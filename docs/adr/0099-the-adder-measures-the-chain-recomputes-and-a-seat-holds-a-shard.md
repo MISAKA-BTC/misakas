@@ -168,9 +168,10 @@ fewest shards per seat budget); the self-reported half (the replay rate in ms a 
 host it was measured on, with the figure ADR-0082 Decision 9 would derive from it and the sentence
 that says what verifies it); and room for the adder's ML-DSA-87 signature over the id
 (`palw_measured_model_id_v1`, borsh over everything but the signature, under
-`misaka-palw/measured-model/id/v1`). The signing context `misaka-palw/measured-model/sign/v1` is
-named and not yet in the bundle's registry, so the generator leaves the signature empty and §6's
-`palw-class measure` is what fills it with the bond key.
+`misaka-palw/measured-model/id/v1`). The signing context `misaka-palw/measured-model/mldsa87/v1` is
+not in the bundle's registry and never will be — no consensus rule verifies it; a registration is
+verified by recomputation — so the generator leaves the signature empty and §6's `palw-class
+measure` is what fills it with the bond key, as a statement to whoever reads the document.
 `palw_verify_measured_model_v1` measures the manifest again on the same ruleset and compares every
 deterministic field by name; a document is refused by the first field that disagrees, and the
 self-reported fields are listed as such. The stand-in of ADR-0097 §1.3 is now a manifest

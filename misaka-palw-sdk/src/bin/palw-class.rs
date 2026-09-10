@@ -19,6 +19,7 @@ use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::network::NetworkId;
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};
 use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
+use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
 use kaspa_hashes::Hash64;
 use misaka_palw_sdk::PalwClassSdk;
 
@@ -29,6 +30,16 @@ USAGE:
     palw-class inspect   --network <id> <artifact-path>
     palw-class preflight --network <id> <artifact-path> [--model-id <model-id>]
     palw-class bind-tokenizer --network <id> --tokenizer <tokenizer.json> --out <path> [--model-id <model-id>] <artifact-path>
+    palw-class measure   --network <id> [--name <model name>] [--replay-ms <ms> --measured-on <host>]
+                         [--key-file <ml-dsa-87 seed>] [--out <measured.json>] <artifact-path>
+    palw-class verify    --network <id> [--artifact <artifact-path>] <measured.json>
+
+`measure` (ADR-0100) reads the geometry off the artifact, measures its bytes from the inventory,
+evaluates every wall of ADR-0097 at 512 / 32,768 / 131,072 / 1,048,576 positions and the shard
+plans a seat budget allows, and writes the Measured Model Artifact — signed under the bond key
+when --key-file is given. `verify` recomputes a document: with --artifact every field, without it
+everything but the artifact's own (which it names as needing the artifact); exits 1 on a mismatch
+or a signature that does not verify.
 
 NETWORKS: a network id with a PALW V2 bundle, e.g. testnet-11 or devnet.
 
@@ -108,6 +119,25 @@ fn run(args: &[String]) -> Result<(), String> {
             let view = network_view(network.as_deref().ok_or(USAGE)?)?;
             let path = PathBuf::from(args.first().ok_or(USAGE)?);
             preflight(&view, &path, wanted.as_deref())
+        }
+        "measure" => {
+            let view = network_view(network.as_deref().ok_or(USAGE)?)?;
+            let name = take_flag(&mut args, "--name");
+            let replay_ms = match take_flag(&mut args, "--replay-ms") {
+                Some(v) => Some(v.parse::<u64>().map_err(|e| format!("--replay-ms {v}: {e}"))?),
+                None => None,
+            };
+            let measured_on = take_flag(&mut args, "--measured-on").unwrap_or_else(|| "not measured".to_string());
+            let key_file = take_flag(&mut args, "--key-file");
+            let out = take_flag(&mut args, "--out");
+            let path = args.first().ok_or(USAGE)?;
+            measure(&view, std::path::Path::new(path), name, replay_ms, &measured_on, key_file.as_deref(), out.as_deref())
+        }
+        "verify" => {
+            let view = network_view(network.as_deref().ok_or(USAGE)?)?;
+            let artifact = take_flag(&mut args, "--artifact");
+            let path = args.first().ok_or(USAGE)?;
+            verify(&view, std::path::Path::new(path), artifact.as_deref().map(std::path::Path::new))
         }
         "bind-tokenizer" => {
             let tokenizer = take_flag(&mut args, "--tokenizer").ok_or(USAGE)?;
@@ -299,4 +329,333 @@ fn preflight(view: &NetworkView, path: &std::path::Path, wanted: Option<&str>) -
     } else {
         Ok(())
     }
+}
+
+// =================================================================================================
+// ADR-0100 — `measure` and `verify`: the Measured Model Artifact from a HELD artifact
+// =================================================================================================
+
+use kaspa_consensus_core::palw_measured_model_v1::{
+    PALW_MEASURED_MODEL_MLDSA87_CONTEXT, PalwHeldArtifactV1, PalwMeasureInputsV1, PalwMeasuredCheckV1, PalwMeasuredModelV1,
+    PalwModelManifestV1, palw_measure_model_v1, palw_measured_model_id_v1, palw_verify_measured_model_v1,
+};
+use kaspa_consensus_core::palw_shard_plan_v1::{PalwArtifactBytesV1, PalwInventoryRowMetaV1, palw_artifact_bytes_from_inventory_v1};
+
+const MEASURE_CONTEXTS: [u32; 4] = [512, 32_768, 131_072, 1_048_576];
+const MEASURE_SEAT_GIBS: [u64; 4] = [24, 64, 128, 512];
+/// The point of judgement the fences are read at: every scheduled fence armed, `never()` dormant.
+const MEASURE_EVER: u64 = u64::MAX - 1;
+
+/// What a held artifact yields before any ruleset is consulted: its manifest (the geometry read
+/// off the file), its inventory-measured bytes, and the root the court-capable row registers.
+struct HeldMeasurementV1 {
+    manifest: PalwModelManifestV1,
+    bytes: PalwArtifactBytesV1,
+    inventory_root: Hash64,
+    lineage: &'static str,
+    layers: u16,
+}
+
+fn held_measurement(loaded: &misaka_palw_sdk::PalwLoadedArtifactV1, name: Option<String>) -> Result<HeldMeasurementV1, String> {
+    if let Some(artifact) = misaka_palw_sdk::lineages::dense::artifact_of(loaded) {
+        use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, QWEN25_A16_GRAPH_V5_N_CTX};
+        let sh = &artifact.shape;
+        let g = PalwQwen25GeometryV1 {
+            layer_count: sh.n_layers as u16,
+            hidden_dim: sh.d_model() as u32,
+            ffn_dim: sh.d_ff as u32,
+            attn_heads: sh.n_heads as u16,
+            attn_kv_heads: sh.n_kv_heads as u16,
+            attn_head_dim: sh.d_head as u32,
+            vocab_size: sh.vocab as u32,
+            rms_eps_q: sh.eps_q,
+            ..QWEN25_1_5B
+        };
+        let manifest = PalwModelManifestV1::from_dense(name.unwrap_or_else(|| loaded.summary.clone()), &g);
+        let profile =
+            manifest.profile(QWEN25_A16_GRAPH_V5_N_CTX).map_err(|e| format!("the dense manifest builds no profile: {e:?}"))?;
+        let inventory = misaka_palw_base0::inventory::a16_inventory_v1(&artifact, &profile)
+            .map_err(|e| format!("the artifact yields no inventory under its own profile: {e:?}"))?;
+        let rows: Vec<PalwInventoryRowMetaV1> = inventory.operands().iter().map(PalwInventoryRowMetaV1::from).collect();
+        let bytes = palw_artifact_bytes_from_inventory_v1(&profile, &rows).map_err(|e| e.to_string())?;
+        return Ok(HeldMeasurementV1 {
+            manifest,
+            bytes,
+            inventory_root: inventory.root(),
+            lineage: loaded.lineage_id,
+            layers: g.layer_count,
+        });
+    }
+    if let Some((_root, artifact)) = misaka_palw_sdk::lineages::qwen36::parts_of(loaded) {
+        use kaspa_consensus_core::palw_qwen36_profile::{PalwQwen36GeometryV1, QWEN36_35B_A3B};
+        use misaka_palw_base0::qwen36::Qwen36LayerKind;
+        let sh = &artifact.shape;
+        let interval = sh
+            .layer_types
+            .iter()
+            .position(|k| matches!(k, Qwen36LayerKind::FullAttention))
+            .map(|i| i as u16 + 1)
+            .ok_or_else(|| "a hybrid artifact with no full-attention layer has no graph in this tree".to_string())?;
+        let g = PalwQwen36GeometryV1 {
+            layer_count: sh.n_layers() as u16,
+            full_attention_interval: interval,
+            hidden_dim: sh.d_model as u32,
+            attn_heads: sh.n_heads as u16,
+            attn_kv_heads: sh.n_kv_heads as u16,
+            attn_head_dim: sh.head_dim as u32,
+            rope_dims: sh.rotary_dim as u16,
+            gdn_k_heads: sh.linear_k_heads as u16,
+            gdn_v_heads: sh.linear_v_heads as u16,
+            gdn_head_dim: sh.linear_head_dim as u32,
+            gdn_conv_kernel: sh.conv_kernel as u16,
+            n_experts: sh.n_experts as u32,
+            experts_per_token: sh.experts_per_token as u32,
+            moe_dim: sh.moe_dim as u32,
+            shared_dim: sh.shared_dim as u32,
+            attn_output_gate: u8::from(sh.attn_output_gate()),
+            vocab_size: sh.vocab as u32,
+            rms_eps_q: sh.eps_q,
+            ..QWEN36_35B_A3B
+        };
+        let manifest = PalwModelManifestV1::from_hybrid(name.unwrap_or_else(|| loaded.summary.clone()), &g, None);
+        let profile = manifest.profile(MEASURE_CONTEXTS[0]).map_err(|e| format!("the hybrid manifest builds no profile: {e:?}"))?;
+        let inventory = misaka_palw_base0::inventory::qwen36_inventory_v1(&artifact, &profile)
+            .map_err(|e| format!("the artifact yields no inventory under its own profile: {e:?}"))?;
+        let rows: Vec<PalwInventoryRowMetaV1> = inventory.operands().iter().map(PalwInventoryRowMetaV1::from).collect();
+        let bytes = palw_artifact_bytes_from_inventory_v1(&profile, &rows).map_err(|e| e.to_string())?;
+        return Ok(HeldMeasurementV1 {
+            manifest,
+            bytes,
+            inventory_root: inventory.root(),
+            lineage: loaded.lineage_id,
+            layers: g.layer_count,
+        });
+    }
+    Err(format!("the {} lineage has no measurement path in this build", loaded.lineage_id))
+}
+
+fn hex_bytes(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+fn measure_inputs<'a>(
+    view: &'a NetworkView,
+    name: &'a str,
+    fingerprint: &'a str,
+    budgets: &'a [u64],
+    held: Option<PalwHeldArtifactV1<'a>>,
+) -> PalwMeasureInputsV1<'a> {
+    PalwMeasureInputsV1 {
+        ruleset: name,
+        ruleset_fingerprint_hex: fingerprint,
+        bundle: &view.bundle,
+        contexts: &MEASURE_CONTEXTS,
+        seat_budgets: budgets,
+        max_shards: 1_024,
+        held,
+    }
+}
+
+fn court_for_view(
+    view: &NetworkView,
+) -> impl Fn(
+    &PalwShapeProfileV3,
+) -> (
+    Option<kaspa_consensus_core::palw_class_admission_v2::PalwKaryCourtV1>,
+    kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) + '_ {
+    move |profile: &PalwShapeProfileV3| {
+        let shape = kaspa_consensus_core::palw_class_admission_v2::palw_admission_shape_at_v1(
+            &view.params,
+            &view.bundle,
+            profile,
+            MEASURE_EVER,
+        )
+        .expect("a network with a V2 bundle has an admission shape");
+        (shape.court, view.params.palw_prompt_ids_form_at(MEASURE_EVER))
+    }
+}
+
+fn measure(
+    view: &NetworkView,
+    path: &std::path::Path,
+    name: Option<String>,
+    replay_ms: Option<u64>,
+    measured_on: &str,
+    key_file: Option<&str>,
+    out: Option<&str>,
+) -> Result<(), String> {
+    let sdk = sdk_for(view);
+    let loaded = sdk.load_artifact(path)?;
+    let held = held_measurement(&loaded, name)?;
+    let file_bytes = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?.len();
+    let pairings = sdk.pairings(&loaded);
+    let ruleset_name = view.network_id.to_string();
+    let fingerprint = format!("{}", view.params.consensus_params_id());
+    let budgets: Vec<u64> = MEASURE_SEAT_GIBS.iter().map(|g| g << 30).collect();
+    let court_for = court_for_view(view);
+    let inputs = measure_inputs(
+        view,
+        &ruleset_name,
+        &fingerprint,
+        &budgets,
+        Some(PalwHeldArtifactV1 { bytes: &held.bytes, root: held.inventory_root, file_bytes }),
+    );
+    let mut doc = palw_measure_model_v1(&held.manifest, inputs, &court_for, replay_ms, measured_on);
+    if let Some(key_file) = key_file {
+        let seed = kaspa_pq_validator_core::load_validator_seed(key_file)?;
+        let key = kaspa_pq_validator_core::ValidatorKey::from_seed(seed);
+        doc.adder_pubkey_hex = hex_bytes(key.public_key());
+        doc.signature_hex.clear();
+        let id = palw_measured_model_id_v1(&doc);
+        doc.signature_hex = hex_bytes(&key.sign_with_context(id.as_byte_slice(), PALW_MEASURED_MODEL_MLDSA87_CONTEXT));
+    }
+    let id = palw_measured_model_id_v1(&doc);
+    let out_path = out.map(std::path::PathBuf::from).unwrap_or_else(|| {
+        let mut p = path.to_path_buf();
+        p.set_extension("measured.json");
+        p
+    });
+    let text = serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?;
+    std::fs::write(&out_path, text).map_err(|e| format!("{}: {e}", out_path.display()))?;
+
+    println!("# Measured Model Artifact — {} on {ruleset_name}\n", held.manifest.name);
+    println!("- artifact `{}` ({} bytes on disk), lineage `{}`, {} layers", path.display(), file_bytes, held.lineage, held.layers);
+    println!(
+        "- bytes measured from the inventory: **{}** ({}); the family formula says {}",
+        held.bytes.total(),
+        held.bytes.basis,
+        held.manifest.artifact_bytes().total()
+    );
+    println!("- inventory root `{}`", held.inventory_root);
+    for (entry, root) in &pairings {
+        match root {
+            Ok(r) => println!(
+                "- registers as `{}` (class `{}`) with root `{r}`{}",
+                entry.model_id,
+                entry.profile.shape_profile_id(),
+                if *r == held.inventory_root { " — the inventory root" } else { "" }
+            ),
+            Err(e) => println!("- `{}`: no root ({e})", entry.model_id),
+        }
+    }
+    println!();
+    println!("| n_ctx | class id | fit | refused by | cache | fewest shards per seat budget |");
+    println!("|---|---|---|---|---|---|");
+    for row in &doc.deterministic.rows {
+        let plans: Vec<String> = row
+            .plans
+            .iter()
+            .map(|p| {
+                format!(
+                    "{} GiB → {}",
+                    p.seat_budget_bytes >> 30,
+                    p.shard_count.map(|c| c.to_string()).unwrap_or_else(|| "none".into())
+                )
+            })
+            .collect();
+        println!(
+            "| {} | `{}` | {} | {} | {:.1} GiB | {} |",
+            row.n_ctx,
+            row.shape_profile_id_hex.as_deref().map(|h| format!("{}…", &h[..12])).unwrap_or_else(|| "— (no profile)".into()),
+            if row.fit_admitted { "admitted" } else { "**refused**" },
+            row.refusing_walls.join(", "),
+            row.kv_cache_bytes as f64 / (1u64 << 30) as f64,
+            plans.join("; ")
+        );
+    }
+    println!();
+    match &doc.self_reported.replay_ms_per_position {
+        Some(ms) => println!(
+            "- self-reported: replay {ms} ms/position on \"{}\" → {} positions within window_receipt; verified by {}",
+            doc.self_reported.measured_on,
+            doc.self_reported.positions_within_window_receipt.map(|p| p.to_string()).unwrap_or_else(|| "—".into()),
+            doc.self_reported.verified_by
+        ),
+        None => println!("- self-reported: no replay rate given (--replay-ms); the certification drill is what measures one"),
+    }
+    println!(
+        "- id `{id}`; {}",
+        if doc.signature_hex.is_empty() {
+            "unsigned (give --key-file to sign under the bond key)".to_string()
+        } else {
+            format!("signed by `{}…`", &doc.adder_pubkey_hex[..16])
+        }
+    );
+    println!("- written: `{}`", out_path.display());
+    Ok(())
+}
+
+fn verify(view: &NetworkView, path: &std::path::Path, artifact: Option<&std::path::Path>) -> Result<(), String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let doc: PalwMeasuredModelV1 =
+        serde_json::from_str(&text).map_err(|e| format!("{} is not a PalwMeasuredModelV1: {e}", path.display()))?;
+    let ruleset_name = view.network_id.to_string();
+    let fingerprint = format!("{}", view.params.consensus_params_id());
+    let budgets: Vec<u64> =
+        doc.deterministic.rows.first().map(|r| r.plans.iter().map(|p| p.seat_budget_bytes).collect()).unwrap_or_default();
+    let held_owned = match artifact {
+        Some(p) => {
+            let sdk = sdk_for(view);
+            let loaded = sdk.load_artifact(p)?;
+            let held = held_measurement(&loaded, Some(doc.manifest.name.clone()))?;
+            let file_bytes = std::fs::metadata(p).map_err(|e| format!("{}: {e}", p.display()))?.len();
+            Some((held, file_bytes))
+        }
+        None => None,
+    };
+    let held = held_owned.as_ref().map(|(h, file_bytes)| PalwHeldArtifactV1 {
+        bytes: &h.bytes,
+        root: h.inventory_root,
+        file_bytes: *file_bytes,
+    });
+    let court_for = court_for_view(view);
+    let verdict = palw_verify_measured_model_v1(&doc, measure_inputs(view, &ruleset_name, &fingerprint, &budgets, held), &court_for);
+    println!("# Measured Model Artifact — verification on {ruleset_name}\n");
+    println!("- model **{}**, id `{}`\n", doc.manifest.name, palw_measured_model_id_v1(&doc));
+    println!("| field | verdict |");
+    println!("|---|---|");
+    for check in &verdict.checks {
+        match check {
+            PalwMeasuredCheckV1::Recomputed { field } => println!("| {field} | recomputed, equal |"),
+            PalwMeasuredCheckV1::Mismatch { field, expected, got } => {
+                println!("| {field} | **MISMATCH** — recomputed `{expected}`, the document says `{got}` |")
+            }
+            PalwMeasuredCheckV1::SelfReported { field, verified_by } => {
+                println!("| {field} | self-reported; verified by {verified_by} |")
+            }
+            PalwMeasuredCheckV1::NeedsTheArtifact { field } => println!(
+                "| {field} | needs the artifact: measured from its inventory, recomputable only by a holder (give --artifact) |"
+            ),
+        }
+    }
+    let signature = if doc.signature_hex.is_empty() {
+        "unsigned".to_string()
+    } else {
+        let pk = decode_hex(&doc.adder_pubkey_hex)?;
+        let sig = decode_hex(&doc.signature_hex)?;
+        let id = palw_measured_model_id_v1(&doc);
+        match kaspa_txscript::verify_mldsa87_with_context(&pk, id.as_byte_slice(), &sig, PALW_MEASURED_MODEL_MLDSA87_CONTEXT) {
+            Ok(true) => format!("verifies under `{}…`", &doc.adder_pubkey_hex[..16]),
+            Ok(false) | Err(_) => "**DOES NOT VERIFY**".to_string(),
+        }
+    };
+    println!();
+    println!("- signature: {signature}");
+    let needs = verdict.needs_the_artifact();
+    if !needs.is_empty() {
+        println!("- {} field(s) need the artifact and were not compared: {}", needs.len(), needs.join(", "));
+    }
+    println!("- deterministic half: **{}**", if verdict.deterministic_ok() { "agrees" } else { "REFUSED" });
+    if !verdict.deterministic_ok() || signature.contains("DOES NOT VERIFY") {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn decode_hex(h: &str) -> Result<Vec<u8>, String> {
+    if !h.len().is_multiple_of(2) || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("not hex".into());
+    }
+    (0..h.len()).step_by(2).map(|i| u8::from_str_radix(&h[i..i + 2], 16).map_err(|e| e.to_string())).collect()
 }

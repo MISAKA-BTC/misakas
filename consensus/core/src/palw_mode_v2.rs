@@ -178,6 +178,39 @@ pub const PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2: &[&[u8]] = &[
     crate::palw_slash::PALW_S_MLDSA87_ATTESTATION_CONTEXT,
 ];
 
+/// **The complete set, plus the one-move court's accusation** (ADR-0099 Decision 5 as built by
+/// ADR-0100). The acceptance layer verifies `ShardCourtAccused` under
+/// `PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT`, so a ruleset whose id does not name that context
+/// cannot arm `Params::palw_shard_court` — `validate_palw_v2` refuses the fence over any other
+/// root. **The order is V2, in V2's order, then the one addition**, for the reason V2 gives: a
+/// prefix is visibly a superset. No shipped preset states this set; a network that wants the court
+/// states it at genesis through `Params::palw_signature_contexts_v2`, and that is the "ruleset
+/// move" ADR-0099 §3 Decision 5 named.
+pub const PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V3: &[&[u8]] = &[
+    // — V2, in order —
+    crate::palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+    crate::palw_panel_v2::PALW_RECEIPT_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_OPEN_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT,
+    crate::palw_derived_v1::PALW_DERIVED_V1_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_BOND_CAPABILITY_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_DA_ACCUSATION_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_DA_DISCLOSURE_V2_MLDSA87_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_ATTN_CHALLENGER_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT,
+    crate::palw_freeprompt_v3::PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT,
+    crate::palw_freeprompt_v3::PALW_FP_V3_MLDSA87_SPEND_CONTEXT,
+    crate::palw_carriage::PALW_CARRIAGE_MLDSA87_COMMITMENT_CONTEXT,
+    crate::palw_slash::PALW_S_MLDSA87_ATTESTATION_CONTEXT,
+    // — the one-move court —
+    crate::palw_shard_court_v1::PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT,
+];
+
 /// The families whose ML-DSA-87 contexts the ConsensusV2 acceptance layer verifies signatures
 /// from — the SOURCE the committed set is checked against, so the set is derived from the
 /// per-family registries every family already maintains rather than re-typed a second time.
@@ -196,6 +229,7 @@ pub(crate) const PALW_V2_ACCEPTANCE_FAMILIES: &[&[&[u8]]] = &[
     crate::palw_derived_v1::PALW_DERIVED_V1_ALL_DOMAINS,
     crate::palw_carriage::PALW_CARRIAGE_ALL_DOMAINS,
     crate::palw_slash::PALW_S_ALL_DOMAINS,
+    crate::palw_shard_court_v1::PALW_SHARD_COURT_ALL_DOMAINS,
 ];
 
 /// The naming convention that separates a signing CONTEXT from a hashing domain inside those
@@ -250,6 +284,12 @@ pub fn palw_v2_signature_contexts_root() -> Hash64 {
 /// `Params::palw_signature_contexts_v2` at genesis commits to.
 pub fn palw_v2_signature_contexts_root_v2() -> Hash64 {
     palw_v2_signature_contexts_root_of(PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2)
+}
+
+/// The root of [`PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V3`] — what a network that arms the
+/// one-move court commits to at genesis.
+pub fn palw_v2_signature_contexts_root_v3() -> Hash64 {
+    palw_v2_signature_contexts_root_of(PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V3)
 }
 
 pub const PALW_MODE_V2_ALL_DOMAINS: &[&[u8]] = &[PALW_RULESET_ID_V2_DOMAIN];
@@ -1041,6 +1081,7 @@ impl PalwConsensusParamsV2 {
         // is enough: this function does not hold a `Params`.
         if self.signature_contexts_root != palw_v2_signature_contexts_root()
             && self.signature_contexts_root != palw_v2_signature_contexts_root_v2()
+            && self.signature_contexts_root != palw_v2_signature_contexts_root_v3()
         {
             return Err(PalwModeV2Error::Invalid("signature_contexts_root is not a context set this binary signs under"));
         }
@@ -1964,7 +2005,7 @@ pub(crate) mod tests {
             .flat_map(|family| family.iter().copied())
             .filter(|d| is_mldsa87_signing_context(d))
             .collect();
-        let committed: BTreeSet<&[u8]> = PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2.iter().copied().collect();
+        let committed: BTreeSet<&[u8]> = PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V3.iter().copied().collect();
 
         let missing: Vec<String> = derived.difference(&committed).map(|d| String::from_utf8_lossy(d).into_owned()).collect();
         assert!(missing.is_empty(), "the acceptance layer verifies under contexts the ruleset id does not commit to: {missing:?}");
@@ -1974,15 +2015,25 @@ pub(crate) mod tests {
         // The convention the filter rests on, asserted in BOTH directions so it is a rule and not
         // a habit: every committed entry ends `mldsa87/v1`, and nothing in these registries that
         // ends `mldsa87/v1` is anything but a signing context.
-        for c in PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2 {
+        for c in PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V3 {
             assert!(is_mldsa87_signing_context(c), "a committed context breaks the naming convention: {}", String::from_utf8_lossy(c));
         }
 
-        // The frozen set is a strict subset, so the complete set is a superset and not a reshuffle.
-        for c in PALW_V2_SIGNATURE_CONTEXTS {
-            assert!(committed.contains(c), "the complete set dropped a context the frozen one committed to");
-        }
-        assert_ne!(palw_v2_signature_contexts_root(), palw_v2_signature_contexts_root_v2(), "two sets, two roots");
+        // Each set is a PREFIX of the next, so every later set is visibly a superset and not a
+        // reshuffle: the frozen nine open V2, and V2 opens V3 (ADR-0100: the one-move court's
+        // context is the one addition).
+        assert_eq!(&PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2[..PALW_V2_SIGNATURE_CONTEXTS.len()], PALW_V2_SIGNATURE_CONTEXTS);
+        assert_eq!(
+            &PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V3[..PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2.len()],
+            PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2
+        );
+        assert_eq!(PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V3.len(), PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2.len() + 1);
+        assert_eq!(
+            PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V3[PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2.len()],
+            crate::palw_shard_court_v1::PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT
+        );
+        let roots = [palw_v2_signature_contexts_root(), palw_v2_signature_contexts_root_v2(), palw_v2_signature_contexts_root_v3()];
+        assert!(roots[0] != roots[1] && roots[1] != roots[2] && roots[0] != roots[2], "three sets, three roots");
 
         // The market families are excluded ON PURPOSE and the exclusion is stated, not silent:
         // their objects are refused wholesale unless `Params::palw_model_market` / `palw_model_lines`

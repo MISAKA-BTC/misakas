@@ -327,14 +327,20 @@ pub struct PalwPanelConfig {
 /// **What the capture arm's leaf samples found** (ADR-0098 Decision 2). A `bool` could say "cleared"
 /// or "not", and a leaf that does not recompute was the second: the seat dropped a proven fault and
 /// went on to the half-window tail. `FaultAt` is the third answer, and it is recorded.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum CaptureSamplesV1 {
     /// Every wanted sample recomputed.
     Cleared,
     /// Too few samples could be checked — nothing proven either way.
     NotCleared,
-    /// This leaf of the claim's own capture does not recompute.
-    FaultAt(u64),
+    /// This leaf of the claim's own capture does not recompute — and here is the refutation that
+    /// says so, with the artifact rows it multiplies by: exactly the one-move court's object
+    /// (ADR-0099 Decision 5 / ADR-0100), built once and kept rather than thrown away.
+    FaultAt {
+        leaf: u64,
+        refutation: Box<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1>,
+        openings: Vec<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1>,
+    },
 }
 
 pub struct PalwPanelService {
@@ -1514,7 +1520,7 @@ impl PalwPanelService {
                     warn!(
                         "[{PALW_PANEL}] claim {claim}: leaf {index} of the served capture does not recompute — the court's business, not a receipt's"
                     );
-                    return CaptureSamplesV1::FaultAt(index);
+                    return CaptureSamplesV1::FaultAt { leaf: index, refutation: Box::new(refutation), openings };
                 }
                 // **A limit is not a verdict, and it is not a redraw either.** A capture priced
                 // above the ladder this node was handed is one this node cannot check at ANY leaf,
@@ -2121,6 +2127,9 @@ impl PalwPanelService {
         // was busy carrying a receipt — and the claim had already been marked judged, so the
         // dispute was never rebuilt. Measured: 22 frauds detected, 0 courts opened.
         let mut court_pending: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
+        // ADR-0100: the claims this seat has accused in the one-move court, so a fault that
+        // recurs on every tick (the duty stands until the claim ends) is filed once.
+        let mut accused: HashSet<Hash64> = HashSet::new();
         // The fee UTXO we are currently spending from, carried across ticks so a mempool chain is
         // not rebuilt from a stale root every two seconds. See the note at its first use.
         let mut chained_funding: Option<(TransactionOutpoint, UtxoEntry)> = None;
@@ -3248,8 +3257,77 @@ impl PalwPanelService {
                                     // ADR-0098 Decision 2: a leaf of the claim's OWN capture — its roots
                                     // matched, its price matched — that does not recompute is a fault
                                     // this seat found, and it is recorded rather than dropped.
-                                    CaptureSamplesV1::FaultAt(leaf) => {
+                                    CaptureSamplesV1::FaultAt { leaf, refutation, openings } => {
                                         self.note_seat_fault_v1(duty.claim_id, leaf, 1);
+                                        // **The one thing a seat that found a lie files** (ADR-0098
+                                        // Decision 2, ADR-0099 Decision 5): on a network whose
+                                        // acceptance layer takes it, the accusation — the leaf, the
+                                        // refutation it just ran, the openings it just proved —
+                                        // signed under this seat's bond key and queued on the same
+                                        // carrier path every court move rides. Once per claim.
+                                        if crate::palw_producer::palw_shard_court_in_force_v1(&self.consensus_config, current_daa)
+                                            && !accused.contains(&duty.claim_id)
+                                        {
+                                            use kaspa_consensus_core::palw_shard_court_v1::{
+                                                PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT, PALW_SHARD_COURT_VERSION_V1,
+                                                PalwShardCourtAccusationV1, palw_shard_court_session_id_v1,
+                                            };
+                                            let ladder = kaspa_consensus_core::palw_court_v2::palw_refutation_leaf_cap_v2(
+                                                &self.config.court,
+                                                self.consensus_config
+                                                    .params
+                                                    .palw_court_ladder
+                                                    .is_some_and(|f| f.is_active(current_daa)),
+                                            );
+                                            let mut accusation = PalwShardCourtAccusationV1 {
+                                                version: PALW_SHARD_COURT_VERSION_V1,
+                                                claim: duty.claim_id,
+                                                execution_root: duty.execution_root,
+                                                trace_root: duty.trace_root,
+                                                executor_bond: duty.executor_bond,
+                                                accuser_bond: duty.seat_bond,
+                                                leaf_index: leaf,
+                                                refutation: *refutation,
+                                                artifact_openings: openings,
+                                                signature: Vec::new(),
+                                            };
+                                            match accusation.validate_shape(ladder) {
+                                                Ok(()) => {
+                                                    let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                                                        self.consensus_config.params.net.to_string().as_bytes(),
+                                                        Some(self.consensus_config.genesis.hash),
+                                                    );
+                                                    let session_id =
+                                                        palw_shard_court_session_id_v1(domain.as_byte_slice(), &accusation);
+                                                    if let Some(signature) =
+                                                        self.sign(session_id.as_byte_slice(), PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT)
+                                                    {
+                                                        accusation.signature = signature;
+                                                        let object = PalwConsensusObjectV2::ShardCourtAccused {
+                                                            accusation: Box::new(accusation),
+                                                        };
+                                                        match kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object) {
+                                                            Ok(()) => {
+                                                                info!(
+                                                                    "[{PALW_PANEL}] claim {}: accusing leaf {leaf} in the one-move court (session {session_id})",
+                                                                    duty.claim_id
+                                                                );
+                                                                accused.insert(duty.claim_id);
+                                                                court_pending.push((session_id, 0, false, object));
+                                                            }
+                                                            Err(why) => warn!(
+                                                                "[{PALW_PANEL}] claim {}: the accusation cannot ride a carrier ({why}); recorded, not filed",
+                                                                duty.claim_id
+                                                            ),
+                                                        }
+                                                    }
+                                                }
+                                                Err(e) => warn!(
+                                                    "[{PALW_PANEL}] claim {}: the accusation's shape is refused locally ({e}); recorded, not filed",
+                                                    duty.claim_id
+                                                ),
+                                            }
+                                        }
                                         break 'verdict None;
                                     }
                                 }
@@ -4170,6 +4248,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::ModelEvaluationPosted { .. } => "ModelEvaluationPosted",
         // ADR-0090 — the seed that opens a line's market.
         PalwConsensusObjectV2::ModelSeed { .. } => "ModelSeed",
+        PalwConsensusObjectV2::ShardCourtAccused { .. } => "ShardCourtAccused",
     }
 }
 

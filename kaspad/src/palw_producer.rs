@@ -179,6 +179,13 @@ pub(crate) fn palw_da_court_in_force_v1(config: &Config, daa_score: u64) -> bool
     config.params.palw_da_court.is_some_and(|fence| fence.is_active(daa_score))
 }
 
+/// **ADR-0099 Decision 5 / ADR-0100: whether the one-move court is in force at this DAA** — the
+/// seat's reading of `Params::palw_shard_court`, through the fence's own mode-aware accessor, so
+/// a seat files an accusation exactly on the networks whose acceptance layer takes one.
+pub(crate) fn palw_shard_court_in_force_v1(config: &Config, daa_score: u64) -> bool {
+    config.params.palw_shard_court_active_at(daa_score)
+}
+
 /// **Where a claim's retained capture lives — the one place that decides.**
 ///
 /// The producer writes these files and the panel reads them back to answer a court about its own

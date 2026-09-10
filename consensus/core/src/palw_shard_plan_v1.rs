@@ -26,6 +26,7 @@
 //! palw-shard-plan` prints them. The artifact estimate counts the projections a layer holds and
 //! not its norms or biases, so it is a floor, and the card's own total is the other bracket.
 
+use crate::palw_artifact::PalwArtifactOperandV1;
 use crate::palw_qwen25_profile::PalwQwen25GeometryV1;
 use crate::palw_qwen36_profile::PalwQwen36GeometryV1;
 use crate::palw_state_chunk_map::gdn_delta_head_slice_bytes_v1;
@@ -44,6 +45,12 @@ use crate::palw_v2::PalwJobContextV2;
 pub struct PalwArtifactBytesV1 {
     pub pre: u64,
     pub post: u64,
+    /// Graph-level rows EVERY shard holds — a tensor a layer node names without a layer
+    /// placeholder. Zero under the family formula; an inventory can carry one.
+    pub shared: u64,
+    /// Graph-level rows both ENDS hold — a tensor a pre node and a post node both name (a tied
+    /// head): once on a seat holding both ends, once each on two. Zero under the formula.
+    pub ends: u64,
     /// One entry per layer, in layer order.
     pub layers: Vec<u64>,
     /// Where the numbers came from — the family formula, or a card's total the formula was scaled to.
@@ -51,8 +58,10 @@ pub struct PalwArtifactBytesV1 {
 }
 
 impl PalwArtifactBytesV1 {
+    /// What one seat holding the whole model holds: every class of row once.
     pub fn total(&self) -> u64 {
-        self.layers.iter().fold(self.pre.saturating_add(self.post), |acc, l| acc.saturating_add(*l))
+        let ends = self.pre.saturating_add(self.post).saturating_add(self.shared).saturating_add(self.ends);
+        self.layers.iter().fold(ends, |acc, l| acc.saturating_add(*l))
     }
 
     /// The same split, scaled so that the total is `total` — for a model whose card states a
@@ -64,6 +73,8 @@ impl PalwArtifactBytesV1 {
         PalwArtifactBytesV1 {
             pre: scale(self.pre),
             post: scale(self.post),
+            shared: scale(self.shared),
+            ends: scale(self.ends),
             layers: self.layers.iter().map(|l| scale(*l)).collect(),
             basis: "the family formula's proportions, scaled to a stated total",
         }
@@ -81,6 +92,8 @@ pub fn palw_qwen25_artifact_bytes_v1(g: &PalwQwen25GeometryV1) -> PalwArtifactBy
     let vocab = (g.vocab_size as u64) * h;
     PalwArtifactBytesV1 {
         pre: vocab,
+        shared: 0,
+        ends: 0,
         post: vocab,
         layers: vec![attention + mlp; g.layer_count as usize],
         basis: "dense: q,k,v,o + gate,up,down per layer; embedding and unembedding; one byte a weight",
@@ -110,6 +123,8 @@ pub fn palw_qwen36_artifact_bytes_v1(g: &PalwQwen36GeometryV1) -> PalwArtifactBy
         .collect();
     PalwArtifactBytesV1 {
         pre: vocab,
+        shared: 0,
+        ends: 0,
         post: vocab,
         layers,
         basis: "hybrid: attention (q[,gate],k,v,o) or delta-rule (q,k,v,gate,o) + every expert's gate,up,down + shared + router per layer; one byte a weight",
@@ -236,9 +251,9 @@ fn layer_weights_v1(profile: &PalwShapeProfileV3, artifact: &PalwArtifactBytesV1
             artifact.layers[l as usize].saturating_add(state)
         })
         .collect();
-    weights[0] = weights[0].saturating_add(artifact.pre);
+    weights[0] = weights[0].saturating_add(artifact.pre).saturating_add(artifact.ends);
     let last = weights.len() - 1;
-    weights[last] = weights[last].saturating_add(artifact.post);
+    weights[last] = weights[last].saturating_add(artifact.post).saturating_add(artifact.ends);
     Ok(weights)
 }
 
@@ -357,7 +372,13 @@ pub fn palw_shard_plan_v1(
         let holds_post = index + 1 == runs.len();
         let mut attention_layers = 0u32;
         let mut recurrent_layers = 0u32;
-        let mut artifact_bytes = if holds_pre { artifact.pre } else { 0 };
+        let mut artifact_bytes = artifact.shared;
+        if holds_pre {
+            artifact_bytes = artifact_bytes.saturating_add(artifact.pre);
+        }
+        if holds_pre || holds_post {
+            artifact_bytes = artifact_bytes.saturating_add(artifact.ends);
+        }
         let mut slot_count = if holds_pre { pre_slots } else { 0 };
         for l in first_layer..first_layer + layer_count {
             match profile.layer_kind(l) {
@@ -396,6 +417,196 @@ pub fn palw_shard_plan_v1(
         boundary_row_bytes: (profile.hidden_dim as u64).saturating_mul(4),
         widest_seat_bytes,
     })
+}
+
+// =================================================================================================
+// ADR-0100 — the inventory measures the artifact, and a shard's rows are the inventory's
+// =================================================================================================
+
+/// One row of the artifact inventory, as much of it as measurement and placement need. An
+/// inventory's canonical order is `(tensor, layer, offset)` ascending — not layer-major — so a
+/// shard's rows are never one index range; they are every row whose layer the shard holds, plus
+/// the graph-level rows its ends pin.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwInventoryRowMetaV1 {
+    pub tensor_name: String,
+    /// `None` for a graph-level tensor; the layer index otherwise.
+    pub layer: Option<u16>,
+    pub bytes: u64,
+}
+
+impl From<&PalwArtifactOperandV1> for PalwInventoryRowMetaV1 {
+    fn from(o: &PalwArtifactOperandV1) -> Self {
+        Self { tensor_name: o.tensor_name.clone(), layer: o.layer, bytes: o.bytes.len() as u64 }
+    }
+}
+
+/// The basis an inventory-measured estimate names.
+pub const PALW_ARTIFACT_BYTES_BASIS_INVENTORY_V1: &str = "the artifact inventory's rows, byte for byte";
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum PalwShardRowsError {
+    #[error("the inventory is empty")]
+    Empty,
+    #[error("row {index} ('{tensor}') names layer {layer} and the profile has {layers} layers")]
+    LayerOutOfRange { index: u32, tensor: String, layer: u16, layers: u16 },
+    #[error("row {index} ('{tensor}') is graph-level and no node of the profile names it — nothing places it, so nothing measures it")]
+    UnplacedGraphRow { index: u32, tensor: String },
+    #[error("the plan's shards cover {covered} layers and the profile has {layers}")]
+    PlanMismatch { covered: u32, layers: u16 },
+}
+
+/// Where a graph-level row lives, read off the profile's node tables.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PalwGraphRowPlaceV1 {
+    /// Named by a pre node only: the shard holding the embedding.
+    Pre,
+    /// Named by a post node only: the shard holding the logits.
+    Post,
+    /// Named by a pre node AND a post node (a tied head): both ends.
+    Ends,
+    /// Named by a layer node without a layer placeholder: every shard.
+    Shared,
+}
+
+/// A node names a row when the row IS the node's tensor or is DERIVED from it — the inventory
+/// carries a tensor's quantisation parameters as `<tensor>.<derivation>` rows (`output.weight.a16`
+/// beside `output.weight`), and a seat that holds the weight holds its parameters.
+fn node_names_row_v1(nodes: &[crate::palw_step::PalwStepNodeV1], tensor: &str) -> bool {
+    nodes.iter().any(|n| {
+        !n.weight_name.is_empty()
+            && (n.weight_name == tensor
+                || (tensor.len() > n.weight_name.len()
+                    && tensor.starts_with(n.weight_name.as_str())
+                    && tensor.as_bytes()[n.weight_name.len()] == b'.'))
+    })
+}
+
+fn graph_row_place_v1(profile: &PalwShapeProfileV3, tensor: &str) -> Option<PalwGraphRowPlaceV1> {
+    let names = |nodes: &[crate::palw_step::PalwStepNodeV1]| node_names_row_v1(nodes, tensor);
+    if names(&profile.gdn_nodes) || names(&profile.attn_nodes) {
+        return Some(PalwGraphRowPlaceV1::Shared);
+    }
+    match (names(&profile.pre_nodes), names(&profile.post_nodes)) {
+        (true, true) => Some(PalwGraphRowPlaceV1::Ends),
+        (true, false) => Some(PalwGraphRowPlaceV1::Pre),
+        (false, true) => Some(PalwGraphRowPlaceV1::Post),
+        (false, false) => None,
+    }
+}
+
+/// **The artifact's bytes, measured from its inventory rather than estimated by the family
+/// formula** — the U-01 of ADR-0099 for any model whose artifact is held: every row is placed by
+/// its layer, or for a graph-level row by the node tables that name it, and the bytes are the
+/// rows' own. A row nothing names is refused by name rather than attributed anywhere.
+pub fn palw_artifact_bytes_from_inventory_v1(
+    profile: &PalwShapeProfileV3,
+    rows: &[PalwInventoryRowMetaV1],
+) -> Result<PalwArtifactBytesV1, PalwShardRowsError> {
+    if rows.is_empty() {
+        return Err(PalwShardRowsError::Empty);
+    }
+    let layers = profile.layer_count;
+    let mut out = PalwArtifactBytesV1 {
+        pre: 0,
+        post: 0,
+        shared: 0,
+        ends: 0,
+        layers: vec![0; layers as usize],
+        basis: PALW_ARTIFACT_BYTES_BASIS_INVENTORY_V1,
+    };
+    for (index, row) in rows.iter().enumerate() {
+        match row.layer {
+            Some(layer) if layer >= layers => {
+                return Err(PalwShardRowsError::LayerOutOfRange {
+                    index: index as u32,
+                    tensor: row.tensor_name.clone(),
+                    layer,
+                    layers,
+                });
+            }
+            Some(layer) => out.layers[layer as usize] = out.layers[layer as usize].saturating_add(row.bytes),
+            None => {
+                let slot = match graph_row_place_v1(profile, &row.tensor_name) {
+                    Some(PalwGraphRowPlaceV1::Pre) => &mut out.pre,
+                    Some(PalwGraphRowPlaceV1::Post) => &mut out.post,
+                    Some(PalwGraphRowPlaceV1::Ends) => &mut out.ends,
+                    Some(PalwGraphRowPlaceV1::Shared) => &mut out.shared,
+                    None => {
+                        return Err(PalwShardRowsError::UnplacedGraphRow { index: index as u32, tensor: row.tensor_name.clone() });
+                    }
+                };
+                *slot = slot.saturating_add(row.bytes);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// **A shard's rows of the inventory** — the shard manifest, derived: which inventory indices a
+/// seat holding `shard` must hold, and how many bytes they are. No new identity: a shard is
+/// named by the class's `artifact_root` and a set of leaf indices under it, and every opening a
+/// court asks of a shard seat is an opening under that same root.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwShardRowsV1 {
+    /// Per shard, the inventory indices it holds, ascending.
+    pub rows_per_shard: Vec<Vec<u32>>,
+    /// Per shard, the bytes of those rows — the seat's artifact bytes, measured.
+    pub bytes_per_shard: Vec<u64>,
+}
+
+pub fn palw_shard_inventory_rows_v1(
+    profile: &PalwShapeProfileV3,
+    plan: &PalwShardPlanV1,
+    rows: &[PalwInventoryRowMetaV1],
+) -> Result<PalwShardRowsV1, PalwShardRowsError> {
+    if rows.is_empty() {
+        return Err(PalwShardRowsError::Empty);
+    }
+    let covered: u32 = plan.shards.iter().map(|s| u32::from(s.layer_count)).sum();
+    if covered != u32::from(profile.layer_count) {
+        return Err(PalwShardRowsError::PlanMismatch { covered, layers: profile.layer_count });
+    }
+    let shard_of_layer = |layer: u16| -> Option<usize> {
+        plan.shards.iter().position(|s| layer >= s.first_layer && layer < s.first_layer + s.layer_count)
+    };
+    let mut rows_per_shard: Vec<Vec<u32>> = vec![Vec::new(); plan.shards.len()];
+    let mut bytes_per_shard = vec![0u64; plan.shards.len()];
+    let mut place = |shard: usize, index: usize, bytes: u64| {
+        rows_per_shard[shard].push(index as u32);
+        bytes_per_shard[shard] = bytes_per_shard[shard].saturating_add(bytes);
+    };
+    for (index, row) in rows.iter().enumerate() {
+        match row.layer {
+            Some(layer) => match shard_of_layer(layer) {
+                Some(shard) => place(shard, index, row.bytes),
+                None => {
+                    return Err(PalwShardRowsError::LayerOutOfRange {
+                        index: index as u32,
+                        tensor: row.tensor_name.clone(),
+                        layer,
+                        layers: profile.layer_count,
+                    });
+                }
+            },
+            None => {
+                let placement = graph_row_place_v1(profile, &row.tensor_name)
+                    .ok_or_else(|| PalwShardRowsError::UnplacedGraphRow { index: index as u32, tensor: row.tensor_name.clone() })?;
+                for (shard, s) in plan.shards.iter().enumerate() {
+                    let holds = match placement {
+                        PalwGraphRowPlaceV1::Pre => s.holds_pre,
+                        PalwGraphRowPlaceV1::Post => s.holds_post,
+                        PalwGraphRowPlaceV1::Ends => s.holds_pre || s.holds_post,
+                        PalwGraphRowPlaceV1::Shared => true,
+                    };
+                    if holds {
+                        place(shard, index, row.bytes);
+                    }
+                }
+            }
+        }
+    }
+    Ok(PalwShardRowsV1 { rows_per_shard, bytes_per_shard })
 }
 
 /// **The fewest shards a seat of `seat_budget_bytes` can hold one of** — the smallest shard
@@ -509,9 +720,143 @@ mod tests {
 
     #[test]
     fn scaling_keeps_the_proportions_and_meets_the_total() {
-        let a = PalwArtifactBytesV1 { pre: 100, post: 100, layers: vec![300, 500], basis: "t" };
+        let a = PalwArtifactBytesV1 { pre: 100, post: 100, shared: 0, ends: 0, layers: vec![300, 500], basis: "t" };
         let s = a.scaled_to_total(2_000);
         assert_eq!(s.total() / 10 * 10, 2_000, "within rounding");
         assert_eq!(s.layers[1] / s.layers[0], 500 / 300, "the proportions are the formula's");
+    }
+
+    fn dense_profile() -> PalwShapeProfileV3 {
+        crate::palw_measured_model_v1::PalwModelManifestV1::from_dense("t", &crate::palw_qwen25_profile::QWEN25_1_5B)
+            .profile(512)
+            .expect("the dense manifest builds a profile")
+    }
+
+    /// A synthetic inventory over the real dense profile: every pre and post tensor once, three
+    /// rows a layer. Its rows land by the node tables, its bytes are its own, and a row nothing
+    /// names is refused by name.
+    fn synthetic_rows(profile: &PalwShapeProfileV3) -> Vec<PalwInventoryRowMetaV1> {
+        // One row per graph-level NAME (an inventory carries a tensor once), pre names first.
+        let mut rows: Vec<PalwInventoryRowMetaV1> = Vec::new();
+        let named = |rows: &mut Vec<PalwInventoryRowMetaV1>, nodes: &[crate::palw_step::PalwStepNodeV1], bytes: u64| {
+            for node in nodes.iter().filter(|n| !n.weight_name.is_empty()) {
+                if !rows.iter().any(|r| r.layer.is_none() && r.tensor_name == node.weight_name) {
+                    rows.push(PalwInventoryRowMetaV1 { tensor_name: node.weight_name.clone(), layer: None, bytes });
+                }
+            }
+        };
+        named(&mut rows, &profile.pre_nodes, 100);
+        named(&mut rows, &profile.post_nodes, 200);
+        for layer in 0..profile.layer_count {
+            for k in 0..3u64 {
+                rows.push(PalwInventoryRowMetaV1 { tensor_name: format!("blk.{layer}.w{k}"), layer: Some(layer), bytes: 10 + k });
+            }
+        }
+        rows
+    }
+
+    #[test]
+    fn an_inventory_measures_the_artifact_and_a_row_nothing_names_is_refused() {
+        let profile = dense_profile();
+        let rows = synthetic_rows(&profile);
+        let pre_names = profile.pre_nodes.iter().filter(|n| !n.weight_name.is_empty()).count() as u64;
+        let post_names = profile
+            .post_nodes
+            .iter()
+            .filter(|n| !n.weight_name.is_empty() && !profile.pre_nodes.iter().any(|p| p.weight_name == n.weight_name))
+            .count() as u64;
+        assert!(pre_names > 0 && post_names > 0, "the dense graph names its embedding and its logits");
+        let measured = palw_artifact_bytes_from_inventory_v1(&profile, &rows).expect("every row is placed");
+        assert_eq!(measured.basis, PALW_ARTIFACT_BYTES_BASIS_INVENTORY_V1);
+        assert_eq!(measured.pre, 100 * pre_names);
+        assert_eq!(measured.post, 200 * post_names);
+        assert_eq!((measured.shared, measured.ends), (0, 0));
+        assert!(measured.layers.iter().all(|l| *l == 33), "10 + 11 + 12 a layer");
+        assert_eq!(measured.total(), rows.iter().map(|r| r.bytes).sum::<u64>(), "the total is the rows' own");
+
+        let mut stray = rows.clone();
+        stray.push(PalwInventoryRowMetaV1 { tensor_name: "nothing.names.this".into(), layer: None, bytes: 1 });
+        assert_eq!(
+            palw_artifact_bytes_from_inventory_v1(&profile, &stray),
+            Err(PalwShardRowsError::UnplacedGraphRow { index: rows.len() as u32, tensor: "nothing.names.this".into() })
+        );
+        let mut deep = rows.clone();
+        deep.push(PalwInventoryRowMetaV1 { tensor_name: "blk.99.w".into(), layer: Some(profile.layer_count), bytes: 1 });
+        assert!(matches!(
+            palw_artifact_bytes_from_inventory_v1(&profile, &deep),
+            Err(PalwShardRowsError::LayerOutOfRange { layer, .. }) if layer == profile.layer_count
+        ));
+        assert_eq!(palw_artifact_bytes_from_inventory_v1(&profile, &[]), Err(PalwShardRowsError::Empty));
+
+        // A row DERIVED from a named tensor (`<tensor>.a16`, the quantisation parameters the
+        // inventory carries beside it) lands with the tensor; a row that merely shares a prefix
+        // without the dot does not.
+        let post_name = profile.post_nodes.iter().find(|n| !n.weight_name.is_empty()).unwrap().weight_name.clone();
+        let mut derived = rows.clone();
+        derived.push(PalwInventoryRowMetaV1 { tensor_name: format!("{post_name}.a16"), layer: None, bytes: 5 });
+        let with_derived = palw_artifact_bytes_from_inventory_v1(&profile, &derived).expect("the derived row lands with its tensor");
+        assert_eq!(with_derived.post, measured.post + 5);
+        let mut lookalike = rows.clone();
+        lookalike.push(PalwInventoryRowMetaV1 { tensor_name: format!("{post_name}x"), layer: None, bytes: 5 });
+        assert!(matches!(
+            palw_artifact_bytes_from_inventory_v1(&profile, &lookalike),
+            Err(PalwShardRowsError::UnplacedGraphRow { .. })
+        ));
+    }
+
+    /// Every row lands on exactly the shards that hold it, and a shard's measured bytes are the
+    /// plan's own figure for it — the round trip inventory → estimate → plan → rows closes.
+    #[test]
+    fn a_shards_rows_are_the_inventorys_and_their_bytes_are_the_plans() {
+        let profile = dense_profile();
+        let rows = synthetic_rows(&profile);
+        let measured = palw_artifact_bytes_from_inventory_v1(&profile, &rows).unwrap();
+        for shards in [1u32, 2, 4, 7] {
+            let plan = palw_shard_plan_v1(&profile, &measured, shards).unwrap();
+            let placed = palw_shard_inventory_rows_v1(&profile, &plan, &rows).unwrap();
+            assert_eq!(placed.rows_per_shard.len(), shards as usize);
+            let mut seen = vec![0u32; rows.len()];
+            for list in &placed.rows_per_shard {
+                assert!(list.windows(2).all(|w| w[0] < w[1]), "ascending, no duplicate");
+                for i in list {
+                    seen[*i as usize] += 1;
+                }
+            }
+            assert!(seen.iter().all(|c| *c == 1), "no shared or tied rows here: every row on exactly one shard");
+            for (shard, bytes) in placed.bytes_per_shard.iter().enumerate() {
+                assert_eq!(*bytes, plan.shards[shard].artifact_bytes, "shard {shard} of {shards}: measured bytes are the plan's");
+            }
+        }
+    }
+
+    /// A tied head (one tensor a pre node and a post node both name) lands on both ends, and a
+    /// graph-level tensor a layer node names lands on every shard — and the plan's per-seat
+    /// bytes say so.
+    #[test]
+    fn tied_and_shared_rows_land_where_they_are_held() {
+        let mut profile = dense_profile();
+        let tied = profile.pre_nodes.iter().find(|n| !n.weight_name.is_empty()).unwrap().weight_name.clone();
+        let post = profile.post_nodes.iter().position(|n| !n.weight_name.is_empty()).unwrap();
+        profile.post_nodes[post].weight_name = tied.clone();
+        let attn = profile.attn_nodes.iter().position(|n| !n.weight_name.is_empty()).unwrap();
+        profile.attn_nodes[attn].weight_name = "rope.table".into();
+        let mut rows = synthetic_rows(&profile);
+        rows.push(PalwInventoryRowMetaV1 { tensor_name: "rope.table".into(), layer: None, bytes: 7 });
+        let measured = palw_artifact_bytes_from_inventory_v1(&profile, &rows).unwrap();
+        assert_eq!(measured.shared, 7);
+        assert_eq!(measured.ends, 100, "the tied tensor's rows are counted once, as both ends'");
+        assert_eq!(measured.total(), rows.iter().map(|r| r.bytes).sum::<u64>(), "one seat holds every row once");
+        let plan = palw_shard_plan_v1(&profile, &measured, 3).unwrap();
+        let placed = palw_shard_inventory_rows_v1(&profile, &plan, &rows).unwrap();
+        let tied_index = rows.iter().position(|r| r.tensor_name == tied && r.layer.is_none()).unwrap() as u32;
+        let rope_index = rows.len() as u32 - 1;
+        assert!(placed.rows_per_shard[0].contains(&tied_index) && placed.rows_per_shard[2].contains(&tied_index));
+        assert!(!placed.rows_per_shard[1].contains(&tied_index));
+        assert!(placed.rows_per_shard.iter().all(|l| l.contains(&rope_index)), "shared: every shard");
+        for (shard, bytes) in placed.bytes_per_shard.iter().enumerate() {
+            assert_eq!(*bytes, plan.shards[shard].artifact_bytes, "shard {shard}");
+        }
+        let whole = palw_shard_plan_v1(&profile, &measured, 1).unwrap();
+        assert_eq!(whole.shards[0].artifact_bytes, measured.total(), "one seat: every row once, the tied one included once");
     }
 }

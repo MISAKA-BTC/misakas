@@ -36,6 +36,7 @@ mod palw_fp;
 /// ADR-0088 Decision 12: `palw line-… / version-… / proposal-… / evaluate` — the model registry.
 mod palw_line;
 mod palw_model;
+mod palw_shard_court;
 #[cfg(feature = "evm-send")]
 mod prea;
 /// ADR-0079 Decision 13: `node security-report` — the host posture, printed from live state.
@@ -428,6 +429,26 @@ enum PalwCmd {
         /// Your own bond outpoint, `txid:index` — a seat of the claim's panel or a bonded challenger.
         #[arg(long)]
         bond: String,
+        /// Where to write the signed object.
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
+    /// Sign a one-move accusation (ADR-0099 Decision 5 / ADR-0100): a named leaf of a claim's own
+    /// execution that does not recompute, with its refutation. Reads an unsigned borsh
+    /// `PalwShardCourtAccusationV1`, signs it under your bond key and writes a
+    /// `PalwConsensusObjectV2::ShardCourtAccused` for `palw submit-object`.
+    ShardAccuse {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// The unsigned accusation (borsh `PalwShardCourtAccusationV1`), as a seat or a tool wrote it.
+        #[arg(long)]
+        accusation: std::path::PathBuf,
+        /// Your own bond outpoint, `txid:index` — any Active bond above the floor, never the claim's.
+        #[arg(long)]
+        bond: String,
+        /// The ladder to check the named leaf against locally (default: the shipped court's 2^26).
+        #[arg(long, default_value_t = 1u64 << 26)]
+        ladder: u64,
         /// Where to write the signed object.
         #[arg(long)]
         out: std::path::PathBuf,
@@ -1450,6 +1471,14 @@ async fn main() -> std::process::ExitCode {
         Command::Palw(PalwCmd::SubmitObject { key, object, yes }) => palw_fp::submit_objects(&ctx, &key.source(), &object, yes).await,
         Command::Palw(PalwCmd::DaAccuse { key, claim, row, tile, bond, out }) => {
             palw_da::accuse(&ctx, &key.source(), palw_da::DaAccuseArgs { claim: &claim, row, tile, bond: &bond, out: &out }).await
+        }
+        Command::Palw(PalwCmd::ShardAccuse { key, accusation, bond, ladder, out }) => {
+            palw_shard_court::accuse(
+                &ctx,
+                &key.source(),
+                palw_shard_court::ShardAccuseArgs { accusation: &accusation, bond: &bond, ladder, out: &out },
+            )
+            .await
         }
         Command::Palw(PalwCmd::CourtClose { key, close, class, side, deadline_at, state, restart, offline, yes }) => {
             palw_court::court_close(

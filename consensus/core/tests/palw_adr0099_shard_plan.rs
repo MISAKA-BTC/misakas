@@ -15,7 +15,9 @@ use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 use kaspa_consensus_core::palw_model_fit_v1::stand_ins;
 use kaspa_consensus_core::palw_qwen25_profile::{QWEN25_1_5B, QWEN25_A16_GRAPH_V5_N_CTX};
 use kaspa_consensus_core::palw_qwen36_profile::{PalwQwen36GeometryV1, QWEN36_35B_A3B, qwen36_artifact_row_profile_v5};
-use kaspa_consensus_core::palw_shard_court_v1::{PalwShardCourtAccusationV1, PalwShardCourtError, palw_shard_court_session_id_v1};
+use kaspa_consensus_core::palw_shard_court_v1::{
+    PalwShardCourtAccusationV1, PalwShardCourtError, palw_shard_court_leaf_is_the_shards_v1, palw_shard_court_session_id_v1,
+};
 use kaspa_consensus_core::palw_shard_plan_v1::{
     PalwArtifactBytesV1, PalwShardPlanError, palw_qwen25_artifact_bytes_v1, palw_qwen36_artifact_bytes_v1, palw_shard_leaf_run_v1,
     palw_shard_plan_for_seat_v1, palw_shard_plan_v1,
@@ -268,39 +270,40 @@ fn an_accusation_binds_its_fields_and_its_shape_is_checked_by_name() {
     let base = PalwShardCourtAccusationV1 {
         version: 1,
         claim: Hash64::from_u64_word(1),
-        execution_root: Hash64::from_u64_word(2),
+        // The binding above commits to the default root, and the shape rule wants them equal.
+        execution_root: Hash64::default(),
         trace_root: Hash64::from_u64_word(3),
         executor_bond: bond(1),
         accuser_bond: bond(2),
-        shard_count: 4,
-        shard_index: 1,
         leaf_index: 77,
         refutation: refutation(77),
         artifact_openings: vec![],
         signature: vec![1, 2, 3],
     };
     assert_eq!(base.validate_shape(1 << 26), Ok(()));
-    let id = palw_shard_court_session_id_v1(&base);
+    let domain = b"misaka-palw/test-network";
+    let id = palw_shard_court_session_id_v1(domain, &base);
     let mut signed = base.clone();
     signed.signature = vec![9];
-    assert_eq!(palw_shard_court_session_id_v1(&signed), id, "the signature is over the id, not in it");
+    assert_eq!(palw_shard_court_session_id_v1(domain, &signed), id, "the signature is over the id, not in it");
+    assert_ne!(palw_shard_court_session_id_v1(b"misaka-palw/another-network", &base), id, "the network domain is inside it");
     let variants: Vec<(&str, PalwShardCourtAccusationV1)> = vec![
         ("claim", PalwShardCourtAccusationV1 { claim: Hash64::from_u64_word(11), ..base.clone() }),
         ("execution_root", PalwShardCourtAccusationV1 { execution_root: Hash64::from_u64_word(12), ..base.clone() }),
         ("trace_root", PalwShardCourtAccusationV1 { trace_root: Hash64::from_u64_word(13), ..base.clone() }),
         ("executor", PalwShardCourtAccusationV1 { executor_bond: bond(3), ..base.clone() }),
         ("accuser", PalwShardCourtAccusationV1 { accuser_bond: bond(4), ..base.clone() }),
-        ("count", PalwShardCourtAccusationV1 { shard_count: 8, ..base.clone() }),
-        ("shard", PalwShardCourtAccusationV1 { shard_index: 2, ..base.clone() }),
         ("leaf", PalwShardCourtAccusationV1 { leaf_index: 78, refutation: refutation(78), ..base.clone() }),
     ];
     for (name, v) in variants {
-        assert_ne!(palw_shard_court_session_id_v1(&v), id, "{name} is inside the session id");
+        assert_ne!(palw_shard_court_session_id_v1(domain, &v), id, "{name} is inside the session id");
     }
     let bad = |a: PalwShardCourtAccusationV1| a.validate_shape(1 << 26).unwrap_err();
     assert!(matches!(bad(PalwShardCourtAccusationV1 { version: 2, ..base.clone() }), PalwShardCourtError::Version { .. }));
-    assert!(matches!(bad(PalwShardCourtAccusationV1 { shard_count: 0, ..base.clone() }), PalwShardCourtError::NoShards));
-    assert!(matches!(bad(PalwShardCourtAccusationV1 { shard_index: 4, ..base.clone() }), PalwShardCourtError::ShardOutOfRange { .. }));
+    assert!(matches!(
+        bad(PalwShardCourtAccusationV1 { execution_root: Hash64::from_u64_word(2), ..base.clone() }),
+        PalwShardCourtError::BindingRootMismatch { .. }
+    ));
     assert!(matches!(
         bad(PalwShardCourtAccusationV1 { leaf_index: 1 << 26, refutation: refutation(1 << 26), ..base.clone() }),
         PalwShardCourtError::LeafPastTheLadder { .. }
@@ -312,6 +315,17 @@ fn an_accusation_binds_its_fields_and_its_shape_is_checked_by_name() {
     assert!(matches!(
         bad(PalwShardCourtAccusationV1 { refutation: refutation(5), ..base.clone() }),
         PalwShardCourtError::RefutationNamesAnotherLeaf { named: 77, refuted: 5 }
+    ));
+
+    // The FILER's rule: a seat holding shard 1 names only shard 1's leaves. The chain asks nothing
+    // of the kind, so this lives beside the object and not in its shape.
+    let (_, artifact) = dense();
+    let plan = palw_shard_plan_v1(&profile, &artifact, 4).unwrap();
+    let (first_of_shard_1, _) = palw_shard_leaf_run_v1(&profile, &ctx, &plan.shards[1], 0, 0).expect("shard 1 has a run");
+    assert_eq!(palw_shard_court_leaf_is_the_shards_v1(&profile, &ctx, &plan.shards[1], first_of_shard_1), Ok(()));
+    assert!(matches!(
+        palw_shard_court_leaf_is_the_shards_v1(&profile, &ctx, &plan.shards[0], first_of_shard_1),
+        Err(PalwShardCourtError::LeafOutsideTheShard { shard: 0, .. })
     ));
 }
 
@@ -378,6 +392,7 @@ fn a_measured_model_is_recomputed_field_by_field_and_a_tampered_one_is_named() {
         contexts: &[512, 2_048, 1_048_576],
         seat_budgets: &[24 * GIB, 512 * GIB],
         max_shards: 64,
+        held: None,
     };
     let manifest = PalwModelManifestV1::from_dense("Qwen2.5-1.5B A16 graph-v5", &QWEN25_1_5B);
     let doc = palw_measure_model_v1(&manifest, inputs, &court_for, Some(34), "an operator's laptop");

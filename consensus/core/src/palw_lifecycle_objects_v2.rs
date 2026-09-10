@@ -285,6 +285,20 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // Carriage is deliberately permissionless for the disclosure (SA-3): the object is signed
         // by the producer's bond, so who carried it is irrelevant, and that is precisely what makes
         // suppressing it cost an attacker every producer for a whole window instead of one.
+        // **ADR-0099 Decision 5 / ADR-0100: the one-move court's accusation rides signed and
+        // bounded.** The signature is the accuser's bond key, checked at acceptance against the
+        // registry; the refutation and the openings answer to the same close ceiling a disclosure
+        // does, for the same reason, and the ruleset's own ceiling is applied at acceptance, where
+        // the bundle is. Whether the court is armed is the acceptance layer's, as for every fence.
+        PalwConsensusObjectV2::ShardCourtAccused { accusation } if accusation.signature.is_empty() => Err(
+            "a one-move accusation must carry the accuser's signature — a bond key is a public outpoint, so without one anyone could accuse under a stranger's identity",
+        ),
+        PalwConsensusObjectV2::ShardCourtAccused { accusation } => {
+            if crate::palw_shard_court_v1::palw_shard_court_accusation_bytes_v1(accusation) > crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES {
+                return Err("a one-move accusation is above the close-byte ceiling this ruleset prices");
+            }
+            Ok(())
+        }
         PalwConsensusObjectV2::DefaultAccused { signature, .. } if !signature.is_empty() => Ok(()),
         PalwConsensusObjectV2::DefaultAccused { .. } => Err(
             "a data-availability accusation must carry the accuser's signature — a bond key is a public outpoint, so without one anyone could accuse under a stranger's identity",

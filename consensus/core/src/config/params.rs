@@ -1419,12 +1419,13 @@ pub struct Params {
     /// A bare fence, top level, `None` on every shipped preset — the `palw_fp_decode_constraint`
     /// shape directly above, for its reasons.
     ///
-    /// **ARMING IT IS REFUSED BY [`Self::validate_palw_v2`] ON THIS BUILD**: the accusation is
-    /// a type and a verdict function and not a consensus object — no acceptance rule takes it,
-    /// no fold slashes on its verdict, its signing context is not in the bundle's registry, and
-    /// no seat files one. A fence that read as armed while no object exists would promise a
-    /// conviction nobody can carry. The refusal lifts when the build carries all four
-    /// (ADR-0099 §6).
+    /// **Built (ADR-0100):** the accusation is `PalwConsensusObjectV2::ShardCourtAccused`, the
+    /// acceptance rule is the processor's arm, the fold is `palw_state_v2`'s, the seat files one
+    /// from its own capture check, and the signing context is in
+    /// `PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V3`. **What [`Self::validate_palw_v2`] still refuses
+    /// is arming it over a bundle that does not commit to that set** — the ruleset move ADR-0099
+    /// §3 named: a network that wants the court states V3 at genesis through
+    /// `palw_signature_contexts_v2`, and no shipped preset does.
     pub palw_shard_court: Option<ForkActivation>,
 
     /// **ADR-0083 Decision 1 — the difficulty window counts only rows priced by `bits`.**
@@ -2082,20 +2083,6 @@ impl Params {
                  three",
             ));
         }
-        // **ADR-0099 Decision 5 cannot be armed by this build either** — the same shape, for the
-        // same reason: the shard court's accusation is a type, not a consensus object, so a
-        // configuration that read as "armed" would promise a one-move conviction no acceptance
-        // rule takes and no fold applies. `never()` is absence and is exempt.
-        if let Some(activation) = self.palw_shard_court
-            && activation != ForkActivation::never()
-        {
-            return Err(PalwModeV2Error::Invalid(
-                "palw_shard_court is armed and this build cannot carry ADR-0099 Decision 5: PalwShardCourtAccusationV1 is \
-                 not a consensus object (no acceptance rule takes it, no fold slashes on its verdict, its signing context is \
-                 not in the bundle's registry, and no seat files one) — the fence may only be armed by a build that carries \
-                 all four",
-            ));
-        }
         // **ADR-0081 Decision 3 / ADR-0082 Decision 5: the prompt-commitment form is a property
         // of the GENESIS, never of a height** (private-prompts design, 2026-09-05).
         //
@@ -2145,16 +2132,35 @@ impl Params {
                      decided once per network, never per height, because no verifier of a signature holds the object's height",
                 ));
             }
-            if bundle.signature_contexts_root != crate::palw_mode_v2::palw_v2_signature_contexts_root_v2() {
+            if bundle.signature_contexts_root != crate::palw_mode_v2::palw_v2_signature_contexts_root_v2()
+                && bundle.signature_contexts_root != crate::palw_mode_v2::palw_v2_signature_contexts_root_v3()
+            {
                 return Err(PalwModeV2Error::Invalid(
-                    "palw_signature_contexts_v2 is armed but the bundle's signature_contexts_root is not the complete set: \
-                     the ruleset id would not name every context a signature on this network is verified under",
+                    "palw_signature_contexts_v2 is armed but the bundle's signature_contexts_root is not a complete set (V2 or \
+                     V3): the ruleset id would not name every context a signature on this network is verified under",
                 ));
             }
         } else if bundle.signature_contexts_root != crate::palw_mode_v2::palw_v2_signature_contexts_root() {
             return Err(PalwModeV2Error::Invalid(
                 "the bundle's signature_contexts_root is the complete set but palw_signature_contexts_v2 is dormant: the \
                  ruleset id claims a context set the fence does not arm",
+            ));
+        }
+        // **ADR-0099 Decision 5, built (ADR-0100): the one-move court is a consensus object, and
+        // what still gates arming it is the ruleset move its signing context needs.** The
+        // acceptance layer verifies `ShardCourtAccused` under the shard court's context, which is
+        // in the COMPLETE_V3 set and in no set a live network committed to. A fence armed over a
+        // bundle whose committed set lacks the context would verify signatures under a context the
+        // ruleset id does not name — audit M-8's defect, re-created on purpose. `never()` is
+        // absence and is exempt.
+        if let Some(activation) = self.palw_shard_court
+            && activation != ForkActivation::never()
+            && bundle.signature_contexts_root != crate::palw_mode_v2::palw_v2_signature_contexts_root_v3()
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_shard_court is armed but the bundle's signature_contexts_root is not the COMPLETE_V3 set: the accusation's \
+                 signing context (misaka-palw/shard-court/accuse/mldsa87/v1) is not one this network's ruleset id commits to — \
+                 a network arms the one-move court by stating the V3 set at genesis (palw_signature_contexts_v2 over the V3 root)",
             ));
         }
         if self.palw_credit.is_some()
@@ -12204,11 +12210,6 @@ mod consensus_params_id_tests {
                 "palw_fp_decode_constraint",
                 (|p: &mut Params, a: ForkActivation| p.palw_fp_decode_constraint = Some(a)) as fn(&mut Params, ForkActivation),
             ),
-            // ADR-0099 Decision 5: the same refusal — the accusation is a type, not an object.
-            (
-                "palw_shard_court",
-                (|p: &mut Params, a: ForkActivation| p.palw_shard_court = Some(a)) as fn(&mut Params, ForkActivation),
-            ),
         ] {
             for activation in [ForkActivation::always(), ForkActivation::new(9_000_000)] {
                 let mut armed = shipped.clone();
@@ -12221,6 +12222,46 @@ mod consensus_params_id_tests {
             arm(&mut never_armed, ForkActivation::never());
             never_armed.validate_palw_v2().unwrap_or_else(|e| panic!("{name}: Some(never()) is absence, not an arming: {e}"));
         }
+    }
+
+    /// **ADR-0100: the one-move court arms only over a bundle that commits to its signing context.**
+    /// Over the frozen set (every shipped preset) the fence is refused by name and by the set it
+    /// wants; over a genesis that states COMPLETE_V3 it assembles; over COMPLETE_V2 — a complete
+    /// set, but not the one that names the accusation's context — it is refused again. The
+    /// refusal that used to stand here ("the accusation is a type, not an object") is gone with
+    /// the reason for it, and this is what replaced it.
+    #[test]
+    fn the_shard_court_arms_only_over_a_bundle_that_commits_to_its_signing_context() {
+        let shipped = devnet_shipped_params();
+        shipped.validate_palw_v2().expect("the shipped devnet assembles");
+        for activation in [ForkActivation::always(), ForkActivation::new(9_000_000)] {
+            let mut armed = shipped.clone();
+            armed.palw_shard_court = Some(activation);
+            let err = format!("{}", armed.validate_palw_v2().expect_err("the frozen set does not commit to the accuse context"));
+            assert!(err.contains("palw_shard_court") && err.contains("COMPLETE_V3"), "the refusal names the fence and the set: {err}");
+        }
+        let mut never = shipped.clone();
+        never.palw_shard_court = Some(ForkActivation::never());
+        never.validate_palw_v2().expect("Some(never()) is absence");
+
+        let over = |root: crate::Hash64| -> Params {
+            let mut p = shipped.clone();
+            let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut p.palw_consensus_mode else {
+                panic!("the shipped devnet is ConsensusV2")
+            };
+            bundle.signature_contexts_root = root;
+            p.palw_signature_contexts_v2 = Some(ForkActivation::always());
+            p.palw_shard_court = Some(ForkActivation::new(9_000_000));
+            p
+        };
+        over(crate::palw_mode_v2::palw_v2_signature_contexts_root_v3())
+            .validate_palw_v2()
+            .expect("a genesis that states the V3 set carries the one-move court");
+        let err = format!(
+            "{}",
+            over(crate::palw_mode_v2::palw_v2_signature_contexts_root_v2()).validate_palw_v2().expect_err("V2 lacks it")
+        );
+        assert!(err.contains("palw_shard_court") && err.contains("COMPLETE_V3"), "{err}");
     }
 
     /// **The V2 pruning horizon IS the derivation, and the inherited floor never binds** — the

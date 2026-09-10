@@ -3195,6 +3195,16 @@ pub enum PalwConsensusObjectV2 {
         msk_seed: u64,
         sink_index: u32,
     },
+    /// **ADR-0099 Decision 5, built by ADR-0100: a court opened at a NAMED leaf, decided in one
+    /// move.** The accuser's refutation of one leaf of the claim's own execution, with the
+    /// artifact rows it multiplies by; signed by the accuser's bond key. Adjudicated at
+    /// acceptance and again in the fold, at the ladder `PalwTransitionExtrasV1::shard_court_ladder`
+    /// carries: a fault voids the claim and slashes its executor, a refutation that proves none
+    /// charges the accuser. Appended last: the enum's Borsh discriminant is positional. Refused
+    /// wholesale while `Params::palw_shard_court` is dormant, which is every shipped preset.
+    ShardCourtAccused {
+        accusation: Box<crate::palw_shard_court_v1::PalwShardCourtAccusationV1>,
+    },
 }
 
 /// The block's own work slot, as the V3 transition consumes it (ADR-0044): a chain-challenge
@@ -4455,6 +4465,21 @@ pub enum PalwStateV2Error {
     ModelBondNotActive(PalwBondKeyV2),
     #[error("proposal {0} was adopted and cannot be closed")]
     ModelProposalAdopted(Hash64),
+    // ADR-0099 Decision 5 / ADR-0100 — the one-move court's refusals, by name.
+    #[error("the one-move court is not armed on this network (Params::palw_shard_court)")]
+    ShardCourtDormant,
+    #[error("the accusation names an executor that is not claim {0}'s bond")]
+    ShardCourtExecutorIsNotTheClaims(Hash64),
+    #[error("the accusation's roots are not claim {0}'s committed roots")]
+    ShardCourtRootsDiffer(Hash64),
+    #[error("bond {0:?} accuses its own claim")]
+    ShardCourtAccuserIsTheProducer(PalwBondKeyV2),
+    #[error("claim {claim} is under court session {session}; one court at a time")]
+    ShardCourtClaimUnderSession { claim: Hash64, session: Hash64 },
+    #[error("leaf {leaf} of claim {claim} is a fused site: its terminal is the dissection, not one move")]
+    ShardCourtNeedsDissection { claim: Hash64, leaf: u64 },
+    #[error("the accusation does not adjudicate: {0}")]
+    ShardCourt(String),
     // There is deliberately NO size error here. A disclosure's ceiling is a wire bound, and it is
     // already applied on the only path into this fold: `palw_lifecycle_objects_from_accepted_txs_v2`
     // runs `palw_lifecycle_object_may_ride_v2` on every extracted object and SKIPS the ones that
@@ -9545,6 +9570,62 @@ fn apply_object(
         PalwConsensusObjectV2::ModelSell { line_id, holder, units_in, min_msk_out, held_units, .. } => {
             model_sell_v1(builder, ctx, line_id, holder, *units_in, *min_msk_out, true, Some(*held_units))?;
         }
+        // **ADR-0099 Decision 5, built by ADR-0100: the one-move court.** Fence first; then the
+        // claim (live, its executor and roots the object's); then the accuser (not the producer,
+        // Active, at or above the floor — the DA court's terms, because an accusation is priced,
+        // not privileged); then one court at a time on a claim; then the verdict, derived HERE at
+        // the ladder the block's extras carry, and applied: a fault voids the claim and slashes
+        // `claim.reserved` (Decision 8's `CourtFraud`, never the whole bond), a refutation that
+        // proves none charges the accuser what it staked. A fused site convicts nobody and is
+        // refused; the acceptance layer already refused the object, so this arm is the second
+        // lock on that door.
+        PalwConsensusObjectV2::ShardCourtAccused { accusation } => {
+            let Some(ladder) = builder.extras.shard_court_ladder else {
+                return Err(PalwStateV2Error::ShardCourtDormant);
+            };
+            let claim_id = accusation.claim;
+            let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
+            if claim.phase.is_terminal() {
+                return Err(PalwStateV2Error::WrongPhase { claim: claim_id, edge: "ShardCourtAccused" });
+            }
+            if accusation.executor_bond != claim.bond {
+                return Err(PalwStateV2Error::ShardCourtExecutorIsNotTheClaims(claim_id));
+            }
+            if accusation.execution_root != claim.execution_root || accusation.trace_root != claim.trace_root {
+                return Err(PalwStateV2Error::ShardCourtRootsDiffer(claim_id));
+            }
+            let accuser = accusation.accuser_bond;
+            if accuser == claim.bond {
+                return Err(PalwStateV2Error::ShardCourtAccuserIsTheProducer(accuser));
+            }
+            if let Some((session, _)) = builder.state.court_sessions.iter().find(|(_, s)| s.claim == claim_id) {
+                return Err(PalwStateV2Error::ShardCourtClaimUnderSession { claim: claim_id, session: *session });
+            }
+            let accuser_record = builder.state.bonds.get(&accuser).ok_or(PalwStateV2Error::MissingBond(accuser))?.clone();
+            if !matches!(accuser_record.status, PalwBondStatusV2::Active) {
+                return Err(PalwStateV2Error::BondNotActive(accuser));
+            }
+            let floor = builder.params.min_collateral_sompi();
+            if accuser_record.collateral < floor {
+                return Err(PalwStateV2Error::BondBelowFloor { bond: accuser, collateral: accuser_record.collateral, floor });
+            }
+            let artifact_root =
+                builder.state.classes.get(&claim.class_id).ok_or(PalwStateV2Error::MissingClass(claim.class_id))?.artifact_root;
+            let verdict = crate::palw_shard_court_v1::palw_shard_court_verdict_v1(accusation, claim.class_id, artifact_root, ladder)
+                .map_err(|e| PalwStateV2Error::ShardCourt(e.to_string()))?;
+            match verdict {
+                crate::palw_shard_court_v1::PalwShardCourtVerdictV1::ExecutorGuilty => {
+                    builder.void_and_slash(claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::CourtFraud)?;
+                }
+                crate::palw_shard_court_v1::PalwShardCourtVerdictV1::FalseAccusation => {
+                    let charge = crate::palw_shard_court_v1::palw_shard_court_false_accusation_charge_v1(claim.reserved, floor);
+                    builder.slash_seat(accuser, charge, floor)?;
+                }
+                crate::palw_shard_court_v1::PalwShardCourtVerdictV1::NeedsDissection => {
+                    return Err(PalwStateV2Error::ShardCourtNeedsDissection { claim: claim_id, leaf: accusation.leaf_index });
+                }
+            }
+        }
         PalwConsensusObjectV2::ModelSeed { line_id, seeder, msk_seed, sink_index: _ } => {
             model_seed_v1(builder, ctx, line_id, seeder, *msk_seed)?;
         }
@@ -11301,6 +11382,13 @@ pub struct PalwTransitionExtrasV1 {
     /// this block's DAA and pins the chunk count to the run's own shape. `false` by `Default`, so
     /// every existing caller and every dormant network is byte-identical.
     pub fp_da_pins_active: bool,
+    /// ADR-0099 Decision 5 / ADR-0100: `Some(ladder)` when `Params::palw_shard_court` is active
+    /// at the block's DAA — the leaf cap the one-move court adjudicates at
+    /// (`palw_court_step_ladder_at`, the court's own) — and `None` while it is dormant, which
+    /// refuses every `ShardCourtAccused` and is byte-identical to the transition before the
+    /// object existed. The ladder rides here because the fold holds no bundle and must derive the
+    /// same verdict the acceptance layer derived.
+    pub shard_court_ladder: Option<u64>,
 }
 
 impl<'a> TransitionBuilder<'a> {
@@ -21575,6 +21663,115 @@ pub(crate) mod tests {
         );
     }
 
+    /// **ADR-0100 Decision 1 — the one-move court's fold refuses by name before it computes**:
+    /// the dormant fence, an executor that is not the claim's, roots that are not the claim's —
+    /// and with everything the claim's, a refutation that does not adjudicate convicts nobody.
+    #[test]
+    fn the_one_move_court_refuses_by_name_before_it_computes() {
+        use crate::palw_shard_court_v1::PalwShardCourtAccusationV1;
+        use crate::palw_step::PalwStepCoordinateV1;
+        use crate::palw_step_leg::{PalwStepOpeningV1, PalwStepTileLeafV1};
+        use crate::palw_step_refute::PalwExecutionStepRefutationV1;
+        let p = params();
+        let (s3, claim_id, root, fx) = da_setup(&p, 130);
+        let refutation = || PalwExecutionStepRefutationV1 {
+            binding: fx.binding.clone(),
+            output_opening: PalwStepOpeningV1 { leaf_index: 0, leaf_hash: Hash64::default(), siblings: vec![] },
+            output_preimage: PalwStepTileLeafV1 {
+                version: 1,
+                coord: PalwStepCoordinateV1 { call_index: 0, position: 0, node_slot: 0, tile_index: 0 },
+                value_count: 0,
+                values_le: vec![],
+            },
+            inputs: vec![],
+            prompt_token_ids: vec![],
+            decode_tokens: None,
+            kv_checkpoint: None,
+        };
+        let accuse = |executor: PalwBondKeyV2, trace_root: Hash64| PalwConsensusObjectV2::ShardCourtAccused {
+            accusation: Box::new(PalwShardCourtAccusationV1 {
+                version: 1,
+                claim: claim_id,
+                execution_root: fx.binding.committed_execution_root,
+                trace_root,
+                executor_bond: executor,
+                accuser_bond: bond_key(2),
+                leaf_index: 0,
+                refutation: refutation(),
+                artifact_openings: vec![],
+                signature: vec![9; 8],
+            }),
+        };
+        let apply = |objects: &[PalwConsensusObjectV2], extras: &PalwTransitionExtrasV1| {
+            apply_palw_transition_v2_with_extras(&s3, &p, &ctx(4, 110, 4), objects, None, false, false, false, false, extras)
+                .expect_err("refused")
+        };
+        let dormant = PalwTransitionExtrasV1::default();
+        assert!(matches!(apply(&[accuse(bond_key(1), root)], &dormant), PalwStateV2Error::ShardCourtDormant));
+        let armed = PalwTransitionExtrasV1 { shard_court_ladder: Some(1 << 26), ..Default::default() };
+        assert!(matches!(
+            apply(&[accuse(bond_key(2), root)], &armed),
+            PalwStateV2Error::ShardCourtExecutorIsNotTheClaims(c) if c == claim_id
+        ));
+        assert!(matches!(apply(&[accuse(bond_key(1), h64(5))], &armed), PalwStateV2Error::ShardCourtRootsDiffer(c) if c == claim_id));
+        let err = apply(&[accuse(bond_key(1), root)], &armed);
+        assert!(matches!(err, PalwStateV2Error::ShardCourt(_)), "a refutation that does not adjudicate convicts nobody: {err:?}");
+        // The fence on and the fence off are byte-identical without an object: arming changes what
+        // a block MAY carry and nothing a block without one folds.
+        let fold = |extras: &PalwTransitionExtrasV1| {
+            apply_palw_transition_v2_with_extras(&s3, &p, &ctx(4, 110, 4), &[], None, false, false, false, false, extras)
+                .expect("nothing to refuse")
+                .0
+        };
+        assert_eq!(fold(&armed).state_root(), fold(&dormant).state_root(), "the fence alone moves no root");
+    }
+
+    /// **The one-move court's Borsh tag is the LAST, pinned as a number** (the lesson of `main`'s
+    /// 891a1a14: a variant inserted mid-enum renumbered every later one and a fresh node could not
+    /// read testnet-11's history). A round trip cannot see a reordering — both sides move together
+    /// — so the tag is pinned against the count, and it must equal the number of variants before
+    /// it on whichever tree this lands: `main` moved `ModelLineBenefitsDeclared` to the end, this
+    /// branch predates that move, and the count is the same on both.
+    #[test]
+    fn the_one_move_courts_borsh_tag_is_the_last_and_pinned() {
+        use crate::palw_shard_court_v1::PalwShardCourtAccusationV1;
+        use crate::palw_step::PalwStepCoordinateV1;
+        use crate::palw_step_leg::{PalwStepOpeningV1, PalwStepTileLeafV1};
+        use crate::palw_step_refute::PalwExecutionStepRefutationV1;
+        let fx = da_fixture();
+        let object = PalwConsensusObjectV2::ShardCourtAccused {
+            accusation: Box::new(PalwShardCourtAccusationV1 {
+                version: 1,
+                claim: h64(1),
+                execution_root: fx.binding.committed_execution_root,
+                trace_root: h64(3),
+                executor_bond: bond_key(1),
+                accuser_bond: bond_key(2),
+                leaf_index: 0,
+                refutation: PalwExecutionStepRefutationV1 {
+                    binding: fx.binding.clone(),
+                    output_opening: PalwStepOpeningV1 { leaf_index: 0, leaf_hash: Hash64::default(), siblings: vec![] },
+                    output_preimage: PalwStepTileLeafV1 {
+                        version: 1,
+                        coord: PalwStepCoordinateV1 { call_index: 0, position: 0, node_slot: 0, tile_index: 0 },
+                        value_count: 0,
+                        values_le: vec![],
+                    },
+                    inputs: vec![],
+                    prompt_token_ids: vec![],
+                    decode_tokens: None,
+                    kv_checkpoint: None,
+                },
+                artifact_openings: vec![],
+                signature: vec![9; 8],
+            }),
+        };
+        let bytes = borsh::to_vec(&object).expect("serializes");
+        assert_eq!(bytes[0], 38, "ShardCourtAccused is tag 38: the last variant, after every kind a live chain carries");
+        let back: PalwConsensusObjectV2 = borsh::from_slice(&bytes).expect("round trip");
+        assert_eq!(back, object);
+    }
+
     /// **DA-2: a second open accusation on one claim is refused.**
     ///
     /// Singular per claim, and the phase IS the singularity — so this cannot drift out of step with
@@ -25235,6 +25432,7 @@ pub(crate) mod tests {
                 evm_actions: actions,
                 court_responder_coverage_active: false,
                 fp_da_pins_active: false,
+                shard_court_ladder: None,
             }
         }
 
@@ -25440,6 +25638,7 @@ pub(crate) mod tests {
                 evm_actions: vec![buy(0, 1, class, MSK, 0)],
                 court_responder_coverage_active: false,
                 fp_da_pins_active: false,
+                shard_court_ladder: None,
             };
             let (s_off, _) =
                 apply_palw_transition_v2_with_extras(&s, &p, &ctx(3, 251, 3), &[], None, false, false, false, false, &dormant)

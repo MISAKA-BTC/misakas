@@ -35,11 +35,15 @@ use kaspa_consensus_core::palw_measured_model_v1::{
     PalwMeasureInputsV1, PalwMeasuredCheckV1, PalwMeasuredModelV1, PalwModelManifestV1, palw_measure_model_v1,
     palw_measured_model_id_v1, palw_verify_measured_model_v1,
 };
+use kaspa_consensus_core::palw_mode_v2::PALW_STANDARD_TX_BYTES;
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};
 use kaspa_consensus_core::palw_model_fit_v1::{palw_widest_context_under_the_geometry_ceiling_v1, stand_ins};
 use kaspa_consensus_core::palw_qwen25_profile::QWEN25_1_5B;
 use kaspa_consensus_core::palw_qwen36_profile::QWEN36_35B_A3B;
-use kaspa_consensus_core::palw_seat_coverage_v1::{palw_sharded_panel_v1, palw_shipped_draws_per_seat_v1};
+use kaspa_consensus_core::palw_seat_coverage_v1::{
+    palw_sharded_panel_v1, palw_shipped_draws_per_seat_v1, palw_widest_shard_count_in_one_transaction_v1,
+};
+use kaspa_consensus_core::palw_shard_licensing_v1::palw_shard_receipt_part_wire_bytes_v1;
 use kaspa_consensus_core::palw_shard_plan_v1::{palw_shard_leaf_run_v1, palw_shard_plan_for_seat_v1, palw_shard_plan_v1};
 use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
 use kaspa_consensus_core::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, trace_scheme_id_v2};
@@ -174,6 +178,7 @@ impl Ruleset {
             contexts: &CONTEXTS,
             seat_budgets,
             max_shards: 1_024,
+            held: None,
         }
     }
 }
@@ -206,6 +211,11 @@ fn main() {
                 }
                 PalwMeasuredCheckV1::SelfReported { field, verified_by } => {
                     println!("| {field} | self-reported; verified by {verified_by} |")
+                }
+                PalwMeasuredCheckV1::NeedsTheArtifact { field } => {
+                    println!(
+                        "| {field} | needs the artifact: measured from its inventory; `palw-class verify --artifact` recomputes it |"
+                    )
                 }
             }
         }
@@ -287,6 +297,13 @@ fn main() {
                     Err(e) => println!("| {shards} | {e} | | | |"),
                 }
             }
+            println!(
+                "\n- licensing per shard (ADR-0100 Decision 4): one part of {} bytes a shard at quorum {quorum}, fitting one \
+                 standard transaction ({} bytes) at every shard count; the whole-object form above fits up to {} shards",
+                palw_shard_receipt_part_wire_bytes_v1(u64::from(quorum)),
+                PALW_STANDARD_TX_BYTES,
+                palw_widest_shard_count_in_one_transaction_v1(quorum),
+            );
             println!("\nFewest shards a seat can hold one of:\n");
             println!("| seat | shards | widest seat | boundary rows per job (all shards) |");
             println!("|---|---|---|---|");

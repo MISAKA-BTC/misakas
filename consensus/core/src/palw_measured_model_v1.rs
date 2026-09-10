@@ -39,7 +39,12 @@ pub const PALW_MEASURED_MODEL_DOMAIN_ID_V1: &[u8] = b"misaka-palw/measured-model
 /// The ML-DSA-87 context the adder signs the id under. Not yet in the bundle's registry; it
 /// enters it with `Params::palw_shard_court`'s ruleset move, and until then the signature is a
 /// statement to a person, not to the chain.
-pub const PALW_MEASURED_MODEL_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/measured-model/sign/v1";
+pub const PALW_MEASURED_MODEL_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/measured-model/mldsa87/v1";
+/// Every keyed domain this family uses, for the cross-family uniqueness sweep. NOT an acceptance
+/// family: no consensus rule verifies the adder's signature — a registration is verified by
+/// recomputation (ADR-0099 Decision 6) — so the context is a statement to a person and stays out
+/// of the committed set on purpose.
+pub const PALW_MEASURED_MODEL_ALL_DOMAINS: &[&[u8]] = &[PALW_MEASURED_MODEL_DOMAIN_ID_V1, PALW_MEASURED_MODEL_MLDSA87_CONTEXT];
 
 /// The families this tree can build a graph for. A model of another architecture needs a
 /// converter and kernels first — ADR-0075's route — and is refused at the manifest.
@@ -93,6 +98,12 @@ pub struct PalwModelManifestV1 {
     pub attn_output_gate: u8,
     #[serde(default)]
     pub total_parameters: Option<u64>,
+    /// The integer RMS-norm epsilon the artifact carries (`eps_q`), when the manifest was read
+    /// off one (`palw-class measure`); `None` takes the family's own, which is the shipped rows'.
+    /// It is inside the profile and therefore inside the class id, so a manifest that states it
+    /// names the class the artifact actually is.
+    #[serde(default)]
+    pub rms_eps_q: Option<i64>,
 }
 
 impl PalwModelManifestV1 {
@@ -120,6 +131,7 @@ impl PalwModelManifestV1 {
             shared_dim: 0,
             attn_output_gate: 0,
             total_parameters: None,
+            rms_eps_q: Some(g.rms_eps_q),
         }
     }
 
@@ -147,6 +159,7 @@ impl PalwModelManifestV1 {
             shared_dim: g.shared_dim,
             attn_output_gate: g.attn_output_gate,
             total_parameters,
+            rms_eps_q: Some(g.rms_eps_q),
         }
     }
 
@@ -162,6 +175,7 @@ impl PalwModelManifestV1 {
             attn_head_dim: self.attn_head_dim,
             vocab_size: self.vocab_size,
             n_ctx,
+            rms_eps_q: self.rms_eps_q.unwrap_or(QWEN25_1_5B.rms_eps_q),
             ..QWEN25_1_5B
         })
     }
@@ -188,6 +202,7 @@ impl PalwModelManifestV1 {
             attn_output_gate: self.attn_output_gate,
             vocab_size: self.vocab_size,
             n_ctx,
+            rms_eps_q: self.rms_eps_q.unwrap_or(QWEN36_35B_A3B.rms_eps_q),
             ..QWEN36_35B_A3B
         })
     }
@@ -249,6 +264,13 @@ pub struct PalwMeasuredRowV1 {
 pub struct PalwMeasuredDeterministicV1 {
     pub artifact_bytes: u64,
     pub artifact_basis: String,
+    /// The root the class registers, when the adder HELD the artifact (`palw-class measure`);
+    /// `None` for a manifest-only measurement. Recomputable by any node holding the artifact.
+    #[serde(default)]
+    pub artifact_root_hex: Option<String>,
+    /// The artifact file's size, when held. The same reader recomputes it.
+    #[serde(default)]
+    pub artifact_file_bytes: Option<u64>,
     pub rows: Vec<PalwMeasuredRowV1>,
 }
 
@@ -293,6 +315,17 @@ pub fn palw_measured_model_id_v1(doc: &PalwMeasuredModelV1) -> Hash64 {
     Hash64::from_bytes(s.finalize().as_bytes().try_into().expect("64 bytes"))
 }
 
+/// What a HOLDER of the artifact adds to a measurement (ADR-0100): the bytes measured from the
+/// inventory rather than estimated by the formula (`palw_artifact_bytes_from_inventory_v1`), the
+/// root the class registers, and the file's size. Every field is recomputable by any node that
+/// holds the same artifact, and by no node that does not — which is what the verifier says.
+#[derive(Clone, Copy, Debug)]
+pub struct PalwHeldArtifactV1<'a> {
+    pub bytes: &'a PalwArtifactBytesV1,
+    pub root: Hash64,
+    pub file_bytes: u64,
+}
+
 /// What the generator is handed beside the manifest.
 #[derive(Clone, Copy, Debug)]
 pub struct PalwMeasureInputsV1<'a> {
@@ -302,6 +335,8 @@ pub struct PalwMeasureInputsV1<'a> {
     pub contexts: &'a [u32],
     pub seat_budgets: &'a [u64],
     pub max_shards: u32,
+    /// `Some` when the artifact is held: its measured bytes replace the family formula.
+    pub held: Option<PalwHeldArtifactV1<'a>>,
 }
 
 /// The court a profile is judged under — the caller's reading of the fences
@@ -321,7 +356,10 @@ pub fn palw_measure_model_v1(
     replay_ms_per_position: Option<u64>,
     measured_on: &str,
 ) -> PalwMeasuredModelV1 {
-    let artifact = manifest.artifact_bytes();
+    let artifact = match inputs.held {
+        Some(held) => held.bytes.clone(),
+        None => manifest.artifact_bytes(),
+    };
     let rows = inputs
         .contexts
         .iter()
@@ -383,6 +421,8 @@ pub fn palw_measure_model_v1(
         deterministic: PalwMeasuredDeterministicV1 {
             artifact_bytes: artifact.total(),
             artifact_basis: artifact.basis.to_string(),
+            artifact_root_hex: inputs.held.map(|h| hex(h.root)),
+            artifact_file_bytes: inputs.held.map(|h| h.file_bytes),
             rows,
         },
         self_reported: PalwSelfReportedV1 {
@@ -405,6 +445,9 @@ pub enum PalwMeasuredCheckV1 {
     Mismatch { field: String, expected: String, got: String },
     /// Not recomputable; carried, and what verifies it instead.
     SelfReported { field: String, verified_by: String },
+    /// Recomputable by a node HOLDING the artifact, and this verification did not hold it: the
+    /// document measured its bytes from the inventory, and the formula cannot stand in.
+    NeedsTheArtifact { field: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -416,6 +459,16 @@ impl PalwMeasuredVerificationV1 {
     /// No recomputed field disagrees.
     pub fn deterministic_ok(&self) -> bool {
         !self.checks.iter().any(|c| matches!(c, PalwMeasuredCheckV1::Mismatch { .. }))
+    }
+
+    pub fn needs_the_artifact(&self) -> Vec<String> {
+        self.checks
+            .iter()
+            .filter_map(|c| match c {
+                PalwMeasuredCheckV1::NeedsTheArtifact { field } => Some(field.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     pub fn mismatches(&self) -> Vec<String> {
@@ -447,37 +500,72 @@ pub fn palw_verify_measured_model_v1(
         doc.self_reported.replay_ms_per_position,
         &doc.self_reported.measured_on,
     );
+    // A document that measured its artifact from the inventory can be recomputed only by a
+    // verifier holding the same artifact; without one, the artifact's fields and everything
+    // derived from them (the plans) are named as such rather than compared with a formula.
+    let unheld =
+        doc.deterministic.artifact_basis == crate::palw_shard_plan_v1::PALW_ARTIFACT_BYTES_BASIS_INVENTORY_V1 && inputs.held.is_none();
     let mut checks = Vec::new();
-    let mut check = |field: &str, expected: String, got: String| {
-        checks.push(if expected == got {
+    // One closure, two doors: a field of the artifact's own is named as needing the artifact when
+    // this verification holds none; every other field is compared.
+    let mut check_in = |field: &str, expected: String, got: String, of_the_artifact: bool| {
+        checks.push(if of_the_artifact && unheld {
+            PalwMeasuredCheckV1::NeedsTheArtifact { field: field.to_string() }
+        } else if expected == got {
             PalwMeasuredCheckV1::Recomputed { field: field.to_string() }
         } else {
             PalwMeasuredCheckV1::Mismatch { field: field.to_string(), expected, got }
         });
     };
-    check("schema", PALW_MEASURED_MODEL_SCHEMA_V1.to_string(), doc.schema.clone());
-    check("ruleset", inputs.ruleset.to_string(), doc.ruleset.clone());
-    check("ruleset_fingerprint_hex", inputs.ruleset_fingerprint_hex.to_string(), doc.ruleset_fingerprint_hex.clone());
-    check("artifact_bytes", again.deterministic.artifact_bytes.to_string(), doc.deterministic.artifact_bytes.to_string());
-    check("artifact_basis", again.deterministic.artifact_basis.clone(), doc.deterministic.artifact_basis.clone());
+    check_in("artifact_bytes", again.deterministic.artifact_bytes.to_string(), doc.deterministic.artifact_bytes.to_string(), true);
+    check_in("artifact_basis", again.deterministic.artifact_basis.clone(), doc.deterministic.artifact_basis.clone(), true);
+    check_in(
+        "artifact_root_hex",
+        format!("{:?}", again.deterministic.artifact_root_hex),
+        format!("{:?}", doc.deterministic.artifact_root_hex),
+        true,
+    );
+    check_in(
+        "artifact_file_bytes",
+        format!("{:?}", again.deterministic.artifact_file_bytes),
+        format!("{:?}", doc.deterministic.artifact_file_bytes),
+        true,
+    );
     for (expected, got) in again.deterministic.rows.iter().zip(doc.deterministic.rows.iter()) {
         let at = |f: &str| format!("rows[{}].{f}", got.n_ctx);
-        check(&at("shape_profile_id_hex"), format!("{:?}", expected.shape_profile_id_hex), format!("{:?}", got.shape_profile_id_hex));
-        check(&at("fit_admitted"), expected.fit_admitted.to_string(), got.fit_admitted.to_string());
-        check(&at("refusing_walls"), format!("{:?}", expected.refusing_walls), format!("{:?}", got.refusing_walls));
-        check(&at("kv_row_bytes"), expected.kv_row_bytes.to_string(), got.kv_row_bytes.to_string());
-        check(&at("kv_cache_bytes"), expected.kv_cache_bytes.to_string(), got.kv_cache_bytes.to_string());
-        check(&at("recurrent_state_bytes"), expected.recurrent_state_bytes.to_string(), got.recurrent_state_bytes.to_string());
-        check(&at("boundary_row_bytes"), expected.boundary_row_bytes.to_string(), got.boundary_row_bytes.to_string());
-        check(&at("plans"), format!("{:?}", expected.plans), format!("{:?}", got.plans));
+        check_in(&at("plans"), format!("{:?}", expected.plans), format!("{:?}", got.plans), true);
     }
-    check("rows.len", again.deterministic.rows.len().to_string(), doc.deterministic.rows.len().to_string());
-    check(
+    check_in("schema", PALW_MEASURED_MODEL_SCHEMA_V1.to_string(), doc.schema.clone(), false);
+    check_in("ruleset", inputs.ruleset.to_string(), doc.ruleset.clone(), false);
+    check_in("ruleset_fingerprint_hex", inputs.ruleset_fingerprint_hex.to_string(), doc.ruleset_fingerprint_hex.clone(), false);
+    for (expected, got) in again.deterministic.rows.iter().zip(doc.deterministic.rows.iter()) {
+        let at = |f: &str| format!("rows[{}].{f}", got.n_ctx);
+        check_in(
+            &at("shape_profile_id_hex"),
+            format!("{:?}", expected.shape_profile_id_hex),
+            format!("{:?}", got.shape_profile_id_hex),
+            false,
+        );
+        check_in(&at("fit_admitted"), expected.fit_admitted.to_string(), got.fit_admitted.to_string(), false);
+        check_in(&at("refusing_walls"), format!("{:?}", expected.refusing_walls), format!("{:?}", got.refusing_walls), false);
+        check_in(&at("kv_row_bytes"), expected.kv_row_bytes.to_string(), got.kv_row_bytes.to_string(), false);
+        check_in(&at("kv_cache_bytes"), expected.kv_cache_bytes.to_string(), got.kv_cache_bytes.to_string(), false);
+        check_in(
+            &at("recurrent_state_bytes"),
+            expected.recurrent_state_bytes.to_string(),
+            got.recurrent_state_bytes.to_string(),
+            false,
+        );
+        check_in(&at("boundary_row_bytes"), expected.boundary_row_bytes.to_string(), got.boundary_row_bytes.to_string(), false);
+    }
+    check_in("rows.len", again.deterministic.rows.len().to_string(), doc.deterministic.rows.len().to_string(), false);
+    check_in(
         "self_reported.positions_within_window_receipt",
         format!("{:?}", again.self_reported.positions_within_window_receipt),
         format!("{:?}", doc.self_reported.positions_within_window_receipt),
+        false,
     );
-    check("self_reported.verified_by", PALW_SELF_REPORT_VERIFIED_BY_V1.to_string(), doc.self_reported.verified_by.clone());
+    check_in("self_reported.verified_by", PALW_SELF_REPORT_VERIFIED_BY_V1.to_string(), doc.self_reported.verified_by.clone(), false);
     checks.push(PalwMeasuredCheckV1::SelfReported {
         field: "self_reported.replay_ms_per_position".into(),
         verified_by: PALW_SELF_REPORT_VERIFIED_BY_V1.into(),

@@ -101,3 +101,16 @@ rate is the adder's to measure (`palw-certify`, `--replay-ms`); the network's ow
 drill is what verifies it. A manifest that fits no ruleset is the case ADR-0097 Decision 5
 describes — a different mint — and the document says so by the wall.
 
+If you HOLD the converted artifact, measure it rather than a manifest (ADR-0100 Decision 3): the
+geometry is read off the file, the bytes off its inventory, and the document carries the root the
+class registers —
+
+```bash
+cargo run -p misaka-palw-sdk --bin palw-class -- measure --network testnet-11 --key-file <bond seed> --out <model>.measured.json <model>.palwart
+```
+
+and anyone recomputes it with `palw-class verify --network testnet-11 [--artifact <model>.palwart] <model>.measured.json`
+(without the artifact, the artifact's own fields are named as needing one; with it, every field
+and the signature). On the shipped A16 artifact this reproduces the genesis class id and the
+registered root; an artifact of an architecture this tree has no graph for is refused by name.
+

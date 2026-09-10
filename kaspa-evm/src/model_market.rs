@@ -1525,6 +1525,36 @@ mod tests {
         assert_eq!(zero, vec![0u8; 11 * 32]);
     }
 
+    /// **ADR-0101 Decision 5 (settled by the operator, 2026-09-10): a Position never moves between
+    /// holders and is never a means of payment — and the EVM window has no door for either.**
+    /// ERC-20's transfer half — `transfer`, `transferFrom`, `approve`, `allowance` — answers
+    /// `NonTransferable()` on every line, whatever the arguments, armed or not: the facade exists
+    /// to read a holding and to buy from and sell to the curve, and nothing else.
+    #[test]
+    fn a_position_has_no_transfer_door_on_the_evm() {
+        let line = Hash64::from_u64_word(9);
+        let m = MarketHandlers::new(
+            std::sync::Arc::new(PalwEvmViewV1 { chain_daa: 42, chain_id: 1, ..Default::default() }),
+            PalwEvmMarketFencesV1 { market_active: true, lines_active: true, evm_active: true },
+            1,
+        );
+        let s = sel();
+        for (name, selector) in
+            [("transfer", s.transfer), ("transferFrom", s.transfer_from), ("approve", s.approve), ("allowance", s.allowance)]
+        {
+            for args in [vec![], vec![0u8; 32], vec![0xFF; 96]] {
+                let mut input = selector.to_vec();
+                input.extend_from_slice(&args);
+                assert!(
+                    matches!(m.facade(&line, &input), Ok(FacadeCall::NonTransferable)),
+                    "{name} with {} argument bytes must answer NonTransferable",
+                    args.len()
+                );
+            }
+        }
+        assert_eq!(errors::non_transferable(), selector("NonTransferable()"), "the revert names itself");
+    }
+
     #[test]
     fn the_core_crate_spells_the_writer_selector_the_intercept_answers() {
         assert_eq!(sel().send_action, kaspa_consensus_core::evm::model_market::send_action_selector());
