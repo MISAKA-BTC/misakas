@@ -1070,4 +1070,100 @@ mod tests {
             assert_eq!(extracted.skipped.len(), 1);
         }
     }
+
+    /// **The seed testnet-11 carried at DAA 1,945 still decodes as a seed.**
+    ///
+    /// Carrier `a1fb54e5…` in block `93eb20f0…`, the one model-market seed on the live chain, was
+    /// written by a build whose `PalwConsensusObjectV2` ended at `ModelSeed` — discriminant 0x24.
+    /// ADR-0095 first shipped `ModelLineBenefitsDeclared` in the middle of the enum, which made
+    /// 0x24 `ModelEvaluationPosted`: this payload failed admission, the block failed with it, and
+    /// every node that started from an empty datadir on that build stopped at DAA 1,945 for good
+    /// (`block has missing parents: [93eb20f0…]` on each IBD retry). Nodes that had already
+    /// accepted the block kept running, which is why nothing looked wrong from the fleet.
+    ///
+    /// The bytes are the chain's, copied out of the block. Re-encoding a seed with the current
+    /// enum and decoding it back is exactly the round trip that cannot see this.
+    #[test]
+    fn the_seed_testnet_11_carried_at_daa_1945_still_decodes() {
+        const PAYLOAD: &str = "0100241c87442e15e86143fb3ac44bc774cf70d3874329c1abd2e9cd66843f1458119f17479343a35f83ad1b027bf2e1e5890ffc920ee68d1560b42fbe16fe3644f2ce6cbcd66f6f69184783c737727f72d41629a55c199a54e0237d69df5a4cef33d8181c4e6ca50da268569d9971b6810aeab93c8f5ebe779d71da81bc7ef824702b00a0724e1809000001000000";
+        let mut payload = vec![0u8; PAYLOAD.len() / 2];
+        faster_hex::hex_decode(PAYLOAD.as_bytes(), &mut payload).unwrap();
+        assert_eq!(payload.len(), 143);
+
+        validate_palw_lifecycle_tx(&payload).expect("the chain accepted this carrier at DAA 1,945; a build that refuses it cannot sync");
+        let decoded: PalwLifecycleTxPayloadV2 = borsh::from_slice(&payload).unwrap();
+        assert_eq!(decoded.version, PALW_LIFECYCLE_TX_VERSION_V2);
+        let PalwConsensusObjectV2::ModelSeed { line_id, seeder: _, msk_seed, sink_index } = decoded.object else {
+            panic!("0x24 is ModelSeed on the chain, decoded as {:?}", decoded.object)
+        };
+        assert_eq!(line_id.as_byte_slice(), &payload[3..67]);
+        assert_eq!(msk_seed, 10_000_000_000_000, "the 100,000 MSK the carrier paid into the sink");
+        assert_eq!(sink_index, 1);
+        assert_eq!(borsh::to_vec(&decoded).unwrap(), payload, "and it re-encodes to the chain's bytes");
+    }
+
+    /// **Every lifecycle kind keeps the discriminant a carrier already put on the chain.**
+    ///
+    /// Borsh numbers an enum's variants by POSITION, and a lifecycle carrier's payload carries that
+    /// number, so a variant inserted anywhere but the end renumbers every kind below it and turns
+    /// history into bytes this build reads as something else (see the test above). Pinning the
+    /// tail catches an insertion anywhere above it; a new kind is appended and given the next
+    /// number here.
+    #[test]
+    fn consensus_object_discriminants_are_the_ones_the_chain_carries() {
+        let line = h64(0x11);
+        let sig = || vec![7u8; 3];
+        let pinned: Vec<(u8, PalwConsensusObjectV2)> = vec![
+            (29, PalwConsensusObjectV2::ModelVersionWithdrawn { line_id: line, version: 1, signature: sig() }),
+            (
+                30,
+                PalwConsensusObjectV2::ModelLineRolesSet {
+                    line_id: line,
+                    developer: None,
+                    maintainer: None,
+                    contributor_permille_of_leg: 0,
+                    signature: sig(),
+                },
+            ),
+            (31, PalwConsensusObjectV2::ModelLineOwnerTransferred { line_id: line, new_owner: bond(1), signature: sig() }),
+            (32, PalwConsensusObjectV2::ModelLineRetired { line_id: line, signature: sig() }),
+            (
+                33,
+                PalwConsensusObjectV2::ModelProposalPosted {
+                    line_id: line,
+                    root: h64(2),
+                    note_hash: h64(3),
+                    by: bond(2),
+                    signature: sig(),
+                },
+            ),
+            (34, PalwConsensusObjectV2::ModelProposalClosed { line_id: line, proposal_id: h64(4), signature: sig() }),
+            (
+                35,
+                PalwConsensusObjectV2::ModelEvaluationPosted {
+                    line_id: line,
+                    version: 1,
+                    evaluator_id: h64(5),
+                    score_permille: 1,
+                    report_hash: h64(6),
+                    by: bond(3),
+                    signature: sig(),
+                },
+            ),
+            (36, PalwConsensusObjectV2::ModelSeed { line_id: line, seeder: h64(7), msk_seed: 1, sink_index: 1 }),
+            (
+                37,
+                PalwConsensusObjectV2::ModelLineBenefitsDeclared {
+                    line_id: line,
+                    tiers: Vec::new(),
+                    cadence_daa: 1,
+                    expires_daa: 2,
+                    signature: sig(),
+                },
+            ),
+        ];
+        for (discriminant, object) in pinned {
+            assert_eq!(borsh::to_vec(&object).unwrap()[0], discriminant, "{object:?}");
+        }
+    }
 }

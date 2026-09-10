@@ -3127,16 +3127,6 @@ pub enum PalwConsensusObjectV2 {
     },
     /// **ADR-0088 Decision 6: the owner sets the roles and the contributor share**, signed over
     /// `palw_model_roles_message_v1`. `None` means the owner.
-    /// **ADR-0095 §4.1: what this line's positions grant its holders**, signed by the OWNER over
-    /// `palw_model_benefits_message_v1`. The owner rather than the developer because this is what
-    /// the line PROMISES, not what it ships. §4.7 decides whether it lands now or waits out notice.
-    ModelLineBenefitsDeclared {
-        line_id: Hash64,
-        tiers: Vec<crate::palw_model_benefits_v1::PalwModelBenefitTierV1>,
-        cadence_daa: u64,
-        expires_daa: u64,
-        signature: Vec<u8>,
-    },
     ModelLineRolesSet {
         line_id: Hash64,
         developer: Option<PalwBondKeyV2>,
@@ -3194,6 +3184,24 @@ pub enum PalwConsensusObjectV2 {
         seeder: Hash64,
         msk_seed: u64,
         sink_index: u32,
+    },
+    /// **ADR-0095 §4.1: what this line's positions grant its holders**, signed by the OWNER over
+    /// `palw_model_benefits_message_v1`. The owner rather than the developer because this is what
+    /// the line PROMISES, not what it ships. §4.7 decides whether it lands now or waits out notice.
+    ///
+    /// **Last, and it has to stay last.** Borsh writes this enum's discriminant as the variant's
+    /// POSITION, and a lifecycle carrier puts that byte on the chain. This variant first shipped
+    /// in the middle (between `ModelVersionWithdrawn` and `ModelLineRolesSet`), which moved every
+    /// variant below it up by one: testnet-11's `ModelSeed` at DAA 1,945 (carrier `a1fb54e5…`,
+    /// discriminant 0x24) decoded as `ModelEvaluationPosted`, failed, and a fresh node on that
+    /// build refused the block and could never sync past it. A new kind goes at the end;
+    /// `consensus_object_discriminants_are_the_ones_the_chain_carries` pins every position.
+    ModelLineBenefitsDeclared {
+        line_id: Hash64,
+        tiers: Vec<crate::palw_model_benefits_v1::PalwModelBenefitTierV1>,
+        cadence_daa: u64,
+        expires_daa: u64,
+        signature: Vec<u8>,
     },
 }
 
@@ -6228,18 +6236,6 @@ pub enum PalwDeltaEntryV2 {
         old: Option<u64>,
         new: Option<u64>,
     },
-    /// ADR-0095: a line's benefits declaration moved.
-    ModelBenefits {
-        key: Hash64,
-        old: Option<crate::palw_model_benefits_v1::PalwModelBenefitsV1>,
-        new: Option<crate::palw_model_benefits_v1::PalwModelBenefitsV1>,
-    },
-    /// ADR-0095 §4.5: a holder's tenure clock moved.
-    ModelPositionSince {
-        key: (Hash64, Hash64),
-        old: Option<u64>,
-        new: Option<u64>,
-    },
     /// ADR-0088: a line row moved.
     ModelLine {
         key: Hash64,
@@ -6275,6 +6271,23 @@ pub enum PalwDeltaEntryV2 {
         key: u32,
         old: Option<crate::evm::model_market::PalwEvmSettlementV1>,
         new: Option<crate::evm::model_market::PalwEvmSettlementV1>,
+    },
+    /// ADR-0095: a line's benefits declaration moved.
+    ///
+    /// This and `ModelPositionSince` first shipped between `ModelPosition` and `ModelLine`, which
+    /// renumbered the six rows below them — and every accepted claim on testnet-11 writes a
+    /// `ModelVersion` and a `ClaimRoot`, so every delta an older build had persisted read back as
+    /// the wrong rows. `delta_entry_discriminants_are_the_ones_on_disk` pins the positions.
+    ModelBenefits {
+        key: Hash64,
+        old: Option<crate::palw_model_benefits_v1::PalwModelBenefitsV1>,
+        new: Option<crate::palw_model_benefits_v1::PalwModelBenefitsV1>,
+    },
+    /// ADR-0095 §4.5: a holder's tenure clock moved.
+    ModelPositionSince {
+        key: (Hash64, Hash64),
+        old: Option<u64>,
+        new: Option<u64>,
     },
 }
 
@@ -20658,6 +20671,34 @@ pub(crate) mod tests {
         }
         // The walk above is only worth trusting if it actually exercised the variety it claims.
         assert!(kinds.len() >= 10, "the fixture walk covered {} entry kinds, expected at least 10", kinds.len());
+    }
+
+    /// **…and a row written by an OLDER build still reads as the row it was.** The round trip
+    /// above serializes and decodes with the same enum, so it passes whatever order the variants
+    /// are in — including the order ADR-0095 first shipped, which put two new kinds above
+    /// `ModelLine` and renumbered the six below them. A node carries deltas across upgrades (the
+    /// reorg walk reverts them from disk), and every accepted claim on testnet-11 writes a
+    /// `ModelVersion` and a `ClaimRoot`, so under that order every row a previous build had
+    /// persisted decoded as a different kind. The discriminants are pinned from the tail, which
+    /// catches an insertion anywhere above it; a new kind is appended and numbered here.
+    #[test]
+    fn delta_entry_discriminants_are_the_ones_on_disk() {
+        let key = h64(0x5A);
+        let pinned: Vec<(u8, PalwDeltaEntryV2)> = vec![
+            (26, PalwDeltaEntryV2::ModelMarket { key, old: None, new: None }),
+            (27, PalwDeltaEntryV2::ModelPosition { key: (key, key), old: None, new: None }),
+            (28, PalwDeltaEntryV2::ModelLine { key, old: None, new: None }),
+            (29, PalwDeltaEntryV2::ModelVersion { key: (key, 1), old: None, new: None }),
+            (30, PalwDeltaEntryV2::ModelProposal { key, old: None, new: None }),
+            (31, PalwDeltaEntryV2::ModelEvaluation { key: (key, 1, bond_key(1)), old: None, new: None }),
+            (32, PalwDeltaEntryV2::ClaimRoot { key, old: None, new: Some(h64(0x5B)) }),
+            (33, PalwDeltaEntryV2::EvmSettlement { key: 1, old: None, new: None }),
+            (34, PalwDeltaEntryV2::ModelBenefits { key, old: None, new: None }),
+            (35, PalwDeltaEntryV2::ModelPositionSince { key: (key, key), old: None, new: None }),
+        ];
+        for (discriminant, entry) in pinned {
+            assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
+        }
     }
 
     // ---- FP-08: the reorg-equivalence gate — the walk a real reorg executes, on FP state ----
