@@ -261,7 +261,18 @@ the forged arms, where the least lie that finalizes to a forged tile is followed
 hides in and convicted at that bottom; invariant 1 — `a_family_takes_the_dissections_turn_with_both_verbs_or_neither`
 and the producer guard.
 
-**Not done.** A live devnet drill of the dissection: the panel's arms are compile-checked,
-source-pinned and built from functions the tests play, but no node has yet filed a root claim on a
-running chain. The admission refusal for dissection-less fused classes (a fence). Step 6.
+**Not done.**
+
+* A live devnet drill of the dissection: the panel's arms are compile-checked, source-pinned and
+  built from functions the tests play, but no node has yet filed a root claim on a running chain.
+  The classic ladder in front of it is carrier-bound on one host and needs six panel seats, here
+  six holders of the 1.8 GB A16 artifact — a fleet drill.
+* **A forged claim whose capture is a FOLD cannot yet be bottomed.** The free-prompt lane retains a
+  fold (no rows), and the evidence reads the accused's rows by re-executing — which reproduces the
+  honest execution, not the forged one, so the evidence refuses by name ("a folded capture keeps
+  no rows, and its re-execution is not the same execution"). The attempt lane retains dense
+  captures and is unaffected. The missing piece is the bottom's twin of ADR-0085's close from
+  served intervals: the accused's rows around the one tile, served with their paths.
+* The admission refusal for classes whose fused sites cannot be dissected (a fence of its own).
+* Step 6.
 
