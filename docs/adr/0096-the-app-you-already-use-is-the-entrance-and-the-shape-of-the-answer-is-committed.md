@@ -639,3 +639,28 @@ mapping is written down.
   string's `maxLength` is practically about 250 under the 64 KiB cap. §4's producer cost is
   measured and corrected above. Still absent: job version 6, `render_answer_v2`, the engines'
   mask, the served token table, and the assembly refusal's removal.
+* **2026-09-10, Decision 10's engine, and the artifact it could not run** (misakas `70d56519`,
+  `11b293a9`; MISAKA-Studio `2d9e5e8`, `af9c4da`). Measured before building it: **the a16 worker
+  refuses the published dense artifact at boot** (`qwen25-1.5b-a16.palwart`, sha256
+  `a8c4e53e…`: "this artifact declares no tokenizer"), so an engine on the family worker could not
+  serve the file every Studio downloads. The node tree gains `bind_tokenizer_file_v1` and
+  `palw-class bind-tokenizer`, which sets that one field and MEASURES each row's registered root
+  before and after: the tiled-map rows (`graph-v2`, `graph-v3`, `graph-v5@512`) keep the inventory
+  root `1a7457f1…`, the one-byte-map rows move with the digest. The output's sha256 is
+  `3f8fc5066bafae28…` — the file the testnet-11 fleet runs for free prompts, reproduced from the
+  public artifact and the public `tokenizer.json`. The gateway admits the identity `{}` under
+  `--answer-never-commit` with `--anchor` and adopts its worker's class. The Studio's `misaka`
+  engine now supervises that gateway over the family worker, speaks to it through the pool
+  path's own request code, empties its answer-only outbox at each load, and — for an unbound
+  artifact on a machine that still has the retired `misaka-palw-serve` — falls back to it by name
+  rather than taking the chat away. Two defects the smoke run through `misaka-studiod` found and
+  fixed: the sampling notice applied only to an engine named `gateway`, and the `misaka` merge
+  replaced the Studio's `ignored_fields` with the gateway's empty list. The Studio's Settings show
+  the effective values and a Components page holds every binary to the manifest (`af9c4da`).
+
+  **One decision is the operator's and is not taken here: publish the bound artifact.** The
+  Studio's class table pins the unbound file's sha256, so every new install downloads a file the
+  family worker refuses and either binds it or falls back to a retired binary. Uploading
+  `3f8fc5066bafae28…` to `Misakachain/Qwen2.5-1.5B-PALW-A16-runtime` and moving the pin is one
+  upload and one line, after which the fallback has no user; it is an outward-facing act, so it
+  waits for the operator.
