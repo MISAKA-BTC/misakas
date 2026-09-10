@@ -406,10 +406,13 @@ enum PalwCmd {
     /// and names the part that failed. Resumable: a run interrupted mid-group picks up from the
     /// parts the chain still holds rather than re-paying for them.
     ///
-    /// **The split path is planned and priced but not yet filable**: consensus refuses every
-    /// `CourtCloseDeclared` until ADR-0080 W6 lands the declaration's signature check, so this
-    /// command reports the whole carriage and then refuses rather than spending fees on carriers
-    /// the chain would drop. A close that fits one carrier files normally.
+    /// **The split path is filable.** This comment used to say it was not — that consensus refused
+    /// every `CourtCloseDeclared` until ADR-0080 W6 landed the signature check. W6 and W7 have both
+    /// landed: the declaration is verified against the declaring side's registered bond key, and
+    /// the chunk that completes a group assembles it, checks the pinned `close_digest`, decodes and
+    /// adjudicates through the arm a one-carrier close takes. What can still refuse is the
+    /// RULESET's own carrier count — 1 on devnet, where a legal close must fit one carrier — and
+    /// that refusal names the network rather than the build.
     /// Build and sign a data-availability accusation (ADR-0062): make a claim's executor open one
     /// trace event on chain, at the price of your own charge if it answers. Writes a
     /// `PalwConsensusObjectV2::DefaultAccused` for `palw submit-object` to file.
