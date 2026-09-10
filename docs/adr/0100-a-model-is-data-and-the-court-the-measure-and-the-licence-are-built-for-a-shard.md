@@ -1,11 +1,12 @@
 # ADR-0100 — A model is data: the one-move court, the held measurement and the licence per shard, and the boundary "permissionless" means
 
-* Status: PROPOSED 2026-09-10. **Decisions 1, 2, 3 and 6 IMPLEMENTED the same day, consensus-inert
-  on every shipped preset** (§9): the one-move court is a consensus object behind the fence
-  ADR-0099 declared, `None` everywhere, and the fence now arms only over a genesis that commits to
-  the court's signing context; `palw-class measure` and `verify` exist and were run on the real
-  A16 artifact; licensing per shard exists as pure functions. **Decision 4's fold and Decisions 5,
-  7 and 8 are stated, not built**, each with the reason. Every number below is the generator's or
+* Status: PROPOSED 2026-09-10. **Decisions 1, 2, 3, 4 and 6 IMPLEMENTED the same day,
+  consensus-inert on every shipped preset** (§9): the one-move court is a consensus object behind
+  the fence ADR-0099 declared, `None` everywhere, and the fence arms only over a genesis that
+  commits to the court's signing context; `palw-class measure` and `verify` exist and were run on
+  the real A16 artifact; licensing per shard is a consensus object behind its own fence
+  (`Params::palw_shard_licensing`), with no state-version move (Decision 4, amended the same day).
+  **Decisions 5, 7 and 8 are stated, not built**, each with the reason. Every number below is the generator's or
   the tool's, recorded in `docs/palw-shard-plan-2026-09-10.md` and §1.3.
 * Builds on: [0099](0099-the-adder-measures-the-chain-recomputes-and-a-seat-holds-a-shard.md)
   (Decision 5's fence and "the four"; §6 steps 2–4; Decision 4 named and not built),
@@ -148,20 +149,50 @@ the artifact it names the artifact's fields as needing one rather than comparing
 formula (`PalwMeasuredCheckV1::NeedsTheArtifact`); it checks the signature and exits 1 on a
 mismatch or a signature that does not verify.
 
-**Decision 4 — licensing per shard: the part, the quorum and the progress are built; the fold is
-the next step, and it is a flag day.** `PalwShardReceiptPartV1 { claim, shard_count, shard_index,
-receipts }` is one shard's licensing; `palw_shard_quorum_v1` is that shard's quorum over verified
-verdicts (its own seats, once each, `Incapable` for neither side, a majority quorum so the two
-outcomes are disjoint); `PalwShardLicensingProgressV1` is the bitmap a claim keeps, complete on
-the last part. What the consensus half needs, in order: the class's shard count as a chain fact
-(a declaration by the line's owner, checked for shape); the stratified draw (`derive_shard_panel_v1`)
-run by the chain and stored as today's flat panel with the shard count deciding the slices; the
-`ShardReceiptLicensed` variant and its acceptance arm (every receipt verified under the seat
-bond's key, as `validate_receipt_quorum_v2_with_policy` does); the claim record's progress field
-and the fold that licenses on the last part, defaults the producer on the first shard whose
-quorum says so, and redraws a shard short of a quorum at the receipt window; and therefore
-`PALW_STATE_V2_VERSION` 20 → 21 with new golden vectors — a move of the identity, which testnet-11
-takes at a flag day the operator calls (the DAA 1900 and 2400 precedents), not on a branch.
+**Decision 4 — licensing per shard, built, and it needs no flag day** (amended the same day; the
+first text said the fold was a state-version flag day, and the precedent below says otherwise).
+The pure half: `PalwShardReceiptPartV1 { claim, shard_count, shard_index, receipts }` is one
+shard's licensing; `palw_shard_quorum_v1` is that shard's quorum over verified verdicts (its own
+seats, once each, `Incapable` for neither side, a majority quorum so the two outcomes are
+disjoint); `PalwShardLicensingProgressV1` is the bitmap a claim keeps. The consensus half:
+
+* **Who declares the count: the class's registrant, once** (`ClassShardPlanDeclared`, signed
+  under `misaka-palw/shard-plan/mldsa87/v1`). Not the line's owner, as this Decision first said:
+  the panel is the class's, and a class carries many lines. A genesis class has no registrant and
+  is never sharded; a plan is immutable, like the class's graph.
+* **Who holds a shard: a bond, as a refinement of a class it declared** (`BondShardsDeclared`,
+  signed under `misaka-palw/bond-shards/mldsa87/v1`; an empty list withdraws). **This corrects
+  ADR-0099 Decision 3**, which said a shard capability id rides `capable_classes`: the fold
+  refuses every entry of that set that is not a registered class id (`MissingClass`), so a derived
+  id could never have been declared — and keeping the class entry is what keeps SA-1's bound,
+  SA-2's exposure and SA-3's production proof on a shard seat.
+* **The draw.** For a claim whose class has a plan — the fence read at the claim's ANCHOR, as
+  ADR-0065 D1 and ADR-0071 SA-3 are, through one processor helper the binding and its validation
+  share — the chain draws `derive_stratified_panel_v2`: the flat draw's eligibility
+  (`palw_panel_eligible_bonds_v2`, now one spelling for both draws), each bond carrying its shards
+  of the class, `derive_shard_panel_v1` per shard, stored flat and shard-major. A shard nobody
+  holds refuses the draw by name and the claim voids at `BindTimeout`; a sharded class never falls
+  back to a flat panel, which would ask shard seats to judge a whole model.
+* **The licence.** A claim licenses by parts exactly when its bound panel has the stratified shape
+  — `shard_count × seat_count` seats, told from a flat panel by its length alone, so a claim bound
+  before the declaration keeps the whole licence it was drawn for (`palw_claim_licenses_by_parts_v1`).
+  `ShardReceiptLicensed` carries one shard's receipts. At acceptance they meet the whole licence's
+  own checks over that shard's seats (`receipt_quorum_over_seats_v2`, one spelling for both
+  doors). In the fold: that shard's dissenting seats are charged as the whole licence charges
+  them; the claim licenses in the block that lands its last shard (`license_claim`, one spelling
+  for both licences); a shard whose quorum says Unavailable voids the claim where ADR-0065 D4 has
+  not retired that door. `ReceiptLicensed` and `ProducerDefaulted` are refused for a claim that
+  licenses by parts, and the collector assembles the next ready part.
+* **No flag day.** The three new collections — plans, bonds' shards, per-claim progress — enter
+  the state root in their own guarded block and the state carriage behind tail `0x99` only once
+  written, which is the ADR-0087 / ADR-0088 / ADR-0095 precedent, and nothing can be written below
+  `Params::palw_shard_licensing`. `PALW_STATE_V2_VERSION` stays 20, the golden vectors stay, and a
+  dormant network roots byte-identically; the claim record gains no field (the progress lives in
+  its own collection, dropped by `write_claim` on every way out of `PanelBound`). Arming is an
+  ordinary scheduled activation, which `validate_palw_v2` refuses over a bundle that does not
+  commit to the V3 contexts (the two new ones are in it) and without the one-move court armed at
+  or below the same height — a panel of shard seats must be able to convict with what a shard
+  seat holds (ADR-0098 Decision 5).
 
 **Decision 5 — the economics come before the arming.** The stratified panel multiplies ADR-0067
 SA-4's problem — a registrant funding a quorum of judges for the price of a few bonds — by the
@@ -246,18 +277,39 @@ is data" adds (a provider, a directory, a sharded seat) receives, escrows or is 
    — the artifact is not in the tree).
 10 A document measured from an inventory verifies with the artifact, is refused by the tampered
    field with it, and without it names the artifact's fields as needing one.
+11 A sharded claim licenses on its last part, holds a progress row only in between, and each
+   part reverts and re-applies exactly.
+12 The whole-object licence is refused for a claim drawn per shard and kept for one drawn flat;
+   a part is refused for a flat claim.
+13 A part is refused by name: dormant, another plan, a shard out of range, a seat of another
+   shard, short of its quorum, already licensed; a shard whose quorum says Unavailable voids the
+   claim, and past ADR-0065 D4 cannot.
+14 A plan is declared once, by a class with a registrant, with a count in range; a bond's shards
+   refine a class it declared, against the plan's count, and an empty list withdraws; a redraw
+   drops the progress.
+15 The stratified draw seats each shard from the bonds that hold it, one operator a shard; the
+   binding validator recomputes it only when told the claim is sharded; a short shard refuses the
+   draw by name; a part is validated over its own shard's seats and the whole door is shut.
+16 The sharding collections enter the root and the carriage only once written; the licensing
+   fence is dormant everywhere and arms only over V3 with the court no later; the new delta
+   entries (36–38) and objects (39–41) keep their Borsh tags.
 ```
 
 1 is `palw_mode_v2`'s tests; 2–3 `palw_shard_plan_v1`'s; 4 and 10
 `consensus/core/tests/palw_adr0099_shard_plan.rs`; 5–7 `palw_shard_licensing_v1`'s; 8
-`config::params`'s `the_shard_court_arms_only_over_a_bundle_that_commits_to_its_signing_context`.
+`config::params`'s `the_shard_court_arms_only_over_a_bundle_that_commits_to_its_signing_context`;
+11–14 and the root half of 16 `palw_state_v2`'s; 15 `palw_panel_v2`'s; the fence half of 16
+`config::params`'s `the_shard_licensing_fence_is_dormant_and_arms_only_over_v3_with_the_court`, the
+tags the two discriminant pins.
 
 ## 6. Order of work
 
-1. Decisions 1, 2, 3 and the pure half of 4 — **done** (§9).
+1. Decisions 1, 2, 3 and 4 — **done** (§9); Decision 4's consensus half without a flag day.
 2. A devnet drill of the one-move court: a genesis stating V3, a seat that files, a fold that
    convicts — the U-04 of ADR-0099, now with an object to file.
-3. Decision 4's consensus half, at the flag day the operator calls (the state version moves).
+3. A devnet drill of per-shard licensing: a class registered by a bond, a plan, bonds declaring
+   shards, a stratified panel, parts landing — the seats holding the whole model until a sharded
+   backend exists (Decision 7 step 7).
 4. Decision 5's conditions: paid seats, the fuzz gate.
 5. Decision 7, in its order; step 4 (the positive control) before any of 5–10.
 6. The successor mint for a K3-class network (ADR-0097 Decision 5), priced by the tools.
@@ -276,8 +328,6 @@ is data" adds (a provider, a directory, a sharded seat) receives, escrows or is 
 
 ## 8. What is deliberately not decided
 
-* **Who declares a class's shard count** beyond "the line's owner, checked for shape" — the
-  object is Decision 4's consensus half.
 * **The provider directory's transport** (Decision 7 step 9): a signed descriptor, carried by
   something the chain does not hold.
 * **A third family.** Still a converter and kernels first; Decision 7 step 4 is what changes that.
@@ -312,4 +362,20 @@ order is `main`'s to overwrite.
     inputs and the document, `rms_eps_q` in the manifest, `NeedsTheArtifact`; the context renamed
     to the convention; `misaka-palw-sdk/src/bin/palw-class.rs` — `measure` and `verify`.
   * `consensus/core/src/palw_shard_licensing_v1.rs` — Decision 4's pure half.
+  * **Decision 4's consensus half (same day):** `palw_shard_licensing_v1.rs` — the plan record,
+    the two message functions and contexts, the extras parameters, the shard slice, the by-parts
+    predicate; `palw_state_v2.rs` — three collections (rooted and carried behind `0x99` only once
+    written), three delta entries, `ClassShardPlanDeclared` / `BondShardsDeclared` /
+    `ShardReceiptLicensed` (tags 39–41), `PalwTransitionExtrasV1::shard_licensing`, fourteen
+    refusals, the three fold arms, `license_claim` and the `write_claim` hook; `palw_panel_v2.rs`
+    — `palw_panel_eligible_bonds_v2`, `derive_stratified_panel_v2`,
+    `validate_panel_bound_v2_with_shards`, `receipt_quorum_over_seats_v2`,
+    `validate_shard_receipt_part_v1`; `palw_lifecycle_objects_v2.rs` — three ride rules;
+    `palw_mode_v2.rs` — V3 gains the two contexts; `config/params.rs`, `fork_id_v1.rs` —
+    `Params::palw_shard_licensing` at every site, its two assembly rules and its test;
+    `processor.rs` — the cached fence, the one-place stratified decision, the extras, the three
+    acceptance arms, the stratified binding and its validation, the part assembler;
+    `misaka-cli/src/palw_shard_licensing.rs` — `palw shard-plan` and `palw bond-shards`;
+    `kaspad/src/palw_panel.rs` — the seat files only where the chain's refutation ladder can try
+    the claim, and its source pin reads the new arm.
   * `docs/palw-shard-plan-2026-09-10.md` regenerated; this ADR; the README index.

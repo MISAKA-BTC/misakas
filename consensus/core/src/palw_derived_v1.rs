@@ -719,6 +719,7 @@ mod tests {
             crate::palw_schedule::PALW_SCHEDULE_ALL_DOMAINS,
             crate::palw_service_descriptor_v1::PALW_SERVICE_DESCRIPTOR_ALL_DOMAINS,
             crate::palw_shard_court_v1::PALW_SHARD_COURT_ALL_DOMAINS,
+            crate::palw_shard_licensing_v1::PALW_SHARD_LICENSING_ALL_DOMAINS,
             crate::palw_slash::PALW_S_ALL_DOMAINS,
             crate::palw_state_v2::PALW_STATE_V2_ALL_DOMAINS,
             crate::palw_step::PALW_STEP_ALL_DOMAINS,

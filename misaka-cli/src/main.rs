@@ -37,6 +37,7 @@ mod palw_fp;
 mod palw_line;
 mod palw_model;
 mod palw_shard_court;
+mod palw_shard_licensing;
 #[cfg(feature = "evm-send")]
 mod prea;
 /// ADR-0079 Decision 13: `node security-report` — the host posture, printed from live state.
@@ -449,6 +450,47 @@ enum PalwCmd {
         /// The ladder to check the named leaf against locally (default: the shipped court's 2^26).
         #[arg(long, default_value_t = 1u64 << 26)]
         ladder: u64,
+        /// Where to write the signed object.
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
+    /// Declare a class's shard plan (ADR-0100 Decision 4), signed by the class's registrant bond:
+    /// claims bound afterwards draw a panel per shard and license by parts. Declared once.
+    /// Writes a `PalwConsensusObjectV2::ClassShardPlanDeclared` for `palw submit-object`.
+    ShardPlan {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex class id (a class registered by a bond — a genesis class has no registrant).
+        #[arg(long)]
+        class: String,
+        /// How many shards (2..=1024). A shard holds at least one layer; `palw-shard-plan` prices a count.
+        #[arg(long)]
+        count: u32,
+        /// The class's registrant bond outpoint, `txid:index` — its key signs.
+        #[arg(long)]
+        bond: String,
+        /// Where to write the signed object.
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
+    /// Declare which shards of a class your bond holds (ADR-0100 Decision 4) — a refinement of the
+    /// class your bond declared in capable_classes. Writes a `BondShardsDeclared`; an empty
+    /// `--shards ""` withdraws.
+    BondShards {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// Your bond outpoint, `txid:index`.
+        #[arg(long)]
+        bond: String,
+        /// 128-hex class id.
+        #[arg(long)]
+        class: String,
+        /// The class's plan's shard count (it must match the declared plan).
+        #[arg(long)]
+        count: u32,
+        /// Comma-separated shard indices, ascending, e.g. `0,1`; empty withdraws.
+        #[arg(long, default_value = "")]
+        shards: String,
         /// Where to write the signed object.
         #[arg(long)]
         out: std::path::PathBuf,
@@ -1471,6 +1513,12 @@ async fn main() -> std::process::ExitCode {
         Command::Palw(PalwCmd::SubmitObject { key, object, yes }) => palw_fp::submit_objects(&ctx, &key.source(), &object, yes).await,
         Command::Palw(PalwCmd::DaAccuse { key, claim, row, tile, bond, out }) => {
             palw_da::accuse(&ctx, &key.source(), palw_da::DaAccuseArgs { claim: &claim, row, tile, bond: &bond, out: &out }).await
+        }
+        Command::Palw(PalwCmd::ShardPlan { key, class, count, bond, out }) => {
+            palw_shard_licensing::shard_plan(&ctx, &key.source(), &class, count, &bond, &out).await
+        }
+        Command::Palw(PalwCmd::BondShards { key, bond, class, count, shards, out }) => {
+            palw_shard_licensing::bond_shards(&ctx, &key.source(), &bond, &class, count, &shards, &out).await
         }
         Command::Palw(PalwCmd::ShardAccuse { key, accusation, bond, ladder, out }) => {
             palw_shard_court::accuse(

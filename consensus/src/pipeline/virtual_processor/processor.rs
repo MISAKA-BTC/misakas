@@ -547,6 +547,10 @@ pub struct VirtualStateProcessor {
     /// gives — the acceptance rehearsal, the fold (through the extras' ladder) and the state walk
     /// must get the same answer for the same block.
     pub(super) palw_shard_court: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// `Params::palw_shard_licensing` (ADR-0100 Decision 4). Resolved in ONE place,
+    /// [`Self::palw_shard_licensing_at`]; the panel draw, its validation and the fold's extras all
+    /// read it through that, so a node cannot bind what its fold refuses.
+    pub(super) palw_shard_licensing: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// Rate limiter for [`Self::palw_warn_if_maturity_outruns_the_registry`] — the DAA score the
     /// shortfall was last reported at, or `PALW_SHORTFALL_NEVER_REPORTED`. **Log state only**:
     /// nothing consensus-visible reads it, so two nodes that report at different moments still
@@ -994,6 +998,7 @@ impl VirtualStateProcessor {
             palw_uncertified_weightless: params.palw_uncertified_weightless,
             palw_da_court: params.palw_da_court,
             palw_shard_court: params.palw_shard_court_fence(),
+            palw_shard_licensing: params.palw_shard_licensing_fence(),
             palw_frontier_provenance: params.palw_frontier_provenance,
             palw_validator_payout_bounds: params.palw_validator_payout_bounds_fence(),
             finality_depth: params.blockrate.finality_depth,
@@ -5993,6 +5998,76 @@ impl VirtualStateProcessor {
             Self::verify_mldsa87_with_context_bool(key, message, sig, context)
         };
 
+        // **ADR-0100 Decision 4: a claim drawn per shard gets its next ready PART**, one shard a
+        // call, by the same greedy rule as the whole licence below and checked by the same
+        // function the chain will check it with, at the same point.
+        if self.palw_shard_licensing_at(point.daa_score)
+            && let Some(plan) = kaspa_consensus_core::palw_shard_licensing_v1::palw_claim_licenses_by_parts_v1(
+                &state,
+                &claim,
+                panel_params.seat_count(),
+            )
+        {
+            let seats = state.panel(&claim)?.seats.clone();
+            let licensed = state.shard_licensing_of(&claim).cloned();
+            for shard in 0..plan.shard_count {
+                if licensed.as_ref().is_some_and(|progress| progress.is_licensed(shard)) {
+                    continue;
+                }
+                let Some(slice) = kaspa_consensus_core::palw_shard_licensing_v1::palw_panel_shard_slice_v1(
+                    &seats,
+                    plan.shard_count,
+                    panel_params.seat_count(),
+                    shard,
+                ) else {
+                    continue;
+                };
+                let mut kept: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2> = Vec::new();
+                let mut ready = false;
+                for candidate in candidates.iter().filter(|candidate| slice.iter().any(|seat| seat.bond == candidate.seat_bond)) {
+                    if kept.iter().any(|receipt| receipt.seat_bond == candidate.seat_bond) {
+                        continue;
+                    }
+                    let mut attempt = kept.clone();
+                    attempt.push(candidate.clone());
+                    let part = kaspa_consensus_core::palw_shard_licensing_v1::PalwShardReceiptPartV1 {
+                        claim,
+                        shard_count: plan.shard_count,
+                        shard_index: shard,
+                        receipts: attempt.clone(),
+                    };
+                    match kaspa_consensus_core::palw_panel_v2::validate_shard_receipt_part_v1(
+                        &state,
+                        panel_params,
+                        state_params,
+                        &point,
+                        network_domain,
+                        &part,
+                        verify,
+                        self.palw_unavailable_abstains_at(point.daa_score),
+                    ) {
+                        Ok(_) => {
+                            kept = attempt;
+                            ready = true;
+                        }
+                        Err(kaspa_consensus_core::palw_panel_v2::PalwPanelV2Error::NoQuorum { .. }) => kept = attempt,
+                        Err(_) => {}
+                    }
+                }
+                if ready {
+                    return Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ShardReceiptLicensed {
+                        part: kaspa_consensus_core::palw_shard_licensing_v1::PalwShardReceiptPartV1 {
+                            claim,
+                            shard_count: plan.shard_count,
+                            shard_index: shard,
+                            receipts: kept,
+                        },
+                    });
+                }
+            }
+            return None;
+        }
+
         let mut kept: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2> = Vec::new();
         let mut verdict: Option<Q> = None;
         for candidate in candidates {
@@ -6060,7 +6135,7 @@ impl VirtualStateProcessor {
                     // `point.daa_score` would make the derived panel change from block to block
                     // around the fence height, and a `PanelBound` that missed the block it was
                     // built for would be refused as a mismatch rather than accepted late.
-                    kaspa_consensus_core::palw_panel_v2::validate_panel_bound_v2_with_capability_proof(
+                    kaspa_consensus_core::palw_panel_v2::validate_panel_bound_v2_with_shards(
                         state,
                         panel_params,
                         state_params,
@@ -6074,6 +6149,8 @@ impl VirtualStateProcessor {
                         // a pure function of the claim, so the rule that narrows it must be one
                         // too — and the assembler below resolves it at the same point.
                         self.palw_capability_bound_at(anchor_fact.anchor_daa),
+                        // ADR-0100 Decision 4: the same one-place decision the binding made.
+                        self.palw_stratified_shard_count(state, &claim_record.class_id, anchor_fact.anchor_daa),
                     )
                     .map_err(|e| e.to_string())?;
                 }
@@ -7088,6 +7165,83 @@ impl VirtualStateProcessor {
                         Err(e) => return Err(format!("claim {claim_id}: the accusation does not adjudicate: {e}")),
                     }
                 }
+                // **ADR-0100 Decision 4: per-shard licensing's three objects.** The fence first, the
+                // same doubled-fence doctrine as every court move; then each object's authority:
+                // the class's registrant over a plan, the bond over its shard list, and over a part
+                // the seats' own receipts, checked exactly as a whole licence checks them, over
+                // that shard's seats.
+                Obj::ClassShardPlanDeclared { class_id, shard_count, signature } => {
+                    if !self.palw_shard_licensing_at(point.daa_score) {
+                        return Err(format!("class {class_id}: per-shard licensing is not armed on this network (ADR-0100)"));
+                    }
+                    let class = state
+                        .class(class_id)
+                        .ok_or_else(|| format!("a shard plan names class {class_id} this chain does not have"))?;
+                    let registrant = class
+                        .registrant_bond
+                        .ok_or_else(|| format!("class {class_id} was registered at genesis and has no registrant"))?;
+                    let record = state.bond(&registrant).ok_or_else(|| format!("class {class_id}'s registrant bond is gone"))?;
+                    let message = kaspa_consensus_core::palw_shard_licensing_v1::palw_class_shard_plan_message_v1(
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        class_id,
+                        *shard_count,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &record.pubkey,
+                        message.as_byte_slice(),
+                        signature,
+                        kaspa_consensus_core::palw_shard_licensing_v1::PALW_SHARD_PLAN_MLDSA87_CONTEXT,
+                    ) {
+                        return Err(format!("class {class_id}'s shard plan is not signed by its registrant"));
+                    }
+                }
+                Obj::BondShardsDeclared { bond, class_id, shard_count, shards, signature } => {
+                    if !self.palw_shard_licensing_at(point.daa_score) {
+                        return Err(format!("bond {bond:?}: per-shard licensing is not armed on this network (ADR-0100)"));
+                    }
+                    let record =
+                        state.bond(bond).ok_or_else(|| format!("a shard list names bond {bond:?} this chain does not have"))?;
+                    let message = kaspa_consensus_core::palw_shard_licensing_v1::palw_bond_shards_message_v1(
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        bond,
+                        class_id,
+                        *shard_count,
+                        shards,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &record.pubkey,
+                        message.as_byte_slice(),
+                        signature,
+                        kaspa_consensus_core::palw_shard_licensing_v1::PALW_BOND_SHARDS_MLDSA87_CONTEXT,
+                    ) {
+                        return Err(format!("bond {bond:?}'s shard list is not signed by the bond"));
+                    }
+                }
+                Obj::ShardReceiptLicensed { part } => {
+                    if !self.palw_shard_licensing_at(point.daa_score) {
+                        return Err(format!("claim {}: per-shard licensing is not armed on this network (ADR-0100)", part.claim));
+                    }
+                    kaspa_consensus_core::palw_panel_v2::validate_shard_receipt_part_v1(
+                        state,
+                        panel_params,
+                        state_params,
+                        point,
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        part,
+                        Self::verify_mldsa87_with_context_bool,
+                        self.palw_unavailable_abstains_at(point.daa_score),
+                    )
+                    .map_err(|e| format!("claim {} shard {}: the part does not carry a quorum: {e}", part.claim, part.shard_index))?;
+                }
                 // **ADR-0062 SA-2: the disclosure is signed by the CLAIM's bond, and bounded by the
                 // ruleset's close ceiling before a single Merkle path is walked.**
                 //
@@ -7342,6 +7496,18 @@ impl VirtualStateProcessor {
             } else {
                 None
             },
+            // ADR-0100 Decision 4: one shard's seats and quorum ride to the fold when per-shard
+            // licensing is armed — the panel parameters the draw and the acceptance layer use.
+            shard_licensing: if self.palw_shard_licensing_at(daa_score) {
+                self.palw_panel_params_v2.as_ref().map(|panel| {
+                    kaspa_consensus_core::palw_shard_licensing_v1::PalwShardLicensingParamsV1 {
+                        seats_per_shard: panel.seat_count(),
+                        quorum_per_shard: panel.quorum(),
+                    }
+                })
+            } else {
+                None
+            },
         }
     }
 
@@ -7405,6 +7571,27 @@ impl VirtualStateProcessor {
     /// carries, which is `Some` exactly when this is true.
     fn palw_shard_court_at(&self, daa_score: u64) -> bool {
         self.palw_shard_court.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0100 Decision 4, resolved in exactly one place.**
+    fn palw_shard_licensing_at(&self, daa_score: u64) -> bool {
+        self.palw_shard_licensing.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **Whether a claim's panel is drawn per shard, and into how many** — the ONE decision the
+    /// binding and its validation share: the fence at the claim's ANCHOR (the panel is a pure
+    /// function of the claim, the reason ADR-0065 D1 and ADR-0071 SA-3 are read there too) and a
+    /// plan its class declared.
+    fn palw_stratified_shard_count(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        class_id: &kaspa_hashes::Hash64,
+        anchor_daa: u64,
+    ) -> Option<u32> {
+        if !self.palw_shard_licensing_at(anchor_daa) {
+            return None;
+        }
+        state.class_shard_plan(class_id).map(|plan| plan.shard_count)
     }
 
     /// **ADR-0075 D14, resolved in exactly one place: WHAT a certification slot may be spent on.**
@@ -8044,21 +8231,38 @@ impl VirtualStateProcessor {
             };
             // A registry too small to seat a panel yields nothing rather than a short one: a
             // partial jury is `derive_panel_v2`'s fail-closed refusal, and it stays that.
-            let Ok(seats) = kaspa_consensus_core::palw_panel_v2::derive_panel_v2_with_capability_proof(
-                state,
-                panel_params,
-                claim_id,
-                anchor.anchor_block,
-                min_collateral,
-                // ADR-0065 D1, from the claim's own anchor — the same input the acceptance layer
-                // uses, through the same one-place subtraction.
-                kaspa_consensus_core::palw_panel_v2::palw_seat_maturity_floor_v1(
-                    anchor.anchor_daa,
-                    self.palw_bond_maturity_at(anchor.anchor_daa),
+            // ADR-0065 D1, from the claim's own anchor — the same input the acceptance layer
+            // uses, through the same one-place subtraction.
+            let maturity_floor = kaspa_consensus_core::palw_panel_v2::palw_seat_maturity_floor_v1(
+                anchor.anchor_daa,
+                self.palw_bond_maturity_at(anchor.anchor_daa),
+            );
+            // ADR-0071 SA-3, from the same anchor as the acceptance layer's sibling call.
+            let capability_bound = self.palw_capability_bound_at(anchor.anchor_daa);
+            // ADR-0100 Decision 4: a class with a plan draws per shard, or not at all — a flat
+            // panel of a sharded class would ask shard seats to judge a whole model.
+            let drawn = match self.palw_stratified_shard_count(state, &claim.class_id, anchor.anchor_daa) {
+                Some(shard_count) => kaspa_consensus_core::palw_panel_v2::derive_stratified_panel_v2(
+                    state,
+                    panel_params,
+                    claim_id,
+                    anchor.anchor_block,
+                    min_collateral,
+                    maturity_floor,
+                    capability_bound,
+                    shard_count,
                 ),
-                // ADR-0071 SA-3, from the same anchor as the acceptance layer's sibling call.
-                self.palw_capability_bound_at(anchor.anchor_daa),
-            ) else {
+                None => kaspa_consensus_core::palw_panel_v2::derive_panel_v2_with_capability_proof(
+                    state,
+                    panel_params,
+                    claim_id,
+                    anchor.anchor_block,
+                    min_collateral,
+                    maturity_floor,
+                    capability_bound,
+                ),
+            };
+            let Ok(seats) = drawn else {
                 continue;
             };
             out.push(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::PanelBound {
@@ -14616,6 +14820,9 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ModelBuy { .. } => "ModelBuy",
         O::ModelSeed { .. } => "ModelSeed",
         O::ShardCourtAccused { .. } => "ShardCourtAccused",
+        O::ClassShardPlanDeclared { .. } => "ClassShardPlanDeclared",
+        O::BondShardsDeclared { .. } => "BondShardsDeclared",
+        O::ShardReceiptLicensed { .. } => "ShardReceiptLicensed",
         O::ModelSell { .. } => "ModelSell",
         O::ModelLineFounded { .. } => "ModelLineFounded",
         O::ModelVersionPublished { .. } => "ModelVersionPublished",

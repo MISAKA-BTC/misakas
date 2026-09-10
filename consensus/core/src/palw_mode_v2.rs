@@ -209,6 +209,9 @@ pub const PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V3: &[&[u8]] = &[
     crate::palw_slash::PALW_S_MLDSA87_ATTESTATION_CONTEXT,
     // — the one-move court —
     crate::palw_shard_court_v1::PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT,
+    // — per-shard licensing (ADR-0100 Decision 4): the registrant's plan, a bond's shards —
+    crate::palw_shard_licensing_v1::PALW_SHARD_PLAN_MLDSA87_CONTEXT,
+    crate::palw_shard_licensing_v1::PALW_BOND_SHARDS_MLDSA87_CONTEXT,
 ];
 
 /// The families whose ML-DSA-87 contexts the ConsensusV2 acceptance layer verifies signatures
@@ -230,6 +233,7 @@ pub(crate) const PALW_V2_ACCEPTANCE_FAMILIES: &[&[&[u8]]] = &[
     crate::palw_carriage::PALW_CARRIAGE_ALL_DOMAINS,
     crate::palw_slash::PALW_S_ALL_DOMAINS,
     crate::palw_shard_court_v1::PALW_SHARD_COURT_ALL_DOMAINS,
+    crate::palw_shard_licensing_v1::PALW_SHARD_LICENSING_ALL_DOMAINS,
 ];
 
 /// The naming convention that separates a signing CONTEXT from a hashing domain inside those
@@ -2027,10 +2031,14 @@ pub(crate) mod tests {
             &PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V3[..PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2.len()],
             PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2
         );
-        assert_eq!(PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V3.len(), PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2.len() + 1);
         assert_eq!(
-            PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V3[PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2.len()],
-            crate::palw_shard_court_v1::PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT
+            &PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V3[PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2.len()..],
+            &[
+                crate::palw_shard_court_v1::PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT,
+                crate::palw_shard_licensing_v1::PALW_SHARD_PLAN_MLDSA87_CONTEXT,
+                crate::palw_shard_licensing_v1::PALW_BOND_SHARDS_MLDSA87_CONTEXT,
+            ],
+            "V3 is V2 then the one-move court's context and per-shard licensing's two (ADR-0100)"
         );
         let roots = [palw_v2_signature_contexts_root(), palw_v2_signature_contexts_root_v2(), palw_v2_signature_contexts_root_v3()];
         assert!(roots[0] != roots[1] && roots[1] != roots[2] && roots[0] != roots[2], "three sets, three roots");

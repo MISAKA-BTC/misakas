@@ -3213,6 +3213,30 @@ pub enum PalwConsensusObjectV2 {
     ShardCourtAccused {
         accusation: Box<crate::palw_shard_court_v1::PalwShardCourtAccusationV1>,
     },
+    /// **ADR-0100 Decision 4: a class's shard plan, declared once by its registrant**, signed over
+    /// `palw_class_shard_plan_message_v1` under the registrant bond's key. A genesis class has no
+    /// registrant and cannot be sharded. Tag 39, appended last.
+    ClassShardPlanDeclared {
+        class_id: Hash64,
+        shard_count: u32,
+        signature: Vec<u8>,
+    },
+    /// **ADR-0100 Decision 4: the shards of a class a bond holds** — the refinement a stratified
+    /// draw reads, of a class the bond already declared in `capable_classes` (which holds class
+    /// ids and nothing else). An empty list withdraws. Signed by the bond. Tag 40.
+    BondShardsDeclared {
+        bond: PalwBondKeyV2,
+        class_id: Hash64,
+        shard_count: u32,
+        shards: Vec<u32>,
+        signature: Vec<u8>,
+    },
+    /// **ADR-0100 Decision 4: one shard's licensing part.** Unsigned like `ReceiptLicensed`: the
+    /// seats' receipts are the authority, verified at acceptance. The claim licenses in the block
+    /// that lands its last shard. Tag 41.
+    ShardReceiptLicensed {
+        part: crate::palw_shard_licensing_v1::PalwShardReceiptPartV1,
+    },
 }
 
 /// The block's own work slot, as the V3 transition consumes it (ADR-0044): a chain-challenge
@@ -4488,6 +4512,35 @@ pub enum PalwStateV2Error {
     ShardCourtNeedsDissection { claim: Hash64, leaf: u64 },
     #[error("the accusation does not adjudicate: {0}")]
     ShardCourt(String),
+    // ADR-0100 Decision 4 — per-shard licensing's refusals, by name.
+    #[error("per-shard licensing is not armed on this network (Params::palw_shard_licensing)")]
+    ShardLicensingDormant,
+    #[error("class {0} was registered at genesis and has no registrant to declare its shard plan")]
+    ShardPlanFromGenesisClass(Hash64),
+    #[error("class {0} already declared its shard plan; a plan is declared once")]
+    ShardPlanAlreadyDeclared(Hash64),
+    #[error("a plan of {0} shards is outside the range the chain accepts")]
+    ShardCountOutOfRange(u32),
+    #[error("class {0} declared no shard plan")]
+    ShardPlanMissing(Hash64),
+    #[error("class {class} declared {declared} shards and the object names {got}")]
+    ShardPlanMismatch { class: Hash64, declared: u32, got: u32 },
+    #[error("bond {bond:?} declares shards of class {class} without declaring the class itself")]
+    BondShardsClassNotDeclared { bond: PalwBondKeyV2, class: Hash64 },
+    #[error("the bond's shard list is malformed: {0}")]
+    BondShardsMalformed(&'static str),
+    #[error("claim {0} does not license by parts: its panel is not a declared plan's stratified shape")]
+    NotLicensedByParts(Hash64),
+    #[error("claim {0} licenses by parts; a whole-object licence or default does not apply to it")]
+    LicensedByParts(Hash64),
+    #[error("shard {shard} of a {count}-shard plan")]
+    ShardIndexOutOfRange { shard: u32, count: u32 },
+    #[error("shard {shard} of claim {claim} has already licensed")]
+    ShardAlreadyLicensed { claim: Hash64, shard: u32 },
+    #[error("shard {shard} of claim {claim}: {why}")]
+    ShardPartRefused { claim: Hash64, shard: u32, why: String },
+    #[error("shard {shard} of claim {claim}: {valid} valid and {unavailable} unavailable of the {needed} a quorum needs")]
+    ShardPartShort { claim: Hash64, shard: u32, valid: u16, unavailable: u16, needed: u16 },
     // There is deliberately NO size error here. A disclosure's ceiling is a wire bound, and it is
     // already applied on the only path into this fold: `palw_lifecycle_objects_from_accepted_txs_v2`
     // runs `palw_lifecycle_object_may_ride_v2` on every extracted object and SKIPS the ones that
@@ -4572,6 +4625,16 @@ pub struct PalwChainStateV2 {
     /// sequence — the list the selected child carries as `MarketSettle` system ops and validates
     /// equal to this. Drained by the child's fold; enters the state root only when non-empty.
     evm_settlements: BTreeMap<u32, crate::evm::model_market::PalwEvmSettlementV1>,
+    /// **ADR-0100 Decision 4: each class's shard plan**, declared once by its registrant. With the
+    /// two below, enters the state root only when non-empty — nothing can be written below
+    /// `Params::palw_shard_licensing` — so a dormant network roots exactly as before.
+    class_shard_plans: BTreeMap<Hash64, crate::palw_shard_licensing_v1::PalwClassShardPlanV1>,
+    /// ADR-0100 Decision 4: which shards of a class a bond holds — a refinement of the class the
+    /// bond declared in `capable_classes`, which carries registered class ids only.
+    bond_shards: BTreeMap<(PalwBondKeyV2, Hash64), Vec<u32>>,
+    /// ADR-0100 Decision 4: which shards of a claim have licensed. Present only while the claim is
+    /// `PanelBound` (`write_claim` drops it on every way out of that phase).
+    shard_licensing: BTreeMap<Hash64, crate::palw_shard_licensing_v1::PalwShardLicensingProgressV1>,
     /// **ADR-0056 Decision 3: the registry's own exposure ledger, kept SEPARATE from the claims'.**
     ///
     /// `reserved_exposure` is an accumulator over live claims, and
@@ -4692,6 +4755,9 @@ impl PalwChainStateV2 {
             model_evaluations: BTreeMap::new(),
             claim_roots: BTreeMap::new(),
             evm_settlements: BTreeMap::new(),
+            class_shard_plans: BTreeMap::new(),
+            bond_shards: BTreeMap::new(),
+            shard_licensing: BTreeMap::new(),
             registration_exposure: BTreeMap::new(),
             class_walks: BTreeMap::new(),
             certified_families: BTreeMap::new(),
@@ -5147,6 +5213,21 @@ impl PalwChainStateV2 {
         self.evm_settlements.values().copied().collect()
     }
 
+    /// ADR-0100 Decision 4: a class's shard plan, if its registrant declared one.
+    pub fn class_shard_plan(&self, class_id: &Hash64) -> Option<crate::palw_shard_licensing_v1::PalwClassShardPlanV1> {
+        self.class_shard_plans.get(class_id).copied()
+    }
+
+    /// ADR-0100 Decision 4: the shards of `class_id` this bond declared it holds.
+    pub fn shards_of_bond(&self, bond: &PalwBondKeyV2, class_id: &Hash64) -> Option<&[u32]> {
+        self.bond_shards.get(&(*bond, *class_id)).map(Vec::as_slice)
+    }
+
+    /// ADR-0100 Decision 4: which shards of a `PanelBound` claim have licensed so far.
+    pub fn shard_licensing_of(&self, claim_id: &Hash64) -> Option<&crate::palw_shard_licensing_v1::PalwShardLicensingProgressV1> {
+        self.shard_licensing.get(claim_id)
+    }
+
     /// **ADR-0089 Decision 2: the window** — every row a read precompile may serve, flattened,
     /// at this state's own point (the EVM block's selected parent). Bond keys are resolved to
     /// their payout payloads, statuses to codes, and every line of every class is present
@@ -5512,6 +5593,15 @@ impl PalwChainStateV2 {
         // and only then.
         if !self.evm_settlements.is_empty() {
             state.update(collection_root(b"evm_settlements", &self.evm_settlements).as_byte_slice());
+        }
+        // **ADR-0100 Decision 4.** Its own block, for ADR-0095's reason: on a chain where the
+        // blocks above are live, joining one of them would move the root the moment the code
+        // shipped. Empty until a plan is declared, and nothing can be declared below
+        // `Params::palw_shard_licensing`.
+        if !self.class_shard_plans.is_empty() || !self.bond_shards.is_empty() || !self.shard_licensing.is_empty() {
+            state.update(collection_root(b"class_shard_plans", &self.class_shard_plans).as_byte_slice());
+            state.update(collection_root(b"bond_shards", &self.bond_shards).as_byte_slice());
+            state.update(collection_root(b"shard_licensing", &self.shard_licensing).as_byte_slice());
         }
         state.update(&self.safe_weight.to_le_bytes());
         state.update(&self.retired_safe_weight.to_le_bytes());
@@ -6314,6 +6404,25 @@ pub enum PalwDeltaEntryV2 {
         old: Option<u64>,
         new: Option<u64>,
     },
+    /// ADR-0100 Decision 4: a class's shard plan was declared. Appended last — the discriminant is
+    /// positional and `delta_entry_discriminants_are_the_ones_on_disk` pins it (36).
+    ClassShardPlan {
+        key: Hash64,
+        old: Option<crate::palw_shard_licensing_v1::PalwClassShardPlanV1>,
+        new: Option<crate::palw_shard_licensing_v1::PalwClassShardPlanV1>,
+    },
+    /// ADR-0100 Decision 4: a bond's shard list of a class moved (37).
+    BondShards {
+        key: (PalwBondKeyV2, Hash64),
+        old: Option<Vec<u32>>,
+        new: Option<Vec<u32>>,
+    },
+    /// ADR-0100 Decision 4: a claim's per-shard licensing progress moved (38).
+    ShardLicensing {
+        key: Hash64,
+        old: Option<crate::palw_shard_licensing_v1::PalwShardLicensingProgressV1>,
+        new: Option<crate::palw_shard_licensing_v1::PalwShardLicensingProgressV1>,
+    },
 }
 
 /// The full effect one block application had on the state, in application order. Applying it to
@@ -6637,6 +6746,14 @@ impl<'a> TransitionBuilder<'a> {
         if new.is_none() && self.state.claim_roots.contains_key(&key) {
             self.write_claim_root(key, None);
         }
+        // ADR-0100 Decision 4: a claim's licensing progress exists only while it is `PanelBound`,
+        // so every way out of that phase — licensed, voided, redrawn to `Provisional`, retired —
+        // drops it HERE, the one site all of them already pass through.
+        if self.state.shard_licensing.contains_key(&key)
+            && !new.as_ref().is_some_and(|claim| matches!(claim.phase, PalwClaimPhaseV2::PanelBound { .. }))
+        {
+            self.write_shard_licensing(key, None);
+        }
         let old = match &new {
             Some(record) => self.state.claims.insert(key, record.clone()),
             None => self.state.claims.remove(&key),
@@ -6811,6 +6928,36 @@ impl<'a> TransitionBuilder<'a> {
         };
         if old != new {
             self.entries.push(PalwDeltaEntryV2::EvmSettlement { key, old, new });
+        }
+    }
+
+    fn write_class_shard_plan(&mut self, key: Hash64, new: Option<crate::palw_shard_licensing_v1::PalwClassShardPlanV1>) {
+        let old = match new {
+            Some(row) => self.state.class_shard_plans.insert(key, row),
+            None => self.state.class_shard_plans.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::ClassShardPlan { key, old, new });
+        }
+    }
+
+    fn write_bond_shards(&mut self, key: (PalwBondKeyV2, Hash64), new: Option<Vec<u32>>) {
+        let old = match &new {
+            Some(row) => self.state.bond_shards.insert(key, row.clone()),
+            None => self.state.bond_shards.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::BondShards { key, old, new });
+        }
+    }
+
+    fn write_shard_licensing(&mut self, key: Hash64, new: Option<crate::palw_shard_licensing_v1::PalwShardLicensingProgressV1>) {
+        let old = match &new {
+            Some(row) => self.state.shard_licensing.insert(key, row.clone()),
+            None => self.state.shard_licensing.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::ShardLicensing { key, old, new });
         }
     }
 
@@ -7177,6 +7324,31 @@ impl<'a> TransitionBuilder<'a> {
     /// `served_won` is what the quorum concluded; a seat that reported the other way is the one
     /// contradicted. Iterated in the object's order, which is the order the acceptance layer
     /// validated, so two nodes charge the same seats in the same sequence.
+    /// **A claim licenses** — the phase, the receipt deadline disarmed, the challenge deadline
+    /// armed unless a court is already open. Spelled once for the whole-object licence and the
+    /// last shard's part (ADR-0100 Decision 4), so the two cannot license differently.
+    fn license_claim(&mut self, claim_id: Hash64, claim: PalwClaimStateV2, daa_score: u64) -> Result<(), PalwStateV2Error> {
+        let mut licensed = claim;
+        licensed.phase = PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: daa_score };
+        self.write_claim(claim_id, Some(licensed));
+        self.disarm_deadline(claim_id);
+        if !self.state.open_courts_by_claim.contains_key(&claim_id) {
+            let deadline =
+                daa_score.checked_add(self.params.window_challenge).ok_or(PalwStateV2Error::Overflow("challenge deadline"))?;
+            self.arm_deadline(deadline, claim_id);
+        }
+        Ok(())
+    }
+
+    /// ADR-0100 Decision 4: whether this claim's panel was drawn per shard. Answers `false`
+    /// wherever the fence is dormant — no plan exists there — so the whole-object doors are
+    /// byte-identical on every network that has not armed it.
+    fn claim_licenses_by_parts(&self, claim_id: &Hash64) -> bool {
+        self.extras.shard_licensing.is_some_and(|params| {
+            crate::palw_shard_licensing_v1::palw_claim_licenses_by_parts_v1(&self.state, claim_id, params.seats_per_shard).is_some()
+        })
+    }
+
     fn slash_dissenting_seats(
         &mut self,
         claim: &PalwClaimStateV2,
@@ -9639,6 +9811,128 @@ fn apply_object(
                 }
             }
         }
+        // **ADR-0100 Decision 4: a class's shard plan.** The registrant's signature is the
+        // acceptance layer's; here: the fence, a registered class with a registrant (a genesis
+        // class has none and is not sharded), declared once, a count in range.
+        PalwConsensusObjectV2::ClassShardPlanDeclared { class_id, shard_count, signature: _ } => {
+            if builder.extras.shard_licensing.is_none() {
+                return Err(PalwStateV2Error::ShardLicensingDormant);
+            }
+            let record = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?;
+            if record.registrant_bond.is_none() {
+                return Err(PalwStateV2Error::ShardPlanFromGenesisClass(*class_id));
+            }
+            if builder.state.class_shard_plans.contains_key(class_id) {
+                return Err(PalwStateV2Error::ShardPlanAlreadyDeclared(*class_id));
+            }
+            if !crate::palw_shard_licensing_v1::palw_shard_count_in_range_v1(*shard_count) {
+                return Err(PalwStateV2Error::ShardCountOutOfRange(*shard_count));
+            }
+            builder.write_class_shard_plan(
+                *class_id,
+                Some(crate::palw_shard_licensing_v1::PalwClassShardPlanV1 { shard_count: *shard_count, declared_daa: ctx.daa_score }),
+            );
+        }
+        // **ADR-0100 Decision 4: a bond's shards of a class.** Only of a class it declared — the
+        // exposure, the bound and the production proof all ride the class entry — only an Active
+        // bond, only against the class's own plan. An empty list withdraws the row.
+        PalwConsensusObjectV2::BondShardsDeclared { bond, class_id, shard_count, shards, signature: _ } => {
+            if builder.extras.shard_licensing.is_none() {
+                return Err(PalwStateV2Error::ShardLicensingDormant);
+            }
+            let record = builder.state.bonds.get(bond).ok_or(PalwStateV2Error::MissingBond(*bond))?;
+            if !matches!(record.status, PalwBondStatusV2::Active) {
+                return Err(PalwStateV2Error::BondNotActive(*bond));
+            }
+            let plan = builder.state.class_shard_plans.get(class_id).copied().ok_or(PalwStateV2Error::ShardPlanMissing(*class_id))?;
+            if plan.shard_count != *shard_count {
+                return Err(PalwStateV2Error::ShardPlanMismatch { class: *class_id, declared: plan.shard_count, got: *shard_count });
+            }
+            if !record.capable_classes.contains(class_id) {
+                return Err(PalwStateV2Error::BondShardsClassNotDeclared { bond: *bond, class: *class_id });
+            }
+            crate::palw_shard_licensing_v1::palw_bond_shards_shape_v1(*shard_count, shards)
+                .map_err(PalwStateV2Error::BondShardsMalformed)?;
+            builder.write_bond_shards((*bond, *class_id), (!shards.is_empty()).then(|| shards.clone()));
+        }
+        // **ADR-0100 Decision 4: one shard's part.** The receipts' signatures are the acceptance
+        // layer's; here: the fence, a `PanelBound` claim that licenses by parts, the plan's count,
+        // a shard not yet licensed, every receipt this claim's and a seat of THIS shard, then the
+        // shard's quorum. Licensed: dissenting seats of this shard are charged as the whole-object
+        // licence charges them, and the claim licenses in the block that lands its last shard.
+        // Defaulted: the whole claim voids, as `ProducerDefaulted` voids it, where ADR-0065 D4 has
+        // not retired that door.
+        PalwConsensusObjectV2::ShardReceiptLicensed { part } => {
+            let Some(params) = builder.extras.shard_licensing else {
+                return Err(PalwStateV2Error::ShardLicensingDormant);
+            };
+            let claim_id = part.claim;
+            let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
+            let PalwClaimPhaseV2::PanelBound { .. } = claim.phase else {
+                return Err(PalwStateV2Error::WrongPhase { claim: claim_id, edge: "ShardReceiptLicensed" });
+            };
+            let plan =
+                crate::palw_shard_licensing_v1::palw_claim_licenses_by_parts_v1(&builder.state, &claim_id, params.seats_per_shard)
+                    .ok_or(PalwStateV2Error::NotLicensedByParts(claim_id))?;
+            if part.shard_count != plan.shard_count {
+                return Err(PalwStateV2Error::ShardPlanMismatch {
+                    class: claim.class_id,
+                    declared: plan.shard_count,
+                    got: part.shard_count,
+                });
+            }
+            if part.shard_index >= plan.shard_count {
+                return Err(PalwStateV2Error::ShardIndexOutOfRange { shard: part.shard_index, count: plan.shard_count });
+            }
+            let mut progress = match builder.state.shard_licensing.get(&claim_id) {
+                Some(progress) => progress.clone(),
+                None => crate::palw_shard_licensing_v1::PalwShardLicensingProgressV1::new(plan.shard_count)
+                    .map_err(|_| PalwStateV2Error::ShardCountOutOfRange(plan.shard_count))?,
+            };
+            if progress.is_licensed(part.shard_index) {
+                return Err(PalwStateV2Error::ShardAlreadyLicensed { claim: claim_id, shard: part.shard_index });
+            }
+            let seats = builder.state.panels.get(&claim_id).map(|panel| panel.seats.clone()).ok_or(PalwStateV2Error::EmptyPanel)?;
+            let slice = crate::palw_shard_licensing_v1::palw_panel_shard_slice_v1(
+                &seats,
+                plan.shard_count,
+                params.seats_per_shard,
+                part.shard_index,
+            )
+            .ok_or(PalwStateV2Error::NotLicensedByParts(claim_id))?;
+            let shard = part.shard_index;
+            let refused = |why: String| PalwStateV2Error::ShardPartRefused { claim: claim_id, shard, why };
+            if let Some(stray) = part.receipts.iter().find(|receipt| receipt.claim != claim_id) {
+                return Err(refused(format!("a receipt names claim {}", stray.claim)));
+            }
+            let verdicts: Vec<(PalwBondKeyV2, crate::palw_panel_v2::PalwReceiptVerdictV2)> =
+                part.receipts.iter().map(|receipt| (receipt.seat_bond, receipt.verdict)).collect();
+            let quorum = crate::palw_shard_licensing_v1::palw_shard_quorum_v1(slice, &verdicts, params.quorum_per_shard)
+                .map_err(|e| refused(e.to_string()))?;
+            let seat_verdicts = palw_seat_verdicts_of_v2(&part.receipts);
+            match quorum {
+                crate::palw_shard_licensing_v1::PalwShardQuorumV1::Licensed { .. } => {
+                    builder.slash_dissenting_seats(&claim, &seat_verdicts, true)?;
+                    progress.mark(shard).map_err(|e| refused(e.to_string()))?;
+                    if progress.is_complete() {
+                        // The claim licenses; `write_claim` drops the progress row with the phase.
+                        builder.license_claim(claim_id, claim, ctx.daa_score)?;
+                    } else {
+                        builder.write_shard_licensing(claim_id, Some(progress));
+                    }
+                }
+                crate::palw_shard_licensing_v1::PalwShardQuorumV1::ProducerUnavailable { .. } => {
+                    if builder.unavailable_abstains {
+                        return Err(PalwStateV2Error::ProducerDefaultRetired(claim_id));
+                    }
+                    builder.slash_dissenting_seats(&claim, &seat_verdicts, false)?;
+                    builder.void_and_slash(claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::ProducerWithholding)?;
+                }
+                crate::palw_shard_licensing_v1::PalwShardQuorumV1::Short { valid, unavailable, needed } => {
+                    return Err(PalwStateV2Error::ShardPartShort { claim: claim_id, shard, valid, unavailable, needed });
+                }
+            }
+        }
         PalwConsensusObjectV2::ModelSeed { line_id, seeder, msk_seed, sink_index: _ } => {
             model_seed_v1(builder, ctx, line_id, seeder, *msk_seed)?;
         }
@@ -10328,6 +10622,11 @@ fn apply_object(
             let PalwClaimPhaseV2::PanelBound { .. } = claim.phase else {
                 return Err(PalwStateV2Error::WrongPhase { claim: *claim_id, edge: "ReceiptLicensed" });
             };
+            // ADR-0100 Decision 4: a claim whose panel was drawn per shard licenses by parts only.
+            // No plan can exist on a network that never armed the fence, so this never fires there.
+            if builder.claim_licenses_by_parts(claim_id) {
+                return Err(PalwStateV2Error::LicensedByParts(*claim_id));
+            }
             // The panel concluded the data WAS served. A seat that signed `Unavailable` accused
             // the producer of withholding what a quorum of its own panel then verified — and the
             // majority invariant (`2·quorum > seat_count`) is what makes that a contradiction
@@ -10338,17 +10637,7 @@ fn apply_object(
             builder.slash_dissenting_seats(&claim, &verdicts, true)?;
             // …and the seats that said nothing while their panel concluded without them (P0-7).
             builder.slash_silent_seats(claim_id, &claim, &verdicts)?;
-            let mut licensed = claim;
-            licensed.phase = PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: ctx.daa_score };
-            builder.write_claim(*claim_id, Some(licensed));
-            builder.disarm_deadline(*claim_id);
-            if !builder.state.open_courts_by_claim.contains_key(claim_id) {
-                let deadline = ctx
-                    .daa_score
-                    .checked_add(builder.params.window_challenge)
-                    .ok_or(PalwStateV2Error::Overflow("challenge deadline"))?;
-                builder.arm_deadline(deadline, *claim_id);
-            }
+            builder.license_claim(*claim_id, claim, ctx.daa_score)?;
         }
         PalwConsensusObjectV2::CourtOpened { session_id, claim: claim_id, challenger_bond, space, space_size, signature: _ } => {
             if builder.state.court_sessions.contains_key(session_id) {
@@ -10872,6 +11161,10 @@ fn apply_object(
             // a rule and a convention.
             if builder.unavailable_abstains {
                 return Err(PalwStateV2Error::ProducerDefaultRetired(*claim_id));
+            }
+            // ADR-0100 Decision 4: a claim drawn per shard defaults through a part, never whole.
+            if builder.claim_licenses_by_parts(claim_id) {
+                return Err(PalwStateV2Error::LicensedByParts(*claim_id));
             }
             let verdicts = palw_seat_verdicts_of_v2(receipts);
             builder.slash_dissenting_seats(&claim, &verdicts, false)?;
@@ -11402,6 +11695,11 @@ pub struct PalwTransitionExtrasV1 {
     /// object existed. The ladder rides here because the fold holds no bundle and must derive the
     /// same verdict the acceptance layer derived.
     pub shard_court_ladder: Option<u64>,
+    /// ADR-0100 Decision 4: `Some` exactly when `Params::palw_shard_licensing` is active at the
+    /// block — one shard's seats and quorum, which the fold needs to slice a stratified panel and
+    /// count a part, and does not otherwise hold. `None` refuses all three sharding objects and is
+    /// byte-identical to the transition before they existed.
+    pub shard_licensing: Option<crate::palw_shard_licensing_v1::PalwShardLicensingParamsV1>,
 }
 
 impl<'a> TransitionBuilder<'a> {
@@ -12533,6 +12831,9 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::ModelEvaluation { key, old, new } => swap_write!(state.model_evaluations, key, old, new),
         PalwDeltaEntryV2::ClaimRoot { key, old, new } => swap_write!(state.claim_roots, key, old, new),
         PalwDeltaEntryV2::EvmSettlement { key, old, new } => swap_write!(state.evm_settlements, key, old, new),
+        PalwDeltaEntryV2::ClassShardPlan { key, old, new } => swap_write!(state.class_shard_plans, key, old, new),
+        PalwDeltaEntryV2::BondShards { key, old, new } => swap_write!(state.bond_shards, key, old, new),
+        PalwDeltaEntryV2::ShardLicensing { key, old, new } => swap_write!(state.shard_licensing, key, old, new),
     }
     Ok(())
 }
@@ -12718,6 +13019,10 @@ pub struct PalwStateCarriageV2 {
     pub claim_roots: BTreeMap<Hash64, Hash64>,
     /// ADR-0089 Decision 6. A third tagged tail (`0x89`), encoded only when non-empty.
     pub evm_settlements: BTreeMap<u32, crate::evm::model_market::PalwEvmSettlementV1>,
+    /// ADR-0100 Decision 4. A fifth tagged tail (`0x99`), encoded only when any is non-empty.
+    pub class_shard_plans: BTreeMap<Hash64, crate::palw_shard_licensing_v1::PalwClassShardPlanV1>,
+    pub bond_shards: BTreeMap<(PalwBondKeyV2, Hash64), Vec<u32>>,
+    pub shard_licensing: BTreeMap<Hash64, crate::palw_shard_licensing_v1::PalwShardLicensingProgressV1>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -12766,6 +13071,9 @@ const PALW_CARRIAGE_SETTLEMENTS_TAIL_V1: u8 = 0x89;
 /// below `Params::palw_model_benefits` never writes it, and one that reads it from a peer ahead of
 /// its own fence rebuilds the same root because the root's block is guarded the same way.
 const PALW_CARRIAGE_BENEFITS_TAIL_V1: u8 = 0x95;
+/// The tail byte that says ADR-0100 Decision 4's sharding collections follow (last of the five),
+/// guarded exactly as the root's block is.
+const PALW_CARRIAGE_SHARDS_TAIL_V1: u8 = 0x99;
 
 impl borsh::BorshSerialize for PalwStateCarriageV2 {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
@@ -12824,6 +13132,12 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             self.model_benefits.serialize(writer)?;
             self.model_position_since.serialize(writer)?;
         }
+        if !self.class_shard_plans.is_empty() || !self.bond_shards.is_empty() || !self.shard_licensing.is_empty() {
+            PALW_CARRIAGE_SHARDS_TAIL_V1.serialize(writer)?;
+            self.class_shard_plans.serialize(writer)?;
+            self.bond_shards.serialize(writer)?;
+            self.shard_licensing.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -12857,6 +13171,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut model_benefits = BTreeMap::new();
         let mut model_position_since = BTreeMap::new();
         let mut seen_benefits = false;
+        let mut class_shard_plans = BTreeMap::new();
+        let mut bond_shards = BTreeMap::new();
+        let mut shard_licensing = BTreeMap::new();
+        let mut seen_shards = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -12880,10 +13198,16 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_settlements = true;
                     evm_settlements = BTreeMap::deserialize_reader(reader)?;
                 }
-                PALW_CARRIAGE_BENEFITS_TAIL_V1 if !seen_benefits => {
+                PALW_CARRIAGE_BENEFITS_TAIL_V1 if !seen_benefits && !seen_shards => {
                     seen_benefits = true;
                     model_benefits = BTreeMap::deserialize_reader(reader)?;
                     model_position_since = BTreeMap::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_SHARDS_TAIL_V1 if !seen_shards => {
+                    seen_shards = true;
+                    class_shard_plans = BTreeMap::deserialize_reader(reader)?;
+                    bond_shards = BTreeMap::deserialize_reader(reader)?;
+                    shard_licensing = BTreeMap::deserialize_reader(reader)?;
                 }
                 _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "an unknown tail follows the state carriage")),
             }
@@ -12928,6 +13252,9 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             evm_settlements,
             model_benefits,
             model_position_since,
+            class_shard_plans,
+            bond_shards,
+            shard_licensing,
         })
     }
 }
@@ -12963,6 +13290,9 @@ impl PalwStateCarriageV2 {
             model_lines: state.model_lines.clone(),
             model_benefits: state.model_benefits.clone(),
             model_position_since: state.model_position_since.clone(),
+            class_shard_plans: state.class_shard_plans.clone(),
+            bond_shards: state.bond_shards.clone(),
+            shard_licensing: state.shard_licensing.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -13046,6 +13376,9 @@ impl PalwStateCarriageV2 {
             model_lines: self.model_lines,
             model_benefits: self.model_benefits,
             model_position_since: self.model_position_since,
+            class_shard_plans: self.class_shard_plans,
+            bond_shards: self.bond_shards,
+            shard_licensing: self.shard_licensing,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -20754,6 +21087,9 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::ModelEvaluation { .. } => "model_evaluation",
                     PalwDeltaEntryV2::ClaimRoot { .. } => "claim_root",
                     PalwDeltaEntryV2::EvmSettlement { .. } => "evm_settlement",
+                    PalwDeltaEntryV2::ClassShardPlan { .. } => "class_shard_plan",
+                    PalwDeltaEntryV2::BondShards { .. } => "bond_shards",
+                    PalwDeltaEntryV2::ShardLicensing { .. } => "shard_licensing",
                 });
             }
         }
@@ -20783,6 +21119,10 @@ pub(crate) mod tests {
             (33, PalwDeltaEntryV2::EvmSettlement { key: 1, old: None, new: None }),
             (34, PalwDeltaEntryV2::ModelBenefits { key, old: None, new: None }),
             (35, PalwDeltaEntryV2::ModelPositionSince { key: (key, key), old: None, new: None }),
+            // ADR-0100 Decision 4, appended last.
+            (36, PalwDeltaEntryV2::ClassShardPlan { key, old: None, new: None }),
+            (37, PalwDeltaEntryV2::BondShards { key: (bond_key(1), key), old: None, new: None }),
+            (38, PalwDeltaEntryV2::ShardLicensing { key, old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -21297,6 +21637,10 @@ pub(crate) mod tests {
             model_evaluations: _,
             claim_roots: _,
             evm_settlements: _,
+            // ADR-0100 Decision 4: rooted in their own guarded block after the settlements.
+            class_shard_plans: _,
+            bond_shards: _,
+            shard_licensing: _,
             safe_weight: _,
             retired_safe_weight: _,
             bounded_immature: _,
@@ -21702,6 +22046,340 @@ pub(crate) mod tests {
             matches!(out_of_range, PalwStateV2Error::DaIndexOutOfRange { index, count: 256, .. } if index == past),
             "got {out_of_range:?}"
         );
+    }
+
+    // ---- ADR-0100 Decision 4: per-shard licensing in the fold ----
+    //
+    // A class registered by a bond (so it has a registrant), a plan of two shards, a claim, and a
+    // stratified panel of 2 × 3 seats bound to it; the parts land one shard at a time.
+
+    const SHARD_SPP: u16 = 3;
+    const SHARD_Q: u16 = 2;
+
+    fn shard_extras() -> PalwTransitionExtrasV1 {
+        PalwTransitionExtrasV1 {
+            shard_licensing: Some(crate::palw_shard_licensing_v1::PalwShardLicensingParamsV1 {
+                seats_per_shard: SHARD_SPP,
+                quorum_per_shard: SHARD_Q,
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn shard_apply(
+        parent: &PalwChainStateV2,
+        p: &PalwStateParamsV2,
+        c: &PalwBlockContextV2,
+        objects: &[PalwConsensusObjectV2],
+        att: Option<&PalwAttemptEnvelopeV2>,
+        extras: &PalwTransitionExtrasV1,
+    ) -> Result<(PalwChainStateV2, PalwStateDeltaV2), PalwStateV2Error> {
+        let applied = apply_palw_transition_v2_with_extras(parent, p, c, objects, att, false, false, false, false, extras)?;
+        applied.0.assert_internal_consistency(p).expect("internal consistency after apply");
+        applied.0.assert_deadline_consistency(p).expect("deadline consistency after apply");
+        Ok(applied)
+    }
+
+    fn shard_bond(v: u64, collateral: u64) -> PalwConsensusObjectV2 {
+        PalwConsensusObjectV2::BondRegistered {
+            bond: bond_key(v),
+            pubkey: vec![v as u8; 4],
+            operator_pubkey: op_key(20 + v),
+            collateral,
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A00 + v),
+            capable_classes: Default::default(),
+            signature: Vec::new(),
+        }
+    }
+
+    /// Class `h64(1)` registered by bond 9 (so it has a registrant), bonds 1 (the executor) and
+    /// 2..=7 (seats); returns the state and the registration's objects for reuse.
+    fn shard_registry(p: &PalwStateParamsV2, registrant: Option<PalwBondKeyV2>) -> PalwChainStateV2 {
+        let profile = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .expect("the floor's geometry projects");
+        let mut objects: Vec<PalwConsensusObjectV2> = (1..=7).map(|v| shard_bond(v, 1_000)).collect();
+        objects.push(shard_bond(9, 1_000_000_000_000));
+        objects.push(PalwConsensusObjectV2::ClassRegistered {
+            class_id: h64(1),
+            artifact_root: h64(11),
+            slash_value_per_pwu: 5,
+            pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+            initial_target: u128::MAX / 2,
+            share_permille: 1000,
+            activation_daa: 0,
+            admission: registrant.map(|bond| {
+                Box::new(PalwClassAdmissionCarriageV2 {
+                    registrant_bond: bond,
+                    canonical: crate::palw_base0_profile::rc_job_context(&profile, 2, 2),
+                    profile: profile.clone(),
+                    signature: Vec::new(),
+                })
+            }),
+        });
+        let (s1, _) = shard_apply(&PalwChainStateV2::genesis(), p, &ctx(1, 100, 1), &objects, None, &shard_extras())
+            .expect("the registry applies");
+        s1
+    }
+
+    fn stratified_seats() -> Vec<PalwPanelSeatV2> {
+        (2..=7).map(|v| PalwPanelSeatV2 { bond: bond_key(v), operator_id: op_id(20 + v) }).collect()
+    }
+
+    fn shard_receipt(
+        claim: Hash64,
+        bond: u64,
+        verdict: crate::palw_panel_v2::PalwReceiptVerdictV2,
+    ) -> crate::palw_panel_v2::PalwSeatReceiptV2 {
+        crate::palw_panel_v2::PalwSeatReceiptV2 { claim, verdict, seat_bond: bond_key(bond), signed_daa: 104, signature: vec![1; 8] }
+    }
+
+    fn shard_part(claim: Hash64, shard: u32, bonds: &[u64]) -> PalwConsensusObjectV2 {
+        PalwConsensusObjectV2::ShardReceiptLicensed {
+            part: crate::palw_shard_licensing_v1::PalwShardReceiptPartV1 {
+                claim,
+                shard_count: 2,
+                shard_index: shard,
+                receipts: bonds.iter().map(|b| shard_receipt(claim, *b, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid)).collect(),
+            },
+        }
+    }
+
+    /// The plan declared, a claim accepted, and a panel bound — `seats` decides whether it is the
+    /// stratified shape (six) or a flat one (three).
+    fn shard_claim_bound(p: &PalwStateParamsV2, seats: Vec<PalwPanelSeatV2>) -> (PalwChainStateV2, Hash64) {
+        let s1 = shard_registry(p, Some(bond_key(9)));
+        let plan = PalwConsensusObjectV2::ClassShardPlanDeclared { class_id: h64(1), shard_count: 2, signature: vec![9; 8] };
+        let (s2, _) = shard_apply(&s1, p, &ctx(2, 101, 2), &[plan], None, &shard_extras()).expect("the plan lands");
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s3, _) = shard_apply(&s2, p, &ctx(3, 102, 3), &[], Some(&env), &shard_extras()).expect("the claim lands");
+        let (s4, _) = shard_apply(
+            &s3,
+            p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }],
+            None,
+            &shard_extras(),
+        )
+        .expect("the panel binds");
+        (s4, claim_id)
+    }
+
+    /// **A sharded claim licenses in the block that lands its LAST shard**, holds a progress row
+    /// only in between, and a revert of each part is exact.
+    #[test]
+    fn a_sharded_claim_licenses_on_its_last_part_and_its_progress_lives_only_in_between() {
+        let p = params();
+        let (s4, claim_id) = shard_claim_bound(&p, stratified_seats());
+        assert_eq!(s4.class_shard_plan(&h64(1)).map(|plan| plan.shard_count), Some(2));
+        let (s5, d5) = shard_apply(&s4, &p, &ctx(5, 104, 5), &[shard_part(claim_id, 0, &[2, 3])], None, &shard_extras())
+            .expect("shard 0 licenses");
+        assert!(matches!(s5.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }), "one shard is not the claim");
+        let progress = s5.shard_licensing_of(&claim_id).expect("a progress row while PanelBound");
+        assert!(progress.is_licensed(0) && !progress.is_licensed(1));
+        assert_ne!(s5.state_root(), s4.state_root(), "the progress row is in the root");
+        assert_eq!(revert_delta_v2(&s5, &d5, &p).unwrap().state_root(), s4.state_root(), "reverting a part is exact");
+
+        let (s6, d6) = shard_apply(&s5, &p, &ctx(6, 105, 6), &[shard_part(claim_id, 1, &[5, 7])], None, &shard_extras())
+            .expect("shard 1 licenses the claim");
+        assert!(matches!(s6.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 105 }));
+        assert!(s6.shard_licensing_of(&claim_id).is_none(), "the progress row leaves with the phase");
+        let back = revert_delta_v2(&s6, &d6, &p).unwrap();
+        assert_eq!(back.state_root(), s5.state_root(), "reverting the licence restores the progress row");
+        assert!(back.shard_licensing_of(&claim_id).is_some_and(|progress| progress.is_licensed(0)));
+        assert_eq!(apply_delta_v2(&s5, &d6, &p).unwrap().state_root(), s6.state_root(), "and re-applying reaches it again");
+    }
+
+    /// **The whole-object doors are shut to a claim drawn per shard, and open to one drawn flat.**
+    #[test]
+    fn the_whole_object_licence_is_refused_for_a_sharded_claim_and_kept_for_a_flat_one() {
+        let p = params();
+        let (s4, claim_id) = shard_claim_bound(&p, stratified_seats());
+        let whole = PalwConsensusObjectV2::ReceiptLicensed {
+            claim: claim_id,
+            receipts: [2, 3, 4]
+                .iter()
+                .map(|b| shard_receipt(claim_id, *b, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid))
+                .collect(),
+        };
+        let err = shard_apply(&s4, &p, &ctx(5, 104, 5), std::slice::from_ref(&whole), None, &shard_extras()).unwrap_err();
+        assert!(matches!(err, PalwStateV2Error::LicensedByParts(c) if c == claim_id), "{err:?}");
+
+        // A panel bound flat — three seats, the shape a claim bound before its class's plan has —
+        // keeps the whole licence, and a part is refused for it.
+        let flat: Vec<PalwPanelSeatV2> = stratified_seats().into_iter().take(SHARD_SPP as usize).collect();
+        let (f4, flat_claim) = shard_claim_bound(&p, flat);
+        let whole = PalwConsensusObjectV2::ReceiptLicensed {
+            claim: flat_claim,
+            receipts: [2, 3]
+                .iter()
+                .map(|b| shard_receipt(flat_claim, *b, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid))
+                .collect(),
+        };
+        let (f5, _) = shard_apply(&f4, &p, &ctx(5, 104, 5), &[whole], None, &shard_extras()).expect("a flat claim licenses whole");
+        assert!(matches!(f5.claim(&flat_claim).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+        let err = shard_apply(&f4, &p, &ctx(5, 104, 5), &[shard_part(flat_claim, 0, &[2, 3])], None, &shard_extras()).unwrap_err();
+        assert!(matches!(err, PalwStateV2Error::NotLicensedByParts(c) if c == flat_claim), "{err:?}");
+    }
+
+    /// **A part is refused by name** before anything is written.
+    #[test]
+    fn a_shard_part_is_refused_by_name() {
+        let p = params();
+        let (s4, claim_id) = shard_claim_bound(&p, stratified_seats());
+        let refuse = |objects: &[PalwConsensusObjectV2], extras: &PalwTransitionExtrasV1| {
+            shard_apply(&s4, &p, &ctx(5, 104, 5), objects, None, extras).expect_err("refused")
+        };
+        assert!(matches!(
+            refuse(&[shard_part(claim_id, 0, &[2, 3])], &PalwTransitionExtrasV1::default()),
+            PalwStateV2Error::ShardLicensingDormant
+        ));
+        let mut other_plan = shard_part(claim_id, 0, &[2, 3]);
+        if let PalwConsensusObjectV2::ShardReceiptLicensed { part } = &mut other_plan {
+            part.shard_count = 3;
+        }
+        assert!(matches!(refuse(&[other_plan], &shard_extras()), PalwStateV2Error::ShardPlanMismatch { declared: 2, got: 3, .. }));
+        let mut far = shard_part(claim_id, 0, &[2, 3]);
+        if let PalwConsensusObjectV2::ShardReceiptLicensed { part } = &mut far {
+            part.shard_index = 2;
+        }
+        assert!(matches!(refuse(&[far], &shard_extras()), PalwStateV2Error::ShardIndexOutOfRange { shard: 2, count: 2 }));
+        // Bond 5 sits on shard 1; it cannot count for shard 0.
+        assert!(matches!(
+            refuse(&[shard_part(claim_id, 0, &[2, 5])], &shard_extras()),
+            PalwStateV2Error::ShardPartRefused { shard: 0, .. }
+        ));
+        assert!(matches!(
+            refuse(&[shard_part(claim_id, 0, &[2])], &shard_extras()),
+            PalwStateV2Error::ShardPartShort { shard: 0, valid: 1, needed: 2, .. }
+        ));
+        // Twice in one block: the second meets the first's progress.
+        assert!(matches!(
+            refuse(&[shard_part(claim_id, 0, &[2, 3]), shard_part(claim_id, 0, &[3, 4])], &shard_extras()),
+            PalwStateV2Error::ShardAlreadyLicensed { shard: 0, .. }
+        ));
+    }
+
+    /// **A defaulting shard voids the whole claim**, where ADR-0065 D4 has not retired the door.
+    #[test]
+    fn a_shard_whose_quorum_says_unavailable_voids_the_claim() {
+        let p = params();
+        let (s4, claim_id) = shard_claim_bound(&p, stratified_seats());
+        let unavailable = crate::palw_panel_v2::PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: 103 };
+        let part = PalwConsensusObjectV2::ShardReceiptLicensed {
+            part: crate::palw_shard_licensing_v1::PalwShardReceiptPartV1 {
+                claim: claim_id,
+                shard_count: 2,
+                shard_index: 1,
+                receipts: [5, 6].iter().map(|b| shard_receipt(claim_id, *b, unavailable)).collect(),
+            },
+        };
+        let (s5, _) = shard_apply(&s4, &p, &ctx(5, 104, 5), std::slice::from_ref(&part), None, &shard_extras()).expect("defaults");
+        assert!(matches!(
+            s5.claim(&claim_id).unwrap().phase,
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }
+        ));
+        let retired =
+            apply_palw_transition_v2_with_extras(&s4, &p, &ctx(5, 104, 5), &[part], None, true, false, false, false, &shard_extras())
+                .expect_err("past ADR-0065 D4 a part cannot default");
+        assert!(matches!(retired, PalwStateV2Error::ProducerDefaultRetired(c) if c == claim_id));
+    }
+
+    /// **A plan is declared once, by a class that has a registrant, with a count in range.**
+    #[test]
+    fn a_shard_plan_is_declared_once_by_a_class_with_a_registrant() {
+        let p = params();
+        let plan =
+            |count: u32| PalwConsensusObjectV2::ClassShardPlanDeclared { class_id: h64(1), shard_count: count, signature: vec![9; 8] };
+        let genesis_class = shard_registry(&p, None);
+        let err = shard_apply(&genesis_class, &p, &ctx(2, 101, 2), &[plan(2)], None, &shard_extras()).unwrap_err();
+        assert!(matches!(err, PalwStateV2Error::ShardPlanFromGenesisClass(c) if c == h64(1)), "{err:?}");
+        let s1 = shard_registry(&p, Some(bond_key(9)));
+        let dormant = shard_apply(&s1, &p, &ctx(2, 101, 2), &[plan(2)], None, &PalwTransitionExtrasV1::default()).unwrap_err();
+        assert!(matches!(dormant, PalwStateV2Error::ShardLicensingDormant));
+        for bad in [0, 1, 1_025] {
+            let err = shard_apply(&s1, &p, &ctx(2, 101, 2), &[plan(bad)], None, &shard_extras()).unwrap_err();
+            assert!(matches!(err, PalwStateV2Error::ShardCountOutOfRange(c) if c == bad), "{bad}: {err:?}");
+        }
+        let (s2, _) = shard_apply(&s1, &p, &ctx(2, 101, 2), &[plan(2)], None, &shard_extras()).unwrap();
+        assert_eq!(
+            s2.class_shard_plan(&h64(1)),
+            Some(crate::palw_shard_licensing_v1::PalwClassShardPlanV1 { shard_count: 2, declared_daa: 101 })
+        );
+        let again = shard_apply(&s2, &p, &ctx(3, 102, 3), &[plan(4)], None, &shard_extras()).unwrap_err();
+        assert!(matches!(again, PalwStateV2Error::ShardPlanAlreadyDeclared(c) if c == h64(1)));
+    }
+
+    /// **A bond's shards refine a class it declared**, against the class's own plan; an empty list
+    /// withdraws the row.
+    #[test]
+    fn a_bonds_shards_refine_a_class_it_declared() {
+        let p = params();
+        let s1 = shard_registry(&p, Some(bond_key(9)));
+        let plan = PalwConsensusObjectV2::ClassShardPlanDeclared { class_id: h64(1), shard_count: 2, signature: vec![9; 8] };
+        let (s2, _) = shard_apply(&s1, &p, &ctx(2, 101, 2), &[plan], None, &shard_extras()).unwrap();
+        let shards = |bond: u64, count: u32, list: Vec<u32>| PalwConsensusObjectV2::BondShardsDeclared {
+            bond: bond_key(bond),
+            class_id: h64(1),
+            shard_count: count,
+            shards: list,
+            signature: vec![1; 8],
+        };
+        let err = shard_apply(&s2, &p, &ctx(3, 102, 3), &[shards(2, 2, vec![0])], None, &shard_extras()).unwrap_err();
+        assert!(matches!(err, PalwStateV2Error::BondShardsClassNotDeclared { .. }), "{err:?}");
+        let declare = PalwConsensusObjectV2::BondCapabilityDeclared {
+            bond: bond_key(2),
+            capable_classes: [h64(1)].into_iter().collect(),
+            signature: vec![1; 8],
+        };
+        let (s3, _) = shard_apply(&s2, &p, &ctx(3, 102, 3), &[declare], None, &shard_extras()).expect("the class is declared");
+        let err = shard_apply(&s3, &p, &ctx(4, 103, 4), &[shards(2, 3, vec![0])], None, &shard_extras()).unwrap_err();
+        assert!(matches!(err, PalwStateV2Error::ShardPlanMismatch { declared: 2, got: 3, .. }), "{err:?}");
+        let err = shard_apply(&s3, &p, &ctx(4, 103, 4), &[shards(2, 2, vec![1, 0])], None, &shard_extras()).unwrap_err();
+        assert!(matches!(err, PalwStateV2Error::BondShardsMalformed(_)), "{err:?}");
+        let (s4, _) = shard_apply(&s3, &p, &ctx(4, 103, 4), &[shards(2, 2, vec![0, 1])], None, &shard_extras()).unwrap();
+        assert_eq!(s4.shards_of_bond(&bond_key(2), &h64(1)), Some(&[0u32, 1][..]));
+        let (s5, _) = shard_apply(&s4, &p, &ctx(5, 104, 5), &[shards(2, 2, vec![])], None, &shard_extras()).unwrap();
+        assert_eq!(s5.shards_of_bond(&bond_key(2), &h64(1)), None, "an empty list withdraws");
+    }
+
+    /// **A redraw drops the progress**: the claim's second panel is a new draw with new slices.
+    #[test]
+    fn a_redrawn_claim_loses_the_progress_its_first_panel_made() {
+        let p = params();
+        let (s4, claim_id) = shard_claim_bound(&p, stratified_seats());
+        let (s5, _) = shard_apply(&s4, &p, &ctx(5, 104, 5), &[shard_part(claim_id, 0, &[2, 3])], None, &shard_extras()).unwrap();
+        assert!(s5.shard_licensing_of(&claim_id).is_some());
+        let past = 103 + p.window_receipt() + 1;
+        let (s6, _) = shard_apply(&s5, &p, &ctx(6, past, 6), &[], None, &shard_extras()).expect("the sweep redraws");
+        assert!(matches!(s6.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Provisional), "revived for a second draw");
+        assert!(s6.shard_licensing_of(&claim_id).is_none(), "a new panel starts from no shard licensed");
+    }
+
+    /// **The sharding collections enter the root and the carriage only once written**: a state
+    /// that never armed the fence roots and carries exactly as before, and one that did carries
+    /// the rows through a round trip.
+    #[test]
+    fn the_shard_collections_enter_the_root_and_the_carriage_only_once_written() {
+        let p = params();
+        let dormant = shard_registry(&p, Some(bond_key(9)));
+        assert!(dormant.class_shard_plan(&h64(1)).is_none());
+        let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&dormant)).unwrap();
+        assert!(
+            !bytes.contains(&PALW_CARRIAGE_SHARDS_TAIL_V1) || {
+                let decoded: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
+                decoded.class_shard_plans.is_empty()
+            }
+        );
+        let (armed, claim_id) = shard_claim_bound(&p, stratified_seats());
+        let (mid, _) = shard_apply(&armed, &p, &ctx(5, 104, 5), &[shard_part(claim_id, 0, &[2, 3])], None, &shard_extras()).unwrap();
+        let carried = borsh::to_vec(&PalwStateCarriageV2::from_state(&mid)).unwrap();
+        let decoded: PalwStateCarriageV2 = borsh::from_slice(&carried).unwrap();
+        assert_eq!(decoded.class_shard_plans.len(), 1);
+        assert_eq!(decoded.shard_licensing.len(), 1);
+        let back = decoded.into_state(&p, Some(mid.state_root())).expect("the carriage roots to the same state");
+        assert_eq!(back.state_root(), mid.state_root());
+        assert!(back.shard_licensing_of(&claim_id).is_some_and(|progress| progress.is_licensed(0)));
     }
 
     /// **ADR-0100 Decision 1 — the one-move court's fold refuses by name before it computes**:
@@ -25474,6 +26152,7 @@ pub(crate) mod tests {
                 court_responder_coverage_active: false,
                 fp_da_pins_active: false,
                 shard_court_ladder: None,
+                shard_licensing: None,
             }
         }
 
@@ -25680,6 +26359,7 @@ pub(crate) mod tests {
                 court_responder_coverage_active: false,
                 fp_da_pins_active: false,
                 shard_court_ladder: None,
+                shard_licensing: None,
             };
             let (s_off, _) =
                 apply_palw_transition_v2_with_extras(&s, &p, &ctx(3, 251, 3), &[], None, false, false, false, false, &dormant)

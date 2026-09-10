@@ -187,7 +187,10 @@ run. A shard seat resumes an interval by recompute (the previous shard's committ
 resume (its own layers' checkpoint chunks), both committed material; the plan prices both and
 chooses neither.
 
-**Decision 3 — a shard is a capability, and the panel is stratified.** A bond that holds shard `i`
+**Decision 3 — a shard is a capability, and the panel is stratified.** *(Corrected by ADR-0100
+Decision 4: `capable_classes` holds registered class ids only — the fold refuses any other entry
+— so a bond declares its shards with `BondShardsDeclared`, a refinement of a class it declared
+there. The stratified draw below stands.)* A bond that holds shard `i`
 of a `k`-shard plan of class `c` declares `palw_shard_capability_id_v1(c, k, i)` in its
 `capable_classes` — the field it already carries, under the rule ADR-0071 SA-1 already applies. A
 claim on a sharded class draws `seats_per_shard` seats per shard from the bonds that declared that
@@ -307,7 +310,7 @@ the next reader from concluding that 23 seats of 128 GiB make a K3 runnable on t
 | ADR-0098 Decision 5 (a court opened at a named leaf; licensing past eight shards) | the court as a type and a verdict function behind a fence; licensing named again as Decision 4; ADR-0098 §1.2's "326 GiB a seat at eight shards" was an even split of the card's total and is 340 GiB under the plan, because a shard is whole layers |
 | ADR-0077 Decision 8 ("as any bonded challenger may, holding the refutation's inputs") | the shard court is that sentence with the search removed |
 | ADR-0082 Decision 9 (the seat recomputes its state; the drill enforces the window) | kept: recompute is one of the two forms; the drill verifies the rate |
-| ADR-0071 SA-1 (`capable_classes`) | a shard is a capability under the same rule |
+| ADR-0071 SA-1 (`capable_classes`) | a shard is a capability under the same rule — corrected by ADR-0100 Decision 4: the shard list is its own object, refining a declared class |
 | ADR-0075 (certification is a consensus object) | what verifies every self-reported number |
 | ADR-0096 Decision 13 (a model request has a door) | the door now leads to a manifest and a generator run |
 

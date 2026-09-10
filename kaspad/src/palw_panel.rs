@@ -270,6 +270,9 @@ pub struct PalwPanelConfig {
     pub canonical_class: Option<String>,
     /// DAA score between two canonical claims from this bond.
     pub canonical_interval_daa: u64,
+    /// DRILL ONLY (devnet/simnet; the daemon refuses it elsewhere): commit canonical claims whose
+    /// capture has one lane of this step leaf corrupted — the one-move court's drill.
+    pub drill_tamper_fp_leaf: Option<u64>,
     /// DRILL ONLY: dispute even a claim this node reproduces exactly, so the innocent half of a
     /// round trip can be shown on a live chain. Refused on mainnet by the daemon.
     pub drill_challenge_all: bool,
@@ -1639,7 +1642,7 @@ impl PalwPanelService {
         job.max_context_tokens = canonical_ctx.max_context_tokens;
 
         let (job_for_run, prompt_for_run) = (job.clone(), prompt.clone());
-        let (_backend, executed) = offload(backend, move |b| {
+        let (backend, executed) = offload(backend, move |b| {
             let run = b.execute_free_prompt(&job_for_run, &prompt_for_run)?;
             let shape =
                 b.capture_shape(&run.outcome.material).ok_or_else(|| "the capture has no shape this family can read".to_string())?;
@@ -1647,6 +1650,24 @@ impl PalwPanelService {
         })
         .await?;
         let (run, shape) = executed?;
+        // **DRILL ONLY** (ADR-0100 §6 step 2; the daemon refuses the flag off devnet/simnet): the
+        // honest run supplied the shape and the job's context; the SAME context, run again with one
+        // lane of this leaf corrupted and the commitment re-derived, is a lie only a re-execution
+        // sees — the capture the seats sample, open and convict.
+        let run = match self.config.drill_tamper_fp_leaf {
+            None => run,
+            Some(leaf) => {
+                let (context, prompt_for_fault) = (shape.job_context.clone(), prompt.clone());
+                let (_backend, lying) =
+                    offload(backend, move |b| b.execute_with_injected_fault(&context, &prompt_for_fault, leaf)).await?;
+                let lying = lying?;
+                warn!(
+                    "[{PALW_PANEL}] PALW DRILL: this canonical claim commits a capture corrupted at step leaf {leaf} (execution root {})",
+                    lying.execution_root
+                );
+                kaspa_consensus_core::palw_backend::PalwFpRunV1 { outcome: lying, ..run }
+            }
+        };
         let retention = current_daa.saturating_add(facts.min_trace_retention_daa);
         let commitment =
             kaspa_consensus_core::palw_fp_execution_v3::palw_fp_commitment_from_context_v3(&job, &shape.job_context, &run, retention)
@@ -3279,6 +3300,18 @@ impl PalwPanelService {
                                                     .palw_court_ladder
                                                     .is_some_and(|f| f.is_active(current_daa)),
                                             );
+                                            // The chain adjudicates at ITS refutation ladder (2^22
+                                            // where `palw_court_ladder` is dormant), and this seat
+                                            // sampled at the bundle's; a claim above the chain's
+                                            // ladder is a fault the one-move court cannot try, so
+                                            // it is recorded (above) and not filed into a drop.
+                                            if refutation.binding.step_leaf_count > ladder {
+                                                warn!(
+                                                    "[{PALW_PANEL}] claim {}: {} leaves is above this network's refutation ladder of {ladder}; the fault is recorded, not accused",
+                                                    duty.claim_id, refutation.binding.step_leaf_count
+                                                );
+                                                break 'verdict None;
+                                            }
                                             let mut accusation = PalwShardCourtAccusationV1 {
                                                 version: PALW_SHARD_COURT_VERSION_V1,
                                                 claim: duty.claim_id,
@@ -4249,6 +4282,9 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         // ADR-0090 — the seed that opens a line's market.
         PalwConsensusObjectV2::ModelSeed { .. } => "ModelSeed",
         PalwConsensusObjectV2::ShardCourtAccused { .. } => "ShardCourtAccused",
+        PalwConsensusObjectV2::ClassShardPlanDeclared { .. } => "ClassShardPlanDeclared",
+        PalwConsensusObjectV2::BondShardsDeclared { .. } => "BondShardsDeclared",
+        PalwConsensusObjectV2::ShardReceiptLicensed { .. } => "ShardReceiptLicensed",
     }
 }
 
@@ -5715,10 +5751,18 @@ mod court_responder_coverage_pin {
         assert!(gates[0] < replay, "the first gate precedes the first replay");
         assert!(gates.iter().any(|g| *g > replay && *g < capture), "a gate between the interval arm and the capture arm");
         assert!(gates.iter().any(|g| *g > capture && *g < tail), "a gate before the half-window tail");
-        let fault = at("CaptureSamplesV1::FaultAt(leaf) => {");
+        let fault = at("CaptureSamplesV1::FaultAt { leaf, refutation, openings } => {");
         assert!(
             block[fault..].contains("self.note_seat_fault_v1(duty.claim_id, leaf, 1);"),
             "the capture arm records the fault it proves"
+        );
+        // ADR-0100 Decision 1: and files the one thing a seat that found a lie files — the
+        // accusation — only where the chain's own refutation ladder can adjudicate it.
+        let filed = at("PalwConsensusObjectV2::ShardCourtAccused {");
+        assert!(filed > fault, "the accusation is built inside the fault arm");
+        assert!(
+            block[fault..filed].contains("refutation.binding.step_leaf_count > ladder"),
+            "a claim above the chain's refutation ladder is recorded, not accused"
         );
         let mismatch = source.find("this seat's own recompute reaches").expect("the checkpoint mismatch");
         assert!(

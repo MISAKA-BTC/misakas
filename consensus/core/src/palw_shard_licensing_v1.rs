@@ -22,7 +22,7 @@
 use crate::Hash64;
 use crate::palw_economic_locus_v1::PALW_SEAT_RECEIPT_VALID_WIRE_BYTES_V1;
 use crate::palw_panel_v2::{PalwReceiptVerdictV2, PalwSeatReceiptV2};
-use crate::palw_state_v2::{PalwBondKeyV2, PalwPanelSeatV2};
+use crate::palw_state_v2::{PalwBondKeyV2, PalwChainStateV2, PalwPanelSeatV2};
 
 /// The most shards a plan may have and still be licensed per shard: the progress bitmap's width.
 /// Ninety-two layers is the widest class this tree has priced (ADR-0099 §1.2), and a shard holds
@@ -165,6 +165,143 @@ impl PalwShardLicensingProgressV1 {
     pub fn is_complete(&self) -> bool {
         self.licensed_count() == self.shard_count
     }
+}
+
+// =================================================================================================
+// ADR-0100 Decision 4, the consensus half: the plan a class declares, the shards a bond holds, and
+// which claims license by parts.
+// =================================================================================================
+
+/// **A class's shard plan, declared once by its registrant** (`ClassShardPlanDeclared`). Immutable
+/// like the class's graph: a claim bound after the declaration draws a stratified panel of
+/// `shard_count × seats_per_shard` seats and licenses by parts; one bound before keeps its flat
+/// panel and the whole-object licence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwClassShardPlanV1 {
+    pub shard_count: u32,
+    pub declared_daa: u64,
+}
+
+/// A plan has at least two shards: one shard is the flat panel, which needs no plan.
+pub const PALW_SHARD_PLAN_MIN_SHARDS_V1: u32 = 2;
+/// The most receipts one part may carry — a stateless bound for the ride list; the acceptance
+/// layer applies the ruleset's own seats per shard.
+pub const PALW_SHARD_PART_MAX_RECEIPTS_V1: usize = 16;
+
+pub const PALW_SHARD_PLAN_DOMAIN_MESSAGE_V1: &[u8] = b"misaka-palw/shard-plan/message/v1";
+/// The registrant's ML-DSA-87 context for a plan. In `PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V3`.
+pub const PALW_SHARD_PLAN_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/shard-plan/mldsa87/v1";
+pub const PALW_BOND_SHARDS_DOMAIN_MESSAGE_V1: &[u8] = b"misaka-palw/bond-shards/message/v1";
+/// The bond's ML-DSA-87 context for its shard list. In `PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V3`.
+pub const PALW_BOND_SHARDS_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/bond-shards/mldsa87/v1";
+/// Every keyed domain this family uses.
+pub const PALW_SHARD_LICENSING_ALL_DOMAINS: &[&[u8]] = &[
+    PALW_SHARD_PLAN_DOMAIN_MESSAGE_V1,
+    PALW_SHARD_PLAN_MLDSA87_CONTEXT,
+    PALW_BOND_SHARDS_DOMAIN_MESSAGE_V1,
+    PALW_BOND_SHARDS_MLDSA87_CONTEXT,
+];
+
+/// Whether a plan of `count` shards is one the chain accepts.
+pub fn palw_shard_count_in_range_v1(count: u32) -> bool {
+    (PALW_SHARD_PLAN_MIN_SHARDS_V1..=PALW_SHARD_LICENSING_MAX_SHARDS_V1).contains(&count)
+}
+
+/// The shape of a bond's shard list: within the plan, strictly ascending, no longer than the plan.
+/// An EMPTY list is well-formed and withdraws the bond's shards of that class.
+pub fn palw_bond_shards_shape_v1(shard_count: u32, shards: &[u32]) -> Result<(), &'static str> {
+    if !palw_shard_count_in_range_v1(shard_count) {
+        return Err("the shard count is outside the plan range");
+    }
+    if shards.len() > shard_count as usize {
+        return Err("more shards than the plan has");
+    }
+    if shards.iter().any(|s| *s >= shard_count) {
+        return Err("a shard index past the plan");
+    }
+    if shards.windows(2).any(|w| w[0] >= w[1]) {
+        return Err("the shards are not strictly ascending");
+    }
+    Ok(())
+}
+
+fn keyed_message(domain: &[u8]) -> blake2b_simd::State {
+    blake2b_simd::Params::new().hash_length(64).key(domain).to_state()
+}
+
+fn finish_message(state: blake2b_simd::State) -> Hash64 {
+    Hash64::from_bytes(state.finalize().as_bytes().try_into().expect("64 bytes"))
+}
+
+/// What the registrant signs to declare a plan: the network domain, the class, the count.
+pub fn palw_class_shard_plan_message_v1(network_domain: Hash64, class_id: &Hash64, shard_count: u32) -> Hash64 {
+    let mut s = keyed_message(PALW_SHARD_PLAN_DOMAIN_MESSAGE_V1);
+    s.update(network_domain.as_byte_slice());
+    s.update(class_id.as_byte_slice());
+    s.update(&shard_count.to_le_bytes());
+    finish_message(s)
+}
+
+/// What a bond signs to declare its shards of a class: the network domain, the bond, the class,
+/// the plan's count and the list.
+pub fn palw_bond_shards_message_v1(
+    network_domain: Hash64,
+    bond: &PalwBondKeyV2,
+    class_id: &Hash64,
+    shard_count: u32,
+    shards: &[u32],
+) -> Hash64 {
+    let mut s = keyed_message(PALW_BOND_SHARDS_DOMAIN_MESSAGE_V1);
+    s.update(network_domain.as_byte_slice());
+    s.update(&borsh::to_vec(bond).expect("a bond key is borsh-serializable"));
+    s.update(class_id.as_byte_slice());
+    s.update(&shard_count.to_le_bytes());
+    s.update(&(shards.len() as u32).to_le_bytes());
+    for shard in shards {
+        s.update(&shard.to_le_bytes());
+    }
+    finish_message(s)
+}
+
+/// What the fold needs from the panel parameters, which it does not hold: the seats and the quorum
+/// of one shard. Rides in `PalwTransitionExtrasV1::shard_licensing`, `Some` exactly when
+/// `Params::palw_shard_licensing` is active at the block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwShardLicensingParamsV1 {
+    pub seats_per_shard: u16,
+    pub quorum_per_shard: u16,
+}
+
+/// **The seats that judge `shard`**: a stratified panel is shard-major, `seats_per_shard` each.
+/// `None` when the panel is not `shard_count × seats_per_shard` seats — it was not drawn
+/// stratified — or the shard is out of range.
+pub fn palw_panel_shard_slice_v1(
+    seats: &[PalwPanelSeatV2],
+    shard_count: u32,
+    seats_per_shard: u16,
+    shard: u32,
+) -> Option<&[PalwPanelSeatV2]> {
+    let spp = usize::from(seats_per_shard);
+    if spp == 0 || shard >= shard_count || seats.len() != (shard_count as usize).checked_mul(spp)? {
+        return None;
+    }
+    let start = shard as usize * spp;
+    seats.get(start..start + spp)
+}
+
+/// **Whether a claim licenses by parts**: its class declared a plan and the panel bound to it has
+/// the stratified shape. A flat panel is `seats_per_shard` seats and a stratified one at least
+/// twice that, so the shape alone tells them apart — no height comparison, and a claim bound
+/// before its class's declaration keeps the whole-object licence it was drawn for.
+pub fn palw_claim_licenses_by_parts_v1(
+    state: &PalwChainStateV2,
+    claim_id: &Hash64,
+    seats_per_shard: u16,
+) -> Option<PalwClassShardPlanV1> {
+    let claim = state.claim(claim_id)?;
+    let plan = state.class_shard_plan(&claim.class_id)?;
+    let panel = state.panel(claim_id)?;
+    (panel.seats.len() == (plan.shard_count as usize).checked_mul(usize::from(seats_per_shard))?).then_some(plan)
 }
 
 #[cfg(test)]

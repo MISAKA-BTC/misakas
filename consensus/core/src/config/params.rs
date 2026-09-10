@@ -1428,6 +1428,23 @@ pub struct Params {
     /// `palw_signature_contexts_v2`, and no shipped preset does.
     pub palw_shard_court: Option<ForkActivation>,
 
+    /// **ADR-0100 Decision 4's fence: a sharded class is licensed per shard.**
+    ///
+    /// Active, a class's registrant may declare a shard plan (`ClassShardPlanDeclared`), a bond
+    /// may declare which shards of a class it holds (`BondShardsDeclared`), a claim on a class
+    /// with a plan draws a stratified panel — `shard_count × seat_count` seats, `quorum` a shard,
+    /// shard-major — and licenses by parts (`ShardReceiptLicensed`), one carrier a shard at any
+    /// shard count, in the block that lands its last shard.
+    ///
+    /// A bare fence, top level, `None` on every shipped preset, Some-only in both fingerprints.
+    /// Its state enters the root and the carriage only once written, so arming it moves nothing a
+    /// dormant chain roots. [`Self::validate_palw_v2`] refuses arming it (a) over a bundle whose
+    /// committed signing contexts are not the COMPLETE_V3 set, because the plan and the bond's
+    /// shard list are verified under contexts only V3 names, and (b) without
+    /// [`Self::palw_shard_court`] armed at or below the same height: a panel of seats that each
+    /// hold a shard must be able to convict with what a shard seat holds (ADR-0098 Decision 5).
+    pub palw_shard_licensing: Option<ForkActivation>,
+
     /// **ADR-0083 Decision 1 — the difficulty window counts only rows priced by `bits`.**
     ///
     /// Past this fence `calculate_difficulty_bits` sizes its expected duration by the rows in the
@@ -2163,6 +2180,26 @@ impl Params {
                  a network arms the one-move court by stating the V3 set at genesis (palw_signature_contexts_v2 over the V3 root)",
             ));
         }
+        // **ADR-0100 Decision 4: per-shard licensing needs the same ruleset move, and the court.**
+        if let Some(activation) = self.palw_shard_licensing
+            && activation != ForkActivation::never()
+        {
+            if bundle.signature_contexts_root != crate::palw_mode_v2::palw_v2_signature_contexts_root_v3() {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_shard_licensing is armed but the bundle's signature_contexts_root is not the COMPLETE_V3 set: the \
+                     shard plan and a bond's shard list are signed under contexts only V3 commits to",
+                ));
+            }
+            let court_by_then = self
+                .palw_shard_court
+                .is_some_and(|court| court != ForkActivation::never() && court.daa_score() <= activation.daa_score());
+            if !court_by_then {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_shard_licensing is armed without palw_shard_court armed at or below the same height: a panel whose \
+                     seats each hold a shard could license a lie no seat of it could convict (ADR-0098 Decision 5)",
+                ));
+            }
+        }
         if self.palw_credit.is_some()
             || self.palw_fork_choice.is_some()
             || self.palw_schedule.is_some()
@@ -2862,6 +2899,10 @@ impl Params {
         if self.palw_shard_court == Some(ForkActivation::never()) {
             self.palw_shard_court = None;
         }
+        // ADR-0100 Decision 4, likewise.
+        if self.palw_shard_licensing == Some(ForkActivation::never()) {
+            self.palw_shard_licensing = None;
+        }
         // ADR-0083 Decision 1, the same shape: a bare fence, `never()` is absence.
         if self.palw_difficulty_priced_rows == Some(ForkActivation::never()) {
             self.palw_difficulty_priced_rows = None;
@@ -3243,6 +3284,19 @@ impl Params {
         self.palw_shard_court_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
+    /// ADR-0100 Decision 4's fence, resolved: `Some` only on a `ConsensusV2` network that armed
+    /// it. The ONE place per-shard licensing is decided.
+    pub fn palw_shard_licensing_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_shard_licensing) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    pub fn palw_shard_licensing_active_at(&self, daa_score: u64) -> bool {
+        self.palw_shard_licensing_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
     /// ADR-0081 Decision 3's fence with the mode condition already folded in — `Some` only on a
     /// `ConsensusV2` network that has armed it.
     pub fn palw_prompt_ids_merkle_fence(&self) -> Option<ForkActivation> {
@@ -3358,6 +3412,7 @@ impl Params {
             palw_fp_decode_rules,
             palw_fp_decode_constraint,
             palw_shard_court,
+            palw_shard_licensing,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -3406,6 +3461,7 @@ impl Params {
             ("palw_fp_decode_rules", *palw_fp_decode_rules),
             ("palw_fp_decode_constraint", *palw_fp_decode_constraint),
             ("palw_shard_court", *palw_shard_court),
+            ("palw_shard_licensing", *palw_shard_licensing),
             ("palw_difficulty_priced_rows", *palw_difficulty_priced_rows),
             ("palw_receipt_rows_unpriced", *palw_receipt_rows_unpriced),
             ("palw_attempt_header_pins", *palw_attempt_header_pins),
@@ -3566,6 +3622,11 @@ impl Params {
             h.write(b"palw_shard_court");
             h.write(court.daa_score().to_le_bytes());
         }
+        // ADR-0100 Decision 4's fence, NAMED likewise: it changes what licenses a claim.
+        if let Some(licensing) = self.palw_shard_licensing {
+            h.write(b"palw_shard_licensing");
+            h.write(licensing.daa_score().to_le_bytes());
+        }
         // ADR-0083 Decision 1's fence, NAMED for the same reason: it changes the bits every header
         // past it must carry, so an operator reading the schedule must see it.
         if let Some(priced) = self.palw_difficulty_priced_rows {
@@ -3709,6 +3770,7 @@ impl Params {
             palw_fp_decode_rules,
             palw_fp_decode_constraint,
             palw_shard_court,
+            palw_shard_licensing,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -3999,6 +4061,10 @@ impl Params {
         if let Some(activation) = palw_shard_court.as_mut() {
             fork(activation, visit);
         }
+        // ADR-0100 Decision 4. Some-only, likewise.
+        if let Some(activation) = palw_shard_licensing.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0083 Decision 1. Some-only, likewise.
         if let Some(activation) = palw_difficulty_priced_rows.as_mut() {
             fork(activation, visit);
@@ -4241,6 +4307,7 @@ impl Params {
             palw_fp_decode_rules,
             palw_fp_decode_constraint,
             palw_shard_court,
+            palw_shard_licensing,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -4548,6 +4615,12 @@ impl Params {
         // to a build without the field.
         if let Some(activation) = palw_shard_court {
             h.write(b"palw_shard_court");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0100 Decision 4, Some-only for the same reason: every shipped preset leaves it
+        // `None` and fingerprints byte-identically to a build without the field.
+        if let Some(activation) = palw_shard_licensing {
+            h.write(b"palw_shard_licensing");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0083 Decision 1, Some-only for the same reason: arming it changes the `bits` every
@@ -4900,6 +4973,7 @@ impl Params {
             palw_fp_decode_rules: self.palw_fp_decode_rules,
             palw_fp_decode_constraint: self.palw_fp_decode_constraint,
             palw_shard_court: self.palw_shard_court,
+            palw_shard_licensing: self.palw_shard_licensing,
             palw_difficulty_priced_rows: self.palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced: self.palw_receipt_rows_unpriced,
             palw_attempt_header_pins: self.palw_attempt_header_pins,
@@ -5854,6 +5928,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_fp_decode_rules: None,
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
+    palw_shard_licensing: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -6020,6 +6095,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_fp_decode_rules: None,
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
+    palw_shard_licensing: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -6168,6 +6244,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_fp_decode_rules: None,
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
+    palw_shard_licensing: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -10386,6 +10463,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_fp_decode_rules: None,
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
+    palw_shard_licensing: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -12265,6 +12343,56 @@ mod consensus_params_id_tests {
             over(crate::palw_mode_v2::palw_v2_signature_contexts_root_v2()).validate_palw_v2().expect_err("V2 lacks it")
         );
         assert!(err.contains("palw_shard_court") && err.contains("COMPLETE_V3"), "{err}");
+    }
+
+    /// **ADR-0100 Decision 4: per-shard licensing is dormant everywhere, visible the moment it is
+    /// not, and arms only over V3 with the one-move court armed no later.**
+    #[test]
+    fn the_shard_licensing_fence_is_dormant_and_arms_only_over_v3_with_the_court() {
+        for (name, shipped) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
+        {
+            assert!(shipped.palw_shard_licensing.is_none(), "{name} must leave ADR-0100 Decision 4 dormant");
+            assert!(!shipped.palw_shard_licensing_active_at(u64::MAX), "{name}");
+        }
+        let shipped = devnet_shipped_params();
+        assert!(shipped.palw_shard_licensing.is_none(), "the bundled devnet leaves it dormant too");
+        let mut visible = shipped.clone();
+        visible.palw_shard_licensing = Some(ForkActivation::new(9_000_000));
+        assert_ne!(visible.consensus_params_id(), shipped.consensus_params_id(), "armed, the fingerprint says so");
+        let mut never = shipped.clone();
+        never.palw_shard_licensing = Some(ForkActivation::never());
+        never.validate_palw_v2().expect("Some(never()) is absence");
+
+        // Over the frozen set: refused, naming the set.
+        let err = format!("{}", visible.validate_palw_v2().expect_err("the frozen set lacks the plan's context"));
+        assert!(err.contains("palw_shard_licensing") && err.contains("COMPLETE_V3"), "{err}");
+
+        let over_v3 = |court: Option<ForkActivation>, licensing: ForkActivation| -> Params {
+            let mut p = shipped.clone();
+            let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut p.palw_consensus_mode else {
+                panic!("the shipped devnet is ConsensusV2")
+            };
+            bundle.signature_contexts_root = crate::palw_mode_v2::palw_v2_signature_contexts_root_v3();
+            p.palw_signature_contexts_v2 = Some(ForkActivation::always());
+            p.palw_shard_court = court;
+            p.palw_shard_licensing = Some(licensing);
+            p
+        };
+        // Over V3 without the court, or with the court armed later: refused, naming the court.
+        for court in [None, Some(ForkActivation::new(9_000_001))] {
+            let err = format!("{}", over_v3(court, ForkActivation::new(9_000_000)).validate_palw_v2().expect_err("no court"));
+            assert!(err.contains("palw_shard_court"), "{err}");
+        }
+        // Over V3 with the court at or below: assembles.
+        over_v3(Some(ForkActivation::new(9_000_000)), ForkActivation::new(9_000_000))
+            .validate_palw_v2()
+            .expect("the court at the same height");
+        over_v3(Some(ForkActivation::always()), ForkActivation::new(9_000_000)).validate_palw_v2().expect("the court from genesis");
+        // Outside ConsensusV2 the fence answers nothing.
+        let mut legacy = MAINNET_PARAMS.clone();
+        legacy.palw_shard_licensing = Some(ForkActivation::always());
+        assert_eq!(legacy.palw_shard_licensing_fence(), None);
     }
 
     /// **The V2 pruning horizon IS the derivation, and the inherited floor never binds** — the

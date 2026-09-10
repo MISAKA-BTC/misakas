@@ -1630,6 +1630,25 @@ Do you confirm? (y/n)";
                         canonical_claims: args.palw_canonical_claims,
                         canonical_class: args.palw_canonical_class.clone(),
                         canonical_interval_daa: args.palw_canonical_interval_daa,
+                        drill_tamper_fp_leaf: match args.palw_drill_tamper_fp_leaf {
+                            Some(leaf)
+                                if !matches!(
+                                    network.network_type,
+                                    kaspa_consensus_core::network::NetworkType::Devnet
+                                        | kaspa_consensus_core::network::NetworkType::Simnet
+                                ) =>
+                            {
+                                panic!("--palw-drill-tamper-fp-leaf={leaf} is a drill fault injector and is devnet/simnet only")
+                            }
+                            Some(leaf) => {
+                                warn!(
+                                    "PALW DRILL: this node's canonical claims will commit a capture CORRUPTED at step leaf {leaf}. \
+                                     They are meant to be convicted by the one-move court."
+                                );
+                                Some(leaf)
+                            }
+                            None => None,
+                        },
                         // The same directory the producer writes to, so a node that produces can
                         // answer a court about its own work after its gossip pool has moved on.
                         retention_dir: app_dir.join(network.to_prefixed()).join("palw-retention"),

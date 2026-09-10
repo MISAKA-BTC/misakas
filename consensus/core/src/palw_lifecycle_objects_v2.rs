@@ -299,6 +299,38 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
             }
             Ok(())
         }
+        // **ADR-0100 Decision 4.** The plan and a bond's shard list ride signed — by the class's
+        // registrant and by the bond, checked at acceptance against their registered keys — and
+        // shaped: a count in range, a list inside it. A part rides unsigned like `ReceiptLicensed`
+        // (its receipts are the authority) and bounded: at least one receipt, at most a shard's
+        // worth under any ruleset, a shard inside its plan. Whether per-shard licensing is armed is
+        // the acceptance layer's, for the reason the k-ary court's moves give.
+        PalwConsensusObjectV2::ClassShardPlanDeclared { signature, .. } if signature.is_empty() => {
+            Err("a shard plan must carry its registrant's signature")
+        }
+        PalwConsensusObjectV2::ClassShardPlanDeclared { shard_count, .. } => {
+            if crate::palw_shard_licensing_v1::palw_shard_count_in_range_v1(*shard_count) {
+                Ok(())
+            } else {
+                Err("a shard plan's count is outside the range the chain accepts")
+            }
+        }
+        PalwConsensusObjectV2::BondShardsDeclared { signature, .. } if signature.is_empty() => {
+            Err("a bond's shard list must carry the bond's signature")
+        }
+        PalwConsensusObjectV2::BondShardsDeclared { shard_count, shards, .. } => {
+            crate::palw_shard_licensing_v1::palw_bond_shards_shape_v1(*shard_count, shards)
+        }
+        PalwConsensusObjectV2::ShardReceiptLicensed { part } => {
+            if part.receipts.is_empty() || part.receipts.len() > crate::palw_shard_licensing_v1::PALW_SHARD_PART_MAX_RECEIPTS_V1 {
+                return Err("a shard part carries between one receipt and a shard's worth");
+            }
+            if !crate::palw_shard_licensing_v1::palw_shard_count_in_range_v1(part.shard_count) || part.shard_index >= part.shard_count
+            {
+                return Err("a shard part names a shard outside a plan the chain accepts");
+            }
+            Ok(())
+        }
         PalwConsensusObjectV2::DefaultAccused { signature, .. } if !signature.is_empty() => Ok(()),
         PalwConsensusObjectV2::DefaultAccused { .. } => Err(
             "a data-availability accusation must carry the accuser's signature — a bond key is a public outpoint, so without one anyone could accuse under a stranger's identity",
@@ -1116,13 +1148,6 @@ mod tests {
         assert_eq!(borsh::to_vec(&decoded).unwrap(), payload, "and it re-encodes to the chain's bytes");
     }
 
-    /// **Every lifecycle kind keeps the discriminant a carrier already put on the chain.**
-    ///
-    /// Borsh numbers an enum's variants by POSITION, and a lifecycle carrier's payload carries that
-    /// number, so a variant inserted anywhere but the end renumbers every kind below it and turns
-    /// history into bytes this build reads as something else (see the test above). Pinning the
-    /// tail catches an insertion anywhere above it; a new kind is appended and given the next
-    /// number here.
     fn shard_accusation() -> crate::palw_shard_court_v1::PalwShardCourtAccusationV1 {
         let (binding, _, _, _) = crate::palw_step_refute::tests::base0_honest_decode_commitment();
         crate::palw_shard_court_v1::PalwShardCourtAccusationV1 {
@@ -1152,7 +1177,13 @@ mod tests {
         }
     }
 
-    #[test]
+    /// **Every lifecycle kind keeps the discriminant a carrier already put on the chain.**
+    ///
+    /// Borsh numbers an enum's variants by POSITION, and a lifecycle carrier's payload carries that
+    /// number, so a variant inserted anywhere but the end renumbers every kind below it and turns
+    /// history into bytes this build reads as something else (see the test above). Pinning the
+    /// tail catches an insertion anywhere above it; a new kind is appended and given the next
+    /// number here.
     #[test]
     fn consensus_object_discriminants_are_the_ones_the_chain_carries() {
         let line = h64(0x11);
@@ -1207,6 +1238,29 @@ mod tests {
             ),
             // ADR-0099 Decision 5 / ADR-0100: the one-move court, appended after main's last.
             (38, PalwConsensusObjectV2::ShardCourtAccused { accusation: Box::new(shard_accusation()) }),
+            // ADR-0100 Decision 4, appended after it.
+            (39, PalwConsensusObjectV2::ClassShardPlanDeclared { class_id: line, shard_count: 2, signature: sig() }),
+            (
+                40,
+                PalwConsensusObjectV2::BondShardsDeclared {
+                    bond: bond(6),
+                    class_id: line,
+                    shard_count: 2,
+                    shards: vec![0],
+                    signature: sig(),
+                },
+            ),
+            (
+                41,
+                PalwConsensusObjectV2::ShardReceiptLicensed {
+                    part: crate::palw_shard_licensing_v1::PalwShardReceiptPartV1 {
+                        claim: h64(12),
+                        shard_count: 2,
+                        shard_index: 0,
+                        receipts: Vec::new(),
+                    },
+                },
+            ),
         ];
         for (discriminant, object) in pinned {
             assert_eq!(borsh::to_vec(&object).unwrap()[0], discriminant, "{object:?}");
