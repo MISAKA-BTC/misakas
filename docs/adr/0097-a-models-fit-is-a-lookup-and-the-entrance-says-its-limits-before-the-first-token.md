@@ -316,8 +316,9 @@ exists (5, 8) and observed against the generator's own output (1–4).
 
 1. Decision 1 — the module, the generator, the tests. **Done** (§9).
 2. Decision 2 — the limits, the refusal, the decode report, the doc. **Done** (§9).
-3. The Studio reads `misaka.limits` instead of `/health`'s bare `n_ctx` and branches on
-   `misaka.refusal.code` instead of the sentence — MISAKA-Studio, under ADR-0096's branch pair.
+3. The Studio reads `misaka.limits` instead of `/health`'s bare `n_ctx` and branches on the
+   refusal's code instead of the sentence — MISAKA-Studio. **Done** (§9): `feat/adr-0097-model-fit`
+   in that repository, branched from its `feat/adr-0096-everyday-lane`.
 4. `palw_qwen36_profile`'s "8 positions because the whole-close derivation says so" comment and
    `palw_qwen25_profile`'s "admits at most 574" are corrected to point at the generator; the
    numbers are the test's. **Done** (§9): each carries a dated note, the old sentence left in
@@ -377,8 +378,16 @@ to §9's record. A concurrent claimant renumbers the later writer. **The next fr
   every OpenAI SDK and the Studio's `Lane::send` read an object — and its test compared the
   function with itself, so it passed. It now builds on the one spelling (`surface::error_body`,
   which `main.rs` delegates to), puts the code in `error.code`, and the test asserts that removing
-  what the refusal adds leaves `error_body(message)`. Measured on the way, and recorded in §1
-  because none of it was in `docs/`:
+  what the refusal adds leaves `error_body(message)`. **The Studio half** (MISAKA-Studio
+  `feat/adr-0097-model-fit`, `74106e0`): `/health` read by one pure function whose limits win
+  over the bare `n_ctx` and the `chain.*` flag; no job asked for more than `max_output_tokens`
+  (per job — the request's own ask still drives the continue legs); one reader for the error
+  body (`LaneRefusal`) used by the chat lane, its SSE path and the mining queue, deciding by
+  `error.code` and computing from `misaka.refusal`, with the sentence parser kept only for a
+  refusal that carries no code; proven end to end against an in-process gateway whose refusal
+  sentence names no numbers. The mining queue had stringified the whole error object and
+  recorded refusals as JSON. Measured on the way, and recorded in §1 because none of it was in
+  `docs/`:
   the dense row's ladder width is 651 (not the 574 the profile comment says), the hybrid row is
   held at 204 by the ladder alone, the devnet cannot carry the hybrid row at all (one carrier),
   and the K3 stand-in fits at ten positions.
