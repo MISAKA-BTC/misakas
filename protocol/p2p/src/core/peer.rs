@@ -11,6 +11,14 @@ pub struct PeerProperties {
     pub disable_relay_tx: bool,
     pub subnetwork_id: Option<SubnetworkId>,
     pub time_offset: i64,
+    /// The fork id the peer advertised at the handshake (ADR-0072 SA-2): its fired-fence digest
+    /// (empty from a build predating the field) and the next fence it expects to cross.
+    pub fork_id_fired: Vec<u8>,
+    pub fork_id_next: u64,
+    /// The local DAA score from which this node's gate refuses that fork id
+    /// (`fork_id_refusal_height_v1`), `None` if it never does. A peer kept on a warning below the
+    /// disputed height is judged again when the node reaches it.
+    pub fork_id_refusal_height: Option<u64>,
 }
 
 #[derive(Debug)]

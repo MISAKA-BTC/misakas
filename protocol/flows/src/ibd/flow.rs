@@ -323,6 +323,10 @@ impl IbdFlow {
                 match outcome {
                     Ok(_) => {
                         info!("IBD with peer {} completed successfully", self.router);
+                        // An IBD moves this node's score the furthest at once — the explorer node went
+                        // from DAA 0 to 3,158 in one — past the fence of every peer it kept on a
+                        // fork-id warning at the start (2026-09-10).
+                        self.ctx.rejudge_fork_ids().await;
 
                         // The run of sidecar shortfalls, if any, is over: this IBD got past them
                         // (audit3 H2/H9).

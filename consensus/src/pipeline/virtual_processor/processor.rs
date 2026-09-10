@@ -1041,22 +1041,24 @@ impl VirtualStateProcessor {
         }
     }
 
-    fn bridge_finality_is_fresh(&self, current_daa_score: u64) -> bool {
+    /// The EVM template's producer policy (never block validity): is DNS finality confirmed and
+    /// keeping up with `sink`? Measured in blue score beyond the anchor's healthy distance — see
+    /// [`dns_finality_fresh_for_bridge`] — and read the same way the deposit-claim RPC reads it,
+    /// so the RPC never accepts a claim the template would then leave out, or the reverse.
+    fn bridge_finality_is_fresh(&self, sink: BlockHash) -> bool {
         let Some(dns_params) = self.dns_params.as_ref() else {
             return false;
         };
         let Ok(state) = self.dns_state_store.read().get() else {
             return false;
         };
+        let Ok(sink_blue_score) = self.headers_store.get_blue_score(sink) else {
+            return false;
+        };
         let dns_confirmed =
             is_dns_confirmed(state.work_depth, state.stake_depth, dns_params.required_work_depth, dns_params.required_stake_depth);
-        dns_finality_fresh_for_bridge(
-            dns_confirmed,
-            state.last_dns_confirmed_anchor,
-            state.last_dns_confirmed_anchor_daa_score,
-            current_daa_score,
-            dns_params.bridge_finality_max_staleness_daa_score,
-        )
+        let anchor_blue_score = self.headers_store.get_blue_score(state.last_dns_confirmed_anchor).ok();
+        dns_finality_fresh_for_bridge(dns_confirmed, state.last_dns_confirmed_anchor, anchor_blue_score, sink_blue_score, dns_params)
     }
 
     pub fn worker(self: &Arc<Self>) {
@@ -13146,7 +13148,8 @@ impl VirtualStateProcessor {
         // its selected-parent state.
         // `evm_bridge_devnet_unpaused` (private devnets only) waives the staleness gate: a drill
         // with no VLT overlay would otherwise never carry an EVM payload.
-        let bridge_finality_fresh = self.evm_bridge_devnet_unpaused || self.bridge_finality_is_fresh(virtual_state.daa_score);
+        let bridge_finality_fresh =
+            self.evm_bridge_devnet_unpaused || self.bridge_finality_is_fresh(virtual_state.ghostdag_data.selected_parent);
         let evm_template_data = if bridge_finality_fresh {
             evm_template_data
         } else {

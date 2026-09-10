@@ -51,6 +51,80 @@ instructions built on them are marked where they no longer apply. If a section t
 `palw-worker`, a GGUF sha, `CPU_THREADS`, or a per-header inference cost, it is describing the old
 lane.
 
+> ## Third flag day, 2026-09-09 (DAA 2400) — a node built before it is cut off, and the fingerprint does not say so
+>
+> The fleet moved on 2026-09-09 to a build that schedules ADR-0095's `palw_model_benefits` at
+> **DAA 2400**, and has crossed it. As on the second flag day, the older side's fork-id gate refused
+> the new build the moment it connected, so every node still on a `main` from before that has been
+> extending **its own arm since DAA ≈2,241** — its virtual DAA sits hundreds behind
+> [misakascan](https://misakascan.com), `misaka node doctor` reports `Seeder mesh overlap: NONE`,
+> and misakascan's [Peers page](https://misakascan.com/#/peers) lists its address under *Refused at
+> handshake*. In its own log:
+>
+> ```
+> [WARN ] P2P, got reject message: Fork-id mismatch on network misaka-testnet-11 at DAA 3036 -
+>         this node has crossed fence 2400; the peer agrees about every fence crossed so far but
+>         expects fence 2125000 next, not 2400. ... from peer: 169.58.232.113:26311
+> ```
+>
+> **The fingerprint is unchanged — `060e3597…` on both sides.** It carries the height of every other
+> scheduled fence — that is why the 1900 fences and the 2150 ladder each moved it (`71b35c25…` →
+> `b511dd1e…` → `ebd3b321…` → `060e3597…`) — but the commit that added ADR-0095's fence (`14c453d1`)
+> left `palw_model_benefits` out of it, so for this one fence the startup line this page used to tell
+> you to trust cannot tell the two builds apart. (What normalises a scheduled fence away is the
+> handshake's *identity* id, which is what lets two builds peer through a rollout; the fingerprint is
+> not normalised.) The build below prints its fence heights on the next line; the check is that line:
+>
+> ```
+> [INFO ] Consensus params fingerprint: 060e3597cd2950bc183b215b5ff87538e72dd788cab43829dca6bc72bcb5ac89 (network testnet-11)
+> [INFO ] Consensus fence schedule: 1150, 1900, 2150, 2400, 2125000 (schedule id …)
+> ```
+>
+> No such line, or no `2400` in it, means you are on the old build.
+>
+> **Do not run `7f4dded4`**, the first build with the 2400 fence. It put ADR-0095's new kinds in the
+> middle of two enums whose borsh discriminant is their position — one the chain carries in every
+> lifecycle carrier, one every node persists per block — so it cannot validate the model-market seed
+> the chain carries at DAA 1,945 and **a node started on it from an empty datadir stops there for
+> good** (`block has missing parents: [93eb20f0…]`), and it misreads delta rows an older build
+> wrote. `891a1a14` restores the order.
+>
+> **To rejoin:**
+>
+> 1. Stop the node and rebuild from **`main` at `891a1a14` or later**
+>    (`cargo build --release -p kaspad -p misaka-cli --bin misaka`).
+> 2. Move the chain data aside — only `datadir`, not the whole appdir, so keys and the `palw-*`
+>    directories stay put: `mv <appdir>/misaka-testnet-11/datadir <appdir>/misaka-testnet-11/datadir.old-arm`.
+>    The arm your node has been on does not exist on the network, and a validator attested on it
+>    (see below), which testnet's hard-checkpoint reorg rule may refuse to leave. A fresh sync takes
+>    minutes.
+> 3. Start the node. Confirm the fence-schedule line above, that `misaka node doctor` shows a seeder
+>    mesh overlap, and that your virtual DAA matches misakascan's.
+> 4. **Validators: restart yours after the node has synced.** Three bonds — `d3b77925…` (10,000 MSK,
+>    99.5 % of all bonded stake), `bb88d918…` and `d506022d…` — last attested on the network's chain
+>    at DAA 2,244–2,246 and have attested only on the old arm since. DNS finality needs 60 % of
+>    bonded stake per epoch, so it has not advanced past DAA 2,246, and the EVM lane and bridge
+>    stay paused until it does.
+>
+> Blocks mined and attestations made on the old arm after DAA ≈2,241 are not on the network's chain
+> and do not come back.
+>
+> **What changes from `10337785` on (the fork-id gate fix).** A node on a build carrying it no longer
+> refuses an upgraded peer the moment it connects just because the peer schedules a fence this
+> build does not carry: it keeps it, with a warning that names the height —
+> `… keeping the peer — … It will be judged again, and refused, when this node reaches DAA 2400` —
+> and disconnects it there:
+>
+> ```
+> [WARN ] P2P, judged connected peer 203.0.113.7:26311 again and disconnecting it: Fork-id mismatch on
+>         network misaka-testnet-11 at DAA 2400 - this node has crossed fence 2400; …
+> ```
+>
+> The same line appears when a node that synced from an empty datadir passes the fence of an
+> un-upgraded peer it met on the way (it used to keep those for good). **This only helps nodes
+> already on such a build**: a build from before it still refuses an upgraded peer at once, so the
+> next flag day still cuts off every node that has not moved to `10337785` or later first.
+
 > ## Second flag day, 2026-09-06 — a node built before this is ALREADY cut off
 >
 > **Rebuild now. Do not wait for the height.** This release schedules five fences at **DAA 1900**:
@@ -90,14 +164,13 @@ lane.
 > [INFO ] Consensus params fingerprint: 060e3597cd2950bc183b215b5ff87538e72dd788cab43829dca6bc72bcb5ac89 (network testnet-11)
 > ```
 
-> **Current identity — Relaunch 5f (genesis re-minted 2026-09-03) carrying THREE flag days: ADR-0083's
-> fence at DAA 1150 (2026-09-04; the difficulty window counts only rows priced by `bits`, because the
-> heartbeat lane had priced every attempt lane off the chain — card §10b) and the DA-court/model-market
-> fences at DAA 1900 (2026-09-06; the block above), and the refutation ladder at DAA 2150
-> (ADR-0084 U-08; ADR-0092). Wipe your datadir only if you joined before 5f — no flag day re-minted
-> the genesis. Build from `main` at `06bf5118` or later: every earlier fingerprint is refused, the
-> pre-5f ones at the handshake and the pre-flag-day ones by the fork-id gate, now rather than at the
-> height.**
+> **Current identity — Relaunch 5f (genesis re-minted 2026-09-03) carrying FOUR fences: ADR-0083's
+> at DAA 1150 (2026-09-04; the difficulty window counts only rows priced by `bits`, because the
+> heartbeat lane had priced every attempt lane off the chain — card §10b), the DA-court/model-market
+> fences at DAA 1900 (2026-09-06), the refutation ladder at DAA 2150 (ADR-0084 U-08; ADR-0092), and
+> ADR-0095's model benefits at DAA 2400 (2026-09-09; the block at the top of this section). No flag
+> day re-minted the genesis. Build from `main` at `891a1a14` or later: a build from before the 2400
+> fence is refused by the fork-id gate, and `7f4dded4` cannot sync from an empty datadir.**
 >
 > > **If you already rebuilt today, rebuild again.** `4fcce4b0` and `6dea4f5f` are superseded and
 > > **must not be run past DAA 1900**. They schedule the 1900 fences but not the ladder's own height,
@@ -112,14 +185,14 @@ lane.
 > * genesis hash: **`ad30b5cb965ad305dfa1dc7516935763ea2623105581b83bb9359c7247157d36b0f8003b337cdad366e3895c8f159e99332be16e258b144dddf483bf9b33edb7`** (`PALW_RC_GENESIS`,
 >   coinbase payload marker `misaka-palw-rc`) — measured from the running node's own startup line,
 >   which is the only value your node will be judged by.
-> * build: **`main` at `06bf5118` or later**;
->   the fleet's eight nodes all run kaspad sha256 `7181cc07eb57a2f8`. Any commit whose build announces
->   the fingerprint above will do — and that, not a commit id, is the check:
->   `kaspad --testnet --netsuffix=11` prints it on the second line of its startup log. Everything
->   earlier — the 5f tag `testnet-11-relaunch-5f-adr0083-h1150` (`16a2f277`), the fleet's previous
->   `cef2ecdb`, and the 5f cut `2222e054…` — is on the far side of the gate **now**, not at 1900; and
->   `4fcce4b0` / `6dea4f5f` (fingerprints `b511dd1e…` / `ebd3b321…`) are on the far side of it from
->   **1900**, not from 2150.
+> * build: **`main` at `891a1a14` or later**. The fingerprint above is necessary and no longer
+>   sufficient: the builds on either side of the DAA-2400 fence print the same one (it is the one
+>   fence the fingerprint leaves out; see the top of this section). The check is the
+>   line after it, `Consensus fence schedule: 1150, 1900, 2150, 2400, 2125000`, which builds from
+>   before `891a1a14` do not print. Builds from before `06bf5118` — the 5f tag
+>   `testnet-11-relaunch-5f-adr0083-h1150` (`16a2f277`), the fleet's previous `cef2ecdb`, and the 5f
+>   cut `2222e054…` — were on the far side of the gate from the second flag day on; and
+>   `4fcce4b0` / `6dea4f5f` (fingerprints `b511dd1e…` / `ebd3b321…`) from **1900**.
 > * classes registered at genesis: BASE-0 `f1c5635c…` (the floor, no model, 22‰), PALW-QWEN25-A16
 >   graph-v5@512 `4277d84f…` (489‰, artifact root `bcf2d9eb…`), PALW-QWEN36 graph-v3 `5bd9ae3d…`
 >   (489‰, artifact root `f4aad4fd…`). Post-genesis registrations are chain data: read them from the
