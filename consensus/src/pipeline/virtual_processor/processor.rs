@@ -4683,7 +4683,18 @@ impl VirtualStateProcessor {
         let daa_score = self.virtual_stores.read().state.get().ok()?.daa_score;
         let step_ladder = self.palw_court_step_ladder_at(daa_score, court);
         let form = self.palw_prompt_ids_form_at(daa_score);
-        kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v2(&state, session_id, proof, court, step_ladder, form).ok()
+        // ADR-0096 Decision 8 at the same DAA: which decode closes this network admits.
+        let fp_decode_constraint = self.palw_fp_decode_constraint_at(daa_score);
+        kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v2(
+            &state,
+            session_id,
+            proof,
+            court,
+            step_ladder,
+            form,
+            fp_decode_constraint,
+        )
+        .ok()
     }
 
     /// The court's half of [`Self::palw_seat_duties_v2_impl`]: the open sessions this node is a
@@ -6207,6 +6218,7 @@ impl VirtualStateProcessor {
                                 court,
                                 self.palw_court_step_ladder_at(point.daa_score, court),
                                 self.palw_prompt_ids_form_at(point.daa_score),
+                                self.palw_fp_decode_constraint_at(point.daa_score),
                             )
                             .map_err(|e| e.to_string())?;
                             if derived != *verdict {
@@ -6510,6 +6522,9 @@ impl VirtualStateProcessor {
                         court,
                         self.palw_court_step_ladder_at(point.daa_score, court),
                         self.palw_prompt_ids_form_at(point.daa_score),
+                        // ADR-0096 Decision 8 at the block's DAA — the same candidate-scoped rule
+                        // the free-prompt walk reads for this block.
+                        self.palw_fp_decode_constraint_at(point.daa_score),
                     )
                     .map_err(|e| e.to_string())?;
                     if derived != *verdict {

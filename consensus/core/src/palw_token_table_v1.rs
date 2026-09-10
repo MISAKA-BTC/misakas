@@ -413,7 +413,18 @@ pub struct PalwTokenTablePinnedV1 {
 ///
 /// A row whose hex does not parse matches nothing; `every_pinned_row_is_well_formed` holds every
 /// row to 128 lowercase hex characters, so that case is a build that failed its own tests.
+///
+/// This is the lookup the court's constrained arms read (ADR-0096 §10 B5/B6), and they read it
+/// directly: a table is the build's, never a caller's argument. The one exception is this crate's
+/// own unit tests, which may pin a synthetic table on the thread they run on
+/// ([`test_seam::pin_on_this_thread`]) — compiled only under `cfg(test)` of THIS crate, so no
+/// binary and no other crate's test build can reach it, and it refuses to shadow a row the build
+/// pins.
 pub fn token_table_pin_for_v1(tokenizer_commitment: &Hash64) -> Option<PalwTokenTablePinnedV1> {
+    #[cfg(test)]
+    if let Some(pin) = test_seam::pinned_on_this_thread(tokenizer_commitment) {
+        return Some(pin);
+    }
     PALW_TOKEN_TABLES_V1.iter().find_map(|row| {
         let commitment = Hash64::from_str(row.tokenizer_commitment_hex).ok()?;
         if commitment != *tokenizer_commitment {
@@ -493,6 +504,55 @@ impl PalwTokenTableV1 {
     pub fn is_pinned_for(&self, tokenizer_commitment: &Hash64) -> bool {
         token_table_pin_for_v1(tokenizer_commitment)
             .is_some_and(|pin| pin.vocab_len == self.vocab_len() && pin.root == self.root && pin.lowest_eog_id == self.lowest_eog_id)
+    }
+}
+
+/// **A synthetic pinned table for this crate's unit tests, on the thread that asks for it.**
+///
+/// The court's constrained arms look a table up by the job's tokenizer commitment and nothing else
+/// (ADR-0096 §10 B4: the tables are the build's), and the build pins exactly one real table — whose
+/// leaves need a 7 MB tokenizer file no unit test holds. So a test that drives a constrained close
+/// through `adjudicate_court_close_v2` pins a synthetic table here, under a commitment of its own,
+/// for as long as the returned guard lives. Thread-local, because the test harness runs tests on
+/// parallel threads and one test's table must not be another's.
+#[cfg(test)]
+pub(crate) mod test_seam {
+    use super::{Hash64, PALW_TOKEN_TABLES_V1, PalwTokenTablePinnedV1};
+    use std::cell::RefCell;
+    use std::str::FromStr;
+
+    thread_local! {
+        static PINS: RefCell<Vec<(Hash64, PalwTokenTablePinnedV1)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// Unpins on drop.
+    pub(crate) struct ThreadPinV1 {
+        commitment: Hash64,
+    }
+
+    impl Drop for ThreadPinV1 {
+        fn drop(&mut self) {
+            PINS.with(|pins| pins.borrow_mut().retain(|(c, _)| *c != self.commitment));
+        }
+    }
+
+    /// Pin `pin` under `commitment` on this thread. Panics on a commitment the build already pins:
+    /// a test must never be able to replace the real table with its own.
+    pub(crate) fn pin_on_this_thread(commitment: Hash64, pin: PalwTokenTablePinnedV1) -> ThreadPinV1 {
+        assert!(
+            PALW_TOKEN_TABLES_V1.iter().all(|row| Hash64::from_str(row.tokenizer_commitment_hex).ok() != Some(commitment)),
+            "a test pin may not shadow a table the build pins"
+        );
+        PINS.with(|pins| {
+            let mut pins = pins.borrow_mut();
+            pins.retain(|(c, _)| *c != commitment);
+            pins.push((commitment, pin));
+        });
+        ThreadPinV1 { commitment }
+    }
+
+    pub(super) fn pinned_on_this_thread(commitment: &Hash64) -> Option<PalwTokenTablePinnedV1> {
+        PINS.with(|pins| pins.borrow().iter().find(|(c, _)| c == commitment).map(|(_, pin)| *pin))
     }
 }
 
@@ -836,6 +896,29 @@ mod tests {
         assert!(constraint_admits_lane_v1(&anything, &start, Some(&[0u8; 128][..])).is_some());
         assert!(constraint_admits_lane_v1(&anything, &start, Some(&b""[..])).is_none(), "and never the table's empty leaf");
         assert!(constraint_admits_lane_v1(&anything, &start, None).is_none());
+    }
+
+    /// **The unit-test seam pins for one thread, unpins on drop, and cannot shadow the build.** The
+    /// court reads `token_table_pin_for_v1` directly; a test that pins a synthetic table must not be
+    /// able to change what the real commitment resolves to, nor leak into another test's thread.
+    #[test]
+    fn the_test_seam_pins_for_one_thread_and_never_shadows_the_build() {
+        let synthetic = Hash64::from_u64_word(0x5EA1);
+        let pin = PalwTokenTablePinnedV1 { vocab_len: 7, root: Hash64::from_u64_word(1), lowest_eog_id: 3 };
+        assert_eq!(token_table_pin_for_v1(&synthetic), None);
+        {
+            let _guard = test_seam::pin_on_this_thread(synthetic, pin);
+            assert_eq!(token_table_pin_for_v1(&synthetic), Some(pin));
+            let elsewhere = std::thread::spawn(move || token_table_pin_for_v1(&synthetic)).join().expect("the thread runs");
+            assert_eq!(elsewhere, None, "another thread does not see this thread's pin");
+        }
+        assert_eq!(token_table_pin_for_v1(&synthetic), None, "dropping the guard unpins");
+        let real = Hash64::from_str(PALW_TOKEN_TABLE_QWEN25_V1.tokenizer_commitment_hex).expect("hex");
+        assert!(
+            std::panic::catch_unwind(|| test_seam::pin_on_this_thread(real, pin)).is_err(),
+            "a test pin may not replace a row the build pins"
+        );
+        assert_eq!(token_table_pin_for_v1(&real).map(|p| p.vocab_len), Some(151_936), "the build's row stands");
     }
 
     /// **The in-memory table is the committed one.** Its root is `token_table_root_v1` over the

@@ -15853,7 +15853,8 @@ pub(crate) mod tests {
                     &proof,
                     &court_params(),
                     crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
-                    crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+                    crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                    false,
                 ),
                 Err(PalwCourtV2Error::LadderNotTerminal)
             ),
@@ -15885,6 +15886,7 @@ pub(crate) mod tests {
             &court_params(),
             crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
             crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            false,
         );
         assert!(
             matches!(outcome, Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened: o, narrowed: 4 }) if o == opened),
@@ -15908,6 +15910,7 @@ pub(crate) mod tests {
             &court_params(),
             crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
             crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            false,
         );
         assert!(
             matches!(outcome, Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened: 7, narrowed: 4 })),
@@ -23260,6 +23263,7 @@ pub(crate) mod tests {
                 &court,
                 crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
                 crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                false,
             )
         }
 
