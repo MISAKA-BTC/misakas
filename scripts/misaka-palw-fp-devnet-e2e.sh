@@ -76,6 +76,14 @@ MODEL_ID="${MODEL_ID:-Qwen/Qwen2.5-1.5B/graph-v5@512}"
 # format to have been committed and valid, the rail to have signed a version-6 job, and a seat to
 # have logged the masked replay — so a run that silently fell back to version 5 cannot pass.
 CONSTRAINED="${CONSTRAINED:-0}"
+# **Whether every seat holds the artifact.** A claim is licensed by 3 `Valid` receipts of a 5-seat
+# panel (`PALW_V2_PANEL_SEATS`/`_QUORUM`), the executor's bond never sits, and a seat without the
+# class's artifact answers `Incapable`, which counts toward neither side. So with the default three
+# nodes — bond 0 executes, node-2 holds no artifact — at most ONE seat can answer `Valid` and no
+# claim can reach `ReceiptLicensed`: the run proves carriage, the panel and the seats' verdicts,
+# and only watches the rest. `SEATS_HOLD_ARTIFACT=1` hands the artifact to every node (production
+# stays on nodes 0 and 1), and `NODES=4` then gives three capable seats — the quorum.
+SEATS_HOLD_ARTIFACT="${SEATS_HOLD_ARTIFACT:-0}"
 FENCE_ARGS=()
 if [ "$CONSTRAINED" = 1 ]; then FENCE_ARGS=(--palw-fp-constraint-devnet=0); fi
 PREMINE_TXID="6d6973616b612d7072656d696e65$(printf '0%.0s' $(seq 1 100))"   # "misaka-premine", zero-padded
@@ -112,6 +120,12 @@ done
 [ -n "${MISAKA_DEVNET_GENESIS:-}" ] || die "MISAKA_DEVNET_GENESIS must be the devnet genesis hash, 128 hex chars (consensus/core/src/config/genesis.rs, DEVNET_GENESIS). A guessed value silently produces claims no seat can replay."
 [ "${#MISAKA_DEVNET_GENESIS}" -eq 128 ] || die "MISAKA_DEVNET_GENESIS is ${#MISAKA_DEVNET_GENESIS} chars, not 128"
 command -v python3 >/dev/null || die "python3 is required (key derivation and the HTTP client)"
+capable_seats=$((NODES > 1 ? 1 : 0))
+if [ "$SEATS_HOLD_ARTIFACT" = 1 ]; then capable_seats=$((NODES - 1)); fi
+if [ "$capable_seats" -lt 3 ]; then
+  log "NOTE: $capable_seats seat(s) can judge the dense class and a licence needs 3 Valid of 5 — this run cannot reach"
+  log "      ReceiptLicensed or Final; it proves carriage, the panel and the verdicts (SEATS_HOLD_ARTIFACT=1 NODES=4 for Final)"
+fi
 
 # Every port this run binds, derived from the two bases and the node count exactly as the stages
 # below derive them — never a second list, or a stage could bind a port this check never saw. The
@@ -220,6 +234,7 @@ for ((i=0; i<NODES; i++)); do
   # attempt is ~2.4 min of inference on this host and the chain needs three blocks. node-2 stays
   # a floor-only seat, which is the shape of a fleet host without the artifact.
   if [ "$i" -le 1 ]; then args+=(--palw-class-artifact="$MISAKA_PALW_ARTIFACT" --palw-producer-class="$EXPECTED_CLASS_ID"); fi
+  if [ "$i" -gt 1 ] && [ "$SEATS_HOLD_ARTIFACT" = 1 ]; then args+=(--palw-class-artifact="$MISAKA_PALW_ARTIFACT"); fi
   if [ "$i" -gt 0 ]; then args+=(--connect=127.0.0.1:$P2P_BASE); fi
   if [ "$CONSTRAINED" = 1 ]; then args+=(--palw-fp-constraint-devnet=0 --palw-class-tokenizer="$MISAKA_PALW_TOKENIZER"); fi
   MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >"$WORK_DIR/node-$i.log" 2>&1 &
