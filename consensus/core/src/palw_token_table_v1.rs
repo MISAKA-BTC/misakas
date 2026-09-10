@@ -363,6 +363,11 @@ pub struct PalwTokenTablePinV1 {
     pub vocab_len: u32,
     /// [`token_table_root_v1`] of the table, 128 lowercase hex characters.
     pub root_hex: &'static str,
+    /// **The class's lowest end-of-generation id** — the token ADR-0096 §10 B7's finish rule
+    /// commits from the position no byte continues to the budget. The court tries that rule from
+    /// the automaton and this id alone, so it is the build's, beside the root, and never the
+    /// carrier's to state. It is an added token, so its leaf is the empty one.
+    pub lowest_eog_id: u32,
     /// Where the value came from, in words a person can re-run.
     pub source: &'static str,
 }
@@ -375,7 +380,8 @@ pub struct PalwTokenTablePinV1 {
 /// wide, so 271 padded ids and the 22 added tokens have the empty leaf (293 in all). The longest
 /// rendering is 128 bytes (id 56,940), and every one of the 256 bytes is some id's whole rendering
 /// (ids 0–255), which is what lets B7's finish rule read "no lane is admitted" as "no byte
-/// continues".
+/// continues". The lowest end-of-generation id is `<|endoftext|>`'s, 151,643 — below
+/// `<|im_end|>`'s 151,645, the family's other EOG name.
 ///
 /// Printed by `palw-token-table --tokenizer tokenizer.json --vocab-len 151936`; checked against
 /// the file by `misaka_palw_base0::token_table::tests::the_pinned_qwen25_token_table_is_the_one_the_tokenizer_file_builds`,
@@ -384,6 +390,7 @@ pub const PALW_TOKEN_TABLE_QWEN25_V1: PalwTokenTablePinV1 = PalwTokenTablePinV1 
     tokenizer_commitment_hex: "fa9a43521e324f8482d88a2f4147ae2321202db8806b7c039322fc8a3d265ab482c35e0ab1bd2819b86d50449b0270db435823b002aef001c07a8c7c10a649bb",
     vocab_len: crate::palw_qwen25_profile::QWEN25_1_5B_A16.vocab_size,
     root_hex: "01e9c31cabc5b9cae91bfea41bb3268e620ed266cc2218337d813fb3133889d4e97291cd2df463ea85c9bb609bb823e61172d5d7c39fe47c9eb8e43dd9cd9a1f",
+    lowest_eog_id: 151_643,
     source: "Qwen2.5-1.5B tokenizer.json (7,031,645 bytes, sha256 c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539), \
              bound into the testnet-11 dense artifact by `palw-class bind-tokenizer`; root printed by \
              `palw-token-table --tokenizer tokenizer.json --vocab-len 151936`",
@@ -393,19 +400,101 @@ pub const PALW_TOKEN_TABLE_QWEN25_V1: PalwTokenTablePinV1 = PalwTokenTablePinV1 
 /// carry a version-6 job: the court could not prove a single token's bytes for it.
 pub const PALW_TOKEN_TABLES_V1: &[PalwTokenTablePinV1] = &[PALW_TOKEN_TABLE_QWEN25_V1];
 
-/// **The pinned `(vocab_len, root)` for a tokenizer commitment**, or `None` when this build pins no
-/// table for it — including the zero commitment an artifact that declares no tokenizer carries.
+/// A pinned row, parsed: what a court and a seat read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwTokenTablePinnedV1 {
+    pub vocab_len: u32,
+    pub root: Hash64,
+    pub lowest_eog_id: u32,
+}
+
+/// **The pinned table for a tokenizer commitment**, or `None` when this build pins no table for it
+/// — including the zero commitment an artifact that declares no tokenizer carries.
 ///
 /// A row whose hex does not parse matches nothing; `every_pinned_row_is_well_formed` holds every
 /// row to 128 lowercase hex characters, so that case is a build that failed its own tests.
-pub fn token_table_pin_for_v1(tokenizer_commitment: &Hash64) -> Option<(u32, Hash64)> {
+pub fn token_table_pin_for_v1(tokenizer_commitment: &Hash64) -> Option<PalwTokenTablePinnedV1> {
     PALW_TOKEN_TABLES_V1.iter().find_map(|row| {
         let commitment = Hash64::from_str(row.tokenizer_commitment_hex).ok()?;
         if commitment != *tokenizer_commitment {
             return None;
         }
-        Some((row.vocab_len, Hash64::from_str(row.root_hex).ok()?))
+        Some(PalwTokenTablePinnedV1 {
+            vocab_len: row.vocab_len,
+            root: Hash64::from_str(row.root_hex).ok()?,
+            lowest_eog_id: row.lowest_eog_id,
+        })
     })
+}
+
+// ---------------------------------------------------------------------------------------------
+// The table in memory
+// ---------------------------------------------------------------------------------------------
+
+/// **A class's token table as an engine and a seat hold it** (ADR-0096 §10 B4): every id's
+/// rendering under the table rule, the lowest end-of-generation id, and the root they commit to.
+///
+/// One type for both sides, so the table a worker masks with and the table a seat replays with are
+/// compared by one value: a seat builds it from the tokenizer file it was given and uses it only if
+/// [`Self::is_pinned_for`] the job's tokenizer — the output root of a version-6 answer is a
+/// function of these bytes (§10 B3), so a table that differed by one token would reproduce nothing.
+/// A worker that serves answers only may mask with an unpinned table; nothing it produces reaches a
+/// chain, and a chain refuses a version-6 job whose tokenizer has no row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwTokenTableV1 {
+    bytes: Vec<Vec<u8>>,
+    lowest_eog_id: u32,
+    root: Hash64,
+}
+
+impl PalwTokenTableV1 {
+    /// Build from every id's rendering, in id order, and the lowest end-of-generation id. Refused
+    /// by name: a rendering past [`PALW_TOKEN_TABLE_MAX_TOKEN_BYTES_V1`] (a court could not open
+    /// it), an EOG id outside the table, and an EOG id with bytes (an end-of-generation token is a
+    /// control token, whose rendering is empty — one with bytes would be admissible as content).
+    pub fn new(bytes: Vec<Vec<u8>>, lowest_eog_id: u32) -> Result<Self, String> {
+        let vocab_len = u32::try_from(bytes.len()).map_err(|_| "a token table past u32::MAX ids".to_string())?;
+        if let Some((id, long)) = bytes.iter().enumerate().find(|(_, b)| b.len() > PALW_TOKEN_TABLE_MAX_TOKEN_BYTES_V1) {
+            return Err(format!(
+                "id {id} renders as {} bytes and an opening carries at most {PALW_TOKEN_TABLE_MAX_TOKEN_BYTES_V1}",
+                long.len()
+            ));
+        }
+        if lowest_eog_id >= vocab_len {
+            return Err(format!("the end-of-generation id {lowest_eog_id} is outside a {vocab_len}-id table"));
+        }
+        if !bytes[lowest_eog_id as usize].is_empty() {
+            return Err(format!("the end-of-generation id {lowest_eog_id} renders as bytes; a control token renders empty"));
+        }
+        let leaves: Vec<Hash64> = bytes.iter().enumerate().map(|(id, b)| token_table_leaf_v1(id as u32, b)).collect();
+        let root = token_table_root_v1(&leaves);
+        Ok(Self { bytes, lowest_eog_id, root })
+    }
+
+    /// Id `id`'s rendering; empty past the table.
+    pub fn segment(&self, id: u32) -> &[u8] {
+        self.bytes.get(id as usize).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    pub fn lowest_eog_id(&self) -> u32 {
+        self.lowest_eog_id
+    }
+
+    pub fn vocab_len(&self) -> u32 {
+        self.bytes.len() as u32
+    }
+
+    pub fn root(&self) -> Hash64 {
+        self.root
+    }
+
+    /// Is this table the one the build pins for `tokenizer_commitment` — its length, its root and
+    /// its end-of-generation id, all three?
+    pub fn is_pinned_for(&self, tokenizer_commitment: &Hash64) -> bool {
+        token_table_pin_for_v1(tokenizer_commitment).is_some_and(|pin| {
+            pin.vocab_len == self.vocab_len() && pin.root == self.root && pin.lowest_eog_id == self.lowest_eog_id
+        })
+    }
 }
 
 #[cfg(test)]
@@ -666,7 +755,11 @@ mod tests {
 
         let commitment = Hash64::from_str(row.tokenizer_commitment_hex).expect("hex");
         let root = Hash64::from_str(row.root_hex).expect("hex");
-        assert_eq!(token_table_pin_for_v1(&commitment), Some((151_936, root)));
+        assert_eq!(
+            token_table_pin_for_v1(&commitment),
+            Some(PalwTokenTablePinnedV1 { vocab_len: 151_936, root, lowest_eog_id: 151_643 })
+        );
+        assert!(row.lowest_eog_id < row.vocab_len);
         assert_eq!(token_table_pin_for_v1(&Hash64::default()), None, "an artifact that declares no tokenizer has no table");
         assert_eq!(token_table_pin_for_v1(&flip(&commitment)), None);
     }
@@ -744,5 +837,34 @@ mod tests {
         assert!(constraint_admits_lane_v1(&anything, &start, Some(&[0u8; 128][..])).is_some());
         assert!(constraint_admits_lane_v1(&anything, &start, Some(&b""[..])).is_none(), "and never the table's empty leaf");
         assert!(constraint_admits_lane_v1(&anything, &start, None).is_none());
+    }
+
+    /// **The in-memory table is the committed one.** Its root is `token_table_root_v1` over the
+    /// same leaves an opening is proven against, so a segment it hands an engine is a segment a
+    /// court can open; it refuses what a court could not try; and "pinned" means all three numbers.
+    #[test]
+    fn the_table_in_memory_commits_to_the_root_an_opening_proves_against() {
+        let n = 37u32;
+        let mut bytes: Vec<Vec<u8>> = (0..n).map(synthetic_bytes).collect();
+        let eog = 30u32; // 30 % 5 == 0: an empty leaf, as a control token's is
+        let table = PalwTokenTableV1::new(bytes.clone(), eog).expect("a well-formed table");
+        let leaves: Vec<Hash64> = (0..n).map(|id| token_table_leaf_v1(id, &synthetic_bytes(id))).collect();
+        assert_eq!(table.root(), token_table_root_v1(&leaves));
+        assert_eq!(table.vocab_len(), n);
+        assert_eq!(table.lowest_eog_id(), eog);
+        for id in 0..n {
+            assert_eq!(table.segment(id), synthetic_bytes(id).as_slice());
+            let opening = token_table_opening_from_leaves_v1(&leaves, id, synthetic_bytes(id)).expect("in range");
+            assert_eq!(token_table_proven_bytes_v1(&table.root(), n, id, &opening), Ok(table.segment(id)));
+        }
+        assert_eq!(table.segment(n), b"", "past the table is empty");
+        assert!(!table.is_pinned_for(&Hash64::default()), "a synthetic table is no pin");
+
+        assert!(PalwTokenTableV1::new(bytes.clone(), n).is_err(), "an EOG outside the table");
+        assert!(PalwTokenTableV1::new(bytes.clone(), 1).is_err(), "an EOG with bytes (id 1 renders one byte)");
+        bytes[3] = vec![b' '; PALW_TOKEN_TABLE_MAX_TOKEN_BYTES_V1];
+        assert!(PalwTokenTableV1::new(bytes.clone(), eog).is_ok(), "the longest rendering an opening carries");
+        bytes[3].push(b' ');
+        assert!(PalwTokenTableV1::new(bytes, eog).is_err(), "one byte past it");
     }
 }

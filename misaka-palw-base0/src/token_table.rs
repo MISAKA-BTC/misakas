@@ -259,7 +259,29 @@ mod tests {
             path.display(),
             row.vocab_len
         );
-        assert_eq!(token_table_pin_for_v1(&commitment), Some((row.vocab_len, root)));
+        // The lowest end-of-generation id B7 commits: the lowest id the family's EOG names resolve
+        // to in THIS file — the value the worker's manifest publishes, pinned beside the root.
+        let lowest_eog = crate::fp_worker::QWEN_EOG_TOKEN_NAMES
+            .iter()
+            .filter_map(|name| tokenizer.added_id(name))
+            .min()
+            .expect("the family's EOG names are in its tokenizer");
+        assert_eq!(lowest_eog, row.lowest_eog_id, "the pinned end-of-generation id is the file's");
+        assert_eq!(
+            token_table_pin_for_v1(&commitment),
+            Some(kaspa_consensus_core::palw_token_table_v1::PalwTokenTablePinnedV1 {
+                vocab_len: row.vocab_len,
+                root,
+                lowest_eog_id: row.lowest_eog_id
+            })
+        );
+        // And the in-memory table the worker and the seat build from this file IS the pin.
+        let table = kaspa_consensus_core::palw_token_table_v1::PalwTokenTableV1::new(
+            (0..row.vocab_len).map(|id| token_table_bytes_v1(&tokenizer, id)).collect(),
+            lowest_eog,
+        )
+        .expect("the file's table is well formed");
+        assert!(table.is_pinned_for(&commitment));
 
         // The facts the constant's doc states, measured.
         assert_eq!(tokenizer.len(), 151_665, "151,643 BPE tokens and 22 added tokens");

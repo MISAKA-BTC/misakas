@@ -962,6 +962,10 @@ pub enum PalwFpV3Error {
     ConstraintIdMismatch { carried: Hash64, named: Hash64 },
     #[error("a PanelDa job cannot carry a constraint yet: the constraint's only route is the public payload (ADR-0096 §10 B2)")]
     ConstraintUnderPanelDa,
+    /// ADR-0096 §10 B4: the court tries a constrained token through the pinned table of the job's
+    /// tokenizer, so a job whose tokenizer has no pinned table is a claim no court could try.
+    #[error("the job's tokenizer {0} has no pinned token table, so no court could try a constrained token (ADR-0096 §10 B4)")]
+    ConstraintTokenizerUnpinned(Hash64),
     /// A mode-2 payload that carries the prompt anyway. Refused rather than trimmed: an executor
     /// that published a prompt the user asked to keep off chain has already done the harm, and a
     /// claim built on that payload would be one the chain quietly blessed.
@@ -1998,6 +2002,12 @@ impl PalwFpCommitmentTxPayloadV3 {
             if carried != self.commitment.job.constraint_id {
                 return Err(PalwFpV3Error::ConstraintIdMismatch { carried, named: self.commitment.job.constraint_id });
             }
+            // B4: a tokenizer with no row cannot carry a version-6 job. The job's `tokenizer_id`
+            // is the artifact's tokenizer commitment (the worker checks it against the file it
+            // opened), and it is what the court looks the table up by.
+            if crate::palw_token_table_v1::token_table_pin_for_v1(&self.commitment.job.tokenizer_id).is_none() {
+                return Err(PalwFpV3Error::ConstraintTokenizerUnpinned(self.commitment.job.tokenizer_id));
+            }
         }
         // **`PanelDa` carries NO ids, and the check is a REQUIREMENT, not a tolerance** (ADR-0077
         // Decision 16). Placed before the canonical arm because the privacy mode decides what the
@@ -2733,6 +2743,8 @@ mod tests {
         let mut c = commitment();
         c.job.version = PALW_FP_V3_VERSION_CONSTRAINED;
         c.job.constraint_id = crate::palw_decode_constraint_v1::constraint_id_v1(&constraint);
+        // The pinned Qwen2.5 tokenizer: a version-6 job's tokenizer must have a table (§10 B4).
+        c.job.tokenizer_id = crate::palw_token_table_v1::PALW_TOKEN_TABLE_QWEN25_V1.tokenizer_commitment_hex.parse().expect("hex");
         c.job.prompt_token_ids_hash = crate::palw_v2::prompt_token_ids_hash_v2(&ids);
         c.job.prompt_tokens = ids.len() as u32;
         PalwFpCommitmentTxPayloadV3 {
@@ -2828,6 +2840,12 @@ mod tests {
         assert_eq!(
             mixed.validate_stateless_armed_v3(net(), armed(true), PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None, form),
             Err(PalwFpV3Error::PayloadJobVersionMismatch { payload: PALW_FP_V3_VERSION, job: PALW_FP_V3_VERSION_CONSTRAINED })
+        );
+        let mut unpinned = payload.clone();
+        unpinned.commitment.job.tokenizer_id = Hash64::from_u64_word(0x70);
+        assert_eq!(
+            unpinned.validate_stateless_armed_v3(net(), armed(true), PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None, form),
+            Err(PalwFpV3Error::ConstraintTokenizerUnpinned(Hash64::from_u64_word(0x70)))
         );
         let mut private = payload;
         private.commitment.job.privacy_mode = PALW_FP_PRIVACY_PANEL_DA;
