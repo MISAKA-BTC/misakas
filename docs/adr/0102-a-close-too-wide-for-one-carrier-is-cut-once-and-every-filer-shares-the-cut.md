@@ -146,8 +146,8 @@ rather than a consensus one.
 
 1. `palw_close_carriage.rs` in consensus-core, with the CLI delegating to it and its tests
    unedited. **Landed first, because everything else is a consumer of it.**
-2. The processor-level split-close test (Decision 7).
-3. The node's submitter (Decisions 4–6).
+2. The node's submitter (Decisions 4–6).
+3. The processor-level split-close test (Decision 7). **Reordered after measurement** — see §10.
 4. *Not in this ADR:* the builder that assembles ADR-0096 §10 B5/B6 closes from a seat's own
    capture. The node's court builds arithmetic closes only; a constrained claim's decode dispute
    has an adjudicator and a carriage after this ADR, and still no assembler. That is ADR-0096's
@@ -167,4 +167,78 @@ free number is 0103.** A concurrent claimant of 0102 renumbers the later writer.
 
 ## 9. Implementation record
 
-*(appended as the work lands)*
+**Stage 1 — the shared cutter (`90ec2317`).** `consensus/core/src/palw_close_carriage.rs`:
+`PalwCourtCloseCarriageV1`, `palw_plan_court_close_carriage_v1`,
+`palw_court_close_parts_to_send_v1` (and `palw_court_close_parts_owed_v1`, the plan-less form the
+node resumes with), `palw_court_close_max_parts_v1`, `palw_court_close_assembly_fits_v1`,
+`PalwCourtCloseGroupSeenV1`, `PalwCloseCarriageError`. Eight tests of its own, one per invariant in
+§5. `misaka-cli/src/palw_court.rs` keeps every operator sentence and delegates the rule;
+`CarriagePlan` is a type alias and `journal_key` an extension trait, so its **sixteen tests passed
+unedited** — the only test-side change is one import line for the three names the cut took with it.
+`misaka-cli/src/main.rs`'s claim that the split path was "planned but not yet filable" is corrected;
+W6 and W7 have landed.
+
+**Stage 2 — the node's submitter (`d22f718a`).** `court_pending` carries `CourtMoveV1 { parts,
+group }`; `plan_court_move_v1` cuts a close, reads the side off `PalwCourtDutyV2::i_am_responder`,
+checks the window against `session_deadline_daa` and signs the declaration. The submit loop resumes
+from `palw_court_close_group_v1`'s bitmap each pass, refuses a group that is not this plan's, and
+files what is missing one carrier at a time under the existing `MAX_INFLIGHT_CARRIERS` and funding
+chain.
+
+**Two defects found by writing it, fixed in the same commit.** Neither was in the design:
+
+* **An armed-rent network prices a declaration by the close it buys.**
+  `palw_court_close_min_fee_v1(count)` is the relay fee for the whole close's counted bytes, while
+  the declaration object is small — its digests are 64 bytes a chunk. `build_lifecycle_tx` paid the
+  carrier's own relay minimum, so the declaration would have been dropped, no group would have
+  opened, and the resume — reading no group — would have re-filed the whole carriage every pass.
+  `build_lifecycle_tx_paying_rent` floors the fee with what the chain charges, behind the same
+  `palw_certification_rent` fence the acceptance layer reads it behind. **The certification lane
+  has the identical gap and is named, not fixed**: this node has never paid
+  `palw_certification_min_fee_v1` either. Both are dormant while the fence is `None` on every
+  shipped preset, which is what makes closing them one at a time safe.
+* **A carriage kept across ticks re-files what is still in flight.** A split close is the first
+  move this loop holds AFTER sending; the bitmap only moves when a carrier reaches a block, and the
+  panel ticks every couple of seconds. Rate-limited by `COURT_MOVE_REPLAN_DAA`, the window the
+  planner already uses, and abandoned past the session's backstop, where the chain accepts no
+  further chunk.
+
+## 10. What Decision 7 costs, measured
+
+Decision 7 called for a processor-level test and put it second. Measured before writing it, it is
+the most expensive item in this ADR and it was reordered behind the submitter. The carriage half is
+solved: `palw_v2_a_funded_carrier_is_priced_by_the_fee_the_utxo_walk_read`
+(`virtual_processor/tests.rs:10637`) is a working template for funding a `0x4b` transaction from a
+two-wide row's coinbase, signing it ML-DSA-87 and mining it — **and it is the only test in the file
+that mines a lifecycle object at all**; every other PALW test calls `palw_v2_validate_objects` or
+the fold directly.
+
+The court half does not exist. **No test in `kaspa-consensus` has ever created a
+`PalwCourtSessionStateV2`**, through blocks or otherwise. `split_close_fixture` gets its session
+for free from helpers that are `#[cfg(test)] pub(crate)` inside consensus-core — `apply`, `ctx`,
+`h64`, `bond_key`, `court_open`, `disclose`, `rung_verdict`, and above all
+`palw_step_refute::tests::skeleton_refutation` — none of which crosses the crate boundary, and
+`consensus/Cargo.toml` exposes no test-only feature that would let them. So the test must build
+through mined blocks: a licensed claim, a signed `CourtOpened` from a SECOND registered bond, then
+four signed disclosure/verdict rungs to collapse `[0,16)` to Terminal — five or six blocks of setup
+before the first chunk.
+
+Two facts make it tractable when it is written. `PALW_COURT_CLOSE_MAX_PER_BLOCK` is 1, but only the
+COMPLETING chunk spends that slot (`palw_court_close_completes_a_group_v1` matches
+`CourtCloseChunk` alone), so the declaration and the earlier chunks may share blocks. And the
+harness bundle uses `PALW_RC_WINDOWS_V1` despite its devnet name, so `max_close_chunks` is 27 there
+and the split path is admitted rather than refused.
+
+The deepest gap is the proof. The processor DROPS a completing chunk whose assembly fails
+`adjudicate_court_close_v2`, so without a structurally real `PalwCourtVerdictProofV2` the group
+never completes and the state never moves. **The first version should therefore assert the
+CONVICTION path** — bytes that assemble but do not decode to this session's close are admitted at
+acceptance by design and convict the declarer in the block carrying the last chunk — and leave
+"adjudicates to the declared verdict" to a follow-up that either publishes a skeleton-proof builder
+or borrows the real fixture in `misaka-palw-base0/tests/constrained_court_e2e.rs`.
+
+Until that lands, what stands behind the split path is the state layer's own coverage
+(`a_three_carrier_close_and_a_whole_one_reach_the_same_state`, the reorg, the pruning round trip,
+the lapse, the signature) plus this ADR's eight. **No split close has been filed on a live chain**,
+and devnet's `max_close_chunks = 1` refuses one, so a drill that exercises it needs a network whose
+court pays for more than one carrier.
