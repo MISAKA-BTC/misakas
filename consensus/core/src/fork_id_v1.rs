@@ -57,10 +57,13 @@
 //! shipped presets already schedule crescendo, so "this node has crossed a fence" is true of
 //! mainnet from DAA 110,165,000 — and under the first rule ("has this node crossed anything")
 //! arming ADR-0072's fence at a future height refused every un-armed peer from the instant the
-//! build started, which is the partition, not the fence. When the mismatch names a fence
-//! (`NextFenceDiffers`) that fence is the one the height test asks about; when it does not
-//! (`Absent`, `UnknownFiredSet`) the test falls back to [`fork_id_gate_fences_v1`], the fences this
-//! module refuses on, which crescendo is deliberately not among.
+//! build started, which is the partition, not the fence. When the mismatch names fences
+//! (`NextFenceDiffers`) the disputed one is the LOWER of the two builds' next fences — where the
+//! schedules part: the peer's own, if it carries a fence this build does not, else this build's,
+//! which then refuses only if the gate names it; when it names none (`Absent`, `UnknownFiredSet`)
+//! the test falls back to [`fork_id_gate_fences_v1`], the fences this module refuses on, which
+//! crescendo is deliberately not among — and never to a gate fence the peer has already agreed
+//! about by matching a prefix of this schedule.
 //!
 //! ## Why the gate is armed by a field and not by "does this build schedule anything"
 //!
@@ -94,8 +97,11 @@
 //! the new build syncing pre-1150 history (empty prefix, next `1150`) and a node already past it
 //! (prefix `[1150]`, next `2_125_000`) are prefix peers and kept, in both directions. That is the
 //! block-level silent fork of a flag day turned into a named handshake refusal, which is the
-//! module's purpose. A connection accepted before the height is not re-judged when the height
-//! passes; the block rules separate that pair, and the next handshake refuses it.
+//! module's purpose. A connection accepted before the height used to stay up when the height
+//! passed — "the block rules separate that pair, and the next handshake refuses it" — and a node
+//! syncing from an empty datadir meets EVERY un-upgraded peer below the height, so it kept them all
+//! (measured 2026-09-10, six of them). The connection layer now stores
+//! [`fork_id_refusal_height_v1`] with each peer it keeps on a warning and judges it again there.
 //!
 //! A later ADR arming a different fence must add it to that list, and the tests
 //! `the_gate_is_armed_only_where_a_shipped_preset_schedules_a_gate_fence` and
@@ -211,6 +217,14 @@ pub fn fork_id_gate_armed_v1(params: &Params) -> bool {
 /// measured being cut off within four minutes of the first restart. Whoever schedules a gate fence
 /// has to say so where node operators read it, and the height's lead time buys the fleet an
 /// ordering, not the network a grace period.
+///
+/// **The third flag day (DAA 2400, 2026-09-09) did it again, and the cause was one arm of
+/// [`evaluate_fork_id_v1`]:** the old side's next fence was crescendo, the gate does not name
+/// crescendo, and the fallback refused on a lower gate fence the peer had just agreed about.
+/// Builds carrying the 2026-09-10 fix keep a peer whose next fence is lower than their own until
+/// they pass it. That fixes the NEXT flag day only for nodes that are already on such a build —
+/// every build from before it still refuses at once, so the notice above stays true for one more
+/// rollout.
 ///
 /// **The fences that ARM the gate, as heights.**
 ///
@@ -342,22 +356,30 @@ pub fn evaluate_fork_id_v1(params: &Params, local_daa_score: u64, peer_fired: &[
     // it made `the_gate_refuses_only_on_the_fences_it_names` an overclaim rather than an invariant.
     // A disputed fence the gate does not name falls back to the gate's own fences, exactly as
     // `Absent` and `UnknownFiredSet` do.
+    //
+    // **…but only to the gate fences the peer has not already agreed about** (2026-09-10). The
+    // fallback used to be "any gate fence this node has crossed", and a peer recognised as a PREFIX
+    // of this schedule has told this node, in a digest this node computed itself, that it crossed
+    // exactly those fences. Refusing it on one of them is refusing it for agreeing. `agreed` is that
+    // prefix; for `Absent` and `UnknownFiredSet` nothing was recognised, so nothing is excluded and
+    // they behave as they always did.
     let gate_fences = fork_id_gate_fences_v1(params);
-    let armed_fired_through = || gate_fences.iter().copied().filter(|&fence| fence <= local_daa_score).max();
-    let classify_at = |mismatch: ForkIdMismatch, disputed: Option<u64>| {
+    let armed_fired_through =
+        |agreed: &[u64]| gate_fences.iter().copied().filter(|&fence| fence <= local_daa_score && !agreed.contains(&fence)).max();
+    let classify_at = |mismatch: ForkIdMismatch, disputed: Option<u64>, agreed: &[u64]| {
         let fired_through = match disputed {
             // A gate-arming fence in dispute: refuse from that height and not one score before it.
             // Never fall back here — a LOWER armed fence the peer already agreed about must not
             // carry a refusal about a fence still ahead of both of them.
             Some(fence) if gate_fences.contains(&fence) => (fence <= local_daa_score).then_some(fence),
-            _ => armed_fired_through(),
+            _ => armed_fired_through(agreed),
         };
         match fired_through {
             Some(fired_through) => ForkIdVerdict::DisagreePastFence { mismatch, fired_through },
             None => ForkIdVerdict::DisagreeBeforeAnyFence(mismatch),
         }
     };
-    let classify = |mismatch: ForkIdMismatch| classify_at(mismatch, None);
+    let classify = |mismatch: ForkIdMismatch| classify_at(mismatch, None, &[]);
 
     if peer_fired.is_empty() {
         return classify(ForkIdMismatch::Absent);
@@ -379,13 +401,68 @@ pub fn evaluate_fork_id_v1(params: &Params, local_daa_score: u64, peer_fired: &[
         // the one term a stale-but-honest node still gets right, and an un-upgraded node cannot:
         // it is the rule the peer has not reached, not the history it has.
         Some(&expected) if peer_next != expected => {
-            classify_at(ForkIdMismatch::NextFenceDiffers { expected, got: peer_next }, Some(expected))
+            let mismatch = ForkIdMismatch::NextFenceDiffers { expected, got: peer_next };
+            // **The two schedules part at the LOWER of the two next fences, and when that is the
+            // peer's, the dispute is about the peer's fence** (2026-09-10).
+            //
+            // A next fence below this build's is a fence this build does not carry — a rule it does
+            // not implement, so not "a rule every build in circulation implements", which is the
+            // only thing the gate-name test below exists to keep out of a refusal. Below that
+            // height the two builds judge every block alike; from it they do not. So refuse once
+            // this node has passed it, and not before.
+            //
+            // This is the arm the second and third flag days fell through. An un-upgraded
+            // testnet-11 node (schedule `1150, 1900, 2150, 2125000`) meeting the upgraded build
+            // (`… 2150, 2400, 2125000`) at DAA ~2241 saw `expected: 2125000` — crescendo, which the
+            // gate does not name — and fell back to "has this node crossed a gate fence", which it
+            // had (2150, a fence the peer had just AGREED about). It refused at once, the fleet's
+            // first restart cut every third-party node off, and they mined their own arm from DAA
+            // ~2,241 while the fleet went past 3,040. Measured 2026-09-09/10.
+            //
+            // Trusting `got` decides only WHEN a peer that matched a prefix this node computed is
+            // refused. The gate was never a defence against a lying peer — any peer can announce
+            // this node's own fork id — and block validity does not read it.
+            if peer_next < expected {
+                return match peer_next <= local_daa_score {
+                    true => ForkIdVerdict::DisagreePastFence { mismatch, fired_through: peer_next },
+                    false => ForkIdVerdict::DisagreeBeforeAnyFence(mismatch),
+                };
+            }
+            // Otherwise the peer lacks THIS build's `expected`: that fence is the dispute, and it
+            // carries a refusal only if the gate names it (crescendo does not).
+            classify_at(mismatch, Some(expected), &schedule[..k])
         }
         // Either the next fence agrees, or the peer has crossed this build's whole schedule and is
         // announcing a fence this build does not carry. The second is this node being out of date,
         // which is a fork-choice question and not a reason to refuse a peer.
         _ => ForkIdVerdict::Agree,
     }
+}
+
+/// **The lowest local DAA score, from `local_daa_score` on, at which [`evaluate_fork_id_v1`] would
+/// refuse this peer** — `None` if it never would.
+///
+/// A handshake is one snapshot of both sides, and a peer kept with a warning below the disputed
+/// height used to stay connected for good once this node passed it. Measured 2026-09-10: the
+/// explorer node (169.58.232.113) resynced from an empty datadir, met six un-upgraded peers at its
+/// own DAA 0 ("this node has not crossed a fence yet (DAA 0); keeping the peer"), and still held
+/// all six after its IBD reached DAA 3,158 — well past the 2400 fence they were missing — until
+/// they were kicked by hand. The connection layer stores this height with the peer and judges it
+/// again when its own score reaches it.
+///
+/// The verdict can only change at a height this node knows in advance — one of its own gate
+/// fences, or the next fence the peer announced — and it is monotone: once a score refuses, every
+/// higher score does (each arm refuses from a threshold and the recognised prefix does not depend on
+/// the score). So scanning those candidates in order finds the exact height. Pure: no peer state
+/// beyond what the handshake already received.
+pub fn fork_id_refusal_height_v1(params: &Params, local_daa_score: u64, peer_fired: &[u8], peer_next: u64) -> Option<u64> {
+    let mut candidates = fork_id_gate_fences_v1(params);
+    candidates.push(peer_next);
+    candidates.push(local_daa_score);
+    candidates.retain(|&height| height >= local_daa_score && height != FORK_ID_NO_NEXT_FENCE);
+    candidates.sort_unstable();
+    candidates.dedup();
+    candidates.into_iter().find(|&height| evaluate_fork_id_v1(params, height, peer_fired, peer_next).refuses())
 }
 
 #[cfg(test)]
@@ -869,11 +946,20 @@ mod tests {
         armed.palw_attempt_activation = Some(ForkActivation::new(ADR_0072));
         assert_eq!(armed.fence_schedule_v1(), vec![CRESCENDO, ADR_0072]);
         assert_eq!(fork_id_gate_fences_v1(&armed), vec![ADR_0072], "crescendo is on the schedule and off the gate");
-        // A peer whose fired set IS the empty prefix but whose next fence is neither of ours.
+        // A peer whose fired set IS the empty prefix but whose next fence is neither of ours and lies
+        // PAST crescendo: it does not carry crescendo where this build does, so what it disputes is
+        // crescendo itself.
+        //
+        // (Until 2026-09-10 this case was written with `got: 42`, a next fence BELOW crescendo. That
+        // is not a dispute about crescendo — the peer then carries a fence at 42 this build does not,
+        // and the two schedules part at 42 — and reading it as one is exactly the fallback that cut
+        // off testnet-11's un-upgraded nodes on both flag days. That case is pinned below, and in
+        // `an_un_upgraded_node_keeps_the_upgraded_build_until_the_new_fence`.)
         let stranger = fired_fences_digest_v1(armed.genesis.hash, &[]);
-        let dispute = ForkIdMismatch::NextFenceDiffers { expected: CRESCENDO, got: 42 };
+        let beyond = CRESCENDO + 5;
+        let dispute = ForkIdMismatch::NextFenceDiffers { expected: CRESCENDO, got: beyond };
         for local_daa in [CRESCENDO, CRESCENDO + 1, ADR_0072 - 1] {
-            let verdict = evaluate_fork_id_v1(&armed, local_daa, stranger.as_bytes().as_slice(), 42);
+            let verdict = evaluate_fork_id_v1(&armed, local_daa, stranger.as_bytes().as_slice(), beyond);
             assert_eq!(
                 verdict,
                 ForkIdVerdict::DisagreeBeforeAnyFence(dispute),
@@ -884,9 +970,156 @@ mod tests {
         // …and past the fence the gate DOES name, the same peer is refused — on that fence, so the
         // arm is not merely permissive.
         assert_eq!(
-            evaluate_fork_id_v1(&armed, ADR_0072, stranger.as_bytes().as_slice(), 42),
+            evaluate_fork_id_v1(&armed, ADR_0072, stranger.as_bytes().as_slice(), beyond),
             ForkIdVerdict::DisagreePastFence { mismatch: dispute, fired_through: ADR_0072 }
         );
+
+        // A next fence BELOW this build's is the peer's own fence: refused from that height — never
+        // from crescendo, and never before it.
+        let lower = ForkIdMismatch::NextFenceDiffers { expected: CRESCENDO, got: 42 };
+        assert_eq!(evaluate_fork_id_v1(&armed, 41, stranger.as_bytes().as_slice(), 42), ForkIdVerdict::DisagreeBeforeAnyFence(lower));
+        for local_daa in [42, CRESCENDO, ADR_0072] {
+            assert_eq!(
+                evaluate_fork_id_v1(&armed, local_daa, stranger.as_bytes().as_slice(), 42),
+                ForkIdVerdict::DisagreePastFence { mismatch: lower, fired_through: 42 },
+                "at {local_daa}: the refusal rests on the peer's fence, which this build does not implement"
+            );
+        }
+    }
+
+    /// **The third flag day, as it was measured (2026-09-09/10): an un-upgraded node keeps the
+    /// upgraded build until the NEW fence, and not one score longer.**
+    ///
+    /// The upgraded testnet-11 build schedules ADR-0095's fence at 2400; the build before it did
+    /// not, so its next fence after 2150 is crescendo. At DAA ~2241 the fleet restarted on the new
+    /// build and every node on the old one refused it — `expected: 2125000`, crescendo, is not a
+    /// gate fence, and the fallback refused on 2150, which the upgraded peer had agreed about. The
+    /// third parties mined their own arm from ~2,241 while the fleet went past 3,040. Both halves
+    /// of the rollout are pinned here, from both sides, and the second flag day's shape (1900 added
+    /// after 1150, measured 2026-09-06) with them.
+    #[test]
+    fn an_un_upgraded_node_keeps_the_upgraded_build_until_the_new_fence() {
+        const ADR_0095: u64 = 2400;
+        const CRESCENDO_T11: u64 = 2_125_000;
+        let upgraded = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
+        let mut un_upgraded = upgraded.clone();
+        un_upgraded.palw_model_benefits = None;
+        assert_eq!(upgraded.fence_schedule_v1(), vec![1150, 1900, 2150, ADR_0095, CRESCENDO_T11]);
+        assert_eq!(un_upgraded.fence_schedule_v1(), vec![1150, 1900, 2150, CRESCENDO_T11], "the build before ADR-0095");
+
+        // The fleet on the new build at the moment it restarted, and a third party at the same height.
+        let new_peer = fork_id_v1(&upgraded, 2241);
+        let old_peer = fork_id_v1(&un_upgraded, 2241);
+        assert_eq!(new_peer.fired, old_peer.fired, "one history: both crossed 1150, 1900 and 2150");
+        assert_eq!((new_peer.next, old_peer.next), (ADR_0095, CRESCENDO_T11));
+        let dispute_seen_by_old = ForkIdMismatch::NextFenceDiffers { expected: CRESCENDO_T11, got: ADR_0095 };
+        let dispute_seen_by_new = ForkIdMismatch::NextFenceDiffers { expected: ADR_0095, got: CRESCENDO_T11 };
+
+        // Below 2400 neither side refuses the other: they agree about every block either can produce.
+        for local_daa in [2150, 2241, 2270, ADR_0095 - 1] {
+            assert_eq!(
+                evaluate_fork_id_v1(&un_upgraded, local_daa, new_peer.fired.as_bytes().as_slice(), new_peer.next),
+                ForkIdVerdict::DisagreeBeforeAnyFence(dispute_seen_by_old),
+                "old judging new at {local_daa}: this is the refusal that cut the third parties off"
+            );
+            assert_eq!(
+                evaluate_fork_id_v1(&upgraded, local_daa, old_peer.fired.as_bytes().as_slice(), old_peer.next),
+                ForkIdVerdict::DisagreeBeforeAnyFence(dispute_seen_by_new),
+                "new judging old at {local_daa}"
+            );
+        }
+        // From 2400 both refuse, each on the height where the schedules part.
+        for local_daa in [ADR_0095, ADR_0095 + 1, 3_040] {
+            assert_eq!(
+                evaluate_fork_id_v1(&un_upgraded, local_daa, new_peer.fired.as_bytes().as_slice(), new_peer.next),
+                ForkIdVerdict::DisagreePastFence { mismatch: dispute_seen_by_old, fired_through: ADR_0095 },
+                "old judging new at {local_daa}"
+            );
+            assert_eq!(
+                evaluate_fork_id_v1(&upgraded, local_daa, old_peer.fired.as_bytes().as_slice(), old_peer.next),
+                ForkIdVerdict::DisagreePastFence { mismatch: dispute_seen_by_new, fired_through: ADR_0095 },
+                "new judging old at {local_daa}"
+            );
+        }
+        // And once the new build is itself past 2400 its fired set is no prefix of the old schedule —
+        // the old side refuses that whatever the heights, as it always did.
+        let new_past = fork_id_v1(&upgraded, 3_040);
+        assert!(evaluate_fork_id_v1(&un_upgraded, 2270, new_past.fired.as_bytes().as_slice(), new_past.next).refuses());
+
+        // The second flag day's shape: a build that knew only ADR-0083's 1150, judging the build that
+        // added 1900 — measured at DAA 1679 as "this node has crossed fence 1150; … expects fence
+        // 1900 next, not 2125000". Now a warning until 1900.
+        let mut before_second = upgraded.clone();
+        before_second.palw_da_court = None;
+        before_second.palw_panel_da = None;
+        before_second.palw_model_market = None;
+        before_second.palw_model_lines = None;
+        before_second.palw_model_evm = None;
+        before_second.palw_court_ladder = None;
+        before_second.palw_model_benefits = None;
+        assert_eq!(before_second.fence_schedule_v1(), vec![1150, CRESCENDO_T11]);
+        let second = fork_id_v1(&upgraded, 1679);
+        assert_eq!(second.next, 1900);
+        assert!(!evaluate_fork_id_v1(&before_second, 1679, second.fired.as_bytes().as_slice(), second.next).refuses());
+        assert!(evaluate_fork_id_v1(&before_second, 1900, second.fired.as_bytes().as_slice(), second.next).refuses());
+    }
+
+    /// **A peer kept on a warning is judged again at the height its verdict turns** — the second
+    /// defect of 2026-09-10, where a node that met six un-upgraded peers at its own DAA 0 kept them
+    /// past the fence they lacked.
+    ///
+    /// The height must be EXACT in both directions: one score below it the peer is still kept, and
+    /// at it the peer is refused. Checked over every verdict shape the gate produces, on both
+    /// testnet-11 schedules and on a mainnet preset where crescendo sits on the schedule and off the
+    /// gate.
+    #[test]
+    fn a_kept_peer_is_judged_again_exactly_where_its_verdict_turns() {
+        const ADR_0095: u64 = 2400;
+        let upgraded = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
+        let mut un_upgraded = upgraded.clone();
+        un_upgraded.palw_model_benefits = None;
+
+        let exact = |params: &Params, from: u64, fired: &[u8], next: u64, want: Option<u64>, what: &str| {
+            let got = fork_id_refusal_height_v1(params, from, fired, next);
+            assert_eq!(got, want, "{what}: refusal height from {from}");
+            if let Some(height) = got {
+                assert!(evaluate_fork_id_v1(params, height, fired, next).refuses(), "{what}: refused at {height}");
+                if height > from {
+                    assert!(!evaluate_fork_id_v1(params, height - 1, fired, next).refuses(), "{what}: kept at {}", height - 1);
+                }
+            } else {
+                for probe in [from, from + 1, 2_125_000, 200_000_000, u64::MAX - 1] {
+                    assert!(!evaluate_fork_id_v1(params, probe, fired, next).refuses(), "{what}: never refused, probed at {probe}");
+                }
+            }
+        };
+
+        // The explorer node's case: this node at DAA 0 (empty datadir) meets the un-upgraded build.
+        let old_peer = fork_id_v1(&un_upgraded, 2270);
+        exact(&upgraded, 0, old_peer.fired.as_bytes().as_slice(), old_peer.next, Some(ADR_0095), "upgraded node meets old build");
+        // The mirror: an un-upgraded node meets the upgraded build below 2400 — the peer's own fence.
+        let new_peer = fork_id_v1(&upgraded, 2241);
+        exact(&un_upgraded, 2241, new_peer.fired.as_bytes().as_slice(), new_peer.next, Some(ADR_0095), "old node meets new build");
+        // A peer already refused has its height at this node's own score.
+        exact(&upgraded, 3_158, old_peer.fired.as_bytes().as_slice(), old_peer.next, Some(3_158), "already past");
+        // A build with no fork-id field, and a stranger: refused from the first gate fence.
+        exact(&upgraded, 0, &[], FORK_ID_NO_NEXT_FENCE, Some(1150), "absent");
+        exact(&upgraded, 0, &[0u8; 32], 7, Some(1150), "unknown fired set");
+        // The same build seen from anywhere along it is never refused.
+        for peer_daa in [0u64, 1_149, 1_150, 2_399, 2_400, 9_000] {
+            let same = fork_id_v1(&upgraded, peer_daa);
+            exact(&upgraded, 0, same.fired.as_bytes().as_slice(), same.next, None, "same build");
+        }
+        // A disarmed preset refuses nobody, crescendo crossed or not.
+        let mainnet = MAINNET_PARAMS;
+        exact(&mainnet, 0, &[], FORK_ID_NO_NEXT_FENCE, None, "disarmed mainnet");
+        // An armed mainnet: crescendo is on the schedule and off the gate, so a dispute about it
+        // turns only at the gate's own fence.
+        let mut armed = MAINNET_PARAMS;
+        armed.palw_attempt_activation = Some(ForkActivation::new(200_000_000));
+        let stranger = fired_fences_digest_v1(armed.genesis.hash, &[]).as_bytes().to_vec();
+        exact(&armed, 110_165_000, &stranger, 110_165_005, Some(200_000_000), "dispute about crescendo");
+        exact(&armed, 0, &stranger, 42, Some(42), "the peer's own lower fence");
     }
 
     /// A build that predates the field sends nothing, and nothing is not a fired set.
