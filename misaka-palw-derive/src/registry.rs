@@ -29,8 +29,69 @@ pub fn transformer_by_name(name: &str) -> Option<&'static dyn Transformer> {
     registry().transformers.iter().find(|t| t.manifest().name == name).map(|t| t.as_ref())
 }
 
+/// **The source trees of earlier builds whose ids a live chain carries** (ADR-0078 Decision 5 —
+/// the case `tests/transformer_id_pin.rs` calls "after a relaunch").
+///
+/// A transformer's id names the code, and the code's name is the hash of every byte under `src/`
+/// (`source_tree.rs`), so any edit in this crate moves every id at once. Without this list that
+/// strands every derivation already published under the previous ids: `verify` answers
+/// `UnknownTransformer` — unverifiable, not false — for objects the chain has carried for days.
+///
+/// An entry keeps those ids resolvable, and only in the one way that keeps Decision 5 honest:
+/// [`transformer_by_id`] also accepts the id the SAME manifest had under a listed tree — same name,
+/// grammar, discipline, writer, kind and three ceilings, every field of the preimage but the tree —
+/// and [`crate::derive::verify`] then re-runs the derivation with THIS build's code and compares
+/// bytes. An old id therefore resolves only to a transformer whose declared contract did not
+/// change, and verifies only if this build reproduces the artifact byte for byte; the corpus
+/// goldens pin that reproduction for every registered transformer. A tree may stay listed only
+/// while that holds — a kind whose output changed is a new name or version (Decision 8), never an
+/// alias here. New derivations always name the CURRENT tree's id (`derive_with` computes it).
+pub const PRIOR_SOURCE_TREES_SHA256_HEX: &[&str] = &[
+    // testnet-11 Relaunch 5f (2026-09-03) through main a5f1bdf7 (2026-09-10) — the tree before
+    // ADR-0096's json kind. Every derivation the public chain carries names an id under it; the
+    // 2026-09-04 3D job's is cad/stl/v1 83e0f508….
+    "637858dba5ea5e34b9459a580b2b81d1361aecf450bc615a4ee9621d4953a988",
+];
+
+/// Which tree gave an id: this build's, or a listed earlier one (`PRIOR_SOURCE_TREES_SHA256_HEX`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransformerIdTree {
+    Current,
+    Prior(&'static str),
+}
+
+/// The transformer an id names, and which tree named it. This build's own ids first; then, for
+/// each listed earlier tree, the id each registered manifest had under it.
+pub fn transformer_by_id_with_tree(id: &Hash64) -> Option<(&'static dyn Transformer, TransformerIdTree)> {
+    if let Some(t) = registry().transformers.iter().find(|t| transformer_id(&t.manifest()) == *id) {
+        return Some((t.as_ref(), TransformerIdTree::Current));
+    }
+    for &tree in PRIOR_SOURCE_TREES_SHA256_HEX {
+        for t in &registry().transformers {
+            let mut manifest = t.manifest();
+            manifest.source_tree_sha256 = tree;
+            if transformer_id(&manifest) == *id {
+                return Some((t.as_ref(), TransformerIdTree::Prior(tree)));
+            }
+        }
+    }
+    None
+}
+
 pub fn transformer_by_id(id: &Hash64) -> Option<&'static dyn Transformer> {
-    registry().transformers.iter().find(|t| transformer_id(&t.manifest()) == *id).map(|t| t.as_ref())
+    transformer_by_id_with_tree(id).map(|(t, _)| t)
+}
+
+/// The manifest an id names, as the tree that gave the id published it — so for an earlier
+/// tree's id it carries that tree's hash and hashes back to the id that was asked for.
+pub fn manifest_for_id(id: &Hash64) -> Option<crate::TransformerManifest> {
+    transformer_by_id_with_tree(id).map(|(t, tree)| {
+        let mut manifest = t.manifest();
+        if let TransformerIdTree::Prior(tree) = tree {
+            manifest.source_tree_sha256 = tree;
+        }
+        manifest
+    })
 }
 
 /// Every registered grammar name.
@@ -63,7 +124,7 @@ pub fn published_manifest(spec: &str) -> Option<crate::TransformerManifest> {
     }
     let mut bytes = [0u8; 64];
     faster_hex::hex_decode(spec.to_ascii_lowercase().as_bytes(), &mut bytes).ok()?;
-    transformer_by_id(&Hash64::from_bytes(bytes)).map(|t| t.manifest())
+    manifest_for_id(&Hash64::from_bytes(bytes))
 }
 
 /// The published manifest as a document: every field of the preimage, the preimage itself, and
