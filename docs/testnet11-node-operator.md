@@ -108,6 +108,22 @@ lane.
 >
 > Blocks mined and attestations made on the old arm after DAA ≈2,241 are not on the network's chain
 > and do not come back.
+>
+> **What changes from `10337785` on (the fork-id gate fix).** A node on a build carrying it no longer
+> refuses an upgraded peer the moment it connects just because the peer schedules a fence this
+> build does not carry: it keeps it, with a warning that names the height —
+> `… keeping the peer — … It will be judged again, and refused, when this node reaches DAA 2400` —
+> and disconnects it there:
+>
+> ```
+> [WARN ] P2P, judged connected peer 203.0.113.7:26311 again and disconnecting it: Fork-id mismatch on
+>         network misaka-testnet-11 at DAA 2400 - this node has crossed fence 2400; …
+> ```
+>
+> The same line appears when a node that synced from an empty datadir passes the fence of an
+> un-upgraded peer it met on the way (it used to keep those for good). **This only helps nodes
+> already on such a build**: a build from before it still refuses an upgraded peer at once, so the
+> next flag day still cuts off every node that has not moved to `10337785` or later first.
 
 > ## Second flag day, 2026-09-06 — a node built before this is ALREADY cut off
 >
