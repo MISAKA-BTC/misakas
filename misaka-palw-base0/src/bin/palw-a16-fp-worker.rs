@@ -207,7 +207,20 @@ fn load() -> FpWorkerRuntime<Qwen25A16Backend> {
         ))
     })
     .with_step_ladder_cap(court.max_step_leaf_count())
-    .with_prompt_ids_form(prompt_ids_form);
+    .with_prompt_ids_form(prompt_ids_form)
+    // **ADR-0096 §10 B4: the class's token table, from the tokenizer this process just checked
+    // against the artifact's commitment** — every id of the class's vocabulary under the table
+    // rule (specials empty), and the lowest end-of-generation id the stop rule commits. Without
+    // it a version-6 job is refused by name; with it the mask and the rendered hash read the same
+    // bytes the pinned table commits.
+    .with_token_table(std::sync::Arc::new(misaka_palw_base0::qwen25_a16_backend::A16TokenTableV1 {
+        bytes: (0..entry.profile.vocab_size).map(|id| tokenizer.constrained_rendering_v1(id)).collect(),
+        lowest_eog: QWEN_EOG_TOKEN_NAMES
+            .iter()
+            .filter_map(|name| tokenizer.added_id(name))
+            .min()
+            .unwrap_or_else(|| die("the tokenizer names none of the class's end-of-generation tokens".into())),
+    }));
     FpWorkerRuntime::new(
         backend,
         &entry.profile,

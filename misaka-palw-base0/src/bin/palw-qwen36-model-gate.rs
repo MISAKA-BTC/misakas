@@ -592,6 +592,7 @@ fn main() {
             // shipped argmax, and the sampler's fence is dormant on every preset.
             sampling_seed: [0u8; 32],
             temperature_q: 0,
+            constraint_id: Default::default(),
         };
         let leaves_for = |decode: u32| -> Result<u64, String> {
             use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_job_context_v3, palw_fp_run_facts_for_executed_v1};

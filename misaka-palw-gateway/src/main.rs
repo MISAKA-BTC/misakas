@@ -937,8 +937,23 @@ fn handle_chat(
     // model is loaded, so a refusal cost a 4xx rather than an inference.
     let (sampling_seed, temperature_q) = admitted.sampling;
 
+    // **ADR-0096 Decision 3's mode, decided here, before the model is loaded.** A format is MASKED
+    // when the schema compiled and either nothing this gateway produces can reach a chain
+    // (`--answer-never-commit`: the local engine, where a mask is a guarantee and never a claim) or
+    // the chain has armed the constraint fence (a version-6 claim it will accept). Anything else is
+    // advisory: the instruction rides the prompt as text and the answer is checked after the fact.
+    let mask: Option<Vec<u8>> = admitted
+        .format
+        .as_ref()
+        .and_then(|format| format.mask_bytes())
+        .filter(|_| config.answer_never_commit || facts.fp_decode_constraint_armed)
+        .map(<[u8]>::to_vec);
     let request = PalwFpWorkerRequestV3 {
-        version: PALW_FP_V3_VERSION,
+        version: if mask.is_some() {
+            kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED
+        } else {
+            PALW_FP_V3_VERSION
+        },
         network_domain: identity.network_domain,
         class_id: identity.class_id,
         executor_bond: identity.executor_bond,
@@ -959,6 +974,7 @@ fn handle_chat(
         runtime_class_id: manifest.runtime_class_id,
         shape_profile_id: manifest.shape_profile_id,
         trace_scheme_id: manifest.trace_scheme_id,
+        constraint: mask.clone().unwrap_or_default(),
     };
 
     // **Decision 2: the answer streams as it is decoded; the commitment does not exist yet.**
@@ -1014,6 +1030,12 @@ fn handle_chat(
             let commitment_bytes = borsh::to_vec(&commitment).map_err(|e| format!("cannot serialize the commitment: {e}"))?;
             std::fs::write(&commitment_borsh, &commitment_bytes)
                 .map_err(|e| format!("cannot write {}: {e}", commitment_borsh.display()))?;
+            // ADR-0096 §10 B2: a version-6 payload carries the automaton, so the rail needs its
+            // bytes beside the commitment — the job names only their hash.
+            if let Some(bytes) = &mask {
+                let constraint_path = config.outbox.join(format!("{artifact_stem}.constraint"));
+                std::fs::write(&constraint_path, bytes).map_err(|e| format!("cannot write {}: {e}", constraint_path.display()))?;
+            }
             budget.lock().expect("the budget lock is never poisoned").charge(price);
         }
         Some(_) => {
@@ -1074,7 +1096,13 @@ fn handle_chat(
     let shown = if streamed_checked { stream.shown() } else { wire::display_trim(&rendered_string).to_string() };
     let parsed = wire::parse_tool_calls(&shown);
     let format_report = admitted.format.as_ref().map(|format| format.check(&shown));
-    let format_json = admitted.format.as_ref().zip(format_report.as_ref()).map(|(format, report)| format.report_json(report));
+    let enforcement = match (&mask, config.answer_never_commit, commit_refusal.is_none()) {
+        (None, _, _) => "advisory",
+        (Some(_), false, true) => "committed",
+        (Some(_), _, _) => "masked",
+    };
+    let format_json =
+        admitted.format.as_ref().zip(format_report.as_ref()).map(|(format, report)| format.report_json(report, enforcement));
     let tool_calls_json: Vec<serde_json::Value> = parsed
         .calls
         .iter()
@@ -1148,8 +1176,11 @@ fn handle_chat(
         match result.stop_reason {
             PalwFpStopReasonV3::EndOfGeneration => "stop",
             PalwFpStopReasonV3::ExactBudgetReached => {
-                if shown.len() < rendered_string.trim_end().len() {
-                    "stop" // the guard or an EOG id ended the shown answer; the budget ended the run
+                // The guard or an EOG id ended the shown answer; the budget ended the run. The
+                // stream knows it even when the EOG rendered nothing (a masked run's specials are
+                // empty, ADR-0096 §10 B4), which a byte comparison cannot see.
+                if (streamed_checked && stream.ended_by_answer()) || shown.len() < rendered_string.trim_end().len() {
+                    "stop"
                 } else {
                     "length"
                 }

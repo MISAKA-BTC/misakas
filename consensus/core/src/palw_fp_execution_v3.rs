@@ -363,6 +363,7 @@ mod tests {
             prompt_mode: crate::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
             sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            constraint_id: Default::default(),
         }
     }
 

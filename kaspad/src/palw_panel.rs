@@ -1604,6 +1604,7 @@ impl PalwPanelService {
             prompt_mode: PALW_FP_PROMPT_MODE_CANONICAL,
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            constraint_id: Default::default(),
         };
         // The anchor is a function of the job's own facts, not of its prompt — so the prompt
         // can be derived from it and then written into the job.

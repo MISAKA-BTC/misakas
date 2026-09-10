@@ -333,12 +333,29 @@ fn main() {
         )
     })
     .unwrap_or_else(|| die("the worker result's prompt ids do not commit to the job under either prompt-id form".into()));
+    // **ADR-0096 §10 B1: a version-6 job names its automaton by id, and the payload carries the
+    // automaton.** The gateway wrote its bytes beside the commitment (`<stem>.constraint`); they
+    // are read here and checked against the id the signed job carries, so a file swapped after the
+    // gateway wrote it is refused before a fee rather than by every node after it.
+    let constraint: Vec<u8> = if commitment.job.version == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED {
+        let path = PathBuf::from(format!("{}.constraint", stem.display()));
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| {
+            die(format!("the job is version 6 and names an automaton, but {} cannot be read: {e}", path.display()))
+        });
+        if kaspa_consensus_core::palw_decode_constraint_v1::constraint_id_v1(&bytes) != commitment.job.constraint_id {
+            die(format!("{} is not the automaton the job names: its constraint_id differs from the job's", path.display()));
+        }
+        bytes
+    } else {
+        Vec::new()
+    };
     let build = |fee: u64| {
-        key.build_fp_commitment_tx(
+        key.build_fp_commitment_tx_with_constraint(
             commitment.job.network_domain,
             prompt_ids_form,
             commitment.clone(),
             result.prompt_token_ids.clone(),
+            constraint.clone(),
             &bundle.freeprompt,
             class_leaves,
             funding_outpoint,

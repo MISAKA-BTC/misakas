@@ -52,6 +52,28 @@ use blake2b_simd::Params;
 /// A node on the old wire cannot decode the new payload, and must not.
 pub const PALW_FP_V3_VERSION: u16 = 5;
 
+/// **ADR-0096 §10 B1: the version a CONSTRAINED job carries.** A version-6 job, worker request and
+/// payload are a version-5 one with one field appended — the job's `constraint_id`, the request's
+/// and the payload's canonical constraint bytes — and nothing else moved, so every version-5 id,
+/// claim and golden stays what it is. Admitted only past `Params::palw_fp_decode_constraint`.
+pub const PALW_FP_V3_VERSION_CONSTRAINED: u16 = 6;
+
+/// **ADR-0096 §10 B2: the most constraint bytes a version-6 payload may carry** — a quarter of
+/// the automaton's own 64 KiB bound, because the bytes must also fit a court carrier beside the
+/// tiled pin, the job and the answer's segments (B5).
+pub const PALW_FP_CONSTRAINT_MAX_BYTES_V6: usize = 16 * 1024;
+
+/// **Which of the lane's dormant rules a caller is judging under** — the arming the extraction
+/// walk resolves at the accepting block's DAA, and the height-free arming the door resolves from
+/// the ruleset. Absent fields are the disarmed answer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwFpArmingV1 {
+    /// ADR-0077 Decision 16's `PanelDa`.
+    pub panel_da: bool,
+    /// ADR-0096 Decision 8's decode constraint.
+    pub decode_constraint: bool,
+}
+
 /// **The widest `work_leaves` any RULESET may make prosecutable** — the bound a caller that holds
 /// no bundle uses, and the only honest one for a context-free door (ADR-0082 Decision 1).
 ///
@@ -219,7 +241,7 @@ fn canonical_id(domain: &[u8], object_bytes: &[u8]) -> Hash64 {
 /// identity, never in the token stream — so PALW on or off, the model consumes byte-identical
 /// input and the user's answer cannot depend on mining metadata. The legacy VLT executor's
 /// DAA-suffix (`new_job_input`) must never be ported to this path.
-#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwFreePromptJobV3 {
     pub version: u16,
     /// The network's domain separator — the same value the attempt lane binds, so a testnet job
@@ -301,6 +323,78 @@ pub struct PalwFreePromptJobV3 {
     /// user who asked for a temperature and silently got greedy has been told a false thing about
     /// what ran.
     pub temperature_q: u32,
+    /// **ADR-0096 Decision 7: the decode constraint this job was run under** —
+    /// `constraint_id_v1(canonical constraint bytes)`, on the WIRE only when `version` is
+    /// [`PALW_FP_V3_VERSION_CONSTRAINED`] (see the hand-written borsh below), and zero otherwise.
+    /// Inside [`fp_job_id_v3`] by construction, so a constraint cannot be changed after the fact
+    /// and grinding one costs a whole inference (ADR-0072 kept).
+    pub constraint_id: Hash64,
+}
+
+/// **The job's encoding: version 5 byte for byte, and `constraint_id` appended for version 6**
+/// (ADR-0096 §10 B1). Hand-written so the field that version 5 does not have cannot change a
+/// version-5 byte; a version-5 job that holds a non-zero `constraint_id` in memory is refused at
+/// encoding rather than silently dropping it.
+impl borsh::BorshSerialize for PalwFreePromptJobV3 {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        use borsh::BorshSerialize as S;
+        if self.version < PALW_FP_V3_VERSION_CONSTRAINED && self.constraint_id != Hash64::default() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "a free-prompt job below version 6 carries no constraint_id (ADR-0096 §10 B1)",
+            ));
+        }
+        S::serialize(&self.version, writer)?;
+        S::serialize(&self.network_domain, writer)?;
+        S::serialize(&self.class_id, writer)?;
+        S::serialize(&self.executor_bond, writer)?;
+        S::serialize(&self.executor_pubkey, writer)?;
+        S::serialize(&self.operator_id, writer)?;
+        S::serialize(&self.anchor_block, writer)?;
+        S::serialize(&self.anchor_daa, writer)?;
+        S::serialize(&self.job_nonce, writer)?;
+        S::serialize(&self.tokenizer_id, writer)?;
+        S::serialize(&self.prompt_token_ids_hash, writer)?;
+        S::serialize(&self.prompt_tokens, writer)?;
+        S::serialize(&self.decode_token_limit, writer)?;
+        S::serialize(&self.max_context_tokens, writer)?;
+        S::serialize(&self.privacy_mode, writer)?;
+        S::serialize(&self.prompt_mode, writer)?;
+        S::serialize(&self.sampling_seed, writer)?;
+        S::serialize(&self.temperature_q, writer)?;
+        if self.version >= PALW_FP_V3_VERSION_CONSTRAINED {
+            S::serialize(&self.constraint_id, writer)?;
+        }
+        Ok(())
+    }
+}
+
+impl borsh::BorshDeserialize for PalwFreePromptJobV3 {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        use borsh::BorshDeserialize as D;
+        let version = u16::deserialize_reader(reader)?;
+        Ok(Self {
+            version,
+            network_domain: D::deserialize_reader(reader)?,
+            class_id: D::deserialize_reader(reader)?,
+            executor_bond: D::deserialize_reader(reader)?,
+            executor_pubkey: D::deserialize_reader(reader)?,
+            operator_id: D::deserialize_reader(reader)?,
+            anchor_block: D::deserialize_reader(reader)?,
+            anchor_daa: D::deserialize_reader(reader)?,
+            job_nonce: D::deserialize_reader(reader)?,
+            tokenizer_id: D::deserialize_reader(reader)?,
+            prompt_token_ids_hash: D::deserialize_reader(reader)?,
+            prompt_tokens: D::deserialize_reader(reader)?,
+            decode_token_limit: D::deserialize_reader(reader)?,
+            max_context_tokens: D::deserialize_reader(reader)?,
+            privacy_mode: D::deserialize_reader(reader)?,
+            prompt_mode: D::deserialize_reader(reader)?,
+            sampling_seed: D::deserialize_reader(reader)?,
+            temperature_q: D::deserialize_reader(reader)?,
+            constraint_id: if version >= PALW_FP_V3_VERSION_CONSTRAINED { D::deserialize_reader(reader)? } else { Hash64::default() },
+        })
+    }
 }
 
 /// `H(canonical(job))` — every field, no exceptions.
@@ -847,6 +941,27 @@ pub enum PalwFpV3Error {
         "sampling (temperature_q {temperature_q}) is not armed on this network — ADR-0082 Decision 11 arms at a height through Params::palw_fp_decode_rules, and this network has none; the greedy defaults are temperature_q 0 with a zero seed"
     )]
     SamplingNotArmed { temperature_q: u32 },
+    /// **ADR-0096 Decision 8's arming refusal**, the same two-sided shape as the two above: this
+    /// build reads a version-6 job completely, and what it refuses is a ruleset that has not armed
+    /// the fence.
+    #[error(
+        "a version-6 (constrained) free-prompt job on a network that has not armed Params::palw_fp_decode_constraint (ADR-0096 Decision 8); an unconstrained job is version 5"
+    )]
+    ConstraintNotArmed,
+    #[error("a version-6 job must name a non-zero constraint_id (ADR-0096 §10 B1); an unconstrained job is version 5")]
+    ConstraintIdMissing,
+    #[error("a version-5 job carries no constraint_id (ADR-0096 §10 B1)")]
+    ConstraintOnUnconstrainedVersion,
+    #[error("the payload's version {payload} is not its job's version {job}")]
+    PayloadJobVersionMismatch { payload: u16, job: u16 },
+    #[error("the constraint is {got} bytes and a version-6 payload carries at most {max} (ADR-0096 §10 B2)")]
+    ConstraintOverCap { got: usize, max: usize },
+    #[error("the carried constraint does not parse as a canonical automaton: {0}")]
+    ConstraintMalformed(String),
+    #[error("the carried constraint hashes to {carried} and the job names {named}")]
+    ConstraintIdMismatch { carried: Hash64, named: Hash64 },
+    #[error("a PanelDa job cannot carry a constraint yet: the constraint's only route is the public payload (ADR-0096 §10 B2)")]
+    ConstraintUnderPanelDa,
     /// A mode-2 payload that carries the prompt anyway. Refused rather than trimmed: an executor
     /// that published a prompt the user asked to keep off chain has already done the harm, and a
     /// claim built on that payload would be one the chain quietly blessed.
@@ -920,7 +1035,7 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
         // **`PanelDa` disarmed, because a caller that passed no arming has armed nothing**
         // (ADR-0077 Decision 16). This entry predates the mode; every one of its callers refuses
         // mode 2 today and keeps refusing it until it starts passing the answer.
-        self.validate_v3(Some(network_domain), false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None)
+        self.validate_v3(Some(network_domain), false, false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None)
     }
 
     /// The same rules **under this network's arming** — the entry that can admit a `PanelDa`
@@ -928,7 +1043,7 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
     /// at the point the caller is judging; a caller that cannot resolve it calls
     /// [`Self::validate_stateless_v3`] and gets the disarmed answer.
     pub fn validate_stateless_under_v3(&self, network_domain: Hash64, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), panel_da_armed, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None)
+        self.validate_v3(Some(network_domain), panel_da_armed, false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None)
     }
 
     /// The same rules **under this network's arming AND its ruleset's ladder** (ADR-0082
@@ -942,7 +1057,7 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
         max_step_leaf_count: u64,
         ruleset_caps: Option<(u32, u32)>,
     ) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), panel_da_armed, false, max_step_leaf_count, ruleset_caps)
+        self.validate_v3(Some(network_domain), panel_da_armed, false, false, max_step_leaf_count, ruleset_caps)
     }
 
     /// **The half a context-free caller can run: everything except the two checks that need the
@@ -974,13 +1089,13 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
     /// Mode 2's own shape rule, that the payload carries no ids, needs no arming at all and is
     /// checked under both answers.
     pub fn validate_shape_v3(&self) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None)
+        self.validate_v3(None, false, false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None)
     }
 
     /// The shape half under a known arming — the door on a network that carries the rule, and
     /// what a builder asks before it spends an inference on a job the chain will refuse.
     pub fn validate_shape_under_v3(&self, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, panel_da_armed, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None)
+        self.validate_v3(None, panel_da_armed, false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None)
     }
 
     /// The shape half **under a ruleset's ladder** — for a builder that holds the bundle and wants
@@ -995,7 +1110,7 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
         max_step_leaf_count: u64,
         ruleset_caps: Option<(u32, u32)>,
     ) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, panel_da_armed, false, max_step_leaf_count, ruleset_caps)
+        self.validate_v3(None, panel_da_armed, false, false, max_step_leaf_count, ruleset_caps)
     }
 
     fn validate_v3(
@@ -1003,13 +1118,30 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
         network_domain: Option<Hash64>,
         panel_da_armed: bool,
         decode_rules_armed: bool,
+        decode_constraint_armed: bool,
         max_step_leaf_count: u64,
         ruleset_caps: Option<(u32, u32)>,
     ) -> Result<(), PalwFpV3Error> {
         let c = &self.commitment;
         let job = &c.job;
-        if job.version != PALW_FP_V3_VERSION {
-            return Err(PalwFpV3Error::UnsupportedVersion { got: job.version, expected: PALW_FP_V3_VERSION });
+        // **Two versions, one meaning each** (ADR-0096 §10 B1): 5 is unconstrained and names no
+        // constraint; 6 is constrained, names one, and is admitted only past the fence.
+        match job.version {
+            PALW_FP_V3_VERSION => {
+                if job.constraint_id != Hash64::default() {
+                    return Err(PalwFpV3Error::ConstraintOnUnconstrainedVersion);
+                }
+            }
+            PALW_FP_V3_VERSION_CONSTRAINED if decode_constraint_armed => {
+                if job.constraint_id == Hash64::default() {
+                    return Err(PalwFpV3Error::ConstraintIdMissing);
+                }
+                if job.privacy_mode == PALW_FP_PRIVACY_PANEL_DA {
+                    return Err(PalwFpV3Error::ConstraintUnderPanelDa);
+                }
+            }
+            PALW_FP_V3_VERSION_CONSTRAINED => return Err(PalwFpV3Error::ConstraintNotArmed),
+            got => return Err(PalwFpV3Error::UnsupportedVersion { got, expected: PALW_FP_V3_VERSION }),
         }
         if let Some(network_domain) = network_domain
             && job.network_domain != network_domain
@@ -1292,7 +1424,7 @@ pub enum PalwFpWorkerInputV3 {
 /// runtime it is not), plus the input. The worker builds the job, binds the trace to
 /// [`fp_job_id_v3`] — a value a replayer can rebuild from CHAIN data alone, which is the whole
 /// requirement — and hands the job back for the gateway to cross-check field by field.
-#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwFpWorkerRequestV3 {
     pub version: u16,
     pub network_domain: Hash64,
@@ -1326,6 +1458,78 @@ pub struct PalwFpWorkerRequestV3 {
     pub runtime_class_id: Hash64,
     pub shape_profile_id: Hash64,
     pub trace_scheme_id: Hash64,
+    /// **ADR-0096 Decision 7: the canonical constraint bytes** the worker masks the decode under —
+    /// on the wire only at [`PALW_FP_V3_VERSION_CONSTRAINED`], empty otherwise. The worker derives
+    /// the job's `constraint_id` from them, so the id it signs is the automaton it ran.
+    pub constraint: Vec<u8>,
+}
+
+impl borsh::BorshSerialize for PalwFpWorkerRequestV3 {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        use borsh::BorshSerialize as S;
+        if self.version < PALW_FP_V3_VERSION_CONSTRAINED && !self.constraint.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "a free-prompt worker request below version 6 carries no constraint (ADR-0096 §10 B1)",
+            ));
+        }
+        S::serialize(&self.version, writer)?;
+        S::serialize(&self.network_domain, writer)?;
+        S::serialize(&self.class_id, writer)?;
+        S::serialize(&self.executor_bond, writer)?;
+        S::serialize(&self.executor_pubkey, writer)?;
+        S::serialize(&self.operator_id, writer)?;
+        S::serialize(&self.anchor_block, writer)?;
+        S::serialize(&self.anchor_daa, writer)?;
+        S::serialize(&self.job_nonce, writer)?;
+        S::serialize(&self.decode_token_limit, writer)?;
+        S::serialize(&self.max_context_tokens, writer)?;
+        S::serialize(&self.privacy_mode, writer)?;
+        S::serialize(&self.prompt_mode, writer)?;
+        S::serialize(&self.sampling_seed, writer)?;
+        S::serialize(&self.temperature_q, writer)?;
+        S::serialize(&self.input, writer)?;
+        S::serialize(&self.model_profile_id, writer)?;
+        S::serialize(&self.runtime_manifest_hash, writer)?;
+        S::serialize(&self.runtime_class_id, writer)?;
+        S::serialize(&self.shape_profile_id, writer)?;
+        S::serialize(&self.trace_scheme_id, writer)?;
+        if self.version >= PALW_FP_V3_VERSION_CONSTRAINED {
+            S::serialize(&self.constraint, writer)?;
+        }
+        Ok(())
+    }
+}
+
+impl borsh::BorshDeserialize for PalwFpWorkerRequestV3 {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        use borsh::BorshDeserialize as D;
+        let version = u16::deserialize_reader(reader)?;
+        Ok(Self {
+            version,
+            network_domain: D::deserialize_reader(reader)?,
+            class_id: D::deserialize_reader(reader)?,
+            executor_bond: D::deserialize_reader(reader)?,
+            executor_pubkey: D::deserialize_reader(reader)?,
+            operator_id: D::deserialize_reader(reader)?,
+            anchor_block: D::deserialize_reader(reader)?,
+            anchor_daa: D::deserialize_reader(reader)?,
+            job_nonce: D::deserialize_reader(reader)?,
+            decode_token_limit: D::deserialize_reader(reader)?,
+            max_context_tokens: D::deserialize_reader(reader)?,
+            privacy_mode: D::deserialize_reader(reader)?,
+            prompt_mode: D::deserialize_reader(reader)?,
+            sampling_seed: D::deserialize_reader(reader)?,
+            temperature_q: D::deserialize_reader(reader)?,
+            input: D::deserialize_reader(reader)?,
+            model_profile_id: D::deserialize_reader(reader)?,
+            runtime_manifest_hash: D::deserialize_reader(reader)?,
+            runtime_class_id: D::deserialize_reader(reader)?,
+            shape_profile_id: D::deserialize_reader(reader)?,
+            trace_scheme_id: D::deserialize_reader(reader)?,
+            constraint: if version >= PALW_FP_V3_VERSION_CONSTRAINED { D::deserialize_reader(reader)? } else { Vec::new() },
+        })
+    }
 }
 
 /// `H(domain ‖ len ‖ raw-frame)` — computed over the exact bytes read, echoed in the result, and
@@ -1387,8 +1591,23 @@ impl PalwFpWorkerResultV3 {
         request_hash: Hash64,
         prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> Result<(), PalwFpV3Error> {
-        if self.version != PALW_FP_V3_VERSION || self.job.version != PALW_FP_V3_VERSION {
-            return Err(PalwFpV3Error::UnsupportedVersion { got: self.version, expected: PALW_FP_V3_VERSION });
+        // The result answers the request's version, and the job it returns is that version too
+        // (ADR-0096 §10 B1): 5, or 6 for a constrained request.
+        if (request.version != PALW_FP_V3_VERSION && request.version != PALW_FP_V3_VERSION_CONSTRAINED)
+            || self.version != request.version
+            || self.job.version != request.version
+        {
+            return Err(PalwFpV3Error::UnsupportedVersion { got: self.version, expected: request.version });
+        }
+        // The id the worker signed is the automaton it was handed, and only a constrained job
+        // names one.
+        let expected_constraint = if request.version == PALW_FP_V3_VERSION_CONSTRAINED {
+            crate::palw_decode_constraint_v1::constraint_id_v1(&request.constraint)
+        } else {
+            Hash64::default()
+        };
+        if self.job.constraint_id != expected_constraint {
+            return Err(PalwFpV3Error::WorkerResultMismatch("the returned job does not name the constraint the request carried"));
         }
         if self.request_hash != request_hash {
             return Err(PalwFpV3Error::WorkerResultMismatch("the result echoes a different request"));
@@ -1557,7 +1776,7 @@ pub const PALW_FP_COMMITMENT_TX_MAX_BYTES: usize = 48 * 1024;
 /// unable to replay (ADR-0044 Decision 8: PublicDA deletes the withholding failure mode rather
 /// than adjudicating it). Acceptance re-derives the hash and refuses a mismatch, so the ids are
 /// bound in effect while being carried once.
-#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwFpCommitmentTxPayloadV3 {
     pub version: u16,
     pub commitment: PalwFreePromptCommitmentV3,
@@ -1569,6 +1788,45 @@ pub struct PalwFpCommitmentTxPayloadV3 {
     pub prompt_token_ids: Vec<u32>,
     /// ML-DSA-87 over [`fp_claim_id_v3`] under [`PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT`].
     pub signature: Vec<u8>,
+    /// **ADR-0096 §10 B2: the constraint the job names, under `PublicDa`** — the canonical bytes
+    /// whose `constraint_id_v1` is the job's `constraint_id`, at most
+    /// [`PALW_FP_CONSTRAINT_MAX_BYTES_V6`]. On the wire only at [`PALW_FP_V3_VERSION_CONSTRAINED`].
+    /// Seats replay from these, and a court close carries the same bytes checked the same way.
+    pub constraint: Vec<u8>,
+}
+
+impl borsh::BorshSerialize for PalwFpCommitmentTxPayloadV3 {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        use borsh::BorshSerialize as S;
+        if self.version < PALW_FP_V3_VERSION_CONSTRAINED && !self.constraint.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "a free-prompt payload below version 6 carries no constraint (ADR-0096 §10 B2)",
+            ));
+        }
+        S::serialize(&self.version, writer)?;
+        S::serialize(&self.commitment, writer)?;
+        S::serialize(&self.prompt_token_ids, writer)?;
+        S::serialize(&self.signature, writer)?;
+        if self.version >= PALW_FP_V3_VERSION_CONSTRAINED {
+            S::serialize(&self.constraint, writer)?;
+        }
+        Ok(())
+    }
+}
+
+impl borsh::BorshDeserialize for PalwFpCommitmentTxPayloadV3 {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        use borsh::BorshDeserialize as D;
+        let version = u16::deserialize_reader(reader)?;
+        Ok(Self {
+            version,
+            commitment: D::deserialize_reader(reader)?,
+            prompt_token_ids: D::deserialize_reader(reader)?,
+            signature: D::deserialize_reader(reader)?,
+            constraint: if version >= PALW_FP_V3_VERSION_CONSTRAINED { D::deserialize_reader(reader)? } else { Vec::new() },
+        })
+    }
 }
 
 impl PalwFpCommitmentTxPayloadV3 {
@@ -1584,7 +1842,7 @@ impl PalwFpCommitmentTxPayloadV3 {
         network_domain: Hash64,
         prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None, prompt_ids_form)
+        self.validate_v3(Some(network_domain), false, false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None, prompt_ids_form)
     }
 
     /// The same, **under this network's arming** — the entry the extraction walk uses, and the
@@ -1596,7 +1854,7 @@ impl PalwFpCommitmentTxPayloadV3 {
         panel_da_armed: bool,
         prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), panel_da_armed, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None, prompt_ids_form)
+        self.validate_v3(Some(network_domain), panel_da_armed, false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None, prompt_ids_form)
     }
 
     /// The same **under the ruleset's ladder as well as its arming** — what the extraction walk
@@ -1610,14 +1868,14 @@ impl PalwFpCommitmentTxPayloadV3 {
         ruleset_caps: Option<(u32, u32)>,
         prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), panel_da_armed, false, max_step_leaf_count, ruleset_caps, prompt_ids_form)
+        self.validate_v3(Some(network_domain), panel_da_armed, false, false, max_step_leaf_count, ruleset_caps, prompt_ids_form)
     }
 
     /// The context-free half — see [`PalwFreePromptCommitmentEnvelopeV3::validate_shape_v3`] for
     /// why the transaction validator can only run this one, and why the arming it asks is the
     /// height-free one.
     pub fn validate_shape_v3(&self, prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None, prompt_ids_form)
+        self.validate_v3(None, false, false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None, prompt_ids_form)
     }
 
     /// The shape half under a known arming — `Params::palw_panel_da_admissible` at the door.
@@ -1626,7 +1884,7 @@ impl PalwFpCommitmentTxPayloadV3 {
         panel_da_armed: bool,
         prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, panel_da_armed, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None, prompt_ids_form)
+        self.validate_v3(None, panel_da_armed, false, false, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None, prompt_ids_form)
     }
 
     /// The shape half under a ruleset's ladder — for a builder holding the bundle.
@@ -1637,7 +1895,48 @@ impl PalwFpCommitmentTxPayloadV3 {
         ruleset_caps: Option<(u32, u32)>,
         prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, panel_da_armed, false, max_step_leaf_count, ruleset_caps, prompt_ids_form)
+        self.validate_v3(None, panel_da_armed, false, false, max_step_leaf_count, ruleset_caps, prompt_ids_form)
+    }
+
+    /// **Stateless admission under this network's full arming** (ADR-0096 Decision 8) — the entry
+    /// the extraction walk uses: `PanelDa` and the decode constraint at the accepting block's DAA,
+    /// the ruleset's ladder and caps. The only entry that can admit a version-6 payload.
+    pub fn validate_stateless_armed_v3(
+        &self,
+        network_domain: Hash64,
+        arming: PalwFpArmingV1,
+        max_step_leaf_count: u64,
+        ruleset_caps: Option<(u32, u32)>,
+        prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    ) -> Result<(), PalwFpV3Error> {
+        self.validate_v3(
+            Some(network_domain),
+            arming.panel_da,
+            false,
+            arming.decode_constraint,
+            max_step_leaf_count,
+            ruleset_caps,
+            prompt_ids_form,
+        )
+    }
+
+    /// The context-free half under a known, height-free arming — the transaction door on a network
+    /// whose ruleset carries the fences (`Params::palw_panel_da_admissible`,
+    /// `Params::palw_fp_decode_constraint_admissible`), weaker at every height than the walk.
+    pub fn validate_shape_armed_v3(
+        &self,
+        arming: PalwFpArmingV1,
+        prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    ) -> Result<(), PalwFpV3Error> {
+        self.validate_v3(
+            None,
+            arming.panel_da,
+            false,
+            arming.decode_constraint,
+            PALW_FP_STRUCTURAL_WORK_LEAVES_CAP,
+            None,
+            prompt_ids_form,
+        )
     }
 
     /// **The signature, on the payload that actually rides a transaction.**
@@ -1657,20 +1956,49 @@ impl PalwFpCommitmentTxPayloadV3 {
             .validate_signature_v3(verify_mldsa87)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn validate_v3(
         &self,
         network_domain: Option<Hash64>,
         panel_da_armed: bool,
         decode_rules_armed: bool,
+        decode_constraint_armed: bool,
         max_step_leaf_count: u64,
         ruleset_caps: Option<(u32, u32)>,
         prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> Result<(), PalwFpV3Error> {
-        if self.version != PALW_FP_V3_VERSION {
+        if self.version != PALW_FP_V3_VERSION && self.version != PALW_FP_V3_VERSION_CONSTRAINED {
             return Err(PalwFpV3Error::UnsupportedVersion { got: self.version, expected: PALW_FP_V3_VERSION });
         }
+        // The payload is the job's container, so it is the job's version (ADR-0096 §10 B1): a
+        // version-5 payload around a version-6 job would drop the constraint on the wire.
+        if self.version != self.commitment.job.version {
+            return Err(PalwFpV3Error::PayloadJobVersionMismatch { payload: self.version, job: self.commitment.job.version });
+        }
         let envelope = PalwFreePromptCommitmentEnvelopeV3 { commitment: self.commitment.clone(), signature: self.signature.clone() };
-        envelope.validate_v3(network_domain, panel_da_armed, decode_rules_armed, max_step_leaf_count, ruleset_caps)?;
+        envelope.validate_v3(
+            network_domain,
+            panel_da_armed,
+            decode_rules_armed,
+            decode_constraint_armed,
+            max_step_leaf_count,
+            ruleset_caps,
+        )?;
+        // **ADR-0096 §10 B2: the constraint rides the payload, bounded and bound.** The envelope
+        // above already refused a version-6 job on a disarmed network, one with no constraint id,
+        // and one under `PanelDa`; what only the payload can state is that the carried bytes ARE
+        // the automaton the job names.
+        if self.version == PALW_FP_V3_VERSION_CONSTRAINED {
+            if self.constraint.len() > PALW_FP_CONSTRAINT_MAX_BYTES_V6 {
+                return Err(PalwFpV3Error::ConstraintOverCap { got: self.constraint.len(), max: PALW_FP_CONSTRAINT_MAX_BYTES_V6 });
+            }
+            crate::palw_decode_constraint_v1::PalwDecodeConstraintV1::from_bytes(&self.constraint)
+                .map_err(|e| PalwFpV3Error::ConstraintMalformed(format!("{e:?}")))?;
+            let carried = crate::palw_decode_constraint_v1::constraint_id_v1(&self.constraint);
+            if carried != self.commitment.job.constraint_id {
+                return Err(PalwFpV3Error::ConstraintIdMismatch { carried, named: self.commitment.job.constraint_id });
+            }
+        }
         // **`PanelDa` carries NO ids, and the check is a REQUIREMENT, not a tolerance** (ADR-0077
         // Decision 16). Placed before the canonical arm because the privacy mode decides what the
         // chain may hold and the prompt mode decides where the ids come from: a mode-2 payload
@@ -1749,6 +2077,7 @@ mod tests {
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
             sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            constraint_id: Default::default(),
         }
     }
 
@@ -2247,6 +2576,7 @@ mod tests {
             runtime_class_id: Hash64::from_u64_word(0x3),
             shape_profile_id: Hash64::from_u64_word(0x4),
             trace_scheme_id: Hash64::from_u64_word(0x5),
+            constraint: Vec::new(),
         };
         let request_hash = fp_worker_request_hash_v3(&borsh::to_vec(&request).unwrap());
         let result = PalwFpWorkerResultV3 {
@@ -2366,6 +2696,7 @@ mod tests {
             commitment: c,
             prompt_token_ids: ids.clone(),
             signature: sig(),
+            constraint: Vec::new(),
         };
         payload
             .validate_stateless_v3(net(), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
@@ -2393,6 +2724,136 @@ mod tests {
             wrong_version.validate_stateless_v3(net(), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
             Err(PalwFpV3Error::UnsupportedVersion { got: 2, .. })
         ));
+    }
+
+    /// A constrained payload: a version-6 job naming `bracket_digit`'s automaton, carrying its bytes.
+    fn constrained_payload() -> PalwFpCommitmentTxPayloadV3 {
+        let ids: Vec<u32> = (0..12u32).collect();
+        let constraint = crate::palw_decode_constraint_v1::tests::bracket_digit().to_bytes();
+        let mut c = commitment();
+        c.job.version = PALW_FP_V3_VERSION_CONSTRAINED;
+        c.job.constraint_id = crate::palw_decode_constraint_v1::constraint_id_v1(&constraint);
+        c.job.prompt_token_ids_hash = crate::palw_v2::prompt_token_ids_hash_v2(&ids);
+        c.job.prompt_tokens = ids.len() as u32;
+        PalwFpCommitmentTxPayloadV3 {
+            version: PALW_FP_V3_VERSION_CONSTRAINED,
+            commitment: c,
+            prompt_token_ids: ids,
+            signature: sig(),
+            constraint,
+        }
+    }
+
+    fn armed(decode_constraint: bool) -> PalwFpArmingV1 {
+        PalwFpArmingV1 { panel_da: false, decode_constraint }
+    }
+
+    /// **ADR-0096 §10 B1: version 5 is byte for byte what it was, and version 6 appends exactly
+    /// the one field.** The golden job ids pinned above already hold version 5; this pins the
+    /// relation — the version-6 encoding is the version-5 one with the version bytes changed and
+    /// the 64-byte constraint id appended — and that a version-5 job cannot smuggle an id.
+    #[test]
+    fn a_version_six_job_is_a_version_five_job_with_the_constraint_id_appended() {
+        let v5 = job();
+        let bytes5 = borsh::to_vec(&v5).expect("encodes");
+        let mut v6 = v5.clone();
+        v6.version = PALW_FP_V3_VERSION_CONSTRAINED;
+        v6.constraint_id = Hash64::from_u64_word(0xC0);
+        let bytes6 = borsh::to_vec(&v6).expect("encodes");
+        assert_eq!(bytes6.len(), bytes5.len() + 64, "one Hash64 appended, nothing else");
+        assert_eq!(&bytes6[2..bytes5.len()], &bytes5[2..], "every field after the version is the same bytes");
+        assert_eq!(&bytes6[bytes5.len()..], Hash64::from_u64_word(0xC0).as_bytes().as_slice());
+        let back: PalwFreePromptJobV3 = borsh::from_slice(&bytes6).expect("decodes");
+        assert_eq!(back, v6);
+        let back5: PalwFreePromptJobV3 = borsh::from_slice(&bytes5).expect("decodes");
+        assert_eq!(back5.constraint_id, Hash64::default(), "a version-5 job names no constraint");
+        assert_ne!(fp_job_id_v3(&v6), fp_job_id_v3(&v5), "the constraint is inside the job id");
+        let mut smuggled = v5;
+        smuggled.constraint_id = Hash64::from_u64_word(1);
+        assert!(borsh::to_vec(&smuggled).is_err(), "a version-5 job holding an id refuses to encode rather than drop it");
+    }
+
+    /// **ADR-0096 Decision 8 and §10 B2 at the payload**: refused by name on a disarmed network,
+    /// admitted armed, and every binding of the carried bytes checked.
+    #[test]
+    fn a_constrained_payload_is_admitted_only_armed_and_only_with_the_automaton_it_names() {
+        let form = crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat;
+        let payload = constrained_payload();
+        assert_eq!(
+            payload.validate_stateless_v3(net(), form),
+            Err(PalwFpV3Error::ConstraintNotArmed),
+            "every entry that predates the fence answers disarmed"
+        );
+        assert_eq!(
+            payload.validate_stateless_armed_v3(net(), armed(false), PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None, form),
+            Err(PalwFpV3Error::ConstraintNotArmed)
+        );
+        payload
+            .validate_stateless_armed_v3(net(), armed(true), PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None, form)
+            .expect("armed, the honest constrained payload validates");
+        payload.validate_shape_armed_v3(armed(true), form).expect("and the door admits its shape");
+        // Round trip through the wire, which is where the appended bytes could be lost.
+        let wire = borsh::to_vec(&payload).expect("encodes");
+        let back: PalwFpCommitmentTxPayloadV3 = borsh::from_slice(&wire).expect("decodes");
+        assert_eq!(back, payload);
+
+        let mut other = payload.clone();
+        other.constraint = crate::palw_decode_constraint_v1::tests::bracket_digit().to_bytes();
+        other.constraint.push(0);
+        assert!(matches!(
+            other.validate_stateless_armed_v3(net(), armed(true), PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None, form),
+            Err(PalwFpV3Error::ConstraintMalformed(_))
+        ));
+        let mut foreign = payload.clone();
+        foreign.commitment.job.constraint_id = Hash64::from_u64_word(9);
+        assert!(matches!(
+            foreign.validate_stateless_armed_v3(net(), armed(true), PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None, form),
+            Err(PalwFpV3Error::ConstraintIdMismatch { .. })
+        ));
+        let mut huge = payload.clone();
+        huge.constraint = vec![0u8; PALW_FP_CONSTRAINT_MAX_BYTES_V6 + 1];
+        assert!(matches!(
+            huge.validate_stateless_armed_v3(net(), armed(true), PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None, form),
+            Err(PalwFpV3Error::ConstraintOverCap { .. })
+        ));
+        let mut unnamed = payload.clone();
+        unnamed.commitment.job.constraint_id = Hash64::default();
+        assert_eq!(
+            unnamed.validate_stateless_armed_v3(net(), armed(true), PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None, form),
+            Err(PalwFpV3Error::ConstraintIdMissing)
+        );
+        let mut mixed = payload.clone();
+        mixed.version = PALW_FP_V3_VERSION;
+        mixed.constraint = Vec::new();
+        assert_eq!(
+            mixed.validate_stateless_armed_v3(net(), armed(true), PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None, form),
+            Err(PalwFpV3Error::PayloadJobVersionMismatch { payload: PALW_FP_V3_VERSION, job: PALW_FP_V3_VERSION_CONSTRAINED })
+        );
+        let mut private = payload;
+        private.commitment.job.privacy_mode = PALW_FP_PRIVACY_PANEL_DA;
+        assert_eq!(
+            private.validate_stateless_armed_v3(
+                net(),
+                PalwFpArmingV1 { panel_da: true, decode_constraint: true },
+                PALW_FP_STRUCTURAL_WORK_LEAVES_CAP,
+                None,
+                form
+            ),
+            Err(PalwFpV3Error::ConstraintUnderPanelDa)
+        );
+    }
+
+    /// A version-5 job that names a constraint is refused wherever it is judged, armed or not.
+    #[test]
+    fn an_unconstrained_version_refuses_a_constraint_id_armed_or_not() {
+        let mut env = PalwFreePromptCommitmentEnvelopeV3 { commitment: commitment(), signature: sig() };
+        env.commitment.job.constraint_id = Hash64::from_u64_word(3);
+        for arming in [armed(false), armed(true)] {
+            assert_eq!(
+                env.validate_v3(Some(net()), arming.panel_da, false, arming.decode_constraint, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, None),
+                Err(PalwFpV3Error::ConstraintOnUnconstrainedVersion)
+            );
+        }
     }
 
     /// The retained-trace manifest: chunking is exact at the boundary, digests bind binding and
@@ -2744,6 +3205,7 @@ mod fp_material_tests {
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
             sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            constraint_id: Default::default(),
         }
     }
 
@@ -2955,6 +3417,7 @@ mod fp_answer_tests {
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
             sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            constraint_id: Default::default(),
         }
     }
 

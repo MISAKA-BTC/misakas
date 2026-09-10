@@ -114,6 +114,8 @@ where
         freeprompt,
         accepted_block,
         panel_da_armed,
+        // No bundle-resolved height either: the disarmed answer for the constraint fence.
+        false,
         crate::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP,
         // No bundle-resolved fence either, and the caps are a RULESET rule: a caller with no
         // height cannot be stricter than the walk (ADR-0044 D9; mainnet audit 2026-09-06, L-2).
@@ -148,6 +150,9 @@ pub fn palw_fp_objects_from_accepted_txs_under_ruleset_v3<V>(
     freeprompt: &PalwFreePromptParamsV3,
     _accepted_block: BlockHash,
     panel_da_armed: bool,
+    // ADR-0096 Decision 8's fence at the ACCEPTING block's DAA: a version-6 (constrained)
+    // commitment becomes a claim only past it, and is skipped by name before it.
+    decode_constraint_armed: bool,
     max_step_leaf_count: u64,
     ruleset_caps_armed: bool,
     prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
@@ -175,7 +180,13 @@ where
         // The same stateless rules a peer applies — re-run here rather than assumed, because this
         // walk must be total over whatever was accepted.
         if payload
-            .validate_stateless_under_ruleset_v3(network_domain, panel_da_armed, max_step_leaf_count, ruleset_caps, prompt_ids_form)
+            .validate_stateless_armed_v3(
+                network_domain,
+                crate::palw_freeprompt_v3::PalwFpArmingV1 { panel_da: panel_da_armed, decode_constraint: decode_constraint_armed },
+                max_step_leaf_count,
+                ruleset_caps,
+                prompt_ids_form,
+            )
             .is_err()
         {
             out.skipped.push((id, "payload is not stateless-admissible"));
@@ -233,9 +244,24 @@ pub fn validate_palw_fp_commitment_tx_under_v3(
     panel_da_admissible: bool,
     prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<(), crate::palw_freeprompt_v3::PalwFpV3Error> {
+    validate_palw_fp_commitment_tx_armed_v3(
+        payload,
+        crate::palw_freeprompt_v3::PalwFpArmingV1 { panel_da: panel_da_admissible, decode_constraint: false },
+        prompt_ids_form,
+    )
+}
+
+/// **The door under the ruleset's full, height-free arming** (ADR-0096 Decision 8): the only door
+/// that can admit a version-6 (constrained) carrier, and only where the ruleset carries the fence
+/// (`Params::palw_fp_decode_constraint_admissible`).
+pub fn validate_palw_fp_commitment_tx_armed_v3(
+    payload: &[u8],
+    arming: crate::palw_freeprompt_v3::PalwFpArmingV1,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<(), crate::palw_freeprompt_v3::PalwFpV3Error> {
     let payload: PalwFpCommitmentTxPayloadV3 =
         borsh::from_slice(payload).map_err(|_| crate::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable)?;
-    payload.validate_shape_under_v3(panel_da_admissible, prompt_ids_form)
+    payload.validate_shape_armed_v3(arming, prompt_ids_form)
 }
 
 #[cfg(test)]
@@ -284,6 +310,7 @@ mod tests {
             prompt_mode: crate::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
             sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            constraint_id: Default::default(),
         };
         let events: Vec<Hash64> = (0..decode as u64).map(|i| h64(i + 1)).collect();
         let (manifest_root, chunk_count, _) = fp_trace_manifest_v3(h64(0xB1), &events);
@@ -305,6 +332,7 @@ mod tests {
             commitment,
             prompt_token_ids: ids,
             signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+            constraint: Vec::new(),
         }
     }
 
@@ -695,6 +723,7 @@ mod tests {
             &fp,
             h64(1),
             false,
+            false,
             crate::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES,
             false,
             crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
@@ -706,6 +735,7 @@ mod tests {
             net(),
             &fp,
             h64(1),
+            false,
             false,
             crate::palw_step::PALW_STEP_MAX_LEAVES,
             false,

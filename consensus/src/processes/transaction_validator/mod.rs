@@ -36,6 +36,9 @@ pub struct TransactionValidator {
     /// holds no DAA score, so it asks the height-free question; the extraction walk asks the
     /// height-indexed one (`palw_panel_da_at`), which is strictly stronger.
     palw_panel_da_admissible: bool,
+    /// **`Params::palw_fp_decode_constraint_admissible()`** — whether this ruleset carries ADR-0096's
+    /// version-6 (constrained) commitment shape at all; height-free, like the `PanelDa` flag above.
+    palw_fp_decode_constraint_admissible: bool,
     /// **`Params::palw_prompt_ids_form_v1()`** — which commitment a commitment's carried prompt ids
     /// must hash to (ADR-0081 Decision 3). Genesis-only by `validate_palw_v2`, so height-free here
     /// is exact, not an approximation.
@@ -84,6 +87,7 @@ impl TransactionValidator {
         pq_enforcement: PqEnforcementMode,
         pq_activation_daa_score: u64,
         palw_panel_da_admissible: bool,
+        palw_fp_decode_constraint_admissible: bool,
         palw_prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
         // **ADR-0087 Decision 6 (audit M-9): the FENCE, not a boolean.** The isolation door still
         // asks the height-free question — it derives it as `.is_some()` below — and the
@@ -107,6 +111,7 @@ impl TransactionValidator {
             pq_enforcement,
             pq_activation_daa_score,
             palw_panel_da_admissible,
+            palw_fp_decode_constraint_admissible,
             palw_prompt_ids_form,
             model_sink_outputs_allowed: palw_model_market_fence.is_some(),
             palw_model_market_fence,
@@ -140,6 +145,7 @@ impl TransactionValidator {
             pq_activation_daa_score: 0,
             // Every shipped preset's door: no mode-2 shape, flat prompt digests.
             palw_panel_da_admissible: false,
+            palw_fp_decode_constraint_admissible: false,
             palw_prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             // Every shipped preset's door: the market is dormant, so both halves are shut.
             model_sink_outputs_allowed: false,

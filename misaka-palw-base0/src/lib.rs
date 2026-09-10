@@ -71,6 +71,7 @@ pub mod qwen36_plan;
 pub mod qwen36_reference;
 pub mod rc;
 pub mod rope;
+pub mod token_table;
 pub mod tokenizer;
 
 pub mod convert;

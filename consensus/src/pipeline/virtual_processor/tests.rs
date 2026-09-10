@@ -9852,6 +9852,7 @@ async fn a_callers_prompt_on_a_registered_class_opens_a_claim_at_the_shipped_qua
         prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
         sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
         temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+        constraint_id: Default::default(),
     };
 
     let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
@@ -9884,6 +9885,7 @@ async fn a_callers_prompt_on_a_registered_class_opens_a_claim_at_the_shipped_qua
         commitment,
         prompt_token_ids: prompt.iter().map(|t| *t as u32).collect(),
         signature,
+        constraint: Vec::new(),
     })
     .expect("the commitment payload serializes");
     let tx = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_PALW_FP_COMMITMENT.clone(), 0, payload);
@@ -10167,6 +10169,7 @@ async fn palw_v2_a_derivation_rides_signed_by_the_claims_executor_and_is_dropped
         prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
         sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
         temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+        constraint_id: Default::default(),
     };
     let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
     let class = PalwFpClassFactsV3 {
@@ -10188,6 +10191,7 @@ async fn palw_v2_a_derivation_rides_signed_by_the_claims_executor_and_is_dropped
         commitment,
         prompt_token_ids: prompt.iter().map(|t| *t as u32).collect(),
         signature: sign(claim_id.as_byte_slice(), PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT),
+        constraint: Vec::new(),
     })
     .unwrap();
     let tx = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_PALW_FP_COMMITMENT.clone(), 0, payload);

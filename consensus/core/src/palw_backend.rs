@@ -722,6 +722,39 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         None
     }
 
+    /// **`output_root` from the answer's ids, for THIS job** (ADR-0096 §10 B3). A version-5 job's
+    /// is [`Self::output_root_for_context_v1`]; a version-6 (constrained) job's rendered hash is
+    /// per token and needs the class's token table, which only a backend given one holds — the
+    /// default answers `None` for it, which a seat reads as "cannot bind this answer", never as a
+    /// match.
+    fn output_root_for_job_v1(
+        &self,
+        job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        context: &PalwJobContextV2,
+        output_token_ids: &[u32],
+    ) -> Option<crate::Hash64> {
+        if job.version >= crate::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED {
+            return None;
+        }
+        self.output_root_for_context_v1(context, output_token_ids)
+    }
+
+    /// **Run a version-6 (constrained) free-prompt job** (ADR-0096 Decision 7, §10 B7): the decode
+    /// masked by `constraint`, the committed token the admitted argmax while a byte continues and
+    /// the lowest EOG id from the stop to the budget, the rendered hash per token. The default
+    /// refuses by name — a family whose engine does not mask (the hybrid tier today, §10 B8) must
+    /// never run a constrained job unconstrained.
+    fn execute_free_prompt_constrained_streaming(
+        &self,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_tokens: &[usize],
+        _constraint: &crate::palw_decode_constraint_v1::PalwDecodeConstraintV1,
+        _on_token: &mut dyn FnMut(u32),
+    ) -> Result<PalwFpRunV1, String> {
+        Err("this family's engine does not mask a decode, so it cannot run a version-6 (constrained) job (ADR-0096 §10 B8)"
+            .to_string())
+    }
+
     /// **A DRILL fault: run the job, corrupt one lane of one tile, and commit to the result.**
     ///
     /// A court that has never convicted on a live chain is a court nobody has evidence works, and

@@ -157,6 +157,7 @@ impl ConsensusServices {
             params.pq_enforcement,
             params.pq_activation_daa_score,
             params.palw_panel_da_admissible(),
+            params.palw_fp_decode_constraint_admissible(),
             params.palw_prompt_ids_form_v1(),
             // **ADR-0087 Decision 6 (mainnet audit 2026-09-06, M-9): the resolved fence.**
             // `palw_model_market.is_some()` was the only `is_some()` read of this fence in the

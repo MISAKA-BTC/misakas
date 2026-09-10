@@ -209,6 +209,58 @@ pub fn a16_execute_for_attempt_streaming_capped_v1(
         prompt,
         max_step_leaf_count,
         crate::legs::Base0CaptureKindV1::DenseTiles,
+        None,
+        on_token,
+    )
+}
+
+/// **The class's token table as the engine holds it** (ADR-0096 §10 B4): each id's rendering
+/// under the pinned table's rule — empty for a special or an unrenderable id — for every id of the
+/// class's vocabulary, and the class's lowest end-of-generation id, which B7's stop rule commits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct A16TokenTableV1 {
+    pub bytes: Vec<Vec<u8>>,
+    pub lowest_eog: u32,
+}
+
+impl A16TokenTableV1 {
+    fn segment(&self, id: u32) -> &[u8] {
+        self.bytes.get(id as usize).map(Vec::as_slice).unwrap_or(&[])
+    }
+}
+
+/// **A constrained run's inputs** (ADR-0096 Decision 7): the automaton, the table it is read
+/// through, and the job's own sampler pair (greedy on every network that has not armed ADR-0082
+/// Decision 11).
+pub struct A16DecodeConstraintV1<'a> {
+    pub constraint: &'a kaspa_consensus_core::palw_decode_constraint_v1::PalwDecodeConstraintV1,
+    pub table: &'a A16TokenTableV1,
+    pub sampling: kaspa_consensus_core::palw_decode_select_v2::PalwDecodeSamplingV2,
+}
+
+/// **The same folded run, with the decode MASKED** (ADR-0096 Decision 7, §10 B7): identical to
+/// [`a16_execute_free_prompt_streaming_v1`] in every leaf the capture sees — the constraint moves
+/// only which token is committed, never a row — and its rendered hash is per token (§10 B3).
+#[allow(clippy::too_many_arguments)]
+pub fn a16_execute_free_prompt_constrained_streaming_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &PalwShapeProfileV3,
+    plan: Option<&crate::engine_a16::A16ProfilePlanV1>,
+    ctx: &PalwJobContextV2,
+    prompt: &[usize],
+    max_step_leaf_count: u64,
+    constraint: &A16DecodeConstraintV1<'_>,
+    on_token: &mut dyn FnMut(u32),
+) -> Result<crate::produce::Base0ExecutionV1, String> {
+    a16_execute_streaming_v1(
+        artifact,
+        profile,
+        plan,
+        ctx,
+        prompt,
+        max_step_leaf_count,
+        crate::legs::Base0CaptureKindV1::Fold,
+        Some(constraint),
         on_token,
     )
 }
@@ -237,6 +289,7 @@ pub fn a16_execute_free_prompt_streaming_v1(
         prompt,
         max_step_leaf_count,
         crate::legs::Base0CaptureKindV1::Fold,
+        None,
         on_token,
     )
 }
@@ -252,9 +305,46 @@ fn a16_execute_streaming_v1(
     prompt: &[usize],
     max_step_leaf_count: u64,
     capture_kind: crate::legs::Base0CaptureKindV1,
+    constraint: Option<&A16DecodeConstraintV1<'_>>,
     on_token: &mut dyn FnMut(u32),
 ) -> Result<crate::produce::Base0ExecutionV1, String> {
+    use kaspa_consensus_core::palw_decode_constraint_v1::{
+        PalwConstraintCursorV1, constraint_admits_any_byte_v1, constraint_admits_lane_v1, constraint_cursor_advance_v1,
+        constraint_cursor_start_v1, decode_token_select_v3,
+    };
     use kaspa_consensus_core::palw_state_chunk_map as map;
+
+    // **The committed token at `position`** — the plain argmax, or under a constraint the rule of
+    // ADR-0096 §10 B7: the admitted keyed argmax while some byte continues, the lowest EOG id
+    // from the first position where none does. `position` is the COMMITTED ROW's index (row 0 is
+    // the last prefill position's), the same index the court's pin names.
+    let mut cursor = constraint.map(|k| constraint_cursor_start_v1(k.constraint));
+    let mut select = |row: &[i32], position: u32| -> Result<u32, String> {
+        let (Some(k), Some(cur)) = (constraint, cursor.as_mut()) else {
+            return Ok(kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(row) as u32);
+        };
+        let running = match cur {
+            PalwConstraintCursorV1::Running(state) if constraint_admits_any_byte_v1(k.constraint, state) => Some(state.clone()),
+            _ => None,
+        };
+        let id = match running {
+            Some(state) => {
+                decode_token_select_v3(row, &k.sampling.seed, position, k.sampling.temperature_q, |lane| {
+                    constraint_admits_lane_v1(k.constraint, &state, Some(k.table.segment(lane as u32))).is_some()
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "no token of this class's table continues the constraint at position {position} although a byte does — \
+                         the vocabulary is not byte-complete, and a constrained class requires it (ADR-0096 §10 B7)"
+                    )
+                })? as u32
+            }
+            None => k.table.lowest_eog,
+        };
+        *cur = constraint_cursor_advance_v1(k.constraint, cur, k.table.segment(id), id == k.table.lowest_eog)
+            .ok_or_else(|| format!("the selected token at position {position} does not follow the constraint's rule"))?;
+        Ok(id)
+    };
 
     let prefill = ctx.declared_prefill_tokens as usize;
     let decode_tokens = ctx.exact_decode_tokens as usize;
@@ -338,7 +428,7 @@ fn a16_execute_streaming_v1(
         }
         last_logits = logits;
     }
-    let mut next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&last_logits) as u32;
+    let mut next = select(&last_logits, 0)?;
     generated.push(next);
     on_token(next);
     logits_rows.push(last_logits);
@@ -352,7 +442,7 @@ fn a16_execute_streaming_v1(
             forward(&engine, &mut cache, next as usize, cache_position).map_err(|e| format!("decode at {cache_position}: {e}"))?;
         let rows = crate::legs::a16_captured_rows_v1(&trace);
         capture.push_call(profile, ctx, call as u32, 0, &rows).map_err(|e| format!("{e:?}"))?;
-        next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&logits) as u32;
+        next = select(&logits, call as u32)?;
         generated.push(next);
         on_token(next);
         logits_rows.push(logits);
@@ -391,7 +481,13 @@ fn a16_execute_streaming_v1(
     let (tiles, step_tree) = captured.into_execution_parts();
 
     let context = ctx.context_hash();
-    let rendered = rendered_output_hash_v1(&generated);
+    // ADR-0096 §10 B3: a constrained answer is committed token by token.
+    let rendered = match constraint {
+        Some(k) => kaspa_consensus_core::palw_decode_constraint_v1::rendered_segments_hash_v1(
+            &generated.iter().map(|id| k.table.segment(*id)).collect::<Vec<_>>(),
+        ),
+        None => rendered_output_hash_v1(&generated),
+    };
     let output_root = output_commitment_v2(&context, &generated, &rendered);
     // The consensus derivation (ADR-0072 Decision 8): admission pins the manifest root to
     // `attempt_trace_manifest_root_v1(trace_root, 1)`, whichever family produced it.
@@ -511,6 +607,11 @@ pub struct Qwen25A16Backend {
     step_ladder_cap: u64,
     /// The network's prompt-commitment form (ADR-0081 Decision 3); see `Base0Backend::prompt_ids_form`.
     prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    /// **The class's token table, when this instance was given one** (ADR-0096 §10 B4) — what a
+    /// constrained job is masked through and what a version-6 answer's rendered hash is taken
+    /// over. `None` on every construction that predates the constraint, and then this instance
+    /// refuses a version-6 job by name rather than run it unmasked.
+    token_table: Option<std::sync::Arc<A16TokenTableV1>>,
 }
 
 /// **Can a class with this graph carry a capture at all — the ONE spelling of the predicate.**
@@ -593,6 +694,7 @@ impl Qwen25A16Backend {
             court_capable,
             step_ladder_cap: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            token_table: None,
         })
     }
 
@@ -612,6 +714,14 @@ impl Qwen25A16Backend {
 
     pub fn prompt_ids_form(&self) -> kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1 {
         self.prompt_ids_form
+    }
+
+    /// **Give this instance the class's token table** (ADR-0096 §10 B4) — the worker from its
+    /// tokenizer at boot, a seat from the tokenizer file it was started with. Without one a
+    /// version-6 job is refused by name.
+    pub fn with_token_table(mut self, table: std::sync::Arc<A16TokenTableV1>) -> Self {
+        self.token_table = Some(table);
+        self
     }
 
     /// The ladder top this instance refuses a capture above.
@@ -736,6 +846,7 @@ impl Qwen25A16Backend {
             court_capable,
             step_ladder_cap: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            token_table: None,
         })
     }
 
@@ -1038,6 +1149,118 @@ impl Qwen25A16Backend {
     }
 }
 
+impl Qwen25A16Backend {
+    /// **The one free-prompt body this family has, masked or not** (ADR-0096 Decision 7): the two
+    /// trait entries differ only in whether a constraint rides the loop, so they share this.
+    fn execute_fp_streaming_impl(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_tokens: &[usize],
+        constraint: Option<&A16DecodeConstraintV1<'_>>,
+        on_token: &mut dyn FnMut(u32),
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
+        use kaspa_consensus_core::palw_fp_execution_v3::{
+            PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3, palw_fp_run_facts_for_executed_v1,
+        };
+
+        // ADR-0077 SA-6: an artifact this host can no longer read is a job failure named at the
+        // boundary, not a fault taken three layers into a kernel.
+        self.artifact_read_probe_v1()?;
+
+        if job.prompt_tokens as usize != prompt_tokens.len() {
+            return Err(format!("the job declares {} prompt tokens and {} were supplied", job.prompt_tokens, prompt_tokens.len()));
+        }
+        // **An empty prompt is refused HERE, where every other malformed job is.** The graceful
+        // answer used to live at the end (`an empty prefill`, after the whole loop), and the
+        // Decision-F probe below indexes `prompt_tokens[0]` before reaching it — so a zero-token
+        // job PANICKED. That is network-reachable: a free-prompt material is gossiped by anyone,
+        // a seat replays it in-process, and a panicked panel task stops filing receipts for every
+        // claim it holds, not just this one.
+        if prompt_tokens.is_empty() {
+            return Err("a job with no prompt tokens is not a job".to_string());
+        }
+        let vocab = self.artifact.shape.vocab;
+        if let Some(bad) = prompt_tokens.iter().find(|t| **t >= vocab) {
+            return Err(format!("token {bad} is outside this class's vocabulary of {vocab}"));
+        }
+
+        // What the derivation asks for. `shape_profile_id` is the class; the rest are the values
+        // this family's job contexts carry, taken from the same profile rather than invented.
+        let class = PalwFpClassFactsV3 {
+            model_profile_id: self.shape_id,
+            runtime_manifest_hash: Hash64::default(),
+            runtime_class_id: self.shape_id,
+            shape_profile_id: self.class_profile_id,
+            cu_ruleset_id: Hash64::default(),
+        };
+        // A declared budget, decoded exactly: the count and the stop reason are known before the
+        // run. The pairing is DERIVED from the count (ADR-0074 Decision 7) rather than typed here,
+        // so that a seat rebuilding this context for an early-stopping claim gets the run that
+        // happened instead of the budget that was asked for.
+        let shape = palw_fp_run_facts_for_executed_v1(job, job.decode_token_limit);
+        // Built BEFORE the run and run under: `palw_fp_execution_root_v3` recomputes the court's
+        // root from this context, so an execution carried out under any other one commits a root
+        // nobody can reproduce.
+        let ctx = palw_fp_job_context_v3(job, &class, &shape, &self.network_id).map_err(|e| format!("{e:?}"))?;
+
+        let prompt_ids: Vec<u32> = prompt_tokens.iter().map(|t| *t as u32).collect();
+        // **The one capture path this family has** (ADR-0049 Decision F's probe, the checkpoint
+        // serializer at the class's declared width, and the selecting-rows retention all live in
+        // it). The free-prompt lane differs from the attempt lane only in where its context and
+        // its tokens come from, so the run itself must not be a second implementation.
+        let run = match constraint {
+            Some(k) => a16_execute_free_prompt_constrained_streaming_v1(
+                &self.artifact,
+                &self.profile,
+                self.plan.as_ref(),
+                &ctx,
+                prompt_tokens,
+                self.step_ladder_cap,
+                k,
+                on_token,
+            )?,
+            None => a16_execute_free_prompt_streaming_v1(
+                &self.artifact,
+                &self.profile,
+                self.plan.as_ref(),
+                &ctx,
+                prompt_tokens,
+                self.step_ladder_cap,
+                on_token,
+            )?,
+        };
+
+        // The four legs, measured — the derived roots the execution root is built from, which is
+        // what `palw_fp_execution_root_v3` recomputes.
+        let (checkpoint_leg_root, step_leg_root) = crate::legs::base0_leg_roots_from_binding_v1(&run.binding);
+        let material = crate::produce::base0_fp_material_encode_v2(&run, &prompt_ids).map_err(|e| e.to_string())?;
+        // The free-prompt lane's own manifest (palw_freeprompt_v3), not the attempt lane's the run carries.
+        let (fp_trace_manifest_root, fp_trace_chunk_count) =
+            crate::produce::base0_fp_trace_manifest_v3(&run.binding.job_context, &run.logits_rows)
+                .ok_or_else(|| "the run's rows build no retained-trace manifest".to_string())?;
+        Ok(kaspa_consensus_core::palw_backend::PalwFpRunV1 {
+            outcome: PalwExecutionOutcomeV1 {
+                trace_root: run.trace_root,
+                output_root: run.output_root,
+                execution_root: run.execution_root,
+                trace_manifest_root: fp_trace_manifest_root,
+                trace_chunk_count: fp_trace_chunk_count,
+                material,
+            },
+            facts: PalwFpRunFactsV3 {
+                full_logits_trace_root: run.trace_root,
+                activation_leg_root: run.binding.activation_leg_root,
+                checkpoint_leg_root,
+                step_leg_root,
+                // The price (ADR-0074 Decision 5): read off the binding, never declared.
+                step_leaf_count: run.binding.step_leaf_count,
+                ..shape
+            },
+            output_token_ids: run.generated_token_ids,
+        })
+    }
+}
+
 impl PalwExecutionBackendV1 for Qwen25A16Backend {
     fn model_id(&self) -> &str {
         &self.model_id
@@ -1171,93 +1394,61 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         prompt_tokens: &[usize],
         on_token: &mut dyn FnMut(u32),
     ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
-        use kaspa_consensus_core::palw_fp_execution_v3::{
-            PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3, palw_fp_run_facts_for_executed_v1,
-        };
-
-        // ADR-0077 SA-6: an artifact this host can no longer read is a job failure named at the
-        // boundary, not a fault taken three layers into a kernel.
-        self.artifact_read_probe_v1()?;
-
-        if job.prompt_tokens as usize != prompt_tokens.len() {
-            return Err(format!("the job declares {} prompt tokens and {} were supplied", job.prompt_tokens, prompt_tokens.len()));
+        // A version-6 job names an automaton this entry was not handed; running it unmasked
+        // would commit tokens its own job id says were constrained (ADR-0096 §10 B1).
+        if job.version >= kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED {
+            return Err("a version-6 job is constrained: run it through execute_free_prompt_constrained_streaming with its \
+                        constraint (ADR-0096 Decision 7)"
+                .to_string());
         }
-        // **An empty prompt is refused HERE, where every other malformed job is.** The graceful
-        // answer used to live at the end (`an empty prefill`, after the whole loop), and the
-        // Decision-F probe below indexes `prompt_tokens[0]` before reaching it — so a zero-token
-        // job PANICKED. That is network-reachable: a free-prompt material is gossiped by anyone,
-        // a seat replays it in-process, and a panicked panel task stops filing receipts for every
-        // claim it holds, not just this one.
-        if prompt_tokens.is_empty() {
-            return Err("a job with no prompt tokens is not a job".to_string());
+        self.execute_fp_streaming_impl(job, prompt_tokens, None, on_token)
+    }
+
+    fn execute_free_prompt_constrained_streaming(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_tokens: &[usize],
+        constraint: &kaspa_consensus_core::palw_decode_constraint_v1::PalwDecodeConstraintV1,
+        on_token: &mut dyn FnMut(u32),
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
+        if job.version != kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED {
+            return Err(format!("a constrained run needs a version-6 job; this one is version {}", job.version));
         }
-        let vocab = self.artifact.shape.vocab;
-        if let Some(bad) = prompt_tokens.iter().find(|t| **t >= vocab) {
-            return Err(format!("token {bad} is outside this class's vocabulary of {vocab}"));
+        let named = kaspa_consensus_core::palw_decode_constraint_v1::constraint_id_v1(&constraint.to_bytes());
+        if named != job.constraint_id {
+            return Err(format!("the constraint hashes to {named} and the job names {}", job.constraint_id));
         }
-
-        // What the derivation asks for. `shape_profile_id` is the class; the rest are the values
-        // this family's job contexts carry, taken from the same profile rather than invented.
-        let class = PalwFpClassFactsV3 {
-            model_profile_id: self.shape_id,
-            runtime_manifest_hash: Hash64::default(),
-            runtime_class_id: self.shape_id,
-            shape_profile_id: self.class_profile_id,
-            cu_ruleset_id: Hash64::default(),
-        };
-        // A declared budget, decoded exactly: the count and the stop reason are known before the
-        // run. The pairing is DERIVED from the count (ADR-0074 Decision 7) rather than typed here,
-        // so that a seat rebuilding this context for an early-stopping claim gets the run that
-        // happened instead of the budget that was asked for.
-        let shape = palw_fp_run_facts_for_executed_v1(job, job.decode_token_limit);
-        // Built BEFORE the run and run under: `palw_fp_execution_root_v3` recomputes the court's
-        // root from this context, so an execution carried out under any other one commits a root
-        // nobody can reproduce.
-        let ctx = palw_fp_job_context_v3(job, &class, &shape, &self.network_id).map_err(|e| format!("{e:?}"))?;
-
-        let prompt_ids: Vec<u32> = prompt_tokens.iter().map(|t| *t as u32).collect();
-        // **The one capture path this family has** (ADR-0049 Decision F's probe, the checkpoint
-        // serializer at the class's declared width, and the selecting-rows retention all live in
-        // it). The free-prompt lane differs from the attempt lane only in where its context and
-        // its tokens come from, so the run itself must not be a second implementation.
-        let run = a16_execute_free_prompt_streaming_v1(
-            &self.artifact,
-            &self.profile,
-            self.plan.as_ref(),
-            &ctx,
-            prompt_tokens,
-            self.step_ladder_cap,
-            on_token,
-        )?;
-
-        // The four legs, measured — the derived roots the execution root is built from, which is
-        // what `palw_fp_execution_root_v3` recomputes.
-        let (checkpoint_leg_root, step_leg_root) = crate::legs::base0_leg_roots_from_binding_v1(&run.binding);
-        let material = crate::produce::base0_fp_material_encode_v2(&run, &prompt_ids).map_err(|e| e.to_string())?;
-        // The free-prompt lane's own manifest (palw_freeprompt_v3), not the attempt lane's the run carries.
-        let (fp_trace_manifest_root, fp_trace_chunk_count) =
-            crate::produce::base0_fp_trace_manifest_v3(&run.binding.job_context, &run.logits_rows)
-                .ok_or_else(|| "the run's rows build no retained-trace manifest".to_string())?;
-        Ok(kaspa_consensus_core::palw_backend::PalwFpRunV1 {
-            outcome: PalwExecutionOutcomeV1 {
-                trace_root: run.trace_root,
-                output_root: run.output_root,
-                execution_root: run.execution_root,
-                trace_manifest_root: fp_trace_manifest_root,
-                trace_chunk_count: fp_trace_chunk_count,
-                material,
+        let table = self.token_table.as_ref().ok_or_else(|| {
+            "this instance holds no token table, so it cannot mask a decode — start it with the class's tokenizer \
+             (ADR-0096 §10 B4)"
+                .to_string()
+        })?;
+        let k = A16DecodeConstraintV1 {
+            constraint,
+            table,
+            sampling: kaspa_consensus_core::palw_decode_select_v2::PalwDecodeSamplingV2 {
+                seed: job.sampling_seed,
+                temperature_q: job.temperature_q,
             },
-            facts: PalwFpRunFactsV3 {
-                full_logits_trace_root: run.trace_root,
-                activation_leg_root: run.binding.activation_leg_root,
-                checkpoint_leg_root,
-                step_leg_root,
-                // The price (ADR-0074 Decision 5): read off the binding, never declared.
-                step_leaf_count: run.binding.step_leaf_count,
-                ..shape
-            },
-            output_token_ids: run.generated_token_ids,
-        })
+        };
+        self.execute_fp_streaming_impl(job, prompt_tokens, Some(&k), on_token)
+    }
+
+    fn output_root_for_job_v1(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        context: &PalwJobContextV2,
+        output_token_ids: &[u32],
+    ) -> Option<Hash64> {
+        if job.version < kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED {
+            return self.output_root_for_context_v1(context, output_token_ids);
+        }
+        // ADR-0096 §10 B3: token by token, through the table this instance holds — or no answer.
+        let table = self.token_table.as_ref()?;
+        let rendered = kaspa_consensus_core::palw_decode_constraint_v1::rendered_segments_hash_v1(
+            &output_token_ids.iter().map(|id| table.segment(*id)).collect::<Vec<_>>(),
+        );
+        Some(output_commitment_v2(&context.context_hash(), output_token_ids, &rendered))
     }
 
     fn verify_material(&self, material: &[u8], claim: PalwClaimRootsV1) -> PalwMaterialVerdictV1 {
@@ -1967,6 +2158,7 @@ mod free_prompt_tests {
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            constraint_id: Default::default(),
         }
     }
 

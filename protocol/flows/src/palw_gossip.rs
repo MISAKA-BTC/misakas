@@ -1508,6 +1508,7 @@ mod tests {
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            constraint_id: Default::default(),
         };
         kaspa_consensus_core::palw_freeprompt_v3::palw_fp_material_encode_v1(&job, &[])
     }

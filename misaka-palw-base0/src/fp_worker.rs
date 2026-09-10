@@ -554,8 +554,24 @@ pub fn manifest_json_v1(manifest: &PalwFpWorkerManifestV1) -> serde_json::Value 
 /// request still fails in milliseconds rather than after an eight-minute map, and run again inside
 /// [`run_one_job_v1`] so the resident path cannot skip them.
 pub fn precheck_request_v1(request: &PalwFpWorkerRequestV3) -> Result<(), String> {
-    if request.version != PALW_FP_V3_VERSION {
-        return Err(format!("request version {} is not {}", request.version, PALW_FP_V3_VERSION));
+    // Version 5 is unconstrained and 6 carries a constraint (ADR-0096 §10 B1); the constraint
+    // itself is parsed where it is used, so a malformed one costs no artifact read.
+    if request.version != PALW_FP_V3_VERSION
+        && request.version != kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED
+    {
+        return Err(format!("request version {} is neither {} nor 6", request.version, PALW_FP_V3_VERSION));
+    }
+    if request.version == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED {
+        if request.constraint.is_empty() {
+            return Err("a version-6 request carries no constraint (ADR-0096 §10 B1)".to_string());
+        }
+        if request.constraint.len() > kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_CONSTRAINT_MAX_BYTES_V6 {
+            return Err(format!(
+                "the constraint is {} bytes and a version-6 job carries at most {} (ADR-0096 §10 B2)",
+                request.constraint.len(),
+                kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_CONSTRAINT_MAX_BYTES_V6
+            ));
+        }
     }
     if request.privacy_mode != PALW_FP_PRIVACY_PUBLIC_DA {
         return Err(format!(
@@ -750,9 +766,20 @@ pub fn run_one_job_v1<B: PalwExecutionBackendV1>(
         ));
     }
 
+    // ADR-0096 Decision 7: a version-6 request's constraint, parsed canonically — the id the job
+    // names is the hash of these bytes, so the automaton the worker masks with IS the one it signs.
+    let constraint = if request.version == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED {
+        Some(
+            kaspa_consensus_core::palw_decode_constraint_v1::PalwDecodeConstraintV1::from_bytes(&request.constraint)
+                .map_err(|e| format!("the request's constraint is not a canonical automaton: {e:?}"))?,
+        )
+    } else {
+        None
+    };
+
     // The job identity the trace binds — rebuilt by every replayer from chain data alone.
     let job = PalwFreePromptJobV3 {
-        version: PALW_FP_V3_VERSION,
+        version: request.version,
         network_domain: request.network_domain,
         class_id: request.class_id,
         executor_bond: request.executor_bond,
@@ -778,6 +805,11 @@ pub fn run_one_job_v1<B: PalwExecutionBackendV1>(
         // bind its trace to a job id nobody else can rebuild.
         sampling_seed: request.sampling_seed,
         temperature_q: request.temperature_q,
+        constraint_id: if constraint.is_some() {
+            kaspa_consensus_core::palw_decode_constraint_v1::constraint_id_v1(&request.constraint)
+        } else {
+            Hash64::default()
+        },
     };
     let binding = fp_job_id_v3(&job);
 
@@ -791,7 +823,7 @@ pub fn run_one_job_v1<B: PalwExecutionBackendV1>(
 
     let exec_started = std::time::Instant::now();
     let prompt_usize: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
-    let (run, streamed) = execute_streaming_v1(rt, &job, &prompt_usize, on_token)?;
+    let (run, streamed) = execute_streaming_v1(rt, &job, &prompt_usize, constraint.as_ref(), on_token)?;
     let execute_ms = exec_started.elapsed().as_millis() as u64;
 
     // **F1 through the stream, on the worker's own side** (Decision 2's failure mode, closed
@@ -837,7 +869,13 @@ pub fn run_one_job_v1<B: PalwExecutionBackendV1>(
 
     retain_v1(rt, trace_out, binding, &run, &context)?;
 
-    let rendered = render_answer_v1(&rt.tokenizer, &run.output_token_ids);
+    // ADR-0096 §10 B7: a constrained answer renders through the table rule — specials empty — so
+    // the rendering is exactly the constrained value and a derivation reads nothing after it.
+    let rendered = if constraint.is_some() {
+        run.output_token_ids.iter().flat_map(|id| rt.tokenizer.constrained_rendering_v1(*id)).collect()
+    } else {
+        render_answer_v1(&rt.tokenizer, &run.output_token_ids)
+    };
 
     eprintln!(
         "[{}] v3 executed: prefill={prefill} decode={}/{} in {execute_ms}ms ({} leaves); exec root={}…",
@@ -849,7 +887,9 @@ pub fn run_one_job_v1<B: PalwExecutionBackendV1>(
     );
 
     Ok(PalwFpWorkerResultV3 {
-        version: PALW_FP_V3_VERSION,
+        // The result answers the request's version (ADR-0096 §10 B1): a constrained request's
+        // result is version 6 like its job, and the gateway refuses any other pairing.
+        version: job.version,
         request_hash,
         job,
         prompt_token_ids: prompt_ids,
@@ -903,6 +943,7 @@ fn execute_streaming_v1<B: PalwExecutionBackendV1>(
     rt: &FpWorkerRuntime<B>,
     job: &PalwFreePromptJobV3,
     prompt_tokens: &[usize],
+    constraint: Option<&kaspa_consensus_core::palw_decode_constraint_v1::PalwDecodeConstraintV1>,
     on_token: &mut dyn FnMut(u32, &[u8]),
 ) -> Result<(PalwFpRunV1, Vec<u32>), String> {
     let mut streamed: Vec<u32> = Vec::new();
@@ -911,10 +952,20 @@ fn execute_streaming_v1<B: PalwExecutionBackendV1>(
             streamed.push(id);
             // An id past the tokenizer's table (a class's padded vocab) renders to nothing, and
             // the id is still reported: the gateway counts tokens and a silent one would
-            // desynchronise it from the ids it will be asked to check the stream against.
-            on_token(id, &rt.tokenizer.token_bytes(id).unwrap_or_default());
+            // desynchronise it from the ids it will be asked to check the stream against. A
+            // constrained run streams the table rule's rendering (specials empty), the same bytes
+            // its `rendered` and its rendered hash are taken over.
+            let bytes = match constraint {
+                Some(_) => rt.tokenizer.constrained_rendering_v1(id),
+                None => rt.tokenizer.token_bytes(id).unwrap_or_default(),
+            };
+            on_token(id, &bytes);
         };
-        rt.backend.execute_free_prompt_streaming(job, prompt_tokens, &mut sink).map_err(|e| format!("execution refused: {e}"))?
+        match constraint {
+            Some(c) => rt.backend.execute_free_prompt_constrained_streaming(job, prompt_tokens, c, &mut sink),
+            None => rt.backend.execute_free_prompt_streaming(job, prompt_tokens, &mut sink),
+        }
+        .map_err(|e| format!("execution refused: {e}"))?
     };
     Ok((run, streamed))
 }
@@ -1248,6 +1299,7 @@ mod tests {
             runtime_class_id: manifest.runtime_class_id,
             shape_profile_id: manifest.shape_profile_id,
             trace_scheme_id: manifest.trace_scheme_id,
+            constraint: Vec::new(),
         }
     }
 

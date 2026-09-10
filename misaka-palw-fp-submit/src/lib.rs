@@ -832,6 +832,7 @@ mod tests {
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            constraint_id: Default::default(),
         };
         let commitment = PalwFreePromptCommitmentV3 {
             job,
@@ -847,7 +848,7 @@ mod tests {
             trace_retention_daa: 200_000,
         };
         let payload =
-            PalwFpCommitmentTxPayloadV3 { version: PALW_FP_V3_VERSION, commitment, prompt_token_ids: ids, signature: vec![7u8; 32] };
+            PalwFpCommitmentTxPayloadV3 { version: PALW_FP_V3_VERSION, commitment, prompt_token_ids: ids, signature: vec![7u8; 32], constraint: Vec::new() };
         let bytes = borsh::to_vec(&payload).unwrap();
         (payload, bytes)
     }

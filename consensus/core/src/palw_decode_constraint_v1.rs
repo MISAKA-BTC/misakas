@@ -415,7 +415,10 @@ pub fn constraint_admits_lane_v1(
     state: &PalwConstraintStateV1,
     rendering: Option<&[u8]>,
 ) -> Option<PalwConstraintStateV1> {
-    rendering.and_then(|bytes| constraint_admits_v1(c, state, bytes))
+    // **An empty rendering is never admitted** (ADR-0096 §10 B4): the table gives special tokens
+    // and unrenderable ids the empty leaf, and a token that advances no byte would otherwise be
+    // admitted at EVERY state — an end-of-generation id in the middle of an answer.
+    rendering.filter(|bytes| !bytes.is_empty()).and_then(|bytes| constraint_admits_v1(c, state, bytes))
 }
 
 /// The state after a rendered prefix — the tokens' byte strings in order, from the start state.
@@ -500,6 +503,80 @@ pub fn decode_token_select_v3(
     best.map(|(lane, _)| lane)
 }
 
+/// **Does any byte continue from this state?** 256 automaton steps, no table.
+///
+/// This is B7's finish test (ADR-0096 §10): for a BYTE-COMPLETE vocabulary — every single byte
+/// is a token that renders as itself, which a byte-level BPE vocabulary is, and which the pinned
+/// token table certifies — "no lane is admitted" is exactly "no byte continues", so the court can
+/// decide the stop from the automaton alone rather than from a table no node holds.
+pub fn constraint_admits_any_byte_v1(c: &PalwDecodeConstraintV1, state: &PalwConstraintStateV1) -> bool {
+    (0u8..=255).any(|byte| {
+        let mut next = state.clone();
+        constraint_step_v1(c, &mut next, byte)
+    })
+}
+
+/// **Where a constrained run is: still reading the answer, or finished** (ADR-0096 §10 B7).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub enum PalwConstraintCursorV1 {
+    Running(PalwConstraintStateV1),
+    /// No byte continued at some position; from there every committed token is the lowest EOG id.
+    Finished,
+}
+
+pub fn constraint_cursor_start_v1(c: &PalwDecodeConstraintV1) -> PalwConstraintCursorV1 {
+    PalwConstraintCursorV1::Running(constraint_start_state_v1(c))
+}
+
+/// **Advance past one committed token under B7's rule**, or `None` if the rule forbids it.
+///
+/// * Running, and some byte continues: the token must be admitted — a NON-EMPTY rendering whose
+///   every byte steps alive — and the cursor runs on from the state after it.
+/// * Running, and no byte continues: the token must be the class's lowest EOG id, and the run is
+///   finished.
+/// * Finished: the token must be the lowest EOG id again. The run still ends at its declared
+///   budget, so the job context is the one built before the run, exactly as today.
+///
+/// `token_bytes` is the token's rendering as the table gives it (empty for a special or an
+/// unrenderable id); `is_lowest_eog` is whether the token is the class's lowest EOG id.
+pub fn constraint_cursor_advance_v1(
+    c: &PalwDecodeConstraintV1,
+    cursor: &PalwConstraintCursorV1,
+    token_bytes: &[u8],
+    is_lowest_eog: bool,
+) -> Option<PalwConstraintCursorV1> {
+    match cursor {
+        PalwConstraintCursorV1::Finished => is_lowest_eog.then_some(PalwConstraintCursorV1::Finished),
+        PalwConstraintCursorV1::Running(state) => {
+            if !constraint_admits_any_byte_v1(c, state) {
+                return is_lowest_eog.then_some(PalwConstraintCursorV1::Finished);
+            }
+            constraint_admits_lane_v1(c, state, Some(token_bytes)).map(PalwConstraintCursorV1::Running)
+        }
+    }
+}
+
+/// The domain of [`rendered_segments_hash_v1`].
+pub const PALW_RENDERED_SEGMENTS_DOMAIN_V1: &[u8] = b"misaka-palw/rendered-segments/v1";
+
+/// **ADR-0096 §10 B3: a version-6 answer's rendered-output hash, token by token.**
+/// `H(domain ‖ count_le32 ‖ (len_le32 ‖ bytes)*)` over each committed token's rendering as the
+/// pinned table gives it, in order — so `output_root` (which already binds the ids) binds each
+/// position's BYTES too, and a court close can carry the rendering and have it checked against the
+/// claim's own root. The same keyed BLAKE2b-512 as [`constraint_id_v1`].
+pub fn rendered_segments_hash_v1<S: AsRef<[u8]>>(segments: &[S]) -> Hash64 {
+    let mut state = blake2b_simd::Params::new().hash_length(64).key(PALW_RENDERED_SEGMENTS_DOMAIN_V1).to_state();
+    state.update(&(segments.len() as u32).to_le_bytes());
+    for segment in segments {
+        let bytes = segment.as_ref();
+        state.update(&(bytes.len() as u32).to_le_bytes());
+        state.update(bytes);
+    }
+    let mut out = [0u8; 64];
+    out.copy_from_slice(state.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
 /// **What the court receives when a claim carried a constraint** — bound to the claim by the
 /// caller, never stated by the challenger (a challenger who could state the constraint could
 /// state "none" and convict an honest masked token; one who could state the table could render
@@ -512,8 +589,14 @@ pub fn decode_token_select_v3(
 /// is admitted but not whether the token committed there is the one the rule names.
 pub struct PalwDecodeConstraintCourtV1<'a> {
     pub constraint: &'a PalwDecodeConstraintV1,
-    /// The class table: `Some(bytes)` for an id it holds, `None` for one it does not.
-    pub token_bytes: &'a dyn Fn(u32) -> Option<Vec<u8>>,
+    /// **The answer's per-token renderings, as the CLAIM committed them** (ADR-0096 §10 B5) — one
+    /// per decode position, checked by the caller against the claim's `output_root` through
+    /// [`rendered_segments_hash_v1`]. The court never renders a token itself: no node holds a
+    /// tokenizer.
+    pub segments: &'a [Vec<u8>],
+    /// **The beating lane's rendering, proven by the caller against the pinned token table**
+    /// (§10 B4); `None` for the one-disclosure arm, which reads no lane but the committed one.
+    pub beat_lane_bytes: Option<&'a [u8]>,
     /// The ids at which generation ends for this class; the rule commits the LOWEST of them.
     pub eog_token_ids: &'a [u32],
 }
@@ -526,7 +609,7 @@ impl PalwDecodeConstraintCourtV1<'_> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::palw_decode_select_v2::{
         PALW_DECODE_SEED_GREEDY, PALW_DECODE_TEMPERATURE_GREEDY, PalwDecodeSamplingV2, decode_token_select_v2,
@@ -650,7 +733,7 @@ mod tests {
 
     /// **`[` one digit `]`**, and then nothing — the smallest grammar whose run ENDS, so the
     /// "no lane admitted → lowest EOG" rule is reachable by the court.
-    fn bracket_digit() -> PalwDecodeConstraintV1 {
+    pub(crate) fn bracket_digit() -> PalwDecodeConstraintV1 {
         let mut f = Fb::new();
         let s = f.node(false);
         let open = f.node(false);
@@ -1087,16 +1170,40 @@ mod tests {
             0..=255 => Some(vec![id as u8]),
             BRACKET_SEVEN => Some(b"[7".to_vec()),
             SEVEN_BRACKET => Some(b"7]".to_vec()),
-            EOG_LOW => Some(b"<|endoftext|>".to_vec()),
-            EOG_HIGH => Some(b"<|im_end|>".to_vec()),
+            // Special tokens render EMPTY in the table (ADR-0096 §10 B4): never answer content.
+            EOG_LOW | EOG_HIGH => Some(Vec::new()),
             _ => None,
         }
     }
 
     const EOG_IDS: [u32; 2] = [EOG_HIGH, EOG_LOW];
 
-    fn court(c: &PalwDecodeConstraintV1) -> PalwDecodeConstraintCourtV1<'_> {
-        PalwDecodeConstraintCourtV1 { constraint: c, token_bytes: &class_table, eog_token_ids: &EOG_IDS }
+    /// A token's rendering as the table gives it: empty for a special or an unrenderable id.
+    fn segment(id: u32) -> Vec<u8> {
+        class_table(id).unwrap_or_default()
+    }
+
+    fn segments(ids: &[u32]) -> Vec<Vec<u8>> {
+        ids.iter().map(|id| segment(*id)).collect()
+    }
+
+    /// The court as the close arm feeds it: the claim's renderings of the pin's ids, and the
+    /// beating lane's rendering (what the table opening would prove).
+    fn try_v3(
+        binding: &crate::palw_step_leg::PalwStepBindingV2,
+        pin: &crate::palw_step_refute::PalwTiledDecodePinV1,
+        sampling: PalwDecodeSamplingV2,
+        c: &PalwDecodeConstraintV1,
+    ) -> Result<crate::palw_step_leg::PalwStepRefutationVerdictV1, crate::palw_step_refute::PalwStepRefuteError> {
+        let segs = segments(&pin.generated_token_ids);
+        let beat = segment(pin.beat_lane);
+        let court = PalwDecodeConstraintCourtV1 {
+            constraint: c,
+            segments: &segs,
+            beat_lane_bytes: Some(&beat),
+            eog_token_ids: &EOG_IDS,
+        };
+        check_tiled_decode_token_refutation_v3(binding, pin, sampling, Some(court), cap())
     }
 
     /// Rows whose raw argmax is a lane the constraint FORBIDS (`x`, so v2 and v3 disagree at every
@@ -1119,21 +1226,23 @@ mod tests {
             .collect()
     }
 
-    /// The honest producer under the rule: at every position the admitted keyed argmax, and at
-    /// the first position with no admitted lane the lowest EOG id, then stop. Returns the ids and
-    /// the position the stop fired at.
+    /// The honest producer under §10 B7: at every position the admitted keyed argmax while some
+    /// byte continues; from the first position where none does, the lowest EOG id — to the end of
+    /// the budget, one id per row.
     fn honest_run(c: &PalwDecodeConstraintV1, rows: &[Vec<i32>], sampling: PalwDecodeSamplingV2) -> Vec<u32> {
         let mut ids = Vec::new();
+        let mut cursor = constraint_cursor_start_v1(c);
         for (p, row) in rows.iter().enumerate() {
-            let state = constraint_state_after_v1(c, ids.iter().map(|id| class_table(*id).expect("rendered"))).expect("admitted");
-            let mask = constraint_admitted_lanes_v1(c, &state, VOCAB as u32, &class_table);
-            match decode_token_select_v3(row, &sampling.seed, p as u32, sampling.temperature_q, |j| mask[j]) {
-                Some(lane) => ids.push(lane as u32),
-                None => {
-                    ids.push(EOG_LOW);
-                    break;
+            let next = match &cursor {
+                PalwConstraintCursorV1::Running(state) if constraint_admits_any_byte_v1(c, state) => {
+                    let mask = constraint_admitted_lanes_v1(c, state, VOCAB as u32, &class_table);
+                    decode_token_select_v3(row, &sampling.seed, p as u32, sampling.temperature_q, |j| mask[j])
+                        .expect("a byte-complete table admits a lane wherever a byte continues") as u32
                 }
-            }
+                _ => EOG_LOW,
+            };
+            cursor = constraint_cursor_advance_v1(c, &cursor, &segment(next), next == EOG_LOW).expect("the honest run follows the rule");
+            ids.push(next);
         }
         ids
     }
@@ -1279,18 +1388,20 @@ mod tests {
         let rows = constrained_rows(6);
         for sampling in [PalwDecodeSamplingV2::GREEDY, PalwDecodeSamplingV2 { seed: [0x77u8; 32], temperature_q: 1 << 28 }] {
             let ids = honest_run(&c, &rows, sampling);
-            // `[`, a digit, `]`, then the stop: four positions, the last the lowest EOG id.
-            assert_eq!(ids.len(), 4, "{ids:?}");
+            // `[`, a digit, `]`, then the stop: the lowest EOG id from the fourth position to the
+            // end of the budget (§10 B7).
+            assert_eq!(ids.len(), 6, "{ids:?}");
+            assert!(ids[3..].iter().all(|id| *id == EOG_LOW), "{ids:?}");
             assert_eq!(ids[0], b'[' as u32);
             assert!(class_table(ids[1]).unwrap().iter().all(u8::is_ascii_digit));
             assert_eq!(ids[2], b']' as u32);
             assert_eq!(ids[3], EOG_LOW);
             let binding = constrained_binding(&rows, &ids);
-            for p in 0..4u32 {
+            for p in 0..6u32 {
                 let bare = one_disclosure_pin(&binding.job_context, &rows, &ids, p);
                 assert!(
                     matches!(
-                        check_tiled_decode_token_refutation_v3(&binding, &bare, sampling, Some(court(&c)), cap()),
+                        try_v3(&binding, &bare, sampling, &c),
                         Err(PalwStepRefuteError::NoFaultFound)
                     ),
                     "honest position {p} under the one-disclosure arm"
@@ -1302,7 +1413,7 @@ mod tests {
                     let pin = tiled_pin(&binding.job_context, &rows, &ids, p, beat);
                     assert!(
                         matches!(
-                            check_tiled_decode_token_refutation_v3(&binding, &pin, sampling, Some(court(&c)), cap()),
+                            try_v3(&binding, &pin, sampling, &c),
                             Err(PalwStepRefuteError::NoFaultFound)
                         ),
                         "honest position {p} against lane {beat}"
@@ -1317,16 +1428,16 @@ mod tests {
             let binding = constrained_binding(&rows, &altered);
             let bare = one_disclosure_pin(&binding.job_context, &rows, &altered, 1);
             let verdict =
-                check_tiled_decode_token_refutation_v3(&binding, &bare, sampling, Some(court(&c)), cap()).expect("convicted");
+                try_v3(&binding, &bare, sampling, &c).expect("convicted");
             assert_eq!(verdict.fault, fault_at(1));
             // With tiles supplied the same arm convicts first — no tile is read for it.
             let pin = tiled_pin(&binding.job_context, &rows, &altered, 1, 0);
-            assert_eq!(check_tiled_decode_token_refutation_v3(&binding, &pin, sampling, Some(court(&c)), cap()), Ok(verdict.clone()));
+            assert_eq!(try_v3(&binding, &pin, sampling, &c), Ok(verdict.clone()));
             // A position AFTER the altered one is not adjudicated from a dead state: the court
             // names the earlier fault instead.
             let later = one_disclosure_pin(&binding.job_context, &rows, &altered, 2);
             assert!(matches!(
-                check_tiled_decode_token_refutation_v3(&binding, &later, sampling, Some(court(&c)), cap()),
+                try_v3(&binding, &later, sampling, &c),
                 Err(PalwStepRefuteError::InputSetNotCanonical(_))
             ));
             // An unrenderable id is not admitted either — and is convicted where it sits.
@@ -1335,12 +1446,12 @@ mod tests {
             let binding = constrained_binding(&rows, &padded);
             let bare = one_disclosure_pin(&binding.job_context, &rows, &padded, 1);
             assert_eq!(
-                check_tiled_decode_token_refutation_v3(&binding, &bare, sampling, Some(court(&c)), cap()).map(|v| v.fault),
+                try_v3(&binding, &bare, sampling, &c).map(|v| v.fault),
                 Ok(fault_at(1))
             );
             let later = one_disclosure_pin(&binding.job_context, &rows, &padded, 2);
             assert!(matches!(
-                check_tiled_decode_token_refutation_v3(&binding, &later, sampling, Some(court(&c)), cap()),
+                try_v3(&binding, &later, sampling, &c),
                 Err(PalwStepRefuteError::InputSetNotCanonical(_))
             ));
         }
@@ -1369,18 +1480,18 @@ mod tests {
             // The one-disclosure arm finds nothing: the token IS admitted.
             let bare = one_disclosure_pin(&binding.job_context, &rows, &cheated, 1);
             assert!(matches!(
-                check_tiled_decode_token_refutation_v3(&binding, &bare, sampling, Some(court(&c)), cap()),
+                try_v3(&binding, &bare, sampling, &c),
                 Err(PalwStepRefuteError::NoFaultFound)
             ));
             // The admitted argmax beats it: convicted.
             let pin = tiled_pin(&binding.job_context, &rows, &cheated, 1, best as u32);
-            let verdict = check_tiled_decode_token_refutation_v3(&binding, &pin, sampling, Some(court(&c)), cap()).expect("convicted");
+            let verdict = try_v3(&binding, &pin, sampling, &c).expect("convicted");
             assert_eq!(verdict.fault, fault_at(1));
             // `x` has the row's greatest key and the constraint forbids it: NOT a fault under the
             // claim's constraint — and a conviction under v2, which knows no constraint.
             let forbidden = tiled_pin(&binding.job_context, &rows, &cheated, 1, b'x' as u32);
             assert!(matches!(
-                check_tiled_decode_token_refutation_v3(&binding, &forbidden, sampling, Some(court(&c)), cap()),
+                try_v3(&binding, &forbidden, sampling, &c),
                 Err(PalwStepRefuteError::NoFaultFound)
             ));
             assert!(check_tiled_decode_token_refutation_capped_v2(&binding, &forbidden, sampling, cap()).is_ok());
@@ -1388,7 +1499,7 @@ mod tests {
             for beat in [UNRENDERABLE, EOG_LOW, EOG_HIGH, BRACKET_SEVEN] {
                 let pin = tiled_pin(&binding.job_context, &rows, &cheated, 1, beat);
                 assert!(matches!(
-                    check_tiled_decode_token_refutation_v3(&binding, &pin, sampling, Some(court(&c)), cap()),
+                    try_v3(&binding, &pin, sampling, &c),
                     Err(PalwStepRefuteError::NoFaultFound)
                 ));
             }
@@ -1396,7 +1507,7 @@ mod tests {
             let weaker = tiled_pin(&binding.job_context, &rows, &honest, 1, b'1' as u32);
             let binding = constrained_binding(&rows, &honest);
             assert!(matches!(
-                check_tiled_decode_token_refutation_v3(&binding, &weaker, sampling, Some(court(&c)), cap()),
+                try_v3(&binding, &weaker, sampling, &c),
                 Err(PalwStepRefuteError::NoFaultFound)
             ));
         }
@@ -1416,7 +1527,7 @@ mod tests {
         let try_last = |ids: &[u32]| {
             let binding = constrained_binding(&rows, ids);
             let bare = one_disclosure_pin(&binding.job_context, &rows, ids, 3);
-            check_tiled_decode_token_refutation_v3(&binding, &bare, sampling, Some(court(&c)), cap())
+            try_v3(&binding, &bare, sampling, &c)
         };
         assert!(matches!(try_last(&honest), Err(PalwStepRefuteError::NoFaultFound)));
         let mut garbage = honest.clone();
@@ -1434,7 +1545,7 @@ mod tests {
         let binding = constrained_binding(&rows, &early);
         let bare = one_disclosure_pin(&binding.job_context, &rows, &early, 1);
         assert_eq!(
-            check_tiled_decode_token_refutation_v3(&binding, &bare, sampling, Some(court(&c)), cap()).map(|v| v.fault),
+            try_v3(&binding, &bare, sampling, &c).map(|v| v.fault),
             Ok(fault_at(1))
         );
         // A multi-byte token: `[7` at position 0 is admitted (and wins when `[` is masked away by
@@ -1442,17 +1553,18 @@ mod tests {
         let mut rows2 = rows.clone();
         rows2[0][b'[' as usize] = 0;
         let ids = honest_run(&c, &rows2, sampling);
-        assert_eq!(ids, vec![BRACKET_SEVEN, b']' as u32, EOG_LOW]);
+        assert_eq!(ids, vec![BRACKET_SEVEN, b']' as u32, EOG_LOW, EOG_LOW, EOG_LOW, EOG_LOW]);
         let binding = constrained_binding(&rows2, &ids);
-        for p in 0..3u32 {
+        for p in 0..6u32 {
             let bare = one_disclosure_pin(&binding.job_context, &rows2, &ids, p);
             assert!(matches!(
-                check_tiled_decode_token_refutation_v3(&binding, &bare, sampling, Some(court(&c)), cap()),
+                try_v3(&binding, &bare, sampling, &c),
                 Err(PalwStepRefuteError::NoFaultFound)
             ));
         }
         // And a class with no EOG id at all cannot try the stop: malformed binding, no verdict.
-        let no_eog = PalwDecodeConstraintCourtV1 { constraint: &c, token_bytes: &class_table, eog_token_ids: &[] };
+        let segs = segments(&ids);
+        let no_eog = PalwDecodeConstraintCourtV1 { constraint: &c, segments: &segs, beat_lane_bytes: None, eog_token_ids: &[] };
         let bare = one_disclosure_pin(&binding.job_context, &rows2, &ids, 2);
         assert!(matches!(
             check_tiled_decode_token_refutation_v3(&binding, &bare, sampling, Some(no_eog), cap()),
@@ -1471,7 +1583,7 @@ mod tests {
         let binding = constrained_binding(&rows, &ids);
         let refused = |pin: &PalwTiledDecodePinV1| {
             matches!(
-                check_tiled_decode_token_refutation_v3(&binding, pin, sampling, Some(court(&c)), cap()),
+                try_v3(&binding, pin, sampling, &c),
                 Err(PalwStepRefuteError::InputSetNotCanonical(_))
             )
         };
@@ -1495,7 +1607,7 @@ mod tests {
         let other = object_ab();
         let bare = one_disclosure_pin(&binding.job_context, &rows, &ids, 0);
         assert_eq!(
-            check_tiled_decode_token_refutation_v3(&binding, &bare, sampling, Some(court(&other)), cap()).map(|v| v.fault),
+            try_v3(&binding, &bare, sampling, &other).map(|v| v.fault),
             Ok(fault_at(0))
         );
     }

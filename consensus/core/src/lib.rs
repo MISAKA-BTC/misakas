@@ -286,6 +286,7 @@ pub mod palw_step_leg;
 /// three-way verdict (convicted / NoFaultFound / unadjudicable). Land-stage, consensus-inert.
 pub mod palw_step_refute;
 pub mod palw_terminal;
+pub mod palw_token_table_v1;
 /// MISAKA PALW canonical transcendentals (ADR-0031): transcriptions of the SPECIFIC exp/log
 /// algorithms the pinned classes run (ggml's vector polynomial; glibc 2.39's expf/logf in
 /// both contraction variants), written in ruleset-v2 arithmetic. Land-stage, consensus-inert;

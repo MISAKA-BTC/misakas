@@ -2969,6 +2969,13 @@ impl Params {
         self.palw_panel_da_fence().is_some()
     }
 
+    /// **Does this ruleset carry ADR-0096's version-6 (constrained) job SHAPE at all** — the
+    /// height-free question the context-free transaction door asks, strictly weaker at every
+    /// height than the walk's `palw_fp_decode_constraint_active_at`.
+    pub fn palw_fp_decode_constraint_admissible(&self) -> bool {
+        self.palw_fp_decode_constraint_fence().is_some()
+    }
+
     /// **Which form a job's `prompt_token_ids_hash` takes at `daa_score`** (ADR-0081 Decision 3).
     ///
     /// [`crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat`] everywhere this build ships, and
