@@ -316,16 +316,34 @@ pub fn palw_court_close_parts_to_send_v1(
     plan: &PalwCourtCloseCarriageV1,
     group: Option<&PalwCourtCloseGroupSeenV1>,
 ) -> Result<Vec<usize>, PalwCloseCarriageError> {
+    palw_court_close_parts_owed_v1(plan.chunk_count, plan.close_digest, group)
+}
+
+/// [`palw_court_close_parts_to_send_v1`] without the plan — **the resume is a function of the
+/// group's IDENTITY and the chain's bitmap, never of the bytes.**
+///
+/// A filer that has already cut its close and is holding the parts across ticks does not need to
+/// hand them back to be counted, and a caller that had to assemble a plan-shaped value just to ask
+/// this question would be filling fields nothing reads. Both callers reach the same arithmetic:
+/// this is where it is written, and the plan form above is one line over it.
+///
+/// The indices are into the parts as the chain must see them — 0 is the declaration, `i + 1`
+/// carries chunk `i` — and a whole close is the `chunk_count = 0` case, which owes part 0 alone.
+pub fn palw_court_close_parts_owed_v1(
+    chunk_count: u8,
+    close_digest: Hash64,
+    group: Option<&PalwCourtCloseGroupSeenV1>,
+) -> Result<Vec<usize>, PalwCloseCarriageError> {
     let Some(group) = group else {
-        return Ok((0..plan.parts.len()).collect());
+        return Ok((0..=usize::from(chunk_count)).collect());
     };
-    if u64::from(plan.chunk_count) != u64::from(group.count) {
-        return Err(PalwCloseCarriageError::GroupCountDiffers { planned: plan.chunk_count, seen: group.count });
+    if u64::from(chunk_count) != u64::from(group.count) {
+        return Err(PalwCloseCarriageError::GroupCountDiffers { planned: chunk_count, seen: group.count });
     }
-    if group.close_digest != Some(plan.close_digest) {
-        return Err(PalwCloseCarriageError::GroupDigestDiffers { planned: plan.close_digest, seen: group.close_digest });
+    if group.close_digest != Some(close_digest) {
+        return Err(PalwCloseCarriageError::GroupDigestDiffers { planned: close_digest, seen: group.close_digest });
     }
-    Ok((0..plan.chunk_count).filter(|index| group.present & (1u64 << index) == 0).map(|index| index as usize + 1).collect())
+    Ok((0..chunk_count).filter(|index| group.present & (1u64 << index) == 0).map(|index| index as usize + 1).collect())
 }
 
 /// **Will the chain give this group time to finish arriving?**

@@ -38,15 +38,19 @@ use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwMaterialVerdictV1
 use kaspa_consensus_core::palw_bisect::{
     PALW_BISECT_OBJECT_VERSION_V1, PalwBisectDisclosureV1, PalwBisectSpaceV1, PalwBisectTurnV1, PalwBisectVerdictV1,
 };
+use kaspa_consensus_core::palw_close_carriage::{
+    PalwCloseCarriageError, PalwCourtCloseGroupSeenV1, palw_court_close_assembly_fits_v1, palw_court_close_parts_owed_v1,
+    palw_plan_court_close_carriage_v1,
+};
 use kaspa_consensus_core::palw_court_v2::{
-    PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT, PALW_COURT_V2_MLDSA87_OPEN_CONTEXT, PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT,
-    PalwCourtVerdictProofV2, court_session_id_v2,
+    PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT, PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT, PALW_COURT_V2_MLDSA87_OPEN_CONTEXT,
+    PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT, PalwCourtVerdictProofV2, court_session_id_v2, palw_court_close_declaration_message_v1,
 };
 use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
 use kaspa_consensus_core::palw_panel_v2::{
     PALW_RECEIPT_V2_MLDSA87_CONTEXT, PalwReceiptVerdictV2, PalwSeatReceiptV2, palw_receipt_message_v2,
 };
-use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwBondStatusV2, PalwConsensusObjectV2};
+use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwBondStatusV2, PalwConsensusObjectV2, PalwCourtSideV1};
 use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE;
 use kaspa_consensus_core::tx::{MutableTransaction, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry};
 use kaspa_consensusmanager::ConsensusManager;
@@ -290,6 +294,61 @@ const MAX_INFLIGHT_CARRIERS: usize = 8;
 const COURT_MOVE_REPLAN_DAA: u64 = 10;
 /// Submission attempts per assembled object before giving up (each tick retries).
 const SUBMIT_ATTEMPTS: u32 = 3;
+
+/// **One court move waiting for a carrier — and, since ADR-0102, possibly for several.**
+///
+/// This used to be a tuple ending in one `PalwConsensusObjectV2`, and that was the defect: a close
+/// too wide for one carrier could not be filed at all. The submit loop built it, `build_lifecycle_
+/// tx` refused it or the mempool did, and the arm logged a line and dropped the move. **A close
+/// denied its assembly window is not a delay but a conviction of the declaring side**, so the
+/// dropped move was a prosecution this node abandoned in silence.
+///
+/// Now a move is its PARTS, in the order the chain must see them. Every move but an oversized close
+/// has exactly one, and the loop below cannot tell the difference — which is the property that
+/// makes this safe: the whole-close path is the one-part path, unchanged.
+struct CourtMoveV1 {
+    session_id: Hash64,
+    round: u32,
+    mine_is_responder: bool,
+    /// The declaration first, then the chunks in index order. One entry for every other move.
+    parts: Vec<PalwConsensusObjectV2>,
+    /// Present only for a split close: what a resume asks the chain about. `None` means there is
+    /// no group to resume into, so `parts` is filed as it stands.
+    group: Option<CourtCloseGroupPlanV1>,
+}
+
+/// What a resume compares the chain's own group against (ADR-0102). Not the bytes — those are in
+/// `parts` — but the identity the chain keys and pins, so a group that is not this plan's is
+/// refused before a carrier is spent on completing somebody else's assembly.
+struct CourtCloseGroupPlanV1 {
+    side: PalwCourtSideV1,
+    chunk_count: u8,
+    close_digest: Hash64,
+    /// The session's backstop. A carriage kept across ticks needs an end: past this the chain will
+    /// not accept another chunk (`CourtCloseGroupExpired`), the declaring side has already lost its
+    /// assembly deposit, and every further carrier is a fee spent on a group that cannot complete.
+    backstop_daa: u64,
+}
+
+/// **Why a court move could not be prepared**, in the two voices the panel already speaks: a
+/// `court_stalls` key, which is a fixed string so a tick's summary can COUNT them, and the line an
+/// operator reads. Split because a stall counted under a formatted key is a stall counted once.
+struct CourtCarriageRefusalV1 {
+    stall: &'static str,
+    said: String,
+}
+
+impl CourtMoveV1 {
+    /// A move that rides on one carrier — every court object but a split close.
+    fn whole(session_id: Hash64, round: u32, mine_is_responder: bool, object: PalwConsensusObjectV2) -> Self {
+        Self { session_id, round, mine_is_responder, parts: vec![object], group: None }
+    }
+
+    /// This move's key in `court_moved`, which is what rate-limits a re-plan.
+    fn key(&self) -> (Hash64, u32, bool) {
+        (self.session_id, self.round, self.mine_is_responder)
+    }
+}
 /// **How long the panel keeps a claim it is not being asked about.**
 ///
 /// The in-memory pools are keyed by claim and were pruned only when a claim was LIVE or already
@@ -1014,6 +1073,116 @@ impl PalwPanelService {
         }
     }
 
+    /// **Turn a court object into the carriage that files it** (ADR-0102).
+    ///
+    /// Every move but a close rides on one carrier by construction — an opening, a disclosure, a
+    /// verdict are all small and their size does not depend on the evidence. A close's does: its
+    /// proof carries the operand openings and the logits rows the court will recompute from, plus
+    /// a `PalwStepBindingV2` the cost rule does not count, and past one carrier it must ride as a
+    /// signed declaration and its chunks.
+    ///
+    /// The cut is `palw_plan_court_close_carriage_v1`'s — the same function `misaka palw
+    /// court-close` files with and the same one the completing chunk's assembly is checked
+    /// against. What this adds is the three things only a node holds: the SIDE, read off the duty
+    /// rather than guessed; the SIGNATURE, under the declaration's own registered domain; and the
+    /// two refusals that are cheaper here than at the last carrier — a ruleset that pays for one
+    /// carrier, and an assembly window the session's backstop will not hold.
+    fn plan_court_move_v1(
+        &self,
+        object: &PalwConsensusObjectV2,
+        duty: &kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2,
+        current_daa: u64,
+    ) -> Result<CourtMoveV1, CourtCarriageRefusalV1> {
+        // Not a close: one object, one carrier, and the planner is not asked — it would refuse a
+        // `CourtOpened` by name, and this arm files those too.
+        if !matches!(object, PalwConsensusObjectV2::CourtClosed { .. }) {
+            return Ok(CourtMoveV1::whole(duty.session_id, duty.round, duty.i_am_responder, object.clone()));
+        }
+        // **The side is the duty's, and it is not a guess.** The responder is the bond that
+        // produced the disputed claim — the executor — and the challenger is the bond that opened
+        // the session. The acceptance layer verifies the declaration against THAT bond's
+        // registered key, so a side inferred any other way spends a carrier on a move the chain
+        // reads as the other party's.
+        let side = if duty.i_am_responder { PalwCourtSideV1::Executor } else { PalwCourtSideV1::Challenger };
+        let plan = palw_plan_court_close_carriage_v1(object, &self.config.court, Some(side)).map_err(|why| match why {
+            PalwCloseCarriageError::TooManyCarriers { whole_bytes, count, max, ruleset_binds } => CourtCarriageRefusalV1 {
+                stall: if ruleset_binds {
+                    "this network's court pays for fewer carriers than the close needs"
+                } else {
+                    "the close needs more carriers than the group row can address"
+                },
+                said: format!(
+                    "the close is {whole_bytes} bytes — {count} carriers, and at most {max} are admitted. Nothing was carried."
+                ),
+            },
+            other => CourtCarriageRefusalV1 { stall: "the close cannot be cut for carriage", said: other.to_string() },
+        })?;
+        let Some(mut declaration) = plan.declaration.clone() else {
+            return Ok(CourtMoveV1 {
+                session_id: duty.session_id,
+                round: duty.round,
+                mine_is_responder: duty.i_am_responder,
+                parts: plan.parts,
+                group: None,
+            });
+        };
+        // **The window, before the declaration is funded.** The declaration gate refuses a group
+        // that cannot finish inside the session's backstop — and the backstop never moves, because
+        // extending it would sell either party a free window for the price of a declaration. A
+        // declaration refused there has already cost its carrier AND its assembly deposit.
+        palw_court_close_assembly_fits_v1(plan.chunk_count, current_daa, duty.session_deadline_daa).map_err(|why| {
+            CourtCarriageRefusalV1 { stall: "the close cannot assemble inside the session", said: why.to_string() }
+        })?;
+        // **Signed here, because the key is here.** `palw_plan_court_close_carriage_v1` returns the
+        // declaration unsigned on purpose: consensus-core holds no key, and
+        // `palw_lifecycle_object_may_ride_v2` refuses a declaration with an empty signature — so an
+        // unsigned plan cannot be filed by accident, and this is the one place that can complete it.
+        let PalwConsensusObjectV2::CourtCloseDeclared { session_id, side, count, chunk_digests, close_digest, verdict, signature } =
+            &mut declaration
+        else {
+            return Err(CourtCarriageRefusalV1 {
+                stall: "the planned declaration is not a declaration",
+                said: "the carriage planner returned a part this node cannot sign".to_string(),
+            });
+        };
+        let message =
+            palw_court_close_declaration_message_v1(session_id, *side, *count, chunk_digests, close_digest, *verdict);
+        let Some(signed) = self.sign(&message, PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT) else {
+            return Err(CourtCarriageRefusalV1 {
+                stall: "no signing key for a close declaration",
+                said: "this node holds no bond key, so it cannot declare a split close".to_string(),
+            });
+        };
+        *signature = signed;
+        info!(
+            "[{PALW_PANEL}] session {}: the close is {} bytes and rides as a {} declaration and {} chunks on the {side} side — \
+             assembly window {} DAA against a backstop at {}",
+            duty.session_id,
+            plan.whole_bytes,
+            side.name(),
+            plan.chunk_count,
+            plan.assembly_daa(),
+            duty.session_deadline_daa
+        );
+        let group = CourtCloseGroupPlanV1 {
+            side: *side,
+            chunk_count: plan.chunk_count,
+            close_digest: *close_digest,
+            backstop_daa: duty.session_deadline_daa,
+        };
+        // `parts[0]` IS the declaration and it is the copy that gets carried, so the signature has
+        // to replace it rather than sit beside it.
+        let mut parts = plan.parts;
+        parts[0] = declaration;
+        Ok(CourtMoveV1 {
+            session_id: duty.session_id,
+            round: duty.round,
+            mine_is_responder: duty.i_am_responder,
+            parts,
+            group: Some(group),
+        })
+    }
+
     /// **Build the `ClassRegistered` for the class this node holds an artifact for**
     /// (ADR-0049 Decision H, ADR-0053).
     ///
@@ -1116,6 +1285,35 @@ impl PalwPanelService {
         build(signature)
     }
 
+    /// **What this object owes the CHAIN, on top of what its carrier owes the relay** (ADR-0102).
+    ///
+    /// A carrier's fee is normally the node's own relay minimum for its real mass, so our mempool
+    /// cannot refuse what we built. That is not the same question the acceptance layer asks of a
+    /// close declaration: it prices the ADJUDICATION the declaration buys —
+    /// `palw_court_close_min_fee_v1(count)`, the relay fee for the whole close's counted bytes —
+    /// and drops a declaration that underpays, with the block standing. The declaration itself is
+    /// small (its digests are 64 bytes a chunk), so its own relay minimum is nowhere near that,
+    /// and a node paying only the relay minimum would have its declaration dropped, open no
+    /// group, and — because the resume reads the chain and sees no group — file the whole carriage
+    /// again on the next pass. A fee bleed, discovered at whichever carrier the operator happened
+    /// to be watching.
+    ///
+    /// Behind the same fence the acceptance layer reads it behind, and at the DAA the mover is
+    /// standing at, because a fee paid before the rule is armed is a fee nobody asked for.
+    ///
+    /// **The certification lane has the same shape and is deliberately not answered here**:
+    /// `palw_certification_min_fee_v1` prices a `FamilyCertified` the same way, this node has
+    /// never paid it either, and closing that is a change to how certifications are funded rather
+    /// than to how a close is carried. Both are dormant while `palw_certification_rent` is `None`
+    /// on every shipped preset, which is what makes it safe to close them one at a time.
+    fn consensus_rent_for(&self, object: &PalwConsensusObjectV2, current_daa: u64) -> u64 {
+        let PalwConsensusObjectV2::CourtCloseDeclared { count, .. } = object else { return 0 };
+        if !self.consensus_config.params.palw_certification_rent.is_some_and(|fence| fence.is_active(current_daa)) {
+            return 0;
+        }
+        kaspa_consensus_core::palw_state_v2::palw_court_close_min_fee_v1(u64::from(*count))
+    }
+
     fn persist_fee_outpoint(&self, outpoint: TransactionOutpoint) {
         // **Tell the wallet before telling the disk** (audit3 H12). This output funds every
         // lifecycle object this node carries, it sits at the producer's own pay address next to
@@ -1138,7 +1336,19 @@ impl PalwPanelService {
         funding_outpoint: TransactionOutpoint,
         funding: &UtxoEntry,
     ) -> Result<Transaction, String> {
-        self.build_lifecycle_tx_with_outputs(object, funding_outpoint, funding, &[])
+        self.build_lifecycle_tx_with_outputs(object, funding_outpoint, funding, &[], 0)
+    }
+
+    /// [`Self::build_lifecycle_tx`] with a floor under the fee — what the CHAIN charges this
+    /// object, from [`Self::consensus_rent_for`], which the relay minimum knows nothing about.
+    fn build_lifecycle_tx_paying_rent(
+        &self,
+        object: &PalwConsensusObjectV2,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        current_daa: u64,
+    ) -> Result<Transaction, String> {
+        self.build_lifecycle_tx_with_outputs(object, funding_outpoint, funding, &[], self.consensus_rent_for(object, current_daa))
     }
 
     /// [`Self::build_lifecycle_tx`] with outputs AHEAD of the change.
@@ -1153,6 +1363,7 @@ impl PalwPanelService {
         funding_outpoint: TransactionOutpoint,
         funding: &UtxoEntry,
         extra_outputs: &[kaspa_consensus_core::tx::TransactionOutput],
+        min_fee: u64,
     ) -> Result<Transaction, String> {
         let kp = self.keypair.as_ref().ok_or("no signing key")?;
         // **Refuse before signing, and name the field.**
@@ -1223,7 +1434,9 @@ impl PalwPanelService {
                 .map_err(|e| format!("sig script shape: {e}"))?
         };
         let priced = build(1, dummy_sig_script)?;
-        let fee = relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&priced).compute_mass);
+        // The relay's price for what we built, floored by what the CHAIN charges this object — see
+        // `consensus_rent_for`. Zero for every object but a close declaration on an armed network.
+        let fee = relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&priced).compute_mass).max(min_fee);
 
         let unsigned = build(fee, vec![])?;
         let mtx = MutableTransaction::with_entries(unsigned, vec![funding.clone()]);
@@ -1304,7 +1517,7 @@ impl PalwPanelService {
         let storm = self.consensus_config.params.storage_mass_parameter;
         let build = |collateral: u64| -> Result<(u64, Transaction), String> {
             let (object, output) = self.build_bond_registration(collateral)?;
-            let tx = self.build_lifecycle_tx_with_outputs(&object, funding_outpoint, funding, std::slice::from_ref(&output))?;
+            let tx = self.build_lifecycle_tx_with_outputs(&object, funding_outpoint, funding, std::slice::from_ref(&output), 0)?;
             Ok((collateral, tx))
         };
         let storage_mass = |tx: &Transaction| {
@@ -2206,7 +2419,7 @@ impl PalwPanelService {
         // and `mem::take`n by the submitter, which dropped every one of them whenever the fee UTXO
         // was busy carrying a receipt — and the claim had already been marked judged, so the
         // dispute was never rebuilt. Measured: 22 frauds detected, 0 courts opened.
-        let mut court_pending: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
+        let mut court_pending: Vec<CourtMoveV1> = Vec::new();
         // The fee UTXO we are currently spending from, carried across ticks so a mempool chain is
         // not rebuilt from a stale root every two seconds. See the note at its first use.
         let mut chained_funding: Option<(TransactionOutpoint, UtxoEntry)> = None;
@@ -2501,10 +2714,10 @@ impl PalwPanelService {
                     let session_id =
                         court_session_id_v2(&target.claim_id, &target.trace_root, &target.executor_bond, &bond_key, space, space_size);
                     let Some(signature) = self.sign(session_id.as_byte_slice(), PALW_COURT_V2_MLDSA87_OPEN_CONTEXT) else { continue };
-                    if court_pending.iter().any(|(sid, _, _, _)| *sid == session_id) {
+                    if court_pending.iter().any(|m| m.session_id == session_id) {
                         continue;
                     }
-                    court_pending.push((
+                    court_pending.push(CourtMoveV1::whole(
                         session_id,
                         0,
                         false,
@@ -2558,9 +2771,7 @@ impl PalwPanelService {
                 // and later sessions' moves were dropped unsent. A rung is clocked, so the moves
                 // crowded out are exactly the ones whose lapse convicts the responder. The
                 // opening-court branch has always had this guard; the responder branch did not.
-                if court_pending.iter().any(|(sid, round, responder, _)| {
-                    *sid == duty.session_id && *round == duty.round && *responder == duty.i_am_responder
-                }) {
+                if court_pending.iter().any(|m| m.key() == (duty.session_id, duty.round, duty.i_am_responder)) {
                     continue;
                 }
                 // The capture, and the family's backend for it. A party with no material — or a
@@ -3022,7 +3233,20 @@ impl PalwPanelService {
                     }
                 };
                 let Some(object) = object else { continue };
-                court_pending.push((duty.session_id, duty.round, duty.i_am_responder, object));
+                // **A close is cut before it is queued** (ADR-0102). Every other move rides on one
+                // carrier by construction; a close is the only object whose size is a function of
+                // the evidence, so it is the only one that can outgrow a carrier — and the cut is
+                // a function of the bytes, which do not change, so it is made once here rather
+                // than re-derived on every tick of the submit loop.
+                let move_v1 = match self.plan_court_move_v1(&object, duty, current_daa) {
+                    Ok(planned) => planned,
+                    Err(why) => {
+                        *court_stalls.entry(why.stall).or_default() += 1;
+                        warn!("[{PALW_PANEL}] session {}: {}", duty.session_id, why.said);
+                        continue;
+                    }
+                };
+                court_pending.push(move_v1);
             }
             // Ask for every accused capture a close needed and this node did not hold. Outside the
             // logging guard below deliberately: a request that only goes out when a summary line
@@ -3078,7 +3302,7 @@ impl PalwPanelService {
                 {
                     continue;
                 }
-                if court_pending.iter().any(|(sid, round, responder, _)| *sid == key.0 && *round == key.1 && *responder == key.2) {
+                if court_pending.iter().any(|m| m.key() == key) {
                     continue;
                 }
                 let Some(bytes) = self.retained_capture(&duty.claim_id).or_else(|| {
@@ -3129,7 +3353,7 @@ impl PalwPanelService {
                      retained capture — deadline DAA {}",
                     duty.claim_id, duty.disclose_deadline_daa
                 );
-                court_pending.push((
+                court_pending.push(CourtMoveV1::whole(
                     key.0,
                     key.1,
                     key.2,
@@ -3893,51 +4117,138 @@ impl PalwPanelService {
                     }
                 }
                 // The court's moves first: a rung has a deadline and a receipt quorum does not.
-                let mut unsent: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
-                for (session_id, round, mine_is_responder, object) in std::mem::take(&mut court_pending) {
-                    let Some((funding_outpoint, funding_entry)) = funding.clone().filter(|_| inflight < MAX_INFLIGHT_CARRIERS) else {
-                        // The fee UTXO is busy. Keep the move: a rung has a deadline, and a dispute
-                        // dropped here is a dispute that never happens.
-                        unsent.push((session_id, round, mine_is_responder, object));
+                let mut unsent: Vec<CourtMoveV1> = Vec::new();
+                for pending in std::mem::take(&mut court_pending) {
+                    let CourtMoveV1 { session_id, round, mine_is_responder, parts, group } = pending;
+                    // **A carriage held across ticks must not re-file what is still in flight.**
+                    //
+                    // A split close is the first move this loop keeps AFTER sending it — every
+                    // other move leaves the queue the moment its carrier is accepted. The bitmap
+                    // that decides what is still owed only moves when a carrier reaches a BLOCK,
+                    // and the panel ticks every couple of seconds, so a plan re-read immediately
+                    // reads its own carriers as missing and pays for them again. The same window
+                    // the planner is rate-limited by answers this: send, then let the chain have
+                    // `COURT_MOVE_REPLAN_DAA` to include what was sent before asking again.
+                    // Past the session's backstop the chain refuses another chunk by name, so a
+                    // carriage held for one is a fee waiting to be spent on nothing.
+                    if let Some(plan) = &group
+                        && current_daa > plan.backstop_daa
+                    {
+                        warn!(
+                            "[{PALW_PANEL}] session {session_id}: the close carriage is abandoned at DAA {current_daa}, past the \
+                             session's backstop of {} — the chain accepts no further chunk",
+                            plan.backstop_daa
+                        );
+                        *court_stalls.entry("the close group outlived the session's backstop").or_default() += 1;
                         continue;
+                    }
+                    if let Some(at) = court_moved.get(&(session_id, round, mine_is_responder))
+                        && current_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA)
+                    {
+                        unsent.push(CourtMoveV1 { session_id, round, mine_is_responder, parts, group });
+                        continue;
+                    }
+                    // **What is still owed is the CHAIN's answer, not this loop's memory**
+                    // (ADR-0102). For a whole move that is the one part; for a split close it is
+                    // the group's `present` bitmap, re-read every tick — so a carrier the mempool
+                    // dropped, an orphaned chunk or a restart mid-group resumes rather than
+                    // re-pays, and a group that is not this plan's is refused before a fee is spent
+                    // on completing somebody else's assembly.
+                    let owed = match &group {
+                        None => Ok((0..parts.len()).collect::<Vec<_>>()),
+                        Some(plan) => {
+                            let seen = session.palw_court_close_group_v1(session_id, plan.side).map(|g| PalwCourtCloseGroupSeenV1 {
+                                count: u32::from(g.count),
+                                present: g.present,
+                                close_digest: Some(g.close_digest),
+                            });
+                            palw_court_close_parts_owed_v1(plan.chunk_count, plan.close_digest, seen.as_ref())
+                        }
                     };
-                    match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
-                        Ok(tx) => {
-                            let txid = tx.id();
-                            let change = tx.outputs[0].clone();
-                            match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
-                                Ok(()) => {
-                                    info!(
-                                        "[{PALW_PANEL}] submitted {} for court session {session_id} round {round} in tx {txid}",
-                                        object_name(&object)
-                                    );
-                                    let next = TransactionOutpoint::new(txid, 0);
-                                    self.persist_fee_outpoint(next);
-                                    funding = Some((
-                                        next,
-                                        UtxoEntry {
-                                            amount: change.value,
-                                            script_public_key: change.script_public_key,
-                                            block_daa_score: current_daa,
-                                            is_coinbase: false,
-                                        },
-                                    ));
-                                    inflight += 1;
-                                    court_moved.insert((session_id, round, mine_is_responder), current_daa);
-                                    if let PalwConsensusObjectV2::CourtOpened { claim, .. } = &object {
-                                        challenged.insert(*claim);
+                    let owed = match owed {
+                        Ok(owed) => owed,
+                        Err(why) => {
+                            // Not kept: a group keyed `(session, side)` is declared once and never
+                            // again, so this move can never be filed and re-planning it every tick
+                            // would only spend the log.
+                            warn!("[{PALW_PANEL}] session {session_id}: this close cannot be filed into the chain's group: {why}");
+                            *court_stalls.entry("the chain's close group is not this close's").or_default() += 1;
+                            continue;
+                        }
+                    };
+                    if owed.is_empty() {
+                        info!("[{PALW_PANEL}] session {session_id}: the chain holds every part of this close; nothing left to carry");
+                        court_moved.insert((session_id, round, mine_is_responder), current_daa);
+                        continue;
+                    }
+                    // One carrier per part, chained on the fee UTXO exactly as a single move is —
+                    // and stopped by the same in-flight bound, because a split close is eight
+                    // ordinary carriers rather than a new kind of traffic.
+                    let mut sent_any = false;
+                    let mut still_owed = false;
+                    for index in owed {
+                        let object = &parts[index];
+                        let Some((funding_outpoint, funding_entry)) = funding.clone().filter(|_| inflight < MAX_INFLIGHT_CARRIERS)
+                        else {
+                            // The fee UTXO is busy. Keep the move: a rung has a deadline, and a
+                            // dispute dropped here is a dispute that never happens.
+                            still_owed = true;
+                            break;
+                        };
+                        match self.build_lifecycle_tx_paying_rent(object, funding_outpoint, &funding_entry, current_daa) {
+                            Ok(tx) => {
+                                let txid = tx.id();
+                                let change = tx.outputs[0].clone();
+                                match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
+                                    Ok(()) => {
+                                        info!(
+                                            "[{PALW_PANEL}] submitted {} for court session {session_id} round {round} in tx {txid}",
+                                            object_name(object)
+                                        );
+                                        let next = TransactionOutpoint::new(txid, 0);
+                                        self.persist_fee_outpoint(next);
+                                        funding = Some((
+                                            next,
+                                            UtxoEntry {
+                                                amount: change.value,
+                                                script_public_key: change.script_public_key,
+                                                block_daa_score: current_daa,
+                                                is_coinbase: false,
+                                            },
+                                        ));
+                                        inflight += 1;
+                                        sent_any = true;
+                                        if let PalwConsensusObjectV2::CourtOpened { claim, .. } = object {
+                                            challenged.insert(*claim);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "[{PALW_PANEL}] the mempool refused the {} for session {session_id}: {e}",
+                                            object_name(object)
+                                        );
+                                        funding = None;
+                                        still_owed = true;
+                                        break;
                                     }
                                 }
-                                Err(e) => {
-                                    warn!(
-                                        "[{PALW_PANEL}] the mempool refused the {} for session {session_id}: {e}",
-                                        object_name(&object)
-                                    );
-                                    funding = None;
-                                }
+                            }
+                            Err(e) => {
+                                warn!("[{PALW_PANEL}] cannot build the carrier for session {session_id}: {e}");
+                                still_owed = true;
+                                break;
                             }
                         }
-                        Err(e) => warn!("[{PALW_PANEL}] cannot build the carrier for session {session_id}: {e}"),
+                    }
+                    if sent_any {
+                        court_moved.insert((session_id, round, mine_is_responder), current_daa);
+                    }
+                    // **A split close is kept until the CHAIN says it is complete.** Its parts
+                    // outlive one tick by design: the next pass re-reads the bitmap and sends only
+                    // what is still missing, which costs nothing when everything landed. A whole
+                    // move is kept only if it did not go out, exactly as before.
+                    if still_owed || (group.is_some() && sent_any) {
+                        unsent.push(CourtMoveV1 { session_id, round, mine_is_responder, parts, group });
                     }
                 }
                 court_pending = unsent;
@@ -4041,7 +4352,7 @@ impl PalwPanelService {
             // its claim is unresolved, and `mark_own_material` feeds that back to itself.
             let mut live: HashSet<Hash64> = duties.iter().map(|d| d.claim_id).collect();
             live.extend(court_duties.iter().map(|d| d.claim_id));
-            live.extend(court_pending.iter().filter_map(|(_, _, _, o)| match o {
+            live.extend(court_pending.iter().flat_map(|m| m.parts.iter()).filter_map(|o| match o {
                 PalwConsensusObjectV2::CourtOpened { claim, .. } => Some(*claim),
                 _ => None,
             }));
