@@ -1522,21 +1522,44 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             )));
         }
 
-        let bridge_finality_max_staleness =
-            self.config.params.dns_params.as_ref().map(|dns| dns.bridge_finality_max_staleness_daa_score);
-        let bridge_finality_fresh = match (session.async_get_dns_confirmation().await.as_ref(), bridge_finality_max_staleness) {
-            (Some(c), Some(max_staleness)) => kaspa_consensus_core::dns_finality::dns_finality_fresh_for_bridge(
-                c.dns_confirmed,
-                c.last_dns_confirmed_anchor,
-                c.last_dns_confirmed_anchor_daa_score,
-                sink_daa,
-                max_staleness,
-            ),
-            _ => false,
+        // The template's own predicate (`bridge_finality_is_fresh` in the virtual processor), read
+        // the same way: blue score, beyond the anchor's healthy distance below the sink. A claim
+        // this accepts is one the template will carry, and the reverse.
+        let dns_confirmation = session.async_get_dns_confirmation().await;
+        let sink_blue_score = session.async_get_sink_blue_score().await;
+        let (bridge_finality_fresh, anchor_distance) = match (dns_confirmation.as_ref(), self.config.params.dns_params.as_ref()) {
+            (Some(c), Some(dns)) => {
+                let anchor_blue_score = if c.last_dns_confirmed_anchor == Default::default() {
+                    None
+                } else {
+                    session.async_get_header(c.last_dns_confirmed_anchor).await.ok().map(|header| header.blue_score)
+                };
+                (
+                    kaspa_consensus_core::dns_finality::dns_finality_fresh_for_bridge(
+                        c.dns_confirmed,
+                        c.last_dns_confirmed_anchor,
+                        anchor_blue_score,
+                        sink_blue_score,
+                        dns,
+                    ),
+                    anchor_blue_score.map(|anchor| {
+                        (
+                            sink_blue_score.saturating_sub(anchor),
+                            kaspa_consensus_core::dns_finality::dns_bridge_max_anchor_distance_blue_score(dns),
+                        )
+                    }),
+                )
+            }
+            _ => (false, None),
         };
         if !bridge_finality_fresh && !self.config.evm_bridge_devnet_unpaused {
             return Err(RpcError::RpcSubsystem(format!(
-                "EVM bridge is paused: DNS finality is unconfirmed or stale at sink daa {sink_daa}; retry after validators advance a fresh DNS-confirmed anchor"
+                "EVM bridge is paused: DNS finality is unconfirmed or stale at sink daa {sink_daa} ({}); retry after validators advance a fresh DNS-confirmed anchor",
+                match (dns_confirmation.as_ref().map(|c| c.dns_confirmed), anchor_distance) {
+                    (Some(false), _) => "DNS finality is not confirmed".to_string(),
+                    (_, Some((distance, bound))) => format!("the confirmed anchor is {distance} blue below the sink; the bridge allows {bound}"),
+                    _ => "no DNS-confirmed anchor this node can read".to_string(),
+                }
             )));
         }
 

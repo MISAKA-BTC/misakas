@@ -10574,7 +10574,10 @@ mod consensus_params_id_tests {
         // The stake-score window stays 15 epochs — the ratio emergency_stake_margin is calibrated
         // against (ADR-0018 / the 2026-07-19 incident note).
         assert_eq!(t.stake_score_window_blue_score, 15 * t.attestation_epoch_length_blue_score);
-        // Bridge staleness keeps at least PRODUCTION's 150 s.
+        // Bridge staleness keeps at least PRODUCTION's 150 s — as tolerance PAST the confirmed
+        // anchor's healthy distance below the tip, which is how the bridge reads it since
+        // 2026-09-10 (`dns_finality_fresh_for_bridge`). Read as a DAA distance that had to contain
+        // that distance, 2 could never be met: the anchor is at least lag + backoff = 3 blue down.
         assert!(t.bridge_finality_max_staleness_daa_score * secs >= 150);
     }
 

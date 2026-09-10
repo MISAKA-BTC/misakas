@@ -718,6 +718,20 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
     // 2026-08-13. One line here makes "is this binary the release?" answerable without a peer,
     // which is what a flag day needs.
     info!("Consensus params fingerprint: {} (network {})", config.params.consensus_params_id(), config.params.net);
+    // **…and the fingerprint above does not show EVERY fence.** It writes each scheduled fence's
+    // height — the 1900 fences and the 2150 ladder each moved testnet-11's pin — but
+    // `consensus_params_id` leaves ADR-0095's `palw_model_benefits` out, so on 2026-09-09 the build
+    // carrying testnet-11's DAA-2400 fence and the build without it both printed `060e3597…`, while
+    // the fork-id gate refused one from the other, and the operator notice told people to trust the
+    // line above. (What normalises a scheduled fence away is `consensus_identity_id`, the handshake's
+    // id — that is what lets two builds that only schedule differently peer during a rollout.) The
+    // heights are the half the gate compares; print them, so "is this binary the release?" is
+    // answerable after any fence.
+    info!(
+        "Consensus fence schedule: {} (schedule id {})",
+        config.params.fence_schedule_v1().iter().map(|fence| fence.to_string()).collect::<Vec<_>>().join(", "),
+        config.params.consensus_schedule_id()
+    );
     info!("Application directory: {}", app_dir.display());
     info!("Data directory: {}", db_dir.display());
     match runtime.log_dir.as_ref() {

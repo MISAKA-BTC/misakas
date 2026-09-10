@@ -240,6 +240,9 @@ pub mod palw_model_market_v1;
 pub mod palw_panel_da_v1;
 pub mod palw_panel_v2;
 pub mod palw_producer_v2;
+/// ADR-0098 — the panel's coverage of one claim, measured with the draw the seats run
+/// (ADR-0077 Decision 8): the number ADR-0081 Decision 8 asked for and never took. A report.
+pub mod palw_seat_coverage_v1;
 /// ADR-0081 Decision 3 — the one decision of ADR-0081 that survives its refutation: the
 /// prompt's token ids as a tiled Merkle root, so a gather proves ONE id instead of carrying
 /// all of them. Dormant (`Params::palw_prompt_ids_merkle` is `None` on every preset).

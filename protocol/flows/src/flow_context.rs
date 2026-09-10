@@ -272,6 +272,62 @@ mod tests {
         Transaction::new(TX_VERSION, vec![], vec![], 0, subnetwork_id, 0, vec![])
     }
 
+    /// **A peer kept below the fence it lacks is dropped when this node reaches that fence, and
+    /// not one score before** (ADR-0072 SA-2, 2026-09-10).
+    ///
+    /// The explorer node synced testnet-11 from an empty datadir, met six un-upgraded peers at its
+    /// own DAA 0 — kept, correctly, since neither side had reached 2400 — and still held all six
+    /// after its IBD reached DAA 3,158, until they were kicked by hand. The properties below are
+    /// built the way the handshake stores them; `fork_id_rejudge_v1` is what `rejudge_fork_ids`
+    /// runs on each connected peer.
+    #[test]
+    fn a_peer_kept_below_the_fence_is_dropped_when_this_node_reaches_it() {
+        use kaspa_consensus_core::config::params::Params;
+        use kaspa_consensus_core::fork_id_v1::{ForkIdMismatch, ForkIdV1, fork_id_v1};
+        use kaspa_consensus_core::network::{NetworkId, NetworkType};
+        const ADR_0095: u64 = 2400;
+        const CRESCENDO_T11: u64 = 2_125_000;
+        let upgraded = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11));
+        let mut un_upgraded = upgraded.clone();
+        un_upgraded.palw_model_benefits = None;
+
+        let stored = |params: &Params, local_daa: u64, peer: ForkIdV1| {
+            fork_id_fields_v1(params, local_daa, peer.fired.as_bytes().as_slice(), peer.next)
+        };
+
+        // The explorer node's case: met at this node's DAA 0.
+        let old_peer = stored(&upgraded, 0, fork_id_v1(&un_upgraded, 2270));
+        assert_eq!(old_peer.fork_id_refusal_height, Some(ADR_0095));
+        for daa in [0, 1150, 2270, ADR_0095 - 1] {
+            assert_eq!(fork_id_rejudge_v1(&upgraded, daa, &old_peer), None, "kept at {daa}");
+        }
+        for daa in [ADR_0095, 3_158] {
+            assert_eq!(
+                fork_id_rejudge_v1(&upgraded, daa, &old_peer),
+                Some((ForkIdMismatch::NextFenceDiffers { expected: ADR_0095, got: CRESCENDO_T11 }, ADR_0095)),
+                "dropped at {daa}"
+            );
+        }
+
+        // The mirror: an un-upgraded node that kept an upgraded peer at 2241 drops it at 2400.
+        let new_peer = stored(&un_upgraded, 2241, fork_id_v1(&upgraded, 2241));
+        assert_eq!(new_peer.fork_id_refusal_height, Some(ADR_0095));
+        assert_eq!(fork_id_rejudge_v1(&un_upgraded, ADR_0095 - 1, &new_peer), None);
+        assert!(fork_id_rejudge_v1(&un_upgraded, ADR_0095, &new_peer).is_some());
+
+        // A peer on this build is never judged again, whatever the heights — and neither is one from
+        // a build with no fork-id field on a network whose gate is not armed.
+        let same = stored(&upgraded, 0, fork_id_v1(&upgraded, 10));
+        assert_eq!(same.fork_id_refusal_height, None);
+        for daa in [0, ADR_0095, 3_158, u64::MAX] {
+            assert_eq!(fork_id_rejudge_v1(&upgraded, daa, &same), None, "same build at {daa}");
+        }
+        let disarmed = Params::from(NetworkId::new(NetworkType::Mainnet));
+        let absent = fork_id_fields_v1(&disarmed, 0, &[], u64::MAX);
+        assert_eq!(absent.fork_id_refusal_height, None);
+        assert_eq!(fork_id_rejudge_v1(&disarmed, u64::MAX, &absent), None);
+    }
+
     /// **A node's own reserved funding outpoints are answerable, and de-duplicated** (audit3 H12).
     ///
     /// Found in production, not by reading: `wallet send` from the producer's pay address selected
@@ -1194,6 +1250,11 @@ impl FlowContext {
             }
         }
 
+        // The virtual has moved: a peer kept on a fork-id warning may now be past its fence.
+        // Before the sync check below, because a node catching up is exactly the one that met its
+        // peers at a low score.
+        self.rejudge_fork_ids().await;
+
         // Transaction relay is disabled if the node is out of sync
         if !self.is_nearly_synced(consensus).await {
             return;
@@ -1728,6 +1789,14 @@ impl ConnectionInitializer for FlowContext {
         // schedule crescendo, which is why the gate is armed by those fields rather than by "has
         // this node crossed a fence" — see the module doc. Below its fence an armed gate only
         // warns (the arm below); from the fence it refuses the build that does not carry it.
+        //
+        // **And a peer kept on a warning is judged again, at the height its verdict turns.** A
+        // handshake is one snapshot, and a node syncing from an empty datadir meets every
+        // un-upgraded peer below the fence they lack — measured 2026-09-10, the explorer node kept
+        // six of them past DAA 3,158. The height is computed here, stored with the peer, and
+        // `rejudge_fork_ids` acts on it as this node's score climbs.
+        let fork_id_record =
+            fork_id_fields_v1(&self.config.params, local_daa_score, &peer_version.fork_id_fired, peer_version.fork_id_next);
         match kaspa_consensus_core::fork_id_v1::evaluate_fork_id_v1(
             &self.config.params,
             local_daa_score,
@@ -1737,10 +1806,16 @@ impl ConnectionInitializer for FlowContext {
             ForkIdVerdict::Unfenced | ForkIdVerdict::Agree => {}
             ForkIdVerdict::DisagreeBeforeAnyFence(mismatch) => {
                 warn!(
-                    "peer {} advertises a different fence schedule ({}), and this node has not crossed a fence yet \
-                     (DAA {}); keeping the peer — the two builds agree about every block either can produce today. \
-                     They will NOT agree past the first fence: compare the two builds before that height arrives",
-                    peer_version.id, mismatch, local_daa_score,
+                    "peer {} advertises a different fence schedule ({}), and this node has not reached the height the two \
+                     schedules part at (DAA {}); keeping the peer — the two builds agree about every block either can \
+                     produce today. {}",
+                    peer_version.id,
+                    mismatch,
+                    local_daa_score,
+                    match fork_id_record.fork_id_refusal_height {
+                        Some(height) => format!("It will be judged again, and refused, when this node reaches DAA {height}"),
+                        None => "Nothing on this build's schedule turns that into a refusal".to_string(),
+                    },
                 );
             }
             ForkIdVerdict::DisagreePastFence { mismatch, fired_through } => {
@@ -1792,6 +1867,7 @@ impl ConnectionInitializer for FlowContext {
             disable_relay_tx: peer_version.disable_relay_tx,
             subnetwork_id: peer_version.subnetwork_id.to_owned(),
             time_offset,
+            ..fork_id_record
         });
         router.set_properties(peer_properties);
 
@@ -1822,6 +1898,93 @@ impl ConnectionInitializer for FlowContext {
         // it is considered a protocol error and the connection will disconnect
 
         Ok(())
+    }
+}
+
+/// **The fork-id half of a peer's properties, as the handshake stores it**: what the peer
+/// advertised, and the local score from which this node's gate refuses it. One function so the
+/// handshake and the tests that pin the re-judge build the record the same way.
+fn fork_id_fields_v1(
+    params: &kaspa_consensus_core::config::params::Params,
+    local_daa_score: u64,
+    peer_fired: &[u8],
+    peer_next: u64,
+) -> PeerProperties {
+    PeerProperties {
+        fork_id_fired: peer_fired.to_vec(),
+        fork_id_next: peer_next,
+        fork_id_refusal_height: kaspa_consensus_core::fork_id_v1::fork_id_refusal_height_v1(
+            params,
+            local_daa_score,
+            peer_fired,
+            peer_next,
+        ),
+        ..Default::default()
+    }
+}
+
+/// **One connected peer, judged again at this node's current score** — the refusal to disconnect
+/// it with, or `None` to keep it.
+///
+/// Only a peer whose stored refusal height this node has reached is evaluated at all, so the
+/// common case (a peer that agreed at the handshake, height `None`) costs one comparison. The
+/// evaluation itself is the handshake's own, on the fork id the peer advertised there.
+fn fork_id_rejudge_v1(
+    params: &kaspa_consensus_core::config::params::Params,
+    local_daa_score: u64,
+    properties: &PeerProperties,
+) -> Option<(kaspa_consensus_core::fork_id_v1::ForkIdMismatch, u64)> {
+    if properties.fork_id_refusal_height.is_none_or(|height| height > local_daa_score) {
+        return None;
+    }
+    match kaspa_consensus_core::fork_id_v1::evaluate_fork_id_v1(
+        params,
+        local_daa_score,
+        &properties.fork_id_fired,
+        properties.fork_id_next,
+    ) {
+        ForkIdVerdict::DisagreePastFence { mismatch, fired_through } => Some((mismatch, fired_through)),
+        _ => None,
+    }
+}
+
+impl FlowContext {
+    /// **Judge again every peer whose fork-id verdict has turned since its handshake** (ADR-0072
+    /// SA-2, 2026-09-10).
+    ///
+    /// The handshake keeps a peer that disagrees about a fence neither side has reached, and stores
+    /// the local DAA score from which the gate would refuse it (`fork_id_refusal_height_v1`). This
+    /// is where that height is acted on: every peer whose height this node has reached is evaluated
+    /// again with the fork id it advertised, and a refusal disconnects it with the text the handshake
+    /// would have used, so a log search for the refusal finds both. Without it a node that synced
+    /// from an empty datadir kept every un-upgraded peer it met below the fence for as long as the
+    /// connection lived — six of them on the explorer node, measured 2026-09-10.
+    ///
+    /// Called after a block is processed and when an IBD completes: the two ways this node's virtual
+    /// DAA moves. Cheap when nothing is due — one score read and one comparison per peer — and a
+    /// no-op wherever the gate is not armed.
+    pub async fn rejudge_fork_ids(&self) {
+        if !kaspa_consensus_core::fork_id_v1::fork_id_gate_armed_v1(&self.config.params) {
+            return;
+        }
+        let local_daa_score = self.consensus().unguarded_session().get_virtual_daa_score();
+        for peer in self.hub.active_peers() {
+            if let Some((mismatch, fired_through)) = fork_id_rejudge_v1(&self.config.params, local_daa_score, &peer.properties()) {
+                let refusal =
+                    ProtocolError::WrongForkId(self.config.network_name(), local_daa_score, fired_through, mismatch.to_string());
+                warn!("P2P, judged connected peer {} again and disconnecting it: {}", peer.net_address(), refusal);
+                // The peer's operator reads the reason in their own log as a received reject — the
+                // same line the handshake would have sent them.
+                let _ = self
+                    .hub
+                    .send(
+                        peer.key(),
+                        make_message!(Payload::Reject, kaspa_p2p_lib::pb::RejectMessage { reason: refusal.to_reject_message() }),
+                    )
+                    .await;
+                self.hub.terminate(peer.key()).await;
+            }
+        }
     }
 }
 

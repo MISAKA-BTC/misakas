@@ -65,7 +65,16 @@ A node on the right chain logs
 
 ```
 Consensus params fingerprint: 060e3597cd2950bc183b215b5ff87538e72dd788cab43829dca6bc72bcb5ac89 (network testnet-11)
+Consensus fence schedule: 1150, 1900, 2150, 2400, 2125000 (schedule id …)
 ```
+
+**Third flag day, 2026-09-09 — build `main` at `891a1a14` or later.** The chain crossed ADR-0095's
+fence at **DAA 2400**, and a node from an earlier `main` has been mining its own arm since DAA
+≈2,241; nothing it produced there reaches the network. The fingerprint is the same on both sides —
+the second line is what tells them apart, and an older build does not print it. `7f4dded4` carries
+the fence but cannot sync from an empty datadir; do not run it. To rejoin: rebuild, move
+`<appdir>/misaka-testnet-11/datadir` aside (keys and `palw-*` stay), start, and resync — details in
+[testnet11-node-operator.md](testnet11-node-operator.md).
 
 (Identity as of the **second flag day, 2026-09-06** — genesis **`ad30b5cb…edb7`**
 (`PALW_RC_GENESIS`; 5f re-minted the genesis on 2026-09-03, so 5e's `08e9c8a4…` is gone), fingerprint

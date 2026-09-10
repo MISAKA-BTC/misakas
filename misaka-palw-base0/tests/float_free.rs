@@ -131,6 +131,8 @@ const EXEMPT: &[(&str, &str)] = &[
     ("src/reference.rs", "the float reference forward: it measures the checkpoint's ranges so the PTQ can pick scales"),
     ("src/bin/base0-depth-sweep.rs", "measurement tool"),
     ("src/bin/base0-class-sizing.rs", "measurement tool"),
+    // ADR-0098's generator: it measures the seats' draw and prints percentages for a person.
+    ("src/bin/palw-seat-coverage.rs", "measurement tool: reports the panel's coverage; executes no class arithmetic"),
     (
         "src/bin/palw-tile-measure.rs",
         "measurement tool: U-00's close sweep over derive_court_cost_shaped_v1; it prices, it computes no engine arithmetic",

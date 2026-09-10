@@ -157,8 +157,9 @@ pub const MAX_ATTESTATIONS_PER_SHARD: usize = 16;
 /// integer-only.
 pub const STAKE_SCORE_SCALE: u128 = 1_000_000_000;
 
-/// Default DAA distance a bridge/finality-dependent producer policy may tolerate
-/// from the last DNS-confirmed anchor. Each network carries the active value in
+/// Default staleness a bridge/finality-dependent producer policy may tolerate in the last
+/// DNS-confirmed anchor beyond its healthy distance below the tip (blue score; see
+/// [`dns_finality_fresh_for_bridge`]). Each network carries the active value in
 /// [`DnsParams::bridge_finality_max_staleness_daa_score`].
 pub const DEFAULT_BRIDGE_FINALITY_MAX_STALENESS_DAA_SCORE: u64 = 1_500;
 
@@ -1086,10 +1087,16 @@ pub struct DnsParams {
     /// tests or private/research nets can lower it deliberately to exercise hard inclusion.
     pub mandatory_attestation_inclusion_daa_score: u64,
 
-    /// Maximum DAA distance a bridge/finality-dependent producer policy may tolerate from the
-    /// last DNS-confirmed anchor. This is a per-network knob because using it as a block-validity
-    /// rule would be a hard-forking consensus decision; current shipped code uses it only to pause
-    /// local finality-dependent production/RPC flows while the base ledger keeps advancing.
+    /// The staleness a bridge/finality-dependent producer policy tolerates in the last
+    /// DNS-confirmed anchor, **beyond the anchor's healthy distance below the tip**
+    /// ([`dns_anchor_healthy_distance_blue_score`]), counted in blue score since 2026-09-10 — see
+    /// [`dns_finality_fresh_for_bridge`] for why the old DAA reading could never be met on
+    /// testnet-11. The value did not change — `DnsParams` is borsh-serialized into the consensus
+    /// fingerprint, so moving it would be a flag day — and neither did the name; only the policy
+    /// that reads it did. This is a per-network knob
+    /// because using it as a block-validity rule would be a hard-forking consensus decision;
+    /// shipped code uses it only to pause local finality-dependent production/RPC flows while the
+    /// base ledger keeps advancing.
     pub bridge_finality_max_staleness_daa_score: u64,
 
     /// **Partition-liveness override (incident 2026-08-03 §8).** Multiplier `N` such that a
@@ -7883,21 +7890,71 @@ pub fn dns_confirmation_from_state(
     }
 }
 
-/// Freshness predicate for bridge/finality-dependent operations.
+/// Attestation epochs whose credit may still be landing on chain when the newest ready epoch's
+/// anchor is read — the inclusion allowance in [`dns_anchor_healthy_distance_blue_score`].
 ///
-/// Missing attestations are not a base-ledger validity failure, but consumers that
-/// depend on DNS finality must require a currently confirmed, non-stale anchor.
+/// A validator's attestations are chained (each spends the previous one's change) and land one per
+/// block, so on a sparse chain the newest one or two epochs are routinely still in the mempool.
+/// Measured on testnet-11 (2026-09-10, the explorer node's log, 27 confirmed anchors): while
+/// confirmation was keeping up the confirmed anchor sat 5–12 blue below the sink, most often 6–8.
+pub const DNS_BRIDGE_ANCHOR_INCLUSION_EPOCHS: u64 = 3;
+
+/// **How far below the tip, in blue score, the DNS-confirmed anchor sits while confirmation is
+/// keeping up** — the distance a bridge must not count as staleness.
+///
+/// The confirmed anchor is the canonical anchor of the newest READY epoch that carries credited
+/// attestations: an epoch is ready `attestation_lag_blue_score` after it ends, its anchor sits
+/// `attestation_anchor_backoff_blue_score` below its end, the tip runs up to one epoch less a score
+/// past the moment that epoch became ready, and the attestations of the newest
+/// [`DNS_BRIDGE_ANCHOR_INCLUSION_EPOCHS`] epochs may still be landing. Summed:
+/// `lag + backoff + epoch_len × (1 + inclusion) + (epoch_len − 1)` — 12 on testnet-11's 120 s
+/// preset (lag 2, backoff 1, epoch 2), 619 on PRODUCTION's 10 bps one.
+pub fn dns_anchor_healthy_distance_blue_score(dns: &DnsParams) -> u64 {
+    let epoch_len = dns.attestation_epoch_length_blue_score.max(1);
+    dns.attestation_lag_blue_score
+        .saturating_add(dns.attestation_anchor_backoff_blue_score)
+        .saturating_add(epoch_len.saturating_mul(1 + DNS_BRIDGE_ANCHOR_INCLUSION_EPOCHS))
+        .saturating_add(epoch_len - 1)
+}
+
+/// **The farthest below the tip, in blue score, the last DNS-confirmed anchor may sit for
+/// bridge/finality-dependent operations to proceed**: the healthy distance plus the preset's
+/// [`DnsParams::bridge_finality_max_staleness_daa_score`] tolerance. Past it, confirmation has
+/// stopped keeping up, and the bridge pauses — within that many blue blocks of a real stall.
+pub fn dns_bridge_max_anchor_distance_blue_score(dns: &DnsParams) -> u64 {
+    dns_anchor_healthy_distance_blue_score(dns).saturating_add(dns.bridge_finality_max_staleness_daa_score)
+}
+
+/// Freshness predicate for bridge/finality-dependent operations — the EVM template's producer
+/// policy and the deposit-claim RPC. Never block validity.
+///
+/// Missing attestations are not a base-ledger validity failure, but consumers that depend on DNS
+/// finality must require a currently confirmed anchor that is keeping up with the tip.
+///
+/// **Measured in blue score, beyond the anchor's structural distance** (2026-09-10). This used to
+/// be `current_daa − anchor_daa ≤ bridge_finality_max_staleness_daa_score`: a DAA distance that
+/// had to hold the anchor's healthy distance inside the tolerance. testnet-11's preset sets that
+/// tolerance to 2, while its confirmed anchor can never be closer than 3 blue (lag 2 + backoff 1)
+/// and DAA runs ahead of blue score — so the bridge could not open there even with DNS confirmed:
+/// 9 to 12 DAA at every confirmation, and `EVM bridge is paused` on every claim. The tolerance now
+/// counts only what is not structure, so a stall still pauses the bridge.
+///
+/// `anchor_blue_score` is the anchor header's blue score, `None` when this node cannot read it
+/// (which pauses); `tip_blue_score` is the sink's.
 pub fn dns_finality_fresh_for_bridge(
     dns_confirmed: bool,
     last_dns_confirmed_anchor: Hash64,
-    last_dns_confirmed_anchor_daa_score: u64,
-    current_daa_score: u64,
-    max_staleness_daa_score: u64,
+    anchor_blue_score: Option<u64>,
+    tip_blue_score: u64,
+    dns: &DnsParams,
 ) -> bool {
+    let Some(anchor_blue_score) = anchor_blue_score else {
+        return false;
+    };
     dns_confirmed
         && last_dns_confirmed_anchor != Hash64::default()
-        && current_daa_score >= last_dns_confirmed_anchor_daa_score
-        && current_daa_score - last_dns_confirmed_anchor_daa_score <= max_staleness_daa_score
+        && tip_blue_score >= anchor_blue_score
+        && tip_blue_score - anchor_blue_score <= dns_bridge_max_anchor_distance_blue_score(dns)
 }
 
 #[cfg(test)]
@@ -11427,39 +11484,62 @@ mod tests {
     #[test]
     fn bridge_finality_freshness_requires_confirmed_non_stale_dns_anchor() {
         let anchor = Hash64::from_bytes([0x42; 64]);
-        let anchor_daa = 10_000;
+        let anchor_blue = 10_000;
+        let dns = crate::config::params::PRODUCTION_DNS_PARAMS;
+        let bound = dns_bridge_max_anchor_distance_blue_score(&dns);
+        assert_eq!(bound, dns_anchor_healthy_distance_blue_score(&dns) + DEFAULT_BRIDGE_FINALITY_MAX_STALENESS_DAA_SCORE);
 
-        assert!(dns_finality_fresh_for_bridge(
-            true,
-            anchor,
-            anchor_daa,
-            anchor_daa + DEFAULT_BRIDGE_FINALITY_MAX_STALENESS_DAA_SCORE,
-            DEFAULT_BRIDGE_FINALITY_MAX_STALENESS_DAA_SCORE
-        ));
-        assert!(!dns_finality_fresh_for_bridge(
-            false,
-            anchor,
-            anchor_daa,
-            anchor_daa,
-            DEFAULT_BRIDGE_FINALITY_MAX_STALENESS_DAA_SCORE
-        ));
-        assert!(!dns_finality_fresh_for_bridge(true, Hash64::default(), 0, 0, DEFAULT_BRIDGE_FINALITY_MAX_STALENESS_DAA_SCORE));
-        assert!(!dns_finality_fresh_for_bridge(
-            true,
-            anchor,
-            anchor_daa,
-            anchor_daa - 1,
-            DEFAULT_BRIDGE_FINALITY_MAX_STALENESS_DAA_SCORE
-        ));
-        assert!(!dns_finality_fresh_for_bridge(
-            true,
-            anchor,
-            anchor_daa,
-            anchor_daa + DEFAULT_BRIDGE_FINALITY_MAX_STALENESS_DAA_SCORE + 1,
-            DEFAULT_BRIDGE_FINALITY_MAX_STALENESS_DAA_SCORE
-        ));
-        assert!(dns_finality_fresh_for_bridge(true, anchor, anchor_daa, anchor_daa + 42, 42));
-        assert!(!dns_finality_fresh_for_bridge(true, anchor, anchor_daa, anchor_daa + 43, 42));
+        assert!(dns_finality_fresh_for_bridge(true, anchor, Some(anchor_blue), anchor_blue + bound, &dns));
+        assert!(!dns_finality_fresh_for_bridge(true, anchor, Some(anchor_blue), anchor_blue + bound + 1, &dns), "a stall pauses");
+        assert!(!dns_finality_fresh_for_bridge(false, anchor, Some(anchor_blue), anchor_blue, &dns), "unconfirmed pauses");
+        assert!(!dns_finality_fresh_for_bridge(true, Hash64::default(), Some(0), 0, &dns), "no anchor pauses");
+        assert!(!dns_finality_fresh_for_bridge(true, anchor, Some(anchor_blue), anchor_blue - 1, &dns), "an anchor above the tip pauses");
+        assert!(!dns_finality_fresh_for_bridge(true, anchor, None, anchor_blue, &dns), "an anchor this node cannot read pauses");
+    }
+
+    /// **testnet-11's bridge could not open, and now opens exactly while confirmation keeps up.**
+    ///
+    /// The 120 s preset tolerates 2 of staleness, and the old predicate read it as a DAA distance
+    /// that had to CONTAIN the confirmed anchor's distance below the tip. That distance is never
+    /// below lag + backoff = 3 blue, and DAA runs ahead of blue score: on 2026-09-10 DNS finality was
+    /// confirmed on testnet-11 at anchor DAA 3149 / blue 2188 with the sink at DAA 3161 / blue 2197,
+    /// and every deposit claim came back `EVM bridge is paused`. Pinned from both sides: the healthy
+    /// distances measured while confirmation was keeping up (5–12 blue) are fresh, and a stall
+    /// pauses the bridge within the preset's 2 blue of tolerance past the healthy distance.
+    #[test]
+    fn testnet_11_opens_the_bridge_while_dns_confirmation_keeps_up_and_pauses_on_a_stall() {
+        let t11 = crate::config::params::Params::from(crate::network::NetworkId::with_suffix(
+            crate::network::NetworkType::Testnet,
+            11,
+        ))
+        .dns_params
+        .expect("testnet-11 carries the DNS overlay");
+        assert_eq!(
+            (
+                t11.attestation_lag_blue_score,
+                t11.attestation_anchor_backoff_blue_score,
+                t11.attestation_epoch_length_blue_score,
+                t11.bridge_finality_max_staleness_daa_score
+            ),
+            (2, 1, 2, 2),
+            "the preset this test reasons about"
+        );
+        assert_eq!(dns_anchor_healthy_distance_blue_score(&t11), 12);
+        assert_eq!(dns_bridge_max_anchor_distance_blue_score(&t11), 14);
+
+        let anchor = Hash64::from_bytes([0x31; 64]);
+        // The measured confirmation: blue 2188 under a sink at blue 2197 — fresh now. (The old DAA
+        // reading saw 3161 − 3149 = 12 > 2 and paused.)
+        assert!(dns_finality_fresh_for_bridge(true, anchor, Some(2188), 2197, &t11));
+        // Every healthy distance measured on the live chain.
+        for distance in 5..=12u64 {
+            assert!(dns_finality_fresh_for_bridge(true, anchor, Some(2188), 2188 + distance, &t11), "healthy {distance}");
+        }
+        // A stall: the anchor stops while the tip climbs. Open through the tolerance, paused after.
+        assert!(dns_finality_fresh_for_bridge(true, anchor, Some(2188), 2188 + 14, &t11));
+        assert!(!dns_finality_fresh_for_bridge(true, anchor, Some(2188), 2188 + 15, &t11), "stalled: paused");
+        // And it never opens on an unconfirmed state, whatever the distance.
+        assert!(!dns_finality_fresh_for_bridge(false, anchor, Some(2188), 2197, &t11));
     }
 
     #[test]
