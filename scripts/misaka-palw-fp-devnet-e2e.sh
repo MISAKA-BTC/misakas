@@ -95,6 +95,13 @@ PREMINE_TXID="6d6973616b612d7072656d696e65$(printf '0%.0s' $(seq 1 100))"   # "m
 MAIN_PREMINE_INDEX=40   # consensus/core/src/config/premine.rs; bond n's fee float is MAIN_PREMINE_INDEX + 1 + n
 DEVNET_BONDS=6          # premine.rs: PALW_DEVNET_GENESIS_BONDS
 REGISTRAR_BOND=$((DEVNET_BONDS - 1))   # the bond no producer node holds, so its float is unspent
+# **The bond the free-prompt claim is executed under — one NO running node holds.** It was bond 0,
+# node-0's own, and node-0's panel pays for every receipt it files from that same fee float: run 1
+# (2026-09-10) submitted the commitment before the panel's carriers landed and won the race; run 3,
+# with four dense producers filing receipts earlier, lost it — "transaction … is an orphan where
+# orphan is disallowed", the float already spent. An executor bond no node runs keeps its float for
+# the rail alone, and it sits on nobody's panel, so every running node is a seat for its claim.
+EXECUTOR_BOND="${EXECUTOR_BOND:-$((DEVNET_BONDS - 2))}"
 BOND_FEE_FLOAT_SOMPI=10000000000       # premine.rs: PALW_RC_BOND_FEE_FLOAT_SOMPI = 100 * SOMPI_PER_KASPA
 
 log() { printf '[fp-e2e] %s\n' "$*" >&2; }
@@ -127,8 +134,13 @@ done
 command -v python3 >/dev/null || die "python3 is required (key derivation and the HTTP client)"
 # Seats that hold the artifact: every dense producer but the executor (node-0), plus every other
 # node when SEATS_HOLD_ARTIFACT=1.
-capable_seats=$(( (DENSE_PRODUCERS < NODES ? DENSE_PRODUCERS : NODES) - 1 ))
-if [ "$SEATS_HOLD_ARTIFACT" = 1 ]; then capable_seats=$((NODES - 1)); fi
+# Refused by name: an executor bond a running node holds shares its fee float with that node's panel
+# (see EXECUTOR_BOND), and the registrar's float pays the class registration.
+[ "$EXECUTOR_BOND" -ge "$NODES" ] || die "EXECUTOR_BOND=$EXECUTOR_BOND is node-$EXECUTOR_BOND's own bond — its panel spends the same fee float the rail needs; use a bond >= NODES ($NODES)"
+[ "$EXECUTOR_BOND" -lt "$REGISTRAR_BOND" ] || die "EXECUTOR_BOND=$EXECUTOR_BOND is the registrar's (or past the $DEVNET_BONDS genesis bonds)"
+# Seats that can judge the dense class: running nodes that hold the artifact (the executor runs none).
+capable_seats=$(( DENSE_PRODUCERS < NODES ? DENSE_PRODUCERS : NODES ))
+if [ "$SEATS_HOLD_ARTIFACT" = 1 ]; then capable_seats=$NODES; fi
 if [ "$capable_seats" -lt 3 ]; then
   log "NOTE: $capable_seats seat(s) can judge the dense class and a licence needs 3 Valid of 5 — this run cannot reach"
   log "      ReceiptLicensed or Final; it proves carriage, the panel and the verdicts (SEATS_HOLD_ARTIFACT=1 NODES=4 for Final)"
@@ -528,20 +540,20 @@ all_nodes_logged "PALW lifecycle carried.*ClassLaneCertified" "$((FAMILY_CHUNKS 
 log "stage 3 OK"
 
 # ---------------------------------------------------------------------------------------------
-# 4. The gateway, under bond 0, reading the chain over node-0's RPC (Decision 3).
+# 4. The gateway, under the executor bond, reading the chain over node-0's RPC (Decision 3).
 # ---------------------------------------------------------------------------------------------
-EXEC_PUBKEY=$("$RAIL_BIN" --bond-key-seed "$WORK_DIR/keys/bond-0.seed" --print-bond-pubkey \
+EXEC_PUBKEY=$("$RAIL_BIN" --bond-key-seed "$WORK_DIR/keys/bond-$EXECUTOR_BOND.seed" --print-bond-pubkey \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["executor_pubkey"])') \
-  || die "cannot read bond 0's public key from the rail"
+  || die "cannot read bond $EXECUTOR_BOND's public key from the rail"
 # **The operator id is DERIVED, with the same preimage the chain uses** — `palw_operator_id_v2`
 # (`consensus/core/src/palw_state_v2.rs`): blake2b-512 keyed by the operator-id domain over
 # `u64le(len) ‖ operator_pubkey`, where the devnet registry's pubkey for bond n is the literal
 # bytes `misaka-devnet-operator-{n}` (`params.rs: palw_devnet_genesis_bonds_v1`). A plain digest
 # here would not match, and the mismatch would surface as an admission refusal rather than as a
 # bad hash, which is the kind of error that costs an afternoon.
-OPERATOR_ID=$(python3 - <<'PY'
-import hashlib, struct
-pk = b"misaka-devnet-operator-0"
+OPERATOR_ID=$(EXECUTOR_BOND="$EXECUTOR_BOND" python3 - <<'PY'
+import hashlib, os, struct
+pk = b"misaka-devnet-operator-" + os.environ["EXECUTOR_BOND"].encode()
 h = hashlib.blake2b(digest_size=64, key=b"misaka-palw/state-v2/operator-id/v1")
 h.update(struct.pack("<Q", len(pk))); h.update(pk)
 print(h.hexdigest())
@@ -552,7 +564,7 @@ cat >"$WORK_DIR/identity.json" <<JSON
   "network_domain": "$NETWORK_DOMAIN",
   "class_id": "$CLASS_ID",
   "bond_txid": "$PREMINE_TXID",
-  "bond_index": 0,
+  "bond_index": $EXECUTOR_BOND,
   "executor_pubkey": "$EXEC_PUBKEY",
   "operator_id": "$OPERATOR_ID"
 }
@@ -722,8 +734,8 @@ else
   capture_args=()
 fi
 if "$RAIL_BIN" --artifact "$ARTIFACT_STEM" \
-     --bond-key-seed "$WORK_DIR/keys/bond-0.seed" \
-     --funding-outpoint "$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1))" \
+     --bond-key-seed "$WORK_DIR/keys/bond-$EXECUTOR_BOND.seed" \
+     --funding-outpoint "$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1 + EXECUTOR_BOND))" \
      --funding-amount "$BOND_FEE_FLOAT_SOMPI" \
      --class-id "$CLASS_ID" --class-leaves "$CLASS_LEAVES" \
      "${capture_args[@]}" \
@@ -884,7 +896,7 @@ derived_note="not attempted"
 if [ "$CONSTRAINED" = 1 ] && [ -f "$ARTIFACT_STEM.derived-unsigned.borsh" ]; then
   log "stage 8 — the constrained answer's own derivation (json/canonical/v1), signed and submitted"
   mkdir -p "$WORK_DIR/derived"
-  if "$RAIL_BIN" --derive-artifact "$ARTIFACT_STEM" --bond-key-seed "$WORK_DIR/keys/bond-0.seed" \
+  if "$RAIL_BIN" --derive-artifact "$ARTIFACT_STEM" --bond-key-seed "$WORK_DIR/keys/bond-$EXECUTOR_BOND.seed" \
        >"$WORK_DIR/derived/derive.log" 2>&1 \
      && submit "$ARTIFACT_STEM.derived-object.borsh" >>"$WORK_DIR/derived/derive.log" 2>&1; then
     if all_nodes_logged "DerivedArtifact"; then
@@ -916,7 +928,7 @@ open(sys.argv[2], "w").write(p["choices"][0]["message"]["content"])' "$WORK_DIR/
     # `<stem>.derived-object.borsh`, the signed `PalwConsensusObjectV2`, not the bare unsigned
     # derivation. Submitting the latter would have been refused as unparseable carriage.
     stem="${obj%.derived-unsigned.borsh}"
-    if [ -n "$obj" ] && "$RAIL_BIN" --derive-artifact "$stem" --bond-key-seed "$WORK_DIR/keys/bond-0.seed" \
+    if [ -n "$obj" ] && "$RAIL_BIN" --derive-artifact "$stem" --bond-key-seed "$WORK_DIR/keys/bond-$EXECUTOR_BOND.seed" \
          >>"$WORK_DIR/derived/derive.log" 2>&1; then
       submit "$stem.derived-object.borsh" >>"$WORK_DIR/derived/derive.log" 2>&1 || true
       if all_nodes_logged "DerivedArtifact"; then
