@@ -1185,6 +1185,10 @@ fn proof_kind_v1(proof: &PalwCourtVerdictProofV2) -> &'static str {
         PalwCourtVerdictProofV2::AttnDissection { .. } => "AttnDissection",
         // ADR-0081 Decision 3: the arithmetic close with the prompt tile opened rather than carried.
         PalwCourtVerdictProofV2::ArithmeticOpened { .. } => "ArithmeticOpened",
+        // ADR-0096 §10 B5/B6: the free-prompt lane's job-carrying decode close, and the rendering
+        // close. Named for the reason the dissection is.
+        PalwCourtVerdictProofV2::ConstrainedDecode { .. } => "ConstrainedDecode",
+        PalwCourtVerdictProofV2::ConstrainedRendering { .. } => "ConstrainedRendering",
     }
 }
 
