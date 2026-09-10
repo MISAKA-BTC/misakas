@@ -419,6 +419,69 @@ pub fn palw_fp_seat_may_judge_mode_v1(privacy_mode: u8, panel_da_admissible: boo
     privacy_mode == PALW_FP_PRIVACY_PUBLIC_DA || (privacy_mode == PALW_FP_PRIVACY_PANEL_DA && panel_da_admissible)
 }
 
+/// **ADR-0098 Decision 2 — the faults this seat found, and the one rule they impose: about a claim
+/// it found a fault in, a seat files NOTHING.**
+///
+/// ADR-0077 Decision 8: "A row unequal: the seat files nothing and opens a court at that leaf."
+/// The seat's verdict block used to return nothing from the interval arm on a fault and then go
+/// on in the same round — to the capture arm, which could certify the claim `Valid` on sampled
+/// leaves that missed the lie, and otherwise to the half-window tail, which signs `Unavailable`:
+/// an accusation of withholding against a producer that served the data, and on a ruleset without
+/// ADR-0065 D4 a dissent the licensing quorum charges `claim.reserved`. Silence is never charged
+/// (`slash_silent_seats` is a no-op), so filing nothing costs the finder nothing; the fault reaches
+/// the court through the challenger's half, which prosecutes every claim held here.
+///
+/// An address rides beside each claim — `(first_leaf, count)` — ordered by how much it says: a
+/// NAMED leaf `(leaf, 1)` over a block `(first, count > 1)` over an unaddressed fault `(0, 0)`, the
+/// last being a state root that does not recompute. A note never replaces a more specific address.
+#[derive(Debug, Default)]
+pub struct PalwSeatFaultLedgerV1 {
+    faults: std::collections::HashMap<Hash64, (u64, u64)>,
+}
+
+impl PalwSeatFaultLedgerV1 {
+    /// How many claims one seat remembers. Past it a NEW claim is refused — the oldest faults are
+    /// the ones already on their way to a court.
+    pub const CLAIMS: usize = 256;
+
+    fn rank(leaf_count: u64) -> u8 {
+        match leaf_count {
+            0 => 0,
+            1 => 2,
+            _ => 1,
+        }
+    }
+
+    /// Remember a fault in `claim` at `(first_leaf_index, leaf_count)`.
+    pub fn note(&mut self, claim: Hash64, first_leaf_index: u64, leaf_count: u64) {
+        match self.faults.get(&claim) {
+            Some((_, held)) if Self::rank(*held) > Self::rank(leaf_count) => {}
+            Some(_) => {
+                self.faults.insert(claim, (first_leaf_index, leaf_count));
+            }
+            None if self.faults.len() >= Self::CLAIMS => {}
+            None => {
+                self.faults.insert(claim, (first_leaf_index, leaf_count));
+            }
+        }
+    }
+
+    /// Whether this seat has found a fault in `claim` — and so files nothing about it.
+    pub fn holds(&self, claim: &Hash64) -> bool {
+        self.faults.contains_key(claim)
+    }
+
+    /// The address held for `claim`.
+    pub fn address(&self, claim: &Hash64) -> Option<(u64, u64)> {
+        self.faults.get(claim).copied()
+    }
+
+    /// Every claim this seat found a fault in — what the challenger's half prosecutes.
+    pub fn claims(&self) -> impl Iterator<Item = Hash64> + '_ {
+        self.faults.keys().copied()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,6 +492,39 @@ mod tests {
 
     fn h(v: u64) -> Hash64 {
         Hash64::from_u64_word(v)
+    }
+
+    /// **ADR-0098 Decision 2's ledger.** Every way a seat finds a fault puts the claim in it, and
+    /// once in, the claim stays — the verdict block reads `holds` and files nothing. A named leaf
+    /// outranks the block it was found in, and an unaddressed state fault never erases an address.
+    #[test]
+    fn a_fault_once_found_stays_found_and_the_most_specific_address_wins() {
+        let mut ledger = PalwSeatFaultLedgerV1::default();
+        assert!(!ledger.holds(&h(1)));
+        ledger.note(h(1), 4_096, 64); // FaultInRange: a block
+        assert!(ledger.holds(&h(1)));
+        assert_eq!(ledger.address(&h(1)), Some((4_096, 64)));
+        ledger.note(h(1), 4_100, 1); // the block's leaf, named
+        assert_eq!(ledger.address(&h(1)), Some((4_100, 1)), "a named leaf replaces its block");
+        ledger.note(h(1), 4_096, 64); // a later round's block
+        assert_eq!(ledger.address(&h(1)), Some((4_100, 1)), "a block never replaces a named leaf");
+        ledger.note(h(1), 0, 0); // a state root that does not recompute
+        assert_eq!(ledger.address(&h(1)), Some((4_100, 1)), "an unaddressed fault never replaces an address");
+
+        ledger.note(h(2), 0, 0);
+        assert!(ledger.holds(&h(2)), "a state fault with no leaf address is still a fault");
+        ledger.note(h(2), 7, 1);
+        assert_eq!(ledger.address(&h(2)), Some((7, 1)));
+
+        let mut full = PalwSeatFaultLedgerV1::default();
+        for claim in 0..PalwSeatFaultLedgerV1::CLAIMS as u64 {
+            full.note(h(1_000 + claim), claim, 1);
+        }
+        full.note(h(9), 1, 1);
+        assert!(!full.holds(&h(9)), "past the bound a NEW claim is refused");
+        full.note(h(1_000), 5, 1);
+        assert_eq!(full.address(&h(1_000)), Some((5, 1)), "a held claim is still updated at the bound");
+        assert_eq!(full.claims().count(), PalwSeatFaultLedgerV1::CLAIMS);
     }
 
     fn bond(v: u8) -> PalwBondKeyV2 {
