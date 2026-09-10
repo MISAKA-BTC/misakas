@@ -861,7 +861,28 @@ fi
 # ---------------------------------------------------------------------------------------------
 DERIVE_BIN="${DERIVE_BIN:-$REPO_ROOT/target/release/palw-derive}"
 derived_note="not attempted"
-if [ -x "$DERIVE_BIN" ]; then
+# **ADR-0096: a constrained claim's derivation is the gateway's own.** A version-6 answer renders
+# exactly the constrained value — its EOG tail renders empty (§10 B4/B7) — so Decision 9's
+# `json/canonical/v1` derives at ANY budget, not only when the answer fills it, and the gateway
+# wrote the unsigned object beside the commitment. The rail signs it and the chain carries it: the
+# shape the person asked for, committed, and its canonical bytes on chain.
+if [ "$CONSTRAINED" = 1 ] && [ -f "$ARTIFACT_STEM.derived-unsigned.borsh" ]; then
+  log "stage 8 — the constrained answer's own derivation (json/canonical/v1), signed and submitted"
+  mkdir -p "$WORK_DIR/derived"
+  if "$RAIL_BIN" --derive-artifact "$ARTIFACT_STEM" --bond-key-seed "$WORK_DIR/keys/bond-0.seed" \
+       >"$WORK_DIR/derived/derive.log" 2>&1 \
+     && submit "$ARTIFACT_STEM.derived-object.borsh" >>"$WORK_DIR/derived/derive.log" 2>&1; then
+    if all_nodes_logged "DerivedArtifact"; then
+      derived_note="ON CHAIN from a constrained inference — json/canonical/v1 carried by every node"
+    else
+      derived_note="signed and submitted, but not carried by every node (see derived/derive.log)"
+    fi
+  else
+    derived_note="the gateway's json derivation did not sign or submit (see derived/derive.log)"
+  fi
+  DERIVE_BIN=""   # the music leg below is the unconstrained lane's demonstration
+fi
+if [ -n "$DERIVE_BIN" ] && [ -x "$DERIVE_BIN" ]; then
   log "stage 8 — the derived-artifact leg (ADR-0078), from the claim's own answer"
   mkdir -p "$WORK_DIR/derived"
   python3 -c '
@@ -917,7 +938,7 @@ DSL
       derived_note="NOT-FROM-AN-INFERENCE: even the hand-written DSL failed to derive (see derived/derive.log)"
     fi
   fi
-else
+elif [ -n "$DERIVE_BIN" ]; then
   derived_note="skipped — $DERIVE_BIN is not built (cargo build --release -p misaka-palw-derive)"
 fi
 
