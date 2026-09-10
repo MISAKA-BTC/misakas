@@ -1340,7 +1340,14 @@ impl ConsensusApi for Consensus {
         let tip_daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
         let current_root = state.model_version(&line_id, row.line.current).map(|v| v.root);
         let roots_in_force = state.class_roots_in_force(&row.line.class_id, tip_daa);
-        Some(kaspa_consensus_core::api::PalwModelLineReadV1 { row, current_root, roots_in_force, tip_daa })
+        // ADR-0095: resolved here, at the tip, so every caller sees the same answer §4.6 gives.
+        let benefits = state.model_benefits(&line_id).map(|b| kaspa_consensus_core::api::PalwModelBenefitsReadV1 {
+            row: b.clone(),
+            in_effect: state.model_benefit_tiers_in_effect(&line_id, tip_daa),
+            lapse: state.model_benefit_lapse(&line_id, tip_daa),
+            enforced_lead_daa: state.model_benefit_enforced_lead(&line_id, tip_daa),
+        });
+        Some(kaspa_consensus_core::api::PalwModelLineReadV1 { row, current_root, roots_in_force, tip_daa, benefits })
     }
 
     fn palw_model_version_v1(

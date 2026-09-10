@@ -56,7 +56,7 @@ window.MISAKA_CONFIG = {
   EXPLORER_URL: "https://misakascan.com",
 
   // Optional tuning.
-  POLL_MS: 10000,             // trade page refresh cadence (price samples for the chart)
+  POLL_MS: 10000,             // store page refresh cadence (price samples for the chart)
   LOG_LOOKBACK_BLOCKS: 5000,  // eth_getLogs window for settlement events (node cap: 10000)
   ADR_URL: "https://github.com/MISAKA-BTC/misakas/tree/main/docs/adr",
   // The runbooks the "Add model" page links (register a bond, register a class, certify).

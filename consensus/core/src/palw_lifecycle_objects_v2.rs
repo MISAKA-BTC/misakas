@@ -163,6 +163,7 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         PalwConsensusObjectV2::ModelVersionPublished { signature, .. }
         | PalwConsensusObjectV2::ModelVersionPromoted { signature, .. }
         | PalwConsensusObjectV2::ModelVersionWithdrawn { signature, .. }
+        | PalwConsensusObjectV2::ModelLineBenefitsDeclared { signature, .. }
         | PalwConsensusObjectV2::ModelLineRolesSet { signature, .. }
         | PalwConsensusObjectV2::ModelLineOwnerTransferred { signature, .. }
         | PalwConsensusObjectV2::ModelLineRetired { signature, .. }

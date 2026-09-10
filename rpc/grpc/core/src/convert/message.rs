@@ -526,6 +526,7 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelMarketResponse>, protowire::G
         seed_sompi: item.seed_sompi,
         seeded_by: item.seeded_by.clone(),
         seed_min_sompi: item.seed_min_sompi,
+        seed_pledged_sompi: item.seed_pledged_sompi,
         buyback_sompi: item.buyback_sompi,
         retired_units: item.retired_units,
         error: None,
@@ -623,7 +624,33 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelLineResponse>, protowire::Get
         current_root: item.current_root.clone(),
         roots_in_force: item.roots_in_force.clone(),
         tip_daa: item.tip_daa,
+        benefits: item.benefits.as_ref().map(protowire::RpcPalwModelBenefits::from),
         error: None,
+    }
+});
+
+from!(item: &kaspa_rpc_core::RpcPalwModelBenefitTier, protowire::RpcPalwModelBenefitTier, {
+    Self {
+        min_units: item.min_units,
+        grants: item.grants,
+        grant_names: item.grant_names.clone(),
+        lead_daa: item.lead_daa,
+        min_hold_daa: item.min_hold_daa,
+        note: item.note.clone(),
+    }
+});
+
+from!(item: &kaspa_rpc_core::RpcPalwModelBenefits, protowire::RpcPalwModelBenefits, {
+    Self {
+        tiers: item.tiers.iter().map(protowire::RpcPalwModelBenefitTier::from).collect(),
+        pending_tiers: item.pending_tiers.iter().map(protowire::RpcPalwModelBenefitTier::from).collect(),
+        pending_effective_daa: item.pending_effective_daa,
+        cadence_daa: item.cadence_daa,
+        expires_daa: item.expires_daa,
+        declared_daa: item.declared_daa,
+        lapsed: item.lapsed.clone(),
+        lapse_daa: item.lapse_daa,
+        enforced_lead_daa: item.enforced_lead_daa,
     }
 });
 from!(item: &kaspa_rpc_core::GetPalwModelVersionRequest, protowire::GetPalwModelVersionRequestMessage, {
@@ -1475,6 +1502,7 @@ try_from!(item: &protowire::GetPalwModelMarketResponseMessage, RpcResult<kaspa_r
         seed_sompi: item.seed_sompi,
         seeded_by: item.seeded_by.clone(),
         seed_min_sompi: item.seed_min_sompi,
+        seed_pledged_sompi: item.seed_pledged_sompi,
         buyback_sompi: item.buyback_sompi,
         retired_units: item.retired_units,
     }
@@ -1578,6 +1606,36 @@ try_from!(item: &protowire::GetPalwModelLineResponseMessage, RpcResult<kaspa_rpc
         current_root: item.current_root.clone(),
         roots_in_force: item.roots_in_force.clone(),
         tip_daa: item.tip_daa,
+        benefits: item.benefits.as_ref().map(kaspa_rpc_core::RpcPalwModelBenefits::try_from).transpose()?,
+    }
+});
+
+try_from!(item: &protowire::RpcPalwModelBenefitTier, kaspa_rpc_core::RpcPalwModelBenefitTier, {
+    Self {
+        min_units: item.min_units,
+        grants: item.grants,
+        grant_names: item.grant_names.clone(),
+        lead_daa: item.lead_daa,
+        min_hold_daa: item.min_hold_daa,
+        note: item.note.clone(),
+    }
+});
+
+try_from!(item: &protowire::RpcPalwModelBenefits, kaspa_rpc_core::RpcPalwModelBenefits, {
+    Self {
+        tiers: item.tiers.iter().map(kaspa_rpc_core::RpcPalwModelBenefitTier::try_from).collect::<RpcResult<Vec<_>>>()?,
+        pending_tiers: item
+            .pending_tiers
+            .iter()
+            .map(kaspa_rpc_core::RpcPalwModelBenefitTier::try_from)
+            .collect::<RpcResult<Vec<_>>>()?,
+        pending_effective_daa: item.pending_effective_daa,
+        cadence_daa: item.cadence_daa,
+        expires_daa: item.expires_daa,
+        declared_daa: item.declared_daa,
+        lapsed: item.lapsed.clone(),
+        lapse_daa: item.lapse_daa,
+        enforced_lead_daa: item.enforced_lead_daa,
     }
 });
 try_from!(item: &protowire::GetPalwModelVersionRequestMessage, kaspa_rpc_core::GetPalwModelVersionRequest, {

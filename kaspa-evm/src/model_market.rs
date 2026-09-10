@@ -1350,8 +1350,13 @@ fn write_frame<EXT, DB: Database>(
             }
             (PALW_EVM_ACTION_SELL, units, min, 0)
         }
-        // ADR-0090: the seed is the value, whole sompi, at least the floor; refused here already
-        // so a too-small seed never even queues.
+        // ADR-0090: the seed is the value, in whole sompi. **ADR-0094: it need not be the whole
+        // floor.** A hundred thousand MSK does not fit in one post-quantum carrier, and the EVM
+        // lane keeps the same rule as the carrier lane so a pair can be funded from either: a
+        // payment under the floor is COLLECTED by the fold, not refused. What is still refused is
+        // a payment of nothing, which buys no progress and would only cost gas. `SeedTooSmall()`
+        // survives as the facade's declared error for callers that still check for it; the writer
+        // no longer raises it.
         Action::Seed => {
             if value.is_zero() || !(value % scale).is_zero() {
                 return Ok(revert(errors::bad_value(), gas, memory));
@@ -1359,9 +1364,6 @@ fn write_frame<EXT, DB: Database>(
             let Some(gross) = fits(value / scale) else {
                 return Ok(revert(errors::bad_value(), gas, memory));
             };
-            if gross < PALW_MODEL_SEED_MIN_SOMPI_V1 {
-                return Ok(revert(errors::seed_too_small(), gas, memory));
-            }
             (PALW_EVM_ACTION_SEED, 0, gross, gross)
         }
     };

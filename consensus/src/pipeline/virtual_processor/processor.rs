@@ -506,6 +506,8 @@ pub struct VirtualStateProcessor {
     /// to) and the fold attributes claims to versions; before it all ten are refused by name.
     /// Resolved at the BLOCK's DAA.
     pub(super) palw_model_lines: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0095 §4.11 as corrected: the membership's own fence.
+    pub(super) palw_model_benefits: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **ADR-0089 Decision 9's fence, `None` on every shipped preset.** Past it the EVM's
     /// window and hand exist and the block's EVM actions reach its transition. Resolved at the
     /// BLOCK's DAA.
@@ -979,6 +981,7 @@ impl VirtualStateProcessor {
             palw_fp_da_pins: params.palw_fp_da_pins_fence(),
             palw_model_market: params.palw_model_market_fence(),
             palw_model_lines: params.palw_model_lines_fence(),
+            palw_model_benefits: params.palw_model_benefits_fence(),
             palw_model_evm: params.palw_model_evm_fence(),
             palw_context_ladder: params.palw_context_ladder,
             palw_epoch_boundary_budget: params.palw_epoch_boundary_budget,
@@ -6368,6 +6371,25 @@ impl VirtualStateProcessor {
                     );
                     self.palw_model_check_bond_signature(state, &developer, &message, signature, "a withdrawal")?;
                 }
+                Obj::ModelLineBenefitsDeclared { line_id, tiers, cadence_daa, expires_daa, signature } => {
+                    // ADR-0095 §4.11 as corrected: its own fence, checked here as well as in the
+                    // fold, so an object that cannot apply never rides in the first place.
+                    if !self.palw_model_benefits_active_at(point.daa_score) {
+                        return Err(format!(
+                            "a benefits declaration for line {line_id} on a chain where the membership is not in force"
+                        ));
+                    }
+                    // §4.1: the OWNER signs what the line promises, not the developer who ships it.
+                    let owner = self.palw_model_line_role(state, line_id, "owner")?;
+                    let message = kaspa_consensus_core::palw_model_benefits_v1::palw_model_benefits_message_v1(
+                        self.palw_network_domain_v2(),
+                        line_id,
+                        tiers,
+                        *cadence_daa,
+                        *expires_daa,
+                    );
+                    self.palw_model_check_bond_signature(state, &owner, &message, signature, "a benefits declaration")?;
+                }
                 Obj::ModelLineRolesSet { line_id, developer, maintainer, contributor_permille_of_leg, signature } => {
                     if !self.palw_model_lines_active_at(point.daa_score) {
                         return Err(format!("a roles change on line {line_id} on a chain where the model registry is not in force"));
@@ -7196,6 +7218,11 @@ impl VirtualStateProcessor {
         self.palw_model_lines.is_some_and(|fence| fence.is_active(daa_score))
     }
 
+    /// ADR-0095 §4.11 as corrected, resolved at the BLOCK's own DAA like every other fence.
+    pub(super) fn palw_model_benefits_active_at(&self, daa_score: u64) -> bool {
+        self.palw_model_benefits.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
     /// **ADR-0089 Decision 9, resolved in exactly one place, at the BLOCK's own DAA.**
     pub(super) fn palw_model_evm_active_at(&self, daa_score: u64) -> bool {
         self.palw_model_evm.is_some_and(|fence| fence.is_active(daa_score))
@@ -7215,6 +7242,7 @@ impl VirtualStateProcessor {
     fn palw_transition_extras_at(&self, daa_score: u64) -> kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
         kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
             model_lines_active: self.palw_model_lines_active_at(daa_score),
+            model_benefits_active: self.palw_model_benefits_active_at(daa_score),
             evm_market_active: self.palw_model_evm_active_at(daa_score),
             // Written explicitly, never left to `..Default::default()`: an unwritten default inside
             // a struct the fold reads is the one fault no golden can see, and this field decides
@@ -14495,6 +14523,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ModelVersionPublished { .. } => "ModelVersionPublished",
         O::ModelVersionPromoted { .. } => "ModelVersionPromoted",
         O::ModelVersionWithdrawn { .. } => "ModelVersionWithdrawn",
+        O::ModelLineBenefitsDeclared { .. } => "ModelLineBenefitsDeclared",
         O::ModelLineRolesSet { .. } => "ModelLineRolesSet",
         O::ModelLineOwnerTransferred { .. } => "ModelLineOwnerTransferred",
         O::ModelLineRetired { .. } => "ModelLineRetired",

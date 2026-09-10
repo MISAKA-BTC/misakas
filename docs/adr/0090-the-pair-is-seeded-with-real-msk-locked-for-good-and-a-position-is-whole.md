@@ -7,6 +7,8 @@
 * Builds on: 0087 (the market), 0088 (the line the market is keyed by), 0089 (the EVM's hand).
 * Supersedes nothing.
 
+> **Amended (2026-09-07, implemented the same day).** [0094](0094-a-seed-is-paid-in-as-many-transactions-as-it-takes.md): a hundred thousand MSK does not fit in one post-quantum transaction (fifteen ML-DSA-87 inputs is the mass cap's most, about a fifth of the floor from mining income), so Decision 2's "one seed a line" becomes an ACCUMULATION: each payment is locked in the sink on arrival, the market opens on the payment that carries the total across the floor, and until then the row has no positions, no price and no moves. Nothing here loosens — a payment never comes back, and it now cannot come back from the first instalment.
+
 > **Amended (2026-09-06, design first).** [0091](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md): the reserve grows by a third source — five percent of every model block's escrowed worker reward, at the claim's `Final`, with the positions the curve gives up retired — so Decision 2's floor tightens to `K / (supply − retired) ≥ seed` and §5's identity gains the slices as a source. Nothing here loosens: no seed leaves, no holder is paid.
 
 ## 0. The sentence this ADR is

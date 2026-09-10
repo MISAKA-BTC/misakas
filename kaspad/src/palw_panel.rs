@@ -3197,7 +3197,15 @@ impl PalwPanelService {
                                 let (leaves, artifact_root, ladder) =
                                     (shape.step_leaf_count, duty.artifact_root, self.config.court.max_step_leaf_count());
                                 let Ok((_backend, cleared)) = offload(backend, move |b| {
-                                    Self::fp_capture_samples_clear(b, &capture_owned, &prompt_owned, leaves, artifact_root, ladder, &claim_owned)
+                                    Self::fp_capture_samples_clear(
+                                        b,
+                                        &capture_owned,
+                                        &prompt_owned,
+                                        leaves,
+                                        artifact_root,
+                                        ladder,
+                                        &claim_owned,
+                                    )
                                 })
                                 .await
                                 else {
@@ -4077,6 +4085,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::ReceiptLicensed { .. } => "ReceiptLicensed",
         PalwConsensusObjectV2::ProducerDefaulted { .. } => "ProducerDefaulted",
         PalwConsensusObjectV2::BondRegistered { .. } => "BondRegistered",
+        PalwConsensusObjectV2::ModelLineBenefitsDeclared { .. } => "ModelLineBenefitsDeclared",
         PalwConsensusObjectV2::ModelBuy { .. } => "ModelBuy",
         PalwConsensusObjectV2::ModelSell { .. } => "ModelSell",
         PalwConsensusObjectV2::BondRetireRequested { .. } => "BondRetireRequested",

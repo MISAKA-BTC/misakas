@@ -53,6 +53,15 @@ pub struct PalwModelLineRowReadV1 {
     pub maintainer_payout_payload: Option<kaspa_hashes::Hash64>,
 }
 
+/// ADR-0095: a line's membership, resolved at a height so a caller need not re-derive §4.6.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwModelBenefitsReadV1 {
+    pub row: crate::palw_model_benefits_v1::PalwModelBenefitsV1,
+    pub in_effect: Vec<crate::palw_model_benefits_v1::PalwModelBenefitTierV1>,
+    pub lapse: Option<crate::palw_model_benefits_v1::PalwModelBenefitLapseV1>,
+    pub enforced_lead_daa: u64,
+}
+
 /// ADR-0088 Decision 12: `getPalwModelLine`'s answer — the row, the current root, the roots in
 /// force for the class at the tip.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,6 +72,9 @@ pub struct PalwModelLineReadV1 {
     /// Decision 3's set for the line's CLASS at `tip_daa`.
     pub roots_in_force: Vec<kaspa_hashes::Hash64>,
     pub tip_daa: u64,
+    /// ADR-0095: the declaration as stored, plus what it means at `tip_daa` — the tiers actually
+    /// governing, any pending weakening, the lapse, and the lead the fold is enforcing.
+    pub benefits: Option<PalwModelBenefitsReadV1>,
 }
 
 /// ADR-0088 Decision 12: `getPalwModelVersion`'s answer — the row and its evaluations, each
