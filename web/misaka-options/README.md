@@ -147,7 +147,11 @@ Hash routes: `#/store/<lineId>`, `#/portfolio`, `#/lines`, `#/line/<lineId>`, `#
   Beside them, the **membership card** (ADR-0095 §4.10: the tiers in effect, what each grants in
   plain words with the chain's bit name in the tooltip, the lead and tenure each asks for, any
   pending weakening, and the lapse — the reason to join belongs before the join; where a node serves
-  no declaration the card says so rather than showing nothing), and under it the **desk**
+  no declaration the card says so rather than showing nothing). With a wallet connected the card
+  also says **where that account stands**: the tier the chain computes for its EVM holder id
+  (`getPalwModelBenefitTier`, never re-derived here), how long since it last left, its own rung
+  marked *you*, and what the next rung needs — memberships, priced as the least join the curve
+  fills (`curve.buyCostForUnits`), and DAA without leaving. Under it the **desk**
   (Join/Leave, amount, the floor, the quote's 5 % burn, 1 % owner leg and 94 % net, quoted by the
   node's AMM precompile when the EVM RPC is armed and by local arithmetic otherwise). Bottom tabs:
   My memberships, My activity (transactions sent from this browser, followed through
@@ -171,7 +175,8 @@ Hash routes: `#/store/<lineId>`, `#/portfolio`, `#/lines`, `#/line/<lineId>`, `#
   with `misaka palw line-benefits`.
 - **Models** (`#/lines`). Every line of every known class, sortable, **use first**; a line with no
   store shows an **Open it** call to action in place of a price.
-- **Line** (`#/line/<lineId>`). The row, the tiles (use first), roles, the membership card, versions
+- **Line** (`#/line/<lineId>`). The row, the tiles (use first), roles, the membership card (with
+  where the connected account stands), versions
   with chain-counted usage and declared hashes/evaluations (labelled *declared*), proposals, roots
   in force.
 - **My memberships** (`#/portfolio`). The connected account's EVM-namespace memberships (whole
@@ -209,7 +214,9 @@ wRPC (JSON over WebSocket, one persistent socket, requests multiplexed by id):
 `getPalwModelMarket(lineId)` (now with `seedSompi`, `seededBy`, `seedMinSompi`, `classStatus`;
 the request also carries `classId` for a pre-ADR-0088 node, see below),
 `getPalwModelVersion(lineId, version)`, `getPalwModelProposals(lineId)`,
-`getPalwModelPositions(holder)`, and on the List a model page `getPalwProducerFacts(classId)` for the
+`getPalwModelPositions(holder)`, `getPalwModelBenefitTier(lineId, holders)` (ADR-0095 §4.10: the
+tier of the connected account's holder id, with the next rung and the declaration in effect), and on
+the List a model page `getPalwProducerFacts(classId)` for the
 free-prompt certification. Wire format:
 `{"id":n,"method":"getPalwModelMarket","params":{"lineId":"<128 hex>"}}` in,
 `{"id":n,"method":"...","params":{...result...}}` out (`error` on failure). Integer literals of 16+
@@ -268,7 +275,9 @@ after; a second releases 4,570 (reserve 101,880); selling all 9,226 back pays 18
 sompi gross and 176,709,637,440 net, puts 500,000 positions back and leaves the reserve at
 100,000.11024 MSK; 0.1 MSK releases nothing and 0.22 MSK releases one; the product never falls and
 the reserve never falls under the seed; an unseeded row quotes nothing; a closed market refuses
-buys and honours sells). 51 checks, all passing as shipped.
+buys and honours sells), and ADR-0095 §4.10's standing: the next rung's memberships and tenure,
+its price as the least join that reaches it (one sompi less falls short), a node that serves no
+tier read as "not served" and never as "not a member". 68 checks, all passing as shipped.
 
 ## Mock mode
 
@@ -282,7 +291,11 @@ block every 6 seconds with background moves and usage, and a wallet account hold
 (enough to open a store) and two memberships. A buy, a sell or a seed sent in mock mode goes through the real code path: the receipt
 appears in the next block, the fold's decision and the `Bought`/`Sold`/`Seeded`/`Refused` event
 one block later (a second seed on a seeded line is refused with reason 10; a buy on the registered
-class is refused with reason 3 until it activates). Mock data lives under its own `localStorage`
+class is refused with reason 3 until it activates). Two lines declare what their memberships
+grant (ADR-0095): the first a live three-rung ladder, the third a declaration whose cadence it has
+not kept, so its card shows the lapse; the mock keeps the tenure clock the fold keeps (started by
+the first join, kept by the next, restarted by any leave) and answers `getPalwModelBenefitTier`
+from it. Mock data lives under its own `localStorage`
 prefix (`mo-mock:`) and never mixes with real data; a new mock world drops the samples and
 transactions an older mock world left there. The banner and the footer say "mock" whenever it is
 on. Nothing in mock mode is a chain fact; it exists for demos, screenshots and UI work.
@@ -300,10 +313,12 @@ on. Nothing in mock mode is a chain fact; it exists for demos, screenshots and U
   deposit sent by hand would be refused or lost; when no market row can be read at all (the wRPC
   down), the desk shows dashes and its button is disabled. Until the fences are armed (a release:
   they enter the fingerprint) no store can be opened and nobody can join one.
-- **ADR-0095 has a fence of its own** (`palw_model_benefits`, `None` on every preset today), so no
-  line can declare what its memberships grant yet and `getPalwModelLine` serves no `benefits` word.
-  The membership card says exactly that instead of rendering an empty promise; it fills in on its
-  own once a node serves the field.
+- **ADR-0095 has a fence of its own** (`palw_model_benefits`: scheduled on testnet-11 at DAA 2,400,
+  `None` everywhere else), so until the height no line can declare what its memberships grant and
+  `getPalwModelLine` serves no `benefits` word. The membership card says exactly that instead of
+  rendering an empty promise; it fills in on its own once a node serves the field. Where the account
+  stands needs `getPalwModelBenefitTier`, which a node from before it does not answer — the card
+  says "not served" there, never "not a member".
 - The public node behind misakascan.com (probed 2026-09-06) still runs a build from **before
   ADR-0088/0090**: its `getPalwModelMarket` is keyed by `classId` (a request with only `lineId`
   is answered with "request deserialization error") and its row carries a virtual reserve of

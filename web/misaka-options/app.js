@@ -744,6 +744,38 @@ function grantChip(name) {
   const w = GRANT_WORDS[name];
   return '<span class="tag" title="' + esc(w ? w[1] + ' (' + name + ')' : name) + '">' + esc(w ? w[0] : name) + '</span>';
 }
+// ADR-0095 §4.10: where one holder stands — the tier held, the next rung, and what that rung needs
+// in memberships (and their MSK at the curve's price now) and in tenure. The tier and the rungs are
+// the node's (getPalwModelBenefitTier); the price is the chain's curve, the least join that reaches
+// the rung. Pure, so the self-test checks it.
+function benefitStanding(t, m) {
+  if (!t || !t.served || !t.exists) return null;
+  const units = bi(t.units), tenure = bi(t.tenureDaa);
+  const next = t.nextTier || null;
+  const needUnits = next ? bmax(bi(next.minUnits) - units, 0n) : 0n;
+  const needHold = next ? bmax(bi(next.minHoldDaa) - tenure, 0n) : 0n;
+  const c = next && needUnits > 0n && m && curve.seeded(m) ? curve.buyCostForUnits(m, needUnits) : null;
+  return { units, tenure, tierIndex: t.tierIndex != null ? Number(t.tierIndex) : null, tier: t.tier || null, next, needUnits, needHold, cost: c ? c.gross : null };
+}
+function standingBlock(opts) {
+  if (!opts.account) return '<div class="note tiny">Connect a wallet to see which tier this account is in and what the next one needs.</div>';
+  const t = opts.standing;
+  if (!t) return '<div class="dim small">Reading your membership…</div>';
+  if (!t.served) return '<div class="dim small">This node does not answer getPalwModelBenefitTier (it is older than this site), so the tier this account is in cannot be read here.</div>';
+  const st = benefitStanding(t, opts.market);
+  if (!st) return '';
+  const rows = [];
+  rows.push('This account holds <b>' + fmtPos(st.units) + '</b> membership' + (st.units === 1n ? '' : 's') + (st.units > 0n ? ', <b>' + fmtInt(st.tenure) + '</b> DAA since it last left' : ''));
+  rows.push(st.tier ? 'Your tier: <b>#' + (st.tierIndex + 1) + '</b> ' + (st.tier.grantNames || []).map(grantChip).join(' ') : 'Not in a tier yet.');
+  if (st.next) {
+    const needs = [];
+    if (st.needUnits > 0n) needs.push(fmtPos(st.needUnits) + ' more membership' + (st.needUnits === 1n ? '' : 's') + (st.cost != null ? ' (about ' + fmtMsk(st.cost, 2) + ' MSK at the price now)' : ' (the curve cannot quote that many now)'));
+    if (st.needHold > 0n) needs.push(fmtInt(st.needHold) + ' more DAA without leaving');
+    rows.push('Next: ' + (st.next.grantNames || []).map(grantChip).join(' ') + (needs.length ? ' — needs ' + needs.join(' and ') : ''));
+  }
+  return '<div class="standing">' + rows.map((r) => '<div>' + r + '</div>').join('') +
+    '<div class="note tiny">The tier is the chain\'s answer for this account\'s holder id (' + esc(shortId(t.holder || '', 8)) + '), the one a line\'s gateway reads before it serves a member first. The price is the curve now and moves with every join and leave; leaving any part restarts the clock.</div></div>';
+}
 // ADR-0095 §4.10: what this membership gets you. The reason to join belongs BEFORE the join, so
 // this sits on the store page as well as on the line page.
 function benefitsPanel(info, opts) {
@@ -768,12 +800,13 @@ function benefitsPanel(info, opts) {
   }
   const tiers = b.tiers || [];
   if (!tiers.length) return head + '<div class="dim small">This line\'s owner has promised its members nothing yet.</div>' + closedSet + '</div></div>';
-  const rows = tiers.map((t) => {
+  const mine = opts.standing && opts.standing.served && opts.standing.tierIndex != null ? Number(opts.standing.tierIndex) : -1;
+  const rows = tiers.map((t, i) => {
     const extra = [];
     if (t.leadDaa) extra.push('a new version ' + fmtInt(t.leadDaa) + ' DAA before it may become current');
-    if (t.minHoldDaa) extra.push('after ' + fmtInt(t.minHoldDaa) + ' DAA held without selling');
+    if (t.minHoldDaa) extra.push('after ' + fmtInt(t.minHoldDaa) + ' DAA held without leaving');
     if (t.note) extra.push(esc(t.note));
-    return '<tr><td class="r mono">' + fmtPos(t.minUnits) + '</td><td class="l">' +
+    return '<tr><td class="r mono">' + fmtPos(t.minUnits) + (i === mine ? ' <span class="tag ok">you</span>' : '') + '</td><td class="l">' +
       (t.grantNames || []).map(grantChip).join(' ') +
       (extra.length ? '<div class="note tiny">' + extra.join(' · ') + '</div>' : '') + '</td></tr>';
   }).join('');
@@ -790,7 +823,7 @@ function benefitsPanel(info, opts) {
       ? 'A WEAKER declaration governs from DAA ' + fmtInt(b.pendingEffectiveDaa) + '.'
       : 'The declaration is WITHDRAWN at DAA ' + fmtInt(b.pendingEffectiveDaa) + '.');
   }
-  return head + '<div class="tbl-wrap"><table class="tbl"><thead><tr><th class="r">Memberships</th><th class="l">What the line gives you</th></tr></thead><tbody>' +
+  return head + standingBlock(opts) + '<div class="tbl-wrap"><table class="tbl"><thead><tr><th class="r">Memberships</th><th class="l">What the line gives you</th></tr></thead><tbody>' +
     rows + '</tbody></table></div>' +
     (foot.length ? '<div class="note tiny">' + foot.join(' ') + '</div>' : '') +
     '<div class="note tiny">A membership is access, not an income: no holder is ever paid. The chain proves the holding, publishes the promise and enforces the window; serving is the developer\'s.</div>' +
@@ -1049,6 +1082,14 @@ async function positionOf(lineId, address) {
   const r = await positionsOf(address);
   const p = r.positions.find((x) => x.lineId === lineId);
   return p ? p.units : 0n;
+}
+// ADR-0095 §4.3/§4.10: the tier the CHAIN computes for this account's EVM-namespace holder id —
+// the same read a gateway makes before it serves a member first. A node from before
+// getPalwModelBenefitTier answers with an error, reported as "not served", never as "not a member".
+async function benefitTierOf(lineId, address) {
+  const holder = await holderIdOf(address);
+  try { return Object.assign({ holder, served: true }, await rpc('getPalwModelBenefitTier', { lineId, holders: [holder] })); }
+  catch (e) { return { holder, served: false, error: e.message }; }
 }
 async function balanceOf(address) { const r = await evm.rpc('eth_getBalance', [address, 'latest']); return bi(r); }
 async function nodeQuoteBuy(lineId, sompi) {
@@ -1449,7 +1490,7 @@ async function pageStore(arg) {
   if (!lineId) lineId = normId(store.get('lastLine')) || firstLineId();
   if (lineId) store.set('lastLine', lineId);
   const rec = lineId ? db.upsertLine(lineId, {}) : null;
-  const entry = { side: 'buy', amount: '', slippage: String(store.get('slippage', '2')), quote: null, nodeQuote: null, quoteSeq: 0, busy: false, balance: null, position: null, positionSrc: null };
+  const entry = { side: 'buy', amount: '', slippage: String(store.get('slippage', '2')), quote: null, nodeQuote: null, quoteSeq: 0, busy: false, balance: null, position: null, positionSrc: null, tier: null };
   const view = { chartTab: 'usage', bottomTab: 'positions', range: store.get('range', 86400000), positions: null, settlements: null, mySettlements: null, versions: null, err: null };
 
   main.innerHTML = h`
@@ -1477,7 +1518,15 @@ async function pageStore(arg) {
   function renderBenefits() {
     if (!alive()) return;
     const box = $('#benefits'); if (!box) return;
-    box.innerHTML = benefitsPanel(rec && rec.info, { always: true });
+    box.innerHTML = benefitsPanel(rec && rec.info, { always: true, account: !!wallet.account, standing: entry.tier, market: rec && rec.market });
+  }
+  // ADR-0095 §4.10: the connected account's tier on this line, as the chain computes it.
+  async function loadTier() {
+    if (!alive()) return;
+    if (!wallet.account || !rec) { entry.tier = null; renderBenefits(); return; }
+    const t = await benefitTierOf(rec.lineId, wallet.account);
+    if (!alive()) return;
+    entry.tier = t; renderBenefits();
   }
 
   // ---- market bar -------------------------------------------------------------------------
@@ -1906,6 +1955,7 @@ async function pageStore(arg) {
     if (rec) {
       await refreshMarket(rec.lineId);
       if (ticks === 1 || ticks % 6 === 0) { await refreshLineInfo(rec.lineId); await refreshFacade(rec.lineId); await refreshUsage(rec.lineId); }
+      if (ticks === 1 || ticks % 3 === 0) loadTier();
       if (!alive()) return;
       // the panel is the order entry for a seeded line and the seed panel for an unseeded one;
       // it is rebuilt when that fact changes (a seed landed) or when the facade got confirmed
@@ -1921,7 +1971,7 @@ async function pageStore(arg) {
   }
 
   renderBar(); renderChart(); renderDepth(); renderEntry(); renderBottom(); renderChartAlt();
-  const onWallet = () => { renderNav(); renderEntry(); loadAccount(); loadPositions(); renderBottom(); };
+  const onWallet = () => { renderNav(); renderEntry(); loadAccount(); loadPositions(); renderBottom(); entry.tier = null; loadTier(); };
   wallet.listeners.add(onWallet); onCleanup(() => wallet.listeners.delete(onWallet));
   const onDb = () => { if (rec && !rec.row && db.line(rec.lineId) && db.line(rec.lineId).row) renderBar(); };
   db.listeners.add(onDb); onCleanup(() => db.listeners.delete(onDb));
@@ -2035,6 +2085,14 @@ async function pageLine(arg) {
   if (!lineId) { main.innerHTML = '<div class="empty">Not a line id (expected 128 hex characters).</div>'; return; }
   const rec = db.upsertLine(lineId, {});
   main.innerHTML = '<div class="empty">Loading line…</div>';
+  let standing = null;
+  // ADR-0095 §4.10: the connected account's tier, beside the card — the reason to join belongs
+  // before the join, and so does where you already stand.
+  async function loadStanding() {
+    if (!alive()) return;
+    standing = wallet.account ? await benefitTierOf(lineId, wallet.account) : null;
+    render();
+  }
   function render() {
     if (!alive()) return;
     const row = rec.row || {}, m = rec.market, info = rec.info;
@@ -2075,7 +2133,7 @@ async function pageLine(arg) {
         <div style="padding:6px 0">${inForce ? (inForce.length ? raw(inForce.map((r) => '<div class="hash">' + (r ? idCell(r, 32).s : '(id not served by the EVM window)') + '</div>').join('')) : '<span class="dim">none</span>') : '—'}</div>
         </div></div>
       </div>
-      <div class="section">${raw(benefitsPanel(info, { always: true }))}</div>
+      <div class="section">${raw(benefitsPanel(info, { always: true, account: !!wallet.account, standing, market: m }))}</div>
       <div class="panel section"><div class="panel-h">Versions <span class="spacer"></span><span class="dim">the node holds the last 64; the explorer keeps the whole history</span></div><div class="panel-b" id="versionsBox">
         ${!versions ? raw('<div class="empty">Loading versions…</div>') : !versions.length ? raw('<div class="empty">No version rows are held for this line' + (row.hasRow === false ? ' (a founding line nothing touched has its registration root as version 1)' : '') + '.</div>') :
           raw(versions.map((v) => h`<details ${v.status === 'Current' ? 'open' : ''}><summary><b>v${v.version}</b> · ${v.status || '—'}${v.inForce ? raw(' <span class="tag ok">in force</span>') : ''} · root ${shortId(v.root, 12)} · published DAA ${fmtInt(v.publishedDaa)} · usage ${fmtInt(bi(v.attemptClaims) + bi(v.fpClaims))} claims · ${(v.evaluations || []).length} evaluation${(v.evaluations || []).length === 1 ? '' : 's'} <span class="tag declared">declared</span></summary>
@@ -2104,7 +2162,9 @@ async function pageLine(arg) {
   render();
   await Promise.all([refreshUsage(lineId), refreshVersions(lineId), refreshProposals(lineId)]);
   render();
-  every(30000, async () => { await refreshMarket(lineId); await refreshLineInfo(lineId); render(); });
+  await loadStanding();
+  const onWallet = () => { renderNav(); standing = null; loadStanding(); }; wallet.listeners.add(onWallet); onCleanup(() => wallet.listeners.delete(onWallet));
+  every(30000, async () => { await refreshMarket(lineId); await refreshLineInfo(lineId); await loadStanding(); });
 }
 
 async function pagePortfolio() {
@@ -2189,6 +2249,7 @@ function pageDocs() {
     <h2>What a membership gets you</h2>
     <p>A model's owner declares, on chain and signed, what its members get, in <b>tiers</b>: how many memberships each tier asks for, what it carries, and how long you must have held without leaving. The grants come from a closed set the whole network reads one way — early access to a new version's artifact, a private beta, priority in the line's inference queue, experimental modes, the developer's room, a served request allowance, a voice in what ships next, support answered first. <b>There is no bit for money</b>: a grant is a service or the fold refuses it.</p>
     <p>Most of that is the developer's to honour off chain, and this site says so. Two parts are not: while a line declares an early-access lead, <b>the fold refuses to make a new version current inside that window</b>, and it refuses to let one skip the window by publishing straight to current — the exclusivity is arithmetic, not a promise. And a declaration that outlives its own cadence or its expiry <b>lapses on its own</b>, with no complaint filed by anyone, and the card then says LAPSED. A weakening or a withdrawal takes effect only after notice, so a member can see what they are about to lose while there is still time to leave (ADR-0095).</p>
+    <p>With a wallet connected, the card also says <b>where you stand</b>: the tier the chain computes for your account (<code>getPalwModelBenefitTier</code>), how long since you last left, and what the next tier needs — more memberships, with their MSK at the curve's price now, and more time without leaving. It is the same read a line's gateway makes before it serves a member first: you prove the account by signing a challenge, nothing is sent to the chain and nothing is spent.</p>
     <p class="dim">Where a store's card says the node serves no declaration, that is what it means: either the node predates ADR-0095 or the rule is not armed on this network yet. Nothing is promised that the chain cannot show you.</p>
     <h2>A store opens with a deposit, and the deposit never comes back</h2>
     <p>A <b>line</b> is a model in the store's sense: a class (a registered model graph), an owner (a bond, the chain's post-quantum identity) and a name. Every class has a founding line whose id is the class id. A line has <b>no store until someone opens one</b> (ADR-0090): at least <b>${fmtMsk(seedMin, 0)} MSK</b> is locked into the line's sink, on the EVM through the facade's <code>seed()</code> (or the writer's action 3) or on the UTXO side with <code>misaka palw model-seed</code>. The whole deposit becomes the buy-back reserve, fee-free. It is <b>locked for good</b>: there is no withdrawal, no LP token, no admin, and no object ever pays it out. Whoever opens the store receives <b>no membership</b> and nothing back; their payout payload is kept on the row for the record only. One opening a line: a second is refused. A class still waiting for its activation can be opened (the store is built when the model is listed, before approval); a frozen class cannot.</p>
@@ -2469,6 +2530,18 @@ function selfTestReport() {
   eq('cost of one position from the seed is minimal', c1 && c1.quote.unitsOut >= 1n && curve.buyQuote(m0, c1.gross - 1n) === null, true);
   const c10 = curve.buyCostForUnits(b2.after, 10n);
   eq('cost of ten positions re-quotes to at least ten', c10 && c10.quote.unitsOut >= 10n && (curve.buyQuote(b2.after, c10.gross - 1n) || { unitsOut: 0n }).unitsOut < 10n, true);
+  // ---- ADR-0095 §4.10: where a holder stands, and what the next rung costs ----
+  eq('the least join for 4,656 memberships from the least seed is at most 1,000 MSK (the ADR-0090 golden)', curve.buyCostForUnits(m0, 4656n).gross <= 1000n * MSK, true);
+  const tierRow = (minUnits, grants, minHoldDaa) => ({ minUnits, grants, grantNames: [], leadDaa: 0, minHoldDaa, note: '' });
+  const tr = { served: true, exists: true, units: 1000, tenureDaa: 200, tierIndex: 0, tier: tierRow(1, 1, 0), nextTier: tierRow(5656, 5, 500) };
+  const st = benefitStanding(tr, m0);
+  eq('standing: the next rung needs 4,656 more memberships', st.needUnits, 4656n);
+  eq('standing: and 300 more DAA without leaving', st.needHold, 300n);
+  eq('standing: its price is the least join that reaches it', st.cost != null && st.cost <= 1000n * MSK && (curve.buyQuote(m0, st.cost - 1n) || { unitsOut: 0n }).unitsOut < 4656n, true);
+  eq('standing: a rung already reached by units costs nothing', benefitStanding(Object.assign({}, tr, { units: 6000 }), m0).cost, null);
+  eq('standing: the top rung needs nothing', benefitStanding(Object.assign({}, tr, { nextTier: null }), m0).needUnits, 0n);
+  eq('standing: a node that serves no tier says so, and is not read as a non-member', benefitStanding({ served: false }, m0), null);
+  eq('standing: an unopened store prices no rung', benefitStanding(tr, curve.unseeded()).cost, null);
   // ---- the seed on the wire ----
   eq('seed() selector', ABI.selector(SIG.seed), '7d94792a');
   eq('Seeded(address,uint256,uint256) topic', ABI.topic(EVT.Seeded), '0xce9a26839d9b9ac2579f3ab333c5dd44665820297641bfc2cee826856a8f44e3');

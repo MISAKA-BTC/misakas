@@ -127,6 +127,8 @@ code, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .tag.declared { color: #d8b4fe; border-color: #4c2f73; }
 .empty { color: var(--dim); padding: 18px 10px; text-align: center; }
 .note { color: var(--muted); font-size: 12px; padding: 6px 0; }
+/* ADR-0095 §4.10: where the connected account stands on a line's membership */
+.standing { border: 1px solid var(--border2); border-radius: 6px; padding: 8px 10px; margin: 0 0 8px; background: var(--panel2); display: grid; gap: 4px; }
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; font-size: 12px; }
 .kv dt { color: var(--muted); }
 .kv dd { margin: 0; overflow-wrap: anywhere; }

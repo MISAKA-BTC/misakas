@@ -40,11 +40,18 @@ const now = () => Date.now();
 const blockOf = (ts) => START_BLOCK + Math.floor((ts - T0) / BLOCK_MS);
 const tsOf = (block) => T0 + (block - START_BLOCK) * BLOCK_MS;
 
-const world = { block: START_BLOCK, daa: START_DAA, classes: new Map(), lines: new Map(), markets: new Map(), positions: new Map(), logs: [], receipts: new Map(), pendingTx: [], queued: [], balances: new Map(), logSeq: 0, facades: new Map() };
+const world = { block: START_BLOCK, daa: START_DAA, classes: new Map(), lines: new Map(), markets: new Map(), positions: new Map(), since: new Map(), benefits: new Map(), logs: [], receipts: new Map(), pendingTx: [], queued: [], balances: new Map(), logSeq: 0, facades: new Map() };
 const key = (line, holder) => line + ':' + holder;
 const holderOf = (addr) => MO.holderIdDerived(CHAIN_ID, addr);
 function posGet(line, holder) { return world.positions.get(key(line, holder)) || 0n; }
-function posAdd(line, holder, d) { world.positions.set(key(line, holder), posGet(line, holder) + d); }
+// ADR-0095 §4.5, as the fold keeps it: the clock starts when a balance rises from zero, is kept
+// when the holder adds, and restarts at the height of any leave.
+function posAdd(line, holder, d) {
+  const k = key(line, holder), before = posGet(line, holder), after = before + d;
+  world.positions.set(k, after);
+  if (after === 0n) world.since.delete(k);
+  else if (before === 0n || after < before) world.since.set(k, world.daa);
+}
 const classStatusString = (c) => (c.status === 0 ? 'Active' : c.status === 1 ? 'Frozen { since_daa: ' + c.sinceDaa + ' }' : c.status === 2 ? 'Registered { activation_daa: ' + c.activationDaa + ', pending_share_permille: ' + c.pendingShare + ' }' : 'Dormant { since_daa: ' + c.sinceDaa + ' }');
 
 function addLog(block, address, topics, data, txHash) {
@@ -123,6 +130,16 @@ function seedWorld() {
   world.lines.get(LINE_C).row.contributorPermilleOfLeg = 250;
   world.lines.get(LINE_C).proposals.push({ proposalId: h128('proposal/C/1'), lineId: LINE_C, root: h128('root/' + LINE_C + '/2'), noteHash: h128('note/1'), by: bond('P1'), postedDaa: 110900, adoptedIn: 2 }, { proposalId: h128('proposal/C/2'), lineId: LINE_C, root: h128('root/prop/2'), noteHash: h128('note/2'), by: bond('P2'), postedDaa: 117900, adoptedIn: null });
   world.lines.get(LINE_C).evaluations.set(2, [{ evaluatorId: h128('eval/mmlu-ish'), scorePermille: 612, reportHash: h128('report/1'), postedDaa: 113100, by: bond('C/dev'), isLinesOwn: true }, { evaluatorId: h128('eval/stranger'), scorePermille: 540, reportHash: h128('report/2'), postedDaa: 114400, by: bond('S1'), isLinesOwn: false }]);
+  // ADR-0095: what the lines promise their members. CLASS_A's ladder is live; LINE_C declared a
+  // cadence it has not kept since v2, so its card shows the lapse and its tiers grant nothing.
+  const G = { EARLY_VERSION: 1, PRIVATE_BETA: 2, PRIORITY_INFERENCE: 4, EXPERIMENTAL: 8, DEVELOPER_ACCESS: 16, INFERENCE_QUOTA: 32, HOLDER_VOICE: 64, SUPPORT: 128 };
+  const tier = (minUnits, grants, leadDaa, minHoldDaa, note) => ({ minUnits, grants, leadDaa, minHoldDaa, note: note || '' });
+  world.benefits.set(CLASS_A, { declaredDaa: START_DAA - 2000, cadenceDaa: 20000, expiresDaa: 0, tiers: [
+    tier(1, G.EARLY_VERSION | G.SUPPORT, 720, 0),
+    tier(2000, G.EARLY_VERSION | G.PRIVATE_BETA | G.PRIORITY_INFERENCE | G.SUPPORT, 720, 1440, 'the line gateways serve you first'),
+    tier(10000, G.EARLY_VERSION | G.PRIVATE_BETA | G.PRIORITY_INFERENCE | G.EXPERIMENTAL | G.DEVELOPER_ACCESS | G.HOLDER_VOICE | G.SUPPORT, 720, 1440, 'the developer room'),
+  ] });
+  world.benefits.set(LINE_C, { declaredDaa: 100000, cadenceDaa: 5000, expiresDaa: 0, tiers: [tier(1, G.EARLY_VERSION | G.SUPPORT, 300, 0)] });
   world.lines.get(CLASS_A).evaluations.set(2, [{ evaluatorId: h128('eval/harness-x'), scorePermille: 705, reportHash: h128('report/3'), postedDaa: 105000, by: bond('A/dev'), isLinesOwn: true }]);
   // balances: the mock wallet holds enough to seed a line (150,000 MSK) and the background accounts trade
   world.balances.set(ACCOUNT, 150000n * MO.SOMPI_PER_MSK * MO.NATIVE_SCALE_WEI);
@@ -142,8 +159,10 @@ function seedWorld() {
   for (const [line, n, lo, hi] of plan) for (let i = 0; i < n; i++) tape.push({ line, ts: T0 - span + Math.floor(rnd() * (span - 120000)), r: rnd(), amt: lo + BigInt(Math.floor(rnd() * Number(hi - lo + 1n))) });
   tape.push({ line: CLASS_A, ts: T0 - 20 * 3600000, r: 0, amt: 600n, who: ACCOUNT }, { line: CLASS_A, ts: T0 - 5 * 3600000, r: 0, amt: 250n, who: ACCOUNT }, { line: LINE_C, ts: T0 - 9 * 3600000, r: 0, amt: 40n, who: ACCOUNT });
   tape.sort((a, b) => a.ts - b.ts);
+  const daaNow = world.daa;
   for (const t of tape) {
     const block = blockOf(t.ts);
+    world.daa = START_DAA + Math.floor((t.ts - T0) / BLOCK_MS);
     const who = t.who || pick(OTHERS);
     let out;
     const held = posGet(t.line, holderOf(who));
@@ -151,6 +170,7 @@ function seedWorld() {
     else out = applyBuy(t.line, who, t.amt * MO.SOMPI_PER_MSK, 0n);
     if (out.kind !== 'Refused') { settlementLog(block, t.line, who, out); MO.history.add(t.line, out.priceAfter, t.ts, 'event'); }
   }
+  world.daa = daaNow;
   // the seeds themselves, as Seeded events at their opening blocks (before the tape)
   for (const [id, m] of world.markets) if (m.seeded) { const b = START_BLOCK - Math.floor(span / BLOCK_MS) - 20; settlementLog(b, id, OTHERS[0], { kind: 'Seeded', mskIn: m.row.seedSompi, priceAfter: m.row.seedSompi / C.supplyUnits }); }
   world.logs.sort((a, b) => Number(BigInt(a.blockNumber)) - Number(BigInt(b.blockNumber)));
@@ -225,6 +245,31 @@ function marketResponse(line) {
   const price = curve.price(r);
   return { found: true, lineId: line, opened: m.seeded, openedDaa: m.openedDaa, mskReserve: num(r.mskReserve), positionUnits: num(r.positionUnits), soldUnits: num(r.soldUnits), burnedSompi: num(r.burnedSompi), registrantPaidSompi: num(r.ownerPaid || 0n), closedToBuys: !!r.closedToBuys || cls.status !== 0, priceSompiPerPosition: price == null ? 0 : num(price), supplyUnits: num(C.supplyUnits), virtualSompi: 0, classStatus: classStatusString(cls), contributorPaidSompi: num(r.contributorPaid || 0n), seedSompi: m.seeded ? num(r.seedSompi) : 0, seededBy: m.seeded ? r.seededBy : '', seedMinSompi: num(C.seedMinSompi), buybackSompi: num(r.buybackSompi || 0n), retiredUnits: num(r.retiredUnits || 0n) };
 }
+const GRANT_NAMES = ['EARLY_VERSION', 'PRIVATE_BETA', 'PRIORITY_INFERENCE', 'EXPERIMENTAL', 'DEVELOPER_ACCESS', 'INFERENCE_QUOTA', 'HOLDER_VOICE', 'SUPPORT'];
+const tierResponse = (t) => ({ minUnits: t.minUnits, grants: t.grants, grantNames: GRANT_NAMES.filter((_, b) => t.grants & (1 << b)), leadDaa: t.leadDaa, minHoldDaa: t.minHoldDaa, note: t.note });
+// ADR-0095 §4.6 at the mock's tip: past the cadence since the last version, the tiers in effect are none.
+function benefitsResponse(line) {
+  const b = world.benefits.get(line); if (!b) return null;
+  const l = world.lines.get(line);
+  const last = Math.max(l.row.foundedDaa || 0, ...l.versions.map((v) => v.publishedDaa));
+  const lapsed = b.expiresDaa && world.daa >= b.expiresDaa ? ['expired', b.expiresDaa] : b.cadenceDaa && world.daa > last + b.cadenceDaa ? ['cadenceMissed', last + b.cadenceDaa] : null;
+  const tiers = lapsed ? [] : b.tiers;
+  const lead = tiers.filter((t) => t.grants & 1).reduce((a, t) => Math.max(a, t.leadDaa), 0);
+  return { tiers: tiers.map(tierResponse), pendingTiers: [], pendingEffectiveDaa: null, cadenceDaa: b.cadenceDaa, expiresDaa: b.expiresDaa, declaredDaa: b.declaredDaa, lapsed: lapsed ? lapsed[0] : null, lapseDaa: lapsed ? lapsed[1] : null, enforcedLeadDaa: lead };
+}
+// §4.3: the ids summed once each, the most recent clock, the highest rung both the units and the clock reach
+function benefitTierResponse(line, holders) {
+  const l = world.lines.get(line);
+  const ids = [...new Set(holders.map(strip))].sort();
+  if (!l) return { exists: false, lineId: line, holders: ids, tipDaa: world.daa, units: 0, tenureDaa: 0, tierIndex: null, tier: null, nextTier: null, benefits: null };
+  let units = 0n, tenure = Infinity;
+  for (const h of ids) { const u = posGet(line, h); if (u > 0n) { units += u; tenure = Math.min(tenure, world.daa - (world.since.get(key(line, h)) ?? world.daa)); } }
+  if (tenure === Infinity) tenure = 0;
+  const b = benefitsResponse(line), tiers = b ? b.tiers : [];
+  let idx = null;
+  tiers.forEach((t, i) => { if (units >= BigInt(t.minUnits) && tenure >= t.minHoldDaa) idx = i; });
+  return { exists: true, lineId: line, holders: ids, tipDaa: world.daa, units: num(units), tenureDaa: tenure, tierIndex: idx, tier: idx == null ? null : tiers[idx], nextTier: tiers[idx == null ? 0 : idx + 1] || null, benefits: b };
+}
 const rootsInForce = (classId) => { const roots = []; for (const l of world.lines.values()) if (l.row.classId === classId) for (const v of l.versions) if (v.inForce) roots.push(v.root); return roots; };
 const versionResponse = (v) => Object.assign({}, v, { attemptClaims: num(v.attemptClaims), fpClaims: num(v.fpClaims), workLeaves: v.workLeaves.toString() });
 M.wrpc = async (method, params) => {
@@ -234,7 +279,8 @@ M.wrpc = async (method, params) => {
     case 'getInfo': return { p2pId: 'mock', mempoolSize: 0, serverVersion: 'mock-0.0.0', isUtxoIndexed: true, isSynced: true, hasNotifyCommand: true, hasMessageId: true };
     case 'getPalwModelMarket': return marketResponse(strip(params.lineId));
     case 'getPalwModelLines': { const id = strip(params.classId); if (!world.classes.has(id)) return { exists: false, classId: id, lines: [] }; return { exists: true, classId: id, lines: [...world.lines.values()].filter((l) => l.row.classId === id).map((l) => l.row) }; }
-    case 'getPalwModelLine': { const id = strip(params.lineId); const l = world.lines.get(id); if (!l) return { exists: false, lineId: id, line: null, currentRoot: null, rootsInForce: [], tipDaa: world.daa }; const cur = l.versions.find((v) => v.status === 'Current'); return { exists: true, lineId: id, line: l.row, currentRoot: cur ? cur.root : null, rootsInForce: rootsInForce(l.row.classId), tipDaa: world.daa }; }
+    case 'getPalwModelLine': { const id = strip(params.lineId); const l = world.lines.get(id); if (!l) return { exists: false, lineId: id, line: null, currentRoot: null, rootsInForce: [], tipDaa: world.daa }; const cur = l.versions.find((v) => v.status === 'Current'); return { exists: true, lineId: id, line: l.row, currentRoot: cur ? cur.root : null, rootsInForce: rootsInForce(l.row.classId), tipDaa: world.daa, benefits: benefitsResponse(id) }; }
+    case 'getPalwModelBenefitTier': return benefitTierResponse(strip(params.lineId), params.holders || []);
     case 'getPalwModelVersion': { const id = strip(params.lineId); const l = world.lines.get(id); const v = l && l.versions.find((x) => x.version === Number(params.version)); if (!v) return { exists: false, lineId: id, versionNumber: Number(params.version), version: null, evaluations: [], tipDaa: world.daa }; return { exists: true, lineId: id, versionNumber: v.version, version: versionResponse(v), evaluations: l.evaluations.get(v.version) || [], tipDaa: world.daa }; }
     case 'getPalwModelProposals': { const id = strip(params.lineId); const l = world.lines.get(id); return l ? { exists: true, lineId: id, proposals: l.proposals } : { exists: false, lineId: id, proposals: [] }; }
     case 'getPalwModelPositions': { const holder = strip(params.holder); const positions = []; for (const [k, units] of world.positions) { const [line, hld] = k.split(':'); if (hld === holder && units > 0n) positions.push({ lineId: line, units: num(units) }); } return { holder, positions }; }
