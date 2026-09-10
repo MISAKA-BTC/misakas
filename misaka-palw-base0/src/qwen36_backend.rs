@@ -1742,6 +1742,95 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         Some(output_commitment_v2(&context.context_hash(), output_token_ids, &rendered_output_hash_v1(output_token_ids)))
     }
 
+    /// **ADR-0093 as built: the fused site's evidence out of this capture** — the hybrid tier's twin
+    /// of the dense tier's: the capture's own committed rows, the checkpoint leg from a
+    /// re-execution through the registered plan, and the anchor's state (the composed map's every
+    /// chunk, the recurrence's included — the checkpoint roots them all) recomputed with the seat's
+    /// kernels, each refused unless it roots to the capture's own binding.
+    fn attn_site_evidence(
+        &self,
+        material: &[u8],
+        narrowed: u64,
+        carried_prompt: Option<&[u32]>,
+    ) -> Result<kaspa_consensus_core::palw_attn_responder_v1::PalwAttnSiteEvidenceV1, String> {
+        let (Some(plan), Some(registered)) = (&self.plan, &self.profile) else {
+            return Err("a backend with no registered graph carries no capture to read a fused site out of".to_string());
+        };
+        let retention =
+            crate::produce::base0_material_decode_any_v1(material).map_err(|_| "the capture does not decode".to_string())?;
+        let binding = retention.binding().clone();
+        let prompt_ids: Vec<u32> = match carried_prompt {
+            Some(ids) => {
+                if !kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(
+                    self.prompt_ids_form,
+                    ids,
+                    &binding.job_context.prompt_token_ids_hash,
+                ) {
+                    return Err("the carried prompt is not the one this capture's job context commits to".to_string());
+                }
+                ids.to_vec()
+            }
+            None => qwen36_prompt_for_anchor(binding.job_context.job_id, self.artifact.shape.vocab, binding.job_context.declared_prefill_tokens)
+                .iter()
+                .map(|t| *t as u32)
+                .collect(),
+        };
+        let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
+        let generated = retention.generated_token_ids().to_vec();
+        let rerun = qwen36_execute_for_attempt_capped_v1(
+            &self.artifact,
+            &binding.shape_profile,
+            plan,
+            &binding.job_context,
+            &prompt,
+            self.step_ladder_cap,
+        )?;
+        // The rows are the CAPTURE's (the bottom opens what the claim committed); a fold keeps
+        // none and is re-executed, which must then be the same execution.
+        let tiles = match &retention {
+            crate::produce::Base0RetentionV1::Dense(_) => self.tiles_from_material_v1(&retention)?,
+            crate::produce::Base0RetentionV1::Folded(_) => {
+                if rerun.binding.committed_execution_root != binding.committed_execution_root {
+                    return Err("a folded capture keeps no rows, and its re-execution is not the same execution".to_string());
+                }
+                rerun.tiles
+            }
+        };
+        let checkpoints = rerun.checkpoints;
+        let inventory = crate::inventory::qwen36_inventory_v1(&self.artifact, registered).map_err(|e| format!("{e:?}"))?;
+        let artifact = &self.artifact;
+        let (profile, ctx, generated) = (&binding.shape_profile, &binding.job_context, &generated);
+        crate::attn_responder::base0_attn_site_evidence_v1(
+            &binding,
+            &tiles,
+            &checkpoints,
+            narrowed,
+            inventory.operands(),
+            inventory.root(),
+            self.step_ladder_cap,
+            &mut |covered| {
+                let mut kernels = crate::fp_recompute::Qwen36RecomputeKernelsV1::new(artifact, plan);
+                crate::fp_recompute::base0_fp_recompute_state_at_covered_v1(profile, ctx, &prompt_ids, generated, covered, &mut kernels)
+                    .map(|state| state.chunks)
+                    .map_err(|e| e.to_string())
+            },
+        )
+    }
+
+    fn supports_dissection(&self) -> bool {
+        self.plan.is_some()
+            && self
+                .profile
+                .as_ref()
+                .is_some_and(kaspa_consensus_core::palw_class_admission_v2::palw_fused_sites_are_dissectable_v1)
+    }
+
+    fn has_fused_site(&self) -> bool {
+        self.profile
+            .as_ref()
+            .is_some_and(|p| p.attn_nodes.iter().any(|n| n.op_kind == kaspa_consensus_core::palw_step::PalwStepOpKindV1::AttnFused))
+    }
+
     fn operand_openings_for(
         &self,
         refutation: &kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1,
@@ -2362,6 +2451,124 @@ mod tests {
                 "checkpoint {} (covering {positions} positions): producer and seat must root the same composition",
                 leaf.checkpoint_index
             );
+        }
+    }
+
+    /// **ADR-0093 as built, on the HYBRID tier: a real fused capture answers its own dissection.**
+    ///
+    /// Graph-v5's hybrid fused tile is the tables' `tile_len`, wider than a head, so its fused leaf
+    /// is two heads' and the court refuses to dissect it by name — PINNED here as the limitation it
+    /// is (the admission gate checks the query slice's tile and not the output's, so such a class
+    /// can be admitted; ADR-0093's record names the fence that refusal would need). Graph-v6 cuts
+    /// the fused row at the head: every fused leaf of the last position answered from the backend's
+    /// evidence —
+    /// the root finalizes to the committed tile, and the bottom, served out of the composed map's
+    /// anchor (the recurrence's chunks rooted beside the cache's), recomputes it exactly. The job
+    /// stays below the recurrence's spacing (see the graph-v5 test above), so a history is one
+    /// court tile and the phase opens at its bottom; the rounds are the dense tier's test's.
+    /// Forged, the least lie that finalizes to the forged tile is convicted at that bottom.
+    #[test]
+    fn a_real_hybrid_fused_capture_answers_its_dissection_exactly_and_a_forged_row_is_convicted() {
+        use kaspa_consensus_core::palw_attn_court_v1::{PalwAttnCourtVerdictV1, PalwAttnDissectPhaseV1, check_attn_dissect_bottom_v1, palw_attn_opened_lanes_v1};
+        use kaspa_consensus_core::palw_bisect::PalwBisectTurnV1;
+        use kaspa_consensus_core::palw_step::{PalwStepOpKindV1, canonical_step_coordinates};
+
+        let (artifact, v5) = crate::fuzz_qwen36::tiny_class_v5_for_tests();
+        let geometry = kaspa_consensus_core::palw_qwen36_profile::PalwQwen36GeometryV1 {
+            n_ctx: v5.n_ctx,
+            ..crate::qwen36_plan::fixture_geometry_of(&artifact.shape, 4)
+        };
+        assert_eq!(
+            kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v5(geometry).expect("v5").shape_profile_id(),
+            v5.shape_profile_id(),
+            "one geometry for both graphs"
+        );
+        let v6 = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v6(geometry).expect("the v6 projection");
+        let artifact = std::sync::Arc::new(artifact);
+        let session = Hash64::from_u64_word(0x5E56);
+        for (graph, profile) in [("v5", v5), ("v6", v6)] {
+            let backend = Qwen36Backend::from_registered_profile(artifact.clone(), b"misaka-palw-test".to_vec(), profile.clone(), (3, 4))
+                .expect("the fused hybrid is servable");
+            assert!(backend.has_fused_site());
+            assert_eq!(backend.supports_dissection(), graph == "v6", "{graph}: the backend says whether its fused tile is one head's");
+            let root = crate::inventory::qwen36_inventory_v1(&artifact, &profile).expect("the inventory").root();
+            let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x0000_9336)).expect("a job");
+            let honest = backend.execute(&job, &prompt).expect("runs");
+            let binding = crate::produce::base0_material_decode_any_v1(&honest.material).expect("decodes").binding().clone();
+            let last_call = job.exact_decode_tokens.saturating_sub(1);
+            let fused: Vec<u64> = (0..binding.step_leaf_count)
+                .filter(|i| {
+                    let c = canonical_step_coordinates(&profile, &binding.job_context, *i).expect("a coordinate");
+                    c.call_index == last_call
+                        && profile.resolve_node_slot(c.node_slot).is_some_and(|(n, _)| n.op_kind == PalwStepOpKindV1::AttnFused)
+                })
+                .collect();
+            assert!(!fused.is_empty(), "the hybrid's attention layer has a fused site at the last position");
+            if graph == "v5" {
+                let refused = backend.attn_site_evidence(&honest.material, fused[0], None).expect_err("a two-head fused tile");
+                assert!(refused.contains("ONE head"), "refused by name: {refused}");
+                continue;
+            }
+            for &narrowed in &fused {
+                let evidence = backend.attn_site_evidence(&honest.material, narrowed, None).expect("the honest capture yields its evidence");
+                let site = evidence.site_v1(root, false).expect("the site derives");
+                let anchored = evidence.site_v1(root, true).expect("and with its anchor");
+                let root_claim = evidence.root_claim_v1(&site).expect("the root computes");
+                let committed =
+                    palw_attn_opened_lanes_v1(&evidence.out_tile, &anchored.binding, site.head_lanes.2 as usize).expect("opens");
+                let open = |claim: &kaspa_consensus_core::palw_attn_dissect::PalwAttnRootClaimV1, tile: &[i32]| {
+                    PalwAttnDissectPhaseV1::open_with_arity(
+                        session,
+                        claim,
+                        site.head_lanes,
+                        site.history_positions,
+                        tile,
+                        site.site.params.values,
+                        2,
+                        site.tile_positions,
+                        0,
+                        10,
+                        true,
+                    )
+                };
+                let phase = open(&root_claim, &committed).expect("the honest root finalizes to the committed tile");
+                assert_eq!(phase.turn(), PalwBisectTurnV1::Terminal, "one court tile: the phase opens at its bottom");
+                let bottom = evidence.bottom_v1(&anchored, &phase).expect("the bottom builds out of the composed anchor");
+                assert_eq!(
+                    check_attn_dissect_bottom_v1(&phase, &bottom, &anchored.binding, &anchored.site, true),
+                    Ok(PalwAttnCourtVerdictV1::ChallengerDefeated),
+                    "leaf {narrowed}: the hybrid evidence must be exact on real committed rows"
+                );
+
+                // Forged: the output tile moved, the least lie that finalizes to it, convicted.
+                let lying = backend.execute_with_injected_fault(&job, &prompt, narrowed).expect("a forged capture commits");
+                let accused = backend.attn_site_evidence(&lying.material, narrowed, None).expect("the accused's commitments open");
+                let accused_site = accused.site_v1(root, true).expect("site");
+                let forged = palw_attn_opened_lanes_v1(&accused.out_tile, &accused_site.binding, site.head_lanes.2 as usize).expect("opens");
+                assert!(open(&root_claim, &forged).is_err(), "an honest root cannot finalize to a forged tile");
+                let values = site.site.params.values;
+                let finalize = |v: &[i64]| kaspa_consensus_core::palw_base0_a16::a16_attn_finalize_v1(v, values);
+                let lane = (0..forged.len()).find(|l| finalize(&root_claim.claim.v_acc)[*l] != forged[*l]).expect("a moved lane");
+                let at = |delta: i64| {
+                    let mut v = root_claim.claim.v_acc.clone();
+                    v[lane] += delta;
+                    finalize(&v)[lane]
+                };
+                let (mut lo, mut hi) = (-(1i64 << 44), 1i64 << 44);
+                while lo < hi {
+                    let mid = lo + (hi - lo) / 2;
+                    if at(mid) < forged[lane] { lo = mid + 1 } else { hi = mid }
+                }
+                let mut lie = root_claim.clone();
+                lie.claim.v_acc[lane] += lo;
+                let phase = open(&lie, &forged).expect("the least lie opens");
+                let bottom = accused.bottom_v1(&accused_site, &phase).expect("the accused's bottom builds");
+                assert_eq!(
+                    check_attn_dissect_bottom_v1(&phase, &bottom, &accused_site.binding, &accused_site.site, true),
+                    Ok(PalwAttnCourtVerdictV1::ExecutorGuilty),
+                    "leaf {narrowed}: the forged hybrid row is convicted"
+                );
+            }
         }
     }
 

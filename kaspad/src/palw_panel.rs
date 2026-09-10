@@ -204,6 +204,20 @@ const MAX_INFLIGHT_CARRIERS: usize = 8;
 /// and is expected to be dozens of DAA; this is a small multiple of block time, so a lost carrier
 /// gets on the order of ten retries rather than one.
 const COURT_MOVE_REPLAN_DAA: u64 = 10;
+
+/// **The round a court move is de-duplicated under** (ADR-0093 as built). One session runs three
+/// sequences of moves — the ladder's rounds, the fused terminal's root claim, and the dissection's
+/// own rounds, which restart at 0 — and keyed by the bare number a dissection move would be taken
+/// for a ladder move already sent and skipped as "moved" while its rung clock ran out.
+fn court_move_round_v1(duty: &kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2) -> u32 {
+    const DISSECTION: u32 = 1 << 31;
+    const ROOT_CLAIM: u32 = 1 << 30;
+    match &duty.dissection {
+        Some(phase) => DISSECTION | phase.round(),
+        None if duty.fused_class && duty.terminal_index.is_some() => ROOT_CLAIM,
+        None => duty.round,
+    }
+}
 /// Submission attempts per assembled object before giving up (each tick retries).
 const SUBMIT_ATTEMPTS: u32 = 3;
 /// **How long the panel keeps a claim it is not being asked about.**
@@ -2096,6 +2110,12 @@ impl PalwPanelService {
         // same pure function, every rung `agree`s, and the ladder walks to an index no real job
         // opens. The dispute is only a dispute if the two sides speak from two executions.
         let mut own_executions: HashMap<Hash64, Vec<u8>> = HashMap::new();
+        // **ADR-0093 as built: a fused site's evidence, per session and per capture** — the
+        // responder's (its own), the challenger's own execution's (its choices) and the accused's
+        // (the bottom). Built once: it is a dense re-execution and an inventory, and every round of
+        // the dissection reads the same one.
+        let mut attn_evidence: HashMap<(Hash64, bool), Arc<kaspa_consensus_core::palw_attn_responder_v1::PalwAttnSiteEvidenceV1>> =
+            HashMap::new();
         let mut receipts: HashMap<Hash64, Vec<PalwSeatReceiptV2>> = HashMap::new();
         // **Keyed by the PANEL, not by the claim** (ADR-0060's redraw, found while landing
         // ADR-0065 D4). A claim whose panel concludes nothing is revived once and binds a SECOND
@@ -2480,8 +2500,10 @@ impl PalwPanelService {
             let mut intervals_for_close: Vec<(Hash64, Vec<u32>)> = Vec::new();
             let court_duties = session.palw_court_duties_v2(vec![bond_key]);
             let mut court_stalls: BTreeMap<&'static str, usize> = BTreeMap::new();
+            attn_evidence.retain(|(session_id, _), _| court_duties.iter().any(|d| d.session_id == *session_id));
             for duty in &court_duties {
-                if let Some(sent_daa) = court_moved.get(&(duty.session_id, duty.round, duty.i_am_responder))
+                let move_round = court_move_round_v1(duty);
+                if let Some(sent_daa) = court_moved.get(&(duty.session_id, move_round, duty.i_am_responder))
                     && current_daa < sent_daa.saturating_add(COURT_MOVE_REPLAN_DAA)
                 {
                     continue;
@@ -2494,7 +2516,7 @@ impl PalwPanelService {
                 // crowded out are exactly the ones whose lapse convicts the responder. The
                 // opening-court branch has always had this guard; the responder branch did not.
                 if court_pending.iter().any(|(sid, round, responder, _)| {
-                    *sid == duty.session_id && *round == duty.round && *responder == duty.i_am_responder
+                    *sid == duty.session_id && *round == move_round && *responder == duty.i_am_responder
                 }) {
                     continue;
                 }
@@ -2701,6 +2723,226 @@ impl PalwPanelService {
                     trace!("[{PALW_PANEL}] session {} needs a move but this node holds no matching capture", duty.session_id);
                     continue;
                 };
+                // ---- ADR-0093 as built: the fused site's dissection -------------------------------
+                //
+                // At a fused terminal the ladder's close is not the move: the responder owes a ROOT
+                // CLAIM (the fold is already clocking it as `AwaitDisclosure`), then one round per
+                // disclosure; the challenger names a child per round; at the bottom a close finishes
+                // it. Every number is computed from the capture's evidence by the court's own
+                // kernels (`palw_attn_responder_v1`) — the responder from its own capture, the
+                // challenger's choices from its own execution, the bottom from the ACCUSED capture,
+                // whose commitments are what the court opens.
+                if duty.dissection.is_some() || (duty.fused_class && duty.terminal_index.is_some()) {
+                    use kaspa_consensus_core::palw_attn_court_v1::{PALW_ATTN_COURT_OBJECT_VERSION_V1, PalwAttnDissectChoiceV1};
+                    use kaspa_consensus_core::palw_court_v2::{
+                        PALW_COURT_V2_MLDSA87_ATTN_CHALLENGER_CONTEXT, PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT,
+                        palw_attn_root_claim_message_v1, palw_attn_round_message_v1,
+                    };
+                    #[derive(Clone, Copy, PartialEq, Eq)]
+                    enum AttnMove {
+                        Root,
+                        Round,
+                        Choice,
+                        Close,
+                    }
+                    let Some(narrowed) = duty.terminal_index else {
+                        *court_stalls.entry("a dissection whose ladder names no leaf").or_default() += 1;
+                        continue;
+                    };
+                    let mv = match (duty.dissection.as_ref(), duty.i_am_responder, duty.turn) {
+                        (None, true, PalwBisectTurnV1::AwaitDisclosure) => AttnMove::Root,
+                        (Some(_), true, PalwBisectTurnV1::AwaitDisclosure) => AttnMove::Round,
+                        (Some(_), false, PalwBisectTurnV1::AwaitVerdict) => AttnMove::Choice,
+                        (Some(_), _, PalwBisectTurnV1::Terminal) => AttnMove::Close,
+                        _ => {
+                            *court_stalls.entry("waiting — the dissection's move is the other party's").or_default() += 1;
+                            continue;
+                        }
+                    };
+                    if !backend.supports_dissection() {
+                        *court_stalls
+                            .entry("this class's family cannot take a dissection's turn in this build — the clock will decide")
+                            .or_default() += 1;
+                        continue;
+                    }
+                    // Which capture this move speaks from: the bottom is the accused's, every other
+                    // move the party's own.
+                    let from_accused = mv == AttnMove::Close || duty.i_am_responder;
+                    let source: Vec<u8> = if mv == AttnMove::Close {
+                        match accused_capture.as_deref() {
+                            Some(accused) => accused.to_vec(),
+                            None => {
+                                if requested.get(&duty.claim_id).is_none_or(|at| current_daa >= at.saturating_add(25)) {
+                                    requested.insert(duty.claim_id, current_daa);
+                                    pull_for_close.push(duty.claim_id);
+                                }
+                                *court_stalls.entry("the dissection's bottom needs the ACCUSED capture — pulling").or_default() += 1;
+                                continue;
+                            }
+                        }
+                    } else {
+                        capture.to_vec()
+                    };
+                    let key = (duty.session_id, from_accused);
+                    let evidence = match attn_evidence.get(&key) {
+                        Some(held) => held.clone(),
+                        None => {
+                            let carried: Option<Vec<u32>> = fp_job.as_ref().map(|job| job.prompt_token_ids.clone());
+                            let Ok((_offloaded, built)) =
+                                offload(backend, move |b| b.attn_site_evidence(&source, narrowed, carried.as_deref())).await
+                            else {
+                                *court_stalls.entry("the dissection evidence task did not finish").or_default() += 1;
+                                continue;
+                            };
+                            match built {
+                                Ok(evidence) => {
+                                    let evidence = Arc::new(evidence);
+                                    attn_evidence.insert(key, evidence.clone());
+                                    evidence
+                                }
+                                Err(why) => {
+                                    *court_stalls.entry("this capture yields no evidence for the fused site").or_default() += 1;
+                                    warn!("[{PALW_PANEL}] session {}: the fused site's evidence: {why}", duty.session_id);
+                                    continue;
+                                }
+                            }
+                        }
+                    };
+                    let site = match evidence.site_v1(duty.artifact_root, false) {
+                        Ok(site) => site,
+                        Err(why) => {
+                            *court_stalls.entry("the fused site does not derive from the evidence").or_default() += 1;
+                            warn!("[{PALW_PANEL}] session {}: {why}", duty.session_id);
+                            continue;
+                        }
+                    };
+                    let object = match mv {
+                        AttnMove::Root => {
+                            let root = match evidence.root_claim_v1(&site) {
+                                Ok(root) => root,
+                                Err(why) => {
+                                    *court_stalls.entry("the root claim does not compute from the evidence").or_default() += 1;
+                                    warn!("[{PALW_PANEL}] session {}: {why}", duty.session_id);
+                                    continue;
+                                }
+                            };
+                            let params = &self.consensus_config.params;
+                            let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode
+                            else {
+                                continue;
+                            };
+                            let Ok(court) = kaspa_consensus_core::palw_court_v2::palw_court_params_at_v2(
+                                bundle,
+                                params.palw_kary_court_active_at(current_daa),
+                            ) else {
+                                *court_stalls.entry("this ruleset's court has no shape for a dissection").or_default() += 1;
+                                continue;
+                            };
+                            let message = palw_attn_root_claim_message_v1(&duty.session_id, &root);
+                            let Some(signature) = self.sign(&message, PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT) else {
+                                *court_stalls.entry("no signing key for a root claim").or_default() += 1;
+                                continue;
+                            };
+                            info!(
+                                "[{PALW_PANEL}] session {}: answering the fused leaf {narrowed} with a root claim over {} positions (head {}, lanes {}+{})",
+                                duty.session_id, root.history_positions, root.head, root.lane_first, root.lane_count
+                            );
+                            PalwConsensusObjectV2::CourtAttnRootClaimed {
+                                session_id: duty.session_id,
+                                root,
+                                arity: court.dissection_arity(),
+                                binding: Box::new(evidence.binding.clone()),
+                                out_tile: evidence.out_tile.clone(),
+                                operand_openings: evidence.operand_openings.clone(),
+                                signature,
+                            }
+                        }
+                        AttnMove::Round => {
+                            let Some(phase) = duty.dissection.as_ref() else { continue };
+                            let round = match evidence.round_v1(&site, phase) {
+                                Ok(round) => round,
+                                Err(why) => {
+                                    *court_stalls.entry("the round does not compute from the evidence").or_default() += 1;
+                                    warn!("[{PALW_PANEL}] session {}: {why}", duty.session_id);
+                                    continue;
+                                }
+                            };
+                            let message = palw_attn_round_message_v1(&duty.session_id, phase.round(), &round);
+                            let Some(signature) = self.sign(&message, PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT) else {
+                                *court_stalls.entry("no signing key for a dissection round").or_default() += 1;
+                                continue;
+                            };
+                            PalwConsensusObjectV2::CourtAttnDissected { session_id: duty.session_id, round, signature }
+                        }
+                        AttnMove::Choice => {
+                            let Some(phase) = duty.dissection.as_ref() else { continue };
+                            let child = match evidence.divergent_child_v1(&site, phase) {
+                                Ok(Some(child)) => child,
+                                Ok(None) => {
+                                    // Every child reproduces: an honest disclosure, and no choice wins.
+                                    // Silence lets the rung clock end it on this side, which is what an
+                                    // accusation the dissection does not support deserves.
+                                    *court_stalls.entry("the responder's disclosure reproduces — nothing to name").or_default() += 1;
+                                    continue;
+                                }
+                                Err(why) => {
+                                    *court_stalls.entry("the challenger cannot recompute the children").or_default() += 1;
+                                    warn!("[{PALW_PANEL}] session {}: {why}", duty.session_id);
+                                    continue;
+                                }
+                            };
+                            let choice =
+                                PalwAttnDissectChoiceV1 { version: PALW_ATTN_COURT_OBJECT_VERSION_V1, session_id: duty.session_id, round: phase.round(), child };
+                            let message = borsh::to_vec(&choice).expect("a dissection choice is borsh-serializable");
+                            let Some(signature) = self.sign(&message, PALW_COURT_V2_MLDSA87_ATTN_CHALLENGER_CONTEXT) else {
+                                *court_stalls.entry("no signing key for a dissection choice").or_default() += 1;
+                                continue;
+                            };
+                            info!(
+                                "[{PALW_PANEL}] session {}: naming child {child} of round {} — the responder's claim does not reproduce there",
+                                duty.session_id,
+                                phase.round()
+                            );
+                            PalwConsensusObjectV2::CourtAttnChildChosen { session_id: duty.session_id, choice, signature }
+                        }
+                        AttnMove::Close => {
+                            let Some(phase) = duty.dissection.as_ref() else { continue };
+                            let bottom = match evidence.site_v1(duty.artifact_root, true).and_then(|anchored| evidence.bottom_v1(&anchored, phase)) {
+                                Ok(bottom) => bottom,
+                                Err(why) => {
+                                    *court_stalls.entry("the dissection's bottom does not assemble").or_default() += 1;
+                                    warn!("[{PALW_PANEL}] session {}: {why}", duty.session_id);
+                                    continue;
+                                }
+                            };
+                            let proof = kaspa_consensus_core::palw_court_v2::PalwCourtVerdictProofV2::AttnDissection {
+                                binding: Box::new(evidence.binding.clone()),
+                                bottom: Box::new(bottom),
+                                operand_openings: evidence.operand_openings.clone(),
+                            };
+                            let Some(verdict) = session.palw_court_close_verdict_v2(&duty.session_id, &proof) else {
+                                *court_stalls.entry("the chain reads no verdict from this bottom").or_default() += 1;
+                                continue;
+                            };
+                            // A party closes only the case it wins: the challenger a conviction, the
+                            // responder an acquittal. The other outcome needs no fee to arrive — the
+                            // backstop ends an unproven accusation on the challenger's side anyway.
+                            let mine = if duty.i_am_responder {
+                                verdict == kaspa_consensus_core::palw_state_v2::PalwCourtVerdictV2::ChallengerDefeated
+                            } else {
+                                verdict == kaspa_consensus_core::palw_state_v2::PalwCourtVerdictV2::ExecutorGuilty
+                            };
+                            if !mine {
+                                *court_stalls.entry("the bottom's verdict is the other party's").or_default() += 1;
+                                continue;
+                            }
+                            info!("[{PALW_PANEL}] session {} closes its dissection as {verdict:?} at tile {}", duty.session_id, phase.terminal_tile().unwrap_or(0));
+                            PalwConsensusObjectV2::CourtClosed { session_id: duty.session_id, verdict, proof }
+                        }
+                    };
+                    court_pending.push((duty.session_id, move_round, duty.i_am_responder, object));
+                    continue;
+                }
                 let object = match (duty.turn, duty.i_am_responder) {
                     // Our disclosure: the state of OUR execution at the midpoint the ladder asks
                     // about. A prefix commitment, so agreeing at an index means agreeing before it.
@@ -2954,7 +3196,7 @@ impl PalwPanelService {
                     }
                 };
                 let Some(object) = object else { continue };
-                court_pending.push((duty.session_id, duty.round, duty.i_am_responder, object));
+                court_pending.push((duty.session_id, move_round, duty.i_am_responder, object));
             }
             // Ask for every accused capture a close needed and this node did not hold. Outside the
             // logging guard below deliberately: a request that only goes out when a summary line
@@ -5769,21 +6011,43 @@ mod court_responder_coverage_pin {
         );
     }
 
+    /// **ADR-0093 as built: the panel FILES the fused terminal's root claim now — and the exemption
+    /// that stood in for it stays unarmed.**
+    ///
+    /// This pin used to count the panel's mentions of `CourtAttnRootClaimed` at two (the match arm
+    /// and its name) and said what to do the day that moved: not relax the count, but retire
+    /// `Params::palw_court_responder_coverage`, whose mercy was "a placeholder for a responder".
+    /// The responder is here — the root claim, the rounds, the challenger's choice and the
+    /// bottom's close, every number computed from a capture's evidence by the court's own kernels
+    /// — so the fence is retired the only way a fence that was never armed can be: it stays `None`
+    /// on every preset, and this test says so. Arming it now would excuse a silence the responder
+    /// no longer has a reason for. The producer still files no court move.
     #[test]
-    fn no_shipped_binary_files_a_court_attn_root_claimed() {
+    fn the_panel_files_the_fused_terminals_moves_and_the_responder_exemption_stays_unarmed() {
         const MARKER: &str = "mod court_responder_coverage_pin";
         let whole = include_str!("palw_panel.rs");
         let panel = &whole[..whole.find(MARKER).expect("this module is in this file")];
         let producer = include_str!("palw_producer.rs");
-        assert_eq!(
-            panel.matches("CourtAttnRootClaimed").count(),
-            2,
-            "the panel names ADR-0082's terminal move exactly twice — the match arm and the string it maps to — and              builds one nowhere. If that count moved because a RESPONDER now exists, retire              `Params::palw_court_responder_coverage` by activation rather than editing this number: the fence is only              correct while this is true."
-        );
-        assert_eq!(
-            producer.matches("CourtAttnRootClaimed").count(),
-            0,
-            "the producer does not file court moves at all; if it now does, the exemption above is a rule nobody chose"
-        );
+        for built in [
+            "PalwConsensusObjectV2::CourtAttnRootClaimed {",
+            "PalwConsensusObjectV2::CourtAttnDissected {",
+            "PalwConsensusObjectV2::CourtAttnChildChosen {",
+            "PalwCourtVerdictProofV2::AttnDissection {",
+        ] {
+            assert!(panel.contains(built), "the panel builds `{built}` — the dissection's move");
+        }
+        assert!(panel.contains("b.attn_site_evidence("), "and every number comes from the capture's evidence");
+        assert_eq!(producer.matches("CourtAttnRootClaimed").count(), 0, "the producer does not file court moves at all");
+        for (name, params) in [
+            ("mainnet", kaspa_consensus_core::config::params::MAINNET_PARAMS),
+            ("testnet", kaspa_consensus_core::config::params::TESTNET_PARAMS),
+            ("simnet", kaspa_consensus_core::config::params::SIMNET_PARAMS),
+            ("devnet", kaspa_consensus_core::config::params::DEVNET_PARAMS),
+        ] {
+            assert!(
+                params.palw_court_responder_coverage.is_none(),
+                "{name}: the responder exemption is retired — a fused terminal's silence is the responder's to answer"
+            );
+        }
     }
 }

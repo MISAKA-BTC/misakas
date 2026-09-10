@@ -652,6 +652,17 @@ impl PalwAttnDissectPhaseV1 {
     pub fn claim(&self) -> &PalwAttnRangeClaimV1 {
         &self.claim
     }
+    /// The children the current round disclosed, awaiting the challenger's index — what an honest
+    /// challenger compares its own recompute against (ADR-0093 as built). Empty outside
+    /// `AwaitVerdict`.
+    pub fn pending(&self) -> &[PalwAttnRangeClaimV1] {
+        &self.pending
+    }
+    /// The disputed head and its output lanes, `(head, lane_first, lane_count)` — the triple the
+    /// phase was opened on.
+    pub fn head_lanes(&self) -> (u16, u16, u16) {
+        (self.head, self.lane_first, self.lane_count)
+    }
     /// The disputed range in TILES: `(first, count)`.
     pub fn tile_range(&self) -> (u64, u64) {
         (self.tile_first, self.tile_count)

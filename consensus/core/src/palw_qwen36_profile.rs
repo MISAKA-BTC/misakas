@@ -1331,8 +1331,20 @@ pub fn qwen36_artifact_row_profile_v5(g: PalwQwen36GeometryV1) -> Result<PalwSha
 ///
 /// A class IS its graph, so this is a new class id, and every `graph-v5` class stays exactly the
 /// live chain fact it is. The artifact is UNCHANGED.
+///
+/// **And its fused output tile IS the head** (ADR-0093 as built). The fusion inherits the values
+/// node's tile, which the hybrid tables budget at the geometry's `tile_len` — 512 lanes against a
+/// 256-lane head on every shipped hybrid geometry — so a graph-v5 hybrid's fused leaf covers two
+/// heads, and the court refuses to dissect it (`FusedTileStraddlesHeads`: a dissection is one
+/// head's softmax). Graph-v6 cuts that one node's row at the head, so every fused leaf is one
+/// head's and the dissection ADR-0082 built can try it; nothing else about the graph moves.
 pub fn qwen36_profile_v6(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
-    qwen36_profile_with(g, QWEN36_PRE_IR_V6, QWEN36_LINEAR_IR_V2, QWEN36_ATTN_IR_V2, QWEN36_POST_IR, true)
+    let mut profile = qwen36_profile_with(g, QWEN36_PRE_IR_V6, QWEN36_LINEAR_IR_V2, QWEN36_ATTN_IR_V2, QWEN36_POST_IR, true)?;
+    for node in profile.attn_nodes.iter_mut().filter(|n| n.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused) {
+        node.tile_len = g.attn_head_dim.max(crate::palw_step::PALW_STEP_MIN_TILE_LEN);
+    }
+    profile.validate_shape()?;
+    Ok(profile)
 }
 
 /// **The `graph-v6` row over the epsilon the artifact executes**, paired as the v5 row is.

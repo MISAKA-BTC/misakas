@@ -292,31 +292,30 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         false
     }
 
-    /// **ADR-0093 Decision 1: the fused-attention responder's whole backend obligation.**
+    /// **ADR-0093 Decision 1, as built: everything this capture yields about the fused site at
+    /// `narrowed`** — the binding, the opened output tile and query row, the site's registered
+    /// narrowings opened against the class root, the site's INPUTS (the disputed head's query
+    /// slice and the layer's K and V series over the whole history), and the evidence its bottom
+    /// is served from: the anchor the disputed step must carry, with every chunk of its state, or
+    /// the cache-write rows.
     ///
-    /// The online-softmax statistics this family's attention formed over `[first, first + count)`
-    /// of the disputed site's key positions — `(m*, S*, V*)`, the triple
-    /// [`crate::palw_attn_dissect::palw_attn_fold_v1`] composes. Because the fold composes, a
-    /// family that can answer for ONE history tile can answer every rung of a dissection: the
-    /// panel folds tiles into children, children into parents, and parents into the root claim.
-    /// A backend therefore never sees a session and never implements a court.
+    /// ADR-0093 made the obligation one history tile's triple; built, it is smaller: every number a
+    /// move carries is COMPUTED from this evidence by the court's own kernels
+    /// ([`crate::palw_attn_responder_v1`]), so a family reads what it committed and never does the
+    /// arithmetic. Decision 4's hazard — statistics "close but not exact" that convict their own
+    /// producer while it holds the claim's collateral — has no family code to live in.
     ///
-    /// `None` by default, the shape `disclose_trace_event` uses: a family that has not implemented
-    /// it cannot take a dissection's turn, and [`Self::supports_dissection`] is where it says so
-    /// before a court is armed over it rather than after it has been convicted.
-    ///
-    /// **Exact or absent, never approximate.** `palw_attn_fold_check_v1` is integer arithmetic and
-    /// does not care why two numbers disagree, so a family that answers with statistics that are
-    /// close but not exact convicts itself while holding the claim's collateral (ADR-0093
-    /// Decision 4). Returning `None` is always safe; returning a rounded triple is not.
-    fn attn_tile_claim(
+    /// `carried_prompt` is the user's ids for a free-prompt claim and `None` for an attempt (whose
+    /// prompt is re-derived from the anchor), as [`Self::refutation_for_free_prompt_index`] takes
+    /// them. `Err` by default: a family that cannot answer says so through
+    /// [`Self::supports_dissection`] before a court is armed over it.
+    fn attn_site_evidence(
         &self,
         _material: &[u8],
-        _site: &crate::palw_attn_court_v1::PalwAttnBottomSiteV1,
-        _first: u64,
-        _count: u64,
-    ) -> Option<crate::palw_attn_dissect::PalwAttnRangeClaimV1> {
-        None
+        _narrowed: u64,
+        _carried_prompt: Option<&[u32]>,
+    ) -> Result<crate::palw_attn_responder_v1::PalwAttnSiteEvidenceV1, String> {
+        Err("this family cannot read a fused site out of its capture".to_string())
     }
 
     /// **Can this backend take a FUSED dissection's turn?** — deliberately not
@@ -327,9 +326,18 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     /// repair, and two call sites branch on it. One boolean cannot answer for two unrelated turns,
     /// so widening it would report a disclosure gap that does not exist. This is the second answer.
     ///
-    /// `false` until [`Self::attn_tile_claim`] is implemented, and a family that overrides one
-    /// without the other is advertising a turn it cannot take.
+    /// `true` exactly where [`Self::attn_site_evidence`] is implemented — a family that overrides
+    /// one without the other is advertising a turn it cannot take, and the source guard in
+    /// `misaka-palw-base0` fails on it.
     fn supports_dissection(&self) -> bool {
+        false
+    }
+
+    /// **Does this backend's class commit a fused attention site at all?** (ADR-0093 as built.) A
+    /// claim of such a class disputed down to a fused leaf is answered by a root claim, which only
+    /// a backend that [`Self::supports_dissection`] can file; a producer asks both before it
+    /// underwrites a claim it could not defend there. `false` by default: the floor has none.
+    fn has_fused_site(&self) -> bool {
         false
     }
 

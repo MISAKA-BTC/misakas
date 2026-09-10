@@ -38,6 +38,7 @@
 //! ADR-0040 Decision H. It is the reason the op count is ten rather than nine.
 
 pub mod artifact;
+pub mod attn_responder;
 pub mod backend;
 /// The chat template a lane renders. `tokenizer::qwen_chat_prompt` is *Qwen2.5's*, and its own
 /// doc says a model whose template differs needs its own renderer; this is where that per-class

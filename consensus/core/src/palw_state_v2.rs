@@ -23843,6 +23843,39 @@ pub(crate) mod tests {
         /// at decode call 0 covers the whole prefill, which is this job's whole history. The
         /// straddle (a tile reaching past the anchor's edge) is a decode-position case, and
         /// `palw_attn_court_v1` is where it is swept.
+        impl Drill {
+            /// **The drill's execution as ONE CAPTURE yields it** (ADR-0093 as built): the binding,
+            /// the opened output tile and query row, the fused operands, the inputs, the anchor with
+            /// every chunk of its state, and the cache-write rows — what a family's
+            /// `attn_site_evidence` returns, built here from the drill's own commitments.
+            pub(crate) fn evidence(&self) -> crate::palw_attn_responder_v1::PalwAttnSiteEvidenceV1 {
+                let anchor = Anchor::build(&self.profile, &self.context, &self.k, &self.v, self.kv_dim, ANCHOR_POSITIONS);
+                let rows = |index: &[u64], series: &[i32]| -> Vec<PalwAttnRowOpeningV1> {
+                    (0..self.history)
+                        .map(|p| self.row(index[p], &series[p * self.kv_dim..(p + 1) * self.kv_dim], self.slot_of(index[p]), p as u32))
+                        .collect()
+                };
+                crate::palw_attn_responder_v1::PalwAttnSiteEvidenceV1 {
+                    narrowed: self.narrowed,
+                    binding: self.binding.clone(),
+                    out_tile: self.out_tile_opening(),
+                    query: self.row(self.query_index, &self.q, self.slot_of(self.query_index), PREFILL - 1),
+                    operand_openings: self.openings(),
+                    inputs: crate::palw_attn_responder_v1::PalwAttnSiteInputsV1 {
+                        qh: self.q.clone(),
+                        k_series: self.k.clone(),
+                        v_series: self.v.clone(),
+                    },
+                    anchor: Some(crate::palw_attn_responder_v1::PalwAttnAnchorEvidenceV1 {
+                        anchor: anchor.anchor.clone(),
+                        chunks: anchor.chunk_bytes.clone(),
+                        chunk_hashes: anchor.chunk_hashes.clone(),
+                    }),
+                    cache_rows: Some((rows(&self.k_index, &self.k), rows(&self.v_index, &self.v))),
+                }
+            }
+        }
+
         const ANCHOR_POSITIONS: u32 = PREFILL;
 
         struct Anchor {
@@ -24227,6 +24260,96 @@ pub(crate) mod tests {
                 matches!(after.claim(&claim_id).expect("the claim survives as a record").phase, PalwClaimPhaseV2::Voided { .. }),
                 "a convicted claim is voided"
             );
+        }
+
+        /// **ADR-0093 as built: every move computed from EVIDENCE by the court's own kernels, played
+        /// through the chain.** The drill's hand-written claims replaced by what
+        /// `PalwAttnSiteEvidenceV1` computes from one capture: the honest responder's root and
+        /// every round, the challenger's choice (the first child its recompute does not reproduce,
+        /// `None` against an honest disclosure), and the bottom out of the anchor.
+        ///
+        /// * Honest: the evidence's root IS the drill's honest root; every round it computes folds
+        ///   and equals the drill's; the challenger finds nothing to name (so the drill's
+        ///   "child 0" walk stands in for a challenger that accused a sound claim); the evidence's
+        ///   bottom is byte-for-byte the drill's anchored bottom and the court acquits.
+        /// * Forged: an honest-inputs root does not finalize to the forged committed tile (the
+        ///   phase would refuse it — the forger MUST lie), so the responder plays the drill's lying
+        ///   root and rounds; the challenger's evidence names the child holding the lie at every
+        ///   round, and the evidence's bottom convicts.
+        #[test]
+        fn the_parties_moves_from_evidence_acquit_the_honest_and_convict_the_forged_through_the_chain() {
+            use crate::palw_attn_responder_v1::PalwAttnSiteEvidenceV1;
+            let p = params_with_ladder();
+            for forge in [false, true] {
+                let drill = Drill::new(forge);
+                let evidence: PalwAttnSiteEvidenceV1 = drill.evidence();
+                let site = evidence.site_v1(drill.artifact_root, false).expect("the site derives from the evidence");
+                let anchored_site = evidence.site_v1(drill.artifact_root, true).expect("and with its anchor");
+                let honest_root = evidence.root_claim_v1(&site).expect("the root computes from the inputs");
+                if forge {
+                    assert_ne!(honest_root, drill.root_claim, "the forger's root is a lie by construction");
+                    assert_ne!(
+                        crate::palw_base0_a16::a16_attn_finalize_v1(&honest_root.claim.v_acc, site.site.params.values),
+                        drill.out_tile,
+                        "an honest-inputs root cannot finalize to the forged committed tile"
+                    );
+                } else {
+                    assert_eq!(honest_root, drill.root_claim, "the evidence's root is the honest root");
+                }
+
+                let (mut state, _claim_id, sid, mut daa) = court_at_the_fused_leaf(&p, &drill);
+                let (next, _) = apply(&state, &p, &ctx(daa, daa, daa), &[root_claimed(sid, &drill, 2)], None);
+                daa += 1;
+                state = next;
+                let mut guard = 0;
+                while state.court_session(&sid).unwrap().dissection.as_ref().unwrap().turn() != PalwBisectTurnV1::Terminal {
+                    let phase = state.court_session(&sid).unwrap().dissection.as_ref().unwrap().clone();
+                    // The responder's round: the evidence's for an honest executor, the drill's lie
+                    // pushed into a child for the forger.
+                    let children: Vec<_> = if forge {
+                        phase.child_ranges().iter().map(|&(f, c)| drill.range_claim(f, c)).collect()
+                    } else {
+                        let round = evidence.round_v1(&site, &phase).expect("an honest round computes");
+                        let drilled: Vec<_> = phase.child_ranges().iter().map(|&(f, c)| drill.range_claim(f, c)).collect();
+                        assert_eq!(round.children, drilled, "the evidence's round is the drill's honest round");
+                        round.children
+                    };
+                    let (next, _) = apply(&state, &p, &ctx(daa, daa, daa), &[dissected(sid, children)], None);
+                    daa += 1;
+                    let disclosed = next.court_session(&sid).unwrap().dissection.as_ref().unwrap().clone();
+                    let named = evidence.divergent_child_v1(&site, &disclosed).expect("the challenger recomputes");
+                    let child = if forge {
+                        named.expect("a forged disclosure has a child the challenger's recompute does not reproduce")
+                    } else {
+                        assert_eq!(named, None, "nothing in an honest disclosure is the challenger's to name");
+                        0
+                    };
+                    let (next, _) = apply(&next, &p, &ctx(daa, daa, daa), &[child_chosen(sid, disclosed.round(), child)], None);
+                    daa += 1;
+                    state = next;
+                    guard += 1;
+                    assert!(guard < 32, "the dissection did not narrow");
+                }
+                let phase = state.court_session(&sid).unwrap().dissection.as_ref().unwrap().clone();
+                let tile = phase.terminal_tile().expect("narrowed");
+                let bottom = evidence.bottom_v1(&anchored_site, &phase).expect("the bottom builds from the evidence");
+                assert_eq!(bottom, drill.bottom_anchored(sid, tile), "the evidence's bottom is the drill's anchored bottom");
+                let court = crate::palw_mode_v2::PalwCourtParamsV2::new(1 << 22, 20, 2).unwrap();
+                let verdict = crate::palw_court_v2::adjudicate_court_close_v2(
+                    &state,
+                    &sid,
+                    &dissection_close(&drill, bottom),
+                    &court,
+                    crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+                    crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                )
+                .expect("the bottom adjudicates");
+                assert_eq!(
+                    verdict,
+                    if forge { PalwCourtVerdictV2::ExecutorGuilty } else { PalwCourtVerdictV2::ChallengerDefeated },
+                    "forge = {forge}"
+                );
+            }
         }
 
         /// **The cache-write route is refused BY NAME for a class that checkpoints every position**

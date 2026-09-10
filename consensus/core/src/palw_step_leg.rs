@@ -333,6 +333,69 @@ pub fn step_merkle_path_capped_v1(
     Ok(path)
 }
 
+/// **The step tree built once, for a party that opens many leaves** (ADR-0093 as built).
+///
+/// The same fold as [`step_merkle_root_capped_v1`] — the same leaf domain, the same node hash, the
+/// same promote-odd shape — with its levels KEPT, so each opening is a walk up the levels instead
+/// of the whole-tree rebuild [`step_merkle_path_capped_v1`] performs per call. A dissection's
+/// bottom and its cache rows open about a thousand leaves of a multi-million-leaf tree; rebuilding
+/// per path is billions of hashes, keeping the levels is one build. Pinned path-for-path against
+/// [`step_merkle_path_v1`] so the two cannot describe different trees.
+#[derive(Clone, Debug)]
+pub struct PalwStepMerkleTreeV1 {
+    levels: Vec<Vec<Hash64>>,
+}
+
+impl PalwStepMerkleTreeV1 {
+    pub fn build_capped_v1(ordered_leaf_hashes: &[Hash64], max_step_leaf_count: u64) -> Result<Self, PalwStepLegError> {
+        let count = ordered_leaf_hashes.len() as u64;
+        if count == 0 || count > max_step_leaf_count {
+            return Err(PalwStepLegError::LeafCountOutOfRange { got: count, max: max_step_leaf_count });
+        }
+        let mut levels: Vec<Vec<Hash64>> =
+            vec![ordered_leaf_hashes.iter().enumerate().map(|(i, leaf)| step_merkle_leaf(i as u64, leaf)).collect()];
+        while levels.last().expect("at least the leaf level").len() > 1 {
+            let level = levels.last().expect("at least the leaf level");
+            let mut next = Vec::with_capacity(level.len().div_ceil(2));
+            let mut chunks = level.chunks_exact(2);
+            for pair in &mut chunks {
+                next.push(keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[pair[0].as_byte_slice(), pair[1].as_byte_slice()]));
+            }
+            if let [odd] = chunks.remainder() {
+                next.push(*odd);
+            }
+            levels.push(next);
+        }
+        Ok(Self { levels })
+    }
+
+    pub fn root(&self) -> Hash64 {
+        self.levels.last().and_then(|top| top.first().copied()).expect("a built tree has a root")
+    }
+
+    pub fn leaf_count(&self) -> u64 {
+        self.levels.first().map_or(0, |leaves| leaves.len() as u64)
+    }
+
+    /// The sibling path of leaf `index`, exactly as [`step_merkle_path_v1`] returns it.
+    pub fn path_v1(&self, mut index: usize) -> Result<Vec<Hash64>, PalwStepLegError> {
+        let count = self.leaf_count();
+        if index as u64 >= count {
+            return Err(PalwStepLegError::LeafIndexOutOfRange { index: index as u64, count });
+        }
+        let mut path = Vec::new();
+        for level in &self.levels[..self.levels.len() - 1] {
+            let promoted = !level.len().is_multiple_of(2) && index == level.len() - 1;
+            if !promoted {
+                let sibling = if index.is_multiple_of(2) { index + 1 } else { index - 1 };
+                path.push(level[sibling]);
+            }
+            index /= 2;
+        }
+        Ok(path)
+    }
+}
+
 /// **A contiguous RANGE of leaves, opened as one subtree** — the carrier form that makes a court
 /// evidence row cost one path instead of one path per leaf.
 ///
@@ -1906,6 +1969,21 @@ fn checkpoint_fault(
 
 #[cfg(test)]
 mod tests {
+    /// **The kept-levels tree is the rebuilt tree, path for path** — every leaf of trees whose
+    /// sizes exercise the promote-odd shape at every level, and the root.
+    #[test]
+    fn the_kept_levels_tree_opens_every_leaf_as_the_rebuilt_tree_does() {
+        for n in [1usize, 2, 3, 5, 8, 13, 31, 64, 100] {
+            let leaves: Vec<Hash64> = (0..n as u64).map(|i| Hash64::from_u64_word(0xA0 + i)).collect();
+            let tree = PalwStepMerkleTreeV1::build_capped_v1(&leaves, PALW_STEP_LEG_MAX_LEAVES).expect("builds");
+            assert_eq!(tree.root(), step_merkle_root_v1(&leaves).expect("the rebuilt root"), "n = {n}");
+            for i in 0..n {
+                assert_eq!(tree.path_v1(i).expect("a path"), step_merkle_path_v1(&leaves, i).expect("the rebuilt path"), "n = {n}, i = {i}");
+            }
+            assert!(tree.path_v1(n).is_err());
+        }
+    }
+
     use super::*;
     use crate::palw_carriage::PALW_CARRIAGE_ALL_DOMAINS;
     use crate::palw_legs::{PALW_LEGS_ALL_DOMAINS, PalwLegOpeningV1, leg_opening_root_v1, leg_opening_v1};

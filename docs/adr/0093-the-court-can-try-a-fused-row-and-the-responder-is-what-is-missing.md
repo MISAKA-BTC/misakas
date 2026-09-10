@@ -1,7 +1,12 @@
 # ADR-0093 — The court can try a fused row; the responder is what is missing
 
-* Status: PROPOSED 2026-09-06 (design only — §7 is explicit that nothing here is implemented, and
-  why shipping half of it would be worse than shipping none)
+* Status: PROPOSED 2026-09-06 (design only). **§6 steps 2–4 IMPLEMENTED 2026-09-11, together**
+  (§9): both A16 families answer a fused dissection — the root claim, every round, the
+  challenger's choice and the bottom's close — with every number computed by the court's own
+  kernels, drilled on real captures before anything relies on it (§7's condition). Step 5 is
+  settled by a fact the design did not have: the exemption it would narrow was never armed on any
+  preset, and is now pinned unarmed. Step 6 — the fleet upgrade that makes testnet-11's dense
+  graph-v5 producers defendable — is the operator's.
 * Builds on: [0082](0082-the-close-is-flat-in-the-context.md) Decisions 2 and 3 (the k-ary history
   dissection and its arity), [0069](0069-e2e-adjudicability-is-the-price-of-weight.md)
   (adjudicability is the price of weight),
@@ -181,3 +186,82 @@ kernel instrumentation is exact.
 
 0093 is free: 0092 is the highest in `docs/adr/`, and `git grep -n "ADR-0093"` finds no citation.
 Next free number after this one is 0094.
+
+## 9. As built (2026-09-11)
+
+On `feat/adr-0099-sharded-seat`, after ADR-0102, in one piece — §7 asked that no half ship.
+
+**Decision 1, smaller than designed: a family reads, the court's kernels compute.** The trait
+verb is `attn_site_evidence(material, narrowed, carried_prompt)`, not `attn_tile_claim`: a
+family returns what its capture COMMITTED about the site — the binding, the opened output tile
+and query row, the four registered narrowings opened against the class root, the head's query
+slice and the layer's K and V series, and the bottom's evidence (the anchor checkpoint with every
+chunk of its state, or the cache-write rows) — and `palw_attn_responder_v1` computes the root
+(`a16_attn_root_claim_v1`), every range (`a16_attn_tile_triple_v1` folded by `palw_attn_fold_v1`),
+the challenger's choice and the bottom, the same calls `check_attn_dissect_bottom_v1` makes.
+Decision 4's hazard — statistics "close but not exact" that convict their own producer — has no
+family code to live in. `attn_tile_claim` is retired. `supports_dissection` is true where the
+verb exists AND the class's fused sites can be dissected (`palw_fused_sites_are_dissectable_v1`);
+`has_fused_site` says whether there is anything to dissect.
+
+**Whose rows.** The evidence is read from the capture's OWN committed rows — a dense capture's
+retained tiles, or a fold re-executed and required to reproduce its own root — so a challenger's
+bottom opens the accused's commitments, a forged output tile included; the checkpoint leg comes
+from a re-execution (the per-position cadence retains none) and the anchor's state from the
+seat's recompute kernels, each refused unless it roots to the capture's own binding. Openings
+are walked off `PalwStepMerkleTreeV1`, the step tree built once and pinned path-for-path against
+`step_merkle_path_v1` (a bottom and its rows are ~a thousand paths over millions of leaves).
+
+**Decision 3, the panel.** Four moves in `kaspad/src/palw_panel.rs`, before the ladder's arms: the
+responder's root claim at a fused terminal (the arity the ruleset derives, signed under the
+claim's key) and its rounds; the challenger's choice — the first child its OWN execution's
+recompute does not reproduce, and silence when every child does (an honest disclosure has no
+winning choice); and the bottom's close, assembled from the ACCUSED capture (pulled when not
+held), filed by a party only when the verdict is its own win. Evidence is cached per session and
+capture; the court dedup keys give the dissection its own round space (`court_move_round_v1`), so
+a round that restarts at 0 is never taken for a ladder move already sent. The court duty view
+carries the phase and the class's fused bit (`PalwCourtDutyV2::{dissection, fused_class}`).
+
+**Decision 2 / step 5, settled by a fact.** `palw_court_responder_coverage` — the mercy this ADR
+would narrow — is `None` on every preset: it was never armed. So there is nothing to narrow, and
+the kaspad pin that was to go red "the day a responder exists" now says the opposite thing it
+should: the panel builds all four moves, and the exemption stays unarmed on every preset. The
+consequence is the one §4 feared, now answerable: on a chain whose k-ary court is armed (the RC
+base and devnet, graph-v5 in genesis), a fused terminal's silence is a conviction, and before
+this build no binary could file the root claim — an honest dense graph-v5 producer brought to a
+fused leaf lost its reservation by silence. A node running this build answers; one that does not
+still cannot, which is why step 6 is a fleet upgrade. The producer now refuses to underwrite a
+fused claim it could not defend (`has_fused_site && !supports_dissection` where the k-ary court is
+armed), as it already refused one the DA court could default.
+
+**Found on the way.**
+
+* **The hybrid graph-v5 fused tile is two heads.** The fusion inherits the values node's tile —
+  512 on every hybrid geometry — against a 256-lane head, so a hybrid graph-v5 fused leaf is
+  refused by the court as `FusedTileStraddlesHeads`, and admission (which checks the query
+  slice's tile, not the output's) does not refuse such a class. Graph-v6 (ADR-0102) now cuts that
+  one node's row at the head, so its fused leaves are dissectable; graph-v5 hybrids report
+  `supports_dissection() == false` and are not produced under where the k-ary court is armed.
+  Refusing them at admission is a refusal of classes a live chain may already hold — a fence of
+  its own, not taken here.
+* **The gap guard read the wrong half of a file.** It cut "production" at the first
+  `#[cfg(test)]`, and `qwen25_a16_backend.rs` carries a test-only helper a thousand lines above its
+  trait impl — so the guard could never have gone red for that family. It now cuts at the first
+  test module and asserts the trait impl is inside what it reads.
+
+**Tests** (§5): invariant 2 and 3 on REAL captures —
+`a_real_fused_capture_answers_its_dissection_exactly_and_a_forged_row_is_convicted` (the dense
+graph-v5 row executed; both layers, both heads, every court tile of a two-tile history acquitted
+from the anchor; a negative control in which one weight-carrying input code moved breaks the
+fold) and `a_real_hybrid_fused_capture_answers_its_dissection_exactly_and_a_forged_row_is_convicted`
+(graph-v6 through the composed anchor; graph-v5's refusal pinned by name); through the CHAIN —
+`the_parties_moves_from_evidence_acquit_the_honest_and_convict_the_forged_through_the_chain`
+(ADR-0082's drill with every hand-written claim replaced by the evidence functions); invariant 4 —
+the forged arms, where the least lie that finalizes to a forged tile is followed into the child it
+hides in and convicted at that bottom; invariant 1 — `a_family_takes_the_dissections_turn_with_both_verbs_or_neither`
+and the producer guard.
+
+**Not done.** A live devnet drill of the dissection: the panel's arms are compile-checked,
+source-pinned and built from functions the tests play, but no node has yet filed a root claim on a
+running chain. The admission refusal for dissection-less fused classes (a fence). Step 6.
+

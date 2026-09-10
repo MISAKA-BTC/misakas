@@ -1206,9 +1206,26 @@ pub fn palw_attn_dispute_site_v2(
     narrowed_leaf: u64,
     anchor: Option<&crate::palw_attn_court_v1::PalwAttnCheckpointAnchorV1>,
 ) -> Result<PalwAttnDisputeSiteV2, PalwCourtV2Error> {
-    use crate::palw_step::PalwStepOpKindV1;
     check_close_profile_is_the_registered_class(claim.class_id, binding)?;
     check_execution_root_binding(claim.execution_root, binding.committed_execution_root)?;
+    palw_attn_dispute_site_unpinned_v2(binding, operands, narrowed_leaf, anchor)
+}
+
+/// **The same derivation without the claim's two pins** (ADR-0093 as built) — for a PARTY
+/// computing its own moves, never for the court.
+///
+/// Every field of the site is a function of the binding's profile and job context, the narrowed
+/// leaf and the proven operands; the two pins above say only that the binding is the ACCUSED
+/// execution's. A challenger computing which child to name reads the site off its OWN capture —
+/// the same class and job, so the same site — and the court, which alone decides anything, still
+/// derives it through [`palw_attn_dispute_site_v2`] with both pins.
+pub fn palw_attn_dispute_site_unpinned_v2(
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+    operands: &PalwProvenOperandsV1,
+    narrowed_leaf: u64,
+    anchor: Option<&crate::palw_attn_court_v1::PalwAttnCheckpointAnchorV1>,
+) -> Result<PalwAttnDisputeSiteV2, PalwCourtV2Error> {
+    use crate::palw_step::PalwStepOpKindV1;
     // `verify_binding` is what makes `committed_execution_root` a PIN rather than a field: it
     // recomputes the root from the job context, both profile hashes, the leaf and checkpoint
     // counts and their roots, so pinning the root pins every part the derivation below reads.
@@ -1451,6 +1468,27 @@ pub fn palw_attn_dispute_site_v2(
             state_chunk_map_id: binding.state_chunk_map_id,
         },
     })
+}
+
+/// **Which registered operand rows a fused site at `narrowed_leaf` reads** (ADR-0093 as built):
+/// `(tensor name, layer)` for the softmax widening byte and the scores, probs and values triples —
+/// each at byte offset 0, which is where [`palw_attn_dispute_site_v2`] reads them. A party opens
+/// exactly these rows from its inventory, so the openings it files are the ones the derivation
+/// asks for, spelled by the same description ([`crate::palw_step_refute::palw_attn_fused_tensors_v1`]).
+pub fn palw_attn_site_operand_names_v2(
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+    narrowed_leaf: u64,
+) -> Result<Vec<(String, Option<u16>)>, PalwCourtV2Error> {
+    let profile = &binding.shape_profile;
+    let coord = crate::palw_step::canonical_step_coordinates(profile, &binding.job_context, narrowed_leaf)
+        .ok_or(PalwCourtV2Error::NotACanonicalLeaf(narrowed_leaf))?;
+    let (node, layer) = profile.resolve_node_slot(coord.node_slot).ok_or(PalwCourtV2Error::NotACanonicalLeaf(narrowed_leaf))?;
+    if node.op_kind != crate::palw_step::PalwStepOpKindV1::AttnFused {
+        return Err(PalwCourtV2Error::NotAFusedLeaf { op: node.op_kind });
+    }
+    let tensors = crate::palw_step_refute::palw_attn_fused_tensors_v1(node.weight_name.as_str())
+        .ok_or(PalwCourtV2Error::FusedGeometryUnservable("the fused node's weight name is not a registered softmax spelling"))?;
+    Ok(vec![(tensors.softmax_up, layer), (tensors.scores, layer), (tensors.probs, layer), (tensors.values, layer)])
 }
 
 /// **ADR-0049 Decision C's ceilings, applied to a close's own payload (audit H-03).**

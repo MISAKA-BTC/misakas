@@ -77,13 +77,13 @@ pin is green and unchanged.
 | bytes measured from the inventory | 2,484,279,940 (the family formula says 2,388,705,280 — a floor, as ADR-0099 said) |
 | the inventory root (what a graph-v6 registration pins) | `189c78352da5…` |
 | the root computed over the mapping (what the v1/v3 rows register) | `d6d79a213180…` |
-| the class at 512 | `3d57104c65a5…` — **admitted** |
-| at 32,768 | `91bbf9b05370…` — refused by the ladder, the court window, the PublicDa payload |
-| at 131,072 | `ac0bb11d257e…` — refused by those and the state chunks |
+| the class at 512 | `410462e8451a…` — **admitted** |
+| at 32,768 | `0b76ac67f56d…` — refused by the ladder, the court window, the PublicDa payload |
+| at 131,072 | `717e320458e6…` — refused by those and the state chunks |
 | at 1,048,576 | no profile — the geometry ceiling (ADR-0097) |
 | `verify --artifact` | every field recomputed equal; the deterministic half agrees; exit 0 |
 | `preflight --model-id …/graph-v6` on testnet-11 (run while a graph-v6 table row existed; Decision 5 removed it) | **refused by name**: "the class reaches the per-token lift kernel and this network has not armed palw_token_lift" |
-| the document | id `eb277d48bc06…`, unsigned; measured twice — before and after the §9 recovery — byte-identical |
+| the document | id `045a3322f0c6…`, unsigned — re-measured after Decision 1's amendment (the fused tile at the head moved every class id; the inventory root, the bytes and every wall did not); before it, the same artifact measured byte-identically twice across the §9 recovery |
 | cost of one measurement | cold: 303 s wall (20.8 s user — a read-bound pass over the file), 1.68 GB resident; with the file in the page cache: 18.8 s, 5.82 GB resident (the mapping's pages count, and the inventory copies every row) |
 
 A temporary graph-v6 row at the table's own geometry (`n_ctx` 8) paired to the same inventory root
@@ -115,7 +115,12 @@ from the carried ids exactly as the gather reads it (the prompt's at call 0, the
 call c ≥ 1). The inventory commits the store one row per token (a calibrated store verbatim, a
 one-row store tiled across the vocabulary); the plan compiles the node to the op the engine already
 runs. A class is its graph: a new class id over the same artifact, and every earlier class stays the
-chain fact it is.
+chain fact it is. **Amended 2026-09-11 (ADR-0093 §9): graph-v6's fused output row is cut at the
+head.** The fusion inherits the values node's tile — 512 lanes on every hybrid geometry against a
+256-lane head — so a graph-v5 hybrid's fused leaf is two heads' and the court refuses to dissect
+it (`FusedTileStraddlesHeads`); graph-v6 sets that one node's tile to `attn_head_dim`, which
+moved its class ids (none was registered anywhere) and makes every graph-v6 fused leaf
+dissectable.
 
 **Decision 2 — A kernel a network has not armed is not in its identity.** The adjudicator gains a
 second table, `KERNEL_CATALOG_FENCED_V1`: resolved like any other kernel, excluded from

@@ -1379,6 +1379,25 @@ pub fn palw_fused_query_slice_is_openable_v1(profile: &PalwShapeProfileV3) -> Re
     Ok(())
 }
 
+/// **Can every fused site of this class be dissected?** (ADR-0093 as built.) The two shape facts
+/// `palw_attn_dispute_site_v2` refuses at dispute time, asked of the class instead: each fused
+/// node's output tile is inside ONE head (a dissection is one head's softmax — a tile wider than
+/// the head is two heads' and the court refuses it as `FusedTileStraddlesHeads`), and each head's
+/// query slice is inside one tile of the rotated-query row ([`palw_fused_query_slice_is_openable_v1`]).
+///
+/// NOT an admission rule — admission checks the query half only, and adding the output half is a
+/// refusal of classes a live chain may already hold, which is a fence of its own. It is what a
+/// BACKEND says about itself (`supports_dissection`), so a node never advertises, or produces
+/// under, a turn the court will refuse to play. `true` for a class with no fused site.
+pub fn palw_fused_sites_are_dissectable_v1(profile: &PalwShapeProfileV3) -> bool {
+    let d_head = u64::from(profile.attn_head_dim);
+    let fused: Vec<_> = profile.attn_nodes.iter().filter(|n| n.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused).collect();
+    fused.is_empty()
+        || (d_head > 0
+            && fused.iter().all(|n| n.tile_len > 0 && d_head.is_multiple_of(u64::from(n.tile_len)))
+            && palw_fused_query_slice_is_openable_v1(profile).is_ok())
+}
+
 /// Every kernel a profile's graph can reach, read off the graph.
 ///
 /// Public because the coverage claim and the catalog entry must be built from the same traversal —

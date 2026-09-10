@@ -1992,43 +1992,42 @@ mod end_to_end_tests {
 
 #[cfg(test)]
 mod adr0093_responder_gap {
-    /// **ADR-0093 §6 step 1: the gap, pinned at the source.**
+    /// **ADR-0093 §6, as built: a family takes a fused dissection's turn with BOTH verbs or
+    /// neither.**
     ///
-    /// No shipped family can take a fused dissection's turn, because none implements
-    /// `attn_tile_claim`. That is the whole of the 2026-09-06 audit's C-2 that the audit's own
-    /// fixes did not close — they stopped the conviction, they did not build the responder.
+    /// This guard used to pin that no family implemented the responder and to fail the day one
+    /// did. It did: the two A16 families (`qwen25_a16_backend.rs`, `qwen36_backend.rs`) read a
+    /// fused site's evidence out of their captures (`attn_site_evidence`) and say so
+    /// (`supports_dissection`); the floor (`backend.rs`) has no fused site and implements neither.
+    /// What stays pinned is the pairing — a family that advertised the turn without the verb
+    /// behind it would be convicted by its own silence — and the §6 step 5 question it used to
+    /// point at is answered in the kaspad pin `court_responder_coverage_pin`: the exemption stays
+    /// unarmed.
     ///
-    /// Read off the source rather than off constructed backends, the way
-    /// `palw_step_ladder_tree_guard` reads the walkers: a backend needs a `ResolvedClassV1` to
-    /// exist, and the fact being pinned is "nobody overrides these", which is a property of the
-    /// files.
-    ///
-    /// It fails in BOTH directions, which is the point. It fails if a family advertises the turn
-    /// without the verb behind it, and it fails the day a family implements the verb — at which
-    /// point the reader is sent to ADR-0093 §6 step 5 (the fold's mercy arm must then be narrowed,
-    /// behind its own fence) and §5 invariant 3 (the drill that must pass before anyone relies on
-    /// the answer).
+    /// Read off the source, as before: production only, so a test stub cannot trip it — and
+    /// "production" ends at the first test MODULE, not the first `#[cfg(test)]`. The old guard cut
+    /// at the latter, and `qwen25_a16_backend.rs` carries a test-only helper function a thousand
+    /// lines above its trait impl, so every line the guard existed to read in that file was outside
+    /// what it read: it could not have gone red for the family it named first.
     #[test]
-    fn no_shipped_family_can_take_a_fused_dissections_turn_yet() {
+    fn a_family_takes_the_dissections_turn_with_both_verbs_or_neither() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let families = ["backend.rs", "qwen25_a16_backend.rs", "qwen36_backend.rs"];
-        for file in families {
+        for (file, answers) in [("backend.rs", false), ("qwen25_a16_backend.rs", true), ("qwen36_backend.rs", true)] {
             let path = dir.join(file);
             let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-            // Production only: the guard must not trip on a future test fixture that stubs one.
-            let production: String = match src.find("\n#[cfg(test)]") {
+            let production: String = match src.find("\n#[cfg(test)]\nmod ") {
                 Some(cut) => src[..cut].to_string(),
                 None => src,
             };
-            for verb in ["fn attn_tile_claim", "fn supports_dissection"] {
-                assert!(
-                    !production.contains(verb),
-                    "{file} implements `{verb}`. If the fused responder now exists here, this test has \
-                     done its job — read ADR-0093 §6 step 5 and §5 invariant 3 before deleting this line, \
-                     because a family that answers a dissection changes what the fold's mercy arm may \
-                     excuse, and that is its own fence and its own height."
+            assert!(production.contains("impl PalwExecutionBackendV1 for"), "{file}: the read reaches the family's trait impl");
+            for verb in ["fn attn_site_evidence", "fn supports_dissection"] {
+                assert_eq!(
+                    production.contains(verb),
+                    answers,
+                    "{file}: `{verb}` — a family answers a dissection with both verbs or with neither"
                 );
             }
+            assert!(!production.contains("fn attn_tile_claim"), "{file}: the retired verb is not implemented");
         }
     }
 }

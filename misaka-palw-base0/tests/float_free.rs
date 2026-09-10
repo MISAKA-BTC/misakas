@@ -48,6 +48,7 @@ const CONSENSUS_PATH: &[&str] = &[
     "src/classes.rs",
     "src/engine.rs",
     "src/engine_a16.rs",
+    "src/attn_responder.rs",
     "src/inventory.rs",
     "src/kernels.rs",
     "src/legs.rs",

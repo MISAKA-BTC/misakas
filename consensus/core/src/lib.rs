@@ -151,6 +151,7 @@ pub mod palw_attempt_v2;
 pub mod palw_attn_court_v1;
 /// ADR-0082 Decisions 2–3: the history dissection's objects, fold and round arithmetic.
 pub mod palw_attn_dissect;
+pub mod palw_attn_responder_v1;
 pub mod palw_backend;
 pub mod palw_base0;
 pub mod palw_base0_a16;
