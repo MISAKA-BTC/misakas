@@ -134,6 +134,8 @@ const EXEMPT: &[(&str, &str)] = &[
     // ADR-0097's generator: it prints every wall a class meets, from consensus-core's own
     // predicates, and formats byte counts for a person to read (`human()` is the only float).
     ("src/bin/palw-model-fit.rs", "measurement tool: reports the walls a class meets; executes no class arithmetic"),
+    // ADR-0098's generator: it measures the seats' draw and prints percentages for a person.
+    ("src/bin/palw-seat-coverage.rs", "measurement tool: reports the panel's coverage; executes no class arithmetic"),
     (
         "src/bin/palw-tile-measure.rs",
         "measurement tool: U-00's close sweep over derive_court_cost_shaped_v1; it prices, it computes no engine arithmetic",

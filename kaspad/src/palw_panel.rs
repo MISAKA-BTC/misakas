@@ -324,6 +324,19 @@ pub struct PalwPanelConfig {
     pub producer_class: Option<Hash64>,
 }
 
+/// **What the capture arm's leaf samples found** (ADR-0098 Decision 2). A `bool` could say "cleared"
+/// or "not", and a leaf that does not recompute was the second: the seat dropped a proven fault and
+/// went on to the half-window tail. `FaultAt` is the third answer, and it is recorded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CaptureSamplesV1 {
+    /// Every wanted sample recomputed.
+    Cleared,
+    /// Too few samples could be checked — nothing proven either way.
+    NotCleared,
+    /// This leaf of the claim's own capture does not recompute.
+    FaultAt(u64),
+}
+
 pub struct PalwPanelService {
     config: PalwPanelConfig,
     /// Loaded once, through the SDK — whichever lineage's container each file is. Same contract
@@ -340,7 +353,8 @@ pub struct PalwPanelService {
     /// **ADR-0085 Decision 4: the faults this seat found, by claim** — `(first leaf, count)`, a
     /// single leaf once named (ADR-0086 Decision 6). The challenger's half prosecutes a claim in
     /// here whether or not `--palw-challenge` challenges everything; bounded, newest refused.
-    seat_faults: std::sync::Mutex<HashMap<Hash64, (u64, u64)>>,
+    /// ADR-0098 Decision 2 reads the same ledger: a claim in it gets no receipt from this seat.
+    seat_faults: std::sync::Mutex<crate::palw_fp_seat::PalwSeatFaultLedgerV1>,
     /// **What this node has already opened, so a second ask is not a second replay.**
     ///
     /// Keyed by the request as it was served — the claim, the request index, and the disputed
@@ -494,7 +508,7 @@ impl PalwPanelService {
             foreign_prune_at: std::sync::Mutex::new(std::time::Instant::now()),
             served_openings: std::sync::Mutex::new(Vec::new()),
             opening_gate: std::sync::Mutex::new(()),
-            seat_faults: std::sync::Mutex::new(HashMap::new()),
+            seat_faults: std::sync::Mutex::new(Default::default()),
             shutdown: SingleTrigger::default(),
         }
     }
@@ -1446,6 +1460,8 @@ impl PalwPanelService {
     /// claim. A leaf the prover cannot open (an aux leaf outside the main coordinates, or one the
     /// court cannot read) is re-drawn, bounded — a capture that yields fewer clear samples than
     /// asked is not verified either.
+    /// Returns what the samples found (ADR-0098 Decision 2): enough samples cleared, too few, or a
+    /// leaf of the claim's own capture that does not recompute — which is a fault, not a "no".
     fn fp_capture_samples_clear(
         backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
         capture: &[u8],
@@ -1454,7 +1470,7 @@ impl PalwPanelService {
         artifact_root: Hash64,
         ladder: u64,
         claim: &Hash64,
-    ) -> bool {
+    ) -> CaptureSamplesV1 {
         use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_capped_v1};
         use rand::Rng;
         const SAMPLES: u64 = 4;
@@ -1470,7 +1486,7 @@ impl PalwPanelService {
         // them from being confused again. The number arrives as an argument because the caller is
         // the one holding `self.config.court`.
         if step_leaf_count == 0 {
-            return false;
+            return CaptureSamplesV1::NotCleared;
         }
         let wanted = SAMPLES.min(step_leaf_count);
         let mut rng = rand::thread_rng();
@@ -1489,7 +1505,7 @@ impl PalwPanelService {
                     // registered — a class/artifact mismatch on THIS seat, not a fact about the
                     // producer. Say so rather than sample around it.
                     warn!("[{PALW_PANEL}] claim {claim}: the openings for leaf {index} do not prove against the class root: {e:?}");
-                    return false;
+                    return CaptureSamplesV1::NotCleared;
                 }
             };
             match check_execution_step_refutation_capped_v1(&refutation, &proven, ladder) {
@@ -1498,7 +1514,7 @@ impl PalwPanelService {
                     warn!(
                         "[{PALW_PANEL}] claim {claim}: leaf {index} of the served capture does not recompute — the court's business, not a receipt's"
                     );
-                    return false;
+                    return CaptureSamplesV1::FaultAt(index);
                 }
                 // **A limit is not a verdict, and it is not a redraw either.** A capture priced
                 // above the ladder this node was handed is one this node cannot check at ANY leaf,
@@ -1514,12 +1530,12 @@ impl PalwPanelService {
                         "[{PALW_PANEL}] claim {claim}: the served capture is priced at {got} leaves and this node's ruleset ladder is \
                          {max} — this seat cannot check it at any leaf, and says so once rather than redrawing"
                     );
-                    return false;
+                    return CaptureSamplesV1::NotCleared;
                 }
                 Err(other) => trace!("[{PALW_PANEL}] claim {claim}: leaf {index} is not a sample ({other:?}) — redrawing"),
             }
         }
-        cleared >= wanted
+        if cleared >= wanted { CaptureSamplesV1::Cleared } else { CaptureSamplesV1::NotCleared }
     }
 
     /// **Run the network's own job and make it a claim** (ADR-0074 Decision 1). The job's prompt
@@ -2286,7 +2302,7 @@ impl PalwPanelService {
             // on a suspicion.
             // ADR-0085 Decision 4: a claim a seat found faulty is prosecuted whether or not this node
             // challenges everything; the faults are the seat's, the court is the challenger's.
-            let seat_faulted: HashSet<Hash64> = self.seat_faults.lock().unwrap().keys().copied().collect();
+            let seat_faulted: HashSet<Hash64> = self.seat_faults.lock().unwrap().claims().collect();
             if self.config.challenge || !seat_faulted.is_empty() {
                 for target in session.palw_disputable_claims_v2(vec![bond_key]) {
                     if challenged.contains(&target.claim_id) {
@@ -3047,6 +3063,15 @@ impl PalwPanelService {
                     if self.resolve_backend(&session, duty.class_id, duty.artifact_root).is_err() {
                         break 'verdict Some(PalwReceiptVerdictV2::Incapable);
                     }
+                    // **ADR-0098 Decision 2: a seat that found a fault in this claim files NOTHING
+                    // about it** — in this round or any later one. Not a `Valid` from an arm whose
+                    // samples missed the lie, and not the half-window `Unavailable`, which accuses a
+                    // producer that served the data (and, without ADR-0065 D4, is charged when the
+                    // rest of the panel licenses). Silence is never charged; the fault goes to the
+                    // court through the challenger's half, and nothing here replays the claim again.
+                    if self.seat_found_fault_v1(&duty.claim_id) {
+                        break 'verdict None;
+                    }
                     // **The free-prompt lane: the seat REPLAYS the job** (FP-R6). An attempt
                     // claim's job is derived from its anchor, so the arm below re-hashes the
                     // material under that derivation — which for a free-prompt claim derives a
@@ -3100,6 +3125,12 @@ impl PalwPanelService {
                                 .await
                         {
                             break 'verdict Some(verdict);
+                        }
+                        // ADR-0098 Decision 2, the same round: the interval arm may just have found
+                        // one. The capture arm below would otherwise certify a claim this seat has
+                        // just watched fail to replay.
+                        if self.seat_found_fault_v1(&duty.claim_id) {
+                            break 'verdict None;
                         }
                         // The same pooled payloads the interval path was offered, handed on rather
                         // than cloned a second time: a claim's pool is megabytes.
@@ -3196,7 +3227,7 @@ impl PalwPanelService {
                                     (payload.capture.clone(), prompt_ids.clone(), duty.claim_id);
                                 let (leaves, artifact_root, ladder) =
                                     (shape.step_leaf_count, duty.artifact_root, self.config.court.max_step_leaf_count());
-                                let Ok((_backend, cleared)) = offload(backend, move |b| {
+                                let Ok((_backend, samples)) = offload(backend, move |b| {
                                     Self::fp_capture_samples_clear(
                                         b,
                                         &capture_owned,
@@ -3211,8 +3242,16 @@ impl PalwPanelService {
                                 else {
                                     continue;
                                 };
-                                if !cleared {
-                                    continue;
+                                match samples {
+                                    CaptureSamplesV1::Cleared => {}
+                                    CaptureSamplesV1::NotCleared => continue,
+                                    // ADR-0098 Decision 2: a leaf of the claim's OWN capture — its roots
+                                    // matched, its price matched — that does not recompute is a fault
+                                    // this seat found, and it is recorded rather than dropped.
+                                    CaptureSamplesV1::FaultAt(leaf) => {
+                                        self.note_seat_fault_v1(duty.claim_id, leaf, 1);
+                                        break 'verdict None;
+                                    }
                                 }
                                 self.persist_foreign_material(&duty.claim_id, &bytes);
                                 break 'verdict Some(PalwReceiptVerdictV2::Valid);
@@ -3479,6 +3518,11 @@ impl PalwPanelService {
                         {
                             break 'verdict Some(verdict);
                         }
+                    }
+                    // ADR-0098 Decision 2, before the tail: a fault found anywhere above in this round
+                    // (the attempt lane's interval arm runs last) is not "no verifying material".
+                    if self.seat_found_fault_v1(&duty.claim_id) {
+                        break 'verdict None;
                     }
                     // No verifying material yet. Ask the network before accusing: the producer may
                     // be gone, but any peer that heard the broadcast can re-serve it.
@@ -4501,14 +4545,16 @@ impl PalwPanelService {
     }
 
     /// ADR-0085 Decision 4: remember a fault this seat found, for the challenger's half. A leaf
-    /// once named replaces the block it was found in.
+    /// once named replaces the block it was found in (`PalwSeatFaultLedgerV1` orders the addresses).
     fn note_seat_fault_v1(&self, claim: Hash64, first_leaf_index: u64, leaf_count: u64) {
-        const CLAIMS: usize = 256;
-        let mut faults = self.seat_faults.lock().unwrap();
-        if faults.len() >= CLAIMS && !faults.contains_key(&claim) {
-            return;
-        }
-        faults.insert(claim, (first_leaf_index, leaf_count));
+        self.seat_faults.lock().unwrap().note(claim, first_leaf_index, leaf_count);
+    }
+
+    /// **ADR-0098 Decision 2: has this seat found a fault in `claim`?** When it has, the verdict
+    /// block files nothing about the claim — neither a later arm's `Valid` nor the half-window
+    /// `Unavailable` — and the fault goes to the court through the challenger's half.
+    fn seat_found_fault_v1(&self, claim: &Hash64) -> bool {
+        self.seat_faults.lock().unwrap().holds(claim)
     }
 
     /// **Hold one served opening, bounded** (ADR-0077 Decision 8).
@@ -4961,6 +5007,11 @@ impl PalwPanelService {
                              court's question, and this node holds the refutation's inputs",
                             duty.claim_id
                         );
+                        // ADR-0098 Decision 2: recorded, or the challenger's half never prosecutes
+                        // it. Every cache-altering lie before this interval lands HERE, which makes
+                        // it the seat's strongest detector — and it was being thrown away. `(0, 0)`
+                        // is a fault with no leaf address; the court's bisection finds the leaf.
+                        self.note_seat_fault_v1(duty.claim_id, 0, 0);
                         return None;
                     }
                 }
@@ -5563,6 +5614,40 @@ mod court_responder_coverage_pin {
     /// question "can a party in the field actually make this move" must be re-answered by hand,
     /// and it is cheap to answer. This module's own text is excluded, or the pin would be counting
     /// itself.
+    /// **ADR-0098 Decision 2, pinned where it lives.** The seat's verdict block consults the fault
+    /// ledger before its first arm, again between the free-prompt interval arm and the capture arm,
+    /// and again before the half-window tail; the capture arm's proven fault is recorded; and the
+    /// checkpoint root that does not recompute is recorded. Each of these was once missing, and a
+    /// missing one is silent: the seat simply certifies, or accuses, a claim it found a lie in.
+    #[test]
+    fn a_seat_that_found_a_fault_consults_the_ledger_before_every_verdict() {
+        const MARKER: &str = "mod court_responder_coverage_pin";
+        let whole = include_str!("palw_panel.rs");
+        let source = &whole[..whole.find(MARKER).expect("this module is in this file")];
+        let start = source.find("let verdict = 'verdict: {").expect("the verdict block");
+        let end = start + source[start..].find("let Some(verdict) = verdict else { continue };").expect("its end");
+        let block = &source[start..end];
+        let at = |needle: &str| block.find(needle).unwrap_or_else(|| panic!("the verdict block no longer contains {needle:?}"));
+        let gates: Vec<usize> = block.match_indices("if self.seat_found_fault_v1(&duty.claim_id) {").map(|(i, _)| i).collect();
+        assert_eq!(gates.len(), 3, "three gates: before every arm, before the capture arm, before the tail");
+        let replay = at(".interval_seat_outcome_v1(");
+        let capture = at("palw_fp_capture_decode_v1(");
+        let tail = at("break 'verdict Some(PalwReceiptVerdictV2::Unavailable");
+        assert!(gates[0] < replay, "the first gate precedes the first replay");
+        assert!(gates.iter().any(|g| *g > replay && *g < capture), "a gate between the interval arm and the capture arm");
+        assert!(gates.iter().any(|g| *g > capture && *g < tail), "a gate before the half-window tail");
+        let fault = at("CaptureSamplesV1::FaultAt(leaf) => {");
+        assert!(
+            block[fault..].contains("self.note_seat_fault_v1(duty.claim_id, leaf, 1);"),
+            "the capture arm records the fault it proves"
+        );
+        let mismatch = source.find("this seat's own recompute reaches").expect("the checkpoint mismatch");
+        assert!(
+            source[mismatch..].find("self.note_seat_fault_v1(duty.claim_id, 0, 0);").is_some_and(|d| d < 1_200),
+            "the state root that does not recompute is recorded"
+        );
+    }
+
     #[test]
     fn no_shipped_binary_files_a_court_attn_root_claimed() {
         const MARKER: &str = "mod court_responder_coverage_pin";
