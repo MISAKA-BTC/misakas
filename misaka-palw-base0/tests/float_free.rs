@@ -131,6 +131,9 @@ const EXEMPT: &[(&str, &str)] = &[
     ("src/reference.rs", "the float reference forward: it measures the checkpoint's ranges so the PTQ can pick scales"),
     ("src/bin/base0-depth-sweep.rs", "measurement tool"),
     ("src/bin/base0-class-sizing.rs", "measurement tool"),
+    // ADR-0097's generator: it prints every wall a class meets, from consensus-core's own
+    // predicates, and formats byte counts for a person to read (`human()` is the only float).
+    ("src/bin/palw-model-fit.rs", "measurement tool: reports the walls a class meets; executes no class arithmetic"),
     (
         "src/bin/palw-tile-measure.rs",
         "measurement tool: U-00's close sweep over derive_court_cost_shaped_v1; it prices, it computes no engine arithmetic",
