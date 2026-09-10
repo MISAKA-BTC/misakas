@@ -767,8 +767,14 @@ masked token from an unmasked one, and a challenger who used them against a vers
 convict an honest masked token whenever the unconstrained argmax differs. On a network that armed
 the fence they are refused by name for a free-prompt claim; the job-carrying arm (B5) is the only
 decode close for one, running the v2 check for a version-5 job and the v3 check for a version-6
-job. Attempt-lane claims keep the old arms. The panel's close assembly must build that arm for a
-free-prompt dispute before the fence is armed on a network where a dispute can happen.
+job. Attempt-lane claims keep the old arms. The arithmetic arms are unaffected: they authenticate
+the committed ids against the claim's logits trace root and recompute arithmetic over them, and
+never re-select a token. Measured while writing this: no tool in the tree assembles a decode-token
+close today, for either version — the panel's automated court builds arithmetic closes only, and
+the CLI builds none — so a selection fault is not prosecuted automatically on any network. For a
+version-6 claim the seat's masked replay is what catches one: a different committed token moves the
+execution root, and the claim gathers no licence. Building the job-carrying close in a
+challenger's tool is the court's remaining work, not the fence's.
 
 **B11 — the pin carries the lowest end-of-generation id.** B7's finish rule commits the class's
 lowest EOG id, and the court tries it from the automaton and that id alone, so the id is the
