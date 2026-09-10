@@ -203,6 +203,17 @@ chain.
   planner already uses, and abandoned past the session's backstop, where the chain accepts no
   further chunk.
 
+**Stage 3 — the cutter run against the assembler (`8afb6fdd`).**
+`the_planner_the_filers_use_cuts_a_close_this_arm_assembles`, in `palw_state_v2`'s own test module
+beside the fixtures. The existing whole-versus-split test cuts with `split_close_v1`, a test's
+cutter sized so three carriers can be exercised cheaply — the right trade for testing the ARM, and
+it left the shipped cutter never run against the assembler at all, which is the exact shape this
+ADR removes. This one builds a close that genuinely outgrows a carrier (the padding is operand
+opening bytes, the part that grows with real evidence), cuts it with
+`palw_plan_court_close_carriage_v1`, files what that returns byte for byte, and asserts the group
+pins the planner's digest and the assembly reaches the same state root as the same close on one
+carrier at the same DAA. It also pins that the planner returns the declaration UNSIGNED.
+
 ## 10. What Decision 7 costs, measured
 
 Decision 7 called for a processor-level test and put it second. Measured before writing it, it is
