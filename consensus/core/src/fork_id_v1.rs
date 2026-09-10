@@ -596,8 +596,62 @@ mod tests {
             "palw_receipt_rows_unpriced" => params.palw_receipt_rows_unpriced = Some(at),
             "palw_attempt_header_pins" => params.palw_attempt_header_pins = Some(at),
             "palw_signature_contexts_v2" => params.palw_signature_contexts_v2 = Some(at),
+            "palw_heartbeat_transparent" => params.palw_heartbeat_transparent = Some(at),
             other => panic!("{other} is a PALW fence `palw_fences_v1` returns and this probe cannot set — add it here"),
         }
+    }
+
+    /// **Every PALW fence's HEIGHT reaches the printed fingerprint and the schedule id, and none
+    /// reaches the identity — with the one fence that does not named, not fixed.**
+    ///
+    /// Three spellings say "this build schedules a fence": the gate reads `palw_fences_v1`, the
+    /// schedule reads `for_each_fence`, and the startup line prints `consensus_params_id`. Each is
+    /// an exhaustive destructure of `Params`, and a destructure proves a field was BOUND, not that
+    /// it was WRITTEN. ADR-0095's `palw_model_benefits` is bound in `consensus_params_id` and never
+    /// hashed (`14c453d1`), which is why the builds on either side of testnet-11's DAA-2400 fence
+    /// print one fingerprint (`0448d955`). Writing it moves testnet-11's pin, which is a release's
+    /// decision rather than this test's, so it is pinned as the known exception: fixing it makes
+    /// this fail until the list is emptied, and a fence added tomorrow and forgotten the same way
+    /// (ADR-0102's `palw_heartbeat_transparent` is the one this was written beside) fails by name.
+    ///
+    /// Two FUTURE heights on each side rather than "absent vs scheduled", so a fence the RC base
+    /// arms at genesis is compared as a schedule against a schedule — the identity is only
+    /// supposed to be blind to heights that have not fired.
+    #[test]
+    fn every_scheduled_palw_fence_moves_the_fingerprint_and_the_schedule_and_never_the_identity() {
+        const KNOWN_UNHASHED: &[&str] = &["palw_model_benefits"];
+        let base = palw_rc_shipped_params();
+        let mut unhashed = Vec::new();
+        for (name, _) in base.palw_fences_v1() {
+            let mut early = base.clone();
+            set_fence_for_probe(&mut early, name, ForkActivation::new(9_000_000));
+            let mut late = base.clone();
+            set_fence_for_probe(&mut late, name, ForkActivation::new(9_000_001));
+            if early.consensus_params_id() == late.consensus_params_id() {
+                unhashed.push(name);
+            }
+            assert_ne!(
+                early.consensus_schedule_id(),
+                late.consensus_schedule_id(),
+                "{name}: two builds scheduling it at different heights must print different schedule ids — that id is \
+                 the only place the operator log can name the disagreement"
+            );
+            assert_eq!(
+                early.consensus_identity_id(),
+                late.consensus_identity_id(),
+                "{name}: a height that has not fired is normalised out of the identity, or scheduling it partitions the \
+                 fleet at deploy instead of at the height"
+            );
+            assert!(
+                early.fence_schedule_v1().contains(&9_000_000) && late.fence_schedule_v1().contains(&9_000_001),
+                "{name}: a scheduled fence must be on the schedule the fork id is derived from"
+            );
+        }
+        assert_eq!(
+            unhashed, KNOWN_UNHASHED,
+            "the fences whose height the printed fingerprint does not carry — a new name here is a fence that was \
+             destructured in consensus_params_id and never written"
+        );
     }
 
     /// **The shipped schedules, measured rather than assumed** — and the measurement is the reason

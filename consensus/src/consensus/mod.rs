@@ -1161,6 +1161,10 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.heartbeat_adapt_block_template(template)
     }
 
+    fn heartbeat_yield_hint(&self) -> kaspa_consensus_core::palw_heartbeat_v1::HeartbeatYieldHintV1 {
+        self.virtual_processor.heartbeat_yield_hint()
+    }
+
     fn build_block_template_with_selector_factory(
         &self,
         miner_data: MinerData,

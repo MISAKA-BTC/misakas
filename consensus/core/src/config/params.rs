@@ -1481,6 +1481,44 @@ pub struct Params {
     /// path for a network with no history.
     pub palw_signature_contexts_v2: Option<ForkActivation>,
 
+    /// **ADR-0102 — a heartbeat never turns a bonded block red.** `None` on every shipped preset,
+    /// so the behaviour is byte-identical to not having the field at all.
+    ///
+    /// Measured on testnet-11 on 2026-09-10 (11:41Z-13:20Z): once a heartbeat was the selected
+    /// parent, every bonded block landed ~17 minutes after the template it was drawn on, with
+    /// eight 120-second heartbeats in its anticone. At `ghostdag_k = 1` that anticone made it RED,
+    /// so its 2^20 of fork-choice work never entered any block's blue work, the DNS anchor could
+    /// never be buried `required_work_depth` deep, and the EVM bridge stayed paused for as long as
+    /// any heartbeat miner ran. The heartbeats that did it weigh ε = 1 each.
+    ///
+    /// Past this fence GHOSTDAG colors a non-heartbeat mergeset candidate against the non-heartbeat
+    /// blues ALONE: a heartbeat in its anticone is not counted, its anticone size is not consulted,
+    /// and neither enlarges the other's count. A heartbeat candidate is still colored against every
+    /// blue (it yields to bonded blocks, as it always did). Keyed on the CANDIDATE's own DAA score,
+    /// which is fixed before any block that merges it is colored — so the rule is decidable
+    /// without the new block's own GHOSTDAG output, the shape `palw_lane_blue_work_v1` already has.
+    ///
+    /// **What it does NOT do**: it does not make the stale bonded block the selected parent. The
+    /// heartbeat that merges it carries its work, so the chain's weight and the DNS work depth are
+    /// right, but the heartbeat lane keeps the chain at its recovery cadence while any heartbeat
+    /// miner runs. Handing the chain back to the bonded lane is the heartbeat miner's node-side
+    /// yield (ADR-0102 Decision 2), because a consensus rule that held the heartbeat slot for a
+    /// merged bonded block would let a producer whose blocks can never become the sink hold the
+    /// clock — ADR-0060 §1's wedge, re-entering through the lane that ended it.
+    ///
+    /// **A bare fence with no companion value**, the [`Self::palw_frontier_provenance`] rule for
+    /// its reason: the classes are algorithm ids and the lane's own fence, so there is nothing
+    /// beside this height for [`Self::consensus_identity_id`] to normalise away.
+    ///
+    /// **TOP LEVEL for the reason on `palw_unavailable_abstains`**: it is a fork-choice rule that
+    /// has to be able to reach a LIVE network by activation, and a fence inside the V2 bundle moves
+    /// `palw_ruleset_id_v2`, which `for_each_fence` never descends into. Arming it on testnet-11
+    /// is a flag day — past the height the blue set, blue work and blue score of every block whose
+    /// mergeset holds a bonded block beside a heartbeat anticone change — and `validate_palw_v2`
+    /// refuses it on a network whose heartbeat lane is not armed. Read it through
+    /// [`Self::palw_heartbeat_transparent_fence`] only.
+    pub palw_heartbeat_transparent: Option<ForkActivation>,
+
     /// ADR-0042 Decision 1 (PR-10): the ONE PALW switch on the V2 lineage. `Disabled` on every
     /// shipped preset. A network is in exactly one mode; `ConsensusV2` carries the whole atomic
     /// ruleset and is validated at construction ([`Params::validate_palw_v2`]) — including the
@@ -1894,6 +1932,20 @@ impl Params {
             return Err(PalwModeV2Error::Invalid(
                 "palw_fp_da_pins is armed on a network that is not ConsensusV2: the retention obligation it derives is \
                  written onto a V2 claim record and its length is the bundle's state params (ADR-0072 Decision 8)",
+            ));
+        }
+        // **ADR-0102's coloring rule is about heartbeats, and it must not be armable where there
+        // are none.** Armed without the lane (or on a network that is not ConsensusV2, where the
+        // lane cannot exist) the fence would enter `consensus_params_id` and fire on nothing — a
+        // fence that hashes and does not fire, the shape the two refusals above exist to keep out.
+        if let Some(transparent) = self.palw_heartbeat_transparent
+            && transparent != ForkActivation::never()
+            && !self.palw_heartbeat_lane_fence().is_some_and(|lane| lane != ForkActivation::never())
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_heartbeat_transparent is armed on a network whose heartbeat lane is not: the rule decides how a \
+                 heartbeat counts in a bonded block's anticone, and with no heartbeat lane (or no ConsensusV2 ruleset) \
+                 there is nothing for it to decide (ADR-0102)",
             ));
         }
         let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
@@ -2794,6 +2846,11 @@ impl Params {
         if self.palw_fp_ruleset_caps == Some(ForkActivation::never()) {
             self.palw_fp_ruleset_caps = None;
         }
+        // ADR-0102, a bare fence: the same collapse for the same reason — `never()` is absence,
+        // and a present `never()` would write a name an unset build never writes.
+        if self.palw_heartbeat_transparent == Some(ForkActivation::never()) {
+            self.palw_heartbeat_transparent = None;
+        }
         let Some(dns) = self.dns_params.as_mut() else {
             return;
         };
@@ -2849,6 +2906,20 @@ impl Params {
     /// equal to the fence's declared value.
     pub fn palw_heartbeat_width_fence(&self) -> Option<ForkActivation> {
         self.palw_heartbeat_lane_fence()
+    }
+
+    /// **ADR-0102's coloring fence with the mode AND the lane folded in** — `Some` only on a
+    /// `ConsensusV2` network whose heartbeat lane is armed and which has armed this fence.
+    ///
+    /// The rule is about how a heartbeat counts in a bonded block's anticone, so without the lane
+    /// there is no heartbeat for it to be about; folding the lane in means GHOSTDAG never reads a
+    /// header for a rule that cannot apply. `validate_palw_v2` refuses the configuration outright,
+    /// so on any node that starts this is `palw_heartbeat_transparent` itself.
+    pub fn palw_heartbeat_transparent_fence(&self) -> Option<ForkActivation> {
+        match (self.palw_heartbeat_lane_fence(), self.palw_heartbeat_transparent) {
+            (Some(lane), Some(fence)) if lane != ForkActivation::never() => Some(fence),
+            _ => None,
+        }
     }
 
     /// **Is the attempt lane's constant work in force at `daa_score`?** (ADR-0066 Decision 3 /
@@ -3230,6 +3301,7 @@ impl Params {
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
             palw_signature_contexts_v2,
+            palw_heartbeat_transparent,
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation: _,
             pow_palw_activation: _,
@@ -3276,6 +3348,7 @@ impl Params {
             ("palw_receipt_rows_unpriced", *palw_receipt_rows_unpriced),
             ("palw_attempt_header_pins", *palw_attempt_header_pins),
             ("palw_signature_contexts_v2", *palw_signature_contexts_v2),
+            ("palw_heartbeat_transparent", *palw_heartbeat_transparent),
         ]
     }
 
@@ -3467,6 +3540,14 @@ impl Params {
             h.write(b"palw_signature_contexts_v2");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ADR-0102's coloring fence. Some-only, at the tail, for the reason its siblings are: it
+        // changes which blocks are blue past its height, so an operator reading the schedule must
+        // see the height, and a preset that leaves it `None` prints the schedule id of a build from
+        // before the field existed.
+        if let Some(activation) = self.palw_heartbeat_transparent {
+            h.write(b"palw_heartbeat_transparent");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         h.finalize()
     }
 
@@ -3569,6 +3650,7 @@ impl Params {
             palw_validator_payout_bounds,
             palw_epoch_boundary_budget,
             palw_fp_ruleset_caps,
+            palw_heartbeat_transparent,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation,
@@ -3882,6 +3964,14 @@ impl Params {
         if let Some(activation) = palw_signature_contexts_v2.as_mut() {
             fork(activation, visit);
         }
+        // ADR-0102's coloring fence. Some-only and at the tail, for the reason
+        // `palw_chunk_cap_charge` states: the schedule id hashes these in sequence, and a
+        // `u64::MAX`-for-absence arm would put eight bytes into every preset that leaves it `None`.
+        // Visited, so a scheduled height normalises out of the identity (a rolling deploy peers
+        // until it fires) and joins `fence_schedule_v1`, which is what the fork id advertises.
+        if let Some(activation) = palw_heartbeat_transparent.as_mut() {
+            fork(activation, visit);
+        }
 
         let Some(dns) = dns_params.as_mut() else {
             absent = u64::MAX;
@@ -4091,6 +4181,7 @@ impl Params {
             palw_validator_payout_bounds,
             palw_epoch_boundary_budget,
             palw_fp_ruleset_caps,
+            palw_heartbeat_transparent,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -4429,6 +4520,16 @@ impl Params {
             h.write(b"palw_signature_contexts_v2");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ADR-0102's coloring fence. WRITTEN, not only destructured — ADR-0095's
+        // `palw_model_benefits` is the fence that was bound here and never hashed (0448d955), which
+        // left the printed fingerprint unable to tell the builds on either side of DAA 2400 apart.
+        // Some-only, like every fence above it: arming it changes which blocks are blue and so the
+        // blue work every later header carries, and a preset that leaves it `None` fingerprints
+        // byte-identically to a build without the field at all.
+        if let Some(activation) = palw_heartbeat_transparent {
+            h.write(b"palw_heartbeat_transparent");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0042 Decisions 1 + 11: the V2 mode decides block validity wholesale, so it is in
         // the fingerprint — through the RULESET ID, one hash for the whole atomic bundle, which
         // is the same value the V2 handshake exchanges (two commitments cannot drift when one is
@@ -4734,6 +4835,7 @@ impl Params {
             palw_validator_payout_bounds: self.palw_validator_payout_bounds,
             palw_epoch_boundary_budget: self.palw_epoch_boundary_budget,
             palw_fp_ruleset_caps: self.palw_fp_ruleset_caps,
+            palw_heartbeat_transparent: self.palw_heartbeat_transparent,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
@@ -5686,6 +5788,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_validator_payout_bounds: None,
     palw_epoch_boundary_budget: None,
     palw_fp_ruleset_caps: None,
+    // ADR-0102: dormant on every shipped preset (see the field's doc).
+    palw_heartbeat_transparent: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
@@ -5850,6 +5954,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_validator_payout_bounds: None,
     palw_epoch_boundary_budget: None,
     palw_fp_ruleset_caps: None,
+    // ADR-0102: dormant on every shipped preset (see the field's doc).
+    palw_heartbeat_transparent: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
@@ -5996,6 +6102,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_validator_payout_bounds: None,
     palw_epoch_boundary_budget: None,
     palw_fp_ruleset_caps: None,
+    // ADR-0102: dormant on every shipped preset (see the field's doc).
+    palw_heartbeat_transparent: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
@@ -10212,6 +10320,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_validator_payout_bounds: None,
     palw_epoch_boundary_budget: None,
     palw_fp_ruleset_caps: None,
+    // ADR-0102: dormant on every shipped preset (see the field's doc).
+    palw_heartbeat_transparent: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // **Devnet is the ADR-0068 drill network on this branch: ConsensusV2, so no V1 PALW
@@ -10769,6 +10879,78 @@ mod consensus_params_id_tests {
         });
         assert!(!hash_net.palw_heartbeat_lane_open_at(0), "the lane is a V2 rule");
         assert!(hash_net.palw_heartbeat_lane_fence().is_none());
+    }
+
+    /// **ADR-0102's fence: dormant everywhere it ships, a schedule where it is scheduled, a rule
+    /// where it is in force from genesis — and refused where there is no heartbeat to be about.**
+    ///
+    /// The four positions every bare fence is held to (unset, scheduled, at genesis, `never()`),
+    /// measured on testnet-11 itself because that is where arming it would be a flag day: the
+    /// scheduled build must peer with today's (identity unchanged) while announcing the height in
+    /// all three places an operator or a peer reads one — the printed fingerprint (the field a
+    /// previous fence was destructured into and never written to, 0448d955), the schedule id, and
+    /// the fork id's schedule.
+    #[test]
+    fn the_heartbeat_transparent_fence_is_dormant_scheduled_or_a_rule_and_never_hides() {
+        let t11 = palw_rc_shipped_params();
+        // ADR-0102 §5.1 derives testnet-11's window from this number — 13 recovery slots at two blue
+        // heartbeats a slot, ~26 minutes, before an exempt draw is red again. If it moves, so does
+        // that figure (the pipeline test `the_fence_keeps_a_slow_draw_blue_only_inside_the_merge_depth_window`
+        // measures the boundary on a fixture with the same cadence).
+        assert_eq!((t11.ghostdag_k(), t11.merge_depth()), (1, 30), "testnet-11: k = 1 at 120 s, merge depth one hour");
+        for (name, preset) in [
+            ("mainnet", Params::from(NetworkId::new(NetworkType::Mainnet))),
+            ("testnet-10", Params::from(NetworkId::with_suffix(NetworkType::Testnet, 10))),
+            ("testnet-11", Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11))),
+            ("devnet", Params::from(NetworkId::new(NetworkType::Devnet))),
+            ("simnet", Params::from(NetworkId::new(NetworkType::Simnet))),
+        ] {
+            assert!(preset.palw_heartbeat_transparent.is_none(), "{name}: ADR-0102 ships dormant on every preset");
+            assert!(preset.palw_heartbeat_transparent_fence().is_none(), "{name}");
+        }
+
+        let at = |activation: ForkActivation| {
+            let mut p = palw_rc_shipped_params();
+            p.palw_heartbeat_transparent = Some(activation);
+            p
+        };
+        let scheduled = at(ForkActivation::new(9_000_000));
+        scheduled.validate_palw_v2().expect("testnet-11 may schedule it: its heartbeat lane is armed from genesis");
+        assert_eq!(
+            t11.consensus_identity_id(),
+            scheduled.consensus_identity_id(),
+            "a scheduled height keeps the identity, or the first upgraded host partitions at deploy"
+        );
+        assert_ne!(t11.consensus_params_id(), scheduled.consensus_params_id(), "the printed fingerprint must carry the height");
+        assert_ne!(t11.consensus_schedule_id(), scheduled.consensus_schedule_id(), "the operator log must name the height");
+        assert!(scheduled.fence_schedule_v1().contains(&9_000_000), "the fork id is derived from this schedule");
+        assert!(
+            crate::fork_id_v1::fork_id_gate_fences_v1(&scheduled).contains(&9_000_000),
+            "and the fork-id gate refuses on it once it fires — it changes which blocks are blue"
+        );
+        assert_ne!(
+            t11.consensus_identity_id(),
+            at(ForkActivation::always()).consensus_identity_id(),
+            "in force from block 1 on one side is a coloring difference and must split the network"
+        );
+        // `never()` is absence to the handshake. (The printed fingerprint still writes the present
+        // `Some(never())`, as it does for every bare fence: only the identity collapses it.)
+        assert_eq!(t11.consensus_identity_id(), at(ForkActivation::never()).consensus_identity_id(), "never() is absence");
+        assert!(at(ForkActivation::never()).palw_heartbeat_transparent_fence().is_some_and(|f| !f.is_active(u64::MAX - 1)));
+
+        // The accessor folds the lane in, and the lane folds the mode in.
+        assert_eq!(scheduled.palw_heartbeat_transparent_fence(), Some(ForkActivation::new(9_000_000)));
+        let mut no_lane = at(ForkActivation::always());
+        no_lane.palw_heartbeat = None;
+        assert!(no_lane.palw_heartbeat_transparent_fence().is_none(), "no heartbeat lane, nothing for the rule to be about");
+        assert!(no_lane.validate_palw_v2().is_err(), "…and a node refuses to start rather than hash a fence that cannot fire");
+        let mut hash_net = MAINNET_PARAMS;
+        hash_net.palw_heartbeat_transparent = Some(ForkActivation::always());
+        assert!(hash_net.palw_heartbeat_transparent_fence().is_none(), "a hash network has no heartbeat lane");
+        assert!(hash_net.validate_palw_v2().is_err(), "…so arming it there is refused, not ignored");
+        let mut hash_net_never = MAINNET_PARAMS;
+        hash_net_never.palw_heartbeat_transparent = Some(ForkActivation::never());
+        hash_net_never.validate_palw_v2().expect("never() is absence and is exempt, as for every bare fence");
     }
 
     /// **ADR-0068 Phase 1: the two values that closed ADR-0066's leftovers follow the exact fence

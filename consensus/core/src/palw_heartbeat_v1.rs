@@ -75,8 +75,25 @@
 //! slash and nobody to license. The coinbase rule (a heartbeat block's declared subsidy is zero —
 //! fees only) lives with the other coinbase validation in the body processor; the ε fork-choice
 //! rule lives in the GHOSTDAG protocol beside the receipt lane's zero. Both cite this module.
+//!
+//! ## The trap the recovery cadence set for a slow producer (ADR-0102)
+//!
+//! The two-step ramp assumes a bonded draw takes seconds against a 120 s block. On testnet-11 a
+//! Qwen3.6 draw takes ~17 minutes, and a bonded block's timestamp is its TEMPLATE's. Once a
+//! heartbeat is the selected parent (a bonded outage longer than the nominal hour is enough), eight
+//! heartbeats land during every draw; the draw lands built on a parent eight ε behind the tip, so
+//! it is never selected, and at `ghostdag_k = 1` that eight-heartbeat anticone made it RED — its
+//! 2²⁰ never entered anyone's blue work, and the DNS anchor could not be buried. The mode sustained
+//! itself for as long as any heartbeat miner ran (2026-09-10, 11:41Z-13:20Z).
+//!
+//! The consensus half of the answer is in the GHOSTDAG protocol behind
+//! `Params::palw_heartbeat_transparent` (a heartbeat never counts against a bonded block's
+//! coloring). The node half is here: [`heartbeat_yield_hint_v1`] tells a heartbeat miner that a
+//! bonded block is waiting to be merged, so it can stand aside long enough for the next bonded
+//! block to take the chain back. That half is **advice, not a rule** — nothing validates against
+//! it, and the slot rule above is unchanged.
 
-use crate::pow_layer0::{POW_ALGO_ID_HEARTBEAT_V1, is_palw_v2_algo_id};
+use crate::pow_layer0::{POW_ALGO_ID_HEARTBEAT_V1, is_palw_attempt_algo_id, is_palw_v2_algo_id};
 
 /// The heartbeat lane's algorithm id. See [`POW_ALGO_ID_HEARTBEAT_V1`] for why it is its own id
 /// and no longer `POW_ALGO_ID_BLAKE2B_SHA3`.
@@ -146,6 +163,50 @@ pub fn check_heartbeat_slot(
         Some(earliest) if header_timestamp >= earliest => Ok(()),
         _ => Err(HeartbeatTooEarly { last_heartbeat_timestamp: selected_parent_timestamp, interval_ms }),
     }
+}
+
+/// **ADR-0102 Decision 2 — what a heartbeat miner is told about the bonded lane.** Node policy,
+/// not a rule: no validation path reads it.
+///
+/// Three answers, because a miner has to act on three different facts and one `Option` would
+/// fold two of them into `None` (the "one None for two answers" shape — the miner's yield budget
+/// must reset on the first and must not reset on the second):
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeartbeatYieldHintV1 {
+    /// The virtual's selected parent is a bonded block. The chain is producing, the slot rule
+    /// already keeps the lane out of the way for the nominal hour, and a heartbeat-led episode —
+    /// if there was one — is over.
+    BondedSelectedParent,
+    /// The chain runs on heartbeats and no attempt-lane block waits in the virtual's mergeset.
+    /// This is the regime the lane exists for: tick at the recovery cadence.
+    NothingToYieldTo,
+    /// The chain runs on heartbeats and an attempt-lane block is waiting in the virtual's mergeset,
+    /// merged by nothing yet. A heartbeat mined now stacks ε on the parent that block's producer
+    /// drew on, and every one of those is weight the next bonded draw has to beat. The value is
+    /// the latest `timestamp + HEARTBEAT_NOMINAL_INTERVAL_MS` over those blocks — the same hour the
+    /// slot rule would have granted each of them had it been selected.
+    YieldUntil(u64),
+}
+
+/// The hint, from facts the virtual state already holds: the selected parent's lane and, for every
+/// OTHER block in the virtual's mergeset, its lane and timestamp.
+///
+/// One block deep, like the slot rule: no walk, and nothing node-local beyond the virtual itself
+/// (a hint may be node-local; the point is that it needs nothing more). Only the ATTEMPT lanes
+/// count as something to yield to — those are the blocks that carry weight and that pay the class
+/// lottery to exist. A receipt-lane block carries no weight a heartbeat could bury.
+pub fn heartbeat_yield_hint_v1(selected_parent_algo_id: u8, merged: impl IntoIterator<Item = (u8, u64)>) -> HeartbeatYieldHintV1 {
+    if is_palw_v2_algo_id(selected_parent_algo_id) {
+        return HeartbeatYieldHintV1::BondedSelectedParent;
+    }
+    merged
+        .into_iter()
+        .filter(|&(algo_id, _)| is_palw_attempt_algo_id(algo_id))
+        // Saturating is the right direction HERE and not in the slot rule: this is a wait a miner
+        // chooses, bounded by its own per-episode budget, not a refusal consensus relies on.
+        .map(|(_, timestamp)| timestamp.saturating_add(HEARTBEAT_NOMINAL_INTERVAL_MS))
+        .max()
+        .map_or(HeartbeatYieldHintV1::NothingToYieldTo, HeartbeatYieldHintV1::YieldUntil)
 }
 
 #[cfg(test)]
@@ -246,6 +307,47 @@ mod tests {
         // And the attempt lane IS the hierarchy — its digests are inference-priced.
         assert!(!crate::pow_layer0::algo_id_derives_no_block_level(POW_ALGO_ID_PALW_COMMITTED_V2));
         assert!(!crate::pow_layer0::algo_id_carries_no_chain_position(POW_ALGO_ID_PALW_COMMITTED_V2));
+    }
+
+    /// **ADR-0102 Decision 2: the hint has three answers, and the two that are not "yield" are
+    /// told apart.**
+    ///
+    /// A bonded selected parent ends a heartbeat-led episode (the miner's budget starts over); a
+    /// heartbeat selected parent with nothing bonded waiting is the lane doing its job. Folding
+    /// both into one `None` would leave a miner unable to reset its budget without also resetting
+    /// it on every quiet heartbeat — the wedge the budget exists to bound.
+    #[test]
+    fn the_yield_hint_separates_a_producing_chain_from_a_quiet_clock() {
+        use crate::pow_layer0::POW_ALGO_ID_PALW_EXEC_V3;
+        let t = 1_700_000_000_000u64;
+        // A bonded selected parent: whatever waits in the mergeset, the episode is over.
+        for sp in [POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_EXEC_V3, POW_ALGO_ID_PALW_RECEIPT_V3] {
+            assert_eq!(heartbeat_yield_hint_v1(sp, [(POW_ALGO_ID_PALW_COMMITTED_V2, t)]), HeartbeatYieldHintV1::BondedSelectedParent);
+            assert_eq!(heartbeat_yield_hint_v1(sp, []), HeartbeatYieldHintV1::BondedSelectedParent);
+        }
+        // A heartbeat selected parent with only heartbeats (or a zero-weight receipt) beside it:
+        // the clock ticks.
+        assert_eq!(heartbeat_yield_hint_v1(PALW_HEARTBEAT_ALGO_ID, []), HeartbeatYieldHintV1::NothingToYieldTo);
+        assert_eq!(
+            heartbeat_yield_hint_v1(PALW_HEARTBEAT_ALGO_ID, [(PALW_HEARTBEAT_ALGO_ID, t), (POW_ALGO_ID_PALW_RECEIPT_V3, t)]),
+            HeartbeatYieldHintV1::NothingToYieldTo,
+            "a receipt carries no weight a heartbeat could bury, and a sibling heartbeat is not a bonded block"
+        );
+        // An attempt block waiting — either attempt id — asks for the hour its own timestamp would
+        // have bought it as a selected parent; the LATEST of several wins.
+        assert_eq!(
+            heartbeat_yield_hint_v1(
+                PALW_HEARTBEAT_ALGO_ID,
+                [(POW_ALGO_ID_PALW_COMMITTED_V2, t), (POW_ALGO_ID_PALW_EXEC_V3, t + 60_000), (PALW_HEARTBEAT_ALGO_ID, t + 90_000)]
+            ),
+            HeartbeatYieldHintV1::YieldUntil(t + 60_000 + HEARTBEAT_NOMINAL_INTERVAL_MS)
+        );
+        // A timestamp at the top of the range saturates into a long wait, which the miner's budget
+        // bounds — it must not wrap into a deadline in the past.
+        assert_eq!(
+            heartbeat_yield_hint_v1(PALW_HEARTBEAT_ALGO_ID, [(POW_ALGO_ID_PALW_COMMITTED_V2, u64::MAX - 1)]),
+            HeartbeatYieldHintV1::YieldUntil(u64::MAX)
+        );
     }
 
     /// The price is a constant this crate states once, and it is the spam floor the withdrawn
