@@ -665,6 +665,18 @@ mapping is written down.
   upload and one line, after which the fallback has no user; it is an outward-facing act, so it
   waits for the operator.
 
+* **2026-09-10, Part B's job, engine and seat halves** (branch `feat/adr-0096-partb-drill`:
+  `231d75cb`, `318d7800`, `03f643a6`). B1–B4 and B7 as §10 says, plus B9–B12 below: the version-6
+  job and payload, the automaton on every free-prompt material, the pinned Qwen2.5 token table
+  (`01e9c31c…`, 151,936 ids, lowest EOG 151,643, reproduced by an independent implementation), the
+  a16 engine's masked decode with the table passed in by its caller, the worker's lazily built table,
+  the seat's masked replay (`--palw-class-tokenizer`), the rail's version-6 build and the
+  entrance's masked and committed modes. The fence is still refused at assembly: the court half
+  (B5, B6, B10) is being built beside this, and `--palw-fp-constraint-devnet` arms the fence on a
+  private devnet only through the same check. The first constrained drill ran on a build whose
+  refusal was bypassed locally for that run only (never committed), while the court half was
+  written; its evidence is recorded when it finishes.
+
 ## 10. Amendment 2026-09-10 — what the court needs, found while building the drill
 
 Decision 7 said the court "recomputes `s` by running the automaton over the rendered prefix —
@@ -737,3 +749,54 @@ arms (B5, B6) are proven by tests through `adjudicate_court_close_v2`, the fold'
 a real constrained run on a fixture-sized artifact: an honest run acquitted, an altered id
 convicted by the one-disclosure arm, a forbidden beating lane not a fault, a lying segment
 convicted by B6. A live court round trip is the court drill's job, not this one's.
+
+**B9 — no interval arm for a version-6 claim.** The interval replay (ADR-0077 Decision 8, ADR-0082
+Decision 9) teacher-forces the committed ids and re-selects each token by the plain argmax, which
+a masked decode is not, so it would disagree with every honest constrained claim. A seat skips it
+for version 6 and replays the whole job masked. The a16 capture is over the transport cap at
+every useful length (37 MB for 60 tokens, measured), so the seat reads the job, the prompt and the
+automaton from the answer envelope, which therefore carries the automaton for version 6 (as do
+`FPM1` and `FPC1`; B2's "seats replay from it" is the material, bound to `constraint_id` by every
+decoder). A seat without the pinned table answers `Incapable` — it cannot judge — never
+`Unavailable` against an executor that served everything.
+
+**B10 — past the fence, a free-prompt decode close carries its job.** Neither the claim record nor
+`PalwJobContextV2` says whether a claim was constrained: the context holds no version and no
+constraint id. So the unconstrained decode arms (`DecodeToken`, `DecodeTokenTiled`) cannot tell a
+masked token from an unmasked one, and a challenger who used them against a version-6 claim would
+convict an honest masked token whenever the unconstrained argmax differs. On a network that armed
+the fence they are refused by name for a free-prompt claim; the job-carrying arm (B5) is the only
+decode close for one, running the v2 check for a version-5 job and the v3 check for a version-6
+job. Attempt-lane claims keep the old arms. The panel's close assembly must build that arm for a
+free-prompt dispute before the fence is armed on a network where a dispute can happen.
+
+**B11 — the pin carries the lowest end-of-generation id.** B7's finish rule commits the class's
+lowest EOG id, and the court tries it from the automaton and that id alone, so the id is the
+build's, beside the root (151,643, `<|endoftext|>`, for the Qwen2.5 row; checked against the
+tokenizer file). Byte-completeness — every one of the 256 bytes is some id's whole rendering, which
+is what lets "no lane is admitted" be read as "no byte continues" — is certified by
+`palw-token-table` and the pin's test. Acceptance refuses a version-6 job whose tokenizer has no
+pinned table (`ConstraintTokenizerUnpinned`), because no court could try a token of it.
+
+**B12 — what the entrance learned from the first masked answers** (Qwen2.5-1.5B-Instruct A16,
+answer-only gateway, 2026-09-10).
+
+* **One space after each `:` and `,`.** The compiler admitted RFC 8785's canonical form only, and a
+  model whose next token is a space-quote was forced onto the best token that is not: "a JSON object
+  describing a cat" came back `{"name":null,"age":null}`. The automaton now admits exactly one space
+  (0x20) after each separator, inside `enum`/`const` literals too, and nothing else — no newline, no
+  second space, nothing around the root — so it cannot loop and B7's finish still fires at the root
+  value's last byte. The same prompt answers `{"name": "Whiskers", "age": 3}`. The derivation strips
+  it (Decision 9 canonicalizes), as it canonicalizes a number.
+* **The model reads the schema in the client's member order.** The instruction rendered the schema
+  canonically, which sorts members, and a light model answers in the order it is shown: for
+  `{label, confidence}` it wrote `"confidence":0.5` first and then `"label":"neutral"` for "the
+  battery died after two days"; shown in the client's order it wrote `"label":"negative"` and 0.95.
+  The gateway reads the order from the request body (the workspace's `Value` sorts, and must keep
+  doing so) and renders RFC 8785 scalars in that order; the constraint id, the automaton and the
+  report stay on the canonical bytes, so two orders of one schema are one constraint. OpenAI emits
+  members in schema order too. An entrance in front of the gateway must forward `response_format`
+  verbatim for this to reach the model (the Studio does not yet).
+* **`finish_reason` is `stop` when the answer ended itself.** A masked answer's EOG renders empty,
+  so the byte comparison that decided `stop` saw no cut and said `length`; the stream records that
+  the answer ended.
