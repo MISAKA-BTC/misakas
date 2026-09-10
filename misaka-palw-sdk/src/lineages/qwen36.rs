@@ -32,6 +32,11 @@ pub struct Qwen36LineageV1;
 struct Qwen36HoldingV1 {
     computed_root: Hash64,
     artifact: Arc<Qwen36ArtifactV1>,
+    /// **ADR-0102: the operand-inventory root under each graph this holding was asked about**,
+    /// keyed by the graph's id. A graph-v6 row registers that root, and deriving it copies every
+    /// row of the artifact — so it is derived once per graph and then read, like the computed root
+    /// is once per holding. Refusals are kept too: an artifact the graph cannot serve stays one.
+    inventory_roots: std::sync::Mutex<std::collections::BTreeMap<Hash64, Result<Hash64, String>>>,
 }
 
 /// Wrap an already-open mapping as a holding of this lineage, computing its root. The constructor
@@ -51,7 +56,12 @@ pub fn holding_from_artifact(artifact: Arc<Qwen36ArtifactV1>, path: Option<std::
             artifact.weight_bytes() as f64 / (1u64 << 30) as f64,
         ),
     };
-    PalwLoadedArtifactV1::from_parts(QWEN36_LINEAGE_ID, path, summary, Arc::new(Qwen36HoldingV1 { computed_root, artifact }))
+    PalwLoadedArtifactV1::from_parts(
+        QWEN36_LINEAGE_ID,
+        path,
+        summary,
+        Arc::new(Qwen36HoldingV1 { computed_root, artifact, inventory_roots: Default::default() }),
+    )
 }
 
 /// The `(computed_root, mapping)` inside a holding of this lineage, if it is one.
@@ -62,11 +72,61 @@ pub fn parts_of(holding: &PalwLoadedArtifactV1) -> Option<(Hash64, Arc<Qwen36Art
     holding.payload().downcast::<Qwen36HoldingV1>().ok().map(|h| (h.computed_root, h.artifact.clone()))
 }
 
+/// **The root a registration of this holding under `profile` pins** (ADR-0102): the
+/// operand-inventory root where the graph registers one
+/// (`misaka_palw_base0::inventory::qwen36_registers_inventory_root_v1`), derived once per graph and
+/// memoized on the holding; the computed root otherwise. `None` for a holding of another lineage.
+pub fn registered_root_of(
+    holding: &PalwLoadedArtifactV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+) -> Option<Result<Hash64, String>> {
+    if holding.lineage_id != QWEN36_LINEAGE_ID {
+        return None;
+    }
+    let held = holding.payload().downcast::<Qwen36HoldingV1>().ok()?;
+    if !misaka_palw_base0::inventory::qwen36_registers_inventory_root_v1(profile) {
+        return Some(Ok(held.computed_root));
+    }
+    let key = profile.shape_profile_id();
+    if let Some(known) = held.inventory_roots.lock().expect("the memo is never poisoned").get(&key) {
+        return Some(known.clone());
+    }
+    // Derived outside the lock: a pass over the whole artifact must not hold up a reader of
+    // another graph's root. Two racing derivations of one graph agree, so the second write is moot.
+    let derived = misaka_palw_base0::inventory::qwen36_inventory_v1(&held.artifact, profile)
+        .map(|inventory| inventory.root())
+        .map_err(|e| format!("the artifact has no inventory under this graph: {e:?}"));
+    held.inventory_roots.lock().expect("the memo is never poisoned").insert(key, derived.clone());
+    Some(derived)
+}
+
 /// The held mapping whose COMPUTED root is `root`, if this node loaded one — the chain-registered
 /// arm's lookup, the exact analogue of the dense lineage's by-digest one. The root was derived
 /// from the mapping's own bytes at load, so a match here IS possession of the registered weights.
 pub(crate) fn qwen36_artifact_by_root(holdings: &[PalwLoadedArtifactV1], root: Hash64) -> Option<Arc<Qwen36ArtifactV1>> {
     holdings.iter().filter_map(parts_of).find(|(computed, _)| *computed == root).map(|(_, artifact)| artifact)
+}
+
+/// **The held mapping a registration of `profile` at `root` names** (ADR-0102): by the computed
+/// root first — every row before graph-v6, and what the chain registered for them — then, for a
+/// graph that registers its inventory root, by that root under the SAME graph. The dense lineage's
+/// `dense_artifact_by_registered_root`, for this container.
+pub(crate) fn qwen36_artifact_by_registered_root(
+    holdings: &[PalwLoadedArtifactV1],
+    root: Hash64,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+) -> Option<Arc<Qwen36ArtifactV1>> {
+    if let Some(artifact) = qwen36_artifact_by_root(holdings, root) {
+        return Some(artifact);
+    }
+    if !misaka_palw_base0::inventory::qwen36_registers_inventory_root_v1(profile) {
+        return None;
+    }
+    holdings
+        .iter()
+        .find(|h| registered_root_of(h, profile).is_some_and(|r| r.is_ok_and(|r| r == root)))
+        .and_then(parts_of)
+        .map(|(_, artifact)| artifact)
 }
 
 fn table_entry(model_id: &str) -> Option<Qwen36CanonicalClassV1> {
@@ -115,10 +175,12 @@ impl PalwModelLineageV1 for Qwen36LineageV1 {
     fn pair(&self, _court: &PalwCourtParamsV2, entry: &PalwClassEntryV1, artifact: &PalwLoadedArtifactV1) -> Result<Hash64, String> {
         let table = table_entry(entry.model_id)
             .ok_or_else(|| format!("{} is not a class of the {QWEN36_LINEAGE_ID} lineage", entry.model_id))?;
-        let (computed_root, artifact) =
+        let (_, mapping) =
             parts_of(artifact).ok_or_else(|| format!("the artifact offered for {} is not a Qwen3.6 mapping", entry.model_id))?;
-        table.shape_matches(&artifact.shape)?;
-        Ok(computed_root)
+        table.shape_matches(&mapping.shape)?;
+        // ADR-0102: the computed root for the rows the chain already registered that way, the
+        // operand-inventory root for a graph-v6 row — one rule, `registered_root_of`.
+        registered_root_of(artifact, &entry.profile).expect("a holding of this lineage").map_err(|e| format!("{}: {e}", entry.model_id))
     }
 
     fn resolve(
@@ -131,7 +193,8 @@ impl PalwModelLineageV1 for Qwen36LineageV1 {
         network_id: &[u8],
     ) -> Option<Result<Box<dyn PalwExecutionBackendV1>, String>> {
         let entry = qwen36_canonical_classes_v1().into_iter().find(|c| c.class_id() == Some(class_id))?;
-        if let Some((_, artifact)) = holdings.iter().filter_map(parts_of).find(|(root, _)| *root == artifact_root) {
+        let profile = entry.profile().ok()?;
+        if let Some(artifact) = qwen36_artifact_by_registered_root(holdings, artifact_root, &profile) {
             // The ladder the RULESET froze — see the dense lineage's resolve for the whole note.
             return Some(Ok(Box::new(
                 misaka_palw_base0::qwen36_backend::Qwen36Backend::new(

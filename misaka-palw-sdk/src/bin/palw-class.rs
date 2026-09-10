@@ -417,7 +417,12 @@ fn held_measurement(loaded: &misaka_palw_sdk::PalwLoadedArtifactV1, name: Option
             rms_eps_q: sh.eps_q,
             ..QWEN36_35B_A3B
         };
-        let manifest = PalwModelManifestV1::from_hybrid(name.unwrap_or_else(|| loaded.summary.clone()), &g, None);
+        // **ADR-0102: a held hybrid artifact is measured under graph-v6**, the graph that reads its
+        // embedding lift the way the engine executes it (per token; a one-row store lifting every
+        // token alike). Under graph-v5 the converter's calibrated store — one triple per
+        // vocabulary row — has no inventory at all, and this measurement refused the Qwen3.5-2B
+        // artifact by name on exactly that.
+        let manifest = PalwModelManifestV1::from_hybrid_token_lift(name.unwrap_or_else(|| loaded.summary.clone()), &g, None);
         let profile = manifest.profile(MEASURE_CONTEXTS[0]).map_err(|e| format!("the hybrid manifest builds no profile: {e:?}"))?;
         let inventory = misaka_palw_base0::inventory::qwen36_inventory_v1(&artifact, &profile)
             .map_err(|e| format!("the artifact yields no inventory under its own profile: {e:?}"))?;

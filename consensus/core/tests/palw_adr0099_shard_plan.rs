@@ -366,6 +366,37 @@ fn a_manifest_of_a_shipped_class_names_the_shipped_class() {
     );
 }
 
+/// **ADR-0102 — a hybrid manifest names its graph, and the graph-v6 variant moves no earlier
+/// document.** `hybrid-qwen36-token-lift` projects graph-v6 (a different class over the same
+/// geometry, reaching the per-token lift); the variant is appended LAST, so a `hybrid-qwen36`
+/// document's Borsh bytes — and therefore its id and its signature — are what they were.
+#[test]
+fn a_token_lift_manifest_names_graph_v6_and_moves_no_earlier_document() {
+    use kaspa_consensus_core::palw_measured_model_v1::PalwModelFamilyV1;
+    let v5 = PalwModelManifestV1::from_hybrid("hybrid", &QWEN36_35B_A3B, None);
+    let v6 = PalwModelManifestV1::from_hybrid_token_lift("hybrid", &QWEN36_35B_A3B, None);
+    assert!(v5.is_hybrid() && v6.is_hybrid());
+    assert_eq!(v5.hybrid_geometry(512), v6.hybrid_geometry(512), "one geometry");
+    assert_eq!(v5.artifact_bytes(), v6.artifact_bytes(), "one artifact");
+    let (p5, p6) = (v5.profile(512).unwrap(), v6.profile(512).unwrap());
+    assert_ne!(p5.shape_profile_id(), p6.shape_profile_id(), "two graphs, two classes");
+    assert_eq!(
+        p6.shape_profile_id(),
+        kaspa_consensus_core::palw_qwen36_profile::qwen36_artifact_row_profile_v6(v6.hybrid_geometry(512).unwrap())
+            .unwrap()
+            .shape_profile_id()
+    );
+    let lift = kaspa_consensus_core::palw_step::kernel_semantics_id_v1(kaspa_consensus_core::palw_step_refute::KDESC_A16_REQUANTIZE_BY_TOKEN);
+    assert!(kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1(&p6).contains(&lift));
+    assert!(!kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1(&p5).contains(&lift));
+    // JSON names it; Borsh appends it.
+    assert!(serde_json::to_string(&v6).unwrap().contains(r#""family":"hybrid-qwen36-token-lift""#));
+    assert_eq!(serde_json::from_str::<PalwModelManifestV1>(&serde_json::to_string(&v6).unwrap()).unwrap(), v6);
+    assert_eq!(borsh::to_vec(&PalwModelFamilyV1::DenseA16).unwrap(), vec![0]);
+    assert_eq!(borsh::to_vec(&PalwModelFamilyV1::HybridQwen36).unwrap(), vec![1]);
+    assert_eq!(borsh::to_vec(&PalwModelFamilyV1::HybridQwen36TokenLift).unwrap(), vec![2]);
+}
+
 fn dense_profile() -> PalwShapeProfileV3 {
     palw_a16_context_row_profile_v5(QWEN25_A16_GRAPH_V5_N_CTX).unwrap()
 }

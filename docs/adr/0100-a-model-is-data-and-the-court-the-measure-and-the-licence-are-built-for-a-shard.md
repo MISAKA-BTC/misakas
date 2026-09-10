@@ -99,7 +99,7 @@ shipped A16 artifact, 1,795,427,276 bytes — the size `docs/model-requests.md` 
 | a self-reported 34 ms a position on this Mac | 2,117,400 positions inside the RC's receipt window, listed as self-reported |
 | signed under a throwaway ML-DSA-87 seed | `verify --artifact` recomputes every field and the signature verifies; one byte added to the artifact's bytes → `artifact_bytes` MISMATCH and the signature does not verify, exit 1 |
 | `verify` WITHOUT the artifact | the eight artifact-derived fields (bytes, basis, root, file size, four contexts' plans) are named as needing the artifact; everything else recomputed; exit 0 |
-| the hybrid-container `qwen35-2b.palwq36` on this Mac (the Qwen3.5-2B rehearsal artifact) | **refused by name**: the inventory is built under the graph-v5 profile its manifest projects, and this artifact's embedding-lift table (`embed_lift.a16: 248320 triples serve neither one lane nor 2048`) is not a layout that inventory accepts — a measurement that cannot place a row refuses rather than estimates |
+| the hybrid-container `qwen35-2b.palwq36` on this Mac (the Qwen3.5-2B rehearsal artifact) | **refused by name**: the inventory is built under the graph-v5 profile its manifest projects, and this artifact's embedding-lift table (`embed_lift.a16: 248320 triples serve neither one lane nor 2048`) is not a layout that inventory accepts — a measurement that cannot place a row refuses rather than estimates. **Answered by [ADR-0102](0102-the-embedding-lift-is-read-per-token-and-an-unarmed-kernel-is-not-in-the-identity.md)**: graph-v6 reads the lift per token, and the artifact measures (§1.4 there) |
 
 ### 1.4 Licensing per shard, priced
 
@@ -306,7 +306,8 @@ tags the two discriminant pins.
 
 1. Decisions 1, 2, 3 and 4 — **done** (§9); Decision 4's consensus half without a flag day.
 2. A devnet drill of the one-move court: a genesis stating V3, a seat that files, a fold that
-   convicts — the U-04 of ADR-0099, now with an object to file.
+   convicts — the U-04 of ADR-0099, now with an object to file. **Done 2026-09-10** (§9, "the
+   drill"): `scripts/misaka-palw-shard-court-devnet-drill.sh`, PASS on the second run.
 3. A devnet drill of per-shard licensing: a class registered by a bond, a plan, bonds declaring
    shards, a stratified panel, parts landing — the seats holding the whole model until a sharded
    backend exists (Decision 7 step 7).
@@ -379,3 +380,24 @@ order is `main`'s to overwrite.
     `kaspad/src/palw_panel.rs` — the seat files only where the chain's refutation ladder can try
     the claim, and its source pin reads the new arm.
   * `docs/palw-shard-plan-2026-09-10.md` regenerated; this ADR; the README index.
+* **2026-09-10, the drill (§6 step 2).** Three devnet nodes on this Mac, the floor class only,
+  `--palw-shard-court-devnet=0` (the genesis states the COMPLETE_V3 set; the court armed from
+  block one); node-0 produces canonical free-prompt claims whose capture is corrupted at step leaf
+  0 (`--palw-drill-tamper-fp-leaf=0`, devnet/simnet only), the other two are its panel.
+  * **Run 1 found a defect in the drill's own lie, not in the court.** The panel patched the
+    attempt-lane liar's outcome into the honest free-prompt run, so the run's FACTS (the four leg
+    roots the free-prompt execution root is recomputed from) still described the honest capture:
+    `palw_fp_commitment_from_context_v3` refused the pair (`ContextDoesNotReproduceTheRoot`) and
+    node-0 logged "the run does not assemble into a commitment" every interval — no claim, so no
+    court. Fixed by a free-prompt verb of the drill fault
+    (`PalwExecutionBackendV1::execute_free_prompt_with_injected_fault`; BASE-0 corrupts the
+    capture BEFORE any fact is measured, `corrupt_capture_v1` shared with the attempt lane), the
+    live failure pinned by `a_free_prompt_drill_fault_assembles_into_its_own_commitment_and_convicts`.
+  * **Run 2, PASS.** 22:25:36 node-0 committed claim `d3766988f70d7a37…` (tx `8bd939f1…`), its
+    material self-consistent; 22:29:19 both seats found leaf 0 of the served capture does not
+    recompute and filed `ShardCourtAccused` (sessions `69e87283…`, `c797e2ef…`) — the claim was
+    `panel_bound`; 22:30:21 block `16729a4e…` carried one accusation, every node folded it, and the
+    three duplicates that followed were dropped with their blocks standing ("wrong phase"); the
+    claim reads `voided court_fraud` on node-1 and node-2 over RPC; bond 0's collateral fell from
+    1,110,106,160 to 1,110,067,640 sompi, −38,520 (`void_and_slash` debits the claim's `reserved`).
+    No human step between the lie and the slash.

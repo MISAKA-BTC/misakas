@@ -742,6 +742,27 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     ) -> Result<PalwExecutionOutcomeV1, String> {
         Err("this backend has no drill fault".to_string())
     }
+
+    /// **The same DRILL fault on the free-prompt lane** (ADR-0100 §6 step 2): run the job, corrupt
+    /// one lane of the tile at `leaf_index`, and hand back the run the corrupted capture IS — its
+    /// four leg roots and its execution root re-derived from the capture, so
+    /// [`crate::palw_fp_execution_v3::palw_fp_commitment_from_context_v3`] assembles the liar's
+    /// commitment exactly as it assembles an honest one.
+    ///
+    /// It is its own verb because the attempt-lane one cannot serve here: its outcome carries a
+    /// re-derived execution root, but the free-prompt commitment recomputes that root from the
+    /// run's FACTS, and facts measured on the honest run describe a capture that was never
+    /// committed — the assembly refuses the pair by name (`ContextDoesNotReproduceTheRoot`), and a
+    /// drill that never commits a claim convicts nobody. Same rule as the attempt lane: callers
+    /// refuse to reach this on a network carrying value.
+    fn execute_free_prompt_with_injected_fault(
+        &self,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_tokens: &[usize],
+        _leaf_index: u64,
+    ) -> Result<PalwFpRunV1, String> {
+        Err("this backend has no free-prompt drill fault".to_string())
+    }
 }
 
 #[cfg(test)]

@@ -2364,4 +2364,114 @@ mod tests {
             );
         }
     }
+
+    /// **ADR-0102: `graph-v6` reads the embedding lift per TOKEN, so a calibrated store is
+    /// adjudicable.** The converter writes one `embed_lift.a16` triple per vocabulary row and the
+    /// engine applies `lift.get(token_id)`; `graph-v5`'s lane-sliced lift names a per-lane table no
+    /// calibrated artifact has, so its inventory refuses the store (ADR-0070 §7(b)) and its court
+    /// could not read it. Under `graph-v6` the same fixture — its lift made per-token and
+    /// non-trivial — clears at every leaf the one-step court can try, and a tampered lift lane
+    /// convicts at a prompt position and at a decode call (whose token is a generated one).
+    #[test]
+    fn a_graph_v6_hybrid_adjudicates_a_per_token_lift_and_a_tampered_lift_convicts() {
+        use kaspa_consensus_core::palw_base0_a16::A16QuantParams;
+        use kaspa_consensus_core::palw_qwen36_profile::{qwen36_profile_v2, qwen36_profile_v5, qwen36_profile_v6};
+        use kaspa_consensus_core::palw_step::{PalwStepOpKindV1, kernel_semantics_id_v1};
+        use kaspa_consensus_core::palw_step_refute::{KDESC_A16_REQUANTIZE_BY_TOKEN, PalwStepRefuteError, check_execution_step_refutation_v1};
+
+        let base = crate::qwen36::test_fixture(4, 8);
+        let vocab = base.shape.vocab;
+        // One triple per token, and not all alike: a lift the court resolved at the wrong row
+        // would recompute a different row and convict an honest claim.
+        let lift: Vec<A16QuantParams> =
+            (0..vocab).map(|t| A16QuantParams { multiplier: 1 + (t % 3) as i64, shift: (t % 2) as u8, zero: 0 }).collect();
+        let artifact = std::sync::Arc::new(base.with_params("embed_lift.a16", &lift));
+        let geometry = crate::qwen36_plan::fixture_geometry_of(&artifact.shape, 4);
+
+        // The gap this graph closes, pinned: the lane-sliced lift cannot serve the store.
+        let lane_sliced = qwen36_profile_v2(geometry).expect("the v2 projection");
+        let refused = crate::inventory::qwen36_inventory_v1(&artifact, &lane_sliced).expect_err("a per-token store is not per-lane");
+        assert!(format!("{refused:?}").contains("embed_lift.a16"), "the refusal names the store: {refused:?}");
+
+        let profile = qwen36_profile_v6(geometry).expect("the v6 projection");
+        assert_ne!(
+            profile.shape_profile_id(),
+            qwen36_profile_v5(geometry).expect("the v5 projection").shape_profile_id(),
+            "a class is its graph: v6 is a new class over the same weights"
+        );
+        let inventory = crate::inventory::qwen36_inventory_v1(&artifact, &profile).expect("graph-v6 serves the per-token store");
+        let lift_rows = inventory.operands().iter().filter(|o| o.tensor_name == "embed_lift.a16").count();
+        assert_eq!(lift_rows, vocab, "one leaf per vocabulary row, so an opening proves exactly one triple");
+        // The engine's other reading, a one-row store lifting every token (the fixture's own): the
+        // same graph serves it, tiled across the vocabulary — the engine and the court agree on
+        // every store the engine executes.
+        let singleton = crate::inventory::qwen36_inventory_v1(&crate::qwen36::test_fixture(4, 8), &profile)
+            .expect("a one-row lift serves every token under graph-v6");
+        assert_eq!(singleton.operands().iter().filter(|o| o.tensor_name == "embed_lift.a16").count(), vocab);
+        // And the root this graph registers is that inventory's; the rows before it keep theirs.
+        assert!(crate::inventory::qwen36_registers_inventory_root_v1(&profile));
+        assert!(!crate::inventory::qwen36_registers_inventory_root_v1(&qwen36_profile_v5(geometry).expect("v5")));
+        assert!(!crate::inventory::qwen36_registers_inventory_root_v1(&lane_sliced));
+
+        // Three prompt positions and four decode calls: six positions, below the recurrence's
+        // spacing on this fixture (`min(16, n_ctx)` = 8), where its mismatched gdn head counts
+        // stop the serializer — the same sizing, for the same reason, as the graph-v5 test above.
+        let backend = Qwen36Backend::from_registered_profile(artifact.clone(), b"misaka-palw-test".to_vec(), profile.clone(), (3, 4))
+            .expect("graph-v6 is servable");
+        assert!(backend.supports_court());
+        let anchor = Hash64::from_u64_word(0x0102_0102);
+        let (job, prompt) = backend.job_for_anchor(anchor).expect("the anchor implies a job");
+        let outcome = backend.execute(&job, &prompt).expect("the v6 class runs");
+        let (binding, _tiles, _logits, _generated, _chunks) =
+            crate::produce::base0_material_decode_v1(&outcome.material).expect("the captured material decodes");
+
+        let openings: Vec<_> = (0..inventory.operands().len())
+            .map(|i| kaspa_consensus_core::palw_artifact::open_artifact_leaf_v1(inventory.operands(), i as u32).unwrap())
+            .collect();
+        let oracle = kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&openings, inventory.root())
+            .expect("every inventory row proves against its own root");
+        let coord_of = |index: u64| {
+            kaspa_consensus_core::palw_step::canonical_step_coordinates(&profile, &job, index).expect("a main step coordinate")
+        };
+        let node_of = |index: u64| profile.resolve_node_slot(coord_of(index).node_slot).map(|(n, _)| n.clone());
+        let by_token = kernel_semantics_id_v1(KDESC_A16_REQUANTIZE_BY_TOKEN);
+
+        // Every leaf the one-step court can try clears the honest capture; the fused attention
+        // site is the dissection's (ADR-0082), not this court's.
+        let mut lift_leaves = Vec::new();
+        for index in 0..binding.step_leaf_count {
+            let Some(node) = node_of(index) else { continue };
+            if node.op_kind == PalwStepOpKindV1::AttnFused {
+                continue;
+            }
+            if node.kernel_semantics_id == by_token {
+                lift_leaves.push(index);
+            }
+            let refutation = backend.refutation_for_index(&outcome.material, index).expect("an honest leaf opens");
+            let got = check_execution_step_refutation_v1(&refutation, &oracle);
+            assert!(
+                matches!(got, Err(PalwStepRefuteError::NoFaultFound)),
+                "an honest execution must clear itself at leaf {index} ({}): got {got:?}",
+                node.weight_name
+            );
+        }
+        let prompt_lift = *lift_leaves.iter().find(|i| coord_of(**i).call_index == 0).expect("a prompt position's lift");
+        let decode_lift = *lift_leaves.iter().find(|i| coord_of(**i).call_index > 0).expect("a decode call's lift");
+        for index in [prompt_lift, decode_lift] {
+            let lying = backend.execute_with_injected_fault(&job, &prompt, index).expect("a tampered capture still commits");
+            let refutation = backend.refutation_for_index(&lying.material, index).expect("a tampered capture opens too");
+            let openings = backend.operand_openings_for(&refutation).expect("the prover opens the one lift row the court reads");
+            assert!(
+                openings.iter().any(|o| o.operand.tensor_name == "embed_lift.a16" && o.operand.bytes.len() == A16QuantParams::WIRE_BYTES),
+                "the court read exactly one 17-byte triple of the lift"
+            );
+            let proven = kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&openings, inventory.root())
+                .expect("recorded openings prove");
+            assert!(
+                check_execution_step_refutation_v1(&refutation, &proven).is_ok(),
+                "a tampered lift lane at leaf {index} (call {}) must convict",
+                coord_of(index).call_index
+            );
+        }
+    }
 }

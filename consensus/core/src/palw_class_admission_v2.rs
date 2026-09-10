@@ -414,6 +414,8 @@ pub struct PalwKaryCourtV1 {
 pub struct PalwAdmissionShapeV1 {
     pub court: Option<PalwKaryCourtV1>,
     pub ladder: Option<PalwClassLadderRulesV1>,
+    /// ADR-0102: `Params::palw_token_lift` at the height — may a class reach the fenced kernel.
+    pub token_lift: bool,
 }
 
 pub fn palw_admission_shape_at_v1(
@@ -438,7 +440,19 @@ pub fn palw_admission_shape_at_v1(
         .is_some_and(|fence| fence.is_active(daa_score))
         .then(|| crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(profile, court, bundle.court.max_step_leaf_count()))
         .flatten();
-    Ok(PalwAdmissionShapeV1 { court, ladder })
+    Ok(PalwAdmissionShapeV1 { court, ladder, token_lift: params.palw_token_lift_active_at(daa_score) })
+}
+
+/// **Does a genesis set register a class that reaches a fenced kernel?** (ADR-0102.) Genesis rows
+/// are verified against the committed catalog rather than through the admission gate, so
+/// `Params::validate_palw_v2` asks this and refuses the set unless the fence is armed from
+/// genesis — the `palw_attn_widest_registered_site_v2` precedent for fused rows.
+pub fn palw_genesis_reaches_fenced_kernel_v1(bundle: &PalwConsensusParamsV2) -> bool {
+    let fenced = crate::palw_step_refute::fenced_kernel_ids_v1();
+    bundle.genesis_objects.iter().any(|object| {
+        matches!(object, PalwConsensusObjectV2::ClassRegistered { admission: Some(carriage), .. }
+            if !reachable_kernels_v1(&carriage.profile).is_disjoint(&fenced))
+    })
 }
 
 impl PalwCourtCostShapeV1 {
@@ -1122,6 +1136,14 @@ pub enum PalwClassAdmissionError {
     /// enough to enumerate and still take more DAA to prosecute than the lattice leaves for it.
     #[error("prosecuting the class's widest row takes {needed} DAA and this lattice's court window is {window}")]
     CourtWindowTooShort { needed: u64, window: u64 },
+    /// **ADR-0102: the class reaches a kernel this network adjudicates only past its fence.**
+    ///
+    /// The per-token lift (`KDESC_A16_REQUANTIZE_BY_TOKEN`) is in the adjudicator's fenced table,
+    /// outside `court_catalog_root`, and `Params::palw_token_lift` is what admits it. Refused BY
+    /// NAME rather than as a coverage gap for the `FusedAttentionNeedsTheKaryCourt` reason: the
+    /// graph is adjudicable by this build, and what is missing is the fence.
+    #[error("the class reaches the per-token lift kernel and this network has not armed palw_token_lift")]
+    TokenLiftNeedsItsFence,
 }
 
 /// **The Phase B rules a `palw_context_ladder`-armed network judges a registration under**
@@ -1497,6 +1519,29 @@ pub fn verify_class_admission_v6(
     court: Option<PalwKaryCourtV1>,
     decode_rules: bool,
 ) -> Result<PalwClassCatalogEntryV2, PalwClassAdmissionError> {
+    verify_class_admission_v7(bundle, profile, canonical, registration, certified, chain_certified, ladder, court, decode_rules, false)
+}
+
+/// [`verify_class_admission_v6`] under ADR-0102's fence.
+///
+/// `token_lift` is `Params::palw_token_lift` at the block, read by the CALLER, and `false` on
+/// every shipped preset, where this is [`verify_class_admission_v6`] byte for byte for every
+/// class that reaches no fenced kernel — and a refusal by name
+/// ([`PalwClassAdmissionError::TokenLiftNeedsItsFence`]) for one that does. `true` admits the
+/// fenced kernel into the coverage the gate checks; nothing else moves.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_class_admission_v7(
+    bundle: &PalwConsensusParamsV2,
+    profile: &PalwShapeProfileV3,
+    canonical: &PalwJobContextV2,
+    registration: &PalwConsensusObjectV2,
+    certified: &[crate::palw_e2e_adjudicability::PalwE2eFamilyV1],
+    chain_certified: &[crate::palw_e2e_adjudicability::PalwE2eFamilyV1],
+    ladder: Option<PalwClassLadderRulesV1>,
+    court: Option<PalwKaryCourtV1>,
+    decode_rules: bool,
+    token_lift: bool,
+) -> Result<PalwClassCatalogEntryV2, PalwClassAdmissionError> {
     let PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, pwu_rule, share_permille, .. } = registration else {
         return Err(PalwClassAdmissionError::NotARegistration);
     };
@@ -1574,12 +1619,23 @@ pub fn verify_class_admission_v6(
     // A4 first: a class whose disputes cannot be adjudicated must not reach any later check, so
     // that a coverage gap can never be reported as some more specific failure.
     let kernel_ids = reachable_kernels_v1(profile);
-    verify_catalog_coverage_v1(&PalwReachableKernelSetV1 { execution_class_id: derived_id, kernel_ids: kernel_ids.clone() })
+    // **ADR-0102: a fenced kernel is admitted by its fence, and only by it.** Asked before the
+    // catalog walk so a class the fence would admit is never reported as a coverage gap; past it
+    // the fenced ids leave the set the identity catalog judges (they are adjudicable — the
+    // resolver reads the fenced table — and they are not in `court_catalog_root`, which is the
+    // point of the fence). `kernel_ids` itself stays whole: the catalog entry records every kernel
+    // the class reaches, and weight asks a certified family to cover all of them.
+    let fenced = crate::palw_step_refute::fenced_kernel_ids_v1();
+    if !token_lift && !kernel_ids.is_disjoint(&fenced) {
+        return Err(PalwClassAdmissionError::TokenLiftNeedsItsFence);
+    }
+    let identity_ids: BTreeSet<Hash64> = kernel_ids.difference(&fenced).copied().collect();
+    verify_catalog_coverage_v1(&PalwReachableKernelSetV1 { execution_class_id: derived_id, kernel_ids: identity_ids.clone() })
         .map_err(|_| PalwClassAdmissionError::CoverageGap)?;
     // The catalogued set is read from the adjudication table itself, which is what
     // `verify_catalog_coverage_v1` compares against — asserted here so a future refactor that
     // pointed the gate at a hand-kept list fails a test rather than certifying quietly.
-    debug_assert!(kernel_ids.is_subset(&catalogued_kernel_ids_v1()), "coverage passed against a set that is not the table");
+    debug_assert!(identity_ids.is_subset(&catalogued_kernel_ids_v1()), "coverage passed against a set that is not the table");
     // **And the STRONG gate, which had no non-test caller at all** (audit H-02).
     //
     // The id check above is set inclusion: it asks whether every kernel this profile names is in
@@ -2403,6 +2459,57 @@ mod tests {
         let v2_reg = weightless_registration(v2.shape_profile_id(), v2_counted);
         verify_class_admission_v4(&bundle, &v2, &v2_canonical, &v2_reg, &[], &[], Some(v2_rules))
             .expect("the shipped graph-v2 row is admitted exactly as before");
+    }
+
+    /// **ADR-0102: the per-token lift is admitted by its fence and by nothing else.** The same
+    /// hybrid geometry projected as graph-v5 (the lane-sliced lift) and graph-v6 (the per-token
+    /// one) meets the same gate under the same armed court: dormant, v6 is refused BY NAME before
+    /// any coverage walk and v5 is untouched; armed, v6 meets exactly the verdict v5 does — the
+    /// fence is the only door the kernel adds.
+    #[test]
+    fn the_per_token_lift_is_admitted_by_its_fence_alone() {
+        use crate::palw_qwen36_profile::{QWEN35_2B, qwen36_artifact_row_profile_v5, qwen36_artifact_row_profile_v6};
+        let court = kary_court_v1();
+        let geometry = crate::palw_qwen36_profile::PalwQwen36GeometryV1 { n_ctx: 512, ..QWEN35_2B };
+        let v5 = qwen36_artifact_row_profile_v5(geometry).expect("the v5 hybrid projects");
+        let v6 = qwen36_artifact_row_profile_v6(geometry).expect("the v6 hybrid projects");
+        assert_ne!(v5.shape_profile_id(), v6.shape_profile_id(), "a class is its graph");
+        let fenced = crate::palw_step_refute::fenced_kernel_ids_v1();
+        assert!(reachable_kernels_v1(&v5).is_disjoint(&fenced), "v5 reaches no fenced kernel");
+        assert!(!reachable_kernels_v1(&v6).is_disjoint(&fenced), "v6 reaches the per-token lift");
+        let mut bundle = conforming_bundle();
+        bundle.court = PalwCourtParamsV2::with_cost_ceilings(
+            crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+            rc_turn_deadline(),
+            2,
+            crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES,
+            crate::palw_mode_v2::DEFAULT_MAX_TERMINAL_MACS,
+            crate::palw_mode_v2::DEFAULT_MAX_OPERAND_COUNT,
+        )
+        .expect("legal");
+        let gate = |profile: &PalwShapeProfileV3, token_lift: bool| {
+            let rules = crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(
+                profile,
+                Some(court),
+                crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+            );
+            let canonical = context(profile, 510, 2);
+            let ladder = rules.map(|r| r.ladder).unwrap_or(crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES);
+            let counted = crate::palw_step::step_leaf_count_capped_v1(profile, &canonical, ladder).expect("counts");
+            let registration = weightless_registration(profile.shape_profile_id(), counted);
+            verify_class_admission_v7(&bundle, profile, &canonical, &registration, &[], &[], rules, Some(court), false, token_lift)
+        };
+        assert_eq!(gate(&v6, false).expect_err("dormant"), PalwClassAdmissionError::TokenLiftNeedsItsFence);
+        assert!(format!("{}", PalwClassAdmissionError::TokenLiftNeedsItsFence).contains("palw_token_lift"));
+        let v5_verdict = gate(&v5, false);
+        assert_eq!(format!("{:?}", gate(&v5, true)), format!("{v5_verdict:?}"), "the fence does not touch a v5 row");
+        // Armed, both graphs of the 2B geometry are admitted at 512 under the RC-shaped court —
+        // the positive path, pinned — and the v6 entry records the fenced kernel among the ones
+        // its weight must be certified for.
+        let a = v5_verdict.expect("the v5 hybrid at the 2B geometry is admitted at 512");
+        let b = gate(&v6, true).expect("armed, the v6 hybrid is admitted exactly where v5 is");
+        assert_eq!(a.reachable_kernels.len() + 1, b.reachable_kernels.len(), "the entry records the fenced kernel too");
+        assert!(!b.reachable_kernels.is_disjoint(&fenced));
     }
 
     /// **Z11: all three bounds at once, and the refusal names which one.**

@@ -45,6 +45,7 @@ use crate::palw_step::{
 };
 use crate::palw_step_refute::{
     KDESC_A16_ADD_ELEM, KDESC_A16_ATTN_SCORES, KDESC_A16_ATTN_VALUES, KDESC_A16_EMBED, KDESC_A16_MATMUL_RESCALE, KDESC_A16_REQUANTIZE,
+    KDESC_A16_REQUANTIZE_BY_TOKEN,
     KDESC_A16_RMS_NORM, KDESC_A16_SOFTMAX, KDESC_Q36_DECAY, KDESC_Q36_GATE_APPLY, KDESC_Q36_GDN_STEP, KDESC_Q36_HEAD_RMS_NORM,
     KDESC_Q36_L2_NORM, KDESC_Q36_MATMUL_GROUPED, KDESC_Q36_MATMUL_GROUPED_WIDE, KDESC_Q36_MOE_COMBINE, KDESC_Q36_MUL_WIDE,
     KDESC_Q36_RESCALE_ROW, KDESC_Q36_RMS_NORM_WIDE, KDESC_Q36_ROPE_PARTIAL, KDESC_Q36_ROUTER_TOPK, KDESC_Q36_SIGMOID, KDESC_Q36_SILU,
@@ -707,6 +708,15 @@ const QWEN36_PRE_IR: &[Ir] = &[
     n(K::MulElem, KDESC_A16_REQUANTIZE, "embed_lift.a16", Hidden, &[Step(0)]),
 ];
 
+/// **ADR-0102: the head of `graph-v6`** — the same gather, and the lift declared as what the
+/// converter writes and the engine executes: ONE triple per token, read at the token's row.
+/// `graph-v5` declared it lane-sliced over `Hidden`, which is a store no calibrated artifact has
+/// (ADR-0070 §7(b)).
+const QWEN36_PRE_IR_V6: &[Ir] = &[
+    n(K::EmbedLookup, KDESC_A16_EMBED, "token_embd.weight", Hidden, &[]),
+    n(K::MulElem, KDESC_A16_REQUANTIZE_BY_TOKEN, "embed_lift.a16", Hidden, &[Step(0)]),
+];
+
 /// The graph's tail: the final norm and the unembedding.
 const QWEN36_POST_IR: &[Ir] = &[
     n(K::RmsNorm, KDESC_A16_RMS_NORM, "", Hidden, &[LayerIn]),
@@ -1308,6 +1318,26 @@ pub fn qwen36_profile_v5(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, 
 /// has to be SERVED is built from one spelling rather than two.
 pub fn qwen36_artifact_row_profile_v5(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
     qwen36_profile_v5(qwen36_geometry_artifact_eps(g))
+}
+
+/// **`graph-v6`: `graph-v5` with the embedding lift read per TOKEN** (ADR-0102).
+///
+/// Every node of `graph-v5` but one: the lift after the gather names
+/// [`crate::palw_step_refute::KDESC_A16_REQUANTIZE_BY_TOKEN`], whose triple is the position's
+/// token's row of `embed_lift.a16` — what `qwen36-convert` writes (one calibrated triple per
+/// vocabulary row) and what the engine applies (`lift.get(token_id)`). Under `graph-v5` that
+/// store is refused by the inventory and unreadable by the court, so no calibrated hybrid
+/// artifact was court-capable; under `graph-v6` the lift leaf opens one 17-byte row.
+///
+/// A class IS its graph, so this is a new class id, and every `graph-v5` class stays exactly the
+/// live chain fact it is. The artifact is UNCHANGED.
+pub fn qwen36_profile_v6(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
+    qwen36_profile_with(g, QWEN36_PRE_IR_V6, QWEN36_LINEAR_IR_V2, QWEN36_ATTN_IR_V2, QWEN36_POST_IR, true)
+}
+
+/// **The `graph-v6` row over the epsilon the artifact executes**, paired as the v5 row is.
+pub fn qwen36_artifact_row_profile_v6(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
+    qwen36_profile_v6(qwen36_geometry_artifact_eps(g))
 }
 
 fn qwen36_profile_with(

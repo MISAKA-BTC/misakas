@@ -551,6 +551,10 @@ pub struct VirtualStateProcessor {
     /// [`Self::palw_shard_licensing_at`]; the panel draw, its validation and the fold's extras all
     /// read it through that, so a node cannot bind what its fold refuses.
     pub(super) palw_shard_licensing: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// `Params::palw_token_lift` (ADR-0102): may a registration reach the per-token lift kernel.
+    /// Resolved in ONE place, [`Self::palw_token_lift_at`], at the block the registration is
+    /// judged in.
+    pub(super) palw_token_lift: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// Rate limiter for [`Self::palw_warn_if_maturity_outruns_the_registry`] — the DAA score the
     /// shortfall was last reported at, or `PALW_SHORTFALL_NEVER_REPORTED`. **Log state only**:
     /// nothing consensus-visible reads it, so two nodes that report at different moments still
@@ -999,6 +1003,7 @@ impl VirtualStateProcessor {
             palw_da_court: params.palw_da_court,
             palw_shard_court: params.palw_shard_court_fence(),
             palw_shard_licensing: params.palw_shard_licensing_fence(),
+            palw_token_lift: params.palw_token_lift_fence(),
             palw_frontier_provenance: params.palw_frontier_provenance,
             palw_validator_payout_bounds: params.palw_validator_payout_bounds_fence(),
             finality_depth: params.blockrate.finality_depth,
@@ -6868,7 +6873,7 @@ impl VirtualStateProcessor {
                             bundle.court.max_step_leaf_count(),
                         )
                     });
-                    kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v6(
+                    kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v7(
                         bundle,
                         &carriage.profile,
                         &carriage.canonical,
@@ -6880,6 +6885,8 @@ impl VirtualStateProcessor {
                         ladder.flatten(),
                         court,
                         false,
+                        // ADR-0102: the per-token lift kernel is admitted by its fence alone.
+                        self.palw_token_lift_at(point.daa_score),
                     )
                     .map_err(|e| format!("class {class_id} is not admissible: {e}"))?;
                 }
@@ -7576,6 +7583,11 @@ impl VirtualStateProcessor {
     /// **ADR-0100 Decision 4, resolved in exactly one place.**
     fn palw_shard_licensing_at(&self, daa_score: u64) -> bool {
         self.palw_shard_licensing.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0102, resolved in exactly one place.**
+    fn palw_token_lift_at(&self, daa_score: u64) -> bool {
+        self.palw_token_lift.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// **Whether a claim's panel is drawn per shard, and into how many** — the ONE decision the

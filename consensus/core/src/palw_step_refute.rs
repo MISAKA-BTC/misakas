@@ -95,6 +95,13 @@ pub const KDESC_A16_MATMUL_REQUANT: &str = "a16/matmul/i8xi16-i64-exact-requant1
 pub const KDESC_A16_MATMUL_RESCALE: &str = "a16/matmul/i8xi16-i64-exact-rescale32/v1";
 pub const KDESC_A16_RMS_NORM: &str = "a16/rms-norm/i64-sumsq-intrsqrt/v1";
 pub const KDESC_A16_REQUANTIZE: &str = "a16/requantize/lane-sliced/i128-mul-rshift-sat16/v1";
+/// **ADR-0102: the requantization whose ONE triple is the position's token's row of the store** —
+/// the hybrid's embedding lift, which the converter calibrates per token (one scale for a
+/// 248,320-row table would be one scale for its outliers). The same `a16_requant` arithmetic as
+/// [`KDESC_A16_REQUANTIZE`]; what differs is which triple, so it is a different kernel and a
+/// different class: the court resolves the token from the carried ids exactly as the gather does
+/// and opens that one row, never a per-lane table the store does not have.
+pub const KDESC_A16_REQUANTIZE_BY_TOKEN: &str = "a16/requantize/token-row/i128-mul-rshift-sat16/v1";
 pub const KDESC_A16_ADD_ELEM: &str = "a16/add-elem/lane-sliced/i32-exact/v1";
 pub const KDESC_A16_SOFTMAX: &str = "a16/softmax/rowmax-shifted-intexp-intrecip/v1";
 pub const KDESC_A16_ATTN_SCORES: &str = "a16/attn-scores/i16xi16-i64-gqa/v1";
@@ -293,6 +300,26 @@ pub fn catalogued_kernel_ids_v1() -> std::collections::BTreeSet<Hash64> {
     KERNEL_CATALOG.iter().map(|(d, _)| kernel_semantics_id_v1(d)).collect()
 }
 
+/// **Kernels this build adjudicates that a network adjudicates only past a FENCE** (ADR-0102).
+///
+/// [`catalogued_kernel_ids_v1`] is a consensus identity: `palw_court_catalog_root_v1` hashes it
+/// into every V2 bundle's `court_catalog_root`, so a kernel appended there moves every shipped
+/// preset's fingerprint the moment the binary ships — a flag day for a network that registers no
+/// class reaching it. A kernel here is resolved by the adjudicator like any other, and the
+/// admission gate admits a class that reaches it only where its fence is armed
+/// (`Params::palw_token_lift` for the one kernel this table has); the fence is what enters the
+/// network's identity, at the height it arms. On a network where it is dormant no class can reach
+/// the kernel — this build refuses the registration by name and a build without the kernel refuses
+/// it as a coverage gap — so the two builds agree on every block, which is the property the
+/// catalog root exists to protect.
+const KERNEL_CATALOG_FENCED_V1: &[(&str, KernelProgram)] =
+    &[(KDESC_A16_REQUANTIZE_BY_TOKEN, KernelProgram::Qwen36(Qwen36Op::RequantizeByToken))];
+
+/// The fenced kernels' ids — disjoint from [`catalogued_kernel_ids_v1`] by construction.
+pub fn fenced_kernel_ids_v1() -> std::collections::BTreeSet<Hash64> {
+    KERNEL_CATALOG_FENCED_V1.iter().map(|(d, _)| kernel_semantics_id_v1(d)).collect()
+}
+
 /// The ten BASE-0 kernels, for a caller assembling that class's reachable set (ADR-0040 D + H).
 pub const KDESC_BASE0_ALL: &[&str] = &[
     KDESC_BASE0_MATMUL,
@@ -347,6 +374,8 @@ enum Base0Op {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Qwen36Op {
     Embed,
+    /// ADR-0102: the embedding lift, one triple per token.
+    RequantizeByToken,
     MatMulRequant,
     MatMulRescale,
     RmsNorm,
@@ -606,6 +635,7 @@ pub fn kernel_can_serve_node_v1(node: &crate::palw_step::PalwStepNodeV1, table_i
         KernelProgram::Qwen36(
             Qwen36Op::RmsNorm
             | Qwen36Op::Requantize
+            | Qwen36Op::RequantizeByToken
             | Qwen36Op::Softmax
             | Qwen36Op::RopePartial
             | Qwen36Op::L2Norm
@@ -706,7 +736,11 @@ pub fn kernel_can_serve_node_v1(node: &crate::palw_step::PalwStepNodeV1, table_i
 }
 
 fn resolve_kernel(id: &Hash64) -> Option<KernelProgram> {
-    KERNEL_CATALOG.iter().find(|(d, _)| kernel_semantics_id_v1(d) == *id).map(|(_, p)| *p)
+    // The fenced table too: which kernels a network may REACH is the admission gate's question
+    // (a class reaching a fenced kernel is refused wherever its fence is dormant), and a court
+    // that could not recompute a kernel an admitted class reaches would end its disputes
+    // `Unadjudicable` — the hole A4 exists to close.
+    KERNEL_CATALOG.iter().chain(KERNEL_CATALOG_FENCED_V1).find(|(d, _)| kernel_semantics_id_v1(d) == *id).map(|(_, p)| *p)
 }
 
 /// Recompute one BASE-0 node's output row (ADR-0040 Decision D).
@@ -1338,6 +1372,26 @@ fn qwen36_row(
             let x = lane_input(0)?;
             let p = stream_params(lane_param_base, x.len())?;
             Ok(out(a16::a16_requant(&x, &p).map_err(shape16)?))
+        }
+        // **ADR-0102: the embedding lift, adjudicated the way the engine executes it** — the
+        // gathered row of the position's token, lifted by THAT token's triple across every lane
+        // (`qwen36.rs`'s `lift.get(token_id)`). The token comes from the carried ids the court has
+        // already matched against the job context, by the gather's own rule; the triple is the ONE
+        // row of the store at the token's offset, opened like any registered operand. A per-lane
+        // read of a per-token store is the request no inventory could serve, which is why the
+        // lane-sliced kernel above refuses such a store and this one exists.
+        Qwen36Op::RequantizeByToken => {
+            need(1)?;
+            let x = lane_input(0)?;
+            let (coord, prompt_ids, generated_ids) = gather;
+            let token = if coord.call_index == 0 {
+                prompt_ids.at(coord.position).ok_or(PalwStepRefuteError::Unadjudicable)?
+            } else {
+                let produced = (coord.call_index as usize).checked_sub(1).ok_or(PalwStepRefuteError::Unadjudicable)?;
+                *generated_ids.get(produced).ok_or(PalwStepRefuteError::Unadjudicable)?
+            };
+            let triple = params_named(node.weight_name.as_str(), token as usize, 1)?[0];
+            Ok(out(a16::a16_requant(&x, &vec![triple; x.len()]).map_err(shape16)?))
         }
         Qwen36Op::RescaleRow => {
             need(1)?;
@@ -7150,6 +7204,22 @@ mod catalog_through_line_tests {
         let tabled: BTreeSet<&str> = KERNEL_CATALOG.iter().map(|(d, _)| *d).collect();
         assert_eq!(listed, tabled, "KDESC_ALL and KERNEL_CATALOG have drifted apart");
         assert_eq!(KDESC_ALL.len(), KERNEL_CATALOG.len(), "a duplicate descriptor would hide a gap");
+    }
+
+    /// **ADR-0102: a fenced kernel resolves, and is not in the identity.** Resolvable, or an
+    /// admitted class reaching it would end its disputes `Unadjudicable`; out of
+    /// `catalogued_kernel_ids_v1`, or shipping it would move `court_catalog_root` — and with it
+    /// every V2 preset's fingerprint — on networks that never arm its fence.
+    #[test]
+    fn a_fenced_kernel_resolves_and_stays_out_of_the_identity() {
+        let fenced = super::fenced_kernel_ids_v1();
+        assert!(!fenced.is_empty());
+        assert!(fenced.contains(&kernel_semantics_id_v1(super::KDESC_A16_REQUANTIZE_BY_TOKEN)));
+        for id in &fenced {
+            assert!(resolve_kernel(id).is_some(), "fenced but not adjudicable: {id}");
+        }
+        assert!(fenced.is_disjoint(&super::catalogued_kernel_ids_v1()), "a fenced kernel inside the identity is a flag day");
+        assert!(!KDESC_ALL.contains(&super::KDESC_A16_REQUANTIZE_BY_TOKEN));
     }
 
     /// ADR-0040 Decision H's tenth op included: the closed BASE-0 catalog is closed on this side

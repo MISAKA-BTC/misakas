@@ -457,6 +457,17 @@ pub fn a16_inventory_v1(
     PalwArtifactInventoryV1::new(rows).map_err(InventoryBuildError::NotCanonical)
 }
 
+/// **Does this hybrid graph register its operand-inventory root?** (ADR-0102.) Exactly when it
+/// reads the embedding lift per token — `graph-v6`, the one hybrid graph whose inventory serves
+/// every store the engine executes, so the one whose court can open what it reads. The rows before
+/// it (graph-v1, graph-v3) register the root computed over the mapping, exactly as the chain
+/// registered them; the ONE spelling the SDK's pairing and both of its resolution arms read.
+pub fn qwen36_registers_inventory_root_v1(profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3) -> bool {
+    let by_token =
+        kaspa_consensus_core::palw_step::kernel_semantics_id_v1(kaspa_consensus_core::palw_step_refute::KDESC_A16_REQUANTIZE_BY_TOKEN);
+    profile.pre_nodes.iter().any(|n| n.kernel_semantics_id == by_token)
+}
+
 /// **Every operand row a Qwen3.6-family execution can open, for one artifact under one
 /// registered profile** — the hybrid tier's answer to [`a16_inventory_v1`], and the other half
 /// of the court-side parameter conventions `palw_step_refute`'s shared arms encode.
@@ -551,6 +562,7 @@ pub fn qwen36_inventory_v1(
 
     let k_embed = kid(kd::KDESC_A16_EMBED);
     let k_req = kid(kd::KDESC_A16_REQUANTIZE);
+    let k_req_by_token = kid(kd::KDESC_A16_REQUANTIZE_BY_TOKEN);
     let k_soft = kid(kd::KDESC_A16_SOFTMAX);
     let k_scores = kid(kd::KDESC_A16_ATTN_SCORES);
     let k_values = kid(kd::KDESC_A16_ATTN_VALUES);
@@ -690,6 +702,25 @@ pub fn qwen36_inventory_v1(
                 let out_dim = fixed.ok_or_else(|| missing(name))?;
                 push_expert_projection(&mut rows, &mut seen, name, &sub(name, layer), layer, out_dim, tile)?;
             }
+        } else if kidv == k_req_by_token {
+            // **ADR-0102: one row per TOKEN.** The court opens the triple at the position's
+            // token's offset — `(token × 17, 17)` — so each vocabulary row of the store is its own
+            // leaf, and an opening proves exactly the one triple the lift applied. The rows are
+            // the ENGINE's reading (`qwen36.rs`: a one-row store lifts every token by that row, a
+            // longer one is indexed by the token): a calibrated store rides verbatim, a singleton
+            // tiles across the vocabulary, and anything else is refused by name.
+            let store = param_rows(&sub(name, layer))?;
+            let vocab = profile.vocab_size as usize;
+            let table = match store.len() {
+                n if n == vocab => store,
+                1 => vec![store[0]; vocab],
+                n => {
+                    return Err(missing(&format!(
+                        "{name}: {n} triples serve neither one token nor each of the {vocab} vocabulary rows"
+                    )));
+                }
+            };
+            push_chunked(&mut rows, &mut seen, name, layer, &wire(&table), w, 1);
         } else if kidv == k_req {
             match fixed {
                 Some(width) => {

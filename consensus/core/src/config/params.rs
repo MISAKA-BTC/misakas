@@ -1445,6 +1445,19 @@ pub struct Params {
     /// hold a shard must be able to convict with what a shard seat holds (ADR-0098 Decision 5).
     pub palw_shard_licensing: Option<ForkActivation>,
 
+    /// **ADR-0102 — the court adjudicates the embedding lift per TOKEN.**
+    ///
+    /// Past this fence a class may reach `KDESC_A16_REQUANTIZE_BY_TOKEN` (graph-v6: the hybrid
+    /// whose lift is the position's token's row of `embed_lift.a16`, which is what every
+    /// calibrated hybrid artifact carries); before it the admission gate refuses such a class by
+    /// name (`TokenLiftNeedsItsFence`). The kernel sits in the adjudicator's FENCED table, outside
+    /// `court_catalog_root`, so shipping it moves no preset's fingerprint — this fence is what
+    /// enters a network's identity, and only where it is armed. [`Self::validate_palw_v2`] refuses
+    /// a genesis that registers such a class while the fence is dormant at genesis: genesis rows
+    /// are verified against the committed catalog, not through the admission gate, so that door
+    /// needs the same refusal. `None` on every preset.
+    pub palw_token_lift: Option<ForkActivation>,
+
     /// **ADR-0083 Decision 1 — the difficulty window counts only rows priced by `bits`.**
     ///
     /// Past this fence `calculate_difficulty_bits` sizes its expected duration by the rows in the
@@ -2200,6 +2213,17 @@ impl Params {
                 ));
             }
         }
+        // **ADR-0102 at the genesis door.** A genesis row is verified against the committed
+        // catalog, not through `verify_class_admission_*`, so `TokenLiftNeedsItsFence` has no door
+        // there — the ADR-0082 fused-row precedent above.
+        if crate::palw_class_admission_v2::palw_genesis_reaches_fenced_kernel_v1(bundle)
+            && !self.palw_token_lift.is_some_and(|f| f != ForkActivation::never() && f.is_active(0))
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "this ruleset's genesis set registers a class reaching the per-token lift kernel and palw_token_lift is \
+                 not armed from genesis: that kernel is adjudicated only where its fence is (ADR-0102)",
+            ));
+        }
         if self.palw_credit.is_some()
             || self.palw_fork_choice.is_some()
             || self.palw_schedule.is_some()
@@ -2903,6 +2927,10 @@ impl Params {
         if self.palw_shard_licensing == Some(ForkActivation::never()) {
             self.palw_shard_licensing = None;
         }
+        // ADR-0102, likewise.
+        if self.palw_token_lift == Some(ForkActivation::never()) {
+            self.palw_token_lift = None;
+        }
         // ADR-0083 Decision 1, the same shape: a bare fence, `never()` is absence.
         if self.palw_difficulty_priced_rows == Some(ForkActivation::never()) {
             self.palw_difficulty_priced_rows = None;
@@ -3297,6 +3325,19 @@ impl Params {
         self.palw_shard_licensing_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
+    /// ADR-0102's fence, resolved: `Some` only on a `ConsensusV2` network that armed it. The ONE
+    /// place "may a class reach the per-token lift kernel" is decided.
+    pub fn palw_token_lift_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_token_lift) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    pub fn palw_token_lift_active_at(&self, daa_score: u64) -> bool {
+        self.palw_token_lift_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
     /// ADR-0081 Decision 3's fence with the mode condition already folded in — `Some` only on a
     /// `ConsensusV2` network that has armed it.
     pub fn palw_prompt_ids_merkle_fence(&self) -> Option<ForkActivation> {
@@ -3413,6 +3454,7 @@ impl Params {
             palw_fp_decode_constraint,
             palw_shard_court,
             palw_shard_licensing,
+            palw_token_lift,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -3462,6 +3504,7 @@ impl Params {
             ("palw_fp_decode_constraint", *palw_fp_decode_constraint),
             ("palw_shard_court", *palw_shard_court),
             ("palw_shard_licensing", *palw_shard_licensing),
+            ("palw_token_lift", *palw_token_lift),
             ("palw_difficulty_priced_rows", *palw_difficulty_priced_rows),
             ("palw_receipt_rows_unpriced", *palw_receipt_rows_unpriced),
             ("palw_attempt_header_pins", *palw_attempt_header_pins),
@@ -3627,6 +3670,11 @@ impl Params {
             h.write(b"palw_shard_licensing");
             h.write(licensing.daa_score().to_le_bytes());
         }
+        // ADR-0102's fence, NAMED likewise: it changes which classes the court can try.
+        if let Some(lift) = self.palw_token_lift {
+            h.write(b"palw_token_lift");
+            h.write(lift.daa_score().to_le_bytes());
+        }
         // ADR-0083 Decision 1's fence, NAMED for the same reason: it changes the bits every header
         // past it must carry, so an operator reading the schedule must see it.
         if let Some(priced) = self.palw_difficulty_priced_rows {
@@ -3771,6 +3819,7 @@ impl Params {
             palw_fp_decode_constraint,
             palw_shard_court,
             palw_shard_licensing,
+            palw_token_lift,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -4065,6 +4114,10 @@ impl Params {
         if let Some(activation) = palw_shard_licensing.as_mut() {
             fork(activation, visit);
         }
+        // ADR-0102. Some-only, likewise.
+        if let Some(activation) = palw_token_lift.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0083 Decision 1. Some-only, likewise.
         if let Some(activation) = palw_difficulty_priced_rows.as_mut() {
             fork(activation, visit);
@@ -4308,6 +4361,7 @@ impl Params {
             palw_fp_decode_constraint,
             palw_shard_court,
             palw_shard_licensing,
+            palw_token_lift,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -4621,6 +4675,13 @@ impl Params {
         // `None` and fingerprints byte-identically to a build without the field.
         if let Some(activation) = palw_shard_licensing {
             h.write(b"palw_shard_licensing");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0102, Some-only for the same reason — and the reason the kernel it arms is not in
+        // `court_catalog_root`: a dormant network fingerprints byte-identically to a build without
+        // the kernel or the field.
+        if let Some(activation) = palw_token_lift {
+            h.write(b"palw_token_lift");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0083 Decision 1, Some-only for the same reason: arming it changes the `bits` every
@@ -4974,6 +5035,7 @@ impl Params {
             palw_fp_decode_constraint: self.palw_fp_decode_constraint,
             palw_shard_court: self.palw_shard_court,
             palw_shard_licensing: self.palw_shard_licensing,
+            palw_token_lift: self.palw_token_lift,
             palw_difficulty_priced_rows: self.palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced: self.palw_receipt_rows_unpriced,
             palw_attempt_header_pins: self.palw_attempt_header_pins,
@@ -5929,6 +5991,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
     palw_shard_licensing: None,
+    palw_token_lift: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -6096,6 +6159,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
     palw_shard_licensing: None,
+    palw_token_lift: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -6245,6 +6309,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
     palw_shard_licensing: None,
+    palw_token_lift: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -10464,6 +10529,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
     palw_shard_licensing: None,
+    palw_token_lift: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -12393,6 +12459,83 @@ mod consensus_params_id_tests {
         let mut legacy = MAINNET_PARAMS.clone();
         legacy.palw_shard_licensing = Some(ForkActivation::always());
         assert_eq!(legacy.palw_shard_licensing_fence(), None);
+    }
+
+    /// **ADR-0102: the per-token lift's fence is dormant everywhere, visible the moment it is not,
+    /// and the kernel it arms is not in the identity.** Shipping the kernel moves no preset's
+    /// fingerprint (`shipped_presets_have_pinned_fingerprints` is the pin); arming the fence does,
+    /// and a genesis that registers a class reaching the kernel needs the fence from genesis.
+    #[test]
+    fn the_token_lift_fence_is_dormant_visible_when_armed_and_its_kernel_is_outside_the_catalog_root() {
+        for (name, shipped) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
+        {
+            assert!(shipped.palw_token_lift.is_none(), "{name} must leave ADR-0102 dormant");
+            assert!(!shipped.palw_token_lift_active_at(u64::MAX), "{name}");
+        }
+        let shipped = devnet_shipped_params();
+        assert!(shipped.palw_token_lift.is_none(), "the bundled devnet leaves it dormant too");
+        let mut visible = shipped.clone();
+        visible.palw_token_lift = Some(ForkActivation::new(9_000_000));
+        assert_ne!(visible.consensus_params_id(), shipped.consensus_params_id(), "armed, the fingerprint says so");
+        visible.validate_palw_v2().expect("the fence alone assembles: it admits a kernel, it needs no other rule");
+        let mut never = shipped.clone();
+        never.palw_token_lift = Some(ForkActivation::never());
+        never.validate_palw_v2().expect("Some(never()) is absence");
+        // The kernel is adjudicable and outside the root the bundle commits to.
+        assert!(
+            crate::palw_step_refute::fenced_kernel_ids_v1().is_disjoint(&crate::palw_step_refute::catalogued_kernel_ids_v1())
+        );
+        // A genesis that registers a v6 row needs the fence from genesis.
+        let v6 = crate::palw_qwen36_profile::qwen36_artifact_row_profile_v6(crate::palw_qwen36_profile::PalwQwen36GeometryV1 {
+            n_ctx: 512,
+            ..crate::palw_qwen36_profile::QWEN35_2B
+        })
+        .expect("projects");
+        let mut with_v6 = shipped.clone();
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut with_v6.palw_consensus_mode else {
+            panic!("the shipped devnet is ConsensusV2")
+        };
+        let Some(template) = bundle
+            .genesis_objects
+            .iter()
+            .find(|o| matches!(o, crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { admission: Some(_), .. }))
+            .cloned()
+        else {
+            panic!("the bundled devnet registers a class with its admission carriage")
+        };
+        let crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { admission: Some(mut carriage), .. } = template.clone()
+        else {
+            unreachable!()
+        };
+        carriage.profile = v6;
+        let crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+            class_id, artifact_root, slash_value_per_pwu, pwu_rule, initial_target, share_permille, activation_daa, ..
+        } = template
+        else {
+            unreachable!()
+        };
+        bundle.genesis_objects.push(crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+            class_id,
+            artifact_root,
+            slash_value_per_pwu,
+            pwu_rule,
+            initial_target,
+            share_permille,
+            activation_daa,
+            admission: Some(carriage),
+        });
+        assert!(crate::palw_class_admission_v2::palw_genesis_reaches_fenced_kernel_v1(bundle));
+        let err = format!("{}", with_v6.validate_palw_v2().expect_err("a v6 genesis row with the fence dormant"));
+        assert!(err.contains("palw_token_lift") && err.contains("ADR-0102"), "{err}");
+        let mut later = with_v6.clone();
+        later.palw_token_lift = Some(ForkActivation::new(1));
+        let err = format!("{}", later.validate_palw_v2().expect_err("armed after genesis is still dormant at it"));
+        assert!(err.contains("palw_token_lift"), "{err}");
+        // Outside ConsensusV2 the fence answers nothing.
+        let mut legacy = MAINNET_PARAMS.clone();
+        legacy.palw_token_lift = Some(ForkActivation::always());
+        assert_eq!(legacy.palw_token_lift_fence(), None);
     }
 
     /// **The V2 pruning horizon IS the derivation, and the inherited floor never binds** — the

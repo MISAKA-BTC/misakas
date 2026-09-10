@@ -482,7 +482,7 @@ impl PalwClassSdk {
             )?;
             return Ok(Box::new(backend.with_prompt_ids_form(self.prompt_ids_form)));
         }
-        if let Some(artifact) = crate::lineages::qwen36::qwen36_artifact_by_root(holdings, artifact_root) {
+        if let Some(artifact) = crate::lineages::qwen36::qwen36_artifact_by_registered_root(holdings, artifact_root, profile) {
             let backend = misaka_palw_base0::qwen36_backend::Qwen36Backend::from_registered_profile(
                 artifact,
                 self.network_id.clone(),
@@ -585,7 +585,7 @@ impl PalwClassSdk {
                 entry.model_id
             )
         })?;
-        kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v6(
+        kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v7(
             bundle,
             &entry.profile,
             &canonical,
@@ -595,6 +595,7 @@ impl PalwClassSdk {
             shape.ladder,
             shape.court,
             false,
+            shape.token_lift,
         )
         .map_err(|e| {
             format!("the {} registration would be refused by the admission gate, so nothing was signed or funded: {e}", entry.model_id)
@@ -1002,6 +1003,56 @@ mod mmap_chain_arm_tests {
         assert_eq!(a.trace_root, b.trace_root);
         assert_eq!(a.output_root, b.output_root);
         assert_eq!(a.material, b.material);
+    }
+
+    /// **ADR-0102: a chain-registered graph-v6 class resolves by its OPERAND-INVENTORY root** —
+    /// the root its registration pins, because a close's openings prove against it; every earlier
+    /// hybrid row keeps the computed root it was registered by. The root is derived once per graph
+    /// and memoized on the holding (the derivation copies every row), so the second resolve reads
+    /// it. The computed root still finds the mapping, as the dense lineage's digest does — it is
+    /// possession either way — and no pairing ever registers a graph-v6 class under it.
+    #[test]
+    fn a_chain_registered_graph_v6_class_resolves_by_its_inventory_root() {
+        let artifact = std::sync::Arc::new(misaka_palw_base0::qwen36::qwen36_dev_fixture(4, 8));
+        let profile = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v6(fixture_geometry()).expect("v6 projects");
+        let class_id = profile.shape_profile_id();
+        let canonical = rc_job_context(&profile, 4, 2);
+        let holdings = vec![crate::lineages::qwen36::holding_from_artifact(artifact.clone(), None)];
+        let inventory_root =
+            misaka_palw_base0::inventory::qwen36_inventory_v1(&artifact, &profile).expect("graph-v6 serves the fixture's lift").root();
+        assert_ne!(inventory_root, artifact.artifact_root(), "two roots over one mapping");
+        assert_eq!(
+            crate::lineages::qwen36::registered_root_of(&holdings[0], &profile).expect("a mapping").expect("an inventory"),
+            inventory_root,
+            "the root a graph-v6 registration pins"
+        );
+        let v2 = qwen36_profile_v2(fixture_geometry()).expect("v2 projects");
+        assert_eq!(
+            crate::lineages::qwen36::registered_root_of(&holdings[0], &v2).expect("a mapping").expect("computed"),
+            artifact.artifact_root(),
+            "an earlier row keeps the computed root it was registered by"
+        );
+
+        let armed = PalwClassSdk::builtin_v1(
+            court(),
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            b"misaka-palw-rc".to_vec(),
+        )
+        .with_chain_classes_v1();
+        for _ in 0..2 {
+            let backend = armed
+                .resolve_chain_registered(class_id, inventory_root, &holdings, &profile, &canonical)
+                .expect("a held mapping serves its graph-v6 class by the inventory root");
+            assert!(backend.supports_court());
+        }
+        armed
+            .resolve_chain_registered(class_id, artifact.artifact_root(), &holdings, &profile, &canonical)
+            .expect("the computed root is possession too, as the dense lineage's digest is");
+        let err = armed
+            .resolve_chain_registered(class_id, Hash64::from_u64_word(0xBAD), &holdings, &profile, &canonical)
+            .map(drop)
+            .expect_err("a root no holding answers to");
+        assert!(err.contains("holds no artifact"), "{err}");
     }
 
     /// **The v1 graph is refused by the arm with its defect named.** The conformance suite

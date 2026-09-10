@@ -56,6 +56,12 @@ pub enum PalwModelFamilyV1 {
     /// Qwen3.6-shaped hybrid: gated delta-rule layers with periodic full attention, a routed
     /// mixture with a shared expert. The K3 stand-in is written in this family.
     HybridQwen36,
+    /// **The same hybrid under graph-v6** (ADR-0102): graph-v5 with the embedding lift read per
+    /// token, as the engine reads it — the graph every converted hybrid artifact can be served and
+    /// judged under, and what `palw-class measure` states for a held one. Its own variant (and
+    /// LAST, so every earlier document's bytes and id stand) because a class is its graph: a
+    /// `hybrid-qwen36` manifest keeps naming the graph-v5 class it always named.
+    HybridQwen36TokenLift,
 }
 
 /// **The model definition an adder hands in.** The public numbers of a geometry; the fields a
@@ -136,6 +142,16 @@ impl PalwModelManifestV1 {
     }
 
     /// A hybrid manifest from the family's geometry, with a card's total when one is stated.
+    /// ADR-0102: a hybrid manifest under graph-v6 — [`Self::from_hybrid`] naming the per-token lift.
+    pub fn from_hybrid_token_lift(name: impl Into<String>, g: &PalwQwen36GeometryV1, total_parameters: Option<u64>) -> Self {
+        PalwModelManifestV1 { family: PalwModelFamilyV1::HybridQwen36TokenLift, ..Self::from_hybrid(name, g, total_parameters) }
+    }
+
+    /// Either hybrid variant: one geometry, two graphs.
+    pub fn is_hybrid(&self) -> bool {
+        matches!(self.family, PalwModelFamilyV1::HybridQwen36 | PalwModelFamilyV1::HybridQwen36TokenLift)
+    }
+
     pub fn from_hybrid(name: impl Into<String>, g: &PalwQwen36GeometryV1, total_parameters: Option<u64>) -> Self {
         PalwModelManifestV1 {
             name: name.into(),
@@ -183,7 +199,7 @@ impl PalwModelManifestV1 {
     /// The hybrid geometry at `n_ctx`; `None` for another family. The rotary base, the epsilon,
     /// the thread count and the tile are the family's own.
     pub fn hybrid_geometry(&self, n_ctx: u32) -> Option<PalwQwen36GeometryV1> {
-        (self.family == PalwModelFamilyV1::HybridQwen36).then_some(PalwQwen36GeometryV1 {
+        self.is_hybrid().then_some(PalwQwen36GeometryV1 {
             layer_count: self.layer_count,
             full_attention_interval: self.full_attention_interval,
             hidden_dim: self.hidden_dim,
@@ -207,9 +223,10 @@ impl PalwModelManifestV1 {
         })
     }
 
-    /// **The class's graph at `n_ctx`** — the family's graph-v5 row over the artifact's epsilon,
-    /// the same projection the registered rows are built through, so a manifest of a shipped class
-    /// names the shipped class id. Refused past the geometry ceiling like any row.
+    /// **The class's graph at `n_ctx`** — the family's graph-v5 row over the artifact's epsilon
+    /// (graph-v6 for [`PalwModelFamilyV1::HybridQwen36TokenLift`], ADR-0102), the same projection
+    /// the registered rows are built through, so a manifest of a shipped class names the shipped
+    /// class id. Refused past the geometry ceiling like any row.
     pub fn profile(&self, n_ctx: u32) -> Result<PalwShapeProfileV3, PalwStepError> {
         match self.family {
             PalwModelFamilyV1::DenseA16 => {
@@ -218,6 +235,9 @@ impl PalwModelManifestV1 {
             PalwModelFamilyV1::HybridQwen36 => {
                 qwen36_artifact_row_profile_v5(self.hybrid_geometry(n_ctx).expect("the family is hybrid"))
             }
+            PalwModelFamilyV1::HybridQwen36TokenLift => {
+                crate::palw_qwen36_profile::qwen36_artifact_row_profile_v6(self.hybrid_geometry(n_ctx).expect("the family is hybrid"))
+            }
         }
     }
 
@@ -225,7 +245,9 @@ impl PalwModelManifestV1 {
     pub fn artifact_bytes(&self) -> PalwArtifactBytesV1 {
         let formula = match self.family {
             PalwModelFamilyV1::DenseA16 => palw_qwen25_artifact_bytes_v1(&self.dense_geometry(1).expect("dense")),
-            PalwModelFamilyV1::HybridQwen36 => palw_qwen36_artifact_bytes_v1(&self.hybrid_geometry(1).expect("hybrid")),
+            PalwModelFamilyV1::HybridQwen36 | PalwModelFamilyV1::HybridQwen36TokenLift => {
+                palw_qwen36_artifact_bytes_v1(&self.hybrid_geometry(1).expect("hybrid"))
+            }
         };
         match self.total_parameters {
             Some(total) => formula.scaled_to_total(total),

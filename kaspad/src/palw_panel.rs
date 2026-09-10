@@ -1642,32 +1642,30 @@ impl PalwPanelService {
         job.max_context_tokens = canonical_ctx.max_context_tokens;
 
         let (job_for_run, prompt_for_run) = (job.clone(), prompt.clone());
-        let (backend, executed) = offload(backend, move |b| {
-            let run = b.execute_free_prompt(&job_for_run, &prompt_for_run)?;
+        let drill_fault_leaf = self.config.drill_tamper_fp_leaf;
+        let (_backend, executed) = offload(backend, move |b| {
+            let run = match drill_fault_leaf {
+                None => b.execute_free_prompt(&job_for_run, &prompt_for_run)?,
+                // **DRILL ONLY** (ADR-0100 §6 step 2; the daemon refuses the flag off
+                // devnet/simnet): the same job with one lane of this leaf corrupted, every fact and
+                // root re-derived from the corrupted capture — a lie only a re-execution sees, and
+                // the capture the seats sample, open and convict. Patching the honest run's outcome
+                // instead left its facts describing a capture nobody committed, and the assembly
+                // below refused the pair (`ContextDoesNotReproduceTheRoot`) — no claim, no court.
+                Some(leaf) => b.execute_free_prompt_with_injected_fault(&job_for_run, &prompt_for_run, leaf)?,
+            };
             let shape =
                 b.capture_shape(&run.outcome.material).ok_or_else(|| "the capture has no shape this family can read".to_string())?;
             Ok::<_, String>((run, shape))
         })
         .await?;
         let (run, shape) = executed?;
-        // **DRILL ONLY** (ADR-0100 §6 step 2; the daemon refuses the flag off devnet/simnet): the
-        // honest run supplied the shape and the job's context; the SAME context, run again with one
-        // lane of this leaf corrupted and the commitment re-derived, is a lie only a re-execution
-        // sees — the capture the seats sample, open and convict.
-        let run = match self.config.drill_tamper_fp_leaf {
-            None => run,
-            Some(leaf) => {
-                let (context, prompt_for_fault) = (shape.job_context.clone(), prompt.clone());
-                let (_backend, lying) =
-                    offload(backend, move |b| b.execute_with_injected_fault(&context, &prompt_for_fault, leaf)).await?;
-                let lying = lying?;
-                warn!(
-                    "[{PALW_PANEL}] PALW DRILL: this canonical claim commits a capture corrupted at step leaf {leaf} (execution root {})",
-                    lying.execution_root
-                );
-                kaspa_consensus_core::palw_backend::PalwFpRunV1 { outcome: lying, ..run }
-            }
-        };
+        if let Some(leaf) = drill_fault_leaf {
+            warn!(
+                "[{PALW_PANEL}] PALW DRILL: this canonical claim commits a capture corrupted at step leaf {leaf} (execution root {})",
+                run.outcome.execution_root
+            );
+        }
         let retention = current_daa.saturating_add(facts.min_trace_retention_daa);
         let commitment =
             kaspa_consensus_core::palw_fp_execution_v3::palw_fp_commitment_from_context_v3(&job, &shape.job_context, &run, retention)
