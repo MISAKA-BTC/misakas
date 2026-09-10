@@ -81,9 +81,16 @@ use wire::{AnswerStream, PromptPlan};
 
 #[derive(Deserialize)]
 struct IdentityFile {
-    /// 64-byte hex: the network's domain separator — the same value the attempt lane binds.
+    /// 64-byte hex: the network's domain separator — the same value the attempt lane binds. May be
+    /// absent for an answer-only gateway (ADR-0096 Decision 10): nothing it produces is filed, so
+    /// no domain separates it from anything, and the job carries zeros.
+    #[serde(default)]
     network_domain: String,
-    /// 64-byte hex: the registered execution class this gateway's worker embodies.
+    /// 64-byte hex: the registered execution class this gateway's worker embodies. May be absent
+    /// for an answer-only gateway reading an anchor file (ADR-0096 Decision 10): the worker IS the
+    /// class, so its manifest's class id is adopted after boot. A caller that runs any artifact —
+    /// the Studio, for a class no table of its own names — then cannot name the wrong one.
+    #[serde(default)]
     class_id: String,
     /// 64-byte hex transaction id of the executor bond outpoint. **May be absent** (ADR-0096
     /// Decision 10): a gateway that only ANSWERS — the Studio's local integer engine — has no
@@ -98,7 +105,9 @@ struct IdentityFile {
     /// absent under the same rule as `bond_txid`.
     #[serde(default)]
     executor_pubkey: String,
-    /// 64-byte hex: the operator identity registered with the bond.
+    /// 64-byte hex: the operator identity registered with the bond. May be absent for an
+    /// answer-only gateway, under the same rule as the bond.
+    #[serde(default)]
     operator_id: String,
 }
 
@@ -411,14 +420,27 @@ fn identity_from_file(file: IdentityFile, answer_never_commit: bool) -> Result<I
         TransactionOutpoint { transaction_id: TransactionId::from_bytes(hex64(&file.bond_txid, "bond_txid").as_bytes()), index: file.bond_index }
     };
     Ok(Identity {
-        network_domain: hex64(&file.network_domain, "network_domain"),
-        class_id: hex64(&file.class_id, "class_id"),
+        network_domain: hex64_or_absent(&file.network_domain, "network_domain", answer_never_commit)?,
+        class_id: hex64_or_absent(&file.class_id, "class_id", answer_never_commit)?,
         class_id_hex: file.class_id.clone(),
         bond_txid_hex: file.bond_txid.clone(),
         executor_bond,
         executor_pubkey: pubkey,
-        operator_id: hex64(&file.operator_id, "operator_id"),
+        operator_id: hex64_or_absent(&file.operator_id, "operator_id", answer_never_commit)?,
     })
+}
+
+/// A 64-byte hex field, or — for an answer-only gateway only — an absent one read as zeros
+/// (ADR-0096 Decision 10). A gateway that can commit names every field or is refused here.
+fn hex64_or_absent(value: &str, what: &str, answer_never_commit: bool) -> Result<Hash64, String> {
+    if value.trim().is_empty() {
+        return if answer_never_commit {
+            Ok(Hash64::default())
+        } else {
+            Err(format!("identity file names no `{what}`: only an --answer-never-commit gateway may omit it (ADR-0096 Decision 10)"))
+        };
+    }
+    Ok(hex64(value, what))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1355,7 +1377,14 @@ fn main() {
     }
 
     std::fs::create_dir_all(&config.outbox).unwrap_or_else(|e| die(format!("cannot create the outbox: {e}")));
-    let identity = load_identity(&config.identity_path, config.answer_never_commit);
+    let mut identity = load_identity(&config.identity_path, config.answer_never_commit);
+    // An absent class id is the answer-only offline form's alone: `--rpc` reads the class's facts
+    // BY id, so a gateway that asks the node must say which class it is asking about.
+    if identity.class_id == Hash64::default() && rpc_endpoint.is_some() {
+        die("the identity names no class_id: an answer-only gateway may omit it only with --anchor, because --rpc reads the \
+             class's facts by its id"
+            .into());
+    }
 
     // ADR-0077 Decision 3: the chain, or an honest statement that there is none.
     let chain_source = match (&rpc_endpoint, &anchor_path) {
@@ -1385,6 +1414,12 @@ fn main() {
     // ADR-0077 Decision 1: the artifact is mapped ONCE, here, before the listener opens.
     let worker = WorkerSupervisor::boot(config.confinement.clone(), config.worker.clone(), config.workdir.clone(), trace_dir)
         .unwrap_or_else(|e| die(e));
+    // ADR-0096 Decision 10: an answer-only gateway that named no class adopts its worker's — the
+    // one value the worker would refuse any other of (`check_identity_v1` pins it per job).
+    if identity.class_id == Hash64::default() {
+        identity.class_id = worker.manifest().class_id;
+        identity.class_id_hex = hex(identity.class_id);
+    }
 
     eprintln!(
         "[misaka-palw-gateway] listening on {} ({}) — worker manifest {}…, class {}…, n_ctx {}, template {}",
@@ -1728,6 +1763,24 @@ mod tests {
         keyless.bond_txid = "44".repeat(64);
         let refused = identity_from_file(keyless, false).err().expect("a bond with no key cannot sign");
         assert!(refused.contains("executor_pubkey"), "{refused}");
+        // An answer-only identity may name no class, domain or operator: zeros, adopted after boot.
+        let mut bare = file();
+        bare.class_id = String::new();
+        bare.network_domain = String::new();
+        bare.operator_id = String::new();
+        let bare_identity = identity_from_file(bare, true).expect("answer-only: every field but the class's own facts may be absent");
+        assert_eq!(bare_identity.class_id, Hash64::default(), "absent reads as zeros, and boot adopts the worker's");
+        let mut committing = file();
+        committing.class_id = String::new();
+        committing.bond_txid = "44".repeat(64);
+        committing.executor_pubkey = "ab".repeat(8);
+        let refused = identity_from_file(committing, false).err().expect("a committing gateway names its class");
+        assert!(refused.contains("class_id"), "{refused}");
+        // Through JSON, the way the file is actually read: the Studio's answer-only identity is `{}`.
+        let empty: IdentityFile = serde_json::from_str("{}").expect("every field of an answer-only identity may be absent");
+        assert!(identity_from_file(empty, true).is_ok(), "an empty answer-only identity loads");
+        let empty: IdentityFile = serde_json::from_str("{}").unwrap();
+        assert!(identity_from_file(empty, false).is_err(), "and a committing gateway refuses the same file");
         // And a complete identity parses as it always did, flag or no flag.
         let mut complete = file();
         complete.bond_txid = "44".repeat(64);

@@ -1320,6 +1320,72 @@ pub fn decode_artifact_file_v1(bytes: &[u8]) -> Result<Base0ArtifactV1, Artifact
     Ok(artifact)
 }
 
+/// What [`bind_tokenizer_file_v1`] did to a file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TokenizerBindOutcomeV1 {
+    /// The artifact already declares this tokenizer's commitment: nothing to write, and the file
+    /// on disk is the bound artifact already.
+    AlreadyBound { commitment: Hash64, artifact_digest: Hash64 },
+    /// A new container: the same weights, the tokenizer's commitment declared. `bytes` is the
+    /// whole encoded file, already decoded once and checked `Bound` against the tokenizer.
+    Bound { bytes: Vec<u8>, commitment: Hash64, digest_before: Hash64, digest_after: Hash64 },
+}
+
+/// **Bind a tokenizer into an already-converted artifact** (ADR-0096 Decision 10).
+///
+/// `qwen25-convert --a16` binds the tokenizer at conversion time, and every dense artifact written
+/// before that line carries `tokenizer_commitment: Hash64::default()` — which is what the published
+/// `qwen25-1.5b-a16.palwart` still is (measured 2026-09-10: the a16 worker refuses it at boot,
+/// "this artifact declares no tokenizer"). Re-converting needs the 3 GiB checkpoint and a
+/// workstation; binding needs neither, because the commitment is ONE field and nothing in the
+/// arithmetic reads it. This is that field, set, and nothing else:
+///
+/// * the weights, the scales, the narrowings and the shape are the input's, byte for byte — the
+///   container is decoded (which verifies its declared digest) and re-encoded with one field
+///   changed, so the class's arithmetic cannot move;
+/// * `artifact_digest` DOES move — the commitment is inside it by design (condition 6: two
+///   tokenizers are two classes) — so for a producer this is a new artifact, and the worker's own
+///   refusal says so; for an answer-only runtime nothing is committed and nothing rides it;
+/// * the result is decoded again and checked `Bound` against the same tokenizer bytes before it
+///   is returned, so a caller never writes a file that would fail the worker's own pair check.
+///
+/// Refused by name: an artifact bound to a DIFFERENT tokenizer (binding would be a relabel, and
+/// the ids it produced would stop meaning what they meant), and a derived artifact (its weights
+/// are a function of a seed every node holds; it has no tokenizer to bind, and the floor class is
+/// exactly that exemption). Deterministic: the same artifact and the same tokenizer bytes give
+/// the same output bytes on every host, which is what lets two people compare the result by
+/// `sha256` instead of trusting each other.
+pub fn bind_tokenizer_file_v1(artifact_bytes: &[u8], tokenizer_bytes: &[u8]) -> Result<TokenizerBindOutcomeV1, String> {
+    let artifact = decode_artifact_file_v1(artifact_bytes).map_err(|e| format!("the artifact does not decode: {e}"))?;
+    if artifact.is_derived() {
+        return Err("this is a DERIVED artifact (its weights come from a seed every node holds); it has no tokenizer, and binding \
+             one would make it a different class — nothing to do"
+            .to_string());
+    }
+    let digest_before = artifact.artifact_digest();
+    match artifact.check_tokenizer_bytes_v1(tokenizer_bytes) {
+        TokenizerBindingV1::Bound(commitment) => {
+            return Ok(TokenizerBindOutcomeV1::AlreadyBound { commitment, artifact_digest: digest_before });
+        }
+        TokenizerBindingV1::Mismatch { declared, file } => {
+            return Err(format!(
+                "the artifact is already bound to a DIFFERENT tokenizer (declared {declared}, this file {file}): binding it again \
+                 would relabel ids that meant something else — use the tokenizer.json it was converted with"
+            ));
+        }
+        TokenizerBindingV1::Undeclared => {}
+    }
+    let commitment = Base0ArtifactV1::tokenizer_commitment_of(tokenizer_bytes);
+    let bound = artifact.with_tokenizer_commitment(commitment);
+    let digest_after = bound.artifact_digest();
+    let bytes = encode_artifact_file_v1(&bound);
+    let back = decode_artifact_file_v1(&bytes).map_err(|e| format!("the bound container does not decode back: {e}"))?;
+    if back.check_tokenizer_bytes_v1(tokenizer_bytes) != TokenizerBindingV1::Bound(commitment) || back.artifact_digest() != digest_after {
+        return Err("the bound container did not read back as bound to this tokenizer — nothing written".to_string());
+    }
+    Ok(TokenizerBindOutcomeV1::Bound { bytes, commitment, digest_before, digest_after })
+}
+
 #[cfg(test)]
 mod tests {
     /// **Adding `a16_params` must not move a single already-registered class id.**
@@ -1585,6 +1651,67 @@ mod tests {
     }
 
     use super::*;
+
+    /// A CONVERTED-shape artifact: the derived weights with the derived marker gone, which is the
+    /// shape the published file has (`from_parts` never sets a seed).
+    fn converted_fixture() -> Base0ArtifactV1 {
+        let derived = Base0ArtifactV1::derive_deterministic(tiny(), 0xB1D).expect("a valid shape");
+        let converted = Base0ArtifactV1::from_parts(
+            derived.shape,
+            derived.embed.clone(),
+            derived.unembed.clone(),
+            derived.layers.clone(),
+            derived.norm_requant,
+            derived.residual_requant,
+        )
+        .expect("the parts of a valid artifact rebuild one");
+        assert!(!converted.is_derived());
+        assert_eq!(converted.tokenizer_commitment, Hash64::default(), "unbound, like the published dense file");
+        converted
+    }
+
+    /// **ADR-0096 Decision 10: binding sets one field and nothing else, reads back bound, and is
+    /// deterministic.** The weights re-encode byte-identically apart from the commitment, the
+    /// digest moves (condition 6), a second bind of the same tokenizer is `AlreadyBound`, and a
+    /// different tokenizer or a derived artifact is refused by name.
+    #[test]
+    fn binding_a_tokenizer_sets_the_commitment_and_nothing_else() {
+        let unbound = converted_fixture();
+        let file = encode_artifact_file_v1(&unbound);
+        let tokenizer = br#"{"model":{"type":"BPE"},"added_tokens":[]}"#;
+
+        let outcome = bind_tokenizer_file_v1(&file, tokenizer).expect("an unbound converted artifact binds");
+        let TokenizerBindOutcomeV1::Bound { bytes, commitment, digest_before, digest_after } = outcome else {
+            panic!("expected a new container");
+        };
+        assert_eq!(commitment, Base0ArtifactV1::tokenizer_commitment_of(tokenizer));
+        assert_eq!(digest_before, unbound.artifact_digest());
+        assert_ne!(digest_after, digest_before, "the commitment is inside the digest — two tokenizers are two classes");
+
+        let bound = decode_artifact_file_v1(&bytes).expect("the output decodes");
+        assert_eq!(bound.check_tokenizer_bytes_v1(tokenizer), TokenizerBindingV1::Bound(commitment));
+        // Everything but the commitment is the input's: un-binding the output gives back the input
+        // file byte for byte.
+        let unbound_again = bound.clone().with_tokenizer_commitment(Hash64::default());
+        assert_eq!(encode_artifact_file_v1(&unbound_again), file, "binding changed something besides the commitment");
+
+        // Deterministic, and idempotent on the same tokenizer.
+        let TokenizerBindOutcomeV1::Bound { bytes: again, .. } = bind_tokenizer_file_v1(&file, tokenizer).unwrap() else {
+            panic!("the same input binds the same way");
+        };
+        assert_eq!(again, bytes, "the same artifact and tokenizer give the same bytes on every run");
+        assert_eq!(
+            bind_tokenizer_file_v1(&bytes, tokenizer).unwrap(),
+            TokenizerBindOutcomeV1::AlreadyBound { commitment, artifact_digest: digest_after }
+        );
+
+        // Refused by name: another tokenizer over a bound file, and a derived artifact.
+        let other = bind_tokenizer_file_v1(&bytes, b"{}").expect_err("a relabel is refused");
+        assert!(other.contains("DIFFERENT tokenizer"), "{other}");
+        let derived = encode_artifact_file_v1(&Base0ArtifactV1::derive_deterministic(tiny(), 7).unwrap());
+        let refused = bind_tokenizer_file_v1(&derived, tokenizer).expect_err("a derived artifact has no tokenizer");
+        assert!(refused.contains("DERIVED"), "{refused}");
+    }
 
     pub(crate) fn tiny() -> Base0ShapeV1 {
         Base0ShapeV1 {

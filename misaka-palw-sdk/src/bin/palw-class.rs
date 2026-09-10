@@ -28,6 +28,7 @@ USAGE:
     palw-class ledger    --network <id>
     palw-class inspect   --network <id> <artifact-path>
     palw-class preflight --network <id> <artifact-path> [--model-id <model-id>]
+    palw-class bind-tokenizer --network <id> --tokenizer <tokenizer.json> --out <path> [--model-id <model-id>] <artifact-path>
 
 NETWORKS: a network id with a PALW V2 bundle, e.g. testnet-11 or devnet.
 
@@ -108,8 +109,96 @@ fn run(args: &[String]) -> Result<(), String> {
             let path = PathBuf::from(args.first().ok_or(USAGE)?);
             preflight(&view, &path, wanted.as_deref())
         }
+        "bind-tokenizer" => {
+            let tokenizer = take_flag(&mut args, "--tokenizer").ok_or(USAGE)?;
+            let out = take_flag(&mut args, "--out").ok_or(USAGE)?;
+            let wanted = take_flag(&mut args, "--model-id");
+            let view = network_view(network.as_deref().ok_or(USAGE)?)?;
+            let path = PathBuf::from(args.first().ok_or(USAGE)?);
+            bind_tokenizer(&view, &path, &PathBuf::from(tokenizer), &PathBuf::from(out), wanted.as_deref())
+        }
         _ => Err(USAGE.to_string()),
     }
+}
+
+/// **ADR-0096 Decision 10: bind a tokenizer into a converted artifact, and MEASURE that the
+/// class's registered root did not move.**
+///
+/// The binding itself is `misaka_palw_base0::artifact::bind_tokenizer_file_v1` (one field set,
+/// read back bound). What this command adds is the measurement a person needs before they trust
+/// the output: the SDK's own pairing is run on the input and on the output, and the root each
+/// pairs to is printed side by side.
+///
+/// **Two kinds of row answer differently, and both answers are printed** (measured 2026-09-10 on
+/// the published dense file): a row that registers the INVENTORY root — the tiled-map rows,
+/// `graph-v2`, `graph-v3`, `graph-v5@512` — keeps its root, because the tokenizer commitment is not
+/// an input to it; a row that registers the artifact DIGEST — the one-byte-map rows — moves,
+/// because the commitment is inside the digest, and for that row the output is a new artifact.
+/// The gate is the class the person is binding FOR: `--model-id` names it, and the command fails
+/// (and deletes the output) if that row's root moved; with no `--model-id`, it fails only if
+/// every row moved. A file that registers somewhere else is not the file the person asked for.
+///
+/// Written to `<out>.tmp` and renamed, so a crash leaves no half file under the name a runtime
+/// looks for. Holds the artifact in memory twice (about 3.6 GB for the 1.7 GB dense file).
+fn bind_tokenizer(
+    view: &NetworkView,
+    input: &std::path::Path,
+    tokenizer: &std::path::Path,
+    out: &std::path::Path,
+    wanted: Option<&str>,
+) -> Result<(), String> {
+    use misaka_palw_base0::artifact::{TokenizerBindOutcomeV1, bind_tokenizer_file_v1};
+    if out == input {
+        return Err("--out must not be the input: the input is the evidence the output is compared against".to_string());
+    }
+    let artifact_bytes = std::fs::read(input).map_err(|e| format!("{}: {e}", input.display()))?;
+    let tokenizer_bytes = std::fs::read(tokenizer).map_err(|e| format!("{}: {e}", tokenizer.display()))?;
+    let outcome = bind_tokenizer_file_v1(&artifact_bytes, &tokenizer_bytes)?;
+    drop(artifact_bytes);
+    let (bytes, commitment, before, after) = match outcome {
+        TokenizerBindOutcomeV1::AlreadyBound { commitment, artifact_digest } => {
+            println!("already bound: {} declares tokenizer {commitment} (artifact digest {artifact_digest}); nothing written", input.display());
+            return Ok(());
+        }
+        TokenizerBindOutcomeV1::Bound { bytes, commitment, digest_before, digest_after } => (bytes, commitment, digest_before, digest_after),
+    };
+    let tmp = out.with_extension("tmp");
+    std::fs::write(&tmp, &bytes).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    drop(bytes);
+    std::fs::rename(&tmp, out).map_err(|e| format!("{} -> {}: {e}", tmp.display(), out.display()))?;
+
+    let sdk = sdk_for(view);
+    let roots = |path: &std::path::Path| -> Result<Vec<(String, Result<Hash64, String>)>, String> {
+        let loaded = sdk.load_artifact(path)?;
+        Ok(sdk.pairings(&loaded).into_iter().map(|(entry, root)| (entry.model_id.to_string(), root)).collect())
+    };
+    let (input_roots, output_roots) = (roots(input)?, roots(out)?);
+    let (mut kept, mut moved) = (Vec::new(), Vec::new());
+    for ((model, a), (_, b)) in input_roots.iter().zip(output_roots.iter()) {
+        if let (Ok(a), Ok(b)) = (a, b) {
+            if a == b {
+                println!("  {model}: registered root {a}  (unchanged — this row registers the inventory root)");
+                kept.push(model.clone());
+            } else {
+                println!("  {model}: registered root {a} → {b}  (MOVED — this row registers the artifact digest; for it this is a new artifact)");
+                moved.push(model.clone());
+            }
+        }
+    }
+    let refusal = match wanted {
+        Some(model) if moved.iter().any(|m| m == model) => Some(format!("binding moved the registered root of {model}, the class named by --model-id")),
+        Some(model) if !kept.iter().any(|m| m == model) => Some(format!("{model} does not pair with this artifact — run `palw-class inspect`")),
+        None if kept.is_empty() => Some("binding moved the registered root of every class this artifact pairs with".to_string()),
+        _ => None,
+    };
+    if let Some(why) = refusal {
+        let _ = std::fs::remove_file(out);
+        return Err(format!("{why} — the output was deleted"));
+    }
+    println!("tokenizer commitment {commitment}");
+    println!("artifact digest      {before} → {after}");
+    println!("wrote                {}", out.display());
+    Ok(())
 }
 
 fn ledger(view: &NetworkView) {
