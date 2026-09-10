@@ -406,9 +406,52 @@ pub struct FpWorkerRuntime<B: PalwExecutionBackendV1> {
     /// gateway re-binds the result under the form the CHAIN reports, so a worker started for the
     /// wrong network produces jobs the gateway refuses rather than jobs the chain refuses.
     prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    /// **The class's token table** (ADR-0096 §10 B4), built on the first constrained job from the
+    /// tokenizer this runtime serves with — every id of the class's vocabulary under the table
+    /// rule (specials empty) and the lowest end-of-generation id — so a worker that never masks
+    /// never pays for it. The mask, the streamed pieces and the rendered hash all read it.
+    token_table: std::sync::OnceLock<Result<std::sync::Arc<kaspa_consensus_core::palw_token_table_v1::PalwTokenTableV1>, String>>,
 }
 
 impl<B: PalwExecutionBackendV1> FpWorkerRuntime<B> {
+    /// The class's token table (see the field). Whether it is the one the build pins is said once,
+    /// on stderr: a masked answer is the same either way, but a chain refuses a version-6 claim
+    /// whose tokenizer has no pinned table, so an operator must be able to see which this is.
+    pub fn token_table(&self) -> Result<std::sync::Arc<kaspa_consensus_core::palw_token_table_v1::PalwTokenTableV1>, String> {
+        self.token_table
+            .get_or_init(|| {
+                let lowest_eog = self
+                    .manifest
+                    .eog_token_ids
+                    .iter()
+                    .copied()
+                    .min()
+                    .ok_or_else(|| "the manifest names no end-of-generation id".to_string())?;
+                let bytes = (0..self.manifest.vocab).map(|id| self.tokenizer.constrained_rendering_v1(id)).collect();
+                let table = kaspa_consensus_core::palw_token_table_v1::PalwTokenTableV1::new(bytes, lowest_eog)?;
+                if table.is_pinned_for(&self.manifest.tokenizer_id) {
+                    eprintln!(
+                        "[{}] token table: {} ids, root {}… — the one this build pins for tokenizer {}…",
+                        self.retention_family,
+                        table.vocab_len(),
+                        &hex(table.root())[..16],
+                        &hex(self.manifest.tokenizer_id)[..16]
+                    );
+                } else {
+                    eprintln!(
+                        "[{}] WARNING token table: {} ids, root {}… is NOT pinned for tokenizer {}… — masked answers are \
+                         served, and a chain refuses a version-6 claim under this tokenizer (ADR-0096 §10 B4)",
+                        self.retention_family,
+                        table.vocab_len(),
+                        &hex(table.root())[..16],
+                        &hex(self.manifest.tokenizer_id)[..16]
+                    );
+                }
+                Ok(std::sync::Arc::new(table))
+            })
+            .clone()
+    }
+
     /// Assemble the runtime, deriving the manifest from the class's registered profile.
     ///
     /// Fails closed and by name on the two things a family can get wrong at construction: a
@@ -488,6 +531,7 @@ impl<B: PalwExecutionBackendV1> FpWorkerRuntime<B> {
             artifact: family.artifact,
             load_ms,
             prompt_ids_form,
+            token_table: std::sync::OnceLock::new(),
         })
     }
 
@@ -872,7 +916,8 @@ pub fn run_one_job_v1<B: PalwExecutionBackendV1>(
     // ADR-0096 §10 B7: a constrained answer renders through the table rule — specials empty — so
     // the rendering is exactly the constrained value and a derivation reads nothing after it.
     let rendered = if constraint.is_some() {
-        run.output_token_ids.iter().flat_map(|id| rt.tokenizer.constrained_rendering_v1(*id)).collect()
+        let table = rt.token_table()?;
+        run.output_token_ids.iter().flat_map(|id| table.segment(*id).to_vec()).collect()
     } else {
         render_answer_v1(&rt.tokenizer, &run.output_token_ids)
     };
@@ -947,6 +992,10 @@ fn execute_streaming_v1<B: PalwExecutionBackendV1>(
     on_token: &mut dyn FnMut(u32, &[u8]),
 ) -> Result<(PalwFpRunV1, Vec<u32>), String> {
     let mut streamed: Vec<u32> = Vec::new();
+    let table = match constraint {
+        Some(_) => Some(rt.token_table()?),
+        None => None,
+    };
     let run = {
         let mut sink = |id: u32| {
             streamed.push(id);
@@ -955,15 +1004,14 @@ fn execute_streaming_v1<B: PalwExecutionBackendV1>(
             // desynchronise it from the ids it will be asked to check the stream against. A
             // constrained run streams the table rule's rendering (specials empty), the same bytes
             // its `rendered` and its rendered hash are taken over.
-            let bytes = match constraint {
-                Some(_) => rt.tokenizer.constrained_rendering_v1(id),
-                None => rt.tokenizer.token_bytes(id).unwrap_or_default(),
-            };
-            on_token(id, &bytes);
+            match &table {
+                Some(table) => on_token(id, table.segment(id)),
+                None => on_token(id, &rt.tokenizer.token_bytes(id).unwrap_or_default()),
+            }
         };
-        match constraint {
-            Some(c) => rt.backend.execute_free_prompt_constrained_streaming(job, prompt_tokens, c, &mut sink),
-            None => rt.backend.execute_free_prompt_streaming(job, prompt_tokens, &mut sink),
+        match (constraint, &table) {
+            (Some(c), Some(table)) => rt.backend.execute_free_prompt_constrained_streaming(job, prompt_tokens, c, table, &mut sink),
+            _ => rt.backend.execute_free_prompt_streaming(job, prompt_tokens, &mut sink),
         }
         .map_err(|e| format!("execution refused: {e}"))?
     };

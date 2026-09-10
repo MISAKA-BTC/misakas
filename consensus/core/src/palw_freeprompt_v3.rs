@@ -2963,10 +2963,64 @@ pub const PALW_FP_MATERIAL_V1_MAGIC: [u8; 4] = *b"FPM1";
 /// (`Params::palw_prompt_ids_form_v1`: flat on every preset that ships the fence dormant, the
 /// tiled Merkle root where a genesis armed it). Should the form ever move again, the
 /// LIST is what is carried either way.
-#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwFpMaterialV1 {
     pub job: PalwFreePromptJobV3,
     pub prompt_token_ids: Vec<u32>,
+    /// **A version-6 job's automaton** (ADR-0096 §10 B2), the bytes the job's `constraint_id`
+    /// names: a seat replays a constrained job through it, and it is served beside the prompt
+    /// under the same obligation. Encoded only for version 6 — every version-5 material is byte
+    /// for byte what it was — and empty for version 5, which names no constraint.
+    pub constraint: Vec<u8>,
+}
+
+impl borsh::BorshSerialize for PalwFpMaterialV1 {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        use borsh::BorshSerialize as S;
+        if self.job.version < PALW_FP_V3_VERSION_CONSTRAINED && !self.constraint.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "a free-prompt material below version 6 carries no constraint (ADR-0096 §10 B2)",
+            ));
+        }
+        S::serialize(&self.job, writer)?;
+        S::serialize(&self.prompt_token_ids, writer)?;
+        if self.job.version >= PALW_FP_V3_VERSION_CONSTRAINED {
+            S::serialize(&self.constraint, writer)?;
+        }
+        Ok(())
+    }
+}
+
+impl borsh::BorshDeserialize for PalwFpMaterialV1 {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        use borsh::BorshDeserialize as D;
+        let job = PalwFreePromptJobV3::deserialize_reader(reader)?;
+        let prompt_token_ids = D::deserialize_reader(reader)?;
+        let constraint = if job.version >= PALW_FP_V3_VERSION_CONSTRAINED { D::deserialize_reader(reader)? } else { Vec::new() };
+        Ok(Self { job, prompt_token_ids, constraint })
+    }
+}
+
+/// **A material's automaton is the one its job names** (ADR-0096 §10 B2) — the second binding a
+/// free-prompt payload proves by itself, beside the prompt ids': a version-6 material carries the
+/// canonical bytes of the automaton `constraint_id` names, bounded as the payload's are; a
+/// version-5 one carries none. Every decoder runs it, so a seat never replays a constrained job
+/// through an automaton the claim did not commit to.
+pub fn palw_fp_material_constraint_admit_v1(material: &PalwFpMaterialV1) -> Result<(), PalwFpV3Error> {
+    if material.job.version < PALW_FP_V3_VERSION_CONSTRAINED {
+        return if material.constraint.is_empty() { Ok(()) } else { Err(PalwFpV3Error::ConstraintOnUnconstrainedVersion) };
+    }
+    if material.constraint.len() > PALW_FP_CONSTRAINT_MAX_BYTES_V6 {
+        return Err(PalwFpV3Error::ConstraintOverCap { got: material.constraint.len(), max: PALW_FP_CONSTRAINT_MAX_BYTES_V6 });
+    }
+    crate::palw_decode_constraint_v1::PalwDecodeConstraintV1::from_bytes(&material.constraint)
+        .map_err(|e| PalwFpV3Error::ConstraintMalformed(format!("{e:?}")))?;
+    let carried = crate::palw_decode_constraint_v1::constraint_id_v1(&material.constraint);
+    if carried != material.job.constraint_id {
+        return Err(PalwFpV3Error::ConstraintIdMismatch { carried, named: material.job.constraint_id });
+    }
+    Ok(())
 }
 
 /// **The one check that comes before every other** (ADR-0077 Decision 16; W8 clauses 1 and 2).
@@ -3028,10 +3082,22 @@ pub fn palw_fp_seat_prompt_admit_v1(
     palw_fp_prompt_ids_admit_v1(job, ids, form)
 }
 
-/// Encode with the magic prefix. The inverse of [`palw_fp_material_decode_v1`].
+/// Encode with the magic prefix. The inverse of [`palw_fp_material_decode_v1`]. A version-5 job's
+/// material; a version-6 job's goes through [`palw_fp_material_encode_constrained_v1`].
 pub fn palw_fp_material_encode_v1(job: &PalwFreePromptJobV3, prompt_token_ids: &[u32]) -> Vec<u8> {
-    let body = borsh::to_vec(&PalwFpMaterialV1 { job: job.clone(), prompt_token_ids: prompt_token_ids.to_vec() })
-        .expect("a material serializes");
+    palw_fp_material_encode_constrained_v1(job, prompt_token_ids, &[])
+}
+
+/// [`palw_fp_material_encode_v1`] with the job's automaton (empty for version 5). Panics on a
+/// version-5 job handed a constraint — a caller bug, since every caller takes the bytes from a
+/// payload that acceptance already held to the same rule.
+pub fn palw_fp_material_encode_constrained_v1(job: &PalwFreePromptJobV3, prompt_token_ids: &[u32], constraint: &[u8]) -> Vec<u8> {
+    let body = borsh::to_vec(&PalwFpMaterialV1 {
+        job: job.clone(),
+        prompt_token_ids: prompt_token_ids.to_vec(),
+        constraint: constraint.to_vec(),
+    })
+    .expect("a material serializes");
     let mut out = Vec::with_capacity(4 + body.len());
     out.extend_from_slice(&PALW_FP_MATERIAL_V1_MAGIC);
     out.extend_from_slice(&body);
@@ -3048,6 +3114,7 @@ pub fn palw_fp_material_decode_v1(bytes: &[u8], form: crate::palw_prompt_ids_v1:
     // Through the shared predicate, not a second copy of it: the seat runs the same call on the
     // same bytes (ADR-0077 Decision 16), and one spelling is what keeps the two answers equal.
     palw_fp_prompt_ids_admit_v1(&material.job, &material.prompt_token_ids, form).ok()?;
+    palw_fp_material_constraint_admit_v1(&material).ok()?;
     Some(material)
 }
 
@@ -3069,8 +3136,18 @@ pub struct PalwFpCaptureV1 {
 }
 
 pub fn palw_fp_capture_encode_v1(job: &PalwFreePromptJobV3, prompt_token_ids: &[u32], capture: &[u8]) -> Vec<u8> {
+    palw_fp_capture_encode_constrained_v1(job, prompt_token_ids, &[], capture)
+}
+
+/// [`palw_fp_capture_encode_v1`] with the job's automaton (empty for version 5).
+pub fn palw_fp_capture_encode_constrained_v1(
+    job: &PalwFreePromptJobV3,
+    prompt_token_ids: &[u32],
+    constraint: &[u8],
+    capture: &[u8],
+) -> Vec<u8> {
     let body = borsh::to_vec(&PalwFpCaptureV1 {
-        material: PalwFpMaterialV1 { job: job.clone(), prompt_token_ids: prompt_token_ids.to_vec() },
+        material: PalwFpMaterialV1 { job: job.clone(), prompt_token_ids: prompt_token_ids.to_vec(), constraint: constraint.to_vec() },
         capture: capture.to_vec(),
     })
     .expect("a capture payload serializes");
@@ -3091,6 +3168,7 @@ pub fn palw_fp_capture_decode_v1(bytes: &[u8], form: crate::palw_prompt_ids_v1::
     // claim, so a capture read first would be a replay of a prompt nobody has shown is this
     // claim's. Same predicate the seat calls.
     palw_fp_prompt_ids_admit_v1(&payload.material.job, &payload.material.prompt_token_ids, form).ok()?;
+    palw_fp_material_constraint_admit_v1(&payload.material).ok()?;
     if payload.capture.is_empty() {
         return None;
     }
@@ -3128,8 +3206,18 @@ pub struct PalwFpAnswerV1 {
 }
 
 pub fn palw_fp_answer_encode_v1(job: &PalwFreePromptJobV3, prompt_token_ids: &[u32], output_token_ids: &[u32]) -> Vec<u8> {
+    palw_fp_answer_encode_constrained_v1(job, prompt_token_ids, &[], output_token_ids)
+}
+
+/// [`palw_fp_answer_encode_v1`] with the job's automaton (empty for version 5).
+pub fn palw_fp_answer_encode_constrained_v1(
+    job: &PalwFreePromptJobV3,
+    prompt_token_ids: &[u32],
+    constraint: &[u8],
+    output_token_ids: &[u32],
+) -> Vec<u8> {
     let body = borsh::to_vec(&PalwFpAnswerV1 {
-        material: PalwFpMaterialV1 { job: job.clone(), prompt_token_ids: prompt_token_ids.to_vec() },
+        material: PalwFpMaterialV1 { job: job.clone(), prompt_token_ids: prompt_token_ids.to_vec(), constraint: constraint.to_vec() },
         output_token_ids: output_token_ids.to_vec(),
     })
     .expect("an answer payload serializes");
@@ -3147,6 +3235,7 @@ pub fn palw_fp_answer_decode_v1(bytes: &[u8], form: crate::palw_prompt_ids_v1::P
     let body = bytes.strip_prefix(&PALW_FP_ANSWER_V1_MAGIC)?;
     let payload: PalwFpAnswerV1 = borsh::from_slice(body).ok()?;
     palw_fp_prompt_ids_admit_v1(&payload.material.job, &payload.material.prompt_token_ids, form).ok()?;
+    palw_fp_material_constraint_admit_v1(&payload.material).ok()?;
     if payload.output_token_ids.is_empty() {
         return None;
     }
@@ -3225,6 +3314,49 @@ mod fp_material_tests {
             temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
             constraint_id: Default::default(),
         }
+    }
+
+    /// **ADR-0096 §10 B2: a version-6 material carries its automaton, and every decoder binds it.**
+    /// A version-5 material is byte for byte `magic ‖ job ‖ ids`, as before; a version-6 one appends
+    /// the automaton, round-trips through all three payloads, and is refused wherever its bytes are
+    /// not the ones the job names — so a seat never replays through an automaton the claim did not
+    /// commit to.
+    #[test]
+    fn a_version_six_material_carries_the_automaton_its_job_names() {
+        let ids = [7u32, 11, 13];
+        let v5 = job(&ids);
+        let v5_bytes = palw_fp_material_encode_v1(&v5, &ids);
+        let mut legacy = PALW_FP_MATERIAL_V1_MAGIC.to_vec();
+        legacy.extend(borsh::to_vec(&v5).unwrap());
+        legacy.extend(borsh::to_vec(&ids.to_vec()).unwrap());
+        assert_eq!(v5_bytes, legacy, "version 5 is magic, job, ids — nothing appended");
+
+        let constraint = crate::palw_decode_constraint_v1::tests::bracket_digit().to_bytes();
+        let mut v6 = v5.clone();
+        v6.version = PALW_FP_V3_VERSION_CONSTRAINED;
+        v6.constraint_id = crate::palw_decode_constraint_v1::constraint_id_v1(&constraint);
+        let form = crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat;
+        let m = palw_fp_material_decode_v1(&palw_fp_material_encode_constrained_v1(&v6, &ids, &constraint), form).expect("FPM1");
+        assert_eq!(m.constraint, constraint);
+        let a = palw_fp_answer_decode_v1(&palw_fp_answer_encode_constrained_v1(&v6, &ids, &constraint, &[5, 6]), form).expect("FPA1");
+        assert_eq!((a.material.constraint.as_slice(), a.output_token_ids.as_slice()), (constraint.as_slice(), &[5u32, 6][..]));
+        let c = palw_fp_capture_decode_v1(&palw_fp_capture_encode_constrained_v1(&v6, &ids, &constraint, &[9]), form).expect("FPC1");
+        assert_eq!(c.material.constraint, constraint);
+        assert_eq!(palw_fp_job_material_decode_v1(&palw_fp_answer_encode_constrained_v1(&v6, &ids, &constraint, &[5]), form), Some(m.clone()));
+
+        // Refused: a version-6 material with no automaton, with another automaton, and with bytes
+        // that are not a canonical automaton; a version-5 job cannot be handed one at all.
+        assert!(palw_fp_material_decode_v1(&palw_fp_material_encode_v1(&v6, &ids), form).is_none(), "no automaton");
+        let mut other = constraint.clone();
+        other.push(0);
+        assert!(palw_fp_answer_decode_v1(&palw_fp_answer_encode_constrained_v1(&v6, &ids, &other, &[5]), form).is_none(), "not canonical");
+        let mut foreign = v6.clone();
+        foreign.constraint_id = Hash64::from_u64_word(9);
+        assert!(palw_fp_capture_decode_v1(&palw_fp_capture_encode_constrained_v1(&foreign, &ids, &constraint, &[9]), form).is_none(), "another id");
+        assert!(
+            borsh::to_vec(&PalwFpMaterialV1 { job: v5, prompt_token_ids: ids.to_vec(), constraint }).is_err(),
+            "a version-5 material cannot carry an automaton"
+        );
     }
 
     /// **`FPC1` is `FPM1` with the answer attached** (ADR-0073 Decision 1a): it round-trips, the
@@ -3401,7 +3533,7 @@ mod fp_material_tests {
         );
         let mut wrong_count = job(&ids);
         wrong_count.prompt_tokens = 2;
-        let body = borsh::to_vec(&PalwFpMaterialV1 { job: wrong_count, prompt_token_ids: ids.to_vec() }).unwrap();
+        let body = borsh::to_vec(&PalwFpMaterialV1 { job: wrong_count, prompt_token_ids: ids.to_vec(), constraint: Vec::new() }).unwrap();
         let mut bytes = PALW_FP_MATERIAL_V1_MAGIC.to_vec();
         bytes.extend_from_slice(&body);
         assert!(

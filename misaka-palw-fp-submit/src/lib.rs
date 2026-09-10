@@ -57,8 +57,8 @@ use std::path::{Path, PathBuf};
 
 use kaspa_addresses::Address;
 use kaspa_consensus_core::palw_freeprompt_v3::{
-    PALW_FP_CAPTURE_V1_MAGIC, PALW_FP_MATERIAL_V1_MAGIC, PalwFpCommitmentTxPayloadV3, fp_claim_id_v3, palw_fp_capture_encode_v1,
-    palw_fp_material_encode_v1,
+    PALW_FP_CAPTURE_V1_MAGIC, PALW_FP_MATERIAL_V1_MAGIC, PalwFpCommitmentTxPayloadV3, fp_claim_id_v3,
+    palw_fp_capture_encode_constrained_v1, palw_fp_material_encode_constrained_v1,
 };
 use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT;
 use kaspa_consensus_core::tx::{Transaction, TransactionOutpoint, UtxoEntry};
@@ -288,12 +288,14 @@ pub fn encode_claim_material(
     prompt_token_ids: &[u32],
     capture: Option<&[u8]>,
 ) -> Result<Vec<u8>, FpSubmitError> {
+    // A version-6 job's automaton rides its material (ADR-0096 §10 B2) — the payload's own bytes,
+    // which acceptance already bound to the job's `constraint_id`; empty for version 5.
     match capture {
         Some(bytes) => {
             check_capture_shape(bytes)?;
-            Ok(palw_fp_capture_encode_v1(&payload.commitment.job, prompt_token_ids, bytes))
+            Ok(palw_fp_capture_encode_constrained_v1(&payload.commitment.job, prompt_token_ids, &payload.constraint, bytes))
         }
-        None => Ok(palw_fp_material_encode_v1(&payload.commitment.job, prompt_token_ids)),
+        None => Ok(palw_fp_material_encode_constrained_v1(&payload.commitment.job, prompt_token_ids, &payload.constraint)),
     }
 }
 
@@ -326,7 +328,12 @@ pub fn encode_claim_answer(
     if output_token_ids.is_empty() || output_token_ids.len() != executed {
         return Err(FpSubmitError::AnswerCountMismatch { got: output_token_ids.len(), committed: executed });
     }
-    Ok(kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_encode_v1(&payload.commitment.job, prompt_token_ids, output_token_ids))
+    Ok(kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_encode_constrained_v1(
+        &payload.commitment.job,
+        prompt_token_ids,
+        &payload.constraint,
+        output_token_ids,
+    ))
 }
 
 /// The capture-shape check on its own, so a caller can refuse a bad path before it has a payload

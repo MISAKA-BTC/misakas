@@ -1611,6 +1611,7 @@ Do you confirm? (y/n)";
                         court: panel_court.expect("v2 is true exactly when this is Some"),
                         prompt_ids_form: config_for_palw_panel.params.palw_prompt_ids_form_v1(),
                         class_artifacts: args.palw_class_artifact.iter().map(std::path::PathBuf::from).collect(),
+                        class_tokenizers: args.palw_class_tokenizer.iter().map(std::path::PathBuf::from).collect(),
                         class_cache_bytes: args.palw_class_cache_bytes,
                         challenge: args.palw_challenge || args.palw_drill_challenge_all,
                         canonical_claims: args.palw_canonical_claims,

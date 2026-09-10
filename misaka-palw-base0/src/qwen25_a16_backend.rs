@@ -214,27 +214,12 @@ pub fn a16_execute_for_attempt_streaming_capped_v1(
     )
 }
 
-/// **The class's token table as the engine holds it** (ADR-0096 §10 B4): each id's rendering
-/// under the pinned table's rule — empty for a special or an unrenderable id — for every id of the
-/// class's vocabulary, and the class's lowest end-of-generation id, which B7's stop rule commits.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct A16TokenTableV1 {
-    pub bytes: Vec<Vec<u8>>,
-    pub lowest_eog: u32,
-}
-
-impl A16TokenTableV1 {
-    fn segment(&self, id: u32) -> &[u8] {
-        self.bytes.get(id as usize).map(Vec::as_slice).unwrap_or(&[])
-    }
-}
-
 /// **A constrained run's inputs** (ADR-0096 Decision 7): the automaton, the table it is read
 /// through, and the job's own sampler pair (greedy on every network that has not armed ADR-0082
 /// Decision 11).
 pub struct A16DecodeConstraintV1<'a> {
     pub constraint: &'a kaspa_consensus_core::palw_decode_constraint_v1::PalwDecodeConstraintV1,
-    pub table: &'a A16TokenTableV1,
+    pub table: &'a kaspa_consensus_core::palw_token_table_v1::PalwTokenTableV1,
     pub sampling: kaspa_consensus_core::palw_decode_select_v2::PalwDecodeSamplingV2,
 }
 
@@ -339,9 +324,9 @@ fn a16_execute_streaming_v1(
                     )
                 })? as u32
             }
-            None => k.table.lowest_eog,
+            None => k.table.lowest_eog_id(),
         };
-        *cur = constraint_cursor_advance_v1(k.constraint, cur, k.table.segment(id), id == k.table.lowest_eog)
+        *cur = constraint_cursor_advance_v1(k.constraint, cur, k.table.segment(id), id == k.table.lowest_eog_id())
             .ok_or_else(|| format!("the selected token at position {position} does not follow the constraint's rule"))?;
         Ok(id)
     };
@@ -481,14 +466,12 @@ fn a16_execute_streaming_v1(
     let (tiles, step_tree) = captured.into_execution_parts();
 
     let context = ctx.context_hash();
-    // ADR-0096 §10 B3: a constrained answer is committed token by token.
-    let rendered = match constraint {
-        Some(k) => kaspa_consensus_core::palw_decode_constraint_v1::rendered_segments_hash_v1(
-            &generated.iter().map(|id| k.table.segment(*id)).collect::<Vec<_>>(),
-        ),
-        None => rendered_output_hash_v1(&generated),
+    // ADR-0096 §10 B3: a constrained answer is committed token by token — the one spelling the
+    // seat that binds a served answer and the court that reads disclosed segments recompute.
+    let output_root = match constraint {
+        Some(k) => kaspa_consensus_core::palw_backend::fp_output_root_constrained_v1(ctx, &generated, k.table),
+        None => output_commitment_v2(&context, &generated, &rendered_output_hash_v1(&generated)),
     };
-    let output_root = output_commitment_v2(&context, &generated, &rendered);
     // The consensus derivation (ADR-0072 Decision 8): admission pins the manifest root to
     // `attempt_trace_manifest_root_v1(trace_root, 1)`, whichever family produced it.
     let trace_manifest_root = kaspa_consensus_core::palw_attempt_v2::attempt_trace_manifest_root_v1(trace_root, 1);
@@ -607,11 +590,6 @@ pub struct Qwen25A16Backend {
     step_ladder_cap: u64,
     /// The network's prompt-commitment form (ADR-0081 Decision 3); see `Base0Backend::prompt_ids_form`.
     prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
-    /// **The class's token table, when this instance was given one** (ADR-0096 §10 B4) — what a
-    /// constrained job is masked through and what a version-6 answer's rendered hash is taken
-    /// over. `None` on every construction that predates the constraint, and then this instance
-    /// refuses a version-6 job by name rather than run it unmasked.
-    token_table: Option<std::sync::Arc<A16TokenTableV1>>,
 }
 
 /// **Can a class with this graph carry a capture at all — the ONE spelling of the predicate.**
@@ -694,7 +672,6 @@ impl Qwen25A16Backend {
             court_capable,
             step_ladder_cap: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
-            token_table: None,
         })
     }
 
@@ -714,14 +691,6 @@ impl Qwen25A16Backend {
 
     pub fn prompt_ids_form(&self) -> kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1 {
         self.prompt_ids_form
-    }
-
-    /// **Give this instance the class's token table** (ADR-0096 §10 B4) — the worker from its
-    /// tokenizer at boot, a seat from the tokenizer file it was started with. Without one a
-    /// version-6 job is refused by name.
-    pub fn with_token_table(mut self, table: std::sync::Arc<A16TokenTableV1>) -> Self {
-        self.token_table = Some(table);
-        self
     }
 
     /// The ladder top this instance refuses a capture above.
@@ -846,7 +815,6 @@ impl Qwen25A16Backend {
             court_capable,
             step_ladder_cap: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
-            token_table: None,
         })
     }
 
@@ -1409,6 +1377,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
         prompt_tokens: &[usize],
         constraint: &kaspa_consensus_core::palw_decode_constraint_v1::PalwDecodeConstraintV1,
+        table: &kaspa_consensus_core::palw_token_table_v1::PalwTokenTableV1,
         on_token: &mut dyn FnMut(u32),
     ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
         if job.version != kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED {
@@ -1418,11 +1387,15 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         if named != job.constraint_id {
             return Err(format!("the constraint hashes to {named} and the job names {}", job.constraint_id));
         }
-        let table = self.token_table.as_ref().ok_or_else(|| {
-            "this instance holds no token table, so it cannot mask a decode — start it with the class's tokenizer \
-             (ADR-0096 §10 B4)"
-                .to_string()
-        })?;
+        // The table spans the class's logit row: a lane past it would be read as empty (never
+        // admitted), which would silently narrow the vocabulary the court opens.
+        if table.vocab_len() as usize != self.artifact.shape.vocab {
+            return Err(format!(
+                "the token table has {} ids and this class's logit row is {} wide (ADR-0096 §10 B4)",
+                table.vocab_len(),
+                self.artifact.shape.vocab
+            ));
+        }
         let k = A16DecodeConstraintV1 {
             constraint,
             table,
@@ -1432,23 +1405,6 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             },
         };
         self.execute_fp_streaming_impl(job, prompt_tokens, Some(&k), on_token)
-    }
-
-    fn output_root_for_job_v1(
-        &self,
-        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
-        context: &PalwJobContextV2,
-        output_token_ids: &[u32],
-    ) -> Option<Hash64> {
-        if job.version < kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED {
-            return self.output_root_for_context_v1(context, output_token_ids);
-        }
-        // ADR-0096 §10 B3: token by token, through the table this instance holds — or no answer.
-        let table = self.token_table.as_ref()?;
-        let rendered = kaspa_consensus_core::palw_decode_constraint_v1::rendered_segments_hash_v1(
-            &output_token_ids.iter().map(|id| table.segment(*id)).collect::<Vec<_>>(),
-        );
-        Some(output_commitment_v2(&context.context_hash(), output_token_ids, &rendered))
     }
 
     fn verify_material(&self, material: &[u8], claim: PalwClaimRootsV1) -> PalwMaterialVerdictV1 {

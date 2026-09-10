@@ -136,24 +136,28 @@ pub async fn submit(
                             ),
                         ));
                     }
-                    let answer = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_encode_v1(
+                    // A version-6 job's automaton rides both (ADR-0096 §10 B2); empty for version 5.
+                    let answer = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_encode_constrained_v1(
                         &payload.commitment.job,
                         &payload.prompt_token_ids,
+                        &payload.constraint,
                         &ids,
                     );
                     (
-                        kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_encode_v1(
+                        kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_encode_constrained_v1(
                             &payload.commitment.job,
                             &payload.prompt_token_ids,
+                            &payload.constraint,
                             &capture_bytes,
                         ),
                         Some(answer),
                     )
                 }
                 None => (
-                    kaspa_consensus_core::palw_freeprompt_v3::palw_fp_material_encode_v1(
+                    kaspa_consensus_core::palw_freeprompt_v3::palw_fp_material_encode_constrained_v1(
                         &payload.commitment.job,
                         &payload.prompt_token_ids,
+                        &payload.constraint,
                     ),
                     None,
                 ),

@@ -434,6 +434,11 @@ fn main() {
         "pwu": pwu,
         "prompt_tokens": commitment.job.prompt_tokens,
         "decode_tokens_executed": commitment.decode_tokens_executed,
+        // ADR-0096 §10 B1: which job this is — 5, or 6 with the automaton the payload carries.
+        "job_version": commitment.job.version,
+        "constraint_id": (commitment.job.version >= kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED)
+            .then(|| hex(commitment.job.constraint_id)),
+        "constraint_bytes": constraint.len(),
         "trace_manifest_root": hex(commitment.trace_manifest_root),
         "trace_retention_daa": commitment.trace_retention_daa,
         "tx_file": tx_path.display().to_string(),

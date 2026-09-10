@@ -1391,15 +1391,13 @@ pub struct Params {
     /// A bare fence, top level, `None` on every shipped preset — the `palw_fp_decode_rules`
     /// shape directly above, for its reasons.
     ///
-    /// **ARMING IT IS REFUSED BY [`Self::validate_palw_v2`] ON THIS BUILD**, exactly as the
-    /// decode-rules fence above is refused: none of the three halves exists on the path that
-    /// would apply it — consensus-core carries no constraint automaton and no version-6 job, the
-    /// court has no v3 refutation arm, and no engine masks a decode. Arming it changes exactly
-    /// one observable thing today — `GetPalwProducerFactsResponse::fp_decode_constraint_armed`,
-    /// which an entrance would read as "serve `response_format` committed" — so the fence's only
-    /// reachable effect would be a format the seat does not replay, which is a claim no seat can
-    /// reproduce. The refusal lifts when the build carries all three halves (ADR-0096 §6 steps
-    /// 3–4).
+    /// **ARMING IT IS REFUSED BY [`Self::validate_palw_v2`] ON THIS BUILD** until the court half
+    /// lands. The job half (version 6, the payload's automaton, admission) and the engine half
+    /// (the a16 family masks; the seat replays masked through the pinned token table) are here;
+    /// the court's constrained decode close (ADR-0096 §10 B5/B6) is not — and without it no court
+    /// can try a constrained token, while the unconstrained decode arms would convict an honest
+    /// masked one. `--palw-fp-constraint-devnet` arms it on a private devnet through the same
+    /// check, so a drill runs only on a build that carries every half.
     pub palw_fp_decode_constraint: Option<ForkActivation>,
 
     /// **ADR-0083 Decision 1 — the difficulty window counts only rows priced by `bits`.**
@@ -2051,10 +2049,10 @@ impl Params {
             && activation != ForkActivation::never()
         {
             return Err(PalwModeV2Error::Invalid(
-                "palw_fp_decode_constraint is armed and this build cannot carry ADR-0096 Decisions 6-8: consensus-core has no \
-                 constraint automaton and no version-6 free-prompt job (no job may carry a constraint_id), the court has no \
-                 v3 refutation arm, and no engine masks a decode — the fence may only be armed by a build that carries all \
-                 three",
+                "palw_fp_decode_constraint is armed and this build cannot carry ADR-0096 Decisions 6-8: the version-6 job, \
+                 the masked engine and the seat's masked replay are here, but the court has no constrained decode close \
+                 (§10 B5/B6) — so no court could try a constrained token, and the unconstrained decode arms would convict \
+                 an honest masked one. The fence may only be armed by a build that carries the court half too",
             ));
         }
         // **ADR-0081 Decision 3 / ADR-0082 Decision 5: the prompt-commitment form is a property

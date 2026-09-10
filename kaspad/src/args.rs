@@ -217,6 +217,14 @@ pub struct Args {
     /// then matched against what the CHAIN says the class is; a file matching neither the
     /// registered graph nor the registered weights is not used.
     pub palw_class_artifact: Vec<String>,
+    /// **The tokenizer files this seat builds pinned token tables from** (ADR-0096 §10 B4).
+    ///
+    /// A version-6 (constrained) free-prompt job is replayed through the class's token table, and
+    /// its answer's output root is taken over that table's bytes — so a seat judges one only with
+    /// the table the build pins for the job's tokenizer. Each file is hashed to its tokenizer
+    /// commitment, built at the pinned width, and kept only if its root IS the pin; a seat without
+    /// one answers `Incapable` for a version-6 claim instead of accusing anybody.
+    pub palw_class_tokenizer: Vec<String>,
     /// **The byte bound on artifacts this node holds resident** (0 = unbounded).
     ///
     /// ADR-0067 makes the class registry permissionless, which multiplies MODELS — and a node that
@@ -302,6 +310,10 @@ pub struct Args {
     /// `palw_model_evm` at this DAA score. Refused anywhere but devnet/simnet (the same rule as the
     /// VLT and token fences above — a fence is a release decision on a public network).
     pub palw_model_devnet_daa: Option<u64>,
+    /// ADR-0096 on a PRIVATE devnet: arm `palw_fp_decode_constraint` (version-6 free-prompt jobs,
+    /// the masked decode, the constrained court) at this DAA score. Devnet/simnet only, for the
+    /// same reason as every fence above.
+    pub palw_fp_constraint_devnet_daa: Option<u64>,
     /// PALW on a PRIVATE devnet: run the floor-only ruleset (the base class alone, seeded by
     /// ADR-0076 with the whole share, `MAX/278`) instead of the shipped devnet's testnet-11 class
     /// set, whose floor holds a sliver of the share and prices a fixture block at minutes per
@@ -408,6 +420,7 @@ impl Default for Args {
             palw_producer_key: None,
             palw_producer_bond: None,
             palw_class_artifact: Vec::new(),
+            palw_class_tokenizer: Vec::new(),
             palw_class_cache_bytes: 0,
             palw_register_class: None,
             palw_register_bond: false,
@@ -442,6 +455,7 @@ impl Default for Args {
             vlt_shadow_only: false,
             vlt_devnet_flat_decay: false,
             palw_model_devnet_daa: None,
+            palw_fp_constraint_devnet_daa: None,
             palw_devnet_floor_only: false,
             tkn_devnet_active_daa: None,
             tkn_devnet_shadow_span: 300,
@@ -623,6 +637,23 @@ impl Args {
             config.params.palw_model_evm = fence;
             if let Err(e) = config.params.validate_palw_v2() {
                 panic!("--palw-model-devnet={daa} produced a ruleset the node refuses: {e:?}");
+            }
+        }
+
+        // ADR-0096 Decision 8's fence on a PRIVATE devnet — the drill's switch, refused anywhere
+        // else. Through the same `validate_palw_v2` a shipped preset passes, so a build that cannot
+        // carry every half of the fence refuses to start rather than run a lane no court can try.
+        if let Some(daa) = self.palw_fp_constraint_devnet_daa {
+            let net = self.network().network_type();
+            if !matches!(net, NetworkType::Devnet | NetworkType::Simnet) {
+                panic!(
+                    "--palw-fp-constraint-devnet is devnet/simnet only (got {net:?}). Arming the decode-constraint fence is a \
+                     consensus change and must ship in a release, not a command line."
+                );
+            }
+            config.params.palw_fp_decode_constraint = Some(kaspa_consensus_core::config::params::ForkActivation::new(daa));
+            if let Err(e) = config.params.validate_palw_v2() {
+                panic!("--palw-fp-constraint-devnet={daa} produced a ruleset the node refuses: {e:?}");
             }
         }
 
@@ -1108,6 +1139,19 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-class-tokenizer")
+                .long("palw-class-tokenizer")
+                .env("KASPAD_PALW_CLASS_TOKENIZER")
+                .require_equals(true)
+                .action(clap::ArgAction::Append)
+                .value_parser(clap::value_parser!(String))
+                .help(
+                    "PALW: path to a class's tokenizer.json (repeatable). A seat replays a constrained (version-6) \
+                     free-prompt job through the token table the build pins for the job's tokenizer; the file is kept \
+                     only if the table it builds is that pin (ADR-0096 §10 B4).",
+                ),
+        )
+        .arg(
             Arg::new("palw-producer-pay-address")
                 .long("palw-producer-pay-address")
                 .env("KASPAD_PALW_PRODUCER_PAY_ADDRESS")
@@ -1361,6 +1405,19 @@ pub fn cli() -> Command {
                      the drill must carry the same value (it is in the consensus fingerprint).",
                 )
                 .env("KASPAD_PALW_MODEL_DEVNET"),
+        )
+        .arg(
+            Arg::new("palw-fp-constraint-devnet")
+                .long("palw-fp-constraint-devnet")
+                .value_name("daa-score")
+                .value_parser(clap::value_parser!(u64))
+                .require_equals(false)
+                .help(
+                    "ADR-0096 on a PRIVATE devnet: arm the decode-constraint fence (version-6 free-prompt jobs, the masked \
+                     decode, the constrained court) at this DAA score. DEVNET/SIMNET ONLY; every node of the drill must carry \
+                     the same value (it is in the consensus fingerprint).",
+                )
+                .env("KASPAD_PALW_FP_CONSTRAINT_DEVNET"),
         )
         .arg(
             arg!(--"palw-devnet-floor-only" "MISAKA PALW on a PRIVATE devnet: run the floor-only ruleset (the base class alone, seeded \
@@ -1629,6 +1686,10 @@ impl Args {
                 .get_many::<String>("palw-class-artifact")
                 .map(|v| v.cloned().collect())
                 .unwrap_or(defaults.palw_class_artifact),
+            palw_class_tokenizer: m
+                .get_many::<String>("palw-class-tokenizer")
+                .map(|v| v.cloned().collect())
+                .unwrap_or(defaults.palw_class_tokenizer),
             palw_class_cache_bytes: m.get_one::<u64>("palw-class-cache-bytes").copied().unwrap_or(defaults.palw_class_cache_bytes),
             palw_register_class: m.get_one::<String>("palw-register-class").cloned().or(defaults.palw_register_class.clone()),
             palw_register_bond: arg_match_unwrap_or::<bool>(&m, "palw-register-bond", defaults.palw_register_bond),
@@ -1681,6 +1742,10 @@ impl Args {
             vlt_shadow_only: arg_match_unwrap_or::<bool>(&m, "vlt-shadow-only", defaults.vlt_shadow_only),
             vlt_devnet_flat_decay: arg_match_unwrap_or::<bool>(&m, "vlt-devnet-flat-decay", defaults.vlt_devnet_flat_decay),
             palw_model_devnet_daa: m.get_one::<u64>("palw-model-devnet").copied().or(defaults.palw_model_devnet_daa),
+            palw_fp_constraint_devnet_daa: m
+                .get_one::<u64>("palw-fp-constraint-devnet")
+                .copied()
+                .or(defaults.palw_fp_constraint_devnet_daa),
             palw_devnet_floor_only: arg_match_unwrap_or::<bool>(&m, "palw-devnet-floor-only", defaults.palw_devnet_floor_only),
             tkn_devnet_active_daa: m.get_one::<u64>("tkn-devnet").copied(),
             tkn_devnet_shadow_span: arg_match_unwrap_or::<u64>(&m, "tkn-devnet-shadow-span", defaults.tkn_devnet_shadow_span),

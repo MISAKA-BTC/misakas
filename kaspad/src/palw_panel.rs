@@ -69,6 +69,90 @@ const PALW_PANEL: &str = "palw-panel";
 /// 3), and the replay is minutes of CPU the seat should not spend on a push that is merely late.
 pub const PALW_ATTEMPT_REPLAY_GRACE_DAA: u64 = 2;
 
+/// **The pinned token tables a seat holds** (ADR-0096 §10 B4), from `--palw-class-tokenizer`.
+///
+/// Each file is hashed to its tokenizer commitment — the value an artifact binds and a job names
+/// as `tokenizer_id` — looked up among the build's pins, built at the PINNED width (the class's
+/// vocabulary, wider than the file), and kept only if its root and end-of-generation id are the
+/// pin's. Anything else is named and dropped: a replay through another table reproduces nothing,
+/// and a seat that replayed through one would refuse honest claims.
+fn load_pinned_token_tables_v1(
+    paths: &[PathBuf],
+) -> HashMap<Hash64, Arc<kaspa_consensus_core::palw_token_table_v1::PalwTokenTableV1>> {
+    use kaspa_consensus_core::palw_token_table_v1::{PalwTokenTableV1, token_table_pin_for_v1};
+    let mut tables = HashMap::new();
+    for path in paths {
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                warn!("[{PALW_PANEL}] tokenizer {} cannot be read ({e}); no version-6 job is replayed under it", path.display());
+                continue;
+            }
+        };
+        let commitment = misaka_palw_base0::artifact::Base0ArtifactV1::tokenizer_commitment_of(&bytes);
+        let Some(pin) = token_table_pin_for_v1(&commitment) else {
+            warn!(
+                "[{PALW_PANEL}] tokenizer {} (commitment {commitment}) has no token table pinned in this build — a chain refuses a \
+                 version-6 job under it, so there is nothing to replay (ADR-0096 §10 B4)",
+                path.display()
+            );
+            continue;
+        };
+        let tokenizer = match misaka_palw_base0::tokenizer::QwenTokenizer::from_json(&bytes) {
+            Ok(tokenizer) => tokenizer,
+            Err(e) => {
+                warn!("[{PALW_PANEL}] tokenizer {} does not parse ({e:?})", path.display());
+                continue;
+            }
+        };
+        let renderings = (0..pin.vocab_len).map(|id| misaka_palw_base0::token_table::token_table_bytes_v1(&tokenizer, id)).collect();
+        match PalwTokenTableV1::new(renderings, pin.lowest_eog_id) {
+            Ok(table) if table.is_pinned_for(&commitment) => {
+                info!(
+                    "[{PALW_PANEL}] token table for tokenizer {commitment}: {} ids, root {} — the build's pin; version-6 jobs under it \
+                     are replayed masked (ADR-0096 §10 B4)",
+                    table.vocab_len(),
+                    table.root()
+                );
+                tables.insert(commitment, Arc::new(table));
+            }
+            Ok(table) => warn!(
+                "[{PALW_PANEL}] tokenizer {} builds root {} and the build pins {} for its commitment — not used",
+                path.display(),
+                table.root(),
+                pin.root
+            ),
+            Err(e) => warn!("[{PALW_PANEL}] tokenizer {} builds no table: {e}", path.display()),
+        }
+    }
+    tables
+}
+
+/// **Run a free-prompt job the way its version says** (ADR-0096 §10 B1/B7): version 5 through
+/// the plain entry, version 6 through the masked one with the material's automaton and the pinned
+/// table for the job's tokenizer. One function for every seat arm and the challenger, so a
+/// constrained job is never replayed unmasked anywhere on this node.
+fn execute_fp_job_v1(
+    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+    prompt: &[usize],
+    constraint: &[u8],
+    table: Option<&kaspa_consensus_core::palw_token_table_v1::PalwTokenTableV1>,
+) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
+    if job.version < kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED {
+        return backend.execute_free_prompt(job, prompt);
+    }
+    let table = table.ok_or_else(|| {
+        format!(
+            "no pinned token table for tokenizer {} — start this node with --palw-class-tokenizer to replay a version-6 job",
+            job.tokenizer_id
+        )
+    })?;
+    let automaton = kaspa_consensus_core::palw_decode_constraint_v1::PalwDecodeConstraintV1::from_bytes(constraint)
+        .map_err(|e| format!("the material's automaton does not parse: {e:?}"))?;
+    backend.execute_free_prompt_constrained(job, prompt, &automaton, table)
+}
+
 /// **Whether a replay licenses the claim** (ADR-0084 Decision 7): both roots reproduce, and the
 /// work reproduces WHEN THE CLAIM PRICES IT. A free-prompt claim carries the leaves it was priced
 /// at (ADR-0083) and a replay of different work is not its material, as the free-prompt arm says;
@@ -253,6 +337,9 @@ pub struct PalwPanelConfig {
     /// Converted-class artifacts this seat holds. A seat can only judge a class whose weights it
     /// has; the floor's are derived, so this is empty on an RC node.
     pub class_artifacts: Vec<PathBuf>,
+    /// Tokenizer files this seat builds pinned token tables from (ADR-0096 §10 B4); see
+    /// `--palw-class-tokenizer`.
+    pub class_tokenizers: Vec<PathBuf>,
     /// ADR-0067 tier ④: the byte bound on resident artifacts (0 = unbounded).
     pub class_cache_bytes: u64,
     /// **Re-run every licensed claim and dispute the ones this node cannot reproduce.**
@@ -329,6 +416,10 @@ pub struct PalwPanelService {
     /// Loaded once, through the SDK — whichever lineage's container each file is. Same contract
     /// as the producer's: container-checked at load, matched against the CHAIN per duty.
     class_holdings: Vec<misaka_palw_sdk::PalwLoadedArtifactV1>,
+    /// **The pinned token tables this seat holds, by tokenizer commitment** (ADR-0096 §10 B4) —
+    /// what a version-6 job is replayed through. Built once, from `--palw-class-tokenizer`, and a
+    /// file whose table is not the build's pin is not here.
+    token_tables: HashMap<Hash64, Arc<kaspa_consensus_core::palw_token_table_v1::PalwTokenTableV1>>,
     consensus_manager: Arc<ConsensusManager>,
     flow_context: Arc<FlowContext>,
     consensus_config: Arc<Config>,
@@ -483,6 +574,7 @@ impl PalwPanelService {
         );
         let class_holdings =
             crate::palw_backends::load_class_holdings_v1(PALW_PANEL, &sdk, &config.class_artifacts, config.class_cache_bytes);
+        let token_tables = load_pinned_token_tables_v1(&config.class_tokenizers);
         Self {
             config,
             consensus_manager,
@@ -491,6 +583,7 @@ impl PalwPanelService {
             keypair,
             bond,
             class_holdings,
+            token_tables,
             foreign_prune_at: std::sync::Mutex::new(std::time::Instant::now()),
             served_openings: std::sync::Mutex::new(Vec::new()),
             opening_gate: std::sync::Mutex::new(()),
@@ -1408,6 +1501,14 @@ impl PalwPanelService {
                 && self.fp_privacy_mode_judgeable(material.job.privacy_mode))
             .then_some(material)
         })
+    }
+
+    /// The pinned token table for a job's tokenizer, when this seat holds it (ADR-0096 §10 B4).
+    fn fp_token_table(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+    ) -> Option<Arc<kaspa_consensus_core::palw_token_table_v1::PalwTokenTableV1>> {
+        self.token_tables.get(&job.tokenizer_id).cloned()
     }
 
     /// **The prompt a free-prompt claim's job was run over** (ADR-0074 Decision 1). For a user's
@@ -2335,7 +2436,15 @@ impl PalwPanelService {
                         };
                         let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
                         let claimed_job = job.job.clone();
-                        let Ok((_backend, run)) = offload(backend, move |b| b.execute_free_prompt(&claimed_job, &prompt)).await else {
+                        // A version-6 job is re-run masked, through its own automaton and the
+                        // pinned table (ADR-0096 §10 B7): an unmasked re-run would "disprove"
+                        // every honest constrained claim.
+                        let (constraint, table) = (job.constraint.clone(), self.fp_token_table(&job.job));
+                        let Ok((_backend, run)) = offload(backend, move |b| {
+                            execute_fp_job_v1(b, &claimed_job, &prompt, &constraint, table.as_deref())
+                        })
+                        .await
+                        else {
                             continue;
                         };
                         let Ok(run) = run else { continue };
@@ -2576,7 +2685,12 @@ impl PalwPanelService {
                     // 1d), the block's for an attempt.
                     let work = match &fp_job {
                         Some(job) => {
-                            Some(ReplayWork::FreePrompt(job.job.clone(), job.prompt_token_ids.iter().map(|t| *t as usize).collect()))
+                            Some(ReplayWork::FreePrompt(
+                                job.job.clone(),
+                                job.prompt_token_ids.iter().map(|t| *t as usize).collect(),
+                                job.constraint.clone(),
+                                self.fp_token_table(&job.job),
+                            ))
                         }
                         None => self
                             .job_anchor_for_claim(
@@ -3072,6 +3186,11 @@ impl PalwPanelService {
                         let held = materials.get(&duty.claim_id).map(|v| v.to_vec()).unwrap_or_default();
                         if let Some(material) =
                             self.fp_job_material_for_claim(&duty.claim_id, duty.class_id, &duty.executor_bond, &held)
+                            // **Not for a version-6 job** (ADR-0096 §10 B9): the interval replay
+                            // re-selects each token by the plain argmax, which a masked decode is
+                            // not, so it would disagree with every honest constrained claim. Such a
+                            // claim is replayed whole below, masked.
+                            && material.job.version < kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED
                             && let Ok(resolved) = self.resolve_backend(&session, duty.class_id, duty.artifact_root)
                             && let Some(prompt_ids) =
                                 Self::fp_prompt_for_job(resolved.as_ref(), &material, self.config.prompt_ids_form)
@@ -3222,10 +3341,19 @@ impl PalwPanelService {
                             // verifier this lane had before ADR-0073, kept for clients that do not
                             // yet ship the capture: a seat's last resort, never its duty, and
                             // bounded exactly as it always was.
+                            // A version-6 claim's answer envelope carries its job, prompt and
+                            // automaton, and with no interval arm for it (ADR-0096 §10 B9) that
+                            // envelope is what a seat replays from when the capture is over the
+                            // transport cap — as it always is for this family.
                             let Some(material) = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_material_decode_v1(
                                 &bytes,
                                 self.config.prompt_ids_form,
-                            ) else {
+                            )
+                            .or_else(|| {
+                                kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_decode_v1(&bytes, self.config.prompt_ids_form)
+                                    .map(|answer| answer.material)
+                                    .filter(|m| m.job.version >= kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED)
+                            }) else {
                                 continue;
                             };
                             if material.job.class_id != duty.class_id
@@ -3259,7 +3387,30 @@ impl PalwPanelService {
                             };
                             let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
                             let material_job = material.job.clone();
-                            let Ok((_backend, run)) = offload(backend, move |b| b.execute_free_prompt(&material_job, &prompt)).await
+                            // A version-6 job without the pinned table is one this seat cannot
+                            // judge: `Incapable`, which counts toward neither side — never an
+                            // `Unavailable` against an executor that served everything.
+                            let table = match material.job.version
+                                >= kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED
+                            {
+                                true => match self.fp_token_table(&material.job) {
+                                    Some(table) => Some(table),
+                                    None => {
+                                        warn!(
+                                            "[{PALW_PANEL}] claim {}: a version-6 job under tokenizer {} and this seat holds no pinned \
+                                             table for it — Incapable (start with --palw-class-tokenizer)",
+                                            duty.claim_id, material.job.tokenizer_id
+                                        );
+                                        break 'verdict Some(PalwReceiptVerdictV2::Incapable);
+                                    }
+                                },
+                                false => None,
+                            };
+                            let constraint = material.constraint.clone();
+                            let Ok((_backend, run)) = offload(backend, move |b| {
+                                execute_fp_job_v1(b, &material_job, &prompt, &constraint, table.as_deref())
+                            })
+                            .await
                             else {
                                 continue;
                             };
@@ -3302,6 +3453,13 @@ impl PalwPanelService {
                                     duty.claim_id, run.facts.step_leaf_count, duty.work_leaves
                                 );
                                 continue;
+                            }
+                            if material.job.version >= kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED {
+                                info!(
+                                    "[{PALW_PANEL}] claim {}: version-6 job replayed MASKED through constraint {} and the pinned token \
+                                     table — both roots and the priced work reproduce (ADR-0096 §10)",
+                                    duty.claim_id, material.job.constraint_id
+                                );
                             }
                             self.persist_foreign_material(&duty.claim_id, &bytes);
                             break 'verdict Some(PalwReceiptVerdictV2::Valid);
@@ -4157,7 +4315,14 @@ where
 /// The job a challenger re-executes off the runtime: the user's for a free prompt (ADR-0073
 /// Decision 1d), the block's for an attempt.
 enum ReplayWork {
-    FreePrompt(kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3, Vec<usize>),
+    /// The job, its prompt, its automaton (empty for version 5) and the pinned table for its
+    /// tokenizer when this node holds one (ADR-0096 §10 B4).
+    FreePrompt(
+        kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        Vec<usize>,
+        Vec<u8>,
+        Option<Arc<kaspa_consensus_core::palw_token_table_v1::PalwTokenTableV1>>,
+    ),
     Attempt(kaspa_consensus_core::palw_v2::PalwJobContextV2, Vec<usize>),
 }
 
@@ -4167,7 +4332,9 @@ impl ReplayWork {
         backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
     ) -> Option<kaspa_consensus_core::palw_backend::PalwExecutionOutcomeV1> {
         match self {
-            Self::FreePrompt(job, prompt) => backend.execute_free_prompt(&job, &prompt).ok().map(|run| run.outcome),
+            Self::FreePrompt(job, prompt, constraint, table) => {
+                execute_fp_job_v1(backend, &job, &prompt, &constraint, table.as_deref()).ok().map(|run| run.outcome)
+            }
             Self::Attempt(job, prompt) => backend.execute(&job, &prompt).ok(),
         }
     }
@@ -4584,7 +4751,10 @@ impl PalwPanelService {
             // the count, and comparing the rebuilt root against `duty.output_root` is the chain
             // confirming it. Nothing here is believed: a wrong length gives a wrong root.
             let ctx = backend.fp_job_context_for_executed_v1(&material.job, ids.len().min(u32::MAX as usize) as u32)?;
-            let recomputed = backend.output_root_for_context_v1(&ctx, &ids)?;
+            // A version-6 answer is committed token by token through the pinned table (ADR-0096
+            // §10 B3); without the table this seat cannot bind it, and says nothing.
+            let table = self.fp_token_table(&material.job);
+            let recomputed = backend.output_root_for_job_v1(&material.job, &ctx, &ids, table.as_deref())?;
             if recomputed != duty.output_root {
                 warn!(
                     "[{PALW_PANEL}] claim {}: a served answer's ids recompute output root {recomputed} and the claim committed {} — \
@@ -4768,9 +4938,12 @@ impl PalwPanelService {
             let facts = session.palw_producer_facts_v2(payload.material.job.class_id, None)?;
             let backend = self.resolve_backend(&session, payload.material.job.class_id, facts.artifact_root).ok()?;
             let ids = backend.fp_committed_output_ids(&payload.capture)?;
-            return Some(kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_encode_v1(
+            // The material's automaton rides the envelope (ADR-0096 §10 B2): a seat replays a
+            // version-6 job from this and nothing else.
+            return Some(kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_encode_constrained_v1(
                 &payload.material.job,
                 &payload.material.prompt_token_ids,
+                &payload.material.constraint,
                 &ids,
             ));
         }

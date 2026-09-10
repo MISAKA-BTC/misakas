@@ -64,8 +64,20 @@ P2P_BASE="${P2P_BASE:-16410}"
 RPC_BASE="${RPC_BASE:-17710}"
 PROMPT="${PROMPT:-Name one property of a hash function.}"
 MAX_TOKENS="${MAX_TOKENS:-4}"
-# The class the gateway's worker embodies. `palw-a16-fp-worker` serves exactly this catalog row.
-MODEL_ID="${MODEL_ID:-Qwen/Qwen2.5-1.5B/graph-v2}"
+# The class the gateway's worker embodies. `palw-a16-fp-worker` serves exactly this catalog row —
+# `A16_GRAPH_V5_MODEL_ID` since ADR-0082 (the graph-v2 default here was a row the worker no longer
+# serves, so every run had to override it by hand).
+MODEL_ID="${MODEL_ID:-Qwen/Qwen2.5-1.5B/graph-v5@512}"
+# **ADR-0096 §10: the constrained lane.** CONSTRAINED=1 arms the decode-constraint fence at genesis
+# on every node (`--palw-fp-constraint-devnet=0` is in the consensus fingerprint, so the registrar and
+# the class-table reader carry it too), hands every seat the tokenizer its pinned token table is
+# built from, and asks stage 5 for a COMMITTED JSON format: the gateway sends a version-6 job, the
+# rail carries the automaton, and the seats replay the job masked. The verdict then also requires the
+# format to have been committed and valid, the rail to have signed a version-6 job, and a seat to
+# have logged the masked replay — so a run that silently fell back to version 5 cannot pass.
+CONSTRAINED="${CONSTRAINED:-0}"
+FENCE_ARGS=()
+if [ "$CONSTRAINED" = 1 ]; then FENCE_ARGS=(--palw-fp-constraint-devnet=0); fi
 PREMINE_TXID="6d6973616b612d7072656d696e65$(printf '0%.0s' $(seq 1 100))"   # "misaka-premine", zero-padded
 MAIN_PREMINE_INDEX=40   # consensus/core/src/config/premine.rs; bond n's fee float is MAIN_PREMINE_INDEX + 1 + n
 DEVNET_BONDS=6          # premine.rs: PALW_DEVNET_GENESIS_BONDS
@@ -209,6 +221,7 @@ for ((i=0; i<NODES; i++)); do
   # a floor-only seat, which is the shape of a fleet host without the artifact.
   if [ "$i" -le 1 ]; then args+=(--palw-class-artifact="$MISAKA_PALW_ARTIFACT" --palw-producer-class="$EXPECTED_CLASS_ID"); fi
   if [ "$i" -gt 0 ]; then args+=(--connect=127.0.0.1:$P2P_BASE); fi
+  if [ "$CONSTRAINED" = 1 ]; then args+=(--palw-fp-constraint-devnet=0 --palw-class-tokenizer="$MISAKA_PALW_TOKENIZER"); fi
   MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >"$WORK_DIR/node-$i.log" 2>&1 &
   # `$!` into a variable rather than `${pids[-1]}`: macOS ships bash 3.2, which rejects a negative
   # array index at PARSE time — the whole script fails to load, not the line.
@@ -301,7 +314,8 @@ class_table() {
   local pid deadline
   MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/node-0-reg" \
     --rpclisten-borsh=127.0.0.1:$((reg_rpc + 200)) --nogrpc --nodnsseed --disable-upnp \
-    --connect=127.0.0.1:$P2P_BASE --utxoindex --palw-dump-classes >"$WORK_DIR/class-table.log" 2>&1 &
+    --connect=127.0.0.1:$P2P_BASE --utxoindex --palw-dump-classes ${FENCE_ARGS[@]+"${FENCE_ARGS[@]}"} \
+    >"$WORK_DIR/class-table.log" 2>&1 &
   pid=$!
   deadline=$((SECONDS + STEP_WAIT))
   while :; do
@@ -348,6 +362,7 @@ MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/node-0-reg"
       --palw-producer-key="$WORK_DIR/keys/bond-$REGISTRAR_BOND.seed" --palw-producer-pay-address="$REGISTRAR_ADDR" \
       --palw-producer-bond="$PREMINE_TXID:$REGISTRAR_BOND" \
       --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1 + REGISTRAR_BOND))" \
+      ${FENCE_ARGS[@]+"${FENCE_ARGS[@]}"} \
       >"$WORK_DIR/register-class.log" 2>&1 &
 # `$!` into a variable rather than `${pids[-1]}`: macOS ships bash 3.2, which rejects a negative
 # array index at PARSE time — the whole script fails to load, not the line.
@@ -549,17 +564,33 @@ log "stage 4 OK — /health names all four"
 # ---------------------------------------------------------------------------------------------
 # 5. One browser-shaped request. The answer is the product; the commitment is the receipt.
 # ---------------------------------------------------------------------------------------------
-log "stage 5 — one chat request"
-python3 - "$GATEWAY_PORT" "$PROMPT" "$MAX_TOKENS" "$WORK_DIR/chat.json" <<'PY' || die "the chat request failed"
+log "stage 5 — one chat request$([ "$CONSTRAINED" = 1 ] && echo ' with a COMMITTED JSON format (ADR-0096)')"
+python3 - "$GATEWAY_PORT" "$PROMPT" "$MAX_TOKENS" "$WORK_DIR/chat.json" "$CONSTRAINED" <<'PY' || die "the chat request failed"
 import json, sys, urllib.request
-port, prompt, max_tokens, out = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
-body = json.dumps({"messages": [{"role": "user", "content": prompt}], "max_tokens": max_tokens}).encode()
+port, prompt, max_tokens, out, constrained = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5] == "1"
+request = {"messages": [{"role": "user", "content": prompt}], "max_tokens": max_tokens}
+if constrained:
+    # A schema in the subset, in the order a person writes it; `require_committed_format` makes the
+    # gateway refuse rather than fall back to advisory, so this stage cannot pass on a version-5 job.
+    request["response_format"] = {"type": "json_schema", "json_schema": {"name": "extraction", "schema": {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "age": {"type": "integer"}, "city": {"type": "string"}},
+        "required": ["name", "age", "city"], "additionalProperties": False}}}
+    request["misaka"] = {"require_committed_format": True}
+body = json.dumps(request).encode()
 req = urllib.request.Request(f"http://127.0.0.1:{port}/v1/chat/completions", data=body,
                              headers={"content-type": "application/json"})
 payload = json.loads(urllib.request.urlopen(req, timeout=1800).read())
 json.dump(payload, open(out, "w"), indent=2)
 m = payload.get("misaka", {})
 print(f"  answer: {payload['choices'][0]['message']['content']!r}", file=sys.stderr)
+if constrained:
+    f = m.get("format") or {}
+    print(f"  format: enforcement={f.get('enforcement')} valid={f.get('valid')} "
+          f"constraint={((f.get('requested') or {}).get('constraint_id') or '?')[:16]}…", file=sys.stderr)
+    if f.get("enforcement") != "committed" or f.get("valid") is not True:
+        print("  the format was not committed and valid — this is not the constrained lane", file=sys.stderr)
+        sys.exit(1)
 print(f"  fp_job_id={m.get('fp_job_id','?')[:16]}… claim={m.get('fp_claim_id','?')[:16]}…", file=sys.stderr)
 PY
 JOB_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["misaka"]["fp_job_id"])' "$WORK_DIR/chat.json")
@@ -891,6 +922,16 @@ for ((i=0; i<NODES; i++)); do
   log "node-$i blocks=$(blocks_of $i) committed=$(grep -c 'FreePromptCommitted' "$WORK_DIR/node-$i.log" 2>/dev/null || echo 0) final=$(grep -c 'Final' "$WORK_DIR/node-$i.log" 2>/dev/null || echo 0)"
 done
 [ "$stage_ok" = 1 ] || { log "the claim did not reach Final on every node"; fail=1; }
+if [ "$CONSTRAINED" = 1 ]; then
+  # ADR-0096 §10: the three facts that make this the constrained lane and not a version-5 run.
+  enforcement=$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1]))["misaka"].get("format") or {}).get("enforcement"))' "$WORK_DIR/chat.json" 2>/dev/null || echo "?")
+  job_version=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("job_version"))' "$ARTIFACT_STEM.rail.json" 2>/dev/null || echo "?")
+  masked=$(grep -l "version-6 job replayed MASKED" "$WORK_DIR"/node-*.log 2>/dev/null | wc -l | tr -d ' ')
+  log "ADR-0096: format enforcement=$enforcement, rail signed job version $job_version, $masked seat(s) logged a masked replay"
+  [ "$enforcement" = committed ] || { log "the format was not committed"; fail=1; }
+  [ "$job_version" = 6 ] || { log "the rail did not sign a version-6 job"; fail=1; }
+  [ "$masked" -gt 0 ] || { log "no seat logged a masked replay of the version-6 job"; fail=1; }
+fi
 [ "$receipt_ok" = 1 ] || { log "no receipt block was accepted by every node"; fail=1; }
 grep -q "$JOB_ID" "$WORK_DIR/chat.json" || { log "the job id is not in the gateway's own answer"; fail=1; }
 
