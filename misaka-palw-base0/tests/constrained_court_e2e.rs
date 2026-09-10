@@ -56,7 +56,7 @@ use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 use kaspa_hashes::Hash64;
 use misaka_palw_base0::artifact::{Base0ArtifactV1, Base0ShapeV1, LN_THETA_10000_GEN_Q};
 use misaka_palw_base0::engine_a16::derived_a16_store;
-use misaka_palw_base0::qwen25_a16_backend::{A16TokenTableV1, Qwen25A16Backend};
+use misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend;
 use misaka_palw_base0::token_table::{token_table_bytes_v1, token_table_leaves_v1};
 use misaka_palw_base0::tokenizer::QwenTokenizer;
 
@@ -229,8 +229,12 @@ fn fixture() -> Option<&'static Fixture> {
                 .with_a16_params(derived_a16_store(&shape))
                 .expect("the derived store is sorted and unique");
             let backend = Qwen25A16Backend::new(Arc::new(artifact), NETWORK.to_vec(), profile.clone(), (4, 3))
-                .expect("the fixture's declaration is this engine's program")
-                .with_token_table(Arc::new(A16TokenTableV1 { bytes: table_bytes.clone(), lowest_eog: pin.lowest_eog_id }));
+                .expect("the fixture's declaration is this engine's program");
+            // The table a worker and a seat hand the engine: the file's renderings at the pinned
+            // width, which IS the pin (checked, so a drift in the table rule fails here by name).
+            let table = kaspa_consensus_core::palw_token_table_v1::PalwTokenTableV1::new(table_bytes.clone(), pin.lowest_eog_id)
+                .expect("the file's table is well formed");
+            assert!(table.is_pinned_for(&commitment), "the engine masks through the pinned table");
 
             let c = automaton();
             let prompt: Vec<usize> = vec![9_707, 11, 1_879];
@@ -257,7 +261,17 @@ fn fixture() -> Option<&'static Fixture> {
                 temperature_q: 0,
                 constraint_id: c.id(),
             };
-            let run = backend.execute_free_prompt_constrained_streaming(&job, &prompt, &c, &mut |_| {}).expect("the masked run");
+            let run = backend.execute_free_prompt_constrained(&job, &prompt, &c, &table).expect("the masked run");
+            // The seat's binding of a served answer and the engine's committed root are one value.
+            assert_eq!(
+                kaspa_consensus_core::palw_backend::fp_output_root_constrained_v1(
+                    &backend.fp_job_context_for_executed_v1(&job, run.output_token_ids.len() as u32).expect("the context"),
+                    &run.output_token_ids,
+                    &table
+                ),
+                run.outcome.output_root,
+                "fp_output_root_constrained_v1 is the engine's own output root"
+            );
             let material =
                 misaka_palw_base0::produce::base0_fp_material_decode_v2(&run.outcome.material).expect("our own material decodes");
             assert_eq!(material.generated_token_ids, run.output_token_ids);
