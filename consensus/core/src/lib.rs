@@ -233,6 +233,9 @@ pub mod palw_legs;
 pub mod palw_lifecycle_objects_v2;
 pub mod palw_mode_v2;
 pub mod palw_model_benefits_v1;
+/// ADR-0097 — a model's fit is a lookup: every wall a class meets on a ruleset, named with its
+/// number, from the predicates admission and the court already run. Consensus-inert (a report).
+pub mod palw_model_fit_v1;
 pub mod palw_model_lines_v1;
 pub mod palw_model_market_v1;
 /// ADR-0077 Decision 16 (P-16): `PanelDa`, the privacy mode whose prompt stays off chain — and

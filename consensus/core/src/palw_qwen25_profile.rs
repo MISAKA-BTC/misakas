@@ -895,6 +895,11 @@ pub fn qwen25_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProf
 /// **Why 512 and not the ladder's ceiling** (5f genesis card §2): the demonstration corpus costs up
 /// to 286 decode tokens, which needs a decode budget of 503 and therefore `n_ctx` 512; and the RC
 /// bundle's `2^26` ladder admits at most 574, so 1,024 is not the next rung but a different cap.
+///
+/// **2026-09-10 (ADR-0097 §1.2): the ladder's figure above is stale — on this graph-v5 row it is
+/// 651, pinned by `palw_adr0097_model_fit.rs` — and the wall that actually holds the row at 512 is
+/// the COURT WINDOW, which refuses 513 by name at the shipped arity.** Widths are the generator's
+/// (`misaka-palw-base0 --bin palw-model-fit`), never a comment's.
 pub const QWEN25_A16_GRAPH_V5_N_CTX: u32 = 512;
 
 /// **The graph the 5f genesis registers for the dense tier** — [`qwen25_a16_profile_v5`] over the

@@ -123,6 +123,12 @@ pub const QWEN36_35B_A3B: PalwQwen36GeometryV1 = PalwQwen36GeometryV1 {
     // JOB a claim may declare, not what the engine serves off-chain. A larger context returns
     // when the recurrence's replay is checkpoint-anchored (the state chunk map is registered;
     // the anchor consumption is wired for attention and not yet for the recurrence).
+    //
+    // **2026-09-10 (ADR-0097 §1.2): on the RC's 27-carrier close that is no longer the binding
+    // wall.** The graph-v5 row is admitted by the close and the window at 512 and refused by the
+    // LADDER alone past 204 (`palw_adr0097_model_fit.rs` pins the 204); the devnet's one-carrier
+    // close refuses the row at 8. Run `misaka-palw-base0 --bin palw-model-fit` for the width; do
+    // not read one off this comment.
     n_ctx: 8,
     n_threads: 1,
     rms_eps_q: 17,
