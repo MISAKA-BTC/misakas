@@ -227,4 +227,43 @@ Implementation, 2026-09-11, on `feat/adr-0109-bridge-liveness` — the measured 
 
 ## 9. Measured results
 
-_Filled in at the end of the implementation._
+Implemented 2026-09-11 on `feat/adr-0109-bridge-liveness` (from `main` `40ac431b`), nothing pushed.
+
+**Where it lives.** `EvmDepositLockRecord` and `EvmBridgeFinalityPolicy` in `consensus/core/src/evm/mod.rs`;
+`Config::evm_bridge_finality` + `evm_bridge_finality_effective()`; the store `DbEvmDepositLockStore`
+(`consensus/src/model/stores/evm.rs`, DB prefixes **228** rows / **229** built-marker — 254 and 255 were
+taken, which the compiler said as E0081); in `processor.rs`: `stage_evm_deposit_locks` (called from
+`commit_virtual_state` next to `write_diff_batch`), `rebuild_evm_deposit_lock_index` (from `init` when the
+marker is absent and from `import_pruning_point_utxo_set`), `with_indexed_deposit_claims` (in the template
+path, under the virtual read lock, before `prepare_deposit_claims`), the `safe` head in
+`update_evm_canonical_heads`, and the mempool refusal in `validate_mempool_transaction_impl`
+(`palw_mempool_locked_bonds`, memoised per registry tip and DAA); `kaspad --evm-bridge-finality
+label|pause`; the claim RPC's staleness refusal now only under `Pause`.
+
+**Tests** (`CARGO_TARGET_DIR` private to the branch; `MISAKA_PALW_POW_FIXTURE=1`):
+
+| suite | result |
+|---|---|
+| `cargo test -p kaspa-consensus --features evm` | **311 passed, 0 failed**, 7 ignored (before I-4 was added; I-4's test passes on its own) |
+| `cargo test -p kaspad -p kaspa-rpc-service -p kaspa-mining` | **191 passed, 0 failed** |
+| new: `evm_producer_claims_every_accepted_lock_unasked` (I-1), `evm_template_claims_oldest_lock_first_and_once` (I-3), `evm_deposit_lock_index_follows_the_virtual_utxo_diff` (I-2), `first_locked_input_names_the_locked_bond_spend` (I-5), I-4 inside `evm_active_chain_executes_persists_and_moves_heads` | pass |
+| `cargo clippy -p kaspa-consensus -p kaspad -p kaspa-rpc-service -p kaspa-database --features evm --tests --no-deps -D warnings` | clean |
+| `cargo clippy -p kaspa-consensus-core` | 6 errors — **the same 6 on `main` `40ac431b`** (measured side by side; none in lines this ADR touched) |
+| `rustfmt --edition 2024 --check` on every touched `.rs` | clean |
+| `bash scripts/ci-gates.sh --group fast` | 6/6 green |
+| `python3 scripts/check-repin-enumeration.py` | 7 unclassified — `main`'s baseline, unchanged |
+
+**Mutations** (each applied alone to `processor.rs`, then restored byte for byte): no index union in the
+template → I-1 and I-3 fail; `Label` ignored (the old pause) → I-1, I-3 and the pipeline test fail; `safe`
+left at the sink → I-4 fails; the diff not staged into the index → I-2 fails. **4 of 4 caught.**
+
+Two fixtures had to change, and both changes are the point of the ADR, not accommodations:
+`set_fresh_dns_finality` named an anchor hash no header exists for — since the 2026-09-10 blue-score
+freshness fix such an anchor reads as stale, so the one test that depended on "fresh" was passing only
+because nothing else had asked; it now names genesis. The pre-existing queue-path test asserts
+"a stale anchor keeps the payload empty", which is `Pause`'s behaviour; it now says `Pause` explicitly.
+
+**Not verified here:** the fleet does not run this build yet (a restart-only rollout: the index builds
+itself on first start, and old-build peers validate every block a new build makes); the index's
+rebuild over a large UTXO set (testnet-11's is small; on a mainnet-sized set it is one pass at the first
+start); a live claim made by the index on testnet-11 (it needs the rollout).

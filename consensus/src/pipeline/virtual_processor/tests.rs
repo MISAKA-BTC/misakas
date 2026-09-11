@@ -8501,6 +8501,26 @@ async fn evm_active_chain_executes_persists_and_moves_heads() {
     assert_eq!(storage.evm_payload_store.get(2.into()).unwrap(), payload2, "own payload persisted at body commit");
     assert_eq!(storage.evm_heads_store.read().get().unwrap().latest, BlockHash::from(2u64));
 
+    // ADR-0109 Decision 4 (I-4): `safe` is the DNS-confirmed anchor when it is a chain ancestor of the
+    // sink that carries an EVM result — b1 here — and the sink when the anchor carries none.
+    {
+        use crate::model::stores::dns_state::{DnsStateStore, DnsStateStoreReader};
+        let vp = consensus.virtual_processor().clone();
+        let point_anchor_at = |anchor: BlockHash| {
+            let mut state = vp.dns_state_store.read().get().unwrap();
+            state.last_dns_confirmed_anchor = anchor;
+            vp.dns_state_store.write().set(state).unwrap();
+            let mut batch = rocksdb::WriteBatch::default();
+            vp.update_evm_canonical_heads(&mut batch, 2.into());
+            vp.db.write(batch).unwrap();
+            storage.evm_heads_store.read().get().unwrap()
+        };
+        let heads = point_anchor_at(1.into());
+        assert_eq!((heads.latest, heads.safe), (BlockHash::from(2u64), BlockHash::from(1u64)), "safe = the DNS-confirmed anchor b1");
+        let heads = point_anchor_at(BlockHash::from(0xDEADu64));
+        assert_eq!(heads.safe, BlockHash::from(2u64), "an anchor with no EVM result leaves safe at the sink, as before");
+    }
+
     // ---- b3: a commitment FAULT (producer lied about the acceptance result).
     // The block enters the DAG but is disqualified from the chain — exactly the
     // UTXO-fault shape — and no EVM rows are written for it.
