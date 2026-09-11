@@ -3718,8 +3718,15 @@ pub fn base0_fp_held_step_range_answer_v1<K: Base0FpIntervalKernelsV1>(
             let end = first.checked_add(count).filter(|end| *end <= step_leaf_count && count > 0).ok_or_else(|| {
                 Base0FpIntervalError::StepSpace(format!("[{first}, +{count}) is not inside {step_leaf_count} leaves"))
             })?;
-            let siblings = kaspa_consensus_core::palw_step_leg::step_merkle_range_siblings_v1(&leaves, first as usize, count as usize)
-                .map_err(|e| Base0FpIntervalError::Leg(e.to_string()))?;
+            // At the ruleset's ladder, never the executor's default (ADR-0084 U-08): the court walks
+            // this range at `max_step_leaf_count`, and so does the answer's builder.
+            let siblings = kaspa_consensus_core::palw_step_leg::step_merkle_range_siblings_capped_v1(
+                &leaves,
+                first as usize,
+                count as usize,
+                max_step_leaf_count,
+            )
+            .map_err(|e| Base0FpIntervalError::Leg(e.to_string()))?;
             Ok(PalwStepRangeOpeningV1 {
                 first_leaf_index: first,
                 leaf_hashes: leaves[first as usize..end as usize].to_vec(),

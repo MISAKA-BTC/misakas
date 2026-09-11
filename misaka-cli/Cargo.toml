@@ -44,6 +44,8 @@ misaka-palw.workspace = true
 # to the answer's ids (X6's third input).
 misaka-palw-derive.workspace = true
 misaka-palw-base0.workspace = true
+# ADR-0110: `verify-context` reports the process's peak resident set — a host fact, never compared.
+libc.workspace = true
 serde_json.workspace = true
 serde = { workspace = true, features = ["derive"] }
 toml.workspace = true

@@ -46,6 +46,9 @@ const CONSENSUS_PATH: &[&str] = &[
     "src/artifact.rs",
     "src/backend.rs",
     "src/classes.rs",
+    // ADR-0110's verifier drives the family's own arithmetic over a vector, so it holds no float
+    // either — its host timings are integer milliseconds.
+    "src/context_vector.rs",
     "src/engine.rs",
     "src/engine_a16.rs",
     "src/attn_responder.rs",

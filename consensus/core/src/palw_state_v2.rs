@@ -6844,7 +6844,7 @@ impl<'a> TransitionBuilder<'a> {
             self.write_held_da_missing(key, None);
         }
         // ADR-0109 Decision 3: the demand record lives as long as the claim can still be tried.
-        if self.state.held_leaf_demands.contains_key(&key) && !new.as_ref().is_some_and(|claim| !claim.phase.is_terminal()) {
+        if self.state.held_leaf_demands.contains_key(&key) && new.as_ref().is_none_or(|claim| claim.phase.is_terminal()) {
             self.write_held_leaf_demands(key, None);
         }
         let old = match &new {

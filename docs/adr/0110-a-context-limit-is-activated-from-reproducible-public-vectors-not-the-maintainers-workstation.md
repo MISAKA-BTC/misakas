@@ -59,9 +59,11 @@ From those, and nothing else:
 * the class is the family's profile projected at the geometry, and its id is `H(profile)`;
 * the weights are the family's deterministic derivation from the seed (the floor's and the test
   fixtures' own derivation — no file is read);
-* the prompt is `prefill` ids drawn from `BLAKE2b-XOF(key = "misaka-palw/context-vector/prompt/v1",
-  seed)`, each reduced modulo the vocabulary, and the job's anchor is `BLAKE2b-512(key =
-  "misaka-palw/context-vector/anchor/v1", seed)`.
+* the job's anchor is `BLAKE2b-512(key = "misaka-palw/context-vector/anchor/v1", seed)`, and the
+  prompt is the family's own canonical prompt for that anchor (`base0_rc_job_v1`'s keyed stream,
+  each id reduced modulo the vocabulary). It is committed under the Merkle form and carried by a
+  free-prompt job, the executor's own entrance, whose every other field is fixed or derived from
+  the seed. No generator is new: a vector reuses the derivations a node already runs.
 
 `vector_id = BLAKE2b-512(key = "misaka-palw/context-vector/v1", canonical bytes of the vector)`. The
 shipped vectors are named by width (`0110-dense-v7-512`, `…-4k`, `…-32k`, `…-128k`, `…-2m`), and
