@@ -756,3 +756,24 @@ shipped network, because a free prompt there is at most 4,096 ids. It also carri
 question the arithmetic does not answer: at `2^21` positions a near-uniform row's Q24 probabilities
 are about `8/2^24`, three bits each. It is recorded here, and ADR-0110 §9.5 carries what it means
 for the 2M vector. Nothing is changed.
+
+**Decided 2026-09-11: the bound stays.** The operator asked that the open design calls be made
+where the gain is large. This one's gain is nil today and its cost is not small:
+
+* **What raising it would buy now: nothing a network runs.** Every shipped network admits a free
+  prompt of at most 4,096 ids, 64 times under the bound; no class, lane or vector beyond 262,144
+  positions is proposed except the 2M vector, which is a measurement.
+* **What would still stop 2M after it.** The seat's replay grows with the square of the width
+  past the knee (§10.6). The 131,072-position vector's seat took 819 s of its 44.7 minutes on a
+  12-core host (ADR-0110 §9.5), and sixteen times that width is, by the same rule, up to 256 times
+  that seat — days, which no court clock in this tree is sized for (ADR-0092). A bound raised alone
+  would trade a refusal by name for a replay nobody finishes.
+* **What it would cost.** A catalog op the court runs changes: a ruleset move on every network,
+  and on testnet-11 another flag day beside DAA 3,500's. A constant alone is also not enough:
+  three-bit probabilities at 2^21 need a wider probability format, which is new kernel semantics,
+  not a bigger number.
+
+So the refusal by name stays the answer at 2M (`the_widest_runnable_vector_is_2_18_and_the_2m_one_is_refused_by_name`),
+and the question reopens with any one of: a lane that admits prompts past 2^18; a seat that replays
+2^19 positions inside the court's wall clock; a probability format with at least eight bits at
+2^21.
