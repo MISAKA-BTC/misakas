@@ -13125,3 +13125,25 @@ async fn a_replayed_root_claim_signature_with_a_foreign_binding_cannot_crowd_out
         "AC-SLOT: an honest claim was voided because its responder's filing was crowded out: {phase:?}"
     );
 }
+
+/// **ADR-0119 Decision 4, pinned where it lives: the acceptance layer bounds a held court move at
+/// the claim's CLASS ladder, and judges a fused site's close knowing the held regime.** The fold
+/// reads the same ladder off the same state (`every_held_court_arm_of_the_fold_reads_the_claims_class_ladder`);
+/// an acceptance arm that read the network's bare would refuse, at `2^26`, a held claim's move the
+/// fold would have applied at `2^40` — the two layers disagreeing about one object.
+#[test]
+fn every_held_court_acceptance_arm_reads_the_claims_class_ladder() {
+    let source = include_str!("processor.rs");
+    let arm = |name: &str| {
+        let at = source.find(&format!("Obj::{name} {{")).unwrap_or_else(|| panic!("{name}'s arm"));
+        let end = at + source[at..].find("\n                Obj::").unwrap_or(source.len() - at);
+        &source[at..end]
+    };
+    assert!(arm("ShardCourtAccused").contains("let ladder = state.class_step_ladder_v1(&claim.class_id, ladder);"));
+    for name in ["CheckpointAccused", "MaterialDisclosedHeld"] {
+        assert!(arm(name).contains("state.class_step_ladder_v1(&claim.class_id, ladder)"), "{name} reads the claim's ladder");
+    }
+    assert!(!source.contains("adjudicate_court_close_v2("), "every close is judged by v3, which knows the held regime");
+    assert_eq!(source.matches("adjudicate_court_close_v3(").count(), 3, "the node's verdict, a close chunk and a close");
+    assert!(source.contains("palw_fp_objects_from_accepted_txs_by_class_v1("), "the walk bounds each commitment by its class");
+}

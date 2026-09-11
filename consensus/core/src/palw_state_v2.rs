@@ -22921,6 +22921,40 @@ pub(crate) mod tests {
         let reverted = revert_delta_v2(&s2, &delta, &p).expect("the registration reverts");
         assert!(reverted.class_step_ladders.is_empty(), "…and so does its ladder");
         assert_eq!(reverted.state_root(), floor.state_root());
+
+        // ADR-0119 Decision 4: a fused site's rows open at the claim's ladder under the regime —
+        // the held class's recorded one, every other class's the network's step ladder — and at
+        // the structural 2^22 before it, as they always did.
+        use crate::palw_court_v2::palw_attn_opening_cap_v1;
+        assert_eq!(palw_attn_opening_cap_v1(&s2, &held_id, 1 << 26, true), PALW_HELD_STEP_LADDER_V1);
+        assert_eq!(palw_attn_opening_cap_v1(&s2, &h64(1), 1 << 26, true), 1 << 26);
+        for class in [held_id, h64(1)] {
+            assert_eq!(palw_attn_opening_cap_v1(&s2, &class, 1 << 26, false), crate::palw_step::PALW_STEP_MAX_LEAVES);
+        }
+    }
+
+    /// **ADR-0119 Decision 4, pinned where it lives: every held court arm of the fold reads the
+    /// claim's CLASS ladder**, and the root claim opens its site at the claim's ladder under the
+    /// regime. A block's extras carry one network ladder; an arm that read it bare would bound a
+    /// held claim's accusation, checkpoint or answer at `2^26` while its producer committed up to
+    /// `2^40`, and an honest producer's answer past `2^26` would be refused and the producer slashed
+    /// for a silence it did not choose.
+    #[test]
+    fn every_held_court_arm_of_the_fold_reads_the_claims_class_ladder() {
+        let source = include_str!("palw_state_v2.rs");
+        let fold = &source[..source.find("\n#[cfg(test)]\npub(crate) mod tests {").expect("the tests follow the fold")];
+        let arm = |name: &str| {
+            let at = fold.find(&format!("PalwConsensusObjectV2::{name} {{")).unwrap_or_else(|| panic!("{name}'s arm"));
+            let end = at + fold[at..].find("\n        PalwConsensusObjectV2::").unwrap_or(fold.len() - at);
+            &fold[at..end]
+        };
+        for name in ["ShardCourtAccused", "CheckpointAccused", "MaterialDisclosedHeld"] {
+            assert!(
+                arm(name).contains("builder.state.class_step_ladder_v1(&claim.class_id, ladder)"),
+                "{name} reads the claim's ladder"
+            );
+        }
+        assert!(fold.contains("crate::palw_court_v2::palw_attn_opening_cap_v1("), "the root claim opens at the claim's ladder");
     }
 
     fn stratified_seats() -> Vec<PalwPanelSeatV2> {

@@ -501,6 +501,66 @@ mod tests {
         );
     }
 
+    /// **ADR-0119 Decision 5: a commitment is bounded by its CLASS's ladder.** A held class recorded
+    /// the regime's `2^40` when it registered, so its commitment of `2^27` leaves — past the network's
+    /// `2^26` — is extracted, while the same commitment of a class that recorded nothing is skipped
+    /// exactly as before, and past `2^40` both are skipped. The class is read off the commitment's
+    /// own job, never off the carrier.
+    #[test]
+    fn a_held_class_commitment_is_bounded_by_its_own_ladder_and_every_other_by_the_networks() {
+        let fp = freeprompt();
+        let walk = |work_leaves: u64, held: bool| {
+            let mut p = payload(96, 256);
+            p.commitment.work_leaves = work_leaves;
+            palw_fp_objects_from_accepted_txs_by_class_v1(
+                &[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(&p).unwrap())],
+                net(),
+                &fp,
+                h64(1),
+                false,
+                |class_id| {
+                    assert_eq!(*class_id, h64(1), "the class is the commitment's own");
+                    PalwFpClassCapsV1 {
+                        step_ladder: if held { crate::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1 } else { 1 << 26 },
+                        held,
+                    }
+                },
+                false,
+                true,
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                |_, _, _, _| true,
+            )
+        };
+        assert_eq!(walk(1 << 27, true).objects.len(), 1, "a held class's job past the network's ladder");
+        let shipped = walk(1 << 27, false);
+        assert!(shipped.objects.is_empty() && shipped.skipped.len() == 1, "every other class's is skipped as before");
+        assert!(walk((1 << 40) + 1, true).objects.is_empty(), "…and nothing passes the regime's own ladder");
+        assert_eq!(walk(1 << 20, false).objects.len(), 1, "inside the network's ladder both are extracted");
+    }
+
+    /// **ADR-0119 Decision 6: the isolation door admits the regime's ladder only where the regime
+    /// is declared**, and says which commitments the header-context door must hold to the
+    /// structural cap below the fence.
+    #[test]
+    fn the_isolation_door_admits_the_regimes_ladder_only_where_the_regime_is_declared() {
+        let at = |work_leaves: u64| {
+            let mut p = payload(96, 256);
+            p.commitment.work_leaves = work_leaves;
+            borsh::to_vec(&p).unwrap()
+        };
+        let form = crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat;
+        let wide = at(1 << 33);
+        assert_eq!(palw_fp_isolation_work_leaves_cap_v1(false), crate::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP);
+        assert!(validate_palw_fp_commitment_tx_under_v4(&wide, false, form, palw_fp_isolation_work_leaves_cap_v1(false)).is_err());
+        validate_palw_fp_commitment_tx_under_v4(&wide, false, form, palw_fp_isolation_work_leaves_cap_v1(true))
+            .expect("a ruleset that declares the regime admits a held job's leaves at the door");
+        assert_eq!(palw_fp_work_leaves_before_the_regime_v1(&wide), Some(1 << 33), "…which the header door holds below the fence");
+        let narrow = at(1 << 20);
+        validate_palw_fp_commitment_tx_under_v4(&narrow, false, form, palw_fp_isolation_work_leaves_cap_v1(false)).expect("inside");
+        assert_eq!(palw_fp_work_leaves_before_the_regime_v1(&narrow), None);
+        assert_eq!(palw_fp_work_leaves_before_the_regime_v1(b"junk"), None, "bytes isolation refused are not this door's");
+    }
+
     /// **ADR-0103 Decision 4: under the held regime the ids never ride above one standard
     /// transaction.** A PublicDa carrier one id past `PALW_STANDARD_TX_BYTES / 4` is skipped by name
     /// under the fence and credited without it (the rule is dormant, and on a shipped network it

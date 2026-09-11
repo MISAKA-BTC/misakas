@@ -1112,6 +1112,98 @@ mod pq_output_class_enforcement_tests {
         }
     }
 
+    /// **ADR-0119 Decision 6: a build that SCHEDULES the held regime accepts, below the fence,
+    /// exactly the free-prompt commitments a build without it accepts** — the market's equality
+    /// (M-9) on the work-leaves cap. Arm (a) declares no regime and arm (b) schedules it at
+    /// 9,000,000. Isolation is height-free, so (b)'s isolation cap is the regime's `2^40`; the
+    /// header-context door then refuses a commitment past the structural `2^32` below the fence, by
+    /// name, and admits it from the fence on. A commitment inside the structural cap is untouched.
+    #[test]
+    fn a_scheduled_held_regime_admits_a_held_jobs_leaves_only_from_its_own_fence() {
+        use crate::processes::transaction_validator::tx_validation_in_header_context::LockTimeArg;
+        use kaspa_consensus_core::config::params::ForkActivation;
+        use kaspa_consensus_core::palw_freeprompt_v3::{
+            PALW_FP_V3_VERSION, PalwFpCommitmentTxPayloadV3, PalwFpStopReasonV3, PalwFreePromptCommitmentV3, PalwFreePromptJobV3,
+        };
+        let h = kaspa_consensus_core::Hash64::from_u64_word;
+        let commitment_tx = |work_leaves: u64| {
+            let job = PalwFreePromptJobV3 {
+                version: PALW_FP_V3_VERSION,
+                network_domain: h(1),
+                class_id: h(2),
+                executor_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(
+                    kaspa_consensus_core::tx::TransactionId::from_u64_word(3),
+                    0,
+                ),
+                executor_pubkey: vec![4; 8],
+                operator_id: h(5),
+                anchor_block: h(6),
+                anchor_daa: 7,
+                job_nonce: [8; 32],
+                tokenizer_id: h(9),
+                prompt_token_ids_hash: h(10),
+                prompt_tokens: 16,
+                decode_token_limit: 4,
+                max_context_tokens: 20,
+                privacy_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA,
+                prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
+                sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+                temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            };
+            let payload = PalwFpCommitmentTxPayloadV3 {
+                version: PALW_FP_V3_VERSION,
+                commitment: PalwFreePromptCommitmentV3 {
+                    trace_root: h(11),
+                    output_root: h(12),
+                    execution_root: h(13),
+                    schedule_root: h(14),
+                    decode_tokens_executed: 4,
+                    stop_reason: PalwFpStopReasonV3::EndOfGeneration,
+                    work_leaves,
+                    trace_manifest_root: h(15),
+                    trace_chunk_count: 1,
+                    trace_retention_daa: 1_000,
+                    job,
+                },
+                prompt_token_ids: Vec::new(),
+                signature: Vec::new(),
+            };
+            Transaction::new(
+                0,
+                vec![],
+                vec![],
+                0,
+                kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT,
+                0,
+                borsh::to_vec(&payload).unwrap(),
+            )
+        };
+        let arm = |fence: Option<ForkActivation>| {
+            let mut tv = validator(PqEnforcementMode::Consensus);
+            tv.palw_held_context_fence = fence;
+            tv
+        };
+        let dormant = arm(None);
+        let scheduled = arm(Some(ForkActivation::new(9_000_000)));
+        let wide = commitment_tx(1 << 33);
+        let header = |tv: &TransactionValidator, daa: u64| tv.validate_tx_in_header_context(&wide, LockTimeArg::Finalized, daa);
+        assert!(header(&dormant, 0).is_ok() && header(&dormant, u64::MAX).is_ok(), "no regime: the isolation cap already refused it");
+        assert_eq!(header(&scheduled, 8_999_999), Err(TxRuleError::PalwFpWorkLeavesBeforeHeldActivation(1 << 33, 8_999_999)));
+        assert_eq!(header(&scheduled, 0), Err(TxRuleError::PalwFpWorkLeavesBeforeHeldActivation(1 << 33, 0)));
+        assert!(header(&scheduled, 9_000_000).is_ok(), "from the fence a held job's leaves are the chain's to carry");
+        let narrow = commitment_tx(1 << 20);
+        for tv in [&dormant, &scheduled] {
+            for daa in [0, 8_999_999, 9_000_000] {
+                assert!(tv.validate_tx_in_header_context(&narrow, LockTimeArg::Finalized, daa).is_ok(), "inside the structural cap");
+            }
+        }
+        assert!(
+            scheduled
+                .validate_tx_in_header_context(&tx_with_output(pq_p2pkh_spk(), SUBNETWORK_ID_NATIVE), LockTimeArg::Finalized, 0)
+                .is_ok()
+        );
+    }
+
     #[test]
     fn consensus_mode_rejects_legacy_output() {
         let tv = validator(PqEnforcementMode::Consensus);
