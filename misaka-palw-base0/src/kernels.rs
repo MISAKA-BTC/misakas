@@ -668,6 +668,193 @@ pub fn a16_attn_values_fast(
     }))
 }
 
+// -------------------------------------------------------------------------------------------
+// The fused site at speed — one pass over the history per narrowing, nothing tiled
+// -------------------------------------------------------------------------------------------
+
+/// Below this much work in one head's history a fused call stays on the calling thread. A
+/// history row costs about `2·d_head` multiply-accumulates and one exponent, so the thin context
+/// vectors (`d_head` = 4) go parallel from about 5,000 rows and a real head (`d_head` = 128) from
+/// about 250.
+const FUSED_PARALLEL_MIN_WORK: usize = 1 << 16;
+
+/// The scratch a fused call reuses: the scores row and the exponents row of one head. Reused so a
+/// long history is not a fresh multi-megabyte allocation, and a fresh page-faulting one, on every
+/// position of every layer. That churn was most of the system time the 32,768-position vector
+/// spent (ADR-0110 §9.5).
+#[derive(Default)]
+struct FusedScratchV1 {
+    scores: Vec<i32>,
+    exps: Vec<i32>,
+}
+
+thread_local! {
+    static FUSED_SCRATCH: std::cell::RefCell<FusedScratchV1> = std::cell::RefCell::new(FusedScratchV1::default());
+}
+
+/// **The fused attention site on the pool** (ADR-0082 Decision 1): W9, W11, W5 and W10 composed,
+/// with each narrowing's parameters given ONCE.
+///
+/// Bit-identical to the composition the engine's fused arm runs on the catalog's side:
+///
+/// ```text
+/// a16_attn_values(a16_requant(a16_softmax_rows(a16_attn_scores(q, k, tile(logits)), history, up),
+///                             tile(probs)),
+///                 v, tile(values))
+/// ```
+///
+/// The composition tiled one registered triple over `heads × history` entries twice per call,
+/// and materialised four rows that long. At 32,768 positions that was megabytes a call, which the
+/// allocator page-faulted fresh on every position of every layer. Here the parameters are read
+/// once. Two rows per head are kept, in scratch reused across calls. Each step is the catalog's
+/// own expression, per element:
+///
+/// * the score is W9's narrowing of an exact dot;
+/// * the exponent is `int_exp` of `softmax_shifted_diff_v1`, the one shifted difference the fused
+///   site and the shipped softmax share;
+/// * the probability is `(e · recip) >> K` against `int_recip` of the row's sum, with the uniform
+///   row when the sum is not positive;
+/// * the code is W5's narrowing;
+/// * the output is W10's narrowing of an exact sum.
+///
+/// Every reduction (the row max, the sum of exponents, the value sums) is exact integer arithmetic
+/// inside `i64`, so splitting the history into chunks across threads changes nothing (ADR-0040
+/// Decision E). Every refusal the composition makes, this makes too.
+#[allow(clippy::too_many_arguments)]
+pub fn a16_attn_fused_uniform_fast(
+    q: &[i32],
+    k_series: &[i32],
+    v_series: &[i32],
+    heads: usize,
+    kv_heads: usize,
+    d_head: usize,
+    logits: A16QuantParams,
+    up_bits: u8,
+    probs: A16QuantParams,
+    values: A16QuantParams,
+) -> Result<Vec<i32>, PalwA16OpError> {
+    // W9's refusals.
+    check_codes(q)?;
+    check_codes(k_series)?;
+    if heads == 0 || kv_heads == 0 || d_head == 0 || !heads.is_multiple_of(kv_heads) {
+        return Err(PalwA16OpError::Empty);
+    }
+    if d_head > A16_MAX_DOT_LEN {
+        return Err(PalwA16OpError::DotTooLong { got: d_head });
+    }
+    if q.len() != heads * d_head {
+        return Err(PalwA16OpError::LengthMismatch { a: q.len(), b: heads * d_head });
+    }
+    let kv_dim = kv_heads * d_head;
+    if k_series.is_empty() || !k_series.len().is_multiple_of(kv_dim) {
+        return Err(PalwA16OpError::NotAMultiple { got: k_series.len(), unit: kv_dim });
+    }
+    let kv_len = k_series.len() / kv_dim;
+    // W10's refusals. The probability row it would be handed is `heads × kv_len` codes, every one
+    // inside the code range by W5's clamp, so only the value row and the lengths can refuse.
+    check_codes(v_series)?;
+    if v_series.is_empty() || !v_series.len().is_multiple_of(kv_dim) {
+        return Err(PalwA16OpError::NotAMultiple { got: v_series.len(), unit: kv_dim });
+    }
+    let v_len = v_series.len() / kv_dim;
+    if v_len > A16_MAX_DOT_LEN {
+        return Err(PalwA16OpError::DotTooLong { got: v_len });
+    }
+    if v_len != kv_len {
+        return Err(PalwA16OpError::LengthMismatch { a: heads * kv_len, b: heads * v_len });
+    }
+
+    let group = heads / kv_heads;
+    let up = i64::from(up_bits.min(62));
+    let parallel = kv_len.saturating_mul(2 * d_head + 4) >= FUSED_PARALLEL_MIN_WORK;
+    let chunk = kv_len.div_ceil(rayon::current_num_threads().max(1) * 4).max(1_024);
+    let narrow = |acc: i64, p: A16QuantParams| {
+        a16_scale_round(acc, p.multiplier, p.shift).saturating_add(p.zero).clamp(-A16_CODE_MAX, A16_CODE_MAX) as i32
+    };
+
+    let mut out = Vec::with_capacity(heads * d_head);
+    let mut run = |scratch: &mut FusedScratchV1| {
+        scratch.scores.resize(kv_len, 0);
+        scratch.exps.resize(kv_len, 0);
+        for h in 0..heads {
+            let qh = &q[h * d_head..(h + 1) * d_head];
+            let kv_off = (h / group) * d_head;
+            // W9 per key, and the row max as it goes.
+            let score_chunk = |base: usize, slice: &mut [i32]| -> i64 {
+                let mut max = i64::MIN;
+                for (o, slot) in slice.iter_mut().enumerate() {
+                    let j = base + o;
+                    let kh = &k_series[j * kv_dim + kv_off..j * kv_dim + kv_off + d_head];
+                    *slot = narrow(dot_codes(qh, kh), logits);
+                    max = max.max(*slot as i64);
+                }
+                max
+            };
+            let max = if parallel {
+                scratch.scores.par_chunks_mut(chunk).enumerate().map(|(c, s)| score_chunk(c * chunk, s)).max().unwrap_or(i64::MIN)
+            } else {
+                score_chunk(0, &mut scratch.scores)
+            };
+            // W11's exponents and their exact sum.
+            let exp_chunk = |scores: &[i32], exps: &mut [i32]| -> i64 {
+                let mut sum = 0i64;
+                for (s, e) in scores.iter().zip(exps.iter_mut()) {
+                    *e = kaspa_consensus_core::palw_base0::int_exp(kaspa_consensus_core::palw_base0_ops::softmax_shifted_diff_v1(
+                        *s, max, up,
+                    ));
+                    sum += *e as i64;
+                }
+                sum
+            };
+            let sum: i64 = if parallel {
+                scratch.scores.par_chunks(chunk).zip(scratch.exps.par_chunks_mut(chunk)).map(|(s, e)| exp_chunk(s, e)).sum()
+            } else {
+                exp_chunk(&scratch.scores, &mut scratch.exps)
+            };
+            // W11's probabilities, W5's codes and W10's exact sums, one pass.
+            let (recip, uniform) = if sum <= 0 {
+                (0, Some((kaspa_consensus_core::palw_base0::ONE / kv_len as i64) as i32))
+            } else {
+                (kaspa_consensus_core::palw_base0::int_recip(sum), None)
+            };
+            let value_chunk = |base: usize, exps: &[i32]| -> Vec<i64> {
+                let mut acc = vec![0i64; d_head];
+                for (o, e) in exps.iter().enumerate() {
+                    let j = base + o;
+                    let prob = match uniform {
+                        Some(u) => u,
+                        None => ((*e as i64 * recip) >> kaspa_consensus_core::palw_base0::K) as i32,
+                    };
+                    let code = narrow(prob as i64, probs) as i64;
+                    let row = &v_series[j * kv_dim + kv_off..j * kv_dim + kv_off + d_head];
+                    for (a, v) in acc.iter_mut().zip(row) {
+                        *a += code * *v as i64;
+                    }
+                }
+                acc
+            };
+            let acc = if parallel {
+                scratch.exps.par_chunks(chunk).enumerate().map(|(c, e)| value_chunk(c * chunk, e)).reduce(
+                    || vec![0i64; d_head],
+                    |mut a, b| {
+                        a.iter_mut().zip(b).for_each(|(x, y)| *x += y);
+                        a
+                    },
+                )
+            } else {
+                value_chunk(0, &scratch.exps)
+            };
+            out.extend(acc.into_iter().map(|a| narrow(a, values)));
+        }
+    };
+    FUSED_SCRATCH.with(|cell| match cell.try_borrow_mut() {
+        Ok(mut scratch) => run(&mut scratch),
+        // A call nested inside another on this thread (work stealing) gets its own scratch.
+        Err(_) => run(&mut FusedScratchV1::default()),
+    });
+    Ok(out)
+}
+
 fn check_codes(row: &[i32]) -> Result<(), PalwA16OpError> {
     if row.is_empty() {
         return Err(PalwA16OpError::Empty);
@@ -935,6 +1122,102 @@ mod tests {
                 "values kv_len={kv_len}"
             );
         }
+    }
+
+    /// The catalog's composition of the fused site, with every triple tiled the way the engine's
+    /// catalog arm tiles it — the function [`a16_attn_fused_uniform_fast`] must equal.
+    #[allow(clippy::too_many_arguments)]
+    fn fused_by_the_catalog(
+        q: &[i32],
+        k: &[i32],
+        v: &[i32],
+        heads: usize,
+        kv_heads: usize,
+        d_head: usize,
+        logits: A16QuantParams,
+        up: u8,
+        probs: A16QuantParams,
+        values: A16QuantParams,
+    ) -> Result<Vec<i32>, PalwA16OpError> {
+        use kaspa_consensus_core::palw_base0_a16::{a16_attn_scores, a16_attn_values, a16_requant, a16_softmax_rows};
+        let history = k.len() / (kv_heads * d_head).max(1);
+        let scores = a16_attn_scores(q, k, heads, kv_heads, d_head, &vec![logits; heads * history])?;
+        let p = a16_softmax_rows(&scores, history, up)?;
+        let codes = a16_requant(&p, &vec![probs; p.len()])?;
+        a16_attn_values(&codes, v, heads, kv_heads, d_head, &vec![values; heads * d_head])
+    }
+
+    /// **The fused kernel IS the catalog's composition** (ADR-0040 Decision E). The check runs
+    /// across the thin vectors' shape, a GQA shape and a real head's width. Histories go from one
+    /// row, across the parallel threshold, to tens of thousands of rows. The widening covers
+    /// every range the tier uses, and the parameters are drawn over the whole triple domain.
+    #[test]
+    fn the_fused_kernel_is_the_catalog_composition() {
+        let mut rng = Lcg(0xA16_0F05);
+        let triple = |rng: &mut Lcg| A16QuantParams {
+            multiplier: (rng.next_u64() % (1 << 40)) as i64 - (1 << 39),
+            shift: 20 + (rng.next_u64() % 30) as u8,
+            zero: (rng.next_u64() % 64) as i64 - 32,
+        };
+        for (heads, kv_heads, d_head, lengths) in [
+            (2usize, 2usize, 4usize, &[1usize, 2, 3, 63, 1_023, 1_024, 1_025, 5_000, 20_000, 70_000][..]),
+            (4, 2, 8, &[1, 64, 3_000, 9_000][..]),
+            (12, 2, 128, &[1, 5, 65, 360, 700][..]),
+        ] {
+            let kv_dim = kv_heads * d_head;
+            for &n in lengths {
+                for up in [0u8, 14, 25, 47, 62] {
+                    let q: Vec<i32> = (0..heads * d_head).map(|_| rng.code()).collect();
+                    let k: Vec<i32> = (0..n * kv_dim).map(|_| rng.code()).collect();
+                    let v: Vec<i32> = (0..n * kv_dim).map(|_| rng.code()).collect();
+                    // A real-looking score scale half the time, so the softmax is not all rails.
+                    let logits = if rng.next_u64() % 2 == 0 {
+                        A16QuantParams { multiplier: 1, shift: 26, zero: 0 }
+                    } else {
+                        triple(&mut rng)
+                    };
+                    let (probs, values) = (triple(&mut rng), triple(&mut rng));
+                    assert_eq!(
+                        a16_attn_fused_uniform_fast(&q, &k, &v, heads, kv_heads, d_head, logits, up, probs, values),
+                        fused_by_the_catalog(&q, &k, &v, heads, kv_heads, d_head, logits, up, probs, values),
+                        "heads {heads}/{kv_heads}, d_head {d_head}, history {n}, up {up}"
+                    );
+                }
+            }
+        }
+        // A row whose every key scores the same: every exponent is the row max's.
+        let (q, k, v) = (vec![0i32; 8], vec![0i32; 8 * 3_000], vec![7i32; 8 * 3_000]);
+        let p = A16QuantParams { multiplier: 1, shift: 26, zero: 0 };
+        assert_eq!(
+            a16_attn_fused_uniform_fast(&q, &k, &v, 2, 2, 4, p, 16, p, p),
+            fused_by_the_catalog(&q, &k, &v, 2, 2, 4, p, 16, p, p)
+        );
+    }
+
+    /// The fused kernel refuses exactly where the composition does: a code out of range on any
+    /// operand, a ragged shape, a value row a different length from the keys, and a history one
+    /// row past `A16_MAX_DOT_LEN` (ADR-0103 §10.7).
+    #[test]
+    fn the_fused_kernel_refuses_exactly_what_the_composition_refuses() {
+        let p = A16QuantParams { multiplier: 1, shift: 26, zero: 0 };
+        let run = |q: &[i32], k: &[i32], v: &[i32], heads: usize, kv_heads: usize, d_head: usize| {
+            let fast = a16_attn_fused_uniform_fast(q, k, v, heads, kv_heads, d_head, p, 16, p, p);
+            let catalog = fused_by_the_catalog(q, k, v, heads, kv_heads, d_head, p, 16, p, p);
+            assert_eq!(fast.is_err(), catalog.is_err(), "fast {fast:?} against the catalog {catalog:?}");
+            fast.is_err()
+        };
+        let bad = A16_CODE_MAX as i32 + 1;
+        assert!(run(&[bad, 0], &[1, 1], &[1, 1], 1, 1, 2), "a query lane out of range");
+        assert!(run(&[1, 0], &[bad, 1], &[1, 1], 1, 1, 2), "a key lane out of range");
+        assert!(run(&[1, 0], &[1, 1], &[bad, 1], 1, 1, 2), "a value lane out of range");
+        assert!(run(&[1, 0, 1], &[1, 1], &[1, 1], 1, 1, 2), "a query that is not heads × d_head");
+        assert!(run(&[1, 0], &[1, 1, 1], &[1, 1, 1], 1, 1, 2), "a key row that is not whole");
+        assert!(run(&[1, 0], &[1, 1, 1, 1], &[1, 1], 1, 1, 2), "values for fewer rows than keys");
+        assert!(run(&[1, 0, 1, 0], &[1, 1], &[1, 1], 2, 3, 1), "heads not a multiple of kv_heads");
+        assert!(!run(&[1, 0], &[1, 1], &[1, 1], 1, 1, 2), "and a well-formed call is not refused");
+        let rows = A16_MAX_DOT_LEN + 1;
+        assert!(run(&[1], &vec![1; rows], &vec![1; rows], 1, 1, 1), "a history past 2^18");
+        assert!(!run(&[1], &vec![1; rows - 1], &vec![1; rows - 1], 1, 1, 1), "a history of exactly 2^18");
     }
 
     /// The refusals must match too: a fast path that accepts a row the reference refuses is a

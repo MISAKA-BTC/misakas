@@ -1470,6 +1470,31 @@ impl<'a> A16Engine<'a> {
                 // bit-identical against, so this keeps the executor at the runtime's speed while
                 // computing exactly what `a16_attn_fused_reference_v1` defines. The equality is
                 // held by `the_fused_arm_is_the_reference_composition` below.
+                // On the fast engine the four ops run as one kernel with each narrowing's
+                // parameters read once (`kernels::a16_attn_fused_uniform_fast`, bit-identical to the
+                // composition below and held to it by `the_fast_engine_and_the_catalog_agree_token_for
+                // _token`): the composition tiles a triple over `heads × history` twice a call and
+                // materialises four history-long rows, which is quadratic allocation over a job.
+                PlanOp::AttnFused if self.fast => {
+                    let q = resolve(&node.inputs[0], &rows)?;
+                    let k_series = resolve(&node.inputs[1], &rows)?;
+                    let v_series = resolve(&node.inputs[2], &rows)?;
+                    let li = layer.as_ref().map(|(li, _)| *li).unwrap_or(0);
+                    let p = lp(li);
+                    crate::kernels::a16_attn_fused_uniform_fast(
+                        &q,
+                        &k_series,
+                        &v_series,
+                        shape.n_heads,
+                        shape.n_kv_heads,
+                        shape.d_head,
+                        p.logits,
+                        p.softmax_up,
+                        p.probs,
+                        p.values,
+                    )
+                    .map_err(refuse("attn_fused"))?
+                }
                 PlanOp::AttnFused => {
                     let q = resolve(&node.inputs[0], &rows)?;
                     let k_series = resolve(&node.inputs[1], &rows)?;
