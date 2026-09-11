@@ -1707,7 +1707,7 @@ pub(crate) mod adr0106_cases {
             let mut writer = crate::qwen36::Qwen36Writer::create(&path, &owned.shape, &owned.rope, owned.params_map(), plan.clone())
                 .expect("created");
             for (name, _) in &plan {
-                writer.push(name, owned.tensor(name).expect("present")).expect("appended");
+                writer.push(name, &owned.tensor(name).expect("present")).expect("appended");
             }
             writer.finish().expect("closed");
             let mapped = crate::qwen36::open_artifact(&path).expect("opens");
