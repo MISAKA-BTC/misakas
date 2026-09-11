@@ -759,6 +759,54 @@ impl PalwExecutionBackendV1 for Base0Backend {
         .map_err(|e| format!("{e:?}"))
     }
 
+    fn held_state_chunk_answer_v1(
+        &self,
+        capture: &[u8],
+        prompt_token_ids: &[u32],
+        checkpoint: u32,
+        chunk: u32,
+    ) -> Result<
+        (
+            kaspa_consensus_core::palw_attn_court_v1::PalwAttnCheckpointAnchorV1,
+            kaspa_consensus_core::palw_attn_court_v1::PalwAttnChunkOpeningV1,
+        ),
+        String,
+    > {
+        let retention =
+            crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())?;
+        crate::fp_interval::base0_fp_held_state_chunk_answer_v1(&retention, checkpoint, chunk, &|covered| match &retention {
+            crate::produce::Base0RetentionV1::Folded(material) => self.fold_anchor_state_v1(material, prompt_token_ids, covered),
+            crate::produce::Base0RetentionV1::Dense(_) => None,
+        })
+        .map_err(|e| e.to_string())
+    }
+
+    fn held_step_range_answer_v1(
+        &self,
+        capture: &[u8],
+        prompt_token_ids: &[u32],
+        first: u64,
+        count: u32,
+    ) -> Result<kaspa_consensus_core::palw_step_leg::PalwStepRangeOpeningV1, String> {
+        let retention =
+            crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())?;
+        crate::fp_interval::base0_fp_held_step_range_answer_v1(
+            &retention,
+            first,
+            count,
+            prompt_token_ids,
+            self.checkpoint_interval(),
+            self.step_ladder_cap,
+            &Base0IntervalKernels { artifact: &self.artifact },
+            &|covered| match &retention {
+                crate::produce::Base0RetentionV1::Folded(material) => self.fold_anchor_state_v1(material, prompt_token_ids, covered),
+                crate::produce::Base0RetentionV1::Dense(_) => None,
+            },
+            self.prompt_ids_form,
+        )
+        .map_err(|e| e.to_string())
+    }
+
     fn fp_name_the_leaf_v1(
         &self,
         opening: &[u8],
@@ -1757,6 +1805,52 @@ mod tests {
 
     fn binding_leaf_count(capture: &[u8]) -> u64 {
         base0_material_decode_v1(capture).expect("the family tuple").0.step_leaf_count
+    }
+
+    /// **ADR-0108 Decision 6 through the trait a node holds, on the floor's dense retention.** The
+    /// floor keeps its tiles and its checkpoint chunks, so its answers are read and hashed rather
+    /// than replayed — and the court takes them against the claim's own root, exactly as it takes
+    /// the fold's (`the_executor_answers_every_held_unit_the_court_can_name`).
+    #[test]
+    fn the_floor_answers_a_held_chunk_and_range_from_its_dense_retention() {
+        use kaspa_consensus_core::palw_held_da_v1::{PalwHeldDisclosureV1, PalwHeldMissingV1, palw_held_da_check_disclosure_v1};
+        let backend = floor_backend();
+        let prompt: Vec<usize> = vec![2, 7, 1, 8, 2, 8, 1, 8];
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let mut job = free_prompt_job(&backend, prompt.len() as u32, 4);
+        job.prompt_token_ids_hash = kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            &ids,
+        )
+        .expect("a commitment");
+        let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs");
+        let capture = &run.outcome.material;
+        let binding = base0_material_decode_v1(capture).expect("the family tuple").0;
+        let (root, ladder) = (run.outcome.execution_root, backend.step_ladder_cap());
+        let leaves = binding.step_leaf_count;
+        for (first, count) in [(0u64, 1u32), (leaves - 5, 5), (leaves / 3, 64)] {
+            let opening = backend.held_step_range_answer_v1(capture, &ids, first, count).expect("the floor answers a range");
+            palw_held_da_check_disclosure_v1(
+                &root,
+                &PalwHeldMissingV1::StepRange { first, count },
+                &binding,
+                &PalwHeldDisclosureV1::StepRange { opening },
+                ladder,
+            )
+            .unwrap_or_else(|e| panic!("[{first}, +{count}): the court refuses the floor's answer: {e:?}"));
+        }
+        assert!(binding.checkpoint_count >= 1, "the floor checkpoints");
+        for checkpoint in 0..binding.checkpoint_count {
+            let (anchor, chunk) = backend.held_state_chunk_answer_v1(capture, &ids, checkpoint, 0).expect("the floor answers a chunk");
+            palw_held_da_check_disclosure_v1(
+                &root,
+                &PalwHeldMissingV1::StateChunk { checkpoint, chunk: 0 },
+                &binding,
+                &PalwHeldDisclosureV1::StateChunk { anchor, chunk },
+                ladder,
+            )
+            .unwrap_or_else(|e| panic!("checkpoint {checkpoint}: the court refuses the floor's answer: {e:?}"));
+        }
     }
 
     /// **Decision 2: the stream is the run, not a replay of it.**

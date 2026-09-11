@@ -3488,6 +3488,142 @@ pub fn base0_fp_block_leaves_from_tiles_v1(
     cut.encode_v1()
 }
 
+// =================================================================================================
+// ADR-0108 Decision 6 — the executor answers every held unit its retention can answer
+// =================================================================================================
+
+/// **A held state-chunk accusation's answer, from the retention** (ADR-0103 Decision 4; ADR-0108
+/// Decision 6): checkpoint `checkpoint`'s leaf, opened against the binding's checkpoint root, and
+/// chunk `chunk` of its state with the path under the class's map — what
+/// `palw_held_da_check_disclosure_v1` accepts, or a refusal by name.
+///
+/// The checkpoint is the one the court's accusation arm derives (`palw_checkpoint_covered_at_index_v1`
+/// at the binding's own interval), and its leaf is named exactly as an interval opening's anchor is
+/// (`base0_checkpoint_operands_v1`). A fold keeps no state, so the state is re-derived as a resume
+/// re-derives it — `anchor_state_for(covered)` — and checked against the committed leaf before a
+/// byte of it is served.
+pub fn base0_fp_held_state_chunk_answer_v1(
+    retention: &crate::produce::Base0RetentionV1,
+    checkpoint: u32,
+    chunk: u32,
+    anchor_state_for: Base0FpAnchorStateForV1<'_>,
+) -> Result<
+    (
+        kaspa_consensus_core::palw_attn_court_v1::PalwAttnCheckpointAnchorV1,
+        kaspa_consensus_core::palw_attn_court_v1::PalwAttnChunkOpeningV1,
+    ),
+    Base0FpIntervalError,
+> {
+    use kaspa_consensus_core::palw_context_ladder as ladder;
+    let binding = retention.binding();
+    let profile = &binding.shape_profile;
+    let per_position = ladder::palw_checkpoint_cadence_v1(profile) == ladder::PalwCheckpointCadenceV1::PerPosition;
+    let leaves = match retention {
+        crate::produce::Base0RetentionV1::Folded(material) => &material.checkpoint_leaves[..],
+        crate::produce::Base0RetentionV1::Dense(_) if per_position => {
+            return Err(Base0FpIntervalError::DenseRetentionCarriesNoCheckpointLeaves);
+        }
+        crate::produce::Base0RetentionV1::Dense(_) => &[],
+    };
+    let covered = ladder::palw_checkpoint_covered_at_index_v1(profile, checkpoint, binding.checkpoint_profile.checkpoint_interval)
+        .ok_or_else(|| Base0FpIntervalError::Leg(format!("checkpoint {checkpoint} covers nothing the class can count")))?;
+    let named = base0_checkpoint_operands_v1(binding, retention.checkpoint_chunks(), leaves, covered)?;
+    if named.opening.leaf_index != u64::from(checkpoint) {
+        return Err(Base0FpIntervalError::NoCheckpointAt { covered });
+    }
+    let chunks = if named.chunks.is_empty() {
+        let state = anchor_state_for(covered).ok_or(Base0FpIntervalError::NoCheckpointAt { covered })?;
+        if state.covered_decode_call != covered || state.state_chunks_root != named.leaf.state_chunks_root {
+            return Err(Base0FpIntervalError::CaptureIsNotTheBindings);
+        }
+        state.chunks
+    } else {
+        named.chunks
+    };
+    let positions = ladder::palw_checkpoint_positions_at_v1(profile, &binding.job_context, covered);
+    let chunk_bytes = chunks
+        .get(chunk as usize)
+        .cloned()
+        .ok_or_else(|| Base0FpIntervalError::Leg(format!("checkpoint {checkpoint} has {} chunks, not {}", chunks.len(), chunk + 1)))?;
+    let siblings = kaspa_consensus_core::palw_state_chunk_map::palw_state_chunk_path_for_map_v1(profile, positions, &chunks, chunk)
+        .map_err(|e| Base0FpIntervalError::Leg(e.to_string()))?;
+    Ok((
+        kaspa_consensus_core::palw_attn_court_v1::PalwAttnCheckpointAnchorV1 { leaf: named.leaf, opening: named.opening },
+        kaspa_consensus_core::palw_attn_court_v1::PalwAttnChunkOpeningV1 { chunk_index: chunk, chunk_bytes, siblings },
+    ))
+}
+
+/// **A held step-range accusation's answer, from the retention** (ADR-0103 Decision 4; ADR-0108
+/// Decision 6): the leaf hashes of `[first, first + count)` and the frontier that folds them to the
+/// binding's step root. A fold re-derives the leaves by replaying the retained-level span around the
+/// range — the replay an interval opening's edges and a block's leaves already take — and a dense
+/// retention hashes the tiles it kept.
+#[allow(clippy::too_many_arguments)]
+pub fn base0_fp_held_step_range_answer_v1<K: Base0FpIntervalKernelsV1>(
+    retention: &crate::produce::Base0RetentionV1,
+    first: u64,
+    count: u32,
+    prompt_token_ids: &[u32],
+    family_checkpoint_interval: u32,
+    max_step_leaf_count: u64,
+    kernels: &K,
+    anchor_state_for: Base0FpAnchorStateForV1<'_>,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<PalwStepRangeOpeningV1, Base0FpIntervalError> {
+    let binding = retention.binding();
+    if !kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(
+        prompt_ids_form,
+        prompt_token_ids,
+        &binding.job_context.prompt_token_ids_hash,
+    ) {
+        return Err(Base0FpIntervalError::PromptIdsAreNotTheJobs);
+    }
+    let count = u64::from(count);
+    match retention {
+        crate::produce::Base0RetentionV1::Folded(material) => {
+            let geometry =
+                Base0FpIntervalGeometryV1::from_binding_capped_v1(binding, family_checkpoint_interval, max_step_leaf_count)?;
+            let (span_first, span_end) = material.step_tree.span_for_range(first, count)?;
+            let span_leaves = base0_replay_span_leaves_v1(
+                kernels,
+                binding,
+                &material.checkpoint_chunks,
+                &material.generated_token_ids,
+                prompt_token_ids,
+                &geometry,
+                span_first,
+                span_end,
+                anchor_state_for,
+            )?;
+            Ok(material.step_tree.range_opening_v1(span_first, &span_leaves, first, count)?)
+        }
+        crate::produce::Base0RetentionV1::Dense((_, tiles, ..)) => {
+            let step_leaf_count = base0_fp_binding_step_space_v1(binding, max_step_leaf_count)?;
+            let ctx_hash = binding.job_context.context_hash();
+            let profile_hash = binding.shape_profile.shape_profile_id();
+            let by_index: std::collections::HashMap<u64, &PalwStepTileLeafV1> = tiles.iter().map(|(i, t)| (*i, t)).collect();
+            let leaves = (0..step_leaf_count)
+                .map(|i| {
+                    by_index
+                        .get(&i)
+                        .map(|t| step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, t))
+                        .ok_or(Base0FpIntervalError::CaptureHasNoTile { index: i })
+                })
+                .collect::<Result<Vec<Hash64>, _>>()?;
+            let end = first.checked_add(count).filter(|end| *end <= step_leaf_count && count > 0).ok_or_else(|| {
+                Base0FpIntervalError::StepSpace(format!("[{first}, +{count}) is not inside {step_leaf_count} leaves"))
+            })?;
+            let siblings = kaspa_consensus_core::palw_step_leg::step_merkle_range_siblings_v1(&leaves, first as usize, count as usize)
+                .map_err(|e| Base0FpIntervalError::Leg(e.to_string()))?;
+            Ok(PalwStepRangeOpeningV1 {
+                first_leaf_index: first,
+                leaf_hashes: leaves[first as usize..end as usize].to_vec(),
+                siblings,
+            })
+        }
+    }
+}
+
 /// **Name the leaf a served block disagrees on** (ADR-0086 Decision 6, the seat's half). The
 /// served block must fold to the digest the V4 opening carries for it — a block that does not is
 /// refused by name, never compared — and the leaf named is the first whose served hash differs
@@ -5256,6 +5392,157 @@ mod tests {
         assert_eq!(base0_fp_block_leaves_request_decode_v1(packed), None, "nor a block-leaves request");
         let block = base0_fp_block_leaves_request_index_v1(index, 3).expect("a block request");
         assert_eq!(base0_fp_resume_request_decode_v1(block), None, "and a block request is not a resume one");
+    }
+
+    /// **ADR-0108 Decision 6: the executor answers every held unit the court can name, from its
+    /// retention, and the court takes the answer.** On the held fold (graph-v7, the Merkle prompt
+    /// form the mint mandates): the first and last chunk of every checkpoint answer a state-chunk
+    /// accusation, and ranges at the step space's two ends, one straddling a retained block and the
+    /// widest the court admits answer a step-range accusation — each checked by the court's own
+    /// `palw_held_da_check_disclosure_v1` against the claim's execution root. A chunk moved by one
+    /// byte and a range with one leaf moved are refused, so the check is not a formality.
+    #[test]
+    fn the_executor_answers_every_held_unit_the_court_can_name() {
+        let form = kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1;
+        assert!(!check_the_executor_answers_every_held_unit(dense_v7_run_with_form(8, 14, form), form), "one retained block");
+        // Wide enough that the fold retains more than one block (4,096 leaves at the ruleset's level),
+        // so a range's span is replayed across a block edge and its frontier is folded above it.
+        let geometry = kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1 {
+            layer_count: 2,
+            hidden_dim: 32,
+            ffn_dim: 64,
+            attn_heads: 4,
+            attn_kv_heads: 2,
+            attn_head_dim: 8,
+            vocab_size: 128,
+            n_ctx: 64,
+            n_threads: 1,
+            rms_eps_q: 1,
+            tile_len: 4,
+        };
+        let profile =
+            kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v7(geometry).expect("a valid graph-v7 A16 profile");
+        assert!(
+            check_the_executor_answers_every_held_unit(dense_run_for_form(geometry, profile, 3, 24, form), form),
+            "the wide fixture straddles a retained block"
+        );
+    }
+
+    /// Returns whether a range straddling a retained block was answered.
+    #[allow(clippy::type_complexity)]
+    fn check_the_executor_answers_every_held_unit(
+        fixture: (
+            crate::artifact::Base0ArtifactV1,
+            PalwShapeProfileV3,
+            PalwJobContextV2,
+            Vec<usize>,
+            crate::produce::Base0ExecutionV1,
+        ),
+        form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    ) -> bool {
+        use kaspa_consensus_core::palw_held_da_v1::{
+            PALW_HELD_DA_MAX_RANGE_LEAVES_V1, PalwHeldDisclosureV1, PalwHeldMissingV1, palw_held_da_check_accusation_v1,
+            palw_held_da_check_disclosure_v1,
+        };
+        let (artifact, profile, ctx, prompt, run) = fixture;
+        assert!(kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&profile), "a held class's retention");
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let bytes = crate::produce::base0_fp_material_encode_v2(&run, &ids).expect("the fold retains");
+        let material = crate::produce::base0_fp_material_decode_v2(&bytes).expect("decodes");
+        let retain_level = material.step_tree.retain_level();
+        let retention = crate::produce::Base0RetentionV1::Folded(material);
+        let engine = crate::engine_a16::A16Engine::new(&artifact).expect("an A16 artifact");
+        let plan = engine.plan_from_profile(&profile).expect("the plan");
+        let interval = kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1;
+        let ladder = PALW_STEP_LEG_MAX_LEAVES;
+        let recompute = |covered: u32| {
+            let mut kernels = crate::fp_recompute::A16RecomputeKernelsV1::new(&artifact, Some(&plan)).ok()?;
+            crate::fp_recompute::base0_fp_recompute_state_at_covered_v1(
+                &profile,
+                &ctx,
+                &ids,
+                &run.generated_token_ids,
+                covered,
+                &mut kernels,
+                form,
+            )
+            .ok()
+        };
+        let kernels = crate::qwen25_a16_backend::a16_interval_kernels_for_tests_v1(&artifact, Some(&plan));
+        let binding = &run.binding;
+        let root = run.execution_root;
+        assert!(binding.checkpoint_count >= 2, "a leg of one checkpoint proves little");
+
+        for checkpoint in 0..binding.checkpoint_count {
+            let first = base0_fp_held_state_chunk_answer_v1(&retention, checkpoint, 0, &recompute)
+                .unwrap_or_else(|e| panic!("checkpoint {checkpoint}: the executor answers its first chunk: {e}"));
+            let last_chunk = first.0.leaf.state_chunk_count - 1;
+            for chunk in [0, last_chunk] {
+                let missing = PalwHeldMissingV1::StateChunk { checkpoint, chunk };
+                palw_held_da_check_accusation_v1(&root, &missing, binding).expect("a committed chunk is accusable");
+                let (anchor, opened) = base0_fp_held_state_chunk_answer_v1(&retention, checkpoint, chunk, &recompute)
+                    .unwrap_or_else(|e| panic!("checkpoint {checkpoint} chunk {chunk}: {e}"));
+                let answer = PalwHeldDisclosureV1::StateChunk { anchor: anchor.clone(), chunk: opened.clone() };
+                palw_held_da_check_disclosure_v1(&root, &missing, binding, &answer, ladder)
+                    .unwrap_or_else(|e| panic!("checkpoint {checkpoint} chunk {chunk}: the court refuses the answer: {e:?}"));
+                let mut moved = opened;
+                moved.chunk_bytes[0] ^= 1;
+                assert!(
+                    palw_held_da_check_disclosure_v1(
+                        &root,
+                        &missing,
+                        binding,
+                        &PalwHeldDisclosureV1::StateChunk { anchor, chunk: moved },
+                        ladder
+                    )
+                    .is_err(),
+                    "checkpoint {checkpoint} chunk {chunk}: a moved byte is not the committed chunk"
+                );
+            }
+        }
+
+        let leaves = binding.step_leaf_count;
+        let block = 1u64 << retain_level;
+        let widest = u64::from(PALW_HELD_DA_MAX_RANGE_LEAVES_V1).min(leaves);
+        let mut ranges = vec![(0, 1), (leaves - 1, 1), (0, widest), (leaves - widest, widest)];
+        let straddles = leaves > block + 4;
+        if straddles {
+            ranges.push((block - 3, 7));
+        }
+        for (first, count) in ranges {
+            let count = count as u32;
+            let missing = PalwHeldMissingV1::StepRange { first, count };
+            palw_held_da_check_accusation_v1(&root, &missing, binding).expect("a committed range is accusable");
+            let opening =
+                base0_fp_held_step_range_answer_v1(&retention, first, count, &ids, interval, ladder, &kernels, &recompute, form)
+                    .unwrap_or_else(|e| panic!("[{first}, +{count}): the executor answers: {e}"));
+            palw_held_da_check_disclosure_v1(
+                &root,
+                &missing,
+                binding,
+                &PalwHeldDisclosureV1::StepRange { opening: opening.clone() },
+                ladder,
+            )
+            .unwrap_or_else(|e| panic!("[{first}, +{count}): the court refuses the answer: {e:?}"));
+            let mut moved = opening;
+            moved.leaf_hashes[0] = Hash64::from_u64_word(0xBAD);
+            assert!(
+                palw_held_da_check_disclosure_v1(
+                    &root,
+                    &missing,
+                    binding,
+                    &PalwHeldDisclosureV1::StepRange { opening: moved },
+                    ladder
+                )
+                .is_err(),
+                "[{first}, +{count}): a moved leaf is not the committed range"
+            );
+        }
+        assert!(
+            base0_fp_held_step_range_answer_v1(&retention, 0, 1, &[1, 2, 3], interval, ladder, &kernels, &recompute, form).is_err(),
+            "ids that are not the job's answer nothing"
+        );
+        straddles
     }
 
     /// **ADR-0108 Decision 3: the chain's geometry is the seat's.** The bound a leaf demand is

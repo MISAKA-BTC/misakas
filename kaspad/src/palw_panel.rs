@@ -5762,15 +5762,8 @@ impl PalwPanelService {
         claim: Hash64,
         leaf: u64,
     ) -> Result<kaspa_consensus_core::palw_shard_court_v1::PalwLeafEvidenceV1, String> {
-        let bytes = self
-            .retained_capture(&claim)
-            .or_else(|| std::fs::read(self.config.retention_dir.join("foreign").join(format!("{claim}.material"))).ok())
-            .ok_or("no retained capture for the claim")?;
-        let payload = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(&bytes, self.config.prompt_ids_form)
-            .ok_or("the retained material is not a free-prompt capture")?;
+        let (backend, payload) = self.retained_fp_capture_v1(session, claim)?;
         let job = &payload.material.job;
-        let facts = session.palw_producer_facts_v2(job.class_id, None).ok_or("the chain names no such class")?;
-        let backend = self.resolve_backend(session, job.class_id, facts.artifact_root)?;
         let (execution_root, trace_root, work_leaves) = session.palw_claim_roots_v2(claim).ok_or("the chain holds no such claim")?;
         let roots =
             PalwClaimRootsV1 { execution_root, trace_root, anchor: kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(job) };
@@ -5793,24 +5786,53 @@ impl PalwPanelService {
         session: &kaspa_consensusmanager::ConsensusProxy,
         claim: Hash64,
     ) -> Result<(kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, Vec<u32>), String> {
+        let (backend, payload) = self.retained_fp_capture_v1(session, claim)?;
+        let binding = Self::served_binding_v1(backend.as_ref(), &payload)?;
+        Ok((binding, payload.material.prompt_token_ids))
+    }
+
+    /// **This node's retained free-prompt capture of `claim`, with the backend of its class** —
+    /// the one loader behind every answer an executor gives from its retention (ADR-0108 Decision
+    /// 6): its own capture first, then one it holds for another executor.
+    fn retained_fp_capture_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        claim: Hash64,
+    ) -> Result<
+        (
+            Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>,
+            kaspa_consensus_core::palw_freeprompt_v3::PalwFpCaptureV1,
+        ),
+        String,
+    > {
         let bytes = self
             .retained_capture(&claim)
             .or_else(|| std::fs::read(self.config.retention_dir.join("foreign").join(format!("{claim}.material"))).ok())
             .ok_or("no retained capture for the claim")?;
         let payload = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(&bytes, self.config.prompt_ids_form)
             .ok_or("the retained material is not a free-prompt capture")?;
-        let job = &payload.material.job;
-        let facts = session.palw_producer_facts_v2(job.class_id, None).ok_or("the chain names no such class")?;
-        let backend = self.resolve_backend(session, job.class_id, facts.artifact_root)?;
+        let class_id = payload.material.job.class_id;
+        let facts = session.palw_producer_facts_v2(class_id, None).ok_or("the chain names no such class")?;
+        let backend = self.resolve_backend(session, class_id, facts.artifact_root)?;
+        Ok((backend, payload))
+    }
+
+    /// The binding a retained capture commits, read off its interval 0 — which every family serves
+    /// and which carries it.
+    fn served_binding_v1(
+        backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+        payload: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpCaptureV1,
+    ) -> Result<kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, String> {
         let opened = backend.open_fp_interval(&payload.capture, 0, &payload.material.prompt_token_ids)?;
         let v4 = misaka_palw_base0::fp_interval::Base0FpIntervalOpeningV4::decode_v1(&opened)
             .map_err(|e| format!("interval 0 is not served in the form that carries the binding: {e:?}"))?;
-        Ok((v4.binding, payload.material.prompt_token_ids.clone()))
+        Ok(v4.binding)
     }
 
     /// **The held DA court's answer, in the unit accused** (ADR-0103 Decision 4; ADR-0108 Decisions
-    /// 4 and 6), signed by the claim's bond. A leaf's evidence and a prompt tile are answered here;
-    /// a state chunk and a step range are not yet, and say so by name.
+    /// 4 and 6), signed by the claim's bond: a leaf's evidence, a prompt tile, a state chunk or a run
+    /// of step leaves, each built from this executor's retention — an executor that cannot answer
+    /// is one the court slashes, so every unit the court can name has its answer here.
     fn held_da_answer_v1(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
@@ -5834,7 +5856,19 @@ impl PalwPanelService {
                     .map_err(|e| format!("the prompt tile does not open: {e}"))?;
                 (binding, PalwHeldDisclosureV1::PromptIdsTile { opening })
             }
-            other => return Err(format!("this node does not answer a held {other:?} yet")),
+            PalwHeldMissingV1::StateChunk { checkpoint, chunk } => {
+                let (backend, payload) = self.retained_fp_capture_v1(session, claim)?;
+                let binding = Self::served_binding_v1(backend.as_ref(), &payload)?;
+                let (anchor, chunk) =
+                    backend.held_state_chunk_answer_v1(&payload.capture, &payload.material.prompt_token_ids, checkpoint, chunk)?;
+                (binding, PalwHeldDisclosureV1::StateChunk { anchor, chunk })
+            }
+            PalwHeldMissingV1::StepRange { first, count } => {
+                let (backend, payload) = self.retained_fp_capture_v1(session, claim)?;
+                let binding = Self::served_binding_v1(backend.as_ref(), &payload)?;
+                let opening = backend.held_step_range_answer_v1(&payload.capture, &payload.material.prompt_token_ids, first, count)?;
+                (binding, PalwHeldDisclosureV1::StepRange { opening })
+            }
         };
         let mut carriage = PalwHeldDisclosureCarriageV1 {
             version: PALW_HELD_DA_VERSION_V1,
@@ -6632,8 +6666,19 @@ mod court_responder_coverage_pin {
         let held = source[loop_start..].find("if let Some(missing) = duty.held_missing {").expect("the held unit branch");
         let event = source[loop_start..].find("palw_da_event_index_parts_v1(duty.missing_event_index)").expect("the event path");
         assert!(held < event, "a held unit is answered before an event index is read");
-        let answer = source.find("fn held_da_answer_v1(").expect("the held answer");
-        assert!(source[answer..].contains("PalwHeldMissingV1::StepLeaf { leaf } =>"), "a leaf's evidence is answered");
+        // Every unit the court can name is answered, and with no catch-all arm — so a unit added to
+        // `PalwHeldMissingV1` is a compile error here rather than an executor slashed for silence.
+        let answer = &source[source.find("fn held_da_answer_v1(").expect("the held answer")..];
+        let answer = &answer[..answer.find("\n    }\n").expect("its end")];
+        for unit in [
+            "PalwHeldMissingV1::StepLeaf { leaf } =>",
+            "PalwHeldMissingV1::PromptIdsTile { tile } =>",
+            "PalwHeldMissingV1::StateChunk { checkpoint, chunk } =>",
+            "PalwHeldMissingV1::StepRange { first, count } =>",
+        ] {
+            assert!(answer.contains(unit), "the held answer has no arm {unit}");
+        }
+        assert!(!answer.contains("other =>") && !answer.contains("_ =>"), "no held unit falls to a catch-all refusal");
     }
 
     /// **ADR-0093 as built: the panel FILES the fused terminal's root claim now — and the exemption

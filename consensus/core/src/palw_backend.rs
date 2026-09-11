@@ -615,6 +615,35 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Err("this execution family serves no block leaves".to_string())
     }
 
+    /// **ADR-0108 Decision 6, the executor's answer to a held state-chunk accusation** (ADR-0103
+    /// Decision 4): checkpoint `checkpoint`'s leaf opened against the binding's checkpoint root, and
+    /// chunk `chunk` of its state with the path under the class's map, built from this executor's
+    /// retention. The default refuses by name — and the court reads a refusal as silence, so a
+    /// family that executes a held class answers here or its executor is slashed for withholding.
+    fn held_state_chunk_answer_v1(
+        &self,
+        _capture: &[u8],
+        _prompt_token_ids: &[u32],
+        _checkpoint: u32,
+        _chunk: u32,
+    ) -> Result<(crate::palw_attn_court_v1::PalwAttnCheckpointAnchorV1, crate::palw_attn_court_v1::PalwAttnChunkOpeningV1), String>
+    {
+        Err("this execution family answers no held state chunk".to_string())
+    }
+
+    /// **ADR-0108 Decision 6, the executor's answer to a held step-range accusation**: the leaf
+    /// hashes of `[first, first + count)` and the frontier that folds them to the binding's step
+    /// root, from this executor's retention. Refused by name by default, as above.
+    fn held_step_range_answer_v1(
+        &self,
+        _capture: &[u8],
+        _prompt_token_ids: &[u32],
+        _first: u64,
+        _count: u32,
+    ) -> Result<crate::palw_step_leg::PalwStepRangeOpeningV1, String> {
+        Err("this execution family answers no held step range".to_string())
+    }
+
     /// **ADR-0086 Decision 6, the seat's half: name the leaf a served block disagrees on**, from
     /// this node's own replay of the interval. `Ok(None)`: every served leaf is this seat's own.
     fn fp_name_the_leaf_v1(
