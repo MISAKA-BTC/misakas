@@ -1906,13 +1906,10 @@ async function pageStore(arg) {
   }
 
   // ---- order entry ----------------------------------------------------------------------------
-  // The floor a join or leave is refused below: the quote less a fixed tolerance. There is no setting
-  // for it — the field that set it read "10000" as 1 % without saying so (anything outside 0–50 fell back
-  // to 1 %), and a tolerance of 0 could give a buyer nothing for their MSK. 50 % is the widest the field
-  // ever allowed: a refusal then means the row really moved by half before the fold applied the request,
-  // and a refused join is refunded.
-  const PRICE_TOLERANCE_BPS = 5000n;
-  function slipBps() { return PRICE_TOLERANCE_BPS; }
+  // No price floor (operator decision 2026-09-11, for ease of use): a join or leave fills at whatever the
+  // row quotes when the fold applies it. What a floor also guarded is guarded by the fold itself — a join
+  // that would release no membership is refused (`ModelBuyReleasesNothing`) and a leave that would pay
+  // nothing is refused (`ModelSellPaysNothing`), both refunded — so 0 never buys or sells for nothing.
   function localQuote() {
     const m = rec && rec.market; if (!m) return null;
     if (!m.seeded) return { invalid: 'Not seeded yet: no curve to quote against.' };
@@ -1952,11 +1949,7 @@ async function pageStore(arg) {
     if (n && n.kind === q.kind && ((q.kind === 'buy' && n.sompi === q.sompi) || (q.kind === 'sell' && n.units === q.units))) return Object.assign({}, q, n, { source: 'node' });
     return q;
   }
-  function mins(q) {
-    const bps = slipBps();
-    if (q.kind === 'buy') return { minUnits: (q.unitsOut * (10000n - bps)) / 10000n };
-    return { minMsk: (q.fees.net * (10000n - bps)) / 10000n };
-  }
+  function mins(q) { return q.kind === 'buy' ? { minUnits: 0n } : { minMsk: 0n }; }
   function reasonNotToSend(q) {
     if (MOCK && !wallet.any()) return 'Mock wallet missing.';
     if (!wallet.any()) return NO_WALLET;
@@ -1983,7 +1976,6 @@ async function pageStore(arg) {
     const price = m ? m.price : null;
     let rows = '';
     if (q && !q.invalid) {
-      const mn = mins(q);
       const impact = price && q.priceAfter != null ? Number(((q.priceAfter - price) * 10000n) / price) / 100 : null;
       if (q.kind === 'buy') {
         const avg = q.unitsOut > 0n ? q.sompi / q.unitsOut : null;
@@ -1994,8 +1986,7 @@ async function pageStore(arg) {
           <div class="r"><span>How far it moves the price</span><span class="v ${impact > 5 ? 'down' : ''}">${fmtPct(impact)}</span></div>
           <div class="r"><span>Burned (5 %)</span><span class="v">${fmtMsk(q.fees.burn)} MSK</span></div>
           <div class="r"><span>To the model's owner (1 %)</span><span class="v">${fmtMsk(q.fees.leg)} MSK</span></div>
-          <div class="r"><span>Into the buy-back reserve (94 %)</span><span class="v">${fmtMsk(q.fees.net)} MSK</span></div>
-          <div class="r tot"><span>Refuse below (floor)</span><span class="v">${fmtPos(mn.minUnits)} memberships</span></div>`.s;
+          <div class="r"><span>Into the buy-back reserve (94 %)</span><span class="v">${fmtMsk(q.fees.net)} MSK</span></div>`.s;
       } else {
         const avg = q.units > 0n ? q.fees.net / q.units : null;
         rows = h`
@@ -2005,8 +1996,7 @@ async function pageStore(arg) {
           <div class="r"><span>You receive (94 %)</span><span class="v">${fmtMsk(q.fees.net)} MSK</span></div>
           <div class="r"><span>Price each</span><span class="v">${avg != null ? fmtPrice(avg) : '—'} MSK</span></div>
           <div class="r"><span>Price after this leave</span><span class="v">${fmtPrice(q.priceAfter)} MSK</span></div>
-          <div class="r"><span>How far it moves the price</span><span class="v ${impact < -5 ? 'down' : ''}">${fmtPct(impact)}</span></div>
-          <div class="r tot"><span>Refuse below (floor)</span><span class="v">${fmtMsk(mn.minMsk)} MSK</span></div>`.s;
+          <div class="r"><span>How far it moves the price</span><span class="v ${impact < -5 ? 'down' : ''}">${fmtPct(impact)}</span></div>`.s;
       }
       rows += h`<div class="r dim tiny"><span>Quoted by</span><span>${q.source === 'node' ? 'the node (AMM precompile)' : 'local arithmetic on the market row'}</span></div>`.s;
     } else if (q && q.invalid) rows = h`<div class="err">${q.invalid}</div>`.s;
@@ -2049,7 +2039,7 @@ async function pageStore(arg) {
         </div>
         <div class="quote" id="quoteBox"></div>
         <div class="field"><button id="sendBtn" class="btn btn-lg btn-accent" disabled>Join</button><div class="reason" id="sendWhy"></div><div class="note tiny" id="sendTopUp"></div></div>
-        <div class="note tiny">Your request is applied by the fold after the block that carries it and settles one block later; a result worse than your floor is refused (never partial) and a refused join is refunded. A membership is a whole number, and it never pays you anything: what it gets you is the card above. A membership taken here lives in the EVM namespace and can only be given up from it.</div>
+        <div class="note tiny">Your request is applied by the fold after the block that carries it and settles one block later, at the price the row then quotes; a join that would release no membership, or a leave that would pay nothing, is refused and refunded. A membership is a whole number, and it never pays you anything: what it gets you is the card above. A membership taken here lives in the EVM namespace and can only be given up from it.</div>
       </div>`.s;
     $$('#entry .seg button').forEach((b) => b.addEventListener('click', () => { entry.side = b.dataset.side; entry.amount = ''; entry.nodeQuote = null; renderEntry(); }));
     const amt = $('#amt');
@@ -2518,7 +2508,7 @@ function pageDocs() {
     <p>A move can be a carrier transaction on the UTXO side signed by an ML-DSA-87 key, or an EVM transaction from an ordinary account. Both reach the same curve and the same fee table. This site uses the EVM door: the line's <b>MRC-20 facade</b> (address <code>0x4d50…</code>, read from the registry) exposes ERC-20's read half plus <code>buy(minUnitsOut)</code> payable, <code>sell(unitsIn, minMskOutSompi)</code> and <code>seed()</code> payable, which route to the writer at <code>0x…F013</code> (actions 1, 2 and 3). The site says join, leave and open; the ABI says buy, sell and seed, and both name the same call.</p>
     <h2>When a join lands</h2>
     <ol><li><b>Emit.</b> Your transaction is included in chain block B. The writer validates the call, escrows a join's or an opening's value and emits <code>ActionQueued</code>. A deposit under the least deposit reverts here (<code>SeedTooSmall</code>). Nothing else happens yet.</li>
-      <li><b>Apply.</b> The fold applies the action after block B, after every carrier-borne move of B, quoted on the row as it then stands. Your floor (<code>minUnitsOut</code> or <code>minMskOutSompi</code>) is checked: a worse result is refused, never partial. An opening on an already open store, or on a frozen class, is refused.</li>
+      <li><b>Apply.</b> The fold applies the action after block B, after every carrier-borne move of B, quoted on the row as it then stands. This site sends no floor (<code>minUnitsOut</code> / <code>minMskOutSompi</code> = 0), so the move fills at the row's price then; a move that would release no membership or pay nothing is refused, never partial. An opening on an already open store, or on a frozen class, is refused.</li>
       <li><b>Settle.</b> In block C, the selected child of B, a system op burns a filled join's or opening's escrow into the line's sink, refunds a refused one, or credits a filled leave's net MSK to your account. The facade emits <code>Bought</code>, <code>Sold</code>, <code>Seeded</code> or <code>Refused</code> there.</li></ol>
     <p>So a membership taken at B is readable, and settled, one chain block later, and a store opened at B opens one block later. My activity on this site follows exactly that sequence: sent, queued, then settled or refused.</p>
     <h2>Two member namespaces</h2>
