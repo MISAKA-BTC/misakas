@@ -3273,16 +3273,15 @@ pub fn base0_fp_interval_of_leaf_v1(
     family_checkpoint_interval: u32,
     leaf: u64,
 ) -> Option<u32> {
-    use kaspa_consensus_core::palw_context_ladder::palw_checkpoint_cadence_v1;
-    let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(profile, ctx, leaf)?;
-    let geometry = Base0FpIntervalGeometryV1::from_chain_facts_v1(
-        ctx.declared_prefill_tokens,
-        ctx.exact_decode_tokens,
+    // The seat's own geometry, spelled once in the core (ADR-0108): a class under the held map
+    // samples intervals of POSITIONS (ADR-0103 Decision 2), so its leaf's interval is its step's,
+    // not its call's — the call-unit form this used to take put every prefill leaf in interval 0.
+    let geometry = kaspa_consensus_core::palw_leaf_evidence_v1::PalwSeatIntervalGeometryV1::from_parts_v1(
+        profile,
+        ctx,
         family_checkpoint_interval,
-        palw_checkpoint_cadence_v1(profile),
-    )
-    .ok()?;
-    Some(interval_of_call_v1(&geometry, coord.call_index))
+    )?;
+    geometry.interval_of_leaf_in_v1(profile, ctx, leaf)
 }
 
 /// **The interval's own tiles, replayed from a folded retention with the family's kernels**
@@ -5256,6 +5255,65 @@ mod tests {
         assert_eq!(base0_fp_block_leaves_request_decode_v1(packed), None, "nor a block-leaves request");
         let block = base0_fp_block_leaves_request_index_v1(index, 3).expect("a block request");
         assert_eq!(base0_fp_resume_request_decode_v1(block), None, "and a block request is not a resume one");
+    }
+
+    /// **ADR-0108 Decision 3: the chain's geometry is the seat's.** The bound a leaf demand is
+    /// admitted under reads the claim's intervals off the binding (`PalwSeatIntervalGeometryV1`);
+    /// the seat draws over the family's own count and opens the family's own windows. On a
+    /// per-call class and a held one, the two counts agree and every leaf's interval is the window
+    /// its step lies in — or a demand the chain assigned a seat would be one the seat never checked.
+    #[test]
+    fn the_chains_interval_geometry_is_the_seats_on_both_units() {
+        use kaspa_consensus_core::palw_leaf_evidence_v1::{PalwSeatIntervalGeometryV1, PalwSeatIntervalUnitV1};
+        let interval = kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1;
+        for (name, (_, profile, ctx, _, run)) in
+            [("per-call graph-v5", dense_v5_run()), ("held graph-v7", dense_v7_run()), ("held, mid-prefill", dense_v7_run_mid_prefill())]
+        {
+            let chain = PalwSeatIntervalGeometryV1::from_binding_v1(&run.binding).expect("derivable from the binding");
+            let family = base0_fp_interval_count_for_class_v1(&profile, ctx.declared_prefill_tokens, ctx.exact_decode_tokens, interval)
+                .expect("the family counts");
+            assert_eq!(chain.count, family, "{name}: one interval count");
+            assert!(chain.count >= 2, "{name}: a fixture with one interval proves nothing");
+            assert_eq!(
+                matches!(chain.unit, PalwSeatIntervalUnitV1::Positions { .. }),
+                kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&profile),
+                "{name}: the unit is the map's"
+            );
+            let geometry = if kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&profile) {
+                Base0FpIntervalGeometryV1::from_chain_facts_held_v1(
+                    ctx.declared_prefill_tokens,
+                    ctx.exact_decode_tokens,
+                    interval,
+                    kaspa_consensus_core::palw_held_context_v1::palw_held_interval_positions_v1(&profile),
+                )
+            } else {
+                Base0FpIntervalGeometryV1::from_chain_facts_v1(
+                    ctx.declared_prefill_tokens,
+                    ctx.exact_decode_tokens,
+                    interval,
+                    kaspa_consensus_core::palw_context_ladder::palw_checkpoint_cadence_v1(&profile),
+                )
+            }
+            .expect("the family's geometry");
+            let mut seen = std::collections::BTreeSet::new();
+            for leaf in 0..run.binding.step_leaf_count {
+                let owner = chain.interval_of_leaf_v1(&run.binding, leaf).expect("every leaf has an interval");
+                let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(&profile, &ctx, leaf).expect("coordinates");
+                let step = if coord.call_index == 0 {
+                    u64::from(coord.position) + 1
+                } else {
+                    u64::from(ctx.declared_prefill_tokens) + u64::from(coord.call_index)
+                };
+                let window = geometry.window_for(owner).expect("the interval has a window");
+                assert!(
+                    window.first_step <= step && step <= window.last_step,
+                    "{name}: leaf {leaf} (step {step}) is in interval {owner}, whose window is {window:?}"
+                );
+                assert_eq!(base0_fp_interval_of_leaf_v1(&profile, &ctx, interval, leaf), Some(owner), "{name}: one spelling");
+                seen.insert(owner);
+            }
+            assert_eq!(seen.len() as u32, chain.count, "{name}: every interval owns a leaf");
+        }
     }
 
     /// **ADR-0103 Decision 2 at the prefill**: an interval that resumes inside the prompt — the

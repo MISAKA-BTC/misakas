@@ -4674,6 +4674,11 @@ pub struct PalwChainStateV2 {
     /// `PALW_HELD_DA_EVENT_INDEX_SENTINEL_V1` in place of an event index. Enters the root and the
     /// carriage only once written, which nothing below `Params::palw_held_context` can do.
     held_da_missing: BTreeMap<Hash64, crate::palw_held_da_v1::PalwHeldMissingV1>,
+    /// **ADR-0108 Decision 3: who has demanded a leaf's evidence on each live claim**, and which
+    /// leaf — a seat demands at most once per claim for the claim's whole life, so the executor's
+    /// burden is the panel's size and never the requesters' appetite. Dropped when the claim goes
+    /// terminal (`write_claim`). Enters the root and the carriage only once written.
+    held_leaf_demands: BTreeMap<Hash64, BTreeMap<PalwBondKeyV2, u64>>,
     /// **ADR-0056 Decision 3: the registry's own exposure ledger, kept SEPARATE from the claims'.**
     ///
     /// `reserved_exposure` is an accumulator over live claims, and
@@ -4798,6 +4803,7 @@ impl PalwChainStateV2 {
             bond_shards: BTreeMap::new(),
             shard_licensing: BTreeMap::new(),
             held_da_missing: BTreeMap::new(),
+            held_leaf_demands: BTreeMap::new(),
             registration_exposure: BTreeMap::new(),
             class_walks: BTreeMap::new(),
             certified_families: BTreeMap::new(),
@@ -5268,6 +5274,16 @@ impl PalwChainStateV2 {
         self.shard_licensing.get(claim_id)
     }
 
+    /// ADR-0103 Decision 4: the unit a held accusation named, while the claim's session is open.
+    pub fn held_da_missing_of(&self, claim_id: &Hash64) -> Option<crate::palw_held_da_v1::PalwHeldMissingV1> {
+        self.held_da_missing.get(claim_id).copied()
+    }
+
+    /// ADR-0108 Decision 3: which seats have demanded which leaf of a live claim.
+    pub fn held_leaf_demands_of(&self, claim_id: &Hash64) -> Option<&BTreeMap<PalwBondKeyV2, u64>> {
+        self.held_leaf_demands.get(claim_id)
+    }
+
     /// **ADR-0089 Decision 2: the window** — every row a read precompile may serve, flattened,
     /// at this state's own point (the EVM block's selected parent). Bond keys are resolved to
     /// their payout payloads, statuses to codes, and every line of every class is present
@@ -5647,6 +5663,11 @@ impl PalwChainStateV2 {
         // accusation is accepted, which nothing below `Params::palw_held_context` can do.
         if !self.held_da_missing.is_empty() {
             state.update(collection_root(b"held_da_missing", &self.held_da_missing).as_byte_slice());
+        }
+        // **ADR-0108 Decision 3.** Its own block, for the same reason: empty until a seat demands a
+        // leaf's evidence, which nothing below `Params::palw_held_context` can do.
+        if !self.held_leaf_demands.is_empty() {
+            state.update(collection_root(b"held_leaf_demands", &self.held_leaf_demands).as_byte_slice());
         }
         state.update(&self.safe_weight.to_le_bytes());
         state.update(&self.retired_safe_weight.to_le_bytes());
@@ -6468,11 +6489,18 @@ pub enum PalwDeltaEntryV2 {
         old: Option<crate::palw_shard_licensing_v1::PalwShardLicensingProgressV1>,
         new: Option<crate::palw_shard_licensing_v1::PalwShardLicensingProgressV1>,
     },
-    /// ADR-0103 Decision 4: the unit a held accusation named moved (39). Appended last.
+    /// ADR-0103 Decision 4: the unit a held accusation named moved (39).
     HeldDaMissing {
         key: Hash64,
         old: Option<crate::palw_held_da_v1::PalwHeldMissingV1>,
         new: Option<crate::palw_held_da_v1::PalwHeldMissingV1>,
+    },
+    /// ADR-0108 Decision 3: a claim's record of which seats demanded which leaf moved (40).
+    /// Appended last.
+    HeldLeafDemands {
+        key: Hash64,
+        old: Option<BTreeMap<PalwBondKeyV2, u64>>,
+        new: Option<BTreeMap<PalwBondKeyV2, u64>>,
     },
 }
 
@@ -6813,6 +6841,10 @@ impl<'a> TransitionBuilder<'a> {
         {
             self.write_held_da_missing(key, None);
         }
+        // ADR-0108 Decision 3: the demand record lives as long as the claim can still be tried.
+        if self.state.held_leaf_demands.contains_key(&key) && !new.as_ref().is_some_and(|claim| !claim.phase.is_terminal()) {
+            self.write_held_leaf_demands(key, None);
+        }
         let old = match &new {
             Some(record) => self.state.claims.insert(key, record.clone()),
             None => self.state.claims.remove(&key),
@@ -7027,6 +7059,16 @@ impl<'a> TransitionBuilder<'a> {
         };
         if old != new {
             self.entries.push(PalwDeltaEntryV2::HeldDaMissing { key, old, new });
+        }
+    }
+
+    fn write_held_leaf_demands(&mut self, key: Hash64, new: Option<BTreeMap<PalwBondKeyV2, u64>>) {
+        let old = match new.clone() {
+            Some(row) => self.state.held_leaf_demands.insert(key, row),
+            None => self.state.held_leaf_demands.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::HeldLeafDemands { key, old, new });
         }
     }
 
@@ -10187,6 +10229,30 @@ fn apply_object(
             let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
             crate::palw_held_da_v1::palw_held_da_check_accusation_v1(&claim.execution_root, &accusation.missing, &accusation.binding)
                 .map_err(|e| PalwStateV2Error::HeldDaRefused { claim: claim_id, why: e.to_string() })?;
+            // **ADR-0108 Decision 3: a leaf's evidence is demanded by a seat, once.** The seat of
+            // the claim's bound panel, never a stranger — whose leaf is one its own draw assigned
+            // it is the acceptance layer's check, which holds the network domain the draw is keyed
+            // by — and never twice on one claim, so what the executor owes is bounded by the panel.
+            let demand = match accusation.missing {
+                crate::palw_held_da_v1::PalwHeldMissingV1::StepLeaf { leaf } => {
+                    let refused = |why: &str| PalwStateV2Error::HeldDaRefused { claim: claim_id, why: why.to_string() };
+                    let seated = builder
+                        .state
+                        .panels
+                        .get(&claim_id)
+                        .is_some_and(|panel| panel.seats.iter().any(|seat| seat.bond == accusation.accuser));
+                    if !seated {
+                        return Err(refused("a leaf's evidence is demanded by a seat of the claim's panel"));
+                    }
+                    let mut demands = builder.state.held_leaf_demands.get(&claim_id).cloned().unwrap_or_default();
+                    if demands.contains_key(&accusation.accuser) {
+                        return Err(refused("this seat has demanded a leaf of this claim before"));
+                    }
+                    demands.insert(accusation.accuser, leaf);
+                    Some(demands)
+                }
+                _ => None,
+            };
             open_da_session_v2(
                 builder,
                 ctx,
@@ -10196,6 +10262,9 @@ fn apply_object(
                 false,
             )?;
             builder.write_held_da_missing(claim_id, Some(accusation.missing));
+            if let Some(demands) = demand {
+                builder.write_held_leaf_demands(claim_id, Some(demands));
+            }
         }
         // **ADR-0103 Decision 4: the answer, and it is arithmetic.** The unit must be the one
         // recorded; the answer is checked against the claim's committed roots through its binding;
@@ -10227,6 +10296,30 @@ fn apply_object(
                 ladder,
             )
             .map_err(|e| PalwStateV2Error::HeldDaRefused { claim: claim_id, why: e.to_string() })?;
+            // **ADR-0108 Decision 4: a leaf's evidence is adjudicated, by the one-move verdict.**
+            // Guilty: the executor convicted itself by answering — the claim voids `CourtFraud`
+            // exactly as `ShardCourtAccused` voids it, and the accuser's stake comes back where every
+            // door out of the disputed phase gives it back. Clear: the demand was wrong, and the
+            // session closes refuted below. Evidence that does not adjudicate is no answer.
+            if let crate::palw_held_da_v1::PalwHeldDisclosureV1::StepLeaf { evidence } = &disclosure.disclosure {
+                let artifact_root =
+                    builder.state.classes.get(&claim.class_id).ok_or(PalwStateV2Error::MissingClass(claim.class_id))?.artifact_root;
+                match evidence.verdict_v1(claim.class_id, artifact_root, ladder).map_err(|e| PalwStateV2Error::HeldDaRefused {
+                    claim: claim_id,
+                    why: format!("the evidence does not adjudicate: {e}"),
+                })? {
+                    crate::palw_shard_court_v1::PalwShardCourtVerdictV1::ExecutorGuilty => {
+                        return builder.void_and_slash(claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::CourtFraud);
+                    }
+                    crate::palw_shard_court_v1::PalwShardCourtVerdictV1::FalseAccusation => {}
+                    crate::palw_shard_court_v1::PalwShardCourtVerdictV1::NeedsDissection => {
+                        return Err(PalwStateV2Error::HeldDaRefused {
+                            claim: claim_id,
+                            why: "a fused-attention leaf is tried by its dissection".to_string(),
+                        });
+                    }
+                }
+            }
             close_da_session_refuted_v2(builder, ctx, claim_id, &claim, accused_daa, accuser, accuser_exposure, *resumed)?;
         }
         // **ADR-0100 Decision 4: a class's shard plan.** The registrant's signature is the
@@ -13145,6 +13238,7 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::BondShards { key, old, new } => swap_write!(state.bond_shards, key, old, new),
         PalwDeltaEntryV2::ShardLicensing { key, old, new } => swap_write!(state.shard_licensing, key, old, new),
         PalwDeltaEntryV2::HeldDaMissing { key, old, new } => swap_write!(state.held_da_missing, key, old, new),
+        PalwDeltaEntryV2::HeldLeafDemands { key, old, new } => swap_write!(state.held_leaf_demands, key, old, new),
     }
     Ok(())
 }
@@ -13336,6 +13430,8 @@ pub struct PalwStateCarriageV2 {
     pub shard_licensing: BTreeMap<Hash64, crate::palw_shard_licensing_v1::PalwShardLicensingProgressV1>,
     /// ADR-0103 Decision 4.
     pub held_da_missing: BTreeMap<Hash64, crate::palw_held_da_v1::PalwHeldMissingV1>,
+    /// ADR-0108 Decision 3. A seventh tagged tail (`0xA4`), encoded only when non-empty.
+    pub held_leaf_demands: BTreeMap<Hash64, BTreeMap<PalwBondKeyV2, u64>>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -13390,6 +13486,9 @@ const PALW_CARRIAGE_SHARDS_TAIL_V1: u8 = 0x99;
 /// The tail byte that says ADR-0103 Decision 4's held-accusation record follows (last of the six),
 /// guarded exactly as the root's block is.
 const PALW_CARRIAGE_HELD_TAIL_V1: u8 = 0xA3;
+/// The tail byte that says ADR-0108 Decision 3's demand record follows (last of the seven),
+/// guarded exactly as the root's block is.
+const PALW_CARRIAGE_HELD_DEMANDS_TAIL_V1: u8 = 0xA4;
 
 impl borsh::BorshSerialize for PalwStateCarriageV2 {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
@@ -13458,6 +13557,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_HELD_TAIL_V1.serialize(writer)?;
             self.held_da_missing.serialize(writer)?;
         }
+        if !self.held_leaf_demands.is_empty() {
+            PALW_CARRIAGE_HELD_DEMANDS_TAIL_V1.serialize(writer)?;
+            self.held_leaf_demands.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -13497,6 +13600,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_shards = false;
         let mut held_da_missing = BTreeMap::new();
         let mut seen_held = false;
+        let mut held_leaf_demands = BTreeMap::new();
+        let mut seen_demands = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -13525,11 +13630,15 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     model_benefits = BTreeMap::deserialize_reader(reader)?;
                     model_position_since = BTreeMap::deserialize_reader(reader)?;
                 }
-                PALW_CARRIAGE_HELD_TAIL_V1 if !seen_held => {
+                PALW_CARRIAGE_HELD_TAIL_V1 if !seen_held && !seen_demands => {
                     seen_held = true;
                     held_da_missing = BTreeMap::deserialize_reader(reader)?;
                 }
-                PALW_CARRIAGE_SHARDS_TAIL_V1 if !seen_shards && !seen_held => {
+                PALW_CARRIAGE_HELD_DEMANDS_TAIL_V1 if !seen_demands => {
+                    seen_demands = true;
+                    held_leaf_demands = BTreeMap::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_SHARDS_TAIL_V1 if !seen_shards && !seen_held && !seen_demands => {
                     seen_shards = true;
                     class_shard_plans = BTreeMap::deserialize_reader(reader)?;
                     bond_shards = BTreeMap::deserialize_reader(reader)?;
@@ -13582,6 +13691,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             bond_shards,
             shard_licensing,
             held_da_missing,
+            held_leaf_demands,
         })
     }
 }
@@ -13621,6 +13731,7 @@ impl PalwStateCarriageV2 {
             bond_shards: state.bond_shards.clone(),
             shard_licensing: state.shard_licensing.clone(),
             held_da_missing: state.held_da_missing.clone(),
+            held_leaf_demands: state.held_leaf_demands.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -13708,6 +13819,7 @@ impl PalwStateCarriageV2 {
             bond_shards: self.bond_shards,
             shard_licensing: self.shard_licensing,
             held_da_missing: self.held_da_missing,
+            held_leaf_demands: self.held_leaf_demands,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -21420,6 +21532,7 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::BondShards { .. } => "bond_shards",
                     PalwDeltaEntryV2::ShardLicensing { .. } => "shard_licensing",
                     PalwDeltaEntryV2::HeldDaMissing { .. } => "held_da_missing",
+                    PalwDeltaEntryV2::HeldLeafDemands { .. } => "held_leaf_demands",
                 });
             }
         }
@@ -21454,6 +21567,8 @@ pub(crate) mod tests {
             (37, PalwDeltaEntryV2::BondShards { key: (bond_key(1), key), old: None, new: None }),
             (38, PalwDeltaEntryV2::ShardLicensing { key, old: None, new: None }),
             (39, PalwDeltaEntryV2::HeldDaMissing { key, old: None, new: None }),
+            // ADR-0108 Decision 3, appended last.
+            (40, PalwDeltaEntryV2::HeldLeafDemands { key, old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -21973,6 +22088,7 @@ pub(crate) mod tests {
             bond_shards: _,
             shard_licensing: _,
             held_da_missing: _,
+            held_leaf_demands: _,
             safe_weight: _,
             retired_safe_weight: _,
             bounded_immature: _,
@@ -23050,6 +23166,168 @@ pub(crate) mod tests {
             PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }
         ));
         assert!(quiet.held_da_missing.is_empty(), "the record goes with a defaulted session too");
+    }
+
+    /// A claim on `binding`'s execution under a class registered at `artifact_root` (the base
+    /// class), bond 1 producing and a panel of bonds 1 and 2 bound — ADR-0108's fold fixture.
+    fn leaf_demand_setup(
+        binding: &crate::palw_step_leg::PalwStepBindingV2,
+        artifact_root: Hash64,
+    ) -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
+        let class_id = binding.shape_profile.shape_profile_id();
+        let p = held_params(class_id);
+        let mut objects = register_class_and_bond();
+        if let PalwConsensusObjectV2::ClassRegistered { class_id: registered, artifact_root: root, .. } = &mut objects[0] {
+            *registered = class_id;
+            *root = artifact_root;
+        }
+        objects.push(PalwConsensusObjectV2::BondRegistered {
+            bond: bond_key(2),
+            pubkey: vec![8; 4],
+            operator_pubkey: op_key(22),
+            collateral: 1_000,
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A22),
+            capable_classes: Default::default(),
+            signature: Vec::new(),
+        });
+        let extras = held_extras();
+        let (s1, _) = held_apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None, &extras).expect("the registry");
+        let mut env = attempt_for_class(40, 1, class_id, bond_key(1), vec![7; 4], op_id(21), h64(11));
+        env.attempt.trace_root = h64(HELD_TRACE_ROOT);
+        env.attempt.execution_root = binding.committed_execution_root;
+        env.attempt.trace_chunk_count = 1;
+        env.attempt.trace_retention_daa = 999_999;
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, _) = held_apply(&s1, &p, &ctx(2, 101, 2), &[], Some(&env), &extras).expect("the claim");
+        let seats = vec![
+            PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) },
+            PalwPanelSeatV2 { bond: bond_key(2), operator_id: h64(91) },
+        ];
+        let (s3, _) = held_apply(
+            &s2,
+            &p,
+            &ctx(3, 102, 3),
+            &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }],
+            None,
+            &extras,
+        )
+        .expect("the panel");
+        (p, s3, claim_id)
+    }
+
+    /// **ADR-0108 in the fold: a leaf's evidence is demanded by a seat, once, and the answer is
+    /// ADJUDICATED by the one-move verdict.** On a guilty leaf and an honest one: a stranger's demand
+    /// is refused, a seat's opens the session and is recorded, evidence that does not adjudicate is
+    /// no answer, the real evidence voids the claim `CourtFraud` (guilty) or closes the session
+    /// refuted — the accuser pays, the claim resumes — and then the same seat may not demand again.
+    #[test]
+    fn a_leaf_is_demanded_by_a_seat_once_and_its_evidence_is_adjudicated() {
+        use crate::palw_held_da_v1::{PalwHeldAccusationV1, PalwHeldDisclosureCarriageV1, PalwHeldDisclosureV1, PalwHeldMissingV1};
+        use crate::palw_shard_court_v1::PalwLeafEvidenceV1;
+        for guilty in [true, false] {
+            let (refutation, openings, artifact_root) = if guilty {
+                crate::palw_step_refute::tests::base0_matmul_fraud()
+            } else {
+                crate::palw_step_refute::tests::base0_honest_case()
+            };
+            let (p, s3, claim_id) = leaf_demand_setup(&refutation.binding, artifact_root);
+            let leaf = refutation.output_opening.leaf_index;
+            let demand = |accuser: PalwBondKeyV2| PalwConsensusObjectV2::DefaultAccusedHeld {
+                accusation: Box::new(PalwHeldAccusationV1 {
+                    version: 1,
+                    claim: claim_id,
+                    missing: PalwHeldMissingV1::StepLeaf { leaf },
+                    accuser,
+                    binding: refutation.binding.clone(),
+                    signature: vec![9; 8],
+                }),
+            };
+            let answer =
+                |artifact_openings: Vec<crate::palw_artifact::PalwArtifactOpeningV1>| PalwConsensusObjectV2::MaterialDisclosedHeld {
+                    disclosure: Box::new(PalwHeldDisclosureCarriageV1 {
+                        version: 1,
+                        claim: claim_id,
+                        missing: PalwHeldMissingV1::StepLeaf { leaf },
+                        binding: refutation.binding.clone(),
+                        disclosure: PalwHeldDisclosureV1::StepLeaf {
+                            evidence: Box::new(PalwLeafEvidenceV1 {
+                                refutation: refutation.clone(),
+                                artifact_openings,
+                                prompt_ids_opening: None,
+                            }),
+                        },
+                        signature: vec![9; 8],
+                    }),
+                };
+            assert!(
+                matches!(
+                    held_apply(&s3, &p, &ctx(4, 110, 4), &[demand(bond_key(3))], None, &held_extras()).expect_err("a stranger"),
+                    PalwStateV2Error::HeldDaRefused { ref why, .. } if why.contains("seat")
+                ),
+                "guilty={guilty}: only a seat of the panel demands"
+            );
+            let (s4, _) =
+                held_apply(&s3, &p, &ctx(4, 110, 4), &[demand(bond_key(2))], None, &held_extras()).expect("the seat demands");
+            assert!(matches!(s4.claim(&claim_id).expect("claim").phase, PalwClaimPhaseV2::DefaultDisputed { .. }));
+            assert_eq!(s4.held_leaf_demands.get(&claim_id).and_then(|d| d.get(&bond_key(2))), Some(&leaf), "the demand is recorded");
+            assert!(
+                matches!(
+                    held_apply(&s4, &p, &ctx(5, 111, 5), &[answer(Vec::new())], None, &held_extras()).expect_err("no rows"),
+                    PalwStateV2Error::HeldDaRefused { ref why, .. } if why.contains("does not adjudicate")
+                ),
+                "guilty={guilty}: evidence the court cannot recompute is no answer"
+            );
+            let accuser_before = s4.bond(&bond_key(2)).expect("accuser").collateral;
+            let executor_before = s4.bond(&bond_key(1)).expect("executor").collateral;
+            let (s5, _) = held_apply(&s4, &p, &ctx(5, 111, 5), &[answer(openings.clone())], None, &held_extras()).expect("answered");
+            if guilty {
+                assert!(matches!(
+                    s5.claim(&claim_id).expect("claim").phase,
+                    PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }
+                ));
+                assert!(s5.bond(&bond_key(1)).expect("executor").collateral < executor_before, "the executor is slashed");
+                assert_eq!(s5.bond(&bond_key(2)).expect("accuser").collateral, accuser_before, "the accuser keeps its stake");
+                assert!(s5.held_leaf_demands.is_empty() && s5.held_da_missing.is_empty(), "a terminal claim keeps no demand record");
+            } else {
+                assert!(matches!(s5.claim(&claim_id).expect("claim").phase, PalwClaimPhaseV2::PanelBound { .. }), "the claim resumes");
+                assert!(s5.bond(&bond_key(2)).expect("accuser").collateral < accuser_before, "the wrong demand is paid for");
+                assert_eq!(s5.bond(&bond_key(1)).expect("executor").collateral, executor_before);
+                assert!(
+                    matches!(
+                        held_apply(&s5, &p, &ctx(6, 112, 6), &[demand(bond_key(2))], None, &held_extras()).expect_err("twice"),
+                        PalwStateV2Error::HeldDaRefused { ref why, .. } if why.contains("before")
+                    ),
+                    "a seat demands once per claim"
+                );
+            }
+        }
+    }
+
+    /// **ADR-0108 in the fold: silence to the deadline is the default** — the leaf demand's session
+    /// ends as every held session ends, `ProducerWithholding`, and the demand record goes with the
+    /// claim.
+    #[test]
+    fn a_leaf_demand_that_nobody_answers_defaults_the_claim() {
+        let (refutation, _, artifact_root) = crate::palw_step_refute::tests::base0_honest_case();
+        let (p, s3, claim_id) = leaf_demand_setup(&refutation.binding, artifact_root);
+        let demand = PalwConsensusObjectV2::DefaultAccusedHeld {
+            accusation: Box::new(crate::palw_held_da_v1::PalwHeldAccusationV1 {
+                version: 1,
+                claim: claim_id,
+                missing: crate::palw_held_da_v1::PalwHeldMissingV1::StepLeaf { leaf: refutation.output_opening.leaf_index },
+                accuser: bond_key(2),
+                binding: refutation.binding.clone(),
+                signature: vec![9; 8],
+            }),
+        };
+        let (s4, _) = held_apply(&s3, &p, &ctx(4, 110, 4), &[demand], None, &held_extras()).expect("demanded");
+        let window = palw_da_disclose_window_daa_v1(&p);
+        let (quiet, _) = held_apply(&s4, &p, &ctx(5, 110 + window + 1, 5), &[], None, &held_extras()).expect("the sweep");
+        assert!(matches!(
+            quiet.claim(&claim_id).expect("claim").phase,
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }
+        ));
+        assert!(quiet.held_leaf_demands.is_empty(), "the record goes with the claim");
     }
 
     /// **The regime's delta entry and objects keep the Borsh tags this build writes** — appended

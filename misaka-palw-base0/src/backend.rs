@@ -815,6 +815,15 @@ impl PalwExecutionBackendV1 for Base0Backend {
         work_leaves: u64,
         leaf: u64,
     ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+        // **The annex pins the decode half as tiled rows; this family commits its logits FLAT.**
+        // BASE-0's pin is the whole committed rows (`Base0V1`), which no annex carries, and the
+        // court refuses a tiled pin on a flat class at every leaf ("the tiled pin is not its
+        // scheme"). A close assembled here would be one the chain can never read, so the family
+        // refuses by name and its caller takes the whole-capture prover — found by ADR-0108's
+        // evidence builder, whose decode leaf came back unadjudicable.
+        if self.profile.logits_scheme_id != kaspa_consensus_core::palw_step_refute::tiled_logits_scheme_id_v1() {
+            return Err("this family commits its logits flat, and a close from served intervals pins them tiled".to_string());
+        }
         // The replay of a served interval resumes from the state this node recomputed for the
         // interval's named anchor (ADR-0086 Decision 2) — warm that memo the way the seat's own
         // row check would have, for every held interval, before assembling.
@@ -1684,6 +1693,70 @@ mod tests {
             backend.checkpoint_root_for_context_v1(&ctx, &foreign, &lying.output_token_ids, covered).is_err(),
             "ids that are not the job's are still refused"
         );
+    }
+
+    /// **ADR-0108 Decisions 1 and 2: what an executor serves for a named leaf is the one-move
+    /// court's object, and both routes build the same one.** Under the Merkle prompt form a held
+    /// network mandates: the evidence for the tampered leaf convicts at the class's root and the
+    /// ruleset's ladder, the evidence for the same leaf of an honest capture clears, the annex route
+    /// (one interval replayed) and the whole-capture prover give the same refutation (ADR-0085 X1),
+    /// and the evidence fits the court's close ceiling it will be disclosed under.
+    #[test]
+    fn the_executors_leaf_evidence_is_the_one_move_object_by_either_route() {
+        use kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3;
+        use kaspa_consensus_core::palw_leaf_evidence_v1::palw_leaf_evidence_from_capture_v1;
+        use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1};
+        use kaspa_consensus_core::palw_shard_court_v1::{PalwShardCourtVerdictV1, palw_leaf_evidence_bytes_v1};
+
+        let form = PalwPromptIdsFormV1::MerkleV1;
+        let backend = floor_backend().with_prompt_ids_form(form);
+        let prompt: Vec<usize> = vec![2, 7, 1, 8, 2, 8, 1, 8];
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let mut job = free_prompt_job(&backend, prompt.len() as u32, 4);
+        job.prompt_token_ids_hash = prompt_token_ids_commitment_v1(form, &ids).expect("a commitment");
+        let lying = backend.execute_free_prompt_with_injected_fault(&job, &prompt, 0).expect("the drill fault runs");
+        let honest = backend.execute_free_prompt(&job, &prompt).expect("the floor runs");
+        let inventory = crate::inventory::base0_inventory_v1(&backend.artifact, backend.inventory_geometry).expect("inventory");
+        let class_id = backend.profile().shape_profile_id();
+        let ladder = backend.step_ladder_cap();
+        let roots_of = |run: &kaspa_consensus_core::palw_backend::PalwFpRunV1| PalwClaimRootsV1 {
+            execution_root: run.outcome.execution_root,
+            trace_root: run.outcome.trace_root,
+            anchor: fp_job_id_v3(&job),
+        };
+        let build = |run: &kaspa_consensus_core::palw_backend::PalwFpRunV1, leaf: u64| {
+            let work = backend.capture_shape(&run.outcome.material).expect("a shape").step_leaf_count;
+            palw_leaf_evidence_from_capture_v1(&backend, &run.outcome.material, &ids, roots_of(run), work, leaf, form)
+                .expect("the executor builds its leaf's evidence")
+        };
+
+        let guilty = build(&lying, 0);
+        assert_eq!(guilty.leaf_index(), 0);
+        assert!(guilty.refutation.prompt_token_ids.is_empty() && guilty.prompt_ids_opening.is_some(), "the Merkle carriage");
+        assert_eq!(guilty.verdict_v1(class_id, inventory.root(), ladder), Ok(PalwShardCourtVerdictV1::ExecutorGuilty));
+        let clear = build(&honest, 0);
+        assert_eq!(clear.verdict_v1(class_id, inventory.root(), ladder), Ok(PalwShardCourtVerdictV1::FalseAccusation));
+
+        // ADR-0085 X1: the whole-capture prover's object for the same leaf is the annex route's.
+        let by_capture = backend.refutation_for_free_prompt_index(&lying.outcome.material, 0, &ids).expect("the prover opens");
+        let (by_capture, _) =
+            kaspa_consensus_core::palw_step_refute::palw_refutation_prompt_carriage_v1(form, by_capture).expect("the carriage");
+        assert_eq!(guilty.refutation, by_capture, "one object by either route");
+
+        // A leaf past the prefill, too: the decode half of the same builder.
+        let late = binding_leaf_count(&lying.outcome.material) - 1;
+        let decode_leaf = build(&honest, late);
+        assert_eq!(decode_leaf.verdict_v1(class_id, inventory.root(), ladder), Ok(PalwShardCourtVerdictV1::FalseAccusation));
+
+        let bytes = palw_leaf_evidence_bytes_v1(&guilty);
+        assert!(
+            bytes <= kaspa_consensus_core::palw_fp_devnet_v3::PALW_DEVNET_WINDOWS_V1.court_max_close_bytes,
+            "the evidence ({bytes} B) must ride one devnet carrier"
+        );
+    }
+
+    fn binding_leaf_count(capture: &[u8]) -> u64 {
+        base0_material_decode_v1(capture).expect("the family tuple").0.step_leaf_count
     }
 
     /// **Decision 2: the stream is the run, not a replay of it.**

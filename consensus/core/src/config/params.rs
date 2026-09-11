@@ -2328,6 +2328,23 @@ impl Params {
                      with no ids on the chain, which only PanelDa allows (ADR-0103 Decision 4)",
                 ));
             }
+            // **ADR-0108 Decision 5: the held regime needs the data-availability court.** A seat
+            // that holds no capture names a leaf and must be able to demand its evidence; without the
+            // court that demand does not exist, and an executor that withholds one leaf is named and
+            // never convicted. The pins make a free-prompt claim's retention a chain fact — without
+            // them the producer writes its own, and a producer that writes `0` is immune.
+            if !by_then(self.palw_da_court) {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_held_context is armed without palw_da_court at or below its height: a seat that holds no capture \
+                     demands a leaf's evidence through it, and without it a withheld leaf is unprosecutable (ADR-0108 Decision 5)",
+                ));
+            }
+            if !by_then(self.palw_fp_da_pins) {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_held_context is armed without palw_fp_da_pins at or below its height: a free-prompt claim's retention \
+                     would be the producer's own number, and a demand could never fit inside it (ADR-0108 Decision 5)",
+                ));
+            }
         }
         // **ADR-0102 at the genesis door.** A genesis row is verified against the committed
         // catalog, not through `verify_class_admission_*`, so `TokenLiftNeedsItsFence` has no door
@@ -10047,7 +10064,8 @@ fn palw_rc_arm_phase1(mut params: Params) -> Params {
 ///
 /// From genesis: the COMPLETE_V4 signing-context set (`palw_signature_contexts_v2`), trace format 4
 /// and the tiled prompt ids (`palw_prompt_ids_merkle`), the k-ary court, the one-move court,
-/// `PanelDa`, and `palw_held_context` itself — every precondition `validate_palw_v2` names — with
+/// `PanelDa`, the data-availability court and the free-prompt pins (ADR-0108 Decision 5), and
+/// `palw_held_context` itself — every precondition `validate_palw_v2` names — with
 /// the court's ladder minted at `ladder` (Decision 1: at the carrier's budget, since no round is
 /// played). Every other number is the base lattice's. `Err` is `validate_palw_v2`'s refusal,
 /// verbatim: a mint this function cannot assemble is not one a node would start on.
@@ -10082,11 +10100,20 @@ pub fn palw_held_context_mint_v1(mut params: Params, ladder: u64) -> Result<Para
     params.palw_shard_court = Some(ForkActivation::always());
     params.palw_panel_da = Some(ForkActivation::always());
     params.palw_held_context = Some(ForkActivation::always());
+    // ADR-0108 Decision 5: the data-availability court and the free-prompt pins, from genesis. A
+    // seat that holds no capture demands a leaf's evidence through the court, and the pins make the
+    // retention that demand must fit inside a chain fact rather than the producer's own number.
+    params.palw_da_court = Some(ForkActivation::always());
+    params.palw_fp_da_pins = Some(ForkActivation::always());
     // ADR-0082 Decision 3: the frozen arity must be the one the held court derives from genesis.
     let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut params.palw_consensus_mode else { unreachable!("matched above") };
     let derived = crate::palw_court_v2::palw_court_params_held_at_v2(bundle, true, true)
         .map_err(|_| crate::palw_mode_v2::PalwModeV2Error::Invalid("no dissection arity fits this lattice's court window with the ladder at zero"))?;
     bundle.court = bundle.court.with_dissection_arity(derived.dissection_arity())?;
+    // The court widens the pruning horizon to hold its phase: re-derived from the bundle, raised and
+    // never lowered, exactly as the shipped assembly derives it.
+    let bundle = bundle.clone();
+    params = params.with_palw_v2_depths(&bundle);
     params.validate_palw_v2()?;
     Ok(params)
 }
@@ -12792,6 +12819,13 @@ mod consensus_params_id_tests {
             p.palw_signature_contexts_v2 = Some(ForkActivation::always());
             p.palw_shard_court = shard_court.map(ForkActivation::new);
             p.palw_panel_da = Some(ForkActivation::always());
+            // ADR-0108 Decision 5: the DA court and the free-prompt pins, which the court's horizon
+            // widens the pruning depth for.
+            p.palw_da_court = Some(ForkActivation::always());
+            p.palw_fp_da_pins = Some(ForkActivation::always());
+            let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { unreachable!() };
+            let bundle = bundle.clone();
+            p = p.with_palw_v2_depths(&bundle);
             p.palw_held_context = Some(ForkActivation::new(held_at));
             p
         };
@@ -12818,6 +12852,20 @@ mod consensus_params_id_tests {
         no_kary.palw_kary_court = None;
         let err = refused(no_kary);
         assert!(err.contains("palw_kary_court"), "the k-ary court: {err}");
+        // ADR-0108 Decision 5: a seat that holds no capture demands a leaf through the DA court,
+        // and the pins make the retention that demand fits inside a chain fact.
+        let mut no_da_court = held(v4, true, Some(100), 200);
+        no_da_court.palw_da_court = None;
+        let err = refused(no_da_court);
+        assert!(err.contains("palw_da_court") && err.contains("ADR-0108"), "the DA court: {err}");
+        let mut late_da_court = held(v4, true, Some(100), 200);
+        late_da_court.palw_da_court = Some(ForkActivation::new(300));
+        let err = refused(late_da_court);
+        assert!(err.contains("palw_da_court"), "the DA court after the fence: {err}");
+        let mut no_pins = held(v4, true, Some(100), 200);
+        no_pins.palw_fp_da_pins = None;
+        let err = refused(no_pins);
+        assert!(err.contains("palw_fp_da_pins") && err.contains("ADR-0108"), "the pins: {err}");
         let mut no_panel = held(v4, true, Some(100), 200);
         no_panel.palw_panel_da = None;
         let err = refused(no_panel);

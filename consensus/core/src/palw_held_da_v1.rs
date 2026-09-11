@@ -70,14 +70,29 @@ pub enum PalwHeldMissingV1 {
     StateChunk { checkpoint: u32, chunk: u32 },
     /// A run of committed step leaves.
     StepRange { first: u64, count: u32 },
+    /// **One step leaf's evidence** (ADR-0108 Decision 3): what a one-move accusation at `leaf`
+    /// carries, demanded by a seat of the claim's panel for a leaf its own draw assigned it. Its
+    /// answer is adjudicated, not only hash-checked (ADR-0108 Decision 4). Appended last.
+    StepLeaf { leaf: u64 },
 }
 
 /// **The answer**, in the unit accused.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum PalwHeldDisclosureV1 {
-    PromptIdsTile { opening: PalwPromptIdsOpeningV1 },
-    StateChunk { anchor: PalwAttnCheckpointAnchorV1, chunk: PalwAttnChunkOpeningV1 },
-    StepRange { opening: PalwStepRangeOpeningV1 },
+    PromptIdsTile {
+        opening: PalwPromptIdsOpeningV1,
+    },
+    StateChunk {
+        anchor: PalwAttnCheckpointAnchorV1,
+        chunk: PalwAttnChunkOpeningV1,
+    },
+    StepRange {
+        opening: PalwStepRangeOpeningV1,
+    },
+    /// A leaf's evidence (ADR-0108 Decision 1) — the one-move court's object without its accuser.
+    StepLeaf {
+        evidence: Box<crate::palw_shard_court_v1::PalwLeafEvidenceV1>,
+    },
 }
 
 /// **The accusation**, with the binding its unit is bounded by.
@@ -167,6 +182,8 @@ pub enum PalwHeldDaError {
     RangeNotCommitted,
     #[error("the class's layout is not derivable here")]
     Layout,
+    #[error("the evidence is of another execution than the demand's binding")]
+    EvidenceIsAnotherExecution,
 }
 
 /// The binding, authenticated against the claim's own `execution_root`.
@@ -223,6 +240,24 @@ pub fn palw_held_da_check_accusation_v1(
             }
             if first.checked_add(u64::from(count)).is_none_or(|end| end > binding.step_leaf_count) {
                 return Err(outside("the step space ends before the range does"));
+            }
+        }
+        // ADR-0108 Decision 3: a leaf of the step space, and not a fused-attention site — that
+        // leaf's terminal is ADR-0103 Decision 5's dissection, whose responder is already clocked.
+        // Who may demand it (a seat of the panel, for a leaf its draw assigned it, once) is the
+        // chain's to answer where the panel is read; this is the half the binding alone decides.
+        PalwHeldMissingV1::StepLeaf { leaf } => {
+            if leaf >= binding.step_leaf_count {
+                return Err(outside("the step space ends before the leaf"));
+            }
+            let coord = crate::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, leaf)
+                .ok_or(outside("the leaf has no coordinates in this job"))?;
+            if binding
+                .shape_profile
+                .resolve_node_slot(coord.node_slot)
+                .is_some_and(|(node, _)| node.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused)
+            {
+                return Err(outside("a fused-attention leaf is tried by its dissection, not demanded"));
             }
         }
     }
@@ -289,6 +324,17 @@ pub fn palw_held_da_check_disclosure_v1(
                 .map_err(|_| PalwHeldDaError::RangeNotCommitted)?;
             if root != binding.step_merkle_root {
                 return Err(PalwHeldDaError::RangeNotCommitted);
+            }
+        }
+        // ADR-0108 Decision 4: the evidence is of the demanded leaf of THIS execution — its
+        // refutation carries the demand's own authenticated binding — and whether it answers is the
+        // one-move verdict, which the caller runs at the class's root (this function holds no class).
+        (PalwHeldMissingV1::StepLeaf { leaf }, PalwHeldDisclosureV1::StepLeaf { evidence }) => {
+            if evidence.leaf_index() != leaf {
+                return Err(PalwHeldDaError::AnswerIsAnotherUnit);
+            }
+            if evidence.refutation.binding != *binding {
+                return Err(PalwHeldDaError::EvidenceIsAnotherExecution);
             }
         }
         _ => return Err(PalwHeldDaError::AnswerIsAnotherUnit),

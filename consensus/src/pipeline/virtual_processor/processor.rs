@@ -7291,6 +7291,28 @@ impl VirtualStateProcessor {
                         &accusation.binding,
                     )
                     .map_err(|e| format!("claim {claim_id}: {e}"))?;
+                    // **ADR-0108 Decision 3: a leaf is demanded only where the chain assigned it.**
+                    // The demanding seat's own draw — keyed by the network domain, which is held here
+                    // and not in the fold — must have put the leaf's interval in that seat's sample,
+                    // so no seat can pick the leaf an executor must put on chain.
+                    if let kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1::StepLeaf { leaf } = accusation.missing {
+                        let panel =
+                            state.panel(&claim_id).ok_or_else(|| format!("claim {claim_id} has no bound panel to demand from"))?;
+                        let seat_index = panel
+                            .seats
+                            .iter()
+                            .position(|seat| seat.bond == accusation.accuser)
+                            .ok_or_else(|| format!("claim {claim_id}: a leaf's evidence is demanded by a seat of its panel"))?;
+                        kaspa_consensus_core::palw_leaf_evidence_v1::palw_leaf_demand_is_the_seats_v1(
+                            &domain,
+                            &panel.anchor,
+                            &claim_id,
+                            seat_index as u8,
+                            &accusation.binding,
+                            leaf,
+                        )
+                        .map_err(|e| format!("claim {claim_id}: {e}"))?;
+                    }
                 }
                 Obj::MaterialDisclosedHeld { disclosure } => {
                     let claim_id = disclosure.claim;
