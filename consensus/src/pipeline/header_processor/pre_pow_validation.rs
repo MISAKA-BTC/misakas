@@ -56,7 +56,7 @@ impl HeaderProcessor {
             let parent = self
                 .headers_store
                 .get_header(ghostdag_data.selected_parent)
-                .map_err(|_| RuleError::MissingParents(vec![ghostdag_data.selected_parent]))?;
+                .map_err(|_| RuleError::MissingParents(vec![ghostdag_data.selected_parent], vec![]))?;
             if let Err(early) =
                 kaspa_consensus_core::palw_heartbeat_v1::check_heartbeat_slot(parent.timestamp, parent.pow_algo_id, header.timestamp)
             {

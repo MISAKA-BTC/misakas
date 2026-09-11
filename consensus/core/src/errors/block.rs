@@ -28,6 +28,23 @@ impl<T: Display + Clone> Display for TwoDimVecDisplay<T> {
     }
 }
 
+/// The tail [`RuleError::MissingParents`] appends when some of the missing parents are parents
+/// this data directory already rejected; empty when none are, so that message is unchanged.
+fn known_invalid_parents_note(known_invalid: &[BlockHash]) -> String {
+    match known_invalid {
+        [] => String::new(),
+        [parent] => format!(
+            "; parent {parent} is marked INVALID in this data directory (it was rejected earlier; search the log for its \
+             first rejection), so this node disagrees with the network about that block: upgrade and resync the data directory"
+        ),
+        parents => format!(
+            "; parents {parents:?} are marked INVALID in this data directory (they were rejected earlier; search the log for \
+             their first rejection), so this node disagrees with the network about those blocks: upgrade and resync the data \
+             directory"
+        ),
+    }
+}
+
 #[derive(Error, Debug, Clone)]
 pub enum RuleError {
     #[error("wrong block version: got {0} but expected {1}")]
@@ -112,8 +129,17 @@ pub enum RuleError {
     #[error("parent {0} is invalid")]
     InvalidParent(BlockHash),
 
-    #[error("block has missing parents: {0:?}")]
-    MissingParents(Vec<BlockHash>),
+    /// A parent the block needs is not there: its header is unknown (header validation) or it
+    /// has no body in this data directory (body validation).
+    ///
+    /// The second list is the subset of those parents this node's statuses store already holds
+    /// as `StatusInvalid`; only body validation fills it. Such a parent never gains a body here,
+    /// so its children can never be processed in this data directory, and the error that set the
+    /// mark was logged once, possibly long before the retry loop that reports this one (issue
+    /// #103). The variant and its handling are the same either way — the child is not marked
+    /// invalid and relay still treats it as an orphan — only the message names those parents.
+    #[error("block has missing parents: {0:?}{}", known_invalid_parents_note(.1))]
+    MissingParents(Vec<BlockHash>, Vec<BlockHash>),
 
     #[error("pruning point {0} is not in the past of this block")]
     PruningViolation(BlockHash),

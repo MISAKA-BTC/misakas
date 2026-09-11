@@ -12939,7 +12939,7 @@ impl VirtualStateProcessor {
         let parent = self
             .headers_store
             .get_header(virtual_state.ghostdag_data.selected_parent)
-            .map_err(|_| RuleError::MissingParents(vec![virtual_state.ghostdag_data.selected_parent]))?;
+            .map_err(|_| RuleError::MissingParents(vec![virtual_state.ghostdag_data.selected_parent], vec![]))?;
         // The slot: at or after the selected parent's timestamp plus the interval its lane sets.
         let earliest = match hb::check_heartbeat_slot(parent.timestamp, parent.pow_algo_id, template.block.header.timestamp) {
             Ok(()) => template.block.header.timestamp,

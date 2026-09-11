@@ -393,7 +393,7 @@ impl HeaderProcessor {
             }
         }
         if !missing_parents.is_empty() {
-            return Err(RuleError::MissingParents(missing_parents));
+            return Err(RuleError::MissingParents(missing_parents, vec![]));
         }
         Ok(())
     }
