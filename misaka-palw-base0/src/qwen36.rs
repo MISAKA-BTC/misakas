@@ -214,6 +214,19 @@ pub struct Qwen36ArtifactV1 {
     pub rope: RopeTableV1,
     /// ADR-0112: who decides which weights are in memory. `None` leaves it to the page cache.
     residency: Option<Qwen36ResidencyV1>,
+    /// ADR-0112 Decision 2 (amended 2026-09-11): why a mapping opened under
+    /// [`Qwen36ResidencyPolicyV1::FifthWithin`] has no residency — the host could spare less than
+    /// the class's floor. `None` for every other artifact.
+    residency_declined: Option<Qwen36ResidencyDeclinedV1>,
+}
+
+/// **Why a default budget was not taken** (ADR-0112 Decision 2, amended 2026-09-11): the bytes the
+/// node said it could spare, and the class's floor and fifth it compared them with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Qwen36ResidencyDeclinedV1 {
+    pub spare_bytes: u64,
+    pub floor_bytes: u64,
+    pub fifth_bytes: u64,
 }
 
 /// **ADR-0112 Decision 2's ratio**: with no budget stated, a mapped class is held within a fifth
@@ -230,6 +243,14 @@ pub enum Qwen36ResidencyPolicyV1 {
     Bytes(u64),
     /// Hold at most a fifth of the artifact's weight bytes — the ratio ADR-0112 certifies.
     FifthOfTheWeights,
+    /// **The default where the node has measured what it can spare** (ADR-0112 Decision 2,
+    /// amended 2026-09-11): a fifth of the weights if the spare bytes hold it, the spare bytes
+    /// themselves if they hold less but at least the class's floor, and the page cache — never a
+    /// refusal, because nobody stated a number — if they hold less than the floor. The fleet's
+    /// hosts are why: a fixed fifth is anonymous memory, which a host already in swap, or a
+    /// service in a 6 GiB cgroup, does not have, where the page cache's pages can at least be
+    /// reclaimed.
+    FifthWithin(u64),
 }
 
 impl Qwen36ResidencyPolicyV1 {
@@ -239,6 +260,7 @@ impl Qwen36ResidencyPolicyV1 {
             Self::PageCache => None,
             Self::Bytes(b) => Some(b),
             Self::FifthOfTheWeights => Some(weight_bytes.div_ceil(QWEN36_RESIDENT_FRACTION_DENOMINATOR_V1)),
+            Self::FifthWithin(spare) => Some(weight_bytes.div_ceil(QWEN36_RESIDENT_FRACTION_DENOMINATOR_V1).min(spare)),
         }
     }
 }
@@ -550,7 +572,14 @@ impl std::error::Error for Qwen36Error {}
 impl Qwen36ArtifactV1 {
     pub fn new(shape: Qwen36ShapeV1, rope: RopeTableV1) -> Result<Self, ArtifactError> {
         shape.validate()?;
-        Ok(Self { shape, store: Store::Owned(BTreeMap::new()), params: BTreeMap::new(), rope, residency: None })
+        Ok(Self {
+            shape,
+            store: Store::Owned(BTreeMap::new()),
+            params: BTreeMap::new(),
+            rope,
+            residency: None,
+            residency_declined: None,
+        })
     }
 
     pub fn with_tensor(mut self, name: impl Into<String>, values: Vec<i8>) -> Self {
@@ -631,6 +660,11 @@ impl Qwen36ArtifactV1 {
     /// The residency's numbers, or `None` when the page cache decides.
     pub fn residency_stats(&self) -> Option<Qwen36ResidencyStatsV1> {
         self.residency.as_ref().map(Qwen36ResidencyV1::stats)
+    }
+
+    /// Why a default budget was not taken, when it was not (ADR-0112 Decision 2, amended).
+    pub fn residency_declined(&self) -> Option<Qwen36ResidencyDeclinedV1> {
+        self.residency_declined
     }
 
     /// The least residency budget this artifact's forward pass runs in — its always-set plus one
@@ -1778,7 +1812,14 @@ pub fn open_artifact_with_residency(path: &std::path::Path, policy: Qwen36Reside
             let row = bytes.get(offset..offset + len).ok_or_else(|| ended("param bytes"))?;
             owned.insert(name, row.to_vec());
         }
-        return Ok(Qwen36ArtifactV1 { shape, store: Store::Mapped { map, directory }, params: owned, rope, residency: None });
+        return Ok(Qwen36ArtifactV1 {
+            shape,
+            store: Store::Mapped { map, directory },
+            params: owned,
+            rope,
+            residency: None,
+            residency_declined: None,
+        });
     };
     let budget = usize::try_from(budget).map_err(|_| Qwen36Error::Residency("the residency budget does not fit a usize".into()))?;
 
@@ -1816,6 +1857,27 @@ pub fn open_artifact_with_residency(path: &std::path::Path, policy: Qwen36Reside
     let pinned_bytes: usize = pinned_extents.iter().map(|(_, _, len)| *len).sum();
     let one_token = expert_bytes.saturating_mul(shape.experts_per_token).saturating_mul(expert_layers);
     let floor = pinned_bytes.saturating_add(one_token);
+    if budget < floor
+        && let Qwen36ResidencyPolicyV1::FifthWithin(spare) = policy
+    {
+        // Nobody stated a number, so nothing is refused: the mapping opens with the page cache
+        // deciding, as it did before ADR-0112, and says why. Every parameter row is owned, as that
+        // path owns them — the expert rows read here through the file descriptor.
+        let mut owned = owned_params;
+        for (name, (offset, len)) in expert_param_extents {
+            let row = map.read_u8_at(offset, len).map_err(|e| unreadable(&name, e))?;
+            owned.insert(name, row);
+        }
+        let fifth = (weight_bytes as u64).div_ceil(QWEN36_RESIDENT_FRACTION_DENOMINATOR_V1);
+        return Ok(Qwen36ArtifactV1 {
+            shape,
+            store: Store::Mapped { map, directory },
+            params: owned,
+            rope,
+            residency: None,
+            residency_declined: Some(Qwen36ResidencyDeclinedV1 { spare_bytes: spare, floor_bytes: floor as u64, fifth_bytes: fifth }),
+        });
+    }
     if budget < floor {
         return Err(Qwen36Error::Residency(format!(
             "a resident budget of {budget} bytes is below this class's floor of {floor}: the always-set is {pinned_bytes} bytes and \
@@ -1853,7 +1915,14 @@ pub fn open_artifact_with_residency(path: &std::path::Path, policy: Qwen36Reside
             bytes_read: pinned_bytes as u64,
         }),
     };
-    Ok(Qwen36ArtifactV1 { shape, store: Store::Mapped { map, directory }, params: owned_params, rope, residency: Some(residency) })
+    Ok(Qwen36ArtifactV1 {
+        shape,
+        store: Store::Mapped { map, directory },
+        params: owned_params,
+        rope,
+        residency: Some(residency),
+        residency_declined: None,
+    })
 }
 
 /// The parameter store a writer needs, taken out of an in-memory artifact.
@@ -2491,6 +2560,36 @@ mod tests {
             other => panic!("a budget below the floor must be refused by name, got {:?}", other.map(|_| ())),
         }
         assert!(open_artifact_with_residency(&path, Qwen36ResidencyPolicyV1::Bytes(floor)).is_ok(), "the floor itself opens");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// **The default is taken within what the node can spare, and never refused** (ADR-0112
+    /// Decision 2, amended 2026-09-11): a fifth where the spare bytes hold it, the spare bytes
+    /// where they hold less but at least the floor, and below the floor the page cache — the same
+    /// root and the same parameter rows as the owned store, and the reason kept for the log.
+    #[test]
+    fn a_default_budget_is_a_fifth_within_what_is_spare_and_below_the_floor_the_page_cache() {
+        let owned = fixture(2, 256);
+        let path = written(&owned, "within");
+        let fifth = (owned.weight_bytes() as u64).div_ceil(QWEN36_RESIDENT_FRACTION_DENOMINATOR_V1);
+        let roomy = open_artifact_with_residency(&path, Qwen36ResidencyPolicyV1::FifthWithin(u64::MAX)).expect("opens");
+        assert_eq!(roomy.residency_stats().expect("a residency").budget_bytes, fifth, "room for a fifth takes a fifth");
+        assert_eq!(roomy.residency_declined(), None);
+        let floor = roomy.residency_floor_bytes().expect("a floor");
+        assert!(floor < fifth, "the fixture's floor ({floor}) is under its fifth ({fifth}), or the middle case is empty");
+
+        let tight = open_artifact_with_residency(&path, Qwen36ResidencyPolicyV1::FifthWithin(floor)).expect("opens");
+        assert_eq!(tight.residency_stats().expect("a residency").budget_bytes, floor, "room for less takes what there is");
+
+        let short = open_artifact_with_residency(&path, Qwen36ResidencyPolicyV1::FifthWithin(floor - 1)).expect("never refused");
+        assert!(short.residency_stats().is_none(), "below the floor the page cache decides");
+        assert_eq!(
+            short.residency_declined(),
+            Some(Qwen36ResidencyDeclinedV1 { spare_bytes: floor - 1, floor_bytes: floor, fifth_bytes: fifth })
+        );
+        assert_eq!(short.artifact_root(), owned.artifact_root(), "the declined mapping is the same artifact");
+        let row = "blk.1.ffn_expert.5_silu.a16";
+        assert_eq!(short.param_rows(row).unwrap(), owned.param_rows(row).unwrap(), "every parameter row owned, the expert rows too");
         std::fs::remove_file(&path).ok();
     }
 
