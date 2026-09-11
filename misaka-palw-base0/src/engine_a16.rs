@@ -158,6 +158,12 @@ impl A16Cache {
     pub fn new(layers: usize) -> Self {
         Self { keys: vec![Vec::new(); layers], values: vec![Vec::new(); layers] }
     }
+
+    /// The rows the cache holds — the positions a walk has run. One forward appends one row to
+    /// every layer, so the first layer's count is every layer's.
+    pub fn rows(&self) -> usize {
+        self.keys.first().map_or(0, Vec::len)
+    }
     /// **This cache's bytes for one state chunk, encoded the way the MAP says — or nothing.**
     ///
     /// The A16 analogue of `KvCache::state_chunk_bytes`, and deliberately not a copy of it. That

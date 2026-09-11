@@ -237,6 +237,22 @@ pub fn base0_fp_recompute_state_at_position_v1<K: Base0FpRecomputeKernelsV1 + ?S
     kernels: &mut K,
     prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<Base0FpSeatStateV1, Base0FpRecomputeError> {
+    let (prefill, decode_calls) =
+        walk_inputs_at_position_v1(profile, ctx, prompt_token_ids, output_token_ids, positions, prompt_ids_form)?;
+    walk_rows_v1(kernels, prompt_token_ids, output_token_ids, prefill, 0, positions as usize)?;
+    seat_state_here_v1(profile, decode_calls, positions, kernels)
+}
+
+/// The inputs of a walk that stops after `positions` rows, checked the way every entry checks
+/// them: `(prefill, decode_calls)`, where `decode_calls` is how many of the rows are decode calls.
+fn walk_inputs_at_position_v1(
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    prompt_token_ids: &[u32],
+    output_token_ids: &[u32],
+    positions: u32,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<(usize, u32), Base0FpRecomputeError> {
     // Under the network's own form (ADR-0081 Decision 3): on a Merkle network the slot holds the
     // tiled root, and hashing the ids flat refused every honest job's own ids — the held drill's
     // `Incapable` at every interval past the first (2026-09-11).
@@ -268,18 +284,26 @@ pub fn base0_fp_recompute_state_at_position_v1<K: Base0FpRecomputeKernelsV1 + ?S
     if (output_token_ids.len() as u64) < decode_calls as u64 {
         return Err(Base0FpRecomputeError::OutputIdsTooShort { need: decode_calls as usize, got: output_token_ids.len() });
     }
+    Ok((prefill, decode_calls))
+}
 
-    // The executor's own walk, stopped at `positions` rows: the prefill in order, then decode call
-    // `c` consuming the id call `c − 1` produced.
-    for (position, token) in prompt_token_ids.iter().enumerate().take((positions as usize).min(prefill)) {
-        kernels.forward_no_capture(*token as usize, position)?;
-    }
-    for call in 1..=decode_calls {
-        let token = output_token_ids[call as usize - 1];
-        let position = prefill + call as usize - 1;
+/// **Rows `from .. to` of the executor's own walk**: the prompt's ids in order while inside the
+/// prefill, then decode call `c` consuming the id call `c − 1` produced — so row `p` past the
+/// prefill is fed `output_token_ids[p − prefill]`. A walk from zero and a walk resumed at `from`
+/// feed every row the same token, which is what lets [`base0_fp_a16_seat_state_v1`] continue one.
+fn walk_rows_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
+    kernels: &mut K,
+    prompt_token_ids: &[u32],
+    output_token_ids: &[u32],
+    prefill: usize,
+    from: usize,
+    to: usize,
+) -> Result<(), Base0FpRecomputeError> {
+    for position in from..to {
+        let token = if position < prefill { prompt_token_ids[position] } else { output_token_ids[position - prefill] };
         kernels.forward_no_capture(token as usize, position)?;
     }
-    seat_state_here_v1(profile, decode_calls, positions, kernels)
+    Ok(())
 }
 
 /// **The state the checkpoint carrying `covered` is the state of** (ADR-0082 Decision 4, amended;
@@ -353,9 +377,29 @@ impl<'a> A16RecomputeKernelsV1<'a> {
         artifact: &'a crate::artifact::Base0ArtifactV1,
         plan: Option<&'a crate::engine_a16::A16ProfilePlanV1>,
     ) -> Result<Self, Base0FpRecomputeError> {
+        Self::with_cache(artifact, plan, crate::engine_a16::A16Cache::new(artifact.shape.n_layers))
+    }
+
+    /// Kernels that continue a walk: `cache` is what an earlier walk of the SAME job left, and the
+    /// next forward is its next row. [`base0_fp_a16_seat_state_v1`] is the one caller that may hand
+    /// one over, and it keys the cache on everything a row is a function of.
+    fn with_cache(
+        artifact: &'a crate::artifact::Base0ArtifactV1,
+        plan: Option<&'a crate::engine_a16::A16ProfilePlanV1>,
+        cache: crate::engine_a16::A16Cache,
+    ) -> Result<Self, Base0FpRecomputeError> {
         let engine = crate::engine_a16::A16Engine::new(artifact)
             .map_err(|e| Base0FpRecomputeError::Engine(format!("the artifact is not an A16 class: {e:?}")))?;
-        Ok(Self { engine, plan, cache: crate::engine_a16::A16Cache::new(artifact.shape.n_layers), vocab: artifact.shape.vocab })
+        Ok(Self { engine, plan, cache, vocab: artifact.shape.vocab })
+    }
+
+    /// The rows the walk has run.
+    fn rows(&self) -> usize {
+        self.cache.rows()
+    }
+
+    fn into_cache(self) -> crate::engine_a16::A16Cache {
+        self.cache
     }
 }
 
@@ -706,6 +750,103 @@ pub fn base0_fp_seat_state_memoized_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
     Ok(state)
 }
 
+/// **The dense tier's walk, kept for the next question about the same job** (ADR-0110 §9.5).
+///
+/// One claim asks for the state at several positions. A seat asks for each drawn interval's start.
+/// An executor asks for each opening's anchor, the leaf its evidence is about, and each held unit.
+/// They arrive in no fixed order, and each used to be a walk from row zero, so `k` questions about
+/// an `n`-position context cost `k` quadratic walks where one suffices. An attention cache only
+/// ever APPENDS, so the cache at row `r` is exactly the first `r` rows of the cache at any later
+/// row. A later question continues the walk, and an earlier one reads the first rows of it.
+///
+/// Keyed on everything a row is a function of: the artifact (held, so its identity cannot be
+/// reused while this entry names it), whether the walk is the planned one, the class, the context,
+/// the prompt and the committed output ids. One entry, like the memo above, for the same reason:
+/// it joins the questions about one job, and it is not a cache of the fleet's claims. Only this
+/// tier has it. A recurrence's state is not a prefix of a later one, so the hybrid tier keeps
+/// walking from zero.
+struct A16WalkV1 {
+    artifact: std::sync::Arc<crate::artifact::Base0ArtifactV1>,
+    job: A16WalkKeyV1,
+    cache: crate::engine_a16::A16Cache,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct A16WalkKeyV1 {
+    planned: bool,
+    class_id: Hash64,
+    context_hash: Hash64,
+    prompt_ids_hash: Hash64,
+    output_ids_hash: Hash64,
+}
+
+static A16_WALK: std::sync::Mutex<Option<A16WalkV1>> = std::sync::Mutex::new(None);
+
+/// **The dense tier's seat state at `covered`, from the walk this process already has**
+/// (ADR-0110 §9.5) — [`base0_fp_seat_state_memoized_v1`] for the A16 family, with the walk kept.
+///
+/// The same question twice is answered from the memo. Otherwise, if the last walk was of the same
+/// job, it is continued when it stopped short of `covered`'s rows, or read up to them when it ran
+/// past. Only a different job, artifact or walk starts again at row zero. The rows are the fresh
+/// walk's either way: every row is the same token through the same forward, and the state is read
+/// from rows `0 .. positions` alone. `a_resumed_walk_is_the_walk_from_zero` holds that, in every
+/// order. The result is kept in the memo for the row check that follows, exactly as the fresh entry
+/// keeps it.
+#[allow(clippy::too_many_arguments)]
+pub fn base0_fp_a16_seat_state_v1(
+    artifact: &std::sync::Arc<crate::artifact::Base0ArtifactV1>,
+    plan: Option<&crate::engine_a16::A16ProfilePlanV1>,
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    prompt_token_ids: &[u32],
+    output_token_ids: &[u32],
+    covered: u32,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<Base0FpSeatStateV1, Base0FpRecomputeError> {
+    let key = seat_state_key_v1(profile, ctx, prompt_token_ids, covered);
+    let ids = kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(output_token_ids);
+    if let Ok(guard) = SEAT_STATE_MEMO.lock()
+        && let Some((held, held_ids, state)) = guard.as_ref()
+        && *held == key
+        && *held_ids == ids
+    {
+        return Ok(state.clone());
+    }
+    let positions = kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(profile, ctx, covered);
+    let (prefill, decode_calls) =
+        walk_inputs_at_position_v1(profile, ctx, prompt_token_ids, output_token_ids, positions, prompt_ids_form)?;
+    let job = A16WalkKeyV1 {
+        planned: plan.is_some(),
+        class_id: key.class_id,
+        context_hash: key.context_hash,
+        prompt_ids_hash: key.prompt_ids_hash,
+        output_ids_hash: ids,
+    };
+    // Taken out of the slot for the walk, so the lock is never held across a forward pass. A
+    // second thread meanwhile finds nothing and walks from zero, which is slower and still exact.
+    let held = A16_WALK
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take())
+        .filter(|walk| std::sync::Arc::ptr_eq(&walk.artifact, artifact) && walk.job == job);
+    let mut kernels = match held {
+        Some(walk) => A16RecomputeKernelsV1::with_cache(artifact, plan, walk.cache)?,
+        None => A16RecomputeKernelsV1::new(artifact, plan)?,
+    };
+    let rows = kernels.rows();
+    if rows < positions as usize {
+        walk_rows_v1(&mut kernels, prompt_token_ids, output_token_ids, prefill, rows, positions as usize)?;
+    }
+    let state = Base0FpSeatStateV1 { covered_decode_call: covered, ..seat_state_here_v1(profile, decode_calls, positions, &kernels)? };
+    if let Ok(mut slot) = A16_WALK.lock() {
+        *slot = Some(A16WalkV1 { artifact: artifact.clone(), job, cache: kernels.into_cache() });
+    }
+    if let Ok(mut guard) = SEAT_STATE_MEMO.lock() {
+        *guard = Some((key, ids, state.clone()));
+    }
+    Ok(state)
+}
+
 /// **The state this seat recomputed for this class, context, prompt and covered call, if it is
 /// still the last one it computed** — the row check's only way to reach it.
 ///
@@ -747,6 +888,9 @@ pub fn base0_fp_seat_state_remember_v1(
 pub fn base0_fp_seat_state_forget_v1() {
     if let Ok(mut guard) = SEAT_STATE_MEMO.lock() {
         *guard = None;
+    }
+    if let Ok(mut slot) = A16_WALK.lock() {
+        *slot = None;
     }
 }
 
@@ -1035,6 +1179,85 @@ mod tests {
         )
         .expect("a neighbouring position also recomputes");
         assert_ne!(state.state_chunks_root, leaf.state_chunks_root, "two positions must not share a state root");
+    }
+
+    /// **A resumed walk is the walk from zero** (ADR-0110 §9.5), in every order a claim's
+    /// questions arrive in:
+    ///
+    /// * later, and the walk continues;
+    /// * earlier, and its first rows are read;
+    /// * the same again, and the memo answers;
+    /// * with another job between, and a fresh walk runs, never the first job's rows.
+    ///
+    /// Every answer is compared whole — chunks, root and counters — against a walk from row zero
+    /// on fresh kernels, and against the checkpoint the executor committed at that position.
+    #[test]
+    fn a_resumed_walk_is_the_walk_from_zero() {
+        use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat;
+        use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, qwen25_a16_profile_v5};
+        let geometry = PalwQwen25GeometryV1 {
+            layer_count: 2,
+            hidden_dim: 8,
+            ffn_dim: 8,
+            attn_heads: 2,
+            attn_kv_heads: 2,
+            attn_head_dim: 4,
+            vocab_size: 64,
+            n_ctx: 32,
+            n_threads: 1,
+            rms_eps_q: 1,
+            tile_len: 4,
+        };
+        let profile = qwen25_a16_profile_v5(geometry).expect("a valid graph-v5 A16 profile");
+        let shape = crate::artifact::Base0ShapeV1 {
+            n_layers: geometry.layer_count as usize,
+            n_heads: geometry.attn_heads as usize,
+            n_kv_heads: geometry.attn_kv_heads as usize,
+            d_head: geometry.attn_head_dim as usize,
+            d_ff: geometry.ffn_dim as usize,
+            vocab: geometry.vocab_size as usize,
+            max_position: geometry.n_ctx as usize,
+            ln_theta_gen_q: crate::artifact::LN_THETA_10000_GEN_Q,
+            eps_q: geometry.rms_eps_q,
+        };
+        let artifact = std::sync::Arc::new(
+            crate::artifact::Base0ArtifactV1::derive_deterministic(shape, 0x5A17)
+                .expect("a valid shape")
+                .with_a16_params(crate::engine_a16::derived_a16_store(&shape))
+                .expect("the derived store is sorted and unique"),
+        );
+        let plan = crate::engine_a16::A16Engine::new(&artifact)
+            .expect("the fixture is an A16 artifact")
+            .plan_from_profile(&profile)
+            .expect("the v5 declaration is this engine's program");
+        let job = |anchor: u64| {
+            let (ctx, prompt) = crate::produce::base0_rc_job_v1(&profile, Hash64::from_u64_word(anchor), 64, 12, 5, Flat);
+            let run = crate::qwen25_a16_backend::a16_execute_for_attempt_v1(&artifact, &profile, Some(&plan), &ctx, &prompt)
+                .expect("the dense v5 fixture runs");
+            let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+            (ctx, ids, run.generated_token_ids, run.checkpoints)
+        };
+        let fresh = |ctx: &PalwJobContextV2, ids: &[u32], out: &[u32], covered: u32| {
+            let mut kernels = A16RecomputeKernelsV1::new(&artifact, Some(&plan)).expect("the dense kernels");
+            base0_fp_recompute_state_at_covered_v1(&profile, ctx, ids, out, covered, &mut kernels, Flat).expect("a walk from zero")
+        };
+        let resumed = |ctx: &PalwJobContextV2, ids: &[u32], out: &[u32], covered: u32| {
+            base0_fp_a16_seat_state_v1(&artifact, Some(&plan), &profile, ctx, ids, out, covered, Flat).expect("a resumed walk")
+        };
+
+        let (ctx, ids, out, checkpoints) = job(0xA16_0001);
+        assert_eq!(ctx.declared_prefill_tokens + ctx.exact_decode_tokens - 1, 16, "sixteen rows: twelve of prompt, four decode");
+        for covered in [7u32, 3, 3, 16, 1, 12, 16, 9, 2, 13] {
+            let got = resumed(&ctx, &ids, &out, covered);
+            assert_eq!(got, fresh(&ctx, &ids, &out, covered), "covered {covered}");
+            let committed =
+                checkpoints.leaves.iter().find(|leaf| leaf.covered_decode_call == covered).expect("a checkpoint at every position");
+            assert_eq!(got.state_chunks_root, committed.state_chunks_root, "covered {covered}: the executor's own root");
+        }
+        let (ctx_b, ids_b, out_b, _) = job(0xA16_0002);
+        assert_ne!(ids_b, ids, "a second job with its own prompt");
+        assert_eq!(resumed(&ctx_b, &ids_b, &out_b, 10), fresh(&ctx_b, &ids_b, &out_b, 10), "another job walks its own rows");
+        assert_eq!(resumed(&ctx, &ids, &out, 10), fresh(&ctx, &ids, &out, 10), "and the first job's again, from zero");
     }
 
     /// **The hybrid composition has a serializer, and it is stream F's own enumeration**

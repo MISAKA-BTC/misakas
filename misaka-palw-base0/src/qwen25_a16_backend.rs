@@ -899,14 +899,16 @@ impl Qwen25A16Backend {
         prompt_token_ids: &[u32],
         covered: u32,
     ) -> Option<crate::fp_recompute::Base0FpSeatStateV1> {
-        let mut kernels = crate::fp_recompute::A16RecomputeKernelsV1::new(&self.artifact, self.plan.as_ref()).ok()?;
-        crate::fp_recompute::base0_fp_seat_state_memoized_v1(
+        // The walk is kept between questions about one job (ADR-0110 §9.5): an executor answering
+        // several openings, a leaf's evidence and the held units of one claim walks it once.
+        crate::fp_recompute::base0_fp_a16_seat_state_v1(
+            &self.artifact,
+            self.plan.as_ref(),
             &material.binding.shape_profile,
             &material.binding.job_context,
             prompt_token_ids,
             &material.generated_token_ids,
             covered,
-            &mut kernels,
             self.prompt_ids_form,
         )
         .ok()
@@ -1921,15 +1923,15 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         if !self.court_capable {
             return Err("the v1 class commits no checkpoint leg, so it has no state root to recompute".to_string());
         }
-        let mut kernels =
-            crate::fp_recompute::A16RecomputeKernelsV1::new(&self.artifact, self.plan.as_ref()).map_err(|e| e.to_string())?;
-        crate::fp_recompute::base0_fp_seat_state_memoized_v1(
+        // A seat's drawn intervals of one claim walk the job once (ADR-0110 §9.5).
+        crate::fp_recompute::base0_fp_a16_seat_state_v1(
+            &self.artifact,
+            self.plan.as_ref(),
             &self.profile,
             context,
             prompt_token_ids,
             output_token_ids,
             covered,
-            &mut kernels,
             self.prompt_ids_form,
         )
         .map(|state| state.state_chunks_root)
