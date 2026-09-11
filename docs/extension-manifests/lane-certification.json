@@ -1,0 +1,10 @@
+{
+  "manifest": "misaka-palw/extension-manifest/v1",
+  "kind": "lane-certification",
+  "name": "the floor's attempt lane",
+  "network": "testnet-11",
+  "source": { "note": "palw-certify bind --model-id PALW-BASE-0/rc --lane attempt --out floor-attempt-lane.borsh" },
+  "declares": { "object_id": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8" },
+  "verification": { "object_path": "floor-attempt-lane.borsh", "lane": "attempt" },
+  "admission": { "object": "ClassLaneCertified" }
+}

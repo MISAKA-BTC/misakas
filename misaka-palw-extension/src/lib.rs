@@ -57,5 +57,6 @@ pub use report::{
     PalwExtensionServingV1, PalwFenceDeltaV1, PalwWouldPrintV1,
 };
 pub use verify::{
-    PALW_EXTENSION_GENESIS_TERMS, PalwExtensionEnvV1, genesis_registration_terms_v1, params_for, verify_extension_v1, verify_parsed_v1,
+    PALW_EXTENSION_GENESIS_TERMS, PalwClassRegistrationInputsV1, PalwExtensionEnvV1, class_registration_inputs_v1,
+    genesis_registration_terms_v1, params_for, verify_extension_v1, verify_parsed_v1,
 };

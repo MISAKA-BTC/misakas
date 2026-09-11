@@ -1,0 +1,10 @@
+{
+  "manifest": "misaka-palw/extension-manifest/v1",
+  "kind": "family-certification",
+  "name": "PALW-BASE-0 attempt-lane drill",
+  "network": "testnet-11",
+  "source": { "note": "palw-certify drill --family base0 --lane attempt --out base0-attempt.borsh" },
+  "declares": { "object_id": "43fb5f37810782ddf8e05951a32d71194a159a023d983bf394e200a70d19bcf8704e569785943bf867298f649f2f29e5f8b9090ea5ade2f1691e1015a689e2dc" },
+  "verification": { "object_path": "base0-attempt.borsh", "lane": "attempt", "expected": { "family_id": "43fb5f37810782ddf8e05951a32d71194a159a023d983bf394e200a70d19bcf8704e569785943bf867298f649f2f29e5f8b9090ea5ade2f1691e1015a689e2dc" } },
+  "admission": { "object": "FamilyCertified" }
+}

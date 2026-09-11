@@ -44,6 +44,10 @@ misaka-palw.workspace = true
 # to the answer's ids (X6's third input).
 misaka-palw-derive.workspace = true
 misaka-palw-base0.workspace = true
+# ADR-0108: `palw extension` — the manifest verifier and the receipt; `submit` builds a
+# `ClassRegistered` through the SDK the way `kaspad --palw-register-class` does.
+misaka-palw-extension.workspace = true
+misaka-palw-sdk.workspace = true
 serde_json.workspace = true
 serde = { workspace = true, features = ["derive"] }
 toml.workspace = true

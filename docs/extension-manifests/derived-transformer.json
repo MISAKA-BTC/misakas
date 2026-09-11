@@ -1,0 +1,20 @@
+{
+  "manifest": "misaka-palw/extension-manifest/v1",
+  "kind": "derived-transformer",
+  "name": "music/smf/v1 — the shipped MIDI writer, over the corpus's smallest answer",
+  "network": "testnet-11",
+  "source": { "note": "the transformer this build publishes under the name; the vector is misaka-palw-derive's own corpus answer" },
+  "declares": { "object_id": "4f47c5786c58affbf0a24e3203d50728385e26aece93737d56b79eebe95cbfff91d10ba03b3ee4cf22cdd836bbe295537fcf810210c8b4cd16a77afa1e5eb50e" },
+  "transformer": { "name": "music/smf/v1" },
+  "verification": {
+    "vectors": [
+      {
+        "dsl_path": "lead.json",
+        "expected_dsl_hash": "36a12bf27dc851ac87964b9649d48f8ca6e12484ea614de31461d26cb7e7ba8af6e507de6d8b9a6c3b415c2b352d387a7d418e2ef1696a55f89a7e1a8529df60",
+        "expected_artifact_hash": "09c9b705c6d1f0a6c95be61028fd813086a13e1491bff4533175d875ece108fd0a305b95486a926a3fdb80c92b89da290816b0a3786fea16a82d1bcf30a56b52",
+        "expected_artifact_bytes": 82
+      }
+    ]
+  },
+  "admission": { "object": "none" }
+}

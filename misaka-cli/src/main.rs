@@ -34,6 +34,8 @@ mod palw_claim;
 mod palw_court;
 mod palw_da;
 mod palw_derived;
+/// ADR-0108: `palw extension inspect|verify|preflight|submit|receipt-verify`.
+mod palw_extension;
 mod palw_fp;
 /// ADR-0088 Decision 12: `palw line-… / version-… / proposal-… / evaluate` — the model registry.
 mod palw_line;
@@ -71,6 +73,20 @@ pub mod exit {
     /// `node security-report`: no platform confinement backend is in force, but nothing public is
     /// exposed behind it. The environment discipline is the whole of the posture.
     pub const SECURITY_DEGRADED: i32 = 14;
+    /// `palw extension` (ADR-0108 §4): the manifest is wrong about itself — an id that does not
+    /// recompute, a bound that is zero, a vector whose expected root the recomputation does not
+    /// produce — or expressible but the chain would refuse it (already registered). The field is
+    /// named. (The ADR's §4 draft said 2; 2 is clap's, and 3–5 were taken.)
+    pub const EXTENSION_REFUSED: i32 = 20;
+    /// `palw extension`: a node extension — unverifiable on this build, never "valid"; the
+    /// missing thing (a transformer, a lineage, a file) is named.
+    pub const EXTENSION_NODE_EXTENSION: i32 = 21;
+    /// `palw extension`: a ruleset change — a fence; the report says what the arming build would
+    /// print and whether arming it is a flag day. Activation is a release, never a manifest.
+    pub const EXTENSION_RULESET_CHANGE: i32 = 22;
+    /// `palw extension`: expressible, but the depth asked for was not reached because this
+    /// machine lacks the bytes (an artifact, a vector file). Not a verdict on the manifest.
+    pub const EXTENSION_DEPTH_NOT_REACHED: i32 = 23;
 }
 
 /// A CLI error that carries the process exit code to surface.
@@ -348,8 +364,90 @@ enum WalletCmd {
     },
 }
 
+/// `palw extension verify --depth` (ADR-0108 Decision 3).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum ExtensionDepthArg {
+    /// Canonical form, bounds, the id, the kind's identity recomputed from what is inline.
+    Structural,
+    /// The declared vectors re-run with this build.
+    Vectors,
+    /// The chain's own computation over the bytes this machine holds.
+    Full,
+}
+
+impl ExtensionDepthArg {
+    fn depth(self) -> misaka_palw_extension::PalwExtensionDepthV1 {
+        match self {
+            Self::Structural => misaka_palw_extension::PalwExtensionDepthV1::Structural,
+            Self::Vectors => misaka_palw_extension::PalwExtensionDepthV1::Vectors,
+            Self::Full => misaka_palw_extension::PalwExtensionDepthV1::Full,
+        }
+    }
+}
+
+/// **ADR-0108: an extension is a manifest the verifier recomputes.** One manifest in; one of
+/// three tiers out — expressible now, a node extension, or a ruleset change — or refused by the
+/// field's name. A receipt is evidence of one reproduction and never a vote.
+#[derive(Subcommand, Debug)]
+enum ExtensionCmd {
+    /// What it is, its id, its tier by structure alone (offline, at the genesis shape).
+    Inspect {
+        manifest: std::path::PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Recompute the manifest at a depth; write a receipt with --receipt-out (signed with --key-file).
+    Verify {
+        manifest: std::path::PathBuf,
+        #[arg(long, value_enum, default_value_t = ExtensionDepthArg::Vectors)]
+        depth: ExtensionDepthArg,
+        /// Write a `misaka-palw/extension-receipt/v1` here — canonical JSON, signed if a key is given.
+        #[arg(long)]
+        receipt_out: Option<std::path::PathBuf>,
+        #[command(flatten)]
+        key: KeyArgs,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Verify at Full, plus the chain's shape at the node's DAA: the object, its cost, and the
+    /// refusal it would meet — before any fee. Registration terms are the genesis terms (§8).
+    Preflight {
+        manifest: std::path::PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Build the EXISTING object and file it (dry-run unless --yes). A class becomes a
+    /// `ClassRegistered` signed by this key, which must be the bond's (`--bond txid:index`); a
+    /// certification files its object; a transformer and a ruleset candidate have nothing to file.
+    Submit {
+        manifest: std::path::PathBuf,
+        #[command(flatten)]
+        key: KeyArgs,
+        /// The registrant's producer bond (`txid:index`) — required for a class.
+        #[arg(long)]
+        bond: Option<String>,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// One receipt: its canonical form, its id, its signature, and the ruleset it was made on
+    /// against this build's (SA-3). With --manifest, it must be about that manifest.
+    ReceiptVerify {
+        receipt: std::path::PathBuf,
+        #[arg(long)]
+        manifest: Option<std::path::PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 #[derive(Subcommand, Debug)]
 enum PalwCmd {
+    /// ADR-0108: verify, preflight, submit and receipt an extension manifest.
+    #[command(subcommand)]
+    Extension(ExtensionCmd),
     /// Submit a free-prompt commitment built by `misaka-palw-fp-rail` (dry-run unless --yes).
     FpSubmit {
         /// The rail's `*.commitment-tx.borsh`.
@@ -1473,6 +1571,19 @@ async fn main() -> std::process::ExitCode {
             palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
         }
         Command::Palw(PalwCmd::SubmitObject { key, object, yes }) => palw_fp::submit_objects(&ctx, &key.source(), &object, yes).await,
+        Command::Palw(PalwCmd::Extension(ExtensionCmd::Inspect { manifest, json })) => palw_extension::inspect(&ctx, &manifest, json),
+        Command::Palw(PalwCmd::Extension(ExtensionCmd::Verify { manifest, depth, receipt_out, key, json })) => {
+            palw_extension::verify(&ctx, &manifest, depth.depth(), receipt_out.as_deref(), key.source_opt(), json)
+        }
+        Command::Palw(PalwCmd::Extension(ExtensionCmd::Preflight { manifest, json })) => {
+            palw_extension::preflight(&ctx, &manifest, json).await
+        }
+        Command::Palw(PalwCmd::Extension(ExtensionCmd::Submit { manifest, key, bond, yes, json })) => {
+            palw_extension::submit(&ctx, &manifest, &key.source(), bond.as_deref(), yes, json).await
+        }
+        Command::Palw(PalwCmd::Extension(ExtensionCmd::ReceiptVerify { receipt, manifest, json })) => {
+            palw_extension::receipt_verify(&ctx, &receipt, manifest.as_deref(), json)
+        }
         Command::Palw(PalwCmd::DaAccuse { key, claim, row, tile, bond, out }) => {
             palw_da::accuse(&ctx, &key.source(), palw_da::DaAccuseArgs { claim: &claim, row, tile, bond: &bond, out: &out }).await
         }

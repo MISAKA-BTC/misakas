@@ -296,18 +296,27 @@ reads is a path the person handed it.
 ```text
 misaka palw extension inspect   <manifest>              what it is, its id, its tier by structure alone
 misaka palw extension verify    <manifest> [--depth structural|vectors|full] [--receipt-out <file>]
-                                                        [--key <source>]  recompute; write a receipt
+                                                        [--key-file <path> | --key-stdin]  recompute; write a receipt
 misaka palw extension preflight <manifest>              verify at Full + the chain's shape at the node's DAA
-misaka palw extension submit    <manifest> --key <source> [--yes]
+misaka palw extension submit    <manifest> --key-file <path> [--bond <txid:index>] [--yes]
                                                         build the existing object and file it (dry-run unless --yes)
 misaka palw extension receipt-verify <receipt> [--manifest <file>]
                                                         the signature, the id, the ruleset it was made on
 ```
 
-Exit codes distinguish the tiers so a script can branch: expressible-and-would-be-admitted `0`;
-refused (the manifest is wrong about itself) `2`; node extension (unverifiable here) `3`; ruleset
-change `4`; a depth not reached because the machine lacks the bytes `5`. Every non-zero exit prints the
-field or the missing thing by name.
+The key is named the way every keyed `misaka` command names it — a 0600 seed file or stdin, never
+an argument or the environment (ADR-0063 SA-1); `--bond` is the registrant's producer bond, required
+for a class because the registration is signed by that bond's key.
+
+Exit codes distinguish the tiers so a script can branch: expressible-and-would-be-admitted at the
+depth asked for `0`; refused (the manifest is wrong about itself, or expressible but the chain would
+refuse it — already registered) `20`; node extension (unverifiable here) `21`; ruleset change `22`;
+a depth not reached because the machine lacks the bytes `23`. The draft of this section proposed
+2/3/4/5; `2` is clap's argument-error code and 3–5 were already `NETWORK_MISMATCH`, `CONNECTION` and
+`NODE_NOT_SYNCED` in `misaka-cli`'s `exit` module, so the tier codes took the first free block at
+20. Every non-zero exit prints the field or the missing thing by name. The CLI's own codes still
+apply around them: `1` for a plain error (a missing `--bond`, a transformer that has nothing to
+file), `3` for a manifest whose network is not `--network`, `4` for a node that cannot be reached.
 
 ## 5. What this costs
 

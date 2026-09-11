@@ -1,0 +1,14 @@
+{
+  "manifest": "misaka-palw/extension-manifest/v1",
+  "kind": "context-profile",
+  "name": "the dense A16 row at a width no catalog row spells",
+  "network": "testnet-11",
+  "source": { "note": "projected with palw_a16_context_row_profile_v1(24); the weights are the published Qwen2.5-1.5B dense artifact" },
+  "artifact": {
+    "root": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "path": "qwen25-1.5b.palwart"
+  },
+  "declares": { "object_id": "95bea23afcc0f7bdbe351283c7dfb77c6da7e614af1e97c66519aa28b369faee2acc9af10c007f7ff2fd5764b06c62373511179e26cf71425b6524767e2de514", "capabilities": ["attempt", "fp"], "resource_bounds": { "memory_bytes": 2147483648 } },
+  "verification": { "project": "a16-context-row", "n_ctx": 24 },
+  "admission": { "object": "ClassRegistered" }
+}
