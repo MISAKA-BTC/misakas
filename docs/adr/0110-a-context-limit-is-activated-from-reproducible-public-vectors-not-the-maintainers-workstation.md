@@ -298,3 +298,59 @@ a generator. Everything that grew with the context is held by the executor or th
 * The first external documents for 128K and 2M, and their pins. **The 2M vector cannot run on
   this tree**: ADR-0103 §10.7 found that the A16 tier's attention ops refuse a history longer
   than 2^18. The widest A16 vector anything here can produce is 262,144 positions.
+
+### 9.5 How the 2M vector runs (2026-09-11)
+
+The operator asked how the 2M vector should be run. Answering meant running the widths below it
+and reading where the time went. Four findings, in the order they bind:
+
+1. **The wall.** No A16-family class executes past 262,143 positions (ADR-0103 §10.7). The 2M
+   vector is therefore refused before produce, by name (`palw_context_vector_blocked_v1`), and
+   `--list` says so. `0110-dense-v7-256k` (262,144 positions) was added as the widest vector the
+   tier can run. Running 2M needs a ruleset decision first: a separate history bound for the
+   attention ops, with its exactness argued (it holds to `2^26` rows) and its Q24 precision
+   answered (about three bits a probability at `2^21`). A faster machine does not help.
+2. **The pool's own overhead was the system time.** Sampled on the 32,768-position vector, 46% of
+   thread time was `swtch_pri` and 34% `__psynch_cvwait`: rayon's workers yielding and waiting.
+   Two things kept waking them. The fused attention site tiled one registered triple over
+   `heads × history` entries twice per call and materialised four history-long rows. The kernels
+   also went to the pool on a channel count alone, even for the thin row's 512-MAC unembedding.
+   `kernels::a16_attn_fused_uniform_fast` reads each triple once and reuses its scratch, and
+   `parallel_worth_it` / `FUSED_CHUNK_WORK` send only real work to the pool. Both are
+   bit-identical by construction and pinned against the catalog. The 4,096-position vector went
+   from 18.9 s (83 s of system time) to 10.9 s (0.14 s); the 32,768 one from 398 s to 274 s
+   (1,312 s of system time to 240 s), on one host at like load.
+3. **One claim's questions each walked the job from row zero.** The seat's interval starts, the
+   executor's opening anchors, a leaf's evidence and the held units all ask for positions of ONE
+   job. `fp_recompute::base0_fp_a16_seat_state_v1` keeps the dense tier's walk between them: an
+   attention cache only appends, so a later question continues it and an earlier one reads its
+   first rows. `a_resumed_walk_is_the_walk_from_zero` holds it equal to the walk from zero in every
+   order.
+4. **The court's tampered half re-executes the job dense**, about 700 bytes a leaf. That is 9 GB
+   at 128K. At 256K (26.2 M leaves, past `PALW_CONTEXT_TAMPER_MAX_LEAVES_V1`) the stage says so
+   and is skipped by name. The honest half still runs at every width. A tamper that re-folds
+   instead of re-executing is the next engine change the widest vectors need, and it is not
+   built.
+
+**The runs, on this host** (a 12-core M-series, 24 GB, shared with a build), after the three
+changes:
+
+| | 4,096 | 32,768 | 131,072 |
+|---|---|---|---|
+| produce | 1.0 s | 33 s | 312 s |
+| seat (four intervals, the Resume route) | 2.8 s | 89 s | 819 s |
+| court (three honest leaves and the drill) | 5.9 s | 139 s | 1,402 s |
+| availability (five answers) | 0.4 s | 12 s | 140 s |
+| whole run | 10.9 s | 274 s | 2,682 s (44.7 min) |
+| peak resident | 373 MB | 2.35 GB | 7.5 GB |
+| a leaf's evidence | 7,315 B | 7,699 B | 8,019 B |
+| `document_id` | `9c5a772c…` | `848d9352…` | `7bc3f88b…` |
+
+The 131,072-position vector's first reproduction is this run. Its id is pinned in
+`misaka-palw-base0/tests/context_vector_external.rs` — its own test target, so the release-mode
+job's filter (which pins its count at two) cannot see it — and it runs by hand:
+`cargo test --release -p misaka-palw-base0 --test context_vector_external -- --ignored`. Every
+chain-side term still reads a constant number of bytes a doubling: the evidence grew 320 bytes
+over the two doublings from 32,768, the answers likewise, and the roots, counts and verdicts are
+the table's. The 262,144-position vector is the next external run; the 2M one waits on §10.7 of
+ADR-0103.
