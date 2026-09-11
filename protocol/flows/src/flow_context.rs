@@ -296,6 +296,7 @@ mod tests {
         let mut upgraded = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11));
         upgraded.palw_model_leg_v2 = None;
         upgraded.palw_audit_2026_09_11 = None;
+        upgraded.palw_prefill_draw = None;
         let mut un_upgraded = upgraded.clone();
         un_upgraded.palw_model_benefits = None;
 
