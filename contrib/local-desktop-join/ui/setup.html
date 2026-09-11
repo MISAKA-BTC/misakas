@@ -751,7 +751,7 @@
           <button id="btn-node-logs" onclick="callApi('/api/logs')" data-i18n="btnNodeLogs">Node logs</button>
           <button id="btn-dashboard" onclick="openDashboard()" data-i18n="btnDashboard">Dashboard</button>
           <button id="btn-learn" onclick="openLearn()" data-i18n="btnLearn">Learn</button>
-          <button id="btn-support" onclick="openSupportPanel()" data-i18n="btnSupport">Support report</button>
+          <button id="btn-support" onclick="openSupportPanel()" data-i18n="btnSupport">Diagnostic report</button>
           <button id="btn-stop" onclick="callApi('/api/stop-setup')" data-i18n="btnFinish">Finish setup page</button>
         </div>
       </section>
@@ -798,7 +798,7 @@
           <button id="btn-quick-validator" class="primary" onclick="autoValidatorJoin()" data-i18n="quickValidator">Auto validator</button>
           <button id="btn-quick-dashboard" onclick="openDashboard()" data-i18n="quickDashboard">Dashboard</button>
           <button id="btn-quick-learn" onclick="openLearn()" data-i18n="quickLearn">Learn</button>
-          <button id="btn-quick-support" onclick="openSupportPanel()" data-i18n="quickSupport">Support</button>
+          <button id="btn-quick-support" onclick="openSupportPanel()" data-i18n="quickSupport">Diagnostics</button>
         </div>
       </section>
 
@@ -953,15 +953,15 @@
       <section id="supportPanel" class="support-panel hidden" aria-live="polite">
         <div class="support-head">
           <div>
-            <div class="card-title" data-i18n="supportTitle">Support report</div>
-            <div class="card-copy" data-i18n="supportBody">Copy or save this redacted report and attach it when asking the project maintainer or support channel for help.</div>
+            <div class="card-title" data-i18n="supportTitle">Diagnostic report</div>
+            <div class="card-copy" data-i18n="supportBody">Creates a redacted report of the node state, recent logs, and errors. It can be copied or saved locally and is never sent automatically.</div>
           </div>
           <button type="button" onclick="closeSupportPanel()" data-i18n="btnCloseSupport">Close</button>
         </div>
         <div id="supportError" class="support-error"></div>
         <div id="supportMeta" class="card-copy"></div>
         <div class="support-actions">
-          <button id="copySupportReport" class="primary" type="button" data-i18n="btnCopySupport">Copy report for submission</button>
+          <button id="copySupportReport" class="primary" type="button" data-i18n="btnCopySupport">Copy diagnostic report</button>
           <button id="saveSupportReport" type="button" data-i18n="btnSaveSupport">Save report (.txt)</button>
         </div>
       </section>
@@ -1083,10 +1083,10 @@
         quickValidator: 'validator自動開始',
         quickDashboard: 'ダッシュボード',
         quickLearn: '用語と仕組み',
-        quickSupport: 'サポート',
+        quickSupport: '診断',
         nextActionLabel: '次にすること',
         btnRefreshState: '現在の状態を再確認',
-        btnSupport: 'サポート情報',
+        btnSupport: '診断レポート',
         btnCheckApp: '1. アプリ確認',
         btnAutoNode: '自動でnode参加',
         btnAutoValidator: '自動でvalidator参加',
@@ -1115,13 +1115,13 @@
         bondStatusLabel: 'Bond',
         attestationEpochLabel: '直近の成功epoch',
         attestationTxLabel: 'transaction ID',
-        supportTitle: '提出用サポート情報',
-        supportBody: '秘匿情報を除いたレポートをコピーまたは保存し、管理者やサポート窓口へ添付してください。',
+        supportTitle: '診断レポート',
+        supportBody: 'nodeの状態、直近のログ、エラーを、秘匿情報を除いてまとめます。レポートはこの端末内でコピーまたは保存され、自動送信されません。',
         btnCloseSupport: '閉じる',
-        btnCopySupport: '提出用レポートをコピー',
+        btnCopySupport: '診断レポートをコピー',
         btnSaveSupport: 'レポートを保存 (.txt)',
         supportNoError: '現在エラーは記録されていません。現在状態のレポートを作成できます。',
-        supportCopied: '提出用レポートをコピーしました。',
+        supportCopied: '診断レポートをコピーしました。',
         statusRunning: '実行中',
         statusStopped: '停止中',
         statusUnknown: '未確認',
@@ -1225,8 +1225,8 @@
         autoRunningHint: '自動実行中です。実行ログを確認し、止める場合は下の「自動実行を停止」を押してください。現在の処理が一区切りした後に止まります。',
         nextAutoTitle: '自動実行の完了を待つ',
         nextPrepareTitle: '実行環境の準備完了を待つ',
-        nextPrepareFailedTitle: '準備エラーを提出する',
-        nextPrepareFailedBody: '準備ログの末尾を確認し、「提出用レポートをコピー」でエラー内容を共有してください。',
+        nextPrepareFailedTitle: '準備エラーを確認する',
+        nextPrepareFailedBody: '準備ログの末尾を確認してください。詳しい状態は「診断レポートをコピー」で記録できます。',
         nextNeedsPrepareTitle: '参加アプリを準備する',
         nextNeedsPublicIpTitle: '公開IPを確認する',
         nextNeedsPreflightTitle: '実行環境の参加条件を確認する',
@@ -1252,7 +1252,7 @@
         needPrepare: '下の「2. VPS準備」を押して、不足しているバイナリをインストールします。',
         bootstrapReadyHuman: '準備は完了しています。画面上部の「次にすること」から「3. VPS確認」へ進めます。',
         bootstrapNeedPrepareHuman: 'VPS準備を押して不足分を入れてください。',
-        needPreflight: '下の「3. VPS確認」を押して、ユーザー・ポート・公開IPを確認します。',
+        needPreflight: '下の「3. VPS確認」を押して、実行アカウント・ポート・公開IPを確認します。',
         needNode: '下の「5. nodeを開始」を押して、ネットワーク参加を始めます。',
         waitNode: 'node起動中です。少し待ってから、下の「6. 同期確認」を押してください。',
         waitSync: '同期中です。下の「6. 同期確認」で進行を確認し、SYNCEDになるまで待ちます。',
@@ -1348,10 +1348,10 @@
         quickValidator: 'Auto validator',
         quickDashboard: 'Dashboard',
         quickLearn: 'Learn',
-        quickSupport: 'Support',
+        quickSupport: 'Diagnostics',
         nextActionLabel: 'Next action',
         btnRefreshState: 'Refresh current state',
-        btnSupport: 'Support report',
+        btnSupport: 'Diagnostic report',
         btnCheckApp: '1. Check app',
         btnAutoNode: 'Auto node setup',
         btnAutoValidator: 'Auto validator setup',
@@ -1380,13 +1380,13 @@
         bondStatusLabel: 'Bond',
         attestationEpochLabel: 'Last successful epoch',
         attestationTxLabel: 'Transaction ID',
-        supportTitle: 'Support report for submission',
-        supportBody: 'Copy or save this redacted report and attach it when contacting the maintainer or support channel.',
+        supportTitle: 'Diagnostic report',
+        supportBody: 'Creates a redacted report of the node state, recent logs, and errors. It can be copied or saved locally and is never sent automatically.',
         btnCloseSupport: 'Close',
-        btnCopySupport: 'Copy report for submission',
+        btnCopySupport: 'Copy diagnostic report',
         btnSaveSupport: 'Save report (.txt)',
         supportNoError: 'No error is currently recorded. You can still create a report of the current state.',
-        supportCopied: 'Support report copied.',
+        supportCopied: 'Diagnostic report copied.',
         statusRunning: 'RUNNING',
         statusStopped: 'STOPPED',
         statusUnknown: 'NOT CHECKED',
@@ -1490,8 +1490,8 @@
         autoRunningHint: 'Automatic setup is running. Watch the run log. To stop, press "Stop automatic setup" below; it stops after the current step finishes.',
         nextAutoTitle: 'Wait for automatic setup',
         nextPrepareTitle: 'Wait for preparation to finish',
-        nextPrepareFailedTitle: 'Submit the preparation error',
-        nextPrepareFailedBody: 'Review the end of the preparation log, then use "Copy report for submission" to share the error.',
+        nextPrepareFailedTitle: 'Review the preparation error',
+        nextPrepareFailedBody: 'Review the end of the preparation log. Use "Copy diagnostic report" to keep a detailed record of the current state.',
         nextNeedsPrepareTitle: 'Prepare the participation app',
         nextNeedsPublicIpTitle: 'Confirm the public IP',
         nextNeedsPreflightTitle: 'Check participation requirements',
@@ -1517,7 +1517,7 @@
         needPrepare: 'Press "2. Prepare VPS" below to install the missing binaries.',
         bootstrapReadyHuman: 'Preparation is complete. Continue with "3. Check VPS" in the Next action panel.',
         bootstrapNeedPrepareHuman: 'Press Prepare VPS to install missing requirements.',
-        needPreflight: 'Press "3. Check VPS" below to verify the user, ports, and public IP.',
+        needPreflight: 'Press "3. Check VPS" below to verify the service account, ports, and public IP.',
         needNode: 'Press "5. Start node" below to join the network.',
         waitNode: 'The node is starting. Wait briefly, then press "6. Check sync" below.',
         waitSync: 'Syncing is in progress. Use "6. Check sync" below and wait until the status becomes SYNCED.',
@@ -1653,7 +1653,7 @@
       const raw = rawEl.textContent ? rawEl.textContent.slice(-24000) : JSON.stringify(lastSnapshot, null, 2);
       const visibleLog = logEl.textContent ? logEl.textContent.slice(-16000) : '';
       return redactSensitive([
-        'MISAKA participation support report',
+        'MISAKA participation diagnostic report',
         `generatedAt: ${new Date().toISOString()}`,
         `page: ${window.location.pathname}`,
         `language: ${lang}`,
@@ -1720,7 +1720,7 @@
       const link = document.createElement('a');
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       link.href = href;
-      link.download = `misaka-support-${stamp}.txt`;
+      link.download = `misaka-diagnostics-${stamp}.txt`;
       document.body.appendChild(link);
       link.click();
       link.remove();
