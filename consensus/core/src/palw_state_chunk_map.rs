@@ -268,6 +268,25 @@ pub fn palw_profile_is_held_v4(profile: &PalwShapeProfileV3) -> bool {
     palw_map_is_held_v4(&profile.state_chunk_map_id)
 }
 
+/// **The attention history an A16 op may reduce over for this class** (ADR-0116): the held
+/// regime's width, `2^21` positions, for a class that registered a held map, and the shipped
+/// `2^18` for every other.
+///
+/// A function of the profile alone, deliberately. The engine that produces, the seat that
+/// replays and the court that recomputes one step all hold the profile and none of them holds a
+/// ruleset; the held map is inside the class id, and the admission gate admits a held class only
+/// while `Params::palw_held_context` is armed — so the bound is the network's decision without
+/// being read from anywhere a node could disagree about. Before ADR-0116 every class had the
+/// projection's constant as its history bound, and no class under the regime could run past
+/// position 262,143 (ADR-0103 §10.7).
+pub fn palw_attn_history_bound_v1(profile: &PalwShapeProfileV3) -> usize {
+    if palw_profile_is_held_v4(profile) {
+        crate::palw_base0_a16::A16_MAX_ATTN_HISTORY_HELD_V1
+    } else {
+        crate::palw_base0_a16::A16_MAX_ATTN_HISTORY_V1
+    }
+}
+
 /// **The v4 geometry of the attention cache** — [`tiled_kv_state_geometry_v3`]'s arithmetic with
 /// the chunk-count cap replaced by the depth cap. Built from the profile rather than from v1/v2,
 /// because those two refuse a chunk count past `PALW_STEP_LEG_MAX_STATE_CHUNKS` before v4 could

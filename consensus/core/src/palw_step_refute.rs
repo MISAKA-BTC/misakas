@@ -1847,7 +1847,12 @@ fn qwen36_row(
                 values: params_named(t.values.as_str(), 0, 1)?[0],
                 up_bits: up,
             };
-            Ok(out(a16::a16_attn_fused_reference_v1(&q, &k_series, &v_series, heads, kv_heads, d_head, params).map_err(shape16)?))
+            // The class's own history bound (ADR-0116): the held regime's `2^21` for a class that
+            // registered a held map, the shipped `2^18` for every other — read off the profile,
+            // exactly as the engine that produced the step read it.
+            let history = crate::palw_state_chunk_map::palw_attn_history_bound_v1(profile);
+            Ok(out(a16::a16_attn_fused_reference_within_v1(&q, &k_series, &v_series, heads, kv_heads, d_head, params, history)
+                .map_err(shape16)?))
         }
         Qwen36Op::AttnScores | Qwen36Op::AttnValues => {
             need(2)?;
@@ -1869,7 +1874,8 @@ fn qwen36_row(
             if op == Qwen36Op::AttnScores {
                 Ok(out(a16::a16_attn_scores(&row, &series, heads, kv_heads, d_head, &p).map_err(shape16)?))
             } else {
-                Ok(out(a16::a16_attn_values(&row, &series, heads, kv_heads, d_head, &p).map_err(shape16)?))
+                let history = crate::palw_state_chunk_map::palw_attn_history_bound_v1(profile);
+                Ok(out(a16::a16_attn_values_within(&row, &series, heads, kv_heads, d_head, &p, history).map_err(shape16)?))
             }
         }
         // **The recurrence, replayed from the genesis, ONE HEAD at a time.** The challenged tile

@@ -60,6 +60,25 @@ pub const A16_CODE_MAX: i64 = i16::MAX as i64;
 /// adversarial length fails fast instead of being priced.
 pub const A16_MAX_DOT_LEN: usize = 1 << 18;
 
+/// **The longest attention history an op of this tier reduces over, for a class outside the
+/// held regime** (ADR-0116). The same number as [`A16_MAX_DOT_LEN`], which is where the history
+/// bound came from — W10 and the fused site refused a history with the projection's constant
+/// (ADR-0103 §10.7, "the eighth wall") — kept byte for byte for every class that exists: a
+/// history is a reduction length only in the sense that W10 sums over it.
+pub const A16_MAX_ATTN_HISTORY_V1: usize = A16_MAX_DOT_LEN;
+
+/// **The held regime's attention history bound** (ADR-0116): ADR-0103's widest context,
+/// `2^21` positions. A class is under the regime exactly when it registered a held map, which is
+/// inside its class id (`palw_held_context_v1::palw_attn_history_bound_v1` reads it), so no class
+/// that exists today moves.
+///
+/// Exact at this width, the premise ADR-0040 Decision E needs: a value product is below `2^30`,
+/// so `2^21` rows sum below `2^51`; a row of `2^21` Q24 exponents sums below `2^45`; both far
+/// inside `i64`. What the width costs is precision, not exactness: a near-uniform row's Q24
+/// probabilities are about `8 / 2^24` at `2^21` rows — three bits each — which is the model's
+/// arithmetic at that length, identical on every node (ADR-0116 §4).
+pub const A16_MAX_ATTN_HISTORY_HELD_V1: usize = 1 << 21;
+
 /// `shift` domain for the wide requantizations: `m / 2^shift` with `shift ≤ 62`.
 pub const A16_MAX_SHIFT: u8 = 62;
 
@@ -372,7 +391,8 @@ pub fn a16_attn_scores(
 ///
 /// `p` is the head-major probability-code row (`heads × kv_len`), `v_series` the V-cache series
 /// in the same position-major layout as W9's keys, and `out[h·d_head + i]` reduces head `h`'s
-/// probabilities against value lane `kv_off + i` over the history.
+/// probabilities against value lane `kv_off + i` over the history — at most
+/// [`A16_MAX_ATTN_HISTORY_V1`] rows; a held class reads [`a16_attn_values_within`].
 #[allow(clippy::too_many_arguments)]
 pub fn a16_attn_values(
     p: &[i32],
@@ -381,6 +401,21 @@ pub fn a16_attn_values(
     kv_heads: usize,
     d_head: usize,
     params: &[A16QuantParams],
+) -> Result<Vec<i32>, PalwA16OpError> {
+    a16_attn_values_within(p, v_series, heads, kv_heads, d_head, params, A16_MAX_ATTN_HISTORY_V1)
+}
+
+/// [`a16_attn_values`] under the history bound the CLASS registered (ADR-0116): the op's
+/// arithmetic is the same at every width, and `max_history` is only where it refuses.
+#[allow(clippy::too_many_arguments)]
+pub fn a16_attn_values_within(
+    p: &[i32],
+    v_series: &[i32],
+    heads: usize,
+    kv_heads: usize,
+    d_head: usize,
+    params: &[A16QuantParams],
+    max_history: usize,
 ) -> Result<Vec<i32>, PalwA16OpError> {
     let p = as_a16(p)?;
     let v_series = as_a16(v_series)?;
@@ -392,7 +427,7 @@ pub fn a16_attn_values(
         return Err(PalwA16OpError::NotAMultiple { got: v_series.len(), unit: kv_dim });
     }
     let kv_len = v_series.len() / kv_dim;
-    if kv_len > A16_MAX_DOT_LEN {
+    if kv_len > max_history.min(A16_MAX_ATTN_HISTORY_HELD_V1) {
         return Err(PalwA16OpError::DotTooLong { got: kv_len });
     }
     if p.len() != heads * kv_len {
@@ -633,6 +668,22 @@ pub fn a16_attn_fused_reference_v1(
     d_head: usize,
     params: A16AttnFusedParamsV1,
 ) -> Result<Vec<i32>, PalwA16OpError> {
+    a16_attn_fused_reference_within_v1(q, k_series, v_series, heads, kv_heads, d_head, params, A16_MAX_ATTN_HISTORY_V1)
+}
+
+/// [`a16_attn_fused_reference_v1`] under the class's history bound (ADR-0116) — W10's refusal
+/// is the only place the width enters.
+#[allow(clippy::too_many_arguments)]
+pub fn a16_attn_fused_reference_within_v1(
+    q: &[i32],
+    k_series: &[i32],
+    v_series: &[i32],
+    heads: usize,
+    kv_heads: usize,
+    d_head: usize,
+    params: A16AttnFusedParamsV1,
+    max_history: usize,
+) -> Result<Vec<i32>, PalwA16OpError> {
     let kv_dim = kv_heads.max(1) * d_head.max(1);
     if k_series.is_empty() || !k_series.len().is_multiple_of(kv_dim) {
         return Err(PalwA16OpError::NotAMultiple { got: k_series.len(), unit: kv_dim });
@@ -641,7 +692,7 @@ pub fn a16_attn_fused_reference_v1(
     let scores = a16_attn_scores(q, k_series, heads, kv_heads, d_head, &vec![params.scores; heads * kv_len])?;
     let probs = a16_softmax_rows(&scores, kv_len, params.up_bits)?;
     let codes = a16_requant(&probs, &vec![params.probs; probs.len()])?;
-    a16_attn_values(&codes, v_series, heads, kv_heads, d_head, &vec![params.values; heads * d_head])
+    a16_attn_values_within(&codes, v_series, heads, kv_heads, d_head, &vec![params.values; heads * d_head], max_history)
 }
 
 /// The fused site through the TILE route: per head, the root claim over all lanes and its
@@ -952,7 +1003,43 @@ mod tests {
             let got = a16_attn_values(&probs, &v_series, heads, kv_heads, d_head, &values);
             assert_eq!(matches!(got, Err(PalwA16OpError::DotTooLong { .. })), refused, "{rows} rows of history");
         }
-        assert_eq!(A16_MAX_DOT_LEN, 262_144, "the widest A16 history is 2^18 rows");
+        assert_eq!(A16_MAX_DOT_LEN, 262_144, "the widest A16 history outside the held regime is 2^18 rows");
+        assert_eq!(A16_MAX_ATTN_HISTORY_V1, A16_MAX_DOT_LEN, "and it is still the projection's number, byte for byte");
+    }
+
+    /// **ADR-0116: under the held regime the wall is at 2^21, and it is exact there.** The same
+    /// op, the same arithmetic, refusing only where the class's bound says: a held class's
+    /// history of 2^18 + 1 rows — one past the eighth wall — and of the full 2^21 is reduced; one
+    /// row more is refused; and a caller cannot ask for more than the held bound. At the widest
+    /// history and the extreme codes the accumulator is the exact sum (`2^21 · 32767²` is under
+    /// `2^51`), which is the Decision E premise the width needs.
+    #[test]
+    fn the_held_history_bound_is_2_21_and_exact_there() {
+        let (heads, kv_heads, d_head) = (1usize, 1usize, 1usize);
+        let values = [params_of(1, 0, 0)];
+        for (rows, refused) in
+            [(A16_MAX_ATTN_HISTORY_V1 + 1, false), (A16_MAX_ATTN_HISTORY_HELD_V1, false), (A16_MAX_ATTN_HISTORY_HELD_V1 + 1, true)]
+        {
+            let probs = vec![1i32; heads * rows];
+            let v_series = vec![1i32; rows * kv_heads * d_head];
+            let got = a16_attn_values_within(&probs, &v_series, heads, kv_heads, d_head, &values, A16_MAX_ATTN_HISTORY_HELD_V1);
+            assert_eq!(matches!(got, Err(PalwA16OpError::DotTooLong { .. })), refused, "{rows} rows of held history");
+        }
+        // No caller widens past the held bound, whatever it passes.
+        let rows = A16_MAX_ATTN_HISTORY_HELD_V1 + 1;
+        let got = a16_attn_values_within(&vec![1i32; rows], &vec![1i32; rows], 1, 1, 1, &values, usize::MAX);
+        assert!(matches!(got, Err(PalwA16OpError::DotTooLong { .. })), "the held bound is the ceiling");
+        // Exact at the width: the extreme codes, narrowed by a shift that keeps the sum a code.
+        let rows = A16_MAX_ATTN_HISTORY_HELD_V1;
+        let code = A16_CODE_MAX as i32;
+        let exact = (rows as i128) * (code as i128) * (code as i128);
+        let shift = 40u8;
+        let narrow = [params_of(1, shift, 0)];
+        let got = a16_attn_values_within(&vec![code; rows], &vec![code; rows], 1, 1, 1, &narrow, A16_MAX_ATTN_HISTORY_HELD_V1)
+            .expect("the widest held history reduces");
+        assert!(exact < (1i128 << 51), "the premise: 2^21 · 32767² is under 2^51");
+        assert_eq!(got, vec![a16_scale_round(exact as i64, 1, shift) as i32], "the accumulator is the exact sum");
+        assert_eq!(A16_MAX_ATTN_HISTORY_HELD_V1, 2_097_152, "ADR-0103's widest context");
     }
 
     /// A lane outside ±32767 is not an A16 code, and every op refuses the row rather than

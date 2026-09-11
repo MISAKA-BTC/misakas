@@ -43,10 +43,13 @@ fn a16_attn_scores(
     }
 }
 
-/// Op W10 likewise.
+/// Op W10 likewise, under the history bound the walk was given (ADR-0116): the shipped `2^18`
+/// on the engine's own paths, the plan's — the class's — on the planned one.
 #[inline]
+#[allow(clippy::too_many_arguments)]
 fn a16_attn_values(
     fast: bool,
+    history: usize,
     probs: &[i32],
     v: &[i32],
     heads: usize,
@@ -55,9 +58,9 @@ fn a16_attn_values(
     p: &[A16QuantParams],
 ) -> Result<Vec<i32>, PalwA16OpError> {
     if fast {
-        crate::kernels::a16_attn_values_fast(probs, v, heads, kv_heads, d_head, p)
+        crate::kernels::a16_attn_values_fast_within(probs, v, heads, kv_heads, d_head, p, history)
     } else {
-        catalog_attn_values(probs, v, heads, kv_heads, d_head, p)
+        kaspa_consensus_core::palw_base0_a16::a16_attn_values_within(probs, v, heads, kv_heads, d_head, p, history)
     }
 }
 use kaspa_consensus_core::palw_base0_ops::silu;
@@ -71,8 +74,8 @@ use kaspa_consensus_core::palw_base0_ops::silu;
 // They may be swapped in precisely because ADR-0040 Decision E makes lanes and threads invisible
 // to the value; the day that stops being true is the day those tests fail.
 use kaspa_consensus_core::palw_base0_a16::{
-    PalwA16OpError, a16_attn_scores as catalog_attn_scores, a16_attn_values as catalog_attn_values,
-    a16_matmul_requant as catalog_matmul_requant, a16_matmul_rescale as catalog_matmul_rescale,
+    PalwA16OpError, a16_attn_scores as catalog_attn_scores, a16_matmul_requant as catalog_matmul_requant,
+    a16_matmul_rescale as catalog_matmul_rescale,
 };
 
 /// Op W1 through whichever implementation this engine was built with.
@@ -515,6 +518,7 @@ impl<'a> A16Engine<'a> {
                 attn_rows.push(
                     a16_attn_values(
                         self.fast,
+                        kaspa_consensus_core::palw_base0_a16::A16_MAX_ATTN_HISTORY_V1,
                         &p15,
                         &v_series[..visible * kv_dim],
                         shape.n_heads,
@@ -683,6 +687,7 @@ impl<'a> A16Engine<'a> {
                 &mut nodes,
                 a16_attn_values(
                     self.fast,
+                    kaspa_consensus_core::palw_base0_a16::A16_MAX_ATTN_HISTORY_V1,
                     &p15,
                     &v_series,
                     shape.n_heads,
@@ -1166,6 +1171,9 @@ pub struct A16ProfilePlanV1 {
     layer: Vec<PlanNode>,
     post: Vec<PlanNode>,
     layer_count: usize,
+    /// The class's attention history bound (ADR-0116), read off the profile at compile time —
+    /// the held regime's `2^21` for a class that registered a held map, `2^18` for every other.
+    attn_history: usize,
 }
 
 impl<'a> A16Engine<'a> {
@@ -1254,7 +1262,13 @@ impl<'a> A16Engine<'a> {
             });
         }
         let post = plan_table(&profile.post_nodes, "post", shape, Some(hidden))?;
-        Ok(A16ProfilePlanV1 { pre, layer, post, layer_count: shape.n_layers })
+        Ok(A16ProfilePlanV1 {
+            pre,
+            layer,
+            post,
+            layer_count: shape.n_layers,
+            attn_history: kaspa_consensus_core::palw_state_chunk_map::palw_attn_history_bound_v1(profile),
+        })
     }
 
     /// One position's forward, EXECUTED FROM THE PLAN: one committed row per declared node, in
@@ -1288,7 +1302,7 @@ impl<'a> A16Engine<'a> {
 
         let mut h: Vec<i32> = Vec::new();
         // ---- pre --------------------------------------------------------------------------
-        let rows = self.walk_table(&plan.pre, None, token_id, sink, cos_row, sin_row, None)?;
+        let rows = self.walk_table(&plan.pre, None, token_id, sink, cos_row, sin_row, None, plan.attn_history)?;
         if let Some(last) = rows.last() {
             h = last.clone();
         }
@@ -1296,13 +1310,14 @@ impl<'a> A16Engine<'a> {
 
         // ---- layers -----------------------------------------------------------------------
         for li in 0..plan.layer_count {
-            let rows = self.walk_table(&plan.layer, Some(&h), token_id, sink, cos_row, sin_row, Some((li, cache)))?;
+            let rows =
+                self.walk_table(&plan.layer, Some(&h), token_id, sink, cos_row, sin_row, Some((li, cache)), plan.attn_history)?;
             h = rows.last().cloned().ok_or(A16EngineError::MalformedParams("an empty layer table"))?;
             trace.attn.push(rows);
         }
 
         // ---- post -------------------------------------------------------------------------
-        let rows = self.walk_table(&plan.post, Some(&h), token_id, sink, cos_row, sin_row, None)?;
+        let rows = self.walk_table(&plan.post, Some(&h), token_id, sink, cos_row, sin_row, None, plan.attn_history)?;
         let logits = rows.last().cloned().ok_or(A16EngineError::MalformedParams("an empty post table"))?;
         trace.post = rows;
         Ok((logits, trace))
@@ -1320,6 +1335,7 @@ impl<'a> A16Engine<'a> {
         cos_row: &[i32],
         sin_row: &[i32],
         mut layer: Option<(usize, &mut A16Cache)>,
+        attn_history: usize,
     ) -> Result<Vec<Vec<i32>>, A16EngineError> {
         let shape = &self.artifact.shape;
         let d = shape.d_model();
@@ -1454,6 +1470,7 @@ impl<'a> A16Engine<'a> {
                     let li = layer.as_ref().map(|(li, _)| *li).unwrap_or(0);
                     a16_attn_values(
                         self.fast,
+                        attn_history,
                         &p,
                         &v_series,
                         shape.n_heads,
@@ -1487,7 +1504,7 @@ impl<'a> A16Engine<'a> {
                     let v_series = resolve(&node.inputs[2], &rows)?;
                     let li = layer.as_ref().map(|(li, _)| *li).unwrap_or(0);
                     let p = lp(li);
-                    crate::kernels::a16_attn_fused_uniform_fast(
+                    crate::kernels::a16_attn_fused_uniform_fast_within(
                         &q,
                         &k_series,
                         &v_series,
@@ -1498,6 +1515,7 @@ impl<'a> A16Engine<'a> {
                         p.softmax_up,
                         p.probs,
                         p.values,
+                        attn_history,
                     )
                     .map_err(refuse("attn_fused"))?
                 }
@@ -1521,6 +1539,7 @@ impl<'a> A16Engine<'a> {
                     let codes = a16_requant(&probs, &tile(lp(li).probs, probs.len())).map_err(refuse("requant"))?;
                     a16_attn_values(
                         self.fast,
+                        attn_history,
                         &codes,
                         &v_series,
                         shape.n_heads,

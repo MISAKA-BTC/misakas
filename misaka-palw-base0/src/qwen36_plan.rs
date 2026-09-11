@@ -46,7 +46,7 @@ use kaspa_consensus_core::palw_step_refute::{
     KDESC_Q36_SIGMOID, KDESC_Q36_SILU, KDESC_Q36_SSM_CONV, palw_attn_fused_tensors_v1,
 };
 
-use crate::kernels::{a16_attn_scores_fast, a16_attn_values_fast};
+use crate::kernels::{a16_attn_scores_fast, a16_attn_values_fast_within};
 use crate::qwen36::{Qwen36Cache, Qwen36Engine, Qwen36Error, Qwen36LayerKind, Qwen36ShapeV1};
 
 /// Why the profile could not become a plan. Mirrors `A16PlanErrorV1`: every refusal is the
@@ -265,6 +265,8 @@ pub struct Qwen36ProfilePlanV1 {
     attn: Vec<PlanNode>,
     post: Vec<PlanNode>,
     layer_kinds: Vec<Qwen36LayerKind>,
+    /// The class's attention history bound (ADR-0116), read off the profile at compile time.
+    attn_history: usize,
 }
 
 /// The committed rows of one planned pass — one row per declared node, per table, in order.
@@ -382,7 +384,8 @@ impl<'a> Qwen36Engine<'a> {
         }
         let post = plan_table(self, &profile.post_nodes, "post", Some(d))?;
         terminal(&profile.post_nodes, "post", s.vocab as u32)?;
-        Ok(Qwen36ProfilePlanV1 { pre, gdn, attn, post, layer_kinds })
+        let attn_history = kaspa_consensus_core::palw_state_chunk_map::palw_attn_history_bound_v1(profile);
+        Ok(Qwen36ProfilePlanV1 { pre, gdn, attn, post, layer_kinds, attn_history })
     }
 
     /// One position's forward, EXECUTED FROM THE PLAN: one committed row per declared node, in
@@ -406,7 +409,7 @@ impl<'a> Qwen36Engine<'a> {
         }
         let mut trace = Qwen36PlanTraceV1::default();
 
-        let rows = self.walk_table(&plan.pre, None, token_id, position, None)?;
+        let rows = self.walk_table(&plan.pre, None, token_id, position, None, plan.attn_history)?;
         let mut h = rows.last().cloned().ok_or_else(|| Qwen36Error::BadParams("an empty pre table".into()))?;
         trace.pre = rows;
 
@@ -415,12 +418,12 @@ impl<'a> Qwen36Engine<'a> {
                 Qwen36LayerKind::LinearAttention => &plan.gdn,
                 Qwen36LayerKind::FullAttention => &plan.attn,
             };
-            let rows = self.walk_table(table, Some(&h), token_id, position, Some((li, cache)))?;
+            let rows = self.walk_table(table, Some(&h), token_id, position, Some((li, cache)), plan.attn_history)?;
             h = rows.last().cloned().ok_or_else(|| Qwen36Error::BadParams("an empty layer table".into()))?;
             trace.layers.push(rows);
         }
 
-        let rows = self.walk_table(&plan.post, Some(&h), token_id, position, None)?;
+        let rows = self.walk_table(&plan.post, Some(&h), token_id, position, None, plan.attn_history)?;
         let logits = rows.last().cloned().ok_or_else(|| Qwen36Error::BadParams("an empty post table".into()))?;
         trace.post = rows;
         Ok((logits, trace))
@@ -446,17 +449,17 @@ impl<'a> Qwen36Engine<'a> {
         if token_id >= s.vocab {
             return Err(Qwen36Error::Position);
         }
-        let rows = self.walk_table(&plan.pre, None, token_id, position, None)?;
+        let rows = self.walk_table(&plan.pre, None, token_id, position, None, plan.attn_history)?;
         let mut h = rows.into_iter().next_back().ok_or_else(|| Qwen36Error::BadParams("an empty pre table".into()))?;
         for (li, kind) in plan.layer_kinds.iter().enumerate() {
             let table = match kind {
                 Qwen36LayerKind::LinearAttention => &plan.gdn,
                 Qwen36LayerKind::FullAttention => &plan.attn,
             };
-            let rows = self.walk_table(table, Some(&h), token_id, position, Some((li, cache)))?;
+            let rows = self.walk_table(table, Some(&h), token_id, position, Some((li, cache)), plan.attn_history)?;
             h = rows.into_iter().next_back().ok_or_else(|| Qwen36Error::BadParams("an empty layer table".into()))?;
         }
-        let rows = self.walk_table(&plan.post, Some(&h), token_id, position, None)?;
+        let rows = self.walk_table(&plan.post, Some(&h), token_id, position, None, plan.attn_history)?;
         rows.into_iter().next_back().ok_or_else(|| Qwen36Error::BadParams("an empty post table".into()))
     }
 
@@ -469,6 +472,7 @@ impl<'a> Qwen36Engine<'a> {
         token_id: usize,
         position: usize,
         mut layer: Option<(usize, &mut Qwen36Cache)>,
+        attn_history: usize,
     ) -> Result<Vec<Vec<i32>>, Qwen36Error> {
         let a = self.artifact;
         let s = &a.shape;
@@ -825,8 +829,16 @@ impl<'a> Qwen36Engine<'a> {
                     let p_row = resolve(&node.inputs[0], &rows)?;
                     let v_series = resolve(&node.inputs[1], &rows)?;
                     let p = a.one_param(&name_of(name))?;
-                    a16_attn_values_fast(&p_row, &v_series, s.n_heads, s.n_kv_heads, s.head_dim, &vec![p; s.n_heads * s.head_dim])
-                        .map_err(a16_refuse("attn_values"))?
+                    a16_attn_values_fast_within(
+                        &p_row,
+                        &v_series,
+                        s.n_heads,
+                        s.n_kv_heads,
+                        s.head_dim,
+                        &vec![p; s.n_heads * s.head_dim],
+                        attn_history,
+                    )
+                    .map_err(a16_refuse("attn_values"))?
                 }
                 // **The fused attention site** (ADR-0082 Decision 1): W9, W11, the probability
                 // requantization and W10, with the three intermediates living only in this frame.
@@ -847,8 +859,16 @@ impl<'a> Qwen36Engine<'a> {
                     let pp = a.one_param(&name_of(probs))?;
                     let codes = a16_requant(&dist, &vec![pp; dist.len()]).map_err(a16_refuse("attn_probs"))?;
                     let vp = a.one_param(&name_of(values))?;
-                    a16_attn_values_fast(&codes, &v_series, s.n_heads, s.n_kv_heads, s.head_dim, &vec![vp; s.n_heads * s.head_dim])
-                        .map_err(a16_refuse("attn_values"))?
+                    a16_attn_values_fast_within(
+                        &codes,
+                        &v_series,
+                        s.n_heads,
+                        s.n_kv_heads,
+                        s.head_dim,
+                        &vec![vp; s.n_heads * s.head_dim],
+                        attn_history,
+                    )
+                    .map_err(a16_refuse("attn_values"))?
                 }
                 PlanOpV1::RouterTopk { name, k } => {
                     let x = resolve(&node.inputs[0], &rows)?;

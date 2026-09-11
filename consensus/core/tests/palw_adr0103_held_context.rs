@@ -232,6 +232,27 @@ fn the_gate_admits_a_held_class_the_shipped_ceiling_refuses_and_names_what_is_mi
     assert_eq!(gate(&params, &profile, flat), Err(PalwClassAdmissionError::LinearInTheContext { wall: "close bytes" }));
 }
 
+/// **ADR-0116: a held class's context is at most its attention history bound.** The held map
+/// lifted the context ceiling; the A16 ops still refuse a history past the class's bound, the
+/// regime's 2^21. So 2^21 — the dense held row at ADR-0103's widest context — is admitted, and a
+/// context past it is refused at the gate, by name, rather than at its first position past the
+/// bound in a producer, a seat or a court.
+#[test]
+fn a_held_context_past_the_attention_history_bound_is_refused_by_name() {
+    let params = held_network(1 << 48);
+    let at = dense_v7(1 << 21);
+    let shape = palw_admission_shape_at_v1(&params, bundle(&params), &at, EVER).expect("a shape");
+    gate(&params, &at, shape).unwrap_or_else(|e| panic!("2^21 is the bound itself: {e}"));
+    let past = dense_v7((1 << 21) + 16);
+    let shape = palw_admission_shape_at_v1(&params, bundle(&params), &past, EVER).expect("a shape");
+    match gate(&params, &past, shape) {
+        Err(PalwClassAdmissionError::Profile(why)) => {
+            assert!(why.contains("ADR-0116") && why.contains("2097168") && why.contains("2097152"), "{why}")
+        }
+        other => panic!("a held context past the bound must be refused by name, got {other:?}"),
+    }
+}
+
 /// **Invariant 5 — the registration gate costs one position.** The held gate at 2M runs the order
 /// sweep to 2^27 positions and every wall's predicate at each: if any of them walked the context,
 /// this test would not finish (2^21 positions × 103,008 leaves is 2 × 10^11). It is asked at 2 and

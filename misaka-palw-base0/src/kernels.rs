@@ -51,7 +51,10 @@
 //! runtime — `dotprod` is ARMv8.2 and `i8mm` is ARMv8.6, and an Apple M1 has the first and not
 //! the second — with the `vmlal` path as the fallback that every machine has.
 
-use kaspa_consensus_core::palw_base0_a16::{A16_CODE_MAX, A16_MAX_DOT_LEN, A16QuantParams, PalwA16OpError, a16_scale_round};
+use kaspa_consensus_core::palw_base0_a16::{
+    A16_CODE_MAX, A16_MAX_ATTN_HISTORY_HELD_V1, A16_MAX_ATTN_HISTORY_V1, A16_MAX_DOT_LEN, A16QuantParams, PalwA16OpError,
+    a16_scale_round,
+};
 use kaspa_consensus_core::palw_qwen36_ops::PalwQwen36OpError;
 use rayon::prelude::*;
 
@@ -650,6 +653,20 @@ pub fn a16_attn_values_fast(
     d_head: usize,
     params: &[A16QuantParams],
 ) -> Result<Vec<i32>, PalwA16OpError> {
+    a16_attn_values_fast_within(probs, v_series, heads, kv_heads, d_head, params, A16_MAX_ATTN_HISTORY_V1)
+}
+
+/// [`a16_attn_values_fast`] under the class's history bound (ADR-0116) — the catalog's
+/// `a16_attn_values_within`, refusal for refusal. The accumulator is `i64` whatever the width.
+pub fn a16_attn_values_fast_within(
+    probs: &[i32],
+    v_series: &[i32],
+    heads: usize,
+    kv_heads: usize,
+    d_head: usize,
+    params: &[A16QuantParams],
+    max_history: usize,
+) -> Result<Vec<i32>, PalwA16OpError> {
     check_codes(probs)?;
     check_codes(v_series)?;
     if heads == 0 || kv_heads == 0 || d_head == 0 || !heads.is_multiple_of(kv_heads) {
@@ -660,7 +677,7 @@ pub fn a16_attn_values_fast(
         return Err(PalwA16OpError::NotAMultiple { got: v_series.len(), unit: kv_dim });
     }
     let kv_len = v_series.len() / kv_dim;
-    if kv_len > A16_MAX_DOT_LEN {
+    if kv_len > max_history.min(A16_MAX_ATTN_HISTORY_HELD_V1) {
         return Err(PalwA16OpError::DotTooLong { got: kv_len });
     }
     if probs.len() != heads * kv_len {
@@ -752,6 +769,38 @@ pub fn a16_attn_fused_uniform_fast(
     probs: A16QuantParams,
     values: A16QuantParams,
 ) -> Result<Vec<i32>, PalwA16OpError> {
+    a16_attn_fused_uniform_fast_within(
+        q,
+        k_series,
+        v_series,
+        heads,
+        kv_heads,
+        d_head,
+        logits,
+        up_bits,
+        probs,
+        values,
+        A16_MAX_ATTN_HISTORY_V1,
+    )
+}
+
+/// [`a16_attn_fused_uniform_fast`] under the class's history bound (ADR-0116): W10's refusal
+/// moves with the bound, and nothing else does — every accumulator here is `i64`, and the
+/// scratch rows are the history's own length.
+#[allow(clippy::too_many_arguments)]
+pub fn a16_attn_fused_uniform_fast_within(
+    q: &[i32],
+    k_series: &[i32],
+    v_series: &[i32],
+    heads: usize,
+    kv_heads: usize,
+    d_head: usize,
+    logits: A16QuantParams,
+    up_bits: u8,
+    probs: A16QuantParams,
+    values: A16QuantParams,
+    max_history: usize,
+) -> Result<Vec<i32>, PalwA16OpError> {
     // W9's refusals.
     check_codes(q)?;
     check_codes(k_series)?;
@@ -776,7 +825,7 @@ pub fn a16_attn_fused_uniform_fast(
         return Err(PalwA16OpError::NotAMultiple { got: v_series.len(), unit: kv_dim });
     }
     let v_len = v_series.len() / kv_dim;
-    if v_len > A16_MAX_DOT_LEN {
+    if v_len > max_history.min(A16_MAX_ATTN_HISTORY_HELD_V1) {
         return Err(PalwA16OpError::DotTooLong { got: v_len });
     }
     if v_len != kv_len {
@@ -1262,6 +1311,56 @@ mod tests {
         let rows = A16_MAX_DOT_LEN + 1;
         assert!(run(&[1], &vec![1; rows], &vec![1; rows], 1, 1, 1), "a history past 2^18");
         assert!(!run(&[1], &vec![1; rows - 1], &vec![1; rows - 1], 1, 1, 1), "a history of exactly 2^18");
+    }
+
+    /// **ADR-0116: past the eighth wall, under a held class's bound, the fast kernels are still
+    /// the catalog.** A history one row past `2^18` — which the shipped bound refuses — and one a
+    /// thousand rows past it are reduced by the fused kernel and by the catalog composition under
+    /// the held bound, bit for bit, and by W10's fast kernel and the catalog's W10 likewise; the
+    /// shipped bound still refuses the same history; and both kernels refuse one row past the held
+    /// bound, whatever bound a caller passes.
+    #[test]
+    fn past_the_eighth_wall_the_held_kernels_are_the_catalog() {
+        use kaspa_consensus_core::palw_base0_a16::{A16AttnFusedParamsV1, a16_attn_fused_reference_within_v1, a16_attn_values_within};
+        let mut rng = Lcg(0x0116_2018);
+        let held = A16_MAX_ATTN_HISTORY_HELD_V1;
+        let scores = A16QuantParams { multiplier: 1, shift: 26, zero: 0 };
+        let probs = A16QuantParams { multiplier: 1 << 15, shift: 24, zero: 0 };
+        let values = A16QuantParams { multiplier: 1, shift: 22, zero: -5 };
+        let fused = A16AttnFusedParamsV1 { scores, probs, values, up_bits: 16 };
+        let (heads, kv_heads, d_head) = (2usize, 1usize, 2usize);
+        let kv_dim = kv_heads * d_head;
+        for rows in [A16_MAX_ATTN_HISTORY_V1 + 1, A16_MAX_ATTN_HISTORY_V1 + 1_000] {
+            let q: Vec<i32> = (0..heads * d_head).map(|_| rng.code()).collect();
+            let k: Vec<i32> = (0..rows * kv_dim).map(|_| rng.code()).collect();
+            let v: Vec<i32> = (0..rows * kv_dim).map(|_| rng.code()).collect();
+            let fast = a16_attn_fused_uniform_fast_within(&q, &k, &v, heads, kv_heads, d_head, scores, 16, probs, values, held)
+                .expect("a held history past the eighth wall reduces");
+            let catalog =
+                a16_attn_fused_reference_within_v1(&q, &k, &v, heads, kv_heads, d_head, fused, held).expect("so does the catalog");
+            assert_eq!(fast, catalog, "{rows} rows: the fused kernel is the composition");
+            assert!(
+                a16_attn_fused_uniform_fast(&q, &k, &v, heads, kv_heads, d_head, scores, 16, probs, values).is_err(),
+                "{rows} rows: the shipped bound still refuses it"
+            );
+            let p_row: Vec<i32> = (0..heads * rows).map(|_| rng.code()).collect();
+            let narrow = vec![values; heads * d_head];
+            assert_eq!(
+                a16_attn_values_fast_within(&p_row, &v, heads, kv_heads, d_head, &narrow, held),
+                a16_attn_values_within(&p_row, &v, heads, kv_heads, d_head, &narrow, held),
+                "{rows} rows: W10's fast kernel is the catalog's"
+            );
+        }
+        let rows = held + 1;
+        let one = [A16QuantParams { multiplier: 1, shift: 0, zero: 0 }];
+        assert!(matches!(
+            a16_attn_values_fast_within(&vec![1; rows], &vec![1; rows], 1, 1, 1, &one, usize::MAX),
+            Err(PalwA16OpError::DotTooLong { .. })
+        ));
+        assert!(matches!(
+            a16_attn_fused_uniform_fast_within(&[1], &vec![1; rows], &vec![1; rows], 1, 1, 1, scores, 16, probs, values, usize::MAX),
+            Err(PalwA16OpError::DotTooLong { .. })
+        ));
     }
 
     /// The refusals must match too: a fast path that accepts a row the reference refuses is a
