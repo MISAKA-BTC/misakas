@@ -1215,8 +1215,11 @@ mod tests {
                     let k: Vec<i32> = (0..n * kv_dim).map(|_| rng.code()).collect();
                     let v: Vec<i32> = (0..n * kv_dim).map(|_| rng.code()).collect();
                     // A real-looking score scale half the time, so the softmax is not all rails.
-                    let logits =
-                        if rng.next_u64() % 2 == 0 { A16QuantParams { multiplier: 1, shift: 26, zero: 0 } } else { triple(&mut rng) };
+                    let logits = if rng.next_u64().is_multiple_of(2) {
+                        A16QuantParams { multiplier: 1, shift: 26, zero: 0 }
+                    } else {
+                        triple(&mut rng)
+                    };
                     let (probs, values) = (triple(&mut rng), triple(&mut rng));
                     assert_eq!(
                         a16_attn_fused_uniform_fast(&q, &k, &v, heads, kv_heads, d_head, logits, up, probs, values),
