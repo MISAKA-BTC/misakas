@@ -4674,7 +4674,7 @@ pub struct PalwChainStateV2 {
     /// `PALW_HELD_DA_EVENT_INDEX_SENTINEL_V1` in place of an event index. Enters the root and the
     /// carriage only once written, which nothing below `Params::palw_held_context` can do.
     held_da_missing: BTreeMap<Hash64, crate::palw_held_da_v1::PalwHeldMissingV1>,
-    /// **ADR-0108 Decision 3: who has demanded a leaf's evidence on each live claim**, and which
+    /// **ADR-0109 Decision 3: who has demanded a leaf's evidence on each live claim**, and which
     /// leaf — a seat demands at most once per claim for the claim's whole life, so the executor's
     /// burden is the panel's size and never the requesters' appetite. Dropped when the claim goes
     /// terminal (`write_claim`). Enters the root and the carriage only once written.
@@ -5279,7 +5279,7 @@ impl PalwChainStateV2 {
         self.held_da_missing.get(claim_id).copied()
     }
 
-    /// ADR-0108 Decision 3: which seats have demanded which leaf of a live claim.
+    /// ADR-0109 Decision 3: which seats have demanded which leaf of a live claim.
     pub fn held_leaf_demands_of(&self, claim_id: &Hash64) -> Option<&BTreeMap<PalwBondKeyV2, u64>> {
         self.held_leaf_demands.get(claim_id)
     }
@@ -5664,7 +5664,7 @@ impl PalwChainStateV2 {
         if !self.held_da_missing.is_empty() {
             state.update(collection_root(b"held_da_missing", &self.held_da_missing).as_byte_slice());
         }
-        // **ADR-0108 Decision 3.** Its own block, for the same reason: empty until a seat demands a
+        // **ADR-0109 Decision 3.** Its own block, for the same reason: empty until a seat demands a
         // leaf's evidence, which nothing below `Params::palw_held_context` can do.
         if !self.held_leaf_demands.is_empty() {
             state.update(collection_root(b"held_leaf_demands", &self.held_leaf_demands).as_byte_slice());
@@ -6495,7 +6495,7 @@ pub enum PalwDeltaEntryV2 {
         old: Option<crate::palw_held_da_v1::PalwHeldMissingV1>,
         new: Option<crate::palw_held_da_v1::PalwHeldMissingV1>,
     },
-    /// ADR-0108 Decision 3: a claim's record of which seats demanded which leaf moved (40).
+    /// ADR-0109 Decision 3: a claim's record of which seats demanded which leaf moved (40).
     /// Appended last.
     HeldLeafDemands {
         key: Hash64,
@@ -6841,7 +6841,7 @@ impl<'a> TransitionBuilder<'a> {
         {
             self.write_held_da_missing(key, None);
         }
-        // ADR-0108 Decision 3: the demand record lives as long as the claim can still be tried.
+        // ADR-0109 Decision 3: the demand record lives as long as the claim can still be tried.
         if self.state.held_leaf_demands.contains_key(&key) && !new.as_ref().is_some_and(|claim| !claim.phase.is_terminal()) {
             self.write_held_leaf_demands(key, None);
         }
@@ -10229,7 +10229,7 @@ fn apply_object(
             let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
             crate::palw_held_da_v1::palw_held_da_check_accusation_v1(&claim.execution_root, &accusation.missing, &accusation.binding)
                 .map_err(|e| PalwStateV2Error::HeldDaRefused { claim: claim_id, why: e.to_string() })?;
-            // **ADR-0108 Decision 3: a leaf's evidence is demanded by a seat, once.** The seat of
+            // **ADR-0109 Decision 3: a leaf's evidence is demanded by a seat, once.** The seat of
             // the claim's bound panel, never a stranger — whose leaf is one its own draw assigned
             // it is the acceptance layer's check, which holds the network domain the draw is keyed
             // by — and never twice on one claim, so what the executor owes is bounded by the panel.
@@ -10296,7 +10296,7 @@ fn apply_object(
                 ladder,
             )
             .map_err(|e| PalwStateV2Error::HeldDaRefused { claim: claim_id, why: e.to_string() })?;
-            // **ADR-0108 Decision 4: a leaf's evidence is adjudicated, by the one-move verdict.**
+            // **ADR-0109 Decision 4: a leaf's evidence is adjudicated, by the one-move verdict.**
             // Guilty: the executor convicted itself by answering — the claim voids `CourtFraud`
             // exactly as `ShardCourtAccused` voids it, and the accuser's stake comes back where every
             // door out of the disputed phase gives it back. Clear: the demand was wrong, and the
@@ -13430,7 +13430,7 @@ pub struct PalwStateCarriageV2 {
     pub shard_licensing: BTreeMap<Hash64, crate::palw_shard_licensing_v1::PalwShardLicensingProgressV1>,
     /// ADR-0103 Decision 4.
     pub held_da_missing: BTreeMap<Hash64, crate::palw_held_da_v1::PalwHeldMissingV1>,
-    /// ADR-0108 Decision 3. A seventh tagged tail (`0xA4`), encoded only when non-empty.
+    /// ADR-0109 Decision 3. A seventh tagged tail (`0xA4`), encoded only when non-empty.
     pub held_leaf_demands: BTreeMap<Hash64, BTreeMap<PalwBondKeyV2, u64>>,
 }
 
@@ -13486,7 +13486,7 @@ const PALW_CARRIAGE_SHARDS_TAIL_V1: u8 = 0x99;
 /// The tail byte that says ADR-0103 Decision 4's held-accusation record follows (last of the six),
 /// guarded exactly as the root's block is.
 const PALW_CARRIAGE_HELD_TAIL_V1: u8 = 0xA3;
-/// The tail byte that says ADR-0108 Decision 3's demand record follows (last of the seven),
+/// The tail byte that says ADR-0109 Decision 3's demand record follows (last of the seven),
 /// guarded exactly as the root's block is.
 const PALW_CARRIAGE_HELD_DEMANDS_TAIL_V1: u8 = 0xA4;
 
@@ -21567,7 +21567,7 @@ pub(crate) mod tests {
             (37, PalwDeltaEntryV2::BondShards { key: (bond_key(1), key), old: None, new: None }),
             (38, PalwDeltaEntryV2::ShardLicensing { key, old: None, new: None }),
             (39, PalwDeltaEntryV2::HeldDaMissing { key, old: None, new: None }),
-            // ADR-0108 Decision 3, appended last.
+            // ADR-0109 Decision 3, appended last.
             (40, PalwDeltaEntryV2::HeldLeafDemands { key, old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
@@ -23169,7 +23169,7 @@ pub(crate) mod tests {
     }
 
     /// A claim on `binding`'s execution under a class registered at `artifact_root` (the base
-    /// class), bond 1 producing and a panel of bonds 1 and 2 bound — ADR-0108's fold fixture.
+    /// class), bond 1 producing and a panel of bonds 1 and 2 bound — ADR-0109's fold fixture.
     fn leaf_demand_setup(
         binding: &crate::palw_step_leg::PalwStepBindingV2,
         artifact_root: Hash64,
@@ -23215,7 +23215,7 @@ pub(crate) mod tests {
         (p, s3, claim_id)
     }
 
-    /// **ADR-0108 in the fold: a leaf's evidence is demanded by a seat, once, and the answer is
+    /// **ADR-0109 in the fold: a leaf's evidence is demanded by a seat, once, and the answer is
     /// ADJUDICATED by the one-move verdict.** On a guilty leaf and an honest one: a stranger's demand
     /// is refused, a seat's opens the session and is recorded, evidence that does not adjudicate is
     /// no answer, the real evidence voids the claim `CourtFraud` (guilty) or closes the session
@@ -23303,7 +23303,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// **ADR-0108 in the fold: silence to the deadline is the default** — the leaf demand's session
+    /// **ADR-0109 in the fold: silence to the deadline is the default** — the leaf demand's session
     /// ends as every held session ends, `ProducerWithholding`, and the demand record goes with the
     /// claim.
     #[test]

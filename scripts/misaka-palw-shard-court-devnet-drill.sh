@@ -28,7 +28,7 @@
 # P2P_BASE / RPC_BASE (port bases), HELD (0; 1 re-runs the drill UNDER ADR-0103's fence —
 # --palw-held-context-devnet on every node, the held regime minted from genesis — which is
 # ADR-0103 Invariant 1: the same tampered leaf, the same one-move conviction, the same slash),
-# LEAF (unset; ADR-0108's two paths, HELD=1 only: `fast` — node-0 serves its claims' answer
+# LEAF (unset; ADR-0109's two paths, HELD=1 only: `fast` — node-0 serves its claims' answer
 # envelope and never the capture, so a seat judges by intervals alone, names the leaf off the
 # block-leaves lane and convicts on the evidence node-0 serves it on request; `slow` — node-0 also
 # refuses that request, so the seat demands the leaf's evidence on chain, node-0 answers the
@@ -127,12 +127,12 @@ committed="$(wait_log "committed canonical claim [0-9a-f]{128}" "the canonical c
 log "    $committed"
 
 if [ "$LEAF" = "slow" ]; then
-  log "2/5 waiting for a seat to demand the named leaf's evidence on chain (ADR-0108 Decision 3)"
-  accused="$(wait_log "demanding it on chain \\(ADR-0108 Decision 3\\)" "a seat's demand")"
+  log "2/5 waiting for a seat to demand the named leaf's evidence on chain (ADR-0109 Decision 3)"
+  accused="$(wait_log "demanding it on chain \\(ADR-0109 Decision 3\\)" "a seat's demand")"
 elif [ "$LEAF" = "fast" ]; then
   # The fast path's own line, not any accusation: a capture-route accusation here would mean a seat
-  # held the capture after all, and the run would prove nothing about ADR-0108.
-  log "2/5 waiting for a seat to accuse on the executor's own evidence (ADR-0108 fast path)"
+  # held the capture after all, and the run would prove nothing about ADR-0109.
+  log "2/5 waiting for a seat to accuse on the executor's own evidence (ADR-0109 fast path)"
   accused="$(wait_log "accusing leaf [0-9]+ in the one-move court on the executor's own evidence" "a fast-path accusation")"
   if grep -h -E "accusing leaf [0-9]+ in the one-move court \\(session" "$WORK_DIR"/node-*.log >/dev/null 2>&1; then
     die "a seat accused from a capture — node-0 served one, so this run does not exercise the fast path"
@@ -194,7 +194,7 @@ fi
 dropped="$(cat "$WORK_DIR"/node-*.log | grep -c "a PALW lifecycle object was dropped, and the block stands" || true)"
 log "    duplicate accusations dropped with the block standing: $dropped (every seat on the panel files once)"
 case "$LEAF" in
-  fast) log "PASS — a seat that held no capture convicted a corrupted free-prompt claim on the executor's own evidence (ADR-0108 fast path)" ;;
-  slow) log "PASS — a seat that held no capture demanded the leaf on chain, and the executor's answer convicted it (ADR-0108 slow path)" ;;
+  fast) log "PASS — a seat that held no capture convicted a corrupted free-prompt claim on the executor's own evidence (ADR-0109 fast path)" ;;
+  slow) log "PASS — a seat that held no capture demanded the leaf on chain, and the executor's answer convicted it (ADR-0109 slow path)" ;;
   *) log "PASS — the one-move court convicted a corrupted free-prompt claim on a live devnet" ;;
 esac

@@ -1,4 +1,4 @@
-//! **ADR-0108 — a seat may demand the committed leaf it needs to judge.** The pure half: which
+//! **ADR-0109 — a seat may demand the committed leaf it needs to judge.** The pure half: which
 //! intervals a seat was assigned (a function of chain facts alone), which interval owns a leaf, and
 //! so whether a demand for a leaf's evidence is one the chain assigned the demanding seat.
 //!
@@ -6,7 +6,7 @@
 //! a seat checks before it signs a receipt is its own duty. A DEMAND is different. It obliges the
 //! executor to put a leaf's evidence on chain or lose the claim, so the leaf it names must be one the
 //! chain told that seat to check — never one the seat chose, never one an executor's worst case was
-//! picked from (ADR-0108 Decision 3). This module is that bound, spelled from the binding the demand
+//! picked from (ADR-0109 Decision 3). This module is that bound, spelled from the binding the demand
 //! carries (authenticated against the claim's `execution_root` by the held DA court before this is
 //! asked), so the acceptance layer and every seat compute one answer.
 //!
@@ -21,13 +21,13 @@ use crate::palw_fp_interval_v1::{PALW_FP_SEAT_INTERVAL_SAMPLES_V1, palw_fp_inter
 use crate::palw_step::canonical_step_coordinates;
 use crate::palw_step_leg::PalwStepBindingV2;
 
-/// **How long a seat waits for the fast path before it demands on chain**, in DAA (ADR-0108
+/// **How long a seat waits for the fast path before it demands on chain**, in DAA (ADR-0109
 /// Decision 6). A node-side patience, not a consensus number: the demand's own window is ADR-0062's
 /// `W_disclose`, and nothing on chain reads this. Long enough for one signed round trip on the
 /// interval lane and one interval's replay at the executor; short against every receipt window.
 pub const PALW_LEAF_EVIDENCE_FAST_PATH_DAA_V1: u64 = 6;
 
-/// **A leaf-evidence request rides the interval lane under bit 29** (ADR-0108 Decision 2). Bits 31
+/// **A leaf-evidence request rides the interval lane under bit 29** (ADR-0109 Decision 2). Bits 31
 /// and 30 clear (they are the block-leaves and resume requests'), bit 29 set, the leaf's interval
 /// below it; the leaf itself rides the request's `leafIndex` field, which the signature binds. A
 /// plain interval index never reaches bit 29 — a held job at 2M positions has about a thousand
@@ -159,7 +159,7 @@ pub fn palw_leaf_demand_is_the_seats_v1(
     Ok(interval)
 }
 
-/// **A leaf's evidence, built by the executor from its own retention** (ADR-0108 Decisions 1 and
+/// **A leaf's evidence, built by the executor from its own retention** (ADR-0109 Decisions 1 and
 /// 2) — one builder for the fast path's answer and the slow path's disclosure, so the two carry the
 /// same bytes for one `(claim, leaf)`.
 ///

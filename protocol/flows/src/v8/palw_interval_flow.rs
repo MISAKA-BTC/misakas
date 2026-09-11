@@ -57,7 +57,7 @@ impl PalwIntervalFlow {
                     let Some(claim) = inner.claim_id.and_then(|h| Hash64::try_from(h).ok()) else {
                         continue; // an opening for no claim is addressed to nobody
                     };
-                    // ADR-0108 Decision 2: the leaf is meaningful only under a leaf-evidence index.
+                    // ADR-0109 Decision 2: the leaf is meaningful only under a leaf-evidence index.
                     let leaf_index =
                         kaspa_consensus_core::palw_leaf_evidence_v1::palw_leaf_evidence_request_decode_v1(inner.interval_index)
                             .map(|_| inner.leaf_index);

@@ -260,10 +260,10 @@ pub struct Args {
     pub palw_drill_challenge_all: bool,
     /// DRILL ONLY (devnet/simnet): this node's canonical free-prompt claims are broadcast and
     /// served as their ANSWER envelope, never the capture — as at a width no capture fits the
-    /// material cap — so a seat judges them by intervals alone (ADR-0108's drill).
+    /// material cap — so a seat judges them by intervals alone (ADR-0109's drill).
     pub palw_drill_answer_only: bool,
     /// DRILL ONLY (devnet/simnet): this node refuses every leaf-evidence request on the interval
-    /// lane, so a seat that named a leaf must demand its evidence on chain (ADR-0108 Decision 3).
+    /// lane, so a seat that named a leaf must demand its evidence on chain (ADR-0109 Decision 3).
     pub palw_drill_refuse_leaf_evidence: bool,
     /// ADR-0074 Decision 1: run the network's own job when nobody is asking and commit it as a
     /// canonical free-prompt claim, drawn by the chain's beacon like any other.
@@ -1036,7 +1036,7 @@ pub fn cli() -> Command {
                 .help(
                     "PALW DRILL ONLY: this node's canonical free-prompt claims are broadcast and served as their answer \
                      envelope, never the capture, so every seat judges them by intervals alone and must obtain a named \
-                     leaf's evidence from the executor (ADR-0108). DEVNET/SIMNET ONLY.",
+                     leaf's evidence from the executor (ADR-0109). DEVNET/SIMNET ONLY.",
                 ),
         )
         .arg(
@@ -1046,7 +1046,7 @@ pub fn cli() -> Command {
                 .action(clap::ArgAction::SetTrue)
                 .help(
                     "PALW DRILL ONLY: this node refuses every leaf-evidence request on the interval lane, so a seat that \
-                     named a leaf demands its evidence on chain through the held data-availability court (ADR-0108 \
+                     named a leaf demands its evidence on chain through the held data-availability court (ADR-0109 \
                      Decision 3). DEVNET/SIMNET ONLY.",
                 ),
         )

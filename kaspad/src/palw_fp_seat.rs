@@ -133,7 +133,7 @@ pub fn palw_fp_verify_opening_request_v1(
         .unwrap_or(false)
 }
 
-/// **ADR-0108 Decision 2: a leaf-evidence request's signed message** — the interval request's
+/// **ADR-0109 Decision 2: a leaf-evidence request's signed message** — the interval request's
 /// domain with its own tag (3), binding the request index AND the leaf, so one signature can be
 /// replayed neither as a request for another leaf nor as a plain interval request.
 pub fn palw_fp_leaf_request_message_v1(network_domain: Hash64, claim: Hash64, index: u32, leaf: u64, requested_daa: u64) -> Hash64 {
@@ -147,7 +147,7 @@ pub fn palw_fp_leaf_request_message_v1(network_domain: Hash64, claim: Hash64, in
     finish(state)
 }
 
-/// Sign a leaf-evidence request with the bond's key (ADR-0108 Decision 2).
+/// Sign a leaf-evidence request with the bond's key (ADR-0109 Decision 2).
 pub fn palw_fp_sign_leaf_request_v1(
     signing_key: &libcrux_ml_dsa::ml_dsa_87::MLDSA87SigningKey,
     network_domain: Hash64,
@@ -1084,7 +1084,7 @@ mod tests {
         assert_eq!(base, palw_fp_opening_request_message_v1(h(1), h(2), Some(3), 400), "pure");
     }
 
-    /// **ADR-0108 Decision 2: a leaf request signs its leaf, and is neither another leaf's request
+    /// **ADR-0109 Decision 2: a leaf request signs its leaf, and is neither another leaf's request
     /// nor a plain interval request.** The same domain and context as the interval lane, its own
     /// tag: a captured leaf request cannot be replayed for another leaf, and a captured interval
     /// request cannot be turned into a leaf request by adding a field the signature never covered.

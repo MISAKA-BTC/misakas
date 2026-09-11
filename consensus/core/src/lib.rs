@@ -291,7 +291,7 @@ pub mod palw_held_context_v1;
 /// ADR-0103 Decision 4 — a data-availability accusation names a prompt tile, a state chunk or a
 /// step range, and is answered by that unit and its path. Behind `Params::palw_held_context`.
 pub mod palw_held_da_v1;
-/// ADR-0108 — a seat may demand the committed leaf it needs to judge: the seat's assigned
+/// ADR-0109 — a seat may demand the committed leaf it needs to judge: the seat's assigned
 /// intervals and the interval that owns a leaf, as pure functions of the binding — the bound a
 /// held DA demand for a leaf's evidence is admitted under.
 pub mod palw_leaf_evidence_v1;

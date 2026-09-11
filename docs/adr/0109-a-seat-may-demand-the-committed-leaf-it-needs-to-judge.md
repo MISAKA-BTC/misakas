@@ -1,4 +1,4 @@
-# ADR-0108 — A seat may demand the committed leaf it needs to judge
+# ADR-0109 — A seat may demand the committed leaf it needs to judge
 
 * Status: PROPOSED 2026-09-11 on `feat/adr-0103-held-context` (continuing ADR-0103 at `36f115c4`),
   written from the operator's decision on ADR-0103 §10.5. Nothing is armed: the new unit rides the
@@ -156,7 +156,7 @@ paid back by the charge on the requester.
 ## 6. What is deliberately not decided
 
 * **Activating a wider context.** How a context limit is armed from reproducible public evidence
-  rather than a maintainer's workstation is ADR-0109's.
+  rather than a maintainer's workstation is the next ADR's (the verification vectors; §7).
 * **A fused leaf's evidence.** Its terminal is the dissection (ADR-0103 Decision 5); the responder
   is clocked there, and silence already convicts.
 * **Who pays a seat's fetch bandwidth** (ADR-0103 §8), unchanged.
@@ -166,6 +166,12 @@ paid back by the charge on the requester.
 0104 (the close cut, `fix/panel-pays-consensus-rent`), 0105 (the heartbeat, on
 `docs/renumber-heartbeat-adr-0105`), 0106 (the streaming inventory, `feat/adr-0099-sharded-seat`)
 and 0107 (share growth, `fix/share-growth-counts-final-work`) are resident on other branches as of
-2026-09-11, so this is 0108 and the verification-vector ADR it names is 0109. The operator's draft
-called these two 0104 and 0105; a concurrent claimant renumbers the later writer, and these are
-the later writers.
+2026-09-11. The operator's draft called this ADR and the verification-vector one 0104 and 0105.
+
+This ADR was first committed as 0108 (`e251c751`, 15:19:45 +0900) — 102 seconds after
+`f608a066` (15:18:03 +0900) committed ADR-0108, "an extension is a manifest the verifier
+recomputes", on `feat/adr-0108-extension-envelope`, a concurrent session's branch. A concurrent
+claimant renumbers the later writer, and this is the later writer: it is 0109, and every reference
+on this branch — code comments, log lines, the drill's patterns — was renumbered with it. The
+verification-vector ADR takes its number when it is written, from what is resident on every branch
+then, rather than reserving one here.

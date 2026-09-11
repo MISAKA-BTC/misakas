@@ -882,7 +882,7 @@ pub struct PalwOpeningRequestV1<'a> {
     /// The interval asked for, or `None` for a whole-capture pull. It is part of the signed
     /// message, so one signature cannot be replayed as a request for every interval of a claim.
     pub interval_index: Option<u32>,
-    /// **ADR-0108 Decision 2: the step leaf whose evidence is asked for**, when the index is a
+    /// **ADR-0109 Decision 2: the step leaf whose evidence is asked for**, when the index is a
     /// leaf-evidence request (bit 29). Part of the signed message, like the index.
     pub leaf_index: Option<u64>,
     /// The requester's DAA score when it signed.

@@ -615,7 +615,7 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Err("this execution family serves no block leaves".to_string())
     }
 
-    /// **ADR-0108 Decision 6, the executor's answer to a held state-chunk accusation** (ADR-0103
+    /// **ADR-0109 Decision 6, the executor's answer to a held state-chunk accusation** (ADR-0103
     /// Decision 4): checkpoint `checkpoint`'s leaf opened against the binding's checkpoint root, and
     /// chunk `chunk` of its state with the path under the class's map, built from this executor's
     /// retention. The default refuses by name — and the court reads a refusal as silence, so a
@@ -631,7 +631,7 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Err("this execution family answers no held state chunk".to_string())
     }
 
-    /// **ADR-0108 Decision 6, the executor's answer to a held step-range accusation**: the leaf
+    /// **ADR-0109 Decision 6, the executor's answer to a held step-range accusation**: the leaf
     /// hashes of `[first, first + count)` and the frontier that folds them to the binding's step
     /// root, from this executor's retention. Refused by name by default, as above.
     fn held_step_range_answer_v1(

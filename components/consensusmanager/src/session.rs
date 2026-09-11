@@ -240,7 +240,7 @@ impl ConsensusSessionOwned {
         self.consensus.palw_claim_readers_v2(claim)
     }
 
-    /// A claim's committed roots and price at the tip (ADR-0108 Decision 2).
+    /// A claim's committed roots and price at the tip (ADR-0109 Decision 2).
     pub fn palw_claim_roots_v2(
         &self,
         claim: kaspa_consensus_core::Hash64,
