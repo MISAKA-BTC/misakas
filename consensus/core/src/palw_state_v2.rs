@@ -4705,6 +4705,14 @@ pub struct PalwChainStateV2 {
     /// burden is the panel's size and never the requesters' appetite. Dropped when the claim goes
     /// terminal (`write_claim`). Enters the root and the carriage only once written.
     held_leaf_demands: BTreeMap<Hash64, BTreeMap<PalwBondKeyV2, u64>>,
+    /// **ADR-0119 Decision 2: the step ladder of every class whose ladder is not the network's** —
+    /// a class registered under the held map, whose ladder is the regime's
+    /// (`palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1`). Written when such a class registers: the
+    /// fold holds the class's profile then and at no other time, and every later reader of a claim's
+    /// ladder holds a claim and this state, never a profile. A class id is a hash of its profile, so
+    /// a row is a function of the id and is never rewritten. Enters the root and the carriage only
+    /// once written, which nothing below `Params::palw_held_context` can do.
+    class_step_ladders: BTreeMap<Hash64, u64>,
     /// **ADR-0056 Decision 3: the registry's own exposure ledger, kept SEPARATE from the claims'.**
     ///
     /// `reserved_exposure` is an accumulator over live claims, and
@@ -4830,6 +4838,7 @@ impl PalwChainStateV2 {
             shard_licensing: BTreeMap::new(),
             held_da_missing: BTreeMap::new(),
             held_leaf_demands: BTreeMap::new(),
+            class_step_ladders: BTreeMap::new(),
             registration_exposure: BTreeMap::new(),
             class_walks: BTreeMap::new(),
             certified_families: BTreeMap::new(),
@@ -5310,6 +5319,15 @@ impl PalwChainStateV2 {
         self.held_leaf_demands.get(claim_id)
     }
 
+    /// **ADR-0119 Decision 2: the step ladder of a class, given the network's** — the ladder this
+    /// state recorded when the class registered (a held class's, the regime's `2^40`), or the
+    /// network's for every class it recorded none for. The one question every consensus reader of
+    /// a claim's ladder asks, so the one-move court, the checkpoint court, the held DA court, the
+    /// dissection and the extraction walk cannot answer it differently.
+    pub fn class_step_ladder_v1(&self, class_id: &Hash64, network_ladder: u64) -> u64 {
+        self.class_step_ladders.get(class_id).copied().unwrap_or(network_ladder)
+    }
+
     /// **ADR-0089 Decision 2: the window** — every row a read precompile may serve, flattened,
     /// at this state's own point (the EVM block's selected parent). Bond keys are resolved to
     /// their payout payloads, statuses to codes, and every line of every class is present
@@ -5694,6 +5712,11 @@ impl PalwChainStateV2 {
         // leaf's evidence, which nothing below `Params::palw_held_context` can do.
         if !self.held_leaf_demands.is_empty() {
             state.update(collection_root(b"held_leaf_demands", &self.held_leaf_demands).as_byte_slice());
+        }
+        // **ADR-0119 Decision 2.** Its own block, for the same reason: empty until a held class
+        // registers, which nothing below `Params::palw_held_context` can do.
+        if !self.class_step_ladders.is_empty() {
+            state.update(collection_root(b"class_step_ladders", &self.class_step_ladders).as_byte_slice());
         }
         state.update(&self.safe_weight.to_le_bytes());
         state.update(&self.retired_safe_weight.to_le_bytes());
@@ -6522,11 +6545,16 @@ pub enum PalwDeltaEntryV2 {
         new: Option<crate::palw_held_da_v1::PalwHeldMissingV1>,
     },
     /// ADR-0111 Decision 3: a claim's record of which seats demanded which leaf moved (40).
-    /// Appended last.
     HeldLeafDemands {
         key: Hash64,
         old: Option<BTreeMap<PalwBondKeyV2, u64>>,
         new: Option<BTreeMap<PalwBondKeyV2, u64>>,
+    },
+    /// ADR-0119 Decision 2: a class's recorded step ladder moved (41). Appended last.
+    ClassStepLadder {
+        key: Hash64,
+        old: Option<u64>,
+        new: Option<u64>,
     },
 }
 
@@ -7085,6 +7113,16 @@ impl<'a> TransitionBuilder<'a> {
         };
         if old != new {
             self.entries.push(PalwDeltaEntryV2::HeldDaMissing { key, old, new });
+        }
+    }
+
+    fn write_class_step_ladder(&mut self, key: Hash64, new: Option<u64>) {
+        let old = match new {
+            Some(ladder) => self.state.class_step_ladders.insert(key, ladder),
+            None => self.state.class_step_ladders.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::ClassStepLadder { key, old, new });
         }
     }
 
@@ -10962,6 +11000,16 @@ fn apply_object(
                     }),
                 }),
             );
+            // **ADR-0119 Decision 2: a class under the held map records its ladder, now.** The
+            // carriage is the one place the fold ever holds the class's profile; every later reader
+            // of a claim's ladder holds this state instead. Written only for a held class — which
+            // the gate admits only past `Params::palw_held_context` — so a network that registers
+            // none roots exactly as before.
+            if let Some(carriage) = admission.as_ref()
+                && crate::palw_state_chunk_map::palw_profile_is_held_v4(&carriage.profile)
+            {
+                builder.write_class_step_ladder(*class_id, Some(crate::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1));
+            }
             // **Decision 3: the registry's price, taken now and held while the class lives.** A
             // re-registration of a Dormant class takes it again — the previous reservation was
             // released at reclamation, so this is one live class and one reservation, always.
@@ -13441,6 +13489,7 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::ShardLicensing { key, old, new } => swap_write!(state.shard_licensing, key, old, new),
         PalwDeltaEntryV2::HeldDaMissing { key, old, new } => swap_write!(state.held_da_missing, key, old, new),
         PalwDeltaEntryV2::HeldLeafDemands { key, old, new } => swap_write!(state.held_leaf_demands, key, old, new),
+        PalwDeltaEntryV2::ClassStepLadder { key, old, new } => swap_write!(state.class_step_ladders, key, old, new),
     }
     Ok(())
 }
@@ -13634,6 +13683,8 @@ pub struct PalwStateCarriageV2 {
     pub held_da_missing: BTreeMap<Hash64, crate::palw_held_da_v1::PalwHeldMissingV1>,
     /// ADR-0111 Decision 3. A seventh tagged tail (`0xA4`), encoded only when non-empty.
     pub held_leaf_demands: BTreeMap<Hash64, BTreeMap<PalwBondKeyV2, u64>>,
+    /// ADR-0119 Decision 2. An eighth tagged tail (`0xA5`), encoded only when non-empty.
+    pub class_step_ladders: BTreeMap<Hash64, u64>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -13691,6 +13742,9 @@ const PALW_CARRIAGE_HELD_TAIL_V1: u8 = 0xA3;
 /// The tail byte that says ADR-0111 Decision 3's demand record follows (last of the seven),
 /// guarded exactly as the root's block is.
 const PALW_CARRIAGE_HELD_DEMANDS_TAIL_V1: u8 = 0xA4;
+/// The tail byte that says ADR-0119 Decision 2's class ladders follow (last of the eight), guarded
+/// exactly as the root's block is.
+const PALW_CARRIAGE_CLASS_LADDERS_TAIL_V1: u8 = 0xA5;
 
 impl borsh::BorshSerialize for PalwStateCarriageV2 {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
@@ -13763,6 +13817,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_HELD_DEMANDS_TAIL_V1.serialize(writer)?;
             self.held_leaf_demands.serialize(writer)?;
         }
+        if !self.class_step_ladders.is_empty() {
+            PALW_CARRIAGE_CLASS_LADDERS_TAIL_V1.serialize(writer)?;
+            self.class_step_ladders.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -13804,6 +13862,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_held = false;
         let mut held_leaf_demands = BTreeMap::new();
         let mut seen_demands = false;
+        let mut class_step_ladders = BTreeMap::new();
+        let mut seen_class_ladders = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -13832,15 +13892,19 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     model_benefits = BTreeMap::deserialize_reader(reader)?;
                     model_position_since = BTreeMap::deserialize_reader(reader)?;
                 }
-                PALW_CARRIAGE_HELD_TAIL_V1 if !seen_held && !seen_demands => {
+                PALW_CARRIAGE_HELD_TAIL_V1 if !seen_held && !seen_demands && !seen_class_ladders => {
                     seen_held = true;
                     held_da_missing = BTreeMap::deserialize_reader(reader)?;
                 }
-                PALW_CARRIAGE_HELD_DEMANDS_TAIL_V1 if !seen_demands => {
+                PALW_CARRIAGE_HELD_DEMANDS_TAIL_V1 if !seen_demands && !seen_class_ladders => {
                     seen_demands = true;
                     held_leaf_demands = BTreeMap::deserialize_reader(reader)?;
                 }
-                PALW_CARRIAGE_SHARDS_TAIL_V1 if !seen_shards && !seen_held && !seen_demands => {
+                PALW_CARRIAGE_CLASS_LADDERS_TAIL_V1 if !seen_class_ladders => {
+                    seen_class_ladders = true;
+                    class_step_ladders = BTreeMap::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_SHARDS_TAIL_V1 if !seen_shards && !seen_held && !seen_demands && !seen_class_ladders => {
                     seen_shards = true;
                     class_shard_plans = BTreeMap::deserialize_reader(reader)?;
                     bond_shards = BTreeMap::deserialize_reader(reader)?;
@@ -13894,6 +13958,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             shard_licensing,
             held_da_missing,
             held_leaf_demands,
+            class_step_ladders,
         })
     }
 }
@@ -13934,6 +13999,7 @@ impl PalwStateCarriageV2 {
             shard_licensing: state.shard_licensing.clone(),
             held_da_missing: state.held_da_missing.clone(),
             held_leaf_demands: state.held_leaf_demands.clone(),
+            class_step_ladders: state.class_step_ladders.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -14022,6 +14088,7 @@ impl PalwStateCarriageV2 {
             shard_licensing: self.shard_licensing,
             held_da_missing: self.held_da_missing,
             held_leaf_demands: self.held_leaf_demands,
+            class_step_ladders: self.class_step_ladders,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -21735,6 +21802,7 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::ShardLicensing { .. } => "shard_licensing",
                     PalwDeltaEntryV2::HeldDaMissing { .. } => "held_da_missing",
                     PalwDeltaEntryV2::HeldLeafDemands { .. } => "held_leaf_demands",
+                    PalwDeltaEntryV2::ClassStepLadder { .. } => "class_step_ladder",
                 });
             }
         }
@@ -21769,8 +21837,10 @@ pub(crate) mod tests {
             (37, PalwDeltaEntryV2::BondShards { key: (bond_key(1), key), old: None, new: None }),
             (38, PalwDeltaEntryV2::ShardLicensing { key, old: None, new: None }),
             (39, PalwDeltaEntryV2::HeldDaMissing { key, old: None, new: None }),
-            // ADR-0111 Decision 3, appended last.
+            // ADR-0111 Decision 3.
             (40, PalwDeltaEntryV2::HeldLeafDemands { key, old: None, new: None }),
+            // ADR-0119 Decision 2, appended last.
+            (41, PalwDeltaEntryV2::ClassStepLadder { key, old: None, new: Some(1 << 40) }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -22291,6 +22361,8 @@ pub(crate) mod tests {
             shard_licensing: _,
             held_da_missing: _,
             held_leaf_demands: _,
+            // ADR-0119 Decision 2: rooted in its own guarded block after the demands.
+            class_step_ladders: _,
             safe_weight: _,
             retired_safe_weight: _,
             bounded_immature: _,
@@ -22769,6 +22841,64 @@ pub(crate) mod tests {
         let (s1, _) = shard_apply(&PalwChainStateV2::genesis(), p, &ctx(1, 100, 1), &objects, None, &shard_extras())
             .expect("the registry applies");
         s1
+    }
+
+    /// **ADR-0119 Decision 2: a held class records its ladder when it registers, and nothing else
+    /// does.** The registration's carriage is the one place the fold holds a class's profile, so a
+    /// held class's row is written there — the regime's `2^40` — and every later reader asks the
+    /// state (`class_step_ladder_v1`), getting the network's ladder for any other class. The row is
+    /// rooted and carried (a state with it roots and encodes differently from one without it), it
+    /// reverts with the delta, and a registry of non-held classes writes none, so a network that
+    /// registers no held class roots exactly as a build without the field.
+    #[test]
+    fn a_held_class_records_its_ladder_at_registration_and_nothing_else_does() {
+        use crate::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1;
+        let p = params();
+        let floor = shard_registry(&p, Some(bond_key(9)));
+        assert!(floor.class_step_ladders.is_empty(), "the floor is not a held class, so it records nothing");
+        assert_eq!(floor.class_step_ladder_v1(&h64(1), 1 << 26), 1 << 26, "…and reads the network's ladder");
+
+        let held = crate::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v7(crate::palw_qwen25_profile::PalwQwen25GeometryV1 {
+            n_ctx: 512,
+            ..crate::palw_qwen25_profile::QWEN25_1_5B
+        })
+        .expect("the held dense row builds");
+        assert!(crate::palw_state_chunk_map::palw_profile_is_held_v4(&held));
+        let held_id = held.shape_profile_id();
+        let register = PalwConsensusObjectV2::ClassRegistered {
+            class_id: held_id,
+            artifact_root: h64(12),
+            slash_value_per_pwu: 5,
+            pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+            initial_target: u128::MAX / 2,
+            share_permille: 0,
+            activation_daa: 0,
+            admission: Some(Box::new(PalwClassAdmissionCarriageV2 {
+                registrant_bond: bond_key(9),
+                canonical: crate::palw_base0_profile::rc_job_context(&held, 64, 2),
+                profile: held.clone(),
+                signature: Vec::new(),
+            })),
+        };
+        let (s2, delta) =
+            shard_apply(&floor, &p, &ctx(2, 101, 2), &[register], None, &shard_extras()).expect("the held class registers");
+        assert_eq!(s2.class_step_ladders.get(&held_id), Some(&PALW_HELD_STEP_LADDER_V1));
+        assert_eq!(s2.class_step_ladder_v1(&held_id, 1 << 26), PALW_HELD_STEP_LADDER_V1);
+        assert_eq!(s2.class_step_ladder_v1(&h64(1), 1 << 26), 1 << 26, "the floor's is still the network's");
+
+        let mut without = s2.clone();
+        without.class_step_ladders.clear();
+        assert_ne!(s2.state_root(), without.state_root(), "the row is rooted");
+        let carried = borsh::to_vec(&PalwStateCarriageV2::from_state(&s2)).unwrap();
+        assert_ne!(carried, borsh::to_vec(&PalwStateCarriageV2::from_state(&without)).unwrap(), "…and carried");
+        let back: PalwStateCarriageV2 = borsh::from_slice(&carried).expect("the carriage decodes with its eighth tail");
+        assert_eq!(back.class_step_ladders, s2.class_step_ladders);
+        let imported = back.into_state(&p, Some(s2.state_root())).expect("a pruned sync imports the row with the rest");
+        assert_eq!(imported.class_step_ladders, s2.class_step_ladders);
+
+        let reverted = revert_delta_v2(&s2, &delta, &p).expect("the registration reverts");
+        assert!(reverted.class_step_ladders.is_empty(), "…and so does its ladder");
+        assert_eq!(reverted.state_root(), floor.state_root());
     }
 
     fn stratified_seats() -> Vec<PalwPanelSeatV2> {

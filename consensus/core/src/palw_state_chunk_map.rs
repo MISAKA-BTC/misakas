@@ -287,6 +287,29 @@ pub fn palw_attn_history_bound_v1(profile: &PalwShapeProfileV3) -> usize {
     }
 }
 
+/// **The step ladder of a class under the held regime** (ADR-0119 Decision 1): `2^40` leaves, on
+/// every network.
+///
+/// A network's ladder is frozen in its bundle at what a BISECTION of the whole step space can play
+/// inside the court window — `2^26` on testnet-11 — because a bisection opened before any fence must
+/// stay playable. A held class exists only past the held fence, where no bisection opens, so that
+/// clock never binds it; what binds it is what its own court opens. The held dissection opens its
+/// session on a [`crate::palw_bisect::PalwBisectLadderV1`] whose space is the claim's ladder, and a
+/// bisection ladder refuses a space past [`crate::palw_bisect::PALW_BISECT_MAX_SPACE`] — so the
+/// regime's ladder is exactly that: 40 levels, 2,560 bytes of path in a close. The dense 1.5B row at
+/// `2^21` positions is `≈2^37.6` leaves and Qwen3.6-35B's density `≈2^39.3`; a class past `2^40` is
+/// refused by the gate's own ladder wall.
+pub const PALW_HELD_STEP_LADDER_V1: u64 = crate::palw_bisect::PALW_BISECT_MAX_SPACE;
+
+/// **The step ladder of THIS class, given the network's** (ADR-0119 Decision 1): the regime's
+/// [`PALW_HELD_STEP_LADDER_V1`] for a class that registered a held map, the network's for every
+/// other. For the readers that hold the class's profile — the gate, the backends, the seats. The
+/// chain's own readers hold a claim and a state, and ask the state (`PalwChainStateV2::
+/// class_step_ladder_v1`), which recorded this answer when the class registered.
+pub fn palw_class_step_ladder_v1(network_ladder: u64, profile: &PalwShapeProfileV3) -> u64 {
+    if palw_profile_is_held_v4(profile) { PALW_HELD_STEP_LADDER_V1 } else { network_ladder }
+}
+
 /// **The v4 geometry of the attention cache** — [`tiled_kv_state_geometry_v3`]'s arithmetic with
 /// the chunk-count cap replaced by the depth cap. Built from the profile rather than from v1/v2,
 /// because those two refuse a chunk count past `PALW_STEP_LEG_MAX_STATE_CHUNKS` before v4 could
