@@ -936,6 +936,25 @@ mod tests {
         assert!(matches!(a16_rms_norm(&x, 1), Err(PalwA16OpError::DotTooLong { .. })));
     }
 
+    /// **The same bound caps an attention HISTORY at 2^18 rows** (ADR-0103 §10.7, the eighth wall),
+    /// and this pins the limitation rather than the behaviour. W10 accepts a history of exactly
+    /// `A16_MAX_DOT_LEN` rows and refuses one more, so no A16-family class executes, replays or is
+    /// adjudicated past position 262,143, whatever its registered `n_ctx`. Raising it is a ruleset
+    /// decision (a separate history bound, with its exactness and its Q24 precision argued), and this
+    /// test is where that decision has to show.
+    #[test]
+    fn an_attention_history_past_the_bound_is_refused_and_that_is_the_eighth_wall() {
+        let (heads, kv_heads, d_head) = (1usize, 1usize, 1usize);
+        let values = [params_of(1, 0, 0)];
+        for (rows, refused) in [(A16_MAX_DOT_LEN, false), (A16_MAX_DOT_LEN + 1, true)] {
+            let probs = vec![1i32; heads * rows];
+            let v_series = vec![1i32; rows * kv_heads * d_head];
+            let got = a16_attn_values(&probs, &v_series, heads, kv_heads, d_head, &values);
+            assert_eq!(matches!(got, Err(PalwA16OpError::DotTooLong { .. })), refused, "{rows} rows of history");
+        }
+        assert_eq!(A16_MAX_DOT_LEN, 262_144, "the widest A16 history is 2^18 rows");
+    }
+
     /// A lane outside ±32767 is not an A16 code, and every op refuses the row rather than
     /// computing something about a different class.
     #[test]

@@ -435,7 +435,7 @@ fn main() {
 /// measured replay row; the certification drill is what makes a width a number (ADR-0075 D7).
 fn print_held_fetch_column_v1(args: &Args) {
     use kaspa_consensus_core::palw_held_context_v1::{
-        palw_held_interval_positions_v1, palw_held_replay_row_v1, palw_held_seat_budget_ms_v1,
+        PalwHeldReplayCostV1, palw_held_interval_positions_v1, palw_held_seat_budget_ms_v1,
     };
     use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, qwen25_a16_artifact_row_profile_v7};
     use kaspa_consensus_core::palw_qwen36_profile::{PalwQwen36GeometryV1, qwen36_profile_v7};
@@ -453,7 +453,8 @@ fn print_held_fetch_column_v1(args: &Args) {
     println!("## ADR-0103 Decision 7 — the fetch column, on the held rows, at 2^21 positions\n");
     println!(
         "The seat's budget is `window_receipt` = {window_receipt} DAA over the drill's margin = **{} ms**; a seat of {} GiB. The fetch is the \
-         widest shard's state at the last interval's start (`n_ctx − P`); a shard replays `P` positions of its share of the layers.\n",
+         widest shard's state at the last interval's start (`n_ctx − P`); a shard replays its share of the layers over the last `P` \
+         positions, each against every row before it (ADR-0103 §10.6).\n",
         palw_held_seat_budget_ms_v1(window_receipt),
         seat >> 30
     );
@@ -476,15 +477,21 @@ fn print_held_fetch_column_v1(args: &Args) {
             continue;
         };
         let p = palw_held_interval_positions_v1(&profile);
-        let rate = palw_held_replay_row_v1(&profile).replay_ms_per_position();
+        let replay = PalwHeldReplayCostV1::for_profile_v1(&profile);
         let budget_at = |bandwidth: u64| PalwSeatResumeBudgetV1 {
             seat_budget_bytes: seat,
             bandwidth_bytes_per_second: bandwidth,
             window_receipt_daa: window_receipt,
-            replay_ms_per_position: rate,
+            replay,
             interval_positions: p,
         };
-        println!("### {name} — P = {p} positions, {rate} ms a position (the family's replay row)\n");
+        println!(
+            "### {name} — P = {p} positions, {} ms a position (the family's replay row) and one more for every {} rows of history; \
+             the last interval replays in {:.1} h whole-model\n",
+            replay.ms_per_position,
+            replay.knee_positions,
+            replay.replay_ms_v1(u64::from(n_ctx - p), u64::from(p)) as f64 / 3_600_000.0
+        );
         print!("| shards | widest seat | widest fetch at the last interval |");
         for (link, _) in links {
             print!(" resume at {link} |");

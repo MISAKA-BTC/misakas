@@ -671,3 +671,88 @@ acceptance arm, and on a live devnet by `HELD=1 scripts/misaka-palw-shard-court-
 * **A shard seat's replay from its own slices.** The fetch is verified slice-locally; replaying one
   shard from that state is ADR-0099's shard replay and is not rebuilt here.
 * **The worker's request frame** for prompts past ~60,000 ids (§10.3 item 6).
+
+### 10.6 Decision 2's price, amended (2026-09-11): a replay pays for its history
+
+Decision 2 priced a seat's replay as a line: `n_ctx × replay_ms_per_position` decided the route,
+and `budget / replay_ms_per_position` bounded the width's clock. But a position's attention reads
+every row before it. ADR-0110 §9.3 measured the consequence on the context vectors' thin row: from
+4,096 to 32,768 positions (8×) the seat's recompute grew 41×. The route was therefore optimistic
+exactly where it matters. It sent seats to recompute contexts they could not recompute inside the
+window, and a seat that overruns files nothing.
+
+**The amendment** (`consensus/core/src/palw_held_context_v1.rs`, consensus-inert like the rest of
+the regime's pure half):
+
+* **The knee.** `palw_held_attention_knee_v1(profile)` is the class's own multiply-accumulates for one
+  position over its attention's for one row of history, read off the registered geometry. The
+  numerator counts the attention layers' `q`, `k`, `v`, `o` projections and every layer's MLP. The
+  denominator is `2 × heads × head_dim` per attention layer. The unembedding is left out of the
+  numerator because a recompute drops the logits, and leaving work out can only make the knee
+  smaller, the side a bound must err on. The dense tier's real row (Qwen2.5-1.5B) has a knee of
+  15,232 rows. The context vectors' thin row has 28. A class with no attention layer has
+  `u64::MAX`, and its replay is the old line to the millisecond.
+* **The price.** `PalwHeldReplayCostV1 { ms_per_position, knee_positions }`. The rate is still the
+  family's measured row (SA-4's source), taken as the cost with an empty history, which is how it was
+  measured. `replay_ms_v1(first, count)` prices positions `first .. first + count`, each against every
+  row before it: `count + (count·first + count(count − 1)/2) / knee` positions' worth, rounded up
+  once and saturating.
+* **The route** is `Recompute` exactly when `replay_ms_v1(0, n_ctx)` fits the seat's budget.
+* **The width's clock** is the LAST interval's replay, `replay_ms_v1(n_ctx − P, P)`, plus the fetch.
+  `P` is halved from the wire's and the context's bound until that fits. The class's chain-facing `P`
+  (`palw_held_interval_positions_v1`, §10.3 item 5) is unchanged; this is the certification's check.
+* **The shard plan** (`palw_shard_resume_ms_v1`) prices the same last interval and gives each shard
+  its layers' share of it.
+
+**What it moves**, at testnet-11's windows (`window_receipt` 600, a 10-hour seat budget):
+
+| | the line | with the history |
+|---|---|---|
+| widest context the dense row RECOMPUTES | 1,058,823 positions | 165,012 positions |
+| the dense row's last 2M interval (`P` = 2,048, the wire's) | 70 s | 2.68 h |
+| one whole-model shard resumes it (112 GiB fetch) down to | ≈ 27 Mbit/s | ≈ 37 Mbit/s |
+| the thin vector row's route on the held devnet (`window_receipt` 40) | recompute to 70,588 positions | recompute below 1,961; resume above |
+
+D7's sentence in §10.2 reads, amended: at a 512 GiB seat the dense row resumes its last 2M interval
+on one shard at 100 Mbit/s in 2.7 h of fetch and 2.7 h of replay, 5.4 h of the budget's 10.
+
+**The model is a bound, and the vectors check it.** On the thin row the model grows 63× from 4,096 to
+32,768 positions. The engine measured 41× for the seat and 22.6× for produce. The model is
+steeper, which is the direction a price that sends seats to recompute must err in. The 4,096 and
+32,768-position vectors now take the Resume route, and their `document_id`s were re-pinned for that
+alone. Only `seat.route` and the intervals' `resume_bytes` moved; every root, count, size and verdict
+still reads as ADR-0110 §9.2's table. So the pinned suite now exercises both routes: 512 positions
+recompute, and 4,096 and 32,768 resume.
+
+**What it does not move.** SA-4's turn deadlines (`palw_context_ladder`, `palw_court_deadline`) still
+price a court move's replay linearly. Those are consensus numbers on every shipped preset, and this
+section does not touch them. At the widths a shipped network executes (a free prompt is capped at
+4,096 ids), the history adds 1.7% at 512 positions and 13.4% at 4,096, which the deadlines' margins
+absorb. ADR-0082 Decision 9's width bound for a non-held seat (`palw-certify`) is likewise
+unchanged. A held network that prices court moves at a wide context takes this price with it, and
+that is a ruleset move, not this amendment.
+
+### 10.7 The eighth wall, found planning the 2M vector (2026-09-11)
+
+§10.2 says every chain wall of the dense row admits from 512 to 2M. It does, but a wall that is
+not the chain's refuses first. The A16 tier's catalog attention ops bound a history at
+`A16_MAX_DOT_LEN` = 2^18:
+
+* `a16_attn_values` refuses `kv_len > 2^18`;
+* the fused site's tile arithmetic refuses more than 2^18 positions;
+* the engine's fused arm composes those ops over the whole history;
+* the fast kernels mirror the same refusals.
+
+So no A16-family class executes past position 262,143. At the 262,145th row the forward fails with
+`DotTooLong`, and the producer, the seat and the court all stop there. The widest A16 context
+anything in this tree can produce, replay or adjudicate is 262,144 positions.
+
+The bound was set for projections ("one power of two above the largest real reduction in the family
+— Qwen2.5's `d_ff` and vocabulary"), when no attention history was longer than a few thousand rows.
+Its exactness argument has room for a longer history. A value product is below `2^30`, so `2^26`
+rows sum inside `i64`, and a row of `2^21` Q24 exponents sums below `2^45`. But a separate history
+bound is a change to catalog ops the court runs, so it is a ruleset decision. It is inert on every
+shipped network, because a free prompt there is at most 4,096 ids. It also carries a precision
+question the arithmetic does not answer: at `2^21` positions a near-uniform row's Q24 probabilities
+are about `8/2^24`, three bits each. It is recorded here, and ADR-0110 §9.5 carries what it means
+for the 2M vector. Nothing is changed.

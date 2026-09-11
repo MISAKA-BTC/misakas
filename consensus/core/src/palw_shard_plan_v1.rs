@@ -212,24 +212,28 @@ pub struct PalwSeatResumeBudgetV1 {
     pub bandwidth_bytes_per_second: u64,
     /// The ruleset's receipt window.
     pub window_receipt_daa: u64,
-    /// The family's replay rate for ONE whole-model position (`palw_held_replay_row_v1`); a shard
-    /// replays its share of the layers.
-    pub replay_ms_per_position: u64,
+    /// The class's replay for ONE whole-model position, its history priced
+    /// (`PalwHeldReplayCostV1::for_profile_v1`, ADR-0103 §10.6); a shard replays its share of the
+    /// layers.
+    pub replay: crate::palw_held_context_v1::PalwHeldReplayCostV1,
     /// The class's interval width `P` (`palw_held_interval_positions_v1`).
     pub interval_positions: u32,
 }
 
 /// **What one shard's seat spends to resume and replay the job's LAST interval** (ADR-0103
-/// Decision 7), in milliseconds: the fetch of its state at `n_ctx − P` positions at the stated
-/// bandwidth, plus `P` positions of its layers' share of the family's replay. The last interval is
-/// the worst one, so a plan that fits it fits every interval.
+/// Decision 7), in milliseconds. That is the fetch of its state at `n_ctx − P` positions at the
+/// stated bandwidth, plus its layers' share of replaying the last `P` positions against the
+/// `n_ctx − P` rows before them (§10.6). The last interval is the worst one, so a plan that fits it
+/// fits every interval. The share is by layer count, which puts the history's cost evenly across
+/// the shards. A hybrid's attention layers are spread through its stack
+/// (`full_attention_interval`), which is what an even share assumes.
 pub fn palw_shard_resume_ms_v1(plan: &PalwShardPlanV1, shard: &PalwShardV1, layer_count: u16, budget: &PalwSeatResumeBudgetV1) -> u64 {
     let start = u64::from(plan.n_ctx.saturating_sub(budget.interval_positions));
     let fetch = shard.fetch_bytes_at_v1(plan.kv_row_bytes, start);
     let fetch_ms = crate::palw_held_context_v1::palw_held_fetch_ms_v1(fetch, budget.bandwidth_bytes_per_second);
     let replay_ms = budget
-        .replay_ms_per_position
-        .saturating_mul(u64::from(budget.interval_positions))
+        .replay
+        .replay_ms_v1(start, u64::from(budget.interval_positions))
         .saturating_mul(u64::from(shard.layer_count))
         .div_ceil(u64::from(layer_count.max(1)));
     fetch_ms.saturating_add(replay_ms)

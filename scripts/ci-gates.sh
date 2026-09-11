@@ -55,7 +55,7 @@ export MISAKA_PALW_POW_FIXTURE="${MISAKA_PALW_POW_FIXTURE:-1}"
 # and is what a pre-commit hook or an impatient human should run. `build` needs a toolchain and
 # a compiled workspace.
 # ---------------------------------------------------------------------------------------------
-GATE_IDS="toolchain-pin workflow-parity artifact-conformance artifact-stranger artifact-roundtrip artifact-thirdparty fmt clippy pq-guard check build-devnet-prealloc check-evm-send nextest derive-suite doctest hashes-no-asm doctest-hashes-no-asm doc example-kip10"
+GATE_IDS="toolchain-pin workflow-parity artifact-conformance artifact-stranger artifact-roundtrip artifact-thirdparty fmt clippy pq-guard check build-devnet-prealloc check-evm-send nextest derive-suite doctest hashes-no-asm doctest-hashes-no-asm doc example-kip10 context-vectors"
 
 gate_group() {
     case "$1" in
@@ -71,6 +71,7 @@ gate_job() {
         artifact-*)           echo "Derived artifacts" ;;
         fmt|clippy|pq-guard)  echo "Lints" ;;
         check)                echo "Check" ;;
+        context-vectors)      echo "Context vectors (release)" ;;
         *)                    echo "Test Suite" ;;
     esac
 }
@@ -96,6 +97,7 @@ gate_desc() {
         doctest-hashes-no-asm) echo "kaspa-hashes without asm, doctests" ;;
         doc)                  echo "cargo doc --no-deps" ;;
         example-kip10)        echo "the kip-10 example still runs under legacy-secp256k1" ;;
+        context-vectors)      echo "ADR-0110: the 4,096 and 32,768-position vectors in release, every stage and each document_id at its pin" ;;
     esac
 }
 
@@ -459,6 +461,14 @@ gate_check_evm_send()         { cargo check --locked -p misaka-cli --bin misaka 
 gate_doctest_hashes_no_asm()  { cargo test --doc -p kaspa-hashes --features=no-asm; }
 gate_example_kip10()          { cargo run -p kaspa-txscript --example kip-10 --features legacy-secp256k1; }
 
+# **ADR-0110 Decision 5: the release-mode vector job.** The 512-position vector is in the default
+# suite, so `nextest` runs it. The 4,096 and 32,768-position vectors are pinned too, but they are
+# `#[ignore]`d because a debug build takes too long over them. This gate, and its own CI job, run
+# them in release. The filter takes every ignored test whose path names `context_vector`, and the
+# evidence names both vectors and pins the count at two. A third vector added under that name
+# (128K takes about three hours) turns this gate red. It does not silently lengthen CI.
+gate_context_vectors()        { cargo test --release -p misaka-palw-base0 --lib -- --ignored context_vector; }
+
 dispatch() {
     case "$1" in
         toolchain-pin)        run_gate "$1" 'PIN OK'                    -- gate_toolchain_pin ;;
@@ -486,6 +496,9 @@ dispatch() {
         doctest-hashes-no-asm) run_gate "$1" 'test result:'             -- gate_doctest_hashes_no_asm ;;
         doc)                  run_gate "$1" 'Finished|Generated|Documenting' -- gate_doc ;;
         example-kip10)        run_gate "$1" 'Finished|Running'          -- gate_example_kip10 ;;
+        # Both vectors BY NAME, and the count: a filter that stopped matching one of them would
+        # still print `test result: ok`.
+        context-vectors)      run_gate "$1" 'the_4k_vector_passes_every_stage_and_is_pinned \.\.\. ok@@the_32k_vector_passes_every_stage_and_is_pinned \.\.\. ok@@test result: ok\. 2 passed' -- gate_context_vectors ;;
         # Rule 1 again, one level up: an unknown id used to print a line to stderr and return
         # 125, which NOTHING read -- the loop below ignored dispatch's status -- so `ci-gates.sh
         # clipy` (one p) printed `GREEN -- 0 gate(s) passed` and exited 0. A wrapper that exits 0
