@@ -91,7 +91,7 @@
 //!
 //! `GetPalwPendingChunkGroup` returns the group's own `present` bitmap, count, deadline and pinned
 //! digest, and [`parts_to_send_v1`] turns it into exactly which carriers are still owed — through
-//! `palw_court_close_parts_to_send_v1`, which is where that rule lives since ADR-0102, so a node
+//! `palw_court_close_parts_to_send_v1`, which is where that rule lives since ADR-0104, so a node
 //! reading the same bitmap out of its own state resumes by the same arithmetic. The
 //! journal on disk stays — it is what chains the funding — but it no longer decides what to send:
 //! a journal believes itself, so it can only answer with a PREFIX, and a prefix is wrong the moment
@@ -237,7 +237,7 @@ pub(crate) struct CarriageGap {
 // **How many carriers one court close may spend** used to be answered here, off two ceilings: the
 // network's `PalwCourtParamsV2::max_close_chunks` (27 on the RC, 1 on devnet, and inside
 // `palw_ruleset_id_v2`) and the ROW's `PALW_COURT_CLOSE_MAX_CHUNKS`, which is what a `u64` bitmap
-// can address whatever a ruleset says. ADR-0102 moved it to `palw_court_close_max_parts_v1`, beside
+// can address whatever a ruleset says. ADR-0104 moved it to `palw_court_close_max_parts_v1`, beside
 // the assembler that enforces both — no wrapper stands in for it here, because the answer is a
 // number rather than a sentence, and a wrapper around a number is only a second place for it to be
 // wrong. The wrappers this file DOES keep are the ones that turn a refusal into an operator's
@@ -248,9 +248,9 @@ pub(crate) struct CarriageGap {
 // =================================================================================================
 
 /// One close's carriage, decided before a fee is spent — **`kaspa-consensus-core`'s, since
-/// ADR-0102.**
+/// ADR-0104.**
 ///
-/// This used to be declared here, and that was the defect ADR-0102 closes: the cut lived in a
+/// This used to be declared here, and that was the defect ADR-0104 closes: the cut lived in a
 /// command-line tool, so the only program that could file a split close was not the one that
 /// prosecutes disputes. The type, the cutter and the resume moved to
 /// [`kaspa_consensus_core::palw_close_carriage`] — beside the assembler that reads them — and what
@@ -394,7 +394,7 @@ fn carriage_refusal_v1(plan: &CarriagePlan, why: PalwCloseCarriageError) -> CliE
 /// [`PALW_COURT_CLOSE_CHUNK_MAX_BYTES`], pinned by `palw_court_close_chunk_digest_v1` per index,
 /// and bounded by `palw_court_close_max_parts_v1`.
 ///
-/// **The cut itself is `palw_plan_court_close_carriage_v1`'s, since ADR-0102** — this is the
+/// **The cut itself is `palw_plan_court_close_carriage_v1`'s, since ADR-0104** — this is the
 /// wrapper that says its refusals in an operator's words, and it exists for that and nothing else.
 /// Every message below is the one this command printed before the move; the CLI's own tests are
 /// what pins that, and they were not edited to make this compile.
@@ -1206,7 +1206,7 @@ fn record_part_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
-    // **The three the cut took with it** (ADR-0102). These tests check this file's WORDS against
+    // **The three the cut took with it** (ADR-0104). These tests check this file's WORDS against
     // consensus's rule, so they still name the rule — from where it lives now. Nothing above needs
     // them: the non-test paths reach them through the planner.
     use kaspa_consensus_core::palw_close_carriage::palw_court_close_max_parts_v1 as court_close_max_parts_v1;

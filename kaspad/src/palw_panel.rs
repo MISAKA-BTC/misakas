@@ -295,7 +295,7 @@ const COURT_MOVE_REPLAN_DAA: u64 = 10;
 /// Submission attempts per assembled object before giving up (each tick retries).
 const SUBMIT_ATTEMPTS: u32 = 3;
 
-/// **One court move waiting for a carrier — and, since ADR-0102, possibly for several.**
+/// **One court move waiting for a carrier — and, since ADR-0104, possibly for several.**
 ///
 /// This used to be a tuple ending in one `PalwConsensusObjectV2`, and that was the defect: a close
 /// too wide for one carrier could not be filed at all. The submit loop built it, `build_lifecycle_
@@ -317,7 +317,7 @@ struct CourtMoveV1 {
     group: Option<CourtCloseGroupPlanV1>,
 }
 
-/// What a resume compares the chain's own group against (ADR-0102). Not the bytes — those are in
+/// What a resume compares the chain's own group against (ADR-0104). Not the bytes — those are in
 /// `parts` — but the identity the chain keys and pins, so a group that is not this plan's is
 /// refused before a carrier is spent on completing somebody else's assembly.
 struct CourtCloseGroupPlanV1 {
@@ -1073,7 +1073,7 @@ impl PalwPanelService {
         }
     }
 
-    /// **Turn a court object into the carriage that files it** (ADR-0102).
+    /// **Turn a court object into the carriage that files it** (ADR-0104).
     ///
     /// Every move but a close rides on one carrier by construction — an opening, a disclosure, a
     /// verdict are all small and their size does not depend on the evidence. A close's does: its
@@ -1285,7 +1285,7 @@ impl PalwPanelService {
         build(signature)
     }
 
-    /// **What this object owes the CHAIN, on top of what its carrier owes the relay** (ADR-0102).
+    /// **What this object owes the CHAIN, on top of what its carrier owes the relay** (ADR-0104).
     ///
     /// A carrier's fee is normally this node's own relay minimum for its real mass, so our mempool
     /// cannot refuse what we built. That is not the question the acceptance layer asks of a close
@@ -3215,7 +3215,7 @@ impl PalwPanelService {
                     }
                 };
                 let Some(object) = object else { continue };
-                // **A close is cut before it is queued** (ADR-0102). Every other move rides on one
+                // **A close is cut before it is queued** (ADR-0104). Every other move rides on one
                 // carrier by construction; a close is the only object whose size is a function of
                 // the evidence, so it is the only one that can outgrow a carrier — and the cut is
                 // a function of the bytes, which do not change, so it is made once here rather
@@ -4131,7 +4131,7 @@ impl PalwPanelService {
                         continue;
                     }
                     // **What is still owed is the CHAIN's answer, not this loop's memory**
-                    // (ADR-0102). For a whole move that is the one part; for a split close it is
+                    // (ADR-0104). For a whole move that is the one part; for a split close it is
                     // the group's `present` bitmap, re-read every tick — so a carrier the mempool
                     // dropped, an orphaned chunk or a restart mid-group resumes rather than
                     // re-pays, and a group that is not this plan's is refused before a fee is spent

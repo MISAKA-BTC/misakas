@@ -1,4 +1,4 @@
-# ADR-0102 — a close too wide for one carrier is cut once, and every filer shares the cut
+# ADR-0104 — a close too wide for one carrier is cut once, and every filer shares the cut
 
 Status: accepted, 2026-09-11. Supersedes nothing; completes ADR-0080 design A's filing half and
 gives ADR-0096 §10 B13's split close a filer.
@@ -161,9 +161,18 @@ is the carriage half ADR-0096 §10 B13 says a worst-case constrained close needs
 
 ## 8. Number hygiene
 
-0099, 0100 and 0101 are resident on `feat/adr-0099-sharded-seat`; 0097 and 0098 on their own
-branches; that branch's README says the next free number is 0102, which this ADR takes. **The next
-free number is 0103.** A concurrent claimant of 0102 renumbers the later writer.
+**This ADR was written as 0102 and renumbered to 0104 on 2026-09-11, which is the rule working
+rather than failing.** It was drafted against `feat/adr-0099-sharded-seat`'s README, which said the
+next free number was 0102, and two other sessions were drafting at the same time: 0102 went to
+`the-embedding-lift-is-read-per-token-and-an-unarmed-kernel-is-not-in-the-identity` and 0103 to
+`the-context-is-held-off-the-chain-and-the-chain-carries-a-root-an-opening-and-a-logarithm`, both
+resident before this one was pushed. Each ADR's own §"Number hygiene" says a concurrent claimant
+renumbers the later writer, and this was the later writer, so it moved.
+
+The renumber is the file, its title, and every `ADR-0102` in the tree that meant this document —
+nineteen of them across `consensus-core`, `kaspad` and `misaka-cli`, none left behind. Checked
+against every branch rather than against a README: 0104 was free on all of them, and 0105–0109
+still are. **The next free number is 0105.**
 
 ## 9. Implementation record
 

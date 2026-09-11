@@ -1,4 +1,4 @@
-//! **PALW court-close carriage v1 — the cut, in the crate that assembles it** (ADR-0102).
+//! **PALW court-close carriage v1 — the cut, in the crate that assembles it** (ADR-0104).
 //!
 //! A court close that fits one carrier is a `CourtClosed` on an ordinary lifecycle transaction. A
 //! close that does not is a signed `CourtCloseDeclared` pinning every byte that will follow, then
@@ -6,7 +6,7 @@
 //! assembles them, checks the declaration's `close_digest`, decodes and adjudicates through the
 //! arm a one-carrier close takes (ADR-0080 design A, W5–W7).
 //!
-//! That assembler lives in [`crate::palw_state_v2`]. Until ADR-0102 the CUT lived in
+//! That assembler lives in [`crate::palw_state_v2`]. Until ADR-0104 the CUT lived in
 //! `misaka-cli`, which meant the only program that could file a split close was a command-line
 //! tool, and the party that actually prosecutes disputes — a node's own panel loop — built one
 //! `CourtClosed`, handed it to one carrier, and logged a warning when it did not fit. **A close

@@ -176,7 +176,7 @@ pub mod palw_catalog_coverage;
 pub mod palw_chain_weight;
 pub mod palw_class_admission_v2;
 pub mod palw_class_daa;
-/// ADR-0102: the cut a court close is carried in, in the crate that assembles it — so the bytes a
+/// ADR-0104: the cut a court close is carried in, in the crate that assembles it — so the bytes a
 /// filer sends and the bytes the chain reassembles cannot come from two functions.
 pub mod palw_close_carriage;
 pub mod palw_context_ladder;

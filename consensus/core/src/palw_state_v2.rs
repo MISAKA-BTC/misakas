@@ -19836,14 +19836,14 @@ pub(crate) mod tests {
         assert_eq!(revert_delta_v2(&split_done, &split_delta, &p).unwrap().state_root(), c1.state_root());
     }
 
-    /// **The SHIPPED cutter's own output assembles and adjudicates** (ADR-0102).
+    /// **The SHIPPED cutter's own output assembles and adjudicates** (ADR-0104).
     ///
     /// [`a_three_carrier_close_and_a_whole_one_reach_the_same_state`] proves the transition, and it
     /// cuts with [`split_close_v1`] — a test's cutter, sized so three carriers can be exercised
     /// without building 200 kB of proof. That is the right trade for testing the ARM, and it leaves
     /// one thing unproven: whether the cutter every filer actually uses produces parts this arm
     /// accepts. Two cutters, one of them never run against the assembler, is exactly the shape
-    /// ADR-0102 exists to remove — so this one builds a close big enough to genuinely split, cuts
+    /// ADR-0104 exists to remove — so this one builds a close big enough to genuinely split, cuts
     /// it with `palw_plan_court_close_carriage_v1`, and files what that returns, byte for byte.
     ///
     /// The court passed to the planner is built with `with_cost_ceilings` rather than taken from a
@@ -20459,7 +20459,7 @@ pub(crate) mod tests {
         assert_eq!(palw_object_rent_ceiling_v1(&bond), 0, "no rule prices a retirement, so its whole fee is the miner's");
     }
 
-    /// **What a filer pays covers every rule that would drop it** (ADR-0102).
+    /// **What a filer pays covers every rule that would drop it** (ADR-0104).
     ///
     /// The acceptance filter holds exactly three `carrier_fee < owed` refusals, and this asserts
     /// [`palw_carrier_min_fee_v1`] answers at least each one, on the object that rule reads. It is
