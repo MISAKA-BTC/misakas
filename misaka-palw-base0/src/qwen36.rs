@@ -299,6 +299,48 @@ impl Qwen36ArtifactV1 {
         }
     }
 
+    /// **A tensor's byte length, without touching one of its bytes** (ADR-0103) — present exactly
+    /// when [`Self::tensor`] would answer: an absent name and an extent that leaves the mapping are
+    /// the same refusals here.
+    pub fn tensor_len(&self, name: &str) -> Result<usize, Qwen36Error> {
+        match &self.store {
+            Store::Owned(t) => t.get(name).map(|v| v.len()).ok_or_else(|| Qwen36Error::MissingTensor(name.to_string())),
+            Store::Mapped { map, directory } => {
+                let (offset, len) = *directory.get(name).ok_or_else(|| Qwen36Error::MissingTensor(name.to_string()))?;
+                match offset.checked_add(len) {
+                    Some(end) if end <= map.len() => Ok(len),
+                    _ => Err(Qwen36Error::BadTensor { name: name.to_string(), want: len, got: 0 }),
+                }
+            }
+        }
+    }
+
+    /// **`buf.len()` bytes of a tensor from byte `at`, copied into the caller's buffer** (ADR-0103)
+    /// — a mapped store reads them through the file descriptor, never the mapping, for the reason
+    /// [`Self::artifact_root`] gives: a whole-artifact pass that faults the map runs at the fault
+    /// rate and leaves every page it touched resident, and one that reads leaves only its buffer.
+    /// A range past the tensor is a refusal; an IO error names the byte it failed at.
+    pub fn read_tensor_range_into(&self, name: &str, at: usize, buf: &mut [u8]) -> Result<(), String> {
+        let len = self.tensor_len(name).map_err(|e| e.to_string())?;
+        if at.checked_add(buf.len()).is_none_or(|end| end > len) {
+            return Err(format!("{name}: bytes {at}..+{} leave its {len}", buf.len()));
+        }
+        match &self.store {
+            Store::Owned(t) => {
+                let codes = &t[name][at..at + buf.len()];
+                for (out, v) in buf.iter_mut().zip(codes) {
+                    *out = *v as u8;
+                }
+                Ok(())
+            }
+            Store::Mapped { map, directory } => {
+                let (offset, _) = directory[name];
+                let from = (offset + at) as u64;
+                map.read_exact_at(from, buf).map_err(|e| format!("{name}: unreadable at file byte {from}: {e}"))
+            }
+        }
+    }
+
     /// **The artifact's identity: one digest over everything a forward pass reads.**
     ///
     /// The shape, every parameter table, the rotary table and every weight byte, each under a

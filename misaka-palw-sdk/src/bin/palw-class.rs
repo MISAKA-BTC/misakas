@@ -424,14 +424,18 @@ fn held_measurement(loaded: &misaka_palw_sdk::PalwLoadedArtifactV1, name: Option
         // artifact by name on exactly that.
         let manifest = PalwModelManifestV1::from_hybrid_token_lift(name.unwrap_or_else(|| loaded.summary.clone()), &g, None);
         let profile = manifest.profile(MEASURE_CONTEXTS[0]).map_err(|e| format!("the hybrid manifest builds no profile: {e:?}"))?;
-        let inventory = misaka_palw_base0::inventory::qwen36_inventory_v1(&artifact, &profile)
+        // **ADR-0103: streamed, not materialized.** Each row is checked, hashed into the root and
+        // dropped where it is read; what is kept is one entry per tensor (its rows' bytes summed —
+        // placement reads a row's tensor, layer and length only). So measuring a 33 GiB artifact
+        // holds one read block, not the artifact: the same root and bytes as the materializing
+        // builder, pinned on every fixture graph and on this Mac's 2B artifact (document id equal).
+        let (summary, tensors) = misaka_palw_base0::inventory::qwen36_inventory_measure_v1(&artifact, &profile)
             .map_err(|e| format!("the artifact yields no inventory under its own profile: {e:?}"))?;
-        let rows: Vec<PalwInventoryRowMetaV1> = inventory.operands().iter().map(PalwInventoryRowMetaV1::from).collect();
-        let bytes = palw_artifact_bytes_from_inventory_v1(&profile, &rows).map_err(|e| e.to_string())?;
+        let bytes = palw_artifact_bytes_from_inventory_v1(&profile, &tensors).map_err(|e| e.to_string())?;
         return Ok(HeldMeasurementV1 {
             manifest,
             bytes,
-            inventory_root: inventory.root(),
+            inventory_root: summary.root,
             lineage: loaded.lineage_id,
             layers: g.layer_count,
         });

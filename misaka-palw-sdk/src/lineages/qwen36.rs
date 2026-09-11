@@ -93,8 +93,10 @@ pub fn registered_root_of(
     }
     // Derived outside the lock: a pass over the whole artifact must not hold up a reader of
     // another graph's root. Two racing derivations of one graph agree, so the second write is moot.
-    let derived = misaka_palw_base0::inventory::qwen36_inventory_v1(&held.artifact, profile)
-        .map(|inventory| inventory.root())
+    // Streamed (ADR-0103): the pass hashes each row where it reads it, so a node deriving the root
+    // of a 33 GiB holding holds one read block of it, not a copy.
+    let derived = misaka_palw_base0::inventory::qwen36_inventory_summary_v1(&held.artifact, profile)
+        .map(|summary| summary.root)
         .map_err(|e| format!("the artifact has no inventory under this graph: {e:?}"));
     held.inventory_roots.lock().expect("the memo is never poisoned").insert(key, derived.clone());
     Some(derived)

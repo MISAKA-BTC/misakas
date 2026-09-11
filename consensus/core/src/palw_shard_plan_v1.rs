@@ -441,6 +441,14 @@ impl From<&PalwArtifactOperandV1> for PalwInventoryRowMetaV1 {
     }
 }
 
+/// The same meta from a streamed row (ADR-0103): a placement reads a row's coordinate and length,
+/// never its bytes.
+impl From<&crate::palw_artifact::PalwArtifactRowDigestV1> for PalwInventoryRowMetaV1 {
+    fn from(r: &crate::palw_artifact::PalwArtifactRowDigestV1) -> Self {
+        Self { tensor_name: r.tensor_name.clone(), layer: r.layer, bytes: u64::from(r.byte_len) }
+    }
+}
+
 /// The basis an inventory-measured estimate names.
 pub const PALW_ARTIFACT_BYTES_BASIS_INVENTORY_V1: &str = "the artifact inventory's rows, byte for byte";
 

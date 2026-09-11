@@ -60,18 +60,54 @@ pub struct PalwArtifactOperandV1 {
 /// an accuser could open a genuine row of some other tensor and claim it as the operand of the step
 /// under dispute — a proof that verifies while proving the wrong thing.
 pub fn artifact_leaf_v1(operand: &PalwArtifactOperandV1) -> Hash64 {
-    let mut state = Params::new().hash_length(64).key(PALW_ARTIFACT_DOMAIN_LEAF).to_state();
-    state.update(&(operand.tensor_name.len() as u32).to_le_bytes());
-    state.update(operand.tensor_name.as_bytes());
-    // `u32::MAX` is the "no layer" marker rather than an absent field, so a graph-level tensor and
-    // layer `u32::MAX` cannot collide by one being shorter than the other.
-    state.update(&operand.layer.map_or(u32::MAX, u32::from).to_le_bytes());
-    state.update(&operand.row_start.to_le_bytes());
-    state.update(&(operand.bytes.len() as u32).to_le_bytes());
-    state.update(&operand.bytes);
-    let mut out = [0u8; 64];
-    out.copy_from_slice(state.finalize().as_bytes());
-    Hash64::from_bytes(out)
+    artifact_leaf_parts_v1(&operand.tensor_name, operand.layer, operand.row_start, &operand.bytes)
+}
+
+/// **The same leaf over BORROWED parts** (ADR-0103) — so a row can be hashed where it is read and
+/// discarded, instead of being copied into an owned operand first. [`artifact_leaf_v1`] is this.
+pub fn artifact_leaf_parts_v1(tensor_name: &str, layer: Option<u16>, row_start: u32, bytes: &[u8]) -> Hash64 {
+    let mut hasher = PalwArtifactLeafHasherV1::new(tensor_name, layer, row_start, bytes.len() as u32);
+    hasher.update(bytes);
+    hasher.finish().expect("the length was the slice's own")
+}
+
+/// **A leaf hashed as a STREAM** (ADR-0103): the position and the length first — the preimage
+/// carries the length before the bytes — then the bytes in any chunking, so a row larger than any
+/// buffer is still one leaf. [`Self::finish`] refuses a stream whose absorbed length is not the
+/// declared one, which is the only way a streamed leaf could differ from [`artifact_leaf_parts_v1`].
+pub struct PalwArtifactLeafHasherV1 {
+    state: blake2b_simd::State,
+    declared: u32,
+    absorbed: u64,
+}
+
+impl PalwArtifactLeafHasherV1 {
+    pub fn new(tensor_name: &str, layer: Option<u16>, row_start: u32, byte_len: u32) -> Self {
+        let mut state = Params::new().hash_length(64).key(PALW_ARTIFACT_DOMAIN_LEAF).to_state();
+        state.update(&(tensor_name.len() as u32).to_le_bytes());
+        state.update(tensor_name.as_bytes());
+        // `u32::MAX` is the "no layer" marker rather than an absent field, so a graph-level tensor
+        // and layer `u32::MAX` cannot collide by one being shorter than the other.
+        state.update(&layer.map_or(u32::MAX, u32::from).to_le_bytes());
+        state.update(&row_start.to_le_bytes());
+        state.update(&byte_len.to_le_bytes());
+        Self { state, declared: byte_len, absorbed: 0 }
+    }
+
+    pub fn update(&mut self, bytes: &[u8]) {
+        self.state.update(bytes);
+        self.absorbed += bytes.len() as u64;
+    }
+
+    /// The leaf, or the refusal naming both lengths.
+    pub fn finish(self) -> Result<Hash64, (u32, u64)> {
+        if self.absorbed != u64::from(self.declared) {
+            return Err((self.declared, self.absorbed));
+        }
+        let mut out = [0u8; 64];
+        out.copy_from_slice(self.state.finalize().as_bytes());
+        Ok(Hash64::from_bytes(out))
+    }
 }
 
 fn node(left: &Hash64, right: &Hash64) -> Hash64 {
@@ -108,6 +144,59 @@ pub fn artifact_root_v1(leaves: &[Hash64]) -> Option<Hash64> {
         level = next;
     }
     Some(level[0])
+}
+
+/// **The same root as a STREAM** (ADR-0103): one peak per level, a leaf pushed as a binary carry,
+/// and the peaks folded from the LOWEST level up at the end — which is exactly what promotion does,
+/// because an unpaired node is carried up untouched until something above pairs with it. No leaf
+/// vector and no level copy; pinned against [`artifact_root_v1`] for every size.
+#[derive(Clone, Debug, Default)]
+pub struct PalwArtifactMerkleFrontierV1 {
+    peaks: Vec<Option<Hash64>>,
+    count: u64,
+}
+
+impl PalwArtifactMerkleFrontierV1 {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&mut self, leaf: Hash64) {
+        let mut carry = leaf;
+        let mut level = 0;
+        loop {
+            if level == self.peaks.len() {
+                self.peaks.push(None);
+            }
+            match self.peaks[level].take() {
+                Some(left) => {
+                    carry = node(&left, &carry);
+                    level += 1;
+                }
+                None => {
+                    self.peaks[level] = Some(carry);
+                    break;
+                }
+            }
+        }
+        self.count += 1;
+    }
+
+    pub fn leaf_count(&self) -> u64 {
+        self.count
+    }
+
+    /// `None` for an empty stream, as [`artifact_root_v1`] answers an empty inventory.
+    pub fn root(&self) -> Option<Hash64> {
+        let mut acc: Option<Hash64> = None;
+        for peak in self.peaks.iter().flatten() {
+            acc = Some(match acc {
+                None => *peak,
+                Some(right) => node(peak, &right),
+            });
+        }
+        acc
+    }
 }
 
 /// **The prover side of [`verify_artifact_opening_v1`]** — build the opening for one leaf.
@@ -530,44 +619,83 @@ pub struct PalwArtifactInventoryV1 {
     operands: Vec<PalwArtifactOperandV1>,
 }
 
+/// **The layout rules, one row at a time — their one spelling** (ADR-0103). A row is its
+/// `(tensor, layer, byte offset, byte length)`; the held inventory, the digest one and a stream are
+/// all checked by this walk, so a streamed inventory is refused by the same rule, at the same row,
+/// with the same error as the held one — "the stream is the same inventory" cannot drift into "the
+/// stream is a similar inventory".
+#[derive(Clone, Debug, Default)]
+pub struct PalwInventoryLayoutCheckerV1 {
+    prev: Option<(String, Option<u16>, u32, u32)>,
+    index: usize,
+}
+
+impl PalwInventoryLayoutCheckerV1 {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The next row, refused by name if it breaks a rule given the rows before it.
+    pub fn push(&mut self, name: &str, layer: Option<u16>, start: u32, len: u32) -> Result<(), PalwInventoryError> {
+        let index = self.index;
+        if len == 0 {
+            return Err(PalwInventoryError::ZeroLengthRow { tensor: name.to_string(), index });
+        }
+        let mut continues_its_tensor = false;
+        if let Some((p_name, p_layer, p_start, p_len)) = &self.prev {
+            let (pk, ok) = ((p_name.as_str(), *p_layer, *p_start), (name, layer, start));
+            if pk == ok {
+                return Err(PalwInventoryError::DuplicateRow { tensor: name.to_string(), offset: start });
+            }
+            if pk > ok {
+                return Err(PalwInventoryError::NotCanonicalOrder { tensor: name.to_string(), index });
+            }
+            // Within one tensor the rows must tile it: the next row starts exactly where the
+            // previous ended. Across tensors the previous end says nothing.
+            if (p_name.as_str(), *p_layer) == (name, layer) {
+                let end = p_start.checked_add(*p_len).ok_or(PalwInventoryError::GapOrOverlap { tensor: name.to_string(), at: *p_start })?;
+                if end != start {
+                    return Err(PalwInventoryError::GapOrOverlap { tensor: name.to_string(), at: end });
+                }
+                continues_its_tensor = true;
+            }
+        }
+        if !continues_its_tensor && start != 0 {
+            return Err(PalwInventoryError::DoesNotStartAtZero { tensor: name.to_string() });
+        }
+        match &mut self.prev {
+            Some((p_name, p_layer, p_start, p_len)) if p_name.as_str() == name => (*p_layer, *p_start, *p_len) = (layer, start, len),
+            _ => self.prev = Some((name.to_string(), layer, start, len)),
+        }
+        self.index += 1;
+        Ok(())
+    }
+
+    /// The rows checked so far, or `Empty` when there were none — an inventory of nothing opens
+    /// nothing.
+    pub fn finish(&self) -> Result<usize, PalwInventoryError> {
+        if self.index == 0 { Err(PalwInventoryError::Empty) } else { Ok(self.index) }
+    }
+}
+
+/// The walk over a held slice — the checker, row by row.
+fn check_inventory_layout_v1<T>(rows: &[T], at: impl Fn(&T) -> (&str, Option<u16>, u32, u32)) -> Result<(), PalwInventoryError> {
+    if rows.is_empty() {
+        return Err(PalwInventoryError::Empty);
+    }
+    let mut checker = PalwInventoryLayoutCheckerV1::new();
+    for row in rows {
+        let (name, layer, start, len) = at(row);
+        checker.push(name, layer, start, len)?;
+    }
+    Ok(())
+}
+
 impl PalwArtifactInventoryV1 {
     /// Check the layout, then keep it. Every rule refuses a way an opening's absence could be made
     /// to mean nothing.
     pub fn new(operands: Vec<PalwArtifactOperandV1>) -> Result<Self, PalwInventoryError> {
-        if operands.is_empty() {
-            return Err(PalwInventoryError::Empty);
-        }
-        let key = |o: &PalwArtifactOperandV1| (o.tensor_name.clone(), o.layer, o.row_start);
-        for (i, o) in operands.iter().enumerate() {
-            if o.bytes.is_empty() {
-                return Err(PalwInventoryError::ZeroLengthRow { tensor: o.tensor_name.clone(), index: i });
-            }
-            if i > 0 {
-                let prev = &operands[i - 1];
-                let (pk, ok) = (key(prev), key(o));
-                if pk == ok {
-                    return Err(PalwInventoryError::DuplicateRow { tensor: o.tensor_name.clone(), offset: o.row_start });
-                }
-                if pk > ok {
-                    return Err(PalwInventoryError::NotCanonicalOrder { tensor: o.tensor_name.clone(), index: i });
-                }
-                // Within one tensor the rows must tile it: the next row starts exactly where the
-                // previous ended. Across tensors the previous end says nothing.
-                if (prev.tensor_name.as_str(), prev.layer) == (o.tensor_name.as_str(), o.layer) {
-                    let end = prev
-                        .row_start
-                        .checked_add(prev.bytes.len() as u32)
-                        .ok_or(PalwInventoryError::GapOrOverlap { tensor: o.tensor_name.clone(), at: prev.row_start })?;
-                    if end != o.row_start {
-                        return Err(PalwInventoryError::GapOrOverlap { tensor: o.tensor_name.clone(), at: end });
-                    }
-                    continue;
-                }
-            }
-            if o.row_start != 0 {
-                return Err(PalwInventoryError::DoesNotStartAtZero { tensor: o.tensor_name.clone() });
-            }
-        }
+        check_inventory_layout_v1(&operands, |o| (o.tensor_name.as_str(), o.layer, o.row_start, o.bytes.len() as u32))?;
         Ok(Self { operands })
     }
 
@@ -579,6 +707,15 @@ impl PalwArtifactInventoryV1 {
     pub fn root(&self) -> Hash64 {
         let leaves: Vec<Hash64> = self.operands.iter().map(artifact_leaf_v1).collect();
         artifact_root_v1(&leaves).expect("a non-empty inventory has a root")
+    }
+
+    /// The three numbers a streamed build is held to (ADR-0103), computed the materialized way.
+    pub fn summary(&self) -> PalwArtifactInventorySummaryV1 {
+        PalwArtifactInventorySummaryV1 {
+            root: self.root(),
+            leaf_count: self.operands.len() as u32,
+            artifact_bytes: self.operands.iter().map(|o| o.bytes.len() as u64).sum(),
+        }
     }
 
     /// **Every tensor the class's graph reads is carried.**
@@ -609,6 +746,161 @@ impl PalwArtifactInventoryV1 {
     }
 }
 
+/// **One inventory row without its bytes** (ADR-0103): the coordinate, the length and the leaf the
+/// bytes hashed to — what a measurement, a root and a placement need, and all a stream keeps.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwArtifactRowDigestV1 {
+    pub tensor_name: String,
+    pub layer: Option<u16>,
+    pub row_start: u32,
+    pub byte_len: u32,
+    pub leaf_hash: Hash64,
+}
+
+impl PalwArtifactRowDigestV1 {
+    /// The row a materialized inventory holds, digested — the equality the stream is held to.
+    pub fn of(operand: &PalwArtifactOperandV1) -> Self {
+        Self {
+            tensor_name: operand.tensor_name.clone(),
+            layer: operand.layer,
+            row_start: operand.row_start,
+            byte_len: operand.bytes.len() as u32,
+            leaf_hash: artifact_leaf_v1(operand),
+        }
+    }
+}
+
+/// **What a measurement and a registration read of an inventory** (ADR-0103): its root, its leaf
+/// count and the bytes its rows cover — the three numbers the materialized and the streamed build
+/// must agree on byte for byte (a root that moves between them is a defect, never a migration).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwArtifactInventorySummaryV1 {
+    pub root: Hash64,
+    pub leaf_count: u32,
+    pub artifact_bytes: u64,
+}
+
+/// **An inventory consumed as a stream** (ADR-0103): rows arriving in canonical order, each checked
+/// by the one layout rule, hashed into the frontier and counted — the summary, with nothing kept
+/// per row. This is what makes a whole-artifact measurement hold one read, not the artifact.
+#[derive(Clone, Debug, Default)]
+pub struct PalwArtifactInventoryStreamV1 {
+    checker: PalwInventoryLayoutCheckerV1,
+    frontier: PalwArtifactMerkleFrontierV1,
+    bytes: u64,
+}
+
+impl PalwArtifactInventoryStreamV1 {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&mut self, tensor_name: &str, layer: Option<u16>, row_start: u32, bytes: &[u8]) -> Result<(), PalwInventoryError> {
+        self.checker.push(tensor_name, layer, row_start, bytes.len() as u32)?;
+        self.frontier.push(artifact_leaf_parts_v1(tensor_name, layer, row_start, bytes));
+        self.bytes += bytes.len() as u64;
+        Ok(())
+    }
+
+    pub fn finish(self) -> Result<PalwArtifactInventorySummaryV1, PalwInventoryError> {
+        let leaf_count = self.checker.finish()? as u32;
+        Ok(PalwArtifactInventorySummaryV1 {
+            root: self.frontier.root().expect("a non-empty stream has a root"),
+            leaf_count,
+            artifact_bytes: self.bytes,
+        })
+    }
+}
+
+/// **The canonical layout, as leaves** (ADR-0103): the same rows [`PalwArtifactInventoryV1`] holds,
+/// in the same order, under the same checks — with each row's bytes hashed where they were read and
+/// never kept. Its root IS the materialized inventory's; an opening is built from it by handing back
+/// the one row's bytes ([`Self::opening_v1`]), which are checked against the leaf, so the court's
+/// wire evidence is unchanged and produced on demand rather than retained.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwArtifactInventoryDigestV1 {
+    rows: Vec<PalwArtifactRowDigestV1>,
+}
+
+impl PalwArtifactInventoryDigestV1 {
+    /// The rows must already be in canonical order — the materialized constructor's rule.
+    pub fn new(rows: Vec<PalwArtifactRowDigestV1>) -> Result<Self, PalwInventoryError> {
+        check_inventory_layout_v1(&rows, |r| (r.tensor_name.as_str(), r.layer, r.row_start, r.byte_len))?;
+        Ok(Self { rows })
+    }
+
+    pub fn rows(&self) -> &[PalwArtifactRowDigestV1] {
+        &self.rows
+    }
+
+    pub fn leaf_count(&self) -> u32 {
+        self.rows.len() as u32
+    }
+
+    pub fn summary(&self) -> PalwArtifactInventorySummaryV1 {
+        PalwArtifactInventorySummaryV1 {
+            root: self.root(),
+            leaf_count: self.leaf_count(),
+            artifact_bytes: self.rows.iter().map(|r| u64::from(r.byte_len)).sum(),
+        }
+    }
+
+    /// `artifact_root`, through the streaming frontier: no leaf vector, no level copy.
+    pub fn root(&self) -> Hash64 {
+        let mut frontier = PalwArtifactMerkleFrontierV1::new();
+        for row in &self.rows {
+            frontier.push(row.leaf_hash);
+        }
+        frontier.root().expect("a non-empty inventory has a root")
+    }
+
+    /// The index of the row at `(tensor, layer, byte offset)`, by the canonical order.
+    pub fn index_of(&self, tensor_name: &str, layer: Option<u16>, row_start: u32) -> Option<u32> {
+        self.rows
+            .binary_search_by(|r| (r.tensor_name.as_str(), r.layer, r.row_start).cmp(&(tensor_name, layer, row_start)))
+            .ok()
+            .map(|i| i as u32)
+    }
+
+    /// **An opening built from the digest and the row's own bytes** — the bytes must hash to the
+    /// recorded leaf, so the opening is the materialized inventory's
+    /// [`open_artifact_leaf_v1`] output exactly. `None` for an index outside the inventory or
+    /// bytes that are not that row's.
+    pub fn opening_v1(&self, index: u32, bytes: Vec<u8>) -> Option<PalwArtifactOpeningV1> {
+        let row = self.rows.get(index as usize)?;
+        if row.byte_len as usize != bytes.len() || artifact_leaf_parts_v1(&row.tensor_name, row.layer, row.row_start, &bytes) != row.leaf_hash {
+            return None;
+        }
+        let mut level: Vec<Hash64> = self.rows.iter().map(|r| r.leaf_hash).collect();
+        let leaf_count = level.len() as u32;
+        let mut at = index as usize;
+        let mut path = Vec::new();
+        while level.len() > 1 {
+            let promoted = at == level.len() - 1 && level.len() % 2 == 1;
+            if !promoted {
+                path.push(if at.is_multiple_of(2) { level[at + 1] } else { level[at - 1] });
+            }
+            let mut next = Vec::with_capacity(level.len().div_ceil(2));
+            let mut i = 0;
+            while i + 1 < level.len() {
+                next.push(node(&level[i], &level[i + 1]));
+                i += 2;
+            }
+            if i < level.len() {
+                next.push(level[i]);
+            }
+            level = next;
+            at /= 2;
+        }
+        Some(PalwArtifactOpeningV1 {
+            operand: PalwArtifactOperandV1 { tensor_name: row.tensor_name.clone(), layer: row.layer, row_start: row.row_start, bytes },
+            leaf_index: index,
+            leaf_count,
+            path,
+        })
+    }
+}
+
 /// `blk.{layer}.x` against `blk.7.x` — the placeholder matches one path segment and nothing else,
 /// so `blk.{layer}.w` cannot be satisfied by `blk.7.other.w`.
 fn layer_template_matches(template: &str, name: &str) -> bool {
@@ -616,6 +908,100 @@ fn layer_template_matches(template: &str, name: &str) -> bool {
     let Some(rest) = name.strip_prefix(head) else { return false };
     let Some(middle) = rest.strip_suffix(tail) else { return false };
     !middle.is_empty() && middle.bytes().all(|b| b.is_ascii_digit())
+}
+
+#[cfg(test)]
+mod streaming_tests {
+    use super::*;
+
+    fn op(name: &str, layer: Option<u16>, start: u32, bytes: &[u8]) -> PalwArtifactOperandV1 {
+        PalwArtifactOperandV1 { tensor_name: name.to_string(), layer, row_start: start, bytes: bytes.to_vec() }
+    }
+
+    /// **ADR-0103 W1: the parts leaf and the streamed leaf are the operand leaf**, and a stream
+    /// that absorbed a different length than it declared is refused rather than hashed.
+    #[test]
+    fn the_parts_leaf_and_the_streamed_leaf_are_the_operand_leaf() {
+        let bytes: Vec<u8> = (0..1000u32).map(|i| (i * 7 + 3) as u8).collect();
+        for (name, layer, start) in [("blk.{layer}.attn_q.weight", Some(3u16), 4096u32), ("token_embd.weight", None, 0)] {
+            let whole = artifact_leaf_v1(&op(name, layer, start, &bytes));
+            assert_eq!(artifact_leaf_parts_v1(name, layer, start, &bytes), whole);
+            let mut streamed = PalwArtifactLeafHasherV1::new(name, layer, start, bytes.len() as u32);
+            for chunk in bytes.chunks(97) {
+                streamed.update(chunk);
+            }
+            assert_eq!(streamed.finish(), Ok(whole));
+        }
+        let mut short = PalwArtifactLeafHasherV1::new("t", None, 0, 10);
+        short.update(&[1, 2, 3]);
+        assert_eq!(short.finish(), Err((10, 3)));
+    }
+
+    /// **ADR-0103 W7: the frontier's root is `artifact_root_v1`'s, at every size** — promotion at
+    /// every level is exercised by the sizes below 300 and a few past powers of two.
+    #[test]
+    fn the_frontier_root_is_the_promoting_root_at_every_size() {
+        let leaves: Vec<Hash64> = (0..1100u64).map(Hash64::from_u64_word).collect();
+        let mut frontier = PalwArtifactMerkleFrontierV1::new();
+        assert_eq!(frontier.root(), None);
+        for n in 1..=leaves.len() {
+            frontier.push(leaves[n - 1]);
+            if n <= 300 || n.is_power_of_two() || (n + 1).is_power_of_two() || n == leaves.len() {
+                assert_eq!(frontier.root(), artifact_root_v1(&leaves[..n]), "n = {n}");
+            }
+        }
+        assert_eq!(frontier.leaf_count(), leaves.len() as u64);
+    }
+
+    /// **ADR-0103 W2: the digest inventory is the materialized one** — the same checks refuse the
+    /// same layouts, the root is the same root, and an opening from the digest plus the row's bytes
+    /// is the materialized opening byte for byte (and bytes that are not the row's open nothing).
+    #[test]
+    fn the_digest_inventory_roots_checks_and_opens_as_the_materialized_one() {
+        let rows = vec![
+            op("a.weight", Some(0), 0, &[1, 2, 3]),
+            op("a.weight", Some(0), 3, &[4, 5]),
+            op("a.weight", Some(1), 0, &[6]),
+            op("b.a16", None, 0, &[7, 8, 9, 10]),
+            op("z", None, 0, &[11]),
+        ];
+        let full = PalwArtifactInventoryV1::new(rows.clone()).expect("a canonical layout");
+        let digest = PalwArtifactInventoryDigestV1::new(rows.iter().map(PalwArtifactRowDigestV1::of).collect()).expect("the same layout");
+        assert_eq!(digest.root(), full.root());
+        assert_eq!(digest.leaf_count() as usize, full.operands().len());
+        for (i, row) in rows.iter().enumerate() {
+            assert_eq!(digest.index_of(&row.tensor_name, row.layer, row.row_start), Some(i as u32));
+            assert_eq!(digest.opening_v1(i as u32, row.bytes.clone()), open_artifact_leaf_v1(full.operands(), i as u32), "row {i}");
+        }
+        assert_eq!(digest.opening_v1(0, vec![9, 9, 9]), None, "bytes that are not the row's open nothing");
+        // The same refusals, from the one walk.
+        let mut gap = rows.clone();
+        gap[1].row_start = 4;
+        assert_eq!(
+            PalwArtifactInventoryDigestV1::new(gap.iter().map(PalwArtifactRowDigestV1::of).collect()),
+            Err(PalwArtifactInventoryV1::new(gap).expect_err("a gap"))
+        );
+        let mut disorder = rows.clone();
+        disorder.swap(3, 4);
+        assert_eq!(
+            PalwArtifactInventoryDigestV1::new(disorder.iter().map(PalwArtifactRowDigestV1::of).collect()),
+            Err(PalwArtifactInventoryV1::new(disorder.clone()).expect_err("out of order"))
+        );
+        // And a STREAM of the same rows: the same summary when canonical, the same refusal when not.
+        let stream = |rows: &[PalwArtifactOperandV1]| -> Result<PalwArtifactInventorySummaryV1, PalwInventoryError> {
+            let mut s = PalwArtifactInventoryStreamV1::new();
+            for o in rows {
+                s.push(&o.tensor_name, o.layer, o.row_start, &o.bytes)?;
+            }
+            s.finish()
+        };
+        assert_eq!(stream(&rows), Ok(full.summary()));
+        assert_eq!(stream(&disorder), Err(PalwArtifactInventoryV1::new(disorder).expect_err("out of order")));
+        assert_eq!(stream(&[]), Err(PalwInventoryError::Empty));
+        let mut zero = rows.clone();
+        zero[2].bytes.clear();
+        assert_eq!(stream(&zero), Err(PalwArtifactInventoryV1::new(zero).expect_err("a zero-length row")));
+    }
 }
 
 #[cfg(test)]
