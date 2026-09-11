@@ -12,6 +12,7 @@ use crate::{
 };
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::block::Block;
+use kaspa_consensus_core::blockstatus::BlockStatus::StatusInvalid;
 use kaspa_database::prelude::StoreResultExt;
 use kaspa_txscript::script_class::ScriptClass;
 use once_cell::unsync::Lazy;
@@ -47,18 +48,22 @@ impl BlockBodyProcessor {
 
     fn check_parent_bodies_exist(self: &Arc<Self>, block: &Block) -> BlockProcessResult<()> {
         let statuses_read_guard = self.statuses_store.read();
-        let missing: Vec<BlockHash> = block
-            .header
-            .direct_parents()
-            .iter()
-            .copied()
-            .filter(|parent| {
-                let status_option = statuses_read_guard.get(*parent).optional().unwrap();
-                status_option.is_none_or(|s| !s.has_block_body())
-            })
-            .collect();
+        let mut missing: Vec<BlockHash> = Vec::new();
+        let mut known_invalid: Vec<BlockHash> = Vec::new();
+        for parent in block.header.direct_parents().iter().copied() {
+            match statuses_read_guard.get(parent).optional().unwrap() {
+                Some(status) if status.has_block_body() => {}
+                // A parent whose body this node already rejected: it is missing like any other
+                // (same error, same handling), but the report names it (issue #103).
+                Some(StatusInvalid) => {
+                    missing.push(parent);
+                    known_invalid.push(parent);
+                }
+                _ => missing.push(parent),
+            }
+        }
         if !missing.is_empty() {
-            return Err(RuleError::MissingParents(missing));
+            return Err(RuleError::MissingParents(missing, known_invalid));
         }
 
         Ok(())
@@ -117,12 +122,16 @@ mod tests {
         consensus::test_consensus::TestConsensus,
         constants::TX_VERSION,
         errors::RuleError,
-        model::stores::ghostdag::GhostdagStoreReader,
+        model::stores::{
+            ghostdag::GhostdagStoreReader,
+            statuses::{StatusesStore, StatusesStoreReader},
+        },
         processes::{transaction_validator::errors::TxRuleError, window::WindowManager},
     };
     use kaspa_consensus_core::{
         BlockHash, // PR-9.5e: block ids are Hash64
         api::ConsensusApi,
+        blockstatus::BlockStatus::{StatusHeaderOnly, StatusInvalid},
         coinbase::MinerData,
         config::params::MAINNET_PARAMS,
         dns_finality::p2pkh_mldsa87_spk,
@@ -131,6 +140,77 @@ mod tests {
         tx::{ScriptPublicKey, ScriptVec, Transaction, TransactionInput, TransactionOutpoint},
     };
     use kaspa_core::assert_match;
+
+    /// Issue #103. A node whose body validation rejected a block once (on testnet-11, block
+    /// 93eb20f0 under a build that could not decode its seed) keeps that block as
+    /// `StatusInvalid`; every later IBD attempt then fails on the block's child with
+    /// "block has missing parents: [..]", and nothing said the parent had been rejected. The
+    /// error now names such a parent. Everything else is as before: the variant is still
+    /// `MissingParents`, and the child is left header-only rather than marked invalid.
+    #[tokio::test]
+    async fn a_parent_this_data_directory_marked_invalid_is_named_by_the_missing_parents_error() {
+        let config = ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build();
+        let consensus = TestConsensus::new(&config);
+        let wait_handles = consensus.init();
+        let body_processor = consensus.block_body_processor();
+        let parent: BlockHash = 1.into();
+        let child_hash: BlockHash = 2.into();
+
+        // Headers first, as IBD stores them; then the parent's body is rejected, which
+        // `process_body` records as `StatusInvalid`.
+        consensus.add_header_only_block_with_parents(parent, vec![config.genesis.hash]).await.unwrap();
+        consensus.add_header_only_block_with_parents(child_hash, vec![parent]).await.unwrap();
+        body_processor.statuses_store.write().set(parent, StatusInvalid).unwrap();
+
+        let child = consensus.build_block_with_parents_and_transactions(child_hash, vec![parent], vec![]);
+        let err = consensus.validate_and_insert_block(child.to_immutable()).block_task.await.unwrap_err();
+        assert_match!(
+            &err,
+            RuleError::MissingParents(missing, known_invalid) if *missing == vec![parent] && *known_invalid == vec![parent]
+        );
+        let message = err.to_string();
+        assert!(
+            message.starts_with(&format!("block has missing parents: {:?}; parent {parent} is marked INVALID", vec![parent])),
+            "{message}"
+        );
+        assert!(message.ends_with("upgrade and resync the data directory"), "{message}");
+        // A reporting distinction only: the child is not marked invalid.
+        assert_eq!(body_processor.statuses_store.read().get(child_hash).unwrap(), StatusHeaderOnly);
+
+        consensus.shutdown(wait_handles);
+    }
+
+    /// The other side of the change above: a parent that merely lacks a body (it may still
+    /// arrive) and a parent this node has never seen keep the message they always had.
+    #[tokio::test]
+    async fn a_parent_that_is_only_missing_keeps_the_plain_missing_parents_error() {
+        let config = ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build();
+        let consensus = TestConsensus::new(&config);
+        let wait_handles = consensus.init();
+        let body_processor = consensus.block_body_processor();
+        let parent: BlockHash = 1.into();
+        let child_hash: BlockHash = 2.into();
+
+        // Body validation: the parent is header-only.
+        consensus.add_header_only_block_with_parents(parent, vec![config.genesis.hash]).await.unwrap();
+        consensus.add_header_only_block_with_parents(child_hash, vec![parent]).await.unwrap();
+        let child = consensus.build_block_with_parents_and_transactions(child_hash, vec![parent], vec![]);
+        let err = consensus.validate_and_insert_block(child.to_immutable()).block_task.await.unwrap_err();
+        assert_match!(&err, RuleError::MissingParents(missing, known_invalid) if *missing == vec![parent] && known_invalid.is_empty());
+        assert_eq!(err.to_string(), format!("block has missing parents: {:?}", vec![parent]));
+        assert_eq!(body_processor.statuses_store.read().get(child_hash).unwrap(), StatusHeaderOnly);
+
+        // Header validation: the parent is unknown to this node (built on a known parent, then
+        // re-pointed, as `missing_parents_test` does — the builder needs the parent's data).
+        let unknown: BlockHash = 99.into();
+        let mut orphan = consensus.build_block_with_parents_and_transactions(3.into(), vec![config.genesis.hash], vec![]);
+        orphan.header.parents_by_level.set_direct_parents(vec![unknown]);
+        let err = consensus.validate_and_insert_block(orphan.to_immutable()).block_task.await.unwrap_err();
+        assert_match!(&err, RuleError::MissingParents(missing, known_invalid) if *missing == vec![unknown] && known_invalid.is_empty());
+        assert_eq!(err.to_string(), format!("block has missing parents: {:?}", vec![unknown]));
+
+        consensus.shutdown(wait_handles);
+    }
 
     #[tokio::test]
     async fn validate_body_in_context_test() {
@@ -147,7 +227,10 @@ mod tests {
         {
             let block = consensus.build_block_with_parents_and_transactions(2.into(), vec![1.into()], vec![]);
             // We expect a missing parents error since the parent is header only.
-            assert_match!(body_processor.validate_body_in_context(&block.to_immutable()), Err(RuleError::MissingParents(_)));
+            assert_match!(
+                body_processor.validate_body_in_context(&block.to_immutable()),
+                Err(RuleError::MissingParents(_, known_invalid)) if known_invalid.is_empty()
+            );
         }
 
         let valid_block = consensus.build_block_with_parents_and_transactions(3.into(), vec![config.genesis.hash], vec![]);
