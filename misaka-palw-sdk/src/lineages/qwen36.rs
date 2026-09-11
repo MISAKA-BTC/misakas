@@ -15,7 +15,9 @@ use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
 use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
 use kaspa_hashes::Hash64;
 use misaka_palw_base0::classes::{Qwen36CanonicalClassV1, qwen36_canonical_classes_v1};
-use misaka_palw_base0::qwen36::{QWEN36_FILE_MAGIC, Qwen36ArtifactV1, Qwen36ResidencyStatsV1, open_artifact_with_residency};
+use misaka_palw_base0::qwen36::{
+    QWEN36_FILE_MAGIC, Qwen36ArtifactV1, Qwen36ResidencyDeclinedV1, Qwen36ResidencyStatsV1, open_artifact_with_residency,
+};
 
 use crate::lineage::{PalwClassEntryV1, PalwLoadedArtifactV1, PalwModelLineageV1};
 
@@ -52,7 +54,14 @@ pub fn holding_from_artifact(artifact: Arc<Qwen36ArtifactV1>, path: Option<std::
             gib(s.pinned_bytes),
             gib(s.expert_budget_bytes())
         ),
-        None => "; residency left to the page cache".to_string(),
+        None => match artifact.residency_declined() {
+            Some(d) => format!(
+                "; residency left to the page cache: {:.2} GiB could be spared, under the class's floor of {:.2} GiB",
+                gib(d.spare_bytes),
+                gib(d.floor_bytes)
+            ),
+            None => "; residency left to the page cache".to_string(),
+        },
     };
     let summary = match &path {
         Some(p) => format!(
@@ -75,13 +84,20 @@ pub fn holding_from_artifact(artifact: Arc<Qwen36ArtifactV1>, path: Option<std::
     )
 }
 
-/// The `(computed_root, mapping)` inside a holding of this lineage, if it is one.
 /// **The residency's numbers for a holding of this lineage** (ADR-0112 Decision 8): `None` for
 /// another lineage's holding, and for a mapping whose residency the page cache decides.
 pub fn residency_stats_of(holding: &PalwLoadedArtifactV1) -> Option<Qwen36ResidencyStatsV1> {
     parts_of(holding).and_then(|(_, artifact)| artifact.residency_stats())
 }
 
+/// **Why a holding of this lineage has no residency although the default asked for one**
+/// (ADR-0112 Decision 2, amended 2026-09-11): the bytes the host could spare, under the class's
+/// floor. `None` for every other holding.
+pub fn residency_declined_of(holding: &PalwLoadedArtifactV1) -> Option<Qwen36ResidencyDeclinedV1> {
+    parts_of(holding).and_then(|(_, artifact)| artifact.residency_declined())
+}
+
+/// The `(computed_root, mapping)` inside a holding of this lineage, if it is one.
 pub fn parts_of(holding: &PalwLoadedArtifactV1) -> Option<(Hash64, Arc<Qwen36ArtifactV1>)> {
     if holding.lineage_id != QWEN36_LINEAGE_ID {
         return None;

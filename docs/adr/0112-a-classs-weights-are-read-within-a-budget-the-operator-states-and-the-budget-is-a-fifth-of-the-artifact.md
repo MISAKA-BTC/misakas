@@ -6,7 +6,8 @@
   a model five times the memory available to it". **Decisions 1–5 and 7–8 IMPLEMENTED the same day
   (§10)**; Decision 6's fleet measurement waits on the operator's go, because it runs a new binary
   on a fleet host. Consensus-inert: no object, acceptance rule, fence, parameter or fingerprint
-  moves. A fleet takes it by an ordinary rebuild, and a node that states no budget takes the ratio.
+  moves. A fleet takes it by an ordinary rebuild, and a node that states no budget takes the ratio where
+  its host can spare it (Decision 2, amended the same day).
 * Builds on: [0052](0052-palw-qwen36-hybrid-class.md) (the mapped container: a 33 GiB file the
   runtime maps rather than reads, and the note that residency was left to the page cache),
   [0067](0067-a-registered-class-is-served-by-any-node-that-holds-its-artifact.md) (a node holds
@@ -25,9 +26,10 @@ in memory at any moment is a decision, and it is the runtime's, made under a bud
 states, never the kernel's. The always-set is read once and pinned; the routed experts are read as
 the router chooses them, together and through the file descriptor, and held under what the budget
 leaves; nothing the arithmetic reads arrives through a page fault. The budget's default is a fifth
-of the artifact's weight bytes, and the class's floor — the always-set and one token's experts — is
-the least it may be. A budget below the floor is refused at startup, by name and with the
-numbers.**
+of the artifact's weight bytes, within what the host can spare, and the class's floor — the
+always-set and one token's experts — is the least it may be. A stated budget below the floor is
+refused at startup, by name and with the numbers; a default the host cannot spare leaves the class
+on the page cache, and says so.**
 
 ## 1. What was measured
 
@@ -138,6 +140,23 @@ in the runtime: `FifthOfTheWeights` (nothing said), `Bytes(b)`, `PageCache` (`0`
 `QWEN36_RESIDENT_FRACTION_DENOMINATOR_V1 = 5`, one spelling. For the Qwen3.6 class that is
 7,145,529,856 bytes: 6.65 GiB.
 
+> **Amended 2026-09-11, before any host ran it: the default is a fifth within what the host can
+> spare.** Read against the fleet the day this ADR landed (§10.5), a fixed fifth was 6.65 GiB of
+> anonymous memory on hosts that had none to give — `ibm` with two nodes and 6 of 7 GB of swap in
+> use, `.113` with all 15 GB of its swap in use and three pool slots at their 6 GiB cgroup limit —
+> and anonymous memory is what the kernel cannot reclaim the way it reclaims the page cache's
+> pages: the default would have turned a slow draw into a killed node. So when the operator states
+> nothing, `kaspad` measures what the process can take at startup — `MemAvailable`, or its memory
+> cgroup's headroom where that is smaller — less `PALW_CLASS_NODE_RESERVE_BYTES_V1` = 16 GiB, the
+> node's own working set (§1: 9–14 GB, which a node at startup does not hold yet), and opens the
+> class under `FifthWithin(spare)`: a fifth if the spare bytes hold it, the spare bytes if they
+> hold less but at least the floor (Decision 3), and **below the floor the page cache — never a
+> refusal**, because nobody stated a number — with a warning that names the spare bytes, the
+> floor and the flag. A default measured once is spent across the files one load maps. Where no
+> reading exists (macOS) the default stays the fifth. A **stated** budget is unchanged: honoured,
+> and refused below the floor. The ratio the class is certified at (R-5) does not move; what
+> moved is that the node no longer assumes the host has it.
+
 **Decision 3 — two tiers, told apart by name, and a floor.** Every tensor that is not a routed
 expert's (`blk.N.ffn_expert.K_*`) and not the embedding table is the always-set: read once at open
 into owned memory, in parallel through the file descriptor, and never given back (1.86 GiB here).
@@ -175,9 +194,11 @@ is 10–15 s — plus compute; the measurement is what §10 records. This decisi
 taken by the maintainer's session, because it runs a new binary on a fleet host.
 
 **Decision 7 — the operator's arithmetic, printed.** At load, for every mapped holding: the
-budget, its two tiers, how many tokens of experts the second tier holds, and the host's
-`MemAvailable`; a warning when the budget exceeds what the host has, because a budget the kernel
-reclaims is the page cache with extra steps. The node's own working set (§1, 9–14 GB on these
+budget, its two tiers, how many tokens of experts the second tier holds, and what the host has
+available (`MemAvailable`, or the memory cgroup's headroom where smaller — amended 2026-09-11);
+a warning when the budget exceeds that, because a budget the kernel reclaims is the page cache
+with extra steps; and, for a default the host could not spare (Decision 2's amendment), a warning
+that the class is on the page cache and why. The node's own working set (§1, 9–14 GB on these
 hosts) is outside this ADR and inside that arithmetic: two kaspads on one 23 GB host leave no
 budget, and that is the operator's to change.
 
@@ -210,7 +231,7 @@ the host; it is a line an operator watches now.
    `a_mapped_artifact_runs_identically_to_an_owned_one`, `the_mapped_root_equals_the_owned_root`.)
 2. **I-2, the budget.** Between admissions the residency never holds more routed-expert bytes than
    the budget leaves after the always-set; at the floor it holds at most one token's.
-3. **I-3, the floor.** A budget below the always-set plus one token's routed experts is refused at
+3. **I-3, the floor.** A stated budget below the always-set plus one token's routed experts is refused at
    open with both terms and the floor in the message; the floor itself opens.
    (`a_budget_below_the_floor_is_refused_by_name`.)
 4. **I-4, no faults.** Under a residency no weight a projection reads is a slice of the mapping:
@@ -223,6 +244,11 @@ the host; it is a line an operator watches now.
 6. **I-6, the seam.** The lineage contract carries the policy (`PalwModelLineageV1::load`), the
    dense lineage ignores it, `kaspad`'s two duties pass what the operator stated, and a holding
    reports its residency in its summary line and its stats through `residency_stats_of`.
+7. **I-7, the default takes only what is spare** (amended 2026-09-11). With nothing stated, the
+   budget is at most a fifth and at most what the host has available less the node's reserve;
+   below the floor the class opens on the page cache, identical in root and rows, with the reason
+   kept — never refused. (`a_default_budget_is_a_fifth_within_what_is_spare_and_below_the_floor_the_page_cache`,
+   `a_budgeted_holding_reports_its_residency`, `a_cgroup_limit_bounds_what_the_default_may_take`.)
 
 ## 6. Order of work
 
@@ -347,3 +373,24 @@ step — rustfmt reports 28 files — so its clippy had never run; behind it wer
 in consensus-core's tests, and four findings this lineage had added (three rustfmt diffs, a
 `byte_char_slices`, and an `is_multiple_of` that only shows once the crates before it are clean).
 This lineage's are fixed on the feature branch; `origin/main`'s on the merge.
+
+### 10.5 The fleet's hosts, and the default amended (2026-09-11)
+
+Read on the three hosts before any restart (13:0x UTC, `/proc` and the cgroup files only):
+
+| host | memory | swap in use | nodes holding the Qwen3.6 class | what each node held for itself |
+|---|---|---|---|---|
+| `ibm` | 23 GB | 6 of 7 GB | node0 (producer) | node0 7.3 GB anonymous + 4.6 GB swapped; node1 (dense) 13.6 + 2.2 |
+| `C` | 23 GB | 4 of 19 GB | seat2 (producer) | 12.7 GB anonymous + 2.3 GB swapped, 9.0 GB of the file cached |
+| `.113` | 23 GB | 15 of 15 GB | the explorer's node (panel) | 4.3 GB + 5.0 GB swapped; pool slots 04, 05, 06 at their 6 GiB cgroup limit |
+
+Under the default as first written each of those nodes would have taken 6.65 GiB it could not be
+given. Under the amendment: on `ibm` and `.113` the spare bytes are under the floor and the class
+stays on the page cache, as today, with the warning; the slots' cgroups leave nothing; `C`, with
+about 20 GiB available at a restart, spares about 4.5 GiB — between the floor (2.83) and the fifth
+(6.65) — and takes that. What a draw then costs on `C` is Decision 6's measurement; the other
+hosts' draws speed up only when the node's own working set (§8) is measured and made smaller, or
+the operator states a budget and accepts the swap it costs.
+
+This is the rollout's order, not the ADR's: the fleet was moved to the DAA 3,500 build by another
+session the same afternoon, and this ADR's first host waits for that rollout to finish.

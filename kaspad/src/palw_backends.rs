@@ -402,8 +402,19 @@ pub fn load_class_holdings_v1(
     // that became unreadable) poisons the lock without corrupting the map, so a later duty takes
     // the map as it stands rather than losing every holding to one bad file.
     let mut held = held_artifacts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    // A default measured against the host is spent across the files this call maps: two classes
+    // do not each take a fifth of the same spare bytes (ADR-0112 Decision 2, amended).
+    let mut policy = residency;
     let (holdings, skipped) = sdk.load_artifacts_bounded_with_v1(paths, bound_bytes, |path| {
-        held_or_load_locked(&mut held, role, path, |p| sdk.load_artifact_with(p, residency))
+        held_or_load_locked(&mut held, role, path, |p| {
+            let loaded = sdk.load_artifact_with(p, policy);
+            if let (Ok(holding), misaka_palw_sdk::PalwWeightResidencyV1::FifthWithin(spare)) = (&loaded, policy)
+                && let Some(stats) = misaka_palw_sdk::lineages::qwen36::residency_stats_of(holding)
+            {
+                policy = misaka_palw_sdk::PalwWeightResidencyV1::FifthWithin(spare.saturating_sub(stats.budget_bytes));
+            }
+            loaded
+        })
     });
     for (path, why) in &skipped {
         warn!("[{role}] class artifact {} is not held: {why}", path.display());
@@ -412,17 +423,30 @@ pub fn load_class_holdings_v1(
     // and a warning when the host cannot hold what the budget pins, because a budget the kernel
     // reclaims is the page cache with extra steps.
     for holding in &holdings {
+        let name = holding.path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| holding.lineage_id.to_string());
+        if let Some(declined) = misaka_palw_sdk::lineages::qwen36::residency_declined_of(holding) {
+            warn!(
+                "[{role}] residency for {name}: the page cache, as before ADR-0112 — this host could spare {:.2} GiB for it \
+                 (what it has available less the node's own {:.0} GiB), under the class's floor of {:.2} GiB (a fifth would \
+                 be {:.2} GiB); every draw will read through page faults. Free the host, or state --palw-class-resident-bytes \
+                 (at least the floor) to hold it anyway",
+                gib(declined.spare_bytes),
+                gib(PALW_CLASS_NODE_RESERVE_BYTES_V1),
+                gib(declined.floor_bytes),
+                gib(declined.fifth_bytes)
+            );
+            continue;
+        }
         let Some(stats) = misaka_palw_sdk::lineages::qwen36::residency_stats_of(holding) else { continue };
-        let available = mem_available_bytes_v1();
+        let available = host_available_bytes_v1();
         info!(
-            "[{role}] residency for {}: budget {:.2} GiB = {:.2} GiB pinned (the always-set) + {:.2} GiB for routed experts \
+            "[{role}] residency for {name}: budget {:.2} GiB = {:.2} GiB pinned (the always-set) + {:.2} GiB for routed experts \
              (about {:.1} tokens of them); the host reports {} available (ADR-0112)",
-            holding.path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| holding.lineage_id.to_string()),
             gib(stats.budget_bytes),
             gib(stats.pinned_bytes),
             gib(stats.expert_budget_bytes()),
             stats.expert_budget_bytes() as f64 / stats.token_expert_bytes.max(1) as f64,
-            available.map_or("no MemAvailable on this platform".to_string(), |a| format!("{:.2} GiB", gib(a)))
+            available.map_or("no available memory on this platform".to_string(), |a| format!("{:.2} GiB", gib(a)))
         );
         if let Some(available) = available
             && stats.budget_bytes > available
@@ -442,15 +466,94 @@ fn gib(bytes: u64) -> f64 {
     bytes as f64 / (1u64 << 30) as f64
 }
 
-/// **The residency policy from the operator's flag** (ADR-0112 Decision 2): nothing said is a
-/// fifth of the artifact's weights; `0` is no loader, the page cache; a number is the number.
+/// **What a node holds for itself, reserved before a default budget is taken** (ADR-0112
+/// Decision 2, amended 2026-09-11). The fleet's nodes held 9–14 GB of anonymous memory each before
+/// any class budget (ADR-0112 §1), and at startup — when the default is measured — they hold
+/// almost none of it yet; the reserve is that working set, rounded up.
+pub const PALW_CLASS_NODE_RESERVE_BYTES_V1: u64 = 16 << 30;
+
+/// **The residency policy from the operator's flag** (ADR-0112 Decision 2): `0` is no loader, the
+/// page cache; a number is the number; nothing said is the default, measured against this host
+/// ([`palw_class_default_residency_v1`]).
 pub fn palw_class_residency_v1(resident_bytes: Option<u64>) -> misaka_palw_sdk::PalwWeightResidencyV1 {
     use misaka_palw_sdk::PalwWeightResidencyV1 as Residency;
     match resident_bytes {
-        None => Residency::FifthOfTheWeights,
+        None => palw_class_default_residency_v1(host_available_bytes_v1()),
         Some(0) => Residency::PageCache,
         Some(bytes) => Residency::Bytes(bytes),
     }
+}
+
+/// **The default, given what the host has available** (ADR-0112 Decision 2, amended 2026-09-11):
+/// a fifth of the weights within what is available less the node's own reserve — taken whole, in
+/// part, or, below the class's floor, not at all (the page cache, as before ADR-0112, and a
+/// warning that says so). Where the platform reports no available memory (macOS), the fifth.
+///
+/// Measured on the fleet the day the ADR landed: every host 23 GB, `ibm` running two nodes with
+/// 6 of 7 GB of swap in use, `.113` with all 15 GB of its swap in use and three pool slots at
+/// their 6 GiB cgroup limit. A fixed fifth is 6.65 GiB of anonymous memory — which the kernel
+/// cannot reclaim the way it reclaims the page cache's pages — on hosts that had none to give.
+pub fn palw_class_default_residency_v1(available: Option<u64>) -> misaka_palw_sdk::PalwWeightResidencyV1 {
+    use misaka_palw_sdk::PalwWeightResidencyV1 as Residency;
+    match available {
+        Some(available) => Residency::FifthWithin(available.saturating_sub(PALW_CLASS_NODE_RESERVE_BYTES_V1)),
+        None => Residency::FifthOfTheWeights,
+    }
+}
+
+/// **What this process can take**: the host's `MemAvailable`, or its memory cgroup's headroom
+/// where that is smaller — a pool slot in a 6 GiB cgroup on a host with 8 GB available has 6 GiB
+/// less what it holds, not 8. `None` off Linux.
+pub fn host_available_bytes_v1() -> Option<u64> {
+    let host = mem_available_bytes_v1()?;
+    Some(cgroup_headroom_bytes_v1().map_or(host, |cgroup| cgroup.min(host)))
+}
+
+fn cgroup_headroom_bytes_v1() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        let own = std::fs::read_to_string("/proc/self/cgroup").ok()?;
+        cgroup_headroom_from_v1(&own, |path| std::fs::read_to_string(path).ok())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+/// The smallest `limit − usage` over a process's memory cgroup and every ancestor that sets a
+/// limit, from `/proc/self/cgroup`'s text and a reader for the cgroup filesystem. cgroup v2's
+/// unified `0::<path>` reads `memory.max` (`max` is no limit) and `memory.current`; failing that,
+/// v1's `memory` controller reads `memory.limit_in_bytes` (its no-limit is a page-rounded
+/// `i64::MAX`) and `memory.usage_in_bytes`. `None` when nothing on the way up sets a limit.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn cgroup_headroom_from_v1(proc_self_cgroup: &str, read: impl Fn(&Path) -> Option<String>) -> Option<u64> {
+    let number = |path: PathBuf| read(&path).and_then(|text| text.trim().parse::<u64>().ok());
+    if let Some(rel) = proc_self_cgroup.lines().find_map(|line| line.strip_prefix("0::")) {
+        let root = Path::new("/sys/fs/cgroup");
+        let mut dir = root.join(rel.trim().trim_start_matches('/'));
+        let mut least: Option<u64> = None;
+        while dir.starts_with(root) && dir != root {
+            if let (Some(max), Some(current)) = (number(dir.join("memory.max")), number(dir.join("memory.current"))) {
+                let headroom = max.saturating_sub(current);
+                least = Some(least.map_or(headroom, |l| l.min(headroom)));
+            }
+            if !dir.pop() {
+                break;
+            }
+        }
+        if least.is_some() {
+            return least;
+        }
+    }
+    let rel = proc_self_cgroup.lines().find_map(|line| {
+        let mut parts = line.splitn(3, ':');
+        let (_, controllers, path) = (parts.next()?, parts.next()?, parts.next()?);
+        controllers.split(',').any(|c| c == "memory").then_some(path)
+    })?;
+    let dir = Path::new("/sys/fs/cgroup/memory").join(rel.trim().trim_start_matches('/'));
+    let (limit, usage) = (number(dir.join("memory.limit_in_bytes"))?, number(dir.join("memory.usage_in_bytes"))?);
+    (limit < 1 << 62).then(|| limit.saturating_sub(usage))
 }
 
 /// `MemAvailable` of this host in bytes, where the kernel says it (Linux); `None` elsewhere.
@@ -785,27 +888,44 @@ mod tests {
         misaka_palw_sdk::lineages::qwen36::parts_of(holding).expect("a Qwen3.6 holding")
     }
 
-    /// **Two duties naming one file hold one mapping.** The producer's and the panel's
-    /// constructors each ask for the operator's list; the second answer is the first's holding —
-    /// the same `Arc`, the same mapping, the root computed once — which is the whole of the fix
-    /// for the testnet-11 double mapping.
-    /// **ADR-0112 on the node's own door**: a holding loaded under the default policy carries its
-    /// residency — the summary names the budget, the stats say what is pinned — and one loaded
-    /// with the page cache carries none. The flag's three spellings map as Decision 2 says.
+    /// **ADR-0112 on the node's own door**: a holding loaded under a budget carries its
+    /// residency — the summary names the budget, the stats say what is pinned — one loaded with
+    /// the page cache carries none, and one whose default the host could not spare says why. The
+    /// flag's spellings map as Decision 2 (amended 2026-09-11) says: `0` the page cache, a number
+    /// the number, nothing a fifth within what is available less the node's reserve.
     #[test]
     fn a_budgeted_holding_reports_its_residency() {
         use misaka_palw_sdk::PalwWeightResidencyV1 as Residency;
         let _guard = exclusive();
         let path = temp_artifact("budgeted");
         write_qwen36_fixture_with(&path, 2, 256);
-        assert_eq!(palw_class_residency_v1(None), Residency::FifthOfTheWeights);
         assert_eq!(palw_class_residency_v1(Some(0)), Residency::PageCache);
         assert_eq!(palw_class_residency_v1(Some(7 << 30)), Residency::Bytes(7 << 30));
+        assert_eq!(palw_class_default_residency_v1(None), Residency::FifthOfTheWeights, "no reading: the fifth");
+        assert_eq!(
+            palw_class_default_residency_v1(Some(40 << 30)),
+            Residency::FifthWithin(24 << 30),
+            "40 GiB available, 16 of them the node's own"
+        );
+        assert_eq!(palw_class_default_residency_v1(Some(8 << 30)), Residency::FifthWithin(0), "a host in swap spares nothing");
+
+        let declined = load_class_holdings_v1("test-declined", &sdk(), std::slice::from_ref(&path), 0, Residency::FifthWithin(0));
+        assert_eq!(declined.len(), 1, "a default the host cannot spare still holds the class");
+        assert!(misaka_palw_sdk::lineages::qwen36::residency_stats_of(&declined[0]).is_none(), "the page cache decides");
+        let why = misaka_palw_sdk::lineages::qwen36::residency_declined_of(&declined[0]).expect("and says why");
+        assert_eq!(why.spare_bytes, 0);
+        assert!(declined[0].summary.contains("under the class's floor"), "{}", declined[0].summary);
+        evict_held_artifacts_v1(std::slice::from_ref(&path));
+
+        let roomy = load_class_holdings_v1("test-roomy", &sdk(), std::slice::from_ref(&path), 0, Residency::FifthWithin(u64::MAX));
+        let fifth = misaka_palw_sdk::lineages::qwen36::residency_stats_of(&roomy[0]).expect("room for a fifth").budget_bytes;
+        evict_held_artifacts_v1(std::slice::from_ref(&path));
 
         let budgeted = load_class_holdings_v1("test-budget", &sdk(), std::slice::from_ref(&path), 0, Residency::FifthOfTheWeights);
         assert_eq!(budgeted.len(), 1, "held");
         let stats = misaka_palw_sdk::lineages::qwen36::residency_stats_of(&budgeted[0]).expect("a budgeted holding has stats");
         assert!(stats.pinned_bytes > 0 && stats.budget_bytes > stats.pinned_bytes, "{stats:?}");
+        assert_eq!(stats.budget_bytes, fifth, "room for a fifth is the fifth the ADR first wrote");
         assert!(budgeted[0].summary.contains("resident within"), "{}", budgeted[0].summary);
         // The holding is shared by file identity, so a second duty asking under ANOTHER policy
         // gets the holding the first made: one mapping, one residency, per file per process.
@@ -823,6 +943,49 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
+    /// **A cgroup's headroom is the least over the process's cgroup and its ancestors**, v2 first
+    /// and v1 where v2 sets nothing — the reading that tells a pool slot in a 6 GiB cgroup from
+    /// the host it runs on.
+    #[test]
+    fn a_cgroup_limit_bounds_what_the_default_may_take() {
+        let files = |pairs: &'static [(&'static str, &'static str)]| {
+            move |path: &Path| pairs.iter().find(|(p, _)| Path::new(p) == path).map(|(_, v)| v.to_string())
+        };
+        let slot = files(&[
+            ("/sys/fs/cgroup/system.slice/misaka-pool-slot@06.service/memory.max", "6442450944\n"),
+            ("/sys/fs/cgroup/system.slice/misaka-pool-slot@06.service/memory.current", "6323744768\n"),
+            ("/sys/fs/cgroup/system.slice/memory.max", "max\n"),
+            ("/sys/fs/cgroup/system.slice/memory.current", "20000000000\n"),
+        ]);
+        assert_eq!(
+            cgroup_headroom_from_v1("0::/system.slice/misaka-pool-slot@06.service\n", slot),
+            Some(6_442_450_944 - 6_323_744_768),
+            "the slot's own limit, not the slice's none"
+        );
+        let nested = files(&[
+            ("/sys/fs/cgroup/a/b/memory.max", "max"),
+            ("/sys/fs/cgroup/a/b/memory.current", "100"),
+            ("/sys/fs/cgroup/a/memory.max", "1000"),
+            ("/sys/fs/cgroup/a/memory.current", "900"),
+        ]);
+        assert_eq!(cgroup_headroom_from_v1("0::/a/b", nested), Some(100), "an ancestor's limit binds its children");
+        assert_eq!(cgroup_headroom_from_v1("0::/", files(&[])), None, "the root sets nothing");
+        let v1 = files(&[
+            ("/sys/fs/cgroup/memory/user.slice/memory.limit_in_bytes", "4294967296"),
+            ("/sys/fs/cgroup/memory/user.slice/memory.usage_in_bytes", "1073741824"),
+        ]);
+        assert_eq!(cgroup_headroom_from_v1("12:memory:/user.slice\n0::/user.slice", v1), Some(3 << 30), "v1 where v2 sets nothing");
+        let unlimited = files(&[
+            ("/sys/fs/cgroup/memory/memory.limit_in_bytes", "9223372036854771712"),
+            ("/sys/fs/cgroup/memory/memory.usage_in_bytes", "1"),
+        ]);
+        assert_eq!(cgroup_headroom_from_v1("5:cpu,memory:/", unlimited), None, "v1's no-limit is no limit");
+    }
+
+    /// **Two duties naming one file hold one mapping.** The producer's and the panel's
+    /// constructors each ask for the operator's list; the second answer is the first's holding —
+    /// the same `Arc`, the same mapping, the root computed once — which is the whole of the fix
+    /// for the testnet-11 double mapping.
     #[test]
     fn two_duties_naming_one_artifact_share_one_mapping() {
         let _serial = exclusive();

@@ -1156,9 +1156,12 @@ pub fn cli() -> Command {
                 .help(
                     "MISAKA PALW: keep at most this many bytes of a MAPPED class artifact's weights in memory (ADR-0112). \
                      The always-set is pinned, routed experts are read as the router chooses them and held under the \
-                     remainder, and nothing is read through a page fault. Default: a fifth of the artifact's weights. \
-                     0 = no loader, the page cache decides (the behaviour before ADR-0112). A budget below the class's \
-                     floor -- its always-set plus one token's experts -- is refused at startup by name.",
+                     remainder, and nothing is read through a page fault. Default: a fifth of the artifact's weights, \
+                     within what this host has available at startup (MemAvailable, or the memory cgroup's headroom where \
+                     smaller) less 16 GiB the node keeps for itself -- less than a fifth if only less can be spared, and \
+                     the page cache, with a warning, if not even the class's floor can. 0 = no loader, the page cache \
+                     decides (the behaviour before ADR-0112). A STATED budget below the class's floor -- its always-set \
+                     plus one token's experts -- is refused at startup by name.",
                 ),
         )
         .arg(
