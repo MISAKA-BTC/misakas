@@ -591,6 +591,39 @@ the episode never reaches 100. It lasts as long as any heartbeat miner runs.
 
 ---
 
+## 7b. The EVM bridge after ADR-0109 — a lock is its own claim
+
+Since [ADR-0109](adr/0109-a-lock-is-its-own-claim-and-finality-is-a-label-not-a-pause.md) a node
+does three things it did not do before, all policy (a node without them validates every block a node
+with them makes):
+
+* **It claims every accepted deposit lock, unasked.** The node keeps an index of the
+  `EVM_DEPOSIT_LOCK` outputs in its virtual UTXO set (built once at the first start on an existing
+  database — the log says `[evm-bridge] deposit-lock index built from the virtual UTXO set: N
+  unclaimed lock(s)` — and kept by every virtual change after that). Every template this node
+  builds carries a claim for every lock in the index, oldest first. A depositor no longer has to call
+  `submitEvmDepositClaim` after the lock is accepted; the RPC still works and still gossips, as an
+  accelerator for a node whose index lags (one mid-IBD).
+* **It no longer pauses the EVM lane while DNS finality is stale.** `--evm-bridge-finality=label`
+  (the default) includes deposit claims, EVM transactions and the EVM coinbase whatever the
+  DNS-confirmed anchor's distance below the sink. A reader who wants the two-resource-confirmed
+  state asks the eth RPC for the **`safe`** tag (`eth_getBalance(addr, "safe")`,
+  `eth_getBlockByNumber("safe", …)`), which is the DNS-confirmed anchor; `latest` is the sink;
+  `finalized` is the pruning point. `--evm-bridge-finality=pause` restores the behaviour before
+  ADR-0109 (an empty EVM payload and `EVM bridge is paused` from the claim RPC while the anchor is
+  stale) on this node only. `--evm-bridge-devnet-unpaused` now means `label` and no longer refuses
+  to start on a public network.
+* **It refuses, at `submitTransaction`, a transaction that spends a PALW producer bond the registry
+  holds locked**, with the error the merge would have used (`SpendsNonReleasableBond`). Before, such
+  a transaction was carried by a block and skipped at the merge, and nobody was told.
+
+**What a transfer costs now.** A deposit is credited two chain blocks after the block that carries
+the lock: the lock is accepted by the next chain block, every template built after that carries the
+claim, and the claim executes when the block carrying it is the chain block. On this network's
+cadence (a chain block every ~20 minutes on 2026-09-11) that is 30–60 minutes with nothing for the
+depositor to do; before ADR-0109 it was that plus a second act the depositor's software had to
+repeat at the right moment, and unbounded while the anchor was stale.
+
 ## 8. Emission at launch
 
 * Full schedule **4445.62 MSK/block** (rate-preserving 120 s table).

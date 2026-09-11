@@ -8381,16 +8381,20 @@ fn set_fresh_dns_finality(consensus: &TestConsensus) {
     use kaspa_consensus_core::BlueWorkType;
     use kaspa_consensus_core::dns_finality::{DnsHealth, DnsRolloutStage, DnsState, STAKE_SCORE_SCALE, StakeScore};
 
+    // The anchor must be a block with a header: since 2026-09-10 the bridge's freshness is measured
+    // in blue score from the anchor's header (`dns_finality_fresh_for_bridge`), and an anchor the
+    // headers store cannot resolve reads as stale. Genesis sits 0 blue below a genesis sink.
+    let anchor = consensus.params().genesis.hash;
     consensus
         .virtual_processor()
         .dns_state_store
         .write()
         .set(DnsState {
-            selected_chain_anchor: BlockHash::from(77u64),
+            selected_chain_anchor: anchor,
             anchor_daa_score: 0,
             work_depth: BlueWorkType::from_u64(2_000_000),
             stake_depth: StakeScore(20 * STAKE_SCORE_SCALE),
-            last_dns_confirmed_anchor: BlockHash::from(77u64),
+            last_dns_confirmed_anchor: anchor,
             last_dns_confirmed_anchor_daa_score: 0,
             rollout_stage: DnsRolloutStage::Active,
             validator_set_commitment: BlockHash::from(88u64),
@@ -8496,6 +8500,26 @@ async fn evm_active_chain_executes_persists_and_moves_heads() {
     assert_eq!(stored2.parent_state_root, exp1.header.state_root, "EVM state chains selected-parent-wise");
     assert_eq!(storage.evm_payload_store.get(2.into()).unwrap(), payload2, "own payload persisted at body commit");
     assert_eq!(storage.evm_heads_store.read().get().unwrap().latest, BlockHash::from(2u64));
+
+    // ADR-0109 Decision 4 (I-4): `safe` is the DNS-confirmed anchor when it is a chain ancestor of the
+    // sink that carries an EVM result — b1 here — and the sink when the anchor carries none.
+    {
+        use crate::model::stores::dns_state::{DnsStateStore, DnsStateStoreReader};
+        let vp = consensus.virtual_processor().clone();
+        let point_anchor_at = |anchor: BlockHash| {
+            let mut state = vp.dns_state_store.read().get().unwrap();
+            state.last_dns_confirmed_anchor = anchor;
+            vp.dns_state_store.write().set(state).unwrap();
+            let mut batch = rocksdb::WriteBatch::default();
+            vp.update_evm_canonical_heads(&mut batch, 2.into());
+            vp.db.write(batch).unwrap();
+            storage.evm_heads_store.read().get().unwrap()
+        };
+        let heads = point_anchor_at(1.into());
+        assert_eq!((heads.latest, heads.safe), (BlockHash::from(2u64), BlockHash::from(1u64)), "safe = the DNS-confirmed anchor b1");
+        let heads = point_anchor_at(BlockHash::from(0xDEADu64));
+        assert_eq!(heads.safe, BlockHash::from(2u64), "an anchor with no EVM result leaves safe at the sink, as before");
+    }
 
     // ---- b3: a commitment FAULT (producer lied about the acceptance result).
     // The block enters the DAG but is disqualified from the chain — exactly the
@@ -8862,6 +8886,9 @@ async fn evm_producer_deposit_claim_fills_and_filters_template_system_ops() {
         .skip_proof_of_work()
         .edit_consensus_params(|p| p.evm_activation_daa_score = 0)
         .apply_args(|cfg| {
+            // ADR-0109: this test is about the QUEUE path under the pre-ADR gate; the index path and
+            // the `Label` default have their own tests below.
+            cfg.evm_bridge_finality = kaspa_consensus_core::evm::EvmBridgeFinalityPolicy::Pause;
             let mut ms = MuHash::new();
             initial_utxos.iter().for_each(|(op, u)| ms.add_utxo(op, u));
             cfg.params.genesis.utxo_commitment = ms.finalize();
@@ -12242,4 +12269,214 @@ async fn a_missing_delta_under_the_tip_is_recovered_from_the_pruning_snapshot() 
     //    other half — the missing row used to reach an `expect` on this path.
     assert_eq!(reached, sink, "the rebuilt base must carry the walk all the way to {sink}");
     let _ = state_params;
+}
+
+/// ADR-0109 test fixture: a consensus whose imported virtual UTXO set holds the given deposit locks
+/// (`(seed, block_daa_score)` each), under `policy`. Returns each lock's outpoint and the claim it is.
+#[cfg(feature = "evm")]
+fn consensus_with_deposit_locks(
+    policy: kaspa_consensus_core::evm::EvmBridgeFinalityPolicy,
+    locks: &[(u64, u64)],
+) -> (TestConsensus, Vec<JoinHandle<()>>, Vec<(TransactionOutpoint, kaspa_consensus_core::evm::DepositClaim)>) {
+    use kaspa_consensus_core::evm::{DepositClaim, EvmAddress};
+    use kaspa_consensus_core::header::Header;
+    use kaspa_consensus_core::muhash::MuHashExtensions;
+    use kaspa_consensus_core::tx::UtxoEntry;
+    use kaspa_muhash::MuHash;
+    use kaspa_txscript::script_class::evm_deposit_lock_script;
+
+    let refund_spk = p2pkh_mldsa87_spk(&[0x42; 64]);
+    let mut initial_utxos = Vec::new();
+    let mut claims = Vec::new();
+    for (i, (seed, daa)) in locks.iter().enumerate() {
+        let evm_addr = [0xA0 + i as u8; 20];
+        let amount = 1000 + i as u64;
+        let lock_spk = evm_deposit_lock_script(evm_addr, 1_000_000, 7, refund_spk.script());
+        let outpoint = TransactionOutpoint::new((*seed).into(), 0);
+        initial_utxos.push((outpoint, UtxoEntry { amount, script_public_key: lock_spk, block_daa_score: *daa, is_coinbase: false }));
+        claims.push((
+            outpoint,
+            DepositClaim {
+                deposit_outpoint: outpoint,
+                evm_address: EvmAddress::from_bytes(evm_addr),
+                amount_sompi: amount,
+                claim_tip_sompi: 7,
+            },
+        ));
+    }
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| p.evm_activation_daa_score = 0)
+        .apply_args(|cfg| {
+            cfg.evm_bridge_finality = policy;
+            let mut ms = MuHash::new();
+            initial_utxos.iter().for_each(|(op, u)| ms.add_utxo(op, u));
+            cfg.params.genesis.utxo_commitment = ms.finalize();
+            let genesis_header: Header = (&cfg.params.genesis).into();
+            cfg.params.genesis.hash = genesis_header.hash;
+        })
+        .build();
+    let consensus = TestConsensus::new(&config);
+    let wait_handles = consensus.init();
+    let mut genesis_ms = MuHash::new();
+    consensus.append_imported_pruning_point_utxos(&initial_utxos, &mut genesis_ms);
+    consensus.import_pruning_point_utxo_set(config.genesis.hash, genesis_ms).unwrap();
+    (consensus, wait_handles, claims)
+}
+
+#[cfg(feature = "evm")]
+fn unasked_template(consensus: &TestConsensus, queued: Vec<kaspa_consensus_core::evm::DepositClaim>) -> BlockTemplate {
+    use kaspa_consensus_core::evm::{EvmAddress, EvmTemplateData};
+    consensus
+        .build_block_template_with_evm(
+            MinerData::new(p2pkh_mldsa87_spk(&[0u8; 64]), vec![]),
+            Box::new(OnetimeTxSelector::new(Default::default())),
+            TemplateBuildMode::Standard,
+            EvmTemplateData { evm_coinbase: EvmAddress::from_bytes([0xCB; 20]), transactions: vec![], system_ops: queued },
+        )
+        .unwrap()
+}
+
+/// ADR-0109 Decision 1 (I-1): a lock in the virtual UTXO set is claimed by the next template with NO
+/// queued claim — the index path, filled by the pruning-point import that put the lock in the set.
+/// Under `Label` (the default) no DNS anchor needs to be fresh for it. Under `Pause` the behaviour
+/// before ADR-0109 holds: a stale anchor empties the payload.
+#[tokio::test]
+#[cfg(feature = "evm")]
+async fn evm_producer_claims_every_accepted_lock_unasked() {
+    use kaspa_consensus_core::evm::{EvmBridgeFinalityPolicy, EvmSystemOp};
+    kaspa_core::log::try_init_logger("info");
+
+    let (consensus, wait_handles, claims) = consensus_with_deposit_locks(EvmBridgeFinalityPolicy::Label, &[(99, 0)]);
+    let template = unasked_template(&consensus, vec![]);
+    assert_eq!(
+        template.block.evm_payload.system_ops,
+        vec![EvmSystemOp::DepositClaim(claims[0].1.clone())],
+        "the lock is claimed unasked, and no anchor had to be fresh for it"
+    );
+    assert_eq!(template.block.header.evm_payload_hash, template.block.evm_payload.payload_hash(), "header commits the claim payload");
+    consensus.shutdown(wait_handles);
+
+    let (consensus, wait_handles, _claims) = consensus_with_deposit_locks(EvmBridgeFinalityPolicy::Pause, &[(99, 0)]);
+    let stale = unasked_template(&consensus, vec![]);
+    assert!(stale.block.evm_payload.is_empty(), "Pause: a stale anchor keeps the payload empty, as before ADR-0109");
+    consensus.shutdown(wait_handles);
+}
+
+/// ADR-0109 Decision 1 (I-3): the template's claims are the index's, oldest lock first, and a claim
+/// the queue also holds is carried once.
+#[tokio::test]
+#[cfg(feature = "evm")]
+async fn evm_template_claims_oldest_lock_first_and_once() {
+    use kaspa_consensus_core::evm::{EvmBridgeFinalityPolicy, EvmSystemOp};
+    kaspa_core::log::try_init_logger("info");
+
+    // seed 5 is the NEWER lock (DAA 50), seed 3 the older (DAA 30); the queue holds the newer's claim.
+    let (consensus, wait_handles, claims) = consensus_with_deposit_locks(EvmBridgeFinalityPolicy::Label, &[(5, 50), (3, 30)]);
+    let template = unasked_template(&consensus, vec![claims[0].1.clone()]);
+    assert_eq!(
+        template.block.evm_payload.system_ops,
+        vec![EvmSystemOp::DepositClaim(claims[1].1.clone()), EvmSystemOp::DepositClaim(claims[0].1.clone())],
+        "oldest lock first; the queued claim the index also holds appears once"
+    );
+    consensus.shutdown(wait_handles);
+}
+
+/// ADR-0109 Decision 1 (I-2): the index follows the virtual UTXO diff — an added lock enters, an added
+/// plain output does not, a removed lock leaves — and a rebuild makes it equal to the set's locks.
+#[tokio::test]
+#[cfg(feature = "evm")]
+async fn evm_deposit_lock_index_follows_the_virtual_utxo_diff() {
+    use crate::model::stores::evm::EvmDepositLockStoreReader;
+    use kaspa_consensus_core::tx::UtxoEntry;
+    use kaspa_consensus_core::utxo::utxo_diff::UtxoDiff;
+    use kaspa_txscript::script_class::evm_deposit_lock_script;
+    use rocksdb::WriteBatch;
+
+    let config =
+        ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().edit_consensus_params(|p| p.evm_activation_daa_score = 0).build();
+    let consensus = TestConsensus::new(&config);
+    let wait_handles = consensus.init();
+    let vp = consensus.virtual_processor().clone();
+    assert!(vp.evm_deposit_lock_store.read().is_built(), "init builds the index once on a database that lacks it");
+    assert!(vp.evm_deposit_lock_store.read().all().unwrap().is_empty());
+
+    let refund_spk = p2pkh_mldsa87_spk(&[0x42; 64]);
+    let lock_entry = |daa: u64| UtxoEntry {
+        amount: 1000,
+        script_public_key: evm_deposit_lock_script([0xAB; 20], 1_000_000, 7, refund_spk.script()),
+        block_daa_score: daa,
+        is_coinbase: false,
+    };
+    let plain_entry =
+        UtxoEntry { amount: 5, script_public_key: p2pkh_mldsa87_spk(&[0x11; 64]), block_daa_score: 5, is_coinbase: false };
+    let lock_op = TransactionOutpoint::new(7u64.into(), 0);
+    let plain_op = TransactionOutpoint::new(8u64.into(), 1);
+
+    // added: the lock enters, the plain output does not
+    let mut diff = UtxoDiff::default();
+    diff.add.insert(lock_op, lock_entry(5));
+    diff.add.insert(plain_op, plain_entry.clone());
+    let mut batch = WriteBatch::default();
+    vp.stage_evm_deposit_locks(&mut batch, &diff);
+    vp.db.write(batch).unwrap();
+    let all = vp.evm_deposit_lock_store.read().all().unwrap();
+    assert_eq!(all.len(), 1, "one lock, no plain output");
+    assert_eq!(all[0].0, lock_op);
+    let record = &all[0].1;
+    assert_eq!(
+        (record.amount_sompi, record.claim_tip_sompi, record.timeout_daa_score, record.block_daa_score),
+        (1000, 7, 1_000_000, 5)
+    );
+    assert_eq!(record.evm_address, kaspa_consensus_core::evm::EvmAddress::from_bytes([0xAB; 20]));
+
+    // removed: the lock leaves; a removed plain output touches nothing
+    let mut diff = UtxoDiff::default();
+    diff.remove.insert(lock_op, lock_entry(5));
+    diff.remove.insert(plain_op, plain_entry.clone());
+    let mut batch = WriteBatch::default();
+    vp.stage_evm_deposit_locks(&mut batch, &diff);
+    vp.db.write(batch).unwrap();
+    assert!(vp.evm_deposit_lock_store.read().all().unwrap().is_empty(), "the removed lock left the index");
+
+    // rebuilt: what the virtual set holds is what the index holds
+    {
+        let mut virtual_write = vp.virtual_stores.write();
+        let mut diff = UtxoDiff::default();
+        diff.add.insert(lock_op, lock_entry(9));
+        diff.add.insert(plain_op, plain_entry);
+        let mut batch = WriteBatch::default();
+        virtual_write.utxo_set.write_diff_batch(&mut batch, &diff).unwrap();
+        vp.db.write(batch).unwrap();
+        vp.rebuild_evm_deposit_lock_index(&virtual_write.utxo_set);
+    }
+    let all = vp.evm_deposit_lock_store.read().all().unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!((all[0].0, all[0].1.block_daa_score), (lock_op, 9), "the rebuild read the set, not the old index");
+    consensus.shutdown(wait_handles);
+}
+
+/// ADR-0109 Decision 3 (I-5): the input a mempool transaction is refused for is the one spending a
+/// locked PALW bond, and a transaction with free inputs names nothing.
+#[test]
+fn first_locked_input_names_the_locked_bond_spend() {
+    use kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE;
+    use kaspa_consensus_core::tx::TransactionInput;
+    let free = TransactionOutpoint::new(1u64.into(), 0);
+    let bond = TransactionOutpoint::new(2u64.into(), 0);
+    let tx = |outpoints: &[TransactionOutpoint]| {
+        Transaction::new(
+            crate::constants::TX_VERSION,
+            outpoints.iter().map(|o| TransactionInput::new(*o, vec![], 0, 1)).collect(),
+            vec![],
+            0,
+            SUBNETWORK_ID_NATIVE,
+            0,
+            vec![],
+        )
+    };
+    let locked: std::collections::HashSet<TransactionOutpoint> = [bond].into_iter().collect();
+    assert_eq!(super::processor::first_locked_input(&tx(&[free, bond]), &locked), Some(bond));
+    assert_eq!(super::processor::first_locked_input(&tx(&[free]), &locked), None);
+    assert_eq!(super::processor::first_locked_input(&tx(&[bond]), &Default::default()), None, "an empty registry locks nothing");
 }

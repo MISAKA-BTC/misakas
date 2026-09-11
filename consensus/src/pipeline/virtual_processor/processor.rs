@@ -25,8 +25,9 @@ use crate::{
             dns_state::{DbDnsStateStore, DbVltActivationStore, DnsStateStoreReader, VltActivationStoreReader},
             epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
             evm::{
-                DbEvmCanonicalHeadsStore, DbEvmHeaderStore, DbEvmPayloadStore, DbEvmStateStore, EvmCanonicalHeadsStoreReader,
-                EvmHeaderStore, EvmHeaderStoreReader, EvmStateStore, EvmStateStoreReader,
+                DbEvmCanonicalHeadsStore, DbEvmDepositLockStore, DbEvmHeaderStore, DbEvmPayloadStore, DbEvmStateStore,
+                EvmCanonicalHeadsStoreReader, EvmDepositLockStore, EvmDepositLockStoreReader, EvmHeaderStore, EvmHeaderStoreReader,
+                EvmStateStore, EvmStateStoreReader,
             },
             ghostdag::{DbGhostdagStore, GhostdagData, GhostdagStoreReader},
             headers::{DbHeadersStore, HeaderStoreReader},
@@ -107,9 +108,9 @@ use kaspa_consensus_core::{
         apply_token_burn, apply_token_transfer, decode_token_burn_payload, decode_token_transfer_payload, emission_epoch_budget,
         emission_rewards_v2, token_burn_message, token_transfer_message,
     },
-    tx::{MutableTransaction, Transaction, TransactionId, TransactionOutpoint, TransactionOutput},
+    tx::{MutableTransaction, Transaction, TransactionId, TransactionOutpoint, TransactionOutput, UtxoEntry},
     utxo::{
-        utxo_diff::UtxoDiff,
+        utxo_diff::{ImmutableUtxoDiff, UtxoDiff},
         utxo_view::{UtxoView, UtxoViewComposition},
     },
     vlt::{
@@ -331,7 +332,7 @@ pub struct VirtualStateProcessor {
     pub(super) thread_pool: Arc<ThreadPool>,
 
     // DB
-    db: Arc<DB>,
+    pub(super) db: Arc<DB>,
 
     // Config
     pub(super) genesis: GenesisBlock,
@@ -596,6 +597,13 @@ pub struct VirtualStateProcessor {
     #[cfg_attr(not(feature = "evm"), allow(dead_code))] // read by the cfg(evm) chain-context step only
     pub(super) evm_payload_store: Arc<DbEvmPayloadStore>,
     pub(super) evm_heads_store: Arc<RwLock<DbEvmCanonicalHeadsStore>>,
+    /// ADR-0109 Decision 1: the deposit-lock index — every lock the virtual set holds, claimed by
+    /// every template unasked. Staged in `commit_virtual_state` from the same diff as the set.
+    pub(super) evm_deposit_lock_store: Arc<RwLock<DbEvmDepositLockStore>>,
+    /// ADR-0109 Decision 3: the PALW locked-bond set the mempool refuses spends of, memoised per
+    /// (registry tip, DAA) so a burst of admissions does not rebuild it per transaction.
+    pub(super) palw_mempool_locked_cache:
+        parking_lot::Mutex<Option<(BlockHash, u64, Arc<std::collections::HashSet<TransactionOutpoint>>)>>,
     pub(super) evm_receipts_store: Arc<crate::model::stores::evm::DbEvmReceiptsStore>,
     pub(super) evm_tx_index_store: Arc<crate::model::stores::evm::DbEvmTxIndexStore>,
     pub(super) evm_block_hash_map_store: Arc<crate::model::stores::evm::DbEvmBlockHashMapStore>,
@@ -634,8 +642,10 @@ pub struct VirtualStateProcessor {
     // disabled (its gap items 206-seed) and reads fall back to flat-materialize / §12-reconstruct.
     // Node-local, consensus-neutral. `false` on every current network and by default.
     pub(super) evm_retire_206: bool,
-    /// `Config::evm_bridge_devnet_unpaused` — the template ignores DNS-finality staleness.
-    pub(super) evm_bridge_devnet_unpaused: bool,
+    /// ADR-0109 Decision 2 — `Config::evm_bridge_finality_effective()`: under `Label` the template
+    /// carries the EVM payload whatever the DNS anchor's distance; under `Pause` a stale anchor
+    /// empties it (the behaviour before ADR-0109).
+    pub(super) evm_bridge_finality: kaspa_consensus_core::evm::EvmBridgeFinalityPolicy,
     // §12: this node's EVM state-history retention mode (`--evm-history-mode`). In
     // `head` mode the per-block archive diff/checkpoint (220/221) are not written at
     // all; `recent`/`archive` write them (the pruning processor decides how long
@@ -812,7 +822,7 @@ impl VirtualStateProcessor {
         evm_shadow_state_backend: bool,
         evm_flat_authoritative: bool,
         evm_retire_206: bool,
-        evm_bridge_devnet_unpaused: bool,
+        evm_bridge_finality: kaspa_consensus_core::evm::EvmBridgeFinalityPolicy,
     ) -> Self {
         // C-01 S9: flat-authoritative seeding needs the shadow backend (which maintains + validates
         // the flat store); without it the flag is a silent no-op (the executor keeps seeding from
@@ -940,6 +950,8 @@ impl VirtualStateProcessor {
             evm_state_store: storage.evm_state_store.clone(),
             evm_payload_store: storage.evm_payload_store.clone(),
             evm_heads_store: storage.evm_heads_store.clone(),
+            evm_deposit_lock_store: storage.evm_deposit_lock_store.clone(),
+            palw_mempool_locked_cache: Default::default(),
             evm_receipts_store: storage.evm_receipts_store.clone(),
             evm_tx_index_store: storage.evm_tx_index_store.clone(),
             evm_block_hash_map_store: storage.evm_block_hash_map_store.clone(),
@@ -955,7 +967,7 @@ impl VirtualStateProcessor {
             evm_shadow_state_backend,
             evm_flat_authoritative,
             evm_retire_206,
-            evm_bridge_devnet_unpaused,
+            evm_bridge_finality,
             evm_history_mode,
             evm_activation_daa_score: params.evm_activation_daa_score,
             evm_gas_pool_v2_activation_daa_score: params.evm_gas_pool_v2_activation_daa_score,
@@ -1053,6 +1065,96 @@ impl VirtualStateProcessor {
             is_dns_confirmed(state.work_depth, state.stake_depth, dns_params.required_work_depth, dns_params.required_stake_depth);
         let anchor_blue_score = self.headers_store.get_blue_score(state.last_dns_confirmed_anchor).ok();
         dns_finality_fresh_for_bridge(dns_confirmed, state.last_dns_confirmed_anchor, anchor_blue_score, sink_blue_score, dns_params)
+    }
+
+    /// **ADR-0109 Decision 1: the deposit-lock index follows the virtual UTXO set, in its batch.**
+    /// Removed lock outputs leave, added lock outputs enter; a non-lock output on either side costs
+    /// one script-class check and touches nothing. Unconditional — a lock output is consensus-legal
+    /// on every network, and the template path is what gates on EVM activation.
+    pub(super) fn stage_evm_deposit_locks(&self, batch: &mut WriteBatch, diff: &impl ImmutableUtxoDiff) {
+        let mut store = self.evm_deposit_lock_store.write();
+        for (outpoint, entry) in diff.removed().iter() {
+            if deposit_lock_record(entry).is_some() {
+                store.delete_batch(batch, *outpoint).unwrap();
+            }
+        }
+        for (outpoint, entry) in diff.added().iter() {
+            if let Some(record) = deposit_lock_record(entry) {
+                store.insert_batch(batch, *outpoint, record).unwrap();
+            }
+        }
+    }
+
+    /// ADR-0109 Decision 1: (re)build the index from the virtual UTXO set — once for a database from
+    /// before the index, and whenever the set is replaced wholesale (a pruning-point import).
+    pub(super) fn rebuild_evm_deposit_lock_index(&self, utxo_set: &crate::model::stores::utxo_set::DbUtxoSetStore) {
+        let mut store = self.evm_deposit_lock_store.write();
+        store.clear().unwrap();
+        let mut locks = 0usize;
+        for item in utxo_set.iterator() {
+            let (outpoint, entry) = item.unwrap();
+            if let Some(record) = deposit_lock_record(&entry) {
+                store.insert(outpoint, record).unwrap();
+                locks += 1;
+            }
+        }
+        store.set_built().unwrap();
+        info!("[evm-bridge] deposit-lock index built from the virtual UTXO set: {locks} unclaimed lock(s)");
+    }
+
+    /// **ADR-0109 Decision 1 — the template's claims: the index's, oldest lock first, then whatever
+    /// the queue holds that the index does not** (a claim relayed for a lock this node's set does
+    /// not show yet). A lock already in its refund window is left out — `prepare_deposit_claims`
+    /// would refuse it (`RefundWindowOpen`) and report to the queue an invalid claim for an outpoint
+    /// the queue never held. Inert below EVM activation.
+    fn with_indexed_deposit_claims(
+        &self,
+        mut data: kaspa_consensus_core::evm::EvmTemplateData,
+        daa_score: u64,
+    ) -> kaspa_consensus_core::evm::EvmTemplateData {
+        if daa_score < self.evm_activation_daa_score {
+            return data;
+        }
+        let mut locks = match self.evm_deposit_lock_store.read().all() {
+            Ok(locks) => locks,
+            Err(e) => {
+                warn!("[evm-bridge] deposit-lock index unreadable ({e}); this template carries only queued claims");
+                return data;
+            }
+        };
+        locks.retain(|(_, record)| daa_score < record.timeout_daa_score);
+        locks.sort_by(|(a_op, a), (b_op, b)| {
+            (a.block_daa_score, a_op.transaction_id, a_op.index).cmp(&(b.block_daa_score, b_op.transaction_id, b_op.index))
+        });
+        let mut seen: std::collections::HashSet<TransactionOutpoint> = locks.iter().map(|(outpoint, _)| *outpoint).collect();
+        let queued = std::mem::take(&mut data.system_ops);
+        let mut system_ops: Vec<kaspa_consensus_core::evm::DepositClaim> =
+            locks.into_iter().map(|(outpoint, record)| record.claim(outpoint)).collect();
+        for claim in queued {
+            if seen.insert(claim.deposit_outpoint) {
+                system_ops.push(claim);
+            }
+        }
+        data.system_ops = system_ops;
+        data
+    }
+
+    /// ADR-0109 Decision 3: the PALW bonds the registry holds locked at the virtual tip — the set the
+    /// acceptance path skips spends of — memoised per (registry tip, DAA). `None` when the network
+    /// has no V2 registry or the registry has no tip yet.
+    fn palw_mempool_locked_bonds(&self, now_daa: u64) -> Option<Arc<std::collections::HashSet<TransactionOutpoint>>> {
+        let params = self.palw_state_params_v2.as_ref()?;
+        let (tip, state) = self.palw_state_v2_store.read().load_tip_cached(params).ok().flatten()?;
+        let mut cache = self.palw_mempool_locked_cache.lock();
+        if let Some((cached_tip, cached_daa, set)) = cache.as_ref()
+            && *cached_tip == tip
+            && *cached_daa == now_daa
+        {
+            return Some(set.clone());
+        }
+        let set = Arc::new(self.palw_v2_locked_bond_outpoints(&state, now_daa));
+        *cache = Some((tip, now_daa, set.clone()));
+        Some(set)
     }
 
     pub fn worker(self: &Arc<Self>) {
@@ -2360,7 +2462,7 @@ impl VirtualStateProcessor {
     /// previous finalized. The blue-work-depth `safe` + DNS-confirmed-anchor
     /// `finalized` selection lands with the RPC phase that first exposes the
     /// tags. Inert (one u64 compare) on every current network.
-    fn update_evm_canonical_heads(&self, batch: &mut WriteBatch, sink: BlockHash) {
+    pub(super) fn update_evm_canonical_heads(&self, batch: &mut WriteBatch, sink: BlockHash) {
         use crate::model::stores::evm::{EvmCanonicalHeadsStoreReader, EvmHeaderStoreReader};
         if self.evm_activation_daa_score == u64::MAX {
             return;
@@ -2374,7 +2476,22 @@ impl VirtualStateProcessor {
         let prev_finalized = self.evm_heads_store.read().get().ok().map(|h| h.finalized);
         let finalized =
             if self.evm_header_store.has(pruning_point).unwrap_or(false) { pruning_point } else { prev_finalized.unwrap_or(sink) };
-        let heads = kaspa_consensus_core::evm::CanonicalEvmHeads { latest: sink, safe: sink, finalized };
+        // ADR-0109 Decision 4: `safe` is the DNS-confirmed anchor when it is in the sink's chain past
+        // and carries an EVM result — the two-resource-confirmed prefix a reader asks for by tag —
+        // and the sink otherwise (as before).
+        let safe = self
+            .dns_state_store
+            .read()
+            .get()
+            .ok()
+            .map(|state| state.last_dns_confirmed_anchor)
+            .filter(|anchor| {
+                *anchor != BlockHash::default()
+                    && self.evm_header_store.has(*anchor).unwrap_or(false)
+                    && self.reachability_service.is_chain_ancestor_of(*anchor, sink)
+            })
+            .unwrap_or(sink);
+        let heads = kaspa_consensus_core::evm::CanonicalEvmHeads { latest: sink, safe, finalized };
         self.evm_heads_store.write().set_batch(batch, heads).unwrap();
     }
 
@@ -2935,6 +3052,9 @@ impl VirtualStateProcessor {
 
         // Apply the accumulated diff to the virtual UTXO set
         virtual_write.utxo_set.write_diff_batch(&mut batch, accumulated_diff).unwrap();
+        // ADR-0109 Decision 1: the deposit-lock index follows the set, from the same diff, in the
+        // same batch — so a template never sees a lock the set does not hold, or misses one it does.
+        self.stage_evm_deposit_locks(&mut batch, accumulated_diff);
 
         // Update virtual state (capture the new sink first — `set_batch` moves the Arc).
         let dns_sink = new_virtual_state.ghostdag_data.selected_parent;
@@ -12497,6 +12617,15 @@ impl VirtualStateProcessor {
             virtual_daa_score,
             virtual_past_median_time,
         )?;
+        // ADR-0109 Decision 3: a spend of a PALW bond the registry holds locked at the virtual tip is
+        // refused here, with the merge's own error, instead of being carried by a block and skipped
+        // at the merge where nobody hears it. The same set the acceptance path builds
+        // (`palw_v2_locked_bonds`), read at the tip the mempool judges against.
+        if let Some(locked) = self.palw_mempool_locked_bonds(virtual_daa_score)
+            && let Some(outpoint) = first_locked_input(&mutable_tx.tx, &locked)
+        {
+            return Err(kaspa_consensus_core::errors::tx::TxRuleError::SpendsNonReleasableBond(outpoint));
+        }
         self.validate_mempool_transaction_in_utxo_context(mutable_tx, virtual_utxo_view, virtual_daa_score, args)?;
         Ok(())
     }
@@ -13079,10 +13208,14 @@ impl VirtualStateProcessor {
         // Block validation deliberately does not reject by reading the current
         // dns_state_store; validity must stay determined by the candidate block and
         // its selected-parent state.
-        // `evm_bridge_devnet_unpaused` (private devnets only) waives the staleness gate: a drill
-        // with no VLT overlay would otherwise never carry an EVM payload.
-        let bridge_finality_fresh =
-            self.evm_bridge_devnet_unpaused || self.bridge_finality_is_fresh(virtual_state.ghostdag_data.selected_parent);
+        // ADR-0109 Decision 1: every lock the virtual set holds is claimed here, unasked — read under
+        // the same lock as `virtual_utxo_view`, so `prepare_deposit_claims` below validates each
+        // claim against exactly the generation it was read from.
+        let evm_template_data = self.with_indexed_deposit_claims(evm_template_data, virtual_state.daa_score);
+        // ADR-0109 Decision 2: under `Label` the anchor's distance decides nothing here; under `Pause`
+        // (the behaviour before ADR-0109) a stale anchor empties the payload.
+        let bridge_finality_fresh = self.evm_bridge_finality == kaspa_consensus_core::evm::EvmBridgeFinalityPolicy::Label
+            || self.bridge_finality_is_fresh(virtual_state.ghostdag_data.selected_parent);
         let evm_template_data = if bridge_finality_fresh {
             evm_template_data
         } else {
@@ -13485,6 +13618,13 @@ impl VirtualStateProcessor {
             drop(pruning_point_write);
             drop(pruning_meta_write);
         }
+        // ADR-0109 Decision 1: a database from before the deposit-lock index builds it once from the
+        // virtual UTXO set it already holds; from then on the diff keeps it.
+        let built = self.evm_deposit_lock_store.read().is_built();
+        if !built {
+            let virtual_read = self.virtual_stores.read();
+            self.rebuild_evm_deposit_lock_index(&virtual_read.utxo_set);
+        }
     }
 
     /// Initializes UTXO state of genesis and points virtual at genesis.
@@ -13599,6 +13739,8 @@ impl VirtualStateProcessor {
             for chunk in &pruning_meta_read.utxo_set.iterator().map(|iter_result| iter_result.unwrap()).chunks(1000) {
                 virtual_write.utxo_set.write_from_iterator_without_cache(chunk).unwrap();
             }
+            // ADR-0109 Decision 1: the set was replaced wholesale; the index follows it wholesale.
+            self.rebuild_evm_deposit_lock_index(&virtual_write.utxo_set);
         }
 
         let virtual_read = self.virtual_stores.upgradable_read();
@@ -14585,6 +14727,28 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::CourtAttnDissected { .. } => "CourtAttnDissected",
         O::CourtAttnChildChosen { .. } => "CourtAttnChildChosen",
     }
+}
+
+/// ADR-0109 Decision 1: the index row of `entry` if its script is an `EVM_DEPOSIT_LOCK`, decided
+/// with the parser the claim's validity uses (`validate_one_deposit_claim`) — so what the index
+/// calls a lock and what the chain calls one cannot diverge.
+pub(super) fn deposit_lock_record(entry: &UtxoEntry) -> Option<kaspa_consensus_core::evm::EvmDepositLockRecord> {
+    let lock = kaspa_txscript::script_class::parse_evm_deposit_lock(&entry.script_public_key)?;
+    Some(kaspa_consensus_core::evm::EvmDepositLockRecord {
+        evm_address: kaspa_consensus_core::evm::EvmAddress::from_bytes(lock.evm_address),
+        amount_sompi: entry.amount,
+        claim_tip_sompi: lock.claim_tip_sompi,
+        timeout_daa_score: lock.timeout_daa_score,
+        block_daa_score: entry.block_daa_score,
+    })
+}
+
+/// ADR-0109 Decision 3: the first input of `tx` that spends a locked PALW bond, if any.
+pub(super) fn first_locked_input(
+    tx: &Transaction,
+    locked: &std::collections::HashSet<TransactionOutpoint>,
+) -> Option<TransactionOutpoint> {
+    tx.inputs.iter().map(|input| input.previous_outpoint).find(|outpoint| locked.contains(outpoint))
 }
 
 #[cfg(test)]

@@ -38,7 +38,7 @@ pub trait UtxoSetStore: UtxoSetStoreReader {
 pub const UTXO_KEY_SIZE: usize = HASH64_SIZE + size_of::<TransactionIndexType>();
 
 #[derive(Eq, Hash, PartialEq, Debug, Copy, Clone)]
-struct UtxoKey([u8; UTXO_KEY_SIZE]);
+pub(crate) struct UtxoKey([u8; UTXO_KEY_SIZE]);
 
 impl AsRef<[u8]> for UtxoKey {
     fn as_ref(&self) -> &[u8] {

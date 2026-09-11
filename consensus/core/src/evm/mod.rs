@@ -1145,6 +1145,76 @@ impl MemSizeEstimator for EvmStateCheckpointV1 {
 /// Controls how far back historical state queries / traces can serve; RPC block,
 /// tx, receipt and log history are kept independently (design §12.1). Default
 /// [`Self::Recent`].
+/// **ADR-0109 Decision 1 — one row of the node-local deposit-lock index**: an `EVM_DEPOSIT_LOCK`
+/// output currently in the virtual UTXO set, reduced to what a claim for it needs. Derived from the
+/// virtual UTXO diff and never declared (ADR-0109 SA-2); read only by the template path, which
+/// re-validates the claim it makes from it against the same view (`prepare_deposit_claims`, SA-1).
+/// Node-local: nothing on the wire and no commitment carries it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvmDepositLockRecord {
+    pub evm_address: EvmAddress,
+    pub amount_sompi: u64,
+    pub claim_tip_sompi: u64,
+    /// First DAA score at which the refund path opens; a claim is valid strictly below it.
+    pub timeout_daa_score: u64,
+    /// `UtxoEntry::block_daa_score` of the lock output — the template claims oldest first.
+    pub block_daa_score: u64,
+}
+
+impl EvmDepositLockRecord {
+    /// The claim this lock is — the same fields the `submitEvmDepositClaim` RPC derives from the
+    /// live lock, so an indexed claim and a submitted one for the same outpoint are equal.
+    pub fn claim(&self, deposit_outpoint: TransactionOutpoint) -> DepositClaim {
+        DepositClaim {
+            deposit_outpoint,
+            evm_address: self.evm_address,
+            amount_sompi: self.amount_sompi,
+            claim_tip_sompi: self.claim_tip_sompi,
+        }
+    }
+}
+
+impl MemSizeEstimator for EvmDepositLockRecord {
+    fn estimate_mem_bytes(&self) -> usize {
+        size_of::<Self>()
+    }
+}
+
+/// **ADR-0109 Decision 2 — what a stale DNS-finality anchor does to the EVM lane on this node.**
+/// Node policy, never block validity: a block built either way validates on every node.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EvmBridgeFinalityPolicy {
+    /// The producer includes deposit claims, EVM transactions and its EVM coinbase whatever the
+    /// anchor's distance, and the claim RPC queues whatever the distance; a reader who wants the
+    /// two-resource-confirmed state asks the eth RPC for the `safe` tag, which is the DNS-confirmed
+    /// anchor (Decision 4). The default on every network.
+    #[default]
+    Label,
+    /// The behaviour before ADR-0109: an empty EVM payload and a refused claim RPC while the anchor
+    /// is unconfirmed or farther below the sink than `dns_bridge_max_anchor_distance_blue_score`.
+    Pause,
+}
+
+impl EvmBridgeFinalityPolicy {
+    /// Parse the `--evm-bridge-finality` value; `None` for an unknown string.
+    pub fn from_str_opt(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "label" => Some(Self::Label),
+            "pause" => Some(Self::Pause),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Label => "label",
+            Self::Pause => "pause",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum EvmHistoryMode {

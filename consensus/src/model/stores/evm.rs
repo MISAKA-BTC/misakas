@@ -11,11 +11,13 @@
 //! caller-supplied; the store values all implement a real `MemSizeEstimator`,
 //! so any policy is safe.
 
+use crate::model::stores::utxo_set::UtxoKey;
 use kaspa_consensus_core::evm::{
-    CanonicalEvmHeads, EvmAddress, EvmBlockReceipts, EvmExecutionHeader, EvmExecutionPayload, EvmLatestStatePtr, EvmRawTx,
-    EvmStateCheckpointV1, EvmStateDiffV2, EvmStateSnapshot, EvmTraceReplayBodyV1, EvmTxLocations, FlatAccount, LogPostingKind,
-    LogPostingLoc, decode_log_posting_loc, encode_log_posting_loc, log_posting_bucket,
+    CanonicalEvmHeads, EvmAddress, EvmBlockReceipts, EvmDepositLockRecord, EvmExecutionHeader, EvmExecutionPayload, EvmLatestStatePtr,
+    EvmRawTx, EvmStateCheckpointV1, EvmStateDiffV2, EvmStateSnapshot, EvmTraceReplayBodyV1, EvmTxLocations, FlatAccount,
+    LogPostingKind, LogPostingLoc, decode_log_posting_loc, encode_log_posting_loc, log_posting_bucket,
 };
+use kaspa_consensus_core::tx::TransactionOutpoint;
 use kaspa_consensus_core::{BlockHash, BlockHasher};
 use kaspa_database::prelude::{
     BatchDbWriter, CachePolicy, CachedDbAccess, CachedDbItem, DB, DbSetAccess, DirectDbWriter, StoreError, StoreResult,
@@ -1222,5 +1224,94 @@ mod tests {
         store.set_floor_batch(&mut b, 3).unwrap();
         db.write(b).unwrap();
         assert_eq!(store.indexed_floor(), Some(3), "a backfill of an older block lowers the floor");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0109 Decision 1: the deposit-lock index (prefix 254) and its built marker (255).
+//
+// Every `EVM_DEPOSIT_LOCK` output currently in the virtual UTXO set, keyed exactly as the set keys
+// it, valued by what a claim needs. Staged from the same accumulated UTXO diff the virtual set is
+// written from (`stage_evm_deposit_locks`), so it moves with every virtual change, reorgs included,
+// in the same batch; rebuilt from the set once on a database that predates it and whenever the set
+// is replaced wholesale. The template path is its only reader, and it re-validates every claim it
+// makes from a row against the same view (SA-1) — a wrong row is a dropped claim, never an invalid
+// block. Node-local: no commitment and nothing on the wire carries it.
+// ---------------------------------------------------------------------------
+
+pub trait EvmDepositLockStoreReader {
+    /// Every lock in the index as `(outpoint, record)`, in key order.
+    fn all(&self) -> StoreResult<Vec<(TransactionOutpoint, EvmDepositLockRecord)>>;
+    fn has(&self, outpoint: TransactionOutpoint) -> StoreResult<bool>;
+    /// Whether the index was built from the virtual UTXO set at least once on this database.
+    fn is_built(&self) -> bool;
+}
+
+pub trait EvmDepositLockStore: EvmDepositLockStoreReader {
+    fn insert_batch(&mut self, batch: &mut WriteBatch, outpoint: TransactionOutpoint, record: EvmDepositLockRecord)
+    -> StoreResult<()>;
+    fn delete_batch(&mut self, batch: &mut WriteBatch, outpoint: TransactionOutpoint) -> StoreResult<()>;
+    /// A direct write — the rebuild's, outside any batch.
+    fn insert(&mut self, outpoint: TransactionOutpoint, record: EvmDepositLockRecord) -> StoreResult<()>;
+    /// Drop every row: the virtual set is about to be replaced wholesale, or rebuilt from.
+    fn clear(&mut self) -> StoreResult<()>;
+    fn set_built(&mut self) -> StoreResult<()>;
+}
+
+#[derive(Clone)]
+pub struct DbEvmDepositLockStore {
+    db: Arc<DB>,
+    access: CachedDbAccess<UtxoKey, EvmDepositLockRecord>,
+    built: CachedDbItem<bool>,
+}
+
+impl DbEvmDepositLockStore {
+    pub fn new(db: Arc<DB>, cache_policy: CachePolicy) -> Self {
+        Self {
+            db: Arc::clone(&db),
+            access: CachedDbAccess::new(db.clone(), cache_policy, DatabaseStorePrefixes::EvmDepositLocks.into()),
+            built: CachedDbItem::new(db, DatabaseStorePrefixes::EvmDepositLocksBuilt.into()),
+        }
+    }
+}
+
+impl EvmDepositLockStoreReader for DbEvmDepositLockStore {
+    fn all(&self) -> StoreResult<Vec<(TransactionOutpoint, EvmDepositLockRecord)>> {
+        let mut out = Vec::new();
+        for item in self.access.iterator() {
+            let (key, record) = item.map_err(|e| StoreError::DataInconsistency(e.to_string()))?;
+            let key = UtxoKey::try_from(key.as_ref()).map_err(|e| StoreError::DataInconsistency(e.to_string()))?;
+            out.push((key.into(), record));
+        }
+        Ok(out)
+    }
+    fn has(&self, outpoint: TransactionOutpoint) -> StoreResult<bool> {
+        self.access.has(outpoint.into())
+    }
+    fn is_built(&self) -> bool {
+        self.built.read().unwrap_or(false)
+    }
+}
+
+impl EvmDepositLockStore for DbEvmDepositLockStore {
+    fn insert_batch(
+        &mut self,
+        batch: &mut WriteBatch,
+        outpoint: TransactionOutpoint,
+        record: EvmDepositLockRecord,
+    ) -> StoreResult<()> {
+        self.access.write(BatchDbWriter::new(batch), outpoint.into(), record)
+    }
+    fn delete_batch(&mut self, batch: &mut WriteBatch, outpoint: TransactionOutpoint) -> StoreResult<()> {
+        self.access.delete(BatchDbWriter::new(batch), outpoint.into())
+    }
+    fn insert(&mut self, outpoint: TransactionOutpoint, record: EvmDepositLockRecord) -> StoreResult<()> {
+        self.access.write(DirectDbWriter::new(&self.db), outpoint.into(), record)
+    }
+    fn clear(&mut self) -> StoreResult<()> {
+        self.access.delete_all(DirectDbWriter::new(&self.db))
+    }
+    fn set_built(&mut self) -> StoreResult<()> {
+        self.built.write(DirectDbWriter::new(&self.db), &true)
     }
 }

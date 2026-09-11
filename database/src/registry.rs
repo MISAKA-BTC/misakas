@@ -349,6 +349,13 @@ pub enum DatabaseStorePrefixes {
     /// the iterator, so without this a layout change reads as an empty store, which is a wrong
     /// answer that looks like a valid one.
     PalwCarriagesSchema = 253,
+    /// ADR-0109 Decision 1: the node-local deposit-lock index — every `EVM_DEPOSIT_LOCK` output in
+    /// the virtual UTXO set, keyed like the set itself (txid ‖ index), valued by what a claim needs
+    /// (`EvmDepositLockRecord`). Staged from the same UTXO diff the set is written from.
+    EvmDepositLocks = 228,
+    /// Singleton marker: the index above was built from the virtual set at least once on this
+    /// database. Absent ⇒ a database from before the index ⇒ rebuilt at startup.
+    EvmDepositLocksBuilt = 229,
     /// ADR-0038 Decision D: per-`ExecutionClass` difficulty state — the DAA target the class's
     /// lottery runs against, which is one of the two factors `palw_pwu` needs and the only one
     /// that is not frozen at registration.

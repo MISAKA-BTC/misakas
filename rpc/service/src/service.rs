@@ -1552,12 +1552,17 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             }
             _ => (false, None),
         };
-        if !bridge_finality_fresh && !self.config.evm_bridge_devnet_unpaused {
+        // ADR-0109 Decision 2: under `Label` (the default) a stale anchor refuses nothing here — the
+        // claim waits in the queue like any other; under `Pause` the pre-ADR refusal stands.
+        if !bridge_finality_fresh
+            && self.config.evm_bridge_finality_effective() == kaspa_consensus_core::evm::EvmBridgeFinalityPolicy::Pause
+        {
             return Err(RpcError::RpcSubsystem(format!(
                 "EVM bridge is paused: DNS finality is unconfirmed or stale at sink daa {sink_daa} ({}); retry after validators advance a fresh DNS-confirmed anchor",
                 match (dns_confirmation.as_ref().map(|c| c.dns_confirmed), anchor_distance) {
                     (Some(false), _) => "DNS finality is not confirmed".to_string(),
-                    (_, Some((distance, bound))) => format!("the confirmed anchor is {distance} blue below the sink; the bridge allows {bound}"),
+                    (_, Some((distance, bound))) =>
+                        format!("the confirmed anchor is {distance} blue below the sink; the bridge allows {bound}"),
                     _ => "no DNS-confirmed anchor this node can read".to_string(),
                 }
             )));

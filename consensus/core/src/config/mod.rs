@@ -122,11 +122,19 @@ pub struct Config {
     /// `evm_flat_authoritative`.
     pub evm_retire_206: bool,
 
-    /// PRIVATE devnets only: run the EVM bridge without the DNS-finality freshness gate — deposit
-    /// claims are queued and the template carries the EVM payload even when no validator has ever
-    /// confirmed an anchor. A drill of the EVM lane on a bonded PALW devnet has no VLT overlay to
-    /// confirm one. Node policy, not consensus; refused by `kaspad` anywhere but devnet/simnet.
+    /// The devnet spelling of `evm_bridge_finality = Label`, kept for the scripts that set it: run
+    /// the EVM bridge without the DNS-finality freshness gate. Since ADR-0109 that is every node's
+    /// default; the flag only overrides an explicit `Pause`. Node policy, not consensus.
     pub evm_bridge_devnet_unpaused: bool,
+
+    /// **ADR-0109 Decision 2 — what a stale DNS anchor does to the EVM lane on this node.** `Label`
+    /// (the default on every network): the producer includes deposit claims, EVM transactions and
+    /// its EVM coinbase whatever the anchor's distance, the claim RPC queues whatever the distance,
+    /// and a reader who wants the two-resource-confirmed state asks the eth RPC for `safe` (the
+    /// DNS-confirmed anchor, Decision 4). `Pause`: the behaviour before ADR-0109 — an empty EVM
+    /// payload and a refused claim RPC while the anchor is unconfirmed or stale. Node policy, never
+    /// block validity. Read through [`Config::evm_bridge_finality_effective`].
+    pub evm_bridge_finality: crate::evm::EvmBridgeFinalityPolicy,
 
     /// kaspa-pq C-01 (slice S9b-prune): ONE-SHOT, IRREVERSIBLE bulk reclamation of the LEGACY per-block
     /// 206 state snapshot store that accumulated BEFORE `evm_retire_206` stopped writing it. The existing
@@ -184,9 +192,16 @@ impl Config {
             evm_flat_authoritative: false,
             evm_retire_206: false,
             evm_bridge_devnet_unpaused: false,
+            evm_bridge_finality: crate::evm::EvmBridgeFinalityPolicy::Label,
             evm_prune_legacy_206: false,
             evm_materialize_pp_anchor: false,
         }
+    }
+
+    /// ADR-0109 Decision 2: the finality policy in force — `Label` when the devnet spelling is set,
+    /// else what `evm_bridge_finality` says. The one reading the template and the claim RPC share.
+    pub fn evm_bridge_finality_effective(&self) -> crate::evm::EvmBridgeFinalityPolicy {
+        if self.evm_bridge_devnet_unpaused { crate::evm::EvmBridgeFinalityPolicy::Label } else { self.evm_bridge_finality }
     }
 
     pub fn to_builder(&self) -> ConfigBuilder {

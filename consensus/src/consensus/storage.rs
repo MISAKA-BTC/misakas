@@ -12,10 +12,10 @@ use crate::{
         dns_state::{DbDnsStateStore, DbVltActivationStore},
         epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
         evm::{
-            DbEvmBlockHashMapStore, DbEvmBlockStateRootStore, DbEvmCanonicalHeadsStore, DbEvmCodeStore, DbEvmFlatAccountStore,
-            DbEvmHeaderStore, DbEvmLatestStatePtrStore, DbEvmLogIndexStore, DbEvmNumberStore, DbEvmPayloadStore, DbEvmRawTxStore,
-            DbEvmReceiptsStore, DbEvmStateCheckpointStore, DbEvmStateDiffStore, DbEvmStateStore, DbEvmTraceReplayStore,
-            DbEvmTxIndexStore,
+            DbEvmBlockHashMapStore, DbEvmBlockStateRootStore, DbEvmCanonicalHeadsStore, DbEvmCodeStore, DbEvmDepositLockStore,
+            DbEvmFlatAccountStore, DbEvmHeaderStore, DbEvmLatestStatePtrStore, DbEvmLogIndexStore, DbEvmNumberStore,
+            DbEvmPayloadStore, DbEvmRawTxStore, DbEvmReceiptsStore, DbEvmStateCheckpointStore, DbEvmStateDiffStore, DbEvmStateStore,
+            DbEvmTraceReplayStore, DbEvmTxIndexStore,
         },
         ghostdag::{CompactGhostdagData, DbGhostdagStore},
         headers::{CompactHeaderData, DbHeadersStore},
@@ -100,6 +100,9 @@ pub struct ConsensusStorage {
     pub evm_state_store: Arc<DbEvmStateStore>,
     pub evm_payload_store: Arc<DbEvmPayloadStore>,
     pub evm_heads_store: Arc<RwLock<DbEvmCanonicalHeadsStore>>,
+    /// ADR-0109 Decision 1: the node-local deposit-lock index (prefix 254) — what the template
+    /// claims unasked. Staged in `commit_virtual_state`, rebuilt from the virtual set on demand.
+    pub evm_deposit_lock_store: Arc<RwLock<DbEvmDepositLockStore>>,
     /// §16: receipts of each ACCEPTING chain block (prefix 203).
     pub evm_receipts_store: Arc<DbEvmReceiptsStore>,
     /// §16: tx-hash → locations lookup (prefix 204).
@@ -465,6 +468,8 @@ impl ConsensusStorage {
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
         ));
         let evm_heads_store = Arc::new(RwLock::new(DbEvmCanonicalHeadsStore::new(db.clone())));
+        let evm_deposit_lock_store =
+            Arc::new(RwLock::new(DbEvmDepositLockStore::new(db.clone(), PolicyBuilder::new().max_items(1024).untracked().build())));
         let evm_receipts_store = Arc::new(DbEvmReceiptsStore::new(
             db.clone(),
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
@@ -550,6 +555,7 @@ impl ConsensusStorage {
             evm_state_store,
             evm_payload_store,
             evm_heads_store,
+            evm_deposit_lock_store,
             evm_receipts_store,
             evm_tx_index_store,
             evm_block_hash_map_store,
