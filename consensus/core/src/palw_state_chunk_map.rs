@@ -301,13 +301,18 @@ pub fn palw_attn_history_bound_v1(profile: &PalwShapeProfileV3) -> usize {
 /// refused by the gate's own ladder wall.
 pub const PALW_HELD_STEP_LADDER_V1: u64 = crate::palw_bisect::PALW_BISECT_MAX_SPACE;
 
-/// **The step ladder of THIS class, given the network's** (ADR-0119 Decision 1): the regime's
-/// [`PALW_HELD_STEP_LADDER_V1`] for a class that registered a held map, the network's for every
-/// other. For the readers that hold the class's profile — the gate, the backends, the seats. The
-/// chain's own readers hold a claim and a state, and ask the state (`PalwChainStateV2::
-/// class_step_ladder_v1`), which recorded this answer when the class registered.
+/// **The step ladder of THIS class, given the network's** (ADR-0119 Decision 1): at least the
+/// regime's [`PALW_HELD_STEP_LADDER_V1`] for a class that registered a held map, the network's for
+/// every other. For the readers that hold the class's profile — the gate, the backends, the seats.
+/// The chain's own readers hold a claim and a state, and ask the state (`PalwChainStateV2::
+/// class_step_ladder_v1`), which recorded the regime's ladder when the class registered.
+///
+/// "At least", not "exactly", for one caller: the fit's order sweep prices a hypothetical row at a
+/// ladder deep enough to hold it, and a held class must not be priced shallower than that. Every
+/// network that can hold a held class has a ladder at or below the regime's (`Params::
+/// validate_palw_v2`), so for a real network the answer IS the regime's, as the state records.
 pub fn palw_class_step_ladder_v1(network_ladder: u64, profile: &PalwShapeProfileV3) -> u64 {
-    if palw_profile_is_held_v4(profile) { PALW_HELD_STEP_LADDER_V1 } else { network_ladder }
+    if palw_profile_is_held_v4(profile) { network_ladder.max(PALW_HELD_STEP_LADDER_V1) } else { network_ladder }
 }
 
 /// **The v4 geometry of the attention cache** — [`tiled_kv_state_geometry_v3`]'s arithmetic with

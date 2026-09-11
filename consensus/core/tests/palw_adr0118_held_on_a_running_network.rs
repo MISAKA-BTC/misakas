@@ -181,32 +181,30 @@ fn on_a_network_minted_flat_a_held_class_is_priced_at_its_own_merkle_form_and_ad
     gate_at(&params, &shipped, HELD_AT).unwrap_or_else(|e| panic!("the shipped row is admitted as before: {e}"));
 }
 
-/// **Pinned as the limitation it is: testnet-11's ladder and prompt cap are its genesis's.** The
-/// held map lifts the context ceiling; it does not lift the step ladder (`2^26`, frozen in the
-/// bundle because a bisection opened before the fence must still be playable inside the court
-/// window) or the advertised prompt cap (512). So on testnet-11 armed at a height the held dense
-/// row is admitted at 512, refused one doubling on, and a 2^21 row's canonical job is past the
-/// ladder before any wall is read — while the same 2^21 row IS admitted by the same gate once a
-/// held class's ladder is the regime's (here the bundle's court re-minted at `2^48`, which a live
-/// chain cannot do: that is ADR-0118 §7's open question). The day that moves, this test says so.
+/// **ADR-0119 lifts the limitation ADR-0118 pinned here: a held class's ladder is the regime's.**
+/// testnet-11's ladder stays the `2^26` its genesis froze — a bisection opened before the fence must
+/// stay playable inside the court window, and a bundle that took a deeper one is refused below — but
+/// a held class exists only past the fence, where no bisection opens, so it is walked, priced and
+/// recounted at the regime's `2^40`: the dense held row that ADR-0118 measured refused at 1,024 and
+/// at 2^21 is admitted at both. A row of the same geometry without the held map keeps the network's
+/// ladder, and before the fence none of them registers.
 #[test]
-fn what_the_regime_admits_on_testnet_11_is_bounded_by_its_frozen_ladder_and_prompt_cap() {
+fn a_held_class_on_testnet_11_is_admitted_to_2_21_at_its_own_ladder() {
     let params = t11_held_at(HELD_AT);
     let b = bundle(&params);
-    assert_eq!(b.court.max_step_leaf_count(), 1 << 26, "testnet-11's ladder, frozen at genesis");
-    assert_eq!(b.freeprompt.max_prompt_tokens(), 512, "and its advertised prompt cap");
-    gate_at(&params, &dense_v7(512), HELD_AT).expect("512 fits the frozen ladder");
-    assert!(gate_at(&params, &dense_v7(1024), HELD_AT).is_err(), "one doubling on, the whole context as prefill is past 2^26");
-    match gate_at(&params, &dense_v7(1 << 21), HELD_AT) {
-        Err(PalwClassAdmissionError::Profile(why)) => assert!(why.contains("67108864"), "{why}"),
-        other => panic!("a 2^21 row's canonical job is past the frozen ladder, got {other:?}"),
+    assert_eq!(b.court.max_step_leaf_count(), 1 << 26, "testnet-11's ladder, frozen at genesis, is unchanged");
+    for n_ctx in [512u32, 1_024, 32_768, 1 << 21] {
+        gate_at(&params, &dense_v7(n_ctx), HELD_AT).unwrap_or_else(|e| panic!("the held row at {n_ctx} is admitted: {e}"));
     }
+    assert_eq!(gate_at(&params, &dense_v7(1 << 21), HELD_AT - 1), Err(PalwClassAdmissionError::HeldMapNeedsItsFence));
+    let shipped_wide = palw_a16_context_row_profile_v5(1_024).expect("graph-v5 at 1,024");
+    assert!(gate_at(&params, &shipped_wide, HELD_AT).is_err(), "a row without the held map keeps the network's 2^26");
 
     let mut deep = params.clone();
     let PalwConsensusMode::ConsensusV2(deep_bundle) = &mut deep.palw_consensus_mode else { unreachable!() };
     let court = deep_bundle.court;
     deep_bundle.court = PalwCourtParamsV2::with_cost_ceilings(
-        1 << 48,
+        kaspa_consensus_core::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1,
         court.turn_deadline_daa(),
         court.terminal_rounds(),
         court.max_close_bytes(),
@@ -215,8 +213,7 @@ fn what_the_regime_admits_on_testnet_11_is_bounded_by_its_frozen_ladder_and_prom
     )
     .and_then(|c| c.with_dissection_arity(court.dissection_arity()))
     .expect("a legal court");
-    gate_at(&deep, &dense_v7(1 << 21), HELD_AT).unwrap_or_else(|e| panic!("at the regime's ladder the 2^21 row is admitted: {e}"));
-    let err = format!("{:?}", deep.validate_palw_v2().expect_err("a live chain's bundle cannot take that ladder"));
+    let err = format!("{:?}", deep.validate_palw_v2().expect_err("a live chain's bundle cannot take the regime's ladder"));
     assert!(err.contains("window_court"), "{err}");
 }
 

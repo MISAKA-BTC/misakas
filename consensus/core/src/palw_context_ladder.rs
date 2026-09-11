@@ -1165,6 +1165,11 @@ pub fn palw_class_ladder_rules_for_court_v1(
     if !palw_long_form_is_refused_v1(profile) {
         return None;
     }
+    // **The CLASS's ladder, given the network's** (ADR-0119 Decision 3): a held class is walked,
+    // priced and recounted at the regime's `2^40`, the ladder its court opens against, whatever
+    // the network froze for its bisections; every other class at the network's, as before. Here,
+    // at the one door every gate, fit and deadline reads its rules through.
+    let ladder = crate::palw_state_chunk_map::palw_class_step_ladder_v1(ladder, profile);
     debug_assert!(
         !matches!(
             profile.state_chunk_map_id,

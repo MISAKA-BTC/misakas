@@ -1985,7 +1985,10 @@ pub fn verify_class_admission_v8(
     // admitting the class the ruleset describes and admitting the one the old executor could
     // reach. ADR-0080 W1b made the executor read the field; this is the same correction on the
     // admission side, and after it the constant bounds nothing here.
-    let bundle_ladder = bundle.court.max_step_leaf_count();
+    // **The CLASS's ladder** (ADR-0119 Decision 3): the regime's `2^40` for a held class — which
+    // exists only past the held fence, where no bisection of the whole step space is played, so the
+    // clock that froze the network's ladder never binds it — and the network's for every other.
+    let bundle_ladder = crate::palw_state_chunk_map::palw_class_step_ladder_v1(bundle.court.max_step_leaf_count(), profile);
     let worst = match match ladder {
         Some(rules) => crate::palw_step::worst_case_step_leaf_count_capped_v1(profile, rules.ladder),
         None => crate::palw_step::worst_case_step_leaf_count_capped_v1(profile, bundle_ladder),
@@ -2252,6 +2255,9 @@ pub fn palw_post_genesis_registration_capped_v1(
     ladder: u64,
 ) -> Result<PalwConsensusObjectV2, PalwClassAdmissionError> {
     let class_id = profile.shape_profile_id();
+    // ADR-0119 Decision 3: counted against the CLASS's ladder — a held class's is the regime's —
+    // which is the ladder the gate recounts against.
+    let ladder = crate::palw_state_chunk_map::palw_class_step_ladder_v1(ladder, &profile);
     // Counted here, from the same canonical job the carriage carries, so the object the gate reads
     // and the number it recounts come from one value. A caller that computed the count separately
     // could hand the gate two statements about one class.

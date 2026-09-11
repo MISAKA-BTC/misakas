@@ -165,7 +165,7 @@ fn section_1_1_is_what_the_shipped_presets_read() {
 /// retention and the fetch — while the seat's replay is `P`.
 #[test]
 fn under_the_fence_the_dense_rows_chain_walls_are_constant_or_logarithmic_to_2m() {
-    let params = held_network(1 << 48);
+    let params = held_network(1 << 40);
     let widths = [512u32, 32_768, 1 << 21];
     let reports: Vec<PalwModelFitReportV1> =
         widths.iter().map(|&n| fit(&params, &dense_v7(n), PalwFitRegimeV1::Held { panel_da: true })).collect();
@@ -193,7 +193,8 @@ fn under_the_fence_the_dense_rows_chain_walls_are_constant_or_logarithmic_to_2m(
     assert_eq!(at_2m.row(PalwFitWallV1::CourtWindow).unwrap().need, moves * court.turn_deadline_daa() + reserve);
     assert_eq!(moves * court.turn_deadline_daa() + reserve, 1_770, "ADR-0103 Decision 5's table, arity 2");
     assert!(1_770 < bundle(&params).state.window_court(), "the RC's own window holds a 2M dissection");
-    // The ladder is a depth: 38 levels at 2M, inside the 48 it was minted at.
+    // The ladder is a depth: 38 levels at 2M, inside the regime's 40 (ADR-0119 Decision 1; ADR-0103 D1
+    // minted at 2^48, which no dissection could open).
     assert_eq!(at_2m.row(PalwFitWallV1::Ladder).unwrap().need, 38);
 }
 
@@ -206,7 +207,7 @@ fn under_the_fence_the_dense_rows_chain_walls_are_constant_or_logarithmic_to_2m(
 /// close here before.
 #[test]
 fn the_gate_admits_a_held_class_the_shipped_ceiling_refuses_and_names_what_is_missing() {
-    let params = held_network(1 << 48);
+    let params = held_network(1 << 40);
     let profile = dense_v7(1 << 21);
     assert_eq!(
         palw_geometry_ceiling_fit_v1(1 << 21, profile.layer_count).verdict,
@@ -244,7 +245,7 @@ fn the_gate_admits_a_held_class_the_shipped_ceiling_refuses_and_names_what_is_mi
 /// bound in a producer, a seat or a court.
 #[test]
 fn a_held_context_past_the_attention_history_bound_is_refused_by_name() {
-    let params = held_network(1 << 48);
+    let params = held_network(1 << 40);
     let at = dense_v7(1 << 21);
     let shape = palw_admission_shape_at_v1(&params, bundle(&params), &at, EVER).expect("a shape");
     gate(&params, &at, shape).unwrap_or_else(|e| panic!("2^21 is the bound itself: {e}"));
@@ -265,7 +266,7 @@ fn a_held_context_past_the_attention_history_bound_is_refused_by_name() {
 /// its context moved.
 #[test]
 fn the_registration_gate_visits_the_same_nodes_at_every_context() {
-    let params = held_network(1 << 48);
+    let params = held_network(1 << 40);
     for n_ctx in [16u32, 1 << 21] {
         let profile = dense_v7(n_ctx);
         let shape = palw_admission_shape_at_v1(&params, bundle(&params), &profile, EVER).expect("a shape");
@@ -294,12 +295,12 @@ fn a_ladder_past_the_clock_needs_the_regime_from_genesis() {
         p.validate_palw_v2().expect("the held mint at the shipped prompt cap");
         p
     };
-    let mut late = held_network(1 << 48);
+    let mut late = held_network(1 << 40);
     late.palw_held_context = Some(ForkActivation::new(1_000));
     let err = format!("{:?}", late.validate_palw_v2().expect_err("a later fence leaves a bisection unplayable before it"));
     assert!(err.contains("palw_held_context is not armed from genesis") || err.contains("window_court"), "{err}");
 
-    let mut v3 = held_network(1 << 48);
+    let mut v3 = held_network(1 << 40);
     let PalwConsensusMode::ConsensusV2(b) = &mut v3.palw_consensus_mode else { unreachable!() };
     b.signature_contexts_root = kaspa_consensus_core::palw_mode_v2::palw_v2_signature_contexts_root_v3();
     v3.palw_held_context = None;
@@ -318,7 +319,7 @@ fn a_ladder_past_the_clock_needs_the_regime_from_genesis() {
 /// is refused, as is one on a bundle that does not commit to the held contexts.
 #[test]
 fn the_prompt_cap_passes_the_frame_only_on_a_held_mint() {
-    let held = held_network(1 << 48);
+    let held = held_network(1 << 40);
     let cap = bundle(&held).freeprompt.max_prompt_tokens();
     assert_eq!(cap, kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_HELD_MAX_PROMPT_TOKENS_V1);
     assert!(cap > 1 << 21, "a 2M prompt is under the held mint's cap");
@@ -425,7 +426,7 @@ fn the_held_devnet_mint_assembles_from_the_floor_only_devnet() {
 #[test]
 fn the_held_mint_moves_no_economics() {
     let base = palw_rc_shipped_params();
-    let held = held_network(1 << 48);
+    let held = held_network(1 << 40);
     let (b, h) = (bundle(&base), bundle(&held));
     assert_eq!(b.state, h.state, "windows, quanta sources, collateral floor: the base's");
     assert_eq!(b.bond, h.bond, "the bond parameters: the base's");

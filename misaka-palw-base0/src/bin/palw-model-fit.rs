@@ -166,7 +166,8 @@ impl Ruleset {
 fn args() -> Ruleset {
     let mut preset = "rc".to_string();
     let mut daa = u64::MAX - 1;
-    let mut ladder_bits = 48u32;
+    // The regime's own ladder (ADR-0119 Decision 1): the held mint refuses a deeper one.
+    let mut ladder_bits = 40u32;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {

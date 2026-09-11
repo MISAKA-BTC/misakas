@@ -648,7 +648,11 @@ fn palw_fit_at_v1(
         .unwrap_or(bundle.court),
         None => bundle.court,
     };
-    let ladder = base_court.max_step_leaf_count();
+    // ADR-0119 Decision 3: the CLASS's ladder — the regime's `2^40` for a held class — or the
+    // deeper ladder a doubling of the order sweep is priced under (a hypothetical row, read only for
+    // how a wall grows), whichever is deeper, so the sweep never prices a wider row shallower.
+    let ladder = crate::palw_state_chunk_map::palw_class_step_ladder_v1(bundle.court.max_step_leaf_count(), profile)
+        .max(base_court.max_step_leaf_count());
     let fused = palw_profile_has_fused_attention_v1(profile);
     let window_court = bundle.state.window_court();
     // The CLASS's rules (the held map's walls) and the NETWORK's clock (no bisection, the pin at

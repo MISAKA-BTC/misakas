@@ -2486,6 +2486,17 @@ impl Params {
                      set: the checkpoint court and the held DA court sign under contexts only V4 commits to (ADR-0103)",
                 ));
             }
+            // **ADR-0119 Decision 1: no deeper than the regime's own ladder.** Under the regime every
+            // fused leaf of every class is tried by a dissection whose session is a bisection ladder
+            // over the claim's ladder, and no bisection ladder opens past `2^40`; a held class's is
+            // exactly that, and a network ladder past it would leave every other fused class's
+            // dissection unopenable.
+            if bundle.court.max_step_leaf_count() > crate::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1 {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_held_context is armed over a court ladder past 2^40: a dissection's session is a bisection ladder over \
+                     the claim's ladder, and no bisection ladder opens past that (ADR-0119 Decision 1)",
+                ));
+            }
             let by_then = |fence: Option<ForkActivation>| {
                 fence.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= activation.daa_score())
             };
@@ -10681,6 +10692,16 @@ fn palw_rc_arm_phase1(mut params: Params) -> Params {
 /// Not a preset and never a default: nothing ships it, and every shipped fingerprint is unmoved by
 /// its existence (the fence stays `None` on every preset).
 pub fn palw_held_context_mint_v1(mut params: Params, ladder: u64) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
+    // **ADR-0119 Decision 1: no deeper than the regime's own ladder.** Under the regime every fused
+    // leaf of every class is tried by a dissection whose session is a bisection ladder over the
+    // claim's ladder, and a bisection ladder refuses a space past `2^40` — so a network ladder past
+    // it minted a court that could not open for any fused class. (ADR-0103 D1's `2^48` example.)
+    if ladder > crate::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1 {
+        return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
+            "the held regime's ladder is at most 2^40: a dissection's session is a bisection ladder over the claim's ladder, \
+             and no bisection ladder opens past that (ADR-0119 Decision 1)",
+        ));
+    }
     let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut params.palw_consensus_mode else {
         return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
             "the held regime is a ConsensusV2 ruleset; this base carries no V2 bundle",
