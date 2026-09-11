@@ -2,7 +2,7 @@ use clap::{Arg, ArgAction, Command, arg};
 use kaspa_consensus_core::config::trusted_checkpoint::TrustedCheckpoint;
 use kaspa_consensus_core::{
     config::Config,
-    evm::EvmHistoryMode,
+    evm::{EvmBridgeFinalityPolicy, EvmHistoryMode},
     network::{NetworkId, NetworkType},
 };
 use kaspa_core::kaspad_env::version;
@@ -130,8 +130,12 @@ pub struct Args {
     /// which keeps no §12 history for the pruning-point export / historical reads).
     #[serde(default)]
     pub evm_retire_206: bool,
-    /// PRIVATE devnets only: waive the EVM bridge's DNS-finality freshness gate (see `Config`).
+    /// The devnet spelling of `--evm-bridge-finality=label` (see `Config`); kept for scripts.
     pub evm_bridge_devnet_unpaused: bool,
+    /// ADR-0109 Decision 2: `label` (default) or `pause` — what a stale DNS-finality anchor does to
+    /// the EVM lane on this node (see `Config::evm_bridge_finality`).
+    #[serde(default)]
+    pub evm_bridge_finality: EvmBridgeFinalityPolicy,
     /// C-01 S9b-prune: ONE-SHOT, IRREVERSIBLE bulk reclamation of the legacy per-block 206 EVM state
     /// snapshot store that accumulated before `--evm-retire-206`. Runs once at startup, then a no-op.
     /// Effective only when `--evm-retire-206` is itself effective (requires `--evm-flat-authoritative`
@@ -462,6 +466,7 @@ impl Default for Args {
             evm_flat_authoritative: false,
             evm_retire_206: false,
             evm_bridge_devnet_unpaused: false,
+            evm_bridge_finality: EvmBridgeFinalityPolicy::Label,
             evm_prune_legacy_206: false,
             evm_materialize_pp_anchor: false,
             wrpc_verbose: false,
@@ -521,16 +526,12 @@ impl Args {
         config.evm_shadow_state_backend = self.evm_shadow_state_backend; // C-01 S4: shadow dual-write
         config.evm_flat_authoritative = self.evm_flat_authoritative; // C-01 S9: flat-authoritative executor seed
         config.evm_retire_206 = self.evm_retire_206; // C-01 S9b: stop persisting the per-block 206 snapshot
-        // The EVM bridge's DNS-finality gate is a public-network safety: a deposit is credited only
-        // behind confirmed finality. A private devnet with no VLT overlay never confirms one, so a
-        // drill of the lane must waive it — and only there; anywhere else the node refuses to start.
+        // ADR-0109 Decision 2: finality is a label, not a pause. `--evm-bridge-finality=label` (the
+        // default) includes deposit claims and EVM transactions whatever the DNS anchor's distance —
+        // a reader asks the eth RPC for `safe` when it wants the confirmed state; `pause` keeps the
+        // gate this node had before ADR-0109. The devnet spelling of `label` is kept for scripts.
+        config.evm_bridge_finality = self.evm_bridge_finality;
         if self.evm_bridge_devnet_unpaused {
-            let net = self.network().network_type();
-            if !matches!(net, NetworkType::Devnet | NetworkType::Simnet) {
-                panic!(
-                    "--evm-bridge-devnet-unpaused is devnet/simnet only (got {net:?}): the bridge's finality gate is not a node operator's to waive on a public network."
-                );
-            }
             config.evm_bridge_devnet_unpaused = true;
         }
         config.evm_prune_legacy_206 = self.evm_prune_legacy_206; // C-01 S9b-prune: one-shot bulk reclamation of legacy 206
@@ -1369,10 +1370,20 @@ pub fn cli() -> Command {
                 .env("KASPAD_PALW_DEVNET_FLOOR_ONLY"),
         )
         .arg(
-            arg!(--"evm-bridge-devnet-unpaused" "MISAKA EVM lane on a PRIVATE devnet: waive the bridge's DNS-finality freshness gate so deposit \
-                 claims queue and the template carries the EVM payload without a VLT overlay confirming an anchor. \
-                 DEVNET/SIMNET ONLY; on a public network the node refuses to start.")
+            arg!(--"evm-bridge-devnet-unpaused" "The devnet spelling of --evm-bridge-finality=label (ADR-0109), kept for scripts: the EVM \
+                 payload and the deposit-claim RPC do not wait for a fresh DNS-finality anchor.")
                 .env("KASPAD_EVM_BRIDGE_DEVNET_UNPAUSED"),
+        )
+        .arg(
+            Arg::new("evm-bridge-finality")
+                .long("evm-bridge-finality")
+                .env("KASPAD_EVM_BRIDGE_FINALITY")
+                .value_name("POLICY")
+                .value_parser(["label", "pause"])
+                .help("ADR-0109: what a stale DNS-finality anchor does to the EVM lane on this node. label (default): deposit claims, \
+                       EVM transactions and the EVM coinbase are included whatever the anchor's distance, and eth_* readers ask for the \
+                       `safe` tag (the DNS-confirmed anchor) when they want confirmed state. pause: the behaviour before ADR-0109 — an \
+                       empty EVM payload and a refused claim RPC while the anchor is unconfirmed or stale."),
         )
         .arg(arg!(--utxoindex "Enable the UTXO index").env("KASPAD_UTXOINDEX"))
         .arg(
@@ -1589,6 +1600,10 @@ impl Args {
                 "evm-bridge-devnet-unpaused",
                 defaults.evm_bridge_devnet_unpaused,
             ),
+            evm_bridge_finality: m
+                .get_one::<String>("evm-bridge-finality")
+                .and_then(|s| EvmBridgeFinalityPolicy::from_str_opt(s))
+                .unwrap_or(defaults.evm_bridge_finality),
             evm_prune_legacy_206: arg_match_unwrap_or::<bool>(&m, "evm-prune-legacy-206", defaults.evm_prune_legacy_206),
             evm_materialize_pp_anchor: arg_match_unwrap_or::<bool>(
                 &m,
