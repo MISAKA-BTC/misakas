@@ -3049,11 +3049,18 @@ pub struct GetPalwModelMarketResponse {
     /// ADR-0091: the positions the reward's buys retired — the chain's, for good; no holder has
     /// them, and `position_units + Σ holders + retired_units = supply_units`.
     pub retired_units: u64,
+    /// ADR-0114: the schedule a move is quoted under at this node's virtual DAA — what the MSK leg
+    /// burns and what it pays the line's owner, in permille. A version-5 peer served none; it quoted
+    /// under ADR-0087 Decision 4's 50/10, which is what those peers' fold does.
+    pub burn_permille: u64,
+    pub leg_permille: u64,
+    /// ADR-0114: the DAA the five-percent leg takes effect at on this network (0 = not scheduled).
+    pub leg_v2_activation_daa: u64,
 }
 
 impl Serializer for GetPalwModelMarketResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &5, writer)?;
+        store!(u16, &6, writer)?;
         store!(bool, &self.found, writer)?;
         store!(String, &self.line_id, writer)?;
         store!(bool, &self.opened, writer)?;
@@ -3078,6 +3085,10 @@ impl Serializer for GetPalwModelMarketResponse {
         store!(u64, &self.retired_units, writer)?;
         // Version 5 (ADR-0094): the instalments collected toward the floor.
         store!(u64, &self.seed_pledged_sompi, writer)?;
+        // Version 6 (ADR-0114): the fee schedule in force, and the height the owner's leg moves at.
+        store!(u64, &self.burn_permille, writer)?;
+        store!(u64, &self.leg_permille, writer)?;
+        store!(u64, &self.leg_v2_activation_daa, writer)?;
         Ok(())
     }
 }
@@ -3109,6 +3120,13 @@ impl Deserializer for GetPalwModelMarketResponse {
         // Version 5 (ADR-0094): a peer older than this served no pledge, and on such a peer a
         // market that exists has always been fully seeded — so its opened seed IS the total.
         let seed_pledged_sompi = if version >= 5 { load!(u64, reader)? } else { seed_sompi };
+        // Version 6 (ADR-0114): an older peer's fold splits every move 50/10 and schedules nothing.
+        let (burn_permille, leg_permille, leg_v2_activation_daa) = if version >= 6 {
+            (load!(u64, reader)?, load!(u64, reader)?, load!(u64, reader)?)
+        } else {
+            let v1 = kaspa_consensus_core::palw_model_market_v1::PalwModelFeesV1::V1;
+            (v1.burn_permille, v1.leg_permille, 0)
+        };
         Ok(Self {
             found,
             line_id,
@@ -3131,6 +3149,9 @@ impl Deserializer for GetPalwModelMarketResponse {
             buyback_sompi,
             retired_units,
             seed_pledged_sompi,
+            burn_permille,
+            leg_permille,
+            leg_v2_activation_daa,
         })
     }
 }

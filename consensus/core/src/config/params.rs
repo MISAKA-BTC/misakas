@@ -1199,6 +1199,13 @@ pub struct Params {
     /// would move the root under a running network. It is a consensus change and gets an
     /// activation of its own, like every other one.
     pub palw_model_benefits: Option<ForkActivation>,
+    /// **ADR-0114 — the owner's leg becomes five percent, by activation.** `None` on every shipped
+    /// preset: below it every join and leave is split 5 % burned / 1 % to the line's owner (ADR-0087
+    /// Decision 4), past it 5 % / 5 % (`PalwModelFeesV1::V2`). It changes what the fold writes into
+    /// the market rows and the owner's payouts, so it is a consensus change on a live chain and
+    /// arrives at a height — a node on a build without it forks off there. Meaningless without the
+    /// market, so it is read through `palw_model_leg_v2_fence` only, which folds that in.
+    pub palw_model_leg_v2: Option<ForkActivation>,
     /// **ADR-0089 Decision 9 — the market's EVM face is a consensus rule armed by activation.**
     /// `None` on every shipped preset: below it the four system addresses and the facades are
     /// empty accounts, the writer accepts nothing and the transition takes an empty action list;
@@ -2830,6 +2837,10 @@ impl Params {
         if self.palw_model_benefits == Some(ForkActivation::never()) {
             self.palw_model_benefits = None;
         }
+        // ADR-0114, a bare fence: the same collapse.
+        if self.palw_model_leg_v2 == Some(ForkActivation::never()) {
+            self.palw_model_leg_v2 = None;
+        }
         if self.palw_model_lines == Some(ForkActivation::never()) {
             self.palw_model_lines = None;
         }
@@ -3163,6 +3174,26 @@ impl Params {
         matches!(self.palw_model_benefits_fence(), Some(fence) if fence.is_active(daa_score))
     }
 
+    /// ADR-0114's fence with the market dependency folded in: a fee schedule for a market that does
+    /// not exist is meaningless, so this is `Some` only where the market is armed too — the ONE
+    /// place ADR-0114 is decided.
+    pub fn palw_model_leg_v2_fence(&self) -> Option<ForkActivation> {
+        match (self.palw_model_market_fence(), self.palw_model_leg_v2) {
+            (Some(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    /// Is ADR-0114's five-percent leg in force at `daa_score`? `false` on every shipped preset.
+    pub fn palw_model_leg_v2_active_at(&self, daa_score: u64) -> bool {
+        matches!(self.palw_model_leg_v2_fence(), Some(fence) if fence.is_active(daa_score))
+    }
+
+    /// The fee schedule a move at `daa_score` is quoted under (ADR-0114).
+    pub fn palw_model_fees_at(&self, daa_score: u64) -> crate::palw_model_market_v1::PalwModelFeesV1 {
+        crate::palw_model_market_v1::PalwModelFeesV1::at(self.palw_model_leg_v2_active_at(daa_score))
+    }
+
     /// Is ADR-0088's model registry in force at `daa_score`? `false` on every shipped preset.
     pub fn palw_model_lines_active_at(&self, daa_score: u64) -> bool {
         matches!(self.palw_model_lines_fence(), Some(fence) if fence.is_active(daa_score))
@@ -3188,6 +3219,7 @@ impl Params {
             market_active: self.palw_model_market_active_at(daa_score),
             lines_active: self.palw_model_lines_active_at(daa_score),
             evm_active: self.palw_model_evm_active_at(daa_score),
+            leg_v2_active: self.palw_model_leg_v2_active_at(daa_score),
         }
     }
 
@@ -3358,6 +3390,7 @@ impl Params {
             palw_model_market,
             palw_model_lines,
             palw_model_benefits,
+            palw_model_leg_v2,
             palw_model_evm,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
@@ -3406,6 +3439,7 @@ impl Params {
             ("palw_model_market", *palw_model_market),
             ("palw_model_lines", *palw_model_lines),
             ("palw_model_benefits", *palw_model_benefits),
+            ("palw_model_leg_v2", *palw_model_leg_v2),
             ("palw_model_evm", *palw_model_evm),
             ("palw_chunk_cap_charge", *palw_chunk_cap_charge),
             ("palw_prompt_ids_merkle", *palw_prompt_ids_merkle),
@@ -3712,6 +3746,7 @@ impl Params {
             palw_model_market,
             palw_model_lines,
             palw_model_benefits,
+            palw_model_leg_v2,
             palw_model_evm,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
@@ -3902,6 +3937,14 @@ impl Params {
         }
         // ADR-0095 §4.11 as corrected. A pure fence with no payload, the same shape.
         match palw_model_benefits.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // ADR-0114. A pure fence, the same shape.
+        match palw_model_leg_v2.as_mut() {
             Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
@@ -4248,6 +4291,7 @@ impl Params {
             palw_model_market,
             palw_model_lines,
             palw_model_benefits,
+            palw_model_leg_v2,
             palw_model_evm,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
@@ -4519,6 +4563,11 @@ impl Params {
         // to `None`, which writes nothing, exactly as before this line existed.
         if let Some(activation) = palw_model_benefits {
             h.write(b"palw_model_benefits");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0114: Some-only, so every preset that does not schedule it fingerprints as before.
+        if let Some(activation) = palw_model_leg_v2 {
+            h.write(b"palw_model_leg_v2");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0089 Decision 9: the same contract.
@@ -4921,6 +4970,7 @@ impl Params {
             palw_model_market: self.palw_model_market,
             palw_model_lines: self.palw_model_lines,
             palw_model_benefits: self.palw_model_benefits,
+            palw_model_leg_v2: self.palw_model_leg_v2,
             palw_model_evm: self.palw_model_evm,
             palw_chunk_cap_charge: self.palw_chunk_cap_charge,
             palw_prompt_ids_merkle: self.palw_prompt_ids_merkle,
@@ -5875,6 +5925,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_model_market: None,
     palw_model_lines: None,
     palw_model_benefits: None,
+    palw_model_leg_v2: None,
     palw_model_evm: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
@@ -6042,6 +6093,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_model_market: None,
     palw_model_lines: None,
     palw_model_benefits: None,
+    palw_model_leg_v2: None,
     palw_model_evm: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
@@ -6191,6 +6243,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_model_market: None,
     palw_model_lines: None,
     palw_model_benefits: None,
+    palw_model_leg_v2: None,
     palw_model_evm: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
@@ -10392,6 +10445,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_model_market: None,
     palw_model_lines: None,
     palw_model_benefits: None,
+    palw_model_leg_v2: None,
     palw_model_evm: None,
     palw_chunk_cap_charge: None,
     // ADR-0082 Decision 5: NOT armed. At the registered 512 row the flat prompt ids are 82,080
@@ -13025,6 +13079,8 @@ mod consensus_params_id_tests {
                 market_active: bits & 1 != 0,
                 lines_active: bits & 2 != 0,
                 evm_active: bits & 4 != 0,
+                // ADR-0114 moves what a quote says, never whether a window exists.
+                leg_v2_active: bits & 1 != 0,
             };
             assert_eq!(f.any_active(), bits != 0, "one window iff some fence is in force");
         }

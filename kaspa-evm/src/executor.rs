@@ -1654,7 +1654,7 @@ mod tests {
     ) -> EvmMarketInput<'a> {
         EvmMarketInput {
             palw_view: Some(view.clone()),
-            fences: PalwEvmMarketFencesV1 { market_active: true, lines_active: true, evm_active },
+            fences: PalwEvmMarketFencesV1 { market_active: true, lines_active: true, evm_active, leg_v2_active: false },
             expected_settlements: expected,
             chain_id: EVM_CHAIN_ID,
         }
