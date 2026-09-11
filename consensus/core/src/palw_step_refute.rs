@@ -6439,7 +6439,17 @@ pub(crate) mod tests {
         };
         let bare_bytes = crate::palw_shard_court_v1::palw_shard_court_accusation_bytes_v1(&accusation(None));
         let tile_bytes = borsh::to_vec(&tile).expect("borsh").len() as u64;
-        assert_eq!(crate::palw_shard_court_v1::palw_shard_court_accusation_bytes_v1(&accusation(Some(tile))), bare_bytes + tile_bytes);
+        assert_eq!(
+            crate::palw_shard_court_v1::palw_shard_court_accusation_bytes_v1(&accusation(Some(tile.clone()))),
+            bare_bytes + tile_bytes
+        );
+        // The wire order, pinned at the tail a round trip cannot see reordered: the tile rides after
+        // the artifact openings and before the signature.
+        let mut signed = accusation(Some(tile.clone()));
+        signed.signature = vec![0xA5; 3];
+        let wire = borsh::to_vec(&signed).expect("borsh");
+        let tail = [borsh::to_vec(&Some(tile)).expect("borsh"), borsh::to_vec(&signed.signature).expect("borsh")].concat();
+        assert!(wire.ends_with(&tail), "… artifact_openings, prompt_ids_opening, signature");
     }
 
     /// **G5c: the KV sentinels resolve to the cache-role nodes over the position history.**
