@@ -30,7 +30,7 @@
 //! 1. `check_opening_request_shape` — the two length comparisons, before anything is read;
 //! 2. `PalwGossipCenter::authorize_serve` — the per-peer rate, then the ML-DSA-87 signature and
 //!    the chain's bond lookup off the runtime, then the per-bond rate. It refuses with
-//!    `PalwServeRefusalV1::NotBonded` when no authorizer is registered, which is the fail-closed
+//!    `PalwServeRefusalV1::NotServing` when no authorizer is registered, which is the fail-closed
 //!    default an amplifier would otherwise enjoy;
 //! 3. a byte allowance reserved BEFORE the read, and a size ceiling on what comes back —
 //!    `PALW_FP_DSL_V1_MAX_BYTES` is the DSL's own, already enforced by `palw_fp_dsl_decode_v1`.
@@ -134,11 +134,13 @@ fn the_opening_gate_sa4_delegates_to_still_exists_and_refuses_without_an_authori
     ] {
         assert!(gossip.contains(needle), "ADR-0077 SA-2's gate lost `{needle}`, and ADR-0078 SA-4 delegates to it");
     }
-    // The fail-closed default, as text: no authorizer means refuse, never serve everyone.
+    // The fail-closed default, as text: no authorizer means refuse, never serve everyone. The
+    // refusal's NAME changed (a node with no authorizer never looked the requester up, so it says
+    // `NotServing` rather than blaming the requester's bond); the refusal did not.
     let authorize = gossip.split("pub async fn authorize_serve").nth(1).expect("authorize_serve still exists");
     let body = &authorize[..authorize.len().min(1200)];
     assert!(
-        body.contains("else { return Err(PalwServeRefusalV1::NotBonded) }"),
+        body.contains("else { return Err(PalwServeRefusalV1::NotServing) }"),
         "ADR-0077 SA-2 / ADR-0078 SA-4: a node with no authorizer must refuse, not serve everyone — that default is \
          the amplifier the rule exists to close"
     );

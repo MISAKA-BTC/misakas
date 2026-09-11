@@ -906,6 +906,13 @@ pub enum PalwServeRefusalV1 {
     /// The key verifies but the chain maps it to no bond that may ask: not a seat of this claim's
     /// panel and not an Active bond.
     NotBonded,
+    /// **This node registered no serving side at all** — it runs no panel (`--palw-panel`), so it
+    /// holds nothing to verify a requester with and nothing to open. A fact about THIS node, not
+    /// about the requester: it used to be reported as `NotBonded`, and since a seat broadcasts
+    /// every interval request to every peer, each node without a panel logged a stream of
+    /// "not-bonded" lines about bonds that were in fact bonded — which an operator reads as "my
+    /// bond is missing". Still fail-closed: nothing is served.
+    NotServing,
     /// The signature is outside [`OPENING_REQUEST_FRESHNESS_DAA`] of the server's own view.
     Stale,
     /// This bond has spent its per-window request allowance.
@@ -937,6 +944,7 @@ impl PalwServeRefusalV1 {
             Self::Malformed => "malformed",
             Self::BadSignature => "bad-signature",
             Self::NotBonded => "not-bonded",
+            Self::NotServing => "not-serving",
             Self::Stale => "stale",
             Self::RateLimited => "rate-limited",
             Self::Throttled => "throttled",
@@ -1113,12 +1121,14 @@ impl PalwGossipCenter {
     /// a request that stops block relay.
     ///
     /// A node with no authorizer refuses everything rather than serving everyone: a fail-open
-    /// default here would be the amplifier SA-2 exists to close.
+    /// default here would be the amplifier SA-2 exists to close. It refuses as `NotServing` — the
+    /// requester was never looked at, so naming the requester's bond would be a claim this node
+    /// did not check.
     pub async fn authorize_serve(&self, peer: PeerKey, request: &PalwOpeningRequestV1<'_>) -> Result<Hash64, PalwServeRefusalV1> {
         check_opening_request_shape(request)?;
         self.charge_opening_peer_rate(peer)?;
         let authorizer = { self.openings.authorizer.lock().unwrap().clone() };
-        let Some(authorizer) = authorizer else { return Err(PalwServeRefusalV1::NotBonded) };
+        let Some(authorizer) = authorizer else { return Err(PalwServeRefusalV1::NotServing) };
         let (claim, interval_index, requested_daa) = (request.claim, request.interval_index, request.requested_daa);
         let (pubkey, signature) = (request.requester_pubkey.to_vec(), request.signature.to_vec());
         let verified = tokio::task::spawn_blocking(move || {
@@ -1963,6 +1973,12 @@ mod tests {
 
     /// **A node with no authorizer refuses every opening request** — it has no capture to open
     /// either, so this is the honest silence of a node with no PALW role and not a policy.
+    ///
+    /// **And it refuses as `NotServing`, never as `NotBonded`.** It never looked the requester up,
+    /// so "not bonded" was a statement about the requester this node had not checked — and since
+    /// seats broadcast every request to every peer, it was the line every node without a panel
+    /// printed about every free-prompt claim on the network, read by outside operators as "my bond
+    /// is missing". The same bonded requester, once an authorizer exists, is authorized.
     #[tokio::test]
     async fn a_node_that_serves_nothing_authorizes_nobody() {
         let center = PalwGossipCenter::default();
@@ -1970,7 +1986,12 @@ mod tests {
         let claim = h64(103);
         let (key, sig) = signed_request();
         let req = PalwOpeningRequestV1 { claim, interval_index: Some(0), requested_daa: 5, requester_pubkey: &key, signature: &sig };
-        assert_eq!(center.resolve_interval_opening_for_serve(peer(1), &req).await, Err(PalwServeRefusalV1::NotBonded));
+        assert_eq!(center.resolve_interval_opening_for_serve(peer(1), &req).await, Err(PalwServeRefusalV1::NotServing));
+        assert_eq!(center.authorize_serve(peer(1), &req).await, Err(PalwServeRefusalV1::NotServing));
+        assert_eq!(PalwServeRefusalV1::NotServing.name(), "not-serving");
+
+        center.set_opening_authorizer(one_bond_authorizer(key.clone(), h64(0xB2)));
+        assert_eq!(center.authorize_serve(peer(2), &req).await, Ok(h64(0xB2)), "the requester was bonded all along");
     }
 
     /// **An opening serve is authenticated, throttled and budgeted, in that order** (ADR-0077

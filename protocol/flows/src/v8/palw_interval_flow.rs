@@ -25,6 +25,10 @@ use std::sync::Arc;
 
 use crate::palw_gossip::{PalwOpeningRequestV1, PalwServeRefusalV1};
 
+/// Whether this process has already explained a `NotServing` refusal at info level. Per process,
+/// not per peer: the explanation is about this node, and it is the same sentence every time.
+static NOT_SERVING_EXPLAINED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub struct PalwIntervalFlow {
     ctx: FlowContext,
     router: Arc<Router>,
@@ -86,6 +90,31 @@ impl PalwIntervalFlow {
                         // stays quiet; every other refusal is the operator's to read.
                         Err(PalwServeRefusalV1::Throttled) => {
                             debug!("[palw-interval] throttled a re-ask for claim {claim} interval {}", inner.interval_index)
+                        }
+                        // **The ordinary state of a node with no panel, said once.** Seats
+                        // broadcast every request to every peer, so a node that runs no panel is
+                        // asked about every free-prompt claim on the network and can answer none.
+                        // Logged per request, that was a steady stream of lines naming the
+                        // requester as unbonded (the old spelling of this refusal), which outside
+                        // operators read as a fault in their own bond. The one case where it IS a
+                        // fault — this node executed the claim and runs no panel, so its own claim
+                        // cannot be verified — is named in the line.
+                        Err(PalwServeRefusalV1::NotServing) => {
+                            if !NOT_SERVING_EXPLAINED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                                info!(
+                                    "[palw-interval] refused an opening request for claim {claim} interval {}: not-serving — this node \
+                                     runs no PALW panel, so it serves no interval openings. Seats ask every peer, so this is normal on a \
+                                     node that executes no free-prompt claims. If this node's own bond commits free-prompt claims, it \
+                                     must run --palw-panel with --palw-class-artifact for that class, or its claims cannot be verified. \
+                                     Further refusals of this kind are logged at debug level.",
+                                    inner.interval_index
+                                )
+                            } else {
+                                debug!(
+                                    "[palw-interval] refused an opening request for claim {claim} interval {}: not-serving",
+                                    inner.interval_index
+                                )
+                            }
                         }
                         Err(refusal) => info!(
                             "[palw-interval] refused an opening request for claim {claim} interval {}: {}",
