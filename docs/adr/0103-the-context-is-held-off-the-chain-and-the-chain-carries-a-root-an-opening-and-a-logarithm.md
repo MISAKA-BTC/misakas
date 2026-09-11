@@ -9,6 +9,12 @@
   `palw_held_context_mint_v1`). Testnet-11 does not move. Every number in §1 is one the tree's generators already printed or an ADR already
   recorded, cited by section; every number in §3 that is not is labelled *arithmetic* and is the
   generator's to print before it is normative (ADR-0092 §5).
+* Amended 2026-09-12 by [ADR-0118](0118-the-held-regime-arrives-at-a-height-and-a-held-class-carries-its-own-prompt-form.md):
+  the regime may also be armed at a HEIGHT on a network minted before it (testnet-11's flag day is
+  one line, `PALW_RC_HELD_FENCE_DAA`, and the operator's). V4 and the tiled prompt ids are required
+  at the fence only from genesis; past it the fence commits V4 itself and a held class commits its
+  own Merkle ids. On such a network the frozen ladder, not the regime, bounds a held class's
+  context (ADR-0118 §4).
 * Builds on: [0097](0097-a-models-fit-is-a-lookup-and-the-entrance-says-its-limits-before-the-first-token.md)
   (the nine walls and their homes; §1.4: 2M is refused past eight layers; Decision 5's table, whose
   rows this ADR answers one by one), [0099](0099-the-adder-measures-the-chain-recomputes-and-a-seat-holds-a-shard.md)
