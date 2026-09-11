@@ -5730,7 +5730,9 @@ impl VirtualStateProcessor {
                 // The pre-object steps are what the real fold runs before any object; if they error
                 // the block is disqualified whatever it carries, so the filter accepts nothing.
                 Err(why) => {
-                    info!("Block {block}: no PALW object is accepted; the pre-object fold fails and the block will be disqualified: {why}");
+                    info!(
+                        "Block {block}: no PALW object is accepted; the pre-object fold fails and the block will be disqualified: {why}"
+                    );
                     return (Vec::new(), state.clone());
                 }
             }
@@ -7561,6 +7563,7 @@ impl VirtualStateProcessor {
                         &claim.execution_root,
                         &accusation.missing,
                         &accusation.binding,
+                        self.palw_prompt_ids_form_at(point.daa_score),
                     )
                     .map_err(|e| format!("claim {claim_id}: {e}"))?;
                     // **ADR-0111 Decision 3: a leaf is demanded only where the chain assigned it.**
@@ -7625,6 +7628,7 @@ impl VirtualStateProcessor {
                         &disclosure.binding,
                         &disclosure.disclosure,
                         ladder,
+                        self.palw_prompt_ids_form_at(point.daa_score),
                     )
                     .map_err(|e| format!("claim {claim_id}: {e}"))?;
                 }
@@ -7995,6 +7999,11 @@ impl VirtualStateProcessor {
             } else {
                 None
             },
+            // ADR-0118 Decision 4: the network's genesis prompt-ids form, which a held DA demand for
+            // a prompt tile is judged against. Written explicitly for the reason every field above
+            // gives: on a network minted flat a tile of a non-held claim has no answer.
+            prompt_ids_merkle: self.palw_prompt_ids_form_at(daa_score)
+                == kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
         }
     }
 

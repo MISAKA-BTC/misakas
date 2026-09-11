@@ -5775,11 +5775,11 @@ mod tests {
             let last_chunk = first.0.leaf.state_chunk_count - 1;
             for chunk in [0, last_chunk] {
                 let missing = PalwHeldMissingV1::StateChunk { checkpoint, chunk };
-                palw_held_da_check_accusation_v1(&root, &missing, binding).expect("a committed chunk is accusable");
+                palw_held_da_check_accusation_v1(&root, &missing, binding, form).expect("a committed chunk is accusable");
                 let (anchor, opened) = base0_fp_held_state_chunk_answer_v1(&retention, checkpoint, chunk, &recompute)
                     .unwrap_or_else(|e| panic!("checkpoint {checkpoint} chunk {chunk}: {e}"));
                 let answer = PalwHeldDisclosureV1::StateChunk { anchor: anchor.clone(), chunk: opened.clone() };
-                palw_held_da_check_disclosure_v1(&root, &missing, binding, &answer, ladder)
+                palw_held_da_check_disclosure_v1(&root, &missing, binding, &answer, ladder, form)
                     .unwrap_or_else(|e| panic!("checkpoint {checkpoint} chunk {chunk}: the court refuses the answer: {e:?}"));
                 let mut moved = opened;
                 moved.chunk_bytes[0] ^= 1;
@@ -5789,7 +5789,8 @@ mod tests {
                         &missing,
                         binding,
                         &PalwHeldDisclosureV1::StateChunk { anchor, chunk: moved },
-                        ladder
+                        ladder,
+                        form
                     )
                     .is_err(),
                     "checkpoint {checkpoint} chunk {chunk}: a moved byte is not the committed chunk"
@@ -5808,7 +5809,7 @@ mod tests {
         for (first, count) in ranges {
             let count = count as u32;
             let missing = PalwHeldMissingV1::StepRange { first, count };
-            palw_held_da_check_accusation_v1(&root, &missing, binding).expect("a committed range is accusable");
+            palw_held_da_check_accusation_v1(&root, &missing, binding, form).expect("a committed range is accusable");
             let opening =
                 base0_fp_held_step_range_answer_v1(&retention, first, count, &ids, interval, ladder, &kernels, &recompute, form)
                     .unwrap_or_else(|e| panic!("[{first}, +{count}): the executor answers: {e}"));
@@ -5818,6 +5819,7 @@ mod tests {
                 binding,
                 &PalwHeldDisclosureV1::StepRange { opening: opening.clone() },
                 ladder,
+                form,
             )
             .unwrap_or_else(|e| panic!("[{first}, +{count}): the court refuses the answer: {e:?}"));
             let mut moved = opening;
@@ -5828,7 +5830,8 @@ mod tests {
                     &missing,
                     binding,
                     &PalwHeldDisclosureV1::StepRange { opening: moved },
-                    ladder
+                    ladder,
+                    form
                 )
                 .is_err(),
                 "[{first}, +{count}): a moved leaf is not the committed range"

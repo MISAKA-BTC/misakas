@@ -118,6 +118,23 @@ pub enum PalwPromptIdsFormV1 {
     MerkleV1,
 }
 
+/// **A class's prompt-ids form** (ADR-0118 Decision 3): the tiled Merkle root for a class under
+/// the held regime, on every network; the network's genesis form for every other class.
+///
+/// A held class's ids never ride and its disputes open one prompt tile at a time, so its jobs
+/// commit the Merkle root even on a network minted flat — testnet-11, which took the regime at a
+/// height. The form is still never a function of a HEIGHT, the reason `palw_prompt_ids_merkle` is
+/// genesis-only (no reader of a `prompt_token_ids_hash` holds the job's anchor height): it is a
+/// function of the class, whose map is inside its id and whose profile every reader that decides
+/// the form holds — the backends that derive a job, the gate that prices one, the court and the
+/// held DA court that open one.
+pub fn palw_prompt_ids_form_of_class_v1(
+    network: PalwPromptIdsFormV1,
+    profile: &crate::palw_step::PalwShapeProfileV3,
+) -> PalwPromptIdsFormV1 {
+    if crate::palw_state_chunk_map::palw_profile_is_held_v4(profile) { PalwPromptIdsFormV1::MerkleV1 } else { network }
+}
+
 /// **The form's identity, so it can be bound rather than assumed.**
 ///
 /// The `flat_logits_scheme_id_v1` precedent exactly: the flat prompt hash predates any name for

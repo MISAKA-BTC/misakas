@@ -2430,6 +2430,13 @@ impl Params {
         if let Some(activation) = self.palw_shard_court
             && activation != ForkActivation::never()
             && !crate::palw_mode_v2::palw_v2_signature_contexts_root_covers_v3(&bundle.signature_contexts_root)
+            // ADR-0118 Decision 2: a held fence armed past genesis at or below the court's height
+            // commits V4 ⊇ V3 there (Decision 1), so the accusation's context is named from the
+            // court's first block. (The held regime requires the court at or below ITS height, so
+            // the two land on one height.)
+            && !self.palw_held_context.is_some_and(|held| {
+                held != ForkActivation::never() && !held.is_active(0) && held.daa_score() <= activation.daa_score()
+            })
         {
             return Err(PalwModeV2Error::Invalid(
                 "palw_shard_court is armed but the bundle's signature_contexts_root is not the COMPLETE_V3 set: the accusation's \
@@ -2466,10 +2473,17 @@ impl Params {
         if let Some(activation) = self.palw_held_context
             && activation != ForkActivation::never()
         {
-            if bundle.signature_contexts_root != crate::palw_mode_v2::palw_v2_signature_contexts_root_v4() {
+            // **ADR-0118 Decision 1: a held fence armed past genesis commits the V4 contexts itself.**
+            // From genesis the bundle is being minted and states V4 (`palw_held_context_mint_v1`).
+            // At a height on a network minted before the regime existed, the objects the regime
+            // verifies under V4's contexts did not exist before the fence, so no signature's meaning
+            // changes at it; and the fingerprint writes the V4 root beside the fence's height, so
+            // two builds that spell a V4 context differently cannot share an identity — the M-8 rule,
+            // kept by the fence rather than by the bundle.
+            if bundle.signature_contexts_root != crate::palw_mode_v2::palw_v2_signature_contexts_root_v4() && activation.is_active(0) {
                 return Err(PalwModeV2Error::Invalid(
-                    "palw_held_context is armed but the bundle's signature_contexts_root is not the COMPLETE_V4 set: the \
-                     checkpoint court and the held DA court sign under contexts only V4 commits to (ADR-0103)",
+                    "palw_held_context is armed from genesis but the bundle's signature_contexts_root is not the COMPLETE_V4 \
+                     set: the checkpoint court and the held DA court sign under contexts only V4 commits to (ADR-0103)",
                 ));
             }
             let by_then = |fence: Option<ForkActivation>| {
@@ -2487,10 +2501,15 @@ impl Params {
                      bisection, so the one-move court must already convict (ADR-0103 Decision 1)",
                 ));
             }
-            if self.palw_prompt_ids_form_v1() != crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1 {
+            // ADR-0118 Decision 3: past genesis, on a network minted flat, a held class carries its
+            // own Merkle form (`palw_prompt_ids_form_of_class_v1`) and every other class keeps the
+            // network's. From genesis the mint states Merkle for the whole network, as before.
+            if self.palw_prompt_ids_form_v1() != crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1 && activation.is_active(0) {
                 return Err(PalwModeV2Error::Invalid(
-                    "palw_held_context is armed on a network whose prompt ids are flat: a held class's ids never ride, and a \
-                     flat digest cannot be opened a tile at a time (ADR-0103 Decision 4; trace format 4)",
+                    "palw_held_context is armed from genesis on a network whose prompt ids are flat: a genesis that takes the \
+                     regime mints its prompt ids Merkle, since a held class's ids never ride and a flat digest cannot be opened \
+                     a tile at a time (ADR-0103 Decision 4; trace format 4) — armed past genesis, a held class commits its own \
+                     Merkle form (ADR-0118 Decision 3)",
                 ));
             }
             // The ids never ride above one standard transaction, so a held class's widest job must
@@ -5298,6 +5317,19 @@ impl Params {
         if let Some(activation) = palw_held_context {
             h.write(b"palw_held_context");
             h.write(activation.daa_score().to_le_bytes());
+            // ADR-0118 Decision 1: the contexts the fence commits, by their root, where the bundle
+            // names an older set — a fence armed past genesis — so every context a held object is
+            // verified under is in the identity two nodes compare. A bundle that states V4 (every
+            // mint that takes the regime from genesis) commits them through the ruleset id already,
+            // and its identity does not move.
+            let v4 = crate::palw_mode_v2::palw_v2_signature_contexts_root_v4();
+            if !matches!(
+                palw_consensus_mode,
+                crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) if bundle.signature_contexts_root == v4
+            ) {
+                h.write(b"palw_held_context/contexts");
+                h.write(v4.as_bytes());
+            }
         }
         // ADR-0117, Some-only for the same reason: a dormant network fingerprints byte-identically
         // to a build without the field.
@@ -10507,6 +10539,37 @@ pub const PALW_RC_MODEL_LEG_V2_FENCE_DAA: u64 = 3_500;
 /// onto the fleet's own base (ADR-0114's `42438178` lineage = origin/main 8b6661a9 + 5bed4405).
 pub const PALW_RC_AUDIT_FENCE_DAA: u64 = 4_000;
 
+/// **testnet-11's held-regime flag day — NOT SCHEDULED** (ADR-0118; the regime is ADR-0103's).
+///
+/// `None` until the operator names a height; naming one is this line, and
+/// [`palw_arm_held_regime_at_v1`] arms the three fences the regime takes together.
+///
+/// **Every fence at one height ships in one build.** `fork_id_v1` digests the FIRED HEIGHTS, not
+/// the fence set, so a node carrying some of a height's fences and not the others advertises the
+/// same fork id and diverges silently past it — where a height of its own is a schedule entry the
+/// gate refuses a stale node at. So the height is one no other entry uses, or one whose other
+/// fences ship in the same release: not 3,500 (ADR-0114, deployed), not 4,000 (the audit and
+/// `palw_prefill_draw`, released without the regime). Proposed: the deep-audit flag day (7,000 at
+/// the time of writing), riding that release so the fleet re-deploys once — the operator's call,
+/// as every flag day is.
+pub const PALW_RC_HELD_FENCE_DAA: Option<u64> = None;
+
+/// **The held regime on a network minted before it, at one height** (ADR-0118 Decision 6).
+///
+/// `palw_held_context` requires, at or below its height, the k-ary court, the data-availability
+/// court, `PanelDa`, the one-move court (the regime refuses the bisection, so something else must
+/// already convict) and the retention pins (a demand must fit inside a retention the chain derived)
+/// — `Params::validate_palw_v2` refuses it otherwise. testnet-11 armed the first three from
+/// genesis and 1,900; the last two it never armed, so they take the regime's own height, and the
+/// held fence past genesis commits the V4 signature contexts the one-move court's accusation
+/// signs under (Decision 1) and leaves every class but a held one its flat prompt ids (Decision 3).
+pub fn palw_arm_held_regime_at_v1(params: &mut Params, daa: u64) {
+    let at = Some(ForkActivation::new(daa));
+    params.palw_held_context = at;
+    params.palw_shard_court = at;
+    params.palw_fp_da_pins = at;
+}
+
 /// **testnet-11's third flag day: the refutation ladder** (ADR-0084 U-08, the 2026-09-06 audit's
 /// H-4, ADR-0092 §9 step 2).
 ///
@@ -10916,6 +10979,12 @@ pub fn palw_rc_base_params() -> Params {
     // testnet-11 "until a flag day says otherwise" (`the_share_growth_final_fence_is_dormant_everywhere`,
     // and the ADR-0107 note that the merged-payout question is still the operator's to make).
     params.palw_audit_2026_09_11 = Some(ForkActivation::new(PALW_RC_AUDIT_FENCE_DAA));
+    // **The held regime (ADR-0103) at its own flag day — dormant until the operator names the
+    // height** (ADR-0118). With [`PALW_RC_HELD_FENCE_DAA`] `None` nothing is armed and the identity
+    // is byte-identical to a build without the regime.
+    if let Some(daa) = PALW_RC_HELD_FENCE_DAA {
+        palw_arm_held_regime_at_v1(&mut params, daa);
+    }
     params.palw_model_evm = Some(ForkActivation::new(PALW_RC_DA_COURT_FENCE_DAA));
     params.palw_court_ladder = Some(ForkActivation::new(PALW_RC_COURT_LADDER_FENCE_DAA));
     // **The EVM lane is ON from DAA 0, inherited from `TESTNET_PARAMS` and kept deliberately.**
@@ -13541,9 +13610,10 @@ mod consensus_params_id_tests {
     }
 
     /// **ADR-0103: the held regime's fence is dormant everywhere, visible the moment it is not, and
-    /// arms only over V4 with the k-ary court, the one-move court and the tiled prompt ids under it.**
-    /// Invariant 10. Every precondition is refused by name with the others satisfied, so each
-    /// refusal is that condition's and no other's.
+    /// arms only with the k-ary court and the one-move court under it — and, from genesis, only over
+    /// V4 and the tiled prompt ids** (past genesis the fence commits V4 itself and a held class its
+    /// own ids, ADR-0118). Invariant 10. Every precondition is refused by name with the others
+    /// satisfied, so each refusal is that condition's and no other's.
     #[test]
     fn the_held_context_fence_is_dormant_and_arms_only_over_v4_with_its_courts_and_tiled_ids() {
         for (name, shipped) in
@@ -13597,14 +13667,20 @@ mod consensus_params_id_tests {
         court_only.validate_palw_v2().expect("the one-move court arms over V4 as over V3");
 
         let refused = |p: Params| format!("{}", p.validate_palw_v2().expect_err("a precondition is missing"));
-        let err = refused(held(crate::palw_mode_v2::palw_v2_signature_contexts_root_v3(), true, Some(100), 200));
+        // The set and the ids are a GENESIS's to state (ADR-0118 Decisions 1 and 3): from genesis a
+        // bundle short of V4, or flat ids, is refused; past genesis the fence commits the V4
+        // contexts itself and a held class commits its own Merkle ids, so neither is.
+        let v3 = crate::palw_mode_v2::palw_v2_signature_contexts_root_v3();
+        let err = refused(held(v3, true, Some(0), 0));
         assert!(err.contains("palw_held_context") && err.contains("COMPLETE_V4"), "the set: {err}");
+        held(v3, true, Some(100), 200).validate_palw_v2().expect("ADR-0118 D1: past genesis the fence commits V4 itself");
+        let err = refused(held(v4, false, Some(0), 0));
+        assert!(err.contains("palw_held_context") && err.contains("flat"), "the ids: {err}");
+        held(v4, false, Some(100), 200).validate_palw_v2().expect("ADR-0118 D3: past genesis a held class's ids are its own");
         let err = refused(held(v4, true, None, 200));
         assert!(err.contains("palw_held_context") && err.contains("palw_shard_court"), "the one-move court: {err}");
         let err = refused(held(v4, true, Some(300), 200));
         assert!(err.contains("palw_held_context") && err.contains("palw_shard_court"), "the court after the fence: {err}");
-        let err = refused(held(v4, false, Some(100), 200));
-        assert!(err.contains("palw_held_context") && err.contains("flat"), "the ids: {err}");
         let mut no_kary = held(v4, true, Some(100), 200);
         no_kary.palw_kary_court = None;
         let err = refused(no_kary);

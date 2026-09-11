@@ -79,9 +79,10 @@ impl Base0Backend {
         self
     }
 
-    /// The network's prompt-commitment form (ADR-0081 Decision 3) — see the field.
+    /// The network's prompt-commitment form (ADR-0081 Decision 3) — see the field. Stored as THIS
+    /// CLASS's form (ADR-0118 Decision 3): Merkle for a held class whatever the network's.
     pub fn with_prompt_ids_form(mut self, form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1) -> Self {
-        self.prompt_ids_form = form;
+        self.prompt_ids_form = kaspa_consensus_core::palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1(form, &self.profile);
         self
     }
 
@@ -1962,6 +1963,7 @@ mod tests {
                 &binding,
                 &PalwHeldDisclosureV1::StepRange { opening },
                 ladder,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             )
             .unwrap_or_else(|e| panic!("[{first}, +{count}): the court refuses the floor's answer: {e:?}"));
         }
@@ -1974,6 +1976,7 @@ mod tests {
                 &binding,
                 &PalwHeldDisclosureV1::StateChunk { anchor, chunk },
                 ladder,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             )
             .unwrap_or_else(|e| panic!("checkpoint {checkpoint}: the court refuses the floor's answer: {e:?}"));
         }

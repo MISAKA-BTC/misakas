@@ -10347,8 +10347,13 @@ fn apply_object(
             }
             let claim_id = accusation.claim;
             let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
-            crate::palw_held_da_v1::palw_held_da_check_accusation_v1(&claim.execution_root, &accusation.missing, &accusation.binding)
-                .map_err(|e| PalwStateV2Error::HeldDaRefused { claim: claim_id, why: e.to_string() })?;
+            crate::palw_held_da_v1::palw_held_da_check_accusation_v1(
+                &claim.execution_root,
+                &accusation.missing,
+                &accusation.binding,
+                builder.extras.prompt_ids_form_v1(),
+            )
+            .map_err(|e| PalwStateV2Error::HeldDaRefused { claim: claim_id, why: e.to_string() })?;
             // **ADR-0111 Decision 3: a leaf's evidence is demanded by a seat, once.** The seat of
             // the claim's bound panel, never a stranger — whose leaf is one its own draw assigned
             // it is the acceptance layer's check, which holds the network domain the draw is keyed
@@ -10416,6 +10421,7 @@ fn apply_object(
                 &disclosure.binding,
                 &disclosure.disclosure,
                 ladder,
+                builder.extras.prompt_ids_form_v1(),
             )
             .map_err(|e| PalwStateV2Error::HeldDaRefused { claim: claim_id, why: e.to_string() })?;
             // **ADR-0111 Decision 4: a leaf's evidence is adjudicated, by the one-move verdict.**
@@ -12276,6 +12282,11 @@ pub struct PalwTransitionExtrasV1 {
     /// through and keeps `NeedsDissection` a refusal: byte-identical to the transition before the
     /// regime existed.
     pub held_context_ladder: Option<u64>,
+    /// ADR-0118 Decision 4: whether the network's genesis prompt-ids form is the Merkle one
+    /// (`Params::palw_prompt_ids_form_v1`, genesis-only, so the same at every block). The fold
+    /// needs it where a held DA demand names a prompt tile: on a network minted flat only a held
+    /// class's ids are a tile tree. `false` — the flat digest — is every shipped preset.
+    pub prompt_ids_merkle: bool,
     /// `Params::palw_audit_2026_09_11` resolved at the block's DAA. `false` (every dormant network,
     /// and testnet-11 below its flag day) selects the pre-audit fold at every site the audit fixes
     /// touch; `true` selects the fixed behavior. The fixes that live in the acceptance filter (A-1,
@@ -12287,6 +12298,17 @@ pub struct PalwTransitionExtrasV1 {
     /// also needs that many of its attempt claims to have reached `Final` in the same span. `false`
     /// by `Default`, so every existing caller and every dormant network is byte-identical.
     pub share_growth_final_active: bool,
+}
+
+impl PalwTransitionExtrasV1 {
+    /// The network's genesis prompt-ids form, from [`Self::prompt_ids_merkle`].
+    pub fn prompt_ids_form_v1(&self) -> crate::palw_prompt_ids_v1::PalwPromptIdsFormV1 {
+        if self.prompt_ids_merkle {
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1
+        } else {
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+        }
+    }
 }
 
 impl<'a> TransitionBuilder<'a> {
@@ -26046,8 +26068,7 @@ pub(crate) mod tests {
             if let Ok(path) = std::env::var("AC_SLOT_FIXTURE") {
                 // The carriage is length-delimited: its own decoder refuses any tail after it.
                 let carriage = borsh::to_vec(&PalwStateCarriageV2::from_state(&state)).expect("the carriage serializes");
-                let bytes = borsh::to_vec(&(carriage, p.clone(), honest, sid, daa))
-                    .expect("the fixture serializes");
+                let bytes = borsh::to_vec(&(carriage, p.clone(), honest, sid, daa)).expect("the fixture serializes");
                 std::fs::write(&path, bytes).expect("the fixture is written");
                 eprintln!("AC-SLOT fixture written to {path}");
             }
@@ -27600,6 +27621,7 @@ pub(crate) mod tests {
                 held_context_ladder: None,
                 audit_2026_09_11_active: false,
                 share_growth_final_active: false,
+                prompt_ids_merkle: false,
             }
         }
 
@@ -27812,6 +27834,7 @@ pub(crate) mod tests {
                 held_context_ladder: None,
                 audit_2026_09_11_active: false,
                 share_growth_final_active: false,
+                prompt_ids_merkle: false,
             };
             let (s_off, _) =
                 apply_palw_transition_v2_with_extras(&s, &p, &ctx(3, 251, 3), &[], None, false, false, false, false, &dormant)

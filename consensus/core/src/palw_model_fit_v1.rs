@@ -564,6 +564,10 @@ pub fn palw_model_fit_v2(
     prompt_ids_form: PalwPromptIdsFormV1,
     regime: PalwFitRegimeV1,
 ) -> PalwModelFitReportV1 {
+    // **The class's form, not the network's** (ADR-0118 Decision 3): a held class commits its ids
+    // as the tiled Merkle root even where the network's genesis form is flat, so it is priced at
+    // the opening its disputes carry. The network's form for every other class, as before.
+    let prompt_ids_form = crate::palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1(prompt_ids_form, profile);
     let n_ctx = profile.n_ctx;
     let at = palw_fit_at_v1(profile, bundle, court, prompt_ids_form, regime, None);
     let marker = |r: &PalwFitRowV1| if r.verdict == PalwFitVerdictV1::Unpriced { u64::MAX } else { r.need };

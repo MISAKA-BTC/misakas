@@ -34,7 +34,7 @@
 //! is the court doing its job, and the loss is bounded by the exposure ceiling (ADR-0077 SA-1).
 
 use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpWorkerResultV3, PalwFreePromptCommitmentV3, fp_claim_id_v3};
-use kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2;
+use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_match_v1};
 use kaspa_hashes::Hash64;
 
 /// Why a commitment may not be signed. Every arm names a field, because "the commitment does not
@@ -115,7 +115,17 @@ pub fn signable_claim_id(commitment: &PalwFreePromptCommitmentV3, result: &PalwF
             return Err(FpSignGateError::RootMismatch(field));
         }
     }
-    if result.job.prompt_token_ids_hash != prompt_token_ids_hash_v2(&result.prompt_token_ids) {
+    // **The ids bind under the form the job committed them in** — the flat digest, or the tiled
+    // Merkle root a held class commits on every network and a Merkle genesis on every class
+    // (ADR-0081 Decision 3, ADR-0118 Decision 3). This spelled the flat digest alone, so every
+    // Merkle job was refused `PromptIdsUnbound` and the rail could sign nothing on such a network.
+    // Which form the CLASS commits in is the chain's and the seats' to hold the claim to; the gate's
+    // question is SA-2's — does this result bind the ids its own job names — and the two digests
+    // are domain-separated, so no list binds one job under both.
+    if ![PalwPromptIdsFormV1::Flat, PalwPromptIdsFormV1::MerkleV1]
+        .into_iter()
+        .any(|form| prompt_token_ids_match_v1(form, &result.prompt_token_ids, &result.job.prompt_token_ids_hash))
+    {
         return Err(FpSignGateError::PromptIdsUnbound);
     }
     if commitment.trace_retention_daa <= commitment.job.anchor_daa {
@@ -131,6 +141,7 @@ pub fn signable_claim_id(commitment: &PalwFreePromptCommitmentV3, result: &PalwF
 mod tests {
     use super::*;
     use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_V3_VERSION, PalwFpStopReasonV3, PalwFreePromptJobV3};
+    use kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2;
     use kaspa_consensus_core::tx::TransactionOutpoint;
 
     fn h(word: u64) -> Hash64 {
@@ -260,6 +271,23 @@ mod tests {
         let mut tampered = base.clone();
         tampered.job.class_id = h(999);
         assert_eq!(signable_claim_id(&tampered, &result), Err(FpSignGateError::JobMismatch));
+    }
+
+    /// **A job that commits its ids as the tiled Merkle root is signable** (ADR-0118 Decision 3) —
+    /// a held class's on every network, every class's on a Merkle genesis. The gate spelled the
+    /// flat digest alone and refused all of them `PromptIdsUnbound`. The Merkle root binds its own
+    /// ids and no others, and a flat digest over the same ids is not that root.
+    #[test]
+    fn a_merkle_committed_job_is_signable_and_binds_only_its_own_ids() {
+        use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1};
+        let (mut commitment, mut result) = fixture();
+        let root = prompt_token_ids_commitment_v1(PalwPromptIdsFormV1::MerkleV1, &result.prompt_token_ids).expect("a root");
+        assert_ne!(root, prompt_token_ids_hash_v2(&result.prompt_token_ids), "the two forms are two digests");
+        commitment.job.prompt_token_ids_hash = root;
+        result.job.prompt_token_ids_hash = root;
+        assert_eq!(signable_claim_id(&commitment, &result), Ok(fp_claim_id_v3(&commitment)));
+        result.prompt_token_ids[0] ^= 1;
+        assert_eq!(signable_claim_id(&commitment, &result), Err(FpSignGateError::PromptIdsUnbound));
     }
 
     /// The prompt the result carries must be the prompt its job binds, and a retention deadline at

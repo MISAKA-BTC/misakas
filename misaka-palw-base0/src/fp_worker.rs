@@ -400,11 +400,13 @@ pub struct FpWorkerRuntime<B: PalwExecutionBackendV1> {
     /// this is the ONE map's cost and it does not recur — which is the measurable half of
     /// Decision 1, and why the SA-6 full read is affordable here and was not affordable per job.
     load_ms: u64,
-    /// **The network's prompt-commitment form** (ADR-0081 Decision 3), derived from the network id
-    /// the worker was started for by [`fp_worker_prompt_ids_form_v1`] — the same derivation that
-    /// gives it its court. Every job this runtime builds commits its prompt under it, and the
-    /// gateway re-binds the result under the form the CHAIN reports, so a worker started for the
-    /// wrong network produces jobs the gateway refuses rather than jobs the chain refuses.
+    /// **This class's prompt-commitment form** (ADR-0081 Decision 3, ADR-0118 Decision 3): the
+    /// network's, derived from the network id the worker was started for by
+    /// [`fp_worker_prompt_ids_form_v1`] — the same derivation that gives it its court — and the
+    /// tiled Merkle root for a class under the held regime whatever the network's. Every job this
+    /// runtime builds commits its prompt under it, and the gateway re-binds the result under the
+    /// form the CHAIN reports for the class, so a worker started for the wrong network produces
+    /// jobs the gateway refuses rather than jobs the chain refuses.
     prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 }
 
@@ -487,7 +489,7 @@ impl<B: PalwExecutionBackendV1> FpWorkerRuntime<B> {
             retention_family: family.retention_family,
             artifact: family.artifact,
             load_ms,
-            prompt_ids_form,
+            prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1(prompt_ids_form, profile),
         })
     }
 

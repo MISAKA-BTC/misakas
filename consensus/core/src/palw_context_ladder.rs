@@ -1192,7 +1192,11 @@ pub fn palw_class_ladder_rules_for_court_v1(
     // is a fused site to price: a court may be k-ary while the class in front of it is graph v2,
     // and then nothing about its cost moves.
     if let Some(k) = court {
-        cost_shape = cost_shape.with_prompt_ids_form_v1(k.prompt_ids_form);
+        // The CLASS's form (ADR-0118 Decision 3): Merkle for a held class on every network, the
+        // court's (the network's genesis form) for every other — so a held class on a network
+        // minted flat is priced at the opening its disputes carry, not at a list it never rides.
+        cost_shape = cost_shape
+            .with_prompt_ids_form_v1(crate::palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1(k.prompt_ids_form, profile));
         if crate::palw_class_admission_v2::palw_profile_has_fused_attention_v1(profile) {
             cost_shape = cost_shape.with_dissection_v1(k.dissection_arity);
         }

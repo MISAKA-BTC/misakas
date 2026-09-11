@@ -1162,11 +1162,14 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         // answers are assembled into one response, and this file already records what an answer
         // built from two chain points costs — see `fp_decode_rules_armed` below.
         let session = self.consensus_manager.consensus().unguarded_session();
-        let (locked_outpoints, facts) = session
+        let (locked_outpoints, facts, class_profile) = session
             .spawn_blocking(move |c| {
                 let locked = c.palw_locked_bond_outpoints_v2();
                 let facts = class_id.and_then(|class_id| c.palw_producer_facts_v2(class_id, bond));
-                (locked, facts)
+                // ADR-0118 Decision 3: the class's registered profile says which form its jobs
+                // commit their prompt ids in (a held class: Merkle on every network).
+                let class_profile = class_id.and_then(|class_id| c.palw_registered_class_carriage_v1(class_id)).map(|(p, _)| p);
+                (locked, facts, class_profile)
             })
             .await;
         // Consensus-locked collateral AND this node's own reserved funding outpoints, in one list
@@ -1236,6 +1239,16 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             fp_decode_constraint_armed: self.config.params.palw_fp_decode_constraint_active_at(facts.daa_score),
             prompt_ids_merkle: self.config.params.palw_prompt_ids_form_at(facts.daa_score)
                 == kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+            // ADR-0118 Decision 3: THIS class's form — the network's, or Merkle for a class under
+            // the held regime whatever the network's. A class this node holds no registration row
+            // for (a genesis row) is not a held one on a network minted flat: the gate admits a
+            // held class only past the fence, by a registration, which is what writes the row.
+            class_prompt_ids_merkle: {
+                let network = self.config.params.palw_prompt_ids_form_at(facts.daa_score);
+                class_profile.as_ref().map_or(network, |profile| {
+                    kaspa_consensus_core::palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1(network, profile)
+                }) == kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1
+            },
             ..Default::default()
         };
         if let Some(bond_facts) = facts.bond.as_ref() {

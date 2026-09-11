@@ -206,11 +206,22 @@ pub fn palw_held_da_check_accusation_v1(
     claim_execution_root: &Hash64,
     missing: &PalwHeldMissingV1,
     binding: &PalwStepBindingV2,
+    network_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<(), PalwHeldDaError> {
     use PalwHeldDaError::OutsideTheCommitment as outside;
     authenticated(binding, claim_execution_root)?;
     match *missing {
         PalwHeldMissingV1::PromptIdsTile { tile } => {
+            // **ADR-0118 Decision 4: a prompt tile is a Merkle commitment's unit.** On a network
+            // minted flat that took the held regime at a height, only a held class's ids are a tile
+            // tree (`palw_prompt_ids_form_of_class_v1`); every other claim's `prompt_token_ids_hash`
+            // is the flat digest, and a tile of it has no answer — so demanding one would slash an
+            // honest producer by its silence. Refused here, where the binding says which class.
+            if crate::palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1(network_form, &binding.shape_profile)
+                != crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1
+            {
+                return Err(outside("this claim's prompt ids are committed flat, and a flat digest has no tiles"));
+            }
             let tiles = prompt_ids_tile_count_v1(u64::from(binding.job_context.declared_prefill_tokens))
                 .ok_or(outside("the prompt has no tile tree"))?;
             if u64::from(tile) >= tiles {
@@ -272,8 +283,9 @@ pub fn palw_held_da_check_disclosure_v1(
     binding: &PalwStepBindingV2,
     disclosure: &PalwHeldDisclosureV1,
     ladder: u64,
+    network_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<(), PalwHeldDaError> {
-    palw_held_da_check_accusation_v1(claim_execution_root, missing, binding)?;
+    palw_held_da_check_accusation_v1(claim_execution_root, missing, binding, network_form)?;
     let (context_hash, checkpoint_profile_hash) = authenticated(binding, claim_execution_root)?;
     match (*missing, disclosure) {
         (PalwHeldMissingV1::PromptIdsTile { tile }, PalwHeldDisclosureV1::PromptIdsTile { opening }) => {
@@ -349,6 +361,8 @@ mod tests {
     use crate::palw_step_leg::{PalwStepOpeningV1, step_merkle_path_v1, step_merkle_range_siblings_v1};
 
     const LADDER: u64 = 1 << 26;
+    /// The held fixture is a held class, so its ids are a tile tree on any network.
+    const MERKLE: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1 = crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1;
 
     /// **The sentinel is no event an accusation can name** — the proof the phase's shared shape
     /// rests on: ADR-0062's arm refuses a row at or past `palw_da_max_accusable_rows_v1(chunks)`,
@@ -358,6 +372,33 @@ mod tests {
         let (row, _) = crate::palw_state_v2::palw_da_event_index_parts_v1(PALW_HELD_DA_EVENT_INDEX_SENTINEL_V1);
         let most = crate::palw_state_v2::palw_da_max_accusable_rows_v1(crate::palw_v2::PALW_V2_MAX_TRACE_EVENTS as u32);
         assert!(row >= most, "row half {row} must be past every accusable row ({most})");
+    }
+
+    /// **ADR-0118 Decision 4: a prompt tile is demanded only of a claim whose ids ARE a tile tree.**
+    /// On a network minted flat that took the regime at a height, a held class's ids are the tiled
+    /// root (its own form) and every other class's are the flat digest, whose tile has no answer —
+    /// so an accusation of one would slash an honest producer by its silence. The held claim is
+    /// accusable under either network form; the graph-v5 claim only where the network's form is
+    /// Merkle, and refused by name where it is flat. The other units read no ids and are accusable
+    /// either way.
+    #[test]
+    fn a_prompt_tile_is_accusable_only_where_the_claims_class_commits_a_tile_tree() {
+        use crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat;
+        let tile = PalwHeldMissingV1::PromptIdsTile { tile: 0 };
+        let held = held_fixture(true, 20, None);
+        for network in [Flat, MERKLE] {
+            palw_held_da_check_accusation_v1(&held.binding.committed_execution_root, &tile, &held.binding, network)
+                .unwrap_or_else(|e| panic!("a held claim's tile is accusable on a {network:?} network: {e:?}"));
+        }
+        let shipped = held_fixture(false, 20, None);
+        let root = shipped.binding.committed_execution_root;
+        palw_held_da_check_accusation_v1(&root, &tile, &shipped.binding, MERKLE).expect("a Merkle genesis's every class is tiled");
+        match palw_held_da_check_accusation_v1(&root, &tile, &shipped.binding, Flat) {
+            Err(PalwHeldDaError::OutsideTheCommitment(why)) => assert!(why.contains("flat"), "{why}"),
+            other => panic!("a flat claim's tile must be refused by name, got {other:?}"),
+        }
+        let range = PalwHeldMissingV1::StepRange { first: 0, count: 1 };
+        palw_held_da_check_accusation_v1(&root, &range, &shipped.binding, Flat).expect("a step range reads no prompt id");
     }
 
     /// **Every unit answers with itself and its path, and only with that** — a state chunk under the
@@ -373,7 +414,7 @@ mod tests {
         let chunks = &fx.chunks[checkpoint as usize];
         let chunk = 3u32;
         let missing = PalwHeldMissingV1::StateChunk { checkpoint, chunk };
-        palw_held_da_check_accusation_v1(&root, &missing, b).expect("a committed chunk is accusable");
+        palw_held_da_check_accusation_v1(&root, &missing, b, MERKLE).expect("a committed chunk is accusable");
         let answer = PalwHeldDisclosureV1::StateChunk {
             anchor: PalwAttnCheckpointAnchorV1 {
                 leaf: fx.checkpoint_leaves[checkpoint as usize].clone(),
@@ -395,31 +436,44 @@ mod tests {
                 .expect("a path"),
             },
         };
-        palw_held_da_check_disclosure_v1(&root, &missing, b, &answer, LADDER).expect("the chunk and its two-level path");
+        palw_held_da_check_disclosure_v1(&root, &missing, b, &answer, LADDER, MERKLE).expect("the chunk and its two-level path");
         let PalwHeldDisclosureV1::StateChunk { anchor, chunk: mut opened } = answer.clone() else { unreachable!() };
         opened.chunk_bytes[0] ^= 1;
         let tampered = PalwHeldDisclosureV1::StateChunk { anchor, chunk: opened };
         assert_eq!(
-            palw_held_da_check_disclosure_v1(&root, &missing, b, &tampered, LADDER),
+            palw_held_da_check_disclosure_v1(&root, &missing, b, &tampered, LADDER, MERKLE),
             Err(PalwHeldDaError::ChunkNotInCheckpoint)
         );
         // Checkpoint 9 holds ten positions: two kinds × two layers × one tile = four chunks.
         assert_eq!(chunks.len(), 4);
         let other = PalwHeldMissingV1::StateChunk { checkpoint, chunk: chunk - 1 };
-        assert_eq!(palw_held_da_check_disclosure_v1(&root, &other, b, &answer, LADDER), Err(PalwHeldDaError::AnswerIsAnotherUnit));
+        assert_eq!(
+            palw_held_da_check_disclosure_v1(&root, &other, b, &answer, LADDER, MERKLE),
+            Err(PalwHeldDaError::AnswerIsAnotherUnit)
+        );
         assert!(matches!(
-            palw_held_da_check_accusation_v1(&root, &PalwHeldMissingV1::StateChunk { checkpoint, chunk: chunks.len() as u32 }, b),
+            palw_held_da_check_accusation_v1(
+                &root,
+                &PalwHeldMissingV1::StateChunk { checkpoint, chunk: chunks.len() as u32 },
+                b,
+                MERKLE
+            ),
             Err(PalwHeldDaError::OutsideTheCommitment(_))
         ));
         assert!(matches!(
-            palw_held_da_check_accusation_v1(&root, &PalwHeldMissingV1::StateChunk { checkpoint: b.checkpoint_count, chunk: 0 }, b),
+            palw_held_da_check_accusation_v1(
+                &root,
+                &PalwHeldMissingV1::StateChunk { checkpoint: b.checkpoint_count, chunk: 0 },
+                b,
+                MERKLE
+            ),
             Err(PalwHeldDaError::OutsideTheCommitment(_))
         ));
 
         // A run of step leaves.
         let (first, count) = (100u64, 64u32);
         let range = PalwHeldMissingV1::StepRange { first, count };
-        palw_held_da_check_accusation_v1(&root, &range, b).expect("a committed range is accusable");
+        palw_held_da_check_accusation_v1(&root, &range, b, MERKLE).expect("a committed range is accusable");
         let answer = PalwHeldDisclosureV1::StepRange {
             opening: crate::palw_step_leg::PalwStepRangeOpeningV1 {
                 first_leaf_index: first,
@@ -427,11 +481,11 @@ mod tests {
                 siblings: step_merkle_range_siblings_v1(&fx.leaves, first as usize, count as usize).expect("siblings"),
             },
         };
-        palw_held_da_check_disclosure_v1(&root, &range, b, &answer, LADDER).expect("the leaves and their frontier");
+        palw_held_da_check_disclosure_v1(&root, &range, b, &answer, LADDER, MERKLE).expect("the leaves and their frontier");
         let PalwHeldDisclosureV1::StepRange { opening: mut forged } = answer else { unreachable!() };
         forged.leaf_hashes[7] = crate::Hash64::from_u64_word(7);
         assert_eq!(
-            palw_held_da_check_disclosure_v1(&root, &range, b, &PalwHeldDisclosureV1::StepRange { opening: forged }, LADDER),
+            palw_held_da_check_disclosure_v1(&root, &range, b, &PalwHeldDisclosureV1::StepRange { opening: forged }, LADDER, MERKLE),
             Err(PalwHeldDaError::RangeNotCommitted)
         );
         for bad in [
@@ -440,7 +494,7 @@ mod tests {
             PalwHeldMissingV1::StepRange { first: b.step_leaf_count - 1, count: 2 },
         ] {
             assert!(
-                matches!(palw_held_da_check_accusation_v1(&root, &bad, b), Err(PalwHeldDaError::OutsideTheCommitment(_))),
+                matches!(palw_held_da_check_accusation_v1(&root, &bad, b, MERKLE), Err(PalwHeldDaError::OutsideTheCommitment(_))),
                 "{bad:?}"
             );
         }
@@ -448,19 +502,19 @@ mod tests {
         // A tile of the prompt ids, under the job's tiled root.
         let ids = fixture_prompt_ids(20);
         let tile = PalwHeldMissingV1::PromptIdsTile { tile: 0 };
-        palw_held_da_check_accusation_v1(&root, &tile, b).expect("the prompt's first tile");
+        palw_held_da_check_accusation_v1(&root, &tile, b, MERKLE).expect("the prompt's first tile");
         let answer = PalwHeldDisclosureV1::PromptIdsTile {
             opening: crate::palw_prompt_ids_v1::prompt_ids_opening_v1(&ids, 0).expect("an opening"),
         };
-        palw_held_da_check_disclosure_v1(&root, &tile, b, &answer, LADDER).expect("the tile opens under the job's root");
+        palw_held_da_check_disclosure_v1(&root, &tile, b, &answer, LADDER, MERKLE).expect("the tile opens under the job's root");
         assert!(matches!(
-            palw_held_da_check_accusation_v1(&root, &PalwHeldMissingV1::PromptIdsTile { tile: 1 }, b),
+            palw_held_da_check_accusation_v1(&root, &PalwHeldMissingV1::PromptIdsTile { tile: 1 }, b, MERKLE),
             Err(PalwHeldDaError::OutsideTheCommitment(_))
         ));
 
         // Another claim's execution is not this claim's.
         assert!(matches!(
-            palw_held_da_check_accusation_v1(&crate::Hash64::from_u64_word(1), &tile, b),
+            palw_held_da_check_accusation_v1(&crate::Hash64::from_u64_word(1), &tile, b, MERKLE),
             Err(PalwHeldDaError::NotTheClaimsExecution { .. })
         ));
     }

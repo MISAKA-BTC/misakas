@@ -252,8 +252,13 @@ impl Qwen36Backend {
     }
 
     /// The network's prompt-commitment form (ADR-0081 Decision 3); see `Base0Backend::prompt_ids_form`.
+    /// Stored as THIS CLASS's form (ADR-0118 Decision 3): Merkle for a held class whatever the
+    /// network's, so the job this backend derives and the one a seat derives cannot disagree.
     pub fn with_prompt_ids_form(mut self, form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1) -> Self {
-        self.prompt_ids_form = form;
+        self.prompt_ids_form = match &self.profile {
+            Some(profile) => kaspa_consensus_core::palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1(form, profile),
+            None => form,
+        };
         self
     }
 

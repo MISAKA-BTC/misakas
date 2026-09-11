@@ -198,8 +198,10 @@ fn under_the_fence_the_dense_rows_chain_walls_are_constant_or_logarithmic_to_2m(
 /// **The gate admits a held class at a context the shipped geometry ceiling refuses** — ADR-0103's
 /// "done when", first clause — and refuses the same class by name wherever the regime is
 /// incomplete: no fence (`HeldMapNeedsItsFence`, and v7 is v8 with the fence down), no `PanelDa`
-/// (the ids would ride: `LinearInTheContext` on the payload), flat ids (the close carries them:
-/// `LinearInTheContext` on the close).
+/// (the ids would ride: `LinearInTheContext` on the payload). A court reading a flat network form
+/// no longer refuses it: a held class's ids are its own Merkle root on every network (ADR-0118
+/// Decision 3), so the close is priced at the opening — it was refused `LinearInTheContext` on the
+/// close here before.
 #[test]
 fn the_gate_admits_a_held_class_the_shipped_ceiling_refuses_and_names_what_is_missing() {
     let params = held_network(1 << 48);
@@ -230,7 +232,7 @@ fn the_gate_admits_a_held_class_the_shipped_ceiling_refuses_and_names_what_is_mi
     let mut flat_court = shape.court.expect("the k-ary court is armed");
     flat_court.prompt_ids_form = PalwPromptIdsFormV1::Flat;
     let flat = PalwAdmissionShapeV1 { court: Some(flat_court), ..shape };
-    assert_eq!(gate(&params, &profile, flat), Err(PalwClassAdmissionError::LinearInTheContext { wall: "close bytes" }));
+    gate(&params, &profile, flat).unwrap_or_else(|e| panic!("ADR-0118 D3: a held class is priced at its own Merkle ids: {e}"));
 }
 
 /// **ADR-0116: a held class's context is at most its attention history bound.** The held map

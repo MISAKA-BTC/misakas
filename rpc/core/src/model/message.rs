@@ -2357,6 +2357,14 @@ pub struct GetPalwProducerFactsResponse {
     /// format advisory and says so. Fail-closed like `fp_decode_rules_armed`, for the same
     /// reason: a node that predates the fence cannot be asserting it is dormant.
     pub fp_decode_constraint_armed: bool,
+    /// **The form THIS CLASS's jobs commit their prompt ids in** (version 8; ADR-0118 Decision 3):
+    /// `true` for the tiled Merkle root. It is `prompt_ids_merkle` for every class but one under
+    /// the held regime on a network minted flat, whose jobs commit Merkle ids whatever the
+    /// network's form — so a gateway re-binds a worker's result under this one, and reads the pair
+    /// to learn that such a class's ids cannot ride a PublicDa carrier (the chain's stateless check
+    /// holds no class and reads the network's). A version-7 or older node cannot have a class that
+    /// differs, so it reads as `prompt_ids_merkle`.
+    pub class_prompt_ids_merkle: bool,
     /// **Every outpoint a wallet must not spend**, `txid:index` with a 128-hex transaction id.
     ///
     /// Two sources, deliberately in ONE list so a wallet cannot read half of it (audit3 H3, H12):
@@ -2376,7 +2384,8 @@ pub struct GetPalwProducerFactsResponse {
 
 impl Serializer for GetPalwProducerFactsResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        // Version 7: `fp_decode_constraint_armed` (ADR-0096 Decision 8's fence). Version 6:
+        // Version 8: `class_prompt_ids_merkle` (ADR-0118 Decision 3, the class's own prompt-ids
+        // form). Version 7: `fp_decode_constraint_armed` (ADR-0096 Decision 8's fence). Version 6:
         // `panel_da_armed` and `prompt_ids_merkle` (ADR-0077 D16 / ADR-0081 D3, the
         // private-prompts design of 2026-09-05). Version 5: `palw_retention_dir` (ADR-0084 Decision 5). Version 4 added
         // `fp_decode_rules_armed` (ADR-0082 Decisions 10/11's fence). Version 3 added
@@ -2384,7 +2393,7 @@ impl Serializer for GetPalwProducerFactsResponse {
         // `locked_bond_outpoints` (audit3 H3). Every version is a strict suffix, so an older
         // reader stops where its version ended and this reader tolerates an older writer by
         // leaving the later fields at their defaults — additive, never re-ordered.
-        store!(u16, &7, writer)?;
+        store!(u16, &8, writer)?;
         store!(bool, &self.available, writer)?;
         store!(String, &self.chain_point, writer)?;
         store!(u64, &self.daa_score, writer)?;
@@ -2414,6 +2423,7 @@ impl Serializer for GetPalwProducerFactsResponse {
         store!(bool, &self.panel_da_armed, writer)?;
         store!(bool, &self.prompt_ids_merkle, writer)?;
         store!(bool, &self.fp_decode_constraint_armed, writer)?;
+        store!(bool, &self.class_prompt_ids_merkle, writer)?;
         Ok(())
     }
 }
@@ -2463,6 +2473,10 @@ impl Deserializer for GetPalwProducerFactsResponse {
         // Version 7 (ADR-0096 Decision 8): fail closed — an older node cannot be asserting the
         // constraint fence is in force, so an entrance reads "unknown" as "advisory only".
         let fp_decode_constraint_armed = if version >= 7 { load!(bool, reader)? } else { false };
+        // Version 8 (ADR-0118 Decision 3): an older node cannot hold a class whose form differs from
+        // the network's (it refuses the held fence past genesis), so its class form IS the network
+        // form it reported — the one reading that neither invents a difference nor hides one.
+        let class_prompt_ids_merkle = if version >= 8 { load!(bool, reader)? } else { prompt_ids_merkle };
         Ok(Self {
             available,
             chain_point,
@@ -2493,6 +2507,7 @@ impl Deserializer for GetPalwProducerFactsResponse {
             panel_da_armed,
             prompt_ids_merkle,
             fp_decode_constraint_armed,
+            class_prompt_ids_merkle,
         })
     }
 }
@@ -6659,6 +6674,9 @@ mod palw_producer_facts_wire_tests {
             prompt_ids_merkle: true,
             // Version 7 (ADR-0096 Decision 8), non-default for the same reason.
             fp_decode_constraint_armed: true,
+            // Version 8 (ADR-0118 Decision 3): DIFFERENT from `prompt_ids_merkle`, so a field lost
+            // on the wire, or read from the wrong slot, cannot pass as carried.
+            class_prompt_ids_merkle: false,
         }
     }
 
@@ -6677,6 +6695,7 @@ mod palw_producer_facts_wire_tests {
         assert_eq!(back.fp_max_quanta_per_receipt, 64);
         assert!(back.fp_decode_rules_armed, "ADR-0082 D10/D11: a builder on the wrong side of this fence is unreproducible");
         assert!(back.fp_decode_constraint_armed, "ADR-0096 D8: an entrance that loses this serves a committed format nobody replays");
+        assert!(back.prompt_ids_merkle && !back.class_prompt_ids_merkle, "ADR-0118 D3: the class's form is its own field");
         assert_eq!(back.locked_bond_outpoints, response.locked_bond_outpoints, "the must-not-spend set must not shorten");
         assert_eq!(back.class_target, response.class_target);
         assert_eq!(back.bond_exposure_ceiling, response.bond_exposure_ceiling);

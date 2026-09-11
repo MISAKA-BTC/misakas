@@ -1050,7 +1050,8 @@ pub fn palw_verify_context_vector_v1(
                 Ok(d) => PalwContextAnswerV1 {
                     unit,
                     answer_bytes: kaspa_consensus_core::palw_held_da_v1::palw_held_da_bytes_v1(&d),
-                    accepted: palw_held_da_check_disclosure_v1(&root, &missing, &binding, &d, ladder).map_err(|e| e.to_string()),
+                    accepted: palw_held_da_check_disclosure_v1(&root, &missing, &binding, &d, ladder, vector.prompt_ids_form)
+                        .map_err(|e| e.to_string()),
                 },
                 Err(why) => PalwContextAnswerV1 { unit, answer_bytes: 0, accepted: Err(format!("unanswered: {why}")) },
             }

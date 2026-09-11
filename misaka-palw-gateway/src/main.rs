@@ -650,6 +650,16 @@ fn privacy_mode_for_request(config: &Config, facts: &chain::ChainFacts) -> Resul
              private commitment would not become a claim, so the job is refused before the inference"
             .to_string());
     }
+    // **ADR-0118 Decision 5: a held class's ids do not ride a PublicDa carrier on a network
+    // minted flat.** Its jobs commit Merkle ids, and the chain's stateless check holds no class
+    // and reads the network's flat form — so the carrier would be refused at the door after the
+    // inference had been paid for. Refused here, by name, before it.
+    if config.privacy_mode != kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA && facts.public_ids_cannot_ride() {
+        return Err("this class is under the held regime and commits its prompt ids as a tiled Merkle root, and this network's \
+             carriers are checked under its flat form (ADR-0118 Decision 5): a PublicDa commitment of it would be refused at the \
+             door, so the job is refused before the inference — serve this class with --privacy panel-da"
+            .to_string());
+    }
     Ok(config.privacy_mode)
 }
 
@@ -1885,6 +1895,26 @@ mod tests {
 
     fn declared_price(config: &Config) -> ExposurePrice {
         ExposurePrice::resolve(config, &chain::ChainFacts::default())
+    }
+
+    /// **ADR-0118 Decision 5: a held class on a network minted flat commits under PanelDa.** Its
+    /// ids are a Merkle root and the chain checks a carrier under the network's flat form, so a
+    /// PublicDa gateway is refused by name before the inference; a panel-da one is served; and a
+    /// class whose form is the network's — Merkle on a Merkle genesis, flat on a flat one — is
+    /// served under either mode exactly as before.
+    #[test]
+    fn a_held_class_on_a_flat_network_commits_under_panel_da_and_is_refused_public_da_by_name() {
+        use kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA;
+        let held_on_flat = chain::ChainFacts { panel_da_armed: true, class_prompt_ids_merkle: true, ..Default::default() };
+        let refused = privacy_mode_for_request(&bounded_config(), &held_on_flat).expect_err("PublicDa cannot carry the held ids");
+        assert!(refused.contains("ADR-0118") && refused.contains("--privacy panel-da"), "{refused}");
+        let panel = Config { privacy_mode: PALW_FP_PRIVACY_PANEL_DA, ..bounded_config() };
+        assert_eq!(privacy_mode_for_request(&panel, &held_on_flat), Ok(PALW_FP_PRIVACY_PANEL_DA));
+        assert_eq!(held_on_flat.prompt_ids_form(), kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1);
+        let merkle_genesis =
+            chain::ChainFacts { panel_da_armed: true, prompt_ids_merkle: true, class_prompt_ids_merkle: true, ..Default::default() };
+        assert_eq!(privacy_mode_for_request(&bounded_config(), &merkle_genesis), Ok(PALW_FP_PRIVACY_PUBLIC_DA));
+        assert_eq!(privacy_mode_for_request(&bounded_config(), &chain::ChainFacts::default()), Ok(PALW_FP_PRIVACY_PUBLIC_DA));
     }
 
     /// **ADR-0079 S6.** A public bind fails at startup without the acknowledgement, and fails

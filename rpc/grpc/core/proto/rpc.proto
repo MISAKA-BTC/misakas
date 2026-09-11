@@ -1375,6 +1375,9 @@ message GetPalwProducerFactsResponseMessage {
   // Version 7: ADR-0096 Decision 8's fence — may a free-prompt job carry a decode constraint at
   // daaScore? False whenever `available` is false; an entrance reads false as "advisory only".
   bool fpDecodeConstraintArmed = 29;
+  // ADR-0118 Decision 3: the form THIS class's jobs commit their prompt ids in (true = tiled
+  // Merkle root) — `promptIdsMerkle` for every class but a held one on a network minted flat.
+  bool classPromptIdsMerkle = 30;
   RPCError error = 1000;
 }
 

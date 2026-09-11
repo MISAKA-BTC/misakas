@@ -1946,7 +1946,12 @@ pub fn verify_class_admission_v8(
     // fit's own rows — the SAME predicates, under the regime — and the first linear wall is the
     // refusal. Then the state tree's depth (Decision 3), which replaces a v3 class's chunk count.
     if held_class {
-        let form = court.map_or(crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat, |k| k.prompt_ids_form);
+        // ADR-0118 Decision 3: a held class's ids are Merkle on every network, so it is priced
+        // under that form even where the network's genesis form is flat.
+        let form = crate::palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1(
+            court.map_or(crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat, |k| k.prompt_ids_form),
+            profile,
+        );
         let fit = crate::palw_model_fit_v1::palw_model_fit_v2(
             profile,
             bundle,

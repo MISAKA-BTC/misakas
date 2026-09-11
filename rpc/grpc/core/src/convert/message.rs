@@ -413,6 +413,7 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwProducerFactsResponse>, protowire:
         panel_da_armed: item.panel_da_armed,
         prompt_ids_merkle: item.prompt_ids_merkle,
         fp_decode_constraint_armed: item.fp_decode_constraint_armed,
+        class_prompt_ids_merkle: item.class_prompt_ids_merkle,
         error: None,
     }
 });
@@ -1401,6 +1402,10 @@ try_from!(item: &protowire::GetPalwProducerFactsResponseMessage, RpcResult<kaspa
         panel_da_armed: item.panel_da_armed,
         prompt_ids_merkle: item.prompt_ids_merkle,
         fp_decode_constraint_armed: item.fp_decode_constraint_armed,
+        // ADR-0118 Decision 3. A class's form is Merkle wherever the network's is, so the class
+        // bit is never below the network's — and a node that predates the field (proto3 reads an
+        // absent bool as false) answers the network's form, which is its every class's.
+        class_prompt_ids_merkle: item.class_prompt_ids_merkle || item.prompt_ids_merkle,
     }
 });
 try_from!(item: &protowire::GetPalwDerivedArtifactsRequestMessage, kaspa_rpc_core::GetPalwDerivedArtifactsRequest, {
@@ -2074,7 +2079,10 @@ mod palw_producer_facts_tests {
             // audit3 H3: the set a wallet must have before it selects inputs.
             locked_bond_outpoints: vec![format!("{}:0", "aa".repeat(64)), format!("{}:7", "bb".repeat(64))],
             panel_da_armed: true,
-            prompt_ids_merkle: true,
+            // ADR-0118 Decision 3: the held-on-flat pair — the network flat, the class Merkle — so
+            // a conversion that dropped the class bit, or read the network's into it, fails below.
+            prompt_ids_merkle: false,
+            class_prompt_ids_merkle: true,
             // ADR-0096 Decision 8: `true` so the round trip distinguishes carried from defaulted.
             fp_decode_constraint_armed: true,
             // ADR-0077 Decision 3: what a gateway reads before it commits.
@@ -2089,6 +2097,15 @@ mod palw_producer_facts_tests {
         };
         let wire: crate::protowire::GetPalwProducerFactsResponseMessage = RpcResult::Ok(&response).into();
         let back: GetPalwProducerFactsResponse = GetPalwProducerFactsResponse::try_from(&wire).unwrap();
+        assert!(!back.prompt_ids_merkle && back.class_prompt_ids_merkle, "ADR-0118 D3: the class's form is its own field");
+        // A node that predates the field answers proto3's absent `false` for the class; its every
+        // class's form is the network's, and that is what is read.
+        let older = crate::protowire::GetPalwProducerFactsResponseMessage {
+            prompt_ids_merkle: true,
+            class_prompt_ids_merkle: false,
+            ..wire.clone()
+        };
+        assert!(GetPalwProducerFactsResponse::try_from(&older).unwrap().class_prompt_ids_merkle, "a Merkle genesis's classes");
         assert_eq!(back.available, response.available);
         assert_eq!(back.chain_point, response.chain_point);
         assert_eq!(back.daa_score, response.daa_score);

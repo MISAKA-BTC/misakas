@@ -605,8 +605,10 @@ impl Qwen25A16Backend {
     }
 
     /// The network's prompt-commitment form (ADR-0081 Decision 3); see `Base0Backend::prompt_ids_form`.
+    /// Stored as THIS CLASS's form (ADR-0118 Decision 3): Merkle for a held class — the dense v7
+    /// row — whatever the network's, so the job this backend derives and a seat's cannot disagree.
     pub fn with_prompt_ids_form(mut self, form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1) -> Self {
-        self.prompt_ids_form = form;
+        self.prompt_ids_form = kaspa_consensus_core::palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1(form, &self.profile);
         self
     }
 
@@ -3129,6 +3131,35 @@ mod free_prompt_tests {
         let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v5(geometry)
             .expect("the v5 projection is a valid profile");
         real_fused_capture_answers_and_convicts(geometry, profile);
+    }
+
+    /// **ADR-0118 Decision 3: a backend keeps its CLASS's prompt-ids form.** Handed a network's flat
+    /// form — testnet-11's — the held row (graph-v7) keeps the tiled Merkle root its seats and
+    /// courts read, and derives its jobs under it; the shipped row (graph-v5) keeps the flat digest,
+    /// byte for byte as before.
+    #[test]
+    fn a_backend_keeps_its_classs_prompt_ids_form_whatever_the_networks() {
+        use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1};
+        let geometry = v5_geometry();
+        let artifact = v5_artifact(geometry);
+        for (profile, form) in [
+            (
+                kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v7(geometry).expect("v7"),
+                PalwPromptIdsFormV1::MerkleV1,
+            ),
+            (
+                kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v5(geometry).expect("v5"),
+                PalwPromptIdsFormV1::Flat,
+            ),
+        ] {
+            let backend = Qwen25A16Backend::from_registered_profile(artifact.clone(), NETWORK.to_vec(), profile, (20, 4))
+                .expect("servable")
+                .with_prompt_ids_form(PalwPromptIdsFormV1::Flat);
+            assert_eq!(backend.prompt_ids_form(), form);
+            let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x0118)).expect("the anchor implies a job");
+            let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+            assert_eq!(job.prompt_token_ids_hash, prompt_token_ids_commitment_v1(form, &ids).expect("a commitment"), "{form:?}");
+        }
     }
 
     /// **The same drill on the held row** (ADR-0103 Decisions 3 and 5): graph-v7 registers the held

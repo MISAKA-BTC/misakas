@@ -134,6 +134,12 @@ pub struct ChainFacts {
     /// as a tiled Merkle root. The worker's result is re-bound under it (`prompt_ids_form`), so a
     /// worker started for the wrong network is refused here rather than at the chain.
     pub prompt_ids_merkle: bool,
+    /// **ADR-0118 Decision 3: the form THIS class's jobs commit their prompt ids in** — `true` for
+    /// the tiled Merkle root. It is `prompt_ids_merkle` for every class but one under the held
+    /// regime on a network minted flat (`GetPalwProducerFactsResponse` version 8; an older node
+    /// answers the network's form, which is then its every class's). Read through
+    /// [`ChainFacts::prompt_ids_form`], never directly.
+    pub class_prompt_ids_merkle: bool,
     /// The freshness binding, from the node's sink (`--rpc`) or from `anchor.json`.
     pub anchor_block: Hash64,
     pub anchor_daa: u64,
@@ -143,13 +149,24 @@ pub struct ChainFacts {
 }
 
 impl ChainFacts {
-    /// The form every job on the network commits its prompt under (ADR-0081 Decision 3).
+    /// **The form THIS class's jobs commit their prompt under** (ADR-0081 Decision 3, ADR-0118
+    /// Decision 3) — the one the worker's result is re-bound under. The network's for every class
+    /// but a held one on a network minted flat; a class's form is Merkle wherever the network's
+    /// is, so the class bit is read as never below the network's.
     pub fn prompt_ids_form(&self) -> kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1 {
-        if self.prompt_ids_merkle {
+        if self.prompt_ids_merkle || self.class_prompt_ids_merkle {
             kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1
         } else {
             kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
         }
+    }
+
+    /// **A PublicDa carrier cannot hold this class's ids** (ADR-0118 Decision 5): the class commits
+    /// Merkle ids and the chain's stateless check, which holds no class, reads the network's flat
+    /// form — so such a carrier is refused at the door whatever it carries, and the class's jobs
+    /// commit under `PanelDa`.
+    pub fn public_ids_cannot_ride(&self) -> bool {
+        self.class_prompt_ids_merkle && !self.prompt_ids_merkle
     }
 
     /// **The chain-side reasons a commitment does not leave the outbox** (Decision 3), by name and
@@ -250,6 +267,7 @@ impl ChainFacts {
             "panel_da_armed": self.panel_da_armed,
             "fp_decode_constraint_armed": self.fp_decode_constraint_armed,
             "prompt_ids_merkle": self.prompt_ids_merkle,
+            "class_prompt_ids_merkle": self.prompt_ids_form() == kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
             "anchor_daa": self.anchor_daa,
         })
     }
@@ -378,6 +396,8 @@ impl RpcChainSource {
                 facts.fp_decode_rules_armed = producer.fp_decode_rules_armed;
                 facts.panel_da_armed = producer.panel_da_armed;
                 facts.prompt_ids_merkle = producer.prompt_ids_merkle;
+                // ADR-0118 Decision 3: the class's own form (wire version 8).
+                facts.class_prompt_ids_merkle = producer.class_prompt_ids_merkle;
                 // ADR-0096 Decision 8's fence, read the way the two above are: the node answers
                 // it at the candidate's score (wire version 7), an older node reads as false, and
                 // false is "serve the format advisory and say so" — the cheap direction.

@@ -262,7 +262,9 @@ pub struct PalwPanelConfig {
     /// way the producer does, because the court decides the geometry a class is registered at.
     pub court: kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2,
     /// **The network's prompt-commitment form** (ADR-0081 Decision 3) — `Params::palw_prompt_ids_form_v1()`,
-    /// handed to every backend this service resolves and to every payload it decodes.
+    /// handed to every backend this service resolves (which keeps its CLASS's form) and read,
+    /// for everything this service decodes or derives, through `class_prompt_ids_form` (ADR-0118
+    /// Decision 3: a held class commits Merkle ids on a network minted flat).
     pub prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     /// Converted-class artifacts this seat holds. A seat can only judge a class whose weights it
     /// has; the floor's are derived, so this is empty on an RC node.
@@ -434,6 +436,12 @@ pub struct PalwPanelService {
     /// FIRST answer arrives in a fraction of the time. Taken on a blocking thread, never on the
     /// runtime's.
     opening_gate: std::sync::Mutex<()>,
+    /// The prompt-ids form of every class `class_prompt_ids_form` has READ a profile for. A class's
+    /// form is a function of its id — the held map is inside `shape_profile_id` — so an answer
+    /// once read never changes, and the profile behind it (a full state read and a carriage
+    /// decode) is read once per class rather than once per payload. A class no profile was found
+    /// for is not remembered: its answer is the network's until one is.
+    class_forms: std::sync::Mutex<HashMap<Hash64, kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1>>,
     /// Fired by `signal_exit` so this service's `start` future can finish. Both panel loops are
     /// `loop { sleep; work }` with nothing else that a shutdown could cancel, so without it the
     /// AsyncRuntime's shutdown join waits on a future that never completes. Measured on
@@ -504,6 +512,44 @@ impl PalwPanelService {
         })
     }
 
+    /// **The prompt-ids form a class commits its jobs' ids in** (ADR-0118 Decision 3) — the one
+    /// door every payload this panel decodes, every prompt it derives and every carriage it builds
+    /// reads the form through. The network's genesis form for every class but one under the held
+    /// regime, whose ids are the tiled Merkle root on every network: testnet-11 takes the regime at
+    /// a height, over a genesis minted flat. Read off the class's profile — the chain's
+    /// registration first, this build's tables second — which is the profile the backends that
+    /// derive and replay its jobs hold, so a seat binds a claim's ids under the form its producer
+    /// committed them in. A class neither names is one this node cannot resolve, and bytes it will
+    /// not judge are decoded under the network's form, as before.
+    fn class_prompt_ids_form(&self, class_id: Hash64) -> kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1 {
+        use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, palw_prompt_ids_form_of_class_v1};
+        let network = self.config.prompt_ids_form;
+        // On a Merkle genesis every class's form is the network's, so nothing is read.
+        if network == PalwPromptIdsFormV1::MerkleV1 {
+            return network;
+        }
+        if let Some(form) = self.class_forms.lock().expect("the class-form memo is never poisoned").get(&class_id) {
+            return *form;
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let profile = session.palw_registered_class_carriage_v1(class_id).map(|(profile, _)| profile).or_else(|| {
+            self.backends().sdk().ledger().into_iter().find(|entry| entry.class_id() == class_id).map(|entry| entry.profile)
+        });
+        let Some(profile) = profile else { return network };
+        let form = palw_prompt_ids_form_of_class_v1(network, &profile);
+        self.class_forms.lock().expect("the class-form memo is never poisoned").insert(class_id, form);
+        form
+    }
+
+    /// The form of the class a free-prompt payload's job names (`palw_fp_class_id_peek_v1`), for
+    /// the readers that decode a payload before anything else has said which class it is.
+    fn payload_prompt_ids_form(&self, bytes: &[u8]) -> kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1 {
+        match kaspa_consensus_core::palw_freeprompt_v3::palw_fp_class_id_peek_v1(bytes) {
+            Some(class_id) => self.class_prompt_ids_form(class_id),
+            None => self.config.prompt_ids_form,
+        }
+    }
+
     pub fn new(
         config: PalwPanelConfig,
         consensus_manager: Arc<ConsensusManager>,
@@ -570,6 +616,7 @@ impl PalwPanelService {
             foreign_prune_at: std::sync::Mutex::new(std::time::Instant::now()),
             served_openings: std::sync::Mutex::new(Vec::new()),
             opening_gate: std::sync::Mutex::new(()),
+            class_forms: std::sync::Mutex::new(HashMap::new()),
             seat_faults: std::sync::Mutex::new(Default::default()),
             sample_refusals_logged: std::sync::Mutex::new(HashSet::new()),
             leaf_pursuits: std::sync::Mutex::new(HashMap::new()),
@@ -1516,9 +1563,9 @@ impl PalwPanelService {
         pooled: &[Vec<u8>],
     ) -> Option<kaspa_consensus_core::palw_freeprompt_v3::PalwFpMaterialV1> {
         let disk = self.fp_retained_payload_paths(claim).into_iter().filter_map(|path| std::fs::read(path).ok());
+        let form = self.class_prompt_ids_form(class_id);
         pooled.iter().cloned().chain(disk).find_map(|bytes| {
-            let material =
-                kaspa_consensus_core::palw_freeprompt_v3::palw_fp_job_material_decode_v1(&bytes, self.config.prompt_ids_form)?;
+            let material = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_job_material_decode_v1(&bytes, form)?;
             // **Every mode the CHAIN admits, this seat must be able to judge** (ADR-0077
             // Decision 16, P-16 seat half). This was `== PALW_FP_PRIVACY_PUBLIC_DA`, and it also
             // feeds the challenger path — so on a network that armed the `PanelDa` fence a seat
@@ -1765,7 +1812,7 @@ impl PalwPanelService {
         let (canonical_ctx, prompt) = backend.job_for_anchor(fp_canonical_anchor_v1(&job))?;
         let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
         job.prompt_token_ids_hash =
-            kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(self.config.prompt_ids_form, &ids)
+            kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(self.class_prompt_ids_form(class_id), &ids)
                 .map_err(|e| e.to_string())?;
         job.prompt_tokens = ids.len() as u32;
         job.decode_token_limit = canonical_ctx.exact_decode_tokens;
@@ -1817,6 +1864,9 @@ impl PalwPanelService {
         let build = |fee: u64| {
             key.build_fp_commitment_tx(
                 network_domain,
+                // The carrier's stateless check is the chain's, which holds no class and reads the
+                // network's genesis form (ADR-0118 Decision 5); a canonical payload carries no ids,
+                // so it reads nothing here.
                 self.config.prompt_ids_form,
                 commitment.clone(),
                 Vec::new(),
@@ -2520,7 +2570,9 @@ impl PalwPanelService {
                         else {
                             continue;
                         };
-                        let Some(prompt_ids) = Self::fp_prompt_for_job(backend.as_ref(), &job, self.config.prompt_ids_form) else {
+                        let Some(prompt_ids) =
+                            Self::fp_prompt_for_job(backend.as_ref(), &job, self.class_prompt_ids_form(job.job.class_id))
+                        else {
                             continue;
                         };
                         let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
@@ -2699,7 +2751,7 @@ impl PalwPanelService {
                         *court_stalls.entry("a free-prompt session whose job material this node has not heard").or_default() += 1;
                         continue;
                     };
-                    if Self::fp_prompt_for_job(backend.as_ref(), &job, self.config.prompt_ids_form).is_none() {
+                    if Self::fp_prompt_for_job(backend.as_ref(), &job, self.class_prompt_ids_form(job.job.class_id)).is_none() {
                         *court_stalls.entry("a canonical claim whose material is not its own prompt").or_default() += 1;
                         continue;
                     }
@@ -2729,14 +2781,14 @@ impl PalwPanelService {
                     .get(&duty.claim_id)
                     .map(|pool| {
                         pool.iter().any(|b| {
-                            backend.verify_material(&fp_capture_view(b, self.config.prompt_ids_form), roots)
+                            backend.verify_material(&fp_capture_view(b, self.class_prompt_ids_form(duty.class_id)), roots)
                                 == PalwMaterialVerdictV1::Matches
                         })
                     })
                     .unwrap_or(false);
                 if !pool_has_it
                     && let Some(bytes) = self.retained_capture(&duty.claim_id)
-                    && backend.verify_material(&fp_capture_view(&bytes, self.config.prompt_ids_form), roots)
+                    && backend.verify_material(&fp_capture_view(&bytes, self.class_prompt_ids_form(duty.class_id)), roots)
                         == PalwMaterialVerdictV1::Matches
                 {
                     info!(
@@ -2833,7 +2885,7 @@ impl PalwPanelService {
                 // sides can name is the accused's.
                 let accused_capture: Option<std::borrow::Cow<'_, [u8]>> = materials.get(&duty.claim_id).and_then(|pool| {
                     pool.iter()
-                        .map(|b| fp_capture_view(b, self.config.prompt_ids_form))
+                        .map(|b| fp_capture_view(b, self.class_prompt_ids_form(duty.class_id)))
                         .find(|c| backend.verify_material(c, roots) == PalwMaterialVerdictV1::Matches)
                 });
                 let capture_from_own: Option<std::borrow::Cow<'_, [u8]>> = (!duty.i_am_responder)
@@ -3386,6 +3438,11 @@ impl PalwPanelService {
                         // not a close under the other form.
                         // One spelling of the carriage, shared with the one-move accusation
                         // (`palw_refutation_prompt_carriage_v1`, ADR-0103 Decision 1).
+                        // The NETWORK's form, which is what the chain's close check reads
+                        // (`check_close_speaks_the_networks_prompt_form`). A bisection is a
+                        // session opened before the held fence, and a held class is registered
+                        // only past it, so no class that reaches here commits in another form
+                        // (ADR-0118 Decision 3).
                         let proof = match kaspa_consensus_core::palw_step_refute::palw_refutation_prompt_carriage_v1(
                             self.config.prompt_ids_form,
                             refutation,
@@ -3509,16 +3566,18 @@ impl PalwPanelService {
                 let (row, tile) = kaspa_consensus_core::palw_state_v2::palw_da_event_index_parts_v1(duty.missing_event_index);
                 // A free-prompt retention wraps the family capture with the job and its ids; the
                 // attempt lane retains the family capture bare (ADR-0084 Decision 4).
-                let disclosed =
-                    match kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(&bytes, self.config.prompt_ids_form) {
-                        Some(payload) => self
-                            .resolve_backend(&session, duty.class_id, duty.artifact_root)
-                            .and_then(|backend| backend.disclose_trace_event(&payload.capture, row, tile)),
-                        None => match self.backend_for_raw_capture_v1(&session, &bytes) {
-                            Some((backend, _)) => backend.disclose_trace_event(&bytes, row, tile),
-                            None => Err("no held class reads the retained capture".to_string()),
-                        },
-                    };
+                let disclosed = match kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(
+                    &bytes,
+                    self.class_prompt_ids_form(duty.class_id),
+                ) {
+                    Some(payload) => self
+                        .resolve_backend(&session, duty.class_id, duty.artifact_root)
+                        .and_then(|backend| backend.disclose_trace_event(&payload.capture, row, tile)),
+                    None => match self.backend_for_raw_capture_v1(&session, &bytes) {
+                        Some((backend, _)) => backend.disclose_trace_event(&bytes, row, tile),
+                        None => Err("no held class reads the retained capture".to_string()),
+                    },
+                };
                 let disclosure = match disclosed {
                     Ok(disclosure) => disclosure,
                     Err(why) => {
@@ -3646,7 +3705,7 @@ impl PalwPanelService {
                             self.fp_job_material_for_claim(&duty.claim_id, duty.class_id, &duty.executor_bond, &held)
                             && let Ok(resolved) = self.resolve_backend(&session, duty.class_id, duty.artifact_root)
                             && let Some(prompt_ids) =
-                                Self::fp_prompt_for_job(resolved.as_ref(), &material, self.config.prompt_ids_form)
+                                Self::fp_prompt_for_job(resolved.as_ref(), &material, self.class_prompt_ids_form(material.job.class_id))
                             && let Some(output_ids) = self.fp_committed_output_ids_v1(resolved.as_ref(), duty, &held)
                             // **The seat's ONE context per claim, built from what RAN** (ADR-0084
                             // Decision 4, ADR-0074 Decision 7). The executed count is the answer's
@@ -3702,7 +3761,7 @@ impl PalwPanelService {
                             // the court's own adjudicator — and never re-runs it.
                             if let Some(payload) = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(
                                 &bytes,
-                                self.config.prompt_ids_form,
+                                self.class_prompt_ids_form(duty.class_id),
                             ) {
                                 let job = &payload.material.job;
                                 if job.class_id != duty.class_id
@@ -3721,7 +3780,7 @@ impl PalwPanelService {
                                 if let Err(why) = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_seat_prompt_admit_v1(
                                     job,
                                     Some(&payload.material.prompt_token_ids),
-                                    self.config.prompt_ids_form,
+                                    self.class_prompt_ids_form(duty.class_id),
                                 ) {
                                     warn!("[{PALW_PANEL}] claim {}: the served prompt is not this claim's ({why})", duty.claim_id);
                                     continue;
@@ -3756,9 +3815,11 @@ impl PalwPanelService {
                                 }
                                 // The prompt the samples are opened with: the user's, or the
                                 // network's own for a canonical claim (ADR-0074 Decision 1).
-                                let Some(prompt_ids) =
-                                    Self::fp_prompt_for_job(backend.as_ref(), &payload.material, self.config.prompt_ids_form)
-                                else {
+                                let Some(prompt_ids) = Self::fp_prompt_for_job(
+                                    backend.as_ref(),
+                                    &payload.material,
+                                    self.class_prompt_ids_form(payload.material.job.class_id),
+                                ) else {
                                     warn!(
                                         "[{PALW_PANEL}] claim {}: a canonical claim whose material is not its own prompt",
                                         duty.claim_id
@@ -3776,7 +3837,7 @@ impl PalwPanelService {
                                     (payload.capture.clone(), prompt_ids.clone(), duty.claim_id);
                                 let (leaves, artifact_root, ladder) =
                                     (shape.step_leaf_count, duty.artifact_root, self.config.court.max_step_leaf_count());
-                                let prompt_ids_form = self.config.prompt_ids_form;
+                                let prompt_ids_form = self.class_prompt_ids_form(duty.class_id);
                                 let Ok((_backend, samples)) = offload(backend, move |b| {
                                     Self::fp_capture_samples_clear(
                                         b,
@@ -3907,7 +3968,7 @@ impl PalwPanelService {
                             // bounded exactly as it always was.
                             let Some(material) = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_material_decode_v1(
                                 &bytes,
-                                self.config.prompt_ids_form,
+                                self.class_prompt_ids_form(duty.class_id),
                             ) else {
                                 continue;
                             };
@@ -3924,7 +3985,7 @@ impl PalwPanelService {
                             if let Err(why) = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_seat_prompt_admit_v1(
                                 &material.job,
                                 Some(&material.prompt_token_ids),
-                                self.config.prompt_ids_form,
+                                self.class_prompt_ids_form(duty.class_id),
                             ) {
                                 warn!("[{PALW_PANEL}] claim {}: the served prompt is not this claim's ({why})", duty.claim_id);
                                 continue;
@@ -3932,8 +3993,11 @@ impl PalwPanelService {
                             let Ok(backend) = self.resolve_backend(&session, duty.class_id, duty.artifact_root) else {
                                 break 'verdict Some(PalwReceiptVerdictV2::Incapable);
                             };
-                            let Some(prompt_ids) = Self::fp_prompt_for_job(backend.as_ref(), &material, self.config.prompt_ids_form)
-                            else {
+                            let Some(prompt_ids) = Self::fp_prompt_for_job(
+                                backend.as_ref(),
+                                &material,
+                                self.class_prompt_ids_form(material.job.class_id),
+                            ) else {
                                 warn!(
                                     "[{PALW_PANEL}] claim {}: a canonical claim whose material is not its own prompt",
                                     duty.claim_id
@@ -5210,7 +5274,8 @@ impl PalwPanelService {
                 }
             }
         };
-        if let Some(payload) = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(&bytes, self.config.prompt_ids_form)
+        if let Some(payload) =
+            kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(&bytes, self.payload_prompt_ids_form(&bytes))
         {
             let facts = session.palw_producer_facts_v2(payload.material.job.class_id, None)?;
             let backend = self.resolve_backend(&session, payload.material.job.class_id, facts.artifact_root).ok()?;
@@ -5291,18 +5356,15 @@ impl PalwPanelService {
         use kaspa_consensus_core::palw_freeprompt_v3::{palw_fp_committed_output_ids_decode_v1, palw_fp_job_material_decode_v1};
         use misaka_palw_base0::fp_interval::{Base0FpIntervalOpeningV4, base0_fp_interval_close_annex_any_v1};
         let Some(job) = fp_job else { return Err(CloseFromServedV1::NotThisLane) };
-        let Some(prompt_ids) = Self::fp_prompt_for_job(backend, job, self.config.prompt_ids_form) else {
+        let Some(prompt_ids) = Self::fp_prompt_for_job(backend, job, self.class_prompt_ids_form(job.job.class_id)) else {
             return Err(CloseFromServedV1::Refused("a canonical claim whose material is not its own prompt".to_string()));
         };
         // The answer's ids, off the same payloads the seat reads them from (ADR-0084 Decision 1).
         let disk = self.fp_retained_payload_paths(claim).into_iter().filter_map(|path| std::fs::read(path).ok());
+        let form = self.class_prompt_ids_form(job.job.class_id);
         let Some(output_ids) = pooled.iter().cloned().chain(disk).find_map(|bytes| {
-            palw_fp_job_material_decode_v1(&bytes, self.config.prompt_ids_form)?;
-            palw_fp_committed_output_ids_decode_v1(
-                &bytes,
-                |capture| backend.fp_committed_output_ids(capture),
-                self.config.prompt_ids_form,
-            )
+            palw_fp_job_material_decode_v1(&bytes, form)?;
+            palw_fp_committed_output_ids_decode_v1(&bytes, |capture| backend.fp_committed_output_ids(capture), form)
         }) else {
             return Err(CloseFromServedV1::Refused("no served answer carries this claim's ids".to_string()));
         };
@@ -5436,13 +5498,10 @@ impl PalwPanelService {
     ) -> Option<Vec<u32>> {
         use kaspa_consensus_core::palw_freeprompt_v3::{palw_fp_committed_output_ids_decode_v1, palw_fp_job_material_decode_v1};
         let disk = self.fp_retained_payload_paths(&duty.claim_id).into_iter().filter_map(|path| std::fs::read(path).ok());
+        let form = self.class_prompt_ids_form(duty.class_id);
         pooled.iter().cloned().chain(disk).find_map(|bytes| {
-            let material = palw_fp_job_material_decode_v1(&bytes, self.config.prompt_ids_form)?;
-            let ids = palw_fp_committed_output_ids_decode_v1(
-                &bytes,
-                |capture| backend.fp_committed_output_ids(capture),
-                self.config.prompt_ids_form,
-            )?;
+            let material = palw_fp_job_material_decode_v1(&bytes, form)?;
+            let ids = palw_fp_committed_output_ids_decode_v1(&bytes, |capture| backend.fp_committed_output_ids(capture), form)?;
             // **The context is built from the ANSWER's own length, and the chain says whether that
             // was right** (ADR-0084 Decision 1, ADR-0074 Decision 7).
             //
@@ -5465,7 +5524,7 @@ impl PalwPanelService {
                 );
                 return None;
             }
-            if kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_decode_v1(&bytes, self.config.prompt_ids_form).is_some() {
+            if kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_decode_v1(&bytes, form).is_some() {
                 self.persist_foreign_answer(&duty.claim_id, &bytes);
             }
             Some(ids)
@@ -5636,7 +5695,8 @@ impl PalwPanelService {
     /// attempt-lane capture is Decision 4's, not this function's.
     fn derive_answer_envelope_v1(&self, bytes: &[u8]) -> Option<Vec<u8>> {
         let session = self.consensus_manager.consensus().unguarded_session();
-        if let Some(payload) = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(bytes, self.config.prompt_ids_form)
+        if let Some(payload) =
+            kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(bytes, self.payload_prompt_ids_form(bytes))
         {
             let facts = session.palw_producer_facts_v2(payload.material.job.class_id, None)?;
             let backend = self.resolve_backend(&session, payload.material.job.class_id, facts.artifact_root).ok()?;
@@ -6044,7 +6104,7 @@ impl PalwPanelService {
             roots,
             work_leaves,
             leaf,
-            self.config.prompt_ids_form,
+            self.class_prompt_ids_form(job.class_id),
         )
     }
 
@@ -6079,8 +6139,9 @@ impl PalwPanelService {
             .retained_capture(&claim)
             .or_else(|| std::fs::read(self.config.retention_dir.join("foreign").join(format!("{claim}.material"))).ok())
             .ok_or("no retained capture for the claim")?;
-        let payload = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(&bytes, self.config.prompt_ids_form)
-            .ok_or("the retained material is not a free-prompt capture")?;
+        let payload =
+            kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(&bytes, self.payload_prompt_ids_form(&bytes))
+                .ok_or("the retained material is not a free-prompt capture")?;
         let class_id = payload.material.job.class_id;
         let facts = session.palw_producer_facts_v2(class_id, None).ok_or("the chain names no such class")?;
         let backend = self.resolve_backend(session, class_id, facts.artifact_root)?;
@@ -7134,6 +7195,62 @@ mod court_responder_coverage_pin {
                 params.palw_court_responder_coverage.is_none(),
                 "{name}: the responder exemption is retired — a fused terminal's silence is the responder's to answer"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod held_class_form_pin {
+    /// The whole call starting at `s` (which begins with the callee's name), by its parentheses.
+    fn call_extent(s: &str) -> &str {
+        let open = s.find('(').expect("a call");
+        let mut depth = 0usize;
+        for (i, c) in s[open..].char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return &s[..open + i + 1];
+                    }
+                }
+                _ => {}
+            }
+        }
+        s
+    }
+
+    /// **ADR-0118 Decision 3, pinned where it lives: every payload this panel decodes, every
+    /// prompt it derives and every carriage a seat builds reads the claim's CLASS's form.** A held
+    /// class commits Merkle ids on a network minted flat, so a reader that took the network's form
+    /// would refuse every held claim's ids and file nothing. The network's form is read in exactly
+    /// the places that are the network's: the backend registry and the SDK (whose backends keep
+    /// their class's form), the two class-form doors themselves, the canonical claim's carrier (the
+    /// chain's stateless check holds no class), and a bisection's close (the chain's close check;
+    /// no held class is ever bisected).
+    #[test]
+    fn every_panel_reader_takes_the_claims_class_form() {
+        let whole = include_str!("palw_panel.rs");
+        let source = &whole[..whole.find("#[cfg(test)]\nmod tests {").expect("the unit tests follow the code")];
+        let uses: Vec<&str> = source.lines().filter(|l| l.contains("self.config.prompt_ids_form")).map(str::trim).collect();
+        assert_eq!(uses.len(), 6, "a new reader of the network's form — read the class's instead (ADR-0118 D3): {uses:#?}");
+        assert!(source.contains("fn class_prompt_ids_form(&self, class_id: Hash64)"), "the one door");
+        for callee in [
+            "palw_fp_capture_decode_v1(",
+            "palw_fp_material_decode_v1(",
+            "palw_fp_job_material_decode_v1(",
+            "palw_fp_answer_decode_v1(",
+            "palw_fp_committed_output_ids_decode_v1(",
+            "palw_fp_seat_prompt_admit_v1(",
+            "fp_prompt_for_job(",
+            "fp_capture_view(",
+            "palw_leaf_evidence_from_capture_v1(",
+        ] {
+            let calls: Vec<&str> = source.match_indices(callee).map(|(at, _)| call_extent(&source[at..])).collect();
+            assert!(!calls.is_empty(), "{callee} is still read here");
+            for call in calls {
+                assert!(!call.contains("self.config.prompt_ids_form"), "{callee} reads the network's form: {call}");
+            }
         }
     }
 }

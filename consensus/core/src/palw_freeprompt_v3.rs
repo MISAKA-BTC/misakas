@@ -2739,6 +2739,23 @@ pub fn palw_fp_privacy_mode_peek_v1(bytes: &[u8]) -> Option<u8> {
     Some(job.privacy_mode)
 }
 
+/// **The class a free-prompt payload's job names, read off its prefix and nothing else** —
+/// unauthenticated, as [`palw_fp_privacy_mode_peek_v1`] is, and for one purpose: choosing the
+/// prompt-ids form the decoders then authenticate the ids under. A held class commits its ids as
+/// the tiled Merkle root on a network minted flat (ADR-0118 Decision 3), so a reader holding
+/// payloads of many classes asks the class before it asks the ids. Nothing is believed: the
+/// decoder reads the same job bytes, so the class it admits under is the class this names, and a
+/// payload that lies is refused by the ids check either way. `None` for foreign bytes.
+pub fn palw_fp_class_id_peek_v1(bytes: &[u8]) -> Option<Hash64> {
+    let body = bytes
+        .strip_prefix(&PALW_FP_MATERIAL_V1_MAGIC)
+        .or_else(|| bytes.strip_prefix(&PALW_FP_CAPTURE_V1_MAGIC))
+        .or_else(|| bytes.strip_prefix(&PALW_FP_ANSWER_V1_MAGIC))?;
+    let mut cursor = body;
+    let job = <PalwFreePromptJobV3 as borsh::BorshDeserialize>::deserialize(&mut cursor).ok()?;
+    Some(job.class_id)
+}
+
 /// The job material of ANY free-prompt payload — `FPC1` (question and capture), `FPA1` (question
 /// and the answer's ids, ADR-0084) or `FPM1` (question alone). Readers that need only the job and
 /// the user's prompt take this.

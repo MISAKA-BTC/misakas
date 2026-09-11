@@ -913,7 +913,12 @@ pub fn limits_body(manifest: &PalwFpWorkerManifestV1, limits: &SurfaceLimits, fa
         },
         "privacy": {
             "prompt_ids_on_chain": if facts.panel_da_armed { "panel_da_available" } else { "public_da" },
-            "prompt_ids_form": if facts.prompt_ids_merkle { "merkle" } else { "flat" },
+            // THIS class's form (ADR-0118 Decision 3): a held class commits Merkle ids on a flat network.
+            "prompt_ids_form": if facts.prompt_ids_form() == kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1 {
+                "merkle"
+            } else {
+                "flat"
+            },
         },
         // What a refusal looks like, so a client can branch on a code instead of a sentence. The
         // code is where OpenAI puts one (`error.code`; `context_length_exceeded` is OpenAI's own
@@ -1568,6 +1573,12 @@ mod tests {
         assert_eq!(body["features"]["sampling"]["seed"], json!("requested"));
         assert_eq!(body["privacy"]["prompt_ids_on_chain"], json!("panel_da_available"));
         assert_eq!(body["privacy"]["prompt_ids_form"], json!("merkle"));
+
+        // ADR-0118 Decision 3: a held class on a network minted flat reads its OWN form.
+        let held_on_flat = ChainFacts { panel_da_armed: true, class_prompt_ids_merkle: true, ..Default::default() };
+        let body = limits_body(&manifest, &limits, &held_on_flat);
+        assert_eq!(body["privacy"]["prompt_ids_form"], json!("merkle"));
+        assert!(held_on_flat.public_ids_cannot_ride() && !armed.public_ids_cannot_ride() && !dormant().public_ids_cannot_ride());
     }
 
     /// **ADR-0097 invariant 8.** The two refusals a request meets before the chain carry a code
