@@ -283,6 +283,24 @@ parameter.
   Decision 6's numbers decide whether it is worth a ruleset move: at the device rates measured, a
   nine-pass draw reads for 10–15 s, which is the order of its compute, so the loader alone brings
   the draw from twenty minutes to under a minute. Recorded, with the arithmetic, and not taken.
+
+  **Decided 2026-09-11: not taken.** The operator asked that the open design calls be made where
+  the gain is large. What a one-forward job would buy depends on the host (§10.5):
+
+  | host | a draw today | with this ADR's loader | with a one-forward job as well |
+  |---|---|---|---|
+  | `C` (about 4.5 GiB spare) | 17–18 min, page faults | about 8 GiB read at 563 MB/s, 15 s, plus compute | about 1 GiB, 2 s, plus a ninth of the compute |
+  | `ibm`, `.113` (nothing spare) | 17–20 min | unchanged: the page cache (§10.5) | 12.8 GiB → about 2.8 GiB, still through faults at 11 MB/s: about 4 min |
+
+  Where the loader has memory it already brings the draw inside the chain's two-minute cadence,
+  and one forward only makes a fast draw faster. Where it has none, one forward still leaves the
+  draw at twice the cadence. The fix there is the node's own working set, 9–14 GB of anonymous
+  memory a node holds for itself (the bullet on it below), not the job. Against that gain, the job is
+  part of the class id through `pwu_per_inference`. On testnet-11 the class was minted in genesis,
+  so changing the job means re-minting it: a flag day for every operator. A class's market row is
+  also keyed by its class id (ADR-0087), so positions on the old class could only be sold back.
+  The gain is not large enough for that. What would reopen it is Decision 6's measurement: a draw
+  on `C` under its budget that still takes longer than the cadence.
 * **Streaming the always-set.** Below the floor (2.83 GiB here, a ratio of 11.8) the always-set
   would have to be read per layer per token — 1.86 GiB a token, 17 GiB a draw. The dial exists in
   the design; the ratio this ADR certifies does not need it. **The ratio is a property of the
