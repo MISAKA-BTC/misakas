@@ -209,8 +209,11 @@ not a failure; it is the sentence the operator's Mac-versus-GPU case asked for.
 report (classification, depth, every check by name with `pass | fail | skipped(reason)`, the
 recomputed roots), the verifier's `ruleset_id` and crate version, a timestamp the verifier chose, and
 optionally an ML-DSA-87 signature by the verifier's key over the receipt's canonical bytes, under the
-context `misaka-palw/extension-receipt/v1` — which this ADR registers, beside the contexts
-`palw_signature_contexts_v2` already lists. `receipt_id = H(canonical bytes without the signature)`.
+context `misaka-palw/extension-receipt/v1`. That context is a constant of the extension crate and is
+**deliberately not added to the bundle's `signature_contexts_root`**: that root is a consensus set
+(`palw_signature_contexts_v2`, armed at genesis), and adding a member moves the fingerprint — a
+receipt signs nothing the chain ever verifies, so the chain's set has no reason to know it.
+`receipt_id = H(canonical bytes without the signature)`.
 
 What a receipt is for: two receipts from two builds that disagree about the same manifest are a bug
 report with a preimage attached. A person who cannot run the Full depth can read receipts from people
@@ -325,9 +328,10 @@ a millisecond to a transition, or a field to `Params`.
 * **SA-3 — a receipt names the ruleset it was made on**, and `receipt-verify` refuses to call a receipt
   made on another `ruleset_id` a receipt for this one. A receipt from a devnet is not evidence about
   testnet-11 (the same object can be Expressible on one and RulesetChange on the other).
-* **SA-4 — the signature context is registered.** `misaka-palw/extension-receipt/v1` joins the
-  context list; a signature under another context does not verify, so a receipt cannot be replayed as
-  an attestation, a bond message, or anything else ML-DSA signs in this system.
+* **SA-4 — the signature context is its own.** `misaka-palw/extension-receipt/v1` is used for
+  receipts and nothing else, and it is not in the chain's context set (Decision 4); a signature under
+  another context does not verify, so a receipt cannot be replayed as an attestation, a bond message,
+  or anything else ML-DSA signs in this system — and nothing signed for the chain verifies as a receipt.
 * **SA-5 — no aggregation, anywhere.** No struct in consensus, node, SDK or CLI holds a *set* of
   receipts. `receipt-verify` takes one. This is the mechanical form of Decision 4.
 * **SA-6 — `submit` signs with the operator's key, never one the manifest names.** A manifest carries
@@ -346,8 +350,11 @@ a millisecond to a transition, or a field to `Params`.
 * **I-3** Every field bound in SA-1 is enforced at the boundary, with the offending field named, before
   any kind-specific work.
 * **I-4** `model-class`: the RC's own genesis rows (the SDK's built-in ledger) verify `Expressible {
-  ClassRegistered }`; a profile that reaches a kernel this build has no family for classifies
-  `NodeExtension` naming the kernel; the serving flag says whether the class is in the build's table.
+  ClassRegistered }` and the report says they are already registered; a profile whose kernels this
+  build's vocabulary cannot price is `RulesetChange` naming the kernel (a new kernel is a release,
+  ADR-0067); a profile no certified family covers is `Expressible` and the report says *weightless*
+  (ADR-0069 Decision 5); an artifact container no lineage of this build sniffs is `NodeExtension`
+  naming the lineage; the serving flag says whether the class is in the build's table.
 * **I-5** `family-certification`: the shipped attempt-lane drill evidence verifies to the pinned
   family id at depth Vectors; one flipped vector is `Refused` with the grader's own error name.
 * **I-6** `derived-transformer`: a manifest naming a transformer this build ships verifies at depth
