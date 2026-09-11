@@ -10299,6 +10299,13 @@ fn mainnet_card_base_v1(mut base: Params, dense_tier_pinned: bool) -> Params {
     // it — so a live chain reaches them as a flag day and that is its operator's call. testnet-11
     // leaves them dormant and every coinbase it builds is byte-identical to today's.
     base.palw_validator_payout_bounds = Some(ForkActivation::always());
+    // **B-2 (mainnet audit 2026-09-11): a carded mainnet counts only Final work in the share
+    // census, from genesis** (ADR-0107). Without it, `produced_blocks` is written at Provisional
+    // and never decremented on void, so fake or unfinalised blocks grow a class's cadence share
+    // (observed 1‰→51‰ in 16 epochs). Armed here rather than derived: a card is where a mainnet's
+    // fences are STATED, and this one has no reason to wait. testnet-11 leaves it dormant — arming
+    // it there is a flag day, and the census it changes is the same one two live chains committed.
+    base.palw_share_growth_final = Some(ForkActivation::always());
     base
 }
 
@@ -15828,6 +15835,9 @@ mod consensus_params_id_tests {
             "palw_prompt_ids_merkle",
             "palw_receipt_rows_unpriced",
             "palw_signature_contexts_v2",
+            // B-2 (mainnet audit 2026-09-11): a card counts only Final work in the share census
+            // (ADR-0107), armed here and dormant on testnet-11.
+            "palw_share_growth_final",
             "palw_unavailable_abstains",
             "palw_uncertified_weightless",
             "palw_validator_payout_bounds",
