@@ -89,8 +89,19 @@ impl AsyncService for P2pService {
                 connection_manager.add_connection_request(peer_address.into(), true).await;
             }
 
-            // Keep the P2P server running until a service shutdown signal is received
-            shutdown_signal.await;
+            // Keep the P2P server running until a service shutdown signal is received — and, meanwhile,
+            // tick the EVM relay on its own clock (ADR-0115): block arrival is too rare on a slow
+            // network to be the only thing that moves pending transactions between nodes.
+            let mut evm_relay = tokio::time::interval(crate::flow_context::EVM_RELAY_TICK);
+            evm_relay.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            let shutdown_signal = shutdown_signal;
+            tokio::pin!(shutdown_signal);
+            loop {
+                tokio::select! {
+                    _ = &mut shutdown_signal => break,
+                    _ = evm_relay.tick() => self.flow_context.evm_relay_tick().await,
+                }
+            }
             // Important for cleanup of the P2P adaptor since we have a reference cycle:
             // flow ctx -> conn manager -> p2p adaptor -> flow ctx (as ConnectionInitializer)
             self.flow_context.drop_connection_manager();
