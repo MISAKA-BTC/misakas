@@ -5266,12 +5266,15 @@ mod tests {
     fn the_chains_interval_geometry_is_the_seats_on_both_units() {
         use kaspa_consensus_core::palw_leaf_evidence_v1::{PalwSeatIntervalGeometryV1, PalwSeatIntervalUnitV1};
         let interval = kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1;
-        for (name, (_, profile, ctx, _, run)) in
-            [("per-call graph-v5", dense_v5_run()), ("held graph-v7", dense_v7_run()), ("held, mid-prefill", dense_v7_run_mid_prefill())]
-        {
+        for (name, (_, profile, ctx, _, run)) in [
+            ("per-call graph-v5", dense_v5_run()),
+            ("held graph-v7", dense_v7_run()),
+            ("held, mid-prefill", dense_v7_run_mid_prefill()),
+        ] {
             let chain = PalwSeatIntervalGeometryV1::from_binding_v1(&run.binding).expect("derivable from the binding");
-            let family = base0_fp_interval_count_for_class_v1(&profile, ctx.declared_prefill_tokens, ctx.exact_decode_tokens, interval)
-                .expect("the family counts");
+            let family =
+                base0_fp_interval_count_for_class_v1(&profile, ctx.declared_prefill_tokens, ctx.exact_decode_tokens, interval)
+                    .expect("the family counts");
             assert_eq!(chain.count, family, "{name}: one interval count");
             assert!(chain.count >= 2, "{name}: a fixture with one interval proves nothing");
             assert_eq!(
