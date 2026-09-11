@@ -1068,8 +1068,21 @@ mod tests {
             let extracted = !palw_lifecycle_objects_from_accepted_txs_v2(&[carrier(SUBNETWORK_ID_PALW_LIFECYCLE, payload.clone())])
                 .objects
                 .is_empty();
-            assert_eq!(admitted, extracted, "admission and extraction disagree on {payload:?}");
+            // **A-2: admission never REJECTS a payload the walk folds** (`extracted ⇒ admitted`).
+            // It no longer holds the reverse: a payload the walk SKIPS — one this build cannot
+            // decode, or that names a wire version it does not know — is now TOLERATED at isolation
+            // (Ok) rather than failing the block, because the walk folds nothing for it and an older
+            // build must not split from a newer one over an appended object kind. A decodable,
+            // current-version object that may-not-ride is still rejected, and the walk still skips
+            // it, so those two agree as before.
+            assert!(!extracted || admitted, "admission rejected a payload the walk extracts: {payload:?}");
         }
+        // The two cases where admission is now deliberately more tolerant than extraction: an
+        // unknown wire version, and bytes this build cannot decode. Both are Ok at isolation and
+        // fold nothing.
+        let unknown_version = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: 99, object: panel_bound() }).unwrap();
+        assert!(validate_palw_lifecycle_tx(&unknown_version).is_ok(), "an unknown wire version is tolerated at isolation (A-2)");
+        assert!(validate_palw_lifecycle_tx(&[0xFFu8; 8]).is_ok(), "an undecodable payload is tolerated at isolation (A-2)");
     }
 
     /// ADR-0075: both certification objects ride the lifecycle subnetwork — admission and
