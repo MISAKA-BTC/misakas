@@ -1179,13 +1179,7 @@ pub fn state_v4_path_len(width: u64, index: u64) -> u32 {
     len
 }
 
-fn v4_root_from_path(
-    domain: &[u8],
-    width: u64,
-    index: u64,
-    leaf: Hash64,
-    siblings: &[Hash64],
-) -> Result<Hash64, PalwStepLegError> {
+fn v4_root_from_path(domain: &[u8], width: u64, index: u64, leaf: Hash64, siblings: &[Hash64]) -> Result<Hash64, PalwStepLegError> {
     if width == 0 || index >= width {
         return Err(PalwStepLegError::LeafIndexOutOfRange { index, count: width });
     }
@@ -1242,9 +1236,13 @@ pub fn state_chunk_opening_root_v4(
     chunk_hash: &Hash64,
     siblings: &[Hash64],
 ) -> Result<Hash64, PalwStepLegError> {
-    let depth = state_v4_path_len(u64::from(block_count), u64::from(block)) + state_v4_path_len(u64::from(slice_count), u64::from(slice));
+    let depth =
+        state_v4_path_len(u64::from(block_count), u64::from(block)) + state_v4_path_len(u64::from(slice_count), u64::from(slice));
     if depth > PALW_STEP_LEG_MAX_STATE_DEPTH_V4 || siblings.len() > PALW_STEP_LEG_MAX_STATE_DEPTH_V4 as usize {
-        return Err(PalwStepLegError::StateTreeTooDeep { depth: depth.max(siblings.len() as u32), max: PALW_STEP_LEG_MAX_STATE_DEPTH_V4 });
+        return Err(PalwStepLegError::StateTreeTooDeep {
+            depth: depth.max(siblings.len() as u32),
+            max: PALW_STEP_LEG_MAX_STATE_DEPTH_V4,
+        });
     }
     let split = state_v4_path_len(u64::from(block_count), u64::from(block)) as usize;
     if siblings.len() < split {
@@ -2253,7 +2251,11 @@ mod tests {
             let tree = PalwStepMerkleTreeV1::build_capped_v1(&leaves, PALW_STEP_LEG_MAX_LEAVES).expect("builds");
             assert_eq!(tree.root(), step_merkle_root_v1(&leaves).expect("the rebuilt root"), "n = {n}");
             for i in 0..n {
-                assert_eq!(tree.path_v1(i).expect("a path"), step_merkle_path_v1(&leaves, i).expect("the rebuilt path"), "n = {n}, i = {i}");
+                assert_eq!(
+                    tree.path_v1(i).expect("a path"),
+                    step_merkle_path_v1(&leaves, i).expect("the rebuilt path"),
+                    "n = {n}, i = {i}"
+                );
             }
             assert!(tree.path_v1(n).is_err());
         }
@@ -2300,8 +2302,11 @@ mod tests {
         let map = Hash64::from_u64_word(0x4444);
         let widths = [1u32, 2, 3, 5, 8, 13, 1];
         let bytes = |s: u32, b: u32| vec![(s * 31 + b) as u8; 5 + (b % 3) as usize];
-        let slices: Vec<Vec<Hash64>> =
-            widths.iter().enumerate().map(|(s, &w)| (0..w).map(|b| state_chunk_leaf_hash_v4(&map, s as u32, b, &bytes(s as u32, b))).collect()).collect();
+        let slices: Vec<Vec<Hash64>> = widths
+            .iter()
+            .enumerate()
+            .map(|(s, &w)| (0..w).map(|b| state_chunk_leaf_hash_v4(&map, s as u32, b, &bytes(s as u32, b))).collect())
+            .collect();
         let top: Vec<Hash64> = slices
             .iter()
             .enumerate()
@@ -2321,7 +2326,10 @@ mod tests {
                 assert_ne!(state_chunk_leaf_hash_v4(&map, s32, b32 + 1, &bytes(s32, b32)), leaves[b]);
                 assert_ne!(state_chunk_leaf_hash_v4(&map, s32 + 1, b32, &bytes(s32, b32)), leaves[b]);
                 if !path.is_empty() {
-                    assert!(state_chunk_opening_root_v4(slice_count, s32, w, b32, &leaves[b], &path[..path.len() - 1]).is_err(), "short");
+                    assert!(
+                        state_chunk_opening_root_v4(slice_count, s32, w, b32, &leaves[b], &path[..path.len() - 1]).is_err(),
+                        "short"
+                    );
                 }
                 let mut long = path.clone();
                 long.push(Hash64::from_u64_word(1));

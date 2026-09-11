@@ -962,25 +962,18 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for Qwen36IntervalKernels<'_> 
         let mut cache = Qwen36Cache::new(&self.artifact.shape);
         let vocab = self.artifact.shape.vocab;
         let max_position = self.artifact.shape.max_position;
-        crate::fp_interval::base0_fp_replay_interval_tiles_v1(
-            profile,
-            ctx,
-            start,
-            window,
-            step_leaf_count,
-            |token, position| {
-                if token >= vocab {
-                    return Err(format!("token {token} is outside this class's vocabulary of {vocab}"));
-                }
-                if position >= max_position {
-                    return Err(format!("the job runs past the rotary table at position {position}"));
-                }
-                let (logits, trace) = engine
-                    .forward_token_planned(self.plan, &mut cache, token, position)
-                    .map_err(|e| format!("forward at {position}: {e}"))?;
-                Ok((logits, qwen36_captured_rows_v1(profile, &trace)))
-            },
-        )
+        crate::fp_interval::base0_fp_replay_interval_tiles_v1(profile, ctx, start, window, step_leaf_count, |token, position| {
+            if token >= vocab {
+                return Err(format!("token {token} is outside this class's vocabulary of {vocab}"));
+            }
+            if position >= max_position {
+                return Err(format!("the job runs past the rotary table at position {position}"));
+            }
+            let (logits, trace) = engine
+                .forward_token_planned(self.plan, &mut cache, token, position)
+                .map_err(|e| format!("forward at {position}: {e}"))?;
+            Ok((logits, qwen36_captured_rows_v1(profile, &trace)))
+        })
     }
 }
 
@@ -1421,7 +1414,9 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
                 self.prompt_ids_form,
             )
             .map_err(|e| e.to_string()),
-            crate::produce::Base0RetentionV1::Dense(_) => Err("a dense retention is the attempt lane's; it resumes nothing".to_string()),
+            crate::produce::Base0RetentionV1::Dense(_) => {
+                Err("a dense retention is the attempt lane's; it resumes nothing".to_string())
+            }
         }
     }
 
@@ -1767,7 +1762,9 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
         decode_tokens_executed: u32,
     ) -> Option<PalwJobContextV2> {
-        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_job_context_v3, palw_fp_run_facts_for_executed_v1};
+        use kaspa_consensus_core::palw_fp_execution_v3::{
+            PalwFpClassFactsV3, palw_fp_job_context_v3, palw_fp_run_facts_for_executed_v1,
+        };
         let class = PalwFpClassFactsV3 {
             model_profile_id: self.shape_id,
             runtime_manifest_hash: Hash64::default(),
@@ -1861,10 +1858,14 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
                 }
                 ids.to_vec()
             }
-            None => qwen36_prompt_for_anchor(binding.job_context.job_id, self.artifact.shape.vocab, binding.job_context.declared_prefill_tokens)
-                .iter()
-                .map(|t| *t as u32)
-                .collect(),
+            None => qwen36_prompt_for_anchor(
+                binding.job_context.job_id,
+                self.artifact.shape.vocab,
+                binding.job_context.declared_prefill_tokens,
+            )
+            .iter()
+            .map(|t| *t as u32)
+            .collect(),
         };
         let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
         let generated = retention.generated_token_ids().to_vec();
@@ -1918,10 +1919,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
 
     fn supports_dissection(&self) -> bool {
         self.plan.is_some()
-            && self
-                .profile
-                .as_ref()
-                .is_some_and(kaspa_consensus_core::palw_class_admission_v2::palw_fused_sites_are_dissectable_v1)
+            && self.profile.as_ref().is_some_and(kaspa_consensus_core::palw_class_admission_v2::palw_fused_sites_are_dissectable_v1)
     }
 
     fn has_fused_site(&self) -> bool {
@@ -2572,7 +2570,9 @@ mod tests {
     /// Forged, the least lie that finalizes to the forged tile is convicted at that bottom.
     #[test]
     fn a_real_hybrid_fused_capture_answers_its_dissection_exactly_and_a_forged_row_is_convicted() {
-        use kaspa_consensus_core::palw_attn_court_v1::{PalwAttnCourtVerdictV1, PalwAttnDissectPhaseV1, check_attn_dissect_bottom_v1, palw_attn_opened_lanes_v1};
+        use kaspa_consensus_core::palw_attn_court_v1::{
+            PalwAttnCourtVerdictV1, PalwAttnDissectPhaseV1, check_attn_dissect_bottom_v1, palw_attn_opened_lanes_v1,
+        };
         use kaspa_consensus_core::palw_bisect::PalwBisectTurnV1;
         use kaspa_consensus_core::palw_step::{PalwStepOpKindV1, canonical_step_coordinates};
 
@@ -2594,8 +2594,9 @@ mod tests {
         let artifact = std::sync::Arc::new(artifact);
         let session = Hash64::from_u64_word(0x5E56);
         for (graph, profile) in [("v5", v5), ("v6", v6), ("v7", v7)] {
-            let backend = Qwen36Backend::from_registered_profile(artifact.clone(), b"misaka-palw-test".to_vec(), profile.clone(), (3, 4))
-                .expect("the fused hybrid is servable");
+            let backend =
+                Qwen36Backend::from_registered_profile(artifact.clone(), b"misaka-palw-test".to_vec(), profile.clone(), (3, 4))
+                    .expect("the fused hybrid is servable");
             assert!(backend.has_fused_site());
             assert_eq!(backend.supports_dissection(), graph != "v5", "{graph}: the backend says whether its fused tile is one head's");
             let root = crate::inventory::qwen36_inventory_v1(&artifact, &profile).expect("the inventory").root();
@@ -2617,7 +2618,8 @@ mod tests {
                 continue;
             }
             for &narrowed in &fused {
-                let evidence = backend.attn_site_evidence(&honest.material, narrowed, None).expect("the honest capture yields its evidence");
+                let evidence =
+                    backend.attn_site_evidence(&honest.material, narrowed, None).expect("the honest capture yields its evidence");
                 let site = evidence.site_v1(root, false).expect("the site derives");
                 let anchored = evidence.site_v1(root, true).expect("and with its anchor");
                 let root_claim = evidence.root_claim_v1(&site).expect("the root computes");
@@ -2651,7 +2653,8 @@ mod tests {
                 let lying = backend.execute_with_injected_fault(&job, &prompt, narrowed).expect("a forged capture commits");
                 let accused = backend.attn_site_evidence(&lying.material, narrowed, None).expect("the accused's commitments open");
                 let accused_site = accused.site_v1(root, true).expect("site");
-                let forged = palw_attn_opened_lanes_v1(&accused.out_tile, &accused_site.binding, site.head_lanes.2 as usize).expect("opens");
+                let forged =
+                    palw_attn_opened_lanes_v1(&accused.out_tile, &accused_site.binding, site.head_lanes.2 as usize).expect("opens");
                 assert!(open(&root_claim, &forged).is_err(), "an honest root cannot finalize to a forged tile");
                 let values = site.site.params.values;
                 let finalize = |v: &[i64]| kaspa_consensus_core::palw_base0_a16::a16_attn_finalize_v1(v, values);
@@ -2691,7 +2694,9 @@ mod tests {
         use kaspa_consensus_core::palw_base0_a16::A16QuantParams;
         use kaspa_consensus_core::palw_qwen36_profile::{qwen36_profile_v2, qwen36_profile_v5, qwen36_profile_v6};
         use kaspa_consensus_core::palw_step::{PalwStepOpKindV1, kernel_semantics_id_v1};
-        use kaspa_consensus_core::palw_step_refute::{KDESC_A16_REQUANTIZE_BY_TOKEN, PalwStepRefuteError, check_execution_step_refutation_v1};
+        use kaspa_consensus_core::palw_step_refute::{
+            KDESC_A16_REQUANTIZE_BY_TOKEN, PalwStepRefuteError, check_execution_step_refutation_v1,
+        };
 
         let base = crate::qwen36::test_fixture(4, 8);
         let vocab = base.shape.vocab;
@@ -2776,7 +2781,9 @@ mod tests {
             let refutation = backend.refutation_for_index(&lying.material, index).expect("a tampered capture opens too");
             let openings = backend.operand_openings_for(&refutation).expect("the prover opens the one lift row the court reads");
             assert!(
-                openings.iter().any(|o| o.operand.tensor_name == "embed_lift.a16" && o.operand.bytes.len() == A16QuantParams::WIRE_BYTES),
+                openings
+                    .iter()
+                    .any(|o| o.operand.tensor_name == "embed_lift.a16" && o.operand.bytes.len() == A16QuantParams::WIRE_BYTES),
                 "the court read exactly one 17-byte triple of the lift"
             );
             let proven = kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&openings, inventory.root())

@@ -10074,7 +10074,9 @@ fn palw_rc_arm_phase1(mut params: Params) -> Params {
 /// its existence (the fence stays `None` on every preset).
 pub fn palw_held_context_mint_v1(mut params: Params, ladder: u64) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
     let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut params.palw_consensus_mode else {
-        return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid("the held regime is a ConsensusV2 ruleset; this base carries no V2 bundle"));
+        return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
+            "the held regime is a ConsensusV2 ruleset; this base carries no V2 bundle",
+        ));
     };
     bundle.signature_contexts_root = crate::palw_mode_v2::palw_v2_signature_contexts_root_v4();
     bundle.trace_format_version = crate::palw_mode_v2::PALW_V2_TRACE_FORMAT_VERSION_MERKLE_IDS;
@@ -10106,9 +10108,12 @@ pub fn palw_held_context_mint_v1(mut params: Params, ladder: u64) -> Result<Para
     params.palw_da_court = Some(ForkActivation::always());
     params.palw_fp_da_pins = Some(ForkActivation::always());
     // ADR-0082 Decision 3: the frozen arity must be the one the held court derives from genesis.
-    let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut params.palw_consensus_mode else { unreachable!("matched above") };
-    let derived = crate::palw_court_v2::palw_court_params_held_at_v2(bundle, true, true)
-        .map_err(|_| crate::palw_mode_v2::PalwModeV2Error::Invalid("no dissection arity fits this lattice's court window with the ladder at zero"))?;
+    let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut params.palw_consensus_mode else {
+        unreachable!("matched above")
+    };
+    let derived = crate::palw_court_v2::palw_court_params_held_at_v2(bundle, true, true).map_err(|_| {
+        crate::palw_mode_v2::PalwModeV2Error::Invalid("no dissection arity fits this lattice's court window with the ladder at zero")
+    })?;
     bundle.court = bundle.court.with_dissection_arity(derived.dissection_arity())?;
     // The court widens the pruning horizon to hold its phase: re-derived from the bundle, raised and
     // never lowered, exactly as the shipped assembly derives it.
@@ -12728,9 +12733,7 @@ mod consensus_params_id_tests {
         never.palw_token_lift = Some(ForkActivation::never());
         never.validate_palw_v2().expect("Some(never()) is absence");
         // The kernel is adjudicable and outside the root the bundle commits to.
-        assert!(
-            crate::palw_step_refute::fenced_kernel_ids_v1().is_disjoint(&crate::palw_step_refute::catalogued_kernel_ids_v1())
-        );
+        assert!(crate::palw_step_refute::fenced_kernel_ids_v1().is_disjoint(&crate::palw_step_refute::catalogued_kernel_ids_v1()));
         // A genesis that registers a v6 row needs the fence from genesis.
         let v6 = crate::palw_qwen36_profile::qwen36_artifact_row_profile_v6(crate::palw_qwen36_profile::PalwQwen36GeometryV1 {
             n_ctx: 512,
@@ -12755,7 +12758,14 @@ mod consensus_params_id_tests {
         };
         carriage.profile = v6;
         let crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
-            class_id, artifact_root, slash_value_per_pwu, pwu_rule, initial_target, share_permille, activation_daa, ..
+            class_id,
+            artifact_root,
+            slash_value_per_pwu,
+            pwu_rule,
+            initial_target,
+            share_permille,
+            activation_daa,
+            ..
         } = template
         else {
             unreachable!()

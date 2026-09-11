@@ -46,7 +46,11 @@ use crate::palw_state_chunk_map::{PalwStateChunkKindV1, integer_kv_state_locate_
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PalwAttnResponderError {
     /// The evidence's inputs do not have the site's shape: `what` names the series.
-    InputsAreNotTheSites { what: &'static str, got: usize, want: usize },
+    InputsAreNotTheSites {
+        what: &'static str,
+        got: usize,
+        want: usize,
+    },
     /// The site could not be derived from the evidence's binding and openings.
     Site(String),
     Kernel(PalwA16OpError),
@@ -102,13 +106,25 @@ impl PalwAttnSiteInputsV1 {
     pub fn check_v1(&self, site: &PalwAttnDisputeSiteV2) -> Result<(), PalwAttnResponderError> {
         let want_series = site.history_positions as usize * site.site.kv_dim;
         if self.qh.len() != site.site.d_head {
-            return Err(PalwAttnResponderError::InputsAreNotTheSites { what: "query slice", got: self.qh.len(), want: site.site.d_head });
+            return Err(PalwAttnResponderError::InputsAreNotTheSites {
+                what: "query slice",
+                got: self.qh.len(),
+                want: site.site.d_head,
+            });
         }
         if self.k_series.len() != want_series {
-            return Err(PalwAttnResponderError::InputsAreNotTheSites { what: "K series", got: self.k_series.len(), want: want_series });
+            return Err(PalwAttnResponderError::InputsAreNotTheSites {
+                what: "K series",
+                got: self.k_series.len(),
+                want: want_series,
+            });
         }
         if self.v_series.len() != want_series {
-            return Err(PalwAttnResponderError::InputsAreNotTheSites { what: "V series", got: self.v_series.len(), want: want_series });
+            return Err(PalwAttnResponderError::InputsAreNotTheSites {
+                what: "V series",
+                got: self.v_series.len(),
+                want: want_series,
+            });
         }
         Ok(())
     }
@@ -161,7 +177,11 @@ impl PalwAttnSiteInputsV1 {
             let lo = t.saturating_mul(tile);
             let hi = lo.saturating_add(tile).min(history);
             if lo >= hi {
-                return Err(PalwAttnResponderError::InputsAreNotTheSites { what: "tile range", got: t as usize, want: history.div_ceil(tile) as usize });
+                return Err(PalwAttnResponderError::InputsAreNotTheSites {
+                    what: "tile range",
+                    got: t as usize,
+                    want: history.div_ceil(tile) as usize,
+                });
             }
             let (lo, hi) = (lo as usize * kv_dim, hi as usize * kv_dim);
             level.push(a16_attn_tile_triple_v1(
@@ -189,7 +209,11 @@ impl PalwAttnSiteInputsV1 {
     /// **The children of the phase's disputed range**, each against the ROOT's `(m*, S*)`, in the
     /// pinned order — the round an honest responder discloses and the round a challenger
     /// recomputes.
-    pub fn round_v1(&self, site: &PalwAttnDisputeSiteV2, phase: &PalwAttnDissectPhaseV1) -> Result<PalwAttnDissectRoundV1, PalwAttnResponderError> {
+    pub fn round_v1(
+        &self,
+        site: &PalwAttnDisputeSiteV2,
+        phase: &PalwAttnDissectPhaseV1,
+    ) -> Result<PalwAttnDissectRoundV1, PalwAttnResponderError> {
         let children = phase
             .child_ranges()
             .into_iter()
@@ -204,7 +228,11 @@ impl PalwAttnSiteInputsV1 {
     /// **The challenger's move: the first disclosed child this recompute does not reproduce.**
     /// `None` when every child reproduces — an honest disclosure, against which an honest
     /// challenger has no move that wins, and so makes none.
-    pub fn divergent_child_v1(&self, site: &PalwAttnDisputeSiteV2, phase: &PalwAttnDissectPhaseV1) -> Result<Option<u8>, PalwAttnResponderError> {
+    pub fn divergent_child_v1(
+        &self,
+        site: &PalwAttnDisputeSiteV2,
+        phase: &PalwAttnDissectPhaseV1,
+    ) -> Result<Option<u8>, PalwAttnResponderError> {
         if phase.pending().is_empty() {
             return Err(PalwAttnResponderError::NoPendingChildren);
         }
@@ -262,11 +290,19 @@ impl PalwAttnSiteEvidenceV1 {
         self.inputs.root_claim_v1(site)
     }
 
-    pub fn round_v1(&self, site: &PalwAttnDisputeSiteV2, phase: &PalwAttnDissectPhaseV1) -> Result<PalwAttnDissectRoundV1, PalwAttnResponderError> {
+    pub fn round_v1(
+        &self,
+        site: &PalwAttnDisputeSiteV2,
+        phase: &PalwAttnDissectPhaseV1,
+    ) -> Result<PalwAttnDissectRoundV1, PalwAttnResponderError> {
         self.inputs.round_v1(site, phase)
     }
 
-    pub fn divergent_child_v1(&self, site: &PalwAttnDisputeSiteV2, phase: &PalwAttnDissectPhaseV1) -> Result<Option<u8>, PalwAttnResponderError> {
+    pub fn divergent_child_v1(
+        &self,
+        site: &PalwAttnDisputeSiteV2,
+        phase: &PalwAttnDissectPhaseV1,
+    ) -> Result<Option<u8>, PalwAttnResponderError> {
         self.inputs.divergent_child_v1(site, phase)
     }
 
@@ -275,7 +311,11 @@ impl PalwAttnSiteEvidenceV1 {
     /// the anchor's layout is what locates the tile's chunk. The route is the class's: one chunk per
     /// kind out of the anchor plus the rows past its edge where every position is checkpointed; the
     /// cache-write rows otherwise.
-    pub fn bottom_v1(&self, site: &PalwAttnDisputeSiteV2, phase: &PalwAttnDissectPhaseV1) -> Result<PalwAttnDissectBottomV1, PalwAttnResponderError> {
+    pub fn bottom_v1(
+        &self,
+        site: &PalwAttnDisputeSiteV2,
+        phase: &PalwAttnDissectPhaseV1,
+    ) -> Result<PalwAttnDissectBottomV1, PalwAttnResponderError> {
         let tile = phase.terminal_tile().ok_or(PalwAttnResponderError::NotNarrowed)?;
         let (first, width) = phase.terminal_tile_positions().ok_or(PalwAttnResponderError::NotNarrowed)?;
         let rows = |series: &[PalwAttnRowOpeningV1], lo: u64, hi: u64| -> Result<Vec<PalwAttnRowOpeningV1>, PalwAttnResponderError> {
@@ -288,8 +328,11 @@ impl PalwAttnSiteEvidenceV1 {
             let chunk_for = |kind: PalwStateChunkKindV1| -> Result<PalwAttnChunkOpeningV1, PalwAttnResponderError> {
                 let (chunk_index, _) = integer_kv_state_locate_v1(geometry, kind, site.site.attn_layer, first as u32)
                     .ok_or(PalwAttnResponderError::EvidenceMissing("the tile's chunk in the anchor's layout"))?;
-                let chunk_bytes =
-                    evidence.chunks.get(chunk_index as usize).cloned().ok_or(PalwAttnResponderError::EvidenceMissing("anchor chunk"))?;
+                let chunk_bytes = evidence
+                    .chunks
+                    .get(chunk_index as usize)
+                    .cloned()
+                    .ok_or(PalwAttnResponderError::EvidenceMissing("anchor chunk"))?;
                 // The path under the class's map (ADR-0103 Decision 3: the held map's two-level
                 // proof), folded from the leaves the evidence already holds.
                 let siblings = crate::palw_state_chunk_map::palw_state_chunk_path_from_leaves_for_map_v1(
@@ -305,7 +348,11 @@ impl PalwAttnSiteEvidenceV1 {
                 if covered >= width as u64 {
                     return Ok(Vec::new());
                 }
-                rows(series.ok_or(PalwAttnResponderError::EvidenceMissing("cache-write rows past the anchor"))?, first + covered, first + width as u64)
+                rows(
+                    series.ok_or(PalwAttnResponderError::EvidenceMissing("cache-write rows past the anchor"))?,
+                    first + covered,
+                    first + width as u64,
+                )
             };
             let (k_rows, v_rows) = match &self.cache_rows {
                 Some((k, v)) => (Some(k), Some(v)),

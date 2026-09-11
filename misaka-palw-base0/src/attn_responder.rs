@@ -15,8 +15,7 @@ use kaspa_consensus_core::palw_attn_court_v1::{PalwAttnCheckpointAnchorV1, PalwA
 use kaspa_consensus_core::palw_attn_responder_v1::{PalwAttnAnchorEvidenceV1, PalwAttnSiteEvidenceV1, PalwAttnSiteInputsV1};
 use kaspa_consensus_core::palw_step::{PalwStepCoordinateV1, canonical_step_leaf_index};
 use kaspa_consensus_core::palw_step_leg::{
-    PalwStepMerkleTreeV1, PalwStepOpeningV1, PalwStepTileLeafV1,
-    step_merkle_path_capped_v1, step_merkle_root_capped_v1,
+    PalwStepMerkleTreeV1, PalwStepOpeningV1, PalwStepTileLeafV1, step_merkle_path_capped_v1, step_merkle_root_capped_v1,
 };
 use kaspa_hashes::Hash64;
 
@@ -68,7 +67,8 @@ pub fn base0_attn_site_evidence_v1(
             .iter()
             .position(|o| o.tensor_name == *name && o.layer == *layer && o.row_start == 0)
             .ok_or_else(|| format!("the inventory holds no row {name} at layer {layer:?}"))?;
-        let opening = open_artifact_leaf_v1(operands, index as u32).ok_or_else(|| format!("the inventory row {name} does not open"))?;
+        let opening =
+            open_artifact_leaf_v1(operands, index as u32).ok_or_else(|| format!("the inventory row {name} does not open"))?;
         operand_openings.push(opening);
     }
     let proven = PalwProvenOperandsV1::from_openings_v1(&operand_openings, artifact_root).map_err(|e| e.to_string())?;
@@ -99,7 +99,9 @@ pub fn base0_attn_site_evidence_v1(
     let q_row = lanes_of(&query.leaf);
     let qh = q_row
         .get(s.query_lane_offset..s.query_lane_offset + s.d_head)
-        .ok_or_else(|| format!("the query row holds {} lanes and the head's slice ends at {}", q_row.len(), s.query_lane_offset + s.d_head))?
+        .ok_or_else(|| {
+            format!("the query row holds {} lanes and the head's slice ends at {}", q_row.len(), s.query_lane_offset + s.d_head)
+        })?
         .to_vec();
 
     // The history: every K and V row the site reads, as the cache writers committed them. A
@@ -164,9 +166,12 @@ pub fn base0_attn_site_evidence_v1(
                 &binding.job_context,
                 covered,
             );
-            let chunk_hashes: Vec<Hash64> =
-                kaspa_consensus_core::palw_state_chunk_map::palw_state_chunk_leaves_for_map_v1(&binding.shape_profile, positions, &chunks)
-                    .map_err(|e| format!("the anchor's chunks at counter {covered} are not the map's: {e:?}"))?;
+            let chunk_hashes: Vec<Hash64> = kaspa_consensus_core::palw_state_chunk_map::palw_state_chunk_leaves_for_map_v1(
+                &binding.shape_profile,
+                positions,
+                &chunks,
+            )
+            .map_err(|e| format!("the anchor's chunks at counter {covered} are not the map's: {e:?}"))?;
             let root = kaspa_consensus_core::palw_state_chunk_map::palw_state_root_from_leaves_for_map_v1(
                 &binding.shape_profile,
                 positions,
@@ -186,14 +191,5 @@ pub fn base0_attn_site_evidence_v1(
         }
     };
 
-    Ok(PalwAttnSiteEvidenceV1 {
-        narrowed,
-        binding: binding.clone(),
-        out_tile,
-        query,
-        operand_openings,
-        inputs,
-        anchor,
-        cache_rows,
-    })
+    Ok(PalwAttnSiteEvidenceV1 { narrowed, binding: binding.clone(), out_tile, query, operand_openings, inputs, anchor, cache_rows })
 }

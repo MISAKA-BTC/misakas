@@ -4565,7 +4565,9 @@ pub enum PalwStateV2Error {
     // ADR-0103 — the held regime's refusals, by name.
     #[error("the context is not held off the chain on this network (Params::palw_held_context is dormant)")]
     HeldContextDormant,
-    #[error("claim {0}: the held regime plays no bisection — a conviction is a one-move object or a dissection opened at a named leaf")]
+    #[error(
+        "claim {0}: the held regime plays no bisection — a conviction is a one-move object or a dissection opened at a named leaf"
+    )]
     BisectionRefusedUnderHeldContext(Hash64),
     #[error("the checkpoint accusation does not adjudicate: {0}")]
     CheckpointCourt(String),
@@ -8455,134 +8457,124 @@ fn open_da_session_v2(
     accuser: &PalwBondKeyV2,
     event_index_is_the_unit: bool,
 ) -> Result<(), PalwStateV2Error> {
-        if !builder.da_court {
-            return Err(PalwStateV2Error::DaCourtDormant);
-        }
-        let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
-        if claim.phase.is_terminal() {
-            return Err(PalwStateV2Error::WrongPhase { claim: claim_id, edge: "DefaultAccused" });
-        }
-        // Singular per claim, and the phase IS the singularity: a claim holds one phase, so a
-        // second accusation on a disputed claim has nowhere to go. No index to keep in step.
-        if matches!(claim.phase, PalwClaimPhaseV2::DefaultDisputed { .. }) {
-            return Err(PalwStateV2Error::DaAccusationAlreadyOpen(claim_id));
-        }
-        // **A phase this fold could not put back is a phase it may not take away** (SA-7).
-        // `resume_claim_after_da_session_v2` returns a `Provisional` claim's paused time on
-        // `rebound_daa`, because `accepted_daa` anchors the retention obligation and may not
-        // move. A `Provisional` claim that has never been rebound has no such anchor — and it
-        // also has no panel, so the check below already refuses it. Asked here anyway: the
-        // alternative is an invariant that lives only in the argument that the panel gate
-        // implies it, and the arm that would discover it broken is the DISCLOSURE, where
-        // refusing means an honest producer's answer is rejected.
-        if matches!(claim.phase, PalwClaimPhaseV2::Provisional) && claim.rebound_daa.is_none() {
-            return Err(PalwStateV2Error::DaClaimNotAccusable(claim_id));
-        }
-        // **An accusation names ONE piece of the obligation, and the obligation's size is a
-        // chain fact.** `trace_chunk_count` is pinned by ADR-0072 Decision 8, so the range this
-        // refuses against cannot be restated by the producer OR the accuser.
-        let (accused_row, _accused_tile) = palw_da_event_index_parts_v1(missing_event_index);
-        let accusable_rows = palw_da_max_accusable_rows_v1(claim.trace_chunk_count);
-        // ADR-0103 Decision 4: a held accusation's unit was bounded against the claim's binding
-        // by the caller, and its phase carries the sentinel, which is no event at all.
-        if event_index_is_the_unit && accused_row >= accusable_rows {
-            return Err(PalwStateV2Error::DaIndexOutOfRange {
-                claim: claim_id,
-                index: missing_event_index,
-                count: accusable_rows,
-            });
-        }
-        // **The whole disclose window must fit inside the retention obligation** (SA-1, SA-6).
-        // Accusing at the last DAA of retention would otherwise be a conviction dressed as a
-        // question: the producer was already allowed to delete what it is being asked to open.
-        let disclose = palw_da_disclose_window_daa_v1(builder.params);
-        let deadline_daa = ctx.daa_score.checked_add(disclose).ok_or(PalwStateV2Error::Overflow("da disclose deadline"))?;
-        if ctx.daa_score < claim.accepted_daa || deadline_daa > claim.trace_retention_daa {
-            return Err(PalwStateV2Error::DaOutsideRetention {
-                claim: claim_id,
-                at: ctx.daa_score,
-                window: disclose,
-                retention_daa: claim.trace_retention_daa,
-            });
-        }
-        // **A panel must be bound.** Before that nobody has been in a position to ask for the
-        // material, so there is nothing to have been withheld — and the panel is where
-        // `seat_count` comes from, which is what an accusation is priced against.
-        let panel = builder.state.panels.get(&claim_id).ok_or(PalwStateV2Error::DaClaimNotAccusable(claim_id))?.clone();
-        if panel.seats.is_empty() {
-            return Err(PalwStateV2Error::EmptyPanel);
-        }
-        if *accuser == claim.bond {
-            return Err(PalwStateV2Error::DaAccuserIsTheProducer(*accuser));
-        }
-        let accuser_record = builder.state.bonds.get(accuser).ok_or(PalwStateV2Error::MissingBond(*accuser))?.clone();
-        // Accusing is a bonded act, and this asks it the way the court asks it: Active, at or
-        // above the registry floor. A retiring bond may not put an honest claim under session
-        // with collateral that is already leaving.
-        if !matches!(accuser_record.status, PalwBondStatusV2::Active) {
-            return Err(PalwStateV2Error::BondNotActive(*accuser));
-        }
-        if accuser_record.collateral < builder.params.min_collateral_sompi() {
-            return Err(PalwStateV2Error::BondBelowFloor {
-                bond: *accuser,
-                collateral: accuser_record.collateral,
-                floor: builder.params.min_collateral_sompi(),
-            });
-        }
-        // **"A seat of that claim's panel or a bonded challenger" (SA-1) is the pair of checks
-        // above, and the seat case is the subset.** A seat IS a bond the draw already found
-        // Active and funded, so requiring Active-and-funded admits every seat and admits a
-        // challenger on the same terms — which is the intent: the accusation is priced, not
-        // privileged. What is excluded is the producer itself (above) and any bond that is
-        // leaving or under the floor.
-        let exposure = palw_da_accusation_exposure_v2(claim.reserved, panel.seats.len(), builder.params.min_collateral_sompi());
-        // **Admission item 8, on this lane** (SA-7, closing the DA half of P0-10): what this
-        // bond already backs — its live claims, its own registrations and every accusation it
-        // has open — plus what this accusation would reserve, against collateral × ratio.
-        //
-        // Being Active and above the floor is a check on the accuser's STATE, and reserving
-        // does not change it: `write_exposure` moves the exposure ledger and leaves
-        // `collateral` alone, which the lane's own `da3` test asserts ("reserving is not
-        // charging"). So without a ceiling one bond holding exactly `min_collateral_sompi`
-        // passed the same two checks once per live claim on the network and froze all of them
-        // in a single block. The exposure ceiling the `CourtOpened` arm says "does the
-        // counting" is applied only in `check_palw_attempt_admission_v2`, i.e. only to a bond
-        // that wants to PRODUCE — no bound at all on a bond that only accuses.
-        //
-        // With the reservation capped at the same figure `slash_seat` can take, the ceiling is
-        // a bound on money and not merely on count: `K × min(fraction, floor) ≤ ceiling`, so
-        // the K-th refutation is funded exactly like the first and `slash_bond`'s clamp at
-        // collateral stops being the thing that makes accusations K..K free.
-        //
-        // The expression is the free-prompt lane's (`FreePromptCommitted` above), for the
-        // reason that one gives: a commitment meets no admission list, so the ceiling is the
-        // transition's. `palw_mode_v2` proves `fp_max_exposure_ratio_permille` equals
-        // `admission.max_exposure_ratio_permille`, so both lanes ride one number.
-        //
-        // The check and the write are `reserve_accuser_exposure_v2`, which the `CourtOpened`
-        // arm calls too: one ceiling, one ledger, both arms — spelled once so they cannot
-        // drift apart again, which is exactly how this arm came to have a bound and its
-        // sibling did not.
-        builder.reserve_accuser_exposure_v2(
-            *accuser,
-            accuser_record.collateral,
-            exposure,
-            "data-availability accusation",
-            true,
-        )?;
-        // The claim's own clock is paused while the session runs, exactly as an open court
-        // pauses the path to `Final`; `resumed` carries the phase back.
-        let mut disputed = claim.clone();
-        disputed.phase = PalwClaimPhaseV2::DefaultDisputed {
-            accused_daa: ctx.daa_score,
-            missing_event_index,
-            accuser: *accuser,
-            accuser_exposure: exposure,
-            resumed: Box::new(claim.phase.clone()),
-        };
-        builder.write_claim(claim_id, Some(disputed));
-        builder.disarm_deadline(claim_id);
-        builder.arm_deadline(deadline_daa, claim_id);
+    if !builder.da_court {
+        return Err(PalwStateV2Error::DaCourtDormant);
+    }
+    let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
+    if claim.phase.is_terminal() {
+        return Err(PalwStateV2Error::WrongPhase { claim: claim_id, edge: "DefaultAccused" });
+    }
+    // Singular per claim, and the phase IS the singularity: a claim holds one phase, so a
+    // second accusation on a disputed claim has nowhere to go. No index to keep in step.
+    if matches!(claim.phase, PalwClaimPhaseV2::DefaultDisputed { .. }) {
+        return Err(PalwStateV2Error::DaAccusationAlreadyOpen(claim_id));
+    }
+    // **A phase this fold could not put back is a phase it may not take away** (SA-7).
+    // `resume_claim_after_da_session_v2` returns a `Provisional` claim's paused time on
+    // `rebound_daa`, because `accepted_daa` anchors the retention obligation and may not
+    // move. A `Provisional` claim that has never been rebound has no such anchor — and it
+    // also has no panel, so the check below already refuses it. Asked here anyway: the
+    // alternative is an invariant that lives only in the argument that the panel gate
+    // implies it, and the arm that would discover it broken is the DISCLOSURE, where
+    // refusing means an honest producer's answer is rejected.
+    if matches!(claim.phase, PalwClaimPhaseV2::Provisional) && claim.rebound_daa.is_none() {
+        return Err(PalwStateV2Error::DaClaimNotAccusable(claim_id));
+    }
+    // **An accusation names ONE piece of the obligation, and the obligation's size is a
+    // chain fact.** `trace_chunk_count` is pinned by ADR-0072 Decision 8, so the range this
+    // refuses against cannot be restated by the producer OR the accuser.
+    let (accused_row, _accused_tile) = palw_da_event_index_parts_v1(missing_event_index);
+    let accusable_rows = palw_da_max_accusable_rows_v1(claim.trace_chunk_count);
+    // ADR-0103 Decision 4: a held accusation's unit was bounded against the claim's binding
+    // by the caller, and its phase carries the sentinel, which is no event at all.
+    if event_index_is_the_unit && accused_row >= accusable_rows {
+        return Err(PalwStateV2Error::DaIndexOutOfRange { claim: claim_id, index: missing_event_index, count: accusable_rows });
+    }
+    // **The whole disclose window must fit inside the retention obligation** (SA-1, SA-6).
+    // Accusing at the last DAA of retention would otherwise be a conviction dressed as a
+    // question: the producer was already allowed to delete what it is being asked to open.
+    let disclose = palw_da_disclose_window_daa_v1(builder.params);
+    let deadline_daa = ctx.daa_score.checked_add(disclose).ok_or(PalwStateV2Error::Overflow("da disclose deadline"))?;
+    if ctx.daa_score < claim.accepted_daa || deadline_daa > claim.trace_retention_daa {
+        return Err(PalwStateV2Error::DaOutsideRetention {
+            claim: claim_id,
+            at: ctx.daa_score,
+            window: disclose,
+            retention_daa: claim.trace_retention_daa,
+        });
+    }
+    // **A panel must be bound.** Before that nobody has been in a position to ask for the
+    // material, so there is nothing to have been withheld — and the panel is where
+    // `seat_count` comes from, which is what an accusation is priced against.
+    let panel = builder.state.panels.get(&claim_id).ok_or(PalwStateV2Error::DaClaimNotAccusable(claim_id))?.clone();
+    if panel.seats.is_empty() {
+        return Err(PalwStateV2Error::EmptyPanel);
+    }
+    if *accuser == claim.bond {
+        return Err(PalwStateV2Error::DaAccuserIsTheProducer(*accuser));
+    }
+    let accuser_record = builder.state.bonds.get(accuser).ok_or(PalwStateV2Error::MissingBond(*accuser))?.clone();
+    // Accusing is a bonded act, and this asks it the way the court asks it: Active, at or
+    // above the registry floor. A retiring bond may not put an honest claim under session
+    // with collateral that is already leaving.
+    if !matches!(accuser_record.status, PalwBondStatusV2::Active) {
+        return Err(PalwStateV2Error::BondNotActive(*accuser));
+    }
+    if accuser_record.collateral < builder.params.min_collateral_sompi() {
+        return Err(PalwStateV2Error::BondBelowFloor {
+            bond: *accuser,
+            collateral: accuser_record.collateral,
+            floor: builder.params.min_collateral_sompi(),
+        });
+    }
+    // **"A seat of that claim's panel or a bonded challenger" (SA-1) is the pair of checks
+    // above, and the seat case is the subset.** A seat IS a bond the draw already found
+    // Active and funded, so requiring Active-and-funded admits every seat and admits a
+    // challenger on the same terms — which is the intent: the accusation is priced, not
+    // privileged. What is excluded is the producer itself (above) and any bond that is
+    // leaving or under the floor.
+    let exposure = palw_da_accusation_exposure_v2(claim.reserved, panel.seats.len(), builder.params.min_collateral_sompi());
+    // **Admission item 8, on this lane** (SA-7, closing the DA half of P0-10): what this
+    // bond already backs — its live claims, its own registrations and every accusation it
+    // has open — plus what this accusation would reserve, against collateral × ratio.
+    //
+    // Being Active and above the floor is a check on the accuser's STATE, and reserving
+    // does not change it: `write_exposure` moves the exposure ledger and leaves
+    // `collateral` alone, which the lane's own `da3` test asserts ("reserving is not
+    // charging"). So without a ceiling one bond holding exactly `min_collateral_sompi`
+    // passed the same two checks once per live claim on the network and froze all of them
+    // in a single block. The exposure ceiling the `CourtOpened` arm says "does the
+    // counting" is applied only in `check_palw_attempt_admission_v2`, i.e. only to a bond
+    // that wants to PRODUCE — no bound at all on a bond that only accuses.
+    //
+    // With the reservation capped at the same figure `slash_seat` can take, the ceiling is
+    // a bound on money and not merely on count: `K × min(fraction, floor) ≤ ceiling`, so
+    // the K-th refutation is funded exactly like the first and `slash_bond`'s clamp at
+    // collateral stops being the thing that makes accusations K..K free.
+    //
+    // The expression is the free-prompt lane's (`FreePromptCommitted` above), for the
+    // reason that one gives: a commitment meets no admission list, so the ceiling is the
+    // transition's. `palw_mode_v2` proves `fp_max_exposure_ratio_permille` equals
+    // `admission.max_exposure_ratio_permille`, so both lanes ride one number.
+    //
+    // The check and the write are `reserve_accuser_exposure_v2`, which the `CourtOpened`
+    // arm calls too: one ceiling, one ledger, both arms — spelled once so they cannot
+    // drift apart again, which is exactly how this arm came to have a bound and its
+    // sibling did not.
+    builder.reserve_accuser_exposure_v2(*accuser, accuser_record.collateral, exposure, "data-availability accusation", true)?;
+    // The claim's own clock is paused while the session runs, exactly as an open court
+    // pauses the path to `Final`; `resumed` carries the phase back.
+    let mut disputed = claim.clone();
+    disputed.phase = PalwClaimPhaseV2::DefaultDisputed {
+        accused_daa: ctx.daa_score,
+        missing_event_index,
+        accuser: *accuser,
+        accuser_exposure: exposure,
+        resumed: Box::new(claim.phase.clone()),
+    };
+    builder.write_claim(claim_id, Some(disputed));
+    builder.disarm_deadline(claim_id);
+    builder.arm_deadline(deadline_daa, claim_id);
     Ok(())
 }
 
@@ -8663,7 +8655,13 @@ fn open_held_dissection_v1(
     if builder.state.court_sessions.contains_key(&session_id) {
         return Err(PalwStateV2Error::DuplicateSession(session_id));
     }
-    builder.reserve_accuser_exposure_v2(challenger_bond, challenger_collateral, claim.reserved, "held dissection", builder.da_court)?;
+    builder.reserve_accuser_exposure_v2(
+        challenger_bond,
+        challenger_collateral,
+        claim.reserved,
+        "held dissection",
+        builder.da_court,
+    )?;
     let mut opened = PalwCourtSessionStateV2 {
         claim: claim_id,
         challenger_bond,
@@ -10285,7 +10283,9 @@ fn apply_object(
                 return Err(PalwStateV2Error::WrongPhase { claim: claim_id, edge: "MaterialDisclosedHeld" });
             };
             let recorded = builder.state.held_da_missing.get(&claim_id).copied();
-            if missing_event_index != crate::palw_held_da_v1::PALW_HELD_DA_EVENT_INDEX_SENTINEL_V1 || recorded != Some(disclosure.missing) {
+            if missing_event_index != crate::palw_held_da_v1::PALW_HELD_DA_EVENT_INDEX_SENTINEL_V1
+                || recorded != Some(disclosure.missing)
+            {
                 return Err(PalwStateV2Error::HeldDaSessionMismatch(claim_id));
             }
             crate::palw_held_da_v1::palw_held_da_check_disclosure_v1(
@@ -12296,24 +12296,17 @@ fn model_seed_v1(
         // Decision 2: opening happens once. An open market takes no further seed, as before.
         Some(open) if open.is_open() => return Err(PalwStateV2Error::ModelMarketAlreadySeeded(*line_id)),
         Some(pledged) if accumulate => {
-            let total = pledged
-                .seed_pledged_sompi
-                .checked_add(msk_seed)
-                .ok_or(PalwStateV2Error::Overflow("model seed accumulation"))?;
+            let total =
+                pledged.seed_pledged_sompi.checked_add(msk_seed).ok_or(PalwStateV2Error::Overflow("model seed accumulation"))?;
             // Decision 3: the row keeps naming the FIRST payer; a later sompi claims nothing.
             let grown = PalwModelMarketV1 { msk_reserve: total, seed_pledged_sompi: total, ..pledged };
             if total >= PALW_MODEL_SEED_MIN_SOMPI_V1 { grown.open_from_pledge_v1(ctx.daa_score) } else { grown }
         }
         Some(_) => return Err(PalwStateV2Error::ModelMarketAlreadySeeded(*line_id)),
-        None if msk_seed >= PALW_MODEL_SEED_MIN_SOMPI_V1 => {
-            PalwModelMarketV1::seed_v1(ctx.daa_score, msk_seed, *seeder)
-        }
+        None if msk_seed >= PALW_MODEL_SEED_MIN_SOMPI_V1 => PalwModelMarketV1::seed_v1(ctx.daa_score, msk_seed, *seeder),
         None if accumulate => PalwModelMarketV1::pledge_v1(ctx.daa_score, msk_seed, *seeder),
         None => {
-            return Err(PalwStateV2Error::ModelSeedTooSmall {
-                want: PALW_MODEL_SEED_MIN_SOMPI_V1,
-                got: msk_seed,
-            });
+            return Err(PalwStateV2Error::ModelSeedTooSmall { want: PALW_MODEL_SEED_MIN_SOMPI_V1, got: msk_seed });
         }
     };
     builder.write_model_market(*line_id, Some(market));
@@ -22949,10 +22942,19 @@ pub(crate) mod tests {
         env.attempt.trace_retention_daa = 999_999;
         let claim_id = attempt_id_v2(&env.attempt);
         let (s2, _) = held_apply(&s1, &p, &ctx(2, 101, 2), &[], Some(&env), &extras).expect("the claim");
-        let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }, PalwPanelSeatV2 { bond: bond_key(2), operator_id: h64(91) }];
-        let (s3, _) =
-            held_apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None, &extras)
-                .expect("the panel");
+        let seats = vec![
+            PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) },
+            PalwPanelSeatV2 { bond: bond_key(2), operator_id: h64(91) },
+        ];
+        let (s3, _) = held_apply(
+            &s2,
+            &p,
+            &ctx(3, 102, 3),
+            &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }],
+            None,
+            &extras,
+        )
+        .expect("the panel");
         (p, s3, claim_id)
     }
 
@@ -22989,9 +22991,17 @@ pub(crate) mod tests {
         let err = held_apply(&s3, &p, &ctx(4, 110, 4), std::slice::from_ref(&open), None, &held_extras()).expect_err("refused");
         assert_eq!(err, PalwStateV2Error::BisectionRefusedUnderHeldContext(claim_id));
         let dormant = held_apply(&s3, &p, &ctx(4, 110, 4), &[open], None, &PalwTransitionExtrasV1::default());
-        assert!(!matches!(dormant, Err(PalwStateV2Error::BisectionRefusedUnderHeldContext(_))), "dormant, the refusal is not this one");
-        let fold = |extras: &PalwTransitionExtrasV1| held_apply(&s3, &p, &ctx(4, 110, 4), &[], None, extras).expect("nothing to refuse").0;
-        assert_eq!(fold(&held_extras()).state_root(), fold(&PalwTransitionExtrasV1::default()).state_root(), "the fence alone moves no root");
+        assert!(
+            !matches!(dormant, Err(PalwStateV2Error::BisectionRefusedUnderHeldContext(_))),
+            "dormant, the refusal is not this one"
+        );
+        let fold =
+            |extras: &PalwTransitionExtrasV1| held_apply(&s3, &p, &ctx(4, 110, 4), &[], None, extras).expect("nothing to refuse").0;
+        assert_eq!(
+            fold(&held_extras()).state_root(),
+            fold(&PalwTransitionExtrasV1::default()).state_root(),
+            "the fence alone moves no root"
+        );
     }
 
     /// **ADR-0103 Decision 1 in the fold: a forged checkpoint convicts its executor in one move, a
@@ -23003,20 +23013,31 @@ pub(crate) mod tests {
             let (p, s3, claim_id) = held_setup(&forged);
             let accuse = held_checkpoint_accusation(&forged, claim_id, 11, 1, 0, 4);
             assert_eq!(
-                held_apply(&s3, &p, &ctx(4, 110, 4), std::slice::from_ref(&accuse), None, &PalwTransitionExtrasV1::default()).expect_err("dormant"),
+                held_apply(&s3, &p, &ctx(4, 110, 4), std::slice::from_ref(&accuse), None, &PalwTransitionExtrasV1::default())
+                    .expect_err("dormant"),
                 PalwStateV2Error::HeldContextDormant
             );
             let (s4, _) = held_apply(&s3, &p, &ctx(4, 110, 4), &[accuse], None, &held_extras()).expect("convicts");
             assert!(
-                matches!(s4.claim(&claim_id).expect("claim").phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+                matches!(
+                    s4.claim(&claim_id).expect("claim").phase,
+                    PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }
+                ),
                 "held={held}: the executor of a forged checkpoint is convicted"
             );
 
             let honest = crate::palw_checkpoint_court_v1::tests::held_fixture(held, 20, None);
             let (p, s3, claim_id) = held_setup(&honest);
             let before = s3.bond(&bond_key(2)).expect("the accuser").collateral;
-            let (s4, _) = held_apply(&s3, &p, &ctx(4, 110, 4), &[held_checkpoint_accusation(&honest, claim_id, 11, 1, 0, 4)], None, &held_extras())
-                .expect("a false accusation is adjudicated, not refused");
+            let (s4, _) = held_apply(
+                &s3,
+                &p,
+                &ctx(4, 110, 4),
+                &[held_checkpoint_accusation(&honest, claim_id, 11, 1, 0, 4)],
+                None,
+                &held_extras(),
+            )
+            .expect("a false accusation is adjudicated, not refused");
             assert!(!s4.claim(&claim_id).expect("claim").phase.is_terminal(), "held={held}: an honest claim stands");
             assert!(s4.bond(&bond_key(2)).expect("the accuser").collateral < before, "held={held}: the false accuser pays");
         }
@@ -23067,7 +23088,8 @@ pub(crate) mod tests {
             held_apply(&s3, &p, &ctx(4, 110, 4), std::slice::from_ref(&accuse), None, &court_only).expect_err("dormant"),
             PalwStateV2Error::ShardCourtNeedsDissection { leaf: l, .. } if l == leaf
         ));
-        let (s4, _) = held_apply(&s3, &p, &ctx(4, 110, 4), std::slice::from_ref(&accuse), None, &held_extras()).expect("the dissection opens");
+        let (s4, _) =
+            held_apply(&s3, &p, &ctx(4, 110, 4), std::slice::from_ref(&accuse), None, &held_extras()).expect("the dissection opens");
         let (_, session) = s4.court_sessions.iter().find(|(_, s)| s.claim == claim_id).expect("a session on the claim");
         assert_eq!(session.ladder.terminal_index(), Some(leaf), "the ladder is terminal on the named leaf");
         assert!(session.dissection.is_none(), "the responder's root claim is the first move");
@@ -23079,7 +23101,11 @@ pub(crate) mod tests {
         ));
     }
 
-    fn held_da_accusation(fx: &crate::palw_checkpoint_court_v1::tests::HeldFixture, claim_id: Hash64, missing: crate::palw_held_da_v1::PalwHeldMissingV1) -> PalwConsensusObjectV2 {
+    fn held_da_accusation(
+        fx: &crate::palw_checkpoint_court_v1::tests::HeldFixture,
+        claim_id: Hash64,
+        missing: crate::palw_held_da_v1::PalwHeldMissingV1,
+    ) -> PalwConsensusObjectV2 {
         PalwConsensusObjectV2::DefaultAccusedHeld {
             accusation: Box::new(crate::palw_held_da_v1::PalwHeldAccusationV1 {
                 version: 1,
@@ -23128,29 +23154,40 @@ pub(crate) mod tests {
         let (p, s3, claim_id) = held_setup(&fx);
         let missing = PalwHeldMissingV1::StepRange { first: 200, count: 32 };
         assert_eq!(
-            held_apply(&s3, &p, &ctx(4, 110, 4), &[held_da_accusation(&fx, claim_id, missing)], None, &PalwTransitionExtrasV1::default())
-                .expect_err("dormant"),
+            held_apply(
+                &s3,
+                &p,
+                &ctx(4, 110, 4),
+                &[held_da_accusation(&fx, claim_id, missing)],
+                None,
+                &PalwTransitionExtrasV1::default()
+            )
+            .expect_err("dormant"),
             PalwStateV2Error::HeldContextDormant
         );
         let outside = PalwHeldMissingV1::StepRange { first: fx.binding.step_leaf_count, count: 1 };
         assert!(matches!(
-            held_apply(&s3, &p, &ctx(4, 110, 4), &[held_da_accusation(&fx, claim_id, outside)], None, &held_extras()).expect_err("outside"),
+            held_apply(&s3, &p, &ctx(4, 110, 4), &[held_da_accusation(&fx, claim_id, outside)], None, &held_extras())
+                .expect_err("outside"),
             PalwStateV2Error::HeldDaRefused { .. }
         ));
         let before = s3.claim(&claim_id).expect("claim").phase.clone();
-        let (s4, _) =
-            held_apply(&s3, &p, &ctx(4, 110, 4), &[held_da_accusation(&fx, claim_id, missing)], None, &held_extras()).expect("accused");
+        let (s4, _) = held_apply(&s3, &p, &ctx(4, 110, 4), &[held_da_accusation(&fx, claim_id, missing)], None, &held_extras())
+            .expect("accused");
         let phase = s4.claim(&claim_id).expect("claim").phase.clone();
-        assert!(matches!(phase, PalwClaimPhaseV2::DefaultDisputed { missing_event_index, .. } if missing_event_index == PALW_HELD_DA_EVENT_INDEX_SENTINEL_V1));
+        assert!(
+            matches!(phase, PalwClaimPhaseV2::DefaultDisputed { missing_event_index, .. } if missing_event_index == PALW_HELD_DA_EVENT_INDEX_SENTINEL_V1)
+        );
         assert_eq!(s4.held_da_missing.get(&claim_id), Some(&missing));
         // Another unit does not answer it; neither does an event disclosure.
         assert_eq!(
-            held_apply(&s4, &p, &ctx(5, 111, 5), &[held_range_answer(&fx, claim_id, 201, 32)], None, &held_extras()).expect_err("another unit"),
+            held_apply(&s4, &p, &ctx(5, 111, 5), &[held_range_answer(&fx, claim_id, 201, 32)], None, &held_extras())
+                .expect_err("another unit"),
             PalwStateV2Error::HeldDaSessionMismatch(claim_id)
         );
         let accuser_before = s4.bond(&bond_key(2)).expect("accuser").collateral;
-        let (s5, _) =
-            held_apply(&s4, &p, &ctx(5, 111, 5), &[held_range_answer(&fx, claim_id, 200, 32)], None, &held_extras()).expect("answered");
+        let (s5, _) = held_apply(&s4, &p, &ctx(5, 111, 5), &[held_range_answer(&fx, claim_id, 200, 32)], None, &held_extras())
+            .expect("answered");
         // The answer gives the claim back its phase, with the session's own length given back to the
         // clock (SA-7): accused at 110, answered at 111, so the panel's anchor moves by one.
         let PalwClaimPhaseV2::PanelBound { bound_daa: was } = before else { panic!("the claim was panel-bound") };

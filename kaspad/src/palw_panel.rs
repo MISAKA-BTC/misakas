@@ -2907,7 +2907,8 @@ impl PalwPanelService {
                                 }
                             };
                             let params = &self.consensus_config.params;
-                            let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode
+                            let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) =
+                                &params.palw_consensus_mode
                             else {
                                 continue;
                             };
@@ -2971,8 +2972,12 @@ impl PalwPanelService {
                                     continue;
                                 }
                             };
-                            let choice =
-                                PalwAttnDissectChoiceV1 { version: PALW_ATTN_COURT_OBJECT_VERSION_V1, session_id: duty.session_id, round: phase.round(), child };
+                            let choice = PalwAttnDissectChoiceV1 {
+                                version: PALW_ATTN_COURT_OBJECT_VERSION_V1,
+                                session_id: duty.session_id,
+                                round: phase.round(),
+                                child,
+                            };
                             let message = borsh::to_vec(&choice).expect("a dissection choice is borsh-serializable");
                             let Some(signature) = self.sign(&message, PALW_COURT_V2_MLDSA87_ATTN_CHALLENGER_CONTEXT) else {
                                 *court_stalls.entry("no signing key for a dissection choice").or_default() += 1;
@@ -2987,7 +2992,10 @@ impl PalwPanelService {
                         }
                         AttnMove::Close => {
                             let Some(phase) = duty.dissection.as_ref() else { continue };
-                            let bottom = match evidence.site_v1(duty.artifact_root, true).and_then(|anchored| evidence.bottom_v1(&anchored, phase)) {
+                            let bottom = match evidence
+                                .site_v1(duty.artifact_root, true)
+                                .and_then(|anchored| evidence.bottom_v1(&anchored, phase))
+                            {
                                 Ok(bottom) => bottom,
                                 Err(why) => {
                                     *court_stalls.entry("the dissection's bottom does not assemble").or_default() += 1;
@@ -3016,7 +3024,11 @@ impl PalwPanelService {
                                 *court_stalls.entry("the bottom's verdict is the other party's").or_default() += 1;
                                 continue;
                             }
-                            info!("[{PALW_PANEL}] session {} closes its dissection as {verdict:?} at tile {}", duty.session_id, phase.terminal_tile().unwrap_or(0));
+                            info!(
+                                "[{PALW_PANEL}] session {} closes its dissection as {verdict:?} at tile {}",
+                                duty.session_id,
+                                phase.terminal_tile().unwrap_or(0)
+                            );
                             PalwConsensusObjectV2::CourtClosed { session_id: duty.session_id, verdict, proof }
                         }
                     };
@@ -5577,8 +5589,10 @@ impl PalwPanelService {
                             offload(backend, move |b| b.fp_accept_resume_v1(&state_bytes, &ctx_owned, &prompt_owned, covered)).await
                         }
                         None => {
-                            offload(backend, move |b| b.checkpoint_root_for_context_v1(&ctx_owned, &prompt_owned, &output_owned, covered))
-                                .await
+                            offload(backend, move |b| {
+                                b.checkpoint_root_for_context_v1(&ctx_owned, &prompt_owned, &output_owned, covered)
+                            })
+                            .await
                         }
                     }) else {
                         return None;
