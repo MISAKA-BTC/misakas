@@ -2332,6 +2332,16 @@ impl Params {
         // **ADR-0102 at the genesis door.** A genesis row is verified against the committed
         // catalog, not through `verify_class_admission_*`, so `TokenLiftNeedsItsFence` has no door
         // there — the ADR-0082 fused-row precedent above.
+        // **ADR-0103 at the genesis door**, for the same reason: a held class in the genesis set
+        // is admitted by nothing but this.
+        if crate::palw_class_admission_v2::palw_genesis_registers_held_class_v1(bundle)
+            && !self.palw_held_context.is_some_and(|f| f != ForkActivation::never() && f.is_active(0))
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "this ruleset's genesis set registers a class under the held map and palw_held_context is not armed from \
+                 genesis: the map lifts the context ceiling only where the regime is (ADR-0103)",
+            ));
+        }
         if crate::palw_class_admission_v2::palw_genesis_reaches_fenced_kernel_v1(bundle)
             && !self.palw_token_lift.is_some_and(|f| f != ForkActivation::never() && f.is_active(0))
         {

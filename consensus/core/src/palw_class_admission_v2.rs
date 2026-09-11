@@ -477,6 +477,17 @@ pub fn palw_admission_shape_at_v1(
     })
 }
 
+/// **Does a genesis set register a class under the held map?** (ADR-0103.) A genesis row is
+/// verified against the committed catalog, not through [`verify_class_admission_v8`], so
+/// `HeldMapNeedsItsFence` has no door there — `Params::validate_palw_v2` asks this and refuses the
+/// set unless the fence is armed from genesis, the ADR-0102 precedent below.
+pub fn palw_genesis_registers_held_class_v1(bundle: &PalwConsensusParamsV2) -> bool {
+    bundle.genesis_objects.iter().any(|object| {
+        matches!(object, PalwConsensusObjectV2::ClassRegistered { admission: Some(carriage), .. }
+            if crate::palw_state_chunk_map::palw_profile_is_held_v4(&carriage.profile))
+    })
+}
+
 /// **Does a genesis set register a class that reaches a fenced kernel?** (ADR-0102.) Genesis rows
 /// are verified against the committed catalog rather than through the admission gate, so
 /// `Params::validate_palw_v2` asks this and refuses the set unless the fence is armed from

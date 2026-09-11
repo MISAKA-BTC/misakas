@@ -409,3 +409,48 @@ fn the_held_mint_moves_no_economics() {
     assert_eq!(b.freeprompt.receipt_maturity_daa(), h.freeprompt.receipt_maturity_daa());
     assert_eq!(base.palw_fp_decode_rules, held.palw_fp_decode_rules, "Decision 10's numerator is not the mint's to arm");
 }
+
+/// **The genesis door** (ADR-0103, the ADR-0102 precedent). A genesis row is verified against the
+/// committed catalog and never meets `verify_class_admission_v8`, so a held class in a genesis set
+/// is refused unless the fence is armed from genesis — and admitted by the mint that arms it.
+#[test]
+fn a_held_class_at_genesis_needs_the_regime_from_genesis() {
+    use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
+    let mut with_held = devnet_shipped_params();
+    let PalwConsensusMode::ConsensusV2(b) = &mut with_held.palw_consensus_mode else { unreachable!() };
+    let template = b
+        .genesis_objects
+        .iter()
+        .find(|o| matches!(o, PalwConsensusObjectV2::ClassRegistered { admission: Some(_), .. }))
+        .cloned()
+        .expect("the bundled devnet registers a class with its carriage");
+    let PalwConsensusObjectV2::ClassRegistered {
+        class_id,
+        artifact_root,
+        slash_value_per_pwu,
+        pwu_rule,
+        initial_target,
+        share_permille,
+        activation_daa,
+        admission: Some(mut carriage),
+    } = template
+    else {
+        unreachable!()
+    };
+    carriage.profile = dense_v7(512);
+    b.genesis_objects.push(PalwConsensusObjectV2::ClassRegistered {
+        class_id,
+        artifact_root,
+        slash_value_per_pwu,
+        pwu_rule,
+        initial_target,
+        share_permille,
+        activation_daa,
+        admission: Some(carriage),
+    });
+    assert!(kaspa_consensus_core::palw_class_admission_v2::palw_genesis_registers_held_class_v1(b));
+    let err = format!("{:?}", with_held.validate_palw_v2().expect_err("a held genesis row with the fence dormant"));
+    assert!(err.contains("held map") && err.contains("palw_held_context"), "{err}");
+    let ladder = bundle(&with_held).court.max_step_leaf_count();
+    palw_held_context_mint_v1(with_held, ladder).expect("the mint that arms the fence from genesis admits it");
+}
