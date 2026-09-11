@@ -254,6 +254,29 @@ impl MiningManager {
         self.evm_mempool.read().len()
     }
 
+    /// ADR-0115: every pending EVM tx hash, for the relay's periodic announcement.
+    pub fn evm_pending_hashes(&self) -> Vec<kaspa_hashes::EvmH256> {
+        self.evm_mempool.read().hashes()
+    }
+
+    /// **ADR-0115: keep the pool true without a template.** Expire past the TTL and drop what the chain
+    /// has executed (a nonce below the sender's committed nonce). Every template build does the same, but
+    /// a node that builds none — an RPC or explorer node, which is where wallets send — kept executed
+    /// transactions until the TTL, which ADR-0115 lengthened. A consensus read error leaves the pool as it
+    /// is (the next tick retries), never pruned against a zeroed view.
+    pub fn maintain_evm_pool(&self, consensus: &dyn ConsensusApi) {
+        let mut pool = self.evm_mempool.write();
+        pool.expire(unix_now() / 1000);
+        if pool.is_empty() {
+            return;
+        }
+        let senders = pool.pending_senders();
+        if let Ok(states) = consensus.get_evm_account_states(&senders) {
+            let state_nonces: HashMap<_, _> = states.iter().map(|(a, (n, _))| (*a, *n)).collect();
+            pool.prune_below_state_nonce(&state_nonces);
+        }
+    }
+
     /// §9 (eth_subscribe newPendingTransactions): a broadcast receiver yielding
     /// the hash of every EVM tx admitted to this node's mempool (both ingress
     /// paths funnel through `submit_evm_transaction`). Lossy under lag
@@ -1454,6 +1477,17 @@ impl MiningManagerProxy {
         self.inner.submit_evm_transaction(raw)
     }
 
+    /// ADR-0115: every pending EVM tx hash (see [`MiningManager::evm_pending_hashes`]).
+    pub fn evm_pending_hashes(&self) -> Vec<kaspa_hashes::EvmH256> {
+        self.inner.evm_pending_hashes()
+    }
+
+    /// ADR-0115: expire and prune the EVM pool against the committed state (see
+    /// [`MiningManager::maintain_evm_pool`]).
+    pub async fn maintain_evm_pool(self, consensus: &ConsensusProxy) {
+        consensus.clone().spawn_blocking(move |c| self.inner.maintain_evm_pool(c)).await
+    }
+
     /// Audit M-3: admit a raw EVM tx with the sender's canonical `(state_nonce,
     /// balance)` view (the RPC ingress, which holds a consensus session, supplies it),
     /// enabling the stateful affordability fast-path. `None` keeps the stateless
@@ -2002,6 +2036,28 @@ mod evm_rpc_ingress_h1_tests {
     /// `submit_evm_transaction` (no canonical view there, by design — H-1 must not
     /// wire state into the relay). A source-level contract assertion guards against a
     /// regression that would silently change the relay path.
+    /// **ADR-0115: a node that builds no template still keeps its pool true** — `maintain_evm_pool`
+    /// prunes what the chain executed (the sender's committed nonce passed it), keeps what is still
+    /// pending, and on a failed state read prunes nothing rather than pruning against a zeroed view.
+    /// `evm_pending_hashes` is what the relay announces again.
+    #[test]
+    fn maintain_prunes_what_executed_and_keeps_what_is_pending() {
+        let raw = hex_to_bytes(FIXTURE_TX_NONCE0);
+        let m = mgr();
+        let sender = m.evm_recover_sender(&raw).expect("the fixture is class-1 admissible");
+        let hash = m.submit_evm_transaction(raw.clone()).expect("admitted");
+        assert_eq!(m.evm_pending_hashes(), vec![hash], "the relay announces exactly what the pool holds");
+        let at =
+            |nonce: u64| StubConsensus { flat: FlatHeadAccount::Stale, states: Ok(HashMap::from([(sender, (nonce, u128::MAX))])) };
+        m.maintain_evm_pool(&at(0));
+        assert_eq!(m.evm_mempool_len(), 1, "nonce 0 is still the sender's next: pending, kept");
+        m.maintain_evm_pool(&StubConsensus { flat: FlatHeadAccount::Stale, states: Err(ConsensusError::General("no snapshot")) });
+        assert_eq!(m.evm_mempool_len(), 1, "no state view: nothing is pruned");
+        m.maintain_evm_pool(&at(1));
+        assert_eq!(m.evm_mempool_len(), 0, "the chain executed nonce 0: pruned without a template");
+        assert!(m.evm_pending_hashes().is_empty());
+    }
+
     #[test]
     fn relay_path_stays_stateless() {
         let src = include_str!("../../protocol/flows/src/v8/txrelay_evm.rs");
