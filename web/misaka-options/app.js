@@ -392,7 +392,7 @@ function replacementFees(order, baseFee) {
 // What eth_getTransactionByHash says was signed: the nonce and fees a replacement needs, and the bytes.
 function signedFacts(tx) {
   return {
-    nonce: Number(bi(tx.nonce)), gas: bi(tx.gas).toString(), value: bi(tx.value).toString(),
+    nonce: Number(bi(tx.nonce)), gas: bi(tx.gas).toString(), value: bi(tx.value).toString(), to: tx.to ? String(tx.to).toLowerCase() : null,
     maxFeePerGas: bi(tx.maxFeePerGas != null ? tx.maxFeePerGas : tx.gasPrice).toString(),
     maxPriorityFeePerGas: bi(tx.maxPriorityFeePerGas).toString(),
     raw: rawTxFromRpc(tx), rawTried: true,
@@ -834,8 +834,12 @@ const txlog = {
   list: store.get('txs', []),
   claimed: new Set(store.get('txs:claimed', [])),
   save() { store.set('txs', this.list.slice(-200)); store.set('txs:claimed', Array.from(this.claimed).slice(-400)); },
-  add(rec) { this.list.push(rec); this.save(); },
-  update(hash, patch) { const r = this.list.find((x) => x.hash === hash); if (r) { Object.assign(r, patch); this.save(); } return r; },
+  listeners: new Set(),
+  dirty: false,
+  add(rec) { this.list.push(rec); this.save(); this.emit(); },
+  update(hash, patch) { const r = this.list.find((x) => x.hash === hash); if (r) { Object.assign(r, patch); this.save(); this.dirty = true; } return r; },
+  // pages redraw what depends on transaction states (open orders, held balance, activity)
+  emit() { this.dirty = false; for (const fn of this.listeners) { try { fn(); } catch (e) { console.error(e); } } },
   forAccount(acct) { return this.list.filter((x) => !acct || x.from === acct).slice().reverse(); },
 };
 
@@ -849,6 +853,10 @@ const ORDER_KINDS = new Set(['buy', 'sell', 'seed']);
 const OPEN = new Set(['sent', 'pending', 'dropped']);    // no block carries it yet — it can be replaced
 const FINAL_OK = new Set(['queued', 'settled', 'refused', 'reverted', 'done']);   // carried: its nonce is used
 const RESEND_MS = 120000;
+// A dropped order whose signed bytes the page never saw cannot be sent again from here; past the node's
+// one-hour pool limit (and a margin) nothing holds it any more, so it is EXPIRED: nothing was paid, and it
+// no longer counts as open. It is still looked at for a day, in case some other node carries it after all.
+const EXPIRE_MS = 70 * 60000;
 const orders = {
   // unfinished orders of `acct`, newest first: open ones and the ones a block carried that the fold has
   // not settled yet (those can no longer be replaced)
@@ -879,7 +887,7 @@ function fmtDur(ms) { const m = Math.round(ms / 60000); return m < 1 ? 'under a 
 const TX_STATUS = {
   sent: ['Sending', 'tag'], pending: ['Pending', 'tag warn'], dropped: ['Dropped by the node', 'tag bad'], queued: ['In a block · settling', 'tag warn'],
   settled: ['Settled', 'tag ok'], refused: ['Refused', 'tag bad'], reverted: ['Reverted', 'tag bad'], replaced: ['Replaced', 'tag'], cancelled: ['Cancelled', 'tag'],
-  done: ['Done', 'tag ok'], late: ['Too late', 'tag'], lost: ['Not found', 'tag bad'],
+  done: ['Done', 'tag ok'], late: ['Too late', 'tag'], lost: ['Not found', 'tag bad'], expired: ['Expired', 'tag'],
 };
 function txStatusCell(t) {
   const [txt, cls] = TX_STATUS[t.status] || [t.status, 'tag'];
@@ -888,7 +896,8 @@ function txStatusCell(t) {
   if (t.status === 'pending' || t.status === 'sent') sub = (t.carriedBy ? 'in a block the chain has not taken yet' : 'waiting for a block') + ' · ' + fmtDur(Date.now() - t.sentAt) + (t.resends ? ' · re-broadcast ' + t.resends + '×' : '');
   if (t.status === 'dropped') sub = t.raw ? 'no node holds it — re-broadcasting the signed transaction' + (t.dropErr ? ' (' + t.dropErr + ')' : '') : 'no node holds it and its signed bytes were never seen — send it again';
   if (t.status === 'queued') sub = 'the fold settles it one block later';
-  if (t.status === 'late') sub = 'the order was carried before the cancel';
+  if (t.status === 'expired') sub = 'no node holds it any more and nothing was paid — place it again if you still want it';
+  if (t.status === 'late') sub = 'the order it was sent to replace was carried first';
   if (t.status === 'refused' && t.reason) sub = REFUSAL[t.reason] || String(t.reason);
   if (t.nonceIgnored) sub = 'the wallet chose its own nonce, so this replaced nothing';
   if (t.replacedBy && OPEN.has(t.status) && t.kind !== 'cancel') sub = 'being replaced by ' + shortId(t.replacedBy, 8);
@@ -938,7 +947,13 @@ async function replaceOrder(order, tx, extra) {
   const head = await evm.rpc('eth_getBlockByNumber', ['latest', false]).catch(() => null);
   const fees = replacementFees(order, head && head.baseFeePerGas);
   const full = Object.assign({ from: order.from, nonce: toHex(order.nonce), maxFeePerGas: toHex(fees.maxFeePerGas), maxPriorityFeePerGas: toHex(fees.maxPriorityFeePerGas) }, tx);
-  const hash = String(await wallet.sendTx(full)).toLowerCase();
+  let hash;
+  try { hash = String(await wallet.sendTx(full)).toLowerCase(); }
+  catch (e) {
+    // the node refuses a nonce a block already used: the order was carried before the replacement arrived
+    if (/nonce (is )?too low|nonce.*(used|below)|already been used/i.test(String(e && e.message))) throw new Error('Too late: a block carried the order before the ' + (extra.kind === 'cancel' ? 'cancel' : 'change') + ' reached a node, so it will settle as sent.');
+    throw e;
+  }
   txlog.add(Object.assign({ hash, from: order.from, lineId: order.lineId, label: order.label, sentAt: Date.now(), status: 'sent', nonce: order.nonce, replaces: order.hash, maxFeePerGas: fees.maxFeePerGas.toString(), maxPriorityFeePerGas: fees.maxPriorityFeePerGas.toString() }, extra));
   txlog.update(order.hash, { replacedBy: hash });
   // Did the wallet sign with the order's nonce? One that picked its own sent a new transaction instead.
@@ -971,7 +986,7 @@ function changeOrder(order, units, market) {
 // Wire a container holding ordersTableHtml(): Cancel, Change, and the change editor. `ctx.changing` is
 // the open editor's hash (kept by the page), `ctx.rerender()` redraws the table.
 function bindOrderActions(box, ctx) {
-  box.addEventListener('click', async (e) => {
+  const onClick = async (e) => {
     const btn = e.target.closest('button'); if (!btn || btn.disabled) return;
     const find = (h2) => txlog.list.find((x) => x.hash === h2);
     if (btn.dataset.cancel) {
@@ -991,7 +1006,8 @@ function bindOrderActions(box, ctx) {
       catch (err) { toast((err && err.message) || String(err), 'bad', 'Change'); btn.disabled = false; btn.textContent = 'Send change'; return; }
       ctx.rerender();
     }
-  });
+  };
+  box.addEventListener('click', onClick);
   function wireEditor() {
     const inp = $('#chgAmt', box); if (!inp) return;
     const t = txlog.list.find((x) => x.hash === ctx.changing);
@@ -1004,7 +1020,7 @@ function bindOrderActions(box, ctx) {
       else if (units > 0n && t.kind === 'buy') {
         const c = curve.buyCostForUnits(m, units);
         if (!c) txt = 'the store cannot release that many';
-        else { txt = 'costs ' + fmtMsk(c.gross) + ' MSK (the order pays ' + fmtMsk(t.amount) + ')'; ok = true; }
+        else { txt = 'costs ' + fmtMsk(c.gross) + ' MSK (the order pays ' + fmtMsk(t.amount) + ' MSK)'; ok = true; }
       } else if (units > 0n) {
         const sq = curve.sellQuote(m, units);
         if (!sq) txt = 'the curve pays nothing for that many';
@@ -1015,6 +1031,7 @@ function bindOrderActions(box, ctx) {
     inp.addEventListener('input', upd); inp.focus(); upd();
   }
   ctx.wireEditor = wireEditor;
+  return () => box.removeEventListener('click', onClick);
 }
 
 // ============================================================================================
@@ -1449,36 +1466,107 @@ async function foldEventsIntoHistory(lineId, events) {
   store.set('hist:events:' + lineId, Array.from(seen).slice(-500));
 }
 
-// pending transactions: receipt (queued / reverted), then the settlement event at the next block
+// Follow every unfinished transaction the site sent. First what was signed (nonce, fees, bytes — while
+// a node still serves it), then its receipt: carried, so queued or reverted, and one block later the
+// fold's settlement event. With no receipt it is pending while a node holds it, replaced once another
+// transaction used its nonce, and dropped when no node holds it — then its signed bytes are broadcast
+// again while the nonce is free (a node's pool forgets after an hour; one that restarted never knew).
+let pollBusy = false;
 async function pollTransactions() {
-  const open = txlog.list.filter((t) => t.status === 'sent' || t.status === 'queued');
-  if (!open.length) return;
-  for (const t of open) {
-    try {
-      if (t.status === 'sent') {
-        const r = await evm.rpc('eth_getTransactionReceipt', [t.hash]);
-        if (!r) { if (Date.now() - t.sentAt > 30 * 60000) txlog.update(t.hash, { status: 'lost' }); continue; }
-        const ok = bi(r.status) === 1n;
-        txlog.update(t.hash, { status: ok ? 'queued' : 'reverted', blockNumber: Number(bi(r.blockNumber)), gasUsed: bi(r.gasUsed).toString() });
-        toast(ok ? 'Action queued in block ' + Number(bi(r.blockNumber)) + '. The fold applies it after this block and settles it one block later.' : 'Transaction reverted at the call (no action was queued).', ok ? 'ok' : 'bad', t.label);
-        if (!ok) continue;
-      }
-      if (t.status === 'queued' || t.status === 'sent') {
-        const rec = txlog.list.find((x) => x.hash === t.hash);
-        if (rec.status !== 'queued') continue;
-        const events = await settlementLogs(rec.lineId, rec.from);
-        const want = rec.kind === 'buy' ? 'Bought' : rec.kind === 'seed' ? 'Seeded' : 'Sold';
-        const actionId = rec.kind === 'buy' ? 1 : rec.kind === 'seed' ? ACTION_SEED : 2;
-        const hit = events.filter((e) => e.blockNumber > rec.blockNumber && !txlog.claimed.has(e.blockNumber + ':' + e.logIndex) && (e.kind === want || (e.kind === 'Refused' && e.actionId === actionId))).sort((a, b) => a.blockNumber - b.blockNumber || a.logIndex - b.logIndex)[0];
-        if (!hit) continue;
-        txlog.claimed.add(hit.blockNumber + ':' + hit.logIndex);
-        if (hit.kind === 'Refused') { txlog.update(rec.hash, { status: 'refused', settledBlock: hit.blockNumber, reason: hit.reason }); toast('Refused by the fold: ' + (REFUSAL[hit.reason] || 'code ' + hit.reason) + '. ' + (rec.kind === 'sell' ? 'Your positions never left.' : 'The escrow was refunded.'), 'warn', rec.label); }
-        else if (hit.kind === 'Seeded') { txlog.update(rec.hash, { status: 'settled', settledBlock: hit.blockNumber, units: '0', msk: hit.mskIn.toString(), priceAfter: hit.priceAfter.toString() }); toast('Seeded: ' + fmtMsk(hit.mskIn) + ' MSK locked into the curve for good; first price ' + fmtPrice(hit.priceAfter) + ' MSK per position (settled in block ' + hit.blockNumber + ').', 'ok', rec.label); refreshMarket(rec.lineId).catch(() => {}); }
-        else { txlog.update(rec.hash, { status: 'settled', settledBlock: hit.blockNumber, units: (hit.units || 0n).toString(), msk: (hit.kind === 'Bought' ? hit.mskIn : hit.mskOut).toString(), priceAfter: hit.priceAfter.toString() }); toast((hit.kind === 'Bought' ? 'Bought ' + fmtPos(hit.units) + ' positions for ' + fmtMsk(hit.mskIn) + ' MSK' : 'Sold ' + fmtPos(hit.units) + ' positions for ' + fmtMsk(hit.mskOut) + ' MSK net') + ' (settled in block ' + hit.blockNumber + ').', 'ok', rec.label); }
-        db.emit();
-      }
-    } catch (e) { /* try again next tick */ }
+  if (pollBusy) return;
+  pollBusy = true;
+  try {
+    const open = txlog.list.filter((t) => OPEN.has(t.status) || t.status === 'queued' || ((t.status === 'lost' || t.status === 'expired') && Date.now() - t.sentAt < 86400000));
+    if (!open.length) return;
+    // replacements first: when a cancel or a change was carried, the order it replaced is then named by it
+    open.sort((a, b) => (b.replaces ? 1 : 0) - (a.replaces ? 1 : 0));
+    const nonces = new Map();
+    const latestNonce = async (acct) => {
+      if (!nonces.has(acct)) nonces.set(acct, Number(bi(await evm.rpc('eth_getTransactionCount', [acct, 'latest']))));
+      return nonces.get(acct);
+    };
+    for (const t of open) {
+      try { await followTx(t.hash, latestNonce); } catch (e) { /* try again next tick */ }
+    }
+  } finally { pollBusy = false; if (txlog.dirty) txlog.emit(); }
+}
+// An order's end when a transaction of ours took its nonce: said once, whichever look saw it first.
+function endReplaced(x, by) {
+  const status = x.kind === 'cancel' || (by && x.replaces === by.hash) ? 'late' : by && by.kind === 'cancel' ? 'cancelled' : 'replaced';
+  txlog.update(x.hash, { status, replacedBy: by ? by.hash : null });
+  if (status === 'cancelled') toast('Order cancelled: the cancel was carried' + (by.blockNumber != null ? ' in block ' + by.blockNumber : '') + ' and nothing was bought or sold.', 'ok', x.label);
+}
+async function followTx(hash, latestNonce) {
+  const get = () => txlog.list.find((x) => x.hash === hash);
+  let t = get();
+  if (t.status !== 'queued' && (t.nonce == null || (t.raw == null && !t.rawTried))) {
+    const tx = await evm.rpc('eth_getTransactionByHash', [t.hash]).catch(() => null);
+    if (tx) t = txlog.update(t.hash, signedFacts(tx));
   }
+  if (t.status !== 'queued') {
+    const r = await evm.rpc('eth_getTransactionReceipt', [t.hash]);
+    if (r) {
+      const ok = bi(r.status) === 1n, bn = Number(bi(r.blockNumber));
+      if (t.kind === 'cancel') t = txlog.update(t.hash, { status: ok ? 'done' : 'reverted', blockNumber: bn });
+      // whatever else was signed with this nonce can never be carried now
+      for (const x of txlog.list) {
+        if (x.hash !== t.hash && x.from === t.from && x.nonce != null && x.nonce === t.nonce && OPEN.has(x.status)) endReplaced(x, t);
+      }
+      if (t.kind === 'cancel') return;
+      t = txlog.update(t.hash, { status: ok ? 'queued' : 'reverted', blockNumber: bn, gasUsed: bi(r.gasUsed).toString() });
+      toast(ok ? 'Order carried in block ' + bn + '. The fold applies it after this block and settles it one block later.' : 'Transaction reverted at the call (no action was queued).', ok ? 'ok' : 'bad', t.label);
+      if (!ok) return;
+    } else {
+      // Not carried. Was its nonce used by another transaction? Then it never will be.
+      if (t.nonce != null && (await latestNonce(t.from)) > t.nonce) {
+        // The nonce read came after the receipt read: a block may have carried THIS one in between.
+        if (await evm.rpc('eth_getTransactionReceipt', [t.hash]).catch(() => null)) return;   // the next look reads it
+        let winner = txlog.list.find((x) => x.hash !== t.hash && x.from === t.from && x.nonce === t.nonce && FINAL_OK.has(x.status));
+        // our own replacement, carried but not read yet: its receipt names what happened
+        if (!winner && t.replacedBy) {
+          const rr = await evm.rpc('eth_getTransactionReceipt', [t.replacedBy]).catch(() => null);
+          if (rr) winner = txlog.list.find((x) => x.hash === t.replacedBy);
+          if (winner && winner.blockNumber == null) winner = txlog.update(winner.hash, { blockNumber: Number(bi(rr.blockNumber)) });
+        }
+        // Something we did not send used the nonce (another device, another page). A receipt index can
+        // trail the state by a moment, so that verdict waits for a second look half a minute on.
+        if (!winner) {
+          if (!t.nonceGoneAt) { txlog.update(t.hash, { nonceGoneAt: Date.now() }); return; }
+          if (Date.now() - t.nonceGoneAt < 30000) return;
+        }
+        endReplaced(t, winner);
+        return;
+      }
+      // A cancel or change of ours stands in for it: while that one is open, this one is out of the pool
+      // on purpose — neither dropped nor to be broadcast again.
+      const stand = t.replacedBy && txlog.list.find((x) => x.hash === t.replacedBy);
+      if (stand && OPEN.has(stand.status)) { if (t.status !== 'pending') txlog.update(t.hash, { status: 'pending' }); return; }
+      // Does a node hold it? (misaka_getEvmTxStatus; a node without it is asked for the transaction.)
+      const st = await evm.rpc('misaka_getEvmTxStatus', [t.hash]).catch(() => undefined);
+      const held = st !== undefined
+        ? !!(st && (st.inMempool || (st.includedIn && st.includedIn.length)))
+        : !!(await evm.rpc('eth_getTransactionByHash', [t.hash]).catch(() => null));
+      if (held) { txlog.update(t.hash, { status: 'pending', carriedBy: st && st.includedIn ? st.includedIn.length : 0, dropErr: null }); return; }
+      // No node holds it: broadcast the signed bytes again (not more often than every two minutes).
+      if (!t.raw) { const next = Date.now() - t.sentAt > EXPIRE_MS ? 'expired' : 'dropped'; if (t.status !== next) txlog.update(t.hash, { status: next }); return; }
+      if (t.resentAt && Date.now() - t.resentAt < RESEND_MS) return;
+      try { await evm.rpc('eth_sendRawTransaction', [t.raw]); txlog.update(t.hash, { status: 'pending', resentAt: Date.now(), resends: (t.resends || 0) + 1, dropErr: null }); }
+      catch (e) { txlog.update(t.hash, { status: 'dropped', resentAt: Date.now(), dropErr: (e && e.message) || String(e) }); }
+      return;
+    }
+  }
+  // Carried and queued: the settlement event the fold emits after the carrying block.
+  if (t.status !== 'queued' || !ORDER_KINDS.has(t.kind)) return;
+  const events = await settlementLogs(t.lineId, t.from);
+  const want = t.kind === 'buy' ? 'Bought' : t.kind === 'seed' ? 'Seeded' : 'Sold';
+  const actionId = t.kind === 'buy' ? 1 : t.kind === 'seed' ? ACTION_SEED : 2;
+  const hit = events.filter((e) => e.blockNumber > t.blockNumber && !txlog.claimed.has(e.blockNumber + ':' + e.logIndex) && (e.kind === want || (e.kind === 'Refused' && e.actionId === actionId))).sort((a, b) => a.blockNumber - b.blockNumber || a.logIndex - b.logIndex)[0];
+  if (!hit) return;
+  txlog.claimed.add(hit.blockNumber + ':' + hit.logIndex);
+  if (hit.kind === 'Refused') { txlog.update(t.hash, { status: 'refused', settledBlock: hit.blockNumber, reason: hit.reason }); toast('Refused by the fold: ' + (REFUSAL[hit.reason] || 'code ' + hit.reason) + '. ' + (t.kind === 'sell' ? 'Your memberships never left.' : 'The escrow was refunded.'), 'warn', t.label); }
+  else if (hit.kind === 'Seeded') { txlog.update(t.hash, { status: 'settled', settledBlock: hit.blockNumber, units: '0', msk: hit.mskIn.toString(), priceAfter: hit.priceAfter.toString() }); toast('Seeded: ' + fmtMsk(hit.mskIn) + ' MSK locked into the curve for good; first price ' + fmtPrice(hit.priceAfter) + ' MSK per membership (settled in block ' + hit.blockNumber + ').', 'ok', t.label); refreshMarket(t.lineId).catch(() => {}); }
+  else { txlog.update(t.hash, { status: 'settled', settledBlock: hit.blockNumber, units: (hit.units || 0n).toString(), msk: (hit.kind === 'Bought' ? hit.mskIn : hit.mskOut).toString(), priceAfter: hit.priceAfter.toString() }); toast((hit.kind === 'Bought' ? 'Joined: ' + fmtPos(hit.units) + ' memberships for ' + fmtMsk(hit.mskIn) + ' MSK' : 'Left: ' + fmtPos(hit.units) + ' memberships for ' + fmtMsk(hit.mskOut) + ' MSK net') + ' (settled in block ' + hit.blockNumber + ').', 'ok', t.label); }
+  db.emit();
 }
 
 // ============================================================================================
@@ -1740,6 +1828,7 @@ class PriceChart {
     this.empty = document.createElement('div'); this.empty.className = 'chart-empty'; box.appendChild(this.empty);
     this.tip = document.createElement('div'); this.tip.className = 'chart-tip'; this.tip.hidden = true; box.appendChild(this.tip);
     this.points = []; this.rangeMs = 86400000; this.hover = null; this.layout = null; this.hint = null;
+    this.markers = [];   // [{ price (sompi per membership), kind: 'buy'|'sell', label }]: the account's pending orders
     this.onResize = () => this.draw();
     window.addEventListener('resize', this.onResize);
     this.canvas.addEventListener('mousemove', (e) => { const r = this.canvas.getBoundingClientRect(); this.hover = { x: e.clientX - r.left, y: e.clientY - r.top }; this.draw(); });
@@ -1767,7 +1856,8 @@ class PriceChart {
     const x0 = padL, x1 = W - padR, y0 = padT, y1 = H - padB;
     const tMin = pts[0].t, tMax = pts[pts.length - 1].t || tMin + 1;
     const prices = pts.map((p) => Number(p.p) / 1e8);
-    let pMin = Math.min(...prices), pMax = Math.max(...prices);
+    const marks = (this.markers || []).map((m) => Object.assign({}, m, { y: Number(m.price) / 1e8 })).filter((m) => isFinite(m.y) && m.y > 0);
+    let pMin = Math.min(...prices, ...marks.map((m) => m.y)), pMax = Math.max(...prices, ...marks.map((m) => m.y));
     if (pMax === pMin) { pMin *= 0.99; pMax *= 1.01; }
     const padP = (pMax - pMin) * 0.08; pMin -= padP; pMax += padP;
     const X = (t) => x0 + ((t - tMin) / Math.max(1, tMax - tMin)) * (x1 - x0);
@@ -1799,6 +1889,13 @@ class PriceChart {
     ctx.beginPath(); ctx.strokeStyle = '#50d2c1'; ctx.lineWidth = 2; ctx.lineJoin = 'round';
     pts.forEach((p, i) => { const x = X(p.t), y = Y(prices[i]); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
     ctx.stroke();
+    // the account's pending orders: a dashed level at the price each one pays (or is paid) per membership
+    for (const m of marks) {
+      const y = Math.round(Y(m.y)) + 0.5, col = m.kind === 'sell' ? '#f26c87' : '#f2c14e';
+      ctx.save(); ctx.strokeStyle = col; ctx.globalAlpha = 0.85; ctx.lineWidth = 1; ctx.setLineDash([6, 4]);
+      ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = col; ctx.textAlign = 'left'; ctx.fillText(m.label, x0 + 6, y - 5); ctx.restore();
+    }
     // last price label
     const lp = prices[prices.length - 1], ly = Y(lp);
     ctx.fillStyle = '#50d2c1'; ctx.beginPath(); ctx.arc(lastX, ly, 3.5, 0, Math.PI * 2); ctx.fill();
@@ -1983,7 +2080,8 @@ async function pageStore(arg) {
   if (lineId) store.set('lastLine', lineId);
   const rec = lineId ? db.upsertLine(lineId, {}) : null;
   const entry = { side: 'buy', amount: '', quote: null, nodeQuote: null, quoteSeq: 0, busy: false, balance: null, position: null, positionSrc: null };
-  const view = { chartTab: 'usage', bottomTab: 'positions', range: store.get('range', 86400000), positions: null, settlements: null, mySettlements: null, versions: null, err: null };
+  const view = { chartTab: 'usage', bottomTab: wallet.account && orders.open(wallet.account).length ? 'orders' : 'positions', range: store.get('range', 86400000), positions: null, settlements: null, mySettlements: null, versions: null, err: null };
+  const orderCtx = { changing: null, rerender: () => { if (view.bottomTab === 'orders') renderBottom(); renderOrderCount(); } };
 
   main.innerHTML = h`
   <section class="store" aria-label="Model store">
@@ -2000,13 +2098,28 @@ async function pageStore(arg) {
       <div class="panel entry" id="entry"></div>
     </aside>
     <div class="panel a-bottom">
-      <div class="tabs" id="bottomTabs"><button data-t="positions" class="on">My memberships</button><button data-t="history">My activity</button><button data-t="settlements">Recent joins and leaves</button><button data-t="info">Model details</button></div>
+      <div class="tabs" id="bottomTabs"><button data-t="orders" id="ordersTab">Open orders</button><button data-t="positions">My memberships</button><button data-t="history">My activity</button><button data-t="settlements">Recent joins and leaves</button><button data-t="info">Model details</button></div>
       <div class="tab-body" id="bottomBody"></div>
     </div>
   </section>`.s;
 
   const chart = new PriceChart($('#chartBox'));
   onCleanup(() => chart.destroy());
+  $$('#bottomTabs button').forEach((x) => x.classList.toggle('on', x.dataset.t === view.bottomTab));
+  onCleanup(bindOrderActions($('#bottomBody'), orderCtx));
+  // "Open orders (2)": the tab says how many are waiting, whichever tab is showing
+  function renderOrderCount() {
+    const b = $('#ordersTab'); if (!b) return;
+    const n = wallet.account ? orders.open(wallet.account).length : 0;
+    b.textContent = n ? 'Open orders (' + n + ')' : 'Open orders';
+    b.classList.toggle('has', n > 0);
+  }
+  // the account's orders on THIS line, drawn on the price chart where they would fill
+  function orderMarkers() {
+    if (!wallet.account || !rec) return [];
+    return orders.heads(wallet.account).filter((t) => t.lineId === rec.lineId && ORDER_KINDS.has(t.kind) && t.px)
+      .map((t) => ({ price: bi(t.px), kind: t.kind, label: (t.kind === 'sell' ? 'your leave' : 'your join') + (t.want ? ' ×' + fmtInt(t.want) : t.kind === 'sell' ? ' ×' + fmtInt(t.amount) : '') + ' · pending' }));
+  }
   function renderBenefits() {
     if (!alive()) return;
     const box = $('#benefits'); if (!box) return;
@@ -2069,7 +2182,7 @@ async function pageStore(arg) {
   }
   function renderChart() {
     if (!alive()) return;
-    if (rec) { chart.hint = rec.market && !rec.market.seeded ? 'This store is not open yet: there is no price until someone opens it with at least ' + fmtMsk(seedMinFor(rec.market), 0) + ' MSK.' : null; chart.setRange(view.range); chart.setPoints(history.points(rec.lineId)); }
+    if (rec) { chart.hint = rec.market && !rec.market.seeded ? 'This store is not open yet: there is no price until someone opens it with at least ' + fmtMsk(seedMinFor(rec.market), 0) + ' MSK.' : null; chart.setRange(view.range); chart.markers = orderMarkers(); chart.setPoints(history.points(rec.lineId)); }
     renderChartTools();
   }
   function versionRows(list) {
@@ -2220,7 +2333,7 @@ async function pageStore(arg) {
     if (q.invalid) return q.invalid;
     if (q.kind === 'buy' && rec.market && rec.market.closedToBuys) return 'This line is closed to buys (retired); sells still queue.';
     if (q.kind === 'buy') { const cs = classStatusOf(rec); if (cs && cs.head !== 'Active') return 'The class is ' + cs.head + (cs.activationDaa != null ? ' (activates at DAA ' + fmtInt(cs.activationDaa) + ')' : '') + ': buys wait for Active.'; }
-    if (q.kind === 'buy' && entry.balance != null && sompiToWei(q.sompi) > entry.balance && !wallet.topsUp()) return 'Insufficient MSK balance in the EVM account.';
+    if (q.kind === 'buy' && entry.balance != null && sompiToWei(q.sompi) > spendable() && !wallet.topsUp()) return entry.balance > spendable() ? 'Not enough MSK left once your open orders are counted: cancel or change one first.' : 'Insufficient MSK balance in the EVM account.';
     if (q.kind === 'sell' && entry.position != null && q.units > entry.position) return 'That is more than the memberships this account holds in the EVM namespace.';
     return null;
   }
@@ -2273,6 +2386,16 @@ async function pageStore(arg) {
     if (topUp) topUp.textContent = !reason && q && !q.invalid && q.kind === 'buy' ? topUpNote(sompiToWei(q.sompi), entry.balance) : '';
   }
   const seedState = { msk: null, busy: false, balance: null };
+  // The EVM balance at latest does not move until a block carries an order, so the desk subtracts what the
+  // account's open orders will take; each order's MSK leaves the balance only when a block carries it.
+  function held() { return wallet.account ? orders.reserved(wallet.account) : { wei: 0n, n: 0 }; }
+  function spendable() { const b = entry.balance; if (b == null) return null; const r = held().wei; return b > r ? b - r : 0n; }
+  function heldHtml() {
+    const r = held();
+    if (!r.n) return '';
+    return h`<div class="avail"><span class="muted">In open orders</span><span class="v"><a href="#" id="heldLink" title="Held by orders no block has carried yet; the balance above is what is left">${fmtWeiMsk(r.wei)} MSK · ${String(r.n)} order${r.n === 1 ? '' : 's'}</a></span></div>`.s;
+  }
+  function availNow() { return entry.balance == null ? availText(null) : availText(spendable()); }
   function renderEntry() {
     if (!alive()) return;
     const m = rec && rec.market;
@@ -2287,7 +2410,8 @@ async function pageStore(arg) {
       <div class="panel-b">
         <div class="seg wide" role="tablist"><button class="${entry.side === 'buy' ? 'on buy' : ''}" data-side="buy" role="tab" title="Buy a membership from the protocol's curve">Join</button><button class="${entry.side === 'sell' ? 'on sell' : ''}" data-side="sell" role="tab" title="Sell the membership back to the curve; nobody else can buy it from you">Leave</button></div>
         <div class="note tiny" style="margin-top:6px">${entry.side === 'buy' ? 'A membership is bought from the protocol, not from another person, and joining raises the price for the next member.' : 'A membership is sold back to the protocol, not to another person. It cannot be transferred, lent or given away.'}</div>
-        <div class="avail" style="margin-top:10px"><span class="muted">MSK available</span><span class="v" id="availV">${availText(entry.balance)}</span></div>
+        <div class="avail" style="margin-top:10px"><span class="muted">MSK available</span><span class="v" id="availV">${availNow()}</span></div>
+        <div id="heldV">${raw(heldHtml())}</div>
         ${entry.side === 'buy' ? availHint() : raw('')}
         <div class="avail"><span class="muted">Your membership</span><span class="v" id="posV">${entry.position != null ? fmtPos(entry.position) + ' ' + (rec ? rec.symbol : '') : acct ? '—' : '—'}</span></div>
         <div class="field">
@@ -2304,35 +2428,37 @@ async function pageStore(arg) {
     amt.addEventListener('input', () => { entry.amount = amt.value; entry.nodeQuote = null; entry.quote = localQuote(); renderQuote(); nodeQuote(entry.quote); });
     $$('#entry .pcts button').forEach((b) => b.addEventListener('click', () => {
       const p = BigInt(b.dataset.pct);
-      if (entry.side === 'buy' && entry.balance != null) { const reserve = 10n ** 16n; const wei = entry.balance > reserve ? entry.balance - reserve : 0n; entry.amount = ((maxAffordableUnits(rec && rec.market, wei / NATIVE_SCALE_WEI) * p) / 100n).toString(); }
+      if (entry.side === 'buy' && entry.balance != null) { const reserve = 10n ** 16n, left = spendable(); const wei = left > reserve ? left - reserve : 0n; entry.amount = ((maxAffordableUnits(rec && rec.market, wei / NATIVE_SCALE_WEI) * p) / 100n).toString(); }
       if (entry.side === 'sell' && entry.position != null) entry.amount = ((entry.position * p) / 100n).toString();
       amt.value = entry.amount; entry.nodeQuote = null; entry.quote = localQuote(); renderQuote(); nodeQuote(entry.quote);
     }));
     $('#sendBtn').addEventListener('click', submit);
+    bindHeldLink();
     entry.quote = localQuote(); renderQuote(); nodeQuote(entry.quote);
   }
+  function showTab(t) { view.bottomTab = t; $$('#bottomTabs button').forEach((x) => x.classList.toggle('on', x.dataset.t === t)); renderBottom(); }
+  function bindHeldLink() { const a = $('#heldLink'); if (a) a.addEventListener('click', (e) => { e.preventDefault(); showTab('orders'); const b = $('#bottomBody'); if (b && b.scrollIntoView) b.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }); }
   async function submit() {
     const q = effectiveQuote(); const reason = reasonNotToSend(q); if (reason) { toast(reason, 'warn'); return; }
     const mn = mins(q);
     const tx = { from: wallet.account, to: rec.facade };
+    const px = q.kind === 'buy' ? (q.unitsOut > 0n ? q.sompi / q.unitsOut : null) : (q.units > 0n ? q.fees.net / q.units : null);
     if (q.kind === 'buy') { tx.value = toHex(sompiToWei(q.sompi)); tx.data = ABI.call(SIG.buy, ABI.word(mn.minUnits)); }
     else { tx.value = '0x0'; tx.data = ABI.call(SIG.sell, ABI.word(q.units), ABI.word(mn.minMsk)); }
     entry.busy = true; renderQuote();
     try {
-      const hash = await wallet.sendTx(tx);
-      txlog.add({ hash, from: wallet.account, lineId: rec.lineId, label: rec.symbol, kind: q.kind, amount: (q.kind === 'buy' ? q.sompi : q.units).toString(), min: (q.kind === 'buy' ? mn.minUnits : mn.minMsk).toString(), sentAt: Date.now(), status: 'sent' });
-      toast('Transaction sent: ' + shortId(hash, 10) + '. Waiting for the block that carries it.', 'ok', (q.kind === 'buy' ? 'Buy ' : 'Sell ') + rec.symbol);
+      const hash = String(await wallet.sendTx(tx)).toLowerCase();
+      txlog.add({ hash, from: wallet.account, to: rec.facade, lineId: rec.lineId, label: rec.symbol, kind: q.kind, amount: (q.kind === 'buy' ? q.sompi : q.units).toString(), want: q.kind === 'buy' && q.want != null ? q.want.toString() : null, px: px != null ? px.toString() : null, min: (q.kind === 'buy' ? mn.minUnits : mn.minMsk).toString(), sentAt: Date.now(), status: 'sent' });
+      toast('Order sent (' + shortId(hash, 10) + '). It waits for a block — usually 20–60 minutes on testnet-11 — and you can cancel or change it until then under Open orders.', 'ok', (q.kind === 'buy' ? 'Join ' : 'Leave ') + rec.symbol);
       entry.amount = ''; entry.nodeQuote = null;
+      // what the wallet signed (nonce, fees, bytes), read back while the node surely holds it
+      evm.rpc('eth_getTransactionByHash', [hash]).then((t) => { if (t) { txlog.update(hash, signedFacts(t)); orderCtx.rerender(); } }).catch(() => {});
+      showTab('orders');
     } catch (e) { toast((e && e.message) || String(e), 'bad', 'Wallet'); }
-    entry.busy = false; renderEntry(); renderBottom();
+    entry.busy = false; renderEntry(); renderBottom(); renderOrderCount(); renderChart();
   }
 
   // ---- bottom tabs ----------------------------------------------------------------------------
-  function statusCell(t) {
-    const map = { sent: ['Sent', 'tag'], queued: ['Queued', 'tag warn'], reverted: ['Reverted', 'tag bad'], settled: ['Settled', 'tag ok'], refused: ['Refused', 'tag bad'], lost: ['Not found', 'tag bad'] };
-    const [txt, cls] = map[t.status] || [t.status, 'tag'];
-    return h`<span class="${cls}">${txt}</span>${t.status === 'refused' && t.reason ? raw(' <span class="dim tiny">' + esc(REFUSAL[t.reason] || String(t.reason)) + '</span>') : ''}`;
-  }
   function renderBottom() {
     if (!alive()) return;
     const body = $('#bottomBody'); if (!body) return;
@@ -2348,11 +2474,20 @@ async function pageStore(arg) {
       </tbody></table></div><div class="note tiny">Read through ${p.source === 'wrpc' ? 'getPalwModelPositions(holder)' : 'the position window per known line'}; holder id ${shortId(p.holder)}. A membership is a whole number, and it is never paid anything: the last column is only what the curve would return if you gave every one of them up right now.</div>`.s;
       return;
     }
+    if (view.bottomTab === 'orders') {
+      renderOrderCount();
+      if (!acct) { body.innerHTML = '<div class="empty">Connect a wallet to see its open orders.</div>'; return; }
+      const list = orders.open(acct);
+      if (!list.length) { body.innerHTML = h`<div class="empty">No open orders for ${shortAddr(acct)}. An order you place here waits for a block and shows up in this list until the fold settles it.</div><div class="note tiny">${ORDERS_NOTE}</div>`.s; return; }
+      body.innerHTML = ordersTableHtml(list, orderCtx.changing).s;
+      if (orderCtx.changing && orderCtx.wireEditor) orderCtx.wireEditor();
+      return;
+    }
     if (view.bottomTab === 'history') {
       const list = txlog.forAccount(acct);
       if (!list.length) { body.innerHTML = '<div class="empty">Nothing sent from this browser' + (acct ? ' by ' + shortAddr(acct) : '') + '.</div>'; return; }
       body.innerHTML = h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Time</th><th>Model</th><th>What you did</th><th>Amount</th><th>Floor</th><th>Status</th><th>Block</th><th>Settled</th><th>Tx</th></tr></thead><tbody>
-        ${list.map((t) => h`<tr><td class="l">${fmtDateTime(t.sentAt)}</td><td class="l">${t.label}</td><td class="l ${t.kind === 'buy' ? 'up' : t.kind === 'sell' ? 'down' : ''}" title="facade call ${t.kind}()">${MOVE_WORD[t.kind] || t.kind}</td><td class="num">${t.kind === 'sell' ? fmtPos(t.amount) + ' memberships' : fmtMsk(t.amount) + ' MSK' + (t.kind === 'seed' ? ' (locked)' : '')}</td><td class="num">${t.kind === 'buy' ? fmtPos(t.min) + ' memberships' : t.kind === 'sell' ? fmtMsk(t.min) + ' MSK' : '—'}</td><td class="l">${statusCell(t)}</td><td class="num">${t.blockNumber != null ? fmtInt(t.blockNumber) : '—'}</td><td class="num">${t.status === 'settled' ? (t.kind === 'seed' ? 'opened with ' + fmtMsk(t.msk) + ' MSK, first price ' + fmtPrice(t.priceAfter) : fmtPos(t.units) + ' memberships for ' + fmtMsk(t.msk) + ' MSK') : t.settledBlock ? 'block ' + fmtInt(t.settledBlock) : '—'}</td><td class="l">${idCell(t.hash, 10)}</td></tr>`)}
+        ${list.map((t) => h`<tr><td class="l">${fmtDateTime(t.sentAt)}</td><td class="l">${t.label}</td><td class="l ${t.kind === 'buy' ? 'up' : t.kind === 'sell' ? 'down' : ''}" title="facade call ${t.kind}()">${t.kind === 'cancel' ? 'cancelled an order' : (MOVE_WORD[t.kind] || t.kind) + (t.replaces ? ' (change)' : '')}</td><td class="num">${t.kind === 'cancel' ? '—' : t.kind === 'sell' ? fmtPos(t.amount) + ' memberships' : fmtMsk(t.amount) + ' MSK' + (t.kind === 'seed' ? ' (locked)' : '')}</td><td class="num">${t.kind === 'buy' ? fmtPos(t.min) + ' memberships' : t.kind === 'sell' ? fmtMsk(t.min) + ' MSK' : '—'}</td><td class="l">${txStatusCell(t)}</td><td class="num">${t.blockNumber != null ? fmtInt(t.blockNumber) : '—'}</td><td class="num">${t.status === 'settled' ? (t.kind === 'seed' ? 'opened with ' + fmtMsk(t.msk) + ' MSK, first price ' + fmtPrice(t.priceAfter) : fmtPos(t.units) + ' memberships for ' + fmtMsk(t.msk) + ' MSK') : t.settledBlock ? 'block ' + fmtInt(t.settledBlock) : '—'}</td><td class="l">${idCell(t.hash, 10)}</td></tr>`)}
       </tbody></table></div>`.s;
       return;
     }
@@ -2405,7 +2540,7 @@ async function pageStore(arg) {
         <dt>Read through</dt><dd>${m ? (m.source === 'wrpc' ? 'wRPC getPalwModelMarket' : 'AMM window (eth_call)') + ', ' + fmtAgo(m.at) : '—'}</dd>
       </dl></div>`.s;
   }
-  $('#bottomTabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; view.bottomTab = b.dataset.t; $$('#bottomTabs button').forEach((x) => x.classList.toggle('on', x === b)); renderBottom(); if (view.bottomTab === 'settlements') loadMySettlements(); if (view.bottomTab === 'positions') loadPositions(); });
+  $('#bottomTabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; showTab(b.dataset.t); if (view.bottomTab === 'settlements') loadMySettlements(); if (view.bottomTab === 'positions') loadPositions(); });
 
   // ---- data refresh ---------------------------------------------------------------------------
   async function loadPositions() {
@@ -2436,8 +2571,9 @@ async function pageStore(arg) {
     // Two awaits back: this page may have been replaced while they were in flight, and writing
     // into #posV then labels the NEW store's row with the OLD line's symbol.
     if (!alive()) return;
-    const a = $('#availV'), p = $('#posV');
-    if (a) a.textContent = availText(entry.balance);
+    const a = $('#availV'), p = $('#posV'), hv = $('#heldV');
+    if (a) a.textContent = availNow();
+    if (hv) { hv.innerHTML = heldHtml(); bindHeldLink(); }
     if (p) p.textContent = entry.position != null ? fmtPos(entry.position) + ' ' + rec.symbol : '—';
     $$('#entry .pcts button').forEach((b) => { b.disabled = entry.side === 'buy' ? entry.balance == null : entry.position == null; });
     // the seed panel re-checks its "can send" reason against the balance (not while the user types)
@@ -2469,11 +2605,21 @@ async function pageStore(arg) {
     }
     loadAccount();
     if (ticks % 3 === 0 && view.bottomTab === 'positions') loadPositions();
-    pollTransactions().then(() => { if (view.bottomTab === 'history') renderBottom(); });
+    pollTransactions().then(afterTx);
   }
+  // a transaction moved (or a new one was sent): the tab count, the open orders, what they hold, the chart
+  function afterTx() {
+    if (!alive()) return;
+    renderOrderCount();
+    if (view.bottomTab === 'history' || (view.bottomTab === 'orders' && !$('#chgAmt:focus'))) renderBottom();
+    const hv = $('#heldV'); if (hv) { hv.innerHTML = heldHtml(); bindHeldLink(); const a = $('#availV'); if (a) a.textContent = availNow(); }
+    chart.markers = orderMarkers(); if (view.chartTab === 'chart') chart.draw();
+    renderQuote();
+  }
+  txlog.listeners.add(afterTx); onCleanup(() => txlog.listeners.delete(afterTx));
 
-  renderBar(); renderChart(); renderDepth(); renderEntry(); renderBottom(); renderChartAlt();
-  const onWallet = () => { renderNav(); renderEntry(); loadAccount(); loadPositions(); renderBottom(); };
+  renderBar(); renderChart(); renderDepth(); renderEntry(); renderBottom(); renderChartAlt(); renderOrderCount();
+  const onWallet = () => { renderNav(); renderEntry(); loadAccount(); loadPositions(); renderBottom(); renderOrderCount(); };
   wallet.listeners.add(onWallet); onCleanup(() => wallet.listeners.delete(onWallet));
   const onDb = () => { if (rec && !rec.row && db.line(rec.lineId) && db.line(rec.lineId).row) renderBar(); };
   db.listeners.add(onDb); onCleanup(() => db.listeners.delete(onDb));
@@ -2663,8 +2809,12 @@ async function pagePortfolio() {
   const gen = pageState.gen, alive = () => gen === pageState.gen;
   const main = $('#main');
   const view = { positions: null, balance: null, settlements: null, err: null };
+  const orderCtx = { changing: null, rerender: () => render() };
+  onCleanup(bindOrderActions(main, orderCtx));
+  const onTx = () => render(); txlog.listeners.add(onTx); onCleanup(() => txlog.listeners.delete(onTx));
   function render() {
     if (!alive()) return;
+    if ($('#chgAmt:focus')) return;              // not while a change is being typed
     const acct = wallet.account;
     if (!acct) { main.innerHTML = h`<div class="page-h"><h1>My memberships</h1></div><div class="panel"><div class="empty">Connect a wallet to see the memberships it holds, its MSK balance and what it has done. <br><button class="btn btn-accent" id="pfConnect" style="margin-top:10px">Connect</button></div></div>`.s; $('#pfConnect').addEventListener('click', () => $('#connectBtn').click()); return; }
     const p = view.positions;
@@ -2673,10 +2823,11 @@ async function pagePortfolio() {
     main.innerHTML = h`
       <div class="page-h"><h1>My memberships</h1><span class="sub mono">${acct}</span>${wallet.onChain() ? '' : raw('<span class="tag bad">wallet not on MISAKA</span>')}</div>
       <div class="grid3">
-        <div class="tile"><div class="k">MSK balance (EVM account)</div><div class="v">${view.balance != null ? fmtWeiMsk(view.balance) : '—'}</div><div class="s">${status.evm === 'up' ? 'eth_getBalance at latest' + (wallet.topsUp() ? ' — MISAKA Wallet also spends its post-quantum balance, moving what a payment is short of when you confirm' : '') : 'EVM RPC unreachable'}</div></div>
+        <div class="tile"><div class="k">MSK balance (EVM account)</div><div class="v">${view.balance != null ? fmtWeiMsk(view.balance) : '—'}</div>${(() => { const r = orders.reserved(acct); return r.n && view.balance != null ? h`<div class="s">${fmtWeiMsk(view.balance > r.wei ? view.balance - r.wei : 0n)} MSK left once ${String(r.n)} open order${r.n === 1 ? '' : 's'} (${fmtWeiMsk(r.wei)} MSK) are carried</div>` : raw(''); })()}<div class="s">${status.evm === 'up' ? 'eth_getBalance at latest' + (wallet.topsUp() ? ' — MISAKA Wallet also spends its post-quantum balance, moving what a payment is short of when you confirm' : '') : 'EVM RPC unreachable'}</div></div>
         <div class="tile"><div class="k">Models you are a member of</div><div class="v">${p ? p.positions.length : '—'}</div><div class="s">EVM namespace only (a bond's memberships are not this account's)</div></div>
         <div class="tile"><div class="k">If you left every one now</div><div class="v">${p && totalKnown ? fmtMsk(total, 2) + ' MSK' : '—'}</div><div class="s">the net MSK the curves would pay back right now, fees included — a membership itself is never paid anything</div></div>
       </div>
+      ${(() => { const list = orders.open(acct); if (!list.length) return raw(''); const r = orders.reserved(acct); return h`<div class="panel section"><div class="panel-h">Open orders <span class="spacer"></span><span class="dim">${String(list.length)} waiting · ${fmtWeiMsk(r.wei)} MSK held</span></div><div class="panel-b">${ordersTableHtml(list, orderCtx.changing)}</div></div>`; })()}
       <div class="panel section"><div class="panel-h">Memberships</div><div class="panel-b">
         ${!p ? raw('<div class="empty">' + (view.err ? esc(view.err) : 'Loading…') + '</div>') : !rows.length ? raw('<div class="empty">This account holds no membership in the EVM namespace. <span class="dim">holder id ' + esc(shortId(p.holder)) + '</span></div>') :
           h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th class="l">Model</th><th>Memberships</th><th>Price (MSK)</th><th>If you left now (net MSK)</th><th>Per membership</th><th></th></tr></thead><tbody>${rows.map(({ x, r, m, q }) => h`<tr class="row-link" data-href="#/store/${x.lineId}"><td class="l"><b>${db.label(r)}</b> <span class="dim tiny mono">${r.symbol}</span></td><td class="num">${fmtPos(x.units)}</td><td class="num">${m && m.price != null ? fmtPrice(m.price) : '—'}</td><td class="num">${q ? fmtMsk(q.fees.net) : '—'}</td><td class="num">${q ? fmtPrice(q.fees.net / x.units) : '—'}</td><td><a href="#/store/${x.lineId}">Open</a></td></tr>`)}</tbody></table></div>
@@ -2687,7 +2838,7 @@ async function pagePortfolio() {
           h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Block</th><th class="l">Model</th><th class="l">What happened</th><th>Memberships</th><th>MSK</th><th>Price after</th></tr></thead><tbody>${view.settlements.map((e) => { const r = db.line(e.lineId); return h`<tr><td class="num">${fmtInt(e.blockNumber)}</td><td class="l">${r ? db.label(r) : shortId(e.lineId)}</td><td class="l ${e.kind === 'Bought' ? 'up' : e.kind === 'Sold' ? 'down' : ''}" title="facade event ${e.kind}">${eventWord(e.kind)}${e.kind === 'Refused' ? ' (' + (ACTION_NAME[e.actionId] || '') + ': ' + (REFUSAL[e.reason] || e.reason) + ')' : ''}</td><td class="num">${e.units != null ? fmtPos(e.units) : e.kind === 'Seeded' ? '0 (opening)' : '—'}</td><td class="num">${e.kind === 'Bought' ? fmtMsk(e.mskIn) : e.kind === 'Seeded' ? fmtMsk(e.mskIn) + ' locked' : e.kind === 'Sold' ? fmtMsk(e.mskOut) : e.actionId !== 2 ? fmtMsk(e.amount) + ' refunded' : '—'}</td><td class="num">${e.priceAfter != null ? fmtPrice(e.priceAfter) : '—'}</td></tr>`; })}</tbody></table></div>`}
       </div></div>
       <div class="panel section"><div class="panel-h">My activity <span class="spacer"></span><span class="dim">transactions sent from this browser</span></div><div class="panel-b">
-        ${(() => { const list = txlog.forAccount(acct); return !list.length ? raw('<div class="empty">Nothing sent from this browser yet.</div>') : h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th class="l">Time</th><th class="l">Model</th><th class="l">What you did</th><th>Amount</th><th class="l">Status</th><th class="l">Tx</th></tr></thead><tbody>${list.map((t) => h`<tr><td class="l">${fmtDateTime(t.sentAt)}</td><td class="l">${t.label}</td><td class="l ${t.kind === 'buy' ? 'up' : t.kind === 'sell' ? 'down' : ''}" title="facade call ${t.kind}()">${MOVE_WORD[t.kind] || t.kind}</td><td class="num">${t.kind === 'sell' ? fmtPos(t.amount) + ' memberships' : fmtMsk(t.amount) + ' MSK' + (t.kind === 'seed' ? ' (locked)' : '')}</td><td class="l">${t.status}${t.status === 'settled' ? (t.kind === 'seed' ? ' · opened, first price ' + fmtPrice(t.priceAfter) + ' MSK' : ' · ' + fmtPos(t.units) + ' memberships / ' + fmtMsk(t.msk) + ' MSK') : ''}</td><td class="l">${idCell(t.hash, 10)}</td></tr>`)}</tbody></table></div>`; })()}
+        ${(() => { const list = txlog.forAccount(acct); return !list.length ? raw('<div class="empty">Nothing sent from this browser yet.</div>') : h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th class="l">Time</th><th class="l">Model</th><th class="l">What you did</th><th>Amount</th><th class="l">Status</th><th class="l">Tx</th></tr></thead><tbody>${list.map((t) => h`<tr><td class="l">${fmtDateTime(t.sentAt)}</td><td class="l">${t.label}</td><td class="l ${t.kind === 'buy' ? 'up' : t.kind === 'sell' ? 'down' : ''}" title="facade call ${t.kind}()">${t.kind === 'cancel' ? 'cancelled an order' : (MOVE_WORD[t.kind] || t.kind) + (t.replaces ? ' (change)' : '')}</td><td class="num">${t.kind === 'cancel' ? '—' : t.kind === 'sell' ? fmtPos(t.amount) + ' memberships' : fmtMsk(t.amount) + ' MSK' + (t.kind === 'seed' ? ' (locked)' : '')}</td><td class="l">${txStatusCell(t)}${t.status === 'settled' ? (t.kind === 'seed' ? ' · opened, first price ' + fmtPrice(t.priceAfter) + ' MSK' : ' · ' + fmtPos(t.units) + ' memberships / ' + fmtMsk(t.msk) + ' MSK') : ''}</td><td class="l">${idCell(t.hash, 10)}</td></tr>`)}</tbody></table></div>`; })()}
       </div></div>`.s;
   }
   async function load() {
@@ -3049,6 +3200,31 @@ function selfTestReport() {
   eq('wallets: an icon that is not an image data: URI is not drawn', walletChoices([ann('x.y', 'X', null, 'https://t.example/p.png')], {})[0].icon, WALLET_ICON_GENERIC);
   const r2 = walletChoices([aMm, aPh], {});
   eq('wallets: the remembered one only while it is installed, else the only one', [initialChoice(r2, 'app.phantom'), initialChoice(r2, MISAKA_RDNS), initialChoice(r2, null), initialChoice(walletChoices([aMm], {}), MISAKA_RDNS)].map((r) => (r ? r.key : '-')).join(' '), 'app.phantom - - io.metamask');
+  // ---- orders: the signed bytes back from eth_getTransactionByHash, and what a replacement must bid ----
+  // A real t11 pending join (2026-09-11), as the explorer node served it; the bytes are the ones a
+  // producer's block template carried for it.
+  const t11Join = { type: '0x2', chainId: '0x4d534b', nonce: '0x0', maxPriorityFeePerGas: '0x0', maxFeePerGas: '0xe', gas: '0xe1aa', to: '0x4d502a1e6968406143b642e4c989a4b1a0bdab00', value: '0x21e19e0c9bab2400000', input: '0xd96a094a000000000000000000000000000000000000000000000000000000000000a53e', accessList: [], v: '0x0', yParity: '0x0', r: '0xf88bf0c32e44b7c25c706dd123be578de2bf2f942d88798c25cb3a49a430e42f', s: '0x221634c015800971716e6c56a41e0281b392b3289016f72919a8dcdfc84dd238', hash: '0x8edf7df7218ba4c9c9a89af5f5689dc982b5ce0c8ba3f60382a32ad748a3a6aa' };
+  eq('raw tx: a t11 type-2 join re-encodes to the bytes its template carried', rawTxFromRpc(t11Join), '0x02f893834d534b80800e82e1aa944d502a1e6968406143b642e4c989a4b1a0bdab008a021e19e0c9bab2400000a4d96a094a000000000000000000000000000000000000000000000000000000000000a53ec080a0f88bf0c32e44b7c25c706dd123be578de2bf2f942d88798c25cb3a49a430e42fa0221634c015800971716e6c56a41e0281b392b3289016f72919a8dcdfc84dd238');
+  eq('raw tx: fields that do not hash to the served hash give no bytes', rawTxFromRpc(Object.assign({}, t11Join, { value: '0x1' })), null);
+  const eip155Raw = '0xf86c098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a76400008025a028ef61340bd939bc2195fe537567866003e1a15d3c71ff63e1590620aa636276a067cbe9d8997f761aecb703304b3800ccf555c9f3dc64214b297fb1966a3b6d83';
+  const eip155 = { type: '0x0', nonce: '0x9', gasPrice: '0x4a817c800', gas: '0x5208', to: '0x' + '35'.repeat(20), value: '0xde0b6b3a7640000', input: '0x', v: '0x25', r: '0x28ef61340bd939bc2195fe537567866003e1a15d3c71ff63e1590620aa636276', s: '0x67cbe9d8997f761aecb703304b3800ccf555c9f3dc64214b297fb1966a3b6d83', hash: '0x' + bytesToHex(keccak256(hexToBytes(eip155Raw))) };
+  eq('raw tx: the EIP-155 example (type 0) re-encodes byte for byte', rawTxFromRpc(eip155), eip155Raw);
+  const rf = replacementFees({ maxFeePerGas: '14', maxPriorityFeePerGas: '0' }, 7n);
+  eq('replacement: 14 wei cap -> 18 (the node wants >= 14 + 14*10/100 = 15), a zero tip stays zero', rf.maxFeePerGas + '/' + rf.maxPriorityFeePerGas, '18/0');
+  const rf2 = replacementFees({ maxFeePerGas: '10', maxPriorityFeePerGas: '4' }, 7n);
+  eq('replacement: never under twice the base fee; a tip grows by 25 % + 1', rf2.maxFeePerGas + '/' + rf2.maxPriorityFeePerGas, '14/6');
+  const keepList = txlog.list;
+  txlog.list = [
+    { hash: 'a', from: '0xabc', kind: 'buy', status: 'pending', nonce: 0, value: '1000', gas: '10', maxFeePerGas: '2', sentAt: 1 },
+    { hash: 'b', from: '0xabc', kind: 'cancel', status: 'sent', nonce: 0, value: '0', gas: '21000', maxFeePerGas: '3', sentAt: 2 },
+    { hash: 'c', from: '0xabc', kind: 'buy', status: 'dropped', nonce: 1, value: '500', gas: '10', maxFeePerGas: '2', sentAt: 3 },
+    { hash: 'd', from: '0xabc', kind: 'buy', status: 'queued', nonce: 2, value: '7', gas: '1', maxFeePerGas: '1', sentAt: 4 },
+    { hash: 'e', from: '0xdef', kind: 'buy', status: 'pending', nonce: 0, value: '9', gas: '1', maxFeePerGas: '1', sentAt: 5 },
+  ];
+  const held = orders.reserved('0xabc'), openRows = orders.open('0xabc').map((t) => t.hash).join('');
+  txlog.list = keepList;
+  eq('held: the newest per nonce counts, a cancel holds nothing, a carried join is already off the balance', held.wei + '/' + held.n, '520/1');
+  eq('open orders: not carried yet, or carried and not settled — newest first, cancels are not orders', openRows, 'dca');
   lines.unshift('MISAKA Options self-test: ' + pass + ' passed, ' + fail + ' failed');
   const report = lines.join('\n');
   console[fail ? 'error' : 'info'](report);
@@ -3061,7 +3237,7 @@ async function boot() {
   db.listeners.add(() => { renderNav(); renderBanner(); });
   wallet.listeners.add(renderNav);
   window.addEventListener('hashchange', route);
-  window.MO = { curve, ABI, SIG, EVT, blake2b, keccak256, utf8, hexToBytes, bytesToHex, facadeDerived, holderIdDerived, CURVE_DEFAULTS, bi, toHex, SOMPI_PER_MSK, NATIVE_SCALE_WEI, normMarket, db, history, store, txlog, seedActionData, ACTION_SEED, sompiToWei, parseClassStatus, REFUSAL, wallet, walletDiscovery, walletChoices, initialChoice, MISAKA_RDNS };
+  window.MO = { encodeRawTx, rawTxFromRpc, replacementFees, orders, pollTransactions, curve, ABI, SIG, EVT, blake2b, keccak256, utf8, hexToBytes, bytesToHex, facadeDerived, holderIdDerived, CURVE_DEFAULTS, bi, toHex, SOMPI_PER_MSK, NATIVE_SCALE_WEI, normMarket, db, history, store, txlog, seedActionData, ACTION_SEED, sompiToWei, parseClassStatus, REFUSAL, wallet, walletDiscovery, walletChoices, initialChoice, MISAKA_RDNS };
   if (MOCK) await new Promise((resolve) => { const s = document.createElement('script'); s.src = 'mock.js'; s.onload = resolve; s.onerror = () => { toast('mock.js failed to load', 'bad'); resolve(); }; document.head.appendChild(s); });
   if (MOCK && window.MISAKA_MOCK && window.MISAKA_MOCK.init) window.MISAKA_MOCK.init(window.MO);
   await wallet.init();

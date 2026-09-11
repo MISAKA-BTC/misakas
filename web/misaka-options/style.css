@@ -343,3 +343,15 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
   .btn-wicon { display: none; }   /* the header has no room for it on a phone; the account menu shows it */
   .stat { min-width: 90px; padding: 6px 10px; }
 }
+
+/* open orders (store tab, portfolio panel) */
+.tabs button.has { color: var(--warn); }
+.tabs button.has.on { color: var(--text); }
+.tbl.orders td.acts { white-space: nowrap; text-align: right; }
+.tbl.orders tr.edit td { background: var(--panel2); }
+.tbl.orders .chg { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tbl.orders .chg .inp { display: inline-flex; align-items: center; gap: 6px; }
+.tbl.orders .chg input { width: 120px; background: var(--bg2); color: var(--text); border: 1px solid var(--border2); border-radius: var(--radius); padding: 4px 8px; font-family: var(--mono); }
+.tbl.orders .chg .chg-q { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.entry .avail a { color: var(--warn); text-decoration: none; }
+.entry .avail a:hover { text-decoration: underline; }

@@ -11,6 +11,13 @@
  * seed panel and the "Add model" checklist have something to act on; a seed sent from the mock
  * wallet goes through the real code path (ActionQueued in the next block, Seeded or Refused one
  * block later), and the registered class flips to Active at its activation DAA.
+ *
+ * Orders: the mock keeps an EVM pool with per-account nonces, replacement by (sender, nonce) at a 10 %
+ * fee bump (as the node does), cancels (a zero-value transfer to yourself), eth_getTransactionByHash,
+ * misaka_getEvmTxStatus and eth_sendRawTransaction. `?mockslow=N` holds a transaction N blocks before a
+ * block carries it (testnet-11's wait, compressed); `?mockdrop=1` makes the pool forget each transaction
+ * once, two blocks after it arrived, so the page's re-broadcast is exercised. Only MISAKA Wallet signs with
+ * the nonce the site names; the other mock wallets pick their own, as real ones may.
  */
 (() => {
 'use strict';
@@ -19,6 +26,7 @@ window.MISAKA_MOCK = M;
 let MO, C, ABI, SIG, curve;
 const T0 = Date.now();
 const BLOCK_MS = 6000;
+const TICK_MS = Number(new URLSearchParams(location.search).get('mockblockms')) || BLOCK_MS;   // ?mockblockms=: blocks tick faster (tests); timestamps keep BLOCK_MS
 const START_BLOCK = 41200, START_DAA = 118500;
 const CHAIN_ID = '0x4d534b';
 const ACCOUNT = '0xa11ce4d5f0b2c8e97a3d6f1b2c3d4e5f60718293';
@@ -35,7 +43,11 @@ const ACCOUNT = '0xa11ce4d5f0b2c8e97a3d6f1b2c3d4e5f60718293';
 //   none            no wallet at all
 // e.g. `?mock=1&mockwallet=misaka,phantom,metamask`. Every one of them signs for the same mock account, which
 // holds 5 MSK on the EVM lane when MISAKA Wallet is in the list (the rest is "post-quantum"), else 150,000.
-const WALLET_KINDS = (new URLSearchParams(location.search).get('mockwallet') || 'injected').toLowerCase().split(',').map((k) => k.trim()).filter((k) => k && k !== 'none');
+const MOCK_QS = new URLSearchParams(location.search);
+const SLOW_BLOCKS = Math.max(0, Number(MOCK_QS.get('mockslow') || 0) | 0);
+const DROP_ONCE = MOCK_QS.get('mockdrop') === '1';
+const MOCK_BASE_FEE = 1000000000n;
+const WALLET_KINDS = (MOCK_QS.get('mockwallet') || 'injected').toLowerCase().split(',').map((k) => k.trim()).filter((k) => k && k !== 'none');
 const MOCK_MISAKA = WALLET_KINDS.some((k) => k === 'misaka' || k === 'misaka-legacy');
 const OTHERS = ['0x0b0b5c1a9d2e3f4a5b6c7d8e9f0a1b2c3d4e5f60', '0x0c4a7e1f2b3c4d5e6f708192a3b4c5d6e7f80912', '0x0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e', '0x0e5f6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5', '0x0f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f70', '0x0a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d'];
 const CLASS_A = '4277d84f7d91528cc04aa366d51ee1c2e4f7902c4f6b16a213dead1c7e227977db732f18ed6183db3d944d44726ebd3feff7b15c48f9dba11cd526684f35f1b7';
@@ -55,7 +67,7 @@ const now = () => Date.now();
 const blockOf = (ts) => START_BLOCK + Math.floor((ts - T0) / BLOCK_MS);
 const tsOf = (block) => T0 + (block - START_BLOCK) * BLOCK_MS;
 
-const world = { block: START_BLOCK, daa: START_DAA, classes: new Map(), lines: new Map(), markets: new Map(), positions: new Map(), logs: [], receipts: new Map(), pendingTx: [], queued: [], balances: new Map(), logSeq: 0, facades: new Map() };
+const world = { block: START_BLOCK, daa: START_DAA, classes: new Map(), lines: new Map(), markets: new Map(), positions: new Map(), logs: [], receipts: new Map(), pool: new Map(), mined: new Map(), dropped: new Map(), nonces: new Map(), queued: [], balances: new Map(), logSeq: 0, facades: new Map() };
 const key = (line, holder) => line + ':' + holder;
 const holderOf = (addr) => MO.holderIdDerived(CHAIN_ID, addr);
 function posGet(line, holder) { return world.positions.get(key(line, holder)) || 0n; }
@@ -197,8 +209,18 @@ function tickBlock() {
     else { out = applySell(a.line, a.from, a.units, a.minMsk); if (out.kind === 'Sold') world.balances.set(a.from, world.balances.get(a.from) + out.mskOut * MO.NATIVE_SCALE_WEI); }
     settlementLog(B, a.line, a.from, out);
   }
-  // include pending transactions: receipts carry ActionQueued; a buy's or a seed's value is escrowed now
-  for (const tx of world.pendingTx.splice(0)) {
+  // the pool forgets (?mockdrop=1): each transaction once, two blocks after it arrived
+  if (DROP_ONCE) for (const tx of Array.from(world.pool.values())) if (!tx.droppedOnce && B - tx.addedBlock >= 2) { tx.droppedOnce = true; world.pool.delete(tx.hash); world.dropped.set(tx.hash, tx); }
+  // include pending transactions: per sender the contiguous run from its nonce, each at least
+  // SLOW_BLOCKS old; receipts carry ActionQueued; a buy's or a seed's value is escrowed now
+  const carried = [];
+  for (const tx of Array.from(world.pool.values()).sort((a, b) => a.nonce - b.nonce)) {
+    if (B - tx.addedBlock <= SLOW_BLOCKS || tx.nonce !== (world.nonces.get(tx.from) || 0)) continue;
+    world.pool.delete(tx.hash); world.nonces.set(tx.from, tx.nonce + 1); carried.push(tx);
+  }
+  for (const tx of carried) {
+    world.mined.set(tx.hash, Object.assign(tx, { blockNumber: B }));
+    if (tx.kind === 'cancel') { world.receipts.set(tx.hash, { transactionHash: tx.hash, blockNumber: hex(B), blockHash: '0x' + h64('block/' + B), transactionIndex: '0x0', from: tx.from, to: tx.from, status: '0x1', gasUsed: '0x5208', cumulativeGasUsed: '0x5208', logs: [], logsBloom: '0x' + '0'.repeat(512), effectiveGasPrice: hex(MOCK_BASE_FEE), type: '0x2' }); continue; }
     const bal = world.balances.get(tx.from) || 0n;
     const escrow = tx.kind === 'buy' || tx.kind === 'seed';
     const okValue = !escrow || (tx.sompi > 0n && tx.sompi * MO.NATIVE_SCALE_WEI <= bal);
@@ -335,9 +357,25 @@ M.evm = async (method, params) => {
     case 'eth_gasPrice': return '0x3b9aca00';
     case 'eth_maxPriorityFeePerGas': return '0x3b9aca00';
     case 'eth_estimateGas': return '0x11170';
-    case 'eth_getTransactionCount': return '0x1';
+    case 'eth_getTransactionCount': { const a = strip0x(params[0]); return hex(params[1] === 'pending' ? pendingNonce(a) : (world.nonces.get(a) || 0)); }
+    case 'eth_getTransactionByHash': { const hs = String(params[0]).toLowerCase(); const t = world.pool.get(hs) || world.mined.get(hs); return t ? rpcTxOf(t) : null; }
+    case 'misaka_getEvmTxStatus': {
+      const hs = String(params[0]).toLowerCase(), m = world.mined.get(hs);
+      if (world.pool.has(hs)) return { transactionHash: hs, state: 'pending', inMempool: true, includedIn: [], acceptedIn: null, orphanedAcceptances: [], lastSkipClass: null };
+      if (m) return { transactionHash: hs, state: 'accepted', inMempool: false, includedIn: ['0x' + h64('block/' + m.blockNumber)], acceptedIn: { block: '0x' + h64('block/' + m.blockNumber), receiptIndex: 0 }, orphanedAcceptances: [], lastSkipClass: null };
+      return { transactionHash: hs, state: 'unknown', inMempool: false, includedIn: [], acceptedIn: null, orphanedAcceptances: [], lastSkipClass: null };
+    }
+    case 'eth_sendRawTransaction': {
+      const bytes = MO.hexToBytes(params[0]); const hs = '0x' + MO.bytesToHex(MO.keccak256(bytes));
+      if (world.pool.has(hs)) throw Object.assign(new Error('already known'), { code: -32000 });
+      if (world.mined.has(hs)) throw Object.assign(new Error('nonce too low'), { code: -32000 });
+      const t = world.dropped.get(hs);
+      if (!t) throw Object.assign(new Error('mock EVM: only a transaction this mock signed can be re-broadcast'), { code: -32000 });
+      world.dropped.delete(hs); t.addedBlock = world.block; world.pool.set(hs, t);
+      return hs;
+    }
     case 'eth_call': return ethCall(params[0].to, params[0].data);
-    case 'eth_getBlockByNumber': { const n = params[0] === 'latest' ? world.block : Number(BigInt(params[0])); if (n > world.block || n < 0) return null; return { number: hex(n), hash: '0x' + h64('block/' + n), parentHash: '0x' + h64('block/' + (n - 1)), timestamp: hex(Math.floor(tsOf(n) / 1000)), transactions: [], gasUsed: '0x0', gasLimit: '0x1c9c380', baseFeePerGas: '0x3b9aca00', miner: '0x' + '0'.repeat(40) }; }
+    case 'eth_getBlockByNumber': { const n = params[0] === 'latest' ? world.block : Number(BigInt(params[0])); if (n > world.block || n < 0) return null; return { number: hex(n), hash: '0x' + h64('block/' + n), parentHash: '0x' + h64('block/' + (n - 1)), timestamp: hex(Math.floor(tsOf(n) / 1000)), transactions: [], gasUsed: '0x0', gasLimit: '0x1c9c380', baseFeePerGas: hex(MOCK_BASE_FEE), miner: '0x' + '0'.repeat(40) }; }
     case 'eth_getTransactionReceipt': return world.receipts.get(String(params[0]).toLowerCase()) || null;
     case 'eth_getLogs': {
       const f = params[0] || {};
@@ -351,6 +389,21 @@ M.evm = async (method, params) => {
   }
 };
 const strip0x = (s) => String(s || '').toLowerCase();
+function pendingNonce(from) {
+  let n = world.nonces.get(from) || 0;
+  while (Array.from(world.pool.values()).some((x) => x.from === from && x.nonce === n)) n++;
+  return n;
+}
+// signed-looking fields, hashed the way a node hashes a signed transaction (keccak of the EIP-2718 bytes)
+function rpcTxOf(t) {
+  return { type: '0x2', chainId: CHAIN_ID, nonce: hex(t.nonce), maxPriorityFeePerGas: hex(t.maxPriorityFeePerGas), maxFeePerGas: hex(t.maxFeePerGas), gas: hex(t.gas), to: t.to, value: hex(t.value), input: t.input, accessList: [], v: '0x0', yParity: '0x0', r: t.r, s: t.s, from: t.from, hash: t.hash, blockNumber: t.blockNumber != null ? hex(t.blockNumber) : null, blockHash: t.blockNumber != null ? '0x' + h64('block/' + t.blockNumber) : null, transactionIndex: t.blockNumber != null ? '0x0' : null, gasPrice: hex(t.maxFeePerGas) };
+}
+function signMock(t) {
+  t.r = '0x' + h64('r/' + Math.random()); t.s = '0x' + h64('s/' + Math.random()).replace(/^[89a-f]/, '1');
+  const bytes = MO.encodeRawTx(rpcTxOf(Object.assign({}, t, { hash: '0x' })));
+  t.raw = '0x' + MO.bytesToHex(bytes);
+  t.hash = '0x' + MO.bytesToHex(MO.keccak256(bytes));
+}
 
 // ---- the wallets (EIP-1193, announced with EIP-6963) ----------------------------------------------
 // one request handler for every mock wallet; `w` is the wallet asked (only MISAKA Wallet tops up)
@@ -362,12 +415,15 @@ async function walletRequest(w, method, params) {
     case 'eth_sendTransaction': {
       const tx = params[0];
       const to = strip0x(tx.to);
-      let line = null; for (const [l, f] of world.facades) if (strip0x(f) === to) line = l;
-      if (!line) throw Object.assign(new Error('mock wallet: the recipient is not a line facade'), { code: -32000 });
-      const sel = strip(tx.data).slice(0, 8); const a = argWords(tx.data);
-      const rec = { hash: '0x' + h64('tx/' + world.block + '/' + Math.random()), from: strip0x(tx.from), to, line, sentAt: now() };
+      const from = strip0x(tx.from);
       const wei = BigInt(tx.value || '0x0');
-      if (sel === ABI.selector(SIG.buy)) { if (wei === 0n || wei % MO.NATIVE_SCALE_WEI !== 0n) throw Object.assign(new Error('execution reverted: BadValue()'), { code: -32000 }); Object.assign(rec, { kind: 'buy', sompi: wei / MO.NATIVE_SCALE_WEI, minUnits: ABI.u(a[0]) }); }
+      let line = null; for (const [l, f] of world.facades) if (strip0x(f) === to) line = l;
+      const isCancel = !line && to === from && wei === 0n;
+      if (!line && !isCancel) throw Object.assign(new Error('mock wallet: the recipient is not a line facade'), { code: -32000 });
+      const sel = strip(tx.data).slice(0, 8); const a = argWords(tx.data || '0x');
+      const rec = { from, to, line, sentAt: now() };
+      if (isCancel) rec.kind = 'cancel';
+      else if (sel === ABI.selector(SIG.buy)) { if (wei === 0n || wei % MO.NATIVE_SCALE_WEI !== 0n) throw Object.assign(new Error('execution reverted: BadValue()'), { code: -32000 }); Object.assign(rec, { kind: 'buy', sompi: wei / MO.NATIVE_SCALE_WEI, minUnits: ABI.u(a[0]) }); }
       else if (sel === ABI.selector(SIG.sell)) Object.assign(rec, { kind: 'sell', units: ABI.u(a[0]), minMsk: ABI.u(a[1]) });
       else if (sel === ABI.selector(SIG.seed)) {
         // ADR-0090: the writer reverts at the call for a bad value or a seed under the floor
@@ -383,7 +439,21 @@ async function walletRequest(w, method, params) {
         const bal = world.balances.get(rec.from) || 0n;
         if (wei > bal) world.balances.set(rec.from, wei + 10000n * MO.NATIVE_SCALE_WEI);
       }
-      world.pendingTx.push(rec);
+      // MISAKA Wallet signs with the nonce the site names; the other mock wallets pick their own
+      rec.nonce = w.isMisakaWallet && tx.nonce != null ? Number(BigInt(tx.nonce)) : pendingNonce(from);
+      rec.maxFeePerGas = tx.maxFeePerGas != null ? BigInt(tx.maxFeePerGas) : MOCK_BASE_FEE * 2n;
+      rec.maxPriorityFeePerGas = tx.maxPriorityFeePerGas != null ? BigInt(tx.maxPriorityFeePerGas) : 0n;
+      rec.gas = tx.gas != null ? BigInt(tx.gas) : isCancel ? 21000n : 70000n;
+      rec.value = wei; rec.input = tx.data || '0x';
+      if (rec.nonce < (world.nonces.get(from) || 0)) throw Object.assign(new Error('nonce too low'), { code: -32000 });
+      const prior = Array.from(world.pool.values()).find((x) => x.from === from && x.nonce === rec.nonce);
+      if (prior && (rec.maxFeePerGas < prior.maxFeePerGas + prior.maxFeePerGas * 10n / 100n || rec.maxPriorityFeePerGas < prior.maxPriorityFeePerGas + prior.maxPriorityFeePerGas * 10n / 100n)) {
+        throw Object.assign(new Error('replacement transaction underpriced'), { code: -32000 });
+      }
+      signMock(rec);
+      if (prior) world.pool.delete(prior.hash);
+      rec.addedBlock = world.block;
+      world.pool.set(rec.hash, rec);
       return rec.hash;
     }
     default: return M.evm(method, params);
@@ -444,7 +514,7 @@ M.init = (mo) => {
     if (MO.txlog) { MO.txlog.list.splice(0); MO.txlog.claimed.clear(); MO.txlog.save(); }   // the app read the old list before this ran
   }
   seedWorld();
-  setInterval(tickBlock, BLOCK_MS);
+  setInterval(tickBlock, TICK_MS);
   M.world = world; M.CLASS_R = CLASS_R;
   console.info('[mock] MISAKA Options mock world ready: ' + world.lines.size + ' lines (' + [...world.markets.values()].filter((m) => m.seeded).length + ' seeded), ' + world.logs.length + ' settlement logs, account ' + ACCOUNT + ', unseeded class ' + CLASS_R.slice(0, 8));
 };
