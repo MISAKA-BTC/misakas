@@ -1813,6 +1813,8 @@ function renderAcctMenu() {
     el('div', { class: 'acct-who' }, el('img', { class: 'wc-icon sm', alt: '', src: c ? c.icon : WALLET_ICON_GENERIC }), el('span', { class: 'wc-name' }, c ? c.name : 'Wallet')),
     el('div', { class: 'acct-addr mono', title: wallet.account || '' }, shortAddr(wallet.account)),
     wallet.onChain() ? null : item('Switch to the MISAKA chain', async () => { try { await wallet.ensureChain(); } catch (e) { toast((e && e.message) || String(e), 'bad', 'Wallet'); } }),
+    item('My memberships', () => navigate('#/portfolio')),
+    item('Developer dashboard', () => navigate('#/dev'), { title: 'Your models, their stores and what their members get' }),
     item('Change wallet', () => openWalletChooser('change'), { title: 'Pick another installed wallet' }),
     item('Copy address', () => copyText(wallet.account)),
     item('Disconnect', () => wallet.disconnect(), { class: 'danger', title: 'Forget the account on this site; the wallet itself stays connected' }),
@@ -2839,7 +2841,7 @@ async function pagePortfolio() {
     let total = 0n, totalKnown = true;
     const rows = (p && p.positions || []).map((x) => { const r = db.line(x.lineId) || db.upsertLine(x.lineId, {}); const m = r.market; const q = m ? curve.sellQuote(m, x.units) : null; if (q) total += q.fees.net; else totalKnown = false; return { x, r, m, q }; });
     main.innerHTML = h`
-      <div class="page-h"><h1>My memberships</h1><span class="sub mono">${acct}</span>${wallet.onChain() ? '' : raw('<span class="tag bad">wallet not on MISAKA</span>')}</div>
+      <div class="page-h"><h1>My memberships</h1><span class="sub mono">${acct}</span>${wallet.onChain() ? '' : raw('<span class="tag bad">wallet not on MISAKA</span>')}<span class="spacer"></span><a class="btn btn-sm" href="#/dev">Developer dashboard</a></div>
       <div class="grid3">
         <div class="tile"><div class="k">MSK balance (EVM account)</div><div class="v">${view.balance != null ? fmtWeiMsk(view.balance) : '—'}</div>${(() => { const r = orders.reserved(acct); return r.n && view.balance != null ? h`<div class="s">${fmtWeiMsk(view.balance > r.wei ? view.balance - r.wei : 0n)} MSK left once ${String(r.n)} open order${r.n === 1 ? '' : 's'} (${fmtWeiMsk(r.wei)} MSK) are carried</div>` : raw(''); })()}<div class="s">${status.evm === 'up' ? 'eth_getBalance at latest' + (wallet.topsUp() ? ' — MISAKA Wallet also spends its post-quantum balance, moving what a payment is short of when you confirm' : '') : 'EVM RPC unreachable'}</div></div>
         <div class="tile"><div class="k">Models you are a member of</div><div class="v">${p ? p.positions.length : '—'}</div><div class="s">EVM namespace only (a bond's memberships are not this account's)</div></div>
@@ -3111,9 +3113,455 @@ kaspad --testnet --netsuffix=11 --appdir=~/.t11 \\
 }
 
 // ============================================================================================
+// 11b. the developer dashboard (#/dev): the owner's side of a store — OpenSea's creator page and
+// pump.fun's launch form, for a chain where a model is owned by a BOND
+// ============================================================================================
+// Every write an owner makes — found a line, publish a version, declare what members get, name a
+// developer, hand the line on — is an ML-DSA-87 signature by the owning bond's key, and no browser
+// wallet holds one (MISAKA Wallet signs EVM transactions for sites, never PALW objects). So this page
+// reads everything live from the node, opens a store in the browser (a seed is an EVM payment anyone
+// can make), and for every signed step writes the exact `misaka palw …` command from what was filled
+// in, dry-run first. Nothing here is a claim the chain does not make: a line is "yours" because its
+// row names the bond or payout payload you entered, not because this browser says so.
+const DEV_TABS = [['models', 'Your models'], ['launch', 'Launch a model'], ['rights', 'Member rights'], ['programs', 'Tools & programs'], ['versions', 'Versions'], ['roles', 'Roles']];
+const GRANT_ORDER = ['EARLY_VERSION', 'PRIVATE_BETA', 'PRIORITY_INFERENCE', 'EXPERIMENTAL', 'DEVELOPER_ACCESS', 'INFERENCE_QUOTA', 'HOLDER_VOICE', 'SUPPORT'];   // grant::NAMES, bit order
+const BENEFIT_MAX_TIERS = 8, BENEFIT_MAX_NOTE = 64, BENEFIT_NOTICE_DAA = 4000n;   // palw_model_benefits_v1.rs
+const EXTENSION_DOMAIN = 'misaka-palw/extension-manifest/v1';                    // ADR-0108's extension_id key
+// What a member can USE for each grant, and what the developer has to run for it to be true. The chain
+// proves the holding and publishes the promise; serving it is the developer's (ADR-0095 §4.10).
+const GRANT_TOOLS = {
+  EARLY_VERSION: 'Serve the new version\'s artifact to members during the lead window. The chain refuses to make it current before the lead is over — that part is enforced.',
+  PRIVATE_BETA: 'Publish previews (version-publish --preview, at most two at once) and serve them to members only.',
+  PRIORITY_INFERENCE: 'Run a gateway that checks the membership (the member signs a challenge with their EVM key) and serves members\' jobs first.',
+  EXPERIMENTAL: 'Offer the modes the line runs but has not made default: tools, thinking, longer context, a new quantisation. Say which in the tier\'s note.',
+  DEVELOPER_ACCESS: 'Open the room where the next version is argued: proposals, research previews. Put its name or address in the note.',
+  INFERENCE_QUOTA: 'Honour an allowance at the gateway; the size (e.g. "1,000 requests/day") goes in the note — a label, never a rule.',
+  HOLDER_VOICE: 'Read proposals and evaluations with the member mark and the tier they were written at.',
+  SUPPORT: 'Answer members\' reports first.',
+};
+const EXTENSION_TEMPLATES = {
+  'model-class': { manifest: EXTENSION_DOMAIN, kind: 'model-class', name: 'your model — its class, by its artifact', network: 'testnet-11', source: { note: 'how the artifact was made (converter, commit, the Hugging Face repo)' }, artifact: { root: '<128-hex artifact root>' }, requires: { ruleset_id: '<the node\'s consensus_params_id>', fences: { palw_kary_court: 'active' } }, declares: { object_id: '<128-hex class id>', capabilities: ['attempt', 'fp'] }, verification: { model_id: '<model id>' }, admission: { object: 'ClassRegistered' } },
+  'lane-certification': { manifest: EXTENSION_DOMAIN, kind: 'lane-certification', name: 'the free-prompt lane of your class', network: 'testnet-11', source: { note: 'palw-certify bind --model-id <id> --lane fp --out lane.borsh' }, declares: { object_id: '<128-hex class id>' }, verification: { object_path: 'lane.borsh', lane: 'fp', expected: { class_id: '<128-hex class id>' } }, admission: { object: 'ClassLaneCertified' } },
+  'family-certification': { manifest: EXTENSION_DOMAIN, kind: 'family-certification', name: 'your family\'s attempt-lane drill', network: 'testnet-11', source: { note: 'palw-certify drill --family <family> --lane attempt --out drill.borsh' }, declares: { object_id: '<128-hex family id>' }, verification: { object_path: 'drill.borsh', lane: 'attempt', expected: { family_id: '<128-hex family id>' } }, admission: { object: 'FamilyCertified' } },
+  'derived-transformer': { manifest: EXTENSION_DOMAIN, kind: 'derived-transformer', name: 'a converter members\' answers can be derived with', network: 'testnet-11', source: { note: 'what it converts and where its code is' }, declares: { object_id: '<128-hex transformer id>' }, transformer: { name: '<family/format/v1>' }, verification: { vectors: [{ dsl_path: 'input.json', expected_dsl_hash: '<128 hex>', expected_artifact_hash: '<128 hex>', expected_artifact_bytes: 0 }] }, admission: { object: 'none' } },
+};
+
+// RFC 8785 for the documents ADR-0108 accepts (no floats): keys sorted by UTF-16 code units, no
+// whitespace, strings as ECMAScript serialises them — which is what RFC 8785 specifies.
+function canonicalJson(v) {
+  if (v === null || typeof v === 'boolean' || typeof v === 'string') return JSON.stringify(v);
+  if (typeof v === 'number') { if (!Number.isInteger(v)) throw new Error('a manifest carries no floats (RFC 8785 / ADR-0108)'); return JSON.stringify(v); }
+  if (Array.isArray(v)) return '[' + v.map(canonicalJson).join(',') + ']';
+  if (typeof v === 'object') return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + canonicalJson(v[k])).join(',') + '}';
+  throw new Error('not JSON: ' + typeof v);
+}
+// extension_id_v1: keyed BLAKE2b-512 under the domain over `len_le64 ‖ canonical bytes` (manifest.rs;
+// the guide's formula leaves the length prefix out — the code is the authority, and the self-test pins it).
+function extensionIdOf(doc) {
+  const bytes = utf8(canonicalJson(doc));
+  const len = new Uint8Array(8); let n = bytes.length; for (let i = 0; i < 8; i++) { len[i] = n & 0xff; n = Math.floor(n / 256); }
+  return bytesToHex(blake2b(concatBytes(len, bytes), utf8(EXTENSION_DOMAIN)));
+}
+
+// A developer names themselves by what the chain names them by: a bond outpoint, or a payout payload.
+function parseDevId(text) {
+  const s = String(text || '').trim().toLowerCase().replace(/^0x/, '');
+  let m = /^([0-9a-f]{64}|[0-9a-f]{128}):(\d{1,10})$/.exec(s);
+  if (m) return { kind: 'bond', txid: m[1], index: Number(m[2]), key: m[1] + ':' + Number(m[2]) };
+  if (/^[0-9a-f]{128}$/.test(s)) return { kind: 'payload', key: s };
+  return null;
+}
+const bondKey = (b) => (b && b.transactionId != null ? String(b.transactionId).toLowerCase() + ':' + Number(b.index || 0) : null);
+// Which roles `ids` hold on `rec`'s row: the chain's own words, compared exactly.
+function devRolesOn(rec, ids) {
+  const row = rec && rec.row; if (!row) return [];
+  const has = (k) => ids.some((d) => d.key === k);
+  const roles = [];
+  for (const [role, b, p] of [['owner', row.owner, row.ownerPayoutPayload], ['developer', row.developer, row.developerPayoutPayload], ['maintainer', row.maintainer, row.maintainerPayoutPayload]]) {
+    if ((b && has(bondKey(b))) || (p && has(String(p).toLowerCase()))) roles.push(role);
+  }
+  return roles;
+}
+const shq = (s) => (/^[A-Za-z0-9_\/:.,@%+=~-]+$/.test(String(s)) ? String(s) : "'" + String(s).replace(/'/g, "'\\''") + "'");
+// `misaka --network <net> palw <sub> --key-file <key> --flag value …`, dry-run and the one that sends
+function devCmd(sub, keyFile, flags) {
+  const parts = ['misaka', '--network', CFG.NETWORK_NAME, 'palw', sub, '--key-file', shq(keyFile || '~/.misaka/owner.seed')];
+  for (const [k, v] of flags) { if (v === true) parts.push('--' + k); else if (Array.isArray(v)) for (const x of v) parts.push('--' + k, shq(x)); else if (v != null && v !== '' && v !== false) parts.push('--' + k, shq(v)); }
+  return parts.join(' ');
+}
+function cmdBlock(cmd, note) {
+  return h`<div class="cmdbox"><div class="cmdbar"><span class="dim tiny">${note || 'dry run first — it prints what it would send; add --yes to send it'}</span><button class="btn btn-sm" data-copy="${cmd}">Copy</button></div><pre class="cmd">${cmd}</pre><div class="cmdbar"><span class="dim tiny">then, to send it:</span><button class="btn btn-sm" data-copy="${cmd + ' --yes'}">Copy with --yes</button></div></div>`;
+}
+// A tiny identicon: a mirrored 5x5 grid from the id's bytes, in the site's palette.
+function identicon(hex, size) {
+  const b = hexToBytes(String(hex || '00').replace(/[^0-9a-f]/gi, '').slice(0, 64) || '00');
+  const hue = ((b[0] || 0) * 360) / 256, fg = 'hsl(' + hue.toFixed(0) + ',55%,58%)';
+  let cells = '';
+  for (let y = 0; y < 5; y++) for (let x = 0; x < 3; x++) if (((b[1 + y * 3 + x] || 0) & 1) === 1) { cells += '<rect x="' + x + '" y="' + y + '" width="1" height="1"/>'; if (x < 2) cells += '<rect x="' + (4 - x) + '" y="' + y + '" width="1" height="1"/>'; }
+  return 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="-1 -1 7 7" width="' + (size || 40) + '" height="' + (size || 40) + '"><rect x="-1" y="-1" width="7" height="7" fill="#162730"/><g fill="' + fg + '">' + cells + '</g></svg>');
+}
+// §4.1 checks of palw_model_benefits_validate_v1, in the order the chain applies them
+function validateTiers(tiers, expiresDaa, daa) {
+  if (tiers.length > BENEFIT_MAX_TIERS) return 'At most ' + BENEFIT_MAX_TIERS + ' tiers.';
+  let last = null;
+  for (const t of tiers) {
+    if (t.minUnits <= 0n) return 'Every tier needs at least one membership.';
+    if (last != null && t.minUnits <= last) return 'Thresholds must rise from tier to tier (' + fmtInt(t.minUnits) + ' does not rise above ' + fmtInt(last) + ').';
+    last = t.minUnits;
+    if (!t.grants.length) return 'Every tier grants something from the closed set.';
+    if (utf8(t.note || '').length > BENEFIT_MAX_NOTE) return 'A note is at most ' + BENEFIT_MAX_NOTE + ' bytes (' + utf8(t.note).length + ' now).';
+    if (t.leadDaa > 0n && !t.grants.includes('EARLY_VERSION')) return 'A lead window only means something with Early access to new versions.';
+  }
+  if (expiresDaa > 0n && daa != null && expiresDaa <= daa) return 'An expiry at or before the current DAA (' + fmtInt(daa) + ') would never govern.';
+  return null;
+}
+// §4.7 palw_model_benefits_is_strengthening_v1: does every holder the current card serves keep at least what they have?
+function tiersStrengthen(prev, prevExpires, next, nextExpires) {
+  const weakerExpiry = prevExpires === 0n ? nextExpires !== 0n : nextExpires !== 0n && nextExpires < prevExpires;
+  if (weakerExpiry) return false;
+  const tierFor = (tiers, units) => tiers.filter((t) => units >= t.minUnits).pop() || null;
+  for (const pt of prev) {
+    const nt = tierFor(next, pt.minUnits);
+    if (!nt) return false;
+    if (!pt.grants.every((g) => nt.grants.includes(g))) return false;
+    if (nt.leadDaa < pt.leadDaa) return false;
+    if (nt.holdDaa > pt.holdDaa) return false;
+  }
+  return true;
+}
+const tierSpec = (t) => { const tail = [t.leadDaa > 0n || t.holdDaa > 0n || t.note ? String(t.leadDaa) : null, t.holdDaa > 0n || t.note ? String(t.holdDaa) : null, t.note || null].filter((x) => x != null); return [String(t.minUnits), t.grants.join(',')].concat(tail).join(':'); };
+function tiersFromChain(b) { return ((b && b.tiers) || []).map((t) => ({ minUnits: bi(t.minUnits), grants: (t.grantNames || []).slice(), leadDaa: bi(t.leadDaa || 0), holdDaa: bi(t.minHoldDaa || 0), note: t.note || '' })); }
+
+async function pageDev(arg) {
+  const gen = pageState.gen, alive = () => gen === pageState.gen;
+  const main = $('#main');
+  const dev = {
+    ids: store.get('dev:ids', []).map(parseDevId).filter(Boolean),
+    watch: store.get('dev:watch', []).filter(isId128),
+    keyFile: store.get('dev:key', '~/.misaka/owner.seed'),
+    tab: DEV_TABS.some(([t]) => t === arg) ? arg : store.get('dev:tab', 'models'),
+    line: normId(store.get('dev:line')) || null,
+    draft: null,            // the rights editor's tiers, for dev.line
+    manifest: null, manifestKind: 'model-class',
+    launch: store.get('dev:launch', { classId: '', name: '', root: '', bond: '', title: '', desc: '', image: '', hf: '', params: '' }),
+    seed: { msk: null, busy: false, balance: null },
+    loading: false,
+  };
+  const saveIds = () => store.set('dev:ids', dev.ids.map((d) => d.key));
+  const mine = () => sortedLines().filter((r) => dev.watch.includes(r.lineId) || devRolesOn(r, dev.ids).length);
+  function members(m) { return m && !m.legacy ? bi(m.supplyUnits) - bi(m.positionUnits) - bi(m.retiredUnits || 0n) : null; }
+  function pickLine() { const list = mine(); if (!dev.line || !list.some((r) => r.lineId === dev.line)) dev.line = list.length ? list[0].lineId : null; return dev.line ? db.line(dev.line) : null; }
+
+  main.innerHTML = h`
+    <div class="page-h"><h1>Developer</h1><span class="sub">your models, their stores, what their members get — and the signed steps, written out for your key</span></div>
+    <div class="panel dev-head" id="devHead"></div>
+    <div class="panel"><div class="tabs" id="devTabs">${DEV_TABS.map(([t, l]) => h`<button data-t="${t}" class="${t === dev.tab ? 'on' : ''}">${l}</button>`)}</div><div class="tab-body" id="devBody"></div></div>`.s;
+
+  function renderHead() {
+    if (!alive()) return;
+    const list = mine();
+    let mem = 0n, reserve = 0n, fees = 0n, burned = 0n, used = 0, memKnown = true;
+    for (const r of list) {
+      const m = r.market; const n = members(m);
+      if (n == null) memKnown = false; else mem += n;
+      if (m) { reserve += bi(m.mskReserve); fees += bi(m.ownerPaid || 0n); burned += bi(m.burnedSompi || 0n); }
+      const u = usageOf(r); if (u != null) used += Number(u);
+    }
+    const idHex = dev.ids.length ? dev.ids[0].key.replace(/[^0-9a-f]/g, '') : (wallet.account || '').replace(/^0x/, '');
+    const fc = curve.consts(null);
+    $('#devHead').innerHTML = h`
+      <div class="dev-who">
+        <img class="dev-avatar" alt="" src="${identicon(idHex, 56)}">
+        <div class="dev-ids">
+          <div class="small muted">The chain knows an owner by its <b>bond</b> (<span class="mono">txid:index</span>) or its <b>payout payload</b> (128 hex). Add yours and every line whose row names it is listed here; nothing is sent anywhere.</div>
+          <div class="dev-chips">${dev.ids.length ? dev.ids.map((d) => h`<span class="chip mono" title="${d.key}">${d.kind === 'bond' ? 'bond ' : 'payload '}${shortId(d.key, 10)} <button class="x" data-rmid="${d.key}" aria-label="remove">×</button></span>`) : raw('<span class="dim small">none yet</span>')}${wallet.account ? h`<span class="chip mono dim" title="The connected EVM account: it can open stores and trade, it owns no line">EVM ${shortAddr(wallet.account)}</span>` : ''}</div>
+          <div class="inp-row"><input id="devIdIn" class="idinp mono" spellcheck="false" autocomplete="off" placeholder="bond txid:index, or payout payload (128 hex)"><button class="btn" id="devIdAdd">Add</button></div>
+        </div>
+      </div>
+      <div class="grid6 dev-stats">
+        <div class="tile"><div class="k">Models</div><div class="v">${String(list.length)}</div><div class="s">lines whose row names you, or that you watch</div></div>
+        <div class="tile"><div class="k">Members</div><div class="v">${memKnown ? fmtInt(mem) : '—'}</div><div class="s">memberships held outside the curves</div></div>
+        <div class="tile"><div class="k">In the reserves</div><div class="v">${fmtMsk(reserve, 0)}</div><div class="s">MSK behind your stores' buy-backs</div></div>
+        <div class="tile"><div class="k">Owner fees earned</div><div class="v">${fmtMsk(fees, 2)}</div><div class="s">the owner's ${pctOf(fc.legPermille)} of every join and leave, paid to the owner payload</div></div>
+        <div class="tile"><div class="k">Burned by your stores</div><div class="v">${fmtMsk(burned, 2)}</div><div class="s">the ${pctOf(fc.burnPermille)} burn of every move</div></div>
+        <div class="tile"><div class="k">Paid inferences</div><div class="v">${fmtInt(used)}</div><div class="s">claims the fold counted against your current versions</div></div>
+      </div>`.s;
+    $$('#devHead [data-rmid]').forEach((b) => b.addEventListener('click', () => { dev.ids = dev.ids.filter((d) => d.key !== b.dataset.rmid); saveIds(); renderAll(); }));
+    const add = () => { const d = parseDevId($('#devIdIn').value); if (!d) { toast('That is neither a bond outpoint (txid:index) nor a 128-hex payout payload.', 'warn'); return; } if (!dev.ids.some((x) => x.key === d.key)) dev.ids.push(d); saveIds(); renderAll(); };
+    $('#devIdAdd').addEventListener('click', add);
+    $('#devIdIn').addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
+  }
+
+  // ---- your models: the creator page's grid ----------------------------------------------------
+  function modelsTab() {
+    const list = mine();
+    const cards = list.map((r) => {
+      const m = r.market, roles = devRolesOn(r, dev.ids), n = members(m), b = r.info && r.info.benefits;
+      const sold = m && !m.legacy && bi(m.supplyUnits) > 0n ? Number((n * 10000n) / bi(m.supplyUnits)) / 100 : null;
+      const cs = classStatusOf(r);
+      return h`<div class="dev-card">
+        <div class="dev-card-h"><img alt="" src="${identicon(r.lineId, 40)}"><div><div class="n">${db.label(r)}</div><div class="s mono dim">${r.symbol} · ${shortId(r.lineId, 8)}</div></div></div>
+        <div class="dev-tags">${roles.map((x) => h`<span class="tag ok">${x}</span>`)}${dev.watch.includes(r.lineId) && !roles.length ? raw('<span class="tag">watching</span>') : ''}${m ? (m.seeded ? raw('<span class="tag ok">store open</span>') : raw('<span class="tag warn">store not open</span>')) : ''}${cs && cs.head !== 'Active' ? h`<span class="tag warn">${cs.head}</span>` : ''}</div>
+        <div class="dev-kv"><span>Price</span><b>${m && m.price != null ? fmtPrice(m.price) + ' MSK' : '—'}</b></div>
+        <div class="dev-kv"><span>Members</span><b>${n != null ? fmtInt(n) : '—'}</b></div>
+        <div class="dev-bar" title="memberships outside the curve, of the ${m ? fmtInt(m.supplyUnits) : ''} a line opens with"><i style="width:${sold != null ? Math.min(100, Math.max(sold, sold > 0 ? 1 : 0)) : 0}%"></i></div>
+        <div class="dev-kv tiny dim"><span>${sold != null ? sold.toFixed(2) + ' % of the supply taken' : 'no curve yet'}</span><span>reserve ${m ? fmtMsk(m.mskReserve, 0) : '—'} MSK</span></div>
+        <div class="dev-kv"><span>Owner fees earned</span><b>${m ? fmtMsk(m.ownerPaid || 0n, 2) + ' MSK' : '—'}</b></div>
+        <div class="dev-kv"><span>Current version</span><b>${r.row && r.row.current ? 'v' + r.row.current : '—'}</b></div>
+        <div class="dev-kv"><span>Member tiers</span><b>${b && b.tiers ? String(b.tiers.length) : '—'}</b></div>
+        <div class="dev-acts"><a class="btn btn-sm" href="#/store/${r.lineId}">Store</a> <button class="btn btn-sm" data-manage="${r.lineId}">Manage</button></div>
+      </div>`;
+    });
+    return h`${!dev.ids.length && !dev.watch.length ? raw('<div class="note">Add your bond or payout payload above — or watch a line below — and your models appear here with their stores, members and earnings. To launch one, see <a href="#/dev/launch">Launch a model</a>.</div>') : ''}
+      ${list.length ? h`<div class="dev-grid">${cards}</div>` : dev.ids.length ? raw('<div class="empty">No line on this network names the bonds or payloads above' + (db.lines.size ? ' (' + db.lines.size + ' lines known).' : '.') + '</div>') : ''}
+      <div class="inp-row" style="margin-top:12px"><input id="devWatchIn" class="idinp mono" spellcheck="false" autocomplete="off" placeholder="watch a line by its id (128 hex)"><button class="btn" id="devWatchAdd">Watch</button></div>`;
+  }
+
+  // ---- launch: pump.fun's one form, split where the chain splits it ----------------------------
+  function launchTab() {
+    const L = dev.launch, classes = Array.from(db.classes.keys());
+    const nameBytes = utf8(L.name || '').length;
+    const bond = parseDevId(L.bond);
+    const okClass = normId(L.classId), okRoot = isId128(L.root);
+    const why = !okClass ? 'pick the class the line runs on' : !L.name || nameBytes > 64 ? 'a name of 1 to 64 bytes' : !okRoot ? 'the 128-hex artifact root of version 1' : !bond || bond.kind !== 'bond' ? 'the founding bond as txid:index (it becomes owner, developer and maintainer, and signs)' : '';
+    const found = why ? null : devCmd('line-found', dev.keyFile, [['class', L.classId], ['name', L.name], ['root', L.root], ['bond', bond.key]]);
+    const card = { title: L.title || L.name || '', variant: L.params ? L.params : undefined, hf: L.hf || undefined, description: L.desc || undefined, image: L.image || undefined };
+    const snippet = okClass ? '"<the new line id>": ' + JSON.stringify(Object.fromEntries(Object.entries(card).filter(([, v]) => v)), null, 2) : '';
+    const target = pickLine();
+    return h`<div class="grid2 dev-launch">
+      <div class="panel"><div class="panel-h">1 · Found a line</div><div class="panel-b">
+        <p class="small">A <b>line</b> is a model people can join: it runs on a registered <b>class</b> (the graph), publishes <b>versions</b> (artifact roots) and gets its own store. Founding one is a signed carrier from an active bond, rent-priced (1 MSK of its fee is burned). A class you do not have yet is registered first — <a href="#/add">the listing checklist</a> walks through it, and <a href="#/dev/programs">Tools &amp; programs</a> writes its ADR-0108 manifest.</p>
+        <label class="small muted" for="lcClass">Class</label>
+        <select id="lcClass" class="idinp mono"><option value="">choose a class…</option>${classes.map((c) => h`<option value="${c}" ${c === L.classId ? 'selected' : ''}>${db.line(c) ? db.label(db.line(c)) + ' · ' : ''}${shortId(c, 10)}</option>`)}</select>
+        <label class="small muted" for="lcName">Name <span class="dim">(${String(nameBytes)}/64 bytes — shared, never squatted: the founder is in the line id)</span></label>
+        <input id="lcName" class="idinp" maxlength="64" autocomplete="off" value="${L.name}" placeholder="e.g. Qwen2.5-1.5B/finance-tuned">
+        <label class="small muted" for="lcRoot">Version 1 — artifact root (128 hex)</label>
+        <input id="lcRoot" class="idinp mono" spellcheck="false" autocomplete="off" value="${L.root}" placeholder="the root palw-class prints for your artifact">
+        <label class="small muted" for="lcBond">Founding bond</label>
+        <input id="lcBond" class="idinp mono" spellcheck="false" autocomplete="off" value="${L.bond}" placeholder="txid:index">
+        <label class="small muted" for="lcKey">Key file of that bond <span class="dim">(only written into the command; never read here)</span></label>
+        <input id="lcKey" class="idinp mono" spellcheck="false" autocomplete="off" value="${dev.keyFile}">
+        ${found ? cmdBlock(found) : h`<div class="reason">${why}</div>`}
+        <p class="small dim">The line id is printed by the command and shown by the node; add its founding bond above and it joins <a href="#/dev/models">Your models</a>.</p>
+      </div></div>
+      <div class="panel"><div class="panel-h">2 · Its listing</div><div class="panel-b">
+        <p class="small">What people see before they join. The chain stores the name; the rest is the site's catalogue (<span class="mono">config.js</span> MODELS), so it is shown here and in this browser only until the site's operator adds the entry below.</p>
+        <label class="small muted" for="lcTitle">Title</label><input id="lcTitle" class="idinp" value="${L.title}" placeholder="Organisation/Model-Name">
+        <label class="small muted" for="lcDesc">Description</label><textarea id="lcDesc" class="idinp" rows="3" placeholder="what it is good at, in two sentences">${L.desc}</textarea>
+        <div class="grid2 tight"><div><label class="small muted" for="lcImg">Image URL</label><input id="lcImg" class="idinp" value="${L.image}" placeholder="https://…/icon.png"></div><div><label class="small muted" for="lcParams">Size / variant</label><input id="lcParams" class="idinp" value="${L.params}" placeholder="1.5B · A16 dense · n_ctx 512"></div></div>
+        <label class="small muted" for="lcHf">Model card</label><input id="lcHf" class="idinp" value="${L.hf}" placeholder="https://huggingface.co/…">
+        <div class="dev-preview"><img alt="" src="${L.image && /^https:\/\//.test(L.image) ? L.image : identicon(L.root || L.name || 'x', 56)}" onerror="this.src='${identicon(L.root || L.name || 'x', 56)}'"><div><b>${L.title || L.name || 'Your model'}</b><div class="small dim">${L.params || ''}</div><div class="small">${L.desc || ''}</div></div></div>
+        ${snippet ? h`<div class="cmdbox"><div class="cmdbar"><span class="dim tiny">config.js · MODELS entry for the site's operator</span><button class="btn btn-sm" data-copy="${snippet}">Copy</button></div><pre class="cmd">${snippet}</pre></div>` : ''}
+      </div></div>
+    </div>
+    <div class="panel"><div class="panel-h">3 · Open its store (in the browser)</div><div class="panel-b">
+      <p class="small">A store opens with a <b>seed</b> of at least ${fmtMsk(seedMinFor(target && target.market), 0)} MSK, locked for good as the curve's reserve (ADR-0090) — an EVM payment any wallet can make, so it happens right here. ${target ? h`For <b>${db.label(target)}</b>:` : raw('Add or watch the line first.')}</p>
+      <div id="devSeed"></div>
+    </div></div>`;
+  }
+
+  // ---- member rights: the ADR-0095 card, edited and previewed ---------------------------------
+  function rightsTab() {
+    const rec = pickLine();
+    if (!rec) return h`<div class="empty">Add your bond, or watch a line, to declare what its members get.</div>`;
+    const b = rec.info && rec.info.benefits;
+    if (!dev.draft || dev.draft.line !== rec.lineId) dev.draft = { line: rec.lineId, tiers: tiersFromChain(b), cadence: bi(b && b.cadenceDaa || 0), expires: bi(b && b.expiresDaa || 0) };
+    const d = dev.draft, daa = db.chain.daa;
+    const err = validateTiers(d.tiers, d.expires, daa);
+    const prev = tiersFromChain(b);
+    const stronger = tiersStrengthen(prev, bi(b && b.expiresDaa || 0), d.tiers, d.expires);
+    const cmd = err ? null : devCmd('line-benefits', dev.keyFile, [['line', rec.lineId], ['tier', d.tiers.map(tierSpec)], ['cadence-daa', d.cadence > 0n ? String(d.cadence) : null], ['expires-daa', d.expires > 0n ? String(d.expires) : null]]);
+    const preview = { benefits: { tiers: d.tiers.map((t) => ({ minUnits: t.minUnits, grantNames: t.grants, leadDaa: t.leadDaa, minHoldDaa: t.holdDaa, note: t.note })), cadenceDaa: d.cadence, expiresDaa: d.expires, enforcedLeadDaa: d.tiers.reduce((a, t) => (t.leadDaa > a ? t.leadDaa : a), 0n) } };
+    return h`${lineSelect(rec)}
+      <div class="grid2">
+        <div><div class="panel-h">The card now</div>${raw(benefitsPanel(rec.info, { always: true }))}</div>
+        <div><div class="panel-h">Your draft ${raw(d.tiers.length ? '' : '<span class="tag warn">empty = withdraw</span>')}</div>
+          <div class="tiers-ed">${d.tiers.map((t, i) => h`<div class="tier-ed" data-i="${String(i)}">
+            <div class="row"><label class="tiny muted">From</label><input class="t-units mono" value="${String(t.minUnits)}" inputmode="numeric"><span class="tiny muted">memberships</span><button class="btn btn-sm btn-ghost" data-rmtier="${String(i)}">Remove</button></div>
+            <div class="grants">${GRANT_ORDER.map((g) => h`<label class="gchip ${t.grants.includes(g) ? 'on' : ''}" title="${GRANT_WORDS[g][1]}"><input type="checkbox" data-grant="${g}" ${t.grants.includes(g) ? 'checked' : ''}>${GRANT_WORDS[g][0]}</label>`)}</div>
+            <div class="row"><label class="tiny muted">Lead (DAA)</label><input class="t-lead mono" value="${String(t.leadDaa)}" inputmode="numeric" title="how long members have a new version before it may become current — enforced by the chain; needs Early access"><label class="tiny muted">Held for (DAA)</label><input class="t-hold mono" value="${String(t.holdDaa)}" inputmode="numeric" title="how long a member must have held without selling"></div>
+            <div class="row"><label class="tiny muted">Note</label><input class="t-note" maxlength="64" value="${t.note}" placeholder="1,000 requests/day · 32K context · #room"><span class="tiny dim">${String(utf8(t.note || '').length)}/64</span></div>
+          </div>`)}</div>
+          <button class="btn btn-sm" id="addTier" ${d.tiers.length >= BENEFIT_MAX_TIERS ? 'disabled' : ''}>Add a tier</button>
+          <div class="row" style="margin-top:8px"><label class="tiny muted">Publish a version every (DAA, 0 = no undertaking)</label><input id="tCad" class="mono" value="${String(d.cadence)}" inputmode="numeric"></div>
+          <div class="row"><label class="tiny muted">Expires at DAA (0 = never)</label><input id="tExp" class="mono" value="${String(d.expires)}" inputmode="numeric"></div>
+        </div>
+      </div>
+      <div class="panel-h">What members will see</div>${raw(benefitsPanel(preview, { always: true }))}
+      ${err ? h`<div class="reason">${err}</div>` : h`<div class="note ${stronger ? '' : 'warn'}">${stronger ? 'This keeps or improves what every current member has, so it governs as soon as it lands.' : 'This takes something away from someone (a removed grant, a higher threshold, a shorter expiry, a longer holding period, or a withdrawal): the chain stores it as pending and the current card keeps governing for ' + fmtInt(BENEFIT_NOTICE_DAA) + ' DAA (ADR-0095 §4.7).'}</div>${cmdBlock(cmd, 'signed by the line\'s owner bond — dry run first')}`}`;
+  }
+
+  // ---- tools & programs: what members can use, and ADR-0108 manifests --------------------------
+  function programsTab() {
+    const rec = pickLine(); const b = rec && rec.info && rec.info.benefits;
+    const promised = new Set(tiersFromChain(b).flatMap((t) => t.grants));
+    if (!dev.manifest) dev.manifest = JSON.stringify(EXTENSION_TEMPLATES[dev.manifestKind], null, 2);
+    let parsed = null, perr = null, eid = null, canon = null;
+    try { parsed = JSON.parse(dev.manifest); canon = canonicalJson(parsed); eid = extensionIdOf(parsed); } catch (e) { perr = e.message; }
+    const file = (parsed && parsed.kind ? parsed.kind : 'extension') + '.json';
+    const cmds = ['misaka --network ' + CFG.NETWORK_NAME + ' palw extension inspect ' + file, 'misaka --network ' + CFG.NETWORK_NAME + ' palw extension verify ' + file + ' --depth vectors', 'misaka --network ' + CFG.NETWORK_NAME + ' palw extension preflight ' + file, 'misaka --network ' + CFG.NETWORK_NAME + ' palw extension submit ' + file + ' --key-file ' + shq(dev.keyFile)].join('\n');
+    return h`${rec ? lineSelect(rec) : ''}
+      <div class="panel-h">What your members can use${rec ? h` — ${db.label(rec)}` : ''}</div>
+      <p class="small">A grant is a service the line runs, never money. The chain proves who holds how many memberships (a member signs a challenge with their EVM key and the gateway reads the holding) and publishes the promise; running the service is yours. ${rec ? (promised.size ? 'This line promises the ticked ones below.' : 'This line promises nothing yet — declare tiers under Member rights.') : ''}</p>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th class="l">Grant</th><th class="l">What you run for it</th><th>Promised</th></tr></thead><tbody>
+        ${GRANT_ORDER.map((g) => h`<tr><td class="l"><b>${GRANT_WORDS[g][0]}</b> <span class="dim tiny mono">${g}</span></td><td class="l small">${GRANT_TOOLS[g]}</td><td>${promised.has(g) ? raw('<span class="tag ok">yes</span>') : raw('<span class="dim">—</span>')}</td></tr>`)}
+      </tbody></table></div>
+      <div class="panel-h" style="margin-top:14px">Bring a program: an ADR-0108 extension manifest</div>
+      <p class="small">A model class, a lane certificate, a family drill or a converter reaches the chain as <b>one manifest</b> a verifier recomputes; its id is a hash of its canonical form, never a name you declare. The verifier answers one tier: <b>expressible now</b> (permissionless — <span class="mono">submit</span> sends the object), <b>a node extension</b> (a build must carry the code), or <b>a ruleset change</b> (a fence and a release).</p>
+      <div class="row"><label class="tiny muted" for="mfKind">Start from</label><select id="mfKind">${Object.keys(EXTENSION_TEMPLATES).map((k) => h`<option value="${k}" ${k === dev.manifestKind ? 'selected' : ''}>${k}</option>`)}</select><button class="btn btn-sm btn-ghost" id="mfReset">Reset to the template</button></div>
+      <textarea id="mfText" class="idinp mono manifest" rows="16" spellcheck="false">${dev.manifest}</textarea>
+      ${perr ? h`<div class="reason">${perr}</div>` : h`<dl class="kv small"><dt>extension_id</dt><dd class="mono">${eid}</dd><dt>canonical bytes</dt><dd>${fmtInt(utf8(canon).length)} (RFC 8785: sorted keys, no whitespace)</dd><dt>save it as</dt><dd class="mono">${file}</dd></dl>
+        <div class="cmdbox"><div class="cmdbar"><span class="dim tiny">inspect → verify → preflight → submit (submit only for an expressible-now tier)</span><button class="btn btn-sm" data-copy="${cmds}">Copy</button></div><pre class="cmd">${cmds}</pre></div>`}`;
+  }
+
+  // ---- versions --------------------------------------------------------------------------------
+  function versionsTab() {
+    const rec = pickLine();
+    if (!rec) return h`<div class="empty">Add your bond, or watch a line, to publish its versions.</div>`;
+    if (!rec.versions) refreshVersions(rec.lineId).then(() => { if (dev.tab === 'versions') renderBody(); }).catch(() => {});
+    const V = dev.ver || (dev.ver = { root: '', parent: rec.row && rec.row.current ? String(rec.row.current) : '', preview: false, notes: '', card: '' });
+    let notesHash = V.notes;
+    if (!notesHash && V.card.trim()) { try { notesHash = bytesToHex(blake2b(utf8(canonicalJson(JSON.parse(V.card))))); } catch (e) { notesHash = ''; } }
+    const why = !isId128(V.root) ? 'the new version\'s 128-hex artifact root' : notesHash && !isId128(notesHash) ? 'a notes hash is 128 hex' : '';
+    const cmd = why ? null : devCmd('version-publish', dev.keyFile, [['line', rec.lineId], ['root', V.root], ['parent', V.parent || null], ['notes-hash', notesHash || null], ['preview', V.preview]]);
+    const previews = (rec.versions || []).filter((v) => /preview/i.test(v.status || ''));
+    return h`${lineSelect(rec)}
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>v</th><th class="l">Status</th><th class="l">Root</th><th>Published DAA</th><th>Attempt</th><th>FP</th><th class="l"></th></tr></thead><tbody>
+        ${!rec.versions ? raw('<tr><td colspan="7" class="empty">Loading versions…</td></tr>') : rec.versions.map((v) => h`<tr><td class="num">${String(v.version)}</td><td class="l">${v.status || '—'}${v.inForce ? raw(' <span class="tag ok">in force</span>') : ''}</td><td class="l">${idCell(v.root)}</td><td class="num">${v.publishedDaa != null ? fmtInt(v.publishedDaa) : '—'}</td><td class="num">${fmtInt(v.attemptClaims)}</td><td class="num">${fmtInt(v.fpClaims)}</td><td class="l">${/preview/i.test(v.status || '') ? h`<button class="btn btn-sm" data-vcmd="version-promote:${String(v.version)}">Promote…</button> <button class="btn btn-sm btn-ghost" data-vcmd="version-withdraw:${String(v.version)}">Withdraw…</button>` : ''}</td></tr>`)}
+      </tbody></table></div>
+      <div id="vCmd"></div>
+      <div class="grid2" style="margin-top:12px">
+        <div><div class="panel-h">Publish a version</div>
+          <label class="small muted" for="vRoot">Artifact root (128 hex)</label><input id="vRoot" class="idinp mono" value="${V.root}" spellcheck="false">
+          <div class="row"><label class="tiny muted" for="vParent">Continues from v</label><input id="vParent" class="mono" value="${V.parent}" inputmode="numeric"><label class="tiny"><input type="checkbox" id="vPrev" ${V.preview ? 'checked' : ''}> preview (members first; ${String(previews.length)}/2 open)</label></div>
+          <label class="small muted" for="vNotes">Notes hash (128 hex) — or write the model card below and it is hashed for you</label><input id="vNotes" class="idinp mono" value="${V.notes}" spellcheck="false">
+          ${cmd ? cmdBlock(cmd, 'signed by the line\'s developer bond; without --preview it becomes current at once') : h`<div class="reason">${why}</div>`}
+        </div>
+        <div><div class="panel-h">Model card (hashed into --notes-hash)</div>
+          <textarea id="vCard" class="idinp mono" rows="10" spellcheck="false" placeholder='{"what": "…", "trained_on": "…", "evals": {…}}'>${V.card}</textarea>
+          <div class="small dim">The chain records the hash and never reads the card: publish the card next to the artifact so members can check it. ${notesHash && !V.notes ? h`BLAKE2b-512 of its canonical form: ${shortId(notesHash, 16)}` : ''}</div>
+        </div>
+      </div>`;
+  }
+
+  // ---- roles -----------------------------------------------------------------------------------
+  function rolesTab() {
+    const rec = pickLine();
+    if (!rec) return h`<div class="empty">Add your bond, or watch a line, to set its roles.</div>`;
+    const row = rec.row || {}, R = dev.roles || (dev.roles = { developer: '', maintainer: '', share: '', newOwner: '' });
+    const who = (b, p) => (b ? h`<span class="mono">${shortId(b.transactionId, 10)}:${String(b.index)}</span>` : p ? idCell(p, 10) : raw('<span class="dim">the owner</span>'));
+    const okBond = (s) => !s || s === 'owner' || (parseDevId(s) && parseDevId(s).kind === 'bond');
+    const share = R.share === '' ? null : Number(R.share);
+    const why = !okBond(R.developer) || !okBond(R.maintainer) ? 'a role is a bond (txid:index) or "owner"' : share != null && !(share >= 0 && share <= 1000 && Number.isInteger(share)) ? 'the contributor share is 0..1000 permille' : !R.developer && !R.maintainer && share == null ? 'change at least one role' : '';
+    const roleCmd = why ? null : devCmd('line-roles', dev.keyFile, [['line', rec.lineId], ['developer', R.developer || null], ['maintainer', R.maintainer || null], ['contributor-permille', share != null ? String(share) : null]]);
+    const nb = parseDevId(R.newOwner);
+    const moveCmd = nb && nb.kind === 'bond' ? devCmd('line-transfer', dev.keyFile, [['line', rec.lineId], ['new-owner', nb.key]]) : null;
+    return h`${lineSelect(rec)}
+      <dl class="kv"><dt>Owner</dt><dd>${who(row.owner, row.ownerPayoutPayload)}</dd><dt>Developer</dt><dd>${who(row.developer, row.developerPayoutPayload)}</dd><dt>Maintainer</dt><dd>${who(row.maintainer, row.maintainerPayoutPayload)}</dd><dt>Contributor share of the owner's leg</dt><dd>${row.contributorPermilleOfLeg != null ? row.contributorPermilleOfLeg + ' ‰' : '—'}</dd></dl>
+      <div class="grid2">
+        <div><div class="panel-h">Name the developer and maintainer</div>
+          <p class="small">The developer publishes versions; the maintainer keeps the line running. Both default to the owner. An adopted contributor takes this share of the owner's leg while their version is current.</p>
+          <label class="small muted" for="rDev">Developer bond</label><input id="rDev" class="idinp mono" value="${R.developer}" placeholder="txid:index, or owner">
+          <label class="small muted" for="rMnt">Maintainer bond</label><input id="rMnt" class="idinp mono" value="${R.maintainer}" placeholder="txid:index, or owner">
+          <label class="small muted" for="rShare">Contributor share (permille of the owner's leg)</label><input id="rShare" class="idinp mono" value="${R.share}" placeholder="e.g. 250" inputmode="numeric">
+          ${roleCmd ? cmdBlock(roleCmd, 'signed by the owner bond') : h`<div class="reason">${why}</div>`}
+        </div>
+        <div><div class="panel-h">Hand the line on</div>
+          <p class="small">The new owner takes the leg from the next move; developer and maintainer reset to them. Memberships do not move.</p>
+          <label class="small muted" for="rNew">New owner bond (an active bond)</label><input id="rNew" class="idinp mono" value="${R.newOwner}" placeholder="txid:index">
+          ${moveCmd ? cmdBlock(moveCmd, 'signed by the current owner bond — this cannot be undone by you') : raw('<div class="dim small">Enter the new owner\'s bond.</div>')}
+          <div class="panel-h" style="margin-top:12px">Retire it</div>
+          <p class="small">The store closes to new members, leaves still pay, the roots leave force after the grace, and the history stays.</p>
+          ${cmdBlock(devCmd('line-retire', dev.keyFile, [['line', rec.lineId]]), 'signed by the owner bond — a retired line does not come back')}
+        </div>
+      </div>`;
+  }
+
+  function lineSelect(rec) {
+    const list = mine();
+    return h`<div class="row dev-linesel"><label class="small muted" for="devLine">Line</label><select id="devLine">${list.map((r) => h`<option value="${r.lineId}" ${r.lineId === rec.lineId ? 'selected' : ''}>${db.label(r)} · ${shortId(r.lineId, 8)}${devRolesOn(r, dev.ids).length ? ' (' + devRolesOn(r, dev.ids).join(', ') + ')' : ' (watching)'}</option>`)}</select><a class="small" href="#/store/${rec.lineId}">store</a></div>`;
+  }
+
+  function renderBody() {
+    if (!alive()) return;
+    const body = $('#devBody'); if (!body) return;
+    const t = dev.tab;
+    body.innerHTML = (t === 'launch' ? launchTab() : t === 'rights' ? rightsTab() : t === 'programs' ? programsTab() : t === 'versions' ? versionsTab() : t === 'roles' ? rolesTab() : modelsTab()).s;
+    wire(body);
+  }
+  function renderAll() { renderHead(); renderBody(); }
+  const num = (v) => { const n = parseDec(String(v).trim() || '0', 0); return n == null || n < 0n ? 0n : n; };
+  function wire(body) {
+    $$('[data-copy]', body).forEach((b) => b.addEventListener('click', () => { copyText(b.dataset.copy); toast('Copied.', 'ok'); }));
+    const sel = $('#devLine', body); if (sel) sel.addEventListener('change', () => { dev.line = sel.value; store.set('dev:line', dev.line); dev.draft = null; dev.ver = null; dev.roles = null; loadLine(dev.line); renderBody(); });
+    $$('[data-manage]', body).forEach((b) => b.addEventListener('click', () => { dev.line = b.dataset.manage; store.set('dev:line', dev.line); showTab('rights'); }));
+    const w = $('#devWatchAdd', body); if (w) w.addEventListener('click', () => { const id = normId($('#devWatchIn').value.trim()); if (!id) { toast('A line id is 128 hex.', 'warn'); return; } if (!dev.watch.includes(id)) dev.watch.push(id); store.set('dev:watch', dev.watch); db.upsertLine(id, {}); loadLine(id).then(renderAll); });
+    if (dev.tab === 'launch') {
+      const bindL = (id, key) => { const el2 = $('#' + id, body); if (!el2) return; el2.addEventListener(el2.tagName === 'SELECT' ? 'change' : 'input', () => { dev.launch[key] = el2.value; store.set('dev:launch', dev.launch); clearTimeout(dev.lt); dev.lt = setTimeout(() => { const f = document.activeElement && document.activeElement.id; renderBody(); if (f && $('#' + f)) { const x = $('#' + f); x.focus(); if (x.setSelectionRange && x.value != null) try { x.setSelectionRange(x.value.length, x.value.length); } catch (e) { /* select */ } } }, 350); }); };
+      bindL('lcClass', 'classId'); bindL('lcName', 'name'); bindL('lcRoot', 'root'); bindL('lcBond', 'bond'); bindL('lcTitle', 'title'); bindL('lcDesc', 'desc'); bindL('lcImg', 'image'); bindL('lcParams', 'params'); bindL('lcHf', 'hf');
+      const k = $('#lcKey', body); if (k) k.addEventListener('change', () => { dev.keyFile = k.value.trim() || '~/.misaka/owner.seed'; store.set('dev:key', dev.keyFile); renderBody(); });
+      const target = pickLine(), box = $('#devSeed', body);
+      if (box && target) { dev.seed.balance = dev.balance; if (target.market && target.market.seeded) box.innerHTML = h`<div class="note">The store is open: ${fmtMsk(target.market.seedSompi || target.market.mskReserve, 0)} MSK locked, ${fmtInt(members(target.market) || 0n)} memberships held. <a href="#/store/${target.lineId}">Go to the store</a></div>`.s; else renderSeedPanel(box, dev.seed, () => target, () => { toast('Seed sent. The store opens when a block carries it; follow it under Open orders on the store page.', 'ok'); }); }
+    }
+    if (dev.tab === 'rights' && dev.draft) {
+      const d = dev.draft;
+      const rerender = () => { const f = document.activeElement; const sig = f && f.closest && f.closest('.tier-ed') ? [f.closest('.tier-ed').dataset.i, f.className] : f && f.id ? ['#', f.id] : null; renderBody(); if (sig) { const x = sig[0] === '#' ? $('#' + sig[1]) : $('.tier-ed[data-i="' + sig[0] + '"] .' + String(sig[1]).split(' ')[0]); if (x) { x.focus(); try { x.setSelectionRange(x.value.length, x.value.length); } catch (e) { /* checkbox */ } } } };
+      $$('.tier-ed', body).forEach((ed) => {
+        const t = d.tiers[Number(ed.dataset.i)];
+        const on = (cls, fn) => { const x = $('.' + cls, ed); if (x) x.addEventListener('input', () => { fn(x.value); clearTimeout(dev.rt); dev.rt = setTimeout(rerender, 300); }); };
+        on('t-units', (v) => { t.minUnits = num(v); }); on('t-lead', (v) => { t.leadDaa = num(v); }); on('t-hold', (v) => { t.holdDaa = num(v); }); on('t-note', (v) => { t.note = v; });
+        $$('[data-grant]', ed).forEach((c) => c.addEventListener('change', () => { const g = c.dataset.grant; t.grants = GRANT_ORDER.filter((x) => (x === g ? c.checked : t.grants.includes(x))); rerender(); }));
+      });
+      $$('[data-rmtier]', body).forEach((b) => b.addEventListener('click', () => { d.tiers.splice(Number(b.dataset.rmtier), 1); renderBody(); }));
+      const at = $('#addTier', body); if (at) at.addEventListener('click', () => { const lastT = d.tiers[d.tiers.length - 1]; d.tiers.push({ minUnits: lastT ? lastT.minUnits * 10n : 1n, grants: ['SUPPORT'], leadDaa: 0n, holdDaa: 0n, note: '' }); renderBody(); });
+      const cad = $('#tCad', body); if (cad) cad.addEventListener('input', () => { d.cadence = num(cad.value); clearTimeout(dev.rt); dev.rt = setTimeout(rerender, 300); });
+      const ex = $('#tExp', body); if (ex) ex.addEventListener('input', () => { d.expires = num(ex.value); clearTimeout(dev.rt); dev.rt = setTimeout(rerender, 300); });
+    }
+    if (dev.tab === 'programs') {
+      const k = $('#mfKind', body); if (k) k.addEventListener('change', () => { dev.manifestKind = k.value; dev.manifest = JSON.stringify(EXTENSION_TEMPLATES[k.value], null, 2); renderBody(); });
+      const r = $('#mfReset', body); if (r) r.addEventListener('click', () => { dev.manifest = JSON.stringify(EXTENSION_TEMPLATES[dev.manifestKind], null, 2); renderBody(); });
+      const t = $('#mfText', body); if (t) t.addEventListener('input', () => { dev.manifest = t.value; clearTimeout(dev.mt); dev.mt = setTimeout(() => { const pos = t.selectionStart; renderBody(); const x = $('#mfText'); if (x) { x.focus(); try { x.setSelectionRange(pos, pos); } catch (e) { /* */ } } }, 600); });
+    }
+    if (dev.tab === 'versions' && dev.ver) {
+      const V = dev.ver;
+      const bindV = (id, key, isBox) => { const x = $('#' + id, body); if (!x) return; x.addEventListener(isBox ? 'change' : 'input', () => { V[key] = isBox ? x.checked : x.value.trim(); clearTimeout(dev.vt); dev.vt = setTimeout(() => { const f = document.activeElement && document.activeElement.id; renderBody(); if (f && $('#' + f)) $('#' + f).focus(); }, 350); }); };
+      bindV('vRoot', 'root'); bindV('vParent', 'parent'); bindV('vNotes', 'notes'); bindV('vPrev', 'preview', true);
+      const card = $('#vCard', body); if (card) card.addEventListener('input', () => { V.card = card.value; clearTimeout(dev.vt); dev.vt = setTimeout(() => { renderBody(); const x = $('#vCard'); if (x) x.focus(); }, 600); });
+      $$('[data-vcmd]', body).forEach((b) => b.addEventListener('click', () => { const [sub, n] = b.dataset.vcmd.split(':'); $('#vCmd', body).innerHTML = cmdBlock(devCmd(sub, dev.keyFile, [['line', dev.line], ['version', n]]), sub === 'version-promote' ? 'makes the preview current (developer bond); refused inside a declared lead window' : 'takes the preview out of force (developer bond)').s; $$('#vCmd [data-copy]', body).forEach((c) => c.addEventListener('click', () => { copyText(c.dataset.copy); toast('Copied.', 'ok'); })); }));
+    }
+    if (dev.tab === 'roles' && dev.roles) {
+      const R = dev.roles;
+      for (const [id, key] of [['rDev', 'developer'], ['rMnt', 'maintainer'], ['rShare', 'share'], ['rNew', 'newOwner']]) { const x = $('#' + id, body); if (x) x.addEventListener('input', () => { R[key] = x.value.trim(); clearTimeout(dev.ot); dev.ot = setTimeout(() => { const f = document.activeElement && document.activeElement.id; renderBody(); if (f && $('#' + f)) $('#' + f).focus(); }, 350); }); }
+    }
+  }
+  function showTab(t) { dev.tab = t; store.set('dev:tab', t); $$('#devTabs button').forEach((x) => x.classList.toggle('on', x.dataset.t === t)); renderBody(); }
+  $('#devTabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) showTab(b.dataset.t); });
+
+  async function loadLine(id) {
+    await Promise.all([refreshLineInfo(id), refreshMarket(id), refreshUsage(id), refreshFacade(id)].map((p) => p.catch(() => {})));
+  }
+  async function load() {
+    if (!alive()) return;
+    await discoverClasses(); await discoverLines();
+    for (const id of dev.watch) db.upsertLine(id, {});
+    // every line's row carries its roles; the ones not read yet are read once
+    await pool(sortedLines().filter((r) => !r.row || !r.market), 3, (r) => loadLine(r.lineId));
+    await pool(mine(), 3, (r) => loadLine(r.lineId));
+    if (wallet.account) { try { dev.balance = await balanceOf(wallet.account); } catch (e) { dev.balance = null; } }
+    if (!alive()) return;
+    renderHead();
+    if (!$('#devBody input:focus, #devBody textarea:focus, #devBody select:focus')) renderBody();
+  }
+  renderAll();
+  const onWallet = () => { renderNav(); load(); }; wallet.listeners.add(onWallet); onCleanup(() => wallet.listeners.delete(onWallet));
+  await load();
+  every(30000, load);
+}
+
+// ============================================================================================
 // 12. router, boot, self-test
 // ============================================================================================
-const PAGES = { store: pageStore, portfolio: pagePortfolio, lines: pageLines, line: pageLine, leaderboard: pageLeaderboard, add: pageAdd, docs: pageDocs };
+const PAGES = { store: pageStore, portfolio: pagePortfolio, lines: pageLines, line: pageLine, leaderboard: pageLeaderboard, add: pageAdd, docs: pageDocs, dev: pageDev };
 async function route() {
   const first = parseHash();
   // Links printed before the store was called a store still exist, in wallets, chats and the
@@ -3254,6 +3702,24 @@ function selfTestReport() {
   txlog.list = keepList;
   eq('held: the newest per nonce counts, a cancel holds nothing, a carried join is already off the balance', held.wei + '/' + held.n, '520/1');
   eq('open orders: not carried yet, or carried and not settled — newest first, cancels are not orders', openRows, 'dca');
+  // ---- the developer dashboard: ADR-0108's extension id, and ADR-0095's declaration rules ----
+  const mcDoc = {"manifest": "misaka-palw/extension-manifest/v1", "kind": "model-class", "name": "PALW-BASE-0/rc \u2014 the floor, by its ledger row", "network": "testnet-11", "source": {"note": "derived from the pinned seed; every node mints it, nobody converts it"}, "artifact": {"root": "bcf2d9eb7357bd6c267df2df6588393ca71c67d7c802903ca7031948303c793dcb78bfe26488f52d0393be08e0cc0777b080e2dce9355d3576036b734545b8df"}, "requires": {"ruleset_id": "ecbdbc2222efcc2d32493f2349e7c17f983611697a5d10ffc7ae90458bac8ee5", "fences": {"palw_kary_court": "active"}}, "declares": {"object_id": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8", "capabilities": ["attempt", "fp"]}, "verification": {"model_id": "PALW-BASE-0/rc"}, "admission": {"object": "ClassRegistered"}};
+  eq('extension_id of docs/extension-manifests/model-class.json is the CLI\'s (misaka palw extension inspect)', extensionIdOf(mcDoc), '68041ae3ce95b7ba5eb7e8d600771d6ec90abde457ed3e71c4b60e20c02258d7fa30fd99db267ebba35ab427c43969a307351a3e5317b35deba68f3519cf964c');
+  eq('canonical JSON sorts keys and drops whitespace', canonicalJson({ b: [1, { d: 'x', c: null }], a: true }), '{"a":true,"b":[1,{"c":null,"d":"x"}]}');
+  const T = (u, g, lead, hold, note) => ({ minUnits: bi(u), grants: g, leadDaa: bi(lead || 0), holdDaa: bi(hold || 0), note: note || '' });
+  eq('tiers: a flat ladder is refused', validateTiers([T(10, ['SUPPORT']), T(10, ['SUPPORT'])], 0n, 100n) != null, true);
+  eq('tiers: a lead without early access is refused', validateTiers([T(1, ['SUPPORT'], 600)], 0n, 100n) != null, true);
+  eq('tiers: nine tiers are refused, a 65-byte note is refused', [validateTiers(Array.from({ length: 9 }, (_, i) => T(i + 1, ['SUPPORT'])), 0n, 1n) != null, validateTiers([T(1, ['SUPPORT'], 0, 0, 'x'.repeat(65))], 0n, 1n) != null].join(), 'true,true');
+  eq('tiers: a rising ladder with a lead on early access is accepted', validateTiers([T(1, ['EARLY_VERSION', 'SUPPORT'], 600), T(100, ['EARLY_VERSION', 'PRIORITY_INFERENCE'], 600, 1000, '1,000 requests/day')], 0n, 100n), null);
+  eq('§4.7: adding a grant strengthens, removing one or raising a threshold weakens, withdrawing weakens', [
+    tiersStrengthen([T(10, ['SUPPORT'])], 0n, [T(10, ['SUPPORT', 'EARLY_VERSION'])], 0n),
+    tiersStrengthen([T(10, ['SUPPORT', 'EARLY_VERSION'])], 0n, [T(10, ['SUPPORT'])], 0n),
+    tiersStrengthen([T(10, ['SUPPORT'])], 0n, [T(20, ['SUPPORT'])], 0n),
+    tiersStrengthen([T(10, ['SUPPORT'])], 0n, [], 0n),
+    tiersStrengthen([T(10, ['SUPPORT'])], 0n, [T(10, ['SUPPORT'])], 5000n),
+  ].join(), 'true,false,false,false,false');
+  eq('the CLI tier spec is units:GRANTS[:lead[:hold[:note]]]', [tierSpec(T(1, ['SUPPORT'])), tierSpec(T(100, ['EARLY_VERSION', 'SUPPORT'], 600)), tierSpec(T(5, ['INFERENCE_QUOTA'], 0, 0, 'a:b'))].join(' | '), '1:SUPPORT | 100:EARLY_VERSION,SUPPORT:600 | 5:INFERENCE_QUOTA:0:0:a:b');
+  eq('a developer id is a bond outpoint or a payout payload', [parseDevId('ab'.repeat(32) + ':3').key, parseDevId('CD'.repeat(64)).kind, parseDevId('nope')].join(), 'ab'.repeat(32) + ':3,payload,');
   lines.unshift('MISAKA Options self-test: ' + pass + ' passed, ' + fail + ' failed');
   const report = lines.join('\n');
   console[fail ? 'error' : 'info'](report);
