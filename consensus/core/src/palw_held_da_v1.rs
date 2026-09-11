@@ -70,9 +70,9 @@ pub enum PalwHeldMissingV1 {
     StateChunk { checkpoint: u32, chunk: u32 },
     /// A run of committed step leaves.
     StepRange { first: u64, count: u32 },
-    /// **One step leaf's evidence** (ADR-0109 Decision 3): what a one-move accusation at `leaf`
+    /// **One step leaf's evidence** (ADR-0111 Decision 3): what a one-move accusation at `leaf`
     /// carries, demanded by a seat of the claim's panel for a leaf its own draw assigned it. Its
-    /// answer is adjudicated, not only hash-checked (ADR-0109 Decision 4). Appended last.
+    /// answer is adjudicated, not only hash-checked (ADR-0111 Decision 4). Appended last.
     StepLeaf { leaf: u64 },
 }
 
@@ -89,7 +89,7 @@ pub enum PalwHeldDisclosureV1 {
     StepRange {
         opening: PalwStepRangeOpeningV1,
     },
-    /// A leaf's evidence (ADR-0109 Decision 1) — the one-move court's object without its accuser.
+    /// A leaf's evidence (ADR-0111 Decision 1) — the one-move court's object without its accuser.
     StepLeaf {
         evidence: Box<crate::palw_shard_court_v1::PalwLeafEvidenceV1>,
     },
@@ -242,7 +242,7 @@ pub fn palw_held_da_check_accusation_v1(
                 return Err(outside("the step space ends before the range does"));
             }
         }
-        // ADR-0109 Decision 3: a leaf of the step space, and not a fused-attention site — that
+        // ADR-0111 Decision 3: a leaf of the step space, and not a fused-attention site — that
         // leaf's terminal is ADR-0103 Decision 5's dissection, whose responder is already clocked.
         // Who may demand it (a seat of the panel, for a leaf its draw assigned it, once) is the
         // chain's to answer where the panel is read; this is the half the binding alone decides.
@@ -326,7 +326,7 @@ pub fn palw_held_da_check_disclosure_v1(
                 return Err(PalwHeldDaError::RangeNotCommitted);
             }
         }
-        // ADR-0109 Decision 4: the evidence is of the demanded leaf of THIS execution — its
+        // ADR-0111 Decision 4: the evidence is of the demanded leaf of THIS execution — its
         // refutation carries the demand's own authenticated binding — and whether it answers is the
         // one-move verdict, which the caller runs at the class's root (this function holds no class).
         (PalwHeldMissingV1::StepLeaf { leaf }, PalwHeldDisclosureV1::StepLeaf { evidence }) => {

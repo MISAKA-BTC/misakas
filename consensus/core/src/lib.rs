@@ -237,7 +237,7 @@ pub mod palw_job_panel;
 /// no one, credits nothing, freezes the class). Consensus-inert — nothing constructs it on
 /// any shipped network; the Track-C change set is its first consumer.
 pub mod palw_job_state;
-/// ADR-0109 — a seat may demand the committed leaf it needs to judge: the seat's assigned
+/// ADR-0111 — a seat may demand the committed leaf it needs to judge: the seat's assigned
 /// intervals and the interval that owns a leaf, as pure functions of the binding — the bound a
 /// held DA demand for a leaf's evidence is admitted under.
 pub mod palw_leaf_evidence_v1;

@@ -799,7 +799,7 @@ pub struct PalwDaDutyV2 {
     pub trace_root: Hash64,
     pub execution_root: Hash64,
     pub free_prompt: bool,
-    /// **ADR-0103 Decision 4 / ADR-0109: the unit a HELD accusation named** — a prompt tile, a state
+    /// **ADR-0103 Decision 4 / ADR-0111: the unit a HELD accusation named** — a prompt tile, a state
     /// chunk, a range of leaves or a leaf's evidence — when `missing_event_index` is the held
     /// sentinel. `None` for an event accusation. The producer answers in this unit or is defaulted.
     pub held_missing: Option<crate::palw_held_da_v1::PalwHeldMissingV1>,

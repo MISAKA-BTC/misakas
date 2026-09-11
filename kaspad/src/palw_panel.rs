@@ -291,7 +291,7 @@ pub struct PalwPanelConfig {
     /// round trip can be shown on a live chain. Refused on mainnet by the daemon.
     pub drill_challenge_all: bool,
     /// DRILL ONLY (devnet/simnet): serve canonical claims as their answer envelope, never the
-    /// capture — the width at which no seat holds one (ADR-0109's drill).
+    /// capture — the width at which no seat holds one (ADR-0111's drill).
     pub drill_answer_only: bool,
     /// DRILL ONLY (devnet/simnet): refuse every leaf-evidence request, so the slow path runs.
     pub drill_refuse_leaf_evidence: bool,
@@ -346,7 +346,7 @@ pub struct PalwPanelConfig {
     pub producer_class: Option<Hash64>,
 }
 
-/// **One named leaf a seat is pursuing** (ADR-0109 Decision 6).
+/// **One named leaf a seat is pursuing** (ADR-0111 Decision 6).
 #[derive(Clone, Copy, Debug)]
 struct LeafPursuitV1 {
     leaf: u64,
@@ -405,7 +405,7 @@ pub struct PalwPanelService {
     /// the arm re-runs every tick until a verdict, and the reason is the operator's to read once.
     /// Bounded: cleared at [`Self::SAMPLE_REFUSALS_LOGGED_CAP`], which at worst says it again.
     sample_refusals_logged: std::sync::Mutex<HashSet<Hash64>>,
-    /// **ADR-0109 Decision 6: the named leaves this seat is pursuing**, by claim — the leaf, when
+    /// **ADR-0111 Decision 6: the named leaves this seat is pursuing**, by claim — the leaf, when
     /// the fast path was asked, whether the demand was filed, and whether the pursuit is over (the
     /// executor's own evidence cleared the leaf). Bounded: cleared past
     /// [`Self::LEAF_PURSUITS_CAP`], which at worst asks again.
@@ -3443,7 +3443,7 @@ impl PalwPanelService {
                     *court_stalls.entry("no retained capture to answer a data-availability accusation from").or_default() += 1;
                     continue;
                 };
-                // **ADR-0103 Decision 4 / ADR-0109 Decision 4: a HELD accusation is answered in its
+                // **ADR-0103 Decision 4 / ADR-0111 Decision 4: a HELD accusation is answered in its
                 // unit** — a leaf's evidence (which the fold then adjudicates), a prompt tile — and an
                 // unanswerable unit is said by name, because silence here is the default's slash.
                 if let Some(missing) = duty.held_missing {
@@ -3543,7 +3543,7 @@ impl PalwPanelService {
                     // court through the challenger's half, and nothing here replays the claim again.
                     if self.seat_found_fault_v1(&duty.claim_id) {
                         // **A fault still addressed at a BLOCK is not finished with** (ADR-0086
-                        // Decision 6, found by ADR-0109's drill): only the interval arm below names
+                        // Decision 6, found by ADR-0111's drill): only the interval arm below names
                         // the leaf from the block's served leaves, and this gate used to stop it for
                         // good the moment the block was noted — the leaves arrived and were never
                         // read, so no leaf was ever named. A free-prompt claim whose fault is a block
@@ -3552,7 +3552,7 @@ impl PalwPanelService {
                         let fault_is_a_block = duty.free_prompt
                             && self.seat_faults.lock().unwrap().address(&duty.claim_id).is_some_and(|(_, count)| count > 1);
                         if !fault_is_a_block {
-                            // **ADR-0109 Decision 6: a NAMED leaf this seat could not accuse from a
+                            // **ADR-0111 Decision 6: a NAMED leaf this seat could not accuse from a
                             // capture is pursued, not dropped** — the executor's evidence if it has
                             // answered, the fast-path ask if not yet, the demand on chain past the
                             // patience. What files is the court's object, never a receipt.
@@ -4302,7 +4302,7 @@ impl PalwPanelService {
                                     // The answer beside the question, retained under the claim id
                                     // (the resolver serves it) and broadcast to the seats.
                                     self.retain_own_material(&claim_id, &material);
-                                    // DRILL (ADR-0109): the answer envelope, never the capture — the
+                                    // DRILL (ADR-0111): the answer envelope, never the capture — the
                                     // width at which no seat holds one and every seat judges by
                                     // intervals, so a named leaf's evidence must come from here.
                                     let served = if self.config.drill_answer_only {
@@ -4982,7 +4982,7 @@ impl PalwPanelService {
             if request.requested_daa.abs_diff(here) > OPENING_REQUEST_FRESHNESS_DAA {
                 return Err(PalwServeRefusalV1::Stale);
             }
-            // ADR-0109 Decision 2: a leaf-evidence request signs its leaf too, under its own tag.
+            // ADR-0111 Decision 2: a leaf-evidence request signs its leaf too, under its own tag.
             let signed = match (request.leaf_index, request.interval_index) {
                 (Some(leaf), Some(index)) => crate::palw_fp_seat::palw_fp_verify_leaf_request_v1(
                     request.requester_pubkey,
@@ -5043,7 +5043,7 @@ impl PalwPanelService {
     /// family's opening arithmetic.
     fn open_retained_interval(&self, claim: Hash64, interval_index: u32, leaf_index: Option<u64>) -> Option<Vec<u8>> {
         use misaka_palw_base0::fp_interval::{base0_fp_block_leaves_request_decode_v1, base0_fp_resume_request_decode_v1};
-        // **ADR-0109 Decision 2: a leaf's evidence, on the lane's own authentication.** The seat
+        // **ADR-0111 Decision 2: a leaf's evidence, on the lane's own authentication.** The seat
         // named the leaf; this node answers with the one-move court's object for it — the builder
         // the on-chain disclosure uses too, so the two paths carry one set of bytes.
         if let Some(leaf) = leaf_index
@@ -5061,7 +5061,7 @@ impl PalwPanelService {
                 Ok(evidence) => {
                     let bytes = borsh::to_vec(&evidence).ok()?;
                     info!(
-                        "[{PALW_PANEL}] claim {claim}: served the evidence of leaf {leaf} ({} bytes, {:.0?}) — ADR-0109's fast path",
+                        "[{PALW_PANEL}] claim {claim}: served the evidence of leaf {leaf} ({} bytes, {:.0?}) — ADR-0111's fast path",
                         bytes.len(),
                         started.elapsed()
                     );
@@ -5533,7 +5533,7 @@ impl PalwPanelService {
             return std::fs::read(own_answer).ok().or_else(|| std::fs::read(foreign_answer).ok());
         };
         let size = std::fs::metadata(&material_path).ok()?.len();
-        // DRILL (ADR-0109): served as if no capture fit the cap, whatever its size.
+        // DRILL (ADR-0111): served as if no capture fit the cap, whatever its size.
         if size <= PALW_MATERIAL_MAX_BYTES as u64 && !self.config.drill_answer_only {
             return std::fs::read(&material_path).ok();
         }
@@ -5947,7 +5947,7 @@ impl PalwPanelService {
         None
     }
 
-    /// **A leaf's evidence, from this node's own retained capture** (ADR-0109 Decisions 1, 2 and
+    /// **A leaf's evidence, from this node's own retained capture** (ADR-0111 Decisions 1, 2 and
     /// 4) — the one builder behind the fast path's answer and the held DA court's disclosure, bound
     /// to the claim's roots as the CHAIN records them.
     fn retained_leaf_evidence_v1(
@@ -5986,7 +5986,7 @@ impl PalwPanelService {
     }
 
     /// **This node's retained free-prompt capture of `claim`, with the backend of its class** —
-    /// the one loader behind every answer an executor gives from its retention (ADR-0109 Decision
+    /// the one loader behind every answer an executor gives from its retention (ADR-0111 Decision
     /// 6): its own capture first, then one it holds for another executor.
     fn retained_fp_capture_v1(
         &self,
@@ -6023,7 +6023,7 @@ impl PalwPanelService {
         Ok(v4.binding)
     }
 
-    /// **The held DA court's answer, in the unit accused** (ADR-0103 Decision 4; ADR-0109 Decisions
+    /// **The held DA court's answer, in the unit accused** (ADR-0103 Decision 4; ADR-0111 Decisions
     /// 4 and 6), signed by the claim's bond: a leaf's evidence, a prompt tile, a state chunk or a run
     /// of step leaves, each built from this executor's retention — an executor that cannot answer
     /// is one the court slashes, so every unit the court can name has its answer here.
@@ -6086,7 +6086,7 @@ impl PalwPanelService {
 
     const LEAF_PURSUITS_CAP: usize = 1_024;
 
-    /// **ADR-0109 Decision 6, the seat's half.** A claim this seat found a fault in at a NAMED leaf
+    /// **ADR-0111 Decision 6, the seat's half.** A claim this seat found a fault in at a NAMED leaf
     /// (the block-leaves lane's answer, ADR-0086 Decision 6), with no accusation filed because it
     /// held no capture to build one from:
     ///
@@ -6170,7 +6170,7 @@ impl PalwPanelService {
                     }
                     info!(
                         "[{PALW_PANEL}] claim {}: accusing leaf {leaf} in the one-move court on the executor's own evidence \
-                         (session {session_id}) — ADR-0109's fast path",
+                         (session {session_id}) — ADR-0111's fast path",
                         duty.claim_id
                     );
                     self.leaf_pursuits
@@ -6215,7 +6215,7 @@ impl PalwPanelService {
             if self.request_leaf_evidence_v1(network_domain, duty.claim_id, index, leaf, current_daa).await {
                 info!(
                     "[{PALW_PANEL}] claim {}: asked the executor for the evidence of leaf {leaf} (interval {interval}, index {index:#x}) \
-                     — ADR-0109's fast path",
+                     — ADR-0111's fast path",
                     duty.claim_id
                 );
                 if let Some(p) = self.leaf_pursuits.lock().unwrap().get_mut(&duty.claim_id) {
@@ -6246,7 +6246,7 @@ impl PalwPanelService {
         demand.signature = self.sign(message.as_byte_slice(), PALW_HELD_DA_MLDSA87_ACCUSE_CONTEXT)?;
         let object = PalwConsensusObjectV2::DefaultAccusedHeld { accusation: Box::new(demand) };
         info!(
-            "[{PALW_PANEL}] claim {}: no evidence of leaf {leaf} {} DAA after asking — demanding it on chain (ADR-0109 Decision 3)",
+            "[{PALW_PANEL}] claim {}: no evidence of leaf {leaf} {} DAA after asking — demanding it on chain (ADR-0111 Decision 3)",
             duty.claim_id,
             current_daa.saturating_sub(asked)
         );
@@ -6256,7 +6256,7 @@ impl PalwPanelService {
         Some((message, object, false))
     }
 
-    /// **ADR-0109 Decision 2, the seat's ask**: one signed leaf-evidence request on the interval
+    /// **ADR-0111 Decision 2, the seat's ask**: one signed leaf-evidence request on the interval
     /// lane, solicited first so the answer is admitted.
     async fn request_leaf_evidence_v1(
         &self,
@@ -6951,7 +6951,7 @@ mod court_responder_coverage_pin {
         assert!(source.contains("prompt_ids_opening: prompt_opening,"), "the accusation carries the tile the sampler opened");
     }
 
-    /// **ADR-0109, pinned where it lives: a named leaf is pursued, a leaf request is served, and a
+    /// **ADR-0111, pinned where it lives: a named leaf is pursued, a leaf request is served, and a
     /// held accusation is answered in its unit.** The first fault gate of the verdict block pursues
     /// the seat's named leaf before it files nothing; the interval resolver answers a leaf-evidence
     /// request before any interval arithmetic; the authorizer verifies a leaf request's own signed
