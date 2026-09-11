@@ -1557,6 +1557,7 @@ pub fn base0_strip_fp_interval_history_v1(chunked_bytes: &[u8]) -> Result<Vec<u8
 }
 
 /// The interval whose replay REACHES `call` — the inverse of [`Base0FpIntervalGeometryV1::calls_for`].
+#[cfg(test)]
 fn interval_of_call_v1(geometry: &Base0FpIntervalGeometryV1, call: u32) -> u32 {
     if call == 0 { 0 } else { (call - 1) / geometry.checkpoint_interval.max(1) }
 }

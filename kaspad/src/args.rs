@@ -258,6 +258,13 @@ pub struct Args {
     pub palw_drill_tamper_fp_leaf: Option<u64>,
     /// DRILL ONLY: open a court against every licensed claim, reproduced or not.
     pub palw_drill_challenge_all: bool,
+    /// DRILL ONLY (devnet/simnet): this node's canonical free-prompt claims are broadcast and
+    /// served as their ANSWER envelope, never the capture — as at a width no capture fits the
+    /// material cap — so a seat judges them by intervals alone (ADR-0108's drill).
+    pub palw_drill_answer_only: bool,
+    /// DRILL ONLY (devnet/simnet): this node refuses every leaf-evidence request on the interval
+    /// lane, so a seat that named a leaf must demand its evidence on chain (ADR-0108 Decision 3).
+    pub palw_drill_refuse_leaf_evidence: bool,
     /// ADR-0074 Decision 1: run the network's own job when nobody is asking and commit it as a
     /// canonical free-prompt claim, drawn by the chain's beacon like any other.
     pub palw_canonical_claims: bool,
@@ -433,6 +440,8 @@ impl Default for Args {
             palw_drill_tamper_leaf: None,
             palw_drill_tamper_fp_leaf: None,
             palw_drill_challenge_all: false,
+            palw_drill_answer_only: false,
+            palw_drill_refuse_leaf_evidence: false,
             palw_canonical_claims: false,
             palw_canonical_class: None,
             palw_canonical_interval_daa: 600,
@@ -1017,6 +1026,28 @@ pub fn cli() -> Command {
                      exactly. Exists so an HONEST producer can be shown clearing itself — the half of a round trip that a \
                      conviction alone does not prove. Every such dispute costs this bond the claim's stake and loses. \
                      REFUSED on mainnet.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-answer-only")
+                .long("palw-drill-answer-only")
+                .env("KASPAD_PALW_DRILL_ANSWER_ONLY")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "PALW DRILL ONLY: this node's canonical free-prompt claims are broadcast and served as their answer \
+                     envelope, never the capture, so every seat judges them by intervals alone and must obtain a named \
+                     leaf's evidence from the executor (ADR-0108). DEVNET/SIMNET ONLY.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-refuse-leaf-evidence")
+                .long("palw-drill-refuse-leaf-evidence")
+                .env("KASPAD_PALW_DRILL_REFUSE_LEAF_EVIDENCE")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "PALW DRILL ONLY: this node refuses every leaf-evidence request on the interval lane, so a seat that \
+                     named a leaf demands its evidence on chain through the held data-availability court (ADR-0108 \
+                     Decision 3). DEVNET/SIMNET ONLY.",
                 ),
         )
         .arg(
@@ -1763,6 +1794,11 @@ impl Args {
                 .get_one::<bool>("palw-drill-challenge-all")
                 .copied()
                 .unwrap_or(defaults.palw_drill_challenge_all),
+            palw_drill_answer_only: m.get_one::<bool>("palw-drill-answer-only").copied().unwrap_or(defaults.palw_drill_answer_only),
+            palw_drill_refuse_leaf_evidence: m
+                .get_one::<bool>("palw-drill-refuse-leaf-evidence")
+                .copied()
+                .unwrap_or(defaults.palw_drill_refuse_leaf_evidence),
             palw_canonical_claims: m.get_one::<bool>("palw-canonical-claims").copied().unwrap_or(defaults.palw_canonical_claims),
             palw_canonical_class: m.get_one::<String>("palw-canonical-class").cloned().or(defaults.palw_canonical_class),
             palw_canonical_interval_daa: m

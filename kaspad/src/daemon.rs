@@ -1652,6 +1652,32 @@ Do you confirm? (y/n)";
                         // The same directory the producer writes to, so a node that produces can
                         // answer a court about its own work after its gossip pool has moved on.
                         retention_dir: app_dir.join(network.to_prefixed()).join("palw-retention"),
+                        drill_answer_only: {
+                            let drill = matches!(
+                                network.network_type,
+                                kaspa_consensus_core::network::NetworkType::Devnet
+                                    | kaspa_consensus_core::network::NetworkType::Simnet
+                            );
+                            if (args.palw_drill_answer_only || args.palw_drill_refuse_leaf_evidence) && !drill {
+                                panic!(
+                                    "--palw-drill-answer-only and --palw-drill-refuse-leaf-evidence are drills and are devnet/simnet only"
+                                )
+                            }
+                            if args.palw_drill_answer_only {
+                                warn!(
+                                    "PALW DRILL: this node serves its canonical claims' answer envelope, never the capture (ADR-0108)."
+                                );
+                            }
+                            args.palw_drill_answer_only
+                        },
+                        drill_refuse_leaf_evidence: {
+                            if args.palw_drill_refuse_leaf_evidence {
+                                warn!(
+                                    "PALW DRILL: this node refuses every leaf-evidence request; seats must demand on chain (ADR-0108)."
+                                );
+                            }
+                            args.palw_drill_refuse_leaf_evidence
+                        },
                         drill_challenge_all: match args.palw_drill_challenge_all {
                             true if network.is_mainnet() => {
                                 panic!("--palw-drill-challenge-all is a drill and is refused on mainnet")

@@ -290,6 +290,11 @@ pub struct PalwPanelConfig {
     /// DRILL ONLY: dispute even a claim this node reproduces exactly, so the innocent half of a
     /// round trip can be shown on a live chain. Refused on mainnet by the daemon.
     pub drill_challenge_all: bool,
+    /// DRILL ONLY (devnet/simnet): serve canonical claims as their answer envelope, never the
+    /// capture — the width at which no seat holds one (ADR-0108's drill).
+    pub drill_answer_only: bool,
+    /// DRILL ONLY (devnet/simnet): refuse every leaf-evidence request, so the slow path runs.
+    pub drill_refuse_leaf_evidence: bool,
     /// Where THIS node's producer persists the material behind its own attempts, when it produces.
     ///
     /// A court can open long after a claim licensed, and the in-memory pool does not live that
@@ -341,6 +346,18 @@ pub struct PalwPanelConfig {
     pub producer_class: Option<Hash64>,
 }
 
+/// **One named leaf a seat is pursuing** (ADR-0108 Decision 6).
+#[derive(Clone, Copy, Debug)]
+struct LeafPursuitV1 {
+    leaf: u64,
+    /// When the fast path was asked, `None` before.
+    asked_daa: Option<u64>,
+    /// The demand has been filed; the chain decides from here.
+    demanded: bool,
+    /// Over: the executor's own evidence cleared the leaf, or the accusation was filed.
+    closed: bool,
+}
+
 /// **What the capture arm's leaf samples found** (ADR-0098 Decision 2). A `bool` could say "cleared"
 /// or "not", and a leaf that does not recompute was the second: the seat dropped a proven fault and
 /// went on to the half-window tail. `FaultAt` is the third answer, and it is recorded.
@@ -388,6 +405,11 @@ pub struct PalwPanelService {
     /// the arm re-runs every tick until a verdict, and the reason is the operator's to read once.
     /// Bounded: cleared at [`Self::SAMPLE_REFUSALS_LOGGED_CAP`], which at worst says it again.
     sample_refusals_logged: std::sync::Mutex<HashSet<Hash64>>,
+    /// **ADR-0108 Decision 6: the named leaves this seat is pursuing**, by claim — the leaf, when
+    /// the fast path was asked, whether the demand was filed, and whether the pursuit is over (the
+    /// executor's own evidence cleared the leaf). Bounded: cleared past
+    /// [`Self::LEAF_PURSUITS_CAP`], which at worst asks again.
+    leaf_pursuits: std::sync::Mutex<HashMap<Hash64, LeafPursuitV1>>,
     /// **What this node has already opened, so a second ask is not a second replay.**
     ///
     /// Keyed by the request as it was served — the claim, the request index, and the disputed
@@ -543,6 +565,7 @@ impl PalwPanelService {
             opening_gate: std::sync::Mutex::new(()),
             seat_faults: std::sync::Mutex::new(Default::default()),
             sample_refusals_logged: std::sync::Mutex::new(HashSet::new()),
+            leaf_pursuits: std::sync::Mutex::new(HashMap::new()),
             shutdown: SingleTrigger::default(),
         }
     }
@@ -3306,6 +3329,26 @@ impl PalwPanelService {
                     *court_stalls.entry("no retained capture to answer a data-availability accusation from").or_default() += 1;
                     continue;
                 };
+                // **ADR-0103 Decision 4 / ADR-0108 Decision 4: a HELD accusation is answered in its
+                // unit** — a leaf's evidence (which the fold then adjudicates), a prompt tile — and an
+                // unanswerable unit is said by name, because silence here is the default's slash.
+                if let Some(missing) = duty.held_missing {
+                    match self.held_da_answer_v1(&session, network_domain, duty.claim_id, missing) {
+                        Ok(object) => {
+                            info!(
+                                "[{PALW_PANEL}] claim {}: answering the held accusation of {missing:?} from the retained capture — \
+                                 deadline DAA {}",
+                                duty.claim_id, duty.disclose_deadline_daa
+                            );
+                            court_pending.push((key.0, key.1, key.2, object));
+                        }
+                        Err(why) => {
+                            warn!("[{PALW_PANEL}] claim {}: cannot answer the held accusation of {missing:?}: {why}", duty.claim_id);
+                            *court_stalls.entry("the held unit accused cannot be answered here").or_default() += 1;
+                        }
+                    }
+                    continue;
+                }
                 let (row, tile) = kaspa_consensus_core::palw_state_v2::palw_da_event_index_parts_v1(duty.missing_event_index);
                 // A free-prompt retention wraps the family capture with the job and its ids; the
                 // attempt lane retains the family capture bare (ADR-0084 Decision 4).
@@ -3385,6 +3428,28 @@ impl PalwPanelService {
                     // rest of the panel licenses). Silence is never charged; the fault goes to the
                     // court through the challenger's half, and nothing here replays the claim again.
                     if self.seat_found_fault_v1(&duty.claim_id) {
+                        // **ADR-0108 Decision 6: a NAMED leaf this seat could not accuse from a
+                        // capture is pursued, not dropped** — the executor's evidence if it has
+                        // answered, the fast-path ask if not yet, the demand on chain past the
+                        // patience. What files is the court's object, never a receipt.
+                        if duty.free_prompt
+                            && let Some((key, object, accusation)) = self
+                                .pursue_named_leaf_v1(
+                                    duty,
+                                    network_domain,
+                                    current_daa,
+                                    &interval_openings,
+                                    accused.contains(&duty.claim_id),
+                                )
+                                .await
+                        {
+                            if accusation {
+                                accused.insert(duty.claim_id);
+                            }
+                            if !court_pending.iter().any(|(sid, _, _, _)| *sid == key) {
+                                court_pending.push((key, 0, false, object));
+                            }
+                        }
                         break 'verdict None;
                     }
                     // **The free-prompt lane: the seat REPLAYS the job** (FP-R6). An attempt
@@ -4112,7 +4177,15 @@ impl PalwPanelService {
                                     // The answer beside the question, retained under the claim id
                                     // (the resolver serves it) and broadcast to the seats.
                                     self.retain_own_material(&claim_id, &material);
-                                    self.flow_context.broadcast_palw_material(claim_id, material).await;
+                                    // DRILL (ADR-0108): the answer envelope, never the capture — the
+                                    // width at which no seat holds one and every seat judges by
+                                    // intervals, so a named leaf's evidence must come from here.
+                                    let served = if self.config.drill_answer_only {
+                                        self.derive_answer_envelope_v1(&material).unwrap_or(material)
+                                    } else {
+                                        material
+                                    };
+                                    self.flow_context.broadcast_palw_material(claim_id, served).await;
                                     let next = TransactionOutpoint::new(txid, 0);
                                     self.persist_fee_outpoint(next);
                                     funding = Some((
@@ -4706,14 +4779,27 @@ impl PalwPanelService {
             if request.requested_daa.abs_diff(here) > OPENING_REQUEST_FRESHNESS_DAA {
                 return Err(PalwServeRefusalV1::Stale);
             }
-            if !crate::palw_fp_seat::palw_fp_verify_opening_request_v1(
-                request.requester_pubkey,
-                request.signature,
-                network_domain,
-                request.claim,
-                request.interval_index,
-                request.requested_daa,
-            ) {
+            // ADR-0108 Decision 2: a leaf-evidence request signs its leaf too, under its own tag.
+            let signed = match (request.leaf_index, request.interval_index) {
+                (Some(leaf), Some(index)) => crate::palw_fp_seat::palw_fp_verify_leaf_request_v1(
+                    request.requester_pubkey,
+                    request.signature,
+                    network_domain,
+                    request.claim,
+                    index,
+                    leaf,
+                    request.requested_daa,
+                ),
+                _ => crate::palw_fp_seat::palw_fp_verify_opening_request_v1(
+                    request.requester_pubkey,
+                    request.signature,
+                    network_domain,
+                    request.claim,
+                    request.interval_index,
+                    request.requested_daa,
+                ),
+            };
+            if !signed {
                 return Err(PalwServeRefusalV1::BadSignature);
             }
             // **A `Retiring` bond is still served, deliberately.** ADR-0077 SA-2 says "an Active
@@ -4752,8 +4838,38 @@ impl PalwPanelService {
     ///
     /// Runs on a blocking thread (the transport arranges that): it reads a file and runs the
     /// family's opening arithmetic.
-    fn open_retained_interval(&self, claim: Hash64, interval_index: u32) -> Option<Vec<u8>> {
+    fn open_retained_interval(&self, claim: Hash64, interval_index: u32, leaf_index: Option<u64>) -> Option<Vec<u8>> {
         use misaka_palw_base0::fp_interval::{base0_fp_block_leaves_request_decode_v1, base0_fp_resume_request_decode_v1};
+        // **ADR-0108 Decision 2: a leaf's evidence, on the lane's own authentication.** The seat
+        // named the leaf; this node answers with the one-move court's object for it — the builder
+        // the on-chain disclosure uses too, so the two paths carry one set of bytes.
+        if let Some(leaf) = leaf_index
+            .filter(|_| kaspa_consensus_core::palw_leaf_evidence_v1::palw_leaf_evidence_request_decode_v1(interval_index).is_some())
+        {
+            if self.config.drill_refuse_leaf_evidence {
+                warn!(
+                    "[{PALW_PANEL}] PALW DRILL: refusing the evidence of leaf {leaf} of claim {claim} — the seat must demand it on chain"
+                );
+                return None;
+            }
+            let session = self.consensus_manager.consensus().unguarded_session();
+            let started = std::time::Instant::now();
+            return match self.retained_leaf_evidence_v1(&session, claim, leaf) {
+                Ok(evidence) => {
+                    let bytes = borsh::to_vec(&evidence).ok()?;
+                    info!(
+                        "[{PALW_PANEL}] claim {claim}: served the evidence of leaf {leaf} ({} bytes, {:.0?}) — ADR-0108's fast path",
+                        bytes.len(),
+                        started.elapsed()
+                    );
+                    Some(bytes)
+                }
+                Err(e) => {
+                    info!("[{PALW_PANEL}] claim {claim}: the evidence of leaf {leaf} does not open here: {e}");
+                    None
+                }
+            };
+        }
         let bytes = self
             .retained_capture(&claim)
             .or_else(|| std::fs::read(self.config.retention_dir.join("foreign").join(format!("{claim}.material"))).ok())?;
@@ -4886,9 +5002,9 @@ impl PalwPanelService {
     pub fn install_fp_interval_serving(self: &Arc<Self>, network_domain: Hash64) {
         self.flow_context.palw_gossip().set_opening_authorizer(self.opening_authorizer(network_domain));
         let me = self.clone();
-        self.flow_context
-            .palw_gossip()
-            .set_interval_opening_resolver(std::sync::Arc::new(move |claim, index| me.open_retained_interval(claim, index)));
+        self.flow_context.palw_gossip().set_interval_opening_resolver(std::sync::Arc::new(move |claim, index, leaf| {
+            me.open_retained_interval(claim, index, leaf)
+        }));
     }
 
     /// **May this seat judge a claim in this privacy mode?** (ADR-0077 Decision 16, P-16's seat
@@ -5214,7 +5330,8 @@ impl PalwPanelService {
             return std::fs::read(own_answer).ok().or_else(|| std::fs::read(foreign_answer).ok());
         };
         let size = std::fs::metadata(&material_path).ok()?.len();
-        if size <= PALW_MATERIAL_MAX_BYTES as u64 {
+        // DRILL (ADR-0108): served as if no capture fit the cap, whatever its size.
+        if size <= PALW_MATERIAL_MAX_BYTES as u64 && !self.config.drill_answer_only {
             return std::fs::read(&material_path).ok();
         }
         if let Ok(answer) = std::fs::read(&answer_path) {
@@ -5625,6 +5742,304 @@ impl PalwPanelService {
         None
     }
 
+    /// **A leaf's evidence, from this node's own retained capture** (ADR-0108 Decisions 1, 2 and
+    /// 4) — the one builder behind the fast path's answer and the held DA court's disclosure, bound
+    /// to the claim's roots as the CHAIN records them.
+    fn retained_leaf_evidence_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        claim: Hash64,
+        leaf: u64,
+    ) -> Result<kaspa_consensus_core::palw_shard_court_v1::PalwLeafEvidenceV1, String> {
+        let bytes = self
+            .retained_capture(&claim)
+            .or_else(|| std::fs::read(self.config.retention_dir.join("foreign").join(format!("{claim}.material"))).ok())
+            .ok_or("no retained capture for the claim")?;
+        let payload = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(&bytes, self.config.prompt_ids_form)
+            .ok_or("the retained material is not a free-prompt capture")?;
+        let job = &payload.material.job;
+        let facts = session.palw_producer_facts_v2(job.class_id, None).ok_or("the chain names no such class")?;
+        let backend = self.resolve_backend(session, job.class_id, facts.artifact_root)?;
+        let (execution_root, trace_root, work_leaves) = session.palw_claim_roots_v2(claim).ok_or("the chain holds no such claim")?;
+        let roots =
+            PalwClaimRootsV1 { execution_root, trace_root, anchor: kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(job) };
+        kaspa_consensus_core::palw_leaf_evidence_v1::palw_leaf_evidence_from_capture_v1(
+            backend.as_ref(),
+            &payload.capture,
+            &payload.material.prompt_token_ids,
+            roots,
+            work_leaves,
+            leaf,
+            self.config.prompt_ids_form,
+        )
+    }
+
+    /// **The binding and the prompt behind a retained free-prompt capture** — what a held
+    /// disclosure of a prompt tile is bound by (ADR-0103 Decision 4). The binding is read off the
+    /// capture's interval 0, which every family serves and which carries it.
+    fn retained_binding_and_prompt_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        claim: Hash64,
+    ) -> Result<(kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, Vec<u32>), String> {
+        let bytes = self
+            .retained_capture(&claim)
+            .or_else(|| std::fs::read(self.config.retention_dir.join("foreign").join(format!("{claim}.material"))).ok())
+            .ok_or("no retained capture for the claim")?;
+        let payload = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(&bytes, self.config.prompt_ids_form)
+            .ok_or("the retained material is not a free-prompt capture")?;
+        let job = &payload.material.job;
+        let facts = session.palw_producer_facts_v2(job.class_id, None).ok_or("the chain names no such class")?;
+        let backend = self.resolve_backend(session, job.class_id, facts.artifact_root)?;
+        let opened = backend.open_fp_interval(&payload.capture, 0, &payload.material.prompt_token_ids)?;
+        let v4 = misaka_palw_base0::fp_interval::Base0FpIntervalOpeningV4::decode_v1(&opened)
+            .map_err(|e| format!("interval 0 is not served in the form that carries the binding: {e:?}"))?;
+        Ok((v4.binding, payload.material.prompt_token_ids.clone()))
+    }
+
+    /// **The held DA court's answer, in the unit accused** (ADR-0103 Decision 4; ADR-0108 Decisions
+    /// 4 and 6), signed by the claim's bond. A leaf's evidence and a prompt tile are answered here;
+    /// a state chunk and a step range are not yet, and say so by name.
+    fn held_da_answer_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        network_domain: Hash64,
+        claim: Hash64,
+        missing: kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1,
+    ) -> Result<PalwConsensusObjectV2, String> {
+        use kaspa_consensus_core::palw_held_da_v1::{
+            PALW_HELD_DA_MLDSA87_DISCLOSE_CONTEXT, PALW_HELD_DA_VERSION_V1, PalwHeldDisclosureCarriageV1, PalwHeldDisclosureV1,
+            PalwHeldMissingV1, palw_held_da_disclosure_message_v1,
+        };
+        let (binding, disclosure) = match missing {
+            PalwHeldMissingV1::StepLeaf { leaf } => {
+                let evidence = self.retained_leaf_evidence_v1(session, claim, leaf)?;
+                (evidence.refutation.binding.clone(), PalwHeldDisclosureV1::StepLeaf { evidence: Box::new(evidence) })
+            }
+            PalwHeldMissingV1::PromptIdsTile { tile } => {
+                let (binding, prompt) = self.retained_binding_and_prompt_v1(session, claim)?;
+                let position = tile.saturating_mul(kaspa_consensus_core::palw_prompt_ids_v1::PALW_PROMPT_IDS_TILE_LEN);
+                let opening = kaspa_consensus_core::palw_prompt_ids_v1::prompt_ids_opening_v1(&prompt, position)
+                    .map_err(|e| format!("the prompt tile does not open: {e}"))?;
+                (binding, PalwHeldDisclosureV1::PromptIdsTile { opening })
+            }
+            other => return Err(format!("this node does not answer a held {other:?} yet")),
+        };
+        let mut carriage = PalwHeldDisclosureCarriageV1 {
+            version: PALW_HELD_DA_VERSION_V1,
+            claim,
+            missing,
+            binding,
+            disclosure,
+            signature: Vec::new(),
+        };
+        let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.consensus_config.params.net.to_string().as_bytes(),
+            Some(self.consensus_config.genesis.hash),
+        );
+        // The court verifies under the domain of the network's own id and genesis, which is what
+        // `network_domain` is on this node; derived again here so the two cannot be told apart.
+        debug_assert_eq!(domain, network_domain);
+        let message = palw_held_da_disclosure_message_v1(domain.as_byte_slice(), &carriage);
+        carriage.signature = self.sign(message.as_byte_slice(), PALW_HELD_DA_MLDSA87_DISCLOSE_CONTEXT).ok_or("no signing key")?;
+        Ok(PalwConsensusObjectV2::MaterialDisclosedHeld { disclosure: Box::new(carriage) })
+    }
+
+    const LEAF_PURSUITS_CAP: usize = 1_024;
+
+    /// **ADR-0108 Decision 6, the seat's half.** A claim this seat found a fault in at a NAMED leaf
+    /// (the block-leaves lane's answer, ADR-0086 Decision 6), with no accusation filed because it
+    /// held no capture to build one from:
+    ///
+    /// 1. the executor's evidence, if it has answered — the one-move verdict at this seat's own
+    ///    artifact root: guilty (or a fused site, whose accusation opens the dissection), the
+    ///    accusation; clear, nothing, and the disagreement said once, because this seat's replay and
+    ///    the court disagree about a leaf whose inputs they share, which is a determinism fault;
+    /// 2. else the fast-path ask, once;
+    /// 3. else, past `PALW_LEAF_EVIDENCE_FAST_PATH_DAA_V1`, the demand on chain, once — only where
+    ///    the held regime and the DA court are in force, the only chains that take it.
+    ///
+    /// Returns the object to queue, keyed, and whether it is an accusation.
+    async fn pursue_named_leaf_v1(
+        &self,
+        duty: &kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2,
+        network_domain: Hash64,
+        current_daa: u64,
+        openings: &HashMap<(Hash64, u32), Vec<Vec<u8>>>,
+        already_accused: bool,
+    ) -> Option<(Hash64, PalwConsensusObjectV2, bool)> {
+        use kaspa_consensus_core::palw_leaf_evidence_v1 as lev;
+        use kaspa_consensus_core::palw_shard_court_v1::{PalwLeafEvidenceV1, PalwShardCourtVerdictV1};
+        if already_accused {
+            return None;
+        }
+        let (leaf, count) = self.seat_faults.lock().unwrap().address(&duty.claim_id)?;
+        if count != 1 {
+            return None; // a block or an unaddressed fault names no leaf yet
+        }
+        if self.leaf_pursuits.lock().unwrap().get(&duty.claim_id).is_some_and(|p| p.closed || p.leaf != leaf) {
+            return None;
+        }
+        // The claim's binding, off any interval opening this seat holds for it; the chain checks it
+        // against the claim's execution root when a demand lands, and so does this.
+        let binding = openings
+            .iter()
+            .filter(|((claim, index), _)| *claim == duty.claim_id && lev::palw_leaf_evidence_request_decode_v1(*index).is_none())
+            .flat_map(|(_, held)| held.iter())
+            .find_map(|bytes| misaka_palw_base0::fp_interval::Base0FpIntervalOpeningV4::decode_v1(bytes).ok().map(|v4| v4.binding))
+            .filter(|binding| binding.committed_execution_root == duty.execution_root)?;
+        let interval = lev::PalwSeatIntervalGeometryV1::from_binding_v1(&binding)?.interval_of_leaf_v1(&binding, leaf)?;
+        let index = lev::palw_leaf_evidence_request_index_v1(interval)?;
+        let ladder = kaspa_consensus_core::palw_court_v2::palw_refutation_leaf_cap_v2(
+            &self.config.court,
+            self.consensus_config.params.palw_court_ladder.is_some_and(|f| f.is_active(current_daa)),
+        );
+        let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.consensus_config.params.net.to_string().as_bytes(),
+            Some(self.consensus_config.genesis.hash),
+        );
+        // 1. The executor's own evidence.
+        let served = openings
+            .get(&(duty.claim_id, index))
+            .into_iter()
+            .flatten()
+            .filter_map(|bytes| borsh::from_slice::<PalwLeafEvidenceV1>(bytes).ok())
+            .find(|evidence| evidence.leaf_index() == leaf && evidence.refutation.binding == binding);
+        if let Some(evidence) = served {
+            match evidence.verdict_v1(duty.class_id, duty.artifact_root, ladder) {
+                Ok(PalwShardCourtVerdictV1::ExecutorGuilty | PalwShardCourtVerdictV1::NeedsDissection) => {
+                    use kaspa_consensus_core::palw_shard_court_v1::{
+                        PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT, palw_shard_court_session_id_v1,
+                    };
+                    let mut accusation = evidence.into_accusation_v1(
+                        duty.claim_id,
+                        duty.execution_root,
+                        duty.trace_root,
+                        duty.executor_bond,
+                        duty.seat_bond,
+                    );
+                    if let Err(e) = accusation.validate_shape(ladder) {
+                        warn!("[{PALW_PANEL}] claim {}: the accusation at leaf {leaf} is refused locally ({e})", duty.claim_id);
+                        return None;
+                    }
+                    let session_id = palw_shard_court_session_id_v1(domain.as_byte_slice(), &accusation);
+                    accusation.signature = self.sign(session_id.as_byte_slice(), PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT)?;
+                    let object = PalwConsensusObjectV2::ShardCourtAccused { accusation: Box::new(accusation) };
+                    if let Err(why) = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object) {
+                        warn!("[{PALW_PANEL}] claim {}: the accusation at leaf {leaf} cannot ride a carrier ({why})", duty.claim_id);
+                        return None;
+                    }
+                    info!(
+                        "[{PALW_PANEL}] claim {}: accusing leaf {leaf} in the one-move court on the executor's own evidence \
+                         (session {session_id}) — ADR-0108's fast path",
+                        duty.claim_id
+                    );
+                    self.leaf_pursuits
+                        .lock()
+                        .unwrap()
+                        .entry(duty.claim_id)
+                        .or_insert(LeafPursuitV1 { leaf, asked_daa: None, demanded: false, closed: false })
+                        .closed = true;
+                    return Some((session_id, object, true));
+                }
+                Ok(PalwShardCourtVerdictV1::FalseAccusation) => {
+                    warn!(
+                        "[{PALW_PANEL}] claim {}: the executor's evidence for leaf {leaf} recomputes — this seat's replay and the court \
+                         disagree about a leaf whose inputs they share, which is a determinism fault, not the claim's; nothing filed",
+                        duty.claim_id
+                    );
+                    self.leaf_pursuits
+                        .lock()
+                        .unwrap()
+                        .entry(duty.claim_id)
+                        .or_insert(LeafPursuitV1 { leaf, asked_daa: None, demanded: false, closed: false })
+                        .closed = true;
+                    return None;
+                }
+                Err(e) => {
+                    info!(
+                        "[{PALW_PANEL}] claim {}: the evidence served for leaf {leaf} does not adjudicate ({e}) — not an answer",
+                        duty.claim_id
+                    );
+                }
+            }
+        }
+        // 2. and 3. Ask once, then demand once.
+        let pursuit = {
+            let mut pursuits = self.leaf_pursuits.lock().unwrap();
+            if pursuits.len() >= Self::LEAF_PURSUITS_CAP && !pursuits.contains_key(&duty.claim_id) {
+                pursuits.clear();
+            }
+            *pursuits.entry(duty.claim_id).or_insert(LeafPursuitV1 { leaf, asked_daa: None, demanded: false, closed: false })
+        };
+        let Some(asked) = pursuit.asked_daa else {
+            if self.request_leaf_evidence_v1(network_domain, duty.claim_id, index, leaf, current_daa).await {
+                info!(
+                    "[{PALW_PANEL}] claim {}: asked the executor for the evidence of leaf {leaf} (interval {interval}, index {index:#x}) \
+                     — ADR-0108's fast path",
+                    duty.claim_id
+                );
+                if let Some(p) = self.leaf_pursuits.lock().unwrap().get_mut(&duty.claim_id) {
+                    p.asked_daa = Some(current_daa);
+                }
+            }
+            return None;
+        };
+        let patience = asked.saturating_add(lev::PALW_LEAF_EVIDENCE_FAST_PATH_DAA_V1);
+        let held_court = self.consensus_config.params.palw_held_context_active_at(current_daa)
+            && crate::palw_producer::palw_da_court_in_force_v1(&self.consensus_config, current_daa);
+        if pursuit.demanded || current_daa < patience || !held_court {
+            return None;
+        }
+        use kaspa_consensus_core::palw_held_da_v1::{
+            PALW_HELD_DA_MLDSA87_ACCUSE_CONTEXT, PALW_HELD_DA_VERSION_V1, PalwHeldAccusationV1, PalwHeldMissingV1,
+            palw_held_da_accusation_message_v1,
+        };
+        let mut demand = PalwHeldAccusationV1 {
+            version: PALW_HELD_DA_VERSION_V1,
+            claim: duty.claim_id,
+            missing: PalwHeldMissingV1::StepLeaf { leaf },
+            accuser: duty.seat_bond,
+            binding,
+            signature: Vec::new(),
+        };
+        let message = palw_held_da_accusation_message_v1(domain.as_byte_slice(), &demand);
+        demand.signature = self.sign(message.as_byte_slice(), PALW_HELD_DA_MLDSA87_ACCUSE_CONTEXT)?;
+        let object = PalwConsensusObjectV2::DefaultAccusedHeld { accusation: Box::new(demand) };
+        info!(
+            "[{PALW_PANEL}] claim {}: no evidence of leaf {leaf} {} DAA after asking — demanding it on chain (ADR-0108 Decision 3)",
+            duty.claim_id,
+            current_daa.saturating_sub(asked)
+        );
+        if let Some(p) = self.leaf_pursuits.lock().unwrap().get_mut(&duty.claim_id) {
+            p.demanded = true;
+        }
+        Some((message, object, false))
+    }
+
+    /// **ADR-0108 Decision 2, the seat's ask**: one signed leaf-evidence request on the interval
+    /// lane, solicited first so the answer is admitted.
+    async fn request_leaf_evidence_v1(
+        &self,
+        network_domain: Hash64,
+        claim: Hash64,
+        index: u32,
+        leaf: u64,
+        requested_daa: u64,
+    ) -> bool {
+        let Some(kp) = self.keypair.as_ref() else { return false };
+        let Some(signature) =
+            crate::palw_fp_seat::palw_fp_sign_leaf_request_v1(&kp.signing_key, network_domain, claim, index, leaf, requested_daa)
+        else {
+            return false;
+        };
+        self.flow_context.palw_gossip().note_interval_pull_request(claim, index);
+        self.flow_context
+            .request_palw_interval_opening(claim, index, kp.verification_key.as_ref().to_vec(), signature, requested_daa, Some(leaf))
+            .await;
+        true
+    }
+
     /// **Ask the network for the openings this seat's draw names** (ADR-0077 Decision 8, the seat
     /// half of P-08).
     ///
@@ -5657,7 +6072,7 @@ impl PalwPanelService {
             };
             self.flow_context.palw_gossip().note_interval_pull_request(claim, *index);
             self.flow_context
-                .request_palw_interval_opening(claim, *index, kp.verification_key.as_ref().to_vec(), signature, requested_daa)
+                .request_palw_interval_opening(claim, *index, kp.verification_key.as_ref().to_vec(), signature, requested_daa, None)
                 .await;
             asked += 1;
         }
@@ -6179,6 +6594,35 @@ mod court_responder_coverage_pin {
             "and grades the carriage it built"
         );
         assert!(source.contains("prompt_ids_opening: prompt_opening,"), "the accusation carries the tile the sampler opened");
+    }
+
+    /// **ADR-0108, pinned where it lives: a named leaf is pursued, a leaf request is served, and a
+    /// held accusation is answered in its unit.** The first fault gate of the verdict block pursues
+    /// the seat's named leaf before it files nothing; the interval resolver answers a leaf-evidence
+    /// request before any interval arithmetic; the authorizer verifies a leaf request's own signed
+    /// message; and the data-availability loop answers a held unit before the event path reads an
+    /// event index the held sentinel is not.
+    #[test]
+    fn the_panel_pursues_a_named_leaf_serves_its_evidence_and_answers_the_held_court() {
+        const MARKER: &str = "mod court_responder_coverage_pin";
+        let whole = include_str!("palw_panel.rs");
+        let source = &whole[..whole.find(MARKER).expect("this module is in this file")];
+        let gate = source.find("if self.seat_found_fault_v1(&duty.claim_id) {").expect("the first fault gate");
+        let pursued = source[gate..].find(".pursue_named_leaf_v1(").expect("the gate pursues");
+        let broke = source[gate..].find("break 'verdict None;").expect("and files nothing");
+        assert!(pursued < broke, "the pursuit runs before the gate files nothing");
+        let resolver = source.find("fn open_retained_interval(").expect("the resolver");
+        let served = source[resolver..].find("self.retained_leaf_evidence_v1(").expect("a leaf request is served");
+        let arithmetic =
+            source[resolver..].find("base0_fp_block_leaves_request_decode_v1(interval_index)").expect("the interval kinds");
+        assert!(served < arithmetic, "a leaf-evidence request is answered before any interval arithmetic");
+        assert!(source.contains("crate::palw_fp_seat::palw_fp_verify_leaf_request_v1("), "the authorizer verifies the leaf's message");
+        let loop_start = source.find("let da_duties = session.palw_da_duties_v2(vec![bond_key]);").expect("the DA loop");
+        let held = source[loop_start..].find("if let Some(missing) = duty.held_missing {").expect("the held unit branch");
+        let event = source[loop_start..].find("palw_da_event_index_parts_v1(duty.missing_event_index)").expect("the event path");
+        assert!(held < event, "a held unit is answered before an event index is read");
+        let answer = source.find("fn held_da_answer_v1(").expect("the held answer");
+        assert!(source[answer..].contains("PalwHeldMissingV1::StepLeaf { leaf } =>"), "a leaf's evidence is answered");
     }
 
     /// **ADR-0093 as built: the panel FILES the fused terminal's root claim now — and the exemption

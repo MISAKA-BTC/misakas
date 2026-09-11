@@ -2374,6 +2374,13 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_claim_readers_v2_impl(claim)
     }
 
+    fn palw_claim_roots_v2(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Option<(kaspa_consensus_core::Hash64, kaspa_consensus_core::Hash64, u64)> {
+        self.virtual_processor.palw_claim_roots_v2_impl(claim)
+    }
+
     fn palw_bond_payout_payload_v2(
         &self,
         bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,

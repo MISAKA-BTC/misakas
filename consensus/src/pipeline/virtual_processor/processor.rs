@@ -4744,6 +4744,16 @@ impl VirtualStateProcessor {
         state.claim_readers_v2(&claim)
     }
 
+    /// A claim's committed roots and price at the tip (ADR-0108 Decision 2) — see the trait doc.
+    pub fn palw_claim_roots_v2_impl(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Option<(kaspa_consensus_core::Hash64, kaspa_consensus_core::Hash64, u64)> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        state.claim(&claim).map(|c| (c.execution_root, c.trace_root, c.work_leaves))
+    }
+
     /// The payout payload the chain has registered for `bond`, if it is registered at all.
     pub fn palw_bond_payout_payload_v2_impl(
         &self,

@@ -27,6 +27,23 @@ use crate::palw_step_leg::PalwStepBindingV2;
 /// interval lane and one interval's replay at the executor; short against every receipt window.
 pub const PALW_LEAF_EVIDENCE_FAST_PATH_DAA_V1: u64 = 6;
 
+/// **A leaf-evidence request rides the interval lane under bit 29** (ADR-0108 Decision 2). Bits 31
+/// and 30 clear (they are the block-leaves and resume requests'), bit 29 set, the leaf's interval
+/// below it; the leaf itself rides the request's `leafIndex` field, which the signature binds. A
+/// plain interval index never reaches bit 29 — a held job at 2M positions has about a thousand
+/// intervals — so the four request kinds cannot collide.
+pub const PALW_LEAF_EVIDENCE_REQUEST_BIT_V1: u32 = 1 << 29;
+
+/// The request index a seat asks for leaf evidence under, for a leaf in `interval`.
+pub fn palw_leaf_evidence_request_index_v1(interval: u32) -> Option<u32> {
+    (interval < PALW_LEAF_EVIDENCE_REQUEST_BIT_V1).then_some(PALW_LEAF_EVIDENCE_REQUEST_BIT_V1 | interval)
+}
+
+/// `Some(interval)` for a leaf-evidence request index, `None` for any other kind.
+pub fn palw_leaf_evidence_request_decode_v1(index: u32) -> Option<u32> {
+    (index & (3 << 30) == 0 && index & PALW_LEAF_EVIDENCE_REQUEST_BIT_V1 != 0).then_some(index & !PALW_LEAF_EVIDENCE_REQUEST_BIT_V1)
+}
+
 /// The seat's sampling unit for one job.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwSeatIntervalUnitV1 {
