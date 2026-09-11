@@ -19,6 +19,11 @@ use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// **How much of a mapped class's weights a node keeps in memory** (ADR-0112): the policy a
+/// lineage whose container is a mapping honours at [`PalwModelLineageV1::load`]. A lineage whose
+/// artifact is owned whole (the dense tier's 1.7 GiB files) has nothing to decide and ignores it.
+pub use misaka_palw_base0::qwen36::Qwen36ResidencyPolicyV1 as PalwWeightResidencyV1;
+
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
 use kaspa_consensus_core::palw_base0_profile::rc_job_context;
 use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
@@ -143,8 +148,10 @@ pub trait PalwModelLineageV1: Send + Sync {
     /// Load one artifact file of this lineage's container, verifying whatever the container
     /// verifies and computing whatever the chain will later be matched against (a mapped tier
     /// computes its root here, once — the root is this node's proof that it holds what the chain
-    /// registered, and a root read from a sidecar would be a declaration).
-    fn load(&self, path: &Path) -> Result<PalwLoadedArtifactV1, String>;
+    /// registered, and a root read from a sidecar would be a declaration). `residency` is how
+    /// much of a mapped container's weights the process keeps (ADR-0112); an owned container
+    /// ignores it.
+    fn load(&self, path: &Path, residency: PalwWeightResidencyV1) -> Result<PalwLoadedArtifactV1, String>;
 
     /// **The roots under which THESE WEIGHTS could already sit on chain.** Matched against
     /// `PalwRegistrationTermsV2::registered_artifact_roots` before the artifact may candidate for

@@ -225,6 +225,16 @@ pub struct Args {
     /// load in the order given, and loading stops here. What is skipped is named in the log, and a
     /// class this node does not hold is one it never declares and is never drawn to judge.
     pub palw_class_cache_bytes: u64,
+    /// **How much of a MAPPED class artifact's weights this node keeps in memory** (ADR-0112).
+    ///
+    /// `None` (the default) is a fifth of the artifact's weight bytes — the ratio the ADR
+    /// certifies. `Some(0)` is no loader: weights are read through the mapping and the page cache
+    /// decides, the behaviour before the ADR, kept for measuring against. `Some(bytes)` is the
+    /// operator's own number. Whatever it is, the always-set is pinned, routed experts are read as
+    /// the router chooses them and held under the remainder, and nothing is read through a page
+    /// fault. A budget below the class's floor (its always-set plus one token's experts) is
+    /// refused at startup, by name and with the numbers.
+    pub palw_class_resident_bytes: Option<u64>,
     /// **Register the class of this node's converted artifact on the running chain, once.**
     ///
     /// A network is born with the classes its ruleset id commits to; every later one arrives as a
@@ -429,6 +439,7 @@ impl Default for Args {
             palw_producer_bond: None,
             palw_class_artifact: Vec::new(),
             palw_class_cache_bytes: 0,
+            palw_class_resident_bytes: None,
             palw_register_class: None,
             palw_register_bond: false,
             palw_dump_classes: false,
@@ -682,7 +693,9 @@ impl Args {
                 panic!("--palw-shard-court-devnet={daa} produced a ruleset the node refuses: {e:?}");
             }
         } else if self.palw_shard_licensing_devnet_daa.is_some() {
-            panic!("--palw-shard-licensing-devnet needs --palw-shard-court-devnet at or below it: a panel of shard seats must be able to convict");
+            panic!(
+                "--palw-shard-licensing-devnet needs --palw-shard-court-devnet at or below it: a panel of shard seats must be able to convict"
+            );
         }
 
         // **ADR-0103 on a private devnet: the held regime, minted from genesis.** One helper —
@@ -1131,6 +1144,20 @@ pub fn cli() -> Command {
                      what did not fit is named in the log. A class this node does not hold is one it does not declare \
                      and is not drawn to judge, so a bound too small for the classes you meant to serve costs you \
                      draws rather than correctness.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-class-resident-bytes")
+                .long("palw-class-resident-bytes")
+                .value_name("bytes")
+                .require_equals(false)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "MISAKA PALW: keep at most this many bytes of a MAPPED class artifact's weights in memory (ADR-0112). \
+                     The always-set is pinned, routed experts are read as the router chooses them and held under the \
+                     remainder, and nothing is read through a page fault. Default: a fifth of the artifact's weights. \
+                     0 = no loader, the page cache decides (the behaviour before ADR-0112). A budget below the class's \
+                     floor -- its always-set plus one token's experts -- is refused at startup by name.",
                 ),
         )
         .arg(
@@ -1777,6 +1804,7 @@ impl Args {
                 .map(|v| v.cloned().collect())
                 .unwrap_or(defaults.palw_class_artifact),
             palw_class_cache_bytes: m.get_one::<u64>("palw-class-cache-bytes").copied().unwrap_or(defaults.palw_class_cache_bytes),
+            palw_class_resident_bytes: m.get_one::<u64>("palw-class-resident-bytes").copied().or(defaults.palw_class_resident_bytes),
             palw_register_class: m.get_one::<String>("palw-register-class").cloned().or(defaults.palw_register_class.clone()),
             palw_register_bond: arg_match_unwrap_or::<bool>(&m, "palw-register-bond", defaults.palw_register_bond),
             palw_dump_classes: arg_match_unwrap_or::<bool>(&m, "palw-dump-classes", defaults.palw_dump_classes),
