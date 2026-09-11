@@ -1521,19 +1521,40 @@ pub struct Params {
     pub palw_held_context: Option<ForkActivation>,
     /// **The 2026-09-11 pre-mainnet audit's consensus fixes, gated to one coordinated activation.**
     ///
-    /// A single fence for the audit findings whose corrections change the state-transition or the
-    /// acceptance filter — A-1 (the acceptance filter folds the fold's step 3, closing the
-    /// activation-crossing halt), B-4 (one inference is one block), B-5 (a certified quantum is paid
-    /// once), AC-SLOT (a fold-failing court move does not spend the block slot), A-2 (an undecodable
-    /// lifecycle payload is tolerated at isolation), and the court/panel fixes B-1, C-01, C-02, C-03,
-    /// C-08 and BC-SYBIL. Below the fence every one of them reproduces the pre-fix behavior exactly,
-    /// so a build carrying this fence and one without it fold every block before the height
-    /// identically; at the height the whole set activates together. Scheduled on testnet-11 at
+    /// The fence for the audit's SHALLOW findings — the corrections that are self-contained edits to
+    /// the state-transition or the acceptance filter: A-1 (the acceptance filter folds the fold's
+    /// step 3, closing the activation-crossing halt), B-5 (a certified quantum is paid once), AC-SLOT
+    /// (a fold-failing court move does not spend the block slot), and A-2 (an undecodable lifecycle
+    /// payload is tolerated at isolation). Below the fence every one reproduces the pre-fix behavior
+    /// exactly, so a build carrying this fence and one without it fold every block before the height
+    /// identically; at the height the set activates together. Scheduled on testnet-11 at
     /// [`PALW_RC_AUDIT_FENCE_DAA`] (a live chain gets its fixes at a height, ADR-0083 path (a)),
     /// `always()` on a mainnet card (correct from genesis), `None` on every other preset. It moves
     /// the fingerprint, so the fleet upgrades to the fenced build before the height — the coordinated
     /// flag day the operator chose.
+    ///
+    /// The audit's DEEP findings (B-1 merged-work escrow, C-01 fused-terminal canonical count, B-4
+    /// pre_pow-inclusive execution dedup, and the C-02/C-03/C-08/BC-SYBIL court-economics cluster)
+    /// ride a SEPARATE fence, [`Self::palw_audit_2026_09_11_deep`], at a later height — they are
+    /// larger changes that were not ready for this fence's flag day, and splitting them keeps this
+    /// day's build stable while the deep set is finished. A build with the deep set and one without
+    /// carry DIFFERENT `palw_audit_2026_09_11_deep` schedules, so they diverge VISIBLY at the deep
+    /// height (the fork-id gate names it) rather than silently at THIS height — which is why the deep
+    /// set must not ride this fence.
     pub palw_audit_2026_09_11: Option<ForkActivation>,
+
+    /// The fence for the audit's DEEP findings — the corrections that are protocol-level changes:
+    /// B-1 (merged work is escrowed symmetrically to own work), C-01 (the fused dissection binds a
+    /// canonical `step_leaf_count`), B-4 (one inference is one block, deduped on the pre_pow-inclusive
+    /// execution commitment), and the court/panel economics cluster (C-02 stake-weighted draw, C-03
+    /// wall-clock court charging, C-08 forced disclosure, BC-SYBIL seat stake-at-risk). A single
+    /// fence for the six, at its own later height (the operator's THIRD flag day), because they were
+    /// not ready when [`Self::palw_audit_2026_09_11`] shipped and holding that day for them would
+    /// have stranded the shallow set. Below the fence every deep fix reproduces the pre-fix behavior
+    /// exactly. Scheduled on testnet-11 at [`PALW_RC_AUDIT_DEEP_FENCE_DAA`], `always()` on a mainnet
+    /// card, `None` on every other preset. Distinct from the shallow fence so a build with the deep
+    /// set and one without advertise different schedules and diverge visibly at this height.
+    pub palw_audit_2026_09_11_deep: Option<ForkActivation>,
 
     /// **ADR-0083 Decision 1 — the difficulty window counts only rows priced by `bits`.**
     ///
@@ -3259,6 +3280,9 @@ impl Params {
         if self.palw_audit_2026_09_11 == Some(ForkActivation::never()) {
             self.palw_audit_2026_09_11 = None;
         }
+        if self.palw_audit_2026_09_11_deep == Some(ForkActivation::never()) {
+            self.palw_audit_2026_09_11_deep = None;
+        }
         // ADR-0083 Decision 1, the same shape: a bare fence, `never()` is absence.
         if self.palw_difficulty_priced_rows == Some(ForkActivation::never()) {
             self.palw_difficulty_priced_rows = None;
@@ -3763,12 +3787,24 @@ impl Params {
         }
     }
 
+    /// The audit DEEP fence (B-1/C-01/B-4/court cluster), resolved off a ConsensusV2 ruleset.
+    pub fn palw_audit_2026_09_11_deep_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_audit_2026_09_11_deep) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
     pub fn palw_held_context_active_at(&self, daa_score: u64) -> bool {
         self.palw_held_context_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
     pub fn palw_audit_2026_09_11_active_at(&self, daa_score: u64) -> bool {
         self.palw_audit_2026_09_11_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
+    pub fn palw_audit_2026_09_11_deep_active_at(&self, daa_score: u64) -> bool {
+        self.palw_audit_2026_09_11_deep_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
     /// ADR-0081 Decision 3's fence with the mode condition already folded in — `Some` only on a
@@ -3893,6 +3929,7 @@ impl Params {
             palw_attn_anchored_root,
             palw_held_context,
             palw_audit_2026_09_11,
+            palw_audit_2026_09_11_deep,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -3950,6 +3987,7 @@ impl Params {
             ("palw_attn_anchored_root", *palw_attn_anchored_root),
             ("palw_held_context", *palw_held_context),
             ("palw_audit_2026_09_11", *palw_audit_2026_09_11),
+            ("palw_audit_2026_09_11_deep", *palw_audit_2026_09_11_deep),
             ("palw_difficulty_priced_rows", *palw_difficulty_priced_rows),
             ("palw_receipt_rows_unpriced", *palw_receipt_rows_unpriced),
             ("palw_attempt_header_pins", *palw_attempt_header_pins),
@@ -4142,6 +4180,10 @@ impl Params {
             h.write(b"palw_audit_2026_09_11");
             h.write(activation.daa_score().to_le_bytes());
         }
+        if let Some(activation) = self.palw_audit_2026_09_11_deep {
+            h.write(b"palw_audit_2026_09_11_deep");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0083 Decision 1's fence, NAMED for the same reason: it changes the bits every header
         // past it must carry, so an operator reading the schedule must see it.
         if let Some(priced) = self.palw_difficulty_priced_rows {
@@ -4307,6 +4349,7 @@ impl Params {
             palw_attn_anchored_root,
             palw_held_context,
             palw_audit_2026_09_11,
+            palw_audit_2026_09_11_deep,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -4630,6 +4673,9 @@ impl Params {
         if let Some(activation) = palw_audit_2026_09_11.as_mut() {
             fork(activation, visit);
         }
+        if let Some(activation) = palw_audit_2026_09_11_deep.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0083 Decision 1. Some-only, likewise.
         if let Some(activation) = palw_difficulty_priced_rows.as_mut() {
             fork(activation, visit);
@@ -4891,6 +4937,7 @@ impl Params {
             palw_attn_anchored_root,
             palw_held_context,
             palw_audit_2026_09_11,
+            palw_audit_2026_09_11_deep,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -5250,6 +5297,10 @@ impl Params {
         }
         if let Some(activation) = palw_audit_2026_09_11 {
             h.write(b"palw_audit_2026_09_11");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_audit_2026_09_11_deep {
+            h.write(b"palw_audit_2026_09_11_deep");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0083 Decision 1, Some-only for the same reason: arming it changes the `bits` every
@@ -5625,6 +5676,7 @@ impl Params {
             palw_attn_anchored_root: self.palw_attn_anchored_root,
             palw_held_context: self.palw_held_context,
             palw_audit_2026_09_11: self.palw_audit_2026_09_11,
+            palw_audit_2026_09_11_deep: self.palw_audit_2026_09_11_deep,
             palw_difficulty_priced_rows: self.palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced: self.palw_receipt_rows_unpriced,
             palw_attempt_header_pins: self.palw_attempt_header_pins,
@@ -6588,6 +6640,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_attn_anchored_root: None,
     palw_held_context: None,
     palw_audit_2026_09_11: None,
+    palw_audit_2026_09_11_deep: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -6765,6 +6818,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_attn_anchored_root: None,
     palw_held_context: None,
     palw_audit_2026_09_11: None,
+    palw_audit_2026_09_11_deep: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -6924,6 +6978,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_attn_anchored_root: None,
     palw_held_context: None,
     palw_audit_2026_09_11: None,
+    palw_audit_2026_09_11_deep: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -10371,6 +10426,8 @@ fn mainnet_card_base_v1(mut base: Params, dense_tier_pinned: bool) -> Params {
     base.palw_share_growth_final = Some(ForkActivation::always());
     // The 2026-09-11 audit's consensus fixes are correct from a mainnet card's genesis.
     base.palw_audit_2026_09_11 = Some(ForkActivation::always());
+    // The deep audit findings (B-1/C-01/B-4/court cluster) likewise — correct from a card's genesis.
+    base.palw_audit_2026_09_11_deep = Some(ForkActivation::always());
     base
 }
 
@@ -10445,6 +10502,22 @@ pub const PALW_RC_MODEL_LEG_V2_FENCE_DAA: u64 = 3_500;
 /// at release time (t11 advances ~4–5 DAA/h; leave external operators room to upgrade), and rebased
 /// onto the fleet's own base (ADR-0114's `42438178` lineage = origin/main 8b6661a9 + 5bed4405).
 pub const PALW_RC_AUDIT_FENCE_DAA: u64 = 4_000;
+
+/// **testnet-11's THIRD flag day: the 2026-09-11 audit's DEEP findings** (`palw_audit_2026_09_11_deep`
+/// — B-1 merged-work escrow, C-01 fused-terminal canonical count, B-4 pre_pow-inclusive execution
+/// dedup, and the C-02/C-03/C-08/BC-SYBIL court-economics cluster). A single fence for the six, at a
+/// height AFTER [`PALW_RC_AUDIT_FENCE_DAA`], because the deep set was not finished when the shallow
+/// fence's flag day shipped and holding that day for it would have stranded the ready shallow fixes.
+///
+/// **It MUST be a height no other schedule entry uses, and greater than 4,000.** Same reason the
+/// shallow fence is not 3,500: `fork_id_v1` digests the FIRED HEIGHTS, so a build that carries the
+/// deep set and one that does not MUST advertise different schedules — a distinct height is what the
+/// gate sees, so a not-yet-upgraded node is refused FROM this height rather than diverging silently.
+/// Putting the deep set on the 4,000 fence instead would make a deep build and a shallow build share
+/// a fingerprint and a schedule yet fold differently at 4,000 — a silent split. **Provisional** —
+/// set with deployment margin over the tip when the deep set ships, and announced as its own flag
+/// day. A placeholder (7,000) until the deep set is finished and the operator sets the real height.
+pub const PALW_RC_AUDIT_DEEP_FENCE_DAA: u64 = 7_000;
 
 /// **testnet-11's third flag day: the refutation ladder** (ADR-0084 U-08, the 2026-09-06 audit's
 /// H-4, ADR-0092 §9 step 2).
@@ -10855,6 +10928,10 @@ pub fn palw_rc_base_params() -> Params {
     // testnet-11 "until a flag day says otherwise" (`the_share_growth_final_fence_is_dormant_everywhere`,
     // and the ADR-0107 note that the merged-payout question is still the operator's to make).
     params.palw_audit_2026_09_11 = Some(ForkActivation::new(PALW_RC_AUDIT_FENCE_DAA));
+    // **The 2026-09-11 audit's THIRD flag day** — the deep findings (B-1/C-01/B-4/court cluster) at
+    // their own later height, distinct from the shallow fence so a deep build and a shallow build
+    // diverge visibly at this height rather than silently at 4,000.
+    params.palw_audit_2026_09_11_deep = Some(ForkActivation::new(PALW_RC_AUDIT_DEEP_FENCE_DAA));
     params.palw_model_evm = Some(ForkActivation::new(PALW_RC_DA_COURT_FENCE_DAA));
     params.palw_court_ladder = Some(ForkActivation::new(PALW_RC_COURT_LADDER_FENCE_DAA));
     // **The EVM lane is ON from DAA 0, inherited from `TESTNET_PARAMS` and kept deliberately.**
@@ -11275,6 +11352,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_attn_anchored_root: None,
     palw_held_context: None,
     palw_audit_2026_09_11: None,
+    palw_audit_2026_09_11_deep: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -13631,8 +13709,9 @@ mod consensus_params_id_tests {
         previous.palw_model_evm = None;
         // ADR-0114's fence (3500) was scheduled five flag days later.
         previous.palw_model_leg_v2 = None;
-        // The pre-mainnet audit's fence (4000) was scheduled later still.
+        // The pre-mainnet audit's fences (4000 shallow, 7000 deep) were scheduled later still.
         previous.palw_audit_2026_09_11 = None;
+        previous.palw_audit_2026_09_11_deep = None;
         // Scheduled on the same flag day by the 2026-09-06 audit's H-4 (ADR-0084 U-08), so the
         // build the fleet is running does not carry it either.
         previous.palw_court_ladder = None;
@@ -15129,7 +15208,15 @@ mod consensus_params_id_tests {
                 // 3,500: identity unmoved, the fork-id gate keeps builds with and without the fence
                 // peers until 4,000, and every node must carry it past 4,000. Previous (ADR-0114's
                 // owner-leg build): 02c7282b7541011344eabb1ce6cbe6544987e7b6a7fc132413fbfff0a6a37cfd.
-                "09efd285a32f31c883edc5b9b869892b15895bf1194593c067556c94cf8fc694",
+                // **Re-pinned again for the THIRD flag day** (the audit's DEEP findings,
+                // `PALW_RC_AUDIT_DEEP_FENCE_DAA` = 7,000, provisional): `palw_audit_2026_09_11_deep`
+                // adds one more schedule entry (1150/1900/2150/2400/3500/4000/7000/2125000). This is
+                // THIS branch's value (shallow @ 4,000 + deep @ 7,000). **It is intermediate**: the
+                // deployed testnet-11 build integrates other sessions' 4,000 fences (ADR-0117
+                // `palw_prefill_draw`, and possibly ADR-0103 held), so the integration owner re-pins
+                // the final value from the release build's startup log. Previous (audit shallow only):
+                // 09efd285a32f31c883edc5b9b869892b15895bf1194593c067556c94cf8fc694.
+                "d6ebbcab7691aec574e983b2c8dd81a6bd1fc1d340e92a7efba2f7e305449bec",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -15921,9 +16008,11 @@ mod consensus_params_id_tests {
         let expected: std::collections::BTreeSet<&str> = [
             "palw_attempt_header_pins",
             "palw_attempt_work",
-            // The 2026-09-11 pre-mainnet audit's fence: a card arms it from genesis (correct there),
-            // testnet-11 schedules it at PALW_RC_AUDIT_FENCE_DAA.
+            // The 2026-09-11 pre-mainnet audit's fences: a card arms both from genesis (correct
+            // there), testnet-11 schedules the shallow one at PALW_RC_AUDIT_FENCE_DAA and the deep
+            // one at PALW_RC_AUDIT_DEEP_FENCE_DAA.
             "palw_audit_2026_09_11",
+            "palw_audit_2026_09_11_deep",
             "palw_capability_bound",
             "palw_certification_rent",
             "palw_chunk_cap_charge",
@@ -16638,6 +16727,7 @@ mod consensus_params_id_tests {
                 PALW_RC_MODEL_BENEFITS_FENCE_DAA,
                 PALW_RC_MODEL_LEG_V2_FENCE_DAA,
                 PALW_RC_AUDIT_FENCE_DAA,
+                PALW_RC_AUDIT_DEEP_FENCE_DAA,
             ],
             "…and a schedule lists every scheduled gate fence's height"
         );

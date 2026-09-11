@@ -575,6 +575,10 @@ pub struct VirtualStateProcessor {
     /// The 2026-09-11 audit fence, resolved once in [`Self::palw_audit_2026_09_11_at`]; the
     /// acceptance arm (A-1, AC-SLOT) and the fold's extras both read it there.
     pub(super) palw_audit_2026_09_11: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// The 2026-09-11 audit DEEP fence (B-1/C-01/B-4/court cluster), resolved once in
+    /// [`Self::palw_audit_2026_09_11_deep_at`]; the fold's extras read it there. A later flag day
+    /// than the shallow fence above.
+    pub(super) palw_audit_2026_09_11_deep: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// Rate limiter for [`Self::palw_warn_if_maturity_outruns_the_registry`] — the DAA score the
     /// shortfall was last reported at, or `PALW_SHORTFALL_NEVER_REPORTED`. **Log state only**:
     /// nothing consensus-visible reads it, so two nodes that report at different moments still
@@ -1041,6 +1045,7 @@ impl VirtualStateProcessor {
             palw_attn_anchored_root: params.palw_attn_anchored_root_fence(),
             palw_held_context: params.palw_held_context_fence(),
             palw_audit_2026_09_11: params.palw_audit_2026_09_11_fence(),
+            palw_audit_2026_09_11_deep: params.palw_audit_2026_09_11_deep_fence(),
             palw_frontier_provenance: params.palw_frontier_provenance,
             palw_validator_payout_bounds: params.palw_validator_payout_bounds_fence(),
             finality_depth: params.blockrate.finality_depth,
@@ -7967,6 +7972,7 @@ impl VirtualStateProcessor {
             // responder's whole defense by omission.
             attn_anchored_root_active: self.palw_attn_anchored_root_at(daa_score),
             audit_2026_09_11_active: self.palw_audit_2026_09_11_at(daa_score),
+            audit_2026_09_11_deep_active: self.palw_audit_2026_09_11_deep_at(daa_score),
             // ADR-0100: the one-move court's ladder rides to the fold when the court is armed —
             // the SAME ladder the acceptance arm adjudicates at, so both derive one verdict.
             // Written explicitly for the reason the two lines above give.
@@ -8094,6 +8100,10 @@ impl VirtualStateProcessor {
 
     fn palw_audit_2026_09_11_at(&self, daa_score: u64) -> bool {
         self.palw_audit_2026_09_11.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    fn palw_audit_2026_09_11_deep_at(&self, daa_score: u64) -> bool {
+        self.palw_audit_2026_09_11_deep.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// **Whether a claim's panel is drawn per shard, and into how many** — the ONE decision the

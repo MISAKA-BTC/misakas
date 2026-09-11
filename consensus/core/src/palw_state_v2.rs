@@ -11765,8 +11765,10 @@ fn apply_object(
             // convicts responder-side). The cap is the claim's OWN count, never `PALW_STEP_MAX_LEAVES`
             // — spelling it a constant convicts the honest graph-v5 class whose canonical job counts
             // millions of leaves (the reason `palw_step_leg.rs` reads it this way); `Ok(n) && n ==
-            // claim` is the same predicate at every ladder. Below the fence, unchanged.
-            if builder.extras.audit_2026_09_11_active {
+            // claim` is the same predicate at every ladder. Below the fence, unchanged. C-01 is one of
+            // the DEEP findings, so it rides `palw_audit_2026_09_11_deep` (a later flag day than the
+            // shallow fence), not `palw_audit_2026_09_11`.
+            if builder.extras.audit_2026_09_11_deep_active {
                 match crate::palw_step::step_leaf_count_capped_v1(&binding.shape_profile, &binding.job_context, binding.step_leaf_count) {
                     Ok(count) if count == binding.step_leaf_count => {}
                     _ => {
@@ -12298,11 +12300,17 @@ pub struct PalwTransitionExtrasV1 {
     /// regime existed.
     pub held_context_ladder: Option<u64>,
     /// `Params::palw_audit_2026_09_11` resolved at the block's DAA. `false` (every dormant network,
-    /// and testnet-11 below its flag day) selects the pre-audit fold at every site the audit fixes
-    /// touch; `true` selects the fixed behavior. The fixes that live in the acceptance filter (A-1,
-    /// AC-SLOT) read the fence off `Params` directly in the processor; the ones the fold decides
-    /// read it here.
+    /// and testnet-11 below its flag day) selects the pre-audit fold at every site the SHALLOW audit
+    /// fixes (A-1, AC-SLOT, B-5) touch; `true` selects the fixed behavior. The acceptance-filter
+    /// fixes read the fence off `Params` directly in the processor; the ones the fold decides read
+    /// it here.
     pub audit_2026_09_11_active: bool,
+    /// `Params::palw_audit_2026_09_11_deep` resolved at the block's DAA — the audit's DEEP findings
+    /// (B-1 merged-work escrow, C-01 fused-terminal canonical count, B-4 execution dedup). `false`
+    /// (dormant, and testnet-11 below its later flag day) selects the pre-fix fold; `true` selects
+    /// the fixed behavior. Separate from `audit_2026_09_11_active` so the deep set activates at its
+    /// own height, distinct from the shallow fence.
+    pub audit_2026_09_11_deep_active: bool,
     /// `Params::palw_share_growth_final` resolved at the block's DAA (ADR-0107). Below it a class
     /// grows its cadence share on the blocks it had ACCEPTED in the closed epoch; past it growth
     /// also needs that many of its attempt claims to have reached `Final` in the same span. `false`
@@ -25434,7 +25442,7 @@ pub(crate) mod tests {
 
             let (state, _claim_id, sid, daa) = court_at_the_fused_leaf(&p, &drill);
             let c = ctx(daa, daa, daa);
-            let armed = PalwTransitionExtrasV1 { audit_2026_09_11_active: true, ..Default::default() };
+            let armed = PalwTransitionExtrasV1 { audit_2026_09_11_deep_active: true, ..Default::default() };
 
             // Honest, canonical: opens the dissection in BOTH regimes — the gate never touches
             // honest play.
@@ -27703,6 +27711,7 @@ pub(crate) mod tests {
                 attn_anchored_root_active: false,
                 held_context_ladder: None,
                 audit_2026_09_11_active: false,
+                audit_2026_09_11_deep_active: false,
                 share_growth_final_active: false,
             }
         }
@@ -27915,6 +27924,7 @@ pub(crate) mod tests {
                 attn_anchored_root_active: false,
                 held_context_ladder: None,
                 audit_2026_09_11_active: false,
+                audit_2026_09_11_deep_active: false,
                 share_growth_final_active: false,
             };
             let (s_off, _) =

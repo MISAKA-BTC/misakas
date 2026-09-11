@@ -536,8 +536,9 @@ mod tests {
                 crate::config::params::PALW_RC_MODEL_BENEFITS_FENCE_DAA,
                 crate::config::params::PALW_RC_MODEL_LEG_V2_FENCE_DAA,
                 crate::config::params::PALW_RC_AUDIT_FENCE_DAA,
+                crate::config::params::PALW_RC_AUDIT_DEEP_FENCE_DAA,
             ],
-            "testnet-11's gate set is its flag days (ADR-0083, ADR-0062, ADR-0084 U-08, ADR-0095, ADR-0114, the audit fence), and deriving the list must not widen it"
+            "testnet-11's gate set is its flag days (ADR-0083, ADR-0062, ADR-0084 U-08, ADR-0095, ADR-0114, the audit shallow and deep fences), and deriving the list must not widen it"
         );
     }
 
@@ -603,6 +604,7 @@ mod tests {
             "palw_attn_anchored_root" => params.palw_attn_anchored_root = Some(at),
             "palw_held_context" => params.palw_held_context = Some(at),
             "palw_audit_2026_09_11" => params.palw_audit_2026_09_11 = Some(at),
+            "palw_audit_2026_09_11_deep" => params.palw_audit_2026_09_11_deep = Some(at),
             "palw_difficulty_priced_rows" => params.palw_difficulty_priced_rows = Some(at),
             "palw_receipt_rows_unpriced" => params.palw_receipt_rows_unpriced = Some(at),
             "palw_attempt_header_pins" => params.palw_attempt_header_pins = Some(at),
@@ -705,7 +707,7 @@ mod tests {
                 // scheduled 2026-09-11): `palw_audit_2026_09_11` fires here — the audit's
                 // state-transition and acceptance-filter fixes. (The share-census and dense-court
                 // fences the audit also touches are mainnet-card corrections, dormant on t11.)
-                ("testnet-11", vec![1150, 1900, 2150, 2400, 3500, 4000, 2_125_000]),
+                ("testnet-11", vec![1150, 1900, 2150, 2400, 3500, 4000, 7000, 2_125_000]),
                 ("devnet", vec![]),
                 ("simnet", vec![]),
             ],
@@ -739,13 +741,15 @@ mod tests {
         /// The pre-mainnet audit's flag day — the audit's state-transition/acceptance fixes and the
         /// dense-court and share-census fences that carry audit corrections all arm here.
         const AUDIT_FENCE: u64 = 4000;
+        /// The audit's DEEP findings' flag day (B-1/C-01/B-4/court cluster) — a later height.
+        const AUDIT_DEEP_FENCE: u64 = 7000;
         const CRESCENDO_T11: u64 = 2_125_000;
         for (name, params) in shipped() {
             if name == "testnet-11" {
                 assert_eq!(
                     fork_id_gate_fences_v1(&params),
-                    vec![ADR_0083, ADR_0062, ADR_0084_U08, ADR_0095, ADR_0114, AUDIT_FENCE],
-                    "{name}: armed by ADR-0083's fence, ADR-0062's, ADR-0084 U-08's, ADR-0095's, ADR-0114's and the audit's, and nothing else"
+                    vec![ADR_0083, ADR_0062, ADR_0084_U08, ADR_0095, ADR_0114, AUDIT_FENCE, AUDIT_DEEP_FENCE],
+                    "{name}: armed by ADR-0083's fence, ADR-0062's, ADR-0084 U-08's, ADR-0095's, ADR-0114's and the audit's (shallow + deep), and nothing else"
                 );
                 assert!(fork_id_gate_armed_v1(&params));
                 continue;
@@ -762,7 +766,10 @@ mod tests {
         }
 
         let t11 = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
-        assert_eq!(t11.fence_schedule_v1(), vec![ADR_0083, ADR_0062, ADR_0084_U08, ADR_0095, ADR_0114, AUDIT_FENCE, CRESCENDO_T11]);
+        assert_eq!(
+            t11.fence_schedule_v1(),
+            vec![ADR_0083, ADR_0062, ADR_0084_U08, ADR_0095, ADR_0114, AUDIT_FENCE, AUDIT_DEEP_FENCE, CRESCENDO_T11]
+        );
         let genesis = t11.genesis.hash;
         // The un-upgraded build: same genesis, schedule [2_125_000] — it has crossed nothing and names
         // crescendo as its next fence, which is exactly what its digest and next look like on the wire.
@@ -775,8 +782,8 @@ mod tests {
             (stale_fired, ADR_0083),
             "same empty prefix as the stale build; the next fence is what tells them apart"
         );
-        // A node on this build past the height.
-        let past = fork_id_v1(&t11, 5_000);
+        // A node on this build past every audit fence (shallow 4,000 and deep 7,000).
+        let past = fork_id_v1(&t11, 8_000);
         assert_eq!(past.next, CRESCENDO_T11);
         let stranger = &[0u8; 32][..];
 
@@ -1086,6 +1093,7 @@ mod tests {
         let mut upgraded = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
         upgraded.palw_model_leg_v2 = None;
         upgraded.palw_audit_2026_09_11 = None;
+        upgraded.palw_audit_2026_09_11_deep = None;
         upgraded.palw_share_growth_final = None;
         upgraded.palw_fused_dissectable = None;
         upgraded.palw_attn_anchored_root = None;
@@ -1166,6 +1174,7 @@ mod tests {
         // flag day; clear it (and the fixes riding its height) so this pins the 3500 boundary alone.
         let mut upgraded = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
         upgraded.palw_audit_2026_09_11 = None;
+        upgraded.palw_audit_2026_09_11_deep = None;
         upgraded.palw_share_growth_final = None;
         upgraded.palw_fused_dissectable = None;
         upgraded.palw_attn_anchored_root = None;
