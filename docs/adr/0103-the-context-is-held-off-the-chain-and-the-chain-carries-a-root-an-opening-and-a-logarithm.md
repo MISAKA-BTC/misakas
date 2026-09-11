@@ -655,11 +655,15 @@ acceptance arm, and on a live devnet by `HELD=1 scripts/misaka-palw-shard-court-
   session names (ADR-0085 §6 item 4) — and under the fence no session opens. The held DA court
   cannot compel them either: its units are ids, chunks and leaf-hash blocks, not a step tile. At
   devnet widths every seat holds the capture and accuses directly (§10.4, run 2); at the widths this
-  ADR is for, closing it needs one of two moves, and choosing between them is a protocol decision:
-  the executor serves a named leaf's annex on a panel seat's signed request (the one-move court's
-  stand-in for the session that authorised it; the interval lane's `u32` index cannot address a
-  leaf, so it is a new request), or the held DA court gains a `StepTile(leaf)` unit whose
-  disclosure is the tile and its opening.
+  ADR is for, a liar that commits a wrong leaf is named but not convicted. Two moves close it, and
+  choosing is a protocol decision: (a) the executor serves a named leaf's annex on a panel seat's
+  signed request — the one-move court's stand-in for the session that used to authorise it (the
+  interval lane's `u32` index cannot address a leaf, so it is a new request) — which an honest
+  executor answers and a liar simply does not; so (b) the held DA court gains a unit for a leaf's
+  committed evidence (its output tile and input rows, each with its opening against the step root,
+  bounded by the court's close ceiling), whose withholding defaults the executor exactly as a
+  missing tile of ids does. (b) is the one that makes silence convictable, and (a) is its
+  off-chain fast path; recommended together.
 * **A resume opening past the interval lane's 4 MiB** (a 2M shard's state is gigabytes): §4 and §8
   already say the class declares its own lane cap off the plan; no such lane is built.
 * **A shard seat's replay from its own slices.** The fetch is verified slice-locally; replaying one
