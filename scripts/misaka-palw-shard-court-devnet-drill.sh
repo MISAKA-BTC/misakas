@@ -152,6 +152,8 @@ log "    before ${before_collateral:-?} sompi, after ${after_collateral:-?} somp
 if [ -n "$before_collateral" ] && [ -n "$after_collateral" ]; then
   [ "$after_collateral" -lt "$before_collateral" ] || die "bond 0's collateral did not fall ($before_collateral → $after_collateral)"
 fi
-dropped="$(grep -h -c "a PALW lifecycle object was dropped, and the block stands" "$WORK_DIR"/node-*.log | paste -sd+ - | bc 2>/dev/null || echo 0)"
+# One count over every log: `grep -c` on one stream prints one number, and `|| true` (not `|| echo 0`)
+# keeps pipefail's non-zero exit on no match from printing a second zero.
+dropped="$(cat "$WORK_DIR"/node-*.log | grep -c "a PALW lifecycle object was dropped, and the block stands" || true)"
 log "    duplicate accusations dropped with the block standing: $dropped (every seat on the panel files once)"
 log "PASS — the one-move court convicted a corrupted free-prompt claim on a live devnet"

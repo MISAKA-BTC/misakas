@@ -509,7 +509,7 @@ green); testnet-11 does not move. A network that wants this ADR mints with
 
 | Decision | where it lives | what pins it |
 |---|---|---|
-| **1** the one-move court is the court | `palw_checkpoint_court_v1.rs` (`CheckpointAccused`, tag 42, a COMPLETE_V4 context: the chunk opened against the checkpoint root, the cache-write rows against the step root, the composition recomputed); `CourtOpened` refused by name once the fence is armed (acceptance and fold); a ladder past the bisection's clock admitted only over COMPLETE_V4 (`PalwConsensusParamsV2::validate`) and only with the fence armed from genesis (`Params::validate_palw_v2`) | the checkpoint court's tests on v3 and v4; the regime's fold tests; `a_ladder_past_the_clock_needs_the_regime_from_genesis` |
+| **1** the one-move court is the court | `palw_checkpoint_court_v1.rs` (`CheckpointAccused`, tag 42, a COMPLETE_V4 context: the chunk opened against the checkpoint root, the cache-write rows against the step root, the composition recomputed); `CourtOpened` refused by name once the fence is armed (acceptance and fold), and the panel's challenger half opens none; a ladder past the bisection's clock admitted only over COMPLETE_V4 (`PalwConsensusParamsV2::validate`) and only with the fence armed from genesis (`Params::validate_palw_v2`); the accusation's prompt carriage (`PalwShardCourtAccusationV1::prompt_ids_opening`, built by `palw_refutation_prompt_carriage_v1` and read by the opened adjudicator — §10.3 item 11) | the checkpoint court's tests on v3 and v4; the regime's fold tests; `a_ladder_past_the_clock_needs_the_regime_from_genesis`; `a_refutation_rides_the_list_on_a_flat_network_and_one_tile_on_a_merkle_one`; `under_the_merkle_prompt_form_the_drill_convicts_and_the_seat_recomputes_the_jobs_ids` |
 | **2** the seat's unit is positions, and a seat resumes | `palw_held_context_v1.rs` (intervals, route, `P`, fetch); base0's interval geometry counts in STEPS (`Base0FpIntervalUnitV1::Positions`, one replay loop over windows); the Resume route (`Base0FpResumeOpeningV1` under a bit-30 request on the interval lane, `base0_fp_verify_resume_v1`'s slice-local check, `base0_fp_accept_resume_v1`); seam verbs `fp_held_route_v1` / `open_fp_resume_v1` / `fp_accept_resume_v1`; the panel derives the route from the class and `window_receipt` and asks for the state beside the interval | `every_held_graph_v7_interval_opens_and_a_recomputing_seat_licenses_it`, `a_held_interval_that_resumes_inside_the_prompt_opens_and_is_licensed`, `a_seat_that_resumes_reaches_the_verdict_a_seat_that_recomputes_does`, `a_held_class_seats_its_prompt_in_intervals_and_a_lie_in_it_is_a_fault` |
 | **3** map v4 | `palw_step_leg.rs` (leaf `(map, slice, block)`, promote-odd slice trees, the frontier, the depth cap 48); `palw_state_chunk_map.rs` (layouts, one dispatch for leaves, roots, paths, top leaves); graph-v7 rows (`qwen25_a16_profile_v7`, `qwen36_profile_v7`); the producer's per-position capture folds a held checkpoint as an APPEND (per-slice frontiers — one tile a slice and `depth` nodes a position) | `the_held_fold_is_an_append_and_its_root_is_the_courts`, `the_held_composition_folds_and_its_root_is_the_courts`; both fused dissection drills on graph-v7 (dense and hybrid) |
 | **4** the ids never ride | Merkle prompt ids and `PanelDa` required at or below the fence (assembly); the payload wall under the fence; a PublicDa carrier past one standard transaction skipped by name (`palw_fp_objects_from_accepted_txs_under_held_v3`); the held DA court (`palw_held_da_v1.rs`, tags 43/44, the `held_da_missing` collection behind tail 0xA3) | `under_the_held_regime_public_ids_past_one_transaction_are_skipped_by_name`, the held DA court's fold tests |
@@ -591,6 +591,28 @@ the K3 stand-in needs six. D9: the shipped `k = 4` catches a one-token lie in a 
     ADR-0082 Decision 10's numerator, which `validate_palw_v2` refuses to arm on any network today
     (audit D M-1). The mint changes no economics (`the_held_mint_moves_no_economics`); a network
     that wants Decision 9's sentence at 2M arms Decision 10 with it, which is not this ADR's move.
+11. **Decision 1 said the one-move court runs `check_execution_step_refutation_capped_v1`
+    "unchanged". Under trace format 4 it cannot convict a free-prompt claim at all** — found by the
+    live drill, not by a test. That entry point compares a refutation's carried id list against a
+    FLAT `prompt_token_ids_hash`; a held network commits the ids as the tiled root (Decision 4), so
+    every refutation that carried the list read `InputSetNotCanonical` — no verdict — and a
+    refutation that carried none could not adjudicate a gather. ADR-0081 had built the opened
+    adjudicator and deferred the carriage field "to the genesis cut that arms
+    `palw_prompt_ids_merkle`"; the held mint is that cut. Built: the accusation carries the gather's
+    one tile (`prompt_ids_opening`, outside the session id — it is bound by the job's root; a new
+    field on tag 38, whose fence is `None` on every preset and which no chain carries), the verdict
+    reads it through `check_execution_step_refutation_opened_capped_v1`, the ceiling prices it, and
+    one helper decides the carriage for the one-move accusation and the bisection close's
+    `ArithmeticOpened` arm alike. So the close term stays the path Decision 1 promised — one tile
+    and `⌈log₂ tiles⌉` siblings — rather than the whole prompt.
+12. **Three readers still hashed the prompt flat on a Merkle network**, each silently: every
+    family's `operand_openings_for` ran the flat check to learn which artifact rows the court
+    resolves, so it recorded none for a gather (now `check_execution_step_refutation_carried_capped_v1`,
+    the check the chain will run); the seat's prefix recompute (`base0_fp_recompute_state_*`,
+    `base0_fp_seat_state_memoized_v1`) refused an honest job's own ids, so every interval past the
+    first filed `Incapable` (it now takes the network's form); and the seat's capture sampler graded
+    the flat carriage, so each of its 32 draws was "not a sample" at trace level and the seat filed
+    nothing. The live drill showed all three at once; `under_the_merkle_prompt_form_…` pins them.
 
 ### 10.4 What was run
 
@@ -599,8 +621,25 @@ ADR-0103 integration tests (invariants 2, 3, 5, 8, 9 and 10 at 2M on the held mi
 as the shipped presets' limitations); invariant 4 on the producer's capture; invariant 6 at the
 seat (resume against recompute, a tampered fetched chunk refused by its slice, a shard's slices
 verified alone); invariant 7 at the carrier and the held DA court; invariant 1 in the fold and the
-acceptance arm, and on a live devnet by `HELD=1 scripts/misaka-palw-shard-court-devnet-drill.sh`
-(§10.5).
+acceptance arm, and on a live devnet by `HELD=1 scripts/misaka-palw-shard-court-devnet-drill.sh`:
+
+* **Run 1 (2026-09-11 11:58 JST) found §10.3 items 11 and 12.** Three devnet nodes, the floor class
+  only, `--palw-held-context-devnet` on every node; node-0 committed canonical claim `aeff845e…`
+  (tx `ed3f166a…`) with its capture corrupted at step leaf 0 at 12:05:06, and block `8bdbb377…`
+  carried its `FreePromptCommitted`. At 12:13:26 both seats drew intervals `[0, 1, 2]`: one found
+  interval 0 does not replay in leaves `[0, +4096)` and fetched the block, the other filed
+  `Incapable` — "the served ids do not hash to the job's prompt_token_ids_hash" — and neither
+  accused: every sample of the tampered capture read no verdict under the Merkle root. Stopped at
+  12:26 with the drill still at step 2 of 5.
+* **Run 2 (12:57 JST), PASS — invariant 1 on a live devnet.** The same drill on the fixed build
+  (`c593e78a`). Node-0 committed canonical claim `20995717…` (tx `84b525d8…`) at 13:04:58; at
+  13:08:57 both seats' first duty round found leaf 0 of the served capture does not recompute and
+  filed `ShardCourtAccused` carrying the prompt's tile (sessions `fa17158f…`, `d0c24a1e…`);
+  13:09:37 block `50b97e87…` carried one accusation and every node folded it; the claim reads
+  `voided court_fraud` on node-1 and node-2 over RPC; bond 0's collateral fell from 1,110,106,160
+  to 1,110,067,640 sompi, −38,520 — to the sompi the slash of ADR-0100's run 2 without the fence,
+  which is invariant 1's "the same tampered leaf, the same one-move conviction, the same slash".
+  No node built a `CourtOpened`, no seat filed `Incapable`, and no sampler refusal was logged.
 
 ### 10.5 What is not done
 
@@ -608,6 +647,19 @@ acceptance arm, and on a live devnet by `HELD=1 scripts/misaka-palw-shard-court-
   (§1.2); this Mac seats neither. The "done when" is met at devnet widths — the held graph-v7
   rows' intervals, resumes and convictions in the tests, the one-move drill under the fence — and
   at 2M in the generators' tables.
+* **A seat that names a leaf without holding the capture cannot yet accuse it.** Decision 1 took
+  ADR-0100's premise that "its interval opening IS the refutation's inputs". For BASE-0's openings
+  it is not: an opening carries the interval's committed leaves as hashes (block roots where the
+  capture is retained sparse) and the block-leaves lane carries leaf hashes, so a seat can name the
+  leaf off the chain (ADR-0086 D6) but holds none of the committed tiles a refutation reveals. The executor serves those tiles only as a close annex, and only for a leaf an open
+  session names (ADR-0085 §6 item 4) — and under the fence no session opens. The held DA court
+  cannot compel them either: its units are ids, chunks and leaf-hash blocks, not a step tile. At
+  devnet widths every seat holds the capture and accuses directly (§10.4, run 2); at the widths this
+  ADR is for, closing it needs one of two moves, and choosing between them is a protocol decision:
+  the executor serves a named leaf's annex on a panel seat's signed request (the one-move court's
+  stand-in for the session that authorised it; the interval lane's `u32` index cannot address a
+  leaf, so it is a new request), or the held DA court gains a `StepTile(leaf)` unit whose
+  disclosure is the tile and its opening.
 * **A resume opening past the interval lane's 4 MiB** (a 2M shard's state is gigabytes): §4 and §8
   already say the class declares its own lane cap off the plan; no such lane is built.
 * **A shard seat's replay from its own slices.** The fetch is verified slice-locally; replaying one
