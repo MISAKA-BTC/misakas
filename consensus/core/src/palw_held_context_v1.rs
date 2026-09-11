@@ -302,6 +302,31 @@ pub fn palw_held_fetch_ms_v1(bytes: u64, bytes_per_second: u64) -> u64 {
 mod tests {
     use super::*;
 
+    /// **ADR-0116: the attention history bound is read off the class.** The held row — dense or
+    /// hybrid — reduces over the regime's 2^21 positions; the rows the shipped networks carry, and
+    /// the hybrid's graph-v6, keep the 2^18 they have always had, because the marker is the map
+    /// inside the class id and none of them registered a held one.
+    #[test]
+    fn the_attention_history_bound_is_the_classs() {
+        use crate::palw_qwen25_profile::{
+            PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7, qwen25_a16_graph_v5_profile_v1,
+        };
+        use crate::palw_qwen36_profile::{PalwQwen36GeometryV1, QWEN36_35B_A3B, qwen36_profile_v6, qwen36_profile_v7};
+        use crate::palw_state_chunk_map::{palw_attn_history_bound_v1, palw_profile_is_held_v4};
+        let held_dense = qwen25_a16_artifact_row_profile_v7(PalwQwen25GeometryV1 { n_ctx: 1 << 21, ..QWEN25_1_5B }).unwrap();
+        let held_hybrid = qwen36_profile_v7(PalwQwen36GeometryV1 { n_ctx: 1 << 20, ..QWEN36_35B_A3B }).unwrap();
+        for held in [&held_dense, &held_hybrid] {
+            assert!(palw_profile_is_held_v4(held));
+            assert_eq!(palw_attn_history_bound_v1(held), 1 << 21, "the held regime's width");
+        }
+        let shipped_dense = qwen25_a16_graph_v5_profile_v1().unwrap();
+        let hybrid_v6 = qwen36_profile_v6(QWEN36_35B_A3B).unwrap();
+        for shipped in [&shipped_dense, &hybrid_v6] {
+            assert!(!palw_profile_is_held_v4(shipped));
+            assert_eq!(palw_attn_history_bound_v1(shipped), 1 << 18, "the eighth wall, for every class outside the regime");
+        }
+    }
+
     /// **Every step of a job is in exactly one interval, prefill included** (ADR-0103 Invariant 6's
     /// first half): interval 0 is `P` positions and never the whole prefill.
     #[test]

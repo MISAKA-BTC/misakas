@@ -212,6 +212,22 @@ pub fn palw_job_anchor_v1(
 /// registered classes, and it moves by activation like every other rule here.
 pub const PALW_TICKET_NONCE_BUCKET_LOG2: u32 = 22;
 
+/// **ADR-0117 Decision 1: the attempt lane's job, past `Params::palw_prefill_draw`.**
+///
+/// The class's canonical job without its decode calls: the same anchor, the same prompt and
+/// prefill, `exact_decode_tokens = 1` — so the one generated token is chosen from the last prefill
+/// position's logits, and the ticket, a function of the attempt whose trace root commits that
+/// row and that token (ADR-0072), is decided by one pass over the prompt. Before the fence the
+/// job is the canonical one, untouched.
+///
+/// The producer that runs the job and the seat that replays it both call this with
+/// `Params::palw_prefill_draw_active_at` of the attempt's OWN block, so the two cannot describe
+/// different jobs; a seat that did would void an honest claim. The free-prompt lane never calls
+/// it — an answer is decode tokens by definition.
+pub fn palw_attempt_job_v1(canonical: crate::palw_v2::PalwJobContextV2, prefill_draw: bool) -> crate::palw_v2::PalwJobContextV2 {
+    if prefill_draw { crate::palw_v2::PalwJobContextV2 { exact_decode_tokens: 1, ..canonical } } else { canonical }
+}
+
 /// The bucket a nonce falls in — the one spelling, so a producer and a verifier cannot disagree
 /// about which execution a block's nonce was supposed to be paid for by.
 pub fn palw_nonce_bucket_v1(nonce: u64) -> u64 {
@@ -775,6 +791,84 @@ mod tests {
         assert_eq!(palw_nonce_bucket_v1(1u64 << k), 1);
     }
     use super::*;
+
+    /// **ADR-0117 Decision 4: a one-forward draw is priced as the canonical job, and the fraction
+    /// of it the draw executes is pinned per shipped class.** `pwu_per_inference` stays each class's
+    /// canonical step-leaf count (the figure admission item 6 derives an attempt's pwu from, pinned
+    /// by the genesis rule); past the fence a draw executes only the prefill's leaves, which is
+    /// exactly the canonical job's prefill share — `job_leaf_split_v1` of the canonical job — and a
+    /// one-forward job's own count. The fractions are stated here so a re-mint that re-prices the
+    /// draw starts from a number, not a surprise.
+    #[test]
+    fn the_one_forward_draw_is_priced_as_the_canonical_job_and_the_fraction_is_pinned() {
+        use crate::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1, rc_job_context};
+        use crate::palw_step::job_leaf_split_capped_v1;
+        // The RULESET's ladder, as every shipped registration counts: the dense row's canonical
+        // count is past the executor's 2^22.
+        let ladder = crate::palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES;
+        let job_leaf_split_v1 = |profile: &crate::palw_step::PalwShapeProfileV3, job: &crate::palw_v2::PalwJobContextV2| {
+            job_leaf_split_capped_v1(profile, job, ladder)
+        };
+        let floor = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).unwrap();
+        let hybrid = crate::palw_qwen36_profile::qwen36_profile_v2(crate::palw_qwen36_profile::qwen36_geometry_artifact_eps(
+            crate::palw_qwen36_profile::QWEN36_35B_A3B,
+        ))
+        .unwrap();
+        let dense = crate::palw_qwen25_profile::qwen25_a16_graph_v5_profile_v1().unwrap();
+        let (dense_p, dense_d) = crate::palw_qwen25_profile::qwen25_a16_graph_v5_canonical_v1();
+        let q = crate::palw_qwen36_profile::QWEN36_RC_CANONICAL;
+        for (name, profile, job, pwu, prefill_permille) in [
+            ("the floor", &floor, (PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1), 7_708u64, PINNED_FLOOR),
+            ("PALW-QWEN36 graph-v3", &hybrid, (q.0, q.1), 2_685_360, PINNED_HYBRID),
+            ("the dense graph-v5@512", &dense, (dense_p, dense_d), 6_630_544, PINNED_DENSE),
+        ] {
+            let canonical = rc_job_context(profile, job.0, job.1);
+            let (prefill, decode) = job_leaf_split_v1(profile, &canonical).unwrap();
+            assert_eq!(prefill + decode, pwu, "{name}: the canonical job is the registered price");
+            let one = palw_attempt_job_v1(canonical, true);
+            assert_eq!(job_leaf_split_v1(profile, &one).unwrap(), (prefill, 0), "{name}: the draw is the canonical prefill");
+            assert_eq!(prefill * 1000 / pwu, prefill_permille, "{name}: the fraction a one-forward draw executes");
+        }
+    }
+    /// 5,560 of 7,708 leaves: the floor's three decode calls are 28 % of its job.
+    const PINNED_FLOOR: u64 = 721;
+    /// 2,326,264 of 2,685,360: the hybrid's one decode call is 13 % of its job.
+    const PINNED_HYBRID: u64 = 866;
+    /// 6,508,520 of 6,630,544: the dense row's one decode call is 2 % of its sixty-three positions.
+    const PINNED_DENSE: u64 = 981;
+
+    /// **ADR-0117 Decision 1: the one-forward job is the canonical job without its decode calls,
+    /// and nothing else moves.** Past the fence `exact_decode_tokens` is one — the first token,
+    /// chosen from the last prefill position — and the anchor, the prompt, the prefill and every
+    /// identity field are the canonical job's; before it the job is untouched.
+    #[test]
+    fn the_one_forward_job_is_the_canonical_job_without_its_decode_calls() {
+        let canonical = crate::palw_v2::PalwJobContextV2 {
+            version: 2,
+            network_id: b"misaka-palw-test".to_vec(),
+            job_id: Hash64::from_u64_word(0x0117),
+            job_nullifier: Hash64::from_u64_word(1),
+            assignment_id: Hash64::default(),
+            execution_seed: [7; 32],
+            model_profile_id: Hash64::from_u64_word(2),
+            runtime_manifest_hash: Hash64::default(),
+            runtime_class_id: Hash64::from_u64_word(2),
+            shape_profile_id: Hash64::from_u64_word(3),
+            trace_scheme_id: Hash64::from_u64_word(4),
+            cu_ruleset_id: Hash64::default(),
+            tokenizer_id: Hash64::default(),
+            prompt_token_ids_hash: Hash64::from_u64_word(5),
+            declared_prefill_tokens: 7,
+            exact_decode_tokens: 2,
+            max_context_tokens: 64,
+        };
+        assert_eq!(palw_attempt_job_v1(canonical.clone(), false), canonical);
+        let one = palw_attempt_job_v1(canonical.clone(), true);
+        assert_eq!(one.exact_decode_tokens, 1);
+        assert_eq!(crate::palw_v2::PalwJobContextV2 { exact_decode_tokens: canonical.exact_decode_tokens, ..one.clone() }, canonical);
+        assert_ne!(one.context_hash(), canonical.context_hash(), "a different job, a different execution root");
+        assert_eq!(palw_attempt_job_v1(one.clone(), true), one, "idempotent: a one-forward job stays one");
+    }
 
     fn op(seed: u8) -> TransactionOutpoint {
         TransactionOutpoint::new(Hash64::from_bytes([seed; 64]), 0)

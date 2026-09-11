@@ -757,7 +757,7 @@ question the arithmetic does not answer: at `2^21` positions a near-uniform row'
 are about `8/2^24`, three bits each. It is recorded here, and ADR-0110 §9.5 carries what it means
 for the 2M vector. Nothing is changed.
 
-**Decided 2026-09-11: the bound stays.** The operator asked that the open design calls be made
+**Decided 2026-09-11: the bound stays** — **reversed the same day by the operator, and implemented as [ADR-0116](0116-an-attention-history-is-the-classs-and-the-held-regime-reduces-over-its-own-width.md):** a held class's history bound is the regime's 2^21, read off its registered map; every other class keeps 2^18. The reasoning below is kept as the record of what the reversal accepted — above all that the bound moving makes 2M executable and not cheap. The operator asked that the open design calls be made
 where the gain is large. This one's gain is nil today and its cost is not small:
 
 * **What raising it would buy now: nothing a network runs.** Every shipped network admits a free

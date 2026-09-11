@@ -1769,6 +1769,21 @@ pub fn verify_class_admission_v8(
     if held_class && !held.armed {
         return Err(PalwClassAdmissionError::HeldMapNeedsItsFence);
     }
+    // **ADR-0116: a held class's context is at most its attention history bound.** The held map
+    // lifted the context ceiling above; the A16 ops still refuse a history past
+    // `palw_attn_history_bound_v1`, so a context past it registers positions no producer, seat
+    // or court could run — refused here, by name, rather than discovered at the first such
+    // position. A class with no attention layer has no history to bound.
+    if held_class
+        && profile.attention_layer_exists()
+        && (profile.n_ctx as u64) > crate::palw_state_chunk_map::palw_attn_history_bound_v1(profile) as u64
+    {
+        return Err(PalwClassAdmissionError::Profile(format!(
+            "a held class's context of {} positions is past the A16 attention history bound of {} (ADR-0116)",
+            profile.n_ctx,
+            crate::palw_state_chunk_map::palw_attn_history_bound_v1(profile)
+        )));
+    }
 
     let derived_id = profile.shape_profile_id();
     if *class_id != derived_id {

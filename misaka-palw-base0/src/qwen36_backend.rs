@@ -630,25 +630,44 @@ fn qwen36_execute_streaming_v1(
 
     // Call 0 — prefill. Post rows exist only at its LAST position; earlier rows predict tokens
     // the prompt already contains, and the step space has no coordinate for them.
+    //
+    // **In one pass over the weights when the class takes no checkpoint inside it** (ADR-0117
+    // Decision 2): every prompt position through a layer before the next layer is read, which is
+    // the same rows in the same capture order (`forward_prefill_planned`), with each layer's
+    // tensors and its positions' experts read once for the prompt instead of once a position. A
+    // class whose cadence wants a checkpoint after a prefill position needs the cache as it stands
+    // after EACH position — which a layer-major pass never holds — and keeps the stepped pass.
+    let one_pass = (0..prefill).all(|position| !checkpoints.wants_checkpoint_after_v1(0, position as u32));
     let mut last_logits = Vec::new();
-    for (position, token) in prompt.iter().take(prefill).enumerate() {
-        let (logits, trace) =
-            engine.forward_token_planned(plan, &mut cache, *token, position).map_err(|e| format!("prefill at {position}: {e}"))?;
-        let mut rows = qwen36_captured_rows_v1(profile, &trace);
-        if position + 1 != prefill {
-            rows.retain(|r| r.table != kaspa_consensus_core::palw_step::PalwStepTableV1::Post);
-        }
-        capture.push_call(profile, ctx, 0, position as u32, &rows).map_err(|e| format!("{e:?}"))?;
-        // **A checkpoint after a PREFILL position, when the class's cadence says so** (ADR-0082
-        // Decision 4, amended). The sentinel-mapped hybrid wants none of these and this is `false`
-        // at every position; a class that registered the composed map wants one after every
-        // position, and before this the hybrid producer took NO checkpoint at any coordinate and
-        // then sealed at a count that is `prefill + decode_calls`.
-        if checkpoints.wants_checkpoint_after_v1(0, position as u32) {
-            qwen36_push_checkpoint_v1(&mut checkpoints, &artifact.shape, &cache)
-                .map_err(|e| format!("the prefill checkpoint at position {position}: {e}"))?;
+    if one_pass {
+        let (logits, traces) =
+            engine.forward_prefill_planned(plan, &mut cache, &prompt[..prefill], 0).map_err(|e| format!("the prefill: {e}"))?;
+        for (position, trace) in traces.iter().enumerate() {
+            capture
+                .push_call(profile, ctx, 0, position as u32, &qwen36_captured_rows_v1(profile, trace))
+                .map_err(|e| format!("{e:?}"))?;
         }
         last_logits = logits;
+    } else {
+        for (position, token) in prompt.iter().take(prefill).enumerate() {
+            let (logits, trace) =
+                engine.forward_token_planned(plan, &mut cache, *token, position).map_err(|e| format!("prefill at {position}: {e}"))?;
+            let mut rows = qwen36_captured_rows_v1(profile, &trace);
+            if position + 1 != prefill {
+                rows.retain(|r| r.table != kaspa_consensus_core::palw_step::PalwStepTableV1::Post);
+            }
+            capture.push_call(profile, ctx, 0, position as u32, &rows).map_err(|e| format!("{e:?}"))?;
+            // **A checkpoint after a PREFILL position, when the class's cadence says so** (ADR-0082
+            // Decision 4, amended). The sentinel-mapped hybrid wants none of these and this is
+            // `false` at every position; a class that registered the composed map wants one after
+            // every position, and before this the hybrid producer took NO checkpoint at any
+            // coordinate and then sealed at a count that is `prefill + decode_calls`.
+            if checkpoints.wants_checkpoint_after_v1(0, position as u32) {
+                qwen36_push_checkpoint_v1(&mut checkpoints, &artifact.shape, &cache)
+                    .map_err(|e| format!("the prefill checkpoint at position {position}: {e}"))?;
+            }
+            last_logits = logits;
+        }
     }
     let mut next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&last_logits) as u32;
     generated.push(next);
@@ -1280,6 +1299,20 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             if claim.anchor != Hash64::default() && decoded.0.job_context.job_id != claim.anchor {
                 return PalwMaterialVerdictV1::Mismatch;
             }
+            // **The whole job, not only its id** (ADR-0117): an attempt claim's material must
+            // answer the job the block asked for — `palw_attempt_job_v1` of the anchor's canonical
+            // job at the block's own draw rule. The id alone let a smaller job through: decode calls
+            // skipped, or a prompt of another length, vouched for by every seat that held it.
+            if let Some(prefill_draw) = claim.attempt_draw
+                && claim.anchor != Hash64::default()
+            {
+                let Ok((canonical, _)) = self.job_for_anchor(claim.anchor) else {
+                    return PalwMaterialVerdictV1::Unverifiable;
+                };
+                if decoded.0.job_context != kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(canonical, prefill_draw) {
+                    return PalwMaterialVerdictV1::Mismatch;
+                }
+            }
             if decoded.0.shape_profile.shape_profile_id() != self.class_profile_id {
                 return PalwMaterialVerdictV1::Unverifiable;
             }
@@ -1309,6 +1342,8 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         let Ok((job, _)) = self.job_for_anchor(claim.anchor) else {
             return PalwMaterialVerdictV1::Unverifiable;
         };
+        // The legacy composite is recomputed under the job the block asked for, ADR-0117's rule included.
+        let job = kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(job, claim.attempt_draw.unwrap_or(false));
         // Material that does not carry the rows it selected from is material this seat cannot
         // check — the honest `Unverifiable`, not an accusation, and not a panic.
         let Some((trace_root, _, execution_root, _)) = qwen36_roots_v1(&job, self.shape_id, &run) else {
@@ -2181,7 +2216,12 @@ mod tests {
         assert_eq!(
             a.verify_material(
                 b"not material",
-                PalwClaimRootsV1 { execution_root: out.execution_root, trace_root: out.trace_root, anchor: Hash64::from_u64_word(7) }
+                PalwClaimRootsV1 {
+                    execution_root: out.execution_root,
+                    trace_root: out.trace_root,
+                    anchor: Hash64::from_u64_word(7),
+                    attempt_draw: None
+                }
             ),
             PalwMaterialVerdictV1::Unverifiable
         );
@@ -2207,7 +2247,8 @@ mod tests {
         let anchor = Hash64::from_u64_word(0x5EA7);
         let (job, prompt) = a.job_for_anchor(anchor).expect("a job");
         let honest = a.execute(&job, &prompt).expect("runs");
-        let claim = PalwClaimRootsV1 { execution_root: honest.execution_root, trace_root: honest.trace_root, anchor };
+        let claim =
+            PalwClaimRootsV1 { execution_root: honest.execution_root, trace_root: honest.trace_root, anchor, attempt_draw: None };
 
         // `rows = 0, generated = 1` — the row a token was selected from is simply absent.
         let mut no_rows = Vec::new();
@@ -2292,8 +2333,10 @@ mod tests {
         // And the planned backend judges the compiled one's material as its own — the seat's
         // verb, which is where a chain-armed node meets a table producer's claim.
         assert_eq!(
-            planned
-                .verify_material(&a.material, PalwClaimRootsV1 { execution_root: a.execution_root, trace_root: a.trace_root, anchor }),
+            planned.verify_material(
+                &a.material,
+                PalwClaimRootsV1 { execution_root: a.execution_root, trace_root: a.trace_root, anchor, attempt_draw: None }
+            ),
             PalwMaterialVerdictV1::Matches
         );
     }
@@ -2309,6 +2352,47 @@ mod tests {
         let err =
             Qwen36Backend::from_registered_profile(artifact, b"misaka-palw-test".to_vec(), profile, (4, 2)).map(drop).unwrap_err();
         assert!(err.contains("cannot serve the registered graph"), "the refusal names the boundary: {err}");
+    }
+
+    /// **ADR-0117 on the hybrid: the one-forward draw is the canonical prompt in one pass, and
+    /// its material answers the block that asked for it.** The prefill-only job
+    /// (`palw_attempt_job_v1(canonical, true)`) runs the canonical prompt with no decode call:
+    /// one generated token, chosen from the last prefill position's logits — the same token the
+    /// canonical job generates first, since both prefills are the same rows — and a trace root
+    /// over that one selecting row. Its material matches a claim whose block drew with one forward
+    /// and is a `Mismatch` against one that did not; the canonical run is the other way round.
+    #[test]
+    fn the_one_forward_draw_is_the_canonical_prompt_in_one_pass() {
+        use kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1;
+        let artifact = std::sync::Arc::new(crate::qwen36::test_fixture(4, 8));
+        let geometry = crate::qwen36_plan::fixture_geometry_of(&artifact.shape, 4);
+        let profile = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v2(geometry).expect("the fixture geometry projects");
+        let backend = Qwen36Backend::from_registered_profile(
+            artifact.clone(),
+            b"misaka-palw-test".to_vec(),
+            profile,
+            kaspa_consensus_core::palw_qwen36_profile::QWEN36_RC_CANONICAL,
+        )
+        .expect("servable");
+        let anchor = Hash64::from_u64_word(0x0117_0936);
+        let (canonical, prompt) = backend.job_for_anchor(anchor).expect("the anchor implies a job");
+        let one_forward = palw_attempt_job_v1(canonical.clone(), true);
+        let full = backend.execute(&canonical, &prompt).expect("the canonical job runs");
+        let short = backend.execute(&one_forward, &prompt).expect("the one-forward job runs");
+        let full_ids = backend.fp_committed_output_ids(&full.material).expect("the canonical run's ids");
+        let short_ids = backend.fp_committed_output_ids(&short.material).expect("the one-forward run's ids");
+        assert_eq!(short_ids.len(), 1, "one generated token");
+        assert_eq!(short_ids[0], full_ids[0], "the same prefill chooses the same first token");
+        let roots = |o: &PalwExecutionOutcomeV1, draw: bool| PalwClaimRootsV1 {
+            execution_root: o.execution_root,
+            trace_root: o.trace_root,
+            anchor,
+            attempt_draw: Some(draw),
+        };
+        assert_eq!(backend.verify_material(&short.material, roots(&short, true)), PalwMaterialVerdictV1::Matches);
+        assert_eq!(backend.verify_material(&short.material, roots(&short, false)), PalwMaterialVerdictV1::Mismatch);
+        assert_eq!(backend.verify_material(&full.material, roots(&full, false)), PalwMaterialVerdictV1::Matches);
+        assert_eq!(backend.verify_material(&full.material, roots(&full, true)), PalwMaterialVerdictV1::Mismatch);
     }
 
     /// A job that runs past the rotary table is refused at derivation, not discovered mid-decode.
@@ -2366,7 +2450,8 @@ mod tests {
         assert_eq!(outcome.execution_root, binding.committed_execution_root, "the claim commits the binding's own root");
 
         // The seat's half, against this very claim.
-        let claim = PalwClaimRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, anchor };
+        let claim =
+            PalwClaimRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, anchor, attempt_draw: None };
         assert_eq!(backend.verify_material(&outcome.material, claim), PalwMaterialVerdictV1::Matches);
 
         // One proven oracle over the whole inventory — the production path a close takes.
@@ -2536,7 +2621,12 @@ mod tests {
         // And the seat's first question is answered off the retained tree rather than off tiles.
         let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
         let bytes = crate::produce::base0_fp_material_encode_v2(&folded, &ids).expect("the fold retains");
-        let claim = PalwClaimRootsV1 { execution_root: folded.execution_root, trace_root: folded.trace_root, anchor: ctx.job_id };
+        let claim = PalwClaimRootsV1 {
+            execution_root: folded.execution_root,
+            trace_root: folded.trace_root,
+            anchor: ctx.job_id,
+            attempt_draw: None,
+        };
         assert_eq!(backend.verify_material(&bytes, claim), PalwMaterialVerdictV1::Matches);
         let dense_bytes = crate::produce::base0_material_encode_v1(&dense).expect("the dense sink retains").len();
         eprintln!(

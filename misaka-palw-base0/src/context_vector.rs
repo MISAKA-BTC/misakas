@@ -90,11 +90,12 @@ pub fn palw_context_vector_seed_v1(name: &str) -> Hash64 {
 
 /// **The shipped vectors, by width** (Decision 5): the three CI pins, then the external runs.
 ///
-/// `0110-dense-v7-256k` is the widest vector the A16 tier can run at all. Its last position
-/// attends to 262,143 rows, and the attention ops refuse a history past 2^18 (ADR-0103 §10.7,
-/// [`palw_context_vector_blocked_v1`]). It was added on 2026-09-11 for that reason. `0110-dense-v7-2m`
-/// stays in the list as the width the regime is for, and it is refused before produce, by name,
-/// until that wall moves.
+/// `0110-dense-v7-256k` was added on 2026-09-11 as the widest vector the A16 tier could run: its
+/// last position attends to 262,143 rows, and the attention ops refused a history past 2^18
+/// (ADR-0103 §10.7). ADR-0116 moved that wall, for a class under the held regime, to the regime's
+/// own width, so `0110-dense-v7-2m` — the width the regime is for, whose last position attends to
+/// 2,097,151 rows — is inside it. [`palw_context_vector_blocked_v1`] still refuses, by name and
+/// before a position runs, a vector past its class's bound.
 pub fn palw_context_vectors_v1() -> Vec<PalwContextVectorV1> {
     [
         ("0110-dense-v7-512", 512u32),
@@ -123,18 +124,22 @@ pub fn palw_context_vector_v1(name: &str) -> Option<PalwContextVectorV1> {
     palw_context_vectors_v1().into_iter().find(|v| v.name == name)
 }
 
-/// **Why a vector cannot be produced on this tree, if it cannot** — ADR-0103 §10.7's wall, stated
-/// before a single position runs. The job's last forward attends to every row the job holds
-/// (`prefill + decode − 1`). The A16 tier's catalog attention ops refuse a history past
-/// `A16_MAX_DOT_LEN` rows, and so do the engine and the court, which compose them. A vector past
-/// it would otherwise run for hours and then fail at the 262,145th row with an op's error.
+/// **Why a vector cannot be produced on this tree, if it cannot** — the attention history wall,
+/// stated before a single position runs. The job's last forward attends to every row the job
+/// holds (`prefill + decode − 1`). The A16 tier's attention ops refuse a history past the class's
+/// bound (`palw_attn_history_bound_v1`: the held regime's 2^21 for the held row every vector runs,
+/// ADR-0116; 2^18 before it, ADR-0103 §10.7), and so do the engine and the court, which compose
+/// them. A vector past it would otherwise run for hours and then fail at its first row past the
+/// bound with an op's error.
 pub fn palw_context_vector_blocked_v1(vector: &PalwContextVectorV1) -> Option<String> {
     let rows = u64::from(vector.prefill) + u64::from(vector.decode.saturating_sub(1));
-    let wall = kaspa_consensus_core::palw_base0_a16::A16_MAX_DOT_LEN as u64;
+    let wall = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v7(vector.geometry)
+        .map(|profile| kaspa_consensus_core::palw_state_chunk_map::palw_attn_history_bound_v1(&profile))
+        .unwrap_or(kaspa_consensus_core::palw_base0_a16::A16_MAX_ATTN_HISTORY_V1) as u64;
     (rows > wall).then(|| {
         format!(
-            "this job's last position attends to {rows} rows and the A16 tier's attention ops refuse a history past {wall} \
-             (A16_MAX_DOT_LEN, ADR-0103 §10.7): no A16 class produces, replays or is adjudicated at this width on this tree"
+            "this job's last position attends to {rows} rows and this class's attention ops refuse a history past {wall} \
+             (the A16 attention history bound, ADR-0116): no A16 class produces, replays or is adjudicated at this width"
         )
     })
 }
@@ -870,7 +875,12 @@ pub fn palw_verify_context_vector_v1(
         }
     };
     let job_id = kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(&job);
-    let roots = PalwClaimRootsV1 { execution_root: run.outcome.execution_root, trace_root: run.outcome.trace_root, anchor: job_id };
+    let roots = PalwClaimRootsV1 {
+        execution_root: run.outcome.execution_root,
+        trace_root: run.outcome.trace_root,
+        anchor: job_id,
+        attempt_draw: None,
+    };
     let work_leaves = binding.step_leaf_count;
     let ctx = binding.job_context.clone();
     f.commit = Some(PalwContextCommitV1 {
@@ -1113,7 +1123,12 @@ fn tamper_stage_v1(
     let lying = backend.execute_with_injected_fault(ctx, prompt, leaf)?;
     let capture = &lying.material;
     let binding = crate::produce::base0_material_decode_any_v1(capture).map_err(|e| format!("{e:?}"))?.binding().clone();
-    let roots = PalwClaimRootsV1 { execution_root: lying.execution_root, trace_root: lying.trace_root, anchor: ctx.job_id };
+    let roots = PalwClaimRootsV1 {
+        execution_root: lying.execution_root,
+        trace_root: lying.trace_root,
+        anchor: ctx.job_id,
+        attempt_draw: None,
+    };
     let work_leaves = binding.step_leaf_count;
     let opening = backend.open_fp_interval(capture, 0, ids)?;
     let verdict = backend.verify_fp_interval_opening(&opening, roots, 0, ids, work_leaves);
@@ -1212,30 +1227,40 @@ mod tests {
         );
     }
 
-    /// **The widest runnable vector, and the 2M one refused by name before a position runs**
-    /// (ADR-0103 §10.7). `0110-dense-v7-256k`'s last position attends to 262,143 rows, inside the
-    /// A16 tier's 2^18. The 2M vector's would attend to 2,097,151, and its document says why produce
-    /// failed, skips the four stages that need a run, and still reports the fit, which reads only the
-    /// class and the ruleset. It does all of that in the time the fit takes, not the hours a doomed
-    /// produce would.
+    /// **ADR-0116: the 2M vector is inside the held bound, and one row past the bound is refused
+    /// by name before a position runs.** Every vector runs the held row, so its bound is the
+    /// regime's 2^21: `0110-dense-v7-2m`'s last position attends to 2,097,151 rows, inside it, and
+    /// so do 262,145 rows — one past the old eighth wall (ADR-0103 §10.7). A job one row past the
+    /// held bound is refused up front, its document saying why produce failed, skipping the four
+    /// stages that need a run and still reporting the fit, in the time the fit takes.
     #[test]
-    fn the_widest_runnable_vector_is_2_18_and_the_2m_one_is_refused_by_name() {
+    fn the_2m_vector_is_inside_the_held_bound_and_one_row_past_it_is_refused_by_name() {
         let wide = palw_context_vector_v1("0110-dense-v7-256k").expect("shipped");
-        assert_eq!(wide.prefill + wide.decode - 1, 262_143);
-        assert_eq!(palw_context_vector_blocked_v1(&wide), None, "inside the wall");
-        let mut one_past = wide.clone();
-        one_past.prefill += 2;
-        assert!(palw_context_vector_blocked_v1(&one_past).is_some(), "262,145 rows is past it");
-        one_past.prefill -= 1;
-        assert_eq!(palw_context_vector_blocked_v1(&one_past), None, "262,144 rows is the wall itself");
+        let mut past_the_old_wall = wide.clone();
+        past_the_old_wall.prefill += 2;
+        assert_eq!(past_the_old_wall.prefill + past_the_old_wall.decode - 1, 262_145);
+        assert_eq!(palw_context_vector_blocked_v1(&past_the_old_wall), None, "one past 2^18 is inside the held bound");
 
-        let ruleset = PalwContextRulesetV1::devnet_held_v1().expect("the held devnet");
         let two_m = palw_context_vector_v1("0110-dense-v7-2m").expect("shipped");
+        assert_eq!(two_m.prefill + two_m.decode - 1, 2_097_151);
+        assert_eq!(palw_context_vector_blocked_v1(&two_m), None, "the regime's own width runs");
+        let mut at_the_bound = two_m.clone();
+        at_the_bound.prefill += 1;
+        assert_eq!(palw_context_vector_blocked_v1(&at_the_bound), None, "2^21 rows is the bound itself");
+
+        // A context two positions wider, so the job itself is well formed and only the bound
+        // refuses it.
+        let mut one_past = two_m.clone();
+        one_past.geometry.n_ctx += 2;
+        one_past.prefill += 2;
+        let why = palw_context_vector_blocked_v1(&one_past).expect("2^21 + 1 rows is past it");
+        assert!(why.contains("ADR-0116") && why.contains("2097153") && why.contains("2097152"), "{why}");
+        let ruleset = PalwContextRulesetV1::devnet_held_v1().expect("the held devnet");
         let t = Instant::now();
-        let f = palw_verify_context_vector_v1(&two_m, &ruleset, &PalwContextStageV1::ALL);
+        let f = palw_verify_context_vector_v1(&one_past, &ruleset, &PalwContextStageV1::ALL);
         assert!(t.elapsed().as_secs() < 60, "refused up front, not after a produce: {:?}", t.elapsed());
         match f.verdicts.get(&PalwContextStageV1::Produce) {
-            Some(PalwContextVerdictV1::Fail(why)) => assert!(why.contains("ADR-0103 §10.7") && why.contains("2097151"), "{why}"),
+            Some(PalwContextVerdictV1::Fail(why)) => assert!(why.contains("ADR-0116"), "{why}"),
             other => panic!("produce must fail by name, got {other:?}"),
         }
         for stage in

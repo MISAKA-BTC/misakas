@@ -103,6 +103,18 @@ pub struct PalwClaimRootsV1 {
     /// producer checking its own fresh run, and the fixtures. Every path that judges SOMEBODY
     /// ELSE's material must supply it.
     pub anchor: Hash64,
+    /// **The whole job an ATTEMPT claim's block asked for** (ADR-0117): `Some(prefill_draw)` for
+    /// a claim of the attempt lane, where `prefill_draw` is `Params::palw_prefill_draw_active_at`
+    /// at the block's own DAA score, and `None` for anything else — a free-prompt claim, whose
+    /// anchor is its job's own id and whose job is the claim's, or a caller with no block (the
+    /// producer's own run, the fixtures).
+    ///
+    /// With `Some`, a seat holding the material checks the material's job context against
+    /// `palw_attempt_v2::palw_attempt_job_v1(job_for_anchor(anchor), prefill_draw)` field for
+    /// field, not only its id. The id alone let a producer answer the right question with a
+    /// smaller job — its decode calls skipped, or a prompt of another length — and every seat that
+    /// held its material vouched for it, while only the seats that replayed caught it.
+    pub attempt_draw: Option<bool>,
 }
 
 /// What a seat concluded about served material.

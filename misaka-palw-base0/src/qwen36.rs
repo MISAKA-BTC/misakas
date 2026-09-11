@@ -2585,6 +2585,56 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
+    /// **ADR-0117 Decision 2 under ADR-0112's budget: the one-pass prefill computes the owned
+    /// store's rows and reads no more than the stepped one.** At the floor — the always-set and
+    /// one token's experts — a prompt no longer than the layer count has a layer's routed union
+    /// inside the budget, so the layer-major pass admits each expert it needs once; the stepped
+    /// pass evicts a layer's experts for the next layer's and reads them again at the next
+    /// position whenever a later token routes back to them. The rows are the owned store's either
+    /// way, whatever order the misses came in.
+    #[test]
+    fn the_one_pass_prefill_under_a_budget_is_the_owned_rows_and_reads_no_more() {
+        use crate::qwen36_plan::fixture_geometry_of;
+        let owned = fixture(4, 256);
+        let path = written(&owned, "one-pass");
+        let profile =
+            kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v2(fixture_geometry_of(&owned.shape, 4)).expect("v2 projects");
+        let tokens: Vec<usize> = (0..4).map(|i| (i * 37 + 11) % owned.shape.vocab).collect();
+        let passed = |artifact: &Qwen36ArtifactV1| {
+            let engine = Qwen36Engine::new(artifact);
+            let plan = engine.plan_from_profile(&profile).expect("servable");
+            let mut cache = Qwen36Cache::new(&artifact.shape);
+            engine.forward_prefill_planned(&plan, &mut cache, &tokens, 0).expect("one pass")
+        };
+        let stepped = |artifact: &Qwen36ArtifactV1| {
+            let engine = Qwen36Engine::new(artifact);
+            let plan = engine.plan_from_profile(&profile).expect("servable");
+            let mut cache = Qwen36Cache::new(&artifact.shape);
+            let mut out = Vec::new();
+            for (position, token) in tokens.iter().enumerate() {
+                out.push(engine.forward_token_planned(&plan, &mut cache, *token, position).expect("stepped"));
+            }
+            out
+        };
+        let (owned_logits, owned_traces) = passed(&owned);
+        let floor = open_artifact_with_residency(&path, Qwen36ResidencyPolicyV1::FifthOfTheWeights)
+            .expect("opens")
+            .residency_floor_bytes()
+            .expect("a floor");
+        let one = open_artifact_with_residency(&path, Qwen36ResidencyPolicyV1::Bytes(floor)).expect("the floor opens");
+        let (logits, traces) = passed(&one);
+        assert_eq!((logits, traces), (owned_logits, owned_traces.clone()), "the owned store's rows, at the floor");
+        let two = open_artifact_with_residency(&path, Qwen36ResidencyPolicyV1::Bytes(floor)).expect("the floor opens");
+        let rows = stepped(&two);
+        assert_eq!(rows.last().map(|(l, _)| l.clone()), Some(passed(&owned).0), "the stepped pass lands on the same logits");
+        for (i, (_, trace)) in rows.iter().enumerate() {
+            assert_eq!(trace.layers, owned_traces[i].layers, "position {i}'s layer rows");
+        }
+        let (a, b) = (one.residency_stats().expect("budgeted"), two.residency_stats().expect("budgeted"));
+        assert!(a.misses <= b.misses && a.bytes_read <= b.bytes_read, "one pass {a:?} read no more than stepped {b:?}");
+        std::fs::remove_file(&path).ok();
+    }
+
     /// A budget below the floor is refused at open, with the floor and both its terms in the
     /// message — never opened and left to re-read what it just read.
     #[test]

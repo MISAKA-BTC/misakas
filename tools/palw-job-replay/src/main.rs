@@ -135,7 +135,7 @@ fn main() {
         let bytes = std::fs::read(&path).unwrap_or_else(|e| die(format!("{path}: {e}")));
         let verdict = backend.verify_material(
             &bytes,
-            PalwClaimRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, anchor },
+            PalwClaimRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, anchor, attempt_draw: None },
         );
         material_file = json!({
             "path": path,

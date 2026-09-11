@@ -46,7 +46,7 @@ use kaspa_consensus_core::palw_step_refute::{
     KDESC_Q36_SIGMOID, KDESC_Q36_SILU, KDESC_Q36_SSM_CONV, palw_attn_fused_tensors_v1,
 };
 
-use crate::kernels::{a16_attn_scores_fast, a16_attn_values_fast};
+use crate::kernels::{a16_attn_scores_fast, a16_attn_values_fast_within};
 use crate::qwen36::{Qwen36Cache, Qwen36Engine, Qwen36Error, Qwen36LayerKind, Qwen36ShapeV1};
 
 /// Why the profile could not become a plan. Mirrors `A16PlanErrorV1`: every refusal is the
@@ -265,6 +265,8 @@ pub struct Qwen36ProfilePlanV1 {
     attn: Vec<PlanNode>,
     post: Vec<PlanNode>,
     layer_kinds: Vec<Qwen36LayerKind>,
+    /// The class's attention history bound (ADR-0116), read off the profile at compile time.
+    attn_history: usize,
 }
 
 /// The committed rows of one planned pass — one row per declared node, per table, in order.
@@ -382,7 +384,8 @@ impl<'a> Qwen36Engine<'a> {
         }
         let post = plan_table(self, &profile.post_nodes, "post", Some(d))?;
         terminal(&profile.post_nodes, "post", s.vocab as u32)?;
-        Ok(Qwen36ProfilePlanV1 { pre, gdn, attn, post, layer_kinds })
+        let attn_history = kaspa_consensus_core::palw_state_chunk_map::palw_attn_history_bound_v1(profile);
+        Ok(Qwen36ProfilePlanV1 { pre, gdn, attn, post, layer_kinds, attn_history })
     }
 
     /// One position's forward, EXECUTED FROM THE PLAN: one committed row per declared node, in
@@ -406,7 +409,7 @@ impl<'a> Qwen36Engine<'a> {
         }
         let mut trace = Qwen36PlanTraceV1::default();
 
-        let rows = self.walk_table(&plan.pre, None, token_id, position, None)?;
+        let rows = self.walk_table(&plan.pre, None, token_id, position, None, plan.attn_history)?;
         let mut h = rows.last().cloned().ok_or_else(|| Qwen36Error::BadParams("an empty pre table".into()))?;
         trace.pre = rows;
 
@@ -415,12 +418,12 @@ impl<'a> Qwen36Engine<'a> {
                 Qwen36LayerKind::LinearAttention => &plan.gdn,
                 Qwen36LayerKind::FullAttention => &plan.attn,
             };
-            let rows = self.walk_table(table, Some(&h), token_id, position, Some((li, cache)))?;
+            let rows = self.walk_table(table, Some(&h), token_id, position, Some((li, cache)), plan.attn_history)?;
             h = rows.last().cloned().ok_or_else(|| Qwen36Error::BadParams("an empty layer table".into()))?;
             trace.layers.push(rows);
         }
 
-        let rows = self.walk_table(&plan.post, Some(&h), token_id, position, None)?;
+        let rows = self.walk_table(&plan.post, Some(&h), token_id, position, None, plan.attn_history)?;
         let logits = rows.last().cloned().ok_or_else(|| Qwen36Error::BadParams("an empty post table".into()))?;
         trace.post = rows;
         Ok((logits, trace))
@@ -446,18 +449,80 @@ impl<'a> Qwen36Engine<'a> {
         if token_id >= s.vocab {
             return Err(Qwen36Error::Position);
         }
-        let rows = self.walk_table(&plan.pre, None, token_id, position, None)?;
+        let rows = self.walk_table(&plan.pre, None, token_id, position, None, plan.attn_history)?;
         let mut h = rows.into_iter().next_back().ok_or_else(|| Qwen36Error::BadParams("an empty pre table".into()))?;
         for (li, kind) in plan.layer_kinds.iter().enumerate() {
             let table = match kind {
                 Qwen36LayerKind::LinearAttention => &plan.gdn,
                 Qwen36LayerKind::FullAttention => &plan.attn,
             };
-            let rows = self.walk_table(table, Some(&h), token_id, position, Some((li, cache)))?;
+            let rows = self.walk_table(table, Some(&h), token_id, position, Some((li, cache)), plan.attn_history)?;
             h = rows.into_iter().next_back().ok_or_else(|| Qwen36Error::BadParams("an empty layer table".into()))?;
         }
-        let rows = self.walk_table(&plan.post, Some(&h), token_id, position, None)?;
+        let rows = self.walk_table(&plan.post, Some(&h), token_id, position, None, plan.attn_history)?;
         rows.into_iter().next_back().ok_or_else(|| Qwen36Error::BadParams("an empty post table".into()))
+    }
+
+    /// **The prefill in one pass over the weights** (ADR-0117 Decision 2): every prompt position
+    /// through a layer before the next layer is read.
+    ///
+    /// The rows are the ones [`Self::forward_token_planned`] commits position by position, in the
+    /// same order within each layer: a layer's walk reads and writes only that layer's cache
+    /// (`keys[li]`, `values[li]`, `conv[li]`, `gdn[li]`), and a position's walk through layer `li`
+    /// reads only its own row out of layer `li − 1` and the positions before it in layer `li` —
+    /// both there, whichever of the two orders ran. So every committed row, the last position's
+    /// logits and the cache left behind are the same bits
+    /// (`the_one_pass_prefill_is_the_position_by_position_one`). What changes is the order the
+    /// WEIGHTS are read in: a layer's tensors, and the experts its positions route to, are read
+    /// once for the whole prompt rather than once a position — for a class held within a budget
+    /// (ADR-0112) the union of a layer's experts is admitted while that layer runs and never again
+    /// in the pass.
+    ///
+    /// The post table runs at the last position only: it is the only position whose rows the step
+    /// space commits (an earlier position's logits predict a token the prompt already holds, and
+    /// `qwen36_execute_streaming_v1` has always dropped them). Its trace rows are the returned
+    /// traces' `post`, empty for every earlier position.
+    pub fn forward_prefill_planned(
+        &self,
+        plan: &Qwen36ProfilePlanV1,
+        cache: &mut Qwen36Cache,
+        tokens: &[usize],
+        first_position: usize,
+    ) -> Result<(Vec<i32>, Vec<Qwen36PlanTraceV1>), Qwen36Error> {
+        let s = &self.artifact.shape;
+        if plan.layer_kinds.len() != s.n_layers() {
+            return Err(Qwen36Error::BadParams("the plan and the artifact disagree about the layer count".into()));
+        }
+        if tokens.is_empty() {
+            return Err(Qwen36Error::BadParams("a prefill of no positions".into()));
+        }
+        // Refused before anything is read, as the position-by-position pass refuses its token.
+        if tokens.iter().any(|t| *t >= s.vocab) {
+            return Err(Qwen36Error::Position);
+        }
+        let mut traces = vec![Qwen36PlanTraceV1::default(); tokens.len()];
+        let mut hs = Vec::with_capacity(tokens.len());
+        for (i, &token) in tokens.iter().enumerate() {
+            let rows = self.walk_table(&plan.pre, None, token, first_position + i, None, plan.attn_history)?;
+            hs.push(rows.last().cloned().ok_or_else(|| Qwen36Error::BadParams("an empty pre table".into()))?);
+            traces[i].pre = rows;
+        }
+        for (li, kind) in plan.layer_kinds.iter().enumerate() {
+            let table = match kind {
+                Qwen36LayerKind::LinearAttention => &plan.gdn,
+                Qwen36LayerKind::FullAttention => &plan.attn,
+            };
+            for (i, &token) in tokens.iter().enumerate() {
+                let rows = self.walk_table(table, Some(&hs[i]), token, first_position + i, Some((li, cache)), plan.attn_history)?;
+                hs[i] = rows.last().cloned().ok_or_else(|| Qwen36Error::BadParams("an empty layer table".into()))?;
+                traces[i].layers.push(rows);
+            }
+        }
+        let last = tokens.len() - 1;
+        let rows = self.walk_table(&plan.post, Some(&hs[last]), tokens[last], first_position + last, None, plan.attn_history)?;
+        let logits = rows.last().cloned().ok_or_else(|| Qwen36Error::BadParams("an empty post table".into()))?;
+        traces[last].post = rows;
+        Ok((logits, traces))
     }
 
     /// Walk one table. `layer` is `Some((index, cache))` for the layer tables — the only ones
@@ -469,6 +534,7 @@ impl<'a> Qwen36Engine<'a> {
         token_id: usize,
         position: usize,
         mut layer: Option<(usize, &mut Qwen36Cache)>,
+        attn_history: usize,
     ) -> Result<Vec<Vec<i32>>, Qwen36Error> {
         let a = self.artifact;
         let s = &a.shape;
@@ -825,8 +891,16 @@ impl<'a> Qwen36Engine<'a> {
                     let p_row = resolve(&node.inputs[0], &rows)?;
                     let v_series = resolve(&node.inputs[1], &rows)?;
                     let p = a.one_param(&name_of(name))?;
-                    a16_attn_values_fast(&p_row, &v_series, s.n_heads, s.n_kv_heads, s.head_dim, &vec![p; s.n_heads * s.head_dim])
-                        .map_err(a16_refuse("attn_values"))?
+                    a16_attn_values_fast_within(
+                        &p_row,
+                        &v_series,
+                        s.n_heads,
+                        s.n_kv_heads,
+                        s.head_dim,
+                        &vec![p; s.n_heads * s.head_dim],
+                        attn_history,
+                    )
+                    .map_err(a16_refuse("attn_values"))?
                 }
                 // **The fused attention site** (ADR-0082 Decision 1): W9, W11, the probability
                 // requantization and W10, with the three intermediates living only in this frame.
@@ -847,8 +921,16 @@ impl<'a> Qwen36Engine<'a> {
                     let pp = a.one_param(&name_of(probs))?;
                     let codes = a16_requant(&dist, &vec![pp; dist.len()]).map_err(a16_refuse("attn_probs"))?;
                     let vp = a.one_param(&name_of(values))?;
-                    a16_attn_values_fast(&codes, &v_series, s.n_heads, s.n_kv_heads, s.head_dim, &vec![vp; s.n_heads * s.head_dim])
-                        .map_err(a16_refuse("attn_values"))?
+                    a16_attn_values_fast_within(
+                        &codes,
+                        &v_series,
+                        s.n_heads,
+                        s.n_kv_heads,
+                        s.head_dim,
+                        &vec![vp; s.n_heads * s.head_dim],
+                        attn_history,
+                    )
+                    .map_err(a16_refuse("attn_values"))?
                 }
                 PlanOpV1::RouterTopk { name, k } => {
                     let x = resolve(&node.inputs[0], &rows)?;
@@ -1486,6 +1568,53 @@ mod tests {
         assert_eq!(compiled_cache.conv, planned_cache.conv, "the convolution windows must be the same state");
         for (li, (a, b)) in compiled_cache.gdn.iter().zip(planned_cache.gdn.iter()).enumerate() {
             assert_eq!(a, b, "layer {li}'s recurrent state must be the same");
+        }
+    }
+
+    /// **ADR-0117 Decision 2: the one-pass prefill is the position-by-position one, to the bit.**
+    /// Over the v2 graph and the fused v5 graph, from a fresh cache and from one a few positions
+    /// in: every committed row at every position, the last position's post rows and logits, and
+    /// the cache left behind. Only the order the weights are read in differs.
+    #[test]
+    fn the_one_pass_prefill_is_the_position_by_position_one() {
+        let artifact = qwen36_dev_fixture(8, 16);
+        let engine = Qwen36Engine::new(&artifact);
+        let v5 = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v5(geometry_of(&artifact.shape, 4)).expect("v5 projects");
+        let v2 = qwen36_profile_v2(geometry_of(&artifact.shape, 4)).expect("v2 projects");
+        for (graph, profile) in [("v2", v2), ("v5", v5)] {
+            let plan = engine.plan_from_profile(&profile).expect("servable");
+            for (start, prompt) in [(0usize, 7usize), (3, 4)] {
+                let tokens: Vec<usize> = (0..start + prompt).map(|i| (i * 11 + 5) % artifact.shape.vocab).collect();
+                let mut stepped = Qwen36Cache::new(&artifact.shape);
+                let mut passed = Qwen36Cache::new(&artifact.shape);
+                for (position, token) in tokens.iter().take(start).enumerate() {
+                    engine.forward_token_planned(&plan, &mut stepped, *token, position).expect("stepped");
+                    engine.forward_token_planned(&plan, &mut passed, *token, position).expect("the same prefix");
+                }
+                let mut expected = Vec::new();
+                let mut last_logits = Vec::new();
+                for (offset, token) in tokens[start..].iter().enumerate() {
+                    let (logits, trace) = engine.forward_token_planned(&plan, &mut stepped, *token, start + offset).expect("stepped");
+                    expected.push(trace);
+                    last_logits = logits;
+                }
+                let (logits, traces) = engine.forward_prefill_planned(&plan, &mut passed, &tokens[start..], start).expect("one pass");
+                assert_eq!(logits, last_logits, "{graph} from {start}: the last position's logits");
+                assert_eq!(traces.len(), prompt);
+                for (i, (got, want)) in traces.iter().zip(&expected).enumerate() {
+                    assert_eq!(got.pre, want.pre, "{graph} from {start}: position {i}'s pre rows");
+                    assert_eq!(got.layers, want.layers, "{graph} from {start}: position {i}'s layer rows");
+                    if i + 1 == prompt {
+                        assert_eq!(got.post, want.post, "{graph} from {start}: the last position's post rows");
+                    } else {
+                        assert!(got.post.is_empty(), "{graph} from {start}: no post rows before the last position");
+                    }
+                }
+                assert_eq!(stepped.keys, passed.keys, "{graph} from {start}: the key caches");
+                assert_eq!(stepped.values, passed.values, "{graph} from {start}: the value caches");
+                assert_eq!(stepped.conv, passed.conv, "{graph} from {start}: the convolution windows");
+                assert_eq!(stepped.gdn, passed.gdn, "{graph} from {start}: the recurrent states");
+            }
         }
     }
 
