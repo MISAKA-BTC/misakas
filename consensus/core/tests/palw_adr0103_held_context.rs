@@ -243,6 +243,15 @@ fn the_registration_gate_visits_the_same_nodes_at_every_context() {
 /// legal move.
 #[test]
 fn a_ladder_past_the_clock_needs_the_regime_from_genesis() {
+    // The held mint with the shipped prompt cap, so the ladder is the only thing past a bound.
+    let held_network = |ladder: u64| {
+        let mut p = held_network(ladder);
+        let shipped_fp = bundle(&palw_rc_shipped_params()).freeprompt.clone();
+        let PalwConsensusMode::ConsensusV2(b) = &mut p.palw_consensus_mode else { unreachable!() };
+        b.freeprompt = shipped_fp;
+        p.validate_palw_v2().expect("the held mint at the shipped prompt cap");
+        p
+    };
     let mut late = held_network(1 << 48);
     late.palw_held_context = Some(ForkActivation::new(1_000));
     let err = format!("{:?}", late.validate_palw_v2().expect_err("a later fence leaves a bisection unplayable before it"));
@@ -259,4 +268,28 @@ fn a_ladder_past_the_clock_needs_the_regime_from_genesis() {
     let mut shallow = held_network(1 << 26);
     shallow.palw_held_context = Some(ForkActivation::new(1_000));
     shallow.validate_palw_v2().expect("a ladder the bisection can play needs no genesis fence");
+}
+
+/// **The seventh wall moves under the fence** (ADR-0103 §10). The advertised free-prompt cap was
+/// bounded by the IPC frame's 4,096 ids — a bound on ids that RODE a frame. On the held mint the
+/// cap is the regime's own, far past 2M; the same cap on a network without the regime from genesis
+/// is refused, as is one on a bundle that does not commit to the held contexts.
+#[test]
+fn the_prompt_cap_passes_the_frame_only_on_a_held_mint() {
+    let held = held_network(1 << 48);
+    let cap = bundle(&held).freeprompt.max_prompt_tokens();
+    assert_eq!(cap, kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_HELD_MAX_PROMPT_TOKENS_V1);
+    assert!(cap > 1 << 21, "a 2M prompt is under the held mint's cap");
+    assert!(cap as usize > kaspa_consensus_core::palw_v2::PALW_V2_MAX_PROMPT_TOKENS, "and past the frame's");
+
+    let mut late = held.clone();
+    late.palw_held_context = Some(ForkActivation::new(1_000));
+    let err = format!("{:?}", late.validate_palw_v2().expect_err("the regime must cover every height"));
+    assert!(err.contains("from genesis"), "{err}");
+
+    let mut shipped = palw_rc_shipped_params();
+    let PalwConsensusMode::ConsensusV2(b) = &mut shipped.palw_consensus_mode else { unreachable!() };
+    b.freeprompt = b.freeprompt.clone().with_held_prompt_cap_v1(1 << 21).expect("a legal held cap");
+    let err = format!("{:?}", shipped.validate_palw_v2().expect_err("a shipped bundle cannot carry it"));
+    assert!(err.contains("held regime's contexts") || err.contains("from genesis"), "{err}");
 }

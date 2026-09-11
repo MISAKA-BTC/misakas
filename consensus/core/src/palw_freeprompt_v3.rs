@@ -702,6 +702,12 @@ pub fn fp_spend_l1_tag_v3(spend_id: Hash64) -> [u8; PALW_FP_V3_L1_TAG_BYTES] {
     out
 }
 
+/// **The widest prompt a network minted with ADR-0103's regime may advertise**: `2^26` ids. Not
+/// the 2M the ADR is about but the bound past it — `n_ctx` bounds every class's prompt, and the
+/// class is what the context is a property of; this only keeps the advertised number inside the
+/// arithmetic every consumer does with it (`prompt × 4` in a `u32` frame length, with room).
+pub const PALW_FP_HELD_MAX_PROMPT_TOKENS_V1: u32 = 1 << 26;
+
 /// The free-prompt lane's network constants — a REQUIRED part of the `ConsensusV2` bundle
 /// (ADR-0044 Decision 9): there is no fence that enables the receipt lane, only a ruleset that
 /// includes it, hashed into `palw_ruleset_id_v2`. Constructed only through
@@ -718,7 +724,9 @@ pub struct PalwFreePromptParamsV3 {
     quanta_per_canonical_job: u32,
     /// The per-receipt jackpot bound.
     max_quanta_per_receipt: u32,
-    /// ≤ [`crate::palw_v2::PALW_V2_MAX_PROMPT_TOKENS`] — the wire frame is the outer bound.
+    /// ≤ [`crate::palw_v2::PALW_V2_MAX_PROMPT_TOKENS`] — the wire frame is the outer bound — or,
+    /// on a network minted with ADR-0103's regime, ≤ [`PALW_FP_HELD_MAX_PROMPT_TOKENS_V1`]
+    /// ([`Self::with_held_prompt_cap_v1`]): there the ids never ride and the frame is not the bound.
     max_prompt_tokens: u32,
     /// ≤ [`crate::palw_v2::PALW_V2_MAX_TRACE_EVENTS`] — one decode step is one trace event.
     max_decode_tokens: u32,
@@ -789,6 +797,25 @@ impl PalwFreePromptParamsV3 {
     }
     pub fn max_prompt_tokens(&self) -> u32 {
         self.max_prompt_tokens
+    }
+
+    /// **ADR-0103: the advertised prompt cap past the wire frame's**, for a network minted with the
+    /// held regime. The shipped bound (`PALW_V2_MAX_PROMPT_TOKENS`, 4,096) is the IPC frame's — the
+    /// ids rode in one — and it is the seventh wall a 2M prompt meets. Under the regime the ids are
+    /// committed by their tiled root and served, never carried, so the cap is the regime's own
+    /// bound; `PalwConsensusParamsV2::validate` admits a cap past the frame's only over the
+    /// COMPLETE_V4 set and `Params::validate_palw_v2` only with the fence armed from genesis.
+    pub fn with_held_prompt_cap_v1(mut self, max_prompt_tokens: u32) -> Result<Self, PalwFpV3Error> {
+        if max_prompt_tokens == 0 || max_prompt_tokens > PALW_FP_HELD_MAX_PROMPT_TOKENS_V1 {
+            return Err(PalwFpV3Error::InvalidParams("a held network's max_prompt_tokens must be 1..=PALW_FP_HELD_MAX_PROMPT_TOKENS_V1"));
+        }
+        self.max_prompt_tokens = max_prompt_tokens;
+        Ok(self)
+    }
+
+    /// Whether the advertised prompt cap is past the wire frame's — a held mint's, and only one.
+    pub fn prompt_cap_is_past_the_frame_v1(&self) -> bool {
+        self.max_prompt_tokens as usize > crate::palw_v2::PALW_V2_MAX_PROMPT_TOKENS
     }
     pub fn max_decode_tokens(&self) -> u32 {
         self.max_decode_tokens

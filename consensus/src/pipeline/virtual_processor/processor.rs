@@ -8490,7 +8490,7 @@ impl VirtualStateProcessor {
             .as_ref()
             .map(|bundle| bundle.court.max_step_leaf_count())
             .unwrap_or(kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP);
-        let extraction = kaspa_consensus_core::palw_fp_objects_v3::palw_fp_objects_from_accepted_txs_under_ruleset_v3(
+        let extraction = kaspa_consensus_core::palw_fp_objects_v3::palw_fp_objects_from_accepted_txs_under_held_v3(
             &txs,
             network_domain,
             freeprompt,
@@ -8508,6 +8508,9 @@ impl VirtualStateProcessor {
             // reads them off the bundle it already holds. `None` on every shipped preset — both
             // live chains have accepted jobs above them since genesis.
             self.palw_fp_ruleset_caps.is_some_and(|fence| fence.is_active(block_daa)),
+            // ADR-0103 Decision 4: under the held regime no PublicDa carrier's ids ride past one
+            // standard transaction.
+            self.palw_held_context_at(block_daa),
             self.palw_prompt_ids_form_at(block_daa),
             // Who authored the commitment. Unverified, a 0x4a transaction from any stranger created
             // a claim bound to any bond outpoint it named — the genesis premine bond among them.

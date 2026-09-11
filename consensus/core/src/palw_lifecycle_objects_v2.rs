@@ -1179,6 +1179,35 @@ mod tests {
         assert_eq!(borsh::to_vec(&decoded).unwrap(), payload, "and it re-encodes to the chain's bytes");
     }
 
+    fn checkpoint_accusation() -> crate::palw_checkpoint_court_v1::PalwCheckpointAccusationV1 {
+        crate::palw_checkpoint_court_v1::PalwCheckpointAccusationV1 {
+            version: 1,
+            claim: h64(15),
+            execution_root: h64(16),
+            trace_root: h64(17),
+            executor_bond: bond(8),
+            accuser_bond: bond(9),
+            binding: shard_accusation().refutation.binding,
+            anchor: crate::palw_attn_court_v1::PalwAttnCheckpointAnchorV1 {
+                leaf: crate::palw_step_leg::PalwCheckpointLeafV2 {
+                    version: 2,
+                    checkpoint_index: 0,
+                    covered_decode_call: 1,
+                    prev_checkpoint_leaf_hash: h64(18),
+                    state_chunk_count: 1,
+                    state_chunks_root: h64(19),
+                },
+                opening: crate::palw_step_leg::PalwStepOpeningV1 { leaf_index: 0, leaf_hash: h64(20), siblings: vec![] },
+            },
+            chunk: crate::palw_attn_court_v1::PalwAttnChunkOpeningV1 { chunk_index: 0, chunk_bytes: vec![0; 4], siblings: vec![] },
+            kind: 0,
+            attn_layer: 0,
+            position: 0,
+            rows: Vec::new(),
+            signature: vec![7u8; 3],
+        }
+    }
+
     fn shard_accusation() -> crate::palw_shard_court_v1::PalwShardCourtAccusationV1 {
         let (binding, _, _, _) = crate::palw_step_refute::tests::base0_honest_decode_commitment();
         crate::palw_shard_court_v1::PalwShardCourtAccusationV1 {
@@ -1290,6 +1319,40 @@ mod tests {
                         shard_index: 0,
                         receipts: Vec::new(),
                     },
+                },
+            ),
+            // ADR-0103: the checkpoint court and the held DA court's two moves, appended after it.
+            (42, PalwConsensusObjectV2::CheckpointAccused { accusation: Box::new(checkpoint_accusation()) }),
+            (
+                43,
+                PalwConsensusObjectV2::DefaultAccusedHeld {
+                    accusation: Box::new(crate::palw_held_da_v1::PalwHeldAccusationV1 {
+                        version: 1,
+                        claim: h64(13),
+                        missing: crate::palw_held_da_v1::PalwHeldMissingV1::PromptIdsTile { tile: 0 },
+                        accuser: bond(7),
+                        binding: shard_accusation().refutation.binding,
+                        signature: sig(),
+                    }),
+                },
+            ),
+            (
+                44,
+                PalwConsensusObjectV2::MaterialDisclosedHeld {
+                    disclosure: Box::new(crate::palw_held_da_v1::PalwHeldDisclosureCarriageV1 {
+                        version: 1,
+                        claim: h64(13),
+                        missing: crate::palw_held_da_v1::PalwHeldMissingV1::StepRange { first: 0, count: 1 },
+                        binding: shard_accusation().refutation.binding,
+                        disclosure: crate::palw_held_da_v1::PalwHeldDisclosureV1::StepRange {
+                            opening: crate::palw_step_leg::PalwStepRangeOpeningV1 {
+                                first_leaf_index: 0,
+                                leaf_hashes: vec![h64(14)],
+                                siblings: vec![],
+                            },
+                        },
+                        signature: sig(),
+                    }),
                 },
             ),
         ];

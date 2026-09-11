@@ -1214,6 +1214,14 @@ impl PalwConsensusParamsV2 {
             .court
             .worst_case_duration_daa()
             .ok_or(PalwModeV2Error::Invalid("the worst-case court duration overflows the DAA score"))?;
+        // **ADR-0103: the advertised prompt cap past the wire frame's** — a held mint's, and only
+        // over the set that commits to the regime's contexts (`Params::validate_palw_v2` then asks
+        // for the fence from genesis, as it does for the ladder).
+        if self.freeprompt.prompt_cap_is_past_the_frame_v1() && self.signature_contexts_root != palw_v2_signature_contexts_root_v4() {
+            return Err(PalwModeV2Error::Invalid(
+                "the free-prompt cap is past the wire frame's and the bundle does not commit to the held regime's contexts (ADR-0103)",
+            ));
+        }
         if self.state.window_court() <= worst_case {
             let held_contexts = self.signature_contexts_root == palw_v2_signature_contexts_root_v4();
             let held_clock = self

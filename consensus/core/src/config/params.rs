@@ -2022,10 +2022,19 @@ impl Params {
         // height. A fence armed later leaves the heights before it playing a bisection this window
         // cannot hold — so the ladder may pass the clock only on a network minted with the fence.
         let bisection_fits = bundle.court.worst_case_duration_daa().is_some_and(|worst| worst < bundle.state.window_court());
-        if !bisection_fits && !self.palw_held_context.is_some_and(|f| f != ForkActivation::never() && f.is_active(0)) {
+        let held_from_genesis = self.palw_held_context.is_some_and(|f| f != ForkActivation::never() && f.is_active(0));
+        if !bisection_fits && !held_from_genesis {
             return Err(PalwModeV2Error::Invalid(
                 "the court's ladder is past the bisection's clock and palw_held_context is not armed from genesis: a bisection \
                  at any height could not finish inside window_court (ADR-0103 Decision 1)",
+            ));
+        }
+        // The same for the advertised prompt cap: past the wire frame's, a job's ids cannot ride,
+        // and before a later fence they would have to.
+        if bundle.freeprompt.prompt_cap_is_past_the_frame_v1() && !held_from_genesis {
+            return Err(PalwModeV2Error::Invalid(
+                "the free-prompt cap is past the wire frame's and palw_held_context is not armed from genesis: the ids of a \
+                 prompt that long cannot ride a commitment (ADR-0103 Decision 4)",
             ));
         }
         // **A V2 network's genesis is minted at the ambient target, because the class lottery is
@@ -10051,6 +10060,12 @@ pub fn palw_held_context_mint_v1(mut params: Params, ladder: u64) -> Result<Para
         court.max_operand_count(),
     )?
     .with_dissection_arity(court.dissection_arity())?;
+    // The seventh wall (ADR-0103 §10): the advertised prompt cap is the regime's, not the frame's.
+    bundle.freeprompt = bundle
+        .freeprompt
+        .clone()
+        .with_held_prompt_cap_v1(crate::palw_freeprompt_v3::PALW_FP_HELD_MAX_PROMPT_TOKENS_V1)
+        .map_err(|_| crate::palw_mode_v2::PalwModeV2Error::Invalid("the held prompt cap is not a legal free-prompt cap"))?;
     params.palw_prompt_ids_merkle = Some(ForkActivation::always());
     params.palw_signature_contexts_v2 = Some(ForkActivation::always());
     params.palw_kary_court = Some(ForkActivation::always());
