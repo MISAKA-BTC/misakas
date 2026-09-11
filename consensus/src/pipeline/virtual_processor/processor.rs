@@ -5327,6 +5327,13 @@ impl VirtualStateProcessor {
         // Identities already paid or claimed in THIS mergeset. The state answers for identities
         // the chain has already seen; nothing but this answers for two siblings carrying one.
         let mut seen_here: std::collections::HashSet<kaspa_consensus_core::Hash64> = Default::default();
+        // **B-5: the receipt lane's version of `seen_here`.** A certified free-prompt quantum is
+        // spent by at most one block — the fold applies the first spend and returns
+        // `QuantumAlreadySpent` for the rest — but two conflicting receipt siblings in one mergeset
+        // both validate against the parent state (where the quantum is unspent), so both were
+        // entitled and the coinbase paid a full worker share for each. Weighed once, paid N times.
+        // Dedup the (claim, quantum) here exactly as the attempt arm dedups the attempt identity.
+        let mut seen_here_quanta: std::collections::HashSet<(kaspa_consensus_core::Hash64, u32)> = Default::default();
         // **Blues AND reds.** This iterated `mergeset_blues` alone, so the set could never contain a
         // red — and the coinbase's reds loop had no skip to apply one anyway. At the frozen 120 s
         // cadence `ghostdag_k = 1` against a `mergeset_size_limit` of 180, so the blues this
@@ -5405,7 +5412,18 @@ impl VirtualStateProcessor {
                     }
                 }
                 Ok(None) => match self.palw_v2_check_receipt_spend(&header, state, state_params, point) {
-                    Ok(Some(_)) => {}
+                    Ok(Some(envelope)) => {
+                        // B-5: at most one sibling per (claim, quantum) is entitled; the fold folds
+                        // the quantum's weight once, so paying a second spend of it mints reward the
+                        // chain never counted.
+                        if !seen_here_quanta.insert((envelope.spend.claim_id, envelope.spend.quantum_index)) {
+                            debug!(
+                                "merged block {blue} spends a certified quantum ({}, {}) already paid in this mergeset",
+                                envelope.spend.claim_id, envelope.spend.quantum_index
+                            );
+                            unentitled.insert(*blue);
+                        }
+                    }
                     Ok(None) => {
                         debug!("merged block {blue} carries no work this chain accepted");
                         unentitled.insert(*blue);
