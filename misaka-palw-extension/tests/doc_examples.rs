@@ -111,26 +111,38 @@ fn the_family_certification_example_verifies_once_the_reader_has_run_the_drill()
     assert!(matches!(report.classification, C::NodeExtension { .. }));
 }
 
+/// The graph-v5@512 row is registered at genesis and is not in the genesis-frozen free-prompt
+/// set, so binding its free-prompt lane is a real next step on testnet-11 — and against the genesis
+/// state it is refused until a family the CHAIN certified for that lane covers it. The report
+/// names that refusal and the command that removes it.
 #[test]
-fn the_lane_certification_example_binds_the_floors_attempt_lane() {
+fn the_lane_certification_example_names_the_family_the_chain_must_certify_first() {
     let dir = stage(&["lane-certification.json"]);
-    let params: kaspa_consensus_core::config::params::Params = NetworkId::with_suffix(NetworkType::Testnet, 11).into();
-    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!() };
-    let floor = misaka_palw_base0::classes::canonical_class_by_model_id_v1(&bundle.court, "PALW-BASE-0/rc").unwrap();
+    let court =
+        kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2)
+            .unwrap();
+    // What `palw-certify bind --model-id Qwen/Qwen2.5-1.5B/graph-v5@512 --lane fp` writes.
+    let profile =
+        misaka_palw_base0::e2e_drill::catalog_profile_by_model_id_v1(&court, misaka_palw_base0::classes::A16_GRAPH_V5_MODEL_ID)
+            .expect("the graph-v5@512 row is in this build's catalogs");
     let object = PalwConsensusObjectV2::ClassLaneCertified {
-        class_id: floor.class_id(),
-        lane: PalwCertifiedLaneV1::Attempt,
-        profile: Box::new(floor.profile.clone()),
+        class_id: profile.shape_profile_id(),
+        lane: PalwCertifiedLaneV1::FreePrompt,
+        profile: Box::new(profile),
     };
-    std::fs::write(dir.path().join("floor-attempt-lane.borsh"), borsh::to_vec(&object).unwrap()).unwrap();
+    std::fs::write(dir.path().join("v5-512-fp-lane.borsh"), borsh::to_vec(&object).unwrap()).unwrap();
     let report = verify_extension_v1(&example("lane-certification.json"), dir.path(), &env(), D::Vectors)
         .unwrap_or_else(|e| panic!("{e}\n{}", values()));
-    assert!(
-        matches!(&report.classification, C::Expressible { would_be_refused: None, .. }),
-        "{}\n{}",
-        report.classification.summary(),
-        values()
-    );
+    match &report.classification {
+        C::Expressible { admission_object, would_be_refused: Some(why), .. } => {
+            assert_eq!(admission_object, "ClassLaneCertified");
+            assert!(why.starts_with("NoCertifiedFamilyCovers"), "{why}");
+            assert!(why.contains("palw-certify drill --family a16-v5 --lane fp"), "the refusal names the step that removes it: {why}");
+        }
+        other => panic!("{}\n{}", other.summary(), values()),
+    }
+    assert_eq!(report.depth_reached, D::Vectors);
+    assert_eq!(report.recomputed.get("covering_family").map(String::as_str), Some("PALW-QWEN25-A16-V5"));
 }
 
 #[test]

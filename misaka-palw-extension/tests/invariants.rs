@@ -3,7 +3,6 @@
 //! directory) is exercised by every test that reads a file, and every hex value is computed by the
 //! build under test — nothing here is a literal a re-genesis would have to re-pin.
 
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -420,7 +419,6 @@ fn i4_a_kernel_outside_the_vocabulary_is_a_ruleset_change_naming_the_kernel() {
 #[test]
 fn i4_an_artifact_container_no_lineage_sniffs_is_a_node_extension_naming_the_lineage() {
     let dir = tempfile::tempdir().unwrap();
-    let (class_id, root) = floor();
     // A ledger row that needs a file, pointed at bytes whose magic nothing in this build claims.
     let params = params();
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!() };
@@ -443,7 +441,6 @@ fn i4_an_artifact_container_no_lineage_sniffs_is_a_node_extension_naming_the_lin
         hex64(&a16_root),
         hex64(&a16.class_id())
     );
-    let _ = class_id;
     let report = verify(&doc, dir.path(), D::Full);
     match &report.classification {
         C::NodeExtension { missing } => assert!(missing[0].starts_with("lineage for container `STRANGE1`"), "{missing:?}"),
@@ -581,6 +578,106 @@ fn i5_the_floors_drill_verifies_to_its_pinned_family_id_and_a_flipped_vector_is_
     let report = verify(&family_manifest(&hex64(&family_id), "tampered.borsh"), dir.path(), D::Structural);
     assert!(matches!(report.classification, C::Expressible { .. }));
     assert_eq!(report.depth_reached, D::Structural);
+}
+
+/// **The transition's other two `FamilyCertified` rules, reported in its order.** Too many vectors
+/// is the manifest's object being wrong for every chain (refused by the field); a family the chain
+/// already certified is a fact about THIS chain, which only live terms can show.
+#[test]
+fn i5_a_family_over_the_vector_bound_is_refused_and_an_already_certified_one_would_be_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let evidence = base0_evidence().clone();
+    let family_id = evidence.family_id;
+    let max = kaspa_consensus_core::palw_state_v2::PALW_CERTIFICATION_MAX_VECTORS;
+    // One vector over the bound, each stripped of its operand openings so the object stays inside
+    // the 1.6 MB a chunked object can ride in — the carriage rule is checked first (an object no
+    // carrier can take never reaches the transition), and this test is about the one behind it.
+    let mut small = evidence.vectors[0].clone();
+    small.operand_openings.clear();
+    let mut stuffed = evidence.clone();
+    stuffed.vectors = std::iter::repeat_n(small, max + 1).collect();
+    let object = PalwConsensusObjectV2::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::Attempt(stuffed)) };
+    write_object(dir.path(), "stuffed.borsh", &object);
+    let report = verify(&family_manifest(&hex64(&family_id), "stuffed.borsh"), dir.path(), D::Structural);
+    match &report.classification {
+        C::Refused { field, reason } => {
+            assert_eq!(field, "verification.object_path");
+            assert!(reason.contains("TooManyDrillVectors"), "{reason}");
+        }
+        other => panic!("{other:?}"),
+    }
+
+    // Live terms that already hold the family: expressible, and the chain would refuse a second.
+    let object = PalwConsensusObjectV2::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::Attempt(evidence.clone())) };
+    write_object(dir.path(), "family.borsh", &object);
+    let graded = PalwCertificationEvidenceV1::Attempt(evidence).grade().unwrap();
+    let params = params();
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!() };
+    let mut terms = misaka_palw_extension::genesis_registration_terms_v1(bundle).expect("genesis terms");
+    terms.chain_certified_families = vec![graded];
+    let live = PalwExtensionEnvV1 { network_id: t11(), daa_score: None, chain_terms: Some(terms) };
+    let report =
+        verify_extension_v1(family_manifest(&hex64(&family_id), "family.borsh").as_bytes(), dir.path(), &live, D::Vectors).unwrap();
+    match &report.classification {
+        C::Expressible { would_be_refused: Some(why), .. } => assert!(why.starts_with("FamilyAlreadyCertified"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+    assert!(report.chain_terms.starts_with("the chain's terms as the caller read them"), "{}", report.chain_terms);
+}
+
+/// **`ClassLaneCertified`, in the transition's order**: the class must be on chain, a family the
+/// chain certified for the lane must cover it, and the attempt lane seats only a weightless class.
+#[test]
+fn i5_a_lane_binding_reports_the_chains_refusals_in_the_transitions_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let (class_id, _) = floor();
+    let profile = base0_evidence().profile.clone();
+    assert_eq!(profile.shape_profile_id(), class_id, "the floor's drill runs the floor's own graph");
+    let lane =
+        PalwConsensusObjectV2::ClassLaneCertified { class_id, lane: PalwCertifiedLaneV1::Attempt, profile: Box::new(profile.clone()) };
+    write_object(dir.path(), "lane.borsh", &lane);
+
+    // At the genesis state: no chain-certified family covers it, and the floor already holds a share.
+    let report = verify(&lane_manifest(&hex64(&class_id), "lane.borsh"), dir.path(), D::Vectors);
+    match &report.classification {
+        C::Expressible { would_be_refused: Some(why), .. } => {
+            assert!(why.starts_with("NoCertifiedFamilyCovers"), "the transition checks coverage first: {why}");
+            assert!(why.contains("palw-certify drill --family base0 --lane attempt"), "{why}");
+            assert!(why.contains("and after that, ClassAlreadyWeighted"), "{why}");
+        }
+        other => panic!("{other:?}"),
+    }
+
+    // Live terms whose chain-certified set covers it: only the lane's own rule is left.
+    let graded = PalwCertificationEvidenceV1::Attempt(base0_evidence().clone()).grade().unwrap();
+    let params = params();
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!() };
+    let mut terms = misaka_palw_extension::genesis_registration_terms_v1(bundle).expect("genesis terms");
+    terms.chain_certified_families = vec![graded];
+    let live = PalwExtensionEnvV1 { network_id: t11(), daa_score: None, chain_terms: Some(terms) };
+    let report =
+        verify_extension_v1(lane_manifest(&hex64(&class_id), "lane.borsh").as_bytes(), dir.path(), &live, D::Vectors).unwrap();
+    match &report.classification {
+        C::Expressible { would_be_refused: Some(why), .. } => assert!(why.starts_with("ClassAlreadyWeighted"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+
+    // A class nobody registered: MissingClass comes first.
+    let mut stranger = profile;
+    stranger.n_ctx += 1;
+    let stranger_id = stranger.shape_profile_id();
+    let lane = PalwConsensusObjectV2::ClassLaneCertified {
+        class_id: stranger_id,
+        lane: PalwCertifiedLaneV1::Attempt,
+        profile: Box::new(stranger),
+    };
+    write_object(dir.path(), "stranger.borsh", &lane);
+    let report = verify(&lane_manifest(&hex64(&stranger_id), "stranger.borsh"), dir.path(), D::Structural);
+    match &report.classification {
+        C::Expressible { would_be_refused: Some(why), .. } => assert!(why.starts_with("MissingClass"), "{why}"),
+        C::Refused { field, reason } => panic!("the widened floor must stay a valid graph for this test: {field}: {reason}"),
+        other => panic!("{other:?}"),
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -901,5 +998,4 @@ fn i10_a_path_that_escapes_the_manifests_directory_is_refused_by_name_and_so_is_
     let report = verify(&family_manifest(&hex64(&family_id), "missing.borsh"), dir.path(), D::Vectors);
     assert!(matches!(report.classification, C::NodeExtension { .. }), "{:?}", report.classification);
     assert_eq!(report.stopped_at.as_deref(), Some("verification.object_path not readable"));
-    let _ = BTreeSet::<u8>::new();
 }

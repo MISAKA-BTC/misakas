@@ -1,10 +1,10 @@
 {
   "manifest": "misaka-palw/extension-manifest/v1",
   "kind": "lane-certification",
-  "name": "the floor's attempt lane",
+  "name": "the free-prompt lane of the graph-v5@512 row",
   "network": "testnet-11",
-  "source": { "note": "palw-certify bind --model-id PALW-BASE-0/rc --lane attempt --out floor-attempt-lane.borsh" },
-  "declares": { "object_id": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8" },
-  "verification": { "object_path": "floor-attempt-lane.borsh", "lane": "attempt" },
+  "source": { "note": "palw-certify bind --model-id Qwen/Qwen2.5-1.5B/graph-v5@512 --lane fp --out v5-512-fp-lane.borsh" },
+  "declares": { "object_id": "4277d84f7d91528cc04aa366d51ee1c2e4f7902c4f6b16a213dead1c7e227977db732f18ed6183db3d944d44726ebd3feff7b15c48f9dba11cd526684f35f1b7" },
+  "verification": { "object_path": "v5-512-fp-lane.borsh", "lane": "fp", "expected": { "class_id": "4277d84f7d91528cc04aa366d51ee1c2e4f7902c4f6b16a213dead1c7e227977db732f18ed6183db3d944d44726ebd3feff7b15c48f9dba11cd526684f35f1b7" } },
   "admission": { "object": "ClassLaneCertified" }
 }

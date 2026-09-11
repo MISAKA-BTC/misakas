@@ -348,6 +348,14 @@ pub async fn submit_objects(ctx: &Ctx, ks: &crate::keys::KeySource, paths: &[std
                     signature.len()
                 )
             }
+            // ADR-0108 `palw extension submit`: a registration built by the SDK. Summarised, because
+            // its `Debug` carries the whole profile — thousands of lines in a dry run.
+            PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, share_permille, activation_daa, admission, .. } => {
+                format!(
+                    "ClassRegistered: class {class_id}, root {artifact_root}, share {share_permille}‰, activation daa {activation_daa}, {}",
+                    if admission.is_some() { "admission carriage attached" } else { "NO admission carriage" }
+                )
+            }
             other => format!("{other:?}"),
         };
         objects.push((path.clone(), object, summary));
