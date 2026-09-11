@@ -2130,6 +2130,44 @@ pub fn base0_fp_challenger_replay_tiles_capped_v1<K: Base0FpIntervalKernelsV1>(
     kernels: &K,
     prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<(Base0FpIntervalOpeningV2, crate::legs::Base0StepTilesV1), String> {
+    base0_fp_replay_served_interval_v1(
+        opening_bytes,
+        claim,
+        index,
+        prompt_token_ids,
+        work_leaves,
+        family_checkpoint_interval,
+        max_step_leaf_count,
+        state,
+        kernels,
+        prompt_ids_form,
+        true,
+    )
+}
+
+/// [`base0_fp_challenger_replay_tiles_capped_v1`]'s body, with the one question the two callers
+/// ask differently. A CLOSE walks the committed root with this party's leaves under the served
+/// frontier, so on a fold (V4) those leaves must BE the committed ones — `own_leaves_must_root`.
+/// A seat NAMING a leaf (ADR-0086 Decision 6) asks the opposite question, where its leaves stop
+/// being the executor's, and a lie inside the interval is exactly the case in which they do not
+/// walk: with the check, no lying interval could ever be named (ADR-0108's live drill —
+/// "this party's replay does not reproduce the step leg root", every round, on the one interval
+/// that held the lie). The naming side binds the executor's leaves to its commitment through the
+/// served block instead (`Base0FpBlockLeavesV1::folds_to_v1`).
+#[allow(clippy::too_many_arguments)]
+fn base0_fp_replay_served_interval_v1<K: Base0FpIntervalKernelsV1>(
+    opening_bytes: &[u8],
+    claim: PalwClaimRootsV1,
+    index: u32,
+    prompt_token_ids: &[u32],
+    work_leaves: u64,
+    family_checkpoint_interval: u32,
+    max_step_leaf_count: u64,
+    state: Option<&crate::fp_recompute::Base0FpSeatStateV1>,
+    kernels: &K,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    own_leaves_must_root: bool,
+) -> Result<(Base0FpIntervalOpeningV2, crate::legs::Base0StepTilesV1), String> {
     let any = base0_fp_interval_opening_decode_any_v1(opening_bytes).map_err(|e| format!("the opening does not decode: {e:?}"))?;
     let carried = match &any {
         Base0FpIntervalOpeningAnyV1::WithHistory(o) => Some(o.as_ref()),
@@ -2272,9 +2310,11 @@ pub fn base0_fp_challenger_replay_tiles_capped_v1<K: Base0FpIntervalKernelsV1>(
             own.push(hash);
         }
         opening.range = f.with_leaves_v1(own).ok_or_else(|| "this party's replay is not the range's count".to_string())?;
-        match step_range_opening_root_capped_v1(binding.step_leaf_count, &opening.range, max_step_leaf_count) {
-            Ok(root) if root == binding.step_merkle_root => {}
-            _ => return Err("this party's replay does not reproduce the step leg root under the served frontier".to_string()),
+        if own_leaves_must_root {
+            match step_range_opening_root_capped_v1(binding.step_leaf_count, &opening.range, max_step_leaf_count) {
+                Ok(root) if root == binding.step_merkle_root => {}
+                _ => return Err("this party's replay does not reproduce the step leg root under the served frontier".to_string()),
+            }
         }
     }
     Ok((opening, tiles))
@@ -3664,7 +3704,9 @@ pub fn base0_fp_name_the_leaf_capped_v1<K: Base0FpIntervalKernelsV1>(
         return Err(format!("the served block {block_index} does not fold to the digest the opening carries"));
     }
     let state = state_for(opening_bytes);
-    let (_, tiles) = base0_fp_challenger_replay_tiles_capped_v1(
+    // The replay WITHOUT the close's root walk: this seat's leaves are the question, not the
+    // commitment's (see `base0_fp_replay_served_interval_v1`).
+    let (_, tiles) = base0_fp_replay_served_interval_v1(
         opening_bytes,
         claim,
         index,
@@ -3675,6 +3717,7 @@ pub fn base0_fp_name_the_leaf_capped_v1<K: Base0FpIntervalKernelsV1>(
         state.as_ref(),
         kernels,
         prompt_ids_form,
+        false,
     )?;
     let ctx_hash = v4.binding.job_context.context_hash();
     let profile_hash = v4.binding.shape_profile.shape_profile_id();

@@ -1807,6 +1807,56 @@ mod tests {
         base0_material_decode_v1(capture).expect("the family tuple").0.step_leaf_count
     }
 
+    /// **A served block names the leaf a liar committed** (ADR-0086 Decision 6, the seat's half),
+    /// end to end through the trait a node holds: the lying executor's interval verifies as a fault
+    /// in a block, the executor serves the block's leaves, and the seat names the tampered leaf from
+    /// its own replay. The naming used to run the close's replay, which walks the committed root
+    /// with the seat's OWN leaves — and a lie inside the interval is exactly when they do not walk,
+    /// so no lying interval was ever named (ADR-0108's live drill, every round). An honest block
+    /// names nothing.
+    #[test]
+    fn a_served_block_names_the_leaf_a_liar_committed() {
+        use kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1;
+        use kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3;
+        use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1};
+        let form = PalwPromptIdsFormV1::MerkleV1;
+        let backend = floor_backend().with_prompt_ids_form(form);
+        let prompt: Vec<usize> = vec![2, 7, 1, 8, 2, 8, 1, 8];
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let mut job = free_prompt_job(&backend, prompt.len() as u32, 4);
+        job.prompt_token_ids_hash = prompt_token_ids_commitment_v1(form, &ids).expect("a commitment");
+        let tampered = 0u64;
+        for (run, lying) in [
+            (backend.execute_free_prompt_with_injected_fault(&job, &prompt, tampered).expect("the drill fault runs"), true),
+            (backend.execute_free_prompt(&job, &prompt).expect("the floor runs"), false),
+        ] {
+            let capture = &run.outcome.material;
+            let work = binding_leaf_count(capture);
+            let roots = PalwClaimRootsV1 {
+                execution_root: run.outcome.execution_root,
+                trace_root: run.outcome.trace_root,
+                anchor: fp_job_id_v3(&job),
+            };
+            let opening = backend.open_fp_interval(capture, 0, &ids).expect("interval 0 opens");
+            let verdict = backend.verify_fp_interval_opening(&opening, roots, 0, &ids, work);
+            let block = match (verdict, lying) {
+                (PalwFpIntervalVerdictV1::FaultInRange { first_leaf_index, .. }, true) => {
+                    first_leaf_index >> crate::fp_interval::Base0FpIntervalOpeningV4::decode_v1(&opening).unwrap().range.retain_level
+                }
+                (PalwFpIntervalVerdictV1::Valid, false) => 0,
+                (other, _) => panic!("lying={lying}: interval 0 verifies as {other:?}"),
+            };
+            let served = backend.open_fp_block_leaves(capture, 0, block, &ids).expect("the executor serves the block");
+            let generated = run.output_token_ids.clone();
+            let named = backend.fp_name_the_leaf_v1(&opening, &served, roots, 0, &ids, &generated, work);
+            if lying {
+                assert_eq!(named, Ok(Some(tampered)), "the seat names the leaf the liar committed");
+            } else {
+                assert_eq!(named, Ok(None), "an honest block names nothing");
+            }
+        }
+    }
+
     /// **ADR-0108 Decision 6 through the trait a node holds, on the floor's dense retention.** The
     /// floor keeps its tiles and its checkpoint chunks, so its answers are read and hashed rather
     /// than replayed — and the court takes them against the claim's own root, exactly as it takes
