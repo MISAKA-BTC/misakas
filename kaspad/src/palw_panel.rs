@@ -6148,6 +6148,39 @@ mod court_responder_coverage_pin {
         );
     }
 
+    /// **ADR-0103 Decision 1, pinned where it lives: under the held fence the challenger's half
+    /// opens no bisection, and the seat grades what the chain reads.** The chain refuses
+    /// `CourtOpened` for every claim once the fence is armed, so the one place the panel builds one
+    /// sits behind the fence's own predicate; and the capture arm's accusation carries the prompt
+    /// tile the carriage built, or on a Merkle-form network it convicts nobody (the held drill,
+    /// 2026-09-11).
+    #[test]
+    fn under_the_held_fence_the_panel_opens_no_bisection_and_accuses_with_the_carriage() {
+        const MARKER: &str = "mod court_responder_coverage_pin";
+        let whole = include_str!("palw_panel.rs");
+        let source = &whole[..whole.find(MARKER).expect("this module is in this file")];
+        let gate = source.find("let bisection_is_played = !self.consensus_config.params.palw_held_context_active_at(current_daa);");
+        // A construction opens its braces on a line of its own; a pattern (`{ claim, .. }`) does not.
+        const BUILT: &str = "PalwConsensusObjectV2::CourtOpened {\n";
+        let opened = source.find(BUILT).expect("the challenger half still builds its opening");
+        assert_eq!(source.matches(BUILT).count(), 1, "one place builds a bisection");
+        let gate = gate.expect("the challenger half reads the held fence");
+        assert!(gate < opened, "the fence is read before the bisection is built");
+        assert!(
+            source[gate..opened].contains("if bisection_is_played && (self.config.challenge || !seat_faulted.is_empty()) {"),
+            "and the bisection is built only where one is played"
+        );
+        let sampler = &source[source.find("fn fp_capture_samples_clear(").expect("the sampler")..];
+        let sampler = &sampler[..sampler.find("\n    }\n").expect("its end")];
+        assert!(sampler.contains("palw_refutation_prompt_carriage_v1(prompt_ids_form, refutation)"), "the sampler carries");
+        assert!(
+            sampler
+                .contains("check_execution_step_refutation_opened_capped_v1(&refutation, &proven, prompt_opening.as_ref(), ladder)"),
+            "and grades the carriage it built"
+        );
+        assert!(source.contains("prompt_ids_opening: prompt_opening,"), "the accusation carries the tile the sampler opened");
+    }
+
     /// **ADR-0093 as built: the panel FILES the fused terminal's root claim now — and the exemption
     /// that stood in for it stays unarmed.**
     ///
