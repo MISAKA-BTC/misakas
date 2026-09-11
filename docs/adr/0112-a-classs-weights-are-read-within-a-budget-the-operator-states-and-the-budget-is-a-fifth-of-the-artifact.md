@@ -284,7 +284,7 @@ parameter.
   nine-pass draw reads for 10–15 s, which is the order of its compute, so the loader alone brings
   the draw from twenty minutes to under a minute. Recorded, with the arithmetic, and not taken.
 
-  **Decided 2026-09-11: not taken.** The operator asked that the open design calls be made where
+  **Decided 2026-09-11: not taken** — **reversed the same day by the operator, and implemented as [ADR-0117](0117-a-draw-is-one-forward.md)**, which also corrects two statements here: the canonical job is NOT part of the class id (`class_id` hashes the graph profile alone, so the job changes by a fence and needs no re-mint), and the committed path runs eight forward passes, not nine (`P + D − 1`; the ninth was the old path's). The reasoning below is kept as the record. The operator asked that the open design calls be made where
   the gain is large. What a one-forward job would buy depends on the host (§10.5):
 
   | host | a draw today | with this ADR's loader | with a one-forward job as well |
