@@ -6,9 +6,18 @@
 //!
 //! # What the automaton admits, precisely
 //!
-//! **RFC 8785's canonical form and no other spelling — except member order.**
+//! **RFC 8785's canonical form and no other spelling — except member order and one space.**
 //!
-//! * No whitespace anywhere: not after `:`, not after `,`, not around the root value.
+//! * **At most one space (0x20) after each `:` and each `,`, and no other whitespace**: not a
+//!   second space, not a newline or a tab, not after `{` or `[`, not before `:`, `,`, `}` or `]`,
+//!   and never around the root value. The one space is the single-line spelling every model
+//!   writes (`{"name": "Tama", "age": 3}`, `json.dumps`'s default separators): with it dead, a
+//!   model whose next token is ` "` is forced onto the best token that does NOT start with a
+//!   space, and the first measured masked answer (Qwen2.5-1.5B, 2026-09-10) was
+//!   `{"name":null,"age":null}` for a cat that has a name. It cannot loop — one space, then a
+//!   byte that is not a space — and nothing after the root value is live, so ADR-0096 §10 B7's
+//!   finish ("no byte continues") still fires at the root's last byte. The derivation strips it
+//!   (RFC 8785 has no insignificant whitespace), exactly as it canonicalizes a number.
 //! * Strings hold well-formed UTF-8 (RFC 3629: no overlongs, no surrogates, nothing past
 //!   U+10FFFF) and exactly RFC 8785 §3.2.2.2's escapes — `\"`, `\\`, `\b`, `\t`, `\n`, `\f`,
 //!   `\r`, and `\u00xx` in LOWERCASE hex for the remaining C0 controls. `\/`, `\u0041`, `\u001F`
@@ -34,8 +43,9 @@
 //!   above 10^21 (canonical spelling `1e+21`) is not reachable there.
 //! * `enum` and `const`: the EXACT canonical bytes of each listed value that also satisfies the
 //!   schema's other keywords (a value that would fail [`validate`] is not a candidate; a schema
-//!   left with none is refused). An object-valued member must therefore be spelled with sorted
-//!   keys — it is a literal, not a grammar.
+//!   left with none is refused), with the one space after a separator admitted as everywhere
+//!   else. An object-valued member must therefore be spelled with sorted keys — it is a literal,
+//!   not a grammar.
 //! * `minLength` / `maxLength` count characters (code points): a raw multi-byte sequence is one, a
 //!   `\u00xx` escape is one. `minItems` / `maxItems` count items.
 //! * Nesting to the depth consensus-core pins (`PALW_CONSTRAINT_MAX_DEPTH_V1`, sixteen pushed
@@ -270,6 +280,17 @@ impl Builder {
         }
     }
 
+    /// After a separator (`:` or `,`): the value's frame reads the next byte, or ONE space comes
+    /// first and then the frame reads the byte after it. A second space dies in the frame's start
+    /// node, since no JSON value starts with one.
+    fn one_space_then_push(&mut self, f: u16, from: u16, frame: u16, resume: u16) -> Result<(), String> {
+        let spaced = self.node(f, false)?;
+        self.set(f, from, b' ', Action::Goto(spaced))?;
+        self.push_all(f, from, frame, resume);
+        self.push_all(f, spaced, frame, resume);
+        Ok(())
+    }
+
     /// A complete value's exits: its parent reads the terminator.
     fn pops(&mut self, f: u16, node: u16) -> Result<(), String> {
         for byte in b",]}" {
@@ -368,18 +389,35 @@ impl Builder {
         struct Tn {
             children: BTreeMap<u8, usize>,
             terminal: bool,
+            /// Reached by a `:` or `,` outside a string: the one space may come next (the module
+            /// doc's rule holds inside a literal too, so an object-valued `const` reads the same
+            /// single-line spelling as an object schema does).
+            after_separator: bool,
         }
-        let mut trie = vec![Tn { children: BTreeMap::new(), terminal: false }];
+        let mut trie = vec![Tn { children: BTreeMap::new(), terminal: false, after_separator: false }];
         for literal in literals {
             if literal.is_empty() {
                 return Err("an empty literal admits the empty answer, which is no JSON value".to_string());
             }
             let mut at = 0usize;
+            let (mut in_string, mut escaped) = (false, false);
             for &byte in literal {
+                let separator = !in_string && (byte == b':' || byte == b',');
+                if in_string {
+                    if escaped {
+                        escaped = false;
+                    } else if byte == b'\\' {
+                        escaped = true;
+                    } else if byte == b'"' {
+                        in_string = false;
+                    }
+                } else if byte == b'"' {
+                    in_string = true;
+                }
                 let fresh = trie.len();
                 let child = *trie[at].children.entry(byte).or_insert(fresh);
                 if child == fresh {
-                    trie.push(Tn { children: BTreeMap::new(), terminal: false });
+                    trie.push(Tn { children: BTreeMap::new(), terminal: false, after_separator: separator });
                 }
                 at = child;
             }
@@ -392,6 +430,15 @@ impl Builder {
         for (tn, &from) in trie.iter().zip(ids.iter()) {
             for (&byte, &child) in &tn.children {
                 self.set(f, from, byte, Action::Goto(ids[child]))?;
+            }
+            if tn.after_separator {
+                // The spaced twin reads exactly what the node reads; a second space is dead
+                // because no canonical literal has a space after a separator.
+                let spaced = self.node(f, false)?;
+                self.set(f, from, b' ', Action::Goto(spaced))?;
+                for (&byte, &child) in &tn.children {
+                    self.set(f, spaced, byte, Action::Goto(ids[child]))?;
+                }
             }
             if tn.terminal {
                 self.pops(f, from)?;
@@ -521,7 +568,7 @@ impl Builder {
                 let resume = if k < cap { after[k] } else { at };
                 let next = self.node(f, false)?;
                 self.set(f, at, b',', Action::Goto(next))?;
-                self.push_all(f, next, items, resume);
+                self.one_space_then_push(f, next, items, resume)?;
             }
         }
         Ok(())
@@ -585,6 +632,9 @@ impl Builder {
         self.set(f, after_value, b',', Action::Goto(next_key))?;
         self.set(f, after_value, b'}', Action::Close { required: required_mask, next: done })?;
         self.set(f, next_key, b'"', Action::Goto(trie_root))?;
+        let next_key_spaced = self.node(f, false)?;
+        self.set(f, next_key, b' ', Action::Goto(next_key_spaced))?;
+        self.set(f, next_key_spaced, b'"', Action::Goto(trie_root))?;
 
         // The generic key string, for undeclared members: one node per phase, the closing quote
         // leading to the additional value.
@@ -594,7 +644,7 @@ impl Builder {
             let colon = self.node(f, false)?;
             let value = self.node(f, false)?;
             self.set(f, colon, b':', Action::Goto(value))?;
-            self.push_all(f, value, frame, after_value);
+            self.one_space_then_push(f, value, frame, after_value)?;
             add_colon = Some(colon);
             for phase in PHASES {
                 generic.insert(phase, self.node(f, false)?);
@@ -617,7 +667,7 @@ impl Builder {
             let colon = self.node(f, false)?;
             let value = self.node(f, false)?;
             self.set(f, colon, b':', Action::Goto(value))?;
-            self.push_all(f, value, *frame, after_value);
+            self.one_space_then_push(f, value, *frame, after_value)?;
             colon_of.push(colon);
         }
 
@@ -722,6 +772,30 @@ mod tests {
         to_rfc8785(value).unwrap()
     }
 
+    /// The canonical bytes with one space after every `:` and `,` outside strings — the
+    /// single-line spelling `json.dumps` writes by default, and the one the compiler admits.
+    fn single_line(canonical: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(canonical.len() * 2);
+        let (mut in_string, mut escaped) = (false, false);
+        for &byte in canonical {
+            out.push(byte);
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else if byte == b'\\' {
+                    escaped = true;
+                } else if byte == b'"' {
+                    in_string = false;
+                }
+            } else if byte == b'"' {
+                in_string = true;
+            } else if byte == b':' || byte == b',' {
+                out.push(b' ');
+            }
+        }
+        out
+    }
+
     /// The canonical bytes of every value that validates are accepted; the canonical bytes of
     /// every value that does not validate are not (dead, or live but not complete); and a
     /// non-canonical spelling of a valid value — whitespace, an escape RFC 8785 does not use — is
@@ -813,7 +887,9 @@ mod tests {
                 validate(&parsed, v).unwrap_or_else(|e| panic!("{v} should validate against {schema}: {e:?}"));
                 assert!(accepts(&c, &canonical(v)), "{schema} must accept {v}");
                 accepted += 1;
-                // The same value with insignificant whitespace is not the canonical form: dead.
+                // One space after each separator is the single-line spelling, admitted.
+                assert!(accepts(&c, &single_line(&canonical(v))), "{schema} must accept the single-line spelling of {v}");
+                // Any other whitespace — the pretty spelling's newlines and indentation — is dead.
                 let spaced = serde_json::to_vec_pretty(v).unwrap();
                 if spaced != canonical(v) {
                     assert!(!accepts(&c, &spaced), "{schema} must not accept the pretty spelling of {v}");
@@ -843,8 +919,9 @@ mod tests {
         }
     }
 
-    /// Decision 3's `json_object`: any canonical JSON value is accepted, malformed JSON is not,
-    /// whitespace is dead, and the depth is consensus-core's.
+    /// Decision 3's `json_object`: any canonical JSON value is accepted, and its single-line
+    /// spelling; malformed JSON is not, whitespace other than one space after a separator is
+    /// dead, and the depth is consensus-core's.
     #[test]
     fn the_json_object_grammar_admits_any_canonical_json_value() {
         let c = compile_json_object_v1();
@@ -861,6 +938,10 @@ mod tests {
             json!({ "dup": 1, "other": 2 }),
         ] {
             assert!(accepts(&c, &canonical(&v)), "{v}");
+            assert!(accepts(&c, &single_line(&canonical(&v))), "single-line {v}");
+        }
+        for spaced in [&b"[1, 2]"[..], b"{\"a\": 1, \"b\": [true, null]}", b"{\"name\": \"Tama\", \"age\": 3}"] {
+            assert!(accepts(&c, spaced), "{:?}", String::from_utf8_lossy(spaced));
         }
         // Duplicate keys are not tracked here (RFC 8259 permits them; the derivation reads the
         // last).
@@ -869,7 +950,17 @@ mod tests {
             &b" 1"[..],
             b"1 ",
             b"{ }",
-            b"[1, 2]",
+            b"[1,  2]",
+            b"[ 1]",
+            b"[1 ,2]",
+            b"[1 ]",
+            b"{ \"a\":1}",
+            b"{\"a\":1 }",
+            b"{\"a\":  1}",
+            b"{\"a\":\n1}",
+            b"{\"a\":\t1}",
+            b"{\"a\":1,\n\"b\":2}",
+            b"{\"a\":1} ",
             b"{\"a\" :1}",
             b"01",
             b"1.",
@@ -905,6 +996,10 @@ mod tests {
         assert!(accepts(&c, &closed));
         // After a complete root value, nothing is admitted: this is how the run's stop fires.
         let done = constraint_state_after_v1(&c, [&b"{\"a\":[1]}"[..]]).unwrap();
+        assert!(constraint_is_accepting_v1(&c, &done));
+        assert!((0..=255u8).all(|b| constraint_admits_v1(&c, &done, &[b]).is_none()));
+        // The same after the single-line spelling: the one space never reaches past the root.
+        let done = constraint_state_after_v1(&c, [&b"{\"a\": [1, 2]}"[..]]).unwrap();
         assert!(constraint_is_accepting_v1(&c, &done));
         assert!((0..=255u8).all(|b| constraint_admits_v1(&c, &done, &[b]).is_none()));
         // A root number is complete AND continuable: digits stay live, so its stop is the budget.

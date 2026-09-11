@@ -1391,15 +1391,13 @@ pub struct Params {
     /// A bare fence, top level, `None` on every shipped preset — the `palw_fp_decode_rules`
     /// shape directly above, for its reasons.
     ///
-    /// **ARMING IT IS REFUSED BY [`Self::validate_palw_v2`] ON THIS BUILD**, exactly as the
-    /// decode-rules fence above is refused: none of the three halves exists on the path that
-    /// would apply it — consensus-core carries no constraint automaton and no version-6 job, the
-    /// court has no v3 refutation arm, and no engine masks a decode. Arming it changes exactly
-    /// one observable thing today — `GetPalwProducerFactsResponse::fp_decode_constraint_armed`,
-    /// which an entrance would read as "serve `response_format` committed" — so the fence's only
-    /// reachable effect would be a format the seat does not replay, which is a claim no seat can
-    /// reproduce. The refusal lifts when the build carries all three halves (ADR-0096 §6 steps
-    /// 3–4).
+    /// **Every half is in this build, so arming it assembles.** The job half (version 6, the
+    /// payload's automaton, admission refusing an unpinned tokenizer), the engine half (the a16
+    /// family masks; the seat replays masked through the pinned token table) and the court half
+    /// (the constrained decode and rendering closes, and the job-less decode arms refused against a
+    /// free-prompt claim past the fence — ADR-0096 §10 B5, B6, B10). It stays `None` on every
+    /// shipped preset: when a network arms it is a release decision. `--palw-fp-constraint-devnet`
+    /// arms it on a private devnet.
     pub palw_fp_decode_constraint: Option<ForkActivation>,
 
     /// **ADR-0083 Decision 1 — the difficulty window counts only rows priced by `bits`.**
@@ -2042,21 +2040,9 @@ impl Params {
                  that carries both",
             ));
         }
-        // **ADR-0096 Decisions 6–8 cannot be armed by this build either, and the fence says so**
-        // — the same shape as the refusal directly above, for the same reason: a configuration
-        // that reads as "armed" while no job may carry a constraint, no court can try one and no
-        // engine masks one would tell every entrance to serve a committed format that no seat
-        // replays. `never()` is absence and is exempt.
-        if let Some(activation) = self.palw_fp_decode_constraint
-            && activation != ForkActivation::never()
-        {
-            return Err(PalwModeV2Error::Invalid(
-                "palw_fp_decode_constraint is armed and this build cannot carry ADR-0096 Decisions 6-8: consensus-core has no \
-                 constraint automaton and no version-6 free-prompt job (no job may carry a constraint_id), the court has no \
-                 v3 refutation arm, and no engine masks a decode — the fence may only be armed by a build that carries all \
-                 three",
-            ));
-        }
+        // ADR-0096 Decisions 6–8 are assemblable: the version-6 job, the masked engine, the seat's
+        // masked replay and the court's constrained closes (§10 B5, B6, B10) are all in this build.
+        // The fence stays `None` on every preset; arming it is a release decision.
         // **ADR-0081 Decision 3 / ADR-0082 Decision 5: the prompt-commitment form is a property
         // of the GENESIS, never of a height** (private-prompts design, 2026-09-05).
         //
@@ -2967,6 +2953,13 @@ impl Params {
     /// the ids is part of the coordinated release... what the DAA fence governs is the *effect*".
     pub fn palw_panel_da_admissible(&self) -> bool {
         self.palw_panel_da_fence().is_some()
+    }
+
+    /// **Does this ruleset carry ADR-0096's version-6 (constrained) job SHAPE at all** — the
+    /// height-free question the context-free transaction door asks, strictly weaker at every
+    /// height than the walk's `palw_fp_decode_constraint_active_at`.
+    pub fn palw_fp_decode_constraint_admissible(&self) -> bool {
+        self.palw_fp_decode_constraint_fence().is_some()
     }
 
     /// **Which form a job's `prompt_token_ids_hash` takes at `daa_score`** (ADR-0081 Decision 3).
@@ -4157,7 +4150,14 @@ impl Params {
             palw_court_ladder,
             palw_model_market,
             palw_model_lines,
-            palw_model_benefits,
+            // **Excluded, and NOT because it is redundant.** The f64 exclusion above is a lossy
+            // view of something already hashed; this is an omission with a live fix on its own
+            // branch (`fix/params-id-writes-model-benefits`): ADR-0095's membership fence is not
+            // in the printed fingerprint, so two nodes can disagree about member benefits and
+            // still agree about their params id. Writing it here MOVES every V2 network's
+            // identity, which is a flag day rather than a lint fix — so the field is NAMED rather
+            // than replaced by `_`, because `_` makes this exhaustive destructure stop asking.
+            palw_model_benefits: _palw_model_benefits,
             palw_model_evm,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
@@ -12111,18 +12111,10 @@ mod consensus_params_id_tests {
         let shipped = devnet_shipped_params();
         shipped.validate_palw_v2().expect("the shipped devnet assembles");
 
-        for (name, arm) in [
-            (
-                "palw_fp_decode_rules",
-                (|p: &mut Params, a: ForkActivation| p.palw_fp_decode_rules = Some(a)) as fn(&mut Params, ForkActivation),
-            ),
-            // ADR-0096 Decisions 6–8: the same refusal, for the same reason — no job may carry
-            // a constraint, no court can try one, no engine masks one.
-            (
-                "palw_fp_decode_constraint",
-                (|p: &mut Params, a: ForkActivation| p.palw_fp_decode_constraint = Some(a)) as fn(&mut Params, ForkActivation),
-            ),
-        ] {
+        for (name, arm) in [(
+            "palw_fp_decode_rules",
+            (|p: &mut Params, a: ForkActivation| p.palw_fp_decode_rules = Some(a)) as fn(&mut Params, ForkActivation),
+        )] {
             for activation in [ForkActivation::always(), ForkActivation::new(9_000_000)] {
                 let mut armed = shipped.clone();
                 arm(&mut armed, activation);
@@ -12133,6 +12125,26 @@ mod consensus_params_id_tests {
             let mut never_armed = shipped.clone();
             arm(&mut never_armed, ForkActivation::never());
             never_armed.validate_palw_v2().unwrap_or_else(|e| panic!("{name}: Some(never()) is absence, not an arming: {e}"));
+        }
+    }
+
+    /// **ADR-0096 Decisions 6–8 assemble now that every half is here** — the job, the engine, the
+    /// seat and the court (§10). The refusal that stood while any half was missing is gone, and
+    /// arming changes what it must: the fence answers at its height and nowhere before it, on the
+    /// devnet a drill arms and on testnet-11's ruleset alike.
+    #[test]
+    fn the_decode_constraint_fence_assembles_now_that_every_half_is_here() {
+        for (name, shipped) in [("devnet", devnet_shipped_params()), ("testnet-11", palw_rc_shipped_params())] {
+            assert!(shipped.palw_fp_decode_constraint.is_none(), "{name} ships the fence dormant");
+            for activation in [ForkActivation::always(), ForkActivation::new(9_000_000)] {
+                let mut armed = shipped.clone();
+                armed.palw_fp_decode_constraint = Some(activation);
+                armed.validate_palw_v2().unwrap_or_else(|e| panic!("{name}: arming ADR-0096's fence must assemble: {e}"));
+                assert!(armed.palw_fp_decode_constraint_admissible(), "{name}: an armed fence is admissible at the tx door");
+            }
+            let mut at = shipped.clone();
+            at.palw_fp_decode_constraint = Some(ForkActivation::new(9_000_000));
+            assert!(at.palw_fp_decode_constraint_active_at(9_000_000) && !at.palw_fp_decode_constraint_active_at(8_999_999));
         }
     }
 
@@ -12467,7 +12479,11 @@ mod consensus_params_id_tests {
         // alias it (ADR-0096 Decision 8, last sentence).
         let mut rules_only = shipped.clone();
         rules_only.palw_fp_decode_rules = Some(ForkActivation::new(9_000_000));
-        assert_ne!(rules_only.consensus_params_id(), armed.consensus_params_id(), "the sampler and the constraint are distinct fences");
+        assert_ne!(
+            rules_only.consensus_params_id(),
+            armed.consensus_params_id(),
+            "the sampler and the constraint are distinct fences"
+        );
         // The mode condition is folded in: outside ConsensusV2 the fence answers nothing.
         let mut legacy = MAINNET_PARAMS.clone();
         legacy.palw_fp_decode_constraint = Some(ForkActivation::always());

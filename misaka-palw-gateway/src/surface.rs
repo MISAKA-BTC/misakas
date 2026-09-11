@@ -255,10 +255,25 @@ pub struct FormatRequest {
     /// The `json_schema.name`, reported back; it is not rendered into the prompt.
     pub name: Option<String>,
     pub schema: Option<Schema>,
-    /// RFC 8785 bytes of the schema as sent — the text the model sees and the id's preimage.
+    /// RFC 8785 bytes of the schema as sent — what the answer is reported against and, before
+    /// [`Self::prompt_schema`], the text the model saw.
     pub canonical_schema: Option<Vec<u8>>,
-    /// `constraint_id(canonical_schema)`. Advisory today: it names the constraint the request
-    /// asked for, and nothing on chain carries it until Part B.
+    /// **The schema in the client's member order** — RFC 8785's spelling of every scalar and no
+    /// whitespace, but the members where the client put them. What the model reads.
+    ///
+    /// Member order is not JSON's, and it IS the model's: OpenAI emits members in the schema's
+    /// order, and a model told the members in sorted order answers in sorted order. Measured on
+    /// the first masked run (Qwen2.5-1.5B, 2026-09-10): for `{label, confidence}` the sorted text
+    /// put `confidence` first, the model wrote `0.5` and then the label that fits a coin flip —
+    /// `neutral` for "the battery died after two days" — where the same schema with `label`
+    /// first answered `negative`. `None` when the body could not be read in order (the canonical
+    /// text is then used, and the answer is the one the sorted text gives).
+    pub prompt_schema: Option<Vec<u8>>,
+    /// **The compiled automaton's canonical bytes** (ADR-0096 Decision 7), or the compiler's
+    /// refusal by name (a `pattern`, a string too long for the automaton's bounds). What a masked
+    /// or committed run hands the worker; an advisory run needs none.
+    pub compiled: Result<Vec<u8>, String>,
+    /// `constraint_id_v1(compiled)` — the id a version-6 job carries — when the schema compiled.
     pub constraint_id: Option<Hash64>,
 }
 
@@ -289,7 +304,7 @@ impl FormatRequest {
             FormatKind::JsonObject => "\n\nRespond with a single JSON value and nothing else.".to_string(),
             FormatKind::JsonSchema => format!(
                 "\n\nRespond with a single JSON value that conforms to this JSON Schema and nothing else:\n{}",
-                String::from_utf8_lossy(self.canonical_schema.as_deref().unwrap_or_default())
+                String::from_utf8_lossy(self.prompt_schema.as_deref().or(self.canonical_schema.as_deref()).unwrap_or_default())
             ),
         }
     }
@@ -339,15 +354,25 @@ impl FormatRequest {
     /// `misaka.format` (ADR-0096 Decision 3): what was asked, which mode served it, and what the
     /// check found. `enforcement` is `"advisory"` on every network whose fence is dormant — which
     /// is every network this build can reach (`ChainFacts::fp_decode_constraint_armed`).
-    pub fn report_json(&self, report: &FormatReport) -> Value {
+    /// The automaton's bytes when the schema compiled and the run may be masked (ADR-0096
+    /// Decision 3's modes, decided by the caller): `None` for an advisory run.
+    pub fn mask_bytes(&self) -> Option<&[u8]> {
+        self.compiled.as_ref().ok().map(Vec::as_slice)
+    }
+
+    /// `misaka.format`. `enforcement` is the caller's decision (ADR-0096 Decision 3): `committed`
+    /// (masked, and the claim the chain accepts names the automaton), `masked` (masked on a gateway
+    /// that commits nothing), or `advisory` (the instruction rode the prompt as text, nothing more).
+    pub fn report_json(&self, report: &FormatReport, enforcement: &str) -> Value {
         serde_json::json!({
             "requested": {
                 "type": self.type_name(),
                 "name": self.name,
                 "constraint_id": self.constraint_id.map(|id| faster_hex::hex_string(id.as_byte_slice())),
-                "constraint_bytes": self.canonical_schema.as_ref().map(Vec::len),
+                "constraint_bytes": self.compiled.as_ref().ok().map(Vec::len),
+                "not_compiled_because": self.compiled.as_ref().err(),
             },
-            "enforcement": "advisory",
+            "enforcement": enforcement,
             "valid": report.valid,
             "errors": report.errors,
             "canonical_sha256": report.canonical_sha256,
@@ -397,8 +422,145 @@ fn not_a_rule(name: &str, value: impl std::fmt::Display) -> String {
 /// **Parse a request body and admit it** — the route's and the conformance corpus's ONE path.
 pub fn parse_and_admit(body: &[u8], facts: &ChainFacts) -> Result<(ChatRequest, AdmittedRequest), String> {
     let chat: ChatRequest = serde_json::from_slice(body).map_err(|e| format!("request body is not a chat completion: {e}"))?;
-    let admitted = admit_request(&chat, facts)?;
+    let mut admitted = admit_request(&chat, facts)?;
+    // The schema the model reads, in the client's member order (see `FormatRequest::prompt_schema`).
+    // Read from the BODY, because the parsed `Value` has already sorted it; kept only when it is
+    // the same schema, member for member, as the one admitted.
+    if let Some(format) = admitted.format.as_mut()
+        && let Some(canonical) = format.canonical_schema.as_deref()
+    {
+        format.prompt_schema =
+            schema_in_client_order(body).filter(|(_, sorted)| sorted.as_slice() == canonical).map(|(ordered, _)| ordered);
+    }
     Ok((chat, admitted))
+}
+
+/// A JSON value with its members in the order the client wrote them. The workspace's
+/// `serde_json::Value` sorts members (`preserve_order` is off, and must stay off: consensus code
+/// hashes `Value`s), so the order is read by a visitor of its own.
+enum InOrder {
+    Scalar(Value),
+    Array(Vec<InOrder>),
+    Object(Vec<(String, InOrder)>),
+}
+
+impl<'de> Deserialize<'de> for InOrder {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = InOrder;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a JSON value")
+            }
+            fn visit_bool<E>(self, v: bool) -> Result<InOrder, E> {
+                Ok(InOrder::Scalar(Value::Bool(v)))
+            }
+            fn visit_i64<E>(self, v: i64) -> Result<InOrder, E> {
+                Ok(InOrder::Scalar(Value::from(v)))
+            }
+            fn visit_u64<E>(self, v: u64) -> Result<InOrder, E> {
+                Ok(InOrder::Scalar(Value::from(v)))
+            }
+            fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<InOrder, E> {
+                serde_json::Number::from_f64(v)
+                    .map(|n| InOrder::Scalar(Value::Number(n)))
+                    .ok_or_else(|| E::custom("not a JSON number"))
+            }
+            fn visit_str<E>(self, v: &str) -> Result<InOrder, E> {
+                Ok(InOrder::Scalar(Value::String(v.to_string())))
+            }
+            fn visit_string<E>(self, v: String) -> Result<InOrder, E> {
+                Ok(InOrder::Scalar(Value::String(v)))
+            }
+            fn visit_unit<E>(self) -> Result<InOrder, E> {
+                Ok(InOrder::Scalar(Value::Null))
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<InOrder, A::Error> {
+                let mut items = Vec::new();
+                while let Some(item) = seq.next_element()? {
+                    items.push(item);
+                }
+                Ok(InOrder::Array(items))
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<InOrder, A::Error> {
+                let mut members = Vec::new();
+                while let Some((key, value)) = map.next_entry::<String, InOrder>()? {
+                    members.push((key, value));
+                }
+                Ok(InOrder::Object(members))
+            }
+        }
+        deserializer.deserialize_any(V)
+    }
+}
+
+impl InOrder {
+    /// RFC 8785's bytes with the members in THIS order. `sorted` renders them sorted instead —
+    /// which is exactly `to_rfc8785` of the same value, the check that the two readings of the
+    /// body agree. A duplicate member name is refused (the sorted reading keeps the last one and
+    /// this one would show both).
+    fn render(&self, sorted: bool, out: &mut Vec<u8>) -> Result<(), String> {
+        match self {
+            InOrder::Scalar(value) => out.extend(misaka_palw_constraint::canonical::to_rfc8785(value).map_err(|e| e.to_string())?),
+            InOrder::Array(items) => {
+                out.push(b'[');
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push(b',');
+                    }
+                    item.render(sorted, out)?;
+                }
+                out.push(b']');
+            }
+            InOrder::Object(members) => {
+                let mut order: Vec<&(String, InOrder)> = members.iter().collect();
+                if sorted {
+                    // RFC 8785 §3.2.3: member names sort by their UTF-16 code units.
+                    order.sort_by(|a, b| a.0.encode_utf16().cmp(b.0.encode_utf16()));
+                }
+                let mut seen = std::collections::BTreeSet::new();
+                if !members.iter().all(|(name, _)| seen.insert(name.as_str())) {
+                    return Err("a member name appears twice".to_string());
+                }
+                out.push(b'{');
+                for (i, (name, value)) in order.into_iter().enumerate() {
+                    if i > 0 {
+                        out.push(b',');
+                    }
+                    out.extend(
+                        misaka_palw_constraint::canonical::to_rfc8785(&Value::String(name.clone())).map_err(|e| e.to_string())?,
+                    );
+                    out.push(b':');
+                    value.render(sorted, out)?;
+                }
+                out.push(b'}');
+            }
+        }
+        Ok(())
+    }
+}
+
+/// `response_format.json_schema.schema` read from the body in the client's member order:
+/// `(in order, sorted)`, both RFC 8785-spelled, or `None` when the body does not hold one that
+/// reads cleanly.
+fn schema_in_client_order(body: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+    #[derive(Deserialize)]
+    struct Body {
+        response_format: Option<Format>,
+    }
+    #[derive(Deserialize)]
+    struct Format {
+        json_schema: Option<Spec>,
+    }
+    #[derive(Deserialize)]
+    struct Spec {
+        schema: Option<InOrder>,
+    }
+    let schema = serde_json::from_slice::<Body>(body).ok()?.response_format?.json_schema?.schema?;
+    let (mut ordered, mut sorted) = (Vec::new(), Vec::new());
+    schema.render(false, &mut ordered).ok()?;
+    schema.render(true, &mut sorted).ok()?;
+    Some((ordered, sorted))
 }
 
 /// **Every refusal, in one function, before the worker** (ADR-0096 Decision 1; invariant 6).
@@ -695,12 +857,21 @@ pub fn admit_request(chat: &ChatRequest, facts: &ChainFacts) -> Result<AdmittedR
 
     // The format (ADR-0096 Decision 3).
     let format = admit_response_format(chat.response_format.as_ref())?;
-    if chat.misaka.as_ref().is_some_and(|m| m.require_committed_format) && !facts.fp_decode_constraint_armed {
-        return Err(
-            "committed format needs Params::palw_fp_decode_constraint (ADR-0096 Decision 8), which this network has not armed; \
-                    ask for enforcement \"advisory\" or wait for the fence"
-                .to_string(),
-        );
+    if chat.misaka.as_ref().is_some_and(|m| m.require_committed_format) {
+        if !facts.fp_decode_constraint_armed {
+            return Err(
+                "committed format needs Params::palw_fp_decode_constraint (ADR-0096 Decision 8), which this network has not armed; \
+                        ask for enforcement \"advisory\" or wait for the fence"
+                    .to_string(),
+            );
+        }
+        // Armed, a committed format is a MASK, and a mask needs the schema compiled.
+        if let Some(Err(why)) = format.as_ref().map(|f| &f.compiled) {
+            return Err(format!("committed format needs the schema compiled to an automaton, and it does not compile: {why}"));
+        }
+        if format.is_none() {
+            return Err("misaka.require_committed_format names a format, and the request carries no response_format".to_string());
+        }
     }
 
     // OpenAI's no-effect fields.
@@ -769,13 +940,19 @@ fn admit_response_format(format: Option<&Value>) -> Result<Option<FormatRequest>
     let members = format.as_object().ok_or_else(|| format!("response_format is {} where an object was expected", kind_of(format)))?;
     match members.get("type").and_then(Value::as_str) {
         Some("text") => Ok(None),
-        Some("json_object") => Ok(Some(FormatRequest {
-            kind: FormatKind::JsonObject,
-            name: None,
-            schema: None,
-            canonical_schema: None,
-            constraint_id: None,
-        })),
+        Some("json_object") => {
+            let compiled = misaka_palw_constraint::compile::compile_json_object_v1().to_bytes();
+            let constraint_id = Some(kaspa_consensus_core::palw_decode_constraint_v1::constraint_id_v1(&compiled));
+            Ok(Some(FormatRequest {
+                kind: FormatKind::JsonObject,
+                name: None,
+                schema: None,
+                canonical_schema: None,
+                prompt_schema: None,
+                compiled: Ok(compiled),
+                constraint_id,
+            }))
+        }
         Some("json_schema") => {
             let spec = members.get("json_schema").and_then(Value::as_object).ok_or_else(|| {
                 "response_format.json_schema is missing (an object with `schema` and optionally `name`, `strict`)".to_string()
@@ -797,13 +974,19 @@ fn admit_response_format(format: Option<&Value>) -> Result<Option<FormatRequest>
                     misaka_palw_constraint::PALW_CONSTRAINT_MAX_BYTES
                 ));
             }
-            let constraint_id = misaka_palw_constraint::constraint_id(&canonical);
+            // The automaton a masked run follows. A schema the subset parses but the compiler cannot
+            // bound (a `pattern` today) is still served advisory; only a mask needs it compiled.
+            let compiled = misaka_palw_constraint::compile::compile_v1(&schema).map(|c| c.to_bytes());
+            let constraint_id =
+                compiled.as_ref().ok().map(|bytes| kaspa_consensus_core::palw_decode_constraint_v1::constraint_id_v1(bytes));
             Ok(Some(FormatRequest {
                 kind: FormatKind::JsonSchema,
                 name: spec.get("name").and_then(Value::as_str).map(str::to_string),
                 schema: Some(schema),
                 canonical_schema: Some(canonical),
-                constraint_id: Some(constraint_id),
+                prompt_schema: None,
+                compiled,
+                constraint_id,
             }))
         }
         Some(other) => Err(format!("response_format.type {other:?} is refused by name: text | json_object | json_schema")),
@@ -1048,6 +1231,44 @@ mod tests {
         );
     }
 
+    /// The model reads the schema in the CLIENT's member order; the id, the automaton and the
+    /// report stay on the canonical bytes, so two orders of one schema are one constraint.
+    #[test]
+    fn the_model_reads_the_schema_in_the_clients_member_order() {
+        let body = |schema: &str| {
+            format!(
+                r#"{{"messages":[{{"role":"user","content":"u"}}],"response_format":{{"type":"json_schema","json_schema":{{"name":"s","schema":{schema}}}}}}}"#
+            )
+        };
+        let label_first = r#"{ "type": "object", "properties": { "label": { "enum": ["positive", "negative"] }, "confidence": { "type": "number" } }, "required": ["label"] }"#;
+        let (_, admitted) = parse_and_admit(body(label_first).as_bytes(), &dormant()).unwrap();
+        let format = admitted.format.unwrap();
+        assert!(
+            format.instruction().ends_with(
+                r#"{"type":"object","properties":{"label":{"enum":["positive","negative"]},"confidence":{"type":"number"}},"required":["label"]}"#
+            ),
+            "{}",
+            format.instruction()
+        );
+        // The canonical bytes are sorted, and they are what the id's automaton was compiled from.
+        assert!(String::from_utf8_lossy(format.canonical_schema.as_deref().unwrap()).starts_with(r#"{"properties":{"confidence""#));
+
+        let confidence_first = r#"{"required":["label"],"properties":{"confidence":{"type":"number"},"label":{"enum":["positive","negative"]}},"type":"object"}"#;
+        let (_, other) = parse_and_admit(body(confidence_first).as_bytes(), &dormant()).unwrap();
+        let other = other.format.unwrap();
+        assert_eq!(other.constraint_id, format.constraint_id, "one schema, one constraint, whatever the order");
+        assert_eq!(other.canonical_schema, format.canonical_schema);
+        assert_ne!(other.instruction(), format.instruction(), "and the model reads each order as sent");
+
+        // A duplicate member name reads two ways (the parsed value keeps the last); the canonical
+        // text is shown instead of either.
+        let duplicate = r#"{"type":"object","properties":{"a":{"type":"string"},"a":{"type":"integer"}}}"#;
+        let (_, dup) = parse_and_admit(body(duplicate).as_bytes(), &dormant()).unwrap();
+        let dup = dup.format.unwrap();
+        assert!(dup.prompt_schema.is_none());
+        assert!(dup.instruction().ends_with(&String::from_utf8(dup.canonical_schema.clone().unwrap()).unwrap()));
+    }
+
     /// **Decision 3 at the entrance.** `text` asks nothing; `json_object` and `json_schema` become
     /// a format whose instruction the system turn will carry; the id is over the canonical bytes;
     /// a schema outside the subset, an oversize one, an unknown type and a stray key are refused
@@ -1058,7 +1279,10 @@ mod tests {
         assert!(admit(json!({ "messages": user("u"), "response_format": null })).unwrap().format.is_none());
         let object = admit(json!({ "messages": user("u"), "response_format": { "type": "json_object" } })).unwrap().format.unwrap();
         assert!(matches!(object.kind, FormatKind::JsonObject));
-        assert_eq!(object.constraint_id, None);
+        // `json_object` compiles to the any-JSON-value automaton, and its id is what a version-6
+        // job would carry (ADR-0096 Decision 7).
+        let compiled = object.mask_bytes().expect("json_object always compiles");
+        assert_eq!(object.constraint_id, Some(kaspa_consensus_core::palw_decode_constraint_v1::constraint_id_v1(compiled)));
         assert_eq!(object.instruction(), "\n\nRespond with a single JSON value and nothing else.");
 
         let schema = json!({ "type": "object", "properties": { "name": { "type": "string" }, "age": { "type": "integer", "minimum": 0 } }, "required": ["name"], "additionalProperties": false });
@@ -1068,7 +1292,15 @@ mod tests {
         assert_eq!(format.name.as_deref(), Some("person"));
         let canonical = misaka_palw_constraint::canonical::to_rfc8785(&schema).unwrap();
         assert_eq!(format.canonical_schema.as_deref(), Some(canonical.as_slice()));
-        assert_eq!(format.constraint_id, Some(misaka_palw_constraint::constraint_id(&canonical)), "the id names the canonical bytes");
+        // The id names the COMPILED automaton — what a version-6 job carries (ADR-0096 Decision 7) —
+        // not the schema's own bytes, which the model reads as text.
+        let compiled = misaka_palw_constraint::compile::compile_v1(format.schema.as_ref().unwrap()).unwrap().to_bytes();
+        assert_eq!(format.mask_bytes(), Some(compiled.as_slice()));
+        assert_eq!(
+            format.constraint_id,
+            Some(kaspa_consensus_core::palw_decode_constraint_v1::constraint_id_v1(&compiled)),
+            "the id names the automaton"
+        );
         assert_eq!(
             format.instruction(),
             format!(
@@ -1290,18 +1522,19 @@ mod tests {
         );
         assert!(!bad.valid && bad.canonical_sha256.is_none());
 
-        let report = person.report_json(&ok);
+        let report = person.report_json(&ok, "advisory");
         assert_eq!(report["enforcement"], json!("advisory"));
         assert_eq!(report["requested"]["type"], json!("json_schema"));
         assert_eq!(report["requested"]["name"], json!("person"));
         assert_eq!(report["requested"]["constraint_id"].as_str().map(str::len), Some(128), "a Hash64, hex");
         assert_eq!(report["valid"], json!(true));
         assert_eq!(report["errors"], json!([]));
-        let object_report = object.report_json(&object.check("{}"));
-        assert_eq!(
-            object_report["requested"],
-            json!({ "type": "json_object", "name": null, "constraint_id": null, "constraint_bytes": null })
-        );
+        let object_report = object.report_json(&object.check("{}"), "advisory");
+        assert_eq!(object_report["requested"]["type"], json!("json_object"));
+        assert_eq!(object_report["requested"]["constraint_id"].as_str().map(str::len), Some(128), "the compiled automaton's id");
+        assert!(object_report["requested"]["constraint_bytes"].as_u64().is_some_and(|n| n > 0));
+        assert_eq!(object_report["requested"]["not_compiled_because"], json!(null));
+        assert_eq!(object_report["enforcement"], json!("advisory"), "the mode is the caller's to state");
     }
 
     /// `GET /v1/models` names the one class, in the shape a stock client lists models with.

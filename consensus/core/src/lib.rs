@@ -176,6 +176,9 @@ pub mod palw_catalog_coverage;
 pub mod palw_chain_weight;
 pub mod palw_class_admission_v2;
 pub mod palw_class_daa;
+/// ADR-0104: the cut a court close is carried in, in the crate that assembles it — so the bytes a
+/// filer sends and the bytes the chain reassembles cannot come from two functions.
+pub mod palw_close_carriage;
 pub mod palw_context_ladder;
 /// ADR-0077 SA-4: the court's turn deadline is a slashing rule, so it is DERIVED from what an
 /// honest responder needs — one interval of replay plus `2 x NETWORK_DELAY_BOUND` — and every
@@ -286,6 +289,7 @@ pub mod palw_step_leg;
 /// three-way verdict (convicted / NoFaultFound / unadjudicable). Land-stage, consensus-inert.
 pub mod palw_step_refute;
 pub mod palw_terminal;
+pub mod palw_token_table_v1;
 /// MISAKA PALW canonical transcendentals (ADR-0031): transcriptions of the SPECIFIC exp/log
 /// algorithms the pinned classes run (ggml's vector polynomial; glibc 2.39's expf/logf in
 /// both contraction variants), written in ruleset-v2 arithmetic. Land-stage, consensus-inert;

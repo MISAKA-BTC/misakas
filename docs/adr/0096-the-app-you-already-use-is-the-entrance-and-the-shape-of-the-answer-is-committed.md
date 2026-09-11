@@ -664,3 +664,208 @@ mapping is written down.
   `3f8fc5066bafae28…` to `Misakachain/Qwen2.5-1.5B-PALW-A16-runtime` and moving the pin is one
   upload and one line, after which the fallback has no user; it is an outward-facing act, so it
   waits for the operator.
+
+* **2026-09-10, Part B's job, engine and seat halves** (branch `feat/adr-0096-partb-drill`:
+  `231d75cb`, `318d7800`, `03f643a6`). B1–B4 and B7 as §10 says, plus B9–B12 below: the version-6
+  job and payload, the automaton on every free-prompt material, the pinned Qwen2.5 token table
+  (`01e9c31c…`, 151,936 ids, lowest EOG 151,643, reproduced by an independent implementation), the
+  a16 engine's masked decode with the table passed in by its caller, the worker's lazily built table,
+  the seat's masked replay (`--palw-class-tokenizer`), the rail's version-6 build and the
+  entrance's masked and committed modes.
+* **2026-09-10, the court half, and the fence assembles** (`3e1864ce`, merged in `5869baa1`;
+  `e9e02e0a`). Two appended close variants (borsh tags 5 and 6, earlier tags pinned):
+  `ConstrainedDecode` (B5: binding, tiled pin, job, automaton, segments, the beating lane's table
+  opening; a version-5 job is tried by the v2 rule through the same arm) and `ConstrainedRendering`
+  (B6: binding, job, ids, segments, a position and its opening). Both answer the step the ladder
+  narrowed to. Past the fence `DecodeToken`/`DecodeTokenTiled` are refused against a free-prompt
+  claim (`DecodeCloseWithoutTheJob`), the new arms are refused against an attempt claim and on a
+  dormant network, and `adjudicate_court_close_v2` takes the fence at the block's DAA. Tested
+  through `adjudicate_court_close_v2` on synthetic pins and end to end on a real masked a16 run at
+  151,936 lanes through the pinned table (an honest run acquitted, a producer that ignored its
+  constraint convicted, a lying rendering convicted, the old arm refused where armed). With the
+  court half in, `validate_palw_v2` no longer refuses the fence; it stays `None` on every preset.
+  The first constrained drill (run 1) started before this merge on a build whose refusal was
+  bypassed locally for that run only and never committed; the final drill runs this commit.
+* **2026-09-10, drill run 1 — a version-6 claim on a live devnet** (`misaka-palw-fp-devnet-e2e.sh`
+  with `CONSTRAINED=1`, three nodes, the fence armed at DAA 0, graph-v5@512 class `4277d84f…`, the
+  bound artifact and the pinned Qwen2.5 table on every node). The gateway committed the format:
+  "Extract the person as JSON: Taro Yamada is 34 years old and lives in Osaka." answered
+  `{"name":"Taro Yamada","age":34,"city":"Osaka"}`, enforcement `committed`, valid, automaton
+  `fe3fb23f…` (1,090 bytes), `finish_reason` `stop`. The worker built the table and said it is the
+  pin (`01e9c31c…`). The rail signed a job of version 6 and the node accepted it (claim
+  `d620161f…`, tx `a65edf84…`). `FreePromptCommitted` and `PanelBound` reached every node. The
+  capture was 19.7 MB, over the transport cap, so the seats had only the answer envelope: node-2
+  (no artifact) filed `Incapable`, and **node-1 replayed the version-6 job masked through the
+  automaton and the pinned table, reproduced both roots and the priced work, and filed `Valid`**
+  (18:58 JST) — the masked decode is the same in two processes on two nodes. With three nodes no
+  licence is reachable (3 `Valid` of 5 seats, the executor never sits), which the drill now says at
+  preflight; the run was stopped there. Evidence: `run1-evidence.txt` beside the run directory.
+
+* **2026-09-11, drill run 5 — a version-6 claim licensed by three masked replays** (commit
+  `e9e02e0a` built, no bypass; the drill at `5ea835b2`; four nodes, all holding the artifact and
+  all producing the dense class, the claim executed under bond 4, which no node runs). Stages 1–5
+  as in run 1; the same prompt answered `{"name":"Taro Yamada","age":34,"city":"Osaka"}`,
+  committed and valid. Claim `de0a000d…` was accepted at DAA 32 under bond 4 and reached
+  `FreePromptCommitted`, `PanelBound` and **`ReceiptLicensed` on every node**: node-1, node-2 and
+  node-3 each replayed the job masked through the automaton and the pinned table and filed `Valid`
+  (node-3 filed `Unavailable` once before its material arrived; node-0, busy with the dense blocks'
+  duties, filed nothing), and the quorum of three licensed it. Two later licensing objects were
+  dropped as "in the wrong phase for ReceiptQuorum" — they arrived after the licence. **`Final` was
+  not reached**: about 100 DAA before it, the host (a 24 GB, 12-core laptop) panicked — "watchdog
+  timeout: no checkins from watchdogd in 91 seconds" — after five hours of four dense producers and
+  their seats' replays. The drill's own findings on the way: the first free-prompt claim ran under
+  node-0's bond and lost its fee float to node-0's panel paying for receipts (run 3; fixed by
+  `EXECUTOR_BOND`), a block count read empty killed a run in bash arithmetic (run 2; fixed), and
+  three nodes can never license a claim (3 `Valid` of 5 seats, the executor never sits; the drill
+  now says so at preflight). Evidence: `run5-evidence.txt` beside the run directory, and the
+  claim's material and answer envelope kept.
+
+## 10. Amendment 2026-09-10 — what the court needs, found while building the drill
+
+Decision 7 said the court "recomputes `s` by running the automaton over the rendered prefix —
+which needs the class's token-to-bytes table (Decision 8)", and Decision 8 said the table is
+"served material". Building toward the drill showed that this is not adjudicable as written. The
+court is run by every node inside the fold, a node holds no tokenizer, and the only
+tokenizer-derived value the chain can reach is the artifact's `tokenizer_commitment` — a flat hash
+of `tokenizer.json`, from which no single token's bytes can be proven. And the claim record the
+court reads (`PalwClaimStateV2`) holds roots, not the job. A court that needs a file only some
+nodes have is a consensus split, and a court that cannot try a constrained token convicts an
+honest one: a challenger who could state "no constraint" would win against every masked token.
+So Decisions 7 and 8 are completed here, and the fence stays refused at assembly until every
+item below is in the build.
+
+**B1 — the job's version 6 layout.** `PalwFreePromptJobV3` serializes byte-for-byte as today for
+version 5 and appends `constraint_id: Hash64` for version 6 only, so every version-5 job id, claim
+id and pinned golden stays what it is. Version 6 requires a non-zero `constraint_id`, and version
+5 has none, so one meaning never has two encodings. The worker result and the commitment payload
+move with the job, as they already do (one version constant today).
+
+**B2 — the payload carries the constraint.** Under `PublicDa` a version-6 payload appends the
+constraint's canonical bytes, bounded to **16 KiB** (not the automaton's own 64 KiB — the bytes
+must fit a court carrier beside the rest of a close, B5). Acceptance parses them canonically and
+requires `constraint_id_v1(bytes) == job.constraint_id`. Seats replay from it. `PanelDa` with
+version 6 is refused by name until a private route for the constraint exists.
+
+**B3 — the answer is committed token by token.** For a version-6 job, the family's rendered-output
+hash is `rendered_segments_hash_v1` over the per-token byte strings, length-prefixed, in order —
+not a keyed hash of the ids. `output_root = output_commitment_v2(context, ids, rendered)` then
+binds each position's bytes, so a close can carry the rendering and the court checks it against
+the claim's own `output_root` without a new field anywhere.
+
+**B4 — the token tables are the build's.** For each tokenizer a class may constrain under,
+consensus-core pins `(tokenizer_commitment, vocab_len, token_table_root)`, where the root is a
+Merkle root over leaves `H(domain ‖ id ‖ len ‖ bytes)` for every id in `0..vocab_len` (an id the
+tokenizer cannot render has the empty-bytes leaf and is never admitted). The pin is produced by a
+script from the tokenizer file and checked against the file by a test, the Gumbel table's shape
+(ADR-0082 Decision 11). A tokenizer with no row cannot carry a version-6 job. This is ADR-0067's
+rule applied to tokenizers: classes are chain data, kernels — and now token tables — are the build.
+
+**B5 — the constrained decode close.** A new close arm carries the tiled pin (as today), the
+version-6 job (checked: `fp_job_id_v3(job) == binding.job_context.job_id`, and the binding is
+already checked against the claim's `execution_root`), the constraint bytes (checked against
+`job.constraint_id`), and the per-token segments (checked: `output_commitment_v2` over the pin's
+ids and `rendered_segments_hash_v1(segments)` equals the claim's `output_root`). The court walks
+the automaton over `segments[..p]`. The one-disclosure arm needs no tile: the committed token at
+`p` is not admitted from `s_p` (under B7's finish rule). The two-disclosure arm adds the beating
+lane's bytes with a Merkle opening against the pinned table root, and convicts only if that lane is
+admitted and its key beats the committed one's.
+
+**B6 — the rendering close.** A lie about the segments themselves is tried separately. The close
+carries the segments (checked against `output_root` as in B5), a position `q`, and the table
+opening for `ids[q]`, and convicts if `segments[q]` is not the table's bytes. A challenger's own
+segmentation cannot be substituted, because the segments are checked against the claimant's
+`output_root`, not supplied on trust.
+
+**B7 — the finish rule.** Once no lane is admitted (a complete root value admits nothing), the
+committed token is the lowest EOG id at that position and at every later one; the automaton is in
+a distinguished finished state, and the run still ends at the declared budget
+(`ExactBudgetReached`), so the job context and its hash are built before the run exactly as today.
+`render_answer_v2` renders up to the first committed EOG id, so the answer a derivation reads is
+exactly the constrained value.
+
+**B8 — the qwen36 family.** Its engine does not mask yet; a version-6 job for it is refused by the
+worker by name.
+
+**What the drill proves, and what it does not.** On a private devnet with the fence scheduled: a
+constrained claim is committed, accepted, replayed by every seat and reaches `Final`. The court
+arms (B5, B6) are proven by tests through `adjudicate_court_close_v2`, the fold's own entry, over
+a real constrained run on a fixture-sized artifact: an honest run acquitted, an altered id
+convicted by the one-disclosure arm, a forbidden beating lane not a fault, a lying segment
+convicted by B6. A live court round trip is the court drill's job, not this one's.
+
+**B9 — no interval arm for a version-6 claim.** The interval replay (ADR-0077 Decision 8, ADR-0082
+Decision 9) teacher-forces the committed ids and re-selects each token by the plain argmax, which
+a masked decode is not, so it would disagree with every honest constrained claim. A seat skips it
+for version 6 and replays the whole job masked. The a16 capture is over the transport cap at
+every useful length (37 MB for 60 tokens, measured), so the seat reads the job, the prompt and the
+automaton from the answer envelope, which therefore carries the automaton for version 6 (as do
+`FPM1` and `FPC1`; B2's "seats replay from it" is the material, bound to `constraint_id` by every
+decoder). A seat without the pinned table answers `Incapable` — it cannot judge — never
+`Unavailable` against an executor that served everything.
+
+**B10 — past the fence, a free-prompt decode close carries its job.** Neither the claim record nor
+`PalwJobContextV2` says whether a claim was constrained: the context holds no version and no
+constraint id. So the unconstrained decode arms (`DecodeToken`, `DecodeTokenTiled`) cannot tell a
+masked token from an unmasked one, and a challenger who used them against a version-6 claim would
+convict an honest masked token whenever the unconstrained argmax differs. On a network that armed
+the fence they are refused by name for a free-prompt claim; the job-carrying arm (B5) is the only
+decode close for one, running the v2 check for a version-5 job and the v3 check for a version-6
+job. Attempt-lane claims keep the old arms. The arithmetic arms are unaffected: they authenticate
+the committed ids against the claim's logits trace root and recompute arithmetic over them, and
+never re-select a token. Measured while writing this: no tool in the tree assembles a decode-token
+close today, for either version — the panel's automated court builds arithmetic closes only, and
+the CLI builds none — so a selection fault is not prosecuted automatically on any network. For a
+version-6 claim the seat's masked replay is what catches one: a different committed token moves the
+execution root, and the claim gathers no licence. Building the job-carrying close in a
+challenger's tool is the court's remaining work, not the fence's.
+
+**B11 — the pin carries the lowest end-of-generation id.** B7's finish rule commits the class's
+lowest EOG id, and the court tries it from the automaton and that id alone, so the id is the
+build's, beside the root (151,643, `<|endoftext|>`, for the Qwen2.5 row; checked against the
+tokenizer file). Byte-completeness — every one of the 256 bytes is some id's whole rendering, which
+is what lets "no lane is admitted" be read as "no byte continues" — is certified by
+`palw-token-table` and the pin's test. Acceptance refuses a version-6 job whose tokenizer has no
+pinned table (`ConstraintTokenizerUnpinned`), because no court could try a token of it.
+
+**B12 — what the entrance learned from the first masked answers** (Qwen2.5-1.5B-Instruct A16,
+answer-only gateway, 2026-09-10).
+
+* **One space after each `:` and `,`.** The compiler admitted RFC 8785's canonical form only, and a
+  model whose next token is a space-quote was forced onto the best token that is not: "a JSON object
+  describing a cat" came back `{"name":null,"age":null}`. The automaton now admits exactly one space
+  (0x20) after each separator, inside `enum`/`const` literals too, and nothing else — no newline, no
+  second space, nothing around the root — so it cannot loop and B7's finish still fires at the root
+  value's last byte. The same prompt answers `{"name": "Whiskers", "age": 3}`. The derivation strips
+  it (Decision 9 canonicalizes), as it canonicalizes a number.
+* **The model reads the schema in the client's member order.** The instruction rendered the schema
+  canonically, which sorts members, and a light model answers in the order it is shown: for
+  `{label, confidence}` it wrote `"confidence":0.5` first and then `"label":"neutral"` for "the
+  battery died after two days"; shown in the client's order it wrote `"label":"negative"` and 0.95.
+  The gateway reads the order from the request body (the workspace's `Value` sorts, and must keep
+  doing so) and renders RFC 8785 scalars in that order; the constraint id, the automaton and the
+  report stay on the canonical bytes, so two orders of one schema are one constraint. OpenAI emits
+  members in schema order too. An entrance in front of the gateway must forward `response_format`
+  verbatim for this to reach the model (the Studio does not yet).
+* **`finish_reason` is `stop` when the answer ended itself.** A masked answer's EOG renders empty,
+  so the byte comparison that decided `stop` saw no cut and said `length`; the stream records that
+  the answer ended.
+
+**B13 — what the court half found, still open.**
+
+* **The worst-case close is a split close.** At the Qwen2.5 row (151,936 lanes, 511 decode
+  positions) a B5 close counts 190,033 bytes and a B6 close 139,532, against 83,333 counted bytes
+  per lifecycle carrier; the segments dominate, not the 16 KiB automaton (B2's reason for its cap
+  was wrong). It needs a three-chunk split close, which fits testnet-11's 2,250,000-byte close
+  ceiling and is refused as `CloseTooLarge` on a network whose close budget is one carrier.
+* **B6 has no per-segment bound, on purpose.** The segments are the claimant's own commitment; a
+  bound that refused an over-long segment would let a claimant escape by committing one. B6
+  convicts it instead, and B5 keeps its bounds because B6 convicts what B5 refuses.
+* **A claimant that commits segments it never serves is untriable in court.** Both arms need the
+  segments that reproduce the claim's `output_root`. With the job-less arms refused, such a claim's
+  decode tokens cannot be tried — but honest seats replay it masked and do not license it, so it
+  matters only under a colluding panel. Closing it needs a close that proves every segment from the
+  table (about 725 KB).
+* **Only tiled-logits classes have a constrained close.** A free-prompt claim on a flat-logits class
+  has no decode close past the fence, and acceptance does not yet refuse a version-6 job on such a
+  class or on a class whose vocabulary differs from the pinned table's width. Every class certified
+  for the free-prompt lane today is tiled; the refusal belongs where class facts are read.

@@ -295,6 +295,71 @@ pub enum PalwCourtV2Error {
          (PalwCourtParamsV2::max_close_chunks, inside the ruleset id)"
     )]
     CloseDeclaresTooManyChunks { session: Hash64, count: u64, ceiling: u64 },
+    // ---------------------------------------------------------------------------------------
+    // ADR-0096 §10 B5/B6 — the constrained decode close, the rendering close, and the corollary
+    // that keeps the old decode arms away from a claim whose job they cannot see. Every one names
+    // what it refused: a court finding that reads "does not adjudicate" is a finding nobody can act
+    // on.
+    // ---------------------------------------------------------------------------------------
+    /// The new arms exist in the binary and the rule does not exist on this chain — the
+    /// `ArithmeticOpened`-on-a-flat-network shape.
+    #[error(
+        "a {close} close is not a move on a network that has not armed Params::palw_fp_decode_constraint at this block \
+         (ADR-0096 Decision 8, §10 B5/B6)"
+    )]
+    DecodeConstraintDormant { close: &'static str },
+    /// **The soundness corollary of §10 B5.** The claim record holds roots, not the job, and
+    /// `PalwJobContextV2` carries neither the job's version nor its constraint id — so a decode close
+    /// that does not carry the job cannot tell a constrained claim from an unconstrained one, and
+    /// grading one by the unconstrained argmax would convict an honest masked token.
+    #[error(
+        "a {close} close cannot try a free-prompt claim past Params::palw_fp_decode_constraint: the claim record holds roots \
+         and not the job, so a close that does not carry the job cannot tell a constrained claim from an unconstrained one \
+         (ADR-0096 §10 B5) — the free-prompt lane's decode close is ConstrainedDecode"
+    )]
+    DecodeCloseWithoutTheJob { close: &'static str },
+    /// The new arms try a free-prompt claim's job; an attempt claim has none.
+    #[error("a {close} close tries a free-prompt claim's job, and this claim is an attempt, which has no job to carry")]
+    CloseNeedsAFreePromptClaim { close: &'static str },
+    #[error("the close carries job {carried}, and the execution it binds is job {bound}")]
+    CloseJobIsNotTheClaims { carried: Hash64, bound: Hash64 },
+    #[error("the close carries a version-{got} job; a {close} close tries {tries}")]
+    CloseJobVersionNotTried { close: &'static str, got: u16, tries: &'static str },
+    /// ADR-0096 §10 B1: one meaning, one encoding. A version-5 job names no constraint, so its close
+    /// carries no constraint bytes, no renderings and no table opening.
+    #[error("the close's job is version 5, which carries no constraint, and the close carries {what}")]
+    CloseCarriesWhatItsJobHasNot { what: &'static str },
+    #[error("the carried constraint hashes to {carried} and the job names {named} (ADR-0096 §10 B5)")]
+    CloseConstraintIsNotTheJobs { carried: Hash64, named: Hash64 },
+    #[error("the carried constraint does not parse as a canonical automaton: {0}")]
+    CloseConstraintMalformed(String),
+    /// ADR-0096 §10 B4: a tokenizer with no row cannot carry a version-6 job, and a court that holds
+    /// no table for it cannot prove a single token's bytes.
+    #[error("the job's tokenizer {0} has no pinned token table in this build, so no token of it can be proven (ADR-0096 §10 B4)")]
+    CloseTokenizerUnpinned(Hash64),
+    /// ADR-0096 §10 B3: `output_root = output_commitment_v2(context, ids, rendered_segments_hash_v1(segments))`
+    /// binds every position's bytes, so a close's renderings are the claimant's or they are nothing.
+    #[error(
+        "the carried ids and renderings do not reproduce the claim's output_root — a close reads the claimant's own \
+         renderings, never a challenger's (ADR-0096 §10 B3/B6)"
+    )]
+    CloseSegmentsAreNotTheClaims,
+    #[error("the token-table opening does not prove: {0}")]
+    CloseTableOpeningInvalid(&'static str),
+    #[error("the rendering close names position {position} of a {count}-token answer")]
+    ClosePositionPastTheAnswer { position: u32, count: u64 },
+    /// ADR-0096 §10 B2's bound, applied to the close before any byte of it is hashed.
+    #[error("the close carries {got} constraint bytes; a version-6 job's constraint is at most {ceiling} (ADR-0096 §10 B2)")]
+    CloseConstraintTooLarge { got: u64, ceiling: u64 },
+    #[error("the close carries {segments} renderings for {ids} committed ids — one per position, never more")]
+    CloseSegmentsPastTheRun { segments: u64, ids: u64 },
+    #[error(
+        "the close's rendering at position {position} is {got} bytes; one token renders as at most {ceiling} \
+         (PALW_TOKEN_TABLE_MAX_TOKEN_BYTES_V1, ADR-0096 §10 B4)"
+    )]
+    CloseSegmentTooLong { position: u64, got: u64, ceiling: u64 },
+    #[error("the close's token-table opening is {got} bytes; an honest opening in the job's table is at most {ceiling}")]
+    CloseTableOpeningTooLarge { got: u64, ceiling: u64 },
 }
 
 /// May THIS `CourtOpened` object be accepted at THIS chain point?
@@ -439,6 +504,82 @@ pub enum PalwCourtVerdictProofV2 {
         refutation: PalwExecutionStepRefutationV1,
         operand_openings: Vec<PalwArtifactOpeningV1>,
         prompt_ids_opening: crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1,
+    },
+    /// **ADR-0096 §10 B5 — the free-prompt lane's decode close, and it carries the JOB.**
+    ///
+    /// The claim record holds roots, not the job, and `PalwJobContextV2` carries neither the job's
+    /// version nor its `constraint_id`, so a decode close that does not carry the job cannot tell a
+    /// constrained claim from an unconstrained one. This one carries it — `fp_job_id_v3(job)` must be
+    /// the binding's `job_context.job_id`, and the binding is pinned to the claim exactly as
+    /// `DecodeTokenTiled`'s is — and so it is the ONE decode close a free-prompt claim answers to
+    /// wherever `Params::palw_fp_decode_constraint` is armed (the old two are refused by name there,
+    /// [`PalwCourtV2Error::DecodeCloseWithoutTheJob`]). It serves both versions:
+    ///
+    /// * **version 5**: `constraint`, `segments` and `beat_opening` are empty, and the pin is graded
+    ///   by the v2 tiled arm under the JOB's sampler pair — the unconstrained rule, which is exactly
+    ///   what a version-5 job was run under;
+    /// * **version 6**: `constraint` is the canonical automaton the job names (≤ 16 KiB, B2),
+    ///   `segments` are the answer's per-token renderings as the claimant committed them (checked
+    ///   against the claim's `output_root`, B3), and `beat_opening` proves the beating lane's bytes
+    ///   against the pinned table of the job's tokenizer (B4) — `None` for the one-disclosure arm,
+    ///   whose pin carries no tile. The pin is graded by `check_tiled_decode_token_refutation_v3`
+    ///   with the pinned table's lowest end-of-generation id (B7).
+    ///
+    /// Appended after `ArithmeticOpened` because a borsh discriminant is positional.
+    ///
+    /// **Worst case, counted as the cost gate counts it** (`constrained_decode_counted_bytes_v1`) at
+    /// the Qwen2.5 A16 row (151,936 lanes → 38 tiles; `n_ctx` 512 → at most 511 decode positions): two
+    /// full tiles 32,768 + three paths (9 + 6 + 6 siblings) 1,344 + ids 2,044 + a version-6 job with an
+    /// ML-DSA-87 key 3,204 + the constraint at its 16 KiB bound 16,388 + 511 renderings at the 256-byte
+    /// bound 132,864 + a beating-lane opening at its bound 1,421 = **190,033 bytes**; with the pinned
+    /// table's measured longest token (128 bytes) in every position, 124,625. One lifecycle carrier
+    /// holds `palw_close_bytes_for_chunks_v1(1)` = **83,333** counted bytes, so the worst case does
+    /// NOT fit one carrier: it is a split close of 3 chunks (ADR-0080 design A), inside the RC's
+    /// 27-chunk ceiling (2,250,000) and refused `CloseTooLarge` on a one-chunk ruleset. The renderings
+    /// are what grow, not the constraint: with every other part at its bound, one carrier leaves
+    /// 24,116 bytes of rendering across the 511 positions. The binding rides uncounted here, as in
+    /// every other arm (its profile is the class's, pinned before any arm reads it) — 5,564 bytes for
+    /// the dense class's real profile, which makes the worst whole object 195,910 bytes on the wire.
+    ConstrainedDecode {
+        binding: Box<crate::palw_step_leg::PalwStepBindingV2>,
+        pin: Box<crate::palw_step_refute::PalwTiledDecodePinV1>,
+        job: Box<crate::palw_freeprompt_v3::PalwFreePromptJobV3>,
+        /// The canonical constraint bytes the job's `constraint_id` names; empty at version 5.
+        constraint: Vec<u8>,
+        /// One rendering per committed id, as the claimant committed them; empty at version 5.
+        segments: Vec<Vec<u8>>,
+        /// The beating lane's (`pin.beat_lane`'s) bytes and their path to the pinned table root.
+        beat_opening: Option<crate::palw_token_table_v1::PalwTokenTableOpeningV1>,
+    },
+    /// **ADR-0096 §10 B6 — the rendering close: a lie about the renderings themselves.**
+    ///
+    /// A version-6 claim commits each position's bytes through its `output_root` (B3); this close
+    /// carries the committed ids and renderings — checked against the claim's own `output_root`,
+    /// so a challenger's segmentation cannot be substituted — a position, and the pinned table's
+    /// opening of the id committed there, and convicts iff the claimant's rendering at that position
+    /// is not the table's bytes, or the claimant's root commits a different number of renderings
+    /// than ids (B3 commits one per id, so that is the same lie at every position past the shorter
+    /// list). The ids ride WITH the renderings rather than inside a tiled pin: `output_commitment_v2`
+    /// binds them as it binds the bytes, so no trace-root opening is needed to know which id a
+    /// position holds. Version 6 only (a version-5 answer's rendered hash is a keyed hash of its ids,
+    /// which commits no bytes to try).
+    ///
+    /// Unlike B5 it applies no per-rendering bound: the renderings are the CLAIMANT's, and a
+    /// rendering longer than any token is exactly the lie this close convicts — a bound that refused
+    /// to carry it would be that claimant's escape. The whole close is bounded by the ruleset's.
+    ///
+    /// **Worst case**, counted the same way, with every honest rendering at the 256-byte token bound:
+    /// ids 2,044 + job 3,204 + 511 renderings 132,864 + an opening at its bound 1,420 = 139,532 bytes
+    /// (74,124 at the measured 128-byte longest) — like B5, a split close past one carrier.
+    ConstrainedRendering {
+        binding: Box<crate::palw_step_leg::PalwStepBindingV2>,
+        job: Box<crate::palw_freeprompt_v3::PalwFreePromptJobV3>,
+        generated_token_ids: Vec<u32>,
+        segments: Vec<Vec<u8>>,
+        /// The decode position whose rendering is tried — the call the ladder narrowed to.
+        position: u32,
+        /// The pinned table's opening of `generated_token_ids[position]`.
+        opening: crate::palw_token_table_v1::PalwTokenTableOpeningV1,
     },
 }
 
@@ -736,6 +877,45 @@ fn check_close_speaks_the_networks_prompt_form(
     }
 }
 
+/// **A decode close speaks the network's decode rule or it is not a move** (ADR-0096 Decision 8,
+/// §10 B5/B6) — the fence half of the constrained court, refused BY NAME before any evidence is
+/// read, in the shape of [`check_close_speaks_the_networks_prompt_form`].
+///
+/// * Dormant (`fp_decode_constraint == false`): the two new arms exist in the binary and the rule
+///   does not exist on this chain — [`PalwCourtV2Error::DecodeConstraintDormant`]. Nothing else
+///   moves: every close a dormant network admitted before this function existed it admits now.
+/// * Armed: a free-prompt claim may be a version-6 claim, and the record the court reads cannot
+///   say whether it is — it holds roots, not the job. So the two decode arms that do not carry
+///   the job (`DecodeToken`, `DecodeTokenTiled`) are refused against a free-prompt claim
+///   ([`PalwCourtV2Error::DecodeCloseWithoutTheJob`]): graded by the unconstrained argmax they
+///   would convict an honest masked token, which is exactly the challenger-states-"none" attack
+///   ADR-0096 Decision 7 forbids. `ConstrainedDecode` serves both job versions, so a free-prompt
+///   claim loses no close. An attempt claim keeps the old arms — it has no job, and its token is the
+///   unconstrained argmax by construction — and the new arms, which try a job, are refused against
+///   it ([`PalwCourtV2Error::CloseNeedsAFreePromptClaim`]).
+fn check_close_speaks_the_networks_decode_rule(
+    proof: &PalwCourtVerdictProofV2,
+    claim: &crate::palw_state_v2::PalwClaimStateV2,
+    fp_decode_constraint: bool,
+) -> Result<(), PalwCourtV2Error> {
+    let free_prompt = matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. });
+    let (close, carries_the_job) = match proof {
+        PalwCourtVerdictProofV2::ConstrainedDecode { .. } => ("ConstrainedDecode", true),
+        PalwCourtVerdictProofV2::ConstrainedRendering { .. } => ("ConstrainedRendering", true),
+        PalwCourtVerdictProofV2::DecodeToken { .. } => ("DecodeToken", false),
+        PalwCourtVerdictProofV2::DecodeTokenTiled { .. } => ("DecodeTokenTiled", false),
+        PalwCourtVerdictProofV2::Arithmetic { .. }
+        | PalwCourtVerdictProofV2::ArithmeticOpened { .. }
+        | PalwCourtVerdictProofV2::AttnDissection { .. } => return Ok(()),
+    };
+    match (carries_the_job, fp_decode_constraint, free_prompt) {
+        (true, false, _) => Err(PalwCourtV2Error::DecodeConstraintDormant { close }),
+        (true, true, false) => Err(PalwCourtV2Error::CloseNeedsAFreePromptClaim { close }),
+        (false, true, true) => Err(PalwCourtV2Error::DecodeCloseWithoutTheJob { close }),
+        _ => Ok(()),
+    }
+}
+
 /// The binding every close carries, whichever scheme it uses.
 fn binding_of(proof: &PalwCourtVerdictProofV2) -> &crate::palw_step_leg::PalwStepBindingV2 {
     match proof {
@@ -745,6 +925,8 @@ fn binding_of(proof: &PalwCourtVerdictProofV2) -> &crate::palw_step_leg::PalwSte
         PalwCourtVerdictProofV2::DecodeToken { binding, .. } => binding,
         PalwCourtVerdictProofV2::DecodeTokenTiled { binding, .. } => binding,
         PalwCourtVerdictProofV2::AttnDissection { binding, .. } => binding,
+        PalwCourtVerdictProofV2::ConstrainedDecode { binding, .. } => binding,
+        PalwCourtVerdictProofV2::ConstrainedRendering { binding, .. } => binding,
     }
 }
 
@@ -827,6 +1009,13 @@ pub fn adjudicate_court_close_v2(
     // ADR-0081 Decision 3: which spelling of "here is the prompt" this network admits — decided by
     // the caller at the block's DAA (`palw_prompt_ids_form_at`), genesis-only so it cannot differ.
     prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    // **ADR-0096 Decision 8: is `Params::palw_fp_decode_constraint` armed at this block?** Decided
+    // by the caller at the BLOCK's DAA (`palw_fp_decode_constraint_at`), never read here from a
+    // constant, so two nodes grading one close read one rule. Armed, it admits the two constrained
+    // arms and refuses the job-less decode arms against a free-prompt claim
+    // (`check_close_speaks_the_networks_decode_rule`); dormant, every close grades as it did before
+    // the parameter existed and the constrained arms are refused by name.
+    fp_decode_constraint: bool,
 ) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
     // The cost gate runs before ANY state is read, which is the cheapest-first ordering a cost
     // bound has to have: an oversized object must be refusable without a lookup, a decode or a
@@ -834,6 +1023,10 @@ pub fn adjudicate_court_close_v2(
     // the ceiling, and that is the right answer — the object was inadmissible on its face.
     check_close_cost_v2(proof, court)?;
     let (session, claim) = resolve_court_session_v2(state, session_id)?;
+    // **Whether this close is a move on this NETWORK comes before whether it is a move in this
+    // session** — a fence is the cheaper question (no geometry, no ladder), and a dormant network's
+    // refusal must read the same whatever the ladder has narrowed to.
+    check_close_speaks_the_networks_decode_rule(proof, claim, fp_decode_constraint)?;
     // **A close is a move IN this session, not a fresh argument beside it.**
     //
     // The session used to be resolved and thrown away (`let (_session, claim) = …`), so nothing
@@ -896,6 +1089,26 @@ pub fn adjudicate_court_close_v2(
                 return Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened: u64::from(pin.position), narrowed });
             }
         }
+        // **ADR-0096 §10 B5 and B6 are the same door again.** Both name their own position — the
+        // pin's, and the rendering close's — and an accused who could pick one would pick a
+        // position it got right and read `NoFaultFound` as its acquittal. So both answer the call
+        // the ladder narrowed to, exactly as the two decode arms above do: the challenger steers the
+        // bisection (its verdicts choose the half), so the challenger chooses the position, and the
+        // accused can only be judged where it was accused.
+        PalwCourtVerdictProofV2::ConstrainedDecode { binding, pin, .. } => {
+            let coord = crate::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, narrowed)
+                .ok_or(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened: u64::from(pin.position), narrowed })?;
+            if coord.call_index != pin.position {
+                return Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened: u64::from(pin.position), narrowed });
+            }
+        }
+        PalwCourtVerdictProofV2::ConstrainedRendering { binding, position, .. } => {
+            let coord = crate::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, narrowed)
+                .ok_or(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened: u64::from(*position), narrowed })?;
+            if coord.call_index != *position {
+                return Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened: u64::from(*position), narrowed });
+            }
+        }
         // **ADR-0082 Decision 2: the fused terminal is not a recompute, it is the end of an
         // exchange — so it is adjudicated HERE, where the phase it answers lives.**
         //
@@ -936,7 +1149,7 @@ pub fn adjudicate_court_close_v2(
             });
         }
     }
-    adjudicate_close_proof_v2(state, claim, proof, court, step_ladder, prompt_ids_form)
+    adjudicate_close_proof_v2(state, claim, proof, court, step_ladder, prompt_ids_form, fp_decode_constraint)
 }
 
 /// The arithmetic half of a close: given the CLAIM the dispute is about, what verdict does this
@@ -959,9 +1172,13 @@ pub fn adjudicate_close_proof_v2(
     // ADR-0081 Decision 3: which spelling of "here is the prompt" this network admits — decided by
     // the caller at the block's DAA (`palw_prompt_ids_form_at`), genesis-only so it cannot differ.
     prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    // ADR-0096 Decision 8: `Params::palw_fp_decode_constraint` at the block's DAA — decided by the
+    // caller (`palw_fp_decode_constraint_at`). See `adjudicate_court_close_v2`.
+    fp_decode_constraint: bool,
 ) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
     check_close_cost_v2(proof, court)?;
     check_close_speaks_the_networks_prompt_form(proof, prompt_ids_form)?;
+    check_close_speaks_the_networks_decode_rule(proof, claim, fp_decode_constraint)?;
     // Before ANY arm reads geometry out of the binding. See the function's own docs: this is the
     // bound that does not have to be repeated at each consumer.
     check_close_profile_is_the_registered_class(claim.class_id, binding_of(proof))?;
@@ -1010,17 +1227,188 @@ pub fn adjudicate_close_proof_v2(
             // mainnet audit 2026-09-06 H-4). It is byte-identical on every network that exists,
             // because `palw_refutation_leaf_cap_v2` IS `PALW_STEP_LEG_MAX_LEAVES` while
             // `Params::palw_court_ladder` is dormant, and it is the correct rule past the fence.
-            map_refutation_outcome(crate::palw_step_refute::check_tiled_decode_token_refutation_capped_v1(
-                binding,
-                pin,
-                step_ladder,
-            ))
+            map_refutation_outcome(crate::palw_step_refute::check_tiled_decode_token_refutation_capped_v1(binding, pin, step_ladder))
         }
         // The one arm that cannot be graded from the claim alone — see `adjudicate_court_close_v2`,
         // which returns before reaching here. Refused rather than silently acquitted, because an
         // arm that fell through to "no fault found" would read as `ChallengerDefeated`.
         PalwCourtVerdictProofV2::AttnDissection { .. } => Err(PalwCourtV2Error::DissectionCloseNeedsItsSession),
+        // ADR-0096 §10 B5. The binding is pinned to the claim exactly as `DecodeTokenTiled`'s is,
+        // then the JOB is pinned to the binding, and only then is anything read out of the job.
+        PalwCourtVerdictProofV2::ConstrainedDecode { binding, pin, job, constraint, segments, beat_opening } => {
+            check_arithmetic_close_binding(claim.trace_root, binding_logits_root_of(binding))?;
+            check_execution_root_binding(claim.execution_root, binding.committed_execution_root)?;
+            check_close_job_is_the_bindings_v1(job, binding, "ConstrainedDecode", "version 5 or 6")?;
+            // **The sampler is the JOB's** (ADR-0082 Decision 11): the pair is inside `fp_job_id_v3`
+            // and therefore inside the claim, so this arm is the first decode close that can bind
+            // it rather than assume greedy. Greedy on every network that has not armed
+            // `palw_fp_decode_rules`, where a job with any other temperature is refused at the door,
+            // and at temperature zero the seed is inert — so on those networks this is the greedy
+            // rule, byte for byte.
+            let sampling =
+                crate::palw_decode_select_v2::PalwDecodeSamplingV2 { seed: job.sampling_seed, temperature_q: job.temperature_q };
+            if job.version == crate::palw_freeprompt_v3::PALW_FP_V3_VERSION {
+                // Version 5 names no constraint, so its close carries none of the three things a
+                // constraint needs: one meaning, one encoding (§10 B1).
+                if !constraint.is_empty() {
+                    return Err(PalwCourtV2Error::CloseCarriesWhatItsJobHasNot { what: "constraint bytes" });
+                }
+                if !segments.is_empty() {
+                    return Err(PalwCourtV2Error::CloseCarriesWhatItsJobHasNot { what: "renderings" });
+                }
+                if beat_opening.is_some() {
+                    return Err(PalwCourtV2Error::CloseCarriesWhatItsJobHasNot { what: "a token-table opening" });
+                }
+                return map_refutation_outcome(crate::palw_step_refute::check_tiled_decode_token_refutation_capped_v2(
+                    binding,
+                    pin,
+                    sampling,
+                    step_ladder,
+                ));
+            }
+            let automaton = check_close_constraint_is_the_jobs_v1(job, constraint)?;
+            let table = crate::palw_token_table_v1::token_table_pin_for_v1(&job.tokenizer_id)
+                .ok_or(PalwCourtV2Error::CloseTokenizerUnpinned(job.tokenizer_id))?;
+            check_close_renderings_are_the_claims_v1(claim, binding, &pin.generated_token_ids, segments)?;
+            // The beating lane is the one the PIN names (`pin.beat_lane`, the lane
+            // `check_tiled_decode_token_refutation_v3` compares), and its bytes are the pinned
+            // table's — proven here against the build's root, never read off the carrier.
+            let beat_lane_bytes = match beat_opening {
+                Some(opening) => Some(
+                    crate::palw_token_table_v1::token_table_proven_bytes_v1(&table.root, table.vocab_len, pin.beat_lane, opening)
+                        .map_err(|e| PalwCourtV2Error::CloseTableOpeningInvalid(e.refusal()))?,
+                ),
+                None => None,
+            };
+            // B7: the finish rule commits the class's LOWEST end-of-generation id, and the table pins
+            // it beside its root — the build's, like the table.
+            let eog_token_ids = [table.lowest_eog_id];
+            let court_input = crate::palw_decode_constraint_v1::PalwDecodeConstraintCourtV1 {
+                constraint: &automaton,
+                segments,
+                beat_lane_bytes,
+                eog_token_ids: &eog_token_ids,
+            };
+            map_refutation_outcome(crate::palw_step_refute::check_tiled_decode_token_refutation_v3(
+                binding,
+                pin,
+                sampling,
+                Some(court_input),
+                step_ladder,
+            ))
+        }
+        // ADR-0096 §10 B6: the same two pins and the same job pin; then the renderings against the
+        // claim's `output_root`, and one comparison.
+        PalwCourtVerdictProofV2::ConstrainedRendering { binding, job, generated_token_ids, segments, position, opening } => {
+            check_arithmetic_close_binding(claim.trace_root, binding_logits_root_of(binding))?;
+            check_execution_root_binding(claim.execution_root, binding.committed_execution_root)?;
+            check_close_job_is_the_bindings_v1(job, binding, "ConstrainedRendering", "version 6")?;
+            if job.version != crate::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED {
+                return Err(PalwCourtV2Error::CloseJobVersionNotTried {
+                    close: "ConstrainedRendering",
+                    got: job.version,
+                    tries: "version 6",
+                });
+            }
+            let table = crate::palw_token_table_v1::token_table_pin_for_v1(&job.tokenizer_id)
+                .ok_or(PalwCourtV2Error::CloseTokenizerUnpinned(job.tokenizer_id))?;
+            check_close_renderings_are_the_claims_v1(claim, binding, generated_token_ids, segments)?;
+            // From here the ids and renderings ARE the claimant's own commitment.
+            let q = *position as usize;
+            let Some(id) = generated_token_ids.get(q) else {
+                return Err(PalwCourtV2Error::ClosePositionPastTheAnswer {
+                    position: *position,
+                    count: generated_token_ids.len() as u64,
+                });
+            };
+            let table_bytes = crate::palw_token_table_v1::token_table_proven_bytes_v1(&table.root, table.vocab_len, *id, opening)
+                .map_err(|e| PalwCourtV2Error::CloseTableOpeningInvalid(e.refusal()))?;
+            // **B3 commits one rendering per committed id.** A claimant whose own `output_root`
+            // commits another count committed a rendering that is not the answer's rendering at
+            // every position past the shorter of the two — no honest engine can produce one (it
+            // renders each id it commits), and no challenger can make an honest root read as one.
+            if segments.len() != generated_token_ids.len() {
+                return Ok(PalwCourtVerdictV2::ExecutorGuilty);
+            }
+            if segments[q].as_slice() == table_bytes {
+                // The claimant's rendering IS the table's: the challenge lost on the merits.
+                return Ok(PalwCourtVerdictV2::ChallengerDefeated);
+            }
+            Ok(PalwCourtVerdictV2::ExecutorGuilty)
+        }
     }
+}
+
+/// **The job a constrained close carries must be the job the claim's execution ran** (ADR-0096 §10
+/// B5): `fp_job_id_v3(job)` is the binding's `job_context.job_id` — the context
+/// `palw_fp_job_context_v3` builds names the job by exactly that id. The context itself is the
+/// claim's because every arm that reads the job then recomputes a claim root FROM that context —
+/// the tiled trace root inside the refutation (both versions) and the `output_root` (version 6,
+/// and the rendering close) — so a close whose context is not the claim's reaches no verdict
+/// whatever job id it names.
+///
+/// The version is read FIRST, and the reason is not style: `fp_job_id_v3` encodes the job, and the
+/// hand-written encoding REFUSES a version-5 job holding a non-zero `constraint_id` (§10 B1) — the
+/// id function would panic on it. A job that arrived on the wire cannot hold one (the decoder reads
+/// no `constraint_id` below version 6), but a court that panics on an object it can be handed in
+/// memory is a court one malformed RPC call stops. So the two versions this court tries are checked,
+/// and version 5's empty `constraint_id`, before any byte is hashed.
+fn check_close_job_is_the_bindings_v1(
+    job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+    close: &'static str,
+    tries: &'static str,
+) -> Result<(), PalwCourtV2Error> {
+    use crate::palw_freeprompt_v3::{PALW_FP_V3_VERSION, PALW_FP_V3_VERSION_CONSTRAINED};
+    match job.version {
+        PALW_FP_V3_VERSION if job.constraint_id != Hash64::default() => {
+            return Err(PalwCourtV2Error::CloseCarriesWhatItsJobHasNot { what: "a constraint_id inside its version-5 job" });
+        }
+        PALW_FP_V3_VERSION | PALW_FP_V3_VERSION_CONSTRAINED => {}
+        got => return Err(PalwCourtV2Error::CloseJobVersionNotTried { close, got, tries }),
+    }
+    let carried = crate::palw_freeprompt_v3::fp_job_id_v3(job);
+    if carried != binding.job_context.job_id {
+        return Err(PalwCourtV2Error::CloseJobIsNotTheClaims { carried, bound: binding.job_context.job_id });
+    }
+    Ok(())
+}
+
+/// **The constraint a version-6 close carries is the one its job names** (ADR-0096 §10 B5, B2):
+/// the id first — a mismatch is refused without parsing a byte — and then the canonical parse, so
+/// the automaton the court walks is exactly the one whose id is inside the claim.
+fn check_close_constraint_is_the_jobs_v1(
+    job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+    constraint: &[u8],
+) -> Result<crate::palw_decode_constraint_v1::PalwDecodeConstraintV1, PalwCourtV2Error> {
+    let carried = crate::palw_decode_constraint_v1::constraint_id_v1(constraint);
+    if carried != job.constraint_id {
+        return Err(PalwCourtV2Error::CloseConstraintIsNotTheJobs { carried, named: job.constraint_id });
+    }
+    crate::palw_decode_constraint_v1::PalwDecodeConstraintV1::from_bytes(constraint)
+        .map_err(|e| PalwCourtV2Error::CloseConstraintMalformed(e.to_string()))
+}
+
+/// **The renderings a close reads are the claimant's own** (ADR-0096 §10 B3): the claim's
+/// `output_root` is `output_commitment_v2(context_hash, ids, rendered_segments_hash_v1(segments))` —
+/// the a16 family forms it from the SAME job context its binding carries (`qwen25_a16_backend.rs`,
+/// `output_commitment_v2(&ctx.context_hash(), &generated, &rendered)`, where the binding is
+/// `base0_binding_from_step_root_v1(profile, ctx, …)`) — so recomputing it from the binding's context,
+/// the carried ids and the carried renderings either reproduces the claim's root or the close is
+/// not about this claim's answer. A challenger's own segmentation, or anyone's edit to one byte of
+/// it, reproduces nothing.
+fn check_close_renderings_are_the_claims_v1(
+    claim: &crate::palw_state_v2::PalwClaimStateV2,
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+    generated_token_ids: &[u32],
+    segments: &[Vec<u8>],
+) -> Result<(), PalwCourtV2Error> {
+    let rendered = crate::palw_decode_constraint_v1::rendered_segments_hash_v1(segments);
+    let output_root = crate::palw_v2::output_commitment_v2(&binding.job_context.context_hash(), generated_token_ids, &rendered);
+    if output_root != claim.output_root {
+        return Err(PalwCourtV2Error::CloseSegmentsAreNotTheClaims);
+    }
+    Ok(())
 }
 
 // =================================================================================================
@@ -1497,13 +1885,53 @@ pub fn check_close_cost_v2(
         }
         PalwCourtVerdictProofV2::DecodeTokenTiled { pin, .. } => {
             // Two tiles, three paths and the ids — the payload the tiled scheme exists to bound.
-            let bytes: u64 = (pin.committed_tile_lanes.len() as u64 * 4)
-                .saturating_add(pin.beat_tile_lanes.len() as u64 * 4)
-                .saturating_add(
-                    (pin.committed_opening.siblings.len() + pin.beat_opening.siblings.len() + pin.row_opening.siblings.len()) as u64
-                        * 64,
-                )
-                .saturating_add(pin.generated_token_ids.len() as u64 * 4);
+            let bytes = tiled_decode_pin_bytes_v2(pin);
+            if bytes > court.max_close_bytes() {
+                return Err(PalwCourtV2Error::CloseTooLarge { got: bytes, ceiling: court.max_close_bytes() });
+            }
+            return Ok(());
+        }
+        // **ADR-0096 §10 B5's bounds, each named, then the whole close against the ruleset's.**
+        // Every one is a length comparison — nothing is hashed, parsed or walked until all hold.
+        PalwCourtVerdictProofV2::ConstrainedDecode { pin, job, constraint, segments, beat_opening, .. } => {
+            let ceiling = PALW_FP_CONSTRAINT_MAX_BYTES_V6_U64;
+            if constraint.len() as u64 > ceiling {
+                return Err(PalwCourtV2Error::CloseConstraintTooLarge { got: constraint.len() as u64, ceiling });
+            }
+            // The renderings are one per committed id and no more, and each is at most what one
+            // token of a pinned table can render. Both bounds refuse only a close carrying a
+            // rendering no honest claim commits — every honest rendering is a table entry and there
+            // is one per id — and such a rendering is a lie the RENDERING close convicts (it carries
+            // the same renderings under no per-rendering bound; see its arm).
+            if segments.len() > pin.generated_token_ids.len() {
+                return Err(PalwCourtV2Error::CloseSegmentsPastTheRun {
+                    segments: segments.len() as u64,
+                    ids: pin.generated_token_ids.len() as u64,
+                });
+            }
+            let ceiling = crate::palw_token_table_v1::PALW_TOKEN_TABLE_MAX_TOKEN_BYTES_V1 as u64;
+            if let Some((position, long)) = segments.iter().enumerate().find(|(_, s)| s.len() as u64 > ceiling) {
+                return Err(PalwCourtV2Error::CloseSegmentTooLong { position: position as u64, got: long.len() as u64, ceiling });
+            }
+            if let Some(opening) = beat_opening {
+                check_close_table_opening_size_v1(job, opening)?;
+            }
+            let bytes = constrained_decode_counted_bytes_v1(pin, job, constraint, segments, beat_opening.as_ref());
+            if bytes > court.max_close_bytes() {
+                return Err(PalwCourtV2Error::CloseTooLarge { got: bytes, ceiling: court.max_close_bytes() });
+            }
+            return Ok(());
+        }
+        // **ADR-0096 §10 B6's bounds: the opening, and the whole close.** Deliberately NOT the
+        // per-rendering bound B5 applies. The renderings are the CLAIMANT's, and this is the arm that
+        // tries them: a claimant that committed a rendering past any token's length — an injected
+        // string where one token was due — or one rendering too many has committed exactly the lie
+        // this close exists to convict, and a bound that refused to carry it would be that
+        // claimant's escape. The whole close is still bounded by the ruleset's ceiling, which is
+        // what makes the hashing it pays for finite.
+        PalwCourtVerdictProofV2::ConstrainedRendering { job, generated_token_ids, segments, opening, .. } => {
+            check_close_table_opening_size_v1(job, opening)?;
+            let bytes = constrained_rendering_counted_bytes_v1(job, generated_token_ids, segments, opening);
             if bytes > court.max_close_bytes() {
                 return Err(PalwCourtV2Error::CloseTooLarge { got: bytes, ceiling: court.max_close_bytes() });
             }
@@ -1525,6 +1953,90 @@ pub fn check_close_cost_v2(
     let bytes = arithmetic_close_bytes_v2(proof).unwrap_or(u64::MAX);
     if bytes > court.max_close_bytes() {
         return Err(PalwCourtV2Error::CloseTooLarge { got: bytes, ceiling: court.max_close_bytes() });
+    }
+    Ok(())
+}
+
+/// [`crate::palw_freeprompt_v3::PALW_FP_CONSTRAINT_MAX_BYTES_V6`], in the gate's unit.
+const PALW_FP_CONSTRAINT_MAX_BYTES_V6_U64: u64 = crate::palw_freeprompt_v3::PALW_FP_CONSTRAINT_MAX_BYTES_V6 as u64;
+
+/// The tiled decode pin as the gate counts it — two tiles, three paths and the ids. The
+/// `DecodeTokenTiled` arm's own measure, shared with `ConstrainedDecode`, which carries the same pin.
+fn tiled_decode_pin_bytes_v2(pin: &crate::palw_step_refute::PalwTiledDecodePinV1) -> u64 {
+    (pin.committed_tile_lanes.len() as u64 * 4)
+        .saturating_add(pin.beat_tile_lanes.len() as u64 * 4)
+        .saturating_add(
+            (pin.committed_opening.siblings.len() + pin.beat_opening.siblings.len() + pin.row_opening.siblings.len()) as u64 * 64,
+        )
+        .saturating_add(pin.generated_token_ids.len() as u64 * 4)
+}
+
+/// **The job's borsh length, computed rather than encoded** (a cost gate that re-encodes is a cost
+/// gate that costs): the version-5 layout's fixed fields — 2 + 64 + 64 + 68 (the bond outpoint) +
+/// 4 (the key's length) + 64 + 64 + 8 + 32 + 64 + 64 + 4 + 4 + 4 + 1 + 1 + 32 + 4 = 548 — plus the
+/// executor key's bytes, plus the 64-byte `constraint_id` at version 6 (§10 B1). Held equal to
+/// `borsh::to_vec(job).len()` by `the_job_is_counted_at_its_borsh_length`.
+pub fn fp_job_close_bytes_v1(job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3) -> u64 {
+    const FIXED_V5: u64 = 548;
+    let constraint_id = if job.version >= crate::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED { 64 } else { 0 };
+    FIXED_V5.saturating_add(job.executor_pubkey.len() as u64).saturating_add(constraint_id)
+}
+
+/// The renderings as they ride: borsh's outer length, then each rendering's length and bytes.
+fn segments_close_bytes_v1(segments: &[Vec<u8>]) -> u64 {
+    segments.iter().fold(4u64, |total, s| total.saturating_add(4).saturating_add(s.len() as u64))
+}
+
+/// **A `ConstrainedDecode` close, counted** (ADR-0096 §10 B5): the tiled pin as `DecodeTokenTiled`
+/// counts it, the job, the constraint and the renderings with their length prefixes, and the
+/// optional opening with its tag. The binding rides uncounted, as in every arm. See the variant's
+/// doc for the worst case at the Qwen2.5 A16 row.
+pub fn constrained_decode_counted_bytes_v1(
+    pin: &crate::palw_step_refute::PalwTiledDecodePinV1,
+    job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+    constraint: &[u8],
+    segments: &[Vec<u8>],
+    beat_opening: Option<&crate::palw_token_table_v1::PalwTokenTableOpeningV1>,
+) -> u64 {
+    tiled_decode_pin_bytes_v2(pin)
+        .saturating_add(fp_job_close_bytes_v1(job))
+        .saturating_add(4 + constraint.len() as u64)
+        .saturating_add(segments_close_bytes_v1(segments))
+        .saturating_add(1 + beat_opening.map(crate::palw_token_table_v1::token_table_opening_bytes_v1).unwrap_or(0))
+}
+
+/// **A `ConstrainedRendering` close, counted** (ADR-0096 §10 B6): the ids, the job, the renderings
+/// and the opening.
+pub fn constrained_rendering_counted_bytes_v1(
+    job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+    generated_token_ids: &[u32],
+    segments: &[Vec<u8>],
+    opening: &crate::palw_token_table_v1::PalwTokenTableOpeningV1,
+) -> u64 {
+    (generated_token_ids.len() as u64)
+        .saturating_mul(4)
+        .saturating_add(fp_job_close_bytes_v1(job))
+        .saturating_add(segments_close_bytes_v1(segments))
+        .saturating_add(crate::palw_token_table_v1::token_table_opening_bytes_v1(opening))
+}
+
+/// **A token-table opening is no bigger than an honest one in the job's table**
+/// (`token_table_max_opening_bytes_v1` of the pinned table's `vocab_len`) — the header, the 256-byte
+/// token bound and a full-height path. A job whose tokenizer this build pins no table for is priced
+/// against the WIDEST pinned table: its close is refused by name (`CloseTokenizerUnpinned`) before
+/// the opening is read, and the gate must not make that refusal depend on an unbounded carrier.
+fn check_close_table_opening_size_v1(
+    job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+    opening: &crate::palw_token_table_v1::PalwTokenTableOpeningV1,
+) -> Result<(), PalwCourtV2Error> {
+    use crate::palw_token_table_v1::{PALW_TOKEN_TABLES_V1, token_table_max_opening_bytes_v1, token_table_pin_for_v1};
+    let vocab_len = token_table_pin_for_v1(&job.tokenizer_id)
+        .map(|pin| pin.vocab_len)
+        .unwrap_or_else(|| PALW_TOKEN_TABLES_V1.iter().map(|row| row.vocab_len).max().unwrap_or(0));
+    let ceiling = token_table_max_opening_bytes_v1(vocab_len);
+    let got = crate::palw_token_table_v1::token_table_opening_bytes_v1(opening);
+    if got > ceiling {
+        return Err(PalwCourtV2Error::CloseTableOpeningTooLarge { got, ceiling });
     }
     Ok(())
 }
@@ -2199,19 +2711,19 @@ mod tests {
             prompt_ids_opening: opening,
         };
         assert_eq!(
-            adjudicate_close_proof_v2(&s2, claim_rec, &opened, &court(), LADDER, PalwPromptIdsFormV1::MerkleV1),
+            adjudicate_close_proof_v2(&s2, claim_rec, &opened, &court(), LADDER, PalwPromptIdsFormV1::MerkleV1, false),
             Ok(PalwCourtVerdictV2::ChallengerDefeated),
             "an honest step, judged on its merits through the opened arm"
         );
         assert!(matches!(
-            adjudicate_close_proof_v2(&s2, claim_rec, &opened, &court(), LADDER, PalwPromptIdsFormV1::Flat),
+            adjudicate_close_proof_v2(&s2, claim_rec, &opened, &court(), LADDER, PalwPromptIdsFormV1::Flat, false),
             Err(PalwCourtV2Error::CloseFormIsNotTheNetworks { .. })
         ));
         let mut listed = refutation;
         listed.prompt_token_ids = vec![7, 8];
         let listed = PalwCourtVerdictProofV2::Arithmetic { refutation: listed, operand_openings: Vec::new() };
         assert!(matches!(
-            adjudicate_close_proof_v2(&s2, claim_rec, &listed, &court(), LADDER, PalwPromptIdsFormV1::MerkleV1),
+            adjudicate_close_proof_v2(&s2, claim_rec, &listed, &court(), LADDER, PalwPromptIdsFormV1::MerkleV1, false),
             Err(PalwCourtV2Error::CloseFormIsNotTheNetworks { .. })
         ));
     }
@@ -2332,6 +2844,7 @@ mod tests {
             &court(),
             LADDER,
             crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            false,
         )
         .expect("a recomputable step adjudicates");
         assert_eq!(verdict, PalwCourtVerdictV2::ExecutorGuilty, "a wrong MatMul is a conviction, not an Unadjudicable");
@@ -2351,7 +2864,8 @@ mod tests {
                     &proof,
                     &court(),
                     leaves - 1,
-                    crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+                    crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                    false,
                 ),
                 Err(PalwCourtV2Error::DoesNotAdjudicate(_))
             ),
@@ -2364,7 +2878,8 @@ mod tests {
                 &proof,
                 &court(),
                 leaves,
-                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                false,
             )
             .expect("at its own space it adjudicates"),
             PalwCourtVerdictV2::ExecutorGuilty
@@ -2496,6 +3011,7 @@ mod tests {
                 &court(),
                 LADDER,
                 crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                false,
             )
             .expect("a carried pin adjudicates");
             let (closed, _) = apply_palw_transition_v2(
@@ -2668,6 +3184,7 @@ mod tests {
             &court(),
             LADDER,
             crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            false,
         )
         .expect("an honest step adjudicates");
         assert_eq!(verdict, PalwCourtVerdictV2::ChallengerDefeated, "an honest producer wins on the merits");
@@ -2748,6 +3265,7 @@ mod tests {
             &court(),
             LADDER,
             crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            false,
         );
         // **Refused, and now for a sharper reason than when this test was written.**
         //
@@ -2762,8 +3280,15 @@ mod tests {
             matches!(outcome, Err(PalwCourtV2Error::CloseProfileIsNotTheClass { .. }) | Err(PalwCourtV2Error::TraceRootMismatch)),
             "a proof about another execution must not produce a verdict at all, got {outcome:?}"
         );
-        let procedural =
-            adjudicate_court_close_v2(&in_court, &sid, &bogus, &court(), LADDER, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat);
+        let procedural = adjudicate_court_close_v2(
+            &in_court,
+            &sid,
+            &bogus,
+            &court(),
+            LADDER,
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            false,
+        );
         assert!(
             matches!(procedural, Err(PalwCourtV2Error::LadderNotTerminal)),
             "and the full close refuses it before the evidence, because no step was narrowed to, got {procedural:?}"
@@ -2782,7 +3307,8 @@ mod tests {
                 &bogus,
                 &court(),
                 LADDER,
-                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                false,
             ),
             Err(PalwCourtV2Error::MissingSession(_))
         ));
@@ -2848,7 +3374,15 @@ mod tests {
         let many = proof(vec![opening(1, 0), opening(1, 0), opening(1, 0)]);
         assert!(
             matches!(
-                adjudicate_court_close_v2(&state, &sid, &many, &tight, LADDER, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+                adjudicate_court_close_v2(
+                    &state,
+                    &sid,
+                    &many,
+                    &tight,
+                    LADDER,
+                    crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                    false
+                ),
                 Err(PalwCourtV2Error::TooManyOperands { got: 3, ceiling: 2 })
             ),
             "three openings against a ceiling of two"
@@ -2858,7 +3392,15 @@ mod tests {
         let fat = proof(vec![opening(2_048, 0)]);
         assert!(
             matches!(
-                adjudicate_court_close_v2(&state, &sid, &fat, &tight, LADDER, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+                adjudicate_court_close_v2(
+                    &state,
+                    &sid,
+                    &fat,
+                    &tight,
+                    LADDER,
+                    crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                    false
+                ),
                 Err(PalwCourtV2Error::CloseTooLarge { .. })
             ),
             "2 KiB against a 1 KiB ceiling"
@@ -2875,7 +3417,8 @@ mod tests {
                     &long_path,
                     &tight,
                     LADDER,
-                    crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+                    crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                    false,
                 ),
                 Err(PalwCourtV2Error::CloseTooLarge { .. })
             ),
@@ -2888,7 +3431,15 @@ mod tests {
         let small = proof(vec![opening(4, 0)]);
         assert!(
             matches!(
-                adjudicate_court_close_v2(&state, &sid, &small, &tight, LADDER, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+                adjudicate_court_close_v2(
+                    &state,
+                    &sid,
+                    &small,
+                    &tight,
+                    LADDER,
+                    crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                    false
+                ),
                 Err(PalwCourtV2Error::MissingSession(_))
             ),
             "a proof inside the ceilings must reach the state questions"
@@ -2897,7 +3448,15 @@ mod tests {
         // The gate is cheapest-first: an oversized object is refused without the session lookup
         // that would otherwise report first. `state` here holds no session at all.
         assert!(matches!(
-            adjudicate_court_close_v2(&state, &sid, &many, &tight, LADDER, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat),
+            adjudicate_court_close_v2(
+                &state,
+                &sid,
+                &many,
+                &tight,
+                LADDER,
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                false
+            ),
             Err(PalwCourtV2Error::TooManyOperands { .. })
         ));
     }
@@ -3021,5 +3580,1263 @@ mod tests {
             bytes: vec![1],
         };
         assert!(palw_attn_move_is_admissible_v2(&other, false).is_ok(), "the fence does not reach objects it is not about");
+    }
+}
+
+// =================================================================================================
+// ADR-0096 §10 B5/B6 — the constrained court, through the fold's own entry
+// =================================================================================================
+
+/// **The constrained decode close (B5) and the rendering close (B6), tried through
+/// [`adjudicate_court_close_v2`] — the function the fold calls — over SYNTHETIC pins.**
+///
+/// What is real here: the chain state (a class, two bonds, a free-prompt claim walked through
+/// `FreePromptCommitted` → `PanelBound` → `ReceiptLicensed` → `CourtOpened`, and a ladder narrowed on
+/// chain to the disputed call by real rung moves), the commitments (the tiled trace root, the
+/// execution root, the version-6 `output_root` over `rendered_segments_hash_v1`, the token-table
+/// root and every opening against it) and the rule (the honest producer below masks exactly as
+/// `qwen25_a16_backend`'s engine does: the admitted keyed argmax while some byte continues, the
+/// lowest EOG id from there to the budget). What is synthetic: the logits rows (chosen so the raw
+/// argmax is a lane the constraint forbids at every position — v2 and v3 disagree everywhere) and
+/// the token table (the 256 single bytes, two multi-byte tokens, two empty end-of-generation ids and
+/// an unrenderable remainder, at 10,000 lanes), pinned for this thread through
+/// `palw_token_table_v1::test_seam` because the build's one real table needs a tokenizer file no unit
+/// test holds. The run over a real engine and the real pinned Qwen2.5 table is
+/// `misaka-palw-base0/tests/constrained_court_e2e.rs`.
+#[cfg(test)]
+mod constrained_close_tests {
+    use super::*;
+    use crate::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2, challenge_v2};
+    use crate::palw_decode_constraint_v1::{
+        PalwConstraintCursorV1, PalwDecodeConstraintV1, constraint_admits_any_byte_v1, constraint_admitted_lanes_v1,
+        constraint_cursor_advance_v1, constraint_cursor_start_v1, constraint_id_v1, decode_token_select_v3, rendered_segments_hash_v1,
+    };
+    use crate::palw_decode_select_v2::PalwDecodeSamplingV2;
+    use crate::palw_freeprompt_v3::{
+        PALW_FP_CONSTRAINT_MAX_BYTES_V6, PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION,
+        PALW_FP_V3_VERSION_CONSTRAINED, PalwFreePromptJobV3, fp_job_id_v3,
+    };
+    use crate::palw_state_v2::{PalwConsensusObjectV2, PalwPanelSeatV2, PalwPwuRuleV2, apply_palw_transition_v2};
+    use crate::palw_step_leg::{PalwStepBindingV2, PalwStepOpeningV1};
+    use crate::palw_step_refute::{
+        PALW_LOGITS_TILE_LANES, PalwTiledDecodePinV1, base0_decode_token_select_v1, tiled_logits_row_root_v1,
+        tiled_logits_scheme_id_v1, tiled_logits_tile_leaf_v1, tiled_logits_trace_root_v1,
+    };
+    use crate::palw_token_table_v1::{
+        PalwTokenTableOpeningV1, PalwTokenTablePinnedV1, token_table_leaf_v1, token_table_opening_from_leaves_v1, token_table_root_v1,
+    };
+    use crate::tx::{TransactionId, TransactionOutpoint};
+
+    const LADDER: u64 = crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES;
+    const FLAT: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1 = crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat;
+    const ARMED: bool = true;
+    const DORMANT: bool = false;
+
+    const VOCAB: usize = 10_000;
+    const EOG_LOW: u32 = 9_998;
+    const EOG_HIGH: u32 = 9_999;
+    const UNRENDERABLE: u32 = 7_000;
+    const BRACKET_SEVEN: u32 = 300;
+    const SEVEN_BRACKET: u32 = 301;
+    const DECODE: usize = 6;
+    /// The session's index space: wider than the fixture's 40 step leaves, a power of two so the
+    /// ladder takes six rungs to reach any of them.
+    const SPACE: u64 = 64;
+    const CLAIM: u64 = 0xFC;
+
+    fn h64(v: u64) -> Hash64 {
+        Hash64::from_u64_word(v)
+    }
+
+    fn bond_key(v: u64) -> PalwBondKeyV2 {
+        PalwBondKeyV2(TransactionOutpoint { transaction_id: TransactionId::from_u64_word(v), index: 0 })
+    }
+
+    fn ctx(daa: u64) -> PalwBlockContextV2 {
+        PalwBlockContextV2 { block: crate::BlockHash::from_u64_word(daa), daa_score: daa, blue_score: daa, subsidy: 0 }
+    }
+
+    fn court() -> crate::palw_mode_v2::PalwCourtParamsV2 {
+        crate::palw_mode_v2::PalwCourtParamsV2::new(crate::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).expect("the shipped court")
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // The synthetic class: its table (pinned for this thread), its automaton, its rows
+    // ---------------------------------------------------------------------------------------
+
+    /// Every id's rendering under the table rule: the 256 single bytes, `[7` and `7]`, and EMPTY for
+    /// the two end-of-generation ids and for every id the tokenizer cannot render (§10 B4).
+    fn table_bytes(id: u32) -> Vec<u8> {
+        match id {
+            0..=255 => vec![id as u8],
+            BRACKET_SEVEN => b"[7".to_vec(),
+            SEVEN_BRACKET => b"7]".to_vec(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn table_leaves() -> &'static [Hash64] {
+        static LEAVES: std::sync::OnceLock<Vec<Hash64>> = std::sync::OnceLock::new();
+        LEAVES.get_or_init(|| (0..VOCAB as u32).map(|id| token_table_leaf_v1(id, &table_bytes(id))).collect())
+    }
+
+    /// The tokenizer commitment the synthetic jobs name.
+    fn tokenizer() -> Hash64 {
+        h64(0x7AB1_E000)
+    }
+
+    fn pinned() -> PalwTokenTablePinnedV1 {
+        PalwTokenTablePinnedV1 { vocab_len: VOCAB as u32, root: token_table_root_v1(table_leaves()), lowest_eog_id: EOG_LOW }
+    }
+
+    /// Pin the synthetic table under [`tokenizer`] for as long as the guard lives, on this thread.
+    fn pin_table() -> crate::palw_token_table_v1::test_seam::ThreadPinV1 {
+        crate::palw_token_table_v1::test_seam::pin_on_this_thread(tokenizer(), pinned())
+    }
+
+    fn opening(id: u32) -> PalwTokenTableOpeningV1 {
+        token_table_opening_from_leaves_v1(table_leaves(), id, table_bytes(id)).expect("an id of the table opens")
+    }
+
+    /// `[` one digit `]`, and then nothing: the smallest grammar whose run ENDS, so B7's finish is
+    /// inside a six-token budget.
+    fn automaton() -> PalwDecodeConstraintV1 {
+        crate::palw_decode_constraint_v1::tests::bracket_digit()
+    }
+
+    /// Deterministic rows whose RAW argmax is `x` — a lane the constraint forbids — at every
+    /// position, with a secondary order among the admitted lanes: `[` above `[7`, the digits
+    /// `3 > 8 > 1`, `]` above `7]`.
+    fn rows() -> Vec<Vec<i32>> {
+        let mut x = 0x0096_0010u64 | 1;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        (0..DECODE)
+            .map(|_| {
+                let mut row: Vec<i32> = (0..VOCAB).map(|_| (next() % 2_001) as i32 - 1_000).collect();
+                row[b'x' as usize] = 1_000_000;
+                row[b'[' as usize] = 500_000;
+                row[BRACKET_SEVEN as usize] = 400_000;
+                row[b'3' as usize] = 300_000;
+                row[b'8' as usize] = 200_000;
+                row[b'1' as usize] = 100_000;
+                row[b']' as usize] = 50_000;
+                row[SEVEN_BRACKET as usize] = 40_000;
+                row
+            })
+            .collect()
+    }
+
+    /// **The honest producer under §10 B7**, the engine's rule restated: the admitted keyed argmax
+    /// while some byte continues; the lowest EOG id from the first position where none does, to the
+    /// end of the budget.
+    fn honest_run(rows: &[Vec<i32>], sampling: PalwDecodeSamplingV2) -> Vec<u32> {
+        let c = automaton();
+        let mut ids = Vec::new();
+        let mut cursor = constraint_cursor_start_v1(&c);
+        for (p, row) in rows.iter().enumerate() {
+            let next = match &cursor {
+                PalwConstraintCursorV1::Running(state) if constraint_admits_any_byte_v1(&c, state) => {
+                    let mask = constraint_admitted_lanes_v1(&c, state, VOCAB as u32, &|id| Some(table_bytes(id)));
+                    decode_token_select_v3(row, &sampling.seed, p as u32, sampling.temperature_q, |j| mask[j])
+                        .expect("a byte-complete table admits a lane wherever a byte continues") as u32
+                }
+                _ => EOG_LOW,
+            };
+            cursor = constraint_cursor_advance_v1(&c, &cursor, &table_bytes(next), next == EOG_LOW)
+                .expect("the honest run follows the rule");
+            ids.push(next);
+        }
+        ids
+    }
+
+    fn renderings(ids: &[u32]) -> Vec<Vec<u8>> {
+        ids.iter().map(|id| table_bytes(*id)).collect()
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // The job, the binding, the commitments
+    // ---------------------------------------------------------------------------------------
+
+    fn job(version: u16, constraint_id: Hash64) -> PalwFreePromptJobV3 {
+        PalwFreePromptJobV3 {
+            version,
+            network_domain: h64(999),
+            class_id: h64(0xC1),
+            executor_bond: bond_key(1).0,
+            executor_pubkey: vec![7; 4],
+            operator_id: h64(0xE0),
+            anchor_block: h64(0xA0),
+            anchor_daa: 100,
+            job_nonce: [0x11; 32],
+            tokenizer_id: tokenizer(),
+            prompt_token_ids_hash: h64(0x9012),
+            prompt_tokens: 2,
+            decode_token_limit: DECODE as u32,
+            max_context_tokens: 64,
+            privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            constraint_id,
+        }
+    }
+
+    fn v6_job() -> PalwFreePromptJobV3 {
+        job(PALW_FP_V3_VERSION_CONSTRAINED, automaton().id())
+    }
+
+    fn v5_job() -> PalwFreePromptJobV3 {
+        job(PALW_FP_V3_VERSION, Hash64::default())
+    }
+
+    /// The step-refute fixture's execution, re-committed as a run of `job` at the synthetic
+    /// vocabulary under the tiled scheme: the context names the job by `fp_job_id_v3` (what
+    /// `palw_fp_job_context_v3` writes), the profile it now carries, and the run's decode count.
+    fn binding_for(rows: &[Vec<i32>], ids: &[u32], job: &PalwFreePromptJobV3) -> PalwStepBindingV2 {
+        let (mut binding, _m, _r, _) = crate::palw_step_refute::tests::base0_honest_decode_commitment();
+        binding.shape_profile.vocab_size = VOCAB as u32;
+        binding.shape_profile.logits_scheme_id = tiled_logits_scheme_id_v1();
+        binding.job_context.shape_profile_id = binding.shape_profile.shape_profile_id();
+        binding.job_context.exact_decode_tokens = ids.len() as u32;
+        binding.job_context.job_id = fp_job_id_v3(job);
+        binding.job_context.tokenizer_id = job.tokenizer_id;
+        binding.full_logits_trace_root = tiled_logits_trace_root_v1(&binding.job_context, &rows[..ids.len()], ids).expect("a tree");
+        crate::palw_step_refute::tests::rebind_committed_root(&mut binding);
+        binding
+    }
+
+    /// ADR-0096 §10 B3: the version-6 `output_root`, token by token.
+    fn output_root_v6(binding: &PalwStepBindingV2, ids: &[u32], segments: &[Vec<u8>]) -> Hash64 {
+        crate::palw_v2::output_commitment_v2(&binding.job_context.context_hash(), ids, &rendered_segments_hash_v1(segments))
+    }
+
+    /// A version-5 `output_root` — the court never reads one (the v5 path tries the pin alone).
+    fn output_root_v5(binding: &PalwStepBindingV2, ids: &[u32]) -> Hash64 {
+        crate::palw_v2::output_commitment_v2(&binding.job_context.context_hash(), ids, &h64(0x55))
+    }
+
+    /// A challenger's two-tile pin for one position, from the full rows.
+    fn tiled_pin(binding: &PalwStepBindingV2, rows: &[Vec<i32>], ids: &[u32], position: u32, beat_lane: u32) -> PalwTiledDecodePinV1 {
+        let ctx_hash = binding.job_context.context_hash();
+        let row = &rows[position as usize];
+        let tiles: Vec<Vec<i32>> = row.chunks(PALW_LOGITS_TILE_LANES).map(<[i32]>::to_vec).collect();
+        let tile_leaves: Vec<Hash64> =
+            tiles.iter().enumerate().map(|(t, lanes)| tiled_logits_tile_leaf_v1(&ctx_hash, position, t as u32, lanes)).collect();
+        let path_for = |leaves: &[Hash64], index: usize| -> Vec<Hash64> {
+            crate::palw_step_leg::step_merkle_path_v1(leaves, index).expect("the test's trees are inside the leg bounds")
+        };
+        let row_roots: Vec<Hash64> = rows[..ids.len()]
+            .iter()
+            .enumerate()
+            .map(|(r, lanes)| tiled_logits_row_root_v1(&ctx_hash, r as u32, lanes).expect("the fixture's rows have lanes"))
+            .collect();
+        let committed = ids[position as usize] as usize;
+        let (ct, bt) = (committed / PALW_LOGITS_TILE_LANES, beat_lane as usize / PALW_LOGITS_TILE_LANES);
+        PalwTiledDecodePinV1 {
+            position,
+            generated_token_ids: ids.to_vec(),
+            row_root: row_roots[position as usize],
+            row_opening: PalwStepOpeningV1 {
+                leaf_index: position as u64,
+                leaf_hash: row_roots[position as usize],
+                siblings: path_for(&row_roots, position as usize),
+            },
+            committed_tile_lanes: tiles[ct].clone(),
+            committed_opening: PalwStepOpeningV1 {
+                leaf_index: ct as u64,
+                leaf_hash: tile_leaves[ct],
+                siblings: path_for(&tile_leaves, ct),
+            },
+            beat_tile_lanes: tiles[bt].clone(),
+            beat_opening: PalwStepOpeningV1 {
+                leaf_index: bt as u64,
+                leaf_hash: tile_leaves[bt],
+                siblings: path_for(&tile_leaves, bt),
+            },
+            beat_lane,
+        }
+    }
+
+    /// The one-disclosure shape: the ids and the row opening, no tile.
+    fn one_disclosure_pin(binding: &PalwStepBindingV2, rows: &[Vec<i32>], ids: &[u32], position: u32) -> PalwTiledDecodePinV1 {
+        let mut pin = tiled_pin(binding, rows, ids, position, 0);
+        let empty = PalwStepOpeningV1 { leaf_index: 0, leaf_hash: Hash64::default(), siblings: Vec::new() };
+        pin.committed_tile_lanes.clear();
+        pin.beat_tile_lanes.clear();
+        pin.committed_opening = empty.clone();
+        pin.beat_opening = empty;
+        pin.beat_lane = 0;
+        pin
+    }
+
+    /// The version-6 decode close: the pin, the job, the automaton's bytes, the claimant's
+    /// renderings, and — for a two-disclosure pin — the beating lane's table opening.
+    fn b5(
+        binding: &PalwStepBindingV2,
+        pin: PalwTiledDecodePinV1,
+        job: &PalwFreePromptJobV3,
+        segments: &[Vec<u8>],
+    ) -> PalwCourtVerdictProofV2 {
+        let beat_opening = (!pin.beat_tile_lanes.is_empty()).then(|| opening(pin.beat_lane));
+        PalwCourtVerdictProofV2::ConstrainedDecode {
+            binding: Box::new(binding.clone()),
+            pin: Box::new(pin),
+            job: Box::new(job.clone()),
+            constraint: automaton().to_bytes(),
+            segments: segments.to_vec(),
+            beat_opening,
+        }
+    }
+
+    /// The version-5 decode close: the pin and the job, nothing else.
+    fn b5_v5(binding: &PalwStepBindingV2, pin: PalwTiledDecodePinV1, job: &PalwFreePromptJobV3) -> PalwCourtVerdictProofV2 {
+        PalwCourtVerdictProofV2::ConstrainedDecode {
+            binding: Box::new(binding.clone()),
+            pin: Box::new(pin),
+            job: Box::new(job.clone()),
+            constraint: Vec::new(),
+            segments: Vec::new(),
+            beat_opening: None,
+        }
+    }
+
+    /// The rendering close at `position`, opening the id the claimant committed there.
+    fn b6(
+        binding: &PalwStepBindingV2,
+        job: &PalwFreePromptJobV3,
+        ids: &[u32],
+        segments: &[Vec<u8>],
+        position: u32,
+    ) -> PalwCourtVerdictProofV2 {
+        PalwCourtVerdictProofV2::ConstrainedRendering {
+            binding: Box::new(binding.clone()),
+            job: Box::new(job.clone()),
+            generated_token_ids: ids.to_vec(),
+            segments: segments.to_vec(),
+            position,
+            opening: opening(ids[position as usize]),
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // The chain: a claim, a court, and a ladder narrowed to one call
+    // ---------------------------------------------------------------------------------------
+
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    enum Lane {
+        FreePrompt,
+        Attempt,
+    }
+
+    fn state_params(class_id: Hash64) -> PalwStateParamsV2 {
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, class_id, 4, 1000, 100, 1000, 0)
+            .unwrap()
+            .with_fp_quanta(8, 64)
+            .unwrap()
+            .with_turn_deadline_daa(20)
+            .unwrap()
+    }
+
+    fn apply(state: &PalwChainStateV2, p: &PalwStateParamsV2, daa: u64, objects: &[PalwConsensusObjectV2]) -> PalwChainStateV2 {
+        apply_palw_transition_v2(state, p, &ctx(daa), objects, None).expect("the transition applies").0
+    }
+
+    /// **A licensed claim under a court whose ladder the challenger has narrowed, on chain, to the
+    /// first step leaf of decode call `call`** — the only place a decode close at `call` is a move.
+    /// Returns the state and the session id.
+    fn narrowed_court(binding: &PalwStepBindingV2, output_root: Hash64, call: u32, lane: Lane) -> (PalwChainStateV2, Hash64) {
+        let cid = binding.shape_profile.shape_profile_id();
+        let p = state_params(cid);
+        let registry = vec![
+            PalwConsensusObjectV2::ClassRegistered {
+                class_id: cid,
+                artifact_root: h64(0xA1),
+                slash_value_per_pwu: 5,
+                // A 160-leaf canonical job: the free-prompt quantum is 20, so 60 leaves are three.
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+                initial_target: u128::MAX / 2,
+                share_permille: 1000,
+                activation_daa: 0,
+                admission: None,
+            },
+            PalwConsensusObjectV2::BondRegistered {
+                bond: bond_key(1),
+                pubkey: vec![7; 4],
+                operator_pubkey: vec![0x21; 8],
+                collateral: 1_000,
+                payout_payload: h64(0x9A11),
+                capable_classes: Default::default(),
+                signature: Vec::new(),
+            },
+            PalwConsensusObjectV2::BondRegistered {
+                bond: bond_key(2),
+                pubkey: vec![8; 4],
+                operator_pubkey: vec![0x22; 8],
+                collateral: 1_000,
+                payout_payload: h64(0x9A12),
+                capable_classes: Default::default(),
+                signature: Vec::new(),
+            },
+        ];
+        let s1 = apply(&PalwChainStateV2::genesis(), &p, 100, &registry);
+        let (s2, claim_id) = match lane {
+            Lane::FreePrompt => {
+                let commit = PalwConsensusObjectV2::FreePromptCommitted {
+                    claim: h64(CLAIM),
+                    class_id: cid,
+                    bond: bond_key(1),
+                    executor_pubkey: vec![7; 4],
+                    work_leaves: 60,
+                    prompt_token_ids_hash: h64(0x7E00),
+                    decode_tokens_executed: binding.job_context.exact_decode_tokens,
+                    trace_root: binding.full_logits_trace_root,
+                    output_root,
+                    execution_root: binding.committed_execution_root,
+                    trace_chunk_count: 1,
+                    trace_retention_daa: 999_999,
+                };
+                (apply(&s1, &p, 101, &[commit]), h64(CLAIM))
+            }
+            Lane::Attempt => {
+                let bond = bond_key(1).0;
+                let env = PalwAttemptEnvelopeV2 {
+                    attempt: PalwAttemptUnsignedV2 {
+                        version: PALW_ATTEMPT_V2_VERSION,
+                        network_domain: h64(999),
+                        challenge: challenge_v2(h64(999), h64(5), 1_700, 1, cid, &bond),
+                        class_id: cid,
+                        executor_bond: bond,
+                        executor_pubkey: vec![7; 4],
+                        operator_id: crate::palw_state_v2::palw_operator_id_v2(&[0x21; 8]),
+                        artifact_root: h64(0xA1),
+                        trace_root: binding.full_logits_trace_root,
+                        output_root,
+                        pwu: 40,
+                        trace_manifest_root: h64(33),
+                        trace_chunk_count: 1,
+                        trace_retention_daa: 999_999,
+                        execution_root: binding.committed_execution_root,
+                    },
+                    signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+                };
+                let claim_id = attempt_id_v2(&env.attempt);
+                (apply_palw_transition_v2(&s1, &p, &ctx(101), &[], Some(&env)).expect("the attempt applies").0, claim_id)
+            }
+        };
+        let claim = s2.claim(&claim_id).expect("the claim is in state");
+        assert_eq!(
+            matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. }),
+            lane == Lane::FreePrompt,
+            "the fixture's claim is the lane it says"
+        );
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(2), operator_id: h64(0x22) }];
+        let s3 = apply(&s2, &p, 102, &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }]);
+        let s4 = apply(&s3, &p, 103, &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }]);
+        let sid = court_session_id_v2(
+            &claim_id,
+            &binding.full_logits_trace_root,
+            &bond_key(1),
+            &bond_key(2),
+            PalwBisectSpaceV1::StepLeaves,
+            SPACE,
+        );
+        let mut state = apply(
+            &s4,
+            &p,
+            104,
+            &[PalwConsensusObjectV2::CourtOpened {
+                session_id: sid,
+                claim: claim_id,
+                challenger_bond: bond_key(2),
+                space: PalwBisectSpaceV1::StepLeaves,
+                space_size: SPACE,
+                signature: Vec::new(),
+            }],
+        );
+        // The challenger steers: its verdict picks the half, so the ladder goes where the accusation
+        // is — the first leaf of the disputed call.
+        let target = crate::palw_step::canonical_step_leaf_index(
+            &binding.shape_profile,
+            &binding.job_context,
+            &crate::palw_step::PalwStepCoordinateV1 { call_index: call, node_slot: 0, position: 0, tile_index: 0 },
+        )
+        .expect("the call is inside the run");
+        let (mut daa, mut round) = (104u64, 0u32);
+        while state.court_session(&sid).unwrap().ladder.terminal_index().is_none() {
+            let mid = state.court_session(&sid).unwrap().ladder.expected_midpoint().expect("the responder's turn");
+            daa += 1;
+            let disclosure = PalwConsensusObjectV2::CourtDisclosed {
+                session_id: sid,
+                disclosure: crate::palw_bisect::PalwBisectDisclosureV1 {
+                    version: crate::palw_bisect::PALW_BISECT_OBJECT_VERSION_V1,
+                    session_id: sid,
+                    round,
+                    midpoint: mid,
+                    mid_state: h64(0xD000 + u64::from(round)),
+                },
+                signature: vec![0xAA; 8],
+            };
+            state = apply(&state, &p, daa, &[disclosure]);
+            daa += 1;
+            let verdict = PalwConsensusObjectV2::CourtVerdictPosted {
+                session_id: sid,
+                verdict: crate::palw_bisect::PalwBisectVerdictV1 {
+                    version: crate::palw_bisect::PALW_BISECT_OBJECT_VERSION_V1,
+                    session_id: sid,
+                    round,
+                    agree: target >= mid,
+                },
+                signature: vec![0xBB; 8],
+            };
+            state = apply(&state, &p, daa, &[verdict]);
+            round += 1;
+        }
+        assert_eq!(state.court_session(&sid).unwrap().ladder.terminal_index(), Some(target), "narrowed to the disputed call");
+        (state, sid)
+    }
+
+    /// The fold's own entry, at the shipped court and ladder.
+    fn close(
+        state: &PalwChainStateV2,
+        sid: &Hash64,
+        proof: &PalwCourtVerdictProofV2,
+        armed: bool,
+    ) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
+        adjudicate_court_close_v2(state, sid, proof, &court(), LADDER, FLAT, armed)
+    }
+
+    /// An honest version-6 claim: its run, its binding and its committed renderings.
+    fn honest_v6() -> (Vec<Vec<i32>>, Vec<u32>, PalwStepBindingV2, Vec<Vec<u8>>, PalwFreePromptJobV3) {
+        let rows = rows();
+        let ids = honest_run(&rows, PalwDecodeSamplingV2::GREEDY);
+        let job = v6_job();
+        let binding = binding_for(&rows, &ids, &job);
+        let segments = renderings(&ids);
+        (rows, ids, binding, segments, job)
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // B5: the constrained decode close
+    // ---------------------------------------------------------------------------------------
+
+    /// **B5, invariant 2's first half: an honest constrained run is acquitted at every position, by
+    /// both arms** — `[`, the admitted argmax among the digits, `]`, and then B7's finish (the lowest
+    /// EOG id to the budget), where the committed id is admitted by nothing and is not a fault.
+    #[test]
+    fn b5_acquits_an_honest_constrained_run_at_every_position() {
+        let _table = pin_table();
+        let (rows, ids, binding, segments, job) = honest_v6();
+        assert_eq!(&ids[..3], &[b'[' as u32, b'3' as u32, b']' as u32], "the admitted argmax at each position: {ids:?}");
+        assert!(ids[3..].iter().all(|id| *id == EOG_LOW), "B7: the lowest EOG id from the finish to the budget: {ids:?}");
+        assert!(
+            rows.iter().all(|row| base0_decode_token_select_v1(row) == b'x' as usize),
+            "the raw argmax is forbidden everywhere, so an unconstrained court disagrees at every position"
+        );
+        let output_root = output_root_v6(&binding, &ids, &segments);
+        for p in 0..DECODE as u32 {
+            let (state, sid) = narrowed_court(&binding, output_root, p, Lane::FreePrompt);
+            let bare = b5(&binding, one_disclosure_pin(&binding, &rows, &ids, p), &job, &segments);
+            assert_eq!(close(&state, &sid, &bare, ARMED), Ok(PalwCourtVerdictV2::ChallengerDefeated), "one disclosure at {p}");
+            for beat in [b'x' as u32, b'[' as u32, b'3' as u32, b'8' as u32, b']' as u32, BRACKET_SEVEN, SEVEN_BRACKET, EOG_HIGH] {
+                if beat == ids[p as usize] {
+                    continue;
+                }
+                let proof = b5(&binding, tiled_pin(&binding, &rows, &ids, p, beat), &job, &segments);
+                assert_eq!(
+                    close(&state, &sid, &proof, ARMED),
+                    Ok(PalwCourtVerdictV2::ChallengerDefeated),
+                    "position {p} against lane {beat}"
+                );
+            }
+        }
+    }
+
+    /// **B5, invariant 2's negative control: one id altered to a token the constraint does not
+    /// admit at its position is convicted by the one-disclosure arm** — no tile read — and so is an
+    /// unrenderable id, and the higher of the two EOG ids where B7 commits the lower.
+    #[test]
+    fn b5_convicts_an_altered_id_by_the_one_disclosure_arm() {
+        let _table = pin_table();
+        let (rows, honest, _, _, job) = honest_v6();
+        for (position, altered_to) in [(1u32, b'x' as u32), (1, UNRENDERABLE), (0, b'3' as u32), (3, EOG_HIGH), (5, b'A' as u32)] {
+            let mut ids = honest.clone();
+            ids[position as usize] = altered_to;
+            // The producer renders its own ids honestly: the lie is the TOKEN, not its bytes.
+            let binding = binding_for(&rows, &ids, &job);
+            let segments = renderings(&ids);
+            let (state, sid) = narrowed_court(&binding, output_root_v6(&binding, &ids, &segments), position, Lane::FreePrompt);
+            let bare = b5(&binding, one_disclosure_pin(&binding, &rows, &ids, position), &job, &segments);
+            assert_eq!(
+                close(&state, &sid, &bare, ARMED),
+                Ok(PalwCourtVerdictV2::ExecutorGuilty),
+                "{altered_to} at {position} is not what the rule commits there"
+            );
+            // With tiles supplied the same arm convicts first: no lane is compared for it.
+            let tiled = b5(&binding, tiled_pin(&binding, &rows, &ids, position, b'8' as u32), &job, &segments);
+            assert_eq!(close(&state, &sid, &tiled, ARMED), Ok(PalwCourtVerdictV2::ExecutorGuilty));
+        }
+    }
+
+    /// **B5, invariant 3: a beating lane the constraint forbids is not a fault** — `x` holds the
+    /// row's greatest logit at every position — while an ADMITTED lane with a greater key convicts a
+    /// producer that committed the second-best admitted digit.
+    #[test]
+    fn b5_does_not_convict_on_a_beating_lane_the_constraint_forbids() {
+        let _table = pin_table();
+        let (rows, honest, binding, segments, job) = honest_v6();
+        let (state, sid) = narrowed_court(&binding, output_root_v6(&binding, &honest, &segments), 1, Lane::FreePrompt);
+        let forbidden = b5(&binding, tiled_pin(&binding, &rows, &honest, 1, b'x' as u32), &job, &segments);
+        assert_eq!(close(&state, &sid, &forbidden, ARMED), Ok(PalwCourtVerdictV2::ChallengerDefeated));
+
+        let mut cheated = honest.clone();
+        cheated[1] = b'8' as u32;
+        let binding = binding_for(&rows, &cheated, &job);
+        let segments = renderings(&cheated);
+        let (state, sid) = narrowed_court(&binding, output_root_v6(&binding, &cheated, &segments), 1, Lane::FreePrompt);
+        let bare = b5(&binding, one_disclosure_pin(&binding, &rows, &cheated, 1), &job, &segments);
+        assert_eq!(
+            close(&state, &sid, &bare, ARMED),
+            Ok(PalwCourtVerdictV2::ChallengerDefeated),
+            "`8` IS admitted after `[`: the one-disclosure arm finds nothing"
+        );
+        let beaten = b5(&binding, tiled_pin(&binding, &rows, &cheated, 1, b'3' as u32), &job, &segments);
+        assert_eq!(close(&state, &sid, &beaten, ARMED), Ok(PalwCourtVerdictV2::ExecutorGuilty), "the admitted argmax beats it");
+        for beat in [b'x' as u32, UNRENDERABLE, EOG_LOW, EOG_HIGH, b']' as u32] {
+            let proof = b5(&binding, tiled_pin(&binding, &rows, &cheated, 1, beat), &job, &segments);
+            assert_eq!(
+                close(&state, &sid, &proof, ARMED),
+                Ok(PalwCourtVerdictV2::ChallengerDefeated),
+                "lane {beat} is not admitted after `[`, so it beats nothing"
+            );
+        }
+        // A two-disclosure close that proves no bytes for its beating lane does not adjudicate,
+        // and a proof of ANOTHER id's bytes is refused as evidence.
+        let mut unproven = beaten.clone();
+        if let PalwCourtVerdictProofV2::ConstrainedDecode { beat_opening, .. } = &mut unproven {
+            *beat_opening = None;
+        }
+        assert!(matches!(close(&state, &sid, &unproven, ARMED), Err(PalwCourtV2Error::DoesNotAdjudicate(_))));
+        let mut misnamed = beaten.clone();
+        if let PalwCourtVerdictProofV2::ConstrainedDecode { beat_opening, .. } = &mut misnamed {
+            *beat_opening = Some(opening(b'8' as u32));
+        }
+        assert_eq!(
+            close(&state, &sid, &misnamed, ARMED),
+            Err(PalwCourtV2Error::CloseTableOpeningInvalid("the token-table opening is for another id"))
+        );
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // B6: the rendering close
+    // ---------------------------------------------------------------------------------------
+
+    /// **B6: a lie about the renderings is convicted, a true rendering acquitted** — at every
+    /// position of an honest claim; a claimant that served `9` for the token `3`; one that injected
+    /// a string past any token's length (which this arm carries: it has no per-rendering bound); one
+    /// that spelled the end-of-generation token as text; and one that committed a rendering too many.
+    #[test]
+    fn b6_convicts_a_lying_rendering_and_acquits_an_honest_one() {
+        let _table = pin_table();
+        let (rows, ids, binding, honest, job) = honest_v6();
+        let root = output_root_v6(&binding, &ids, &honest);
+        for q in 0..DECODE as u32 {
+            let (state, sid) = narrowed_court(&binding, root, q, Lane::FreePrompt);
+            assert_eq!(
+                close(&state, &sid, &b6(&binding, &job, &ids, &honest, q), ARMED),
+                Ok(PalwCourtVerdictV2::ChallengerDefeated),
+                "the honest rendering at {q}"
+            );
+        }
+
+        let lie = |q: usize, bytes: Vec<u8>| {
+            let mut segments = honest.clone();
+            segments[q] = bytes;
+            segments
+        };
+        for (q, served) in [(1usize, lie(1, b"9".to_vec())), (0, lie(0, vec![b'['; 300])), (4, lie(4, b"<|endoftext|>".to_vec()))] {
+            let root = output_root_v6(&binding, &ids, &served);
+            let (state, sid) = narrowed_court(&binding, root, q as u32, Lane::FreePrompt);
+            assert_eq!(
+                close(&state, &sid, &b6(&binding, &job, &ids, &served, q as u32), ARMED),
+                Ok(PalwCourtVerdictV2::ExecutorGuilty),
+                "the rendering served at {q}"
+            );
+            // Where the same claim's rendering is true, the same claim is acquitted.
+            let other = if q == 2 { 3 } else { 2 };
+            let (state, sid) = narrowed_court(&binding, root, other, Lane::FreePrompt);
+            assert_eq!(
+                close(&state, &sid, &b6(&binding, &job, &ids, &served, other), ARMED),
+                Ok(PalwCourtVerdictV2::ChallengerDefeated)
+            );
+        }
+        // B5 over a lying rendering: the walk reads the CLAIMANT's bytes (`9` is a digit), so B5 finds
+        // nothing — which is why the rendering is tried separately, and above it is convicted.
+        let served = lie(1, b"9".to_vec());
+        let (state, sid) = narrowed_court(&binding, output_root_v6(&binding, &ids, &served), 1, Lane::FreePrompt);
+        let decode = b5(&binding, one_disclosure_pin(&binding, &rows, &ids, 1), &job, &served);
+        assert_eq!(close(&state, &sid, &decode, ARMED), Ok(PalwCourtVerdictV2::ChallengerDefeated));
+
+        // One rendering too many: B3 commits one per id, so the claimant's rendering is not the
+        // answer's, whichever position is asked. B5 cannot carry it (its count bound refuses), and
+        // that is safe only because B6 convicts it.
+        let mut surplus = honest.clone();
+        surplus.push(Vec::new());
+        let (state, sid) = narrowed_court(&binding, output_root_v6(&binding, &ids, &surplus), 2, Lane::FreePrompt);
+        assert_eq!(close(&state, &sid, &b6(&binding, &job, &ids, &surplus, 2), ARMED), Ok(PalwCourtVerdictV2::ExecutorGuilty));
+        let decode = b5(&binding, one_disclosure_pin(&binding, &rows, &ids, 2), &job, &surplus);
+        assert_eq!(close(&state, &sid, &decode, ARMED), Err(PalwCourtV2Error::CloseSegmentsPastTheRun { segments: 7, ids: 6 }));
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // The corollary and the fence
+    // ---------------------------------------------------------------------------------------
+
+    /// **§10's soundness corollary.** Armed, the two decode arms that do not carry the job are
+    /// refused BY NAME against a free-prompt claim. Dormant they are graded as they always were —
+    /// and what the dormant grade of this pin shows is exactly why: by the unconstrained argmax the
+    /// honest masked `3` loses to the forbidden `x`, a conviction of an honest token. The
+    /// job-carrying arm clears the same pin.
+    #[test]
+    fn the_job_less_decode_arms_are_refused_against_a_free_prompt_claim_when_armed() {
+        let _table = pin_table();
+        let (rows, ids, binding, segments, job) = honest_v6();
+        let (state, sid) = narrowed_court(&binding, output_root_v6(&binding, &ids, &segments), 1, Lane::FreePrompt);
+        let pin = tiled_pin(&binding, &rows, &ids, 1, b'x' as u32);
+        let tiled = PalwCourtVerdictProofV2::DecodeTokenTiled { binding: binding.clone(), pin: pin.clone() };
+        assert_eq!(close(&state, &sid, &tiled, ARMED), Err(PalwCourtV2Error::DecodeCloseWithoutTheJob { close: "DecodeTokenTiled" }));
+        assert_eq!(close(&state, &sid, &tiled, DORMANT), Ok(PalwCourtVerdictV2::ExecutorGuilty), "the hole the refusal closes");
+        assert_eq!(close(&state, &sid, &b5(&binding, pin, &job, &segments), ARMED), Ok(PalwCourtVerdictV2::ChallengerDefeated));
+        // The flat arm is the same door, refused before its pin is read.
+        let flat = PalwCourtVerdictProofV2::DecodeToken {
+            binding: binding.clone(),
+            pin: crate::palw_step_refute::PalwBase0DecodeTokensV1 { logits_rows: vec![vec![0, 1]], generated_token_ids: vec![0] },
+            position: 1,
+        };
+        assert_eq!(close(&state, &sid, &flat, ARMED), Err(PalwCourtV2Error::DecodeCloseWithoutTheJob { close: "DecodeToken" }));
+        // And through the half the fold reaches with the claim in hand.
+        let claim = state.claim(&h64(CLAIM)).unwrap();
+        assert_eq!(
+            adjudicate_close_proof_v2(&state, claim, &tiled, &court(), LADDER, FLAT, ARMED),
+            Err(PalwCourtV2Error::DecodeCloseWithoutTheJob { close: "DecodeTokenTiled" })
+        );
+    }
+
+    /// **One arm serves both versions.** A version-5 (unconstrained) free-prompt claim: dormant,
+    /// `DecodeTokenTiled` grades it as ever (the honest `x` cleared, a lying `3` convicted); armed,
+    /// that arm is refused and `ConstrainedDecode` with the version-5 job reaches the same two
+    /// verdicts by the v2 rule. A version-5 close carrying any constraint material is refused by name.
+    #[test]
+    fn an_unconstrained_free_prompt_claim_is_tried_by_the_job_carrying_arm() {
+        let rows = rows();
+        let job = v5_job();
+        let honest: Vec<u32> = rows.iter().map(|r| base0_decode_token_select_v1(r) as u32).collect();
+        for (lying, beat, want) in
+            [(false, b'3' as u32, PalwCourtVerdictV2::ChallengerDefeated), (true, b'x' as u32, PalwCourtVerdictV2::ExecutorGuilty)]
+        {
+            let mut ids = honest.clone();
+            if lying {
+                ids[2] = b'3' as u32;
+            }
+            let binding = binding_for(&rows, &ids, &job);
+            let (state, sid) = narrowed_court(&binding, output_root_v5(&binding, &ids), 2, Lane::FreePrompt);
+            let pin = tiled_pin(&binding, &rows, &ids, 2, beat);
+            let tiled = PalwCourtVerdictProofV2::DecodeTokenTiled { binding: binding.clone(), pin: pin.clone() };
+            assert_eq!(close(&state, &sid, &tiled, DORMANT), Ok(want), "dormant, the old arm grades it");
+            assert_eq!(
+                close(&state, &sid, &tiled, ARMED),
+                Err(PalwCourtV2Error::DecodeCloseWithoutTheJob { close: "DecodeTokenTiled" })
+            );
+            let v5 = b5_v5(&binding, pin, &job);
+            assert_eq!(close(&state, &sid, &v5, ARMED), Ok(want), "armed, the job-carrying arm grades it the same");
+            for (what, edit) in [("constraint bytes", 0usize), ("renderings", 1), ("a token-table opening", 2)] {
+                let mut bent = v5.clone();
+                if let PalwCourtVerdictProofV2::ConstrainedDecode { constraint, segments, beat_opening, .. } = &mut bent {
+                    match edit {
+                        0 => *constraint = automaton().to_bytes(),
+                        1 => *segments = renderings(&ids),
+                        _ => *beat_opening = Some(opening(beat)),
+                    }
+                }
+                assert_eq!(close(&state, &sid, &bent, ARMED), Err(PalwCourtV2Error::CloseCarriesWhatItsJobHasNot { what }));
+            }
+        }
+    }
+
+    /// **An attempt claim keeps the old arms** — graded identically either side of the fence — and
+    /// the job-carrying arms, which try a job an attempt does not have, are refused against it.
+    #[test]
+    fn an_attempt_claim_keeps_the_old_decode_arms_and_refuses_the_job_carrying_ones() {
+        let _table = pin_table();
+        let (rows, ids, binding, segments, job) = honest_v6();
+        let (state, sid) = narrowed_court(&binding, output_root_v6(&binding, &ids, &segments), 1, Lane::Attempt);
+        let tiled = PalwCourtVerdictProofV2::DecodeTokenTiled {
+            binding: binding.clone(),
+            pin: tiled_pin(&binding, &rows, &ids, 1, b'x' as u32),
+        };
+        let armed = close(&state, &sid, &tiled, ARMED);
+        assert!(armed.is_ok(), "an attempt's decode close is graded: {armed:?}");
+        assert_eq!(armed, close(&state, &sid, &tiled, DORMANT), "and graded the same either side of the fence");
+        let decode = b5(&binding, one_disclosure_pin(&binding, &rows, &ids, 1), &job, &segments);
+        assert_eq!(
+            close(&state, &sid, &decode, ARMED),
+            Err(PalwCourtV2Error::CloseNeedsAFreePromptClaim { close: "ConstrainedDecode" })
+        );
+        let rendering = b6(&binding, &job, &ids, &segments, 1);
+        assert_eq!(
+            close(&state, &sid, &rendering, ARMED),
+            Err(PalwCourtV2Error::CloseNeedsAFreePromptClaim { close: "ConstrainedRendering" })
+        );
+    }
+
+    /// **Dormant, the constrained arms are refused BY NAME** — the same honest close that is a move
+    /// where the fence is armed, and before the session's ladder is asked anything.
+    #[test]
+    fn the_constrained_arms_are_refused_by_name_on_a_dormant_network() {
+        let _table = pin_table();
+        let (rows, ids, binding, segments, job) = honest_v6();
+        let (state, sid) = narrowed_court(&binding, output_root_v6(&binding, &ids, &segments), 1, Lane::FreePrompt);
+        let decode = b5(&binding, one_disclosure_pin(&binding, &rows, &ids, 1), &job, &segments);
+        let rendering = b6(&binding, &job, &ids, &segments, 1);
+        assert_eq!(close(&state, &sid, &decode, ARMED), Ok(PalwCourtVerdictV2::ChallengerDefeated));
+        assert_eq!(close(&state, &sid, &rendering, ARMED), Ok(PalwCourtVerdictV2::ChallengerDefeated));
+        assert_eq!(
+            close(&state, &sid, &decode, DORMANT),
+            Err(PalwCourtV2Error::DecodeConstraintDormant { close: "ConstrainedDecode" })
+        );
+        assert_eq!(
+            close(&state, &sid, &rendering, DORMANT),
+            Err(PalwCourtV2Error::DecodeConstraintDormant { close: "ConstrainedRendering" })
+        );
+        let claim = state.claim(&h64(CLAIM)).unwrap();
+        assert_eq!(
+            adjudicate_close_proof_v2(&state, claim, &decode, &court(), LADDER, FLAT, DORMANT),
+            Err(PalwCourtV2Error::DecodeConstraintDormant { close: "ConstrainedDecode" })
+        );
+        // A close at a position the ladder never narrowed to is still refused for the fence first.
+        let elsewhere = b5(&binding, one_disclosure_pin(&binding, &rows, &ids, 4), &job, &segments);
+        assert_eq!(
+            close(&state, &sid, &elsewhere, DORMANT),
+            Err(PalwCourtV2Error::DecodeConstraintDormant { close: "ConstrainedDecode" })
+        );
+    }
+
+    /// **Both arms answer the call the ladder narrowed to** — the procedural rule the two decode arms
+    /// already obey, so an accused cannot pick a position it got right and read its acquittal there.
+    #[test]
+    fn a_constrained_close_answers_the_call_the_ladder_narrowed_to() {
+        let _table = pin_table();
+        let (rows, ids, binding, segments, job) = honest_v6();
+        let (state, sid) = narrowed_court(&binding, output_root_v6(&binding, &ids, &segments), 1, Lane::FreePrompt);
+        let narrowed = state.court_session(&sid).unwrap().ladder.terminal_index().unwrap();
+        let decode = b5(&binding, one_disclosure_pin(&binding, &rows, &ids, 2), &job, &segments);
+        assert_eq!(close(&state, &sid, &decode, ARMED), Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened: 2, narrowed }));
+        let rendering = b6(&binding, &job, &ids, &segments, 2);
+        assert_eq!(close(&state, &sid, &rendering, ARMED), Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened: 2, narrowed }));
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Material that is not the claim's, refused by name
+    // ---------------------------------------------------------------------------------------
+
+    /// **Everything a constrained close reads is bound to the claim, and a close whose material is
+    /// not is refused by name**: another job, another automaton, bytes that do not parse, an
+    /// unpinned tokenizer, renderings (or a segmentation) the claim did not commit, a job version
+    /// this court does not try, a version-5 job holding a `constraint_id` in memory (refused, not a
+    /// panic), an opening of another id, and a position past the answer.
+    #[test]
+    fn a_constrained_close_whose_material_is_not_the_claims_is_refused_by_name() {
+        let table = pin_table();
+        let (rows, ids, binding, segments, job) = honest_v6();
+        let (state, sid) = narrowed_court(&binding, output_root_v6(&binding, &ids, &segments), 1, Lane::FreePrompt);
+        let honest = b5(&binding, one_disclosure_pin(&binding, &rows, &ids, 1), &job, &segments);
+        assert_eq!(close(&state, &sid, &honest, ARMED), Ok(PalwCourtVerdictV2::ChallengerDefeated));
+        let bent = |edit: &dyn Fn(&mut PalwCourtVerdictProofV2)| {
+            let mut proof = honest.clone();
+            edit(&mut proof);
+            close(&state, &sid, &proof, ARMED)
+        };
+        let with_job = |j: PalwFreePromptJobV3| {
+            move |p: &mut PalwCourtVerdictProofV2| {
+                if let PalwCourtVerdictProofV2::ConstrainedDecode { job, .. } = p {
+                    **job = j.clone();
+                }
+            }
+        };
+        let mut other = job.clone();
+        other.job_nonce = [0x22; 32];
+        assert_eq!(
+            bent(&with_job(other.clone())),
+            Err(PalwCourtV2Error::CloseJobIsNotTheClaims { carried: fp_job_id_v3(&other), bound: binding.job_context.job_id })
+        );
+        // **The attack Decision 7 names: a challenger stating "no constraint".** The same job at
+        // version 5 is another job id — the version and the constraint are inside it — so the
+        // unconstrained rule cannot be reached for a constrained claim through this arm either.
+        let none = v5_job();
+        assert_eq!(
+            bent(&with_job(none.clone())),
+            Err(PalwCourtV2Error::CloseJobIsNotTheClaims { carried: fp_job_id_v3(&none), bound: binding.job_context.job_id })
+        );
+        let mut downgraded = b5_v5(&binding, one_disclosure_pin(&binding, &rows, &ids, 1), &none);
+        assert_eq!(
+            close(&state, &sid, &downgraded, ARMED),
+            Err(PalwCourtV2Error::CloseJobIsNotTheClaims { carried: fp_job_id_v3(&none), bound: binding.job_context.job_id })
+        );
+        if let PalwCourtVerdictProofV2::ConstrainedDecode { pin, .. } = &mut downgraded {
+            **pin = tiled_pin(&binding, &rows, &ids, 1, b'x' as u32);
+        }
+        assert_eq!(
+            close(&state, &sid, &downgraded, ARMED),
+            Err(PalwCourtV2Error::CloseJobIsNotTheClaims { carried: fp_job_id_v3(&none), bound: binding.job_context.job_id }),
+            "with the tile that would convict under the unconstrained rule, still refused"
+        );
+        let mut four = job.clone();
+        four.version = 4;
+        four.constraint_id = Hash64::default();
+        assert_eq!(
+            bent(&with_job(four)),
+            Err(PalwCourtV2Error::CloseJobVersionNotTried { close: "ConstrainedDecode", got: 4, tries: "version 5 or 6" })
+        );
+        let mut five_with_an_id = job.clone();
+        five_with_an_id.version = PALW_FP_V3_VERSION;
+        assert_eq!(
+            bent(&with_job(five_with_an_id)),
+            Err(PalwCourtV2Error::CloseCarriesWhatItsJobHasNot { what: "a constraint_id inside its version-5 job" })
+        );
+        let mut another = automaton();
+        another.compiler_id = h64(0xBAD);
+        assert_eq!(
+            bent(&|p| {
+                if let PalwCourtVerdictProofV2::ConstrainedDecode { constraint, .. } = p {
+                    *constraint = another.to_bytes();
+                }
+            }),
+            Err(PalwCourtV2Error::CloseConstraintIsNotTheJobs { carried: another.id(), named: job.constraint_id })
+        );
+        let mut one_byte = segments.clone();
+        one_byte[0] = b"{".to_vec();
+        assert_eq!(
+            bent(&|p| {
+                if let PalwCourtVerdictProofV2::ConstrainedDecode { segments, .. } = p {
+                    *segments = one_byte.clone();
+                }
+            }),
+            Err(PalwCourtV2Error::CloseSegmentsAreNotTheClaims)
+        );
+        // A challenger's own segmentation of the same bytes (`[3` as one rendering) is not the
+        // claimant's, whatever it concatenates to.
+        let mut resegmented = segments.clone();
+        resegmented[0] = b"[3".to_vec();
+        resegmented[1] = Vec::new();
+        assert_eq!(
+            bent(&|p| {
+                if let PalwCourtVerdictProofV2::ConstrainedDecode { segments, .. } = p {
+                    *segments = resegmented.clone();
+                }
+            }),
+            Err(PalwCourtV2Error::CloseSegmentsAreNotTheClaims)
+        );
+
+        // The rendering close: a version-6 job only, and an opening of the id at the position.
+        let rendering = b6(&binding, &job, &ids, &segments, 1);
+        let mut wrong_id = rendering.clone();
+        if let PalwCourtVerdictProofV2::ConstrainedRendering { opening: o, .. } = &mut wrong_id {
+            *o = opening(b'8' as u32);
+        }
+        assert_eq!(
+            close(&state, &sid, &wrong_id, ARMED),
+            Err(PalwCourtV2Error::CloseTableOpeningInvalid("the token-table opening is for another id"))
+        );
+        let mut forged = rendering.clone();
+        if let PalwCourtVerdictProofV2::ConstrainedRendering { opening: o, .. } = &mut forged {
+            o.bytes = b"9".to_vec();
+        }
+        assert_eq!(
+            close(&state, &sid, &forged, ARMED),
+            Err(PalwCourtV2Error::CloseTableOpeningInvalid("the token-table opening does not reconstruct the pinned table root"))
+        );
+
+        // An unpinned tokenizer: the same close, once this thread's pin is gone.
+        drop(table);
+        assert_eq!(close(&state, &sid, &honest, ARMED), Err(PalwCourtV2Error::CloseTokenizerUnpinned(tokenizer())));
+        assert_eq!(close(&state, &sid, &rendering, ARMED), Err(PalwCourtV2Error::CloseTokenizerUnpinned(tokenizer())));
+    }
+
+    /// The claim-side refusals that need a claim of their own: a job naming bytes that are not an
+    /// automaton, a version-5 claim tried by the rendering close, and a claimant whose committed answer
+    /// is one id short at the position the ladder narrowed to.
+    #[test]
+    fn a_rendering_or_constraint_the_claim_cannot_have_is_refused_by_name() {
+        let _table = pin_table();
+        let rows = rows();
+        // A job whose constraint id names bytes that do not parse.
+        let garbage = b"not an automaton".to_vec();
+        let job = job(PALW_FP_V3_VERSION_CONSTRAINED, constraint_id_v1(&garbage));
+        let ids = honest_run(&rows, PalwDecodeSamplingV2::GREEDY);
+        let binding = binding_for(&rows, &ids, &job);
+        let segments = renderings(&ids);
+        let (state, sid) = narrowed_court(&binding, output_root_v6(&binding, &ids, &segments), 1, Lane::FreePrompt);
+        let mut proof = b5(&binding, one_disclosure_pin(&binding, &rows, &ids, 1), &job, &segments);
+        if let PalwCourtVerdictProofV2::ConstrainedDecode { constraint, .. } = &mut proof {
+            *constraint = garbage.clone();
+        }
+        assert!(matches!(close(&state, &sid, &proof, ARMED), Err(PalwCourtV2Error::CloseConstraintMalformed(_))));
+
+        // A version-5 claim has no rendering to try.
+        let five = v5_job();
+        let binding = binding_for(&rows, &ids, &five);
+        let (state, sid) = narrowed_court(&binding, output_root_v6(&binding, &ids, &segments), 1, Lane::FreePrompt);
+        assert_eq!(
+            close(&state, &sid, &b6(&binding, &five, &ids, &segments, 1), ARMED),
+            Err(PalwCourtV2Error::CloseJobVersionNotTried { close: "ConstrainedRendering", got: 5, tries: "version 6" })
+        );
+
+        // A claimant whose output root commits five ids for a six-token run, asked about the sixth.
+        let job = v6_job();
+        let binding = binding_for(&rows, &ids, &job);
+        let (short_ids, short_segments) = (&ids[..DECODE - 1], &segments[..DECODE - 1]);
+        let (state, sid) =
+            narrowed_court(&binding, output_root_v6(&binding, short_ids, short_segments), DECODE as u32 - 1, Lane::FreePrompt);
+        let past = PalwCourtVerdictProofV2::ConstrainedRendering {
+            binding: Box::new(binding.clone()),
+            job: Box::new(job.clone()),
+            generated_token_ids: short_ids.to_vec(),
+            segments: short_segments.to_vec(),
+            position: DECODE as u32 - 1,
+            opening: opening(EOG_LOW),
+        };
+        assert_eq!(
+            close(&state, &sid, &past, ARMED),
+            Err(PalwCourtV2Error::ClosePositionPastTheAnswer { position: DECODE as u32 - 1, count: DECODE as u64 - 1 })
+        );
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // The cost gate
+    // ---------------------------------------------------------------------------------------
+
+    /// **Each bound, refused by name, before any state is read** — the state here holds no session
+    /// at all, so an in-bounds close reports `MissingSession` and anything else is the gate. The
+    /// boundary values themselves pass. And B6's DELIBERATE absence is pinned: a rendering past the
+    /// per-token bound passes its gate, because that rendering is the lie B6 convicts.
+    #[test]
+    fn each_constrained_bound_is_refused_by_name_before_any_state_is_read() {
+        let _table = pin_table();
+        let (rows, ids, binding, segments, job) = honest_v6();
+        let (genesis, nowhere) = (PalwChainStateV2::genesis(), h64(0xC0FFEE));
+        let in_bounds = Err(PalwCourtV2Error::MissingSession(nowhere));
+        let decode = b5(&binding, tiled_pin(&binding, &rows, &ids, 1, b'3' as u32), &job, &segments);
+        assert_eq!(close(&genesis, &nowhere, &decode, ARMED), in_bounds, "an honest close is inside every bound");
+        let gate = |edit: &dyn Fn(&mut PalwCourtVerdictProofV2)| {
+            let mut proof = decode.clone();
+            edit(&mut proof);
+            close(&genesis, &nowhere, &proof, ARMED)
+        };
+        let set_constraint = |len: usize| {
+            move |p: &mut PalwCourtVerdictProofV2| {
+                if let PalwCourtVerdictProofV2::ConstrainedDecode { constraint, .. } = p {
+                    *constraint = vec![0; len];
+                }
+            }
+        };
+        assert_eq!(gate(&set_constraint(PALW_FP_CONSTRAINT_MAX_BYTES_V6)), in_bounds, "16 KiB is the bound, not past it");
+        assert_eq!(
+            gate(&set_constraint(PALW_FP_CONSTRAINT_MAX_BYTES_V6 + 1)),
+            Err(PalwCourtV2Error::CloseConstraintTooLarge { got: 16_385, ceiling: 16_384 })
+        );
+        assert_eq!(
+            gate(&|p| {
+                if let PalwCourtVerdictProofV2::ConstrainedDecode { segments, .. } = p {
+                    segments.push(Vec::new());
+                }
+            }),
+            Err(PalwCourtV2Error::CloseSegmentsPastTheRun { segments: 7, ids: 6 })
+        );
+        let set_rendering = |len: usize| {
+            move |p: &mut PalwCourtVerdictProofV2| {
+                if let PalwCourtVerdictProofV2::ConstrainedDecode { segments, .. } = p {
+                    segments[3] = vec![b' '; len];
+                }
+            }
+        };
+        assert_eq!(gate(&set_rendering(256)), in_bounds, "256 bytes is one token's bound");
+        assert_eq!(gate(&set_rendering(257)), Err(PalwCourtV2Error::CloseSegmentTooLong { position: 3, got: 257, ceiling: 256 }));
+        // The opening: an honest one in the 10,000-id table rides a 14-sibling path; five siblings
+        // more is past the most any honest opening of that table can cost.
+        let ceiling = crate::palw_token_table_v1::token_table_max_opening_bytes_v1(VOCAB as u32);
+        assert_eq!(ceiling, 12 + 256 + 14 * 64);
+        let padded = |extra: usize| {
+            move |p: &mut PalwCourtVerdictProofV2| {
+                if let PalwCourtVerdictProofV2::ConstrainedDecode { beat_opening: Some(o), .. } = p {
+                    o.siblings.extend(std::iter::repeat_n(Hash64::default(), extra));
+                }
+            }
+        };
+        // `3` renders as one byte: 12 + 1 + 14·64 = 909 bytes honest; three siblings more (1,101) is
+        // inside the bound, four (1,165) is one byte past it.
+        assert_eq!(gate(&padded(3)), in_bounds, "1,101 bytes is inside 1,164");
+        assert_eq!(gate(&padded(4)), Err(PalwCourtV2Error::CloseTableOpeningTooLarge { got: 909 + 4 * 64, ceiling }));
+        // The whole close, against a ruleset whose ceiling is one tile.
+        let tight =
+            crate::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(crate::palw_step::PALW_STEP_MAX_LEAVES, 4, 2, 16_384, 1_000, 2)
+                .unwrap();
+        let counted = match &decode {
+            PalwCourtVerdictProofV2::ConstrainedDecode { pin, job, constraint, segments, beat_opening, .. } => {
+                constrained_decode_counted_bytes_v1(pin, job, constraint, segments, beat_opening.as_ref())
+            }
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            adjudicate_court_close_v2(&genesis, &nowhere, &decode, &tight, LADDER, FLAT, ARMED),
+            Err(PalwCourtV2Error::CloseTooLarge { got: counted, ceiling: 16_384 })
+        );
+
+        // B6: the opening and the whole close are bounded; a rendering past one token's bound is not.
+        let rendering = b6(&binding, &job, &ids, &segments, 1);
+        assert_eq!(close(&genesis, &nowhere, &rendering, ARMED), in_bounds);
+        let mut long = rendering.clone();
+        if let PalwCourtVerdictProofV2::ConstrainedRendering { segments, .. } = &mut long {
+            segments[0] = vec![b'['; 300];
+            segments.push(Vec::new());
+        }
+        assert_eq!(close(&genesis, &nowhere, &long, ARMED), in_bounds, "B6 carries the claimant's malformed renderings");
+        let mut fat = rendering.clone();
+        if let PalwCourtVerdictProofV2::ConstrainedRendering { opening, .. } = &mut fat {
+            opening.siblings.extend(std::iter::repeat_n(Hash64::default(), 5));
+        }
+        assert!(matches!(close(&genesis, &nowhere, &fat, ARMED), Err(PalwCourtV2Error::CloseTableOpeningTooLarge { .. })));
+        let tiny =
+            crate::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(crate::palw_step::PALW_STEP_MAX_LEAVES, 4, 2, 1_024, 1_000, 2)
+                .unwrap();
+        assert!(matches!(
+            adjudicate_court_close_v2(&genesis, &nowhere, &rendering, &tiny, LADDER, FLAT, ARMED),
+            Err(PalwCourtV2Error::CloseTooLarge { .. })
+        ));
+    }
+
+    /// The gate counts the job at exactly its borsh length, at both versions and any key length —
+    /// so the counted close cannot drift from the encoding the carrier pays for.
+    #[test]
+    fn the_job_is_counted_at_its_borsh_length() {
+        for key in [0usize, 4, 32, 2_592] {
+            for mut j in [v5_job(), v6_job()] {
+                j.executor_pubkey = vec![9; key];
+                assert_eq!(fp_job_close_bytes_v1(&j), borsh::to_vec(&j).unwrap().len() as u64, "version {} key {key}", j.version);
+            }
+        }
+        let mut ml_dsa = v6_job();
+        ml_dsa.executor_pubkey = vec![0; crate::palw_derived_v1::PALW_DERIVED_V1_EXECUTOR_PUBKEY_LEN];
+        assert_eq!(fp_job_close_bytes_v1(&ml_dsa), 3_204, "a version-6 job under an ML-DSA-87 key");
+    }
+
+    /// **The worst case the variant's doc states, measured** — at the Qwen2.5 A16 row's geometry, a
+    /// `ConstrainedDecode` close with every carried part at its bound counts 190,033 bytes, which is
+    /// not one lifecycle carrier (83,333) but three, inside the RC's 27; with the pinned table's
+    /// measured longest token in every position it is 124,625 (two). `ConstrainedRendering`'s worst
+    /// case is 139,532. The whole borsh object with the class's real binding is measured and printed.
+    #[test]
+    fn the_worst_case_constrained_close_is_a_split_close() {
+        use crate::palw_mode_v2::{DEFAULT_MAX_CLOSE_BYTES, palw_close_bytes_for_chunks_v1, palw_close_chunks_for_bytes_v1};
+        let vocab = crate::palw_qwen25_profile::QWEN25_1_5B_A16.vocab_size as usize;
+        assert_eq!(vocab, 151_936);
+        let tiles = vocab.div_ceil(PALW_LOGITS_TILE_LANES) as u64;
+        assert_eq!(tiles, 38);
+        let decode = 511usize; // `n_ctx` 512 less a one-token prompt
+        let row_path = crate::palw_step_leg::step_leg_max_opening_siblings_v1(decode as u64);
+        let tile_path = crate::palw_step_leg::step_leg_max_opening_siblings_v1(tiles);
+        assert_eq!((row_path, tile_path), (9, 6));
+        let opening_at = |siblings: usize| PalwStepOpeningV1 {
+            leaf_index: 0,
+            leaf_hash: Hash64::default(),
+            siblings: vec![Hash64::default(); siblings],
+        };
+        let pin = PalwTiledDecodePinV1 {
+            position: 0,
+            generated_token_ids: vec![0; decode],
+            row_root: Hash64::default(),
+            row_opening: opening_at(row_path),
+            committed_tile_lanes: vec![0; PALW_LOGITS_TILE_LANES],
+            committed_opening: opening_at(tile_path),
+            beat_tile_lanes: vec![0; PALW_LOGITS_TILE_LANES],
+            beat_opening: opening_at(tile_path),
+            beat_lane: 0,
+        };
+        let mut job = v6_job();
+        job.executor_pubkey = vec![0; crate::palw_derived_v1::PALW_DERIVED_V1_EXECUTOR_PUBKEY_LEN];
+        let constraint = vec![0u8; PALW_FP_CONSTRAINT_MAX_BYTES_V6];
+        let bound = crate::palw_token_table_v1::PALW_TOKEN_TABLE_MAX_TOKEN_BYTES_V1;
+        let opening = PalwTokenTableOpeningV1 {
+            id: 0,
+            bytes: vec![b' '; bound],
+            siblings: vec![Hash64::default(); crate::palw_step_leg::step_leg_max_opening_siblings_v1(vocab as u64)],
+        };
+        assert_eq!(crate::palw_token_table_v1::token_table_opening_bytes_v1(&opening), 1_420);
+        let at_bound = vec![vec![b' '; bound]; decode];
+        let measured_longest = vec![vec![b' '; 128]; decode];
+
+        let worst = constrained_decode_counted_bytes_v1(&pin, &job, &constraint, &at_bound, Some(&opening));
+        assert_eq!(worst, 32_768 + 1_344 + 2_044 + 3_204 + 16_388 + 132_864 + 1_421);
+        assert_eq!(worst, 190_033);
+        let realistic = constrained_decode_counted_bytes_v1(&pin, &job, &constraint, &measured_longest, Some(&opening));
+        assert_eq!(realistic, 124_625);
+        let one_carrier = palw_close_bytes_for_chunks_v1(1);
+        assert_eq!(one_carrier, 83_333);
+        assert!(worst > one_carrier && realistic > one_carrier, "neither fits one lifecycle carrier");
+        assert_eq!(palw_close_chunks_for_bytes_v1(worst), 3);
+        assert_eq!(palw_close_chunks_for_bytes_v1(realistic), 2);
+        assert!(worst <= DEFAULT_MAX_CLOSE_BYTES, "the RC's 27-chunk ceiling holds it");
+        // What one carrier leaves for rendering bytes at the full 511 positions, with every other part
+        // at its bound: 83,333 − (36,156 + 3,204 + 16,388 + 1,421) − 4 − 511·4.
+        let rendering_room = one_carrier - (36_156 + 3_204 + 16_388 + 1_421) - 4 - 4 * decode as u64;
+        assert_eq!(rendering_room, 24_116);
+
+        let b6_worst = constrained_rendering_counted_bytes_v1(&job, &pin.generated_token_ids, &at_bound, &opening);
+        assert_eq!(b6_worst, 2_044 + 3_204 + 132_864 + 1_420);
+        assert_eq!(b6_worst, 139_532);
+        assert_eq!(constrained_rendering_counted_bytes_v1(&job, &pin.generated_token_ids, &measured_longest, &opening), 74_124);
+
+        // The whole object as it rides, with the dense class's real profile in the binding — which
+        // the gate does not count, as for every arm.
+        let (mut binding, _m, _r, _) = crate::palw_step_refute::tests::base0_honest_decode_commitment();
+        binding.shape_profile = crate::palw_qwen25_profile::qwen25_a16_profile_v2(crate::palw_qwen25_profile::QWEN25_1_5B_A16)
+            .expect("the registered A16 geometry projects");
+        let binding_bytes = borsh::to_vec(&binding).unwrap().len() as u64;
+        let proof = PalwCourtVerdictProofV2::ConstrainedDecode {
+            binding: Box::new(binding),
+            pin: Box::new(pin),
+            job: Box::new(job),
+            constraint,
+            segments: at_bound,
+            beat_opening: Some(opening),
+        };
+        let wire = borsh::to_vec(&proof).unwrap().len() as u64;
+        println!(
+            "worst ConstrainedDecode: counted {worst} B, binding {binding_bytes} B, whole borsh {wire} B, {} carrier(s) framed",
+            palw_close_chunks_for_bytes_v1(wire)
+        );
+        assert!(wire >= worst + binding_bytes, "the count never exceeds what rides");
+        assert!(wire <= worst + binding_bytes + 1_024, "and misses only headers: {wire} against {}", worst + binding_bytes);
+        let back: PalwCourtVerdictProofV2 = borsh::from_slice(&borsh::to_vec(&proof).unwrap()).unwrap();
+        assert_eq!(back, proof, "the new arm round-trips");
+    }
+
+    /// **The two new arms are APPENDED**: every earlier variant keeps its borsh discriminant, so no
+    /// close testnet-11 has accepted re-numbers, and the new ones take 5 and 6.
+    #[test]
+    fn the_constrained_arms_are_appended_and_every_earlier_discriminant_stands() {
+        let _table = pin_table();
+        let (rows, ids, binding, segments, job) = honest_v6();
+        let tag = |proof: &PalwCourtVerdictProofV2| borsh::to_vec(proof).unwrap()[0];
+        let tiled =
+            PalwCourtVerdictProofV2::DecodeTokenTiled { binding: binding.clone(), pin: tiled_pin(&binding, &rows, &ids, 1, 0) };
+        assert_eq!(tag(&tiled), 2, "DecodeTokenTiled");
+        assert_eq!(tag(&b5(&binding, one_disclosure_pin(&binding, &rows, &ids, 1), &job, &segments)), 5);
+        assert_eq!(tag(&b6(&binding, &job, &ids, &segments, 1)), 6);
+        let skeleton = crate::palw_step_refute::tests::skeleton_refutation();
+        assert_eq!(tag(&PalwCourtVerdictProofV2::Arithmetic { refutation: skeleton, operand_openings: Vec::new() }), 0);
     }
 }

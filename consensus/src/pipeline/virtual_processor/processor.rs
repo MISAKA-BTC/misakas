@@ -480,6 +480,10 @@ pub struct VirtualStateProcessor {
     /// literal `false` — which on a genesis that arms the fence would have refused every private
     /// commitment the door had admitted.
     pub(super) palw_panel_da: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **ADR-0096 Decision 8's decode-constraint fence** (`Params::palw_fp_decode_constraint_fence`,
+    /// mode folded in), `None` on every shipped preset. The extraction walk reads it at the
+    /// accepting block's DAA: a version-6 commitment becomes a claim only past it.
+    pub(super) palw_fp_decode_constraint: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **ADR-0084 U-08's fence, `None` on every shipped preset.** Past it a court close is walked
     /// at the ruleset's step ladder (`PalwCourtParamsV2::max_step_leaf_count`); before it at
     /// `PALW_STEP_LEG_MAX_LEAVES`. Resolved in exactly one place, `palw_court_step_ladder_at`,
@@ -976,6 +980,7 @@ impl VirtualStateProcessor {
             palw_kary_court: params.palw_kary_court_fence(),
             palw_prompt_ids_merkle: params.palw_prompt_ids_merkle_fence(),
             palw_panel_da: params.palw_panel_da_fence(),
+            palw_fp_decode_constraint: params.palw_fp_decode_constraint_fence(),
             palw_court_ladder: params.palw_court_ladder_fence(),
             palw_court_responder_coverage: params.palw_court_responder_coverage_fence(),
             palw_fp_da_pins: params.palw_fp_da_pins_fence(),
@@ -4678,7 +4683,18 @@ impl VirtualStateProcessor {
         let daa_score = self.virtual_stores.read().state.get().ok()?.daa_score;
         let step_ladder = self.palw_court_step_ladder_at(daa_score, court);
         let form = self.palw_prompt_ids_form_at(daa_score);
-        kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v2(&state, session_id, proof, court, step_ladder, form).ok()
+        // ADR-0096 Decision 8 at the same DAA: which decode closes this network admits.
+        let fp_decode_constraint = self.palw_fp_decode_constraint_at(daa_score);
+        kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v2(
+            &state,
+            session_id,
+            proof,
+            court,
+            step_ladder,
+            form,
+            fp_decode_constraint,
+        )
+        .ok()
     }
 
     /// The court's half of [`Self::palw_seat_duties_v2_impl`]: the open sessions this node is a
@@ -6202,6 +6218,7 @@ impl VirtualStateProcessor {
                                 court,
                                 self.palw_court_step_ladder_at(point.daa_score, court),
                                 self.palw_prompt_ids_form_at(point.daa_score),
+                                self.palw_fp_decode_constraint_at(point.daa_score),
                             )
                             .map_err(|e| e.to_string())?;
                             if derived != *verdict {
@@ -6505,6 +6522,9 @@ impl VirtualStateProcessor {
                         court,
                         self.palw_court_step_ladder_at(point.daa_score, court),
                         self.palw_prompt_ids_form_at(point.daa_score),
+                        // ADR-0096 Decision 8 at the block's DAA — the same candidate-scoped rule
+                        // the free-prompt walk reads for this block.
+                        self.palw_fp_decode_constraint_at(point.daa_score),
                     )
                     .map_err(|e| e.to_string())?;
                     if derived != *verdict {
@@ -7421,6 +7441,12 @@ impl VirtualStateProcessor {
         self.palw_panel_da.is_some_and(|fence| fence.is_active(daa_score))
     }
 
+    /// **ADR-0096 Decision 8 at this block, resolved in exactly one place.** `false` on every
+    /// shipped preset.
+    pub(super) fn palw_fp_decode_constraint_at(&self, daa_score: u64) -> bool {
+        self.palw_fp_decode_constraint.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
     /// **ADR-0081 Decision 3's form at this block, resolved in exactly one place.** `Flat` on every
     /// shipped preset; the tiled Merkle root from block one on a genesis that arms it
     /// (`validate_palw_v2` refuses any other height, so this never differs from
@@ -8014,6 +8040,8 @@ impl VirtualStateProcessor {
             // `false`, which on a genesis that arms `PanelDa` would have skipped every private
             // commitment the door had admitted.
             self.palw_panel_da_at(block_daa),
+            // ADR-0096 Decision 8 at the same block's DAA, the same candidate-scoped rule.
+            self.palw_fp_decode_constraint_at(block_daa),
             ladder,
             // **ADR-0044 Decision 9's two advertised caps, at the same block's DAA** (mainnet audit
             // 2026-09-06, L-2). The bundle's `max_prompt_tokens` and `max_decode_tokens` are inside

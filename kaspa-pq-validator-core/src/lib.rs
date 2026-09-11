@@ -626,15 +626,8 @@ impl ValidatorKey {
             funding.iter().map(|(o, _)| TransactionInput::new(*o, vec![], MAX_TX_IN_SEQUENCE_NUM, 1)).collect();
         let mut outputs = vec![TransactionOutput::new(funded - spent, funding[0].1.script_public_key.clone())];
         outputs.extend(extra);
-        let tx = Transaction::new(
-            TX_VERSION,
-            inputs,
-            outputs,
-            0,
-            kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
-            0,
-            bytes,
-        );
+        let tx =
+            Transaction::new(TX_VERSION, inputs, outputs, 0, kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE, 0, bytes);
         let entries: Vec<UtxoEntry> = funding.iter().map(|(_, e)| e.clone()).collect();
         let mtx = MutableTransaction::with_entries(tx, entries);
         let reused_mldsa = Mldsa87SigHashReusedValuesUnsync::new();
@@ -944,6 +937,39 @@ impl ValidatorKey {
         funding: &UtxoEntry,
         fee: u64,
     ) -> Result<Transaction, String> {
+        self.build_fp_commitment_tx_with_constraint(
+            network_domain,
+            prompt_ids_form,
+            commitment,
+            prompt_token_ids,
+            Vec::new(),
+            freeprompt,
+            class_canonical_leaves,
+            funding_outpoint,
+            funding,
+            fee,
+        )
+    }
+
+    /// **The same carriage for a version-6 (constrained) commitment** (ADR-0096 §10 B2): the payload
+    /// is the job's version and carries the automaton's canonical bytes, and it is checked under
+    /// the constraint fence's arming — the caller has read the chain and knows the fence is armed,
+    /// and a chain that has not armed it refuses the carrier by name anyway. An empty `constraint`
+    /// with a version-5 job is exactly [`Self::build_fp_commitment_tx`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_fp_commitment_tx_with_constraint(
+        &self,
+        network_domain: Hash64,
+        prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        commitment: PalwFreePromptCommitmentV3,
+        prompt_token_ids: Vec<u32>,
+        constraint: Vec<u8>,
+        freeprompt: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptParamsV3,
+        class_canonical_leaves: u64,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        fee: u64,
+    ) -> Result<Transaction, String> {
         // Sign the identity first so the payload carries a signature over exactly the bytes the
         // stateless check will re-derive.
         let signature =
@@ -959,10 +985,19 @@ impl ValidatorKey {
         } else {
             prompt_token_ids
         };
-        let payload = PalwFpCommitmentTxPayloadV3 { version: PALW_FP_V3_VERSION, commitment, prompt_token_ids, signature };
-        // The same stateless rules a peer will apply, applied before spending a fee on them.
+        let constrained = commitment.job.version == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED;
+        let version = if constrained { commitment.job.version } else { PALW_FP_V3_VERSION };
+        let payload = PalwFpCommitmentTxPayloadV3 { version, commitment, prompt_token_ids, signature, constraint };
+        // The same stateless rules a peer will apply, applied before spending a fee on them — under
+        // the constraint fence's arming for a version-6 payload, and disarmed for everything else.
         payload
-            .validate_stateless_v3(network_domain, prompt_ids_form)
+            .validate_stateless_armed_v3(
+                network_domain,
+                kaspa_consensus_core::palw_freeprompt_v3::PalwFpArmingV1 { panel_da: false, decode_constraint: constrained },
+                kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP,
+                None,
+                prompt_ids_form,
+            )
             .map_err(|e| format!("free-prompt commitment is not admissible: {e}"))?;
         let (quanta, pwu) = freeprompt.derive_quanta_and_pwu(payload.commitment.work_leaves, class_canonical_leaves).ok_or_else(|| {
             format!(
@@ -2190,6 +2225,7 @@ mod tests {
             prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            constraint_id: Default::default(),
         };
         let events: Vec<Hash64> = (0..256u64).map(|i| Hash64::from_u64_word(i + 1)).collect();
         let (manifest_root, chunk_count, _) = fp_trace_manifest_v3(Hash64::from_bytes([0xB1; 64]), &events);

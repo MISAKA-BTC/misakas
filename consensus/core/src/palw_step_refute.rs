@@ -7170,46 +7170,34 @@ mod catalog_through_line_tests {
 // ADR-0096 Decision 7 — the decode-token refutation under a constraint
 // ---------------------------------------------------------------------------------------------
 
-/// **ADR-0096 Decision 7's court: the two-disclosure arm gains the automaton state, and a third
-/// arm needs one disclosure.**
+/// **ADR-0096 Decision 7's court, completed by §10: the two-disclosure arm gains the automaton
+/// state, and a third arm needs one disclosure.**
 ///
-/// `constraint` is what the caller bound to the CLAIM — the job's `constraint_id` resolved to its
-/// bytes, the class's token-to-bytes table, the class's `eog_token_ids`
-/// ([`crate::palw_decode_constraint_v1::PalwDecodeConstraintCourtV1`]) — and never anything the
-/// challenger stated: a challenger who could state the constraint could state "none" and convict
-/// an honest masked token, exactly the reason `sampling` comes from the claim (ADR-0082 Decision
-/// 11). With `constraint = None` this function IS
-/// [`check_tiled_decode_token_refutation_capped_v2`], verdict for verdict — it delegates, so a
-/// dormant network is adjudicated by the bytes it is adjudicated by today
-/// (`refutation_v3_without_a_constraint_is_the_v2_verdict_byte_for_byte`).
+/// `constraint` is what the caller bound to the CLAIM (§10 B5) — the automaton whose id is the
+/// claim's job's `constraint_id`, the answer's per-token renderings checked against the claim's
+/// `output_root`, the beating lane's rendering proven against the pinned token table, and the
+/// class's end-of-generation ids — and never anything the challenger stated: a challenger who
+/// could state the constraint could state "none" and convict an honest masked token, exactly the
+/// reason `sampling` comes from the claim (ADR-0082 Decision 11). With `constraint = None` this
+/// function IS [`check_tiled_decode_token_refutation_capped_v2`], verdict for verdict.
 ///
-/// With a constraint, after the same authentication the v2 arm performs (the scheme, the id
-/// count, the position, the row opening, the claim's own trace root — [`tiled_row_authenticate_v1`]):
+/// With a constraint, after the same authentication the v2 arm performs:
 ///
-/// 1. **The state.** `s = A(bytes(ids[..position]))`, the automaton run over the prefix rendered
-///    through the class table. An id the table cannot render, or a prefix the automaton does not
-///    admit, names an EARLIER position as the fault and is refused here as `InputSetNotCanonical`
-///    — the challenger opens that position instead; nothing is adjudicated from a dead state.
-/// 2. **The one-disclosure arm** (no tile read): the committed token at `position` is not admitted
-///    from `s`. Then, unless NO lane of the vocabulary is admitted from `s` and the token is the
-///    class's lowest EOG id — Decision 7's stop rule, "if no lane is admitted, the committed token
-///    is the lowest EOG id" — it is a `DecodeTokenMismatch` proven from the ids and the constraint
-///    alone. The arm is reached by the pin's SHAPE: a pin whose two tile-lane vectors are empty
-///    carries the ids and the row opening and nothing else (a v2 court refuses that shape as
-///    malformed, so the wire form is unchanged and the arm is unreachable before the fence). A pin
-///    that does carry tiles is tried by this arm first, since the arm needs none of them.
-/// 3. **The two-disclosure arm** as v2 — both tiles authenticated against the row root, two keys
-///    under `sampling` — with one more condition: **the beating lane must be admitted from `s`**.
-///    A lane the constraint forbids beats nothing, however large its logit, and a pin that names
-///    one is `NoFaultFound` (invariant 3: the challenger's lane must be admitted). The committed
-///    lane is admitted by the time this arm runs, so the comparison is between two admitted lanes,
-///    which is the selection rule v3's own question.
+/// 1. **The cursor at the position** (§10 B7), walked over `segments[..position]` with the ids:
+///    each token must advance it — an admitted, non-empty rendering while some byte continues;
+///    the lowest EOG id once none does, and at every position after. A prefix the rule does not
+///    admit names an EARLIER position and is refused here as `InputSetNotCanonical`.
+/// 2. **The one-disclosure arm** (no tile read): the committed token does not advance the cursor.
+///    That is a `DecodeTokenMismatch` proven from the ids, the renderings and the constraint alone.
+///    The arm is reached by the pin's SHAPE (both tile-lane vectors empty), which a v2 court
+///    refuses as malformed, so it is unreachable before the fence.
+/// 3. **The two-disclosure arm** as v2, with two more conditions: the run is not finished (after
+///    the stop the token is fixed by rule and nothing can beat it), and **the beating lane must be
+///    admitted** from the state — a lane the constraint forbids beats nothing (invariant 3).
 ///
-/// What is NOT tried here: that the run stopped at the stop (`exact_decode_tokens` is the
-/// transition's to read against the rule; positions after an honest stop have a dead prefix and
-/// are refused by step 1), and the constraint's binding to the claim (the caller's, as for
-/// `sampling`). No tile is opened for the third arm; the two-disclosure cost is v2's plus one
-/// automaton step per byte of the rendered prefix (ADR-0096 §4).
+/// What is NOT tried here: the renderings' truth (the caller checks them against `output_root`,
+/// and a lying rendering is the rendering close's, §10 B6) and the constraint's binding to the
+/// claim (the caller's, as for `sampling`).
 pub fn check_tiled_decode_token_refutation_v3(
     binding: &PalwStepBindingV2,
     pin: &PalwTiledDecodePinV1,
@@ -7217,7 +7205,9 @@ pub fn check_tiled_decode_token_refutation_v3(
     constraint: Option<crate::palw_decode_constraint_v1::PalwDecodeConstraintCourtV1<'_>>,
     max_step_leaf_count: u64,
 ) -> Result<crate::palw_step_leg::PalwStepRefutationVerdictV1, PalwStepRefuteError> {
-    use crate::palw_decode_constraint_v1::{constraint_admits_any_lane_v1, constraint_admits_lane_v1, constraint_state_after_v1};
+    use crate::palw_decode_constraint_v1::{
+        PalwConstraintCursorV1, constraint_admits_lane_v1, constraint_cursor_advance_v1, constraint_cursor_start_v1,
+    };
     let Some(court) = constraint else {
         return check_tiled_decode_token_refutation_capped_v2(binding, pin, sampling, max_step_leaf_count);
     };
@@ -7231,12 +7221,20 @@ pub fn check_tiled_decode_token_refutation_v3(
         &pin.row_opening,
         max_step_leaf_count,
     )?;
+    if court.segments.len() != pin.generated_token_ids.len() {
+        return Err(bad("the renderings are not one per decode position"));
+    }
+    let lowest_eog = court
+        .eog_token_ids
+        .iter()
+        .copied()
+        .min()
+        .ok_or(bad("the class binding names no end-of-generation id, so the stop rule cannot be tried"))?;
     let position = pin.position as usize;
     let committed = *pin.generated_token_ids.get(position).ok_or(bad("the challenged position is past the decode count"))?;
     if committed as usize >= vocab {
         return Err(bad("the committed token is past the registered vocabulary"));
     }
-    let table = court.token_bytes;
     let convicted = || {
         let fault = crate::palw_step_leg::PalwStepFaultV1::DecodeTokenMismatch { position: pin.position };
         crate::palw_step_leg::PalwStepRefutationVerdictV1 {
@@ -7250,32 +7248,25 @@ pub fn check_tiled_decode_token_refutation_v3(
         }
     };
 
-    // 1. The state at the position, from the rendered prefix.
-    let mut prefix: Vec<Vec<u8>> = Vec::with_capacity(position);
-    for id in &pin.generated_token_ids[..position] {
-        prefix.push(table(*id).ok_or(bad(
-            "an id before the challenged position has no rendering in the class table — that position is the one to challenge",
-        ))?);
+    // 1. The cursor at the position, from the committed prefix.
+    let mut cursor = constraint_cursor_start_v1(court.constraint);
+    for (id, segment) in pin.generated_token_ids[..position].iter().zip(&court.segments[..position]) {
+        cursor = constraint_cursor_advance_v1(court.constraint, &cursor, segment, *id == lowest_eog).ok_or(bad(
+            "the committed prefix does not follow the rule before the challenged position — the first position that does not is the one to challenge",
+        ))?;
     }
-    let state = constraint_state_after_v1(court.constraint, prefix.iter()).ok_or(bad(
-        "the prefix is not admitted before the challenged position — the first position that is not is the one to challenge",
-    ))?;
 
-    // 2. The one-disclosure arm: the committed token is not admitted from the state.
-    if constraint_admits_lane_v1(court.constraint, &state, table(committed).as_deref()).is_none() {
-        if !constraint_admits_any_lane_v1(court.constraint, &state, vocab as u32, table) {
-            let lowest = court
-                .lowest_eog_id()
-                .ok_or(bad("the class binding names no end-of-generation id, so Decision 7's stop rule cannot be tried"))?;
-            if committed == lowest {
-                return Err(PalwStepRefuteError::NoFaultFound);
-            }
-        }
+    // 2. The one-disclosure arm: the committed token does not advance the cursor.
+    if constraint_cursor_advance_v1(court.constraint, &cursor, &court.segments[position], committed == lowest_eog).is_none() {
         return Ok(convicted());
     }
     if pin.committed_tile_lanes.is_empty() && pin.beat_tile_lanes.is_empty() {
         return Err(PalwStepRefuteError::NoFaultFound);
     }
+    // After the stop the token is the rule's, not the argmax's: nothing beats it.
+    let PalwConstraintCursorV1::Running(state) = &cursor else {
+        return Err(PalwStepRefuteError::NoFaultFound);
+    };
 
     // 3. The two-disclosure arm, over two admitted lanes.
     let beat_lane = pin.beat_lane as usize;
@@ -7292,7 +7283,9 @@ pub fn check_tiled_decode_token_refutation_v3(
     };
     let v_committed = open_tile(&pin.committed_tile_lanes, &pin.committed_opening, committed as usize)?;
     let v_beat = open_tile(&pin.beat_tile_lanes, &pin.beat_opening, beat_lane)?;
-    if constraint_admits_lane_v1(court.constraint, &state, table(pin.beat_lane).as_deref()).is_none() {
+    let beat_bytes =
+        court.beat_lane_bytes.ok_or(bad("a two-disclosure close names a beating lane and carries no rendering for it"))?;
+    if constraint_admits_lane_v1(court.constraint, state, Some(beat_bytes)).is_none() {
         return Err(PalwStepRefuteError::NoFaultFound);
     }
     let beats = crate::palw_decode_select_v2::decode_lane_beats_v2(

@@ -722,6 +722,57 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         None
     }
 
+    /// **`output_root` from the answer's ids, for THIS job** (ADR-0096 §10 B3). A version-5 job's
+    /// is [`Self::output_root_for_context_v1`]; a version-6 (constrained) job's is
+    /// [`fp_output_root_constrained_v1`] — per token, through the class's token table, and the same
+    /// for every family, so it is not the family's to override. `None` for a version-6 job when
+    /// the caller holds no table, which a seat reads as "cannot bind this answer", never as a
+    /// match.
+    fn output_root_for_job_v1(
+        &self,
+        job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        context: &PalwJobContextV2,
+        output_token_ids: &[u32],
+        table: Option<&crate::palw_token_table_v1::PalwTokenTableV1>,
+    ) -> Option<crate::Hash64> {
+        if job.version >= crate::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED {
+            return table.map(|table| fp_output_root_constrained_v1(context, output_token_ids, table));
+        }
+        self.output_root_for_context_v1(context, output_token_ids)
+    }
+
+    /// **Run a version-6 (constrained) free-prompt job** (ADR-0096 Decision 7, §10 B7): the decode
+    /// masked by `constraint`, the committed token the admitted argmax while a byte continues and
+    /// the lowest EOG id from the stop to the budget, the rendered hash per token. The default
+    /// refuses by name — a family whose engine does not mask (the hybrid tier today, §10 B8) must
+    /// never run a constrained job unconstrained.
+    ///
+    /// `table` is the class's token table (§10 B4), the caller's: a worker builds it from the
+    /// tokenizer it serves with, a seat from the file it was given and only when it is the pin —
+    /// the masked selection and the rendered hash both read it, so one table is one answer.
+    fn execute_free_prompt_constrained_streaming(
+        &self,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_tokens: &[usize],
+        _constraint: &crate::palw_decode_constraint_v1::PalwDecodeConstraintV1,
+        _table: &crate::palw_token_table_v1::PalwTokenTableV1,
+        _on_token: &mut dyn FnMut(u32),
+    ) -> Result<PalwFpRunV1, String> {
+        Err("this family's engine does not mask a decode, so it cannot run a version-6 (constrained) job (ADR-0096 §10 B8)"
+            .to_string())
+    }
+
+    /// [`Self::execute_free_prompt_constrained_streaming`] without a sink — what a seat replays.
+    fn execute_free_prompt_constrained(
+        &self,
+        job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_tokens: &[usize],
+        constraint: &crate::palw_decode_constraint_v1::PalwDecodeConstraintV1,
+        table: &crate::palw_token_table_v1::PalwTokenTableV1,
+    ) -> Result<PalwFpRunV1, String> {
+        self.execute_free_prompt_constrained_streaming(job, prompt_tokens, constraint, table, &mut |_| {})
+    }
+
     /// **A DRILL fault: run the job, corrupt one lane of one tile, and commit to the result.**
     ///
     /// A court that has never convicted on a live chain is a court nobody has evidence works, and
@@ -742,6 +793,20 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     ) -> Result<PalwExecutionOutcomeV1, String> {
         Err("this backend has no drill fault".to_string())
     }
+}
+
+/// **A version-6 answer's `output_root`** (ADR-0096 §10 B3): `output_commitment_v2` over the
+/// context, the ids, and [`crate::palw_decode_constraint_v1::rendered_segments_hash_v1`] of each
+/// id's rendering in the class's token table. One spelling for the engine that commits it, the
+/// seat that binds a served answer to it, and the court that checks disclosed segments against it.
+pub fn fp_output_root_constrained_v1(
+    context: &PalwJobContextV2,
+    output_token_ids: &[u32],
+    table: &crate::palw_token_table_v1::PalwTokenTableV1,
+) -> crate::Hash64 {
+    let segments: Vec<&[u8]> = output_token_ids.iter().map(|id| table.segment(*id)).collect();
+    let rendered = crate::palw_decode_constraint_v1::rendered_segments_hash_v1(&segments);
+    crate::palw_v2::output_commitment_v2(&context.context_hash(), output_token_ids, &rendered)
 }
 
 #[cfg(test)]

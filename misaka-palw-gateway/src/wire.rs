@@ -537,6 +537,10 @@ pub struct AnswerStream {
     emitted: usize,
     /// Where the SHOWN answer ends. `None` while the display is still open.
     cut: Option<usize>,
+    /// The display was closed by the answer itself — an EOG id or the stop guard — rather than
+    /// by the run ending. A constrained run's EOG renders EMPTY (ADR-0096 §10 B4's table rule),
+    /// so the cut is then at the end of the bytes and only this says the answer stopped.
+    ended_by_answer: bool,
 }
 
 impl AnswerStream {
@@ -557,8 +561,10 @@ impl AnswerStream {
             if eog.contains(&token_id) {
                 // The EOG token's own bytes are not part of the answer.
                 self.cut = Some(before);
+                self.ended_by_answer = true;
             } else if let Some(at) = find_guard(&self.bytes, self.emitted) {
                 self.cut = Some(at);
+                self.ended_by_answer = true;
             }
         }
         self.take_delta()
@@ -607,6 +613,12 @@ impl AnswerStream {
 
     pub fn ids(&self) -> &[u32] {
         &self.ids
+    }
+
+    /// Did the answer end itself (an EOG id or the stop guard) before the run's budget did?
+    /// OpenAI's `finish_reason: "stop"` against `"length"`.
+    pub fn ended_by_answer(&self) -> bool {
+        self.ended_by_answer
     }
 
     pub fn bytes(&self) -> &[u8] {
@@ -980,6 +992,7 @@ mod tests {
                 prompt_mode: 0,
                 sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
                 temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+                constraint_id: Default::default(),
             },
             prompt_token_ids: vec![1, 2, 3],
             trace_root: Hash64::from_u64_word(7),
@@ -1062,6 +1075,32 @@ mod tests {
         guarded.finish();
         assert_eq!(guarded.shown(), "2+2=4.");
         assert_eq!(display_trim("2+2=4.\n\n### User:\nWhat…"), "2+2=4.", "and the non-streaming rule agrees");
+    }
+
+    /// A masked run's EOG renders EMPTY (ADR-0096 §10 B4), so the shown answer and the bytes are
+    /// the same length and only the stream can say the answer stopped itself. Measured on the
+    /// first masked answer: `{"name":null,"age":null}` then EOG to the budget reported
+    /// `finish_reason: "length"`.
+    #[test]
+    fn an_empty_eog_still_ends_the_answer() {
+        let eog: BTreeSet<u32> = [151_643u32, 151_645].into_iter().collect();
+        let mut stream = AnswerStream::new();
+        stream.push(4913, b"{\"", &eog);
+        stream.push(64, b"a\":1}", &eog);
+        assert!(!stream.ended_by_answer(), "still open");
+        for _ in 0..3 {
+            stream.push(151_643, b"", &eog);
+        }
+        stream.finish();
+        assert!(stream.ended_by_answer());
+        assert_eq!(stream.shown(), "{\"a\":1}");
+        assert_eq!(stream.shown().len(), stream.bytes().len(), "the byte comparison sees no cut");
+
+        // The run's budget ending the display is not the answer ending it.
+        let mut cut_by_budget = AnswerStream::new();
+        cut_by_budget.push(1, b"{\"a\":", &eog);
+        cut_by_budget.finish();
+        assert!(!cut_by_budget.ended_by_answer());
     }
 
     /// What a client that concatenates the deltas sees is what a client that asks for one response

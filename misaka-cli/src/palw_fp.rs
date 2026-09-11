@@ -136,24 +136,28 @@ pub async fn submit(
                             ),
                         ));
                     }
-                    let answer = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_encode_v1(
+                    // A version-6 job's automaton rides both (ADR-0096 §10 B2); empty for version 5.
+                    let answer = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_encode_constrained_v1(
                         &payload.commitment.job,
                         &payload.prompt_token_ids,
+                        &payload.constraint,
                         &ids,
                     );
                     (
-                        kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_encode_v1(
+                        kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_encode_constrained_v1(
                             &payload.commitment.job,
                             &payload.prompt_token_ids,
+                            &payload.constraint,
                             &capture_bytes,
                         ),
                         Some(answer),
                     )
                 }
                 None => (
-                    kaspa_consensus_core::palw_freeprompt_v3::palw_fp_material_encode_v1(
+                    kaspa_consensus_core::palw_freeprompt_v3::palw_fp_material_encode_constrained_v1(
                         &payload.commitment.job,
                         &payload.prompt_token_ids,
+                        &payload.constraint,
                     ),
                     None,
                 ),
@@ -524,37 +528,14 @@ pub(crate) async fn spendable_candidates_v1(
 
 /// **What the chain may charge this carrier as RENT rather than as carriage** (ADR-0075 SA-1/SA-2).
 ///
-/// One spelling, read by every carrier builder. Paid on every network, armed fence or not: a
-/// carrier the chain drops for underpaying is a fee spent and nothing recorded.
-///
-/// The room a chunk group reserves is charged to chunk 0 alone, which is the chunk that opens the
-/// group: the carriers are CHAINED on one another's change, so no later one can be mined first.
-/// The chunk that COMPLETES the group carries the object into its block, so it owes the grading
-/// rent — and a single chunk cannot say how many vectors the assembled object holds, so it pays
-/// for the most the rules allow. `index` and `count` come off a FILE an operator hands the tool,
-/// so the comparison is widened to `u16`: `255 + 1` on a `u8` is a panic rather than a refusal.
+/// The rule itself is `palw_carrier_min_fee_v1`, in the crate that owns the acceptance layer that
+/// charges it — this file worked it out first, and a second filer (the node's own panel) then
+/// needed the same answer, which is the moment a rule stops belonging to whichever tool wrote it
+/// down. Kept as a name here because this crate's callers read it, and because the sentence worth
+/// keeping beside them is the one about WHY it is paid unconditionally: **a carrier the chain drops
+/// for underpaying is a fee spent and nothing recorded.**
 pub(crate) fn carrier_rent_v1(object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2) -> u64 {
-    use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as Obj;
-    match object {
-        Obj::FamilyCertified { evidence } => {
-            kaspa_consensus_core::palw_state_v2::palw_certification_min_fee_v1(evidence.vector_count())
-        }
-        Obj::ObjectChunk { index, count, .. } => {
-            let opener = if *index == 0 { kaspa_consensus_core::palw_state_v2::palw_object_chunk_group_rent_v1() } else { 0 };
-            let completing = if u16::from(*index) + 1 == u16::from(*count) {
-                kaspa_consensus_core::palw_state_v2::palw_certification_min_fee_v1(
-                    kaspa_consensus_core::palw_state_v2::PALW_CERTIFICATION_MAX_VECTORS,
-                )
-            } else {
-                0
-            };
-            opener.max(completing)
-        }
-        // Every other object owes exactly what the chain's own ceiling says — ADR-0088 Decision
-        // 11's three rent-priced registry objects (a founding, a proposal, an evaluation) among
-        // them; the rest read 0 and pay carriage only.
-        other => kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v1(other),
-    }
+    kaspa_consensus_core::palw_state_v2::palw_carrier_min_fee_v1(object)
 }
 
 /// **Build one lifecycle carrier and price it from its own mass** — the fee rule, once.

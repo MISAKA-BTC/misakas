@@ -840,7 +840,9 @@ impl PalwExecutionBackendV1 for Base0Backend {
         job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
         decode_tokens_executed: u32,
     ) -> Option<PalwJobContextV2> {
-        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_job_context_v3, palw_fp_run_facts_for_executed_v1};
+        use kaspa_consensus_core::palw_fp_execution_v3::{
+            PalwFpClassFactsV3, palw_fp_job_context_v3, palw_fp_run_facts_for_executed_v1,
+        };
         let class = PalwFpClassFactsV3 {
             model_profile_id: Hash64::default(),
             runtime_manifest_hash: Hash64::default(),
@@ -970,6 +972,7 @@ mod tests {
             prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            constraint_id: Default::default(),
         }
     }
 
@@ -1708,6 +1711,7 @@ mod end_to_end_tests {
             prompt_mode: PALW_FP_PROMPT_MODE_USER,
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            constraint_id: Default::default(),
         };
         let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
         let class = PalwFpClassFactsV3 {

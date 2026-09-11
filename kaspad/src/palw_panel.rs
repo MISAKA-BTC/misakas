@@ -38,15 +38,19 @@ use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwMaterialVerdictV1
 use kaspa_consensus_core::palw_bisect::{
     PALW_BISECT_OBJECT_VERSION_V1, PalwBisectDisclosureV1, PalwBisectSpaceV1, PalwBisectTurnV1, PalwBisectVerdictV1,
 };
+use kaspa_consensus_core::palw_close_carriage::{
+    PalwCloseCarriageError, PalwCourtCloseGroupSeenV1, palw_court_close_assembly_fits_v1, palw_court_close_parts_owed_v1,
+    palw_plan_court_close_carriage_v1,
+};
 use kaspa_consensus_core::palw_court_v2::{
-    PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT, PALW_COURT_V2_MLDSA87_OPEN_CONTEXT, PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT,
-    PalwCourtVerdictProofV2, court_session_id_v2,
+    PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT, PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT, PALW_COURT_V2_MLDSA87_OPEN_CONTEXT,
+    PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT, PalwCourtVerdictProofV2, court_session_id_v2, palw_court_close_declaration_message_v1,
 };
 use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
 use kaspa_consensus_core::palw_panel_v2::{
     PALW_RECEIPT_V2_MLDSA87_CONTEXT, PalwReceiptVerdictV2, PalwSeatReceiptV2, palw_receipt_message_v2,
 };
-use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwBondStatusV2, PalwConsensusObjectV2};
+use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwBondStatusV2, PalwConsensusObjectV2, PalwCourtSideV1};
 use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE;
 use kaspa_consensus_core::tx::{MutableTransaction, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry};
 use kaspa_consensusmanager::ConsensusManager;
@@ -68,6 +72,90 @@ const PALW_PANEL: &str = "palw-panel";
 /// cap reaches every seat by push within seconds of the block; one over it never will (Decision
 /// 3), and the replay is minutes of CPU the seat should not spend on a push that is merely late.
 pub const PALW_ATTEMPT_REPLAY_GRACE_DAA: u64 = 2;
+
+/// **The pinned token tables a seat holds** (ADR-0096 §10 B4), from `--palw-class-tokenizer`.
+///
+/// Each file is hashed to its tokenizer commitment — the value an artifact binds and a job names
+/// as `tokenizer_id` — looked up among the build's pins, built at the PINNED width (the class's
+/// vocabulary, wider than the file), and kept only if its root and end-of-generation id are the
+/// pin's. Anything else is named and dropped: a replay through another table reproduces nothing,
+/// and a seat that replayed through one would refuse honest claims.
+fn load_pinned_token_tables_v1(
+    paths: &[PathBuf],
+) -> HashMap<Hash64, Arc<kaspa_consensus_core::palw_token_table_v1::PalwTokenTableV1>> {
+    use kaspa_consensus_core::palw_token_table_v1::{PalwTokenTableV1, token_table_pin_for_v1};
+    let mut tables = HashMap::new();
+    for path in paths {
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                warn!("[{PALW_PANEL}] tokenizer {} cannot be read ({e}); no version-6 job is replayed under it", path.display());
+                continue;
+            }
+        };
+        let commitment = misaka_palw_base0::artifact::Base0ArtifactV1::tokenizer_commitment_of(&bytes);
+        let Some(pin) = token_table_pin_for_v1(&commitment) else {
+            warn!(
+                "[{PALW_PANEL}] tokenizer {} (commitment {commitment}) has no token table pinned in this build — a chain refuses a \
+                 version-6 job under it, so there is nothing to replay (ADR-0096 §10 B4)",
+                path.display()
+            );
+            continue;
+        };
+        let tokenizer = match misaka_palw_base0::tokenizer::QwenTokenizer::from_json(&bytes) {
+            Ok(tokenizer) => tokenizer,
+            Err(e) => {
+                warn!("[{PALW_PANEL}] tokenizer {} does not parse ({e:?})", path.display());
+                continue;
+            }
+        };
+        let renderings = (0..pin.vocab_len).map(|id| misaka_palw_base0::token_table::token_table_bytes_v1(&tokenizer, id)).collect();
+        match PalwTokenTableV1::new(renderings, pin.lowest_eog_id) {
+            Ok(table) if table.is_pinned_for(&commitment) => {
+                info!(
+                    "[{PALW_PANEL}] token table for tokenizer {commitment}: {} ids, root {} — the build's pin; version-6 jobs under it \
+                     are replayed masked (ADR-0096 §10 B4)",
+                    table.vocab_len(),
+                    table.root()
+                );
+                tables.insert(commitment, Arc::new(table));
+            }
+            Ok(table) => warn!(
+                "[{PALW_PANEL}] tokenizer {} builds root {} and the build pins {} for its commitment — not used",
+                path.display(),
+                table.root(),
+                pin.root
+            ),
+            Err(e) => warn!("[{PALW_PANEL}] tokenizer {} builds no table: {e}", path.display()),
+        }
+    }
+    tables
+}
+
+/// **Run a free-prompt job the way its version says** (ADR-0096 §10 B1/B7): version 5 through
+/// the plain entry, version 6 through the masked one with the material's automaton and the pinned
+/// table for the job's tokenizer. One function for every seat arm and the challenger, so a
+/// constrained job is never replayed unmasked anywhere on this node.
+fn execute_fp_job_v1(
+    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+    prompt: &[usize],
+    constraint: &[u8],
+    table: Option<&kaspa_consensus_core::palw_token_table_v1::PalwTokenTableV1>,
+) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
+    if job.version < kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED {
+        return backend.execute_free_prompt(job, prompt);
+    }
+    let table = table.ok_or_else(|| {
+        format!(
+            "no pinned token table for tokenizer {} — start this node with --palw-class-tokenizer to replay a version-6 job",
+            job.tokenizer_id
+        )
+    })?;
+    let automaton = kaspa_consensus_core::palw_decode_constraint_v1::PalwDecodeConstraintV1::from_bytes(constraint)
+        .map_err(|e| format!("the material's automaton does not parse: {e:?}"))?;
+    backend.execute_free_prompt_constrained(job, prompt, &automaton, table)
+}
 
 /// **Whether a replay licenses the claim** (ADR-0084 Decision 7): both roots reproduce, and the
 /// work reproduces WHEN THE CLAIM PRICES IT. A free-prompt claim carries the leaves it was priced
@@ -206,6 +294,61 @@ const MAX_INFLIGHT_CARRIERS: usize = 8;
 const COURT_MOVE_REPLAN_DAA: u64 = 10;
 /// Submission attempts per assembled object before giving up (each tick retries).
 const SUBMIT_ATTEMPTS: u32 = 3;
+
+/// **One court move waiting for a carrier — and, since ADR-0104, possibly for several.**
+///
+/// This used to be a tuple ending in one `PalwConsensusObjectV2`, and that was the defect: a close
+/// too wide for one carrier could not be filed at all. The submit loop built it, `build_lifecycle_
+/// tx` refused it or the mempool did, and the arm logged a line and dropped the move. **A close
+/// denied its assembly window is not a delay but a conviction of the declaring side**, so the
+/// dropped move was a prosecution this node abandoned in silence.
+///
+/// Now a move is its PARTS, in the order the chain must see them. Every move but an oversized close
+/// has exactly one, and the loop below cannot tell the difference — which is the property that
+/// makes this safe: the whole-close path is the one-part path, unchanged.
+struct CourtMoveV1 {
+    session_id: Hash64,
+    round: u32,
+    mine_is_responder: bool,
+    /// The declaration first, then the chunks in index order. One entry for every other move.
+    parts: Vec<PalwConsensusObjectV2>,
+    /// Present only for a split close: what a resume asks the chain about. `None` means there is
+    /// no group to resume into, so `parts` is filed as it stands.
+    group: Option<CourtCloseGroupPlanV1>,
+}
+
+/// What a resume compares the chain's own group against (ADR-0104). Not the bytes — those are in
+/// `parts` — but the identity the chain keys and pins, so a group that is not this plan's is
+/// refused before a carrier is spent on completing somebody else's assembly.
+struct CourtCloseGroupPlanV1 {
+    side: PalwCourtSideV1,
+    chunk_count: u8,
+    close_digest: Hash64,
+    /// The session's backstop. A carriage kept across ticks needs an end: past this the chain will
+    /// not accept another chunk (`CourtCloseGroupExpired`), the declaring side has already lost its
+    /// assembly deposit, and every further carrier is a fee spent on a group that cannot complete.
+    backstop_daa: u64,
+}
+
+/// **Why a court move could not be prepared**, in the two voices the panel already speaks: a
+/// `court_stalls` key, which is a fixed string so a tick's summary can COUNT them, and the line an
+/// operator reads. Split because a stall counted under a formatted key is a stall counted once.
+struct CourtCarriageRefusalV1 {
+    stall: &'static str,
+    said: String,
+}
+
+impl CourtMoveV1 {
+    /// A move that rides on one carrier — every court object but a split close.
+    fn whole(session_id: Hash64, round: u32, mine_is_responder: bool, object: PalwConsensusObjectV2) -> Self {
+        Self { session_id, round, mine_is_responder, parts: vec![object], group: None }
+    }
+
+    /// This move's key in `court_moved`, which is what rate-limits a re-plan.
+    fn key(&self) -> (Hash64, u32, bool) {
+        (self.session_id, self.round, self.mine_is_responder)
+    }
+}
 /// **How long the panel keeps a claim it is not being asked about.**
 ///
 /// The in-memory pools are keyed by claim and were pruned only when a claim was LIVE or already
@@ -253,6 +396,9 @@ pub struct PalwPanelConfig {
     /// Converted-class artifacts this seat holds. A seat can only judge a class whose weights it
     /// has; the floor's are derived, so this is empty on an RC node.
     pub class_artifacts: Vec<PathBuf>,
+    /// Tokenizer files this seat builds pinned token tables from (ADR-0096 §10 B4); see
+    /// `--palw-class-tokenizer`.
+    pub class_tokenizers: Vec<PathBuf>,
     /// ADR-0067 tier ④: the byte bound on resident artifacts (0 = unbounded).
     pub class_cache_bytes: u64,
     /// **Re-run every licensed claim and dispute the ones this node cannot reproduce.**
@@ -329,6 +475,10 @@ pub struct PalwPanelService {
     /// Loaded once, through the SDK — whichever lineage's container each file is. Same contract
     /// as the producer's: container-checked at load, matched against the CHAIN per duty.
     class_holdings: Vec<misaka_palw_sdk::PalwLoadedArtifactV1>,
+    /// **The pinned token tables this seat holds, by tokenizer commitment** (ADR-0096 §10 B4) —
+    /// what a version-6 job is replayed through. Built once, from `--palw-class-tokenizer`, and a
+    /// file whose table is not the build's pin is not here.
+    token_tables: HashMap<Hash64, Arc<kaspa_consensus_core::palw_token_table_v1::PalwTokenTableV1>>,
     consensus_manager: Arc<ConsensusManager>,
     flow_context: Arc<FlowContext>,
     consensus_config: Arc<Config>,
@@ -483,6 +633,7 @@ impl PalwPanelService {
         );
         let class_holdings =
             crate::palw_backends::load_class_holdings_v1(PALW_PANEL, &sdk, &config.class_artifacts, config.class_cache_bytes);
+        let token_tables = load_pinned_token_tables_v1(&config.class_tokenizers);
         Self {
             config,
             consensus_manager,
@@ -491,6 +642,7 @@ impl PalwPanelService {
             keypair,
             bond,
             class_holdings,
+            token_tables,
             foreign_prune_at: std::sync::Mutex::new(std::time::Instant::now()),
             served_openings: std::sync::Mutex::new(Vec::new()),
             opening_gate: std::sync::Mutex::new(()),
@@ -921,6 +1073,114 @@ impl PalwPanelService {
         }
     }
 
+    /// **Turn a court object into the carriage that files it** (ADR-0104).
+    ///
+    /// Every move but a close rides on one carrier by construction — an opening, a disclosure, a
+    /// verdict are all small and their size does not depend on the evidence. A close's does: its
+    /// proof carries the operand openings and the logits rows the court will recompute from, plus
+    /// a `PalwStepBindingV2` the cost rule does not count, and past one carrier it must ride as a
+    /// signed declaration and its chunks.
+    ///
+    /// The cut is `palw_plan_court_close_carriage_v1`'s — the same function `misaka palw
+    /// court-close` files with and the same one the completing chunk's assembly is checked
+    /// against. What this adds is the three things only a node holds: the SIDE, read off the duty
+    /// rather than guessed; the SIGNATURE, under the declaration's own registered domain; and the
+    /// two refusals that are cheaper here than at the last carrier — a ruleset that pays for one
+    /// carrier, and an assembly window the session's backstop will not hold.
+    fn plan_court_move_v1(
+        &self,
+        object: &PalwConsensusObjectV2,
+        duty: &kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2,
+        current_daa: u64,
+    ) -> Result<CourtMoveV1, CourtCarriageRefusalV1> {
+        // Not a close: one object, one carrier, and the planner is not asked — it would refuse a
+        // `CourtOpened` by name, and this arm files those too.
+        if !matches!(object, PalwConsensusObjectV2::CourtClosed { .. }) {
+            return Ok(CourtMoveV1::whole(duty.session_id, duty.round, duty.i_am_responder, object.clone()));
+        }
+        // **The side is the duty's, and it is not a guess.** The responder is the bond that
+        // produced the disputed claim — the executor — and the challenger is the bond that opened
+        // the session. The acceptance layer verifies the declaration against THAT bond's
+        // registered key, so a side inferred any other way spends a carrier on a move the chain
+        // reads as the other party's.
+        let side = if duty.i_am_responder { PalwCourtSideV1::Executor } else { PalwCourtSideV1::Challenger };
+        let plan = palw_plan_court_close_carriage_v1(object, &self.config.court, Some(side)).map_err(|why| match why {
+            PalwCloseCarriageError::TooManyCarriers { whole_bytes, count, max, ruleset_binds } => CourtCarriageRefusalV1 {
+                stall: if ruleset_binds {
+                    "this network's court pays for fewer carriers than the close needs"
+                } else {
+                    "the close needs more carriers than the group row can address"
+                },
+                said: format!(
+                    "the close is {whole_bytes} bytes — {count} carriers, and at most {max} are admitted. Nothing was carried."
+                ),
+            },
+            other => CourtCarriageRefusalV1 { stall: "the close cannot be cut for carriage", said: other.to_string() },
+        })?;
+        let Some(mut declaration) = plan.declaration.clone() else {
+            return Ok(CourtMoveV1 {
+                session_id: duty.session_id,
+                round: duty.round,
+                mine_is_responder: duty.i_am_responder,
+                parts: plan.parts,
+                group: None,
+            });
+        };
+        // **The window, before the declaration is funded.** The declaration gate refuses a group
+        // that cannot finish inside the session's backstop — and the backstop never moves, because
+        // extending it would sell either party a free window for the price of a declaration. A
+        // declaration refused there has already cost its carrier AND its assembly deposit.
+        palw_court_close_assembly_fits_v1(plan.chunk_count, current_daa, duty.session_deadline_daa)
+            .map_err(|why| CourtCarriageRefusalV1 { stall: "the close cannot assemble inside the session", said: why.to_string() })?;
+        // **Signed here, because the key is here.** `palw_plan_court_close_carriage_v1` returns the
+        // declaration unsigned on purpose: consensus-core holds no key, and
+        // `palw_lifecycle_object_may_ride_v2` refuses a declaration with an empty signature — so an
+        // unsigned plan cannot be filed by accident, and this is the one place that can complete it.
+        let PalwConsensusObjectV2::CourtCloseDeclared { session_id, side, count, chunk_digests, close_digest, verdict, signature } =
+            &mut declaration
+        else {
+            return Err(CourtCarriageRefusalV1 {
+                stall: "the planned declaration is not a declaration",
+                said: "the carriage planner returned a part this node cannot sign".to_string(),
+            });
+        };
+        let message = palw_court_close_declaration_message_v1(session_id, *side, *count, chunk_digests, close_digest, *verdict);
+        let Some(signed) = self.sign(&message, PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT) else {
+            return Err(CourtCarriageRefusalV1 {
+                stall: "no signing key for a close declaration",
+                said: "this node holds no bond key, so it cannot declare a split close".to_string(),
+            });
+        };
+        *signature = signed;
+        info!(
+            "[{PALW_PANEL}] session {}: the close is {} bytes and rides as a {} declaration and {} chunks on the {side} side — \
+             assembly window {} DAA against a backstop at {}",
+            duty.session_id,
+            plan.whole_bytes,
+            side.name(),
+            plan.chunk_count,
+            plan.assembly_daa(),
+            duty.session_deadline_daa
+        );
+        let group = CourtCloseGroupPlanV1 {
+            side: *side,
+            chunk_count: plan.chunk_count,
+            close_digest: *close_digest,
+            backstop_daa: duty.session_deadline_daa,
+        };
+        // `parts[0]` IS the declaration and it is the copy that gets carried, so the signature has
+        // to replace it rather than sit beside it.
+        let mut parts = plan.parts;
+        parts[0] = declaration;
+        Ok(CourtMoveV1 {
+            session_id: duty.session_id,
+            round: duty.round,
+            mine_is_responder: duty.i_am_responder,
+            parts,
+            group: Some(group),
+        })
+    }
+
     /// **Build the `ClassRegistered` for the class this node holds an artifact for**
     /// (ADR-0049 Decision H, ADR-0053).
     ///
@@ -1021,6 +1281,27 @@ impl PalwPanelService {
             .sign(message.as_byte_slice(), kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT)
             .ok_or("this node holds no bond key, so it cannot sign a registration")?;
         build(signature)
+    }
+
+    /// **What this object owes the CHAIN, on top of what its carrier owes the relay** (ADR-0104).
+    ///
+    /// A carrier's fee is normally this node's own relay minimum for its real mass, so our mempool
+    /// cannot refuse what we built. That is not the question the acceptance layer asks of a close
+    /// declaration: it prices the ADJUDICATION the declaration buys, and the declaration object is
+    /// small — its digests are 64 bytes a chunk — so its own relay minimum is nowhere near it. A
+    /// node paying only that would have the declaration dropped, open no group, and, because the
+    /// resume reads the chain and sees no group, file the whole carriage again on the next pass.
+    ///
+    /// **The rule is `palw_carrier_min_fee_v1`, which `misaka-cli` reads too, and it is paid
+    /// whether or not the fence is armed.** The first version of this gated on
+    /// `palw_certification_rent` at the DAA the carrier is BUILT at, reasoning that a fee paid
+    /// before the rule is armed is a fee nobody asked for. It is judged at the DAA it LANDS at, so
+    /// a fence arming in between drops it — and for a declaration that is not a retry but a lost
+    /// dispute and a forfeited deposit. Measured, the premium for being early is under a third of
+    /// one MSK on the widest close a shipped ruleset admits, and it is burned rather than paid to
+    /// anyone. Two filers answering this differently was the larger defect of the two.
+    fn consensus_rent_for(&self, object: &PalwConsensusObjectV2) -> u64 {
+        kaspa_consensus_core::palw_state_v2::palw_carrier_min_fee_v1(object)
     }
 
     fn persist_fee_outpoint(&self, outpoint: TransactionOutpoint) {
@@ -1130,7 +1411,12 @@ impl PalwPanelService {
                 .map_err(|e| format!("sig script shape: {e}"))?
         };
         let priced = build(1, dummy_sig_script)?;
-        let fee = relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&priced).compute_mass);
+        // The relay's price for what we built, floored by what the CHAIN charges this object — see
+        // `consensus_rent_for`. Read from the object HERE, in the one builder every carrier this
+        // node files goes through, rather than at the call sites: a rent a caller has to remember
+        // to ask for is a rent the next lane forgets, and forgetting it costs the carrier.
+        let fee = relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&priced).compute_mass)
+            .max(self.consensus_rent_for(object));
 
         let unsigned = build(fee, vec![])?;
         let mtx = MutableTransaction::with_entries(unsigned, vec![funding.clone()]);
@@ -1410,6 +1696,14 @@ impl PalwPanelService {
         })
     }
 
+    /// The pinned token table for a job's tokenizer, when this seat holds it (ADR-0096 §10 B4).
+    fn fp_token_table(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+    ) -> Option<Arc<kaspa_consensus_core::palw_token_table_v1::PalwTokenTableV1>> {
+        self.token_tables.get(&job.tokenizer_id).cloned()
+    }
+
     /// **The prompt a free-prompt claim's job was run over** (ADR-0074 Decision 1). For a user's
     /// job, the ids in the job material, hash-bound to the job. For a CANONICAL job, the family's
     /// own derivation from `fp_canonical_anchor_v1(job)` — the same `job_for_anchor` the attempt
@@ -1604,6 +1898,7 @@ impl PalwPanelService {
             prompt_mode: PALW_FP_PROMPT_MODE_CANONICAL,
             sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+            constraint_id: Default::default(),
         };
         // The anchor is a function of the job's own facts, not of its prompt — so the prompt
         // can be derived from it and then written into the job.
@@ -2104,7 +2399,7 @@ impl PalwPanelService {
         // and `mem::take`n by the submitter, which dropped every one of them whenever the fee UTXO
         // was busy carrying a receipt — and the claim had already been marked judged, so the
         // dispute was never rebuilt. Measured: 22 frauds detected, 0 courts opened.
-        let mut court_pending: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
+        let mut court_pending: Vec<CourtMoveV1> = Vec::new();
         // The fee UTXO we are currently spending from, carried across ticks so a mempool chain is
         // not rebuilt from a stale root every two seconds. See the note at its first use.
         let mut chained_funding: Option<(TransactionOutpoint, UtxoEntry)> = None;
@@ -2334,7 +2629,14 @@ impl PalwPanelService {
                         };
                         let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
                         let claimed_job = job.job.clone();
-                        let Ok((_backend, run)) = offload(backend, move |b| b.execute_free_prompt(&claimed_job, &prompt)).await else {
+                        // A version-6 job is re-run masked, through its own automaton and the
+                        // pinned table (ADR-0096 §10 B7): an unmasked re-run would "disprove"
+                        // every honest constrained claim.
+                        let (constraint, table) = (job.constraint.clone(), self.fp_token_table(&job.job));
+                        let Ok((_backend, run)) =
+                            offload(backend, move |b| execute_fp_job_v1(b, &claimed_job, &prompt, &constraint, table.as_deref()))
+                                .await
+                        else {
                             continue;
                         };
                         let Ok(run) = run else { continue };
@@ -2392,10 +2694,10 @@ impl PalwPanelService {
                     let session_id =
                         court_session_id_v2(&target.claim_id, &target.trace_root, &target.executor_bond, &bond_key, space, space_size);
                     let Some(signature) = self.sign(session_id.as_byte_slice(), PALW_COURT_V2_MLDSA87_OPEN_CONTEXT) else { continue };
-                    if court_pending.iter().any(|(sid, _, _, _)| *sid == session_id) {
+                    if court_pending.iter().any(|m| m.session_id == session_id) {
                         continue;
                     }
-                    court_pending.push((
+                    court_pending.push(CourtMoveV1::whole(
                         session_id,
                         0,
                         false,
@@ -2449,9 +2751,7 @@ impl PalwPanelService {
                 // and later sessions' moves were dropped unsent. A rung is clocked, so the moves
                 // crowded out are exactly the ones whose lapse convicts the responder. The
                 // opening-court branch has always had this guard; the responder branch did not.
-                if court_pending.iter().any(|(sid, round, responder, _)| {
-                    *sid == duty.session_id && *round == duty.round && *responder == duty.i_am_responder
-                }) {
+                if court_pending.iter().any(|m| m.key() == (duty.session_id, duty.round, duty.i_am_responder)) {
                     continue;
                 }
                 // The capture, and the family's backend for it. A party with no material — or a
@@ -2574,9 +2874,12 @@ impl PalwPanelService {
                     // The job that was CLAIMED: the user's for a free prompt (ADR-0073 Decision
                     // 1d), the block's for an attempt.
                     let work = match &fp_job {
-                        Some(job) => {
-                            Some(ReplayWork::FreePrompt(job.job.clone(), job.prompt_token_ids.iter().map(|t| *t as usize).collect()))
-                        }
+                        Some(job) => Some(ReplayWork::FreePrompt(
+                            job.job.clone(),
+                            job.prompt_token_ids.iter().map(|t| *t as usize).collect(),
+                            job.constraint.clone(),
+                            self.fp_token_table(&job.job),
+                        )),
                         None => self
                             .job_anchor_for_claim(
                                 &session,
@@ -2910,7 +3213,20 @@ impl PalwPanelService {
                     }
                 };
                 let Some(object) = object else { continue };
-                court_pending.push((duty.session_id, duty.round, duty.i_am_responder, object));
+                // **A close is cut before it is queued** (ADR-0104). Every other move rides on one
+                // carrier by construction; a close is the only object whose size is a function of
+                // the evidence, so it is the only one that can outgrow a carrier — and the cut is
+                // a function of the bytes, which do not change, so it is made once here rather
+                // than re-derived on every tick of the submit loop.
+                let move_v1 = match self.plan_court_move_v1(&object, duty, current_daa) {
+                    Ok(planned) => planned,
+                    Err(why) => {
+                        *court_stalls.entry(why.stall).or_default() += 1;
+                        warn!("[{PALW_PANEL}] session {}: {}", duty.session_id, why.said);
+                        continue;
+                    }
+                };
+                court_pending.push(move_v1);
             }
             // Ask for every accused capture a close needed and this node did not hold. Outside the
             // logging guard below deliberately: a request that only goes out when a summary line
@@ -2966,7 +3282,7 @@ impl PalwPanelService {
                 {
                     continue;
                 }
-                if court_pending.iter().any(|(sid, round, responder, _)| *sid == key.0 && *round == key.1 && *responder == key.2) {
+                if court_pending.iter().any(|m| m.key() == key) {
                     continue;
                 }
                 let Some(bytes) = self.retained_capture(&duty.claim_id).or_else(|| {
@@ -3017,7 +3333,7 @@ impl PalwPanelService {
                      retained capture — deadline DAA {}",
                     duty.claim_id, duty.disclose_deadline_daa
                 );
-                court_pending.push((
+                court_pending.push(CourtMoveV1::whole(
                     key.0,
                     key.1,
                     key.2,
@@ -3071,6 +3387,11 @@ impl PalwPanelService {
                         let held = materials.get(&duty.claim_id).map(|v| v.to_vec()).unwrap_or_default();
                         if let Some(material) =
                             self.fp_job_material_for_claim(&duty.claim_id, duty.class_id, &duty.executor_bond, &held)
+                            // **Not for a version-6 job** (ADR-0096 §10 B9): the interval replay
+                            // re-selects each token by the plain argmax, which a masked decode is
+                            // not, so it would disagree with every honest constrained claim. Such a
+                            // claim is replayed whole below, masked.
+                            && material.job.version < kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED
                             && let Ok(resolved) = self.resolve_backend(&session, duty.class_id, duty.artifact_root)
                             && let Some(prompt_ids) =
                                 Self::fp_prompt_for_job(resolved.as_ref(), &material, self.config.prompt_ids_form)
@@ -3221,10 +3542,21 @@ impl PalwPanelService {
                             // verifier this lane had before ADR-0073, kept for clients that do not
                             // yet ship the capture: a seat's last resort, never its duty, and
                             // bounded exactly as it always was.
+                            // A version-6 claim's answer envelope carries its job, prompt and
+                            // automaton, and with no interval arm for it (ADR-0096 §10 B9) that
+                            // envelope is what a seat replays from when the capture is over the
+                            // transport cap — as it always is for this family.
                             let Some(material) = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_material_decode_v1(
                                 &bytes,
                                 self.config.prompt_ids_form,
-                            ) else {
+                            )
+                            .or_else(|| {
+                                kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_decode_v1(&bytes, self.config.prompt_ids_form)
+                                    .map(|answer| answer.material)
+                                    .filter(|m| {
+                                        m.job.version >= kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED
+                                    })
+                            }) else {
                                 continue;
                             };
                             if material.job.class_id != duty.class_id
@@ -3258,7 +3590,29 @@ impl PalwPanelService {
                             };
                             let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
                             let material_job = material.job.clone();
-                            let Ok((_backend, run)) = offload(backend, move |b| b.execute_free_prompt(&material_job, &prompt)).await
+                            // A version-6 job without the pinned table is one this seat cannot
+                            // judge: `Incapable`, which counts toward neither side — never an
+                            // `Unavailable` against an executor that served everything.
+                            let table = match material.job.version
+                                >= kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED
+                            {
+                                true => match self.fp_token_table(&material.job) {
+                                    Some(table) => Some(table),
+                                    None => {
+                                        warn!(
+                                            "[{PALW_PANEL}] claim {}: a version-6 job under tokenizer {} and this seat holds no pinned \
+                                             table for it — Incapable (start with --palw-class-tokenizer)",
+                                            duty.claim_id, material.job.tokenizer_id
+                                        );
+                                        break 'verdict Some(PalwReceiptVerdictV2::Incapable);
+                                    }
+                                },
+                                false => None,
+                            };
+                            let constraint = material.constraint.clone();
+                            let Ok((_backend, run)) =
+                                offload(backend, move |b| execute_fp_job_v1(b, &material_job, &prompt, &constraint, table.as_deref()))
+                                    .await
                             else {
                                 continue;
                             };
@@ -3301,6 +3655,13 @@ impl PalwPanelService {
                                     duty.claim_id, run.facts.step_leaf_count, duty.work_leaves
                                 );
                                 continue;
+                            }
+                            if material.job.version >= kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION_CONSTRAINED {
+                                info!(
+                                    "[{PALW_PANEL}] claim {}: version-6 job replayed MASKED through constraint {} and the pinned token \
+                                     table — both roots and the priced work reproduce (ADR-0096 §10)",
+                                    duty.claim_id, material.job.constraint_id
+                                );
                             }
                             self.persist_foreign_material(&duty.claim_id, &bytes);
                             break 'verdict Some(PalwReceiptVerdictV2::Valid);
@@ -3736,51 +4097,138 @@ impl PalwPanelService {
                     }
                 }
                 // The court's moves first: a rung has a deadline and a receipt quorum does not.
-                let mut unsent: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
-                for (session_id, round, mine_is_responder, object) in std::mem::take(&mut court_pending) {
-                    let Some((funding_outpoint, funding_entry)) = funding.clone().filter(|_| inflight < MAX_INFLIGHT_CARRIERS) else {
-                        // The fee UTXO is busy. Keep the move: a rung has a deadline, and a dispute
-                        // dropped here is a dispute that never happens.
-                        unsent.push((session_id, round, mine_is_responder, object));
+                let mut unsent: Vec<CourtMoveV1> = Vec::new();
+                for pending in std::mem::take(&mut court_pending) {
+                    let CourtMoveV1 { session_id, round, mine_is_responder, parts, group } = pending;
+                    // **A carriage held across ticks must not re-file what is still in flight.**
+                    //
+                    // A split close is the first move this loop keeps AFTER sending it — every
+                    // other move leaves the queue the moment its carrier is accepted. The bitmap
+                    // that decides what is still owed only moves when a carrier reaches a BLOCK,
+                    // and the panel ticks every couple of seconds, so a plan re-read immediately
+                    // reads its own carriers as missing and pays for them again. The same window
+                    // the planner is rate-limited by answers this: send, then let the chain have
+                    // `COURT_MOVE_REPLAN_DAA` to include what was sent before asking again.
+                    // Past the session's backstop the chain refuses another chunk by name, so a
+                    // carriage held for one is a fee waiting to be spent on nothing.
+                    if let Some(plan) = &group
+                        && current_daa > plan.backstop_daa
+                    {
+                        warn!(
+                            "[{PALW_PANEL}] session {session_id}: the close carriage is abandoned at DAA {current_daa}, past the \
+                             session's backstop of {} — the chain accepts no further chunk",
+                            plan.backstop_daa
+                        );
+                        *court_stalls.entry("the close group outlived the session's backstop").or_default() += 1;
                         continue;
+                    }
+                    if let Some(at) = court_moved.get(&(session_id, round, mine_is_responder))
+                        && current_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA)
+                    {
+                        unsent.push(CourtMoveV1 { session_id, round, mine_is_responder, parts, group });
+                        continue;
+                    }
+                    // **What is still owed is the CHAIN's answer, not this loop's memory**
+                    // (ADR-0104). For a whole move that is the one part; for a split close it is
+                    // the group's `present` bitmap, re-read every tick — so a carrier the mempool
+                    // dropped, an orphaned chunk or a restart mid-group resumes rather than
+                    // re-pays, and a group that is not this plan's is refused before a fee is spent
+                    // on completing somebody else's assembly.
+                    let owed = match &group {
+                        None => Ok((0..parts.len()).collect::<Vec<_>>()),
+                        Some(plan) => {
+                            let seen = session.palw_court_close_group_v1(session_id, plan.side).map(|g| PalwCourtCloseGroupSeenV1 {
+                                count: u32::from(g.count),
+                                present: g.present,
+                                close_digest: Some(g.close_digest),
+                            });
+                            palw_court_close_parts_owed_v1(plan.chunk_count, plan.close_digest, seen.as_ref())
+                        }
                     };
-                    match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
-                        Ok(tx) => {
-                            let txid = tx.id();
-                            let change = tx.outputs[0].clone();
-                            match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
-                                Ok(()) => {
-                                    info!(
-                                        "[{PALW_PANEL}] submitted {} for court session {session_id} round {round} in tx {txid}",
-                                        object_name(&object)
-                                    );
-                                    let next = TransactionOutpoint::new(txid, 0);
-                                    self.persist_fee_outpoint(next);
-                                    funding = Some((
-                                        next,
-                                        UtxoEntry {
-                                            amount: change.value,
-                                            script_public_key: change.script_public_key,
-                                            block_daa_score: current_daa,
-                                            is_coinbase: false,
-                                        },
-                                    ));
-                                    inflight += 1;
-                                    court_moved.insert((session_id, round, mine_is_responder), current_daa);
-                                    if let PalwConsensusObjectV2::CourtOpened { claim, .. } = &object {
-                                        challenged.insert(*claim);
+                    let owed = match owed {
+                        Ok(owed) => owed,
+                        Err(why) => {
+                            // Not kept: a group keyed `(session, side)` is declared once and never
+                            // again, so this move can never be filed and re-planning it every tick
+                            // would only spend the log.
+                            warn!("[{PALW_PANEL}] session {session_id}: this close cannot be filed into the chain's group: {why}");
+                            *court_stalls.entry("the chain's close group is not this close's").or_default() += 1;
+                            continue;
+                        }
+                    };
+                    if owed.is_empty() {
+                        info!("[{PALW_PANEL}] session {session_id}: the chain holds every part of this close; nothing left to carry");
+                        court_moved.insert((session_id, round, mine_is_responder), current_daa);
+                        continue;
+                    }
+                    // One carrier per part, chained on the fee UTXO exactly as a single move is —
+                    // and stopped by the same in-flight bound, because a split close is eight
+                    // ordinary carriers rather than a new kind of traffic.
+                    let mut sent_any = false;
+                    let mut still_owed = false;
+                    for index in owed {
+                        let object = &parts[index];
+                        let Some((funding_outpoint, funding_entry)) = funding.clone().filter(|_| inflight < MAX_INFLIGHT_CARRIERS)
+                        else {
+                            // The fee UTXO is busy. Keep the move: a rung has a deadline, and a
+                            // dispute dropped here is a dispute that never happens.
+                            still_owed = true;
+                            break;
+                        };
+                        match self.build_lifecycle_tx(object, funding_outpoint, &funding_entry) {
+                            Ok(tx) => {
+                                let txid = tx.id();
+                                let change = tx.outputs[0].clone();
+                                match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
+                                    Ok(()) => {
+                                        info!(
+                                            "[{PALW_PANEL}] submitted {} for court session {session_id} round {round} in tx {txid}",
+                                            object_name(object)
+                                        );
+                                        let next = TransactionOutpoint::new(txid, 0);
+                                        self.persist_fee_outpoint(next);
+                                        funding = Some((
+                                            next,
+                                            UtxoEntry {
+                                                amount: change.value,
+                                                script_public_key: change.script_public_key,
+                                                block_daa_score: current_daa,
+                                                is_coinbase: false,
+                                            },
+                                        ));
+                                        inflight += 1;
+                                        sent_any = true;
+                                        if let PalwConsensusObjectV2::CourtOpened { claim, .. } = object {
+                                            challenged.insert(*claim);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "[{PALW_PANEL}] the mempool refused the {} for session {session_id}: {e}",
+                                            object_name(object)
+                                        );
+                                        funding = None;
+                                        still_owed = true;
+                                        break;
                                     }
                                 }
-                                Err(e) => {
-                                    warn!(
-                                        "[{PALW_PANEL}] the mempool refused the {} for session {session_id}: {e}",
-                                        object_name(&object)
-                                    );
-                                    funding = None;
-                                }
+                            }
+                            Err(e) => {
+                                warn!("[{PALW_PANEL}] cannot build the carrier for session {session_id}: {e}");
+                                still_owed = true;
+                                break;
                             }
                         }
-                        Err(e) => warn!("[{PALW_PANEL}] cannot build the carrier for session {session_id}: {e}"),
+                    }
+                    if sent_any {
+                        court_moved.insert((session_id, round, mine_is_responder), current_daa);
+                    }
+                    // **A split close is kept until the CHAIN says it is complete.** Its parts
+                    // outlive one tick by design: the next pass re-reads the bitmap and sends only
+                    // what is still missing, which costs nothing when everything landed. A whole
+                    // move is kept only if it did not go out, exactly as before.
+                    if still_owed || (group.is_some() && sent_any) {
+                        unsent.push(CourtMoveV1 { session_id, round, mine_is_responder, parts, group });
                     }
                 }
                 court_pending = unsent;
@@ -3884,7 +4332,7 @@ impl PalwPanelService {
             // its claim is unresolved, and `mark_own_material` feeds that back to itself.
             let mut live: HashSet<Hash64> = duties.iter().map(|d| d.claim_id).collect();
             live.extend(court_duties.iter().map(|d| d.claim_id));
-            live.extend(court_pending.iter().filter_map(|(_, _, _, o)| match o {
+            live.extend(court_pending.iter().flat_map(|m| m.parts.iter()).filter_map(|o| match o {
                 PalwConsensusObjectV2::CourtOpened { claim, .. } => Some(*claim),
                 _ => None,
             }));
@@ -4156,7 +4604,14 @@ where
 /// The job a challenger re-executes off the runtime: the user's for a free prompt (ADR-0073
 /// Decision 1d), the block's for an attempt.
 enum ReplayWork {
-    FreePrompt(kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3, Vec<usize>),
+    /// The job, its prompt, its automaton (empty for version 5) and the pinned table for its
+    /// tokenizer when this node holds one (ADR-0096 §10 B4).
+    FreePrompt(
+        kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        Vec<usize>,
+        Vec<u8>,
+        Option<Arc<kaspa_consensus_core::palw_token_table_v1::PalwTokenTableV1>>,
+    ),
     Attempt(kaspa_consensus_core::palw_v2::PalwJobContextV2, Vec<usize>),
 }
 
@@ -4166,7 +4621,9 @@ impl ReplayWork {
         backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
     ) -> Option<kaspa_consensus_core::palw_backend::PalwExecutionOutcomeV1> {
         match self {
-            Self::FreePrompt(job, prompt) => backend.execute_free_prompt(&job, &prompt).ok().map(|run| run.outcome),
+            Self::FreePrompt(job, prompt, constraint, table) => {
+                execute_fp_job_v1(backend, &job, &prompt, &constraint, table.as_deref()).ok().map(|run| run.outcome)
+            }
             Self::Attempt(job, prompt) => backend.execute(&job, &prompt).ok(),
         }
     }
@@ -4583,7 +5040,10 @@ impl PalwPanelService {
             // the count, and comparing the rebuilt root against `duty.output_root` is the chain
             // confirming it. Nothing here is believed: a wrong length gives a wrong root.
             let ctx = backend.fp_job_context_for_executed_v1(&material.job, ids.len().min(u32::MAX as usize) as u32)?;
-            let recomputed = backend.output_root_for_context_v1(&ctx, &ids)?;
+            // A version-6 answer is committed token by token through the pinned table (ADR-0096
+            // §10 B3); without the table this seat cannot bind it, and says nothing.
+            let table = self.fp_token_table(&material.job);
+            let recomputed = backend.output_root_for_job_v1(&material.job, &ctx, &ids, table.as_deref())?;
             if recomputed != duty.output_root {
                 warn!(
                     "[{PALW_PANEL}] claim {}: a served answer's ids recompute output root {recomputed} and the claim committed {} — \
@@ -4767,9 +5227,12 @@ impl PalwPanelService {
             let facts = session.palw_producer_facts_v2(payload.material.job.class_id, None)?;
             let backend = self.resolve_backend(&session, payload.material.job.class_id, facts.artifact_root).ok()?;
             let ids = backend.fp_committed_output_ids(&payload.capture)?;
-            return Some(kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_encode_v1(
+            // The material's automaton rides the envelope (ADR-0096 §10 B2): a seat replays a
+            // version-6 job from this and nothing else.
+            return Some(kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_encode_constrained_v1(
                 &payload.material.job,
                 &payload.material.prompt_token_ids,
+                &payload.material.constraint,
                 &ids,
             ));
         }

@@ -90,7 +90,9 @@
 //! # And the resume is the CHAIN's answer now, not a file's
 //!
 //! `GetPalwPendingChunkGroup` returns the group's own `present` bitmap, count, deadline and pinned
-//! digest, and [`parts_to_send_v1`] turns it into exactly which carriers are still owed. The
+//! digest, and [`parts_to_send_v1`] turns it into exactly which carriers are still owed — through
+//! `palw_court_close_parts_to_send_v1`, which is where that rule lives since ADR-0104, so a node
+//! reading the same bitmap out of its own state resumes by the same arithmetic. The
 //! journal on disk stays — it is what chains the funding — but it no longer decides what to send:
 //! a journal believes itself, so it can only answer with a PREFIX, and a prefix is wrong the moment
 //! one carrier in the middle is orphaned. The same call answers the two preflights this command
@@ -102,6 +104,10 @@ use crate::node::Ctx;
 use crate::wallet::connect;
 use crate::{CliError, OutputFormat, exit};
 use kaspa_consensus_core::Hash64;
+use kaspa_consensus_core::palw_close_carriage::{
+    PalwCloseCarriageError, PalwCourtCloseCarriageV1, PalwCourtCloseGroupSeenV1, palw_court_close_assembly_fits_v1,
+    palw_court_close_parts_to_send_v1, palw_plan_court_close_carriage_v1,
+};
 use kaspa_consensus_core::palw_court_deadline::{
     PalwShippedCourtRowV1, palw_court_move_cost_daa_v1, palw_court_replay_positions_v1, palw_shipped_court_rows_v1,
 };
@@ -112,7 +118,7 @@ use kaspa_consensus_core::palw_court_v2::{
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwCourtParamsV2, palw_close_bytes_for_chunks_v1};
 use kaspa_consensus_core::palw_state_v2::{
     PALW_COURT_CLOSE_CHUNK_MAX_BYTES, PALW_COURT_CLOSE_INCLUSION_MARGIN, PALW_COURT_CLOSE_MAX_CHUNKS, PalwConsensusObjectV2,
-    PalwCourtSideV1, palw_close_assembly_daa_v1, palw_court_close_chunk_digest_v1,
+    PalwCourtSideV1,
 };
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint, UtxoEntry};
 use kaspa_rpc_core::GetPalwPendingChunkGroupResponse;
@@ -228,76 +234,46 @@ pub(crate) struct CarriageGap {
     pub context: Option<&'static [u8]>,
 }
 
-/// **How many carriers one court close may spend — from the ruleset that will judge it.**
-///
-/// Two ceilings, and the smaller one is the answer. `PalwCourtParamsV2::max_close_chunks` is the
-/// network's: it is inside `palw_ruleset_id_v2`, it is what class admission prices a class against,
-/// and it is 27 on the RC and **1 on devnet**, where the pre-ADR-0080 byte ceiling frames to a
-/// single carrier. [`PALW_COURT_CLOSE_MAX_CHUNKS`] is the ROW's: `PalwCourtCloseGroupV2::present`
-/// is a `u64` bitmap, so a count above it could not be represented whatever a ruleset said.
-///
-/// This used to answer `PALW_OBJECT_CHUNK_MAX_COUNT` and take its argument by `_`, because the
-/// field did not exist. It exists; the argument is read.
-pub(crate) fn court_close_max_parts_v1(court: &PalwCourtParamsV2) -> u8 {
-    court.max_close_chunks().min(PALW_COURT_CLOSE_MAX_CHUNKS as u64) as u8
-}
+// **How many carriers one court close may spend** used to be answered here, off two ceilings: the
+// network's `PalwCourtParamsV2::max_close_chunks` (27 on the RC, 1 on devnet, and inside
+// `palw_ruleset_id_v2`) and the ROW's `PALW_COURT_CLOSE_MAX_CHUNKS`, which is what a `u64` bitmap
+// can address whatever a ruleset says. ADR-0104 moved it to `palw_court_close_max_parts_v1`, beside
+// the assembler that enforces both — no wrapper stands in for it here, because the answer is a
+// number rather than a sentence, and a wrapper around a number is only a second place for it to be
+// wrong. The wrappers this file DOES keep are the ones that turn a refusal into an operator's
+// words.
 
 // =================================================================================================
 // The plan
 // =================================================================================================
 
-/// One close's carriage, decided before a fee is spent.
-#[derive(Debug)]
-pub(crate) struct CarriagePlan {
-    pub session_id: Hash64,
-    /// Which of the two bonds the session id binds is moving. `None` when the close rides whole: a
-    /// `CourtClosed` attributes itself to nobody, because nothing rides behind it to attribute.
-    pub side: Option<PalwCourtSideV1>,
-    /// The declaration, when the close is split — also `parts[0]`. Kept separately because every
-    /// caller has to treat it differently: it is the only part that is signed, the only one that
-    /// must land first, and the only one whose refusal strands the rest.
-    pub declaration: Option<PalwConsensusObjectV2>,
-    /// The objects to carry, in the order the chain must see them: the declaration, then the chunks
-    /// in index order. One entry when the close rides whole.
-    pub parts: Vec<PalwConsensusObjectV2>,
-    /// The serialized close, before cutting.
-    pub whole_bytes: usize,
-    /// The chunks alone, without the declaration. Zero when the close rides whole. This is the
-    /// number every consensus rule is denominated in — the ruleset's count, the row's bitmap and
-    /// the assembly window all count CHUNKS — so it is spelled once and never re-derived from
-    /// `parts.len()`, which is one larger.
-    pub chunk_count: u8,
-    /// `palw_court_close_chunk_digest_v1` of the concatenation — what the declaration pins as
-    /// `close_digest`. See [`court_close_chunked_carriage_v1`]'s item 3: this is the only shipped
-    /// court-close digest, and W7 is what makes it the right one.
-    pub close_digest: Hash64,
+/// One close's carriage, decided before a fee is spent — **`kaspa-consensus-core`'s, since
+/// ADR-0104.**
+///
+/// This used to be declared here, and that was the defect ADR-0104 closes: the cut lived in a
+/// command-line tool, so the only program that could file a split close was not the one that
+/// prosecutes disputes. The type, the cutter and the resume moved to
+/// [`kaspa_consensus_core::palw_close_carriage`] — beside the assembler that reads them — and what
+/// stays in this file is what belongs to an OPERATOR: the words a refusal is said in, the journal
+/// on disk, the wallet and the key.
+pub(crate) type CarriagePlan = PalwCourtCloseCarriageV1;
+
+/// **What a carriage journal is a journal FOR** — the chain's own key for this group, which is
+/// `(session_id, side)` and not a digest of the bytes. That is the whole reason the court has its
+/// own table (see [`court_close_chunked_carriage_v1`]): a free digest can be squatted, a side of a
+/// session cannot, and one declaration per side is all a session will ever accept.
+///
+/// A trait rather than an inherent method because the plan is consensus's type now, and the
+/// journal is this tool's idea: the chain keys a GROUP, and this file happens to key a FILE the
+/// same way so that a resume and the chain cannot disagree about which bond a group belongs to.
+pub(crate) trait CarriageJournalKeyV1 {
+    /// Empty for a close that rides whole, which has no group to resume into.
+    fn journal_key(&self) -> String;
 }
 
-impl CarriagePlan {
-    /// The blocks this close spends of the mover's own turn — the `close_blocks` term
-    /// [`palw_court_move_cost_daa_v1`] takes, and the reason it takes it. The declaration is one of
-    /// them: it is a court move on a carrier of its own.
-    pub fn close_blocks(&self) -> u64 {
-        self.parts.len() as u64
-    }
-
-    /// The DAA the chain gives this group to finish arriving, from the block that carries the
-    /// declaration — `PALW_COURT_CLOSE_INCLUSION_MARGIN` per chunk, read from consensus rather than
-    /// multiplied here.
-    pub fn assembly_daa(&self) -> u64 {
-        palw_close_assembly_daa_v1(self.chunk_count)
-    }
-
-    /// **What a carriage journal is a journal FOR** — the chain's own key for this group, which is
-    /// `(session_id, side)` and not a digest of the bytes. That is the whole reason the court has
-    /// its own table (see [`court_close_chunked_carriage_v1`]): a free digest can be squatted, a
-    /// side of a session cannot, and one declaration per side is all a session will ever accept.
-    /// Empty for a close that rides whole, which has no group to resume into.
-    pub fn journal_key(&self) -> String {
-        match self.side {
-            None => String::new(),
-            Some(side) => format!("{}/{}", self.session_id, side_name_v1(side)),
-        }
+impl CarriageJournalKeyV1 for CarriagePlan {
+    fn journal_key(&self) -> String {
+        self.group_key()
     }
 }
 
@@ -366,31 +342,48 @@ pub(crate) fn sign_declaration_v1(plan: &mut CarriagePlan, key: &kaspa_pq_valida
 /// command than the dispute.
 pub(crate) fn parts_to_send_v1(plan: &CarriagePlan, group: Option<&GetPalwPendingChunkGroupResponse>) -> Result<Vec<usize>, CliError> {
     let Some(group) = group.filter(|g| g.found) else {
-        return Ok((0..plan.parts.len()).collect());
+        return palw_court_close_parts_to_send_v1(plan, None).map_err(|why| carriage_refusal_v1(plan, why));
     };
-    if u64::from(plan.chunk_count) != u64::from(group.count) {
-        return Err(CliError::new(
+    // The rule is consensus's; the RPC's shape is this file's. `count` widens rather than
+    // narrowing, so a nonsense count from a node still reaches the comparison that refuses it
+    // instead of being clamped into agreement. The digest arrives as 128 hex and `None` is
+    // "not a digest this build can read" — which is not this plan's digest either, and is
+    // reported as the mismatch it is rather than as a parse failure somebody would retry.
+    let seen = PalwCourtCloseGroupSeenV1 {
+        count: group.count,
+        present: group.present,
+        close_digest: group.close_digest.parse::<Hash64>().ok(),
+    };
+    palw_court_close_parts_to_send_v1(plan, Some(&seen)).map_err(|why| match why {
+        PalwCloseCarriageError::GroupCountDiffers { .. } => CliError::new(
             exit::GENERIC,
             format!(
                 "session {} already holds a close declared in {} chunks on the {} side, and this one needs {}.\n  One declaration \
                  per side, ever — this close cannot be filed into that group. Nothing was carried.",
                 plan.session_id, group.count, group.side, plan.chunk_count
             ),
-        ));
-    }
-    if group.close_digest != plan.close_digest.to_string() {
-        return Err(CliError::new(
+        ),
+        PalwCloseCarriageError::GroupDigestDiffers { .. } => CliError::new(
             exit::GENERIC,
             format!(
                 "session {} already holds a declared close on the {} side pinning {}, and this close is {}.\n  Completing that \
                  group with these bytes convicts the declaring side (ADR-0080 W7). Nothing was carried.",
                 plan.session_id, group.side, group.close_digest, plan.close_digest
             ),
-        ));
-    }
-    // Part 0 is the declaration and the group's existence is proof it landed; part `i + 1` carries
-    // chunk `i`, and a set bit is a chunk the chain already has.
-    Ok((0..plan.chunk_count).filter(|index| group.present & (1u64 << index) == 0).map(|index| index as usize + 1).collect())
+        ),
+        other => carriage_refusal_v1(plan, other),
+    })
+}
+
+/// **A refusal this file has no better words for**, rendered from consensus's own.
+///
+/// Every carriage refusal an operator can actually provoke is spelled out where it is raised —
+/// with the ceiling that stopped it, the flag that would have fixed it and the sentence saying
+/// nothing was spent. This is the fallback for the rest, and it exists so that a variant added to
+/// [`PalwCloseCarriageError`] later surfaces as a sentence rather than as a compile error somebody
+/// silences with a catch-all that says "failed".
+fn carriage_refusal_v1(plan: &CarriagePlan, why: PalwCloseCarriageError) -> CliError {
+    CliError::new(exit::GENERIC, format!("this close cannot be carried: {why}\n  session {}. Nothing was carried.", plan.session_id))
 }
 
 /// **Cut the close the way the court's own table cuts it, or say it rides whole.**
@@ -399,7 +392,12 @@ pub(crate) fn parts_to_send_v1(plan: &CarriagePlan, group: Option<&GetPalwPendin
 /// free digest and it caps at `PALW_OBJECT_CHUNK_MAX_COUNT`, and a court close does not ride there
 /// (see [`court_close_chunked_carriage_v1`]). The court's cut is by
 /// [`PALW_COURT_CLOSE_CHUNK_MAX_BYTES`], pinned by `palw_court_close_chunk_digest_v1` per index,
-/// and bounded by [`court_close_max_parts_v1`].
+/// and bounded by `palw_court_close_max_parts_v1`.
+///
+/// **The cut itself is `palw_plan_court_close_carriage_v1`'s, since ADR-0104** — this is the
+/// wrapper that says its refusals in an operator's words, and it exists for that and nothing else.
+/// Every message below is the one this command printed before the move; the CLI's own tests are
+/// what pins that, and they were not edited to make this compile.
 ///
 /// **Every refusal it can make, it makes here** — before a plan exists to price, let alone fund.
 /// The failure this file exists to prevent is a mover paying carrier after carrier into a group
@@ -409,88 +407,38 @@ pub(crate) fn plan_carriage_v1(
     court: &PalwCourtParamsV2,
     side: Option<PalwCourtSideV1>,
 ) -> Result<CarriagePlan, CliError> {
-    let PalwConsensusObjectV2::CourtClosed { session_id, verdict, .. } = object else {
-        return Err(CliError::new(exit::GENERIC, format!("{} is not a court close", object_kind_v1(object))));
-    };
-    let whole = borsh::to_vec(object).map_err(|e| CliError::new(exit::GENERIC, format!("this close does not serialize: {e}")))?;
-    let whole_bytes = whole.len();
-    let close_digest = palw_court_close_chunk_digest_v1(&whole);
-    if whole_bytes <= PALW_COURT_CLOSE_CHUNK_MAX_BYTES {
-        return Ok(CarriagePlan {
-            session_id: *session_id,
-            side: None,
-            declaration: None,
-            parts: vec![object.clone()],
-            whole_bytes,
-            chunk_count: 0,
-            close_digest,
-        });
-    }
-    let count = whole_bytes.div_ceil(PALW_COURT_CLOSE_CHUNK_MAX_BYTES);
-    let max = court_close_max_parts_v1(court);
-    if count > max as usize {
-        return Err(too_many_carriers_v1(court, whole_bytes, count, max));
-    }
-    // A `CourtClosed` names no side and a declaration cannot be built without one: the transition
-    // reads the declarer from the session (challenger) or the claim (executor), so a tool that
-    // guessed would file one party's move under the other party's bond. Refused rather than
-    // defaulted — a default here is a forged move that the mover pays for.
-    let Some(side) = side else {
-        return Err(CliError::new(
+    palw_plan_court_close_carriage_v1(object, court, side).map_err(|why| match why {
+        PalwCloseCarriageError::NotACourtClose => {
+            CliError::new(exit::GENERIC, format!("{} is not a court close", object_kind_v1(object)))
+        }
+        PalwCloseCarriageError::DoesNotSerialize { why } => {
+            CliError::new(exit::GENERIC, format!("this close does not serialize: {why}"))
+        }
+        PalwCloseCarriageError::TooManyCarriers { whole_bytes, count, max, ruleset_binds } => {
+            too_many_carriers_v1(court, whole_bytes, count, max, ruleset_binds)
+        }
+        // A `CourtClosed` names no side and a declaration cannot be built without one: the
+        // transition reads the declarer from the session (challenger) or the claim (executor), so a
+        // tool that guessed would file one party's move under the other party's bond. Refused
+        // rather than defaulted — a default here is a forged move that the mover pays for.
+        PalwCloseCarriageError::SideNotNamed { whole_bytes, count } => CliError::new(
             exit::GENERIC,
             format!(
                 "this close is {whole_bytes} bytes and needs {count} carriers, so it rides as a declaration and its chunks — and \
                  a declaration has to say WHICH of the session's two bonds is moving.\n  Pass --side challenger or --side \
                  executor. Nothing was carried and no fee was spent."
             ),
-        ));
-    };
-    let chunks: Vec<Vec<u8>> = whole.chunks(PALW_COURT_CLOSE_CHUNK_MAX_BYTES).map(|part| part.to_vec()).collect();
-    debug_assert_eq!(chunks.len(), count);
-    // Belt to the count's braces: the transition refuses an empty or oversized chunk by name
-    // (`CourtCloseChunkTooLarge`), and a cutter that could produce one is a cutter whose output has
-    // to be trusted rather than checked.
-    if let Some(bad) = chunks.iter().position(|part| part.is_empty() || part.len() > PALW_COURT_CLOSE_CHUNK_MAX_BYTES) {
-        return Err(CliError::new(
+        ),
+        // The transition refuses an empty or oversized chunk by name (`CourtCloseChunkTooLarge`),
+        // and the cutter checks its own output rather than asking to be trusted for it.
+        PalwCloseCarriageError::CutOutOfRange { index, bytes } => CliError::new(
             exit::GENERIC,
             format!(
-                "chunk {bad} came out {} bytes, outside the 1..={PALW_COURT_CLOSE_CHUNK_MAX_BYTES} a carrier holds — this cut is \
-                 wrong and nothing was carried",
-                chunks[bad].len()
+                "chunk {index} came out {bytes} bytes, outside the 1..={PALW_COURT_CLOSE_CHUNK_MAX_BYTES} a carrier holds — this \
+                 cut is wrong and nothing was carried"
             ),
-        ));
-    }
-    let chunk_digests: Vec<Hash64> = chunks.iter().map(|part| palw_court_close_chunk_digest_v1(part)).collect();
-    let declaration = PalwConsensusObjectV2::CourtCloseDeclared {
-        session_id: *session_id,
-        side,
-        count: count as u8,
-        chunk_digests,
-        close_digest,
-        verdict: *verdict,
-        // **Empty, and that is not an oversight — it is the gap, in the object.**
-        // `palw_lifecycle_object_may_ride_v2` refuses a declaration with no signature, so this
-        // object cannot be filed by accident. It cannot be signed either: there is no context to
-        // sign under (see [`close_declaration_context_v1`]), and signing under an invented one
-        // would produce a declaration that looks filed and binds nothing.
-        signature: Vec::new(),
-    };
-    let mut parts = Vec::with_capacity(count + 1);
-    parts.push(declaration.clone());
-    parts.extend(chunks.into_iter().enumerate().map(|(index, bytes)| PalwConsensusObjectV2::CourtCloseChunk {
-        session_id: *session_id,
-        side,
-        index: index as u8,
-        bytes,
-    }));
-    Ok(CarriagePlan {
-        session_id: *session_id,
-        side: Some(side),
-        declaration: Some(declaration),
-        parts,
-        whole_bytes,
-        chunk_count: count as u8,
-        close_digest,
+        ),
+        other => CliError::new(exit::GENERIC, format!("this close cannot be carried: {other}. Nothing was carried.")),
     })
 }
 
@@ -500,8 +448,7 @@ pub(crate) fn plan_carriage_v1(
 /// ruleset's is a fact about the NETWORK the dispute is on and the only remedy is a smaller close;
 /// the row's is a fact about the state layout and no ruleset can raise it. Naming the wrong one
 /// sends somebody to argue with the wrong file.
-fn too_many_carriers_v1(court: &PalwCourtParamsV2, whole_bytes: usize, count: usize, max: u8) -> CliError {
-    let ruleset_binds = court.max_close_chunks() <= PALW_COURT_CLOSE_MAX_CHUNKS as u64;
+fn too_many_carriers_v1(court: &PalwCourtParamsV2, whole_bytes: usize, count: usize, max: u8, ruleset_binds: bool) -> CliError {
     let named = if ruleset_binds {
         "this network's court (PalwCourtParamsV2::max_close_chunks, inside the ruleset id)"
     } else {
@@ -538,13 +485,12 @@ fn too_many_carriers_v1(court: &PalwCourtParamsV2, whole_bytes: usize, count: us
 /// honest answer and this is not called — an assembly check invented from a turn deadline would be
 /// a second clock, and a mover would find out which one the chain kept at the last carrier.
 pub(crate) fn check_assembly_window_v1(chunk_count: u8, now: u64, backstop: u64) -> Result<(), CliError> {
-    let needed = palw_close_assembly_daa_v1(chunk_count);
-    let finishes_at = now.saturating_add(needed);
-    if finishes_at <= backstop {
+    let Err(why) = palw_court_close_assembly_fits_v1(chunk_count, now, backstop) else {
         return Ok(());
-    }
-    let left = backstop.saturating_sub(now);
-    let fits = left / PALW_COURT_CLOSE_INCLUSION_MARGIN;
+    };
+    let PalwCloseCarriageError::AssemblyWindowTooShort { needed, left, fits, .. } = why else {
+        return Err(CliError::new(exit::GENERIC, format!("this group's assembly window cannot be checked: {why}")));
+    };
     Err(CliError::new(
         exit::GENERIC,
         format!(
@@ -1185,6 +1131,10 @@ fn proof_kind_v1(proof: &PalwCourtVerdictProofV2) -> &'static str {
         PalwCourtVerdictProofV2::AttnDissection { .. } => "AttnDissection",
         // ADR-0081 Decision 3: the arithmetic close with the prompt tile opened rather than carried.
         PalwCourtVerdictProofV2::ArithmeticOpened { .. } => "ArithmeticOpened",
+        // ADR-0096 §10 B5/B6: the free-prompt lane's job-carrying decode close, and the rendering
+        // close. Named for the reason the dissection is.
+        PalwCourtVerdictProofV2::ConstrainedDecode { .. } => "ConstrainedDecode",
+        PalwCourtVerdictProofV2::ConstrainedRendering { .. } => "ConstrainedRendering",
     }
 }
 
@@ -1256,6 +1206,12 @@ fn record_part_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // **The three the cut took with it** (ADR-0104). These tests check this file's WORDS against
+    // consensus's rule, so they still name the rule — from where it lives now. Nothing above needs
+    // them: the non-test paths reach them through the planner.
+    use kaspa_consensus_core::palw_close_carriage::palw_court_close_max_parts_v1 as court_close_max_parts_v1;
+    use kaspa_consensus_core::palw_state_v2::{palw_close_assembly_daa_v1, palw_court_close_chunk_digest_v1};
+
     use kaspa_consensus_core::config::params::{Params, devnet_shipped_params, palw_rc_shipped_params};
     use kaspa_consensus_core::palw_court_v2::arithmetic_close_bytes_v2;
     use kaspa_consensus_core::palw_legs::{PALW_LEGS_OBJECT_VERSION_V1, PalwCheckpointProfileV1};

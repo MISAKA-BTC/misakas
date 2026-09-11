@@ -110,6 +110,12 @@ const CONSENSUS_PATH: &[&str] = &[
     // fingerprints and refuse each other at the handshake. That is the divergence Decision A
     // exists to make impossible, reached through a value rather than through a block.
     "src/e2e_drill.rs",
+    // ADR-0096 §10 B4's token table, on the list for `e2e_drill.rs`'s reason: it runs no model
+    // arithmetic, and its OUTPUT is pinned. `PALW_TOKEN_TABLES_V1` carries the root computed here,
+    // every court opening of a token's bytes is built here, and the tool prints the pin — a float
+    // in deciding an id's bytes would let two builds pin two tables and prove two renderings.
+    "src/token_table.rs",
+    "src/bin/palw-token-table.rs",
 ];
 
 /// Not executed by consensus, but they *state* the class's arithmetic: the KAT set publishes the

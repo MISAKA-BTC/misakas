@@ -64,12 +64,44 @@ P2P_BASE="${P2P_BASE:-16410}"
 RPC_BASE="${RPC_BASE:-17710}"
 PROMPT="${PROMPT:-Name one property of a hash function.}"
 MAX_TOKENS="${MAX_TOKENS:-4}"
-# The class the gateway's worker embodies. `palw-a16-fp-worker` serves exactly this catalog row.
-MODEL_ID="${MODEL_ID:-Qwen/Qwen2.5-1.5B/graph-v2}"
+# The class the gateway's worker embodies. `palw-a16-fp-worker` serves exactly this catalog row —
+# `A16_GRAPH_V5_MODEL_ID` since ADR-0082 (the graph-v2 default here was a row the worker no longer
+# serves, so every run had to override it by hand).
+MODEL_ID="${MODEL_ID:-Qwen/Qwen2.5-1.5B/graph-v5@512}"
+# **ADR-0096 §10: the constrained lane.** CONSTRAINED=1 arms the decode-constraint fence at genesis
+# on every node (`--palw-fp-constraint-devnet=0` is in the consensus fingerprint, so the registrar and
+# the class-table reader carry it too), hands every seat the tokenizer its pinned token table is
+# built from, and asks stage 5 for a COMMITTED JSON format: the gateway sends a version-6 job, the
+# rail carries the automaton, and the seats replay the job masked. The verdict then also requires the
+# format to have been committed and valid, the rail to have signed a version-6 job, and a seat to
+# have logged the masked replay — so a run that silently fell back to version 5 cannot pass.
+CONSTRAINED="${CONSTRAINED:-0}"
+# **Whether every seat holds the artifact.** A claim is licensed by 3 `Valid` receipts of a 5-seat
+# panel (`PALW_V2_PANEL_SEATS`/`_QUORUM`), the executor's bond never sits, and a seat without the
+# class's artifact answers `Incapable`, which counts toward neither side. So with the default three
+# nodes — bond 0 executes, node-2 holds no artifact — at most ONE seat can answer `Valid` and no
+# claim can reach `ReceiptLicensed`: the run proves carriage, the panel and the seats' verdicts,
+# and only watches the rest. `SEATS_HOLD_ARTIFACT=1` hands the artifact to every node (production
+# stays on nodes 0 and 1), and `NODES=4` then gives three capable seats — the quorum.
+SEATS_HOLD_ARTIFACT="${SEATS_HOLD_ARTIFACT:-0}"
+# **How many nodes produce the dense class.** The chain's pace IS the dense producers' (the floor's
+# seed on this ruleset is minutes per fixture block): measured at ~3 minutes a block with two, and a
+# claim needs ~150 DAA from landing to `Final` on the devnet windows. Every node that holds the
+# artifact may produce it; more producers is the one lever on the wall clock a drill has.
+DENSE_PRODUCERS="${DENSE_PRODUCERS:-2}"
+FENCE_ARGS=()
+if [ "$CONSTRAINED" = 1 ]; then FENCE_ARGS=(--palw-fp-constraint-devnet=0); fi
 PREMINE_TXID="6d6973616b612d7072656d696e65$(printf '0%.0s' $(seq 1 100))"   # "misaka-premine", zero-padded
 MAIN_PREMINE_INDEX=40   # consensus/core/src/config/premine.rs; bond n's fee float is MAIN_PREMINE_INDEX + 1 + n
 DEVNET_BONDS=6          # premine.rs: PALW_DEVNET_GENESIS_BONDS
 REGISTRAR_BOND=$((DEVNET_BONDS - 1))   # the bond no producer node holds, so its float is unspent
+# **The bond the free-prompt claim is executed under — one NO running node holds.** It was bond 0,
+# node-0's own, and node-0's panel pays for every receipt it files from that same fee float: run 1
+# (2026-09-10) submitted the commitment before the panel's carriers landed and won the race; run 3,
+# with four dense producers filing receipts earlier, lost it — "transaction … is an orphan where
+# orphan is disallowed", the float already spent. An executor bond no node runs keeps its float for
+# the rail alone, and it sits on nobody's panel, so every running node is a seat for its claim.
+EXECUTOR_BOND="${EXECUTOR_BOND:-$((DEVNET_BONDS - 2))}"
 BOND_FEE_FLOAT_SOMPI=10000000000       # premine.rs: PALW_RC_BOND_FEE_FLOAT_SOMPI = 100 * SOMPI_PER_KASPA
 
 log() { printf '[fp-e2e] %s\n' "$*" >&2; }
@@ -100,6 +132,19 @@ done
 [ -n "${MISAKA_DEVNET_GENESIS:-}" ] || die "MISAKA_DEVNET_GENESIS must be the devnet genesis hash, 128 hex chars (consensus/core/src/config/genesis.rs, DEVNET_GENESIS). A guessed value silently produces claims no seat can replay."
 [ "${#MISAKA_DEVNET_GENESIS}" -eq 128 ] || die "MISAKA_DEVNET_GENESIS is ${#MISAKA_DEVNET_GENESIS} chars, not 128"
 command -v python3 >/dev/null || die "python3 is required (key derivation and the HTTP client)"
+# Seats that hold the artifact: every dense producer but the executor (node-0), plus every other
+# node when SEATS_HOLD_ARTIFACT=1.
+# Refused by name: an executor bond a running node holds shares its fee float with that node's panel
+# (see EXECUTOR_BOND), and the registrar's float pays the class registration.
+[ "$EXECUTOR_BOND" -ge "$NODES" ] || die "EXECUTOR_BOND=$EXECUTOR_BOND is node-$EXECUTOR_BOND's own bond — its panel spends the same fee float the rail needs; use a bond >= NODES ($NODES)"
+[ "$EXECUTOR_BOND" -lt "$REGISTRAR_BOND" ] || die "EXECUTOR_BOND=$EXECUTOR_BOND is the registrar's (or past the $DEVNET_BONDS genesis bonds)"
+# Seats that can judge the dense class: running nodes that hold the artifact (the executor runs none).
+capable_seats=$(( DENSE_PRODUCERS < NODES ? DENSE_PRODUCERS : NODES ))
+if [ "$SEATS_HOLD_ARTIFACT" = 1 ]; then capable_seats=$NODES; fi
+if [ "$capable_seats" -lt 3 ]; then
+  log "NOTE: $capable_seats seat(s) can judge the dense class and a licence needs 3 Valid of 5 — this run cannot reach"
+  log "      ReceiptLicensed or Final; it proves carriage, the panel and the verdicts (SEATS_HOLD_ARTIFACT=1 NODES=4 for Final)"
+fi
 
 # Every port this run binds, derived from the two bases and the node count exactly as the stages
 # below derive them — never a second list, or a stage could bind a port this check never saw. The
@@ -207,8 +252,13 @@ for ((i=0; i<NODES; i++)); do
   # Two dense producers (node-0 and node-1), so one lost draw does not stall stage 1: a dense
   # attempt is ~2.4 min of inference on this host and the chain needs three blocks. node-2 stays
   # a floor-only seat, which is the shape of a fleet host without the artifact.
-  if [ "$i" -le 1 ]; then args+=(--palw-class-artifact="$MISAKA_PALW_ARTIFACT" --palw-producer-class="$EXPECTED_CLASS_ID"); fi
+  if [ "$i" -lt "$DENSE_PRODUCERS" ]; then
+    args+=(--palw-class-artifact="$MISAKA_PALW_ARTIFACT" --palw-producer-class="$EXPECTED_CLASS_ID")
+  elif [ "$SEATS_HOLD_ARTIFACT" = 1 ]; then
+    args+=(--palw-class-artifact="$MISAKA_PALW_ARTIFACT")
+  fi
   if [ "$i" -gt 0 ]; then args+=(--connect=127.0.0.1:$P2P_BASE); fi
+  if [ "$CONSTRAINED" = 1 ]; then args+=(--palw-fp-constraint-devnet=0 --palw-class-tokenizer="$MISAKA_PALW_TOKENIZER"); fi
   MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >"$WORK_DIR/node-$i.log" 2>&1 &
   # `$!` into a variable rather than `${pids[-1]}`: macOS ships bash 3.2, which rejects a negative
   # array index at PARSE time — the whole script fails to load, not the line.
@@ -218,7 +268,22 @@ for ((i=0; i<NODES; i++)); do
 done
 
 CLI=("$CLI_BIN" --network devnet --rpc 127.0.0.1:$RPC_BASE)
-blocks_of() { grep -c "produced block #" "$WORK_DIR/node-$1.log" 2>/dev/null || true; }
+# **Always a number.** Run 2 of the ADR-0096 drill (2026-09-10) died in stage 3 with
+# `total + : syntax error` — one read of a node's log printed NOTHING (grep failed, its stderr
+# discarded) and bash 3.2's arithmetic refused the empty operand, so the EXIT trap stopped every
+# node forty minutes in. A read that fails is retried and then counted as 0: a transient
+# undercount only shortens one best-effort wait, and every stage after it polls the chain itself.
+# (`grep -c` prints "0" and exits 1 on no match, so the capture is not followed by a second
+# fallback that would print the zero twice.)
+blocks_of() {
+  local n="" _try
+  for _try in 1 2 3; do
+    n=$(grep -c "produced block #" "$WORK_DIR/node-$1.log" 2>/dev/null) || true
+    [ -n "$n" ] && break
+    sleep 0.2
+  done
+  echo "${n:-0}"
+}
 # **The chain's progress is the SET's, not node-0's.**
 #
 # Every wait below wants the same thing: DAA has moved, so the next window can open. Reading it off
@@ -301,7 +366,8 @@ class_table() {
   local pid deadline
   MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/node-0-reg" \
     --rpclisten-borsh=127.0.0.1:$((reg_rpc + 200)) --nogrpc --nodnsseed --disable-upnp \
-    --connect=127.0.0.1:$P2P_BASE --utxoindex --palw-dump-classes >"$WORK_DIR/class-table.log" 2>&1 &
+    --connect=127.0.0.1:$P2P_BASE --utxoindex --palw-dump-classes ${FENCE_ARGS[@]+"${FENCE_ARGS[@]}"} \
+    >"$WORK_DIR/class-table.log" 2>&1 &
   pid=$!
   deadline=$((SECONDS + STEP_WAIT))
   while :; do
@@ -348,6 +414,7 @@ MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/node-0-reg"
       --palw-producer-key="$WORK_DIR/keys/bond-$REGISTRAR_BOND.seed" --palw-producer-pay-address="$REGISTRAR_ADDR" \
       --palw-producer-bond="$PREMINE_TXID:$REGISTRAR_BOND" \
       --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1 + REGISTRAR_BOND))" \
+      ${FENCE_ARGS[@]+"${FENCE_ARGS[@]}"} \
       >"$WORK_DIR/register-class.log" 2>&1 &
 # `$!` into a variable rather than `${pids[-1]}`: macOS ships bash 3.2, which rejects a negative
 # array index at PARSE time — the whole script fails to load, not the line.
@@ -473,20 +540,20 @@ all_nodes_logged "PALW lifecycle carried.*ClassLaneCertified" "$((FAMILY_CHUNKS 
 log "stage 3 OK"
 
 # ---------------------------------------------------------------------------------------------
-# 4. The gateway, under bond 0, reading the chain over node-0's RPC (Decision 3).
+# 4. The gateway, under the executor bond, reading the chain over node-0's RPC (Decision 3).
 # ---------------------------------------------------------------------------------------------
-EXEC_PUBKEY=$("$RAIL_BIN" --bond-key-seed "$WORK_DIR/keys/bond-0.seed" --print-bond-pubkey \
+EXEC_PUBKEY=$("$RAIL_BIN" --bond-key-seed "$WORK_DIR/keys/bond-$EXECUTOR_BOND.seed" --print-bond-pubkey \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["executor_pubkey"])') \
-  || die "cannot read bond 0's public key from the rail"
+  || die "cannot read bond $EXECUTOR_BOND's public key from the rail"
 # **The operator id is DERIVED, with the same preimage the chain uses** — `palw_operator_id_v2`
 # (`consensus/core/src/palw_state_v2.rs`): blake2b-512 keyed by the operator-id domain over
 # `u64le(len) ‖ operator_pubkey`, where the devnet registry's pubkey for bond n is the literal
 # bytes `misaka-devnet-operator-{n}` (`params.rs: palw_devnet_genesis_bonds_v1`). A plain digest
 # here would not match, and the mismatch would surface as an admission refusal rather than as a
 # bad hash, which is the kind of error that costs an afternoon.
-OPERATOR_ID=$(python3 - <<'PY'
-import hashlib, struct
-pk = b"misaka-devnet-operator-0"
+OPERATOR_ID=$(EXECUTOR_BOND="$EXECUTOR_BOND" python3 - <<'PY'
+import hashlib, os, struct
+pk = b"misaka-devnet-operator-" + os.environ["EXECUTOR_BOND"].encode()
 h = hashlib.blake2b(digest_size=64, key=b"misaka-palw/state-v2/operator-id/v1")
 h.update(struct.pack("<Q", len(pk))); h.update(pk)
 print(h.hexdigest())
@@ -497,7 +564,7 @@ cat >"$WORK_DIR/identity.json" <<JSON
   "network_domain": "$NETWORK_DOMAIN",
   "class_id": "$CLASS_ID",
   "bond_txid": "$PREMINE_TXID",
-  "bond_index": 0,
+  "bond_index": $EXECUTOR_BOND,
   "executor_pubkey": "$EXEC_PUBKEY",
   "operator_id": "$OPERATOR_ID"
 }
@@ -549,17 +616,33 @@ log "stage 4 OK — /health names all four"
 # ---------------------------------------------------------------------------------------------
 # 5. One browser-shaped request. The answer is the product; the commitment is the receipt.
 # ---------------------------------------------------------------------------------------------
-log "stage 5 — one chat request"
-python3 - "$GATEWAY_PORT" "$PROMPT" "$MAX_TOKENS" "$WORK_DIR/chat.json" <<'PY' || die "the chat request failed"
+log "stage 5 — one chat request$([ "$CONSTRAINED" = 1 ] && echo ' with a COMMITTED JSON format (ADR-0096)')"
+python3 - "$GATEWAY_PORT" "$PROMPT" "$MAX_TOKENS" "$WORK_DIR/chat.json" "$CONSTRAINED" <<'PY' || die "the chat request failed"
 import json, sys, urllib.request
-port, prompt, max_tokens, out = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
-body = json.dumps({"messages": [{"role": "user", "content": prompt}], "max_tokens": max_tokens}).encode()
+port, prompt, max_tokens, out, constrained = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5] == "1"
+request = {"messages": [{"role": "user", "content": prompt}], "max_tokens": max_tokens}
+if constrained:
+    # A schema in the subset, in the order a person writes it; `require_committed_format` makes the
+    # gateway refuse rather than fall back to advisory, so this stage cannot pass on a version-5 job.
+    request["response_format"] = {"type": "json_schema", "json_schema": {"name": "extraction", "schema": {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "age": {"type": "integer"}, "city": {"type": "string"}},
+        "required": ["name", "age", "city"], "additionalProperties": False}}}
+    request["misaka"] = {"require_committed_format": True}
+body = json.dumps(request).encode()
 req = urllib.request.Request(f"http://127.0.0.1:{port}/v1/chat/completions", data=body,
                              headers={"content-type": "application/json"})
 payload = json.loads(urllib.request.urlopen(req, timeout=1800).read())
 json.dump(payload, open(out, "w"), indent=2)
 m = payload.get("misaka", {})
 print(f"  answer: {payload['choices'][0]['message']['content']!r}", file=sys.stderr)
+if constrained:
+    f = m.get("format") or {}
+    print(f"  format: enforcement={f.get('enforcement')} valid={f.get('valid')} "
+          f"constraint={((f.get('requested') or {}).get('constraint_id') or '?')[:16]}…", file=sys.stderr)
+    if f.get("enforcement") != "committed" or f.get("valid") is not True:
+        print("  the format was not committed and valid — this is not the constrained lane", file=sys.stderr)
+        sys.exit(1)
 print(f"  fp_job_id={m.get('fp_job_id','?')[:16]}… claim={m.get('fp_claim_id','?')[:16]}…", file=sys.stderr)
 PY
 JOB_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["misaka"]["fp_job_id"])' "$WORK_DIR/chat.json")
@@ -651,8 +734,8 @@ else
   capture_args=()
 fi
 if "$RAIL_BIN" --artifact "$ARTIFACT_STEM" \
-     --bond-key-seed "$WORK_DIR/keys/bond-0.seed" \
-     --funding-outpoint "$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1))" \
+     --bond-key-seed "$WORK_DIR/keys/bond-$EXECUTOR_BOND.seed" \
+     --funding-outpoint "$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1 + EXECUTOR_BOND))" \
      --funding-amount "$BOND_FEE_FLOAT_SOMPI" \
      --class-id "$CLASS_ID" --class-leaves "$CLASS_LEAVES" \
      "${capture_args[@]}" \
@@ -805,7 +888,28 @@ fi
 # ---------------------------------------------------------------------------------------------
 DERIVE_BIN="${DERIVE_BIN:-$REPO_ROOT/target/release/palw-derive}"
 derived_note="not attempted"
-if [ -x "$DERIVE_BIN" ]; then
+# **ADR-0096: a constrained claim's derivation is the gateway's own.** A version-6 answer renders
+# exactly the constrained value — its EOG tail renders empty (§10 B4/B7) — so Decision 9's
+# `json/canonical/v1` derives at ANY budget, not only when the answer fills it, and the gateway
+# wrote the unsigned object beside the commitment. The rail signs it and the chain carries it: the
+# shape the person asked for, committed, and its canonical bytes on chain.
+if [ "$CONSTRAINED" = 1 ] && [ -f "$ARTIFACT_STEM.derived-unsigned.borsh" ]; then
+  log "stage 8 — the constrained answer's own derivation (json/canonical/v1), signed and submitted"
+  mkdir -p "$WORK_DIR/derived"
+  if "$RAIL_BIN" --derive-artifact "$ARTIFACT_STEM" --bond-key-seed "$WORK_DIR/keys/bond-$EXECUTOR_BOND.seed" \
+       >"$WORK_DIR/derived/derive.log" 2>&1 \
+     && submit "$ARTIFACT_STEM.derived-object.borsh" >>"$WORK_DIR/derived/derive.log" 2>&1; then
+    if all_nodes_logged "DerivedArtifact"; then
+      derived_note="ON CHAIN from a constrained inference — json/canonical/v1 carried by every node"
+    else
+      derived_note="signed and submitted, but not carried by every node (see derived/derive.log)"
+    fi
+  else
+    derived_note="the gateway's json derivation did not sign or submit (see derived/derive.log)"
+  fi
+  DERIVE_BIN=""   # the music leg below is the unconstrained lane's demonstration
+fi
+if [ -n "$DERIVE_BIN" ] && [ -x "$DERIVE_BIN" ]; then
   log "stage 8 — the derived-artifact leg (ADR-0078), from the claim's own answer"
   mkdir -p "$WORK_DIR/derived"
   python3 -c '
@@ -824,7 +928,7 @@ open(sys.argv[2], "w").write(p["choices"][0]["message"]["content"])' "$WORK_DIR/
     # `<stem>.derived-object.borsh`, the signed `PalwConsensusObjectV2`, not the bare unsigned
     # derivation. Submitting the latter would have been refused as unparseable carriage.
     stem="${obj%.derived-unsigned.borsh}"
-    if [ -n "$obj" ] && "$RAIL_BIN" --derive-artifact "$stem" --bond-key-seed "$WORK_DIR/keys/bond-0.seed" \
+    if [ -n "$obj" ] && "$RAIL_BIN" --derive-artifact "$stem" --bond-key-seed "$WORK_DIR/keys/bond-$EXECUTOR_BOND.seed" \
          >>"$WORK_DIR/derived/derive.log" 2>&1; then
       submit "$stem.derived-object.borsh" >>"$WORK_DIR/derived/derive.log" 2>&1 || true
       if all_nodes_logged "DerivedArtifact"; then
@@ -861,7 +965,7 @@ DSL
       derived_note="NOT-FROM-AN-INFERENCE: even the hand-written DSL failed to derive (see derived/derive.log)"
     fi
   fi
-else
+elif [ -n "$DERIVE_BIN" ]; then
   derived_note="skipped — $DERIVE_BIN is not built (cargo build --release -p misaka-palw-derive)"
 fi
 
@@ -891,6 +995,16 @@ for ((i=0; i<NODES; i++)); do
   log "node-$i blocks=$(blocks_of $i) committed=$(grep -c 'FreePromptCommitted' "$WORK_DIR/node-$i.log" 2>/dev/null || echo 0) final=$(grep -c 'Final' "$WORK_DIR/node-$i.log" 2>/dev/null || echo 0)"
 done
 [ "$stage_ok" = 1 ] || { log "the claim did not reach Final on every node"; fail=1; }
+if [ "$CONSTRAINED" = 1 ]; then
+  # ADR-0096 §10: the three facts that make this the constrained lane and not a version-5 run.
+  enforcement=$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1]))["misaka"].get("format") or {}).get("enforcement"))' "$WORK_DIR/chat.json" 2>/dev/null || echo "?")
+  job_version=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("job_version"))' "$ARTIFACT_STEM.rail.json" 2>/dev/null || echo "?")
+  masked=$(grep -l "version-6 job replayed MASKED" "$WORK_DIR"/node-*.log 2>/dev/null | wc -l | tr -d ' ')
+  log "ADR-0096: format enforcement=$enforcement, rail signed job version $job_version, $masked seat(s) logged a masked replay"
+  [ "$enforcement" = committed ] || { log "the format was not committed"; fail=1; }
+  [ "$job_version" = 6 ] || { log "the rail did not sign a version-6 job"; fail=1; }
+  [ "$masked" -gt 0 ] || { log "no seat logged a masked replay of the version-6 job"; fail=1; }
+fi
 [ "$receipt_ok" = 1 ] || { log "no receipt block was accepted by every node"; fail=1; }
 grep -q "$JOB_ID" "$WORK_DIR/chat.json" || { log "the job id is not in the gateway's own answer"; fail=1; }
 

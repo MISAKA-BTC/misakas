@@ -424,6 +424,18 @@ impl QwenTokenizer {
         token.chars().map(|c| self.char_to_byte.get(&c).copied()).collect()
     }
 
+    /// **A token's rendering under the constrained lane's table rule** (ADR-0096 §10 B4) — the ONE
+    /// spelling the pinned token table, the engine's mask, the worker's stream and the rendered
+    /// hash all read: an added (special) token renders EMPTY, because a special is never answer
+    /// content and an empty rendering is never admitted; an id past this table renders empty too.
+    /// Everything else is [`Self::token_bytes`].
+    pub fn constrained_rendering_v1(&self, id: u32) -> Vec<u8> {
+        if self.is_added_id(id) {
+            return Vec::new();
+        }
+        self.token_bytes(id).unwrap_or_default()
+    }
+
     /// Decode ids back to text.
     pub fn decode(&self, ids: &[u32]) -> Result<String, TokenizerError> {
         let mut bytes = Vec::with_capacity(ids.len() * 4);
