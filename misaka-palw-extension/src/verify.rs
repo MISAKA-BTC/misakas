@@ -319,6 +319,75 @@ pub fn verify_parsed_v1(
     })
 }
 
+/// **What `submit` needs to build a `ClassRegistered` through the SDK** (ADR-0108 Decision 5): the
+/// class as the manifest resolved it, and the root it names. The CLI hands these to
+/// `PalwClassSdk::build_post_genesis_registration` exactly as `kaspad --palw-register-class` does.
+#[derive(Clone, Debug)]
+pub struct PalwClassRegistrationInputsV1 {
+    pub profile: kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    pub canonical_job: (u32, u32),
+    pub artifact_root: kaspa_hashes::Hash64,
+    /// The ledger row's model id where the class is one, else the manifest's name.
+    pub model_id: String,
+    /// The ledger row's lineage where the class is one, else `manifest`.
+    pub lineage_id: String,
+    pub needs_artifact_file: bool,
+    pub in_build_table: bool,
+}
+
+/// Resolve a `model-class` / `context-profile` manifest to the inputs a registration is built from.
+/// `Err` is the boundary's or a tier already decided, rendered as its field and reason.
+pub fn class_registration_inputs_v1(
+    parsed: &PalwParsedManifestV1,
+    manifest_dir: &Path,
+    env: &PalwExtensionEnvV1,
+) -> Result<PalwClassRegistrationInputsV1, PalwExtensionError> {
+    let manifest = &parsed.manifest;
+    if !matches!(manifest.kind, PalwExtensionKindV1::ModelClass | PalwExtensionKindV1::ContextProfile) {
+        return Err(PalwExtensionError::field("kind", format!("a {} manifest builds no registration", manifest.kind)));
+    }
+    let params = params_for(env.network_id)?;
+    let bundle = match &params.palw_consensus_mode {
+        PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.clone()),
+        _ => None,
+    };
+    let daa = env.daa_score.unwrap_or(0);
+    let mut cx = VerifyCx {
+        parsed,
+        manifest_dir,
+        env,
+        depth: PalwExtensionDepthV1::Structural,
+        params,
+        bundle,
+        daa,
+        checks: Vec::new(),
+        recomputed: BTreeMap::new(),
+        sdk: None,
+    };
+    let class = match crate::kinds::model_class::resolve_class(&mut cx)? {
+        Ok(class) => class,
+        Err(classification) => return Err(PalwExtensionError::field("verification", classification.summary())),
+    };
+    let artifact = manifest
+        .artifact
+        .as_ref()
+        .ok_or_else(|| PalwExtensionError::field("artifact", "a class names the root its registration pins"))?;
+    let artifact_root = crate::manifest::parse_hash64("artifact.root", &artifact.root)?;
+    let (model_id, lineage_id, needs_artifact_file) = match &class.ledger_entry {
+        Some(entry) => (entry.model_id.to_string(), entry.lineage_id.to_string(), entry.needs_artifact_file),
+        None => (manifest.name.clone(), "manifest".to_string(), true),
+    };
+    Ok(PalwClassRegistrationInputsV1 {
+        profile: class.profile.clone(),
+        canonical_job: class.canonical_job,
+        artifact_root,
+        model_id,
+        lineage_id,
+        needs_artifact_file,
+        in_build_table: class.ledger_entry.is_some(),
+    })
+}
+
 /// This build's materialised `Params` for the network — the same `From<NetworkId>` the node and
 /// the fingerprint pin read, guarded against the suffixes that constructor panics on.
 pub fn params_for(network_id: NetworkId) -> Result<Params, PalwExtensionError> {

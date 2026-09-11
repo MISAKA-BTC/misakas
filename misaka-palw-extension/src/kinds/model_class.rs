@@ -400,6 +400,25 @@ pub(crate) fn verify(cx: &mut VerifyCx<'_>) -> Result<KindOutcomeV1, PalwExtensi
 
     let reachable = reachable_kernels_v1(&class.profile);
     cx.record("reachable_kernels", reachable.len());
+    // ADR-0067: a kernel outside this build's adjudication table is a release, and the question is
+    // answerable from the profile alone — so it is answered here, before the gate would fold it
+    // into `CoverageGap`.
+    let catalogued = kaspa_consensus_core::palw_step_refute::catalogued_kernel_ids_v1();
+    let outside: Vec<String> = reachable.difference(&catalogued).map(|k| k.to_string()).collect();
+    if !outside.is_empty() {
+        let reason = format!(
+            "kernel{} {} {} outside this build's vocabulary — a new kernel is a release (ADR-0067)",
+            if outside.len() == 1 { "" } else { "s" },
+            outside.join(", "),
+            if outside.len() == 1 { "is" } else { "are" }
+        );
+        cx.fail("kernel_vocabulary", reason.clone());
+        return Ok(KindOutcomeV1::at(
+            PalwExtensionClassificationV1::RulesetChange { fences: Vec::new(), would_print: None, flag_day: true, reason },
+            Structural,
+        ));
+    }
+    cx.pass("kernel_vocabulary");
     if !manifest.requires.kernel_ids.is_empty() {
         let mut listed = BTreeSet::new();
         for (i, id) in manifest.requires.kernel_ids.iter().enumerate() {
@@ -679,4 +698,43 @@ pub(crate) fn verify(cx: &mut VerifyCx<'_>) -> Result<KindOutcomeV1, PalwExtensi
     }
     cx.pass("artifact.root");
     Ok(KindOutcomeV1::at(expressible(cx, &class, weightless, already_registered, would_be_refused), Full))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kaspa_consensus_core::network::{NetworkId, NetworkType};
+    use misaka_palw_sdk::PalwClassSdk;
+
+    /// **The probe restated here answers as the SDK's does, row for row.** Same Ok, same Err text
+    /// — so the tier mapping reads the variant of the answer the SDK gives, never a different
+    /// answer. Run over every ledger row on testnet-11's own shape.
+    #[test]
+    fn the_probe_agrees_with_the_sdks_preflight_over_every_ledger_row() {
+        let params: kaspa_consensus_core::config::params::Params = NetworkId::with_suffix(NetworkType::Testnet, 11).into();
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            panic!("testnet-11 ships a ConsensusV2 bundle");
+        };
+        let sdk = PalwClassSdk::builtin_v1(bundle.court, params.palw_prompt_ids_form_v1(), params.net.to_string().into_bytes());
+        let root = Hash64::from_u64_word(0xA16);
+        let mut rows = 0;
+        for entry in sdk.ledger() {
+            let Ok(shape) = palw_admission_shape_at_v1(&params, bundle, &entry.profile, 0) else { continue };
+            let theirs = sdk.preflight_admission(bundle, &entry, root, &shape);
+            let ours = admission_probe_v1(bundle, &entry.profile, &entry.canonical_context(), root, &[], &shape);
+            match (theirs, ours) {
+                (Ok(a), Ok((b, _))) => assert_eq!(format!("{a:?}"), format!("{b:?}"), "{}", entry.model_id),
+                (Err(text), Err(ProbeRefusalV1::Gate(err))) => {
+                    assert!(text.ends_with(&err.to_string()), "{}: {text} / {err}", entry.model_id)
+                }
+                (Err(text), Err(ProbeRefusalV1::Express(err))) => {
+                    assert!(text.ends_with(&err.to_string()), "{}: {text} / {err}", entry.model_id)
+                }
+                (Err(text), Err(ProbeRefusalV1::Price(why))) => assert!(text.ends_with(&why), "{}: {text} / {why}", entry.model_id),
+                (a, b) => panic!("{}: the SDK says {a:?} and the probe says {}", entry.model_id, b.is_ok()),
+            }
+            rows += 1;
+        }
+        assert!(rows >= 5, "the ledger names the shipped classes");
+    }
 }

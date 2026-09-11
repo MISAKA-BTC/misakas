@@ -471,6 +471,9 @@ pub fn check_relative_path(field: &str, value: &str) -> Result<(), PalwExtension
             format!("{} bytes, over the {PALW_EXTENSION_MAX_PATH_BYTES}-byte path bound", value.len()),
         ));
     }
+    if value.contains("://") {
+        return Err(PalwExtensionError::field(field, "a URL is not a path: the verifier follows nothing (SA-2)"));
+    }
     let path = Path::new(value);
     if path.is_absolute() {
         return Err(PalwExtensionError::field(field, "must be relative to the manifest's directory, not absolute (SA-2)"));
@@ -511,8 +514,9 @@ pub fn resolve_manifest_path(field: &str, manifest_dir: &Path, value: &str) -> R
 }
 
 impl PalwExtensionManifestV1 {
-    /// SA-1's field bounds, every one naming its field.
-    fn check_bounds(&self) -> Result<(), PalwExtensionError> {
+    /// SA-1's field bounds, every one naming its field. Run by [`PalwParsedManifestV1::parse`]
+    /// after the byte bound; public so the bounds the byte bound shadows can still be pinned.
+    pub fn check_bounds(&self) -> Result<(), PalwExtensionError> {
         if self.name.is_empty() || self.name.len() > PALW_EXTENSION_MAX_NAME_BYTES {
             return Err(PalwExtensionError::field(
                 "name",
