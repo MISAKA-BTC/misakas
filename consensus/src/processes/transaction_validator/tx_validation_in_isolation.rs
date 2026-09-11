@@ -774,9 +774,15 @@ mod tests {
         tx.subnetwork_id = SubnetworkId::from_byte(0x4A);
         assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidPalwFpPayload(_)));
 
+        // **A-2: the lifecycle band (0x4B) TOLERATES a payload it cannot decode as a lifecycle
+        // object.** A cross-band body here does not decode as `PalwLifecycleTxPayloadV2`, so it is
+        // Ok at isolation and the extraction walk folds nothing for it — band separation is
+        // enforced at the fold, not by failing the block, so an object kind a later build appends
+        // does not split an older one. (The FP band above still rejects at isolation; only the
+        // lifecycle validator was made forward-compatible.)
         let mut tx = base.clone();
         tx.subnetwork_id = SubnetworkId::from_byte(0x4B);
-        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidPalwLifecyclePayload(_)));
+        assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
 
         // The hard edge moved with them: 0x4C (one past the last routed id) is NOT routed and
         // still rejects with the blanket `SubnetworksDisabled` — an unknown id stays a
