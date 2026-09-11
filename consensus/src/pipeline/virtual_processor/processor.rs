@@ -14729,6 +14729,28 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
     }
 }
 
+/// ADR-0109 Decision 1: the index row of `entry` if its script is an `EVM_DEPOSIT_LOCK`, decided
+/// with the parser the claim's validity uses (`validate_one_deposit_claim`) — so what the index
+/// calls a lock and what the chain calls one cannot diverge.
+pub(super) fn deposit_lock_record(entry: &UtxoEntry) -> Option<kaspa_consensus_core::evm::EvmDepositLockRecord> {
+    let lock = kaspa_txscript::script_class::parse_evm_deposit_lock(&entry.script_public_key)?;
+    Some(kaspa_consensus_core::evm::EvmDepositLockRecord {
+        evm_address: kaspa_consensus_core::evm::EvmAddress::from_bytes(lock.evm_address),
+        amount_sompi: entry.amount,
+        claim_tip_sompi: lock.claim_tip_sompi,
+        timeout_daa_score: lock.timeout_daa_score,
+        block_daa_score: entry.block_daa_score,
+    })
+}
+
+/// ADR-0109 Decision 3: the first input of `tx` that spends a locked PALW bond, if any.
+pub(super) fn first_locked_input(
+    tx: &Transaction,
+    locked: &std::collections::HashSet<TransactionOutpoint>,
+) -> Option<TransactionOutpoint> {
+    tx.inputs.iter().map(|input| input.previous_outpoint).find(|outpoint| locked.contains(outpoint))
+}
+
 #[cfg(test)]
 mod palw_equivocation_wiring_tests {
     /// The chain identity these slash tests adjudicate under — it must equal the network the
@@ -14902,26 +14924,4 @@ mod palw_equivocation_wiring_tests {
         let txs = vec![carriage_tx(&forged)];
         assert!(palw_equivocation_slashes_v1(&txs, &view(signer, accused), 100, SLASH_NET, true, mock_verify).is_empty());
     }
-}
-
-/// ADR-0109 Decision 1: the index row of `entry` if its script is an `EVM_DEPOSIT_LOCK`, decided
-/// with the parser the claim's validity uses (`validate_one_deposit_claim`) — so what the index
-/// calls a lock and what the chain calls one cannot diverge.
-pub(super) fn deposit_lock_record(entry: &UtxoEntry) -> Option<kaspa_consensus_core::evm::EvmDepositLockRecord> {
-    let lock = kaspa_txscript::script_class::parse_evm_deposit_lock(&entry.script_public_key)?;
-    Some(kaspa_consensus_core::evm::EvmDepositLockRecord {
-        evm_address: kaspa_consensus_core::evm::EvmAddress::from_bytes(lock.evm_address),
-        amount_sompi: entry.amount,
-        claim_tip_sompi: lock.claim_tip_sompi,
-        timeout_daa_score: lock.timeout_daa_score,
-        block_daa_score: entry.block_daa_score,
-    })
-}
-
-/// ADR-0109 Decision 3: the first input of `tx` that spends a locked PALW bond, if any.
-pub(super) fn first_locked_input(
-    tx: &Transaction,
-    locked: &std::collections::HashSet<TransactionOutpoint>,
-) -> Option<TransactionOutpoint> {
-    tx.inputs.iter().map(|input| input.previous_outpoint).find(|outpoint| locked.contains(outpoint))
 }
