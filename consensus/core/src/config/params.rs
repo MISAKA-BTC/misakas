@@ -10202,6 +10202,20 @@ fn mainnet_card_params_v1(
 fn mainnet_card_base_v1(mut base: Params, dense_tier_pinned: bool) -> Params {
     if dense_tier_pinned {
         base.palw_kary_court = Some(ForkActivation::always());
+        // **AC-D8 (mainnet audit 2026-09-11): a dense card that arms the k-ary court arms
+        // ADR-0093's D6 and D8 with it, from genesis.** The k-ary court alone leaves two holes on
+        // the fused tier: `palw_fused_dissectable` (D6) is what refuses a registrant's fused class
+        // whose output tile spans two heads — a class no dissection can try, so an honest responder
+        // is convicted by silence — and `palw_attn_anchored_root` (D8) is what lets move 1 carry
+        // its anchor checkpoint, the one path a challenger cannot rebuild once a forger's execution
+        // followed its lie. Both are free to state from genesis (no shipped row fails D6, and
+        // `validate_palw_v2` only needs `palw_kary_court` at or below the anchored-root height,
+        // which `always()` satisfies). Residual (audit C-04): D8 as designed still cannot bottom a
+        // forger who lied at a mid-layer fused tile, because the per-position anchor carries that
+        // forger's own later-layer state — a court-completeness gap the dense tier keeps until D8
+        // carries the sibling chunk hashes, tracked against ADR-0093.
+        base.palw_fused_dissectable = Some(ForkActivation::always());
+        base.palw_attn_anchored_root = Some(ForkActivation::always());
     }
     base.palw_capability_bound = Some(ForkActivation::always());
     base.palw_context_ladder = Some(ForkActivation::always());
@@ -15849,12 +15863,13 @@ mod consensus_params_id_tests {
             "the card's armed set changed. docs/adr/README.md's activation-axis table is written FROM this set; update it \
              in the same commit"
         );
-        // The dense card is this set plus the court its own pinned row needs, and nothing else.
+        // The dense card is this set plus the court its own pinned row needs and the two fences
+        // that complete that court (AC-D8: ADR-0093 D6/D8), and nothing else.
         let dense: std::collections::BTreeSet<&str> = card_armed_names(&mainnet_card_fixture_v1(true));
         assert_eq!(
             dense.difference(&expected).copied().collect::<Vec<_>>(),
-            vec!["palw_kary_court"],
-            "pinning the dense tier states the k-ary court and nothing else"
+            vec!["palw_attn_anchored_root", "palw_fused_dissectable", "palw_kary_court"],
+            "pinning the dense tier states the k-ary court and the two fences (D6/D8) that complete it, and nothing else"
         );
 
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &carded.palw_consensus_mode else {
@@ -16352,6 +16367,32 @@ mod consensus_params_id_tests {
             "…and the row it registers is the fused one the court exists for"
         );
         palw_rc_arm_phase1(params);
+    }
+
+    /// **AC-D8 (A-3): a dense card arms ADR-0093 Decisions 6 and 8 with the court they complete.**
+    ///
+    /// The dense-tier card arms `palw_kary_court` from genesis; the court's bottom on the
+    /// per-position dense row needs Decision 8's anchored root claim, and Decision 6 refuses a
+    /// fused class no dissection can try. Both are free from genesis on a fresh card; the test
+    /// shows that first, then asserts the card states them.
+    #[test]
+    fn a_dense_card_arms_the_anchored_root_and_the_dissectable_fence_from_genesis() {
+        let card = mainnet_card_fixture_v1(true);
+        assert_eq!(card.palw_kary_court, Some(ForkActivation::always()), "the dense card runs the k-ary court from genesis");
+        let mut armed = card.clone();
+        armed.palw_attn_anchored_root = Some(ForkActivation::always());
+        armed.palw_fused_dissectable = Some(ForkActivation::always());
+        armed.validate_palw_v2().expect("both fences arm from genesis on the dense card");
+        assert_eq!(
+            card.palw_attn_anchored_root,
+            Some(ForkActivation::always()),
+            "the dense card must arm ADR-0093 Decision 8 (palw_attn_anchored_root) with the court"
+        );
+        assert_eq!(
+            card.palw_fused_dissectable,
+            Some(ForkActivation::always()),
+            "the dense card must arm ADR-0093 Decision 6 (palw_fused_dissectable) with the court"
+        );
     }
 
     /// **A carded mainnet runs the DAG shape testnet-11 runs, and what still differs is named**
