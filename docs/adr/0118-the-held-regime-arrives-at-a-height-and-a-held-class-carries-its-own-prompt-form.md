@@ -124,6 +124,14 @@ heights, not the fence set — so the height is one no other schedule entry uses
 fences ship in the same release: not 3,500, and not 4,000, which releases the audit and
 `palw_prefill_draw` without the regime.
 
+**Decision 7 — a chain-registered class is served at the ruleset's ladder.** Every tabled lineage
+builds its backend with `with_step_ladder_cap(court.max_step_leaf_count())`; the SDK's chain arm
+(`resolve_chain_registered`) did not, and left both families at the executor's `2^22` default. A
+held class reaches a network like testnet-11 only by registration, and a dense row's job passes
+`2^22` leaves after a few dozen positions, so its own producer and seats refused it, and its
+retained blocks were addressed at a level the seats did not derive. The chain arm now takes the
+ruleset's ladder, as the tables do. Node policy; no rule moves.
+
 ## 4. What arming buys on testnet-11, measured
 
 **Less than its name.** The held map lifts the context ceiling; it does not lift the step ladder
@@ -139,7 +147,10 @@ regime armed at 7,000, the admission gate reads the dense lineage's held row (gr
 | 32,768 and 2^21 | refused before the gate: the canonical job alone is 67,161,216 leaves | admitted |
 
 So on testnet-11 the regime delivers its courts and its objects, and a held class up to about 512
-positions — not the 2^21 ADR-0116 widened the history for. This corrects the report of
+positions that produces attempts and canonical claims — not the 2^21 ADR-0116 widened the history
+for. A held class's USER prompts have no executor path there yet either: the chain refuses a
+PublicDa carrier of its Merkle-committed ids (Decision 5), and the fp worker executes PublicDa jobs
+only (`precheck_request_v1`), so the gateway has nothing to hand a PanelDa job to. This corrects the report of
 2026-09-11, which said the 2^21 bound "changes nothing until the regime is armed" as if arming
 were the only step. What would make 2^21 real there is the same move this ADR makes for the prompt
 form, made for the ladder and the prompt cap: a held class exists only past the fence, where no
@@ -193,6 +204,20 @@ binds a held class. That is §7's first question, not a decision taken here.
   its own registration, but that is a claim to prove, not assume) or a held bit in the class state.
   It is the next ADR if the operator wants 2^21 on testnet-11 rather than on a network minted with
   the regime.
+* **The other walls between a held class and 2^21**, found by the same survey (2026-09-12). Each is
+  a bound a network minted with the regime meets as well, because ADR-0110's vectors run the
+  stages in process at a tiny geometry and never reached them:
+  - the transaction door's structural work-leaves cap, `PALW_FP_STRUCTURAL_WORK_LEAVES_CAP = 2^32`
+    — with no class, no state and no height, and failing it invalidates the block — against about
+    `2^38` leaves for the dense 1.5B row at 2^21 positions;
+  - the worker's result frame (256 KiB), which carries the prompt ids whole: about 60,000 ids;
+  - the fp worker's PublicDa-only precheck, above;
+  - the held dissection opens its bisection ladder at the ladder's size, and `PalwBisectLadderV1`
+    refuses a space past `2^40`, so at the held mint's `2^48` a fused held leaf is not prosecutable;
+  - the fused dissection's bottom and root claim open rows under the structural
+    `PALW_STEP_MAX_LEAVES` (`2^22`), not the ruleset's ladder — a bound testnet-11's own fused rows
+    meet today, since the court's ladder there is `2^26` (reported to the deep-audit session, whose
+    court findings ride 7,000; not decided here).
 * **testnet-11's height.** The operator's. The proposal is the deep-audit flag day, riding its
   release.
 * **The dense-court fences on testnet-11.** `palw_fused_dissectable` and `palw_attn_anchored_root`
@@ -219,6 +244,7 @@ and every local branch were listed: none holds 0118 or later. **The next free nu
 | **4** the tile | `palw_held_da_v1::palw_held_da_check_accusation_v1`; `PalwTransitionExtrasV1::prompt_ids_merkle` for the fold | I-3 |
 | **5** the carriers | `privacy_mode_for_request`, `ChainFacts::public_ids_cannot_ride`; `palw_fp_sign_gate::signable_claim_id` | I-5 |
 | **6** the flag day | `PALW_RC_HELD_FENCE_DAA`, `palw_arm_held_regime_at_v1`, `palw_rc_base_params` | I-1, I-6 |
+| **7** the chain arm's ladder | `PalwClassSdk::resolve_chain_registered` | `the_chain_arm_applies_the_rulesets_ladder_like_every_lineage` |
 
 The suites, on the branch's head: the whole workspace under nextest, 4,665 tests, all passing —
 with the AC-SLOT fixture generated first (`AC_SLOT_FIXTURE`, which CI does not set yet; two tests of
