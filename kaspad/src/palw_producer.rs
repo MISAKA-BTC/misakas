@@ -196,6 +196,27 @@ pub(crate) fn palw_retained_answer_path(dir: &std::path::Path, claim: &Hash64) -
     dir.join(format!("{claim}{PALW_RETAINED_ANSWER_SUFFIX}"))
 }
 
+/// **Does the chain still hold `claim` as a free-prompt claim someone may yet ask this node
+/// about?** The retention prune's exception (see `rebroadcast_retained`): read off the claim
+/// state at the tip, so a claim the chain has resolved — or never held — is not kept.
+fn free_prompt_claim_still_owed(session: &kaspa_consensusmanager::ConsensusProxy, claim: Hash64) -> bool {
+    session.palw_derived_artifacts_v1(claim).is_some_and(|(state, _, _)| free_prompt_retention_is_owed(&state.source, &state.phase))
+}
+
+/// The phase half of [`free_prompt_claim_still_owed`], separated so it can be pinned without a
+/// consensus instance. Owed while a seat, a redrawn seat, a challenger or an accuser can still ask
+/// for an opening; not once the claim is `Final` (nothing can open a challenge on it any more) or
+/// `Voided` (there is nothing left to defend). An attempt claim is never "owed" here — its seats
+/// replay the anchor's job instead (ADR-0084 Decision 7) and it keeps the wall-clock horizon.
+fn free_prompt_retention_is_owed(
+    source: &kaspa_consensus_core::palw_state_v2::PalwClaimSourceV2,
+    phase: &kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2,
+) -> bool {
+    use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2 as P, PalwClaimSourceV2 as S};
+    matches!(source, S::FreePrompt { .. })
+        && matches!(phase, P::Provisional | P::PanelBound { .. } | P::ReceiptLicensed { .. } | P::DefaultDisputed { .. })
+}
+
 impl PalwProducerService {
     pub fn new(
         config: PalwProducerConfig,
@@ -355,6 +376,7 @@ impl PalwProducerService {
     async fn rebroadcast_retained(&self) {
         let Ok(entries) = std::fs::read_dir(&self.config.retention_dir) else { return };
         let now = std::time::SystemTime::now();
+        let session = self.consensus_manager.consensus().unguarded_session();
         for entry in entries.flatten() {
             let path = entry.path();
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
@@ -376,6 +398,25 @@ impl PalwProducerService {
                 .map(|age| age < std::time::Duration::from_secs(48 * 3600))
                 .unwrap_or(false);
             if !fresh {
+                // **A free-prompt claim the chain still holds live is kept, whatever its age.** The
+                // 48 h horizon is a wall-clock reading of windows that are DAA counts: bind +
+                // receipt is 1,200 DAA, ~40 h only at the frozen 120 s cadence, and testnet-11 has
+                // run at a fraction of that cadence — so the horizon deleted captures of claims
+                // still in their receipt window, or licensed and inside their challenge window. For a
+                // free-prompt claim that is the one copy anywhere: graph-v5 captures are over the
+                // transport cap, so only the executor can open an interval, and a seat or a court
+                // that asks after the delete gets "not held" — a void at best, and an unanswerable
+                // challenge at worst. So the chain decides, not the clock: kept while the claim is
+                // provisional, bound, licensed or under a data-availability accusation; pruned
+                // once it is final or void, or unknown to the chain (never mined, or dropped).
+                //
+                // Attempt claims keep the clock: their seats license by replaying the anchor's job
+                // (ADR-0084 Decision 7) rather than from these bytes, and a graph-v5 attempt
+                // capture is ~0.8 GB per block, which a chain-long horizon would put on the
+                // consensus volume.
+                if free_prompt_claim_still_owed(&session, claim) {
+                    continue;
+                }
                 // **Past the horizon it is not just un-broadcast, it is deleted** (audit M2-22).
                 // Retention grew monotonically on the consensus volume — the same volume RocksDB
                 // is on — because nothing ever removed a file. The obligation ends with the
@@ -428,6 +469,11 @@ impl PalwProducerService {
         let mut draws_reported_at: Option<std::time::Instant> = None;
         // Where the bucket walk stands on the template last drawn against — see `produce_one`.
         let mut cursor: Option<(Hash64, u64)> = None;
+        // The last receipt-lane failure printed, and when — the same once-per-change-then-every-
+        // five-minutes rule as the holds. The receipt lane is now tried while the attempt lane
+        // holds, on that branch's 5 s cadence, so an unchanging failure must not repeat per tick.
+        let mut last_receipt_err: Option<String> = None;
+        let mut last_receipt_err_at: Option<std::time::Instant> = None;
         loop {
             if !self.tick(std::time::Duration::from_millis(200)).await {
                 break;
@@ -493,6 +539,38 @@ impl PalwProducerService {
                 }
                 continue;
             };
+            // **The receipt lane, first — and ahead of the attempt lane's readiness.** A certified
+            // free-prompt claim whose quantum wins its draw is a receipt block waiting to be mined,
+            // and it needs no nonce search — the quantum ticket is the lottery, already decided at
+            // the claim's beacon. So it is cheaper than an attempt and, unlike one, it turns a claim
+            // over into weight. Tried before the attempt for both reasons.
+            //
+            // It used to be tried only once `ready_to_produce` passed, so a bond whose ATTEMPT lane
+            // held — the exposure ceiling full, or the attempt class's epoch budget spent — never
+            // spent its quanta either. Neither hold is about a receipt (it opens no claim and draws
+            // on no attempt budget: `ready_to_spend_receipts`), and a winning quantum is spendable
+            // only inside its use window, so the hold did not delay a free-prompt executor's pay, it
+            // forfeited it. The bond that fills its ceiling is exactly the one committing
+            // free-prompt claims.
+            if facts.ready_to_spend_receipts(&self.verification_key()).is_ok() {
+                match self.produce_receipt(&session, network_domain, bond, miner_data.clone()).await {
+                    Ok(Some(hash)) => {
+                        produced += 1;
+                        info!("[{PALW_PRODUCER}] produced RECEIPT block #{produced} {hash} (a certified free-prompt claim, mined)");
+                        last_receipt_err = None;
+                        continue;
+                    }
+                    Ok(None) => {} // No winning quantum right now; fall through to an attempt.
+                    Err(err) => {
+                        let stale = last_receipt_err_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
+                        if last_receipt_err.as_deref() != Some(err.as_str()) || stale {
+                            warn!("[{PALW_PRODUCER}] receipt: {err}");
+                            last_receipt_err = Some(err);
+                            last_receipt_err_at = Some(std::time::Instant::now());
+                        }
+                    }
+                }
+            }
             if let Err(why) = facts.ready_to_produce(&self.verification_key()) {
                 // **The reason alone is not a diagnosis.** "this class's epoch budget is already
                 // spent" is what a class that exhausted its cap says AND what a class that was
@@ -529,20 +607,6 @@ impl PalwProducerService {
             // suppressed as a repeat of one the node has since recovered from.
             last_hold = None;
             last_hold_at = None;
-            // **The receipt lane, first.** A certified free-prompt claim whose quantum wins its
-            // draw is a receipt block waiting to be mined, and it needs no nonce search — the
-            // quantum ticket is the lottery, already decided at the claim's beacon. So it is
-            // cheaper than an attempt and, unlike one, it turns a claim over into weight. Tried
-            // before the attempt for both reasons.
-            match self.produce_receipt(&session, network_domain, bond, miner_data.clone()).await {
-                Ok(Some(hash)) => {
-                    produced += 1;
-                    info!("[{PALW_PRODUCER}] produced RECEIPT block #{produced} {hash} (a certified free-prompt claim, mined)");
-                    continue;
-                }
-                Ok(None) => {} // No winning quantum right now; fall through to an attempt.
-                Err(err) => warn!("[{PALW_PRODUCER}] receipt: {err}"),
-            }
             match self.produce_one(&session, &facts, network_domain, bond, miner_data.clone(), &mut cursor).await {
                 Ok(Some(hash)) => {
                     draws += 1;
@@ -602,7 +666,14 @@ impl PalwProducerService {
     ) -> Result<Option<kaspa_consensus_core::BlockHash>, String> {
         let seed = self.key_seed.ok_or("no signing key")?;
         let spendable = session.palw_fp_spendable_v3(bond);
-        let Some(win) = spendable.into_iter().find(|q| q.wins) else {
+        // A win licenses a block only inside its use window (invariant F14), and the spendable
+        // list does not filter on it — a quantum whose window closed stays in the list, unspent,
+        // forever. Picking one built a template, signed it and had the chain refuse it on every
+        // pass, and this lane now runs on every pass the attempt lane holds, too. So a win is
+        // taken only while the next block could still carry it: a template carries the virtual's
+        // DAA score, which is the one the window is checked against.
+        let next_daa = session.get_virtual_daa_score();
+        let Some(win) = spendable.into_iter().find(|q| q.wins && next_daa <= q.spend_deadline_daa) else {
             return Ok(None);
         };
 
@@ -957,6 +1028,29 @@ mod attempt_lane_tests {
         // The receipt lane is a different producer path (`produce_one_receipt`), so this one must
         // not claim it.
         assert!(!template_declares_an_attempt_lane(POW_ALGO_ID_PALW_RECEIPT_V3));
+    }
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::free_prompt_retention_is_owed;
+    use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2 as P, PalwClaimSourceV2 as S, PalwVoidReasonV2 as R};
+
+    /// **A live free-prompt claim's capture outlives the wall-clock horizon; nothing else does.**
+    /// Every phase in which a seat, a redrawn panel, a challenger or an accuser can still ask the
+    /// executor for an opening keeps the file; `Final` and every void release it; an attempt claim
+    /// is never kept past the horizon by this rule, whatever its phase.
+    #[test]
+    fn a_live_free_prompt_claim_keeps_its_capture_and_nothing_else_does() {
+        let fp = S::FreePrompt { quanta: 8, spent: Default::default() };
+        for live in [P::Provisional, P::PanelBound { bound_daa: 10 }, P::ReceiptLicensed { licensed_daa: 20 }] {
+            assert!(free_prompt_retention_is_owed(&fp, &live), "{live:?} can still be asked about");
+            assert!(!free_prompt_retention_is_owed(&S::Attempt, &live), "an attempt claim keeps the clock");
+        }
+        assert!(!free_prompt_retention_is_owed(&fp, &P::Final { final_daa: 30 }));
+        for reason in [R::BindTimeout, R::ReceiptTimeout, R::CourtFraud, R::ProducerWithholding] {
+            assert!(!free_prompt_retention_is_owed(&fp, &P::Voided { voided_daa: 40, reason }));
+        }
     }
 }
 
