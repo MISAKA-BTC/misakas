@@ -498,6 +498,20 @@ impl PalwExecutionBackendV1 for Base0Backend {
         if claim.anchor != Hash64::default() && decoded.0.job_context.job_id != claim.anchor {
             return PalwMaterialVerdictV1::Mismatch;
         }
+        // **The whole job, not only its id** (ADR-0117): an attempt claim's material must
+        // answer the job the block asked for — `palw_attempt_job_v1` of the anchor's canonical
+        // job at the block's own draw rule. The id alone let a smaller job through: decode calls
+        // skipped, or a prompt of another length, vouched for by every seat that held it.
+        if let Some(prefill_draw) = claim.attempt_draw
+            && claim.anchor != Hash64::default()
+        {
+            let Ok((canonical, _)) = self.job_for_anchor(claim.anchor) else {
+                return PalwMaterialVerdictV1::Unverifiable;
+            };
+            if decoded.0.job_context != kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(canonical, prefill_draw) {
+                return PalwMaterialVerdictV1::Mismatch;
+            }
+        }
         match base0_material_matches_claim_capped_v1(&decoded, claim.execution_root, claim.trace_root, self.step_ladder_cap) {
             Ok(true) => PalwMaterialVerdictV1::Matches,
             Ok(false) => PalwMaterialVerdictV1::Mismatch,
@@ -1177,8 +1191,12 @@ mod tests {
         assert!(!outcome.material.is_empty(), "a producer that retained nothing could not answer a challenge");
 
         // The seat's half, against the roots this very run committed.
-        let claim =
-            PalwClaimRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, anchor: Hash64::default() };
+        let claim = PalwClaimRootsV1 {
+            execution_root: outcome.execution_root,
+            trace_root: outcome.trace_root,
+            anchor: Hash64::default(),
+            attempt_draw: None,
+        };
         assert_eq!(backend.verify_material(&outcome.material, claim), PalwMaterialVerdictV1::Matches);
     }
 
@@ -1271,6 +1289,51 @@ mod tests {
         assert_ne!(honest_after, lying_after, "and including it, they differ — which is what makes the rung informative");
     }
 
+    /// **ADR-0117: a held material answers the WHOLE job its attempt block asked for.** Before the
+    /// fence that is the canonical job; past it, the canonical job without its decode calls — and
+    /// each is a `Mismatch` against the other's claim. The id alone was the check before, so a
+    /// producer that skipped its decode calls (or ran a prompt of another length under the same
+    /// id) was vouched for by every seat that held its material; the claim now says which job the
+    /// block asked for, and a seat that knows no block (`None`) keeps the id check it had.
+    #[test]
+    fn a_held_material_answers_the_whole_job_its_block_asked_for() {
+        use kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1;
+        let backend = floor_backend();
+        let anchor = Hash64::from_u64_word(0x0117);
+        let (canonical, prompt) = backend.job_for_anchor(anchor).expect("the anchor implies a job");
+        assert!(canonical.exact_decode_tokens > 1, "the floor's canonical job has decode calls to skip");
+        let one_forward = palw_attempt_job_v1(canonical.clone(), true);
+        assert_eq!(one_forward.exact_decode_tokens, 1);
+        assert_eq!(palw_attempt_job_v1(canonical.clone(), false), canonical, "before the fence the job is untouched");
+        let roots = |o: &kaspa_consensus_core::palw_backend::PalwExecutionOutcomeV1, draw: Option<bool>| PalwClaimRootsV1 {
+            execution_root: o.execution_root,
+            trace_root: o.trace_root,
+            anchor,
+            attempt_draw: draw,
+        };
+        let full = backend.execute(&canonical, &prompt).expect("the canonical job runs");
+        let short = backend.execute(&one_forward, &prompt).expect("the one-forward job runs");
+        assert_ne!(full.execution_root, short.execution_root, "two jobs, two executions");
+        // Before the fence: the canonical job is the block's, the short one is not.
+        assert_eq!(backend.verify_material(&full.material, roots(&full, Some(false))), PalwMaterialVerdictV1::Matches);
+        assert_eq!(
+            backend.verify_material(&short.material, roots(&short, Some(false))),
+            PalwMaterialVerdictV1::Mismatch,
+            "a producer that skipped its decode calls before the fence is refused by a seat that holds its material"
+        );
+        // Past it: the other way round.
+        assert_eq!(backend.verify_material(&short.material, roots(&short, Some(true))), PalwMaterialVerdictV1::Matches);
+        assert_eq!(backend.verify_material(&full.material, roots(&full, Some(true))), PalwMaterialVerdictV1::Mismatch);
+        // A prompt of another length under the same id is not the block's job either.
+        let longer = PalwJobContextV2 { declared_prefill_tokens: canonical.declared_prefill_tokens + 1, ..canonical.clone() };
+        let mut longer_prompt = prompt.clone();
+        longer_prompt.push(prompt[0]);
+        let other = backend.execute(&longer, &longer_prompt).expect("the floor runs a longer prompt");
+        assert_eq!(backend.verify_material(&other.material, roots(&other, Some(false))), PalwMaterialVerdictV1::Mismatch);
+        // A seat with no block to read the rule from keeps the id check it had.
+        assert_eq!(backend.verify_material(&short.material, roots(&short, None)), PalwMaterialVerdictV1::Matches);
+    }
+
     /// **A capture answers a question, and the question has to be this block's.**
     ///
     /// The roots say the arithmetic is self-consistent. They do not say which job was run, so a
@@ -1290,7 +1353,8 @@ mod tests {
         let outcome = backend.execute(&job, &prompt).expect("the floor runs");
 
         // Its own block: roots and anchor both this run's.
-        let mine = PalwClaimRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, anchor };
+        let mine =
+            PalwClaimRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, anchor, attempt_draw: None };
         assert_eq!(backend.verify_material(&outcome.material, mine), PalwMaterialVerdictV1::Matches);
 
         // Somebody else's block, borrowing this run's roots. The roots are genuine and the
@@ -1428,8 +1492,12 @@ mod tests {
 
         // 2. And it is SELF-CONSISTENT: the liar's own material verifies against the liar's own
         //    claim, so no seat check refuses it and the claim licenses normally.
-        let its_own =
-            PalwClaimRootsV1 { execution_root: lying.execution_root, trace_root: lying.trace_root, anchor: Hash64::default() };
+        let its_own = PalwClaimRootsV1 {
+            execution_root: lying.execution_root,
+            trace_root: lying.trace_root,
+            anchor: Hash64::default(),
+            attempt_draw: None,
+        };
         assert_eq!(
             backend.verify_material(&lying.material, its_own),
             PalwMaterialVerdictV1::Matches,
@@ -1459,8 +1527,12 @@ mod tests {
         let backend = floor_backend();
         let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(7)).expect("job");
         let outcome = backend.execute(&job, &prompt).expect("runs");
-        let claim =
-            PalwClaimRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, anchor: Hash64::default() };
+        let claim = PalwClaimRootsV1 {
+            execution_root: outcome.execution_root,
+            trace_root: outcome.trace_root,
+            anchor: Hash64::default(),
+            attempt_draw: None,
+        };
 
         assert_eq!(backend.verify_material(b"not material at all", claim), PalwMaterialVerdictV1::Unverifiable);
         // Real material, a claim committing a DIFFERENT execution: the case a rubber stamp signs.
@@ -1514,6 +1586,7 @@ mod tests {
             execution_root: run.outcome.execution_root,
             trace_root: run.outcome.trace_root,
             anchor: fp_job_id_v3(&job),
+            attempt_draw: None,
         };
         assert_eq!(backend.verify_material(&capture, roots), PalwMaterialVerdictV1::Matches);
         let attempt_anchor = PalwClaimRootsV1 { anchor: Hash64::from_u64_word(0xA71E), ..roots };
@@ -1623,6 +1696,7 @@ mod tests {
             execution_root: commitment.execution_root,
             trace_root: commitment.trace_root,
             anchor: fp_job_id_v3(&job),
+            attempt_draw: None,
         };
         assert_eq!(backend.verify_material(&lying.outcome.material, roots), PalwMaterialVerdictV1::Matches);
 
@@ -1771,6 +1845,7 @@ mod tests {
             execution_root: run.outcome.execution_root,
             trace_root: run.outcome.trace_root,
             anchor: fp_job_id_v3(&job),
+            attempt_draw: None,
         };
         let build = |run: &kaspa_consensus_core::palw_backend::PalwFpRunV1, leaf: u64| {
             let work = backend.capture_shape(&run.outcome.material).expect("a shape").step_leaf_count;
@@ -1836,6 +1911,7 @@ mod tests {
                 execution_root: run.outcome.execution_root,
                 trace_root: run.outcome.trace_root,
                 anchor: fp_job_id_v3(&job),
+                attempt_draw: None,
             };
             let opening = backend.open_fp_interval(capture, 0, &ids).expect("interval 0 opens");
             let verdict = backend.verify_fp_interval_opening(&opening, roots, 0, &ids, work);
@@ -1963,6 +2039,7 @@ mod tests {
             // The FP lane's anchor is the job id the derivation produced, which is what a seat
             // reads off the accepted commitment.
             anchor: Hash64::default(),
+            attempt_draw: None,
         };
         let draw = palw_fp_interval_draw_v1(
             &job.network_domain,

@@ -1485,6 +1485,25 @@ pub struct Params {
     /// flat — a held class's ids never ride, and a flat digest cannot be opened one tile at a time.
     pub palw_held_context: Option<ForkActivation>,
 
+    /// **ADR-0117 — a draw is one forward.**
+    ///
+    /// Past this fence the attempt lane's job is the class's canonical job without its decode
+    /// calls: the same anchor-derived prompt and prefill, `exact_decode_tokens = 1`, so the one
+    /// generated token is chosen from the last prefill position's logits and the ticket — a
+    /// function of the attempt, whose trace root commits that logits row and that token (ADR-0072)
+    /// — is decided by one pass over the prompt (`palw_attempt_v2::palw_attempt_job_v1`, the ONE
+    /// spelling the producer that runs it and the seat that replays it both call). The class, its
+    /// id, its certification, its pwu and the free-prompt lane are unchanged: the canonical job is
+    /// still what a class is registered, drilled and priced by, and a prefill-only job is its
+    /// prefix, which every court already adjudicates.
+    ///
+    /// A bare fence, top level, `None` on every shipped preset, Some-only in the fingerprint, the
+    /// schedule id and the fork id. Nothing at block acceptance reads it — the job is enforced by
+    /// the seats that replay it (ADR-0084 Decision 7) — which is exactly why it must be a fence:
+    /// a seat on the old rule replays the two-token job, finds a root it did not compute, and
+    /// voids an honest claim, so the network must switch at one height.
+    pub palw_prefill_draw: Option<ForkActivation>,
+
     /// **ADR-0083 Decision 1 — the difficulty window counts only rows priced by `bits`.**
     ///
     /// Past this fence `calculate_difficulty_bits` sizes its expected duration by the rows in the
@@ -3078,6 +3097,10 @@ impl Params {
         if self.palw_held_context == Some(ForkActivation::never()) {
             self.palw_held_context = None;
         }
+        // ADR-0117, likewise.
+        if self.palw_prefill_draw == Some(ForkActivation::never()) {
+            self.palw_prefill_draw = None;
+        }
         // ADR-0083 Decision 1, the same shape: a bare fence, `never()` is absence.
         if self.palw_difficulty_priced_rows == Some(ForkActivation::never()) {
             self.palw_difficulty_priced_rows = None;
@@ -3498,6 +3521,21 @@ impl Params {
         self.palw_held_context_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
+    /// ADR-0117's fence, resolved: `Some` only on a `ConsensusV2` network that armed it. The ONE
+    /// place "is an attempt's job its class's canonical job without the decode calls" is decided.
+    pub fn palw_prefill_draw_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_prefill_draw) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    /// Is an attempt drawn at `daa_score` a one-forward draw (ADR-0117)? Asked with the attempt's
+    /// OWN block's DAA score, by the producer that builds it and the seat that replays it.
+    pub fn palw_prefill_draw_active_at(&self, daa_score: u64) -> bool {
+        self.palw_prefill_draw_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
     /// ADR-0081 Decision 3's fence with the mode condition already folded in — `Some` only on a
     /// `ConsensusV2` network that has armed it.
     pub fn palw_prompt_ids_merkle_fence(&self) -> Option<ForkActivation> {
@@ -3616,6 +3654,7 @@ impl Params {
             palw_shard_licensing,
             palw_token_lift,
             palw_held_context,
+            palw_prefill_draw,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -3667,6 +3706,7 @@ impl Params {
             ("palw_shard_licensing", *palw_shard_licensing),
             ("palw_token_lift", *palw_token_lift),
             ("palw_held_context", *palw_held_context),
+            ("palw_prefill_draw", *palw_prefill_draw),
             ("palw_difficulty_priced_rows", *palw_difficulty_priced_rows),
             ("palw_receipt_rows_unpriced", *palw_receipt_rows_unpriced),
             ("palw_attempt_header_pins", *palw_attempt_header_pins),
@@ -3843,6 +3883,11 @@ impl Params {
             h.write(b"palw_held_context");
             h.write(held.daa_score().to_le_bytes());
         }
+        // ADR-0117's fence, NAMED likewise: it changes which job every attempt past it runs.
+        if let Some(draw) = self.palw_prefill_draw {
+            h.write(b"palw_prefill_draw");
+            h.write(draw.daa_score().to_le_bytes());
+        }
         // ADR-0083 Decision 1's fence, NAMED for the same reason: it changes the bits every header
         // past it must carry, so an operator reading the schedule must see it.
         if let Some(priced) = self.palw_difficulty_priced_rows {
@@ -3989,6 +4034,7 @@ impl Params {
             palw_shard_licensing,
             palw_token_lift,
             palw_held_context,
+            palw_prefill_draw,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -4291,6 +4337,10 @@ impl Params {
         if let Some(activation) = palw_held_context.as_mut() {
             fork(activation, visit);
         }
+        // ADR-0117. Some-only, likewise.
+        if let Some(activation) = palw_prefill_draw.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0083 Decision 1. Some-only, likewise.
         if let Some(activation) = palw_difficulty_priced_rows.as_mut() {
             fork(activation, visit);
@@ -4536,6 +4586,7 @@ impl Params {
             palw_shard_licensing,
             palw_token_lift,
             palw_held_context,
+            palw_prefill_draw,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -4862,6 +4913,12 @@ impl Params {
         // to a build without the field, the map, the objects or the gate.
         if let Some(activation) = palw_held_context {
             h.write(b"palw_held_context");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0117, Some-only for the same reason: a dormant network fingerprints byte-identically
+        // to a build without the field.
+        if let Some(activation) = palw_prefill_draw {
+            h.write(b"palw_prefill_draw");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0083 Decision 1, Some-only for the same reason: arming it changes the `bits` every
@@ -5217,6 +5274,7 @@ impl Params {
             palw_shard_licensing: self.palw_shard_licensing,
             palw_token_lift: self.palw_token_lift,
             palw_held_context: self.palw_held_context,
+            palw_prefill_draw: self.palw_prefill_draw,
             palw_difficulty_priced_rows: self.palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced: self.palw_receipt_rows_unpriced,
             palw_attempt_header_pins: self.palw_attempt_header_pins,
@@ -6174,6 +6232,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_held_context: None,
+    palw_prefill_draw: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -6343,6 +6402,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_held_context: None,
+    palw_prefill_draw: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -6494,6 +6554,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_held_context: None,
+    palw_prefill_draw: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -10780,6 +10841,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_held_context: None,
+    palw_prefill_draw: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -12889,6 +12951,35 @@ mod consensus_params_id_tests {
         let mut legacy = MAINNET_PARAMS.clone();
         legacy.palw_held_context = Some(ForkActivation::always());
         assert_eq!(legacy.palw_held_context_fence(), None);
+    }
+
+    /// **ADR-0117: the one-forward draw is dormant on every preset, Some-only in the identity, and
+    /// read at the attempt's own height.** Armed, the fingerprint and the schedule say so; the
+    /// switch is exact at its height; `Some(never())` is absence; and outside `ConsensusV2` there
+    /// is no attempt lane for it to change.
+    #[test]
+    fn the_prefill_draw_fence_is_dormant_and_named_when_armed() {
+        for (name, shipped) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
+        {
+            assert!(shipped.palw_prefill_draw.is_none(), "{name} must leave ADR-0117 dormant");
+            assert!(!shipped.palw_prefill_draw_active_at(u64::MAX), "{name}");
+        }
+        let shipped = devnet_shipped_params();
+        assert!(shipped.palw_prefill_draw.is_none(), "the bundled devnet leaves it dormant too");
+        let mut visible = shipped.clone();
+        visible.palw_prefill_draw = Some(ForkActivation::new(9_000_000));
+        assert_ne!(visible.consensus_params_id(), shipped.consensus_params_id(), "armed, the fingerprint says so");
+        assert!(visible.fence_schedule_v1().contains(&9_000_000), "and the schedule names its height");
+        assert!(!visible.palw_prefill_draw_active_at(8_999_999), "before its height the draw is the canonical job");
+        assert!(visible.palw_prefill_draw_active_at(9_000_000), "at its height, one forward");
+        visible.validate_palw_v2().expect("a bare fence has no precondition");
+        let mut never = shipped.clone();
+        never.palw_prefill_draw = Some(ForkActivation::never());
+        never.validate_palw_v2().expect("Some(never()) is absence");
+        let mut legacy = MAINNET_PARAMS.clone();
+        legacy.palw_prefill_draw = Some(ForkActivation::always());
+        assert_eq!(legacy.palw_prefill_draw_fence(), None, "outside ConsensusV2 there is no attempt lane to change");
     }
 
     /// **The V2 pruning horizon IS the derivation, and the inherited floor never binds** — the

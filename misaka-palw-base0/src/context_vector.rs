@@ -875,7 +875,12 @@ pub fn palw_verify_context_vector_v1(
         }
     };
     let job_id = kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(&job);
-    let roots = PalwClaimRootsV1 { execution_root: run.outcome.execution_root, trace_root: run.outcome.trace_root, anchor: job_id };
+    let roots = PalwClaimRootsV1 {
+        execution_root: run.outcome.execution_root,
+        trace_root: run.outcome.trace_root,
+        anchor: job_id,
+        attempt_draw: None,
+    };
     let work_leaves = binding.step_leaf_count;
     let ctx = binding.job_context.clone();
     f.commit = Some(PalwContextCommitV1 {
@@ -1118,7 +1123,12 @@ fn tamper_stage_v1(
     let lying = backend.execute_with_injected_fault(ctx, prompt, leaf)?;
     let capture = &lying.material;
     let binding = crate::produce::base0_material_decode_any_v1(capture).map_err(|e| format!("{e:?}"))?.binding().clone();
-    let roots = PalwClaimRootsV1 { execution_root: lying.execution_root, trace_root: lying.trace_root, anchor: ctx.job_id };
+    let roots = PalwClaimRootsV1 {
+        execution_root: lying.execution_root,
+        trace_root: lying.trace_root,
+        anchor: ctx.job_id,
+        attempt_draw: None,
+    };
     let work_leaves = binding.step_leaf_count;
     let opening = backend.open_fp_interval(capture, 0, ids)?;
     let verdict = backend.verify_fp_interval_opening(&opening, roots, 0, ids, work_leaves);

@@ -1405,6 +1405,40 @@ impl PalwPanelService {
         backend.job_anchor_v1(network_domain, pre_pow, class_id, &executor_bond.0, nonce_bucket)
     }
 
+    /// **The job a claim's block asked for, and the prompt it implies** — [`Self::job_anchor_for_claim`]
+    /// through the family's `job_for_anchor`, then ADR-0117's rule at the block's OWN height
+    /// (`palw_attempt_job_v1`): past `palw_prefill_draw` an attempt's job is its class's canonical
+    /// job without the decode calls, which is what the producer ran. The one place a seat or a
+    /// challenger turns an attempt claim into the job it replays, so none of them can replay a
+    /// different job from the producer's and void an honest claim. The free-prompt lane never
+    /// comes here: its job is the claim's own.
+    #[allow(clippy::too_many_arguments)]
+    fn attempt_job_for_claim(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+        network_domain: Hash64,
+        accepted_block: Hash64,
+        class_id: Hash64,
+        executor_bond: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Option<(kaspa_consensus_core::palw_v2::PalwJobContextV2, Vec<usize>)> {
+        let anchor = self.job_anchor_for_claim(session, backend, network_domain, accepted_block, class_id, executor_bond)?;
+        let daa_score = session.palw_claim_block_header_v2(accepted_block)?.daa_score;
+        let (job, prompt) = backend.job_for_anchor(anchor).ok()?;
+        let prefill_draw = self.consensus_config.params.palw_prefill_draw_active_at(daa_score);
+        Some((kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(job, prefill_draw), prompt))
+    }
+
+    /// **Did an attempt claim's block draw with one forward** (ADR-0117) — the draw rule at the
+    /// block's OWN height, which the seat hands `verify_material` so a held material is checked
+    /// against the whole job the block asked for. `None` when the block is not in this node's
+    /// store; the material is then checked by its id alone, as before, and the caller's anchor —
+    /// read off the same header — is already the default that skips even that.
+    fn attempt_draw_for_claim(&self, session: &kaspa_consensusmanager::ConsensusProxy, accepted_block: Hash64) -> Option<bool> {
+        let daa_score = session.palw_claim_block_header_v2(accepted_block)?.daa_score;
+        Some(self.consensus_config.params.palw_prefill_draw_active_at(daa_score))
+    }
+
     /// Persist a foreign (gossiped) material under `retention/foreign/`, best-effort.
     ///
     /// Write-once per claim file; pruned by age on every write so the directory stays bounded
@@ -2491,7 +2525,7 @@ impl PalwPanelService {
                         let Ok(run) = run else { continue };
                         run.outcome
                     } else {
-                        let Some(anchor) = self.job_anchor_for_claim(
+                        let Some((job, prompt)) = self.attempt_job_for_claim(
                             &session,
                             backend.as_ref(),
                             network_domain,
@@ -2501,7 +2535,6 @@ impl PalwPanelService {
                         ) else {
                             continue;
                         };
-                        let Ok((job, prompt)) = backend.job_for_anchor(anchor) else { continue };
                         let Ok((_backend, run)) = offload(backend, move |b| b.execute(&job, &prompt)).await else { continue };
                         let Ok(run) = run else { continue };
                         run
@@ -2667,6 +2700,9 @@ impl PalwPanelService {
                 } else {
                     None
                 };
+                // An attempt's material answers the whole job its block asked for (ADR-0117); a
+                // free-prompt claim's job is its own.
+                let attempt_draw = if fp_job.is_some() { None } else { self.attempt_draw_for_claim(&session, duty.accepted_block) };
                 let anchor = match &fp_job {
                     Some(job) => kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(&job.job),
                     None => self
@@ -2680,7 +2716,8 @@ impl PalwPanelService {
                         )
                         .unwrap_or_default(),
                 };
-                let roots = PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root, anchor };
+                let roots =
+                    PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root, anchor, attempt_draw };
                 let pool_has_it = materials
                     .get(&duty.claim_id)
                     .map(|pool| {
@@ -2731,7 +2768,7 @@ impl PalwPanelService {
                             Some(ReplayWork::FreePrompt(job.job.clone(), job.prompt_token_ids.iter().map(|t| *t as usize).collect()))
                         }
                         None => self
-                            .job_anchor_for_claim(
+                            .attempt_job_for_claim(
                                 &session,
                                 backend.as_ref(),
                                 network_domain,
@@ -2739,7 +2776,6 @@ impl PalwPanelService {
                                 duty.class_id,
                                 &duty.executor_bond,
                             )
-                            .and_then(|anchor| backend.job_for_anchor(anchor).ok())
                             .map(|(job, prompt)| ReplayWork::Attempt(job, prompt)),
                     };
                     let rerun = match work {
@@ -3595,6 +3631,7 @@ impl PalwPanelService {
                                     execution_root: duty.execution_root,
                                     trace_root: duty.trace_root,
                                     anchor: kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(job),
+                                    attempt_draw: None,
                                 };
                                 if backend.verify_material(&payload.capture, roots) != PalwMaterialVerdictV1::Matches {
                                     continue;
@@ -3885,7 +3922,12 @@ impl PalwPanelService {
                             };
                             if backend.verify_material(
                                 bytes,
-                                PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root, anchor },
+                                PalwClaimRootsV1 {
+                                    execution_root: duty.execution_root,
+                                    trace_root: duty.trace_root,
+                                    anchor,
+                                    attempt_draw: self.attempt_draw_for_claim(&session, duty.accepted_block),
+                                },
                             ) == PalwMaterialVerdictV1::Matches
                             {
                                 // **Retained here, and only here**: the chain carries this claim, this
@@ -3915,7 +3957,12 @@ impl PalwPanelService {
                             )
                             && backend.verify_material(
                                 &bytes,
-                                PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root, anchor },
+                                PalwClaimRootsV1 {
+                                    execution_root: duty.execution_root,
+                                    trace_root: duty.trace_root,
+                                    anchor,
+                                    attempt_draw: self.attempt_draw_for_claim(&session, duty.accepted_block),
+                                },
                             ) == PalwMaterialVerdictV1::Matches
                         {
                             pool_admit_material_v1(
@@ -3941,7 +3988,7 @@ impl PalwPanelService {
                     // exactly as before.
                     if !duty.free_prompt
                         && let Ok(resolved) = self.resolve_backend(&session, duty.class_id, duty.artifact_root)
-                        && let Some(anchor) = self.job_anchor_for_claim(
+                        && let Some((ctx, prompt)) = self.attempt_job_for_claim(
                             &session,
                             resolved.as_ref(),
                             network_domain,
@@ -3949,7 +3996,6 @@ impl PalwPanelService {
                             duty.class_id,
                             &duty.executor_bond,
                         )
-                        && let Ok((ctx, prompt)) = resolved.job_for_anchor(anchor)
                     {
                         // **ADR-0084 Decision 7 — the verdict by execution.** No material of this
                         // claim's is held and, past the grace a push needs, none is coming: the seat
@@ -4006,6 +4052,8 @@ impl PalwPanelService {
                         };
                         let prompt_ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
                         let held = materials.get(&duty.claim_id).map(|v| v.to_vec()).unwrap_or_default();
+                        // The job's id IS the block's anchor: `job_for_anchor` names it so.
+                        let anchor = ctx.job_id;
                         if let Some(output_ids) =
                             self.attempt_committed_output_ids_v1(resolved.as_ref(), duty, &ctx, anchor, &prompt_ids, &held)
                             && let Some(verdict) = self
@@ -5520,7 +5568,7 @@ impl PalwPanelService {
             }
             return None;
         };
-        let roots = PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root, anchor };
+        let roots = PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root, anchor, attempt_draw: None };
         // **The bound is the CLASS's, in the class's own cadence unit** (audit B, C-2). A
         // checkpoint leaf's `covered_decode_call` counts decode calls on a per-call class and
         // cache POSITIONS on a per-position one, and the two differ by the prefill — so a panel
@@ -5803,8 +5851,12 @@ impl PalwPanelService {
         let (backend, payload) = self.retained_fp_capture_v1(session, claim)?;
         let job = &payload.material.job;
         let (execution_root, trace_root, work_leaves) = session.palw_claim_roots_v2(claim).ok_or("the chain holds no such claim")?;
-        let roots =
-            PalwClaimRootsV1 { execution_root, trace_root, anchor: kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(job) };
+        let roots = PalwClaimRootsV1 {
+            execution_root,
+            trace_root,
+            anchor: kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(job),
+            attempt_draw: None,
+        };
         kaspa_consensus_core::palw_leaf_evidence_v1::palw_leaf_evidence_from_capture_v1(
             backend.as_ref(),
             &payload.capture,

@@ -1348,6 +1348,20 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             if claim.anchor != Hash64::default() && decoded.0.job_context.job_id != claim.anchor {
                 return PalwMaterialVerdictV1::Mismatch;
             }
+            // **The whole job, not only its id** (ADR-0117): an attempt claim's material must
+            // answer the job the block asked for — `palw_attempt_job_v1` of the anchor's canonical
+            // job at the block's own draw rule. The id alone let a smaller job through: decode calls
+            // skipped, or a prompt of another length, vouched for by every seat that held it.
+            if let Some(prefill_draw) = claim.attempt_draw
+                && claim.anchor != Hash64::default()
+            {
+                let Ok((canonical, _)) = self.job_for_anchor(claim.anchor) else {
+                    return PalwMaterialVerdictV1::Unverifiable;
+                };
+                if decoded.0.job_context != kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(canonical, prefill_draw) {
+                    return PalwMaterialVerdictV1::Mismatch;
+                }
+            }
             // A capture for some OTHER class of this family is not this backend's to vouch for.
             if decoded.0.shape_profile.shape_profile_id() != self.class_profile_id {
                 return PalwMaterialVerdictV1::Unverifiable;
@@ -1376,6 +1390,8 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         let Ok((job, _)) = self.job_for_anchor(claim.anchor) else {
             return PalwMaterialVerdictV1::Unverifiable;
         };
+        // The legacy composite is recomputed under the job the block asked for, ADR-0117's rule included.
+        let job = kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(job, claim.attempt_draw.unwrap_or(false));
         // Material that does not carry the rows it selected from is material this seat cannot
         // check — the honest `Unverifiable`, not an accusation, and not a panic.
         let Some((trace_root, _, execution_root, _)) = qwen25_a16_roots_v1(&job, self.shape_id, &run) else {
@@ -2358,6 +2374,7 @@ mod free_prompt_tests {
             execution_root: outcome.execution_root,
             trace_root: outcome.trace_root,
             anchor: Hash64::from_u64_word(0xA16C0117),
+            attempt_draw: None,
         };
         assert_eq!(
             backend.verify_material(&outcome.material, claim),
@@ -2562,6 +2579,7 @@ mod free_prompt_tests {
                     execution_root: outcome.execution_root,
                     trace_root: outcome.trace_root,
                     anchor: Hash64::from_u64_word(0xE95),
+                    attempt_draw: None,
                 }
             ),
             kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1::Matches
@@ -2673,7 +2691,12 @@ mod free_prompt_tests {
             .expect("the capture has an interval geometry")
             .interval_count;
         assert!(count >= 2, "a one-interval job cannot show that a replayed anchor is the committed one");
-        let claim = PalwClaimRootsV1 { execution_root: dense.execution_root, trace_root: dense.trace_root, anchor: ctx.job_id };
+        let claim = PalwClaimRootsV1 {
+            execution_root: dense.execution_root,
+            trace_root: dense.trace_root,
+            anchor: ctx.job_id,
+            attempt_draw: None,
+        };
         let geometry = crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_v1(&dense.binding, interval).expect("a geometry");
         for index in 0..count {
             // ADR-0086 Decision 2: the anchor is named; the seat holds the state it recomputed.
@@ -3311,8 +3334,12 @@ mod free_prompt_tests {
         assert_eq!(backend.fp_interval_of_leaf_v1(&job, leaf), Some(0), "the leaf is interval 0's");
 
         let close_of = |outcome: &PalwExecutionOutcomeV1, with_block: bool| {
-            let claim =
-                PalwClaimRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, anchor: job.job_id };
+            let claim = PalwClaimRootsV1 {
+                execution_root: outcome.execution_root,
+                trace_root: outcome.trace_root,
+                anchor: job.job_id,
+                attempt_draw: None,
+            };
             let annexed = backend.open_fp_interval_with_close(&outcome.material, 0, &ids, &[leaf]).expect("the annex");
             let generated = backend.fp_committed_output_ids(&outcome.material).expect("the answer's ids");
             let mut held = vec![(0u32, annexed)];
@@ -3373,6 +3400,7 @@ mod free_prompt_tests {
             execution_root: o.execution_root,
             trace_root: o.trace_root,
             anchor: job.job_id,
+            attempt_draw: None,
         };
         let leaves = crate::produce::base0_material_decode_any_v1(&honest.material).expect("decodes").binding().step_leaf_count;
         let opened = backend.open_fp_interval(&honest.material, 0, &ids).expect("interval 0 opens");

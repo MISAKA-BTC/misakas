@@ -4334,6 +4334,7 @@ mod tests {
             execution_root: run.execution_root,
             trace_root: run.trace_root,
             anchor: run.binding.job_context.job_id,
+            attempt_draw: None,
         };
         let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
         let material: Base0RetainedMaterialV1 = (
@@ -4657,6 +4658,7 @@ mod tests {
             execution_root: binding.committed_execution_root,
             trace_root: binding.full_logits_trace_root,
             anchor: ctx.job_id,
+            attempt_draw: None,
         };
         let leaf_count = binding.step_leaf_count;
         material.0 = binding;
@@ -5094,6 +5096,7 @@ mod tests {
             execution_root: lying.committed_execution_root,
             trace_root: lying.full_logits_trace_root,
             anchor: lying.job_context.job_id,
+            attempt_draw: None,
         };
         let material: Base0RetainedMaterialV1 = (lying, honest.1.clone(), honest.2.clone(), honest.3.clone(), chunks);
         let opening = base0_open_fp_interval_chunkless_v1(
@@ -5628,7 +5631,12 @@ mod tests {
             )
             .ok()
         };
-        let claim = PalwClaimRootsV1 { execution_root: run.execution_root, trace_root: run.trace_root, anchor: ctx.job_id };
+        let claim = PalwClaimRootsV1 {
+            execution_root: run.execution_root,
+            trace_root: run.trace_root,
+            anchor: ctx.job_id,
+            attempt_draw: None,
+        };
         let kernels = crate::qwen25_a16_backend::a16_interval_kernels_for_tests_v1(&artifact, Some(&plan));
         for index in 1..geometry.interval_count {
             let covered = geometry.anchor_covered_call(index).expect("an anchored interval");
@@ -5962,7 +5970,12 @@ mod tests {
         let geometry = Base0FpIntervalGeometryV1::from_binding_v1(&run.binding, interval).expect("a geometry");
         assert!(geometry.interval_count >= 2, "a one-interval job proves nothing about an anchor");
 
-        let claim = PalwClaimRootsV1 { execution_root: run.execution_root, trace_root: run.trace_root, anchor: ctx.job_id };
+        let claim = PalwClaimRootsV1 {
+            execution_root: run.execution_root,
+            trace_root: run.trace_root,
+            anchor: ctx.job_id,
+            attempt_draw: None,
+        };
         let kernels = crate::qwen25_a16_backend::a16_interval_kernels_for_tests_v1(&artifact, Some(&plan));
         for index in 0..geometry.interval_count {
             let opened = base0_open_fp_interval_sparse_v1(&material, index, &ids, interval, &kernels, form)
@@ -6173,6 +6186,7 @@ mod tests {
             execution_root: run.execution_root,
             trace_root: run.trace_root,
             anchor: run.binding.job_context.job_id,
+            attempt_draw: None,
         };
         let material: Base0RetainedMaterialV1 = (
             run.binding.clone(),
@@ -6392,6 +6406,7 @@ mod tests {
             execution_root: run.execution_root,
             trace_root: run.trace_root,
             anchor: run.binding.job_context.job_id,
+            attempt_draw: None,
         };
         let material: Base0RetainedMaterialV1 = (
             run.binding.clone(),
@@ -6749,7 +6764,12 @@ mod the_rulesets_ladder {
         let wide = COURT_MAX_STEP_LEAVES;
         let geometry = Base0FpIntervalGeometryV1::from_binding_capped_v1(&material.binding, interval, wide).expect("a geometry");
         assert!(geometry.interval_count >= 3, "the fixture has intervals past the first: {}", geometry.interval_count);
-        let claim = PalwClaimRootsV1 { execution_root: run.execution_root, trace_root: run.trace_root, anchor: ctx.job_id };
+        let claim = PalwClaimRootsV1 {
+            execution_root: run.execution_root,
+            trace_root: run.trace_root,
+            anchor: ctx.job_id,
+            attempt_draw: None,
+        };
         let consulted = std::cell::Cell::new(0u32);
         let anchor_state_for = |covered: u32| {
             consulted.set(consulted.get() + 1);
@@ -6852,7 +6872,12 @@ mod the_rulesets_ladder {
         let plan = engine.plan_from_profile(&profile).expect("the plan");
         let kernels = crate::qwen25_a16_backend::a16_interval_kernels_for_tests_v1(&artifact, Some(&plan));
         let interval = PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1;
-        let claim = PalwClaimRootsV1 { execution_root: run.execution_root, trace_root: run.trace_root, anchor: ctx.job_id };
+        let claim = PalwClaimRootsV1 {
+            execution_root: run.execution_root,
+            trace_root: run.trace_root,
+            anchor: ctx.job_id,
+            attempt_draw: None,
+        };
 
         let leaves = run.binding.step_leaf_count;
         let wide = COURT_MAX_STEP_LEAVES;

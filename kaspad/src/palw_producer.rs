@@ -777,6 +777,13 @@ impl PalwProducerService {
         // function no longer knows which family it is producing for, which is what lets a second
         // one exist. Which backend it is, is the CHAIN's answer (`facts.terms.family`).
         let (job, prompt) = backend.job_for_anchor(anchor).map_err(|e| format!("the job this template implies: {e}"))?;
+        // **ADR-0117: past the fence the draw is one forward** — the canonical job without its
+        // decode calls, read at THIS block's height through the one spelling the seats replay it
+        // with (`palw_attempt_job_v1`).
+        let job = kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(
+            job,
+            self.consensus_config.params.palw_prefill_draw_active_at(template.block.header.daa_score),
+        );
         // **Off the async worker.** The inference and the nonce grind are pure CPU with no await in
         // them, and they ran inline on the shared `AsyncRuntime` — pinning one tokio worker thread.
         // Trivial at genesis difficulty and not trivial at all once the retarget pulls the search

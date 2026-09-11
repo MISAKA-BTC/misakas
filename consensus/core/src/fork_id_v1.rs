@@ -597,6 +597,7 @@ mod tests {
             "palw_shard_licensing" => params.palw_shard_licensing = Some(at),
             "palw_token_lift" => params.palw_token_lift = Some(at),
             "palw_held_context" => params.palw_held_context = Some(at),
+            "palw_prefill_draw" => params.palw_prefill_draw = Some(at),
             "palw_difficulty_priced_rows" => params.palw_difficulty_priced_rows = Some(at),
             "palw_receipt_rows_unpriced" => params.palw_receipt_rows_unpriced = Some(at),
             "palw_attempt_header_pins" => params.palw_attempt_header_pins = Some(at),
