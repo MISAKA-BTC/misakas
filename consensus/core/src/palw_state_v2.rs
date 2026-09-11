@@ -26003,6 +26003,45 @@ pub(crate) mod tests {
             assert!(matches!(err, PalwStateV2Error::DissectionAlreadyOpen(id) if id == sid), "{err}");
         }
 
+        /// **AC-SLOT reproduction: the fused-terminal court, emitted for the processor-level test.**
+        ///
+        /// The acceptance filter that charges `PALW_COURT_CLOSE_MAX_PER_BLOCK` lives in the
+        /// `consensus` crate and this drill is `#[cfg(test)]` in this one, so the drill cannot be
+        /// reached from there directly. This test builds the drill's court at the fused leaf, pins
+        /// the three fold-level facts the finding rests on, and — when `AC_SLOT_FIXTURE` names a
+        /// path — writes `(carriage, params, honest root claim, session, next daa)` there for
+        /// `consensus/src/pipeline/virtual_processor/tests.rs::ac_slot_*` to load.
+        #[test]
+        fn ac_slot_emit_the_fused_terminal_fixture() {
+            let p = params_with_ladder();
+            let drill = Drill::new(false);
+            let (state, _claim_id, sid, daa) = court_at_the_fused_leaf(&p, &drill);
+            let honest = root_claimed(sid, &drill, 2);
+            // (1) The honest root claim is a move the fold plays: it opens the phase.
+            let (opened, _) = apply(&state, &p, &ctx(daa, daa, daa), std::slice::from_ref(&honest), None);
+            assert!(opened.court_session(&sid).unwrap().dissection.is_some(), "the honest root claim opens the phase");
+            // (2) A copy with the SAME session, root, arity and signature but a foreign binding —
+            // everything the root-claim signature does not cover — still satisfies the slot
+            // predicate the acceptance filter counts on ...
+            let mut junk = honest.clone();
+            if let PalwConsensusObjectV2::CourtAttnRootClaimed { binding, .. } = &mut junk {
+                binding.step_merkle_root = h64(0x0BAD_B1D);
+            }
+            assert!(palw_court_move_spends_the_slot_v1(&state, &junk), "the junk copy satisfies the slot predicate");
+            // (3) ... and the fold refuses it.
+            let err = apply_palw_transition_v2(&state, &p, &ctx(daa, daa, daa), &[junk], None)
+                .expect_err("a root claim over a foreign binding is not a move the fold plays");
+            assert!(matches!(err, PalwStateV2Error::DissectionRefused(id, _) if id == sid), "{err}");
+            if let Ok(path) = std::env::var("AC_SLOT_FIXTURE") {
+                // The carriage is length-delimited: its own decoder refuses any tail after it.
+                let carriage = borsh::to_vec(&PalwStateCarriageV2::from_state(&state)).expect("the carriage serializes");
+                let bytes = borsh::to_vec(&(carriage, p.clone(), honest, sid, daa))
+                    .expect("the fixture serializes");
+                std::fs::write(&path, bytes).expect("the fixture is written");
+                eprintln!("AC-SLOT fixture written to {path}");
+            }
+        }
+
         /// What a ladder's next disclosure must name — the pinned midpoint of its live interval.
         pub(crate) fn ladder_midpoint(ladder: &crate::palw_bisect::PalwBisectLadderV1) -> Option<u64> {
             (ladder.turn() == PalwBisectTurnV1::AwaitDisclosure).then(|| {
