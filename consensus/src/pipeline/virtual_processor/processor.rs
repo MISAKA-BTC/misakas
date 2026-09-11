@@ -1917,6 +1917,17 @@ impl VirtualStateProcessor {
                                             kaspa_consensus_core::palw_state_v2::PalwMergedWorkV1 {
                                                 carrying_block: *blue,
                                                 work: kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::Attempt(envelope),
+                                                // B-4: the execution key from the merged blue's OWN header (pre_pow +
+                                                // nonce). A header the store cannot serve degrades to the attempt id — a
+                                                // unique value that never false-dedups — but a mergeset blue always has one.
+                                                execution_key: self
+                                                    .headers_store
+                                                    .get_header(*blue)
+                                                    .ok()
+                                                    .map(|h| self.palw_execution_key_v1(&h, &envelope.attempt))
+                                                    .unwrap_or_else(|| {
+                                                        kaspa_consensus_core::palw_attempt_v2::attempt_id_v2(&envelope.attempt)
+                                                    }),
                                             }
                                         }
                                         PalwMergedOwnedWorkV1::Spend(blue, envelope) => {
@@ -1925,10 +1936,26 @@ impl VirtualStateProcessor {
                                                 work: kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::ReceiptSpend(
                                                     &envelope.spend,
                                                 ),
+                                                // A receipt spend is the free-prompt lane (B-5 dedups it on (claim,
+                                                // quantum)); B-4's attempt-execution dedup does not apply, so the key is unread.
+                                                execution_key: kaspa_hashes::Hash64::default(),
                                             }
                                         }
                                     })
                                     .collect();
+                                // B-4: this block's OWN attempt's execution key, from its own header
+                                // (pre_pow + nonce). `default` when the block carries no attempt.
+                                let own_execution_key = match attempt.as_ref() {
+                                    Some(envelope) => self
+                                        .headers_store
+                                        .get_header(current)
+                                        .ok()
+                                        .map(|h| self.palw_execution_key_v1(&h, &envelope.attempt))
+                                        .unwrap_or_else(|| {
+                                            kaspa_consensus_core::palw_attempt_v2::attempt_id_v2(&envelope.attempt)
+                                        }),
+                                    None => kaspa_hashes::Hash64::default(),
+                                };
                                 match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v7(
                                     state,
                                     state_params,
@@ -1937,6 +1964,7 @@ impl VirtualStateProcessor {
                                     &objects,
                                     work,
                                     &merged_refs,
+                                    own_execution_key,
                                     self.palw_unavailable_abstains_at(point.daa_score),
                                     self.palw_capability_bound_at(point.daa_score),
                                     // ADR-0069 Decision 7, at this BLOCK's DAA. `false` on every
@@ -5351,6 +5379,24 @@ impl VirtualStateProcessor {
         // one agree on every block's coinbase before the height.
         let audit_active = self.palw_audit_2026_09_11_at(point.daa_score);
         let mut seen_here_quanta: std::collections::HashSet<(kaspa_consensus_core::Hash64, u32)> = Default::default();
+        // **B-4: the attempt lane's execution dedup, matching the fold's `seen_exec`.** Two merged
+        // siblings that re-announce one inference under different within-bucket nonces have distinct
+        // attempt ids (so `seen_here` above lets both through) but one pre_pow-inclusive
+        // `execution_commitment_v3`; the fold claims one and refuses the rest, so the coinbase must
+        // pay one, not each.
+        //
+        // **This set is seeded EMPTY, and that is exactly the fold's behaviour on the merged loop.**
+        // The fold applies the block's own work first (step 4) and inserts its key too, so its
+        // `seen_exec` also carries `own_execution_key` when the mergeset loop runs — but that seed can
+        // never refuse a merged blue, because `palw_execution_key_v1` binds the CARRYING block's
+        // `pre_pow_hash` and two blocks share a key iff they share pre_pow (are nonce-siblings at one
+        // DAG position). A merged blue is in B's past, so it cannot be a nonce-sibling of B; hence
+        // `own_execution_key` differs from every merged key, the fold's own seed is inert against the
+        // merged loop, and this set omitting it agrees with the fold by construction rather than by
+        // reachability. Gated on the deep flag day (`palw_audit_2026_09_11_deep`); below it the pay
+        // set is byte-identical to before.
+        let audit_deep_active = self.palw_audit_2026_09_11_deep_at(point.daa_score);
+        let mut seen_here_exec: std::collections::HashSet<kaspa_consensus_core::Hash64> = Default::default();
         // **Blues AND reds.** This iterated `mergeset_blues` alone, so the set could never contain a
         // red — and the coinbase's reds loop had no skip to apply one anyway. At the frozen 120 s
         // cadence `ghostdag_k = 1` against a `mergeset_size_limit` of 180, so the blues this
@@ -5425,6 +5471,12 @@ impl VirtualStateProcessor {
                     // has already seen; nothing but this answers for a pair arriving together.
                     if !seen_here.insert(attempt_id_v2(&envelope.attempt)) {
                         debug!("merged block {blue} carries an attempt identity already paid in this mergeset");
+                        unentitled.insert(*blue);
+                    } else if audit_deep_active && !seen_here_exec.insert(self.palw_execution_key_v1(&header, &envelope.attempt)) {
+                        // **B-4:** a distinct attempt id but the SAME execution (a nonce-sibling in one
+                        // bucket) — the fold folds one claim's weight and refuses the rest, so paying
+                        // this second one would mint a worker share the chain never counted.
+                        debug!("merged block {blue} re-announces an execution already paid in this mergeset (B-4)");
                         unentitled.insert(*blue);
                     }
                 }
@@ -7799,6 +7851,30 @@ impl VirtualStateProcessor {
     /// registration is signed under.
     fn palw_network_domain_v2(&self) -> kaspa_hashes::Hash64 {
         kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash))
+    }
+
+    /// **B-4: the pre_pow-inclusive execution commitment of `attempt` as carried by `header`'s
+    /// block** — the key the fold dedups on past `palw_audit_2026_09_11_deep`. It is exactly the
+    /// anchor the class lottery drew under (`palw_admission_v2` derives the same
+    /// `execution_anchor_v3` from the header): `execution_commitment_v3` blanks the challenge and
+    /// keys under `(network_domain, pre_pow, class, bond, nonce-bucket)`. Two blocks share it iff
+    /// they share pre_pow (same parents + payload) and the challenge-blanked attempt — nonce-siblings
+    /// in one bucket, the one inference re-announced; a genuinely different position (different
+    /// pre_pow) has a different key and is not deduped (the reason the reverted B-4's position-free
+    /// `execution_root` key over-refused).
+    fn palw_execution_key_v1(
+        &self,
+        header: &kaspa_consensus_core::header::Header,
+        attempt: &kaspa_consensus_core::palw_attempt_v2::PalwAttemptUnsignedV2,
+    ) -> kaspa_hashes::Hash64 {
+        let anchor = kaspa_consensus_core::palw_attempt_v2::execution_anchor_v3(
+            self.palw_network_domain_v2(),
+            kaspa_consensus_core::hashing::header::pre_pow_hash_64(header),
+            attempt.class_id,
+            &attempt.executor_bond,
+            header.nonce,
+        );
+        kaspa_consensus_core::palw_attempt_v2::execution_commitment_v3(attempt, anchor)
     }
 
     /// ADR-0088: the bond a line's `role` ("owner" or "developer") names, read from the acceptance

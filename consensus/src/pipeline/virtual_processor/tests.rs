@@ -12878,8 +12878,8 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
     };
     let (spend_a, spend_b) = (unsigned(0xAAAA), unsigned(0xBBBB));
     let merged = vec![
-        PalwMergedWorkV1 { carrying_block: r1, work: PalwBlockWorkV3::ReceiptSpend(&spend_a) },
-        PalwMergedWorkV1 { carrying_block: r2, work: PalwBlockWorkV3::ReceiptSpend(&spend_b) },
+        PalwMergedWorkV1 { carrying_block: r1, work: PalwBlockWorkV3::ReceiptSpend(&spend_a), execution_key: Default::default() },
+        PalwMergedWorkV1 { carrying_block: r2, work: PalwBlockWorkV3::ReceiptSpend(&spend_b), execution_key: Default::default() },
     ];
     let fold_point = PalwBlockContextV2 { block: h64(0xF01D), daa_score: 7, blue_score: 6, subsidy: 0 };
     let (folded, _delta, merged_skips) = apply_palw_transition_v7(
@@ -12890,6 +12890,8 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
         &[],
         PalwBlockWorkV3::None,
         &merged,
+        // B-4 own-work key: no own attempt here (block_work None), so default.
+        Default::default(),
         false,
         false,
         false,

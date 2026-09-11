@@ -3302,6 +3302,12 @@ pub enum PalwBlockWorkV3<'a> {
 pub struct PalwMergedWorkV1<'a> {
     pub carrying_block: BlockHash,
     pub work: PalwBlockWorkV3<'a>,
+    /// **B-4: the pre_pow-inclusive execution commitment of this merged work's attempt**
+    /// (`execution_commitment_v3` under `execution_anchor_v3(net, MB pre_pow, class, bond, nonce)`),
+    /// computed by the processor from the merged block's own header (the fold holds no pre_pow).
+    /// The fold dedups on it past `palw_audit_2026_09_11_deep`. `Hash64::default()` for a non-attempt
+    /// work (`None`/`ReceiptSpend`) — unread there — and below the fence, where it is never consulted.
+    pub execution_key: Hash64,
 }
 
 /// Where an attempt entered the chain — its own chain block, or a merged blue (ADR-0058).
@@ -3313,6 +3319,10 @@ pub struct PalwMergedWorkV1<'a> {
 struct PalwAttemptOriginV1 {
     carrying_block: BlockHash,
     escrows_reward: bool,
+    /// **B-4: this attempt's pre_pow-inclusive execution commitment**, threaded from the processor
+    /// (own work from this block's header, merged work from the merged block's). `apply_attempt`
+    /// dedups on it against the builder's `seen_exec` past `palw_audit_2026_09_11_deep`.
+    execution_key: Hash64,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -4157,6 +4167,13 @@ pub enum PalwStateV2Error {
     MissingClaim(Hash64),
     #[error("claim {0} already exists (one attempt id, one claim)")]
     DuplicateClaim(Hash64),
+    /// **B-4 (mainnet audit 2026-09-11): one inference is one block.** Two attempts in a block's own
+    /// + mergeset work whose pre_pow-inclusive execution commitment (`execution_commitment_v3` under
+    /// `execution_anchor_v3`) is equal are the SAME inference re-announced under different nonces in
+    /// one bucket; the second is refused so it mints no second claim, no second weight and no second
+    /// coinbase share. Past `palw_audit_2026_09_11_deep` only; below it, unchanged.
+    #[error("execution {0} is already claimed by this block's work (one inference, one block)")]
+    DuplicateExecution(Hash64),
     /// ADR-0065 D4. Named for what it is, because "wrong phase" would have said the claim was the
     /// problem — and an operator reading a refused object needs to know the RULE moved, not go
     /// looking at a claim that is in exactly the phase it should be.
@@ -6604,6 +6621,13 @@ struct TransitionBuilder<'a> {
     da_court: bool,
     /// ADR-0088 / ADR-0089: the block's extras (fences and EVM inputs), constant for the fold.
     extras: &'a PalwTransitionExtrasV1,
+    /// **B-4: the pre_pow-inclusive execution commitments this block's work has already claimed.**
+    /// One inference is one block — two attempts in this block's own + mergeset work with the same
+    /// `execution_commitment_v3` are the same inference re-announced, and the second is refused
+    /// (`DuplicateExecution`) so it mints no second claim/weight/share. Populated only at an
+    /// attempt's SUCCESSFUL end, so a refused attempt (which the merged loop restores) leaves no
+    /// mark; read only past `palw_audit_2026_09_11_deep`, so below the fence it is never consulted.
+    seen_exec: std::collections::HashSet<Hash64>,
 }
 
 impl<'a> TransitionBuilder<'a> {
@@ -6626,6 +6650,7 @@ impl<'a> TransitionBuilder<'a> {
             uncertified_weightless,
             da_court,
             extras,
+            seen_exec: std::collections::HashSet::new(),
         }
     }
 
@@ -7922,6 +7947,9 @@ pub fn apply_palw_transition_v2_with_extras(
         accepted_objects,
         work,
         &[],
+        // No header here (attempt-only wrapper, no merged work) — the own-vs-merged execution dedup
+        // cannot fire, so B-4's own-work key is `default`; below the deep fence it is unread anyway.
+        Hash64::default(),
         unavailable_abstains,
         capability_bound,
         uncertified_weightless,
@@ -8045,6 +8073,10 @@ pub fn apply_palw_transition_v6(
         accepted_objects,
         block_work,
         merged_work,
+        // v6 has no header; a caller that needs the own-work execution key threads it through v7
+        // directly. Its own merged works still carry their own `execution_key`, so merged-vs-merged
+        // dedup is intact; only the own-vs-merged case needs the header, which v6 lacks.
+        Hash64::default(),
         unavailable_abstains,
         capability_bound,
         uncertified_weightless,
@@ -8135,6 +8167,12 @@ pub fn apply_palw_transition_v7(
     accepted_objects: &[PalwConsensusObjectV2],
     block_work: PalwBlockWorkV3<'_>,
     merged_work: &[PalwMergedWorkV1<'_>],
+    // **B-4: the block's OWN attempt's pre_pow-inclusive execution commitment**, computed by the
+    // processor from this block's header (the fold holds no pre_pow). `Hash64::default()` when the
+    // block carries no attempt, and unread below `palw_audit_2026_09_11_deep`. A wrapper that has no
+    // header (rehearsal / genesis / sync) passes `default` — its fold carries no merged work, so the
+    // own-vs-merged dedup cannot fire there and the own attempt is applied identically either way.
+    own_execution_key: Hash64,
     unavailable_abstains: bool,
     capability_bound: bool,
     uncertified_weightless: bool,
@@ -8241,7 +8279,12 @@ pub fn apply_palw_transition_v7(
     match block_work {
         PalwBlockWorkV3::None => {}
         PalwBlockWorkV3::Attempt(envelope) => {
-            apply_attempt(&mut builder, ctx, envelope, PalwAttemptOriginV1 { carrying_block: ctx.block, escrows_reward: true })?
+            apply_attempt(
+                &mut builder,
+                ctx,
+                envelope,
+                PalwAttemptOriginV1 { carrying_block: ctx.block, escrows_reward: true, execution_key: own_execution_key },
+            )?
         }
         PalwBlockWorkV3::ReceiptSpend(spend) => apply_receipt_spend(&mut builder, ctx, spend)?,
     }
@@ -8284,7 +8327,11 @@ pub fn apply_palw_transition_v7(
                                 &mut builder,
                                 ctx,
                                 envelope,
-                                PalwAttemptOriginV1 { carrying_block: merged.carrying_block, escrows_reward: false },
+                                PalwAttemptOriginV1 {
+                                    carrying_block: merged.carrying_block,
+                                    escrows_reward: false,
+                                    execution_key: merged.execution_key,
+                                },
                             ) {
                                 Ok(()) => None,
                                 Err(refused) => {
@@ -13195,6 +13242,14 @@ fn apply_attempt(
     if builder.state.claims.contains_key(&claim_id) {
         return Err(PalwStateV2Error::DuplicateClaim(claim_id));
     }
+    // **B-4: one inference is one block.** A sibling that re-announces THIS block's-work execution
+    // under a different within-bucket nonce has a different `attempt_id` (so `DuplicateClaim` above
+    // lets it through) but the SAME pre_pow-inclusive `execution_commitment_v3` — refuse it so it
+    // mints no second claim, no second weight, no second coinbase share. Only past the deep fence;
+    // below it, `seen_exec` is never consulted and the pay set is byte-identical to before.
+    if builder.extras.audit_2026_09_11_deep_active && builder.seen_exec.contains(&origin.execution_key) {
+        return Err(PalwStateV2Error::DuplicateExecution(origin.execution_key));
+    }
     let bond_key = PalwBondKeyV2(attempt.executor_bond);
     let bond = builder.state.bonds.get(&bond_key).ok_or(PalwStateV2Error::MissingBond(bond_key))?;
     if let PalwBondStatusV2::Retiring { .. } = bond.status {
@@ -13277,6 +13332,12 @@ fn apply_attempt(
         _ => PalwEpochCounterV2 { epoch_index, produced_pwu: attempt.pwu as u128, produced_blocks: 1 },
     };
     builder.write_epoch(attempt.class_id, Some(counter));
+    // **B-4: mark this execution claimed**, so a sibling re-announcing it later in this same block's
+    // work is refused above. At the SUCCESSFUL end only — a refused attempt is restored by the
+    // merged loop and must leave no mark, and only past the deep fence.
+    if builder.extras.audit_2026_09_11_deep_active {
+        builder.seen_exec.insert(origin.execution_key);
+    }
     Ok(())
 }
 
@@ -19644,7 +19705,8 @@ pub(crate) mod tests {
 
         // A spend naming a claim that does not exist: refused inside the fold, after checkpoint.
         let ghost = fp_spend(0xDEAD, 0);
-        let merged = [PalwMergedWorkV1 { carrying_block: h64(0xB1u64), work: PalwBlockWorkV3::ReceiptSpend(&ghost) }];
+        let merged =
+            [PalwMergedWorkV1 { carrying_block: h64(0xB1u64), work: PalwBlockWorkV3::ReceiptSpend(&ghost), execution_key: Hash64::default() }];
         let (with_skip, delta_with, skips) =
             apply_palw_transition_v4(&s1, &p, None, &ctx(2, 101, 2), &[], PalwBlockWorkV3::None, &merged)
                 .expect("the accepting block stands");
@@ -19667,12 +19729,98 @@ pub(crate) mod tests {
 
         let env = attempt(40, 1);
         let claim_id = attempt_id_v2(&env.attempt);
-        let merged = [PalwMergedWorkV1 { carrying_block: h64(0xB2u64), work: PalwBlockWorkV3::Attempt(&env) }];
+        let merged =
+            [PalwMergedWorkV1 { carrying_block: h64(0xB2u64), work: PalwBlockWorkV3::Attempt(&env), execution_key: Hash64::default() }];
         let (s2, _, skips) = apply_palw_transition_v4(&s1, &p, None, &ctx(2, 101, 2), &[], PalwBlockWorkV3::None, &merged)
             .expect("the accepting block stands");
         assert_eq!(skips.len(), 1, "skipped, with the missing-params reason");
         assert!(s2.claim(&claim_id).is_none(), "and no claim was minted");
         assert_eq!(s2.reserved_exposure(&bond_key(1)), 0, "and nothing was reserved");
+    }
+
+    /// **B-4 (mainnet audit 2026-09-11 deep fence): one inference is one block.** Two merged blues
+    /// re-announce the SAME execution under different within-bucket nonces — distinct `attempt_id`s
+    /// (so the `DuplicateClaim` guard lets both through) but one pre_pow-inclusive
+    /// `execution_commitment_v3`, which the processor threads into the fold as `execution_key`. Past
+    /// `palw_audit_2026_09_11_deep` the fold claims the first and refuses the second
+    /// (`DuplicateExecution`), skipped like any refused merged work — one claim, one reserve, one
+    /// coinbase share. Below the fence `seen_exec` is never consulted and BOTH claim: the pre-fix
+    /// behaviour, byte for byte. Only the extras flag differs between the two folds below.
+    ///
+    /// This closes the INTRA-block half of B-4. The durable CROSS-block half — a sibling that
+    /// re-announces an execution a PAST block already claimed — is not folded: recovering a stored
+    /// claim's `execution_key` would need its accepted block's header (the fold holds only the
+    /// commitment roots), and storing the key would move the state root. The residual is bounded by
+    /// the same bond exposure ceiling every claim answers to, and documented at [`TransitionBuilder`].
+    #[test]
+    fn b4_merged_nonce_siblings_sharing_an_execution_dedup_past_the_deep_fence() {
+        let p = params();
+        let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+
+        // Two attempts of the base class, same execution, different nonces → different attempt_ids.
+        let a = attempt(40, 1);
+        let b = attempt(40, 2);
+        let id_a = attempt_id_v2(&a.attempt);
+        let id_b = attempt_id_v2(&b.attempt);
+        assert_ne!(id_a, id_b, "the nonce siblings are distinct claims — DuplicateClaim would not catch this");
+
+        // The pre_pow-inclusive key the processor computes for BOTH (equal = same inference); the
+        // fold has no header, so it is handed the value the processor would derive.
+        let shared = h64(0x5EED);
+        let merged = [
+            PalwMergedWorkV1 { carrying_block: h64(0xB1), work: PalwBlockWorkV3::Attempt(&a), execution_key: shared },
+            PalwMergedWorkV1 { carrying_block: h64(0xB2), work: PalwBlockWorkV3::Attempt(&b), execution_key: shared },
+        ];
+
+        // --- Past the deep fence: the second is refused; exactly one claim is minted. ---
+        let armed = PalwTransitionExtrasV1 { audit_2026_09_11_deep_active: true, ..Default::default() };
+        let (deep, _, skips) = apply_palw_transition_v7(
+            &s1,
+            &p,
+            Some(&admission),
+            &ctx(2, 101, 2),
+            &[],
+            PalwBlockWorkV3::None,
+            &merged,
+            Hash64::default(),
+            false,
+            false,
+            false,
+            false,
+            &armed,
+        )
+        .expect("the accepting block stands");
+        deep.assert_internal_consistency(&p).expect("internal consistency, deep-armed");
+        assert!(deep.claim(&id_a).is_some(), "the first inference is claimed");
+        assert!(deep.claim(&id_b).is_none(), "the sibling re-announcing the same execution is not");
+        assert_eq!(skips.len(), 1, "the refusal is recorded, not swallowed");
+        assert_eq!(skips[0].0, h64(0xB2), "and it names the second blue");
+        assert!(skips[0].1.contains("already claimed by this block's work"), "with the DuplicateExecution reason: {}", skips[0].1);
+        assert_eq!(deep.reserved_exposure(&bond_key(1)), 200, "one claim reserved, 40 × 5 — the checkpoint restored the second");
+
+        // --- Below the deep fence: BOTH claim — the pre-fix behaviour, unchanged. ---
+        let (base, _, base_skips) = apply_palw_transition_v7(
+            &s1,
+            &p,
+            Some(&admission),
+            &ctx(2, 101, 2),
+            &[],
+            PalwBlockWorkV3::None,
+            &merged,
+            Hash64::default(),
+            false,
+            false,
+            false,
+            false,
+            &PalwTransitionExtrasV1::default(),
+        )
+        .expect("the accepting block stands");
+        base.assert_internal_consistency(&p).expect("internal consistency, deep-dormant");
+        assert!(base.claim(&id_a).is_some() && base.claim(&id_b).is_some(), "both nonce siblings claim below the fence");
+        assert!(base_skips.is_empty(), "and nothing is skipped");
+        assert_eq!(base.reserved_exposure(&bond_key(1)), 400, "two claims reserve 40 × 5 twice");
     }
 
     /// A spend licenses only what is certified: wrong phase, wrong source, absent claim — each
