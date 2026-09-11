@@ -11751,6 +11751,32 @@ fn apply_object(
             let proven_root = builder.state.claim_roots.get(&session.claim).copied().unwrap_or(class.artifact_root);
             let operands = crate::palw_artifact::PalwProvenOperandsV1::from_openings_v1(operand_openings, proven_root)
                 .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
+            // **C-01 (mainnet audit 2026-09-11): the dissection binds a CANONICAL leaf count.**
+            // The site is classified under the canonical count `step_leaf_count(profile, context)`
+            // (`canonical_step_coordinates`), but the opened output tile and every prefix row are
+            // authenticated under the DECLARED `binding.step_leaf_count` (its Merkle tree's shape is
+            // a function of that count). The arithmetic path pins the two equal
+            // (`StepLeafCountNotCanonical`, `palw_step_leg.rs`); the dissection path did not, so a
+            // non-canonical count let the accused commit a step tree the court classifies one way and
+            // authenticates another — a terminal remap the honest close cannot convict (it "roots
+            // elsewhere"), acquitting a forged execution. Past the audit fence, refuse a
+            // non-canonical count HERE: a session can then be opened only over a canonical binding,
+            // so the accused's only moves are a canonical one (no remap) or a no-show (which
+            // convicts responder-side). The cap is the claim's OWN count, never `PALW_STEP_MAX_LEAVES`
+            // — spelling it a constant convicts the honest graph-v5 class whose canonical job counts
+            // millions of leaves (the reason `palw_step_leg.rs` reads it this way); `Ok(n) && n ==
+            // claim` is the same predicate at every ladder. Below the fence, unchanged.
+            if builder.extras.audit_2026_09_11_active {
+                match crate::palw_step::step_leaf_count_capped_v1(&binding.shape_profile, &binding.job_context, binding.step_leaf_count) {
+                    Ok(count) if count == binding.step_leaf_count => {}
+                    _ => {
+                        return Err(PalwStateV2Error::DissectionRefused(
+                            *session_id,
+                            "the root claim's step_leaf_count is not the canonical function of (profile, context) (C-01)".to_string(),
+                        ));
+                    }
+                }
+            }
             // The site is the CLASS's description of the leaf the ladder terminated on — derived
             // from the coordinate and the registered profile, never supplied by the mover.
             let derived = crate::palw_court_v2::palw_attn_dispute_site_v2(&claim, binding, &operands, narrowed, filed_anchor)
@@ -25380,6 +25406,89 @@ pub(crate) mod tests {
                 matches!(after.claim(&claim_id).expect("the claim survives as a record").phase, PalwClaimPhaseV2::Voided { .. }),
                 "a convicted claim is voided"
             );
+        }
+
+        /// **C-01 (mainnet audit 2026-09-11): a non-canonical `step_leaf_count` cannot open a fused
+        /// dissection past the audit fence.** The bottom classifies the terminal leaf under the
+        /// CANONICAL count `step_leaf_count(profile, context)` (`canonical_step_coordinates`) but
+        /// authenticates the opened output tile and every prefix row under the DECLARED
+        /// `binding.step_leaf_count` (its Merkle tree's shape is a function of that count). Forcing
+        /// the two equal at phase-open closes the terminal remap that let a forged execution "root
+        /// elsewhere" and be acquitted. Below the fence the gate is skipped, so a fenced build and an
+        /// unfenced one fold every block below the height alike.
+        #[test]
+        fn c01_a_non_canonical_step_leaf_count_cannot_open_a_dissection_past_the_fence() {
+            let p = params_with_ladder();
+            let drill = Drill::new(false);
+
+            // The predicate the gate copies from the arithmetic path: the honest drill is canonical.
+            assert_eq!(
+                crate::palw_step::step_leaf_count_capped_v1(
+                    &drill.binding.shape_profile,
+                    &drill.binding.job_context,
+                    drill.binding.step_leaf_count,
+                ),
+                Ok(drill.binding.step_leaf_count),
+                "the honest drill's committed step_leaf_count is the canonical function of (profile, context)"
+            );
+
+            let (state, _claim_id, sid, daa) = court_at_the_fused_leaf(&p, &drill);
+            let c = ctx(daa, daa, daa);
+            let armed = PalwTransitionExtrasV1 { audit_2026_09_11_active: true, ..Default::default() };
+
+            // Honest, canonical: opens the dissection in BOTH regimes — the gate never touches
+            // honest play.
+            let honest = root_claimed(sid, &drill, 2);
+            let (open_armed, _) = apply_palw_transition_v2_with_extras(
+                &state,
+                &p,
+                &c,
+                std::slice::from_ref(&honest),
+                None,
+                false,
+                false,
+                false,
+                false,
+                &armed,
+            )
+            .expect("a canonical root claim opens the dissection past the fence");
+            assert!(open_armed.court_session(&sid).unwrap().dissection.is_some(), "the honest dissection opens armed");
+            let (open_dormant, _) = apply(&state, &p, &c, std::slice::from_ref(&honest), None);
+            assert!(open_dormant.court_session(&sid).unwrap().dissection.is_some(), "and dormant, unchanged");
+
+            // A non-canonical count (the terminal-remap shape). Past the fence the C-01 gate refuses
+            // it — the gate runs before the site derivation. Below the fence the gate is skipped and
+            // the pre-existing binding check refuses it instead, a DIFFERENT reason: the proof the
+            // new refusal is fenced and adds nothing below the height.
+            let mut bad_binding = drill.binding.clone();
+            bad_binding.step_leaf_count += 1;
+            let bad = PalwConsensusObjectV2::CourtAttnRootClaimed {
+                session_id: sid,
+                root: drill.root_claim.clone(),
+                arity: 2,
+                binding: Box::new(bad_binding),
+                out_tile: drill.out_tile_opening(),
+                operand_openings: drill.openings(),
+                signature: vec![0xAA; 8],
+            };
+            let armed_err =
+                apply_palw_transition_v2_with_extras(&state, &p, &c, std::slice::from_ref(&bad), None, false, false, false, false, &armed)
+                    .expect_err("a non-canonical count is refused past the fence");
+            match armed_err {
+                PalwStateV2Error::DissectionRefused(s, ref msg) => {
+                    assert_eq!(s, sid);
+                    assert!(msg.contains("C-01"), "armed, the refusal is the C-01 canonical-count gate, got: {msg}");
+                }
+                other => panic!("expected DissectionRefused past the fence, got {other:?}"),
+            }
+            let dormant_err = apply_palw_transition_v2(&state, &p, &c, std::slice::from_ref(&bad), None)
+                .expect_err("the same count is refused below the fence too, but for the pre-existing reason");
+            match dormant_err {
+                PalwStateV2Error::DissectionRefused(_, ref msg) => {
+                    assert!(!msg.contains("C-01"), "below the fence the C-01 gate is not consulted, got: {msg}");
+                }
+                other => panic!("expected DissectionRefused below the fence, got {other:?}"),
+            }
         }
 
         /// **ADR-0093 as built: every move computed from EVIDENCE by the court's own kernels, played
