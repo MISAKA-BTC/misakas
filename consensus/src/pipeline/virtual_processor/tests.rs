@@ -13007,7 +13007,7 @@ fn ac_slot_fixture() -> AcSlotFixture {
     // mempool — no key needed), and a foreign binding, which the signature does not cover.
     let mut junk = honest.clone();
     if let PalwConsensusObjectV2::CourtAttnRootClaimed { binding, .. } = &mut junk {
-        binding.step_merkle_root = kaspa_hashes::Hash64::from_u64_word(0x0BAD_B1D);
+        binding.step_merkle_root = kaspa_hashes::Hash64::from_u64_word(0x00BA_DB1D);
     }
     AcSlotFixture { ctx, state, params, honest, junk, sid, claim, daa }
 }

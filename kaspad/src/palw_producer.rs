@@ -1100,10 +1100,9 @@ mod retention_tests {
                 "an attempt claim is accusable at {live:?}, so it is kept (C-05)"
             );
         }
-        for settled in [P::Final { final_daa: 30 }] {
-            assert!(!free_prompt_retention_is_owed(&fp, &settled), "free-prompt {settled:?} releases the capture");
-            assert!(!free_prompt_retention_is_owed(&S::Attempt, &settled), "attempt {settled:?} releases the capture");
-        }
+        let settled = P::Final { final_daa: 30 };
+        assert!(!free_prompt_retention_is_owed(&fp, &settled), "free-prompt {settled:?} releases the capture");
+        assert!(!free_prompt_retention_is_owed(&S::Attempt, &settled), "attempt {settled:?} releases the capture");
         for reason in [R::BindTimeout, R::ReceiptTimeout, R::CourtFraud, R::ProducerWithholding] {
             let voided = P::Voided { voided_daa: 40, reason };
             assert!(!free_prompt_retention_is_owed(&fp, &voided));
