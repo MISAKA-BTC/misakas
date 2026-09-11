@@ -230,3 +230,11 @@ The producer-side step-leg capture (the material an honest producer answers a bi
 not yet emitted by `Qwen36Engine` — the profile above is its specification. And the weight-width
 question (a four-bit tier) remains unspecified, now with the measured note that expert residency
 plus the NEON grouped kernels took the 33 GiB class from 0.4 to 1.75 tok/s on a 24 GiB machine.
+
+*2026-09-11:* that residency cache (`Qwen36Residency`, `MADV_WILLNEED` admission on the engine)
+was never wired into the producer, and on the fleet's virtio disks `MADV_WILLNEED` prefetches
+nothing — a draw read 12.8 GiB through three million page faults and took twenty minutes.
+[ADR-0112](0112-a-classs-weights-are-read-within-a-budget-the-operator-states-and-the-budget-is-a-fifth-of-the-artifact.md)
+replaces it: residency is the artifact's, the always-set is read once through the file descriptor
+and pinned, routed experts are read as the router chooses them and held under a budget the
+operator states, a fifth of the artifact by default.

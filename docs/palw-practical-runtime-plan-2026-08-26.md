@@ -77,6 +77,7 @@ page cache は「エキスパート」を知らないページ LRU なので、�
 unembedding）を追い出す。→ 常駐制御をエンジン側に:
 
 - **always-set は pin**（routed expert 以外を open 時に MADV_WILLNEED、返さない）
+  — **2026-09-11 に ADR-0112 で置き換え**: MADV_WILLNEED はフリートの virtio ディスクでは何も先読みしなかった(draw は 4 KiB fault ×300 万で 20 分)。always-set は open 時に fd 経由で読み切って所有、routed expert は router が選んだ瞬間に並列 pread して LRU、予算の既定は artifact の 1/5。
 - **routed expert はバイト予算つき LRU**（admission=WILLNEED, eviction=DONTNEED —
   private read-only map では無損失でページを落とすだけ）
 - **router が commit した瞬間に選ばれた 8 個 × 3 tensor の range を一括 prefetch**
