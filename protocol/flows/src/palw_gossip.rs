@@ -2339,10 +2339,7 @@ mod tests {
         // (2) A serve larger than one peer's whole share is charged in full, not capped at the
         // reservation floor — an overshoot that is free is not a bound.
         center.charge_sidecar_serve(peer(1), 64 << 20);
-        assert!(
-            (64u64 << 20) > SERVE_BUDGET_BYTES_PER_PEER,
-            "the fixture must charge past one peer's share, or it asserts nothing"
-        );
+        assert!((64u64 << 20) > SERVE_BUDGET_BYTES_PER_PEER, "the fixture must charge past one peer's share, or it asserts nothing");
         assert!(!center.reserve_sidecar_serve(peer(1)), "a peer that has spent its window must be refused the next blob");
 
         // (3) The bound is PER PEER: one peer cannot spend another's share.

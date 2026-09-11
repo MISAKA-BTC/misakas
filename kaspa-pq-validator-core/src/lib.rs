@@ -626,15 +626,8 @@ impl ValidatorKey {
             funding.iter().map(|(o, _)| TransactionInput::new(*o, vec![], MAX_TX_IN_SEQUENCE_NUM, 1)).collect();
         let mut outputs = vec![TransactionOutput::new(funded - spent, funding[0].1.script_public_key.clone())];
         outputs.extend(extra);
-        let tx = Transaction::new(
-            TX_VERSION,
-            inputs,
-            outputs,
-            0,
-            kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
-            0,
-            bytes,
-        );
+        let tx =
+            Transaction::new(TX_VERSION, inputs, outputs, 0, kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE, 0, bytes);
         let entries: Vec<UtxoEntry> = funding.iter().map(|(_, e)| e.clone()).collect();
         let mtx = MutableTransaction::with_entries(tx, entries);
         let reused_mldsa = Mldsa87SigHashReusedValuesUnsync::new();

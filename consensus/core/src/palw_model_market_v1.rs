@@ -227,12 +227,7 @@ impl PalwModelMarketV1 {
     /// the whole collected total, the supply enters the curve, and `seed_sompi` records what the
     /// pair opened with. The first payer keeps the record (Decision 3).
     pub fn open_from_pledge_v1(&self, daa: u64) -> Self {
-        Self {
-            opened_daa: daa,
-            position_units: PALW_MODEL_SUPPLY_UNITS_V1,
-            seed_sompi: self.seed_pledged_sompi,
-            ..*self
-        }
+        Self { opened_daa: daa, position_units: PALW_MODEL_SUPPLY_UNITS_V1, seed_sompi: self.seed_pledged_sompi, ..*self }
     }
 
     /// The product the next move must not fall under: the row's own `reserve × units`.

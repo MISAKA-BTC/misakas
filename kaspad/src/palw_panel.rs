@@ -1130,9 +1130,8 @@ impl PalwPanelService {
         // that cannot finish inside the session's backstop — and the backstop never moves, because
         // extending it would sell either party a free window for the price of a declaration. A
         // declaration refused there has already cost its carrier AND its assembly deposit.
-        palw_court_close_assembly_fits_v1(plan.chunk_count, current_daa, duty.session_deadline_daa).map_err(|why| {
-            CourtCarriageRefusalV1 { stall: "the close cannot assemble inside the session", said: why.to_string() }
-        })?;
+        palw_court_close_assembly_fits_v1(plan.chunk_count, current_daa, duty.session_deadline_daa)
+            .map_err(|why| CourtCarriageRefusalV1 { stall: "the close cannot assemble inside the session", said: why.to_string() })?;
         // **Signed here, because the key is here.** `palw_plan_court_close_carriage_v1` returns the
         // declaration unsigned on purpose: consensus-core holds no key, and
         // `palw_lifecycle_object_may_ride_v2` refuses a declaration with an empty signature — so an
@@ -1145,8 +1144,7 @@ impl PalwPanelService {
                 said: "the carriage planner returned a part this node cannot sign".to_string(),
             });
         };
-        let message =
-            palw_court_close_declaration_message_v1(session_id, *side, *count, chunk_digests, close_digest, *verdict);
+        let message = palw_court_close_declaration_message_v1(session_id, *side, *count, chunk_digests, close_digest, *verdict);
         let Some(signed) = self.sign(&message, PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT) else {
             return Err(CourtCarriageRefusalV1 {
                 stall: "no signing key for a close declaration",
@@ -1417,8 +1415,8 @@ impl PalwPanelService {
         // `consensus_rent_for`. Read from the object HERE, in the one builder every carrier this
         // node files goes through, rather than at the call sites: a rent a caller has to remember
         // to ask for is a rent the next lane forgets, and forgetting it costs the carrier.
-        let fee =
-            relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&priced).compute_mass).max(self.consensus_rent_for(object));
+        let fee = relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&priced).compute_mass)
+            .max(self.consensus_rent_for(object));
 
         let unsigned = build(fee, vec![])?;
         let mtx = MutableTransaction::with_entries(unsigned, vec![funding.clone()]);

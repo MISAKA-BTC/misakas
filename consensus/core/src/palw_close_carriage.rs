@@ -461,7 +461,11 @@ mod tests {
         for (index, part) in plan.parts[1..].iter().enumerate() {
             let PalwConsensusObjectV2::CourtCloseChunk { index: at, bytes, .. } = part else { panic!("part {index} is not a chunk") };
             assert_eq!(*at as usize, index, "the chunks are not in index order");
-            assert_eq!(chunk_digests[index], palw_court_close_chunk_digest_v1(bytes), "chunk {index} is not what the declaration pins");
+            assert_eq!(
+                chunk_digests[index],
+                palw_court_close_chunk_digest_v1(bytes),
+                "chunk {index} is not what the declaration pins"
+            );
             assert!(!bytes.is_empty() && bytes.len() <= PALW_COURT_CLOSE_CHUNK_MAX_BYTES);
             assembled.extend_from_slice(bytes);
         }
@@ -560,11 +564,8 @@ mod tests {
     #[test]
     fn another_close_on_this_side_is_refused_rather_than_completed() {
         let plan = palw_plan_court_close_carriage_v1(&close_needing(3), &rc_court(), Some(PalwCourtSideV1::Executor)).expect("plans");
-        let wider = PalwCourtCloseGroupSeenV1 {
-            count: u32::from(plan.chunk_count) + 1,
-            present: 0,
-            close_digest: Some(plan.close_digest),
-        };
+        let wider =
+            PalwCourtCloseGroupSeenV1 { count: u32::from(plan.chunk_count) + 1, present: 0, close_digest: Some(plan.close_digest) };
         assert!(
             matches!(
                 palw_court_close_parts_to_send_v1(&plan, Some(&wider)),

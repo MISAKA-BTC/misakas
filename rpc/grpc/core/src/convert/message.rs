@@ -2113,7 +2113,10 @@ mod palw_producer_facts_tests {
             back.fp_decode_rules_armed,
             "a builder that loses fp_decode_rules_armed builds jobs for the wrong decode ruleset — honest and unreproducible"
         );
-        assert!(back.fp_decode_constraint_armed, "an entrance that loses fp_decode_constraint_armed serves a committed format nobody replays (ADR-0096)");
+        assert!(
+            back.fp_decode_constraint_armed,
+            "an entrance that loses fp_decode_constraint_armed serves a committed format nobody replays (ADR-0096)"
+        );
         assert_eq!(
             back.palw_retention_dir, response.palw_retention_dir,
             "a submitter that loses the retention directory stages a claim's material where the node never looks (ADR-0084)"

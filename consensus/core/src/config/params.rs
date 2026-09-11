@@ -4150,7 +4150,14 @@ impl Params {
             palw_court_ladder,
             palw_model_market,
             palw_model_lines,
-            palw_model_benefits,
+            // **Excluded, and NOT because it is redundant.** The f64 exclusion above is a lossy
+            // view of something already hashed; this is an omission with a live fix on its own
+            // branch (`fix/params-id-writes-model-benefits`): ADR-0095's membership fence is not
+            // in the printed fingerprint, so two nodes can disagree about member benefits and
+            // still agree about their params id. Writing it here MOVES every V2 network's
+            // identity, which is a flag day rather than a lint fix — so the field is NAMED rather
+            // than replaced by `_`, because `_` makes this exhaustive destructure stop asking.
+            palw_model_benefits: _palw_model_benefits,
             palw_model_evm,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
@@ -12104,12 +12111,10 @@ mod consensus_params_id_tests {
         let shipped = devnet_shipped_params();
         shipped.validate_palw_v2().expect("the shipped devnet assembles");
 
-        for (name, arm) in [
-            (
-                "palw_fp_decode_rules",
-                (|p: &mut Params, a: ForkActivation| p.palw_fp_decode_rules = Some(a)) as fn(&mut Params, ForkActivation),
-            ),
-        ] {
+        for (name, arm) in [(
+            "palw_fp_decode_rules",
+            (|p: &mut Params, a: ForkActivation| p.palw_fp_decode_rules = Some(a)) as fn(&mut Params, ForkActivation),
+        )] {
             for activation in [ForkActivation::always(), ForkActivation::new(9_000_000)] {
                 let mut armed = shipped.clone();
                 arm(&mut armed, activation);

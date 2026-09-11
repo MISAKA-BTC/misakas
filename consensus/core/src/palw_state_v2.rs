@@ -11547,24 +11547,17 @@ fn model_seed_v1(
         // Decision 2: opening happens once. An open market takes no further seed, as before.
         Some(open) if open.is_open() => return Err(PalwStateV2Error::ModelMarketAlreadySeeded(*line_id)),
         Some(pledged) if accumulate => {
-            let total = pledged
-                .seed_pledged_sompi
-                .checked_add(msk_seed)
-                .ok_or(PalwStateV2Error::Overflow("model seed accumulation"))?;
+            let total =
+                pledged.seed_pledged_sompi.checked_add(msk_seed).ok_or(PalwStateV2Error::Overflow("model seed accumulation"))?;
             // Decision 3: the row keeps naming the FIRST payer; a later sompi claims nothing.
             let grown = PalwModelMarketV1 { msk_reserve: total, seed_pledged_sompi: total, ..pledged };
             if total >= PALW_MODEL_SEED_MIN_SOMPI_V1 { grown.open_from_pledge_v1(ctx.daa_score) } else { grown }
         }
         Some(_) => return Err(PalwStateV2Error::ModelMarketAlreadySeeded(*line_id)),
-        None if msk_seed >= PALW_MODEL_SEED_MIN_SOMPI_V1 => {
-            PalwModelMarketV1::seed_v1(ctx.daa_score, msk_seed, *seeder)
-        }
+        None if msk_seed >= PALW_MODEL_SEED_MIN_SOMPI_V1 => PalwModelMarketV1::seed_v1(ctx.daa_score, msk_seed, *seeder),
         None if accumulate => PalwModelMarketV1::pledge_v1(ctx.daa_score, msk_seed, *seeder),
         None => {
-            return Err(PalwStateV2Error::ModelSeedTooSmall {
-                want: PALW_MODEL_SEED_MIN_SOMPI_V1,
-                got: msk_seed,
-            });
+            return Err(PalwStateV2Error::ModelSeedTooSmall { want: PALW_MODEL_SEED_MIN_SOMPI_V1, got: msk_seed });
         }
     };
     builder.write_model_market(*line_id, Some(market));
@@ -13561,7 +13554,7 @@ pub(crate) mod tests {
         assert!(matches!(status, PalwBondStatusV2::Retiring { .. }), "and the status is how the caller tells them apart");
 
         // Nothing else answers to this key, and an unknown key answers to nothing.
-        assert!(retired.bond_of_pubkey_v2(&vec![8u8; 4]).is_none(), "an unregistered key holds no bond");
+        assert!(retired.bond_of_pubkey_v2(&[8u8; 4]).is_none(), "an unregistered key holds no bond");
     }
 
     /// **The reason the lookup above may not filter: one key, one bond, for the life of the chain.**
@@ -19858,9 +19851,11 @@ pub(crate) mod tests {
         // operand-opening bytes — the part of a real close that grows with the evidence.
         let close = {
             let mut close = a_court_close(session_id, PalwCourtVerdictV2::ExecutorGuilty);
-            let PalwConsensusObjectV2::CourtClosed { proof: crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic {
-                operand_openings, ..
-            }, .. } = &mut close else {
+            let PalwConsensusObjectV2::CourtClosed {
+                proof: crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic { operand_openings, .. },
+                ..
+            } = &mut close
+            else {
                 panic!("the fixture stopped building an arithmetic close");
             };
             operand_openings.push(crate::palw_artifact::PalwArtifactOpeningV1 {
@@ -24803,7 +24798,7 @@ pub(crate) mod tests {
             let promote = PalwConsensusObjectV2::ModelVersionPromoted { line_id: class, version: 2, signature: vec![1] };
 
             // N7, the closed side: one block short of the promise is refused.
-            let e = try_with(&s2, &p, &ctx(5, 851, 5), &[promote.clone()], &extras()).unwrap_err();
+            let e = try_with(&s2, &p, &ctx(5, 851, 5), std::slice::from_ref(&promote), &extras()).unwrap_err();
             assert!(
                 matches!(e, PalwStateV2Error::ModelBenefitLeadNotElapsed { line, version, promotable_at }
                     if line == class && version == 2 && promotable_at == 852),

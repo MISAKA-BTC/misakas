@@ -1380,7 +1380,9 @@ pub fn bind_tokenizer_file_v1(artifact_bytes: &[u8], tokenizer_bytes: &[u8]) -> 
     let digest_after = bound.artifact_digest();
     let bytes = encode_artifact_file_v1(&bound);
     let back = decode_artifact_file_v1(&bytes).map_err(|e| format!("the bound container does not decode back: {e}"))?;
-    if back.check_tokenizer_bytes_v1(tokenizer_bytes) != TokenizerBindingV1::Bound(commitment) || back.artifact_digest() != digest_after {
+    if back.check_tokenizer_bytes_v1(tokenizer_bytes) != TokenizerBindingV1::Bound(commitment)
+        || back.artifact_digest() != digest_after
+    {
         return Err("the bound container did not read back as bound to this tokenizer — nothing written".to_string());
     }
     Ok(TokenizerBindOutcomeV1::Bound { bytes, commitment, digest_before, digest_after })

@@ -121,6 +121,10 @@ fn run(args: &[String]) -> Result<(), String> {
     }
 }
 
+/// One artifact's model rows: each model id it names, beside the root that model pairs to —
+/// or the reason it did not pair, which is a per-row answer and not a failure of the walk.
+type ModelRootsV1 = Vec<(String, Result<Hash64, String>)>;
+
 /// **ADR-0096 Decision 10: bind a tokenizer into a converted artifact, and MEASURE that the
 /// class's registered root did not move.**
 ///
@@ -157,10 +161,15 @@ fn bind_tokenizer(
     drop(artifact_bytes);
     let (bytes, commitment, before, after) = match outcome {
         TokenizerBindOutcomeV1::AlreadyBound { commitment, artifact_digest } => {
-            println!("already bound: {} declares tokenizer {commitment} (artifact digest {artifact_digest}); nothing written", input.display());
+            println!(
+                "already bound: {} declares tokenizer {commitment} (artifact digest {artifact_digest}); nothing written",
+                input.display()
+            );
             return Ok(());
         }
-        TokenizerBindOutcomeV1::Bound { bytes, commitment, digest_before, digest_after } => (bytes, commitment, digest_before, digest_after),
+        TokenizerBindOutcomeV1::Bound { bytes, commitment, digest_before, digest_after } => {
+            (bytes, commitment, digest_before, digest_after)
+        }
     };
     let tmp = out.with_extension("tmp");
     std::fs::write(&tmp, &bytes).map_err(|e| format!("{}: {e}", tmp.display()))?;
@@ -168,7 +177,7 @@ fn bind_tokenizer(
     std::fs::rename(&tmp, out).map_err(|e| format!("{} -> {}: {e}", tmp.display(), out.display()))?;
 
     let sdk = sdk_for(view);
-    let roots = |path: &std::path::Path| -> Result<Vec<(String, Result<Hash64, String>)>, String> {
+    let roots = |path: &std::path::Path| -> Result<ModelRootsV1, String> {
         let loaded = sdk.load_artifact(path)?;
         Ok(sdk.pairings(&loaded).into_iter().map(|(entry, root)| (entry.model_id.to_string(), root)).collect())
     };
@@ -180,14 +189,20 @@ fn bind_tokenizer(
                 println!("  {model}: registered root {a}  (unchanged — this row registers the inventory root)");
                 kept.push(model.clone());
             } else {
-                println!("  {model}: registered root {a} → {b}  (MOVED — this row registers the artifact digest; for it this is a new artifact)");
+                println!(
+                    "  {model}: registered root {a} → {b}  (MOVED — this row registers the artifact digest; for it this is a new artifact)"
+                );
                 moved.push(model.clone());
             }
         }
     }
     let refusal = match wanted {
-        Some(model) if moved.iter().any(|m| m == model) => Some(format!("binding moved the registered root of {model}, the class named by --model-id")),
-        Some(model) if !kept.iter().any(|m| m == model) => Some(format!("{model} does not pair with this artifact — run `palw-class inspect`")),
+        Some(model) if moved.iter().any(|m| m == model) => {
+            Some(format!("binding moved the registered root of {model}, the class named by --model-id"))
+        }
+        Some(model) if !kept.iter().any(|m| m == model) => {
+            Some(format!("{model} does not pair with this artifact — run `palw-class inspect`"))
+        }
         None if kept.is_empty() => Some("binding moved the registered root of every class this artifact pairs with".to_string()),
         _ => None,
     };
