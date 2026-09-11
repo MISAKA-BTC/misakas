@@ -15,7 +15,7 @@ use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
 use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
 use kaspa_hashes::Hash64;
 use misaka_palw_base0::classes::{Qwen36CanonicalClassV1, qwen36_canonical_classes_v1};
-use misaka_palw_base0::qwen36::{QWEN36_FILE_MAGIC, Qwen36ArtifactV1, open_artifact};
+use misaka_palw_base0::qwen36::{QWEN36_FILE_MAGIC, Qwen36ArtifactV1, Qwen36ResidencyStatsV1, open_artifact_with_residency};
 
 use crate::lineage::{PalwClassEntryV1, PalwLoadedArtifactV1, PalwModelLineageV1};
 
@@ -43,17 +43,28 @@ struct Qwen36HoldingV1 {
 /// node code and tests use when the artifact did not come through [`PalwModelLineageV1::load`].
 pub fn holding_from_artifact(artifact: Arc<Qwen36ArtifactV1>, path: Option<std::path::PathBuf>) -> PalwLoadedArtifactV1 {
     let computed_root = artifact.artifact_root();
+    // ADR-0112: what of the file this process holds, said where the file is named.
+    let gib = |bytes: u64| bytes as f64 / (1u64 << 30) as f64;
+    let residency = match artifact.residency_stats() {
+        Some(s) => format!(
+            "; resident within {:.2} GiB ({:.2} GiB pinned, {:.2} GiB for routed experts)",
+            gib(s.budget_bytes),
+            gib(s.pinned_bytes),
+            gib(s.expert_budget_bytes())
+        ),
+        None => "; residency left to the page cache".to_string(),
+    };
     let summary = match &path {
         Some(p) => format!(
-            "mapped Qwen3.6 artifact {} ({} layers, {:.2} GiB, computed root {computed_root})",
+            "mapped Qwen3.6 artifact {} ({} layers, {:.2} GiB, computed root {computed_root}{residency})",
             p.display(),
             artifact.shape.n_layers(),
-            artifact.weight_bytes() as f64 / (1u64 << 30) as f64,
+            gib(artifact.weight_bytes() as u64),
         ),
         None => format!(
-            "holding a Qwen3.6 mapping ({} layers, {:.2} GiB, computed root {computed_root})",
+            "holding a Qwen3.6 mapping ({} layers, {:.2} GiB, computed root {computed_root}{residency})",
             artifact.shape.n_layers(),
-            artifact.weight_bytes() as f64 / (1u64 << 30) as f64,
+            gib(artifact.weight_bytes() as u64),
         ),
     };
     PalwLoadedArtifactV1::from_parts(
@@ -65,6 +76,12 @@ pub fn holding_from_artifact(artifact: Arc<Qwen36ArtifactV1>, path: Option<std::
 }
 
 /// The `(computed_root, mapping)` inside a holding of this lineage, if it is one.
+/// **The residency's numbers for a holding of this lineage** (ADR-0112 Decision 8): `None` for
+/// another lineage's holding, and for a mapping whose residency the page cache decides.
+pub fn residency_stats_of(holding: &PalwLoadedArtifactV1) -> Option<Qwen36ResidencyStatsV1> {
+    parts_of(holding).and_then(|(_, artifact)| artifact.residency_stats())
+}
+
 pub fn parts_of(holding: &PalwLoadedArtifactV1) -> Option<(Hash64, Arc<Qwen36ArtifactV1>)> {
     if holding.lineage_id != QWEN36_LINEAGE_ID {
         return None;
@@ -163,8 +180,8 @@ impl PalwModelLineageV1 for Qwen36LineageV1 {
         head == QWEN36_FILE_MAGIC
     }
 
-    fn load(&self, path: &Path) -> Result<PalwLoadedArtifactV1, String> {
-        let artifact = open_artifact(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    fn load(&self, path: &Path, residency: crate::lineage::PalwWeightResidencyV1) -> Result<PalwLoadedArtifactV1, String> {
+        let artifact = open_artifact_with_residency(path, residency).map_err(|e| format!("{}: {e}", path.display()))?;
         Ok(holding_from_artifact(Arc::new(artifact), Some(path.to_path_buf())))
     }
 

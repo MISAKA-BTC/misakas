@@ -178,6 +178,17 @@ impl PalwClassSdk {
     /// lineage, whose decoder authenticates the format internally and whose refusal is the error
     /// the operator sees.
     pub fn load_artifact(&self, path: &Path) -> Result<PalwLoadedArtifactV1, String> {
+        self.load_artifact_with(path, crate::lineage::PalwWeightResidencyV1::PageCache)
+    }
+
+    /// [`Self::load_artifact`] under a residency policy (ADR-0112): how much of a mapped
+    /// container's weights the process keeps. A node passes what its operator stated, or the
+    /// default ratio; a plain consumer that wants the page cache uses `load_artifact`.
+    pub fn load_artifact_with(
+        &self,
+        path: &Path,
+        residency: crate::lineage::PalwWeightResidencyV1,
+    ) -> Result<PalwLoadedArtifactV1, String> {
         let mut head = [0u8; 8];
         {
             use std::io::Read;
@@ -193,7 +204,7 @@ impl PalwClassSdk {
             .find(|l| l.sniffs(&head))
             .or_else(|| self.lineages.iter().find(|l| l.is_container_fallback()))
             .ok_or_else(|| format!("{}: no lineage in this build claims this container", path.display()))?;
-        lineage.load(path)
+        lineage.load(path, residency)
     }
 
     /// Every `(entry, pairing result)` for one artifact against its own lineage's classes — the
@@ -1376,7 +1387,11 @@ mod revision_row_tests {
         fn sniffs(&self, _head: &[u8; 8]) -> bool {
             false
         }
-        fn load(&self, _path: &std::path::Path) -> Result<PalwLoadedArtifactV1, String> {
+        fn load(
+            &self,
+            _path: &std::path::Path,
+            _residency: crate::lineage::PalwWeightResidencyV1,
+        ) -> Result<PalwLoadedArtifactV1, String> {
             Err("the mock loads nothing".into())
         }
         fn registered_weight_keys(&self, _artifact: &PalwLoadedArtifactV1) -> Vec<Hash64> {

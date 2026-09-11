@@ -269,6 +269,8 @@ pub struct PalwPanelConfig {
     pub class_artifacts: Vec<PathBuf>,
     /// ADR-0067 tier ④: the byte bound on resident artifacts (0 = unbounded).
     pub class_cache_bytes: u64,
+    /// ADR-0112: how much of a mapped class's weights this node keeps in memory.
+    pub class_residency: misaka_palw_sdk::PalwWeightResidencyV1,
     /// **Re-run every licensed claim and dispute the ones this node cannot reproduce.**
     ///
     /// Off by default because it is not free: it costs one full inference per licensed claim, and
@@ -550,8 +552,13 @@ impl PalwPanelService {
             config.prompt_ids_form,
             consensus_config.params.net.to_string().into_bytes(),
         );
-        let class_holdings =
-            crate::palw_backends::load_class_holdings_v1(PALW_PANEL, &sdk, &config.class_artifacts, config.class_cache_bytes);
+        let class_holdings = crate::palw_backends::load_class_holdings_v1(
+            PALW_PANEL,
+            &sdk,
+            &config.class_artifacts,
+            config.class_cache_bytes,
+            config.class_residency,
+        );
         Self {
             config,
             consensus_manager,
