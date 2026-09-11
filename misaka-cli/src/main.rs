@@ -29,6 +29,8 @@ mod forward;
 mod key_roles;
 mod keys;
 mod node;
+/// `palw claim` — what became of a free-prompt claim: its phase on the chain, and the next step.
+mod palw_claim;
 mod palw_court;
 mod palw_da;
 mod palw_derived;
@@ -890,6 +892,29 @@ enum PalwCmd {
         #[arg(long)]
         yes: bool,
     },
+    /// **What became of a free-prompt claim** — its phase on the chain, what that means, and the
+    /// next step.
+    ///
+    /// Reads `getPalwFreePromptClaim` and says what the phase means for the executor: a panel
+    /// drawn and when, receipts due, final and when (and by whom) its quanta can be spent as
+    /// receipt blocks, or voided and who paid — dated in the windows of the network's own
+    /// ConsensusV2 bundle, against the node's current DAA. Name claim ids (the gateway's
+    /// `fp_claim_id`), or pass `--outbox` to follow every job the gateway wrote there as far as it
+    /// got: answered but not committed, committed but not submitted, signed but not submitted,
+    /// expired, given up, or on the chain. A named claim the chain does not hold exits non-zero; an
+    /// outbox job that is not on the chain is reported in its row. Nothing signs, nothing spends.
+    #[command(group(clap::ArgGroup::new("claims").required(true).multiple(true).args(["claim_ids", "outbox"])))]
+    Claim {
+        /// 128-hex claim ids (the gateway's or the rail's `fp_claim_id`).
+        #[arg(value_name = "CLAIM_ID")]
+        claim_ids: Vec<String>,
+        /// The gateway's outbox directory: every `fp-job-*.json` job in it, oldest first.
+        #[arg(long, value_name = "DIR")]
+        outbox: Option<std::path::PathBuf>,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
+    },
     /// ADR-0078 Decision 5: read what the chain holds about a free-prompt claim's DERIVATIONS —
     /// the grammar, the transformer, the DSL and artifact hashes, and the claim's own output_root.
     /// The answer's token ids are on no chain; hold them from the gateway response.
@@ -1469,6 +1494,7 @@ async fn main() -> std::process::ExitCode {
             .await
         }
         Command::Palw(PalwCmd::Certified { class_id, json }) => palw_fp::certified(&ctx, &class_id, json).await,
+        Command::Palw(PalwCmd::Claim { claim_ids, outbox, json }) => palw_claim::show(&ctx, &claim_ids, outbox.as_deref(), json).await,
         Command::Palw(PalwCmd::Derived { claim_id, json }) => palw_derived::show(&ctx, &claim_id, json).await,
         Command::Palw(PalwCmd::ModelShow { line_id, quote_msk, json }) => palw_model::show(&ctx, &line_id, quote_msk, json).await,
         Command::Palw(PalwCmd::ModelPositions { holder, key, json }) => {
