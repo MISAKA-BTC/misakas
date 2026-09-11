@@ -1,7 +1,8 @@
 //! **ADR-0077 Decision 4: one handoff — and therefore one submit path.**
 //!
 //! ```text
-//!   the gateway (per job, automatic)          `misaka palw fp-submit` (the manual form)
+//!   misaka-palw-fp-rail --submit              `misaka palw fp-submit` (the manual form)
+//!   (and --watch: every job an outbox holds)
 //!                     \                                   /
 //!                      \                                 /
 //!                       ────────  THIS CRATE  ───────────
@@ -782,6 +783,91 @@ pub async fn select_funding(
         .into_iter()
         .find(|c| c.entry.amount > must_exceed)
         .ok_or_else(|| FpSubmitError::NoFunding { address: address.to_string(), need: must_exceed })
+}
+
+// -------------------------------------------------------------------------------------------
+// The lane's price, from what the node reports
+// -------------------------------------------------------------------------------------------
+
+/// **A class's canonical job in leaves (`pwu_per_inference`), recovered from the node's facts.**
+///
+/// `getPalwProducerFacts` carries the ATTEMPT lane's `pwu` — `palw_pwu_v1(class_target,
+/// pwu_per_inference)`, the expected executions at the class's target times one inference —
+/// rather than the ingredient (ADR-0046: derive, never declare). Dividing by the same consensus
+/// function's execution count gives the ingredient back exactly. A remainder, a zero or a
+/// saturated product is `None`, never a rounded guess: an off-by-one canonical job moves every
+/// quantum boundary of every claim priced from it.
+pub fn fp_class_canonical_leaves_v1(class_target: u128, attempt_pwu: u64) -> Option<u64> {
+    let executions = kaspa_consensus_core::palw_pwu::palw_expected_attempts_v1(class_target).max(1);
+    if attempt_pwu == 0 || attempt_pwu == u64::MAX || !attempt_pwu.is_multiple_of(executions) {
+        return None;
+    }
+    Some(attempt_pwu / executions)
+}
+
+/// **What a free-prompt claim over `work_leaves` reserves on its bond**, as the transition
+/// reserves it (`FreePromptCommitted`: `reserved = pwu × slash_value_per_pwu`): the pwu is the
+/// transition's own quantization of the leaves (`fp_class_quantum_leaves_v1`, `fp_quanta_v3`), and
+/// the slash rate is read back out of the canonical claim's exposure the node reports
+/// (`bond_claim_exposure`, which for a derived class is `pwu_per_inference × slash`).
+///
+/// **This is the number a bond's room must hold, and it is not the canonical claim's.** A
+/// 256-token answer on testnet-11's A16 class is 40 quanta — five canonical jobs, 165,763,600
+/// sompi — while a gateway pricing "one claim" checked the room against 33,152,720. It committed,
+/// the rail submitted, the carrier was mined, and the transition refused the commitment as
+/// `FreePromptExposureCeiling`: a fee spent and no claim, with nothing on either side saying so.
+///
+/// `None` when the inputs do not divide cleanly (no guess is made) or the job earns no quantum.
+pub fn fp_claim_exposure_v1(
+    canonical_leaves: u64,
+    canonical_claim_exposure: u128,
+    quanta_per_canonical_job: u32,
+    max_quanta_per_receipt: u32,
+    work_leaves: u64,
+) -> Option<u128> {
+    if canonical_leaves == 0 || canonical_claim_exposure == 0 || !canonical_claim_exposure.is_multiple_of(u128::from(canonical_leaves))
+    {
+        return None;
+    }
+    let slash = canonical_claim_exposure / u128::from(canonical_leaves);
+    let quantum = kaspa_consensus_core::palw_freeprompt_v3::fp_class_quantum_leaves_v1(canonical_leaves, quanta_per_canonical_job);
+    let quanta = kaspa_consensus_core::palw_freeprompt_v3::fp_quanta_v3(work_leaves, quantum, max_quanta_per_receipt);
+    if quanta == 0 {
+        return None;
+    }
+    Some(u128::from(quanta) * u128::from(quantum) * slash)
+}
+
+#[cfg(test)]
+mod price_tests {
+    use super::{fp_claim_exposure_v1, fp_class_canonical_leaves_v1};
+
+    /// testnet-11's A16 class: `pwu_per_inference` 6,630,544 at target MAX, slash 5, 8 quanta per
+    /// canonical job, 64 per receipt. The numbers are the chain's own: the 300-token claim
+    /// `019efe78…` (42,272,640 leaves) was assigned 51 quanta / 42,269,718 pwu.
+    #[test]
+    fn a_claims_exposure_is_its_own_quanta_times_the_slash_rate() {
+        let canonical = 6_630_544u64;
+        let exposure = u128::from(canonical) * 5;
+        assert_eq!(fp_claim_exposure_v1(canonical, exposure, 8, 64, 33_152_720), Some(165_763_600), "256 tokens = 5 canonical jobs");
+        assert_eq!(fp_claim_exposure_v1(canonical, exposure, 8, 64, 42_272_640), Some(42_269_718 * 5));
+        assert_eq!(fp_claim_exposure_v1(canonical, exposure, 8, 64, u64::MAX), Some(64 * 828_818 * 5), "capped at 64 quanta");
+        assert_eq!(fp_claim_exposure_v1(canonical, exposure, 8, 64, 1), None, "below one quantum there is no claim");
+        assert_eq!(fp_claim_exposure_v1(canonical, exposure + 1, 8, 64, 33_152_720), None, "no guess at a fractional slash rate");
+        assert_eq!(fp_claim_exposure_v1(canonical, exposure, 0, 64, 33_152_720), None, "an unpriced lane prices nothing");
+    }
+
+    #[test]
+    fn the_canonical_job_inverts_the_attempt_pwu_at_any_target() {
+        assert_eq!(fp_class_canonical_leaves_v1(u128::MAX, 6_630_544), Some(6_630_544));
+        let target = u128::MAX >> 14;
+        let pwu = kaspa_consensus_core::palw_pwu::palw_pwu_v1(target, 7_708);
+        assert!(pwu > 7_708, "a hard target is many executions");
+        assert_eq!(fp_class_canonical_leaves_v1(target, pwu), Some(7_708));
+        assert_eq!(fp_class_canonical_leaves_v1(target, pwu + 1), None);
+        assert_eq!(fp_class_canonical_leaves_v1(u128::MAX, 0), None);
+        assert_eq!(fp_class_canonical_leaves_v1(u128::MAX, u64::MAX), None, "a saturated product is not invertible");
+    }
 }
 
 #[cfg(test)]

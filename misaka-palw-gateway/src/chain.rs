@@ -10,9 +10,19 @@
 //!   registered      the class registry row exists on THIS network
 //!   fp_certified    the class is seated on the free-prompt lane (ADR-0075 ClassLaneCertified,
 //!                   the genesis set ∪ the chain set)
-//!   bond_active     the executor bond is known and may produce
+//!   bond_known      the executor bond is registered on this chain — what a commitment needs
+//!   bond_active     the bond is known and may PRODUCE on the attempt lane (context only)
 //!   exposure_room   ceiling − reserved: room for one more claim
 //! ```
+//!
+//! **`bond_active` is not a condition of committing.** It is `ready_to_produce`, the attempt
+//! lane's readiness, and for a known bond its only two refusals are attempt-lane facts: the
+//! class's epoch budget is spent, or the ceiling cannot fit one more CANONICAL claim. The
+//! transition that admits a free-prompt commitment reads neither (`FreePromptCommitted` checks the
+//! bond, its key, that it is not retiring, the class, the lane's certification and price, and the
+//! claim's OWN exposure). Gating on it made a gateway answer and refuse to commit for the rest of
+//! every epoch in which its class's attempt budget ran out — measured on a devnet drill and
+//! documented as expected — while the chain would have taken every one of those claims.
 //!
 //! **An uncertified class ANSWERS and never submits.** That is the whole shape of R0's "the only
 //! reasons a commitment does not reach the chain are the chain's — never a runtime mode": the
@@ -50,7 +60,11 @@ pub struct ChainFacts {
     pub registered: bool,
     /// Decision 3's `fp_certified`: the class is seated on the free-prompt lane.
     pub fp_certified: bool,
-    /// Decision 3's `bond_active`: the bond is known AND has no reason it may not produce.
+    /// The executor bond is registered on this chain. This, not `bond_active`, is the bond fact a
+    /// free-prompt commitment needs (see the module doc).
+    pub bond_known: bool,
+    /// Decision 3's `bond_active`: the bond is known AND has no reason it may not produce — on
+    /// the ATTEMPT lane. Reported for context; a commitment does not wait on it.
     pub bond_active: bool,
     /// Why the bond may not produce, in the chain's own words. Empty when it may.
     pub bond_not_ready_reason: String,
@@ -60,7 +74,16 @@ pub struct ChainFacts {
     /// What the chain says ONE claim of this class reserves. The gateway's own
     /// `--claim-exposure-sompi` overrides it; without one this is the price used, so an operator
     /// who configured a node correctly does not also have to configure a number the node knows.
+    ///
+    /// It is the CANONICAL claim's — one inference of the class — and a free-prompt claim reserves
+    /// its own quanta's worth, which for a long answer is several canonical jobs. It is therefore
+    /// the entrance's lower bound, and [`Self::fp_claim_exposure`] is the price once the job has
+    /// run and its leaves are known.
     pub claim_exposure_sompi: u64,
+    /// The class's canonical job in leaves (`pwu_per_inference`), recovered from the attempt `pwu`
+    /// and target the node reports (`misaka_palw_fp_submit::fp_class_canonical_leaves_v1`). Zero
+    /// when unknown.
+    pub class_canonical_leaves: u64,
     /// Zero means this network prices no free-prompt lane at all, and a commitment on it would
     /// never enter the state — a refusal with a name, not a silent no-op.
     pub fp_quanta_per_canonical_job: u32,
@@ -163,13 +186,14 @@ impl ChainFacts {
                     .to_string(),
             );
         }
-        if !self.bond_active {
-            let why = if self.bond_not_ready_reason.is_empty() {
-                "the chain does not know this bond".to_string()
-            } else {
-                self.bond_not_ready_reason.clone()
-            };
-            return Some(format!("the executor bond is not producible: {why} (`bond_active` is false in /health)"));
+        // The bond's EXISTENCE, not its attempt-lane readiness (see the module doc): a known bond
+        // whose class is out of attempt budget commits free-prompt claims the chain accepts.
+        if !self.bond_known {
+            return Some(
+                "the chain does not know the executor bond this gateway's identity names (`bond_known` is false in /health) \
+                 — register it (kaspad --palw-register-bond) or fix identity.json's bond_txid/bond_index"
+                    .to_string(),
+            );
         }
         if self.exposure_room_sompi == 0 {
             return Some(
@@ -188,6 +212,19 @@ impl ChainFacts {
         self.live && self.read_error.is_none()
     }
 
+    /// **What a claim over `work_leaves` reserves on this bond** — the chain's price for THIS job
+    /// (`misaka_palw_fp_submit::fp_claim_exposure_v1`), known once the job has run. `None` when
+    /// the node did not report the ingredients cleanly; the caller then keeps the canonical price.
+    pub fn fp_claim_exposure(&self, work_leaves: u64) -> Option<u128> {
+        misaka_palw_fp_submit::fp_claim_exposure_v1(
+            self.class_canonical_leaves,
+            u128::from(self.claim_exposure_sompi),
+            self.fp_quanta_per_canonical_job,
+            self.fp_max_quanta_per_receipt,
+            work_leaves,
+        )
+    }
+
     /// What `/health` says. All four names appear in every answer, including the unknown one —
     /// a field that disappears when it is unknown is a field an operator reads as fine, and a
     /// `false` where the truth is "unreachable" is a field an operator acts on wrongly.
@@ -200,8 +237,10 @@ impl ChainFacts {
             "daa_score": self.daa_score,
             "registered": if self.known() { serde_json::json!(self.registered) } else { serde_json::json!("unknown") },
             "fp_certified": if self.known() { serde_json::json!(self.fp_certified) } else { serde_json::json!("unknown") },
+            "bond_known": if self.known() { serde_json::json!(self.bond_known) } else { serde_json::json!("unknown") },
             "bond_active": if self.known() { serde_json::json!(self.bond_active) } else { serde_json::json!("unknown") },
             "bond_not_ready_reason": self.bond_not_ready_reason,
+            "class_canonical_leaves": self.class_canonical_leaves,
             "exposure_room": if self.known() { serde_json::json!(self.exposure_room_sompi) } else { serde_json::json!("unknown") },
             "bond_collateral": self.bond_collateral,
             "chain_claim_exposure_sompi": self.claim_exposure_sompi,
@@ -322,7 +361,14 @@ impl RpcChainSource {
                 facts.anchor_daa = dag.1;
                 facts.registered = producer.available;
                 facts.fp_certified = producer.fp_certified;
+                facts.bond_known = producer.bond_known;
                 facts.bond_active = producer.bond_known && producer.not_ready_reason.is_empty();
+                facts.class_canonical_leaves = producer
+                    .class_target
+                    .parse::<u128>()
+                    .ok()
+                    .and_then(|target| misaka_palw_fp_submit::fp_class_canonical_leaves_v1(target, producer.pwu))
+                    .unwrap_or(0);
                 facts.bond_not_ready_reason = producer.not_ready_reason.clone();
                 facts.bond_collateral = producer.bond_collateral;
                 facts.exposure_room_sompi = exposure_room(&producer.bond_exposure_ceiling, &producer.bond_reserved_exposure);
@@ -399,6 +445,7 @@ mod tests {
             live: true,
             registered: true,
             fp_certified: true,
+            bond_known: true,
             bond_active: true,
             exposure_room_sompi: 1_000_000,
             claim_exposure_sompi: 50_000,
@@ -419,11 +466,7 @@ mod tests {
             (ChainFacts { registered: false, ..certified() }, "does not know this class"),
             (ChainFacts { fp_certified: false, ..certified() }, "free-prompt lane"),
             (ChainFacts { fp_quanta_per_canonical_job: 0, ..certified() }, "prices no free-prompt lane"),
-            (ChainFacts { bond_active: false, ..certified() }, "does not know this bond"),
-            (
-                ChainFacts { bond_active: false, bond_not_ready_reason: "the bond is Retiring".into(), ..certified() },
-                "the bond is Retiring",
-            ),
+            (ChainFacts { bond_known: false, bond_active: false, ..certified() }, "does not know the executor bond"),
             (ChainFacts { exposure_room_sompi: 0, ..certified() }, "no room for another claim"),
             (ChainFacts { read_error: Some("connection refused".into()), ..certified() }, "could not be read"),
         ];
@@ -431,6 +474,35 @@ mod tests {
             let refusal = facts.commit_refusal().unwrap_or_else(|| panic!("expected a refusal naming {needle:?}"));
             assert!(refusal.contains(needle), "the refusal must name {needle:?}, got: {refusal}");
         }
+    }
+
+    /// **An attempt-lane hold is not a reason to withhold a free-prompt commitment.** For a known
+    /// bond the node's `not_ready_reason` can only be one of the attempt lane's two holds; the
+    /// transition that admits a commitment reads neither, so a class out of epoch budget — every
+    /// class registered mid-epoch, for the rest of that epoch — still commits.
+    #[test]
+    fn an_attempt_lane_hold_does_not_withhold_a_commitment() {
+        for reason in ["this class's epoch budget is already spent", "the bond's exposure ceiling leaves no room for another claim"] {
+            let facts = ChainFacts { bond_active: false, bond_not_ready_reason: reason.into(), ..certified() };
+            assert_eq!(facts.commit_refusal(), None, "{reason:?} is the attempt lane's, and the chain would take the claim");
+        }
+        let health = ChainFacts { bond_active: false, ..certified() }.health_json();
+        assert_eq!(health["bond_known"], serde_json::json!(true), "and /health says the bond is there");
+    }
+
+    /// **A job is priced at its own quanta once it has run**, not at the canonical claim the node
+    /// reports: the A16 row on testnet-11, a 256-token answer, five canonical claims.
+    #[test]
+    fn a_job_is_priced_at_its_own_quanta() {
+        let facts = ChainFacts {
+            claim_exposure_sompi: 33_152_720,
+            class_canonical_leaves: 6_630_544,
+            fp_quanta_per_canonical_job: 8,
+            fp_max_quanta_per_receipt: 64,
+            ..certified()
+        };
+        assert_eq!(facts.fp_claim_exposure(33_152_720), Some(165_763_600));
+        assert_eq!(ChainFacts { class_canonical_leaves: 0, ..facts }.fp_claim_exposure(33_152_720), None, "unknown is not a price");
     }
 
     /// The offline form objects to nothing and claims nothing: four unknowns, and a `/health` that
