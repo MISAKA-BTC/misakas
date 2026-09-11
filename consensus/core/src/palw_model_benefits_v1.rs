@@ -151,10 +151,10 @@ pub fn palw_model_benefits_validate_v1(
         if t.min_units == 0 {
             return Err(PalwModelBenefitRejectV1::TiersNotIncreasing);
         }
-        if let Some(prev) = last {
-            if t.min_units <= prev {
-                return Err(PalwModelBenefitRejectV1::TiersNotIncreasing);
-            }
+        if let Some(prev) = last
+            && t.min_units <= prev
+        {
+            return Err(PalwModelBenefitRejectV1::TiersNotIncreasing);
         }
         last = Some(t.min_units);
         if t.grants & !grant::KNOWN != 0 {
@@ -221,7 +221,7 @@ pub fn palw_model_benefits_is_strengthening_v1(
 /// The highest tier in `tiers` a holder of `units` with `tenure_daa` qualifies for (§4.3, §4.5).
 /// Pass `u64::MAX` for `tenure_daa` to ignore the clock, which is what §4.7's comparison wants.
 pub fn tier_for_units(tiers: &[PalwModelBenefitTierV1], units: u64, tenure_daa: u64) -> Option<&PalwModelBenefitTierV1> {
-    tiers.iter().filter(|t| units >= t.min_units && tenure_daa >= t.min_hold_daa).next_back()
+    tiers.iter().rfind(|t| units >= t.min_units && tenure_daa >= t.min_hold_daa)
 }
 
 /// §4.6 — the tiers GOVERNING at `daa`, after any pending weakening has matured and after the
