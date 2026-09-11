@@ -6,6 +6,13 @@
   Decision 2 (the engine) is consensus-neutral and in force wherever this build runs. Decision 1
   (the job) is behind `Params::palw_prefill_draw`, `None` on every shipped preset, so no fingerprint
   moves until a network arms it.
+* **Scheduled on testnet-11 at DAA 4,000** (operator, 2026-09-11), on the pre-mainnet audit's flag day
+  (`PALW_RC_AUDIT_FENCE_DAA`), so one rollout carries both; t11's fingerprint moves `09efd285…` →
+  `4300409b…`. The shared height has one consequence the fork-id gate cannot see: a build carrying
+  the audit fence without this one advertises the same fork id and parts silently at 4,000 (the
+  constant's doc). Held context (ADR-0103) was asked for the same height and given its own flag day
+  instead — its prerequisites on testnet-11 (signature contexts, Merkle prompt ids, the shard court)
+  are not armable yet.
 * Builds on: [0072](0072-the-ticket-is-the-execution.md) (the ticket is a function of the
   execution), [0084](0084-the-ids-ride-the-capture-stays-home.md) (Decision 7: the seat's verdict by
   execution), [0112](0112-a-classs-weights-are-read-within-a-budget-the-operator-states-and-the-budget-is-a-fifth-of-the-artifact.md)
