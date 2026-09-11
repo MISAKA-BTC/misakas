@@ -14447,7 +14447,7 @@ pub(crate) mod tests {
         assert!(matches!(status, PalwBondStatusV2::Retiring { .. }), "and the status is how the caller tells them apart");
 
         // Nothing else answers to this key, and an unknown key answers to nothing.
-        assert!(retired.bond_of_pubkey_v2(&vec![8u8; 4]).is_none(), "an unregistered key holds no bond");
+        assert!(retired.bond_of_pubkey_v2(&[8u8; 4]).is_none(), "an unregistered key holds no bond");
     }
 
     /// **The reason the lookup above may not filter: one key, one bond, for the life of the chain.**
@@ -26730,7 +26730,7 @@ pub(crate) mod tests {
             let promote = PalwConsensusObjectV2::ModelVersionPromoted { line_id: class, version: 2, signature: vec![1] };
 
             // N7, the closed side: one block short of the promise is refused.
-            let e = try_with(&s2, &p, &ctx(5, 851, 5), &[promote.clone()], &extras()).unwrap_err();
+            let e = try_with(&s2, &p, &ctx(5, 851, 5), std::slice::from_ref(&promote), &extras()).unwrap_err();
             assert!(
                 matches!(e, PalwStateV2Error::ModelBenefitLeadNotElapsed { line, version, promotable_at }
                     if line == class && version == 2 && promotable_at == 852),

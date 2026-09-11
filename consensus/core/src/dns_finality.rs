@@ -11493,7 +11493,10 @@ mod tests {
         assert!(!dns_finality_fresh_for_bridge(true, anchor, Some(anchor_blue), anchor_blue + bound + 1, &dns), "a stall pauses");
         assert!(!dns_finality_fresh_for_bridge(false, anchor, Some(anchor_blue), anchor_blue, &dns), "unconfirmed pauses");
         assert!(!dns_finality_fresh_for_bridge(true, Hash64::default(), Some(0), 0, &dns), "no anchor pauses");
-        assert!(!dns_finality_fresh_for_bridge(true, anchor, Some(anchor_blue), anchor_blue - 1, &dns), "an anchor above the tip pauses");
+        assert!(
+            !dns_finality_fresh_for_bridge(true, anchor, Some(anchor_blue), anchor_blue - 1, &dns),
+            "an anchor above the tip pauses"
+        );
         assert!(!dns_finality_fresh_for_bridge(true, anchor, None, anchor_blue, &dns), "an anchor this node cannot read pauses");
     }
 
@@ -11508,12 +11511,10 @@ mod tests {
     /// pauses the bridge within the preset's 2 blue of tolerance past the healthy distance.
     #[test]
     fn testnet_11_opens_the_bridge_while_dns_confirmation_keeps_up_and_pauses_on_a_stall() {
-        let t11 = crate::config::params::Params::from(crate::network::NetworkId::with_suffix(
-            crate::network::NetworkType::Testnet,
-            11,
-        ))
-        .dns_params
-        .expect("testnet-11 carries the DNS overlay");
+        let t11 =
+            crate::config::params::Params::from(crate::network::NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11))
+                .dns_params
+                .expect("testnet-11 carries the DNS overlay");
         assert_eq!(
             (
                 t11.attestation_lag_blue_score,
@@ -11921,8 +11922,7 @@ mod tests {
         );
 
         // Below the fence such an epoch mints more than its pool — pinned as the number.
-        let unfenced =
-            validator_quality_bonus_outputs(tally.quality_pool_accrued, &tally.included, tally.expected_stake, true, None);
+        let unfenced = validator_quality_bonus_outputs(tally.quality_pool_accrued, &tally.included, tally.expected_stake, true, None);
         assert_eq!(
             unfenced.iter().map(|o| o.value as u128).sum::<u128>(),
             2 * tally.quality_pool_accrued,
@@ -11984,7 +11984,7 @@ mod tests {
             "past the fence one block releases at most one cap however many thresholds it crossed ({bounded_total} > {cap})"
         );
         assert!(
-            bounded.iter().map(|o| o.value as u64).sum::<u64>() == bounded_total,
+            bounded.iter().map(|o| o.value).sum::<u64>() == bounded_total,
             "the minted total and the outputs are one statement — the reserve recurrence subtracts exactly what was paid"
         );
 

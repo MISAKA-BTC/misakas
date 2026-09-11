@@ -1169,7 +1169,8 @@ mod tests {
         faster_hex::hex_decode(PAYLOAD.as_bytes(), &mut payload).unwrap();
         assert_eq!(payload.len(), 143);
 
-        validate_palw_lifecycle_tx(&payload).expect("the chain accepted this carrier at DAA 1,945; a build that refuses it cannot sync");
+        validate_palw_lifecycle_tx(&payload)
+            .expect("the chain accepted this carrier at DAA 1,945; a build that refuses it cannot sync");
         let decoded: PalwLifecycleTxPayloadV2 = borsh::from_slice(&payload).unwrap();
         assert_eq!(decoded.version, PALW_LIFECYCLE_TX_VERSION_V2);
         let PalwConsensusObjectV2::ModelSeed { line_id, seeder: _, msk_seed, sink_index } = decoded.object else {

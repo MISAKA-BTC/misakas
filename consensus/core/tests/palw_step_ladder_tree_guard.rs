@@ -168,7 +168,8 @@ fn relative(path: &Path) -> String {
 fn production_lines(source: &str) -> impl Iterator<Item = (usize, &str)> {
     fn is_module_head(line: &str) -> bool {
         let t = line.trim_start();
-        let t = t.strip_prefix("pub(crate) ").or_else(|| t.strip_prefix("pub(super) ")).or_else(|| t.strip_prefix("pub ")).unwrap_or(t);
+        let t =
+            t.strip_prefix("pub(crate) ").or_else(|| t.strip_prefix("pub(super) ")).or_else(|| t.strip_prefix("pub ")).unwrap_or(t);
         t.starts_with("mod ")
     }
     let lines: Vec<&str> = source.lines().collect();
@@ -176,7 +177,8 @@ fn production_lines(source: &str) -> impl Iterator<Item = (usize, &str)> {
         .iter()
         .enumerate()
         .find(|(n, l)| {
-            l.trim() == "#[cfg(test)]" && lines[n + 1..].iter().find(|next| !next.trim().is_empty()).is_some_and(|next| is_module_head(next))
+            l.trim() == "#[cfg(test)]"
+                && lines[n + 1..].iter().find(|next| !next.trim().is_empty()).is_some_and(|next| is_module_head(next))
         })
         .map(|(n, _)| n)
         .unwrap_or(usize::MAX);
@@ -244,7 +246,8 @@ fn no_production_path_builds_or_opens_a_step_tree_at_the_default_ladder() {
 /// The seat still grades, still opens, and still does both at a number it reads from its ruleset.
 #[test]
 fn the_seat_still_grades_its_samples_and_does_it_at_the_rulesets_ladder() {
-    let panel = std::fs::read_to_string(repo_root().join("kaspad/src/palw_panel.rs")).expect("kaspad/src/palw_panel.rs is in the tree");
+    let panel =
+        std::fs::read_to_string(repo_root().join("kaspad/src/palw_panel.rs")).expect("kaspad/src/palw_panel.rs is in the tree");
     let body = panel.split("fn fp_capture_samples_clear").nth(1).expect("the seat's sample check still exists");
     let body = &body[..body.len().min(4_000)];
     // ADR-0103 §10.3 item 11: the seat grades the carriage the chain will read — the opened check,

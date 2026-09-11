@@ -417,7 +417,10 @@ fn identity_from_file(file: IdentityFile, answer_never_commit: bool) -> Result<I
     let executor_bond = if bond_absent {
         TransactionOutpoint { transaction_id: TransactionId::from_bytes(Hash64::default().as_bytes()), index: 0 }
     } else {
-        TransactionOutpoint { transaction_id: TransactionId::from_bytes(hex64(&file.bond_txid, "bond_txid").as_bytes()), index: file.bond_index }
+        TransactionOutpoint {
+            transaction_id: TransactionId::from_bytes(hex64(&file.bond_txid, "bond_txid").as_bytes()),
+            index: file.bond_index,
+        }
     };
     Ok(Identity {
         network_domain: hex64_or_absent(&file.network_domain, "network_domain", answer_never_commit)?,
