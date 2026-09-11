@@ -336,6 +336,12 @@ pub(crate) mod tests {
         pub chunks: Vec<Vec<Vec<u8>>>,
     }
 
+    /// The prompt the fixture's job commits to — under the tiled root (ADR-0081 Decision 3), so a
+    /// held DA court can open one tile of it.
+    pub(crate) fn fixture_prompt_ids(prefill: u32) -> Vec<u32> {
+        (0..prefill).map(|i| i * 3 + 1).collect()
+    }
+
     /// The cache row the engine would have written at `(kind, layer, position)`.
     fn row(kind: u8, layer: u16, position: u32, lanes: usize) -> Vec<i32> {
         (0..lanes).map(|i| ((kind as i32 * 7919 + layer as i32 * 131 + position as i32 * 17 + i as i32) % 509) - 254).collect()
@@ -369,7 +375,8 @@ pub(crate) mod tests {
             trace_scheme_id: crate::palw_step_refute::tiled_logits_scheme_id_v1(),
             cu_ruleset_id: h64(9),
             tokenizer_id: h64(10),
-            prompt_token_ids_hash: h64(11),
+            prompt_token_ids_hash: crate::palw_prompt_ids_v1::prompt_token_ids_root_v1(&fixture_prompt_ids(prefill))
+                .expect("a tiled prompt root"),
             declared_prefill_tokens: prefill,
             exact_decode_tokens: 1,
             max_context_tokens: 32,

@@ -22777,6 +22777,293 @@ pub(crate) mod tests {
         assert_eq!(fold(&armed).state_root(), fold(&dormant).state_root(), "the fence alone moves no root");
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // ADR-0103 — the held regime in the fold
+    // ---------------------------------------------------------------------------------------------
+
+    fn held_params(class_id: Hash64) -> PalwStateParamsV2 {
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, class_id, 4, 1000, 100, 1000, 0).unwrap().with_fp_quanta(8, 64).unwrap()
+    }
+
+    fn held_extras() -> PalwTransitionExtrasV1 {
+        PalwTransitionExtrasV1 { shard_court_ladder: Some(1 << 26), held_context_ladder: Some(1 << 26), ..Default::default() }
+    }
+
+    fn held_apply(
+        parent: &PalwChainStateV2,
+        p: &PalwStateParamsV2,
+        c: &PalwBlockContextV2,
+        objects: &[PalwConsensusObjectV2],
+        att: Option<&PalwAttemptEnvelopeV2>,
+        extras: &PalwTransitionExtrasV1,
+    ) -> Result<(PalwChainStateV2, PalwStateDeltaV2), PalwStateV2Error> {
+        let out = apply_palw_transition_v2_with_extras(parent, p, c, objects, att, false, false, false, true, extras)?;
+        out.0.assert_internal_consistency(p).expect("internal consistency after apply");
+        out.0.assert_deadline_consistency(p).expect("deadline consistency after apply");
+        Ok(out)
+    }
+
+    const HELD_TRACE_ROOT: u64 = 0x7A;
+
+    /// The fixture's class registered as the chain's base class, bond 1 producing and bond 2
+    /// accusing, and one claim on the fixture's execution with a bound panel.
+    fn held_setup(fx: &crate::palw_checkpoint_court_v1::tests::HeldFixture) -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
+        let class_id = fx.class_id();
+        let p = held_params(class_id);
+        let mut objects = register_class_and_bond();
+        if let PalwConsensusObjectV2::ClassRegistered { class_id: registered, .. } = &mut objects[0] {
+            *registered = class_id;
+        }
+        objects.push(PalwConsensusObjectV2::BondRegistered {
+            bond: bond_key(2),
+            pubkey: vec![8; 4],
+            operator_pubkey: op_key(22),
+            collateral: 1_000,
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A22),
+            capable_classes: Default::default(),
+            signature: Vec::new(),
+        });
+        let extras = held_extras();
+        let (s1, _) = held_apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None, &extras).expect("the registry");
+        let mut env = attempt_for_class(40, 1, class_id, bond_key(1), vec![7; 4], op_id(21), h64(11));
+        env.attempt.trace_root = h64(HELD_TRACE_ROOT);
+        env.attempt.execution_root = fx.binding.committed_execution_root;
+        env.attempt.trace_chunk_count = 1;
+        env.attempt.trace_retention_daa = 999_999;
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, _) = held_apply(&s1, &p, &ctx(2, 101, 2), &[], Some(&env), &extras).expect("the claim");
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }, PalwPanelSeatV2 { bond: bond_key(2), operator_id: h64(91) }];
+        let (s3, _) =
+            held_apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None, &extras)
+                .expect("the panel");
+        (p, s3, claim_id)
+    }
+
+    fn held_checkpoint_accusation(
+        fx: &crate::palw_checkpoint_court_v1::tests::HeldFixture,
+        claim_id: Hash64,
+        c: u32,
+        kind: u8,
+        layer: u16,
+        position: u32,
+    ) -> PalwConsensusObjectV2 {
+        let mut a = fx.accusation(c, kind, layer, position);
+        a.claim = claim_id;
+        a.trace_root = h64(HELD_TRACE_ROOT);
+        a.executor_bond = bond_key(1);
+        a.accuser_bond = bond_key(2);
+        PalwConsensusObjectV2::CheckpointAccused { accusation: Box::new(a) }
+    }
+
+    /// **ADR-0103 Decision 1 in the fold: no bisection is played under the regime, and the fence
+    /// alone moves no root.**
+    #[test]
+    fn the_held_regime_refuses_the_bisection_and_the_fence_alone_moves_no_root() {
+        let fx = crate::palw_checkpoint_court_v1::tests::held_fixture(true, 20, None);
+        let (p, s3, claim_id) = held_setup(&fx);
+        let open = PalwConsensusObjectV2::CourtOpened {
+            session_id: h64(5),
+            claim: claim_id,
+            challenger_bond: bond_key(2),
+            space: crate::palw_bisect::PalwBisectSpaceV1::StepLeaves,
+            space_size: 1 << 26,
+            signature: vec![1; 8],
+        };
+        let err = held_apply(&s3, &p, &ctx(4, 110, 4), &[open.clone()], None, &held_extras()).expect_err("refused");
+        assert_eq!(err, PalwStateV2Error::BisectionRefusedUnderHeldContext(claim_id));
+        let dormant = held_apply(&s3, &p, &ctx(4, 110, 4), &[open], None, &PalwTransitionExtrasV1::default());
+        assert!(!matches!(dormant, Err(PalwStateV2Error::BisectionRefusedUnderHeldContext(_))), "dormant, the refusal is not this one");
+        let fold = |extras: &PalwTransitionExtrasV1| held_apply(&s3, &p, &ctx(4, 110, 4), &[], None, extras).expect("nothing to refuse").0;
+        assert_eq!(fold(&held_extras()).state_root(), fold(&PalwTransitionExtrasV1::default()).state_root(), "the fence alone moves no root");
+    }
+
+    /// **ADR-0103 Decision 1 in the fold: a forged checkpoint convicts its executor in one move, a
+    /// false accusation charges its accuser, and dormant the object is refused by name.**
+    #[test]
+    fn a_checkpoint_accusation_convicts_a_forged_checkpoint_and_charges_a_false_one() {
+        for held in [false, true] {
+            let forged = crate::palw_checkpoint_court_v1::tests::held_fixture(held, 20, Some((1, 0, 4)));
+            let (p, s3, claim_id) = held_setup(&forged);
+            let accuse = held_checkpoint_accusation(&forged, claim_id, 11, 1, 0, 4);
+            assert_eq!(
+                held_apply(&s3, &p, &ctx(4, 110, 4), &[accuse.clone()], None, &PalwTransitionExtrasV1::default()).expect_err("dormant"),
+                PalwStateV2Error::HeldContextDormant
+            );
+            let (s4, _) = held_apply(&s3, &p, &ctx(4, 110, 4), &[accuse], None, &held_extras()).expect("convicts");
+            assert!(
+                matches!(s4.claim(&claim_id).expect("claim").phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+                "held={held}: the executor of a forged checkpoint is convicted"
+            );
+
+            let honest = crate::palw_checkpoint_court_v1::tests::held_fixture(held, 20, None);
+            let (p, s3, claim_id) = held_setup(&honest);
+            let before = s3.bond(&bond_key(2)).expect("the accuser").collateral;
+            let (s4, _) = held_apply(&s3, &p, &ctx(4, 110, 4), &[held_checkpoint_accusation(&honest, claim_id, 11, 1, 0, 4)], None, &held_extras())
+                .expect("a false accusation is adjudicated, not refused");
+            assert!(!s4.claim(&claim_id).expect("claim").phase.is_terminal(), "held={held}: an honest claim stands");
+            assert!(s4.bond(&bond_key(2)).expect("the accuser").collateral < before, "held={held}: the false accuser pays");
+        }
+    }
+
+    /// **ADR-0103 Decision 5 in the fold: a one-move accusation at a fused leaf opens the dissection
+    /// AT that leaf** — a session whose ladder is terminal on the named leaf, no phase yet (the
+    /// responder's root claim is the first move), the accuser as the challenger. Without the
+    /// regime it is the refusal it always was.
+    #[test]
+    fn an_accusation_at_a_fused_leaf_opens_the_dissection_at_that_leaf() {
+        use crate::palw_shard_court_v1::PalwShardCourtAccusationV1;
+        use crate::palw_step::{PalwStepCoordinateV1, PalwStepOpKindV1, canonical_step_leaf_index};
+        use crate::palw_step_leg::{PalwStepOpeningV1, PalwStepTileLeafV1};
+        use crate::palw_step_refute::PalwExecutionStepRefutationV1;
+        let fx = crate::palw_checkpoint_court_v1::tests::held_fixture(true, 20, None);
+        let (p, s3, claim_id) = held_setup(&fx);
+        let profile = &fx.binding.shape_profile;
+        let fused = profile.attn_nodes.iter().position(|n| n.op_kind == PalwStepOpKindV1::AttnFused).expect("a fused site");
+        let slot = profile.global_node_slot(crate::palw_step::PalwStepTableV1::Attn, 1, fused).expect("a slot");
+        let coord = PalwStepCoordinateV1 { call_index: 0, node_slot: slot, position: 12, tile_index: 0 };
+        let leaf = canonical_step_leaf_index(profile, &fx.binding.job_context, &coord).expect("a leaf");
+        let accuse = PalwConsensusObjectV2::ShardCourtAccused {
+            accusation: Box::new(PalwShardCourtAccusationV1 {
+                version: 1,
+                claim: claim_id,
+                execution_root: fx.binding.committed_execution_root,
+                trace_root: h64(HELD_TRACE_ROOT),
+                executor_bond: bond_key(1),
+                accuser_bond: bond_key(2),
+                leaf_index: leaf,
+                refutation: PalwExecutionStepRefutationV1 {
+                    binding: fx.binding.clone(),
+                    output_opening: PalwStepOpeningV1 { leaf_index: leaf, leaf_hash: fx.leaves[leaf as usize], siblings: vec![] },
+                    output_preimage: PalwStepTileLeafV1 { version: 1, coord, value_count: 0, values_le: vec![] },
+                    inputs: vec![],
+                    prompt_token_ids: vec![],
+                    decode_tokens: None,
+                    kv_checkpoint: None,
+                },
+                artifact_openings: vec![],
+                signature: vec![9; 8],
+            }),
+        };
+        let court_only = PalwTransitionExtrasV1 { shard_court_ladder: Some(1 << 26), ..Default::default() };
+        assert!(matches!(
+            held_apply(&s3, &p, &ctx(4, 110, 4), &[accuse.clone()], None, &court_only).expect_err("dormant"),
+            PalwStateV2Error::ShardCourtNeedsDissection { leaf: l, .. } if l == leaf
+        ));
+        let (s4, _) = held_apply(&s3, &p, &ctx(4, 110, 4), &[accuse.clone()], None, &held_extras()).expect("the dissection opens");
+        let (_, session) = s4.court_sessions.iter().find(|(_, s)| s.claim == claim_id).expect("a session on the claim");
+        assert_eq!(session.ladder.terminal_index(), Some(leaf), "the ladder is terminal on the named leaf");
+        assert!(session.dissection.is_none(), "the responder's root claim is the first move");
+        assert_eq!(session.challenger_bond, bond_key(2));
+        // A second accusation on the same claim is refused while the session runs.
+        assert!(matches!(
+            held_apply(&s4, &p, &ctx(5, 111, 5), &[accuse], None, &held_extras()).expect_err("one session a claim"),
+            PalwStateV2Error::ShardCourtClaimUnderSession { .. }
+        ));
+    }
+
+    fn held_da_accusation(fx: &crate::palw_checkpoint_court_v1::tests::HeldFixture, claim_id: Hash64, missing: crate::palw_held_da_v1::PalwHeldMissingV1) -> PalwConsensusObjectV2 {
+        PalwConsensusObjectV2::DefaultAccusedHeld {
+            accusation: Box::new(crate::palw_held_da_v1::PalwHeldAccusationV1 {
+                version: 1,
+                claim: claim_id,
+                missing,
+                accuser: bond_key(2),
+                binding: fx.binding.clone(),
+                signature: vec![9; 8],
+            }),
+        }
+    }
+
+    fn held_range_answer(
+        fx: &crate::palw_checkpoint_court_v1::tests::HeldFixture,
+        claim_id: Hash64,
+        first: u64,
+        count: u32,
+    ) -> PalwConsensusObjectV2 {
+        PalwConsensusObjectV2::MaterialDisclosedHeld {
+            disclosure: Box::new(crate::palw_held_da_v1::PalwHeldDisclosureCarriageV1 {
+                version: 1,
+                claim: claim_id,
+                missing: crate::palw_held_da_v1::PalwHeldMissingV1::StepRange { first, count },
+                binding: fx.binding.clone(),
+                disclosure: crate::palw_held_da_v1::PalwHeldDisclosureV1::StepRange {
+                    opening: crate::palw_step_leg::PalwStepRangeOpeningV1 {
+                        first_leaf_index: first,
+                        leaf_hashes: fx.leaves[first as usize..(first + u64::from(count)) as usize].to_vec(),
+                        siblings: crate::palw_step_leg::step_merkle_range_siblings_v1(&fx.leaves, first as usize, count as usize)
+                            .expect("siblings"),
+                    },
+                },
+                signature: vec![9; 8],
+            }),
+        }
+    }
+
+    /// **ADR-0103 Decision 4 in the fold: a held accusation opens ADR-0062's session over its unit,
+    /// only that unit answers it, the answer gives the claim back and charges the accuser, and
+    /// silence past the window is the default.** The unit's record lives exactly as long as the
+    /// disputed phase, on both exits.
+    #[test]
+    fn a_held_accusation_is_answered_in_its_unit_and_silence_defaults() {
+        use crate::palw_held_da_v1::{PALW_HELD_DA_EVENT_INDEX_SENTINEL_V1, PalwHeldMissingV1};
+        let fx = crate::palw_checkpoint_court_v1::tests::held_fixture(true, 20, None);
+        let (p, s3, claim_id) = held_setup(&fx);
+        let missing = PalwHeldMissingV1::StepRange { first: 200, count: 32 };
+        assert_eq!(
+            held_apply(&s3, &p, &ctx(4, 110, 4), &[held_da_accusation(&fx, claim_id, missing)], None, &PalwTransitionExtrasV1::default())
+                .expect_err("dormant"),
+            PalwStateV2Error::HeldContextDormant
+        );
+        let outside = PalwHeldMissingV1::StepRange { first: fx.binding.step_leaf_count, count: 1 };
+        assert!(matches!(
+            held_apply(&s3, &p, &ctx(4, 110, 4), &[held_da_accusation(&fx, claim_id, outside)], None, &held_extras()).expect_err("outside"),
+            PalwStateV2Error::HeldDaRefused { .. }
+        ));
+        let before = s3.claim(&claim_id).expect("claim").phase.clone();
+        let (s4, _) =
+            held_apply(&s3, &p, &ctx(4, 110, 4), &[held_da_accusation(&fx, claim_id, missing)], None, &held_extras()).expect("accused");
+        let phase = s4.claim(&claim_id).expect("claim").phase.clone();
+        assert!(matches!(phase, PalwClaimPhaseV2::DefaultDisputed { missing_event_index, .. } if missing_event_index == PALW_HELD_DA_EVENT_INDEX_SENTINEL_V1));
+        assert_eq!(s4.held_da_missing.get(&claim_id), Some(&missing));
+        // Another unit does not answer it; neither does an event disclosure.
+        assert_eq!(
+            held_apply(&s4, &p, &ctx(5, 111, 5), &[held_range_answer(&fx, claim_id, 201, 32)], None, &held_extras()).expect_err("another unit"),
+            PalwStateV2Error::HeldDaSessionMismatch(claim_id)
+        );
+        let accuser_before = s4.bond(&bond_key(2)).expect("accuser").collateral;
+        let (s5, _) =
+            held_apply(&s4, &p, &ctx(5, 111, 5), &[held_range_answer(&fx, claim_id, 200, 32)], None, &held_extras()).expect("answered");
+        // The answer gives the claim back its phase, with the session's own length given back to the
+        // clock (SA-7): accused at 110, answered at 111, so the panel's anchor moves by one.
+        let PalwClaimPhaseV2::PanelBound { bound_daa: was } = before else { panic!("the claim was panel-bound") };
+        assert_eq!(s5.claim(&claim_id).expect("claim").phase, PalwClaimPhaseV2::PanelBound { bound_daa: was + 1 });
+        assert!(s5.held_da_missing.is_empty(), "the unit's record goes with the session");
+        assert!(s5.bond(&bond_key(2)).expect("accuser").collateral < accuser_before, "the accuser alone pays");
+
+        // Silence past the window: the default, and the record goes with it.
+        let window = palw_da_disclose_window_daa_v1(&p);
+        let (quiet, _) = held_apply(&s4, &p, &ctx(6, 110 + window + 1, 6), &[], None, &held_extras()).expect("the sweep");
+        assert!(matches!(
+            quiet.claim(&claim_id).expect("claim").phase,
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }
+        ));
+        assert!(quiet.held_da_missing.is_empty(), "the record goes with a defaulted session too");
+    }
+
+    /// **The regime's delta entry and objects keep the Borsh tags this build writes** — appended
+    /// after ADR-0100's (39; 42–44), pinned as numbers because a round trip cannot see a reorder.
+    #[test]
+    fn the_held_regimes_tags_are_appended_and_pinned() {
+        let fx = crate::palw_checkpoint_court_v1::tests::held_fixture(true, 4, None);
+        let entry = PalwDeltaEntryV2::HeldDaMissing { key: h64(1), old: None, new: None };
+        assert_eq!(borsh::to_vec(&entry).unwrap()[0], 39);
+        let accuse = held_checkpoint_accusation(&fx, h64(1), 3, 0, 0, 1);
+        assert_eq!(borsh::to_vec(&accuse).unwrap()[0], 42);
+        let missing = crate::palw_held_da_v1::PalwHeldMissingV1::PromptIdsTile { tile: 0 };
+        assert_eq!(borsh::to_vec(&held_da_accusation(&fx, h64(1), missing)).unwrap()[0], 43);
+        assert_eq!(borsh::to_vec(&held_range_answer(&fx, h64(1), 0, 1)).unwrap()[0], 44);
+    }
+
     /// **The one-move court's Borsh tag is the LAST, pinned as a number** (the lesson of `main`'s
     /// 891a1a14: a variant inserted mid-enum renumbered every later one and a fresh node could not
     /// read testnet-11's history). A round trip cannot see a reordering — both sides move together
