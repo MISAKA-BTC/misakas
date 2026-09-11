@@ -27,6 +27,7 @@ const DEFAULTS = {
   LOG_LOOKBACK_BLOCKS: 5000,
   ADR_URL: 'https://github.com/MISAKA-BTC/misakas/tree/main/docs/adr',
   DOCS_URL: 'https://github.com/MISAKA-BTC/misakas/tree/main/docs',
+  WALLET_URL: 'https://wallet.misakascan.com',   // MISAKA Wallet's hosted page, which links the extension
 };
 const CFG = Object.assign({}, DEFAULTS, window.MISAKA_CONFIG || {});
 const QS = new URLSearchParams(location.search);
@@ -343,6 +344,61 @@ const topics = () => ({ bought: ABI.topic(EVT.Bought), sold: ABI.topic(EVT.Sold)
 const ACTION_SEED = 3;
 function seedActionData(lineId) { return '0x01' + '000003' + String(lineId).toLowerCase(); }
 
+// ---- the signed bytes of a transaction, from what the node serves --------------------------------
+// A node answers eth_getTransactionByHash for a PENDING transaction with every signed field. RLP-encoded
+// back they are the exact bytes the wallet broadcast, and keccak256 of those bytes must be the hash —
+// checked, so a node serving some other transaction can never make the site broadcast it. The site keeps
+// the bytes so an order a node forgets (its pool's TTL, a restart) can be broadcast again exactly as it
+// was signed: same hash, same nonce, nothing signed twice.
+const RLP = {
+  bytes(b) { return b.length === 1 && b[0] < 0x80 ? b : concatBytes(RLP.head(b.length, 0x80), b); },
+  head(n, off) {
+    if (n < 56) return Uint8Array.of(off + n);
+    const lb = hexToBytes(n.toString(16));
+    return concatBytes(Uint8Array.of(off + 55 + lb.length), lb);
+  },
+  list(items) { const body = concatBytes(...items); return concatBytes(RLP.head(body.length, 0xc0), body); },
+  int(v) { const n = bi(v); return RLP.bytes(n === 0n ? new Uint8Array(0) : hexToBytes(n.toString(16))); },
+  hex(s) { return RLP.bytes(hexToBytes(String(s || '').replace(/^0x/i, ''))); },
+};
+// The EIP-2718 envelope of a transaction as eth_getTransactionByHash serves it (types 0, 1, 2), or null.
+function encodeRawTx(t) {
+  if (!t || t.r == null || t.s == null) return null;
+  const type = t.type == null ? 0n : bi(t.type);
+  const to = RLP.hex(t.to || '');
+  const data = RLP.hex(t.input != null ? t.input : t.data);
+  const access = () => RLP.list((t.accessList || []).map((a) => RLP.list([RLP.hex(a.address), RLP.list((a.storageKeys || []).map((k) => RLP.hex(k)))])));
+  const y = t.yParity != null ? t.yParity : t.v;
+  if (type === 2n) return concatBytes(Uint8Array.of(2), RLP.list([RLP.int(t.chainId), RLP.int(t.nonce), RLP.int(t.maxPriorityFeePerGas), RLP.int(t.maxFeePerGas), RLP.int(t.gas), to, RLP.int(t.value), data, access(), RLP.int(y), RLP.int(t.r), RLP.int(t.s)]));
+  if (type === 1n) return concatBytes(Uint8Array.of(1), RLP.list([RLP.int(t.chainId), RLP.int(t.nonce), RLP.int(t.gasPrice), RLP.int(t.gas), to, RLP.int(t.value), data, access(), RLP.int(y), RLP.int(t.r), RLP.int(t.s)]));
+  if (type === 0n) return RLP.list([RLP.int(t.nonce), RLP.int(t.gasPrice), RLP.int(t.gas), to, RLP.int(t.value), data, RLP.int(t.v), RLP.int(t.r), RLP.int(t.s)]);
+  return null;
+}
+// ...kept only when those bytes hash to the transaction's own hash.
+function rawTxFromRpc(t) {
+  const bytes = encodeRawTx(t);
+  if (!bytes || '0x' + bytesToHex(keccak256(bytes)) !== String(t.hash || '').toLowerCase()) return null;
+  return '0x' + bytesToHex(bytes);
+}
+// A replacement (a cancel or a change) has to outbid the transaction it replaces: a node takes a second
+// transaction for the same sender and nonce only when its fee cap AND its tip each grow by at least 10 %
+// (EVM_MEMPOOL_REPLACEMENT_BUMP_PCT, integer arithmetic). 25 % + 1 wei clears that on every node, and the
+// cap never goes under twice the base fee now. A zero tip stays zero: 10 % of nothing is nothing.
+function bumpFee(v) { const n = bi(v); return n === 0n ? 0n : (n * 125n) / 100n + 1n; }
+function replacementFees(order, baseFee) {
+  const cap = bumpFee(order.maxFeePerGas), floor = bi(baseFee) * 2n;
+  return { maxFeePerGas: cap > floor ? cap : floor, maxPriorityFeePerGas: bumpFee(order.maxPriorityFeePerGas) };
+}
+// What eth_getTransactionByHash says was signed: the nonce and fees a replacement needs, and the bytes.
+function signedFacts(tx) {
+  return {
+    nonce: Number(bi(tx.nonce)), gas: bi(tx.gas).toString(), value: bi(tx.value).toString(), to: tx.to ? String(tx.to).toLowerCase() : null,
+    maxFeePerGas: bi(tx.maxFeePerGas != null ? tx.maxFeePerGas : tx.gasPrice).toString(),
+    maxPriorityFeePerGas: bi(tx.maxPriorityFeePerGas).toString(),
+    raw: rawTxFromRpc(tx), rawTried: true,
+  };
+}
+
 // ============================================================================================
 // 4. the curve: ADR-0087 as amended by ADR-0090, ported from palw_model_market_v1.rs (BigInt, exact)
 // ============================================================================================
@@ -358,11 +414,19 @@ const CURVE_DEFAULTS = {
   buybackPermille: 50n,                       // PALW_MODEL_BUYBACK_PERMILLE_V1 (ADR-0091: 5 % of a block's reward)
   legPermille: 10n,                           // PALW_MODEL_REGISTRANT_PERMILLE_V1 (the owner's leg since ADR-0088)
 };
+// ADR-0114: the owner's leg is 5 % past `palw_model_leg_v2`. The site never assumes which side of that
+// height the chain is on: the node serves the schedule in force with every market row (getPalwModelMarket
+// v6: burnPermille, legPermille, legV2ActivationDaa) and the AMM's constants() answer under it too.
+const LEG_V2_PERMILLE = 50n;
+const pctOf = (permille) => { const p = bi(permille); return (p % 10n === 0n ? String(p / 10n) : (Number(p) / 10).toFixed(1)) + ' %'; };
 const curve = {
   consts(m) {
     const c = Object.assign({}, CURVE_DEFAULTS);
     if (m && m.supplyUnits && bi(m.supplyUnits) > 0n) c.supplyUnits = bi(m.supplyUnits);
     if (m && m.seedMinSompi && bi(m.seedMinSompi) > 0n) c.seedMinSompi = bi(m.seedMinSompi);
+    // the schedule the chain says is in force: the row's own (wRPC v6), else the window's constants()
+    const chainFees = db.constsFromChain && db.constsFromChain.legPermille != null ? { burnPermille: db.constsFromChain.burnPermille, legPermille: db.constsFromChain.legPermille } : null;
+    if (chainFees && !(m && m.consts)) Object.assign(c, chainFees);
     if (m && m.consts) Object.assign(c, m.consts);
     return c;
   },
@@ -475,7 +539,11 @@ function normMarket(src, source) {
     // ADR-0091: both lanes serve these; a node from before it serves neither (null = not served)
     buybackSompi: src.buybackSompi != null ? bi(src.buybackSompi) : null, retiredUnits: src.retiredUnits != null ? bi(src.retiredUnits) : null,
     classStatus: src.classStatus || '', source, at: Date.now(),
+    // ADR-0114 (wRPC v6): the height the owner's leg becomes 5 % at, 0 when none is scheduled
+    legV2Daa: src.legV2ActivationDaa != null ? bi(src.legV2ActivationDaa) : 0n,
   };
+  // ADR-0114 (wRPC v6): the fee schedule in force at the node's tip, served with the row
+  if (src.burnPermille != null && src.legPermille != null && (bi(src.burnPermille) > 0n || bi(src.legPermille) > 0n)) m.consts = { burnPermille: bi(src.burnPermille), legPermille: bi(src.legPermille) };
   m.seeded = curve.seeded(m);        // reserve > 0: the same guard the fold's quote applies
   m.opened = m.seeded;
   // A node from before ADR-0090 serves a virtual reserve and no least seed; its units are 10^-6 of
@@ -582,42 +650,142 @@ const evm = {
   async chainDaa() { const r = await this.call(ADDR.REGISTRY, ABI.call(SIG.chainDaa)); return ABI.isEmpty(r) ? null : ABI.u(ABI.words(r)[0]); },
 };
 
-const wallet = {
-  provider: null, account: null, chainId: null, listeners: new Set(),
-  // MISAKA Wallet first: it also answers on `window.ethereum`, but only when no other wallet took that
-  // global first — with MetaMask installed beside it, "Connect" reached MetaMask.
-  detect() {
-    const misaka = window.misaka && window.misaka.isMisakaWallet ? window.misaka : null;
-    this.provider = (MOCK && window.MISAKA_MOCK && window.MISAKA_MOCK.ethereum) || misaka || window.ethereum || null;
-    return !!this.provider;
+// ---- which wallet -----------------------------------------------------------------------------
+// A page that talks to `window.ethereum` gets whichever extension claimed that global: with Phantom
+// installed it is Phantom's own "MetaMask or Phantom?" prompt, and MISAKA Wallet is not on it.
+// EIP-6963 has every installed wallet announce itself (`eip6963:announceProvider`, and again each time
+// the page dispatches `eip6963:requestProvider`), so the site lists them all and talks to the one the
+// user picks. The legacy globals are the fallback for a wallet that announces nothing.
+const MISAKA_RDNS = 'com.misakachain.wallet';      // MISAKA Wallet's EIP-6963 rdns (its page-provider.js)
+const WALLET_KEY_ETHEREUM = 'window.ethereum';     // how a pick of the generic row is remembered
+const MISAKA_WALLET_NOTE = 'Recommended — tops up from your UTXO balance automatically';
+const svgUri = (svg) => 'data:image/svg+xml,' + encodeURIComponent(svg);
+const WALLET_ICON_MISAKA = svgUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#132228"/><path d="M7 23V9l9 9 9-9v14" fill="none" stroke="#50d2c1" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+const WALLET_ICON_GENERIC = svgUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#1b3039"/><rect x="7" y="10" width="18" height="13" rx="2.5" fill="none" stroke="#a3b6b2" stroke-width="2"/><path d="M19 16.5h6" stroke="#a3b6b2" stroke-width="2" stroke-linecap="round"/></svg>');
+// EIP-6963 makes the icon a data: URI. Only an image one is drawn (any other URL would be a request to
+// a host the wallet chose), and only ever as an <img src>, never as markup; the name is only ever text.
+function walletIcon(icon, fallback) { return typeof icon === 'string' && /^data:image\//i.test(icon) && icon.length <= 262144 ? icon : fallback; }
+function walletName(name, fallback) { const s = typeof name === 'string' ? name.replace(/\s+/g, ' ').trim().slice(0, 48) : ''; return s || fallback; }
+// The wallets this page can talk to, in the chooser's order. `announced`: EIP-6963 announcements
+// ({ info, provider }) in arrival order; `legacy`: { misaka, ethereum }, the globals. One row per rdns
+// and per provider object. MISAKA Wallet first; the others in the order they announced; last,
+// `window.ethereum` when no announcement is that object. `key` is what a pick is remembered by: the
+// rdns (a uuid is new on every page load, so a row without an rdns is not remembered across visits).
+function walletChoices(announced, legacy) {
+  const rows = [], keys = new Set(), seen = new Set();
+  for (const a of announced || []) {
+    const info = (a && a.info) || {}, p = a && a.provider;
+    if (!p || typeof p.request !== 'function' || seen.has(p)) continue;
+    const rdns = typeof info.rdns === 'string' ? info.rdns.trim().toLowerCase() : '';
+    const key = rdns || 'uuid:' + String(info.uuid || '');
+    if (keys.has(key)) continue;
+    keys.add(key); seen.add(p);
+    const misaka = rdns === MISAKA_RDNS;
+    rows.push({ key, rdns, name: walletName(info.name, misaka ? 'MISAKA Wallet' : rdns || 'Wallet'), icon: walletIcon(info.icon, misaka ? WALLET_ICON_MISAKA : WALLET_ICON_GENERIC), provider: p, source: 'EIP-6963', misaka });
+  }
+  const g = legacy || {};
+  if (g.misaka && g.misaka.isMisakaWallet && typeof g.misaka.request === 'function' && !keys.has(MISAKA_RDNS) && !seen.has(g.misaka)) {
+    keys.add(MISAKA_RDNS); seen.add(g.misaka);
+    rows.push({ key: MISAKA_RDNS, rdns: MISAKA_RDNS, name: 'MISAKA Wallet', icon: WALLET_ICON_MISAKA, provider: g.misaka, source: 'window.misaka', misaka: true });
+  }
+  if (g.ethereum && typeof g.ethereum.request === 'function' && !seen.has(g.ethereum)) {
+    rows.push({ key: WALLET_KEY_ETHEREUM, rdns: '', name: 'Browser wallet', icon: WALLET_ICON_GENERIC, provider: g.ethereum, source: 'window.ethereum', misaka: false });
+  }
+  return rows.filter((r) => r.misaka).concat(rows.filter((r) => !r.misaka));
+}
+// The row the page takes without asking: the remembered one while it is still installed, else the only one.
+function initialChoice(rows, remembered) {
+  const r = remembered ? rows.find((x) => x.key === remembered) : null;
+  return r || (rows.length === 1 ? rows[0] : null);
+}
+const walletDiscovery = {
+  announced: new Map(),      // info.uuid -> { info, provider }, in arrival order
+  listeners: new Set(),
+  add(detail) {
+    const info = detail && detail.info, p = detail && detail.provider;
+    if (!info || typeof info.uuid !== 'string' || !info.uuid || !p || typeof p.request !== 'function') return;
+    // mock mode lists mock.js's wallets only: a real extension would sign on a real chain for a simulated one
+    if (MOCK && !p.isMisakaMock) return;
+    const had = this.announced.get(info.uuid);
+    if (had && had.provider === p) return;           // the same wallet answering another request
+    this.announced.set(info.uuid, { info, provider: p });
+    for (const fn of this.listeners) { try { fn(); } catch (e) { console.error(e); } }
   },
+  request() { try { window.dispatchEvent(new Event('eip6963:requestProvider')); } catch (e) { /* no DOM events */ } },
+  legacy() {
+    if (MOCK) { const m = window.MISAKA_MOCK || {}; return { misaka: m.misaka || null, ethereum: m.ethereum || null }; }
+    try { return { misaka: window.misaka || null, ethereum: window.ethereum || null }; } catch (e) { return {}; }
+  },
+  list() { return walletChoices(Array.from(this.announced.values()), this.legacy()); },
+  // a wallet may announce a moment after the page asks: wait (briefly) for the remembered one
+  waitFor(key, ms) {
+    if (!key || this.list().some((r) => r.key === key)) return Promise.resolve();
+    return new Promise((resolve) => {
+      const check = () => { if (this.list().some((r) => r.key === key)) done(); };
+      const done = () => { clearTimeout(t); this.listeners.delete(check); resolve(); };
+      const t = setTimeout(done, ms);
+      this.listeners.add(check);
+    });
+  },
+};
+window.addEventListener('eip6963:announceProvider', (ev) => walletDiscovery.add(ev && ev.detail));
+
+const wallet = {
+  provider: null, choice: null, account: null, chainId: null, listeners: new Set(), bound: null,
+  choices() { return walletDiscovery.list(); },
+  // a wallet to talk to: the chosen one, or one to choose
+  any() { return !!this.provider || this.choices().length > 0; },
   // **Can this wallet pay from more than the EVM account?** MISAKA Wallet keeps MSK on the post-quantum
   // (UTXO) lane and, inside the same confirmation, moves what a transaction is short of to the EVM
   // account before sending it (its eth_sendTransaction plans the top-up; the approval window says how
   // much). So for it the EVM balance is NOT what it can spend — refusing on that balance is what kept
-  // the wallet from ever being asked, and the balance from ever going up.
+  // the wallet from ever being asked, and the balance from ever going up. Keyed on the wallet the user
+  // CHOSE: MISAKA Wallet installed next to the one in use tops nothing up.
   topsUp() { return !!(this.provider && this.provider.isMisakaWallet); },
   emit() { for (const fn of this.listeners) { try { fn(); } catch (e) { /* ignore */ } } },
   onChain() { return this.chainId != null && this.chainId.toLowerCase() === CHAIN_ID_HEX; },
+  // Talk to `row`'s provider from now on and hear its events alone: the last wallet's listeners come
+  // off, and the guard in each handler drops an event a wallet without removeListener still delivers.
+  use(row) {
+    const b = this.bound; this.bound = null;
+    if (b) {
+      const off = typeof b.p.removeListener === 'function' ? 'removeListener' : typeof b.p.off === 'function' ? 'off' : null;
+      if (off) { try { b.p[off]('accountsChanged', b.accounts); b.p[off]('chainChanged', b.chain); } catch (e) { /* the guard holds */ } }
+    }
+    this.choice = row || null; this.provider = row ? row.provider : null;
+    const p = this.provider;
+    if (p && typeof p.on === 'function') {
+      const accounts = (a) => { if (this.provider !== p) return; this.account = a && a.length ? String(a[0]).toLowerCase() : null; this.emit(); };
+      const chain = (c) => { if (this.provider !== p) return; this.chainId = String(c); this.emit(); };
+      try { p.on('accountsChanged', accounts); p.on('chainChanged', chain); this.bound = { p, accounts, chain }; } catch (e) { /* a wallet without events */ }
+    }
+  },
   async init() {
-    if (!this.detect()) return;
-    try {
-      const accts = await this.provider.request({ method: 'eth_accounts' });
-      if (accts && accts.length && store.get('wallet:auto', MOCK)) this.account = accts[0].toLowerCase();
-      this.chainId = String(await this.provider.request({ method: 'eth_chainId' }));
-    } catch (e) { /* not connected */ }
-    if (this.provider.on) {
-      this.provider.on('accountsChanged', (a) => { this.account = a && a.length ? a[0].toLowerCase() : null; this.emit(); });
-      this.provider.on('chainChanged', (c) => { this.chainId = String(c); this.emit(); });
+    walletDiscovery.request();
+    const remembered = store.get('wallet:choice', null);
+    await walletDiscovery.waitFor(remembered, 300);
+    const row = initialChoice(this.choices(), remembered);
+    if (row) {
+      this.use(row);
+      try {
+        const accts = await row.provider.request({ method: 'eth_accounts' });
+        if (accts && accts.length && store.get('wallet:auto', MOCK)) this.account = String(accts[0]).toLowerCase();
+        this.chainId = String(await row.provider.request({ method: 'eth_chainId' }));
+      } catch (e) { /* not connected */ }
     }
     this.emit();
   },
-  async connect() {
-    if (!this.detect()) throw new Error('No EIP-1193 wallet found. Install MetaMask (or another injected wallet) and reload.');
-    const accts = await this.provider.request({ method: 'eth_requestAccounts' });
-    this.account = accts && accts.length ? accts[0].toLowerCase() : null;
+  // Ask `row`'s wallet for an account. Only once it says yes does it become the site's wallet (and the
+  // one remembered for the next visit): a refusal leaves the wallet in use, and its account, as they were.
+  async connectWith(row) {
+    const p = row.provider;
+    const accts = await p.request({ method: 'eth_requestAccounts' });
+    if (!accts || !accts.length) throw new Error(row.name + ' returned no account.');
+    if (this.provider !== p) this.use(row); else this.choice = row;
+    this.account = String(accts[0]).toLowerCase();
     store.set('wallet:auto', true);
-    this.chainId = String(await this.provider.request({ method: 'eth_chainId' }));
+    if (!row.key.startsWith('uuid:')) store.set('wallet:choice', row.key);
+    this.chainId = String(await p.request({ method: 'eth_chainId' }));
     this.emit();
     if (!this.onChain()) await this.ensureChain();
   },
@@ -678,10 +846,205 @@ const txlog = {
   list: store.get('txs', []),
   claimed: new Set(store.get('txs:claimed', [])),
   save() { store.set('txs', this.list.slice(-200)); store.set('txs:claimed', Array.from(this.claimed).slice(-400)); },
-  add(rec) { this.list.push(rec); this.save(); },
-  update(hash, patch) { const r = this.list.find((x) => x.hash === hash); if (r) { Object.assign(r, patch); this.save(); } return r; },
+  listeners: new Set(),
+  dirty: false,
+  add(rec) { this.list.push(rec); this.save(); this.emit(); },
+  update(hash, patch) { const r = this.list.find((x) => x.hash === hash); if (r) { Object.assign(r, patch); this.save(); this.dirty = true; } return r; },
+  // pages redraw what depends on transaction states (open orders, held balance, activity)
+  emit() { this.dirty = false; for (const fn of this.listeners) { try { fn(); } catch (e) { console.error(e); } } },
   forAccount(acct) { return this.list.filter((x) => !acct || x.from === acct).slice().reverse(); },
 };
+
+// ---- orders: what the site sent, followed until the chain settles it or something replaces it ------
+// On testnet-11 an order waits for a producer that holds it to win a draw: a block comes every ~15–30
+// minutes, and a producer fixes its block's contents when it starts drawing, so pending for tens of
+// minutes is normal. Until a block carries it an order can be cancelled or changed (a replacement with
+// the same nonce and a higher fee). A node forgets a pending transaction after its TTL, and a node that
+// restarted never heard of it: while the nonce is still free the site broadcasts the signed bytes again.
+const ORDER_KINDS = new Set(['buy', 'sell', 'seed']);
+const OPEN = new Set(['sent', 'pending', 'dropped']);    // no block carries it yet — it can be replaced
+const FINAL_OK = new Set(['queued', 'settled', 'refused', 'reverted', 'done']);   // carried: its nonce is used
+const RESEND_MS = 120000;
+// A dropped order whose signed bytes the page never saw cannot be sent again from here; past the node's
+// one-hour pool limit (and a margin) nothing holds it any more, so it is EXPIRED: nothing was paid, and it
+// no longer counts as open. It is still looked at for a day, in case some other node carries it after all.
+const EXPIRE_MS = 70 * 60000;
+const orders = {
+  // unfinished orders of `acct`, newest first: open ones and the ones a block carried that the fold has
+  // not settled yet (those can no longer be replaced)
+  open(acct) { return txlog.forAccount(acct).filter((t) => ORDER_KINDS.has(t.kind) && (OPEN.has(t.status) || t.status === 'queued')); },
+  // the newest open transaction per nonce: a cancel or a change supersedes what it replaces
+  heads(acct) {
+    const by = new Map();
+    for (const t of txlog.list) {
+      if (t.from !== acct || !OPEN.has(t.status)) continue;
+      const k = t.nonce != null ? 'n' + t.nonce : 'h' + t.hash;
+      const cur = by.get(k);
+      if (!cur || t.sentAt > cur.sentAt) by.set(k, t);
+    }
+    return Array.from(by.values());
+  },
+  // what the open orders hold back from the EVM balance: the value of each open join (a cancel holds none)
+  // plus its fee ceiling. A carried join is already off the balance, so it is not counted twice.
+  reserved(acct) {
+    let wei = 0n, n = 0;
+    for (const t of this.heads(acct)) {
+      if (t.kind !== 'buy' && t.kind !== 'seed') continue;
+      wei += bi(t.value != null ? t.value : sompiToWei(bi(t.amount))) + bi(t.gas) * bi(t.maxFeePerGas); n++;
+    }
+    return { wei, n };
+  },
+};
+function fmtDur(ms) { const m = Math.round(ms / 60000); return m < 1 ? 'under a minute' : m < 60 ? m + ' min' : Math.floor(m / 60) + ' h ' + (m % 60) + ' min'; }
+const TX_STATUS = {
+  sent: ['Sending', 'tag'], pending: ['Pending', 'tag warn'], dropped: ['Dropped by the node', 'tag bad'], queued: ['In a block · settling', 'tag warn'],
+  settled: ['Settled', 'tag ok'], refused: ['Refused', 'tag bad'], reverted: ['Reverted', 'tag bad'], replaced: ['Replaced', 'tag'], cancelled: ['Cancelled', 'tag'],
+  done: ['Done', 'tag ok'], late: ['Too late', 'tag'], lost: ['Not found', 'tag bad'], expired: ['Expired', 'tag'],
+};
+function txStatusCell(t) {
+  const [txt, cls] = TX_STATUS[t.status] || [t.status, 'tag'];
+  let label = txt, sub = '';
+  if (t.kind === 'cancel') label = t.status === 'done' ? 'Cancelled the order' : t.status === 'late' ? 'Too late' : OPEN.has(t.status) ? 'Cancel pending' : txt;
+  if (t.status === 'pending' || t.status === 'sent') sub = (t.carriedBy ? 'in a block the chain has not taken yet' : 'waiting for a block') + ' · ' + fmtDur(Date.now() - t.sentAt) + (t.resends ? ' · re-broadcast ' + t.resends + '×' : '');
+  if (t.status === 'dropped') sub = t.raw ? 'no node holds it — re-broadcasting the signed transaction' + (t.dropErr ? ' (' + t.dropErr + ')' : '') : 'no node holds it and its signed bytes were never seen — send it again';
+  if (t.status === 'queued') sub = 'the fold settles it one block later';
+  if (t.status === 'expired') sub = 'no node holds it any more and nothing was paid — place it again if you still want it';
+  if (t.status === 'late') sub = 'the order it was sent to replace was carried first';
+  if (t.status === 'refused' && t.reason) sub = REFUSAL[t.reason] || String(t.reason);
+  if (t.nonceIgnored) sub = 'the wallet chose its own nonce, so this replaced nothing';
+  if (t.replacedBy && OPEN.has(t.status) && t.kind !== 'cancel') sub = 'being replaced by ' + shortId(t.replacedBy, 8);
+  return h`<span class="${cls}">${label}</span>${sub ? raw(' <span class="dim tiny">' + esc(sub) + '</span>') : ''}`;
+}
+function orderWhat(t) {
+  if (t.kind === 'buy') return 'Join' + (t.want ? ' ×' + fmtInt(t.want) : '');
+  if (t.kind === 'sell') return 'Leave ×' + fmtInt(t.amount);
+  if (t.kind === 'seed') return 'Open the store';
+  return t.kind;
+}
+// Can this wallet send a replacement? One has to sign with the nonce the site names: MISAKA Wallet does;
+// a wallet that picks its own nonce would turn a "change" into a second order.
+function walletKeepsNonce() { return !!(wallet.provider && wallet.provider.isMisakaWallet); }
+const REPLACE_NOTE = 'A cancel or a change is a replacement: the same nonce with a higher fee, which a node takes instead of the order while no block carries it yet. It needs MISAKA Wallet, which signs with the nonce the site names — a wallet that picks its own nonce would send a second order instead.';
+const ORDERS_NOTE = 'An order is a transaction waiting for a block. On testnet-11 a block comes about every 15–30 minutes and a producer fixes a block\'s contents when it starts drawing, so an order usually waits 20–60 minutes to be carried; the fold settles it one block later. Until it is carried you can cancel it or change it. If a node forgets a pending order (a restart, its one-hour pool limit), this page broadcasts the signed transaction again while its nonce is still free.';
+// The open-orders table. `changing` is the hash whose change editor is open.
+function ordersTableHtml(list, changing) {
+  const keeps = walletKeepsNonce();
+  return h`<div class="tbl-wrap"><table class="tbl orders"><thead><tr><th class="l">Sent</th><th class="l">Model</th><th class="l">Order</th><th>Amount</th><th class="l">Status</th><th>Nonce</th><th class="l">Tx</th><th></th></tr></thead><tbody>
+    ${list.map((t) => {
+      const rec = db.line(t.lineId);
+      const replaceable = OPEN.has(t.status) && t.from === wallet.account && !t.replacedBy;
+      const why = !replaceable ? '' : !keeps ? REPLACE_NOTE : t.nonce == null ? 'Its nonce is not known yet (the node has not served it back): try again in a moment.' : '';
+      const acts = replaceable
+        ? h`<button class="btn btn-sm" data-change="${t.hash}" ${why || t.kind === 'seed' ? 'disabled' : ''} title="${why || (t.kind === 'seed' ? 'An opening deposit is cancelled, not changed' : 'Send a new amount in its place (same nonce, higher fee)')}">Change</button> <button class="btn btn-sm btn-ghost" data-cancel="${t.hash}" ${why ? 'disabled' : ''} title="${why || 'Replace it with a zero-value transfer to yourself (same nonce, higher fee): nothing is bought or sold'}">Cancel</button>`
+        : raw('<span class="dim tiny">' + (t.status === 'queued' ? 'carried — can no longer be replaced' : t.replacedBy ? 'replacement sent' : '') + '</span>');
+      const row = h`<tr><td class="l">${fmtTime(t.sentAt)} <span class="dim tiny">${fmtDur(Date.now() - t.sentAt)} ago</span></td><td class="l">${rec ? db.label(rec) : t.label || shortId(t.lineId)}</td><td class="l ${t.kind === 'buy' ? 'up' : t.kind === 'sell' ? 'down' : ''}">${orderWhat(t)}${t.replaces ? raw(' <span class="dim tiny">(change)</span>') : ''}</td><td class="num">${t.kind === 'sell' ? fmtPos(t.amount) + ' memberships' : fmtMsk(t.amount) + ' MSK'}</td><td class="l">${txStatusCell(t)}</td><td class="num">${t.nonce != null ? String(t.nonce) : '—'}</td><td class="l">${idCell(t.hash, 10)}</td><td class="acts">${acts}</td></tr>`;
+      if (changing !== t.hash) return row;
+      return h`${row}<tr class="edit"><td colspan="8"><div class="chg">
+        <label for="chgAmt">${t.kind === 'sell' ? 'Leave with' : 'Join with'}</label>
+        <div class="inp"><input id="chgAmt" inputmode="numeric" autocomplete="off" placeholder="${t.kind === 'buy' ? (t.want || '') : t.amount}"><span class="unit">memberships</span></div>
+        <span class="chg-q" id="chgQuote"></span>
+        <button class="btn btn-sm btn-accent" id="chgSend" disabled>Send change</button> <button class="btn btn-sm btn-ghost" id="chgClose">Close</button>
+      </div><div class="note tiny">The change replaces this order: same nonce, a higher fee (${t.maxFeePerGas != null ? fmtInt(bumpFee(t.maxFeePerGas)) + ' wei per gas cap' : 'fee from the node'}). If a block carries the old order first, the change is refused and the old one settles.</div></td></tr>`;
+    })}
+  </tbody></table></div><div class="note tiny">${ORDERS_NOTE}${keeps ? '' : ' ' + REPLACE_NOTE}</div>`;
+}
+// Send `tx` in place of `order`: its nonce, fees that outbid it. Records the replacement and returns its hash.
+async function replaceOrder(order, tx, extra) {
+  if (order.nonce == null || order.maxFeePerGas == null) {
+    const t = await evm.rpc('eth_getTransactionByHash', [order.hash]).catch(() => null);
+    if (t) txlog.update(order.hash, signedFacts(t));
+    order = txlog.list.find((x) => x.hash === order.hash) || order;
+  }
+  if (order.nonce == null || order.maxFeePerGas == null) throw new Error('The node no longer serves this order, so its nonce and fee are unknown: it cannot be replaced from here.');
+  const head = await evm.rpc('eth_getBlockByNumber', ['latest', false]).catch(() => null);
+  const fees = replacementFees(order, head && head.baseFeePerGas);
+  const full = Object.assign({ from: order.from, nonce: toHex(order.nonce), maxFeePerGas: toHex(fees.maxFeePerGas), maxPriorityFeePerGas: toHex(fees.maxPriorityFeePerGas) }, tx);
+  let hash;
+  try { hash = String(await wallet.sendTx(full)).toLowerCase(); }
+  catch (e) {
+    // the node refuses a nonce a block already used: the order was carried before the replacement arrived
+    if (/nonce (is )?too low|nonce.*(used|below)|already been used/i.test(String(e && e.message))) throw new Error('Too late: a block carried the order before the ' + (extra.kind === 'cancel' ? 'cancel' : 'change') + ' reached a node, so it will settle as sent.');
+    throw e;
+  }
+  txlog.add(Object.assign({ hash, from: order.from, lineId: order.lineId, label: order.label, sentAt: Date.now(), status: 'sent', nonce: order.nonce, replaces: order.hash, maxFeePerGas: fees.maxFeePerGas.toString(), maxPriorityFeePerGas: fees.maxPriorityFeePerGas.toString() }, extra));
+  txlog.update(order.hash, { replacedBy: hash });
+  // Did the wallet sign with the order's nonce? One that picked its own sent a new transaction instead.
+  const sent = await evm.rpc('eth_getTransactionByHash', [hash]).catch(() => null);
+  if (sent) {
+    txlog.update(hash, signedFacts(sent));
+    if (Number(bi(sent.nonce)) !== order.nonce) {
+      txlog.update(hash, { replaces: null, nonceIgnored: true });
+      txlog.update(order.hash, { replacedBy: null });
+      toast('The wallet signed with nonce ' + Number(bi(sent.nonce)) + ', not the order\'s ' + order.nonce + ', so the order was not replaced' + (extra.kind === 'cancel' ? ' (the zero-value transfer to yourself moves nothing).' : ': this is a second order.'), 'bad', 'Wallet');
+    }
+  }
+  return hash;
+}
+function cancelOrder(order) {
+  return replaceOrder(order, { to: order.from, value: '0x0', data: '0x', gas: toHex(21000n) }, { kind: 'cancel', amount: '0' });
+}
+// A new count for a join (the least MSK that releases it, no floor), or a new count for a leave.
+function changeOrder(order, units, market) {
+  if (order.kind === 'buy') {
+    const cost = curve.buyCostForUnits(market, units);
+    if (!cost) throw new Error('The store cannot release that many memberships now.');
+    const px = cost.quote.unitsOut > 0n ? cost.gross / cost.quote.unitsOut : null;
+    return replaceOrder(order, { to: order.to || db.line(order.lineId).facade, value: toHex(sompiToWei(cost.gross)), data: ABI.call(SIG.buy, ABI.word(0n)) },
+      { kind: 'buy', amount: cost.gross.toString(), want: units.toString(), min: '0', px: px != null ? px.toString() : null, to: order.to });
+  }
+  return replaceOrder(order, { to: order.to || db.line(order.lineId).facade, value: '0x0', data: ABI.call(SIG.sell, ABI.word(units), ABI.word(0n)) },
+    { kind: 'sell', amount: units.toString(), min: '0', to: order.to });
+}
+// Wire a container holding ordersTableHtml(): Cancel, Change, and the change editor. `ctx.changing` is
+// the open editor's hash (kept by the page), `ctx.rerender()` redraws the table.
+function bindOrderActions(box, ctx) {
+  const onClick = async (e) => {
+    const btn = e.target.closest('button'); if (!btn || btn.disabled) return;
+    const find = (h2) => txlog.list.find((x) => x.hash === h2);
+    if (btn.dataset.cancel) {
+      const t = find(btn.dataset.cancel); if (!t) return;
+      btn.disabled = true; btn.textContent = 'Confirm in wallet…';
+      try { await cancelOrder(t); toast('Cancel sent. It replaces the order when a node takes it, and completes when a block carries it; if a block carries the order first, the order settles instead.', 'ok', t.label); }
+      catch (err) { toast((err && err.message) || String(err), 'bad', 'Cancel'); }
+      ctx.rerender(); return;
+    }
+    if (btn.dataset.change) { ctx.changing = ctx.changing === btn.dataset.change ? null : btn.dataset.change; ctx.rerender(); if (ctx.changing) await refreshMarket(find(ctx.changing).lineId).catch(() => {}); wireEditor(); return; }
+    if (btn.id === 'chgClose') { ctx.changing = null; ctx.rerender(); return; }
+    if (btn.id === 'chgSend') {
+      const t = find(ctx.changing); const units = parseDec($('#chgAmt', box).value, 0); const m = t && db.line(t.lineId) && db.line(t.lineId).market;
+      if (!t || units == null || units <= 0n || !m) return;
+      btn.disabled = true; btn.textContent = 'Confirm in wallet…';
+      try { await changeOrder(t, units, m); ctx.changing = null; toast('Change sent. It takes the order\'s place when a node takes it; if a block carries the old order first, the change is refused and the old order settles.', 'ok', t.label); }
+      catch (err) { toast((err && err.message) || String(err), 'bad', 'Change'); btn.disabled = false; btn.textContent = 'Send change'; return; }
+      ctx.rerender();
+    }
+  };
+  box.addEventListener('click', onClick);
+  function wireEditor() {
+    const inp = $('#chgAmt', box); if (!inp) return;
+    const t = txlog.list.find((x) => x.hash === ctx.changing);
+    const upd = () => {
+      const m = t && db.line(t.lineId) && db.line(t.lineId).market, q = $('#chgQuote', box), send = $('#chgSend', box);
+      const units = parseDec(inp.value, 0);
+      let txt = '', ok = false;
+      if (!m || !m.seeded) txt = 'reading the market…';
+      else if (units == null) txt = 'whole memberships only';
+      else if (units > 0n && t.kind === 'buy') {
+        const c = curve.buyCostForUnits(m, units);
+        if (!c) txt = 'the store cannot release that many';
+        else { txt = 'costs ' + fmtMsk(c.gross) + ' MSK (the order pays ' + fmtMsk(t.amount) + ' MSK)'; ok = true; }
+      } else if (units > 0n) {
+        const sq = curve.sellQuote(m, units);
+        if (!sq) txt = 'the curve pays nothing for that many';
+        else { txt = 'pays back ' + fmtMsk(sq.fees.net) + ' MSK'; ok = true; }
+      }
+      q.textContent = txt; send.disabled = !ok;
+    };
+    inp.addEventListener('input', upd); inp.focus(); upd();
+  }
+  ctx.wireEditor = wireEditor;
+  return () => box.removeEventListener('click', onClick);
+}
 
 // ============================================================================================
 // 7. the data layer: classes, lines, markets, positions, settlements
@@ -831,11 +1194,12 @@ async function refreshChainInfo() {
   try {
     const daa = await evm.chainDaa();
     db.armed = daa != null; db.evmDaa = daa;
-    if (db.armed && !db.constsFromChain) {
+    // re-read every few minutes: ADR-0114's leg changes at a height, and constants() answers under it
+    if (db.armed && (!db.constsFromChain || Date.now() - (db.constsFromChain.at || 0) > 300000)) {
       const r = await evm.call(ADDR.AMM, ABI.call(SIG.constants));
       const w = ABI.words(r);
       // ADR-0090: the third word carries the least seed (it carried the virtual reserve before)
-      if (w.length >= 5) db.constsFromChain = { supplyUnits: ABI.u(w[0]), unitsPerPosition: ABI.u(w[1]), seedMinSompi: ABI.u(w[2]), burnPermille: ABI.u(w[3]), legPermille: ABI.u(w[4]) };
+      if (w.length >= 5) db.constsFromChain = { supplyUnits: ABI.u(w[0]), unitsPerPosition: ABI.u(w[1]), seedMinSompi: ABI.u(w[2]), burnPermille: ABI.u(w[3]), legPermille: ABI.u(w[4]), at: Date.now() };
     }
   } catch (e) { db.armed = null; }
   db.emit();
@@ -1071,7 +1435,9 @@ async function nodeQuoteBuy(lineId, sompi) {
 async function nodeQuoteSell(lineId, units) {
   const w = ABI.words(await evm.call(ADDR.AMM, ABI.call(SIG.quoteSell, ...ABI.idWords(lineId), ABI.word(units))));
   if (w.length < 5) return null;
-  return { fees: { gross: ABI.u(w[0]), burn: ABI.u(w[1]), leg: ABI.u(w[2]), net: ABI.u(w[3]) }, priceAfter: ABI.u(w[4]), source: 'node' };
+  // The window answers (msk out, burn, leg, net, price after): the first word is the net again, so the
+  // gross is the three legs together.
+  return { fees: { gross: ABI.u(w[1]) + ABI.u(w[2]) + ABI.u(w[3]), burn: ABI.u(w[1]), leg: ABI.u(w[2]), net: ABI.u(w[3]) }, priceAfter: ABI.u(w[4]), source: 'node' };
 }
 function decodeSettlement(log) {
   const T = topics(); const t0 = (log.topics && log.topics[0] || '').toLowerCase();
@@ -1115,36 +1481,107 @@ async function foldEventsIntoHistory(lineId, events) {
   store.set('hist:events:' + lineId, Array.from(seen).slice(-500));
 }
 
-// pending transactions: receipt (queued / reverted), then the settlement event at the next block
+// Follow every unfinished transaction the site sent. First what was signed (nonce, fees, bytes — while
+// a node still serves it), then its receipt: carried, so queued or reverted, and one block later the
+// fold's settlement event. With no receipt it is pending while a node holds it, replaced once another
+// transaction used its nonce, and dropped when no node holds it — then its signed bytes are broadcast
+// again while the nonce is free (a node's pool forgets after an hour; one that restarted never knew).
+let pollBusy = false;
 async function pollTransactions() {
-  const open = txlog.list.filter((t) => t.status === 'sent' || t.status === 'queued');
-  if (!open.length) return;
-  for (const t of open) {
-    try {
-      if (t.status === 'sent') {
-        const r = await evm.rpc('eth_getTransactionReceipt', [t.hash]);
-        if (!r) { if (Date.now() - t.sentAt > 30 * 60000) txlog.update(t.hash, { status: 'lost' }); continue; }
-        const ok = bi(r.status) === 1n;
-        txlog.update(t.hash, { status: ok ? 'queued' : 'reverted', blockNumber: Number(bi(r.blockNumber)), gasUsed: bi(r.gasUsed).toString() });
-        toast(ok ? 'Action queued in block ' + Number(bi(r.blockNumber)) + '. The fold applies it after this block and settles it one block later.' : 'Transaction reverted at the call (no action was queued).', ok ? 'ok' : 'bad', t.label);
-        if (!ok) continue;
-      }
-      if (t.status === 'queued' || t.status === 'sent') {
-        const rec = txlog.list.find((x) => x.hash === t.hash);
-        if (rec.status !== 'queued') continue;
-        const events = await settlementLogs(rec.lineId, rec.from);
-        const want = rec.kind === 'buy' ? 'Bought' : rec.kind === 'seed' ? 'Seeded' : 'Sold';
-        const actionId = rec.kind === 'buy' ? 1 : rec.kind === 'seed' ? ACTION_SEED : 2;
-        const hit = events.filter((e) => e.blockNumber > rec.blockNumber && !txlog.claimed.has(e.blockNumber + ':' + e.logIndex) && (e.kind === want || (e.kind === 'Refused' && e.actionId === actionId))).sort((a, b) => a.blockNumber - b.blockNumber || a.logIndex - b.logIndex)[0];
-        if (!hit) continue;
-        txlog.claimed.add(hit.blockNumber + ':' + hit.logIndex);
-        if (hit.kind === 'Refused') { txlog.update(rec.hash, { status: 'refused', settledBlock: hit.blockNumber, reason: hit.reason }); toast('Refused by the fold: ' + (REFUSAL[hit.reason] || 'code ' + hit.reason) + '. ' + (rec.kind === 'sell' ? 'Your positions never left.' : 'The escrow was refunded.'), 'warn', rec.label); }
-        else if (hit.kind === 'Seeded') { txlog.update(rec.hash, { status: 'settled', settledBlock: hit.blockNumber, units: '0', msk: hit.mskIn.toString(), priceAfter: hit.priceAfter.toString() }); toast('Seeded: ' + fmtMsk(hit.mskIn) + ' MSK locked into the curve for good; first price ' + fmtPrice(hit.priceAfter) + ' MSK per position (settled in block ' + hit.blockNumber + ').', 'ok', rec.label); refreshMarket(rec.lineId).catch(() => {}); }
-        else { txlog.update(rec.hash, { status: 'settled', settledBlock: hit.blockNumber, units: (hit.units || 0n).toString(), msk: (hit.kind === 'Bought' ? hit.mskIn : hit.mskOut).toString(), priceAfter: hit.priceAfter.toString() }); toast((hit.kind === 'Bought' ? 'Bought ' + fmtPos(hit.units) + ' positions for ' + fmtMsk(hit.mskIn) + ' MSK' : 'Sold ' + fmtPos(hit.units) + ' positions for ' + fmtMsk(hit.mskOut) + ' MSK net') + ' (settled in block ' + hit.blockNumber + ').', 'ok', rec.label); }
-        db.emit();
-      }
-    } catch (e) { /* try again next tick */ }
+  if (pollBusy) return;
+  pollBusy = true;
+  try {
+    const open = txlog.list.filter((t) => OPEN.has(t.status) || t.status === 'queued' || ((t.status === 'lost' || t.status === 'expired') && Date.now() - t.sentAt < 86400000));
+    if (!open.length) return;
+    // replacements first: when a cancel or a change was carried, the order it replaced is then named by it
+    open.sort((a, b) => (b.replaces ? 1 : 0) - (a.replaces ? 1 : 0));
+    const nonces = new Map();
+    const latestNonce = async (acct) => {
+      if (!nonces.has(acct)) nonces.set(acct, Number(bi(await evm.rpc('eth_getTransactionCount', [acct, 'latest']))));
+      return nonces.get(acct);
+    };
+    for (const t of open) {
+      try { await followTx(t.hash, latestNonce); } catch (e) { /* try again next tick */ }
+    }
+  } finally { pollBusy = false; if (txlog.dirty) txlog.emit(); }
+}
+// An order's end when a transaction of ours took its nonce: said once, whichever look saw it first.
+function endReplaced(x, by) {
+  const status = x.kind === 'cancel' || (by && x.replaces === by.hash) ? 'late' : by && by.kind === 'cancel' ? 'cancelled' : 'replaced';
+  txlog.update(x.hash, { status, replacedBy: by ? by.hash : null });
+  if (status === 'cancelled') toast('Order cancelled: the cancel was carried' + (by.blockNumber != null ? ' in block ' + by.blockNumber : '') + ' and nothing was bought or sold.', 'ok', x.label);
+}
+async function followTx(hash, latestNonce) {
+  const get = () => txlog.list.find((x) => x.hash === hash);
+  let t = get();
+  if (t.status !== 'queued' && (t.nonce == null || (t.raw == null && !t.rawTried))) {
+    const tx = await evm.rpc('eth_getTransactionByHash', [t.hash]).catch(() => null);
+    if (tx) t = txlog.update(t.hash, signedFacts(tx));
   }
+  if (t.status !== 'queued') {
+    const r = await evm.rpc('eth_getTransactionReceipt', [t.hash]);
+    if (r) {
+      const ok = bi(r.status) === 1n, bn = Number(bi(r.blockNumber));
+      if (t.kind === 'cancel') t = txlog.update(t.hash, { status: ok ? 'done' : 'reverted', blockNumber: bn });
+      // whatever else was signed with this nonce can never be carried now
+      for (const x of txlog.list) {
+        if (x.hash !== t.hash && x.from === t.from && x.nonce != null && x.nonce === t.nonce && OPEN.has(x.status)) endReplaced(x, t);
+      }
+      if (t.kind === 'cancel') return;
+      t = txlog.update(t.hash, { status: ok ? 'queued' : 'reverted', blockNumber: bn, gasUsed: bi(r.gasUsed).toString() });
+      toast(ok ? 'Order carried in block ' + bn + '. The fold applies it after this block and settles it one block later.' : 'Transaction reverted at the call (no action was queued).', ok ? 'ok' : 'bad', t.label);
+      if (!ok) return;
+    } else {
+      // Not carried. Was its nonce used by another transaction? Then it never will be.
+      if (t.nonce != null && (await latestNonce(t.from)) > t.nonce) {
+        // The nonce read came after the receipt read: a block may have carried THIS one in between.
+        if (await evm.rpc('eth_getTransactionReceipt', [t.hash]).catch(() => null)) return;   // the next look reads it
+        let winner = txlog.list.find((x) => x.hash !== t.hash && x.from === t.from && x.nonce === t.nonce && FINAL_OK.has(x.status));
+        // our own replacement, carried but not read yet: its receipt names what happened
+        if (!winner && t.replacedBy) {
+          const rr = await evm.rpc('eth_getTransactionReceipt', [t.replacedBy]).catch(() => null);
+          if (rr) winner = txlog.list.find((x) => x.hash === t.replacedBy);
+          if (winner && winner.blockNumber == null) winner = txlog.update(winner.hash, { blockNumber: Number(bi(rr.blockNumber)) });
+        }
+        // Something we did not send used the nonce (another device, another page). A receipt index can
+        // trail the state by a moment, so that verdict waits for a second look half a minute on.
+        if (!winner) {
+          if (!t.nonceGoneAt) { txlog.update(t.hash, { nonceGoneAt: Date.now() }); return; }
+          if (Date.now() - t.nonceGoneAt < 30000) return;
+        }
+        endReplaced(t, winner);
+        return;
+      }
+      // A cancel or change of ours stands in for it: while that one is open, this one is out of the pool
+      // on purpose — neither dropped nor to be broadcast again.
+      const stand = t.replacedBy && txlog.list.find((x) => x.hash === t.replacedBy);
+      if (stand && OPEN.has(stand.status)) { if (t.status !== 'pending') txlog.update(t.hash, { status: 'pending' }); return; }
+      // Does a node hold it? (misaka_getEvmTxStatus; a node without it is asked for the transaction.)
+      const st = await evm.rpc('misaka_getEvmTxStatus', [t.hash]).catch(() => undefined);
+      const held = st !== undefined
+        ? !!(st && (st.inMempool || (st.includedIn && st.includedIn.length)))
+        : !!(await evm.rpc('eth_getTransactionByHash', [t.hash]).catch(() => null));
+      if (held) { txlog.update(t.hash, { status: 'pending', carriedBy: st && st.includedIn ? st.includedIn.length : 0, dropErr: null }); return; }
+      // No node holds it: broadcast the signed bytes again (not more often than every two minutes).
+      if (!t.raw) { const next = Date.now() - t.sentAt > EXPIRE_MS ? 'expired' : 'dropped'; if (t.status !== next) txlog.update(t.hash, { status: next }); return; }
+      if (t.resentAt && Date.now() - t.resentAt < RESEND_MS) return;
+      try { await evm.rpc('eth_sendRawTransaction', [t.raw]); txlog.update(t.hash, { status: 'pending', resentAt: Date.now(), resends: (t.resends || 0) + 1, dropErr: null }); }
+      catch (e) { txlog.update(t.hash, { status: 'dropped', resentAt: Date.now(), dropErr: (e && e.message) || String(e) }); }
+      return;
+    }
+  }
+  // Carried and queued: the settlement event the fold emits after the carrying block.
+  if (t.status !== 'queued' || !ORDER_KINDS.has(t.kind)) return;
+  const events = await settlementLogs(t.lineId, t.from);
+  const want = t.kind === 'buy' ? 'Bought' : t.kind === 'seed' ? 'Seeded' : 'Sold';
+  const actionId = t.kind === 'buy' ? 1 : t.kind === 'seed' ? ACTION_SEED : 2;
+  const hit = events.filter((e) => e.blockNumber > t.blockNumber && !txlog.claimed.has(e.blockNumber + ':' + e.logIndex) && (e.kind === want || (e.kind === 'Refused' && e.actionId === actionId))).sort((a, b) => a.blockNumber - b.blockNumber || a.logIndex - b.logIndex)[0];
+  if (!hit) return;
+  txlog.claimed.add(hit.blockNumber + ':' + hit.logIndex);
+  if (hit.kind === 'Refused') { txlog.update(t.hash, { status: 'refused', settledBlock: hit.blockNumber, reason: hit.reason }); toast('Refused by the fold: ' + (REFUSAL[hit.reason] || 'code ' + hit.reason) + '. ' + (t.kind === 'sell' ? 'Your memberships never left.' : 'The escrow was refunded.'), 'warn', t.label); }
+  else if (hit.kind === 'Seeded') { txlog.update(t.hash, { status: 'settled', settledBlock: hit.blockNumber, units: '0', msk: hit.mskIn.toString(), priceAfter: hit.priceAfter.toString() }); toast('Seeded: ' + fmtMsk(hit.mskIn) + ' MSK locked into the curve for good; first price ' + fmtPrice(hit.priceAfter) + ' MSK per membership (settled in block ' + hit.blockNumber + ').', 'ok', t.label); refreshMarket(t.lineId).catch(() => {}); }
+  else { txlog.update(t.hash, { status: 'settled', settledBlock: hit.blockNumber, units: (hit.units || 0n).toString(), msk: (hit.kind === 'Bought' ? hit.mskIn : hit.mskOut).toString(), priceAfter: hit.priceAfter.toString() }); toast((hit.kind === 'Bought' ? 'Joined: ' + fmtPos(hit.units) + ' memberships for ' + fmtMsk(hit.mskIn) + ' MSK' : 'Left: ' + fmtPos(hit.units) + ' memberships for ' + fmtMsk(hit.mskOut) + ' MSK net') + ' (settled in block ' + hit.blockNumber + ').', 'ok', t.label); }
+  db.emit();
 }
 
 // ============================================================================================
@@ -1188,9 +1625,24 @@ function navigate(hash) { location.hash = hash; }
 function renderNav() {
   const { name } = parseHash();
   for (const a of $$('#navLinks a[data-page]')) a.classList.toggle('active', a.dataset.page === name || (name === 'line' && a.dataset.page === 'lines'));
-  const btn = $('#connectBtn');
-  if (wallet.account) { btn.textContent = shortAddr(wallet.account) + (wallet.onChain() ? '' : ' (wrong chain)'); btn.className = 'btn' + (wallet.onChain() ? '' : ' btn-sell'); btn.title = wallet.account; }
-  else { btn.textContent = 'Connect'; btn.className = 'btn btn-accent'; btn.title = 'Connect an EIP-1193 wallet'; }
+  const btn = $('#connectBtn'), c = wallet.choice;
+  const sig = wallet.account ? [wallet.account, wallet.onChain(), c ? c.key : ''].join('|') : '';
+  if (btn.dataset.sig !== sig) {
+    btn.dataset.sig = sig;
+    btn.textContent = '';
+    if (wallet.account) {
+      if (c) btn.append(el('img', { class: 'btn-wicon', alt: '', src: c.icon }));
+      btn.append(shortAddr(wallet.account) + (wallet.onChain() ? '' : ' (wrong chain)'));
+      btn.className = 'btn' + (wallet.onChain() ? '' : ' btn-sell');
+      btn.title = wallet.account + (c ? ' in ' + c.name : '') + (wallet.onChain() ? '' : ' — not on the MISAKA chain');
+      btn.setAttribute('aria-haspopup', 'true');
+      const am = $('#acctMenu'); if (am && !am.hidden) renderAcctMenu();
+    } else {
+      btn.append('Connect'); btn.className = 'btn btn-accent'; btn.title = 'Connect a wallet';
+      closeAcctMenu();
+      btn.removeAttribute('aria-haspopup'); btn.removeAttribute('aria-expanded');
+    }
+  }
   const dot = $('#netDot'), txt = $('#netText'), pill = $('#netPill');
   const daa = db.chain.daa != null ? fmtInt(db.chain.daa) : null;
   const market = db.armed === true ? 'market armed' : db.armed === false ? 'market dormant' : 'market: unknown';
@@ -1213,21 +1665,175 @@ function renderBanner() {
   b.className = cls; b.textContent = text; b.hidden = !text;
 }
 function bindNav() {
-  $('#connectBtn').addEventListener('click', async () => {
-    if (wallet.account) { if (confirm('Disconnect ' + shortAddr(wallet.account) + ' from this site? (The wallet itself stays connected.)')) wallet.disconnect(); return; }
-    try { await wallet.connect(); toast('Connected ' + shortAddr(wallet.account) + (wallet.onChain() ? ' on MISAKA.' : '.'), 'ok'); }
-    catch (e) { toast(e.message || String(e), 'bad', 'Wallet'); }
-  });
+  // Connected, the header button opens the account menu (change wallet, disconnect); not connected, it
+  // connects the only wallet there is or opens the chooser. The menu hangs under the button (made here,
+  // so the page does not depend on index.html carrying it).
+  const cb = $('#connectBtn');
+  const acct = el('div', { class: 'acct' });
+  cb.parentNode.insertBefore(acct, cb);
+  acct.append(cb, el('div', { class: 'acct-menu', id: 'acctMenu', 'aria-label': 'Account', hidden: true }));
+  cb.addEventListener('click', () => { if (wallet.account) toggleAcctMenu(); else startConnect(); });
+  $('#acctMenu').addEventListener('keydown', (ev) => { if (ev.key === 'Escape') { closeAcctMenu(); cb.focus(); } });
   $('#navToggle').addEventListener('click', () => { const l = $('#navLinks'); l.classList.toggle('open'); $('#navToggle').setAttribute('aria-expanded', l.classList.contains('open')); });
   $('#moreBtn').addEventListener('click', (ev) => { ev.stopPropagation(); const m = $('#moreMenu'); m.hidden = !m.hidden; $('#moreBtn').setAttribute('aria-expanded', !m.hidden); });
   document.addEventListener('click', (ev) => {
     const m = $('#moreMenu'); if (m && !m.hidden && !m.contains(ev.target)) m.hidden = true;
+    const am = $('#acctMenu'); if (am && !am.hidden && !am.contains(ev.target) && !$('#connectBtn').contains(ev.target)) closeAcctMenu();
     const c = ev.target.closest('[data-copy]'); if (c) { ev.preventDefault(); copyText(c.dataset.copy); }
     const row = ev.target.closest('tr[data-href]'); if (row && !ev.target.closest('a, button')) navigate(row.dataset.href);
   });
   $('#lnkExplorer').href = CFG.EXPLORER_URL || '#';
   $('#lnkAdr').href = CFG.ADR_URL || '#';
   $$('#navLinks a').forEach((a) => a.addEventListener('click', () => $('#navLinks').classList.remove('open')));
+}
+
+// ---- the wallet chooser and the account menu ---------------------------------------------------
+// Built node by node, not from markup: a wallet's name and icon are the wallet's own words, so the
+// name is only ever text and the icon only ever an <img src>.
+function el(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const k of Object.keys(attrs || {})) {
+    const v = attrs[k];
+    if (v == null || v === false) continue;
+    if (k === 'class') e.className = v; else e.setAttribute(k, v === true ? '' : String(v));
+  }
+  for (const c of kids) if (c != null && c !== false) e.append(c);
+  return e;
+}
+const hostOf = (url) => { try { return new URL(url).host; } catch (e) { return String(url); } };
+const chooser = { root: null, box: null, title: null, lead: null, list: null, mode: 'connect', busy: false, back: null };
+// Connect: straight to the only wallet there is; with several, or none, the chooser says what there is.
+async function startConnect() {
+  walletDiscovery.request();
+  const rows = wallet.choices();
+  if (rows.length !== 1) { openWalletChooser('connect'); return; }
+  try { await wallet.connectWith(rows[0]); toast('Connected ' + shortAddr(wallet.account) + ' with ' + rows[0].name + (wallet.onChain() ? ' on MISAKA.' : '.'), 'ok'); }
+  catch (e) { toast((e && e.message) || String(e), 'bad', rows[0].name); }
+}
+function openWalletChooser(mode) {
+  walletDiscovery.request();                  // a wallet can announce after the page loaded: ask again
+  closeAcctMenu();
+  if (!chooser.root) buildChooser();
+  chooser.mode = mode === 'change' ? 'change' : 'connect';
+  if (chooser.root.hidden) chooser.back = document.activeElement;
+  chooser.root.hidden = false;
+  renderChooser();
+  const first = chooser.list.querySelector('button, a[href]');
+  if (first && !chooser.list.contains(document.activeElement)) first.focus();
+}
+function closeWalletChooser() {
+  if (!chooser.root || chooser.root.hidden) return;
+  chooser.root.hidden = true;
+  // focus goes back where it came from, unless that was the account menu (closed by now)
+  const back = chooser.back; chooser.back = null;
+  const to = back && back.isConnected && typeof back.focus === 'function' && !back.closest('[hidden]') ? back : $('#connectBtn');
+  if (to) to.focus();
+}
+function buildChooser() {
+  chooser.title = el('span', { id: 'wcTitle' });
+  chooser.lead = el('div', { class: 'wc-lead' });
+  chooser.list = el('ul', { class: 'wc-list', 'aria-labelledby': 'wcTitle' });
+  const close = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'aria-label': 'Close', title: 'Close' }, '✕');
+  close.addEventListener('click', closeWalletChooser);
+  chooser.box = el('div', { class: 'panel wc', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'wcTitle' },
+    el('div', { class: 'panel-h' }, chooser.title, el('span', { class: 'spacer' }), close),
+    el('div', { class: 'panel-b' }, chooser.lead, chooser.list,
+      el('div', { class: 'note tiny wc-foot' }, 'Only wallets installed in this browser are listed. The site asks the one you pick for an account and sends every move through it; no key ever reaches this page.')));
+  chooser.root = el('div', { class: 'wc-back', id: 'walletChooser', hidden: true }, chooser.box);
+  chooser.root.addEventListener('click', (ev) => { if (ev.target === chooser.root) closeWalletChooser(); });
+  document.addEventListener('keydown', (ev) => {
+    if (chooser.root.hidden) return;
+    if (ev.key === 'Escape') { ev.preventDefault(); closeWalletChooser(); return; }
+    if (ev.key !== 'Tab') return;
+    const f = $$('button, a[href]', chooser.box), a = document.activeElement;
+    if (!f.length) return;
+    if (!chooser.box.contains(a)) { ev.preventDefault(); f[0].focus(); }
+    else if (ev.shiftKey && a === f[0]) { ev.preventDefault(); f[f.length - 1].focus(); }
+    else if (!ev.shiftKey && a === f[f.length - 1]) { ev.preventDefault(); f[0].focus(); }
+  });
+  document.body.appendChild(chooser.root);
+  // a wallet that announces while the chooser is open joins the list
+  walletDiscovery.listeners.add(() => { if (!chooser.root.hidden) renderChooser(); });
+}
+function renderChooser() {
+  const rows = wallet.choices(), last = store.get('wallet:choice', null);
+  const a = document.activeElement, focused = a && chooser.list.contains(a) ? a.getAttribute('data-wallet') : null;
+  chooser.title.textContent = chooser.mode === 'change' ? 'Change wallet' : 'Connect a wallet';
+  chooser.lead.textContent = rows.length ? '' : 'No wallet was found in this browser.';
+  chooser.lead.hidden = rows.length > 0;
+  chooser.list.textContent = '';
+  if (!rows.some((r) => r.misaka)) chooser.list.append(el('li', null, missingMisakaRow()));
+  for (const r of rows) chooser.list.append(el('li', null, walletRow(r, last)));
+  const again = focused && $$('[data-wallet]', chooser.list).find((x) => x.getAttribute('data-wallet') === focused);
+  if (again) again.focus();
+}
+function walletRow(r, last) {
+  const current = !!wallet.account && wallet.provider === r.provider;
+  const tag = chooser.busy === r.key ? el('span', { class: 'tag warn' }, 'confirm in the wallet…')
+    : current ? el('span', { class: 'tag ok' }, 'connected')
+    : r.key === last ? el('span', { class: 'tag' }, 'last used') : null;
+  const note = r.misaka ? el('span', { class: 'wc-note' }, MISAKA_WALLET_NOTE)
+    : r.source === 'window.ethereum' ? el('span', { class: 'wc-note dim' }, 'window.ethereum: whichever extension answers it') : null;
+  const b = el('button', { type: 'button', class: 'wc-row' + (r.misaka ? ' rec' : ''), 'data-wallet': r.key, title: r.name + ' (' + r.source + ')', 'aria-disabled': chooser.busy ? 'true' : null },
+    el('img', { class: 'wc-icon', alt: '', src: r.icon }),
+    el('span', { class: 'wc-body' }, el('span', { class: 'wc-name' }, r.name), note),
+    tag);
+  b.addEventListener('click', () => pickWallet(r));
+  return b;
+}
+// MISAKA Wallet is not in this browser: its row stays first, not a wallet to connect but the way to get it.
+function missingMisakaRow() {
+  return el('a', { class: 'wc-row off', href: CFG.WALLET_URL, target: '_blank', rel: 'noopener', 'data-wallet': 'missing:' + MISAKA_RDNS, title: 'Get MISAKA Wallet at ' + CFG.WALLET_URL },
+    el('img', { class: 'wc-icon', alt: '', src: WALLET_ICON_MISAKA }),
+    el('span', { class: 'wc-body' }, el('span', { class: 'wc-name' }, 'MISAKA Wallet — not installed'),
+      el('span', { class: 'wc-note' }, MISAKA_WALLET_NOTE + '. Get it at ' + hostOf(CFG.WALLET_URL) + ', then reload this page.')),
+    el('span', { class: 'tag' }, 'Get it ↗'));
+}
+async function pickWallet(r) {
+  if (chooser.busy) return;
+  chooser.busy = r.key;
+  renderChooser();
+  try { await wallet.connectWith(r); toast('Connected ' + shortAddr(wallet.account) + ' with ' + r.name + (wallet.onChain() ? ' on MISAKA.' : '.'), 'ok'); }
+  catch (e) { toast((e && e.message) || String(e), 'bad', r.name); }
+  chooser.busy = false;
+  if (wallet.account && wallet.provider === r.provider) closeWalletChooser();
+  else if (!chooser.root.hidden) renderChooser();
+}
+function renderAcctMenu() {
+  const m = $('#acctMenu'); if (!m) return;
+  const c = wallet.choice;
+  const item = (label, fn, extra) => {
+    const b = el('button', Object.assign({ type: 'button' }, extra || {}), label);
+    b.addEventListener('click', () => { closeAcctMenu(); fn(); });
+    return b;
+  };
+  m.textContent = '';
+  // (append(null) would print "null": the optional item is filtered out, not passed)
+  m.append(...[
+    el('div', { class: 'acct-who' }, el('img', { class: 'wc-icon sm', alt: '', src: c ? c.icon : WALLET_ICON_GENERIC }), el('span', { class: 'wc-name' }, c ? c.name : 'Wallet')),
+    el('div', { class: 'acct-addr mono', title: wallet.account || '' }, shortAddr(wallet.account)),
+    wallet.onChain() ? null : item('Switch to the MISAKA chain', async () => { try { await wallet.ensureChain(); } catch (e) { toast((e && e.message) || String(e), 'bad', 'Wallet'); } }),
+    item('My memberships', () => navigate('#/portfolio')),
+    item('Developer dashboard', () => navigate('#/dev'), { title: 'Your models, their stores and what their members get' }),
+    item('Change wallet', () => openWalletChooser('change'), { title: 'Pick another installed wallet' }),
+    item('Copy address', () => copyText(wallet.account)),
+    item('Disconnect', () => wallet.disconnect(), { class: 'danger', title: 'Forget the account on this site; the wallet itself stays connected' }),
+  ].filter(Boolean));
+}
+function toggleAcctMenu() {
+  const m = $('#acctMenu'); if (!m) return;
+  if (!m.hidden) { closeAcctMenu(); return; }
+  renderAcctMenu();
+  m.hidden = false;
+  $('#connectBtn').setAttribute('aria-expanded', 'true');
+  const first = m.querySelector('button');
+  if (first) first.focus();
+}
+function closeAcctMenu() {
+  const m = $('#acctMenu');
+  if (!m || m.hidden) return;
+  m.hidden = true;
+  $('#connectBtn').setAttribute('aria-expanded', 'false');
 }
 
 // ============================================================================================
@@ -1239,6 +1845,7 @@ class PriceChart {
     this.empty = document.createElement('div'); this.empty.className = 'chart-empty'; box.appendChild(this.empty);
     this.tip = document.createElement('div'); this.tip.className = 'chart-tip'; this.tip.hidden = true; box.appendChild(this.tip);
     this.points = []; this.rangeMs = 86400000; this.hover = null; this.layout = null; this.hint = null;
+    this.markers = [];   // [{ price (sompi per membership), kind: 'buy'|'sell', label }]: the account's pending orders
     this.onResize = () => this.draw();
     window.addEventListener('resize', this.onResize);
     this.canvas.addEventListener('mousemove', (e) => { const r = this.canvas.getBoundingClientRect(); this.hover = { x: e.clientX - r.left, y: e.clientY - r.top }; this.draw(); });
@@ -1266,7 +1873,8 @@ class PriceChart {
     const x0 = padL, x1 = W - padR, y0 = padT, y1 = H - padB;
     const tMin = pts[0].t, tMax = pts[pts.length - 1].t || tMin + 1;
     const prices = pts.map((p) => Number(p.p) / 1e8);
-    let pMin = Math.min(...prices), pMax = Math.max(...prices);
+    const marks = (this.markers || []).map((m) => Object.assign({}, m, { y: Number(m.price) / 1e8 })).filter((m) => isFinite(m.y) && m.y > 0);
+    let pMin = Math.min(...prices, ...marks.map((m) => m.y)), pMax = Math.max(...prices, ...marks.map((m) => m.y));
     if (pMax === pMin) { pMin *= 0.99; pMax *= 1.01; }
     const padP = (pMax - pMin) * 0.08; pMin -= padP; pMax += padP;
     const X = (t) => x0 + ((t - tMin) / Math.max(1, tMax - tMin)) * (x1 - x0);
@@ -1298,6 +1906,13 @@ class PriceChart {
     ctx.beginPath(); ctx.strokeStyle = '#50d2c1'; ctx.lineWidth = 2; ctx.lineJoin = 'round';
     pts.forEach((p, i) => { const x = X(p.t), y = Y(prices[i]); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
     ctx.stroke();
+    // the account's pending orders: a dashed level at the price each one pays (or is paid) per membership
+    for (const m of marks) {
+      const y = Math.round(Y(m.y)) + 0.5, col = m.kind === 'sell' ? '#f26c87' : '#f2c14e';
+      ctx.save(); ctx.strokeStyle = col; ctx.globalAlpha = 0.85; ctx.lineWidth = 1; ctx.setLineDash([6, 4]);
+      ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = col; ctx.textAlign = 'left'; ctx.fillText(m.label, x0 + 6, y - 5); ctx.restore();
+    }
     // last price label
     const lp = prices[prices.length - 1], ly = Y(lp);
     ctx.fillStyle = '#50d2c1'; ctx.beginPath(); ctx.arc(lastX, ly, 3.5, 0, Math.PI * 2); ctx.fill();
@@ -1335,10 +1950,11 @@ function classStatusOf(rec) {
   const c = rec && rec.classId && db.classes.get(rec.classId);
   return c && c.statusLabel ? { head: c.statusLabel, activationDaa: null, sinceDaa: null, raw: 'registry classRow' } : null;
 }
+const NO_WALLET = 'No wallet found in this browser: install MISAKA Wallet (' + hostOf(CFG.WALLET_URL) + ') or another EIP-1193 wallet, then reload.';
 function seedReasonNotToSend(rec, sompi, balance) {
   const m = rec && rec.market;
-  if (MOCK && !wallet.provider) return 'Mock wallet missing.';
-  if (!wallet.provider) return 'No EIP-1193 wallet found: install MetaMask and reload.';
+  if (MOCK && !wallet.any()) return 'Mock wallet missing.';
+  if (!wallet.any()) return NO_WALLET;
   if (!wallet.account) return 'Connect a wallet to open this store.';
   if (!wallet.onChain()) return 'Switch the wallet to the MISAKA chain (' + CFG.CHAIN_ID + ').';
   if (db.armed === false) return 'The store is not armed on this network: the facade is an empty account, so an opening deposit would be refused.';
@@ -1480,8 +2096,9 @@ async function pageStore(arg) {
   if (!lineId) lineId = normId(store.get('lastLine')) || firstLineId();
   if (lineId) store.set('lastLine', lineId);
   const rec = lineId ? db.upsertLine(lineId, {}) : null;
-  const entry = { side: 'buy', amount: '', slippage: String(store.get('slippage', '2')), quote: null, nodeQuote: null, quoteSeq: 0, busy: false, balance: null, position: null, positionSrc: null };
-  const view = { chartTab: 'usage', bottomTab: 'positions', range: store.get('range', 86400000), positions: null, settlements: null, mySettlements: null, versions: null, err: null };
+  const entry = { side: 'buy', amount: '', quote: null, nodeQuote: null, quoteSeq: 0, busy: false, balance: null, position: null, positionSrc: null };
+  const view = { chartTab: 'usage', bottomTab: wallet.account && orders.open(wallet.account).length ? 'orders' : 'positions', range: store.get('range', 86400000), positions: null, settlements: null, mySettlements: null, versions: null, err: null };
+  const orderCtx = { changing: null, rerender: () => { if (view.bottomTab === 'orders') renderBottom(); renderOrderCount(); } };
 
   main.innerHTML = h`
   <section class="store" aria-label="Model store">
@@ -1498,13 +2115,28 @@ async function pageStore(arg) {
       <div class="panel entry" id="entry"></div>
     </aside>
     <div class="panel a-bottom">
-      <div class="tabs" id="bottomTabs"><button data-t="positions" class="on">My memberships</button><button data-t="history">My activity</button><button data-t="settlements">Recent joins and leaves</button><button data-t="info">Model details</button></div>
+      <div class="tabs" id="bottomTabs"><button data-t="orders" id="ordersTab">Open orders</button><button data-t="positions">My memberships</button><button data-t="history">My activity</button><button data-t="settlements">Recent joins and leaves</button><button data-t="info">Model details</button></div>
       <div class="tab-body" id="bottomBody"></div>
     </div>
   </section>`.s;
 
   const chart = new PriceChart($('#chartBox'));
   onCleanup(() => chart.destroy());
+  $$('#bottomTabs button').forEach((x) => x.classList.toggle('on', x.dataset.t === view.bottomTab));
+  onCleanup(bindOrderActions($('#bottomBody'), orderCtx));
+  // "Open orders (2)": the tab says how many are waiting, whichever tab is showing
+  function renderOrderCount() {
+    const b = $('#ordersTab'); if (!b) return;
+    const n = wallet.account ? orders.open(wallet.account).length : 0;
+    b.textContent = n ? 'Open orders (' + n + ')' : 'Open orders';
+    b.classList.toggle('has', n > 0);
+  }
+  // the account's orders on THIS line, drawn on the price chart where they would fill
+  function orderMarkers() {
+    if (!wallet.account || !rec) return [];
+    return orders.heads(wallet.account).filter((t) => t.lineId === rec.lineId && ORDER_KINDS.has(t.kind) && t.px)
+      .map((t) => ({ price: bi(t.px), kind: t.kind, label: (t.kind === 'sell' ? 'your leave' : 'your join') + (t.want ? ' ×' + fmtInt(t.want) : t.kind === 'sell' ? ' ×' + fmtInt(t.amount) : '') + ' · pending' }));
+  }
   function renderBenefits() {
     if (!alive()) return;
     const box = $('#benefits'); if (!box) return;
@@ -1567,7 +2199,7 @@ async function pageStore(arg) {
   }
   function renderChart() {
     if (!alive()) return;
-    if (rec) { chart.hint = rec.market && !rec.market.seeded ? 'This store is not open yet: there is no price until someone opens it with at least ' + fmtMsk(seedMinFor(rec.market), 0) + ' MSK.' : null; chart.setRange(view.range); chart.setPoints(history.points(rec.lineId)); }
+    if (rec) { chart.hint = rec.market && !rec.market.seeded ? 'This store is not open yet: there is no price until someone opens it with at least ' + fmtMsk(seedMinFor(rec.market), 0) + ' MSK.' : null; chart.setRange(view.range); chart.markers = orderMarkers(); chart.setPoints(history.points(rec.lineId)); }
     renderChartTools();
   }
   function versionRows(list) {
@@ -1637,20 +2269,34 @@ async function pageStore(arg) {
   }
 
   // ---- order entry ----------------------------------------------------------------------------
-  function slipBps() { const s = Number(entry.slippage); return isFinite(s) && s >= 0 && s <= 50 ? BigInt(Math.round(s * 100)) : 100n; }
+  // No price floor (operator decision 2026-09-11, for ease of use): a join or leave fills at whatever the
+  // row quotes when the fold applies it. What a floor also guarded is guarded by the fold itself — a join
+  // that would release no membership is refused (`ModelBuyReleasesNothing`) and a leave that would pay
+  // nothing is refused (`ModelSellPaysNothing`), both refunded — so 0 never buys or sells for nothing.
   function localQuote() {
     const m = rec && rec.market; if (!m) return null;
     if (!m.seeded) return { invalid: 'Not seeded yet: no curve to quote against.' };
     if (entry.side === 'buy') {
-      const sompi = parseDec(entry.amount, 8); if (!sompi || sompi <= 0n) return null;
+      // A join is entered as HOW MANY memberships (operator, 2026-09-11), and the site pays the least MSK
+      // that releases them — `curve.buyCostForUnits`, the chain's own arithmetic run until it gives at least
+      // that many. Anything more would stay in the reserve: the fold refunds no fraction of a membership.
+      if (String(entry.amount).trim() === '') return null;
+      const want = parseDec(entry.amount, 0);
+      if (want == null) return { invalid: 'Memberships are whole numbers: enter an integer.' };
+      if (want <= 0n) return null;
       if (m.closedToBuys) {
         // the wRPC reports closedToBuys for a retired line AND for a class that is not Active; say which
         const cs = classStatusOf(rec);
         if (cs && cs.head !== 'Active') return { invalid: 'The class is ' + cs.head + (cs.activationDaa != null ? ' (activates at DAA ' + fmtInt(cs.activationDaa) + ')' : '') + ': buys wait for Active; sells still queue.' };
         return { invalid: 'This line is closed to buys (retired); sells still queue.' };
       }
-      const q = curve.buyQuote(m, sompi); if (!q) return { invalid: 'The curve releases no whole position for this amount (a position is whole: the least buy releases exactly one).' };
-      return { kind: 'buy', sompi, unitsOut: q.unitsOut, fees: q.fees, priceAfter: q.priceAfter, source: 'local' };
+      const cost = curve.buyCostForUnits(m, want);
+      if (!cost) {
+        const left = bi(m.positionUnits) > 0n ? bi(m.positionUnits) - 1n : 0n;
+        return { invalid: 'The store cannot release that many: at most ' + fmtPos(left) + ' memberships can be bought from it now.' };
+      }
+      const q = cost.quote;
+      return { kind: 'buy', want, sompi: cost.gross, unitsOut: q.unitsOut, fees: q.fees, priceAfter: q.priceAfter, source: 'local' };
     }
     if (String(entry.amount).trim() === '') return null;
     const units = parseDec(entry.amount, 0);
@@ -1677,14 +2323,22 @@ async function pageStore(arg) {
     if (n && n.kind === q.kind && ((q.kind === 'buy' && n.sompi === q.sompi) || (q.kind === 'sell' && n.units === q.units))) return Object.assign({}, q, n, { source: 'node' });
     return q;
   }
-  function mins(q) {
-    const bps = slipBps();
-    if (q.kind === 'buy') return { minUnits: (q.unitsOut * (10000n - bps)) / 10000n };
-    return { minMsk: (q.fees.net * (10000n - bps)) / 10000n };
+  function mins(q) { return q.kind === 'buy' ? { minUnits: 0n } : { minMsk: 0n }; }
+  // The most whole memberships `sompi` pays for at the row as it stands (0 when it buys none). Monotone in
+  // the count, so a binary search over [0, units in the curve) on the chain's own cost finds it exactly.
+  function maxAffordableUnits(m, sompi) {
+    if (!m || !m.seeded || m.closedToBuys || sompi <= 0n) return 0n;
+    let lo = 0n, hi = bi(m.positionUnits) > 0n ? bi(m.positionUnits) - 1n : 0n;
+    while (lo < hi) {
+      const mid = (lo + hi + 1n) / 2n;
+      const c = curve.buyCostForUnits(m, mid);
+      if (c && c.gross <= sompi) lo = mid; else hi = mid - 1n;
+    }
+    return lo;
   }
   function reasonNotToSend(q) {
-    if (MOCK && !wallet.provider) return 'Mock wallet missing.';
-    if (!wallet.provider) return 'No EIP-1193 wallet found: install MetaMask and reload.';
+    if (MOCK && !wallet.any()) return 'Mock wallet missing.';
+    if (!wallet.any()) return NO_WALLET;
     if (!wallet.account) return 'Connect a wallet to join.';
     if (!wallet.onChain()) return 'Switch the wallet to the MISAKA chain (' + CFG.CHAIN_ID + ').';
     if (db.armed === false) return 'The market is not armed on this network: the facade is an empty account.';
@@ -1692,11 +2346,11 @@ async function pageStore(arg) {
     if (!rec) return 'No line selected.';
     if (rec.market && !rec.market.seeded) return 'This store is not open yet: it takes an opening deposit first.';
     if (rec.facadeSource !== 'registry') return 'Facade address not confirmed by the registry window yet.';
-    if (!q) return 'Enter an amount.';
+    if (!q) return entry.side === 'buy' ? 'Enter how many memberships.' : 'Enter an amount.';
     if (q.invalid) return q.invalid;
     if (q.kind === 'buy' && rec.market && rec.market.closedToBuys) return 'This line is closed to buys (retired); sells still queue.';
     if (q.kind === 'buy') { const cs = classStatusOf(rec); if (cs && cs.head !== 'Active') return 'The class is ' + cs.head + (cs.activationDaa != null ? ' (activates at DAA ' + fmtInt(cs.activationDaa) + ')' : '') + ': buys wait for Active.'; }
-    if (q.kind === 'buy' && entry.balance != null && sompiToWei(q.sompi) > entry.balance && !wallet.topsUp()) return 'Insufficient MSK balance in the EVM account.';
+    if (q.kind === 'buy' && entry.balance != null && sompiToWei(q.sompi) > spendable() && !wallet.topsUp()) return entry.balance > spendable() ? 'Not enough MSK left once your open orders are counted: cancel or change one first.' : 'Insufficient MSK balance in the EVM account.';
     if (q.kind === 'sell' && entry.position != null && q.units > entry.position) return 'That is more than the memberships this account holds in the EVM namespace.';
     return null;
   }
@@ -1707,35 +2361,37 @@ async function pageStore(arg) {
     const m = rec && rec.market;
     const price = m ? m.price : null;
     let rows = '';
+    const fc = curve.consts(m);
     if (q && !q.invalid) {
-      const mn = mins(q);
       const impact = price && q.priceAfter != null ? Number(((q.priceAfter - price) * 10000n) / price) / 100 : null;
       if (q.kind === 'buy') {
         const avg = q.unitsOut > 0n ? q.sompi / q.unitsOut : null;
         rows = h`
-          <div class="r"><span>Memberships you get</span><span class="v">${fmtPos(q.unitsOut)}</span></div>
+          <div class="r tot"><span>You pay (fees included)</span><span class="v">${fmtMsk(q.sompi)} MSK</span></div>
+          <div class="r"><span>Memberships you get</span><span class="v">${fmtPos(q.unitsOut)}</span></div>${q.want != null && q.unitsOut < q.want ? h`
+          <div class="r warn tiny"><span>The node's row has moved: this MSK now releases ${fmtPos(q.unitsOut)}, not ${fmtPos(q.want)}. Re-enter the count to re-price.</span></div>` : ''}
           <div class="r"><span>Price each</span><span class="v">${avg != null ? fmtPrice(avg) : '—'} MSK</span></div>
           <div class="r"><span>Price after this join</span><span class="v">${fmtPrice(q.priceAfter)} MSK</span></div>
           <div class="r"><span>How far it moves the price</span><span class="v ${impact > 5 ? 'down' : ''}">${fmtPct(impact)}</span></div>
-          <div class="r"><span>Burned (5 %)</span><span class="v">${fmtMsk(q.fees.burn)} MSK</span></div>
-          <div class="r"><span>To the model's owner (1 %)</span><span class="v">${fmtMsk(q.fees.leg)} MSK</span></div>
-          <div class="r"><span>Into the buy-back reserve (94 %)</span><span class="v">${fmtMsk(q.fees.net)} MSK</span></div>
-          <div class="r tot"><span>Refuse below (floor)</span><span class="v">${fmtPos(mn.minUnits)} memberships</span></div>`.s;
+          <div class="r"><span>Burned (${pctOf(fc.burnPermille)})</span><span class="v">${fmtMsk(q.fees.burn)} MSK</span></div>
+          <div class="r"><span>To the model's owner (${pctOf(fc.legPermille)})</span><span class="v">${fmtMsk(q.fees.leg)} MSK</span></div>
+          <div class="r"><span>Into the buy-back reserve (${pctOf(1000n - fc.burnPermille - fc.legPermille)})</span><span class="v">${fmtMsk(q.fees.net)} MSK</span></div>`.s;
       } else {
         const avg = q.units > 0n ? q.fees.net / q.units : null;
         rows = h`
           <div class="r"><span>From the buy-back reserve</span><span class="v">${fmtMsk(q.fees.gross)} MSK</span></div>
-          <div class="r"><span>Burned (5 %)</span><span class="v">${fmtMsk(q.fees.burn)} MSK</span></div>
-          <div class="r"><span>To the model's owner (1 %)</span><span class="v">${fmtMsk(q.fees.leg)} MSK</span></div>
-          <div class="r"><span>You receive (94 %)</span><span class="v">${fmtMsk(q.fees.net)} MSK</span></div>
+          <div class="r"><span>Burned (${pctOf(fc.burnPermille)})</span><span class="v">${fmtMsk(q.fees.burn)} MSK</span></div>
+          <div class="r"><span>To the model's owner (${pctOf(fc.legPermille)})</span><span class="v">${fmtMsk(q.fees.leg)} MSK</span></div>
+          <div class="r"><span>You receive (${pctOf(1000n - fc.burnPermille - fc.legPermille)})</span><span class="v">${fmtMsk(q.fees.net)} MSK</span></div>
           <div class="r"><span>Price each</span><span class="v">${avg != null ? fmtPrice(avg) : '—'} MSK</span></div>
           <div class="r"><span>Price after this leave</span><span class="v">${fmtPrice(q.priceAfter)} MSK</span></div>
-          <div class="r"><span>How far it moves the price</span><span class="v ${impact < -5 ? 'down' : ''}">${fmtPct(impact)}</span></div>
-          <div class="r tot"><span>Refuse below (floor)</span><span class="v">${fmtMsk(mn.minMsk)} MSK</span></div>`.s;
+          <div class="r"><span>How far it moves the price</span><span class="v ${impact < -5 ? 'down' : ''}">${fmtPct(impact)}</span></div>`.s;
       }
       rows += h`<div class="r dim tiny"><span>Quoted by</span><span>${q.source === 'node' ? 'the node (AMM precompile)' : 'local arithmetic on the market row'}</span></div>`.s;
+      // ADR-0114: a scheduled change of the owner's leg, said before it bites
+      if (m && m.legV2Daa > 0n && fc.legPermille !== LEG_V2_PERMILLE) rows += h`<div class="r warn tiny"><span>From DAA ${fmtInt(m.legV2Daa)} the owner's fee on every join and leave is ${pctOf(LEG_V2_PERMILLE)} (ADR-0114); an order settled after that height pays it.</span></div>`.s;
     } else if (q && q.invalid) rows = h`<div class="err">${q.invalid}</div>`.s;
-    else rows = h`<div class="dim small">Enter an amount to see what it costs. ${m && price != null ? 'One membership is ' + fmtPrice(price) + ' MSK right now.' : ''}</div>`.s;
+    else rows = h`<div class="dim small">${entry.side === 'buy' ? 'Enter how many memberships to see what they cost.' : 'Enter how many memberships to give up.'} ${m && price != null ? 'One membership is ' + fmtPrice(price) + ' MSK right now.' : ''}</div>`.s;
     box.innerHTML = rows;
     const btn = $('#sendBtn'), why = $('#sendWhy');
     if (!btn) return;
@@ -1750,6 +2406,16 @@ async function pageStore(arg) {
     if (topUp) topUp.textContent = !reason && q && !q.invalid && q.kind === 'buy' ? topUpNote(sompiToWei(q.sompi), entry.balance) : '';
   }
   const seedState = { msk: null, busy: false, balance: null };
+  // The EVM balance at latest does not move until a block carries an order, so the desk subtracts what the
+  // account's open orders will take; each order's MSK leaves the balance only when a block carries it.
+  function held() { return wallet.account ? orders.reserved(wallet.account) : { wei: 0n, n: 0 }; }
+  function spendable() { const b = entry.balance; if (b == null) return null; const r = held().wei; return b > r ? b - r : 0n; }
+  function heldHtml() {
+    const r = held();
+    if (!r.n) return '';
+    return h`<div class="avail"><span class="muted">In open orders</span><span class="v"><a href="#" id="heldLink" title="Held by orders no block has carried yet; the balance above is what is left">${fmtWeiMsk(r.wei)} MSK · ${String(r.n)} order${r.n === 1 ? '' : 's'}</a></span></div>`.s;
+  }
+  function availNow() { return entry.balance == null ? availText(null) : availText(spendable()); }
   function renderEntry() {
     if (!alive()) return;
     const m = rec && rec.market;
@@ -1764,57 +2430,55 @@ async function pageStore(arg) {
       <div class="panel-b">
         <div class="seg wide" role="tablist"><button class="${entry.side === 'buy' ? 'on buy' : ''}" data-side="buy" role="tab" title="Buy a membership from the protocol's curve">Join</button><button class="${entry.side === 'sell' ? 'on sell' : ''}" data-side="sell" role="tab" title="Sell the membership back to the curve; nobody else can buy it from you">Leave</button></div>
         <div class="note tiny" style="margin-top:6px">${entry.side === 'buy' ? 'A membership is bought from the protocol, not from another person, and joining raises the price for the next member.' : 'A membership is sold back to the protocol, not to another person. It cannot be transferred, lent or given away.'}</div>
-        <div class="avail" style="margin-top:10px"><span class="muted">MSK available</span><span class="v" id="availV">${availText(entry.balance)}</span></div>
+        <div class="avail" style="margin-top:10px"><span class="muted">MSK available</span><span class="v" id="availV">${availNow()}</span></div>
+        <div id="heldV">${raw(heldHtml())}</div>
         ${entry.side === 'buy' ? availHint() : raw('')}
         <div class="avail"><span class="muted">Your membership</span><span class="v" id="posV">${entry.position != null ? fmtPos(entry.position) + ' ' + (rec ? rec.symbol : '') : acct ? '—' : '—'}</span></div>
         <div class="field">
-          <label for="amt">${entry.side === 'buy' ? 'What you pay (MSK, fees included)' : 'Memberships to give up (whole)'}</label>
-          <div class="inp"><input id="amt" inputmode="${entry.side === 'buy' ? 'decimal' : 'numeric'}" autocomplete="off" placeholder="0" value="${entry.amount}" aria-describedby="quoteBox"><span class="unit">${entry.side === 'buy' ? 'MSK' : 'memberships'}</span></div>
+          <label for="amt">${entry.side === 'buy' ? 'Memberships to buy (whole)' : 'Memberships to give up (whole)'}</label>
+          <div class="inp"><input id="amt" inputmode="numeric" autocomplete="off" placeholder="0" value="${entry.amount}" aria-describedby="quoteBox"><span class="unit">memberships</span></div>
           <div class="pcts">${[25, 50, 75, 100].map((p) => h`<button data-pct="${p}" ${entry.side === 'buy' ? (entry.balance == null ? 'disabled' : '') : (entry.position == null ? 'disabled' : '')}>${p}%</button>`)}</div>
-        </div>
-        <div class="field">
-          <label for="slip">Refuse if the price moved more than (%)</label>
-          <div class="inp"><input id="slip" inputmode="decimal" value="${entry.slippage}" aria-label="Refuse if the price moved more than this many percent"><span class="unit">${entry.side === 'buy' ? 'min memberships' : 'min MSK'}</span></div>
         </div>
         <div class="quote" id="quoteBox"></div>
         <div class="field"><button id="sendBtn" class="btn btn-lg btn-accent" disabled>Join</button><div class="reason" id="sendWhy"></div><div class="note tiny" id="sendTopUp"></div></div>
-        <div class="note tiny">Your request is applied by the fold after the block that carries it and settles one block later; a result worse than your floor is refused (never partial) and a refused join is refunded. A membership is a whole number, and it never pays you anything: what it gets you is the card above. A membership taken here lives in the EVM namespace and can only be given up from it.</div>
+        <div class="note tiny">Your request is applied by the fold after the block that carries it and settles one block later, at the price the row then quotes; a join that would release no membership, or a leave that would pay nothing, is refused and refunded. A membership is a whole number, and it never pays you anything: what it gets you is the card above. A membership taken here lives in the EVM namespace and can only be given up from it.</div>
       </div>`.s;
     $$('#entry .seg button').forEach((b) => b.addEventListener('click', () => { entry.side = b.dataset.side; entry.amount = ''; entry.nodeQuote = null; renderEntry(); }));
-    const amt = $('#amt'), slip = $('#slip');
+    const amt = $('#amt');
     amt.addEventListener('input', () => { entry.amount = amt.value; entry.nodeQuote = null; entry.quote = localQuote(); renderQuote(); nodeQuote(entry.quote); });
-    slip.addEventListener('input', () => { entry.slippage = slip.value; store.set('slippage', slip.value); renderQuote(); });
     $$('#entry .pcts button').forEach((b) => b.addEventListener('click', () => {
       const p = BigInt(b.dataset.pct);
-      if (entry.side === 'buy' && entry.balance != null) { const reserve = 10n ** 16n; const wei = entry.balance > reserve ? entry.balance - reserve : 0n; entry.amount = fmtScaled(((wei / NATIVE_SCALE_WEI) * p) / 100n, 8, 8).replace(/,/g, ''); }
+      if (entry.side === 'buy' && entry.balance != null) { const reserve = 10n ** 16n, left = spendable(); const wei = left > reserve ? left - reserve : 0n; entry.amount = ((maxAffordableUnits(rec && rec.market, wei / NATIVE_SCALE_WEI) * p) / 100n).toString(); }
       if (entry.side === 'sell' && entry.position != null) entry.amount = ((entry.position * p) / 100n).toString();
       amt.value = entry.amount; entry.nodeQuote = null; entry.quote = localQuote(); renderQuote(); nodeQuote(entry.quote);
     }));
     $('#sendBtn').addEventListener('click', submit);
+    bindHeldLink();
     entry.quote = localQuote(); renderQuote(); nodeQuote(entry.quote);
   }
+  function showTab(t) { view.bottomTab = t; $$('#bottomTabs button').forEach((x) => x.classList.toggle('on', x.dataset.t === t)); renderBottom(); }
+  function bindHeldLink() { const a = $('#heldLink'); if (a) a.addEventListener('click', (e) => { e.preventDefault(); showTab('orders'); const b = $('#bottomBody'); if (b && b.scrollIntoView) b.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }); }
   async function submit() {
     const q = effectiveQuote(); const reason = reasonNotToSend(q); if (reason) { toast(reason, 'warn'); return; }
     const mn = mins(q);
     const tx = { from: wallet.account, to: rec.facade };
+    const px = q.kind === 'buy' ? (q.unitsOut > 0n ? q.sompi / q.unitsOut : null) : (q.units > 0n ? q.fees.net / q.units : null);
     if (q.kind === 'buy') { tx.value = toHex(sompiToWei(q.sompi)); tx.data = ABI.call(SIG.buy, ABI.word(mn.minUnits)); }
     else { tx.value = '0x0'; tx.data = ABI.call(SIG.sell, ABI.word(q.units), ABI.word(mn.minMsk)); }
     entry.busy = true; renderQuote();
     try {
-      const hash = await wallet.sendTx(tx);
-      txlog.add({ hash, from: wallet.account, lineId: rec.lineId, label: rec.symbol, kind: q.kind, amount: (q.kind === 'buy' ? q.sompi : q.units).toString(), min: (q.kind === 'buy' ? mn.minUnits : mn.minMsk).toString(), sentAt: Date.now(), status: 'sent' });
-      toast('Transaction sent: ' + shortId(hash, 10) + '. Waiting for the block that carries it.', 'ok', (q.kind === 'buy' ? 'Buy ' : 'Sell ') + rec.symbol);
+      const hash = String(await wallet.sendTx(tx)).toLowerCase();
+      txlog.add({ hash, from: wallet.account, to: rec.facade, lineId: rec.lineId, label: rec.symbol, kind: q.kind, amount: (q.kind === 'buy' ? q.sompi : q.units).toString(), want: q.kind === 'buy' && q.want != null ? q.want.toString() : null, px: px != null ? px.toString() : null, min: (q.kind === 'buy' ? mn.minUnits : mn.minMsk).toString(), sentAt: Date.now(), status: 'sent' });
+      toast('Order sent (' + shortId(hash, 10) + '). It waits for a block — usually 20–60 minutes on testnet-11 — and you can cancel or change it until then under Open orders.', 'ok', (q.kind === 'buy' ? 'Join ' : 'Leave ') + rec.symbol);
       entry.amount = ''; entry.nodeQuote = null;
+      // what the wallet signed (nonce, fees, bytes), read back while the node surely holds it
+      evm.rpc('eth_getTransactionByHash', [hash]).then((t) => { if (t) { txlog.update(hash, signedFacts(t)); orderCtx.rerender(); } }).catch(() => {});
+      showTab('orders');
     } catch (e) { toast((e && e.message) || String(e), 'bad', 'Wallet'); }
-    entry.busy = false; renderEntry(); renderBottom();
+    entry.busy = false; renderEntry(); renderBottom(); renderOrderCount(); renderChart();
   }
 
   // ---- bottom tabs ----------------------------------------------------------------------------
-  function statusCell(t) {
-    const map = { sent: ['Sent', 'tag'], queued: ['Queued', 'tag warn'], reverted: ['Reverted', 'tag bad'], settled: ['Settled', 'tag ok'], refused: ['Refused', 'tag bad'], lost: ['Not found', 'tag bad'] };
-    const [txt, cls] = map[t.status] || [t.status, 'tag'];
-    return h`<span class="${cls}">${txt}</span>${t.status === 'refused' && t.reason ? raw(' <span class="dim tiny">' + esc(REFUSAL[t.reason] || String(t.reason)) + '</span>') : ''}`;
-  }
   function renderBottom() {
     if (!alive()) return;
     const body = $('#bottomBody'); if (!body) return;
@@ -1830,11 +2494,20 @@ async function pageStore(arg) {
       </tbody></table></div><div class="note tiny">Read through ${p.source === 'wrpc' ? 'getPalwModelPositions(holder)' : 'the position window per known line'}; holder id ${shortId(p.holder)}. A membership is a whole number, and it is never paid anything: the last column is only what the curve would return if you gave every one of them up right now.</div>`.s;
       return;
     }
+    if (view.bottomTab === 'orders') {
+      renderOrderCount();
+      if (!acct) { body.innerHTML = '<div class="empty">Connect a wallet to see its open orders.</div>'; return; }
+      const list = orders.open(acct);
+      if (!list.length) { body.innerHTML = h`<div class="empty">No open orders for ${shortAddr(acct)}. An order you place here waits for a block and shows up in this list until the fold settles it.</div><div class="note tiny">${ORDERS_NOTE}</div>`.s; return; }
+      body.innerHTML = ordersTableHtml(list, orderCtx.changing).s;
+      if (orderCtx.changing && orderCtx.wireEditor) orderCtx.wireEditor();
+      return;
+    }
     if (view.bottomTab === 'history') {
       const list = txlog.forAccount(acct);
       if (!list.length) { body.innerHTML = '<div class="empty">Nothing sent from this browser' + (acct ? ' by ' + shortAddr(acct) : '') + '.</div>'; return; }
       body.innerHTML = h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Time</th><th>Model</th><th>What you did</th><th>Amount</th><th>Floor</th><th>Status</th><th>Block</th><th>Settled</th><th>Tx</th></tr></thead><tbody>
-        ${list.map((t) => h`<tr><td class="l">${fmtDateTime(t.sentAt)}</td><td class="l">${t.label}</td><td class="l ${t.kind === 'buy' ? 'up' : t.kind === 'sell' ? 'down' : ''}" title="facade call ${t.kind}()">${MOVE_WORD[t.kind] || t.kind}</td><td class="num">${t.kind === 'sell' ? fmtPos(t.amount) + ' memberships' : fmtMsk(t.amount) + ' MSK' + (t.kind === 'seed' ? ' (locked)' : '')}</td><td class="num">${t.kind === 'buy' ? fmtPos(t.min) + ' memberships' : t.kind === 'sell' ? fmtMsk(t.min) + ' MSK' : '—'}</td><td class="l">${statusCell(t)}</td><td class="num">${t.blockNumber != null ? fmtInt(t.blockNumber) : '—'}</td><td class="num">${t.status === 'settled' ? (t.kind === 'seed' ? 'opened with ' + fmtMsk(t.msk) + ' MSK, first price ' + fmtPrice(t.priceAfter) : fmtPos(t.units) + ' memberships for ' + fmtMsk(t.msk) + ' MSK') : t.settledBlock ? 'block ' + fmtInt(t.settledBlock) : '—'}</td><td class="l">${idCell(t.hash, 10)}</td></tr>`)}
+        ${list.map((t) => h`<tr><td class="l">${fmtDateTime(t.sentAt)}</td><td class="l">${t.label}</td><td class="l ${t.kind === 'buy' ? 'up' : t.kind === 'sell' ? 'down' : ''}" title="facade call ${t.kind}()">${t.kind === 'cancel' ? 'cancelled an order' : (MOVE_WORD[t.kind] || t.kind) + (t.replaces ? ' (change)' : '')}</td><td class="num">${t.kind === 'cancel' ? '—' : t.kind === 'sell' ? fmtPos(t.amount) + ' memberships' : fmtMsk(t.amount) + ' MSK' + (t.kind === 'seed' ? ' (locked)' : '')}</td><td class="num">${t.kind === 'buy' ? fmtPos(t.min) + ' memberships' : t.kind === 'sell' ? fmtMsk(t.min) + ' MSK' : '—'}</td><td class="l">${txStatusCell(t)}</td><td class="num">${t.blockNumber != null ? fmtInt(t.blockNumber) : '—'}</td><td class="num">${t.status === 'settled' ? (t.kind === 'seed' ? 'opened with ' + fmtMsk(t.msk) + ' MSK, first price ' + fmtPrice(t.priceAfter) : fmtPos(t.units) + ' memberships for ' + fmtMsk(t.msk) + ' MSK') : t.settledBlock ? 'block ' + fmtInt(t.settledBlock) : '—'}</td><td class="l">${idCell(t.hash, 10)}</td></tr>`)}
       </tbody></table></div>`.s;
       return;
     }
@@ -1887,7 +2560,7 @@ async function pageStore(arg) {
         <dt>Read through</dt><dd>${m ? (m.source === 'wrpc' ? 'wRPC getPalwModelMarket' : 'AMM window (eth_call)') + ', ' + fmtAgo(m.at) : '—'}</dd>
       </dl></div>`.s;
   }
-  $('#bottomTabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; view.bottomTab = b.dataset.t; $$('#bottomTabs button').forEach((x) => x.classList.toggle('on', x === b)); renderBottom(); if (view.bottomTab === 'settlements') loadMySettlements(); if (view.bottomTab === 'positions') loadPositions(); });
+  $('#bottomTabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; showTab(b.dataset.t); if (view.bottomTab === 'settlements') loadMySettlements(); if (view.bottomTab === 'positions') loadPositions(); });
 
   // ---- data refresh ---------------------------------------------------------------------------
   async function loadPositions() {
@@ -1918,8 +2591,9 @@ async function pageStore(arg) {
     // Two awaits back: this page may have been replaced while they were in flight, and writing
     // into #posV then labels the NEW store's row with the OLD line's symbol.
     if (!alive()) return;
-    const a = $('#availV'), p = $('#posV');
-    if (a) a.textContent = availText(entry.balance);
+    const a = $('#availV'), p = $('#posV'), hv = $('#heldV');
+    if (a) a.textContent = availNow();
+    if (hv) { hv.innerHTML = heldHtml(); bindHeldLink(); }
     if (p) p.textContent = entry.position != null ? fmtPos(entry.position) + ' ' + rec.symbol : '—';
     $$('#entry .pcts button').forEach((b) => { b.disabled = entry.side === 'buy' ? entry.balance == null : entry.position == null; });
     // the seed panel re-checks its "can send" reason against the balance (not while the user types)
@@ -1951,11 +2625,21 @@ async function pageStore(arg) {
     }
     loadAccount();
     if (ticks % 3 === 0 && view.bottomTab === 'positions') loadPositions();
-    pollTransactions().then(() => { if (view.bottomTab === 'history') renderBottom(); });
+    pollTransactions().then(afterTx);
   }
+  // a transaction moved (or a new one was sent): the tab count, the open orders, what they hold, the chart
+  function afterTx() {
+    if (!alive()) return;
+    renderOrderCount();
+    if (view.bottomTab === 'history' || (view.bottomTab === 'orders' && !$('#chgAmt:focus'))) renderBottom();
+    const hv = $('#heldV'); if (hv) { hv.innerHTML = heldHtml(); bindHeldLink(); const a = $('#availV'); if (a) a.textContent = availNow(); }
+    chart.markers = orderMarkers(); if (view.chartTab === 'chart') chart.draw();
+    renderQuote();
+  }
+  txlog.listeners.add(afterTx); onCleanup(() => txlog.listeners.delete(afterTx));
 
-  renderBar(); renderChart(); renderDepth(); renderEntry(); renderBottom(); renderChartAlt();
-  const onWallet = () => { renderNav(); renderEntry(); loadAccount(); loadPositions(); renderBottom(); };
+  renderBar(); renderChart(); renderDepth(); renderEntry(); renderBottom(); renderChartAlt(); renderOrderCount();
+  const onWallet = () => { renderNav(); renderEntry(); loadAccount(); loadPositions(); renderBottom(); renderOrderCount(); };
   wallet.listeners.add(onWallet); onCleanup(() => wallet.listeners.delete(onWallet));
   const onDb = () => { if (rec && !rec.row && db.line(rec.lineId) && db.line(rec.lineId).row) renderBar(); };
   db.listeners.add(onDb); onCleanup(() => db.listeners.delete(onDb));
@@ -2145,20 +2829,25 @@ async function pagePortfolio() {
   const gen = pageState.gen, alive = () => gen === pageState.gen;
   const main = $('#main');
   const view = { positions: null, balance: null, settlements: null, err: null };
+  const orderCtx = { changing: null, rerender: () => render() };
+  onCleanup(bindOrderActions(main, orderCtx));
+  const onTx = () => render(); txlog.listeners.add(onTx); onCleanup(() => txlog.listeners.delete(onTx));
   function render() {
     if (!alive()) return;
+    if ($('#chgAmt:focus')) return;              // not while a change is being typed
     const acct = wallet.account;
     if (!acct) { main.innerHTML = h`<div class="page-h"><h1>My memberships</h1></div><div class="panel"><div class="empty">Connect a wallet to see the memberships it holds, its MSK balance and what it has done. <br><button class="btn btn-accent" id="pfConnect" style="margin-top:10px">Connect</button></div></div>`.s; $('#pfConnect').addEventListener('click', () => $('#connectBtn').click()); return; }
     const p = view.positions;
     let total = 0n, totalKnown = true;
     const rows = (p && p.positions || []).map((x) => { const r = db.line(x.lineId) || db.upsertLine(x.lineId, {}); const m = r.market; const q = m ? curve.sellQuote(m, x.units) : null; if (q) total += q.fees.net; else totalKnown = false; return { x, r, m, q }; });
     main.innerHTML = h`
-      <div class="page-h"><h1>My memberships</h1><span class="sub mono">${acct}</span>${wallet.onChain() ? '' : raw('<span class="tag bad">wallet not on MISAKA</span>')}</div>
+      <div class="page-h"><h1>My memberships</h1><span class="sub mono">${acct}</span>${wallet.onChain() ? '' : raw('<span class="tag bad">wallet not on MISAKA</span>')}<span class="spacer"></span><a class="btn btn-sm" href="#/dev">Developer dashboard</a></div>
       <div class="grid3">
-        <div class="tile"><div class="k">MSK balance (EVM account)</div><div class="v">${view.balance != null ? fmtWeiMsk(view.balance) : '—'}</div><div class="s">${status.evm === 'up' ? 'eth_getBalance at latest' + (wallet.topsUp() ? ' — MISAKA Wallet also spends its post-quantum balance, moving what a payment is short of when you confirm' : '') : 'EVM RPC unreachable'}</div></div>
+        <div class="tile"><div class="k">MSK balance (EVM account)</div><div class="v">${view.balance != null ? fmtWeiMsk(view.balance) : '—'}</div>${(() => { const r = orders.reserved(acct); return r.n && view.balance != null ? h`<div class="s">${fmtWeiMsk(view.balance > r.wei ? view.balance - r.wei : 0n)} MSK left once ${String(r.n)} open order${r.n === 1 ? '' : 's'} (${fmtWeiMsk(r.wei)} MSK) are carried</div>` : raw(''); })()}<div class="s">${status.evm === 'up' ? 'eth_getBalance at latest' + (wallet.topsUp() ? ' — MISAKA Wallet also spends its post-quantum balance, moving what a payment is short of when you confirm' : '') : 'EVM RPC unreachable'}</div></div>
         <div class="tile"><div class="k">Models you are a member of</div><div class="v">${p ? p.positions.length : '—'}</div><div class="s">EVM namespace only (a bond's memberships are not this account's)</div></div>
         <div class="tile"><div class="k">If you left every one now</div><div class="v">${p && totalKnown ? fmtMsk(total, 2) + ' MSK' : '—'}</div><div class="s">the net MSK the curves would pay back right now, fees included — a membership itself is never paid anything</div></div>
       </div>
+      ${(() => { const list = orders.open(acct); if (!list.length) return raw(''); const r = orders.reserved(acct); return h`<div class="panel section"><div class="panel-h">Open orders <span class="spacer"></span><span class="dim">${String(list.length)} waiting · ${fmtWeiMsk(r.wei)} MSK held</span></div><div class="panel-b">${ordersTableHtml(list, orderCtx.changing)}</div></div>`; })()}
       <div class="panel section"><div class="panel-h">Memberships</div><div class="panel-b">
         ${!p ? raw('<div class="empty">' + (view.err ? esc(view.err) : 'Loading…') + '</div>') : !rows.length ? raw('<div class="empty">This account holds no membership in the EVM namespace. <span class="dim">holder id ' + esc(shortId(p.holder)) + '</span></div>') :
           h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th class="l">Model</th><th>Memberships</th><th>Price (MSK)</th><th>If you left now (net MSK)</th><th>Per membership</th><th></th></tr></thead><tbody>${rows.map(({ x, r, m, q }) => h`<tr class="row-link" data-href="#/store/${x.lineId}"><td class="l"><b>${db.label(r)}</b> <span class="dim tiny mono">${r.symbol}</span></td><td class="num">${fmtPos(x.units)}</td><td class="num">${m && m.price != null ? fmtPrice(m.price) : '—'}</td><td class="num">${q ? fmtMsk(q.fees.net) : '—'}</td><td class="num">${q ? fmtPrice(q.fees.net / x.units) : '—'}</td><td><a href="#/store/${x.lineId}">Open</a></td></tr>`)}</tbody></table></div>
@@ -2169,7 +2858,7 @@ async function pagePortfolio() {
           h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Block</th><th class="l">Model</th><th class="l">What happened</th><th>Memberships</th><th>MSK</th><th>Price after</th></tr></thead><tbody>${view.settlements.map((e) => { const r = db.line(e.lineId); return h`<tr><td class="num">${fmtInt(e.blockNumber)}</td><td class="l">${r ? db.label(r) : shortId(e.lineId)}</td><td class="l ${e.kind === 'Bought' ? 'up' : e.kind === 'Sold' ? 'down' : ''}" title="facade event ${e.kind}">${eventWord(e.kind)}${e.kind === 'Refused' ? ' (' + (ACTION_NAME[e.actionId] || '') + ': ' + (REFUSAL[e.reason] || e.reason) + ')' : ''}</td><td class="num">${e.units != null ? fmtPos(e.units) : e.kind === 'Seeded' ? '0 (opening)' : '—'}</td><td class="num">${e.kind === 'Bought' ? fmtMsk(e.mskIn) : e.kind === 'Seeded' ? fmtMsk(e.mskIn) + ' locked' : e.kind === 'Sold' ? fmtMsk(e.mskOut) : e.actionId !== 2 ? fmtMsk(e.amount) + ' refunded' : '—'}</td><td class="num">${e.priceAfter != null ? fmtPrice(e.priceAfter) : '—'}</td></tr>`; })}</tbody></table></div>`}
       </div></div>
       <div class="panel section"><div class="panel-h">My activity <span class="spacer"></span><span class="dim">transactions sent from this browser</span></div><div class="panel-b">
-        ${(() => { const list = txlog.forAccount(acct); return !list.length ? raw('<div class="empty">Nothing sent from this browser yet.</div>') : h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th class="l">Time</th><th class="l">Model</th><th class="l">What you did</th><th>Amount</th><th class="l">Status</th><th class="l">Tx</th></tr></thead><tbody>${list.map((t) => h`<tr><td class="l">${fmtDateTime(t.sentAt)}</td><td class="l">${t.label}</td><td class="l ${t.kind === 'buy' ? 'up' : t.kind === 'sell' ? 'down' : ''}" title="facade call ${t.kind}()">${MOVE_WORD[t.kind] || t.kind}</td><td class="num">${t.kind === 'sell' ? fmtPos(t.amount) + ' memberships' : fmtMsk(t.amount) + ' MSK' + (t.kind === 'seed' ? ' (locked)' : '')}</td><td class="l">${t.status}${t.status === 'settled' ? (t.kind === 'seed' ? ' · opened, first price ' + fmtPrice(t.priceAfter) + ' MSK' : ' · ' + fmtPos(t.units) + ' memberships / ' + fmtMsk(t.msk) + ' MSK') : ''}</td><td class="l">${idCell(t.hash, 10)}</td></tr>`)}</tbody></table></div>`; })()}
+        ${(() => { const list = txlog.forAccount(acct); return !list.length ? raw('<div class="empty">Nothing sent from this browser yet.</div>') : h`<div class="tbl-wrap"><table class="tbl"><thead><tr><th class="l">Time</th><th class="l">Model</th><th class="l">What you did</th><th>Amount</th><th class="l">Status</th><th class="l">Tx</th></tr></thead><tbody>${list.map((t) => h`<tr><td class="l">${fmtDateTime(t.sentAt)}</td><td class="l">${t.label}</td><td class="l ${t.kind === 'buy' ? 'up' : t.kind === 'sell' ? 'down' : ''}" title="facade call ${t.kind}()">${t.kind === 'cancel' ? 'cancelled an order' : (MOVE_WORD[t.kind] || t.kind) + (t.replaces ? ' (change)' : '')}</td><td class="num">${t.kind === 'cancel' ? '—' : t.kind === 'sell' ? fmtPos(t.amount) + ' memberships' : fmtMsk(t.amount) + ' MSK' + (t.kind === 'seed' ? ' (locked)' : '')}</td><td class="l">${txStatusCell(t)}${t.status === 'settled' ? (t.kind === 'seed' ? ' · opened, first price ' + fmtPrice(t.priceAfter) + ' MSK' : ' · ' + fmtPos(t.units) + ' memberships / ' + fmtMsk(t.msk) + ' MSK') : ''}</td><td class="l">${idCell(t.hash, 10)}</td></tr>`)}</tbody></table></div>`; })()}
       </div></div>`.s;
   }
   async function load() {
@@ -2195,6 +2884,7 @@ async function pagePortfolio() {
 
 function pageDocs() {
   const c = db.constsFromChain || CURVE_DEFAULTS;
+  const fees = curve.consts(null);   // the schedule the chain answers under now (ADR-0114), else the launch one
   const seedMin = c.seedMinSompi || CURVE_DEFAULTS.seedMinSompi, supply = c.supplyUnits || CURVE_DEFAULTS.supplyUnits;
   const first = curve.price(curve.seed(seedMin, { supplyUnits: supply }));
   $('#main').innerHTML = h`<div class="docs">
@@ -2236,19 +2926,19 @@ function pageDocs() {
     <p>A model with <b>no store</b>, or one closed to new members, pays its miner in full — nothing is taken for it. Because the slice enters the reserve, the product rises and the price rises even when the slice is worth less than one membership, which at the least deposit is every ordinary block: on testnet-11's subsidy the escrow is 2.29690373 MSK, the slice 0.11484518 MSK and the miner's 2.18205855 MSK, which lifts a freshly opened store from 0.2 to 0.20000022 MSK a membership, and about +2.5 % over a month of such blocks.</p>
     <h2>Fees</h2>
     <table><tr><th>on every MSK leg of a join or a leave</th><th>share</th><th>where it goes</th></tr>
-      <tr><td>burn</td><td>5 %</td><td>destroyed; supply only ever falls</td></tr>
-      <tr><td>the model's owner</td><td>1 %</td><td>the line's owner bond (shared with an adopted contributor when the owner says so); burned for an unowned genesis line</td></tr>
-      <tr><td>net</td><td>94 %</td><td>into the buy-back reserve on a join; paid to the member on a leave</td></tr>
+      <tr><td>burn</td><td>${pctOf(fees.burnPermille)}</td><td>destroyed; supply only ever falls</td></tr>
+      <tr><td>the model's owner</td><td>${pctOf(fees.legPermille)}</td><td>the line's owner bond (shared with an adopted contributor when the owner says so); burned for an unowned genesis line${fees.legPermille === LEG_V2_PERMILLE ? '' : ' — 5 % once ADR-0114\'s height is reached on this network'}</td></tr>
+      <tr><td>net</td><td>${pctOf(1000n - fees.burnPermille - fees.legPermille)}</td><td>into the buy-back reserve on a join; paid to the member on a leave</td></tr>
       <tr><td>the opening deposit</td><td>none</td><td>it is the reserve, not a purchase: every sompi of it enters the curve</td></tr>
       <tr><td>the mining slice</td><td>none</td><td>reserve too: 5 % of a block's reward, whole; what it buys is retired, not held (ADR-0091)</td></tr></table>
-    <p>Joining and then leaving therefore costs 12 % plus what your own move did to the price. Worked from a store opened with exactly ${fmtMsk(seedMin, 0)} MSK (first price ${fmtPrice(first)} MSK): a join of 1,000 MSK burns 50, pays 10 to the owner, puts 940 in the reserve and releases 4,656 memberships (price 0.20377757); a second 1,000 MSK join releases 4,570 more (reserve 101,880); leaving with all 9,226 pays 1,879.88976 MSK gross and 1,767.0963744 MSK net, puts 500,000 memberships back and leaves the reserve at 100,000.11024 MSK, above the deposit. A join of 0.1 MSK releases nothing; 0.22 MSK releases exactly one. The <a href="?selftest=1#/docs">self-test</a> checks this site's arithmetic against those golden numbers from the chain's own tests.</p>
+    <p>Joining and then leaving therefore costs ${pctOf(2n * (fees.burnPermille + fees.legPermille))} plus what your own move did to the price (the legs below are the ${pctOf(CURVE_DEFAULTS.legPermille)} owner's leg the chain was launched with; past ADR-0114's height the owner takes ${pctOf(LEG_V2_PERMILLE)} and a round trip leaves about 20 % behind — 100 MSK in, 80.89 MSK back). Worked from a store opened with exactly ${fmtMsk(seedMin, 0)} MSK (first price ${fmtPrice(first)} MSK): a join of 1,000 MSK burns 50, pays 10 to the owner, puts 940 in the reserve and releases 4,656 memberships (price 0.20377757); a second 1,000 MSK join releases 4,570 more (reserve 101,880); leaving with all 9,226 pays 1,879.88976 MSK gross and 1,767.0963744 MSK net, puts 500,000 memberships back and leaves the reserve at 100,000.11024 MSK, above the deposit. A join of 0.1 MSK releases nothing; 0.22 MSK releases exactly one. The <a href="?selftest=1#/docs">self-test</a> checks this site's arithmetic against those golden numbers from the chain's own tests.</p>
     <h2>Listing a model</h2>
     <p>The <a href="#/add">List a model</a> page is the checklist: (1) register the class from a node that holds the artifact (a bond, its key and a fee; not something a browser can do), (2) open the store with at least ${fmtMsk(seedMin, 0)} MSK, (3) approval, which is the class reaching <code>Active</code> at its activation DAA and its lanes being certified (ADR-0054, ADR-0075; a clock and a court, not a vote), (4) members join — and the owner declares what their membership gets them (ADR-0095). The store may be opened before the approval; joins wait for <code>Active</code>.</p>
     <h2>Two doors, one store</h2>
     <p>A move can be a carrier transaction on the UTXO side signed by an ML-DSA-87 key, or an EVM transaction from an ordinary account. Both reach the same curve and the same fee table. This site uses the EVM door: the line's <b>MRC-20 facade</b> (address <code>0x4d50…</code>, read from the registry) exposes ERC-20's read half plus <code>buy(minUnitsOut)</code> payable, <code>sell(unitsIn, minMskOutSompi)</code> and <code>seed()</code> payable, which route to the writer at <code>0x…F013</code> (actions 1, 2 and 3). The site says join, leave and open; the ABI says buy, sell and seed, and both name the same call.</p>
     <h2>When a join lands</h2>
     <ol><li><b>Emit.</b> Your transaction is included in chain block B. The writer validates the call, escrows a join's or an opening's value and emits <code>ActionQueued</code>. A deposit under the least deposit reverts here (<code>SeedTooSmall</code>). Nothing else happens yet.</li>
-      <li><b>Apply.</b> The fold applies the action after block B, after every carrier-borne move of B, quoted on the row as it then stands. Your floor (<code>minUnitsOut</code> or <code>minMskOutSompi</code>) is checked: a worse result is refused, never partial. An opening on an already open store, or on a frozen class, is refused.</li>
+      <li><b>Apply.</b> The fold applies the action after block B, after every carrier-borne move of B, quoted on the row as it then stands. This site sends no floor (<code>minUnitsOut</code> / <code>minMskOutSompi</code> = 0), so the move fills at the row's price then; a move that would release no membership or pay nothing is refused, never partial. An opening on an already open store, or on a frozen class, is refused.</li>
       <li><b>Settle.</b> In block C, the selected child of B, a system op burns a filled join's or opening's escrow into the line's sink, refunds a refused one, or credits a filled leave's net MSK to your account. The facade emits <code>Bought</code>, <code>Sold</code>, <code>Seeded</code> or <code>Refused</code> there.</li></ol>
     <p>So a membership taken at B is readable, and settled, one chain block later, and a store opened at B opens one block later. My activity on this site follows exactly that sequence: sent, queued, then settled or refused.</p>
     <h2>Two member namespaces</h2>
@@ -2423,9 +3113,455 @@ kaspad --testnet --netsuffix=11 --appdir=~/.t11 \\
 }
 
 // ============================================================================================
+// 11b. the developer dashboard (#/dev): the owner's side of a store — OpenSea's creator page and
+// pump.fun's launch form, for a chain where a model is owned by a BOND
+// ============================================================================================
+// Every write an owner makes — found a line, publish a version, declare what members get, name a
+// developer, hand the line on — is an ML-DSA-87 signature by the owning bond's key, and no browser
+// wallet holds one (MISAKA Wallet signs EVM transactions for sites, never PALW objects). So this page
+// reads everything live from the node, opens a store in the browser (a seed is an EVM payment anyone
+// can make), and for every signed step writes the exact `misaka palw …` command from what was filled
+// in, dry-run first. Nothing here is a claim the chain does not make: a line is "yours" because its
+// row names the bond or payout payload you entered, not because this browser says so.
+const DEV_TABS = [['models', 'Your models'], ['launch', 'Launch a model'], ['rights', 'Member rights'], ['programs', 'Tools & programs'], ['versions', 'Versions'], ['roles', 'Roles']];
+const GRANT_ORDER = ['EARLY_VERSION', 'PRIVATE_BETA', 'PRIORITY_INFERENCE', 'EXPERIMENTAL', 'DEVELOPER_ACCESS', 'INFERENCE_QUOTA', 'HOLDER_VOICE', 'SUPPORT'];   // grant::NAMES, bit order
+const BENEFIT_MAX_TIERS = 8, BENEFIT_MAX_NOTE = 64, BENEFIT_NOTICE_DAA = 4000n;   // palw_model_benefits_v1.rs
+const EXTENSION_DOMAIN = 'misaka-palw/extension-manifest/v1';                    // ADR-0108's extension_id key
+// What a member can USE for each grant, and what the developer has to run for it to be true. The chain
+// proves the holding and publishes the promise; serving it is the developer's (ADR-0095 §4.10).
+const GRANT_TOOLS = {
+  EARLY_VERSION: 'Serve the new version\'s artifact to members during the lead window. The chain refuses to make it current before the lead is over — that part is enforced.',
+  PRIVATE_BETA: 'Publish previews (version-publish --preview, at most two at once) and serve them to members only.',
+  PRIORITY_INFERENCE: 'Run a gateway that checks the membership (the member signs a challenge with their EVM key) and serves members\' jobs first.',
+  EXPERIMENTAL: 'Offer the modes the line runs but has not made default: tools, thinking, longer context, a new quantisation. Say which in the tier\'s note.',
+  DEVELOPER_ACCESS: 'Open the room where the next version is argued: proposals, research previews. Put its name or address in the note.',
+  INFERENCE_QUOTA: 'Honour an allowance at the gateway; the size (e.g. "1,000 requests/day") goes in the note — a label, never a rule.',
+  HOLDER_VOICE: 'Read proposals and evaluations with the member mark and the tier they were written at.',
+  SUPPORT: 'Answer members\' reports first.',
+};
+const EXTENSION_TEMPLATES = {
+  'model-class': { manifest: EXTENSION_DOMAIN, kind: 'model-class', name: 'your model — its class, by its artifact', network: 'testnet-11', source: { note: 'how the artifact was made (converter, commit, the Hugging Face repo)' }, artifact: { root: '<128-hex artifact root>' }, requires: { ruleset_id: '<the node\'s consensus_params_id>', fences: { palw_kary_court: 'active' } }, declares: { object_id: '<128-hex class id>', capabilities: ['attempt', 'fp'] }, verification: { model_id: '<model id>' }, admission: { object: 'ClassRegistered' } },
+  'lane-certification': { manifest: EXTENSION_DOMAIN, kind: 'lane-certification', name: 'the free-prompt lane of your class', network: 'testnet-11', source: { note: 'palw-certify bind --model-id <id> --lane fp --out lane.borsh' }, declares: { object_id: '<128-hex class id>' }, verification: { object_path: 'lane.borsh', lane: 'fp', expected: { class_id: '<128-hex class id>' } }, admission: { object: 'ClassLaneCertified' } },
+  'family-certification': { manifest: EXTENSION_DOMAIN, kind: 'family-certification', name: 'your family\'s attempt-lane drill', network: 'testnet-11', source: { note: 'palw-certify drill --family <family> --lane attempt --out drill.borsh' }, declares: { object_id: '<128-hex family id>' }, verification: { object_path: 'drill.borsh', lane: 'attempt', expected: { family_id: '<128-hex family id>' } }, admission: { object: 'FamilyCertified' } },
+  'derived-transformer': { manifest: EXTENSION_DOMAIN, kind: 'derived-transformer', name: 'a converter members\' answers can be derived with', network: 'testnet-11', source: { note: 'what it converts and where its code is' }, declares: { object_id: '<128-hex transformer id>' }, transformer: { name: '<family/format/v1>' }, verification: { vectors: [{ dsl_path: 'input.json', expected_dsl_hash: '<128 hex>', expected_artifact_hash: '<128 hex>', expected_artifact_bytes: 0 }] }, admission: { object: 'none' } },
+};
+
+// RFC 8785 for the documents ADR-0108 accepts (no floats): keys sorted by UTF-16 code units, no
+// whitespace, strings as ECMAScript serialises them — which is what RFC 8785 specifies.
+function canonicalJson(v) {
+  if (v === null || typeof v === 'boolean' || typeof v === 'string') return JSON.stringify(v);
+  if (typeof v === 'number') { if (!Number.isInteger(v)) throw new Error('a manifest carries no floats (RFC 8785 / ADR-0108)'); return JSON.stringify(v); }
+  if (Array.isArray(v)) return '[' + v.map(canonicalJson).join(',') + ']';
+  if (typeof v === 'object') return '{' + Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + canonicalJson(v[k])).join(',') + '}';
+  throw new Error('not JSON: ' + typeof v);
+}
+// extension_id_v1: keyed BLAKE2b-512 under the domain over `len_le64 ‖ canonical bytes` (manifest.rs;
+// the guide's formula leaves the length prefix out — the code is the authority, and the self-test pins it).
+function extensionIdOf(doc) {
+  const bytes = utf8(canonicalJson(doc));
+  const len = new Uint8Array(8); let n = bytes.length; for (let i = 0; i < 8; i++) { len[i] = n & 0xff; n = Math.floor(n / 256); }
+  return bytesToHex(blake2b(concatBytes(len, bytes), utf8(EXTENSION_DOMAIN)));
+}
+
+// A developer names themselves by what the chain names them by: a bond outpoint, or a payout payload.
+function parseDevId(text) {
+  const s = String(text || '').trim().toLowerCase().replace(/^0x/, '');
+  let m = /^([0-9a-f]{64}|[0-9a-f]{128}):(\d{1,10})$/.exec(s);
+  if (m) return { kind: 'bond', txid: m[1], index: Number(m[2]), key: m[1] + ':' + Number(m[2]) };
+  if (/^[0-9a-f]{128}$/.test(s)) return { kind: 'payload', key: s };
+  return null;
+}
+const bondKey = (b) => (b && b.transactionId != null ? String(b.transactionId).toLowerCase() + ':' + Number(b.index || 0) : null);
+// Which roles `ids` hold on `rec`'s row: the chain's own words, compared exactly.
+function devRolesOn(rec, ids) {
+  const row = rec && rec.row; if (!row) return [];
+  const has = (k) => ids.some((d) => d.key === k);
+  const roles = [];
+  for (const [role, b, p] of [['owner', row.owner, row.ownerPayoutPayload], ['developer', row.developer, row.developerPayoutPayload], ['maintainer', row.maintainer, row.maintainerPayoutPayload]]) {
+    if ((b && has(bondKey(b))) || (p && has(String(p).toLowerCase()))) roles.push(role);
+  }
+  return roles;
+}
+const shq = (s) => (/^[A-Za-z0-9_\/:.,@%+=~-]+$/.test(String(s)) ? String(s) : "'" + String(s).replace(/'/g, "'\\''") + "'");
+// `misaka --network <net> palw <sub> --key-file <key> --flag value …`, dry-run and the one that sends
+function devCmd(sub, keyFile, flags) {
+  const parts = ['misaka', '--network', CFG.NETWORK_NAME, 'palw', sub, '--key-file', shq(keyFile || '~/.misaka/owner.seed')];
+  for (const [k, v] of flags) { if (v === true) parts.push('--' + k); else if (Array.isArray(v)) for (const x of v) parts.push('--' + k, shq(x)); else if (v != null && v !== '' && v !== false) parts.push('--' + k, shq(v)); }
+  return parts.join(' ');
+}
+function cmdBlock(cmd, note) {
+  return h`<div class="cmdbox"><div class="cmdbar"><span class="dim tiny">${note || 'dry run first — it prints what it would send; add --yes to send it'}</span><button class="btn btn-sm" data-copy="${cmd}">Copy</button></div><pre class="cmd">${cmd}</pre><div class="cmdbar"><span class="dim tiny">then, to send it:</span><button class="btn btn-sm" data-copy="${cmd + ' --yes'}">Copy with --yes</button></div></div>`;
+}
+// A tiny identicon: a mirrored 5x5 grid from the id's bytes, in the site's palette.
+function identicon(hex, size) {
+  const b = hexToBytes(String(hex || '00').replace(/[^0-9a-f]/gi, '').slice(0, 64) || '00');
+  const hue = ((b[0] || 0) * 360) / 256, fg = 'hsl(' + hue.toFixed(0) + ',55%,58%)';
+  let cells = '';
+  for (let y = 0; y < 5; y++) for (let x = 0; x < 3; x++) if (((b[1 + y * 3 + x] || 0) & 1) === 1) { cells += '<rect x="' + x + '" y="' + y + '" width="1" height="1"/>'; if (x < 2) cells += '<rect x="' + (4 - x) + '" y="' + y + '" width="1" height="1"/>'; }
+  return 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="-1 -1 7 7" width="' + (size || 40) + '" height="' + (size || 40) + '"><rect x="-1" y="-1" width="7" height="7" fill="#162730"/><g fill="' + fg + '">' + cells + '</g></svg>');
+}
+// §4.1 checks of palw_model_benefits_validate_v1, in the order the chain applies them
+function validateTiers(tiers, expiresDaa, daa) {
+  if (tiers.length > BENEFIT_MAX_TIERS) return 'At most ' + BENEFIT_MAX_TIERS + ' tiers.';
+  let last = null;
+  for (const t of tiers) {
+    if (t.minUnits <= 0n) return 'Every tier needs at least one membership.';
+    if (last != null && t.minUnits <= last) return 'Thresholds must rise from tier to tier (' + fmtInt(t.minUnits) + ' does not rise above ' + fmtInt(last) + ').';
+    last = t.minUnits;
+    if (!t.grants.length) return 'Every tier grants something from the closed set.';
+    if (utf8(t.note || '').length > BENEFIT_MAX_NOTE) return 'A note is at most ' + BENEFIT_MAX_NOTE + ' bytes (' + utf8(t.note).length + ' now).';
+    if (t.leadDaa > 0n && !t.grants.includes('EARLY_VERSION')) return 'A lead window only means something with Early access to new versions.';
+  }
+  if (expiresDaa > 0n && daa != null && expiresDaa <= daa) return 'An expiry at or before the current DAA (' + fmtInt(daa) + ') would never govern.';
+  return null;
+}
+// §4.7 palw_model_benefits_is_strengthening_v1: does every holder the current card serves keep at least what they have?
+function tiersStrengthen(prev, prevExpires, next, nextExpires) {
+  const weakerExpiry = prevExpires === 0n ? nextExpires !== 0n : nextExpires !== 0n && nextExpires < prevExpires;
+  if (weakerExpiry) return false;
+  const tierFor = (tiers, units) => tiers.filter((t) => units >= t.minUnits).pop() || null;
+  for (const pt of prev) {
+    const nt = tierFor(next, pt.minUnits);
+    if (!nt) return false;
+    if (!pt.grants.every((g) => nt.grants.includes(g))) return false;
+    if (nt.leadDaa < pt.leadDaa) return false;
+    if (nt.holdDaa > pt.holdDaa) return false;
+  }
+  return true;
+}
+const tierSpec = (t) => { const tail = [t.leadDaa > 0n || t.holdDaa > 0n || t.note ? String(t.leadDaa) : null, t.holdDaa > 0n || t.note ? String(t.holdDaa) : null, t.note || null].filter((x) => x != null); return [String(t.minUnits), t.grants.join(',')].concat(tail).join(':'); };
+function tiersFromChain(b) { return ((b && b.tiers) || []).map((t) => ({ minUnits: bi(t.minUnits), grants: (t.grantNames || []).slice(), leadDaa: bi(t.leadDaa || 0), holdDaa: bi(t.minHoldDaa || 0), note: t.note || '' })); }
+
+async function pageDev(arg) {
+  const gen = pageState.gen, alive = () => gen === pageState.gen;
+  const main = $('#main');
+  const dev = {
+    ids: store.get('dev:ids', []).map(parseDevId).filter(Boolean),
+    watch: store.get('dev:watch', []).filter(isId128),
+    keyFile: store.get('dev:key', '~/.misaka/owner.seed'),
+    tab: DEV_TABS.some(([t]) => t === arg) ? arg : store.get('dev:tab', 'models'),
+    line: normId(store.get('dev:line')) || null,
+    draft: null,            // the rights editor's tiers, for dev.line
+    manifest: null, manifestKind: 'model-class',
+    launch: store.get('dev:launch', { classId: '', name: '', root: '', bond: '', title: '', desc: '', image: '', hf: '', params: '' }),
+    seed: { msk: null, busy: false, balance: null },
+    loading: false,
+  };
+  const saveIds = () => store.set('dev:ids', dev.ids.map((d) => d.key));
+  const mine = () => sortedLines().filter((r) => dev.watch.includes(r.lineId) || devRolesOn(r, dev.ids).length);
+  function members(m) { return m && !m.legacy ? bi(m.supplyUnits) - bi(m.positionUnits) - bi(m.retiredUnits || 0n) : null; }
+  function pickLine() { const list = mine(); if (!dev.line || !list.some((r) => r.lineId === dev.line)) dev.line = list.length ? list[0].lineId : null; return dev.line ? db.line(dev.line) : null; }
+
+  main.innerHTML = h`
+    <div class="page-h"><h1>Developer</h1><span class="sub">your models, their stores, what their members get — and the signed steps, written out for your key</span></div>
+    <div class="panel dev-head" id="devHead"></div>
+    <div class="panel"><div class="tabs" id="devTabs">${DEV_TABS.map(([t, l]) => h`<button data-t="${t}" class="${t === dev.tab ? 'on' : ''}">${l}</button>`)}</div><div class="tab-body" id="devBody"></div></div>`.s;
+
+  function renderHead() {
+    if (!alive()) return;
+    const list = mine();
+    let mem = 0n, reserve = 0n, fees = 0n, burned = 0n, used = 0, memKnown = true;
+    for (const r of list) {
+      const m = r.market; const n = members(m);
+      if (n == null) memKnown = false; else mem += n;
+      if (m) { reserve += bi(m.mskReserve); fees += bi(m.ownerPaid || 0n); burned += bi(m.burnedSompi || 0n); }
+      const u = usageOf(r); if (u != null) used += Number(u);
+    }
+    const idHex = dev.ids.length ? dev.ids[0].key.replace(/[^0-9a-f]/g, '') : (wallet.account || '').replace(/^0x/, '');
+    const fc = curve.consts(null);
+    $('#devHead').innerHTML = h`
+      <div class="dev-who">
+        <img class="dev-avatar" alt="" src="${identicon(idHex, 56)}">
+        <div class="dev-ids">
+          <div class="small muted">The chain knows an owner by its <b>bond</b> (<span class="mono">txid:index</span>) or its <b>payout payload</b> (128 hex). Add yours and every line whose row names it is listed here; nothing is sent anywhere.</div>
+          <div class="dev-chips">${dev.ids.length ? dev.ids.map((d) => h`<span class="chip mono" title="${d.key}">${d.kind === 'bond' ? 'bond ' : 'payload '}${shortId(d.key, 10)} <button class="x" data-rmid="${d.key}" aria-label="remove">×</button></span>`) : raw('<span class="dim small">none yet</span>')}${wallet.account ? h`<span class="chip mono dim" title="The connected EVM account: it can open stores and trade, it owns no line">EVM ${shortAddr(wallet.account)}</span>` : ''}</div>
+          <div class="inp-row"><input id="devIdIn" class="idinp mono" spellcheck="false" autocomplete="off" placeholder="bond txid:index, or payout payload (128 hex)"><button class="btn" id="devIdAdd">Add</button></div>
+        </div>
+      </div>
+      <div class="grid6 dev-stats">
+        <div class="tile"><div class="k">Models</div><div class="v">${String(list.length)}</div><div class="s">lines whose row names you, or that you watch</div></div>
+        <div class="tile"><div class="k">Members</div><div class="v">${memKnown ? fmtInt(mem) : '—'}</div><div class="s">memberships held outside the curves</div></div>
+        <div class="tile"><div class="k">In the reserves</div><div class="v">${fmtMsk(reserve, 0)}</div><div class="s">MSK behind your stores' buy-backs</div></div>
+        <div class="tile"><div class="k">Owner fees earned</div><div class="v">${fmtMsk(fees, 2)}</div><div class="s">the owner's ${pctOf(fc.legPermille)} of every join and leave, paid to the owner payload</div></div>
+        <div class="tile"><div class="k">Burned by your stores</div><div class="v">${fmtMsk(burned, 2)}</div><div class="s">the ${pctOf(fc.burnPermille)} burn of every move</div></div>
+        <div class="tile"><div class="k">Paid inferences</div><div class="v">${fmtInt(used)}</div><div class="s">claims the fold counted against your current versions</div></div>
+      </div>`.s;
+    $$('#devHead [data-rmid]').forEach((b) => b.addEventListener('click', () => { dev.ids = dev.ids.filter((d) => d.key !== b.dataset.rmid); saveIds(); renderAll(); }));
+    const add = () => { const d = parseDevId($('#devIdIn').value); if (!d) { toast('That is neither a bond outpoint (txid:index) nor a 128-hex payout payload.', 'warn'); return; } if (!dev.ids.some((x) => x.key === d.key)) dev.ids.push(d); saveIds(); renderAll(); };
+    $('#devIdAdd').addEventListener('click', add);
+    $('#devIdIn').addEventListener('keydown', (e) => { if (e.key === 'Enter') add(); });
+  }
+
+  // ---- your models: the creator page's grid ----------------------------------------------------
+  function modelsTab() {
+    const list = mine();
+    const cards = list.map((r) => {
+      const m = r.market, roles = devRolesOn(r, dev.ids), n = members(m), b = r.info && r.info.benefits;
+      const sold = m && !m.legacy && bi(m.supplyUnits) > 0n ? Number((n * 10000n) / bi(m.supplyUnits)) / 100 : null;
+      const cs = classStatusOf(r);
+      return h`<div class="dev-card">
+        <div class="dev-card-h"><img alt="" src="${identicon(r.lineId, 40)}"><div><div class="n">${db.label(r)}</div><div class="s mono dim">${r.symbol} · ${shortId(r.lineId, 8)}</div></div></div>
+        <div class="dev-tags">${roles.map((x) => h`<span class="tag ok">${x}</span>`)}${dev.watch.includes(r.lineId) && !roles.length ? raw('<span class="tag">watching</span>') : ''}${m ? (m.seeded ? raw('<span class="tag ok">store open</span>') : raw('<span class="tag warn">store not open</span>')) : ''}${cs && cs.head !== 'Active' ? h`<span class="tag warn">${cs.head}</span>` : ''}</div>
+        <div class="dev-kv"><span>Price</span><b>${m && m.price != null ? fmtPrice(m.price) + ' MSK' : '—'}</b></div>
+        <div class="dev-kv"><span>Members</span><b>${n != null ? fmtInt(n) : '—'}</b></div>
+        <div class="dev-bar" title="memberships outside the curve, of the ${m ? fmtInt(m.supplyUnits) : ''} a line opens with"><i style="width:${sold != null ? Math.min(100, Math.max(sold, sold > 0 ? 1 : 0)) : 0}%"></i></div>
+        <div class="dev-kv tiny dim"><span>${sold != null ? sold.toFixed(2) + ' % of the supply taken' : 'no curve yet'}</span><span>reserve ${m ? fmtMsk(m.mskReserve, 0) : '—'} MSK</span></div>
+        <div class="dev-kv"><span>Owner fees earned</span><b>${m ? fmtMsk(m.ownerPaid || 0n, 2) + ' MSK' : '—'}</b></div>
+        <div class="dev-kv"><span>Current version</span><b>${r.row && r.row.current ? 'v' + r.row.current : '—'}</b></div>
+        <div class="dev-kv"><span>Member tiers</span><b>${b && b.tiers ? String(b.tiers.length) : '—'}</b></div>
+        <div class="dev-acts"><a class="btn btn-sm" href="#/store/${r.lineId}">Store</a> <button class="btn btn-sm" data-manage="${r.lineId}">Manage</button></div>
+      </div>`;
+    });
+    return h`${!dev.ids.length && !dev.watch.length ? raw('<div class="note">Add your bond or payout payload above — or watch a line below — and your models appear here with their stores, members and earnings. To launch one, see <a href="#/dev/launch">Launch a model</a>.</div>') : ''}
+      ${list.length ? h`<div class="dev-grid">${cards}</div>` : dev.ids.length ? raw('<div class="empty">No line on this network names the bonds or payloads above' + (db.lines.size ? ' (' + db.lines.size + ' lines known).' : '.') + '</div>') : ''}
+      <div class="inp-row" style="margin-top:12px"><input id="devWatchIn" class="idinp mono" spellcheck="false" autocomplete="off" placeholder="watch a line by its id (128 hex)"><button class="btn" id="devWatchAdd">Watch</button></div>`;
+  }
+
+  // ---- launch: pump.fun's one form, split where the chain splits it ----------------------------
+  function launchTab() {
+    const L = dev.launch, classes = Array.from(db.classes.keys());
+    const nameBytes = utf8(L.name || '').length;
+    const bond = parseDevId(L.bond);
+    const okClass = normId(L.classId), okRoot = isId128(L.root);
+    const why = !okClass ? 'pick the class the line runs on' : !L.name || nameBytes > 64 ? 'a name of 1 to 64 bytes' : !okRoot ? 'the 128-hex artifact root of version 1' : !bond || bond.kind !== 'bond' ? 'the founding bond as txid:index (it becomes owner, developer and maintainer, and signs)' : '';
+    const found = why ? null : devCmd('line-found', dev.keyFile, [['class', L.classId], ['name', L.name], ['root', L.root], ['bond', bond.key]]);
+    const card = { title: L.title || L.name || '', variant: L.params ? L.params : undefined, hf: L.hf || undefined, description: L.desc || undefined, image: L.image || undefined };
+    const snippet = okClass ? '"<the new line id>": ' + JSON.stringify(Object.fromEntries(Object.entries(card).filter(([, v]) => v)), null, 2) : '';
+    const target = pickLine();
+    return h`<div class="grid2 dev-launch">
+      <div class="panel"><div class="panel-h">1 · Found a line</div><div class="panel-b">
+        <p class="small">A <b>line</b> is a model people can join: it runs on a registered <b>class</b> (the graph), publishes <b>versions</b> (artifact roots) and gets its own store. Founding one is a signed carrier from an active bond, rent-priced (1 MSK of its fee is burned). A class you do not have yet is registered first — <a href="#/add">the listing checklist</a> walks through it, and <a href="#/dev/programs">Tools &amp; programs</a> writes its ADR-0108 manifest.</p>
+        <label class="small muted" for="lcClass">Class</label>
+        <select id="lcClass" class="idinp mono"><option value="">choose a class…</option>${classes.map((c) => h`<option value="${c}" ${c === L.classId ? 'selected' : ''}>${db.line(c) ? db.label(db.line(c)) + ' · ' : ''}${shortId(c, 10)}</option>`)}</select>
+        <label class="small muted" for="lcName">Name <span class="dim">(${String(nameBytes)}/64 bytes — shared, never squatted: the founder is in the line id)</span></label>
+        <input id="lcName" class="idinp" maxlength="64" autocomplete="off" value="${L.name}" placeholder="e.g. Qwen2.5-1.5B/finance-tuned">
+        <label class="small muted" for="lcRoot">Version 1 — artifact root (128 hex)</label>
+        <input id="lcRoot" class="idinp mono" spellcheck="false" autocomplete="off" value="${L.root}" placeholder="the root palw-class prints for your artifact">
+        <label class="small muted" for="lcBond">Founding bond</label>
+        <input id="lcBond" class="idinp mono" spellcheck="false" autocomplete="off" value="${L.bond}" placeholder="txid:index">
+        <label class="small muted" for="lcKey">Key file of that bond <span class="dim">(only written into the command; never read here)</span></label>
+        <input id="lcKey" class="idinp mono" spellcheck="false" autocomplete="off" value="${dev.keyFile}">
+        ${found ? cmdBlock(found) : h`<div class="reason">${why}</div>`}
+        <p class="small dim">The line id is printed by the command and shown by the node; add its founding bond above and it joins <a href="#/dev/models">Your models</a>.</p>
+      </div></div>
+      <div class="panel"><div class="panel-h">2 · Its listing</div><div class="panel-b">
+        <p class="small">What people see before they join. The chain stores the name; the rest is the site's catalogue (<span class="mono">config.js</span> MODELS), so it is shown here and in this browser only until the site's operator adds the entry below.</p>
+        <label class="small muted" for="lcTitle">Title</label><input id="lcTitle" class="idinp" value="${L.title}" placeholder="Organisation/Model-Name">
+        <label class="small muted" for="lcDesc">Description</label><textarea id="lcDesc" class="idinp" rows="3" placeholder="what it is good at, in two sentences">${L.desc}</textarea>
+        <div class="grid2 tight"><div><label class="small muted" for="lcImg">Image URL</label><input id="lcImg" class="idinp" value="${L.image}" placeholder="https://…/icon.png"></div><div><label class="small muted" for="lcParams">Size / variant</label><input id="lcParams" class="idinp" value="${L.params}" placeholder="1.5B · A16 dense · n_ctx 512"></div></div>
+        <label class="small muted" for="lcHf">Model card</label><input id="lcHf" class="idinp" value="${L.hf}" placeholder="https://huggingface.co/…">
+        <div class="dev-preview"><img alt="" src="${L.image && /^https:\/\//.test(L.image) ? L.image : identicon(L.root || L.name || 'x', 56)}" onerror="this.src='${identicon(L.root || L.name || 'x', 56)}'"><div><b>${L.title || L.name || 'Your model'}</b><div class="small dim">${L.params || ''}</div><div class="small">${L.desc || ''}</div></div></div>
+        ${snippet ? h`<div class="cmdbox"><div class="cmdbar"><span class="dim tiny">config.js · MODELS entry for the site's operator</span><button class="btn btn-sm" data-copy="${snippet}">Copy</button></div><pre class="cmd">${snippet}</pre></div>` : ''}
+      </div></div>
+    </div>
+    <div class="panel"><div class="panel-h">3 · Open its store (in the browser)</div><div class="panel-b">
+      <p class="small">A store opens with a <b>seed</b> of at least ${fmtMsk(seedMinFor(target && target.market), 0)} MSK, locked for good as the curve's reserve (ADR-0090) — an EVM payment any wallet can make, so it happens right here. ${target ? h`For <b>${db.label(target)}</b>:` : raw('Add or watch the line first.')}</p>
+      <div id="devSeed"></div>
+    </div></div>`;
+  }
+
+  // ---- member rights: the ADR-0095 card, edited and previewed ---------------------------------
+  function rightsTab() {
+    const rec = pickLine();
+    if (!rec) return h`<div class="empty">Add your bond, or watch a line, to declare what its members get.</div>`;
+    const b = rec.info && rec.info.benefits;
+    if (!dev.draft || dev.draft.line !== rec.lineId) dev.draft = { line: rec.lineId, tiers: tiersFromChain(b), cadence: bi(b && b.cadenceDaa || 0), expires: bi(b && b.expiresDaa || 0) };
+    const d = dev.draft, daa = db.chain.daa;
+    const err = validateTiers(d.tiers, d.expires, daa);
+    const prev = tiersFromChain(b);
+    const stronger = tiersStrengthen(prev, bi(b && b.expiresDaa || 0), d.tiers, d.expires);
+    const cmd = err ? null : devCmd('line-benefits', dev.keyFile, [['line', rec.lineId], ['tier', d.tiers.map(tierSpec)], ['cadence-daa', d.cadence > 0n ? String(d.cadence) : null], ['expires-daa', d.expires > 0n ? String(d.expires) : null]]);
+    const preview = { benefits: { tiers: d.tiers.map((t) => ({ minUnits: t.minUnits, grantNames: t.grants, leadDaa: t.leadDaa, minHoldDaa: t.holdDaa, note: t.note })), cadenceDaa: d.cadence, expiresDaa: d.expires, enforcedLeadDaa: d.tiers.reduce((a, t) => (t.leadDaa > a ? t.leadDaa : a), 0n) } };
+    return h`${lineSelect(rec)}
+      <div class="grid2">
+        <div><div class="panel-h">The card now</div>${raw(benefitsPanel(rec.info, { always: true }))}</div>
+        <div><div class="panel-h">Your draft ${raw(d.tiers.length ? '' : '<span class="tag warn">empty = withdraw</span>')}</div>
+          <div class="tiers-ed">${d.tiers.map((t, i) => h`<div class="tier-ed" data-i="${String(i)}">
+            <div class="row"><label class="tiny muted">From</label><input class="t-units mono" value="${String(t.minUnits)}" inputmode="numeric"><span class="tiny muted">memberships</span><button class="btn btn-sm btn-ghost" data-rmtier="${String(i)}">Remove</button></div>
+            <div class="grants">${GRANT_ORDER.map((g) => h`<label class="gchip ${t.grants.includes(g) ? 'on' : ''}" title="${GRANT_WORDS[g][1]}"><input type="checkbox" data-grant="${g}" ${t.grants.includes(g) ? 'checked' : ''}>${GRANT_WORDS[g][0]}</label>`)}</div>
+            <div class="row"><label class="tiny muted">Lead (DAA)</label><input class="t-lead mono" value="${String(t.leadDaa)}" inputmode="numeric" title="how long members have a new version before it may become current — enforced by the chain; needs Early access"><label class="tiny muted">Held for (DAA)</label><input class="t-hold mono" value="${String(t.holdDaa)}" inputmode="numeric" title="how long a member must have held without selling"></div>
+            <div class="row"><label class="tiny muted">Note</label><input class="t-note" maxlength="64" value="${t.note}" placeholder="1,000 requests/day · 32K context · #room"><span class="tiny dim">${String(utf8(t.note || '').length)}/64</span></div>
+          </div>`)}</div>
+          <button class="btn btn-sm" id="addTier" ${d.tiers.length >= BENEFIT_MAX_TIERS ? 'disabled' : ''}>Add a tier</button>
+          <div class="row" style="margin-top:8px"><label class="tiny muted">Publish a version every (DAA, 0 = no undertaking)</label><input id="tCad" class="mono" value="${String(d.cadence)}" inputmode="numeric"></div>
+          <div class="row"><label class="tiny muted">Expires at DAA (0 = never)</label><input id="tExp" class="mono" value="${String(d.expires)}" inputmode="numeric"></div>
+        </div>
+      </div>
+      <div class="panel-h">What members will see</div>${raw(benefitsPanel(preview, { always: true }))}
+      ${err ? h`<div class="reason">${err}</div>` : h`<div class="note ${stronger ? '' : 'warn'}">${stronger ? 'This keeps or improves what every current member has, so it governs as soon as it lands.' : 'This takes something away from someone (a removed grant, a higher threshold, a shorter expiry, a longer holding period, or a withdrawal): the chain stores it as pending and the current card keeps governing for ' + fmtInt(BENEFIT_NOTICE_DAA) + ' DAA (ADR-0095 §4.7).'}</div>${cmdBlock(cmd, 'signed by the line\'s owner bond — dry run first')}`}`;
+  }
+
+  // ---- tools & programs: what members can use, and ADR-0108 manifests --------------------------
+  function programsTab() {
+    const rec = pickLine(); const b = rec && rec.info && rec.info.benefits;
+    const promised = new Set(tiersFromChain(b).flatMap((t) => t.grants));
+    if (!dev.manifest) dev.manifest = JSON.stringify(EXTENSION_TEMPLATES[dev.manifestKind], null, 2);
+    let parsed = null, perr = null, eid = null, canon = null;
+    try { parsed = JSON.parse(dev.manifest); canon = canonicalJson(parsed); eid = extensionIdOf(parsed); } catch (e) { perr = e.message; }
+    const file = (parsed && parsed.kind ? parsed.kind : 'extension') + '.json';
+    const cmds = ['misaka --network ' + CFG.NETWORK_NAME + ' palw extension inspect ' + file, 'misaka --network ' + CFG.NETWORK_NAME + ' palw extension verify ' + file + ' --depth vectors', 'misaka --network ' + CFG.NETWORK_NAME + ' palw extension preflight ' + file, 'misaka --network ' + CFG.NETWORK_NAME + ' palw extension submit ' + file + ' --key-file ' + shq(dev.keyFile)].join('\n');
+    return h`${rec ? lineSelect(rec) : ''}
+      <div class="panel-h">What your members can use${rec ? h` — ${db.label(rec)}` : ''}</div>
+      <p class="small">A grant is a service the line runs, never money. The chain proves who holds how many memberships (a member signs a challenge with their EVM key and the gateway reads the holding) and publishes the promise; running the service is yours. ${rec ? (promised.size ? 'This line promises the ticked ones below.' : 'This line promises nothing yet — declare tiers under Member rights.') : ''}</p>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th class="l">Grant</th><th class="l">What you run for it</th><th>Promised</th></tr></thead><tbody>
+        ${GRANT_ORDER.map((g) => h`<tr><td class="l"><b>${GRANT_WORDS[g][0]}</b> <span class="dim tiny mono">${g}</span></td><td class="l small">${GRANT_TOOLS[g]}</td><td>${promised.has(g) ? raw('<span class="tag ok">yes</span>') : raw('<span class="dim">—</span>')}</td></tr>`)}
+      </tbody></table></div>
+      <div class="panel-h" style="margin-top:14px">Bring a program: an ADR-0108 extension manifest</div>
+      <p class="small">A model class, a lane certificate, a family drill or a converter reaches the chain as <b>one manifest</b> a verifier recomputes; its id is a hash of its canonical form, never a name you declare. The verifier answers one tier: <b>expressible now</b> (permissionless — <span class="mono">submit</span> sends the object), <b>a node extension</b> (a build must carry the code), or <b>a ruleset change</b> (a fence and a release).</p>
+      <div class="row"><label class="tiny muted" for="mfKind">Start from</label><select id="mfKind">${Object.keys(EXTENSION_TEMPLATES).map((k) => h`<option value="${k}" ${k === dev.manifestKind ? 'selected' : ''}>${k}</option>`)}</select><button class="btn btn-sm btn-ghost" id="mfReset">Reset to the template</button></div>
+      <textarea id="mfText" class="idinp mono manifest" rows="16" spellcheck="false">${dev.manifest}</textarea>
+      ${perr ? h`<div class="reason">${perr}</div>` : h`<dl class="kv small"><dt>extension_id</dt><dd class="mono">${eid}</dd><dt>canonical bytes</dt><dd>${fmtInt(utf8(canon).length)} (RFC 8785: sorted keys, no whitespace)</dd><dt>save it as</dt><dd class="mono">${file}</dd></dl>
+        <div class="cmdbox"><div class="cmdbar"><span class="dim tiny">inspect → verify → preflight → submit (submit only for an expressible-now tier)</span><button class="btn btn-sm" data-copy="${cmds}">Copy</button></div><pre class="cmd">${cmds}</pre></div>`}`;
+  }
+
+  // ---- versions --------------------------------------------------------------------------------
+  function versionsTab() {
+    const rec = pickLine();
+    if (!rec) return h`<div class="empty">Add your bond, or watch a line, to publish its versions.</div>`;
+    if (!rec.versions) refreshVersions(rec.lineId).then(() => { if (dev.tab === 'versions') renderBody(); }).catch(() => {});
+    const V = dev.ver || (dev.ver = { root: '', parent: rec.row && rec.row.current ? String(rec.row.current) : '', preview: false, notes: '', card: '' });
+    let notesHash = V.notes;
+    if (!notesHash && V.card.trim()) { try { notesHash = bytesToHex(blake2b(utf8(canonicalJson(JSON.parse(V.card))))); } catch (e) { notesHash = ''; } }
+    const why = !isId128(V.root) ? 'the new version\'s 128-hex artifact root' : notesHash && !isId128(notesHash) ? 'a notes hash is 128 hex' : '';
+    const cmd = why ? null : devCmd('version-publish', dev.keyFile, [['line', rec.lineId], ['root', V.root], ['parent', V.parent || null], ['notes-hash', notesHash || null], ['preview', V.preview]]);
+    const previews = (rec.versions || []).filter((v) => /preview/i.test(v.status || ''));
+    return h`${lineSelect(rec)}
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>v</th><th class="l">Status</th><th class="l">Root</th><th>Published DAA</th><th>Attempt</th><th>FP</th><th class="l"></th></tr></thead><tbody>
+        ${!rec.versions ? raw('<tr><td colspan="7" class="empty">Loading versions…</td></tr>') : rec.versions.map((v) => h`<tr><td class="num">${String(v.version)}</td><td class="l">${v.status || '—'}${v.inForce ? raw(' <span class="tag ok">in force</span>') : ''}</td><td class="l">${idCell(v.root)}</td><td class="num">${v.publishedDaa != null ? fmtInt(v.publishedDaa) : '—'}</td><td class="num">${fmtInt(v.attemptClaims)}</td><td class="num">${fmtInt(v.fpClaims)}</td><td class="l">${/preview/i.test(v.status || '') ? h`<button class="btn btn-sm" data-vcmd="version-promote:${String(v.version)}">Promote…</button> <button class="btn btn-sm btn-ghost" data-vcmd="version-withdraw:${String(v.version)}">Withdraw…</button>` : ''}</td></tr>`)}
+      </tbody></table></div>
+      <div id="vCmd"></div>
+      <div class="grid2" style="margin-top:12px">
+        <div><div class="panel-h">Publish a version</div>
+          <label class="small muted" for="vRoot">Artifact root (128 hex)</label><input id="vRoot" class="idinp mono" value="${V.root}" spellcheck="false">
+          <div class="row"><label class="tiny muted" for="vParent">Continues from v</label><input id="vParent" class="mono" value="${V.parent}" inputmode="numeric"><label class="tiny"><input type="checkbox" id="vPrev" ${V.preview ? 'checked' : ''}> preview (members first; ${String(previews.length)}/2 open)</label></div>
+          <label class="small muted" for="vNotes">Notes hash (128 hex) — or write the model card below and it is hashed for you</label><input id="vNotes" class="idinp mono" value="${V.notes}" spellcheck="false">
+          ${cmd ? cmdBlock(cmd, 'signed by the line\'s developer bond; without --preview it becomes current at once') : h`<div class="reason">${why}</div>`}
+        </div>
+        <div><div class="panel-h">Model card (hashed into --notes-hash)</div>
+          <textarea id="vCard" class="idinp mono" rows="10" spellcheck="false" placeholder='{"what": "…", "trained_on": "…", "evals": {…}}'>${V.card}</textarea>
+          <div class="small dim">The chain records the hash and never reads the card: publish the card next to the artifact so members can check it. ${notesHash && !V.notes ? h`BLAKE2b-512 of its canonical form: ${shortId(notesHash, 16)}` : ''}</div>
+        </div>
+      </div>`;
+  }
+
+  // ---- roles -----------------------------------------------------------------------------------
+  function rolesTab() {
+    const rec = pickLine();
+    if (!rec) return h`<div class="empty">Add your bond, or watch a line, to set its roles.</div>`;
+    const row = rec.row || {}, R = dev.roles || (dev.roles = { developer: '', maintainer: '', share: '', newOwner: '' });
+    const who = (b, p) => (b ? h`<span class="mono">${shortId(b.transactionId, 10)}:${String(b.index)}</span>` : p ? idCell(p, 10) : raw('<span class="dim">the owner</span>'));
+    const okBond = (s) => !s || s === 'owner' || (parseDevId(s) && parseDevId(s).kind === 'bond');
+    const share = R.share === '' ? null : Number(R.share);
+    const why = !okBond(R.developer) || !okBond(R.maintainer) ? 'a role is a bond (txid:index) or "owner"' : share != null && !(share >= 0 && share <= 1000 && Number.isInteger(share)) ? 'the contributor share is 0..1000 permille' : !R.developer && !R.maintainer && share == null ? 'change at least one role' : '';
+    const roleCmd = why ? null : devCmd('line-roles', dev.keyFile, [['line', rec.lineId], ['developer', R.developer || null], ['maintainer', R.maintainer || null], ['contributor-permille', share != null ? String(share) : null]]);
+    const nb = parseDevId(R.newOwner);
+    const moveCmd = nb && nb.kind === 'bond' ? devCmd('line-transfer', dev.keyFile, [['line', rec.lineId], ['new-owner', nb.key]]) : null;
+    return h`${lineSelect(rec)}
+      <dl class="kv"><dt>Owner</dt><dd>${who(row.owner, row.ownerPayoutPayload)}</dd><dt>Developer</dt><dd>${who(row.developer, row.developerPayoutPayload)}</dd><dt>Maintainer</dt><dd>${who(row.maintainer, row.maintainerPayoutPayload)}</dd><dt>Contributor share of the owner's leg</dt><dd>${row.contributorPermilleOfLeg != null ? row.contributorPermilleOfLeg + ' ‰' : '—'}</dd></dl>
+      <div class="grid2">
+        <div><div class="panel-h">Name the developer and maintainer</div>
+          <p class="small">The developer publishes versions; the maintainer keeps the line running. Both default to the owner. An adopted contributor takes this share of the owner's leg while their version is current.</p>
+          <label class="small muted" for="rDev">Developer bond</label><input id="rDev" class="idinp mono" value="${R.developer}" placeholder="txid:index, or owner">
+          <label class="small muted" for="rMnt">Maintainer bond</label><input id="rMnt" class="idinp mono" value="${R.maintainer}" placeholder="txid:index, or owner">
+          <label class="small muted" for="rShare">Contributor share (permille of the owner's leg)</label><input id="rShare" class="idinp mono" value="${R.share}" placeholder="e.g. 250" inputmode="numeric">
+          ${roleCmd ? cmdBlock(roleCmd, 'signed by the owner bond') : h`<div class="reason">${why}</div>`}
+        </div>
+        <div><div class="panel-h">Hand the line on</div>
+          <p class="small">The new owner takes the leg from the next move; developer and maintainer reset to them. Memberships do not move.</p>
+          <label class="small muted" for="rNew">New owner bond (an active bond)</label><input id="rNew" class="idinp mono" value="${R.newOwner}" placeholder="txid:index">
+          ${moveCmd ? cmdBlock(moveCmd, 'signed by the current owner bond — this cannot be undone by you') : raw('<div class="dim small">Enter the new owner\'s bond.</div>')}
+          <div class="panel-h" style="margin-top:12px">Retire it</div>
+          <p class="small">The store closes to new members, leaves still pay, the roots leave force after the grace, and the history stays.</p>
+          ${cmdBlock(devCmd('line-retire', dev.keyFile, [['line', rec.lineId]]), 'signed by the owner bond — a retired line does not come back')}
+        </div>
+      </div>`;
+  }
+
+  function lineSelect(rec) {
+    const list = mine();
+    return h`<div class="row dev-linesel"><label class="small muted" for="devLine">Line</label><select id="devLine">${list.map((r) => h`<option value="${r.lineId}" ${r.lineId === rec.lineId ? 'selected' : ''}>${db.label(r)} · ${shortId(r.lineId, 8)}${devRolesOn(r, dev.ids).length ? ' (' + devRolesOn(r, dev.ids).join(', ') + ')' : ' (watching)'}</option>`)}</select><a class="small" href="#/store/${rec.lineId}">store</a></div>`;
+  }
+
+  function renderBody() {
+    if (!alive()) return;
+    const body = $('#devBody'); if (!body) return;
+    const t = dev.tab;
+    body.innerHTML = (t === 'launch' ? launchTab() : t === 'rights' ? rightsTab() : t === 'programs' ? programsTab() : t === 'versions' ? versionsTab() : t === 'roles' ? rolesTab() : modelsTab()).s;
+    wire(body);
+  }
+  function renderAll() { renderHead(); renderBody(); }
+  const num = (v) => { const n = parseDec(String(v).trim() || '0', 0); return n == null || n < 0n ? 0n : n; };
+  function wire(body) {
+    $$('[data-copy]', body).forEach((b) => b.addEventListener('click', () => { copyText(b.dataset.copy); toast('Copied.', 'ok'); }));
+    const sel = $('#devLine', body); if (sel) sel.addEventListener('change', () => { dev.line = sel.value; store.set('dev:line', dev.line); dev.draft = null; dev.ver = null; dev.roles = null; loadLine(dev.line); renderBody(); });
+    $$('[data-manage]', body).forEach((b) => b.addEventListener('click', () => { dev.line = b.dataset.manage; store.set('dev:line', dev.line); showTab('rights'); }));
+    const w = $('#devWatchAdd', body); if (w) w.addEventListener('click', () => { const id = normId($('#devWatchIn').value.trim()); if (!id) { toast('A line id is 128 hex.', 'warn'); return; } if (!dev.watch.includes(id)) dev.watch.push(id); store.set('dev:watch', dev.watch); db.upsertLine(id, {}); loadLine(id).then(renderAll); });
+    if (dev.tab === 'launch') {
+      const bindL = (id, key) => { const el2 = $('#' + id, body); if (!el2) return; el2.addEventListener(el2.tagName === 'SELECT' ? 'change' : 'input', () => { dev.launch[key] = el2.value; store.set('dev:launch', dev.launch); clearTimeout(dev.lt); dev.lt = setTimeout(() => { const f = document.activeElement && document.activeElement.id; renderBody(); if (f && $('#' + f)) { const x = $('#' + f); x.focus(); if (x.setSelectionRange && x.value != null) try { x.setSelectionRange(x.value.length, x.value.length); } catch (e) { /* select */ } } }, 350); }); };
+      bindL('lcClass', 'classId'); bindL('lcName', 'name'); bindL('lcRoot', 'root'); bindL('lcBond', 'bond'); bindL('lcTitle', 'title'); bindL('lcDesc', 'desc'); bindL('lcImg', 'image'); bindL('lcParams', 'params'); bindL('lcHf', 'hf');
+      const k = $('#lcKey', body); if (k) k.addEventListener('change', () => { dev.keyFile = k.value.trim() || '~/.misaka/owner.seed'; store.set('dev:key', dev.keyFile); renderBody(); });
+      const target = pickLine(), box = $('#devSeed', body);
+      if (box && target) { dev.seed.balance = dev.balance; if (target.market && target.market.seeded) box.innerHTML = h`<div class="note">The store is open: ${fmtMsk(target.market.seedSompi || target.market.mskReserve, 0)} MSK locked, ${fmtInt(members(target.market) || 0n)} memberships held. <a href="#/store/${target.lineId}">Go to the store</a></div>`.s; else renderSeedPanel(box, dev.seed, () => target, () => { toast('Seed sent. The store opens when a block carries it; follow it under Open orders on the store page.', 'ok'); }); }
+    }
+    if (dev.tab === 'rights' && dev.draft) {
+      const d = dev.draft;
+      const rerender = () => { const f = document.activeElement; const sig = f && f.closest && f.closest('.tier-ed') ? [f.closest('.tier-ed').dataset.i, f.className] : f && f.id ? ['#', f.id] : null; renderBody(); if (sig) { const x = sig[0] === '#' ? $('#' + sig[1]) : $('.tier-ed[data-i="' + sig[0] + '"] .' + String(sig[1]).split(' ')[0]); if (x) { x.focus(); try { x.setSelectionRange(x.value.length, x.value.length); } catch (e) { /* checkbox */ } } } };
+      $$('.tier-ed', body).forEach((ed) => {
+        const t = d.tiers[Number(ed.dataset.i)];
+        const on = (cls, fn) => { const x = $('.' + cls, ed); if (x) x.addEventListener('input', () => { fn(x.value); clearTimeout(dev.rt); dev.rt = setTimeout(rerender, 300); }); };
+        on('t-units', (v) => { t.minUnits = num(v); }); on('t-lead', (v) => { t.leadDaa = num(v); }); on('t-hold', (v) => { t.holdDaa = num(v); }); on('t-note', (v) => { t.note = v; });
+        $$('[data-grant]', ed).forEach((c) => c.addEventListener('change', () => { const g = c.dataset.grant; t.grants = GRANT_ORDER.filter((x) => (x === g ? c.checked : t.grants.includes(x))); rerender(); }));
+      });
+      $$('[data-rmtier]', body).forEach((b) => b.addEventListener('click', () => { d.tiers.splice(Number(b.dataset.rmtier), 1); renderBody(); }));
+      const at = $('#addTier', body); if (at) at.addEventListener('click', () => { const lastT = d.tiers[d.tiers.length - 1]; d.tiers.push({ minUnits: lastT ? lastT.minUnits * 10n : 1n, grants: ['SUPPORT'], leadDaa: 0n, holdDaa: 0n, note: '' }); renderBody(); });
+      const cad = $('#tCad', body); if (cad) cad.addEventListener('input', () => { d.cadence = num(cad.value); clearTimeout(dev.rt); dev.rt = setTimeout(rerender, 300); });
+      const ex = $('#tExp', body); if (ex) ex.addEventListener('input', () => { d.expires = num(ex.value); clearTimeout(dev.rt); dev.rt = setTimeout(rerender, 300); });
+    }
+    if (dev.tab === 'programs') {
+      const k = $('#mfKind', body); if (k) k.addEventListener('change', () => { dev.manifestKind = k.value; dev.manifest = JSON.stringify(EXTENSION_TEMPLATES[k.value], null, 2); renderBody(); });
+      const r = $('#mfReset', body); if (r) r.addEventListener('click', () => { dev.manifest = JSON.stringify(EXTENSION_TEMPLATES[dev.manifestKind], null, 2); renderBody(); });
+      const t = $('#mfText', body); if (t) t.addEventListener('input', () => { dev.manifest = t.value; clearTimeout(dev.mt); dev.mt = setTimeout(() => { const pos = t.selectionStart; renderBody(); const x = $('#mfText'); if (x) { x.focus(); try { x.setSelectionRange(pos, pos); } catch (e) { /* */ } } }, 600); });
+    }
+    if (dev.tab === 'versions' && dev.ver) {
+      const V = dev.ver;
+      const bindV = (id, key, isBox) => { const x = $('#' + id, body); if (!x) return; x.addEventListener(isBox ? 'change' : 'input', () => { V[key] = isBox ? x.checked : x.value.trim(); clearTimeout(dev.vt); dev.vt = setTimeout(() => { const f = document.activeElement && document.activeElement.id; renderBody(); if (f && $('#' + f)) $('#' + f).focus(); }, 350); }); };
+      bindV('vRoot', 'root'); bindV('vParent', 'parent'); bindV('vNotes', 'notes'); bindV('vPrev', 'preview', true);
+      const card = $('#vCard', body); if (card) card.addEventListener('input', () => { V.card = card.value; clearTimeout(dev.vt); dev.vt = setTimeout(() => { renderBody(); const x = $('#vCard'); if (x) x.focus(); }, 600); });
+      $$('[data-vcmd]', body).forEach((b) => b.addEventListener('click', () => { const [sub, n] = b.dataset.vcmd.split(':'); $('#vCmd', body).innerHTML = cmdBlock(devCmd(sub, dev.keyFile, [['line', dev.line], ['version', n]]), sub === 'version-promote' ? 'makes the preview current (developer bond); refused inside a declared lead window' : 'takes the preview out of force (developer bond)').s; $$('#vCmd [data-copy]', body).forEach((c) => c.addEventListener('click', () => { copyText(c.dataset.copy); toast('Copied.', 'ok'); })); }));
+    }
+    if (dev.tab === 'roles' && dev.roles) {
+      const R = dev.roles;
+      for (const [id, key] of [['rDev', 'developer'], ['rMnt', 'maintainer'], ['rShare', 'share'], ['rNew', 'newOwner']]) { const x = $('#' + id, body); if (x) x.addEventListener('input', () => { R[key] = x.value.trim(); clearTimeout(dev.ot); dev.ot = setTimeout(() => { const f = document.activeElement && document.activeElement.id; renderBody(); if (f && $('#' + f)) $('#' + f).focus(); }, 350); }); }
+    }
+  }
+  function showTab(t) { dev.tab = t; store.set('dev:tab', t); $$('#devTabs button').forEach((x) => x.classList.toggle('on', x.dataset.t === t)); renderBody(); }
+  $('#devTabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) showTab(b.dataset.t); });
+
+  async function loadLine(id) {
+    await Promise.all([refreshLineInfo(id), refreshMarket(id), refreshUsage(id), refreshFacade(id)].map((p) => p.catch(() => {})));
+  }
+  async function load() {
+    if (!alive()) return;
+    await discoverClasses(); await discoverLines();
+    for (const id of dev.watch) db.upsertLine(id, {});
+    // every line's row carries its roles; the ones not read yet are read once
+    await pool(sortedLines().filter((r) => !r.row || !r.market), 3, (r) => loadLine(r.lineId));
+    await pool(mine(), 3, (r) => loadLine(r.lineId));
+    if (wallet.account) { try { dev.balance = await balanceOf(wallet.account); } catch (e) { dev.balance = null; } }
+    if (!alive()) return;
+    renderHead();
+    if (!$('#devBody input:focus, #devBody textarea:focus, #devBody select:focus')) renderBody();
+  }
+  renderAll();
+  const onWallet = () => { renderNav(); load(); }; wallet.listeners.add(onWallet); onCleanup(() => wallet.listeners.delete(onWallet));
+  await load();
+  every(30000, load);
+}
+
+// ============================================================================================
 // 12. router, boot, self-test
 // ============================================================================================
-const PAGES = { store: pageStore, portfolio: pagePortfolio, lines: pageLines, line: pageLine, leaderboard: pageLeaderboard, add: pageAdd, docs: pageDocs };
+const PAGES = { store: pageStore, portfolio: pagePortfolio, lines: pageLines, line: pageLine, leaderboard: pageLeaderboard, add: pageAdd, docs: pageDocs, dev: pageDev };
 async function route() {
   const first = parseHash();
   // Links printed before the store was called a store still exist, in wallets, chats and the
@@ -2482,6 +3618,16 @@ function selfTestReport() {
   const one = curve.buyQuote(m0, (22n * MSK) / 100n);
   eq('P3: a buy of 0.22 MSK releases exactly one', one && one.unitsOut, 1n);
   const rb = curve.buyQuote(m0, 100n * MSK), rs = curve.sellQuote(rb.after, rb.unitsOut);
+  // ADR-0114: the same table under the 5 % owner leg — the chain's palw_model_market_v1 goldens
+  const V2 = Object.assign({}, CURVE_DEFAULTS, { legPermille: 50n });
+  const v2b1 = curve.buyQuote(m0, 1000n * MSK, V2);
+  eq('ADR-0114: a 1,000 MSK join burns 50, pays the owner 50, puts 900 in', [v2b1.fees.burn, v2b1.fees.leg, v2b1.fees.net].join('/'), [50n * MSK, 50n * MSK, 900n * MSK].join('/'));
+  eq('ADR-0114: …and releases 4,459 memberships (price 20,361,584 sompi)', v2b1.unitsOut + '/' + v2b1.priceAfter, '4459/20361584');
+  const v2b2 = curve.buyQuote(v2b1.after, 1000n * MSK, V2);
+  const v2s = curve.sellQuote(v2b2.after, v2b1.unitsOut + v2b2.unitsOut, V2);
+  eq('ADR-0114: leaving with all 8,840: gross 179,982,400,000, net 161,984,160,000', v2b2.unitsOut + '/' + v2s.fees.gross + '/' + v2s.fees.net, '4381/179982400000/161984160000');
+  const v2rt = curve.sellQuote(curve.buyQuote(m0, 100n * MSK, V2).after, curve.buyQuote(m0, 100n * MSK, V2).unitsOut, V2);
+  eq('ADR-0114: 100 MSK in and straight out returns 80.892738 MSK (a fifth goes to fees)', v2rt.fees.net, 8089273800n);
   eq('round trip returns at most 0.94² of the gross', rs.fees.net <= (94n * 94n * MSK) / 100n && rs.fees.net > 80n * MSK, true);
   const closed = Object.assign({}, b1.after, { closedToBuys: true });
   eq('a closed market refuses buys', curve.buyQuote(closed, 10n * MSK), null); eq('a closed market honours sells', !!curve.sellQuote(closed, b1.unitsOut), true);
@@ -2517,6 +3663,63 @@ function selfTestReport() {
   const ns = normMarket({ found: true, opened: true, openedDaa: 7, mskReserve: 10000000000000, positionUnits: 500000, soldUnits: 0, priceSompiPerPosition: 20000000, seedSompi: 10000000000000, seededBy: lid, classStatus: 'Active' }, 'wrpc');
   eq('normMarket: a seeded row keeps its seed, its seeder and its price', ns.seeded && ns.seedSompi === 10000000000000n && ns.seededBy === lid && ns.price === 20000000n, true);
   eq('safeParse keeps u64 exact', safeParse('{"a":12345678901234567890}').a, '12345678901234567890');
+  // ---- which wallet (EIP-6963): the rows the chooser lists, and the one taken without asking ----
+  const pv = (flags) => Object.assign({ request: async () => null }, flags);
+  const ann = (rdns, name, p, icon) => ({ info: { uuid: 'uuid-' + rdns, name, icon: icon || 'data:image/png;base64,AA==', rdns }, provider: p || pv() });
+  const aMm = ann('io.metamask', 'MetaMask'), aPh = ann('app.phantom', 'Phantom'), aMw = ann(MISAKA_RDNS, 'MISAKA Wallet', pv({ isMisakaWallet: true }));
+  const keysOf = (rows) => rows.map((r) => r.key + (r.source === 'EIP-6963' ? '' : '@' + r.source)).join(' ');
+  eq('wallets: MISAKA Wallet first, the others in announcement order', keysOf(walletChoices([aMm, aPh, aMw], {})), MISAKA_RDNS + ' io.metamask app.phantom');
+  eq('wallets: one row per rdns', keysOf(walletChoices([aMm, ann('io.metamask', 'MetaMask again'), aPh], {})), 'io.metamask app.phantom');
+  const gM = pv({ isMisakaWallet: true }), gE = pv();
+  eq('wallets: nothing announced, the globals are the rows', keysOf(walletChoices([], { misaka: gM, ethereum: gE })), MISAKA_RDNS + '@window.misaka window.ethereum@window.ethereum');
+  eq('wallets: window.ethereum that is window.misaka is one row', keysOf(walletChoices([], { misaka: gM, ethereum: gM })), MISAKA_RDNS + '@window.misaka');
+  eq('wallets: a global an announcement already covers adds no row', keysOf(walletChoices([aMw, aMm], { misaka: gM, ethereum: aMm.provider })), MISAKA_RDNS + ' io.metamask');
+  eq('wallets: an icon that is not an image data: URI is not drawn', walletChoices([ann('x.y', 'X', null, 'https://t.example/p.png')], {})[0].icon, WALLET_ICON_GENERIC);
+  const r2 = walletChoices([aMm, aPh], {});
+  eq('wallets: the remembered one only while it is installed, else the only one', [initialChoice(r2, 'app.phantom'), initialChoice(r2, MISAKA_RDNS), initialChoice(r2, null), initialChoice(walletChoices([aMm], {}), MISAKA_RDNS)].map((r) => (r ? r.key : '-')).join(' '), 'app.phantom - - io.metamask');
+  // ---- orders: the signed bytes back from eth_getTransactionByHash, and what a replacement must bid ----
+  // A real t11 pending join (2026-09-11), as the explorer node served it; the bytes are the ones a
+  // producer's block template carried for it.
+  const t11Join = { type: '0x2', chainId: '0x4d534b', nonce: '0x0', maxPriorityFeePerGas: '0x0', maxFeePerGas: '0xe', gas: '0xe1aa', to: '0x4d502a1e6968406143b642e4c989a4b1a0bdab00', value: '0x21e19e0c9bab2400000', input: '0xd96a094a000000000000000000000000000000000000000000000000000000000000a53e', accessList: [], v: '0x0', yParity: '0x0', r: '0xf88bf0c32e44b7c25c706dd123be578de2bf2f942d88798c25cb3a49a430e42f', s: '0x221634c015800971716e6c56a41e0281b392b3289016f72919a8dcdfc84dd238', hash: '0x8edf7df7218ba4c9c9a89af5f5689dc982b5ce0c8ba3f60382a32ad748a3a6aa' };
+  eq('raw tx: a t11 type-2 join re-encodes to the bytes its template carried', rawTxFromRpc(t11Join), '0x02f893834d534b80800e82e1aa944d502a1e6968406143b642e4c989a4b1a0bdab008a021e19e0c9bab2400000a4d96a094a000000000000000000000000000000000000000000000000000000000000a53ec080a0f88bf0c32e44b7c25c706dd123be578de2bf2f942d88798c25cb3a49a430e42fa0221634c015800971716e6c56a41e0281b392b3289016f72919a8dcdfc84dd238');
+  eq('raw tx: fields that do not hash to the served hash give no bytes', rawTxFromRpc(Object.assign({}, t11Join, { value: '0x1' })), null);
+  const eip155Raw = '0xf86c098504a817c800825208943535353535353535353535353535353535353535880de0b6b3a76400008025a028ef61340bd939bc2195fe537567866003e1a15d3c71ff63e1590620aa636276a067cbe9d8997f761aecb703304b3800ccf555c9f3dc64214b297fb1966a3b6d83';
+  const eip155 = { type: '0x0', nonce: '0x9', gasPrice: '0x4a817c800', gas: '0x5208', to: '0x' + '35'.repeat(20), value: '0xde0b6b3a7640000', input: '0x', v: '0x25', r: '0x28ef61340bd939bc2195fe537567866003e1a15d3c71ff63e1590620aa636276', s: '0x67cbe9d8997f761aecb703304b3800ccf555c9f3dc64214b297fb1966a3b6d83', hash: '0x' + bytesToHex(keccak256(hexToBytes(eip155Raw))) };
+  eq('raw tx: the EIP-155 example (type 0) re-encodes byte for byte', rawTxFromRpc(eip155), eip155Raw);
+  const rf = replacementFees({ maxFeePerGas: '14', maxPriorityFeePerGas: '0' }, 7n);
+  eq('replacement: 14 wei cap -> 18 (the node wants >= 14 + 14*10/100 = 15), a zero tip stays zero', rf.maxFeePerGas + '/' + rf.maxPriorityFeePerGas, '18/0');
+  const rf2 = replacementFees({ maxFeePerGas: '10', maxPriorityFeePerGas: '4' }, 7n);
+  eq('replacement: never under twice the base fee; a tip grows by 25 % + 1', rf2.maxFeePerGas + '/' + rf2.maxPriorityFeePerGas, '14/6');
+  const keepList = txlog.list;
+  txlog.list = [
+    { hash: 'a', from: '0xabc', kind: 'buy', status: 'pending', nonce: 0, value: '1000', gas: '10', maxFeePerGas: '2', sentAt: 1 },
+    { hash: 'b', from: '0xabc', kind: 'cancel', status: 'sent', nonce: 0, value: '0', gas: '21000', maxFeePerGas: '3', sentAt: 2 },
+    { hash: 'c', from: '0xabc', kind: 'buy', status: 'dropped', nonce: 1, value: '500', gas: '10', maxFeePerGas: '2', sentAt: 3 },
+    { hash: 'd', from: '0xabc', kind: 'buy', status: 'queued', nonce: 2, value: '7', gas: '1', maxFeePerGas: '1', sentAt: 4 },
+    { hash: 'e', from: '0xdef', kind: 'buy', status: 'pending', nonce: 0, value: '9', gas: '1', maxFeePerGas: '1', sentAt: 5 },
+  ];
+  const held = orders.reserved('0xabc'), openRows = orders.open('0xabc').map((t) => t.hash).join('');
+  txlog.list = keepList;
+  eq('held: the newest per nonce counts, a cancel holds nothing, a carried join is already off the balance', held.wei + '/' + held.n, '520/1');
+  eq('open orders: not carried yet, or carried and not settled — newest first, cancels are not orders', openRows, 'dca');
+  // ---- the developer dashboard: ADR-0108's extension id, and ADR-0095's declaration rules ----
+  const mcDoc = {"manifest": "misaka-palw/extension-manifest/v1", "kind": "model-class", "name": "PALW-BASE-0/rc \u2014 the floor, by its ledger row", "network": "testnet-11", "source": {"note": "derived from the pinned seed; every node mints it, nobody converts it"}, "artifact": {"root": "bcf2d9eb7357bd6c267df2df6588393ca71c67d7c802903ca7031948303c793dcb78bfe26488f52d0393be08e0cc0777b080e2dce9355d3576036b734545b8df"}, "requires": {"ruleset_id": "ecbdbc2222efcc2d32493f2349e7c17f983611697a5d10ffc7ae90458bac8ee5", "fences": {"palw_kary_court": "active"}}, "declares": {"object_id": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8", "capabilities": ["attempt", "fp"]}, "verification": {"model_id": "PALW-BASE-0/rc"}, "admission": {"object": "ClassRegistered"}};
+  eq('extension_id of docs/extension-manifests/model-class.json is the CLI\'s (misaka palw extension inspect)', extensionIdOf(mcDoc), '68041ae3ce95b7ba5eb7e8d600771d6ec90abde457ed3e71c4b60e20c02258d7fa30fd99db267ebba35ab427c43969a307351a3e5317b35deba68f3519cf964c');
+  eq('canonical JSON sorts keys and drops whitespace', canonicalJson({ b: [1, { d: 'x', c: null }], a: true }), '{"a":true,"b":[1,{"c":null,"d":"x"}]}');
+  const T = (u, g, lead, hold, note) => ({ minUnits: bi(u), grants: g, leadDaa: bi(lead || 0), holdDaa: bi(hold || 0), note: note || '' });
+  eq('tiers: a flat ladder is refused', validateTiers([T(10, ['SUPPORT']), T(10, ['SUPPORT'])], 0n, 100n) != null, true);
+  eq('tiers: a lead without early access is refused', validateTiers([T(1, ['SUPPORT'], 600)], 0n, 100n) != null, true);
+  eq('tiers: nine tiers are refused, a 65-byte note is refused', [validateTiers(Array.from({ length: 9 }, (_, i) => T(i + 1, ['SUPPORT'])), 0n, 1n) != null, validateTiers([T(1, ['SUPPORT'], 0, 0, 'x'.repeat(65))], 0n, 1n) != null].join(), 'true,true');
+  eq('tiers: a rising ladder with a lead on early access is accepted', validateTiers([T(1, ['EARLY_VERSION', 'SUPPORT'], 600), T(100, ['EARLY_VERSION', 'PRIORITY_INFERENCE'], 600, 1000, '1,000 requests/day')], 0n, 100n), null);
+  eq('§4.7: adding a grant strengthens, removing one or raising a threshold weakens, withdrawing weakens', [
+    tiersStrengthen([T(10, ['SUPPORT'])], 0n, [T(10, ['SUPPORT', 'EARLY_VERSION'])], 0n),
+    tiersStrengthen([T(10, ['SUPPORT', 'EARLY_VERSION'])], 0n, [T(10, ['SUPPORT'])], 0n),
+    tiersStrengthen([T(10, ['SUPPORT'])], 0n, [T(20, ['SUPPORT'])], 0n),
+    tiersStrengthen([T(10, ['SUPPORT'])], 0n, [], 0n),
+    tiersStrengthen([T(10, ['SUPPORT'])], 0n, [T(10, ['SUPPORT'])], 5000n),
+  ].join(), 'true,false,false,false,false');
+  eq('the CLI tier spec is units:GRANTS[:lead[:hold[:note]]]', [tierSpec(T(1, ['SUPPORT'])), tierSpec(T(100, ['EARLY_VERSION', 'SUPPORT'], 600)), tierSpec(T(5, ['INFERENCE_QUOTA'], 0, 0, 'a:b'))].join(' | '), '1:SUPPORT | 100:EARLY_VERSION,SUPPORT:600 | 5:INFERENCE_QUOTA:0:0:a:b');
+  eq('a developer id is a bond outpoint or a payout payload', [parseDevId('ab'.repeat(32) + ':3').key, parseDevId('CD'.repeat(64)).kind, parseDevId('nope')].join(), 'ab'.repeat(32) + ':3,payload,');
   lines.unshift('MISAKA Options self-test: ' + pass + ' passed, ' + fail + ' failed');
   const report = lines.join('\n');
   console[fail ? 'error' : 'info'](report);
@@ -2529,7 +3732,7 @@ async function boot() {
   db.listeners.add(() => { renderNav(); renderBanner(); });
   wallet.listeners.add(renderNav);
   window.addEventListener('hashchange', route);
-  window.MO = { curve, ABI, SIG, EVT, blake2b, keccak256, utf8, hexToBytes, bytesToHex, facadeDerived, holderIdDerived, CURVE_DEFAULTS, bi, toHex, SOMPI_PER_MSK, NATIVE_SCALE_WEI, normMarket, db, history, store, txlog, seedActionData, ACTION_SEED, sompiToWei, parseClassStatus, REFUSAL };
+  window.MO = { encodeRawTx, rawTxFromRpc, replacementFees, orders, pollTransactions, curve, ABI, SIG, EVT, blake2b, keccak256, utf8, hexToBytes, bytesToHex, facadeDerived, holderIdDerived, CURVE_DEFAULTS, bi, toHex, SOMPI_PER_MSK, NATIVE_SCALE_WEI, normMarket, db, history, store, txlog, seedActionData, ACTION_SEED, sompiToWei, parseClassStatus, REFUSAL, wallet, walletDiscovery, walletChoices, initialChoice, MISAKA_RDNS };
   if (MOCK) await new Promise((resolve) => { const s = document.createElement('script'); s.src = 'mock.js'; s.onload = resolve; s.onerror = () => { toast('mock.js failed to load', 'bad'); resolve(); }; document.head.appendChild(s); });
   if (MOCK && window.MISAKA_MOCK && window.MISAKA_MOCK.init) window.MISAKA_MOCK.init(window.MO);
   await wallet.init();

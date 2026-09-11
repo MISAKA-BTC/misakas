@@ -28,7 +28,8 @@ of every MSK leg of a join or a leave is burned and 1 % goes to the line's owner
 product never falls, so the reserve never falls under the opening deposit. **No holder is ever
 paid** (ADR-0091). This site reads the store through a node (the Kaspa-style wRPC and the EVM's
 read precompiles), quotes with the chain's own curve arithmetic, and sends every move through the
-EVM writer from an injected EIP-1193 wallet (MetaMask).
+EVM writer from the EIP-1193 wallet the user picks (MISAKA Wallet, MetaMask, or any other the
+browser has; see [The wallet](#the-wallet)).
 
 **Every figure on screen is an RPC reply or the ADR-0090 arithmetic applied to a market row, or a
 dash.** Nothing is estimated or invented, and there is no server side: four static files.
@@ -44,7 +45,7 @@ dash.** Nothing is estimated or invented, and there is no server side: four stat
 | `mock.js` | loaded **only** with `?mock=1`: a simulated node and wallet for demos and screenshots (see below) |
 | `screenshots/` | `store.png` (an open store), `store-not-open.png` (the opening panel), `list-a-model.png` (the checklist), `models.png`, `rankings.png`, `memberships.png`, taken in mock mode at 1440 px wide |
 
-No external dependencies, no CDN, no fonts, no build step. `app.js` is about 185 KB unminified.
+No external dependencies, no CDN, no fonts, no build step. `app.js` is about 230 KB unminified.
 
 ## Configure
 
@@ -61,7 +62,8 @@ window.MISAKA_CONFIG = {
   POLL_MS: 10000,               // store page refresh cadence
   LOG_LOOKBACK_BLOCKS: 5000,    // eth_getLogs window for settlement events (node cap: 10000)
   ADR_URL: "https://github.com/MISAKA-BTC/misakas/tree/main/docs/adr",
-  DOCS_URL: "https://github.com/MISAKA-BTC/misakas/tree/main/docs"   // the runbooks the List a model page links
+  DOCS_URL: "https://github.com/MISAKA-BTC/misakas/tree/main/docs",  // the runbooks the List a model page links
+  WALLET_URL: "https://wallet.misakascan.com"   // optional: where the wallet chooser sends a browser without MISAKA Wallet
 };
 ```
 
@@ -240,7 +242,27 @@ swallowing it.
 
 ## The wallet
 
-Connect asks the injected provider for accounts, then `wallet_switchEthereumChain` to `0x4D534B`
+**Which wallet.** The site no longer takes whatever sits on `window.ethereum`: that global belongs
+to whichever extension claimed it (with Phantom installed, Phantom's own "MetaMask or Phantom?"
+prompt, which never lists MISAKA Wallet). It listens for EIP-6963 announcements (`eip6963:announceProvider`,
+collected by `info.uuid`, one row per `rdns`) and dispatches `eip6963:requestProvider` at startup and
+again whenever the chooser opens. A wallet that announces nothing is still reached through the legacy
+globals: `window.misaka` (when `isMisakaWallet`) as "MISAKA Wallet", and `window.ethereum`, when no
+announcement is that object, as "Browser wallet". **Connect** goes straight to the wallet when there
+is exactly one; with several (or none) it opens the chooser: MISAKA Wallet first, marked *Recommended
+— tops up from your UTXO balance automatically*, then the others in the order they announced, each
+with the icon it announced (only an image `data:` URI, only ever as an `<img src>`; the name only
+ever as text). Without MISAKA Wallet in the browser its row is still first, as a link to
+`WALLET_URL` (https://wallet.misakascan.com) instead of a wallet to connect. The wallet the user
+picks is asked for accounts and only then becomes the site's wallet for the session (its
+`accountsChanged`/`chainChanged` listeners replace the last wallet's); it is remembered by rdns under
+`mo:wallet:choice` and taken again without asking on the next visit while it is still announced
+(and reconnected, unless the user disconnected). Connected, the header button shows the wallet's
+icon (not on a phone) and the address and opens a menu: *Change wallet*, *Copy address*, *Disconnect* (and *Switch to
+the MISAKA chain* when the wallet is elsewhere). `wallet.topsUp()` follows the chosen wallet: only a
+MISAKA Wallet in use lifts the EVM-balance refusals, not one merely installed next to it.
+
+Connect asks the chosen provider for accounts, then `wallet_switchEthereumChain` to `0x4D534B`
 and, on 4902, `wallet_addEthereumChain` (name "MISAKA <network>", currency MSK with 18 decimals,
 rpc = the resolved `EVM_RPC_URL`, explorer = `EXPLORER_URL`). A buy is `eth_sendTransaction` to the
 facade with `value = gross sompi × 1e10` and `data = buy(minUnitsOut)`; a sell is `sell(unitsIn,
@@ -248,7 +270,7 @@ minMskOutSompi)`; a seed is `seed()` with `value = seed sompi × 1e10` (at least
 else the writer reverts `SeedTooSmall()` at the call). Gas is left to the wallet's estimate. No
 private key ever touches this site.
 
-The floor is the quote less the slippage tolerance (default 2 %). The fold quotes the action on the
+A join is entered as a count of whole memberships; the site pays the least MSK that releases that many (`curve.buyCostForUnits`, the chain's own arithmetic), because the fold refunds no fraction of a membership. The site sends no floor (`minUnitsOut` / `minMskOutSompi` = 0): a move fills at the row's price when the fold applies it. A join that would release no membership, or a leave that would pay nothing, is refused by the fold itself and refunded. The fold quotes the action on the
 row *as it then stands* after the block's carrier-borne moves, so a floor that is too tight is
 refused rather than filled worse; a refused buy or seed is refunded at the next block, and the site
 shows the refusal reason from the `Refused` event (1 not armed, 2 line missing, 3 class or line
@@ -268,7 +290,9 @@ after; a second releases 4,570 (reserve 101,880); selling all 9,226 back pays 18
 sompi gross and 176,709,637,440 net, puts 500,000 positions back and leaves the reserve at
 100,000.11024 MSK; 0.1 MSK releases nothing and 0.22 MSK releases one; the product never falls and
 the reserve never falls under the seed; an unseeded row quotes nothing; a closed market refuses
-buys and honours sells). 51 checks, all passing as shipped.
+buys and honours sells), and the wallet chooser's ordering (MISAKA Wallet first, one row per rdns,
+the legacy globals as fallbacks, a non-image icon not drawn, a remembered wallet taken only while
+it is installed). 67 checks, all passing as shipped.
 
 ## Mock mode
 
@@ -294,6 +318,17 @@ the rest "on the post-quantum lane", and a send that tops the EVM account up by 
 EVM balance alone (the wallet moves what is missing inside the same confirmation and says so), and
 the desk says how much will be moved and that the claim takes about two blocks. Any other wallet
 (MetaMask) is still refused with "Insufficient MSK balance in the EVM account", because it cannot top up.
+
+`?mockwallet=` also takes a comma list, so the wallet chooser can be exercised without extensions:
+`misaka` (MISAKA Wallet, announced with EIP-6963 as `com.misakachain.wallet`), `misaka-legacy` (MISAKA
+Wallet reachable only through its global), `phantom` and `metamask` (announced as `app.phantom` and
+`io.metamask`, with plain lettered icons, not the real marks; neither tops up), `injected` (a wallet
+on `window.ethereum` that announces nothing: the "Browser wallet" row) and `none`. For example
+`?mock=1&mockwallet=misaka,phantom,metamask` lists three wallets, MISAKA Wallet first;
+`?mock=1&mockwallet=phantom,metamask` shows the "MISAKA Wallet — not installed" row; `none` shows the
+chooser with no wallet at all. All of them sign for the one mock account (5 MSK on the EVM lane when
+MISAKA Wallet is in the list, else 150,000), and in mock mode the chooser lists mock.js's wallets
+only: a real extension would sign on a real chain for a simulated one.
 
 ## What is not available on the public network yet
 
