@@ -44,7 +44,11 @@ The 1,000,000 MSK deposit of 2026-09-11 (`c57eec8d…`), read from the chain:
 | 07:07:22 | chain block `b90571fe…`, EVM payload **empty** | 3376 |
 | 07:22:05 | chain block, EVM payload **empty** | 3377 |
 | ≈07:30 | the wallet's claim first *accepted* by the RPC (the wallet re-asked only while its popup was open; the operator reloaded a wallet that re-asks from the background) | — |
-| 07:4x | contract-side balance still 0; the claim waits for the first template built after it reached a producer, then for that block, then for that block to become a chain block | — |
+| 07:43:12 | the first template built after the claim reached a producer — chain block at DAA 3379 carries it (template time) | 3379 |
+| ≈08:15 | that block arrives and is the chain block; the credit is at `latest` (read 08:16Z: 1,000,000 MSK) | — |
+
+**Lock in a block at 06:26Z, credit at 08:15Z: 1 h 49 min**, of which the chain needed one interval
+after someone asked (07:43 → 08:15) and everything before that was waiting for the ask.
 
 The previous day's 5 MSK deposit (`8e5315b3…`) took six minutes — claim RPC 13:27Z, credited by the
 chain block at DAA 3297 (template 13:33:53Z) — because a template happened to be built just after
