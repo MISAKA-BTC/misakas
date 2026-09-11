@@ -88,14 +88,20 @@ pub fn palw_context_vector_seed_v1(name: &str) -> Hash64 {
     keyed64(DOMAIN_SEED, &[name.as_bytes()])
 }
 
-/// **The shipped vectors, by width** (Decision 5): the three CI pins, the one where the suite's
-/// budget allows, and the external one.
+/// **The shipped vectors, by width** (Decision 5): the three CI pins, then the external runs.
+///
+/// `0110-dense-v7-256k` is the widest vector the A16 tier can run at all. Its last position
+/// attends to 262,143 rows, and the attention ops refuse a history past 2^18 (ADR-0103 §10.7,
+/// [`palw_context_vector_blocked_v1`]). It was added on 2026-09-11 for that reason. `0110-dense-v7-2m`
+/// stays in the list as the width the regime is for, and it is refused before produce, by name,
+/// until that wall moves.
 pub fn palw_context_vectors_v1() -> Vec<PalwContextVectorV1> {
     [
         ("0110-dense-v7-512", 512u32),
         ("0110-dense-v7-4k", 4096),
         ("0110-dense-v7-32k", 32_768),
         ("0110-dense-v7-128k", 131_072),
+        ("0110-dense-v7-256k", 262_144),
         ("0110-dense-v7-2m", 2_097_152),
     ]
     .into_iter()
@@ -115,6 +121,22 @@ pub fn palw_context_vectors_v1() -> Vec<PalwContextVectorV1> {
 /// The shipped vector named `name`.
 pub fn palw_context_vector_v1(name: &str) -> Option<PalwContextVectorV1> {
     palw_context_vectors_v1().into_iter().find(|v| v.name == name)
+}
+
+/// **Why a vector cannot be produced on this tree, if it cannot** — ADR-0103 §10.7's wall, stated
+/// before a single position runs. The job's last forward attends to every row the job holds
+/// (`prefill + decode − 1`). The A16 tier's catalog attention ops refuse a history past
+/// `A16_MAX_DOT_LEN` rows, and so do the engine and the court, which compose them. A vector past
+/// it would otherwise run for hours and then fail at the 262,145th row with an op's error.
+pub fn palw_context_vector_blocked_v1(vector: &PalwContextVectorV1) -> Option<String> {
+    let rows = u64::from(vector.prefill) + u64::from(vector.decode.saturating_sub(1));
+    let wall = kaspa_consensus_core::palw_base0_a16::A16_MAX_DOT_LEN as u64;
+    (rows > wall).then(|| {
+        format!(
+            "this job's last position attends to {rows} rows and the A16 tier's attention ops refuse a history past {wall} \
+             (A16_MAX_DOT_LEN, ADR-0103 §10.7): no A16 class produces, replays or is adjudicated at this width on this tree"
+        )
+    })
 }
 
 fn form_name(form: PalwPromptIdsFormV1) -> &'static str {
@@ -801,6 +823,14 @@ pub fn palw_verify_context_vector_v1(
     if !needs_run {
         return f;
     }
+    // ADR-0103 §10.7: refused before the first position rather than at the 262,145th.
+    if let Some(why) = palw_context_vector_blocked_v1(vector) {
+        if wants(St::Produce) {
+            f.verdicts.insert(St::Produce, V::Fail(why));
+        }
+        skip_all(&mut f, &[St::Commit, St::Seat, St::Court, St::Availability], "nothing can be produced at this width");
+        return f;
+    }
     let t = Instant::now();
     let run = match backend.execute_free_prompt(&job, &prompt) {
         Ok(run) => run,
@@ -1176,6 +1206,38 @@ mod tests {
              (the document: {})",
             String::from_utf8(palw_canonical_json_v1(&f.agreed_json_v1())).unwrap()
         );
+    }
+
+    /// **The widest runnable vector, and the 2M one refused by name before a position runs**
+    /// (ADR-0103 §10.7). `0110-dense-v7-256k`'s last position attends to 262,143 rows, inside the
+    /// A16 tier's 2^18. The 2M vector's would attend to 2,097,151, and its document says why produce
+    /// failed, skips the four stages that need a run, and still reports the fit, which reads only the
+    /// class and the ruleset. It does all of that in the time the fit takes, not the hours a doomed
+    /// produce would.
+    #[test]
+    fn the_widest_runnable_vector_is_2_18_and_the_2m_one_is_refused_by_name() {
+        let wide = palw_context_vector_v1("0110-dense-v7-256k").expect("shipped");
+        assert_eq!(wide.prefill + wide.decode - 1, 262_143);
+        assert_eq!(palw_context_vector_blocked_v1(&wide), None, "inside the wall");
+        let mut one_past = wide.clone();
+        one_past.prefill += 2;
+        assert!(palw_context_vector_blocked_v1(&one_past).is_some(), "262,145 rows is past it");
+        one_past.prefill -= 1;
+        assert_eq!(palw_context_vector_blocked_v1(&one_past), None, "262,144 rows is the wall itself");
+
+        let ruleset = PalwContextRulesetV1::devnet_held_v1().expect("the held devnet");
+        let two_m = palw_context_vector_v1("0110-dense-v7-2m").expect("shipped");
+        let t = Instant::now();
+        let f = palw_verify_context_vector_v1(&two_m, &ruleset, &PalwContextStageV1::ALL);
+        assert!(t.elapsed().as_secs() < 60, "refused up front, not after a produce: {:?}", t.elapsed());
+        match f.verdicts.get(&PalwContextStageV1::Produce) {
+            Some(PalwContextVerdictV1::Fail(why)) => assert!(why.contains("ADR-0103 §10.7") && why.contains("2097151"), "{why}"),
+            other => panic!("produce must fail by name, got {other:?}"),
+        }
+        for stage in [PalwContextStageV1::Commit, PalwContextStageV1::Seat, PalwContextStageV1::Court, PalwContextStageV1::Availability] {
+            assert!(matches!(f.verdicts.get(&stage), Some(PalwContextVerdictV1::Skipped(_))), "{}: skipped by name", stage.name());
+        }
+        assert!(f.verdicts.contains_key(&PalwContextStageV1::Fit), "the fit reads no run and still reports");
     }
 
     /// **The 512-position vector, in the default suite.**

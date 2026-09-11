@@ -83,8 +83,12 @@ fn peak_rss_bytes() -> u64 {
     if cfg!(target_os = "macos") { max } else { max.saturating_mul(1024) }
 }
 
-fn cost_class(n_ctx: u32) -> &'static str {
-    match n_ctx {
+fn cost_class(vector: &cv::PalwContextVectorV1) -> &'static str {
+    if cv::palw_context_vector_blocked_v1(vector).is_some() {
+        // ADR-0103 §10.7: refused before produce, by name, until the wall moves.
+        return "nothing: past the A16 history wall";
+    }
+    match vector.geometry.n_ctx {
         0..=512 => "the default test suite",
         513..=32_768 => "the release-mode vector job",
         _ => "an external run",
@@ -93,9 +97,9 @@ fn cost_class(n_ctx: u32) -> &'static str {
 
 pub fn verify_context(args: VerifyContextArgs<'_>) -> Result<(), CliError> {
     if args.list {
-        println!("{:<22} {:>9}  {:<30}  vector_id", "name", "n_ctx", "runs in");
+        println!("{:<22} {:>9}  {:<34}  vector_id", "name", "n_ctx", "runs in");
         for v in cv::palw_context_vectors_v1() {
-            println!("{:<22} {:>9}  {:<30}  {}", v.name, v.geometry.n_ctx, cost_class(v.geometry.n_ctx), v.vector_id());
+            println!("{:<22} {:>9}  {:<34}  {}", v.name, v.geometry.n_ctx, cost_class(&v), v.vector_id());
         }
         return Ok(());
     }
