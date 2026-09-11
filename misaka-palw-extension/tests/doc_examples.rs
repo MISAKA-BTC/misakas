@@ -88,6 +88,18 @@ fn the_context_profile_example_is_a_new_width_expressible_and_served_only_with_t
     }
     assert_eq!(report.depth_reached, D::Vectors, "no artifact file beside the example");
     assert_eq!(report.stopped_at.as_deref(), Some("artifact.path not readable"));
+    // The width is new; the WEIGHTS are the ones the graph-v5@512 row already registered, so the
+    // example carries that root and the report warns rather than refuses (the chain admits a second
+    // class over registered weights — only the SDK's candidate rule never builds one).
+    assert!(
+        report
+            .checks
+            .iter()
+            .any(|c| c.name == "registration.new_weights"
+                && matches!(c.outcome, misaka_palw_extension::PalwExtensionOutcomeV1::Fail(_))),
+        "{:?}",
+        report.checks
+    );
 }
 
 #[test]

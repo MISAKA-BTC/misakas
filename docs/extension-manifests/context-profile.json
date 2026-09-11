@@ -3,12 +3,10 @@
   "kind": "context-profile",
   "name": "the dense A16 row at a width no catalog row spells",
   "network": "testnet-11",
-  "source": { "note": "projected with palw_a16_context_row_profile_v1(24); the weights are the published Qwen2.5-1.5B dense artifact" },
-  "artifact": {
-    "root": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-    "path": "qwen25-1.5b.palwart"
-  },
-  "declares": { "object_id": "95bea23afcc0f7bdbe351283c7dfb77c6da7e614af1e97c66519aa28b369faee2acc9af10c007f7ff2fd5764b06c62373511179e26cf71425b6524767e2de514", "capabilities": ["attempt", "fp"], "resource_bounds": { "memory_bytes": 2147483648 } },
+  "source": { "note": "projected with palw_a16_context_row_profile_v1(24) over the published Qwen2.5-1.5B dense artifact" },
+  "artifact": { "root": "1a7457f100d9fb0f3406d882b4b5bcd7e2ebcccd54edc5268a08c3a85bc6c8d3adacdf345cde3cb72ffe8ed7fe7a2f729d10f00821f94b1e8562e4e217b72708", "bytes": 1795427276, "path": "qwen25-1.5b.palwart" },
+  "requires": { "ruleset_id": "ecbdbc2222efcc2d32493f2349e7c17f983611697a5d10ffc7ae90458bac8ee5", "fences": { "palw_kary_court": "active" } },
+  "declares": { "object_id": "95bea23afcc0f7bdbe351283c7dfb77c6da7e614af1e97c66519aa28b369faee2acc9af10c007f7ff2fd5764b06c62373511179e26cf71425b6524767e2de514", "capabilities": ["attempt", "fp"], "resource_bounds": { "memory_bytes": 6442450944 } },
   "verification": { "project": "a16-context-row", "n_ctx": 24 },
   "admission": { "object": "ClassRegistered" }
 }

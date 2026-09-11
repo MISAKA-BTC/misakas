@@ -493,13 +493,22 @@ pub(crate) fn verify(cx: &mut VerifyCx<'_>) -> Result<KindOutcomeV1, PalwExtensi
                 .to_string(),
         );
         cx.pass("registration.already");
-    } else if terms.registered_artifact_roots.contains(&root) {
-        return Ok(KindOutcomeV1::at(
-            cx.refuse("artifact.root", "these weights are already registered under another class id — known weights serve their own class (the 2026-08-28 rule)"),
-            Structural,
-        ));
     } else {
         cx.pass("registration.new");
+        // Not a chain rule: nothing in the `ClassRegistered` transition refuses a second class over
+        // weights it already holds. It is the SDK's candidate rule (a node never builds one for
+        // itself — the 2026-08-28 mispairing), so it is named here and the tier is left alone: a
+        // limit of one path is not a verdict on the manifest.
+        if terms.registered_artifact_roots.contains(&root) {
+            cx.fail(
+                "registration.new_weights",
+                "this root is already registered under another class id — the chain admits a second class over the same weights, and \
+                 the SDK never builds one for a node's own registration (the 2026-08-28 mispairing rule): make sure this is a new \
+                 graph over those weights and not a mispairing",
+            );
+        } else {
+            cx.pass("registration.new_weights");
+        }
     }
 
     // ADR-0069 Decision 5: weight is what certification buys; a class no family covers registers
@@ -554,6 +563,12 @@ pub(crate) fn verify(cx: &mut VerifyCx<'_>) -> Result<KindOutcomeV1, PalwExtensi
         Ok((entry, _)) => {
             cx.record("pwu_per_inference", entry.canonical_step_leaf_count);
             cx.pass("admission.gate");
+            // The transition's one rule the gate does not hold: the registrant bond must afford the
+            // registration's exposure (`RegistrationExposureUnaffordable`). Bond state is the chain's.
+            cx.skip(
+                "chain.bond_affords_registration",
+                "the registrant bond's collateral and exposure are chain state this verifier cannot read",
+            );
         }
         Err(ProbeRefusalV1::Price(why)) => {
             return Ok(KindOutcomeV1::at(
@@ -663,25 +678,77 @@ pub(crate) fn verify(cx: &mut VerifyCx<'_>) -> Result<KindOutcomeV1, PalwExtensi
             Err(why) => return Ok(KindOutcomeV1::at(cx.refuse("artifact.path", why), Vectors)),
         };
         cx.record("artifact_summary", &loaded.summary);
-        let paired = cx.sdk()?.pairings(&loaded).into_iter().find(|(e, _)| e.class_id() == entry.class_id()).map(|(_, r)| r);
+        // The one pairing this class needs, by the lineage that loaded the file — `pairings` would
+        // pair every row of that lineage, and on the dense tier each pairing is a pass over the
+        // whole artifact (measured: six rows, 67 s, for the published 1.7 GB file).
+        let sdk = cx.sdk()?;
+        let paired = if entry.lineage_id == loaded.lineage_id {
+            sdk.lineages().iter().find(|l| l.lineage_id() == loaded.lineage_id).map(|l| l.pair(sdk.court(), entry, &loaded))
+        } else {
+            None
+        };
         match paired {
             Some(Ok(root)) => root,
             Some(Err(why)) => {
                 return Ok(KindOutcomeV1::at(cx.refuse("artifact.path", format!("does not pair with the class: {why}")), Vectors));
             }
             None => {
-                return Ok(KindOutcomeV1::at(cx.refuse("artifact.path", "the file's lineage has no pairing for this class"), Vectors));
+                return Ok(KindOutcomeV1::at(
+                    cx.refuse(
+                        "artifact.path",
+                        format!(
+                            "the file is a {} container and the class is a row of the {} lineage",
+                            loaded.lineage_id, entry.lineage_id
+                        ),
+                    ),
+                    Vectors,
+                ));
             }
         }
     } else if dense_magic {
-        // A class outside the ledger, in the dense container: the root the chain arm matches is
-        // the artifact's digest (ADR-0067 Decision 6, `dense_artifact_by_registered_root`).
+        // A class outside the ledger, in the dense container. The chain arm serves the holding
+        // whose DIGEST is the registered root, or — for a court-capable profile — whose INVENTORY
+        // root under that profile is (`dense_artifact_by_registered_root`, ADR-0067 Decision 6).
+        // Both are recomputed, and the manifest's root must be one of them.
         let bytes = std::fs::read(&resolved).map_err(|e| PalwExtensionError::Internal(format!("{}: {e}", resolved.display())))?;
-        match misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes) {
-            Ok(decoded) => decoded.artifact_digest(),
+        let decoded = match misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes) {
+            Ok(decoded) => decoded,
             Err(e) => {
                 return Ok(KindOutcomeV1::at(cx.refuse("artifact.path", format!("not a readable dense artifact: {e}")), Vectors));
             }
+        };
+        drop(bytes);
+        let digest = decoded.artifact_digest();
+        cx.record("artifact_digest", digest);
+        let inventory = if misaka_palw_base0::qwen25_a16_backend::a16_court_capable_v1(&class.profile) {
+            match misaka_palw_base0::inventory::a16_inventory_v1(&decoded, &class.profile) {
+                Ok(inventory) => {
+                    let inventory_root = inventory.root();
+                    cx.record("artifact_inventory_root", inventory_root);
+                    Some(inventory_root)
+                }
+                Err(e) => {
+                    cx.record("artifact_inventory_root", format!("none: {e:?}"));
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        if inventory == Some(root) {
+            cx.record("artifact_root_form", "the inventory root under this profile — the form a court-capable row registers");
+            root
+        } else if digest == root {
+            cx.record("artifact_root_form", "the artifact digest");
+            root
+        } else {
+            let found = match inventory {
+                Some(inventory_root) => format!(
+                    "the file's inventory root under this profile is {inventory_root} and its digest is {digest} — a court-capable row registers the inventory root"
+                ),
+                None => format!("the file's digest is {digest}"),
+            };
+            return Ok(KindOutcomeV1::at(cx.refuse("artifact.root", found), Vectors));
         }
     } else {
         cx.fail("artifact.root", "a class outside this build's ledger in a mapped container: this build has no pairing rule for it");
