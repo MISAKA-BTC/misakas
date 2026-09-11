@@ -284,10 +284,10 @@ impl Consensus {
             notification_root.clone(),
             counters.clone(),
             mining_rules,
-            config.evm_history_mode,           // §12: gate the archive diff/checkpoint writer
-            config.evm_shadow_state_backend,   // C-01 S4: node-local shadow dual-write + differential
-            config.evm_flat_authoritative,     // C-01 S9: flat-authoritative executor seed
-            config.evm_retire_206,             // C-01 S9b: stop persisting the per-block 206 snapshot
+            config.evm_history_mode,                // §12: gate the archive diff/checkpoint writer
+            config.evm_shadow_state_backend,        // C-01 S4: node-local shadow dual-write + differential
+            config.evm_flat_authoritative,          // C-01 S9: flat-authoritative executor seed
+            config.evm_retire_206,                  // C-01 S9b: stop persisting the per-block 206 snapshot
             config.evm_bridge_finality_effective(), // ADR-0109 Decision 2: Label (default) or Pause
         ));
 

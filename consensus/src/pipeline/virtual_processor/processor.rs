@@ -26,8 +26,8 @@ use crate::{
             epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
             evm::{
                 DbEvmCanonicalHeadsStore, DbEvmDepositLockStore, DbEvmHeaderStore, DbEvmPayloadStore, DbEvmStateStore,
-                EvmCanonicalHeadsStoreReader, EvmDepositLockStore, EvmDepositLockStoreReader,
-                EvmHeaderStore, EvmHeaderStoreReader, EvmStateStore, EvmStateStoreReader,
+                EvmCanonicalHeadsStoreReader, EvmDepositLockStore, EvmDepositLockStoreReader, EvmHeaderStore, EvmHeaderStoreReader,
+                EvmStateStore, EvmStateStoreReader,
             },
             ghostdag::{DbGhostdagStore, GhostdagData, GhostdagStoreReader},
             headers::{DbHeadersStore, HeaderStoreReader},
@@ -14919,6 +14919,9 @@ pub(super) fn deposit_lock_record(entry: &UtxoEntry) -> Option<kaspa_consensus_c
 }
 
 /// ADR-0109 Decision 3: the first input of `tx` that spends a locked PALW bond, if any.
-pub(super) fn first_locked_input(tx: &Transaction, locked: &std::collections::HashSet<TransactionOutpoint>) -> Option<TransactionOutpoint> {
+pub(super) fn first_locked_input(
+    tx: &Transaction,
+    locked: &std::collections::HashSet<TransactionOutpoint>,
+) -> Option<TransactionOutpoint> {
     tx.inputs.iter().map(|input| input.previous_outpoint).find(|outpoint| locked.contains(outpoint))
 }

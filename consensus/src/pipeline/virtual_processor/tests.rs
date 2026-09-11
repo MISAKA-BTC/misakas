@@ -8381,16 +8381,20 @@ fn set_fresh_dns_finality(consensus: &TestConsensus) {
     use kaspa_consensus_core::BlueWorkType;
     use kaspa_consensus_core::dns_finality::{DnsHealth, DnsRolloutStage, DnsState, STAKE_SCORE_SCALE, StakeScore};
 
+    // The anchor must be a block with a header: since 2026-09-10 the bridge's freshness is measured
+    // in blue score from the anchor's header (`dns_finality_fresh_for_bridge`), and an anchor the
+    // headers store cannot resolve reads as stale. Genesis sits 0 blue below a genesis sink.
+    let anchor = consensus.params().genesis.hash;
     consensus
         .virtual_processor()
         .dns_state_store
         .write()
         .set(DnsState {
-            selected_chain_anchor: BlockHash::from(77u64),
+            selected_chain_anchor: anchor,
             anchor_daa_score: 0,
             work_depth: BlueWorkType::from_u64(2_000_000),
             stake_depth: StakeScore(20 * STAKE_SCORE_SCALE),
-            last_dns_confirmed_anchor: BlockHash::from(77u64),
+            last_dns_confirmed_anchor: anchor,
             last_dns_confirmed_anchor_daa_score: 0,
             rollout_stage: DnsRolloutStage::Active,
             validator_set_commitment: BlockHash::from(88u64),
@@ -12272,7 +12276,12 @@ fn consensus_with_deposit_locks(
         initial_utxos.push((outpoint, UtxoEntry { amount, script_public_key: lock_spk, block_daa_score: *daa, is_coinbase: false }));
         claims.push((
             outpoint,
-            DepositClaim { deposit_outpoint: outpoint, evm_address: EvmAddress::from_bytes(evm_addr), amount_sompi: amount, claim_tip_sompi: 7 },
+            DepositClaim {
+                deposit_outpoint: outpoint,
+                evm_address: EvmAddress::from_bytes(evm_addr),
+                amount_sompi: amount,
+                claim_tip_sompi: 7,
+            },
         ));
     }
     let config = ConfigBuilder::new(MAINNET_PARAMS)
@@ -12379,7 +12388,8 @@ async fn evm_deposit_lock_index_follows_the_virtual_utxo_diff() {
         block_daa_score: daa,
         is_coinbase: false,
     };
-    let plain_entry = UtxoEntry { amount: 5, script_public_key: p2pkh_mldsa87_spk(&[0x11; 64]), block_daa_score: 5, is_coinbase: false };
+    let plain_entry =
+        UtxoEntry { amount: 5, script_public_key: p2pkh_mldsa87_spk(&[0x11; 64]), block_daa_score: 5, is_coinbase: false };
     let lock_op = TransactionOutpoint::new(7u64.into(), 0);
     let plain_op = TransactionOutpoint::new(8u64.into(), 1);
 
@@ -12394,7 +12404,10 @@ async fn evm_deposit_lock_index_follows_the_virtual_utxo_diff() {
     assert_eq!(all.len(), 1, "one lock, no plain output");
     assert_eq!(all[0].0, lock_op);
     let record = &all[0].1;
-    assert_eq!((record.amount_sompi, record.claim_tip_sompi, record.timeout_daa_score, record.block_daa_score), (1000, 7, 1_000_000, 5));
+    assert_eq!(
+        (record.amount_sompi, record.claim_tip_sompi, record.timeout_daa_score, record.block_daa_score),
+        (1000, 7, 1_000_000, 5)
+    );
     assert_eq!(record.evm_address, kaspa_consensus_core::evm::EvmAddress::from_bytes([0xAB; 20]));
 
     // removed: the lock leaves; a removed plain output touches nothing

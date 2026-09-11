@@ -13,10 +13,9 @@ use crate::{
         epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
         evm::{
             DbEvmBlockHashMapStore, DbEvmBlockStateRootStore, DbEvmCanonicalHeadsStore, DbEvmCodeStore, DbEvmDepositLockStore,
-            DbEvmFlatAccountStore,
-            DbEvmHeaderStore, DbEvmLatestStatePtrStore, DbEvmLogIndexStore, DbEvmNumberStore, DbEvmPayloadStore, DbEvmRawTxStore,
-            DbEvmReceiptsStore, DbEvmStateCheckpointStore, DbEvmStateDiffStore, DbEvmStateStore, DbEvmTraceReplayStore,
-            DbEvmTxIndexStore,
+            DbEvmFlatAccountStore, DbEvmHeaderStore, DbEvmLatestStatePtrStore, DbEvmLogIndexStore, DbEvmNumberStore,
+            DbEvmPayloadStore, DbEvmRawTxStore, DbEvmReceiptsStore, DbEvmStateCheckpointStore, DbEvmStateDiffStore, DbEvmStateStore,
+            DbEvmTraceReplayStore, DbEvmTxIndexStore,
         },
         ghostdag::{CompactGhostdagData, DbGhostdagStore},
         headers::{CompactHeaderData, DbHeadersStore},
@@ -469,10 +468,8 @@ impl ConsensusStorage {
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
         ));
         let evm_heads_store = Arc::new(RwLock::new(DbEvmCanonicalHeadsStore::new(db.clone())));
-        let evm_deposit_lock_store = Arc::new(RwLock::new(DbEvmDepositLockStore::new(
-            db.clone(),
-            PolicyBuilder::new().max_items(1024).untracked().build(),
-        )));
+        let evm_deposit_lock_store =
+            Arc::new(RwLock::new(DbEvmDepositLockStore::new(db.clone(), PolicyBuilder::new().max_items(1024).untracked().build())));
         let evm_receipts_store = Arc::new(DbEvmReceiptsStore::new(
             db.clone(),
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),

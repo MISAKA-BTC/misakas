@@ -11,13 +11,12 @@
 //! caller-supplied; the store values all implement a real `MemSizeEstimator`,
 //! so any policy is safe.
 
+use crate::model::stores::utxo_set::UtxoKey;
 use kaspa_consensus_core::evm::{
     CanonicalEvmHeads, EvmAddress, EvmBlockReceipts, EvmDepositLockRecord, EvmExecutionHeader, EvmExecutionPayload, EvmLatestStatePtr,
-    EvmRawTx,
-    EvmStateCheckpointV1, EvmStateDiffV2, EvmStateSnapshot, EvmTraceReplayBodyV1, EvmTxLocations, FlatAccount, LogPostingKind,
-    LogPostingLoc, decode_log_posting_loc, encode_log_posting_loc, log_posting_bucket,
+    EvmRawTx, EvmStateCheckpointV1, EvmStateDiffV2, EvmStateSnapshot, EvmTraceReplayBodyV1, EvmTxLocations, FlatAccount,
+    LogPostingKind, LogPostingLoc, decode_log_posting_loc, encode_log_posting_loc, log_posting_bucket,
 };
-use crate::model::stores::utxo_set::UtxoKey;
 use kaspa_consensus_core::tx::TransactionOutpoint;
 use kaspa_consensus_core::{BlockHash, BlockHasher};
 use kaspa_database::prelude::{
@@ -1249,7 +1248,8 @@ pub trait EvmDepositLockStoreReader {
 }
 
 pub trait EvmDepositLockStore: EvmDepositLockStoreReader {
-    fn insert_batch(&mut self, batch: &mut WriteBatch, outpoint: TransactionOutpoint, record: EvmDepositLockRecord) -> StoreResult<()>;
+    fn insert_batch(&mut self, batch: &mut WriteBatch, outpoint: TransactionOutpoint, record: EvmDepositLockRecord)
+    -> StoreResult<()>;
     fn delete_batch(&mut self, batch: &mut WriteBatch, outpoint: TransactionOutpoint) -> StoreResult<()>;
     /// A direct write — the rebuild's, outside any batch.
     fn insert(&mut self, outpoint: TransactionOutpoint, record: EvmDepositLockRecord) -> StoreResult<()>;
@@ -1294,7 +1294,12 @@ impl EvmDepositLockStoreReader for DbEvmDepositLockStore {
 }
 
 impl EvmDepositLockStore for DbEvmDepositLockStore {
-    fn insert_batch(&mut self, batch: &mut WriteBatch, outpoint: TransactionOutpoint, record: EvmDepositLockRecord) -> StoreResult<()> {
+    fn insert_batch(
+        &mut self,
+        batch: &mut WriteBatch,
+        outpoint: TransactionOutpoint,
+        record: EvmDepositLockRecord,
+    ) -> StoreResult<()> {
         self.access.write(BatchDbWriter::new(batch), outpoint.into(), record)
     }
     fn delete_batch(&mut self, batch: &mut WriteBatch, outpoint: TransactionOutpoint) -> StoreResult<()> {
