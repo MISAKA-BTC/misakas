@@ -529,6 +529,9 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelMarketResponse>, protowire::G
         seed_pledged_sompi: item.seed_pledged_sompi,
         buyback_sompi: item.buyback_sompi,
         retired_units: item.retired_units,
+        burn_permille: item.burn_permille,
+        leg_permille: item.leg_permille,
+        leg_v2_activation_daa: item.leg_v2_activation_daa,
         error: None,
     }
 });
@@ -1505,6 +1508,10 @@ try_from!(item: &protowire::GetPalwModelMarketResponseMessage, RpcResult<kaspa_r
         seed_pledged_sompi: item.seed_pledged_sompi,
         buyback_sompi: item.buyback_sompi,
         retired_units: item.retired_units,
+        // A gRPC peer from before ADR-0114 sends zeros: its fold split 50/10.
+        burn_permille: if item.burn_permille == 0 && item.leg_permille == 0 { 50 } else { item.burn_permille },
+        leg_permille: if item.burn_permille == 0 && item.leg_permille == 0 { 10 } else { item.leg_permille },
+        leg_v2_activation_daa: item.leg_v2_activation_daa,
     }
 });
 try_from!(item: &protowire::GetPalwModelPositionsRequestMessage, kaspa_rpc_core::GetPalwModelPositionsRequest, {
@@ -2113,7 +2120,10 @@ mod palw_producer_facts_tests {
             back.fp_decode_rules_armed,
             "a builder that loses fp_decode_rules_armed builds jobs for the wrong decode ruleset — honest and unreproducible"
         );
-        assert!(back.fp_decode_constraint_armed, "an entrance that loses fp_decode_constraint_armed serves a committed format nobody replays (ADR-0096)");
+        assert!(
+            back.fp_decode_constraint_armed,
+            "an entrance that loses fp_decode_constraint_armed serves a committed format nobody replays (ADR-0096)"
+        );
         assert_eq!(
             back.palw_retention_dir, response.palw_retention_dir,
             "a submitter that loses the retention directory stages a claim's material where the node never looks (ADR-0084)"

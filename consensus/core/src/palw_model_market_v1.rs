@@ -45,6 +45,34 @@ pub const PALW_MODEL_BURN_PERMILLE_V1: u64 = 50;
 /// Fee on the MSK leg of every move, in permille: to the class's registrant (burned when the
 /// class has none).
 pub const PALW_MODEL_REGISTRANT_PERMILLE_V1: u64 = 10;
+/// **ADR-0114: the owner's leg once `Params::palw_model_leg_v2` is in force** — fifty permille, the
+/// size of the burn. A join then leaves 10 % of its MSK behind (5 % burned, 5 % to the line's owner)
+/// and a leave does the same, so a round trip costs about a fifth of what went in, before the curve's
+/// own slippage. Below the fence every move is quoted at `PALW_MODEL_REGISTRANT_PERMILLE_V1`, exactly
+/// as before, so a chain that has not armed it keeps every row it had.
+pub const PALW_MODEL_OWNER_LEG_PERMILLE_V2: u64 = 50;
+
+/// **The fee schedule one move is quoted under** (ADR-0114): what its MSK leg burns and what it pays
+/// the line's owner, in permille. Chosen by the fence at the move's own DAA and by nothing else — the
+/// fold, the EVM window, the RPC and the CLI each ask [`PalwModelFeesV1::at`], so no two of them can
+/// quote one move under two schedules.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwModelFeesV1 {
+    pub burn_permille: u64,
+    pub leg_permille: u64,
+}
+
+impl PalwModelFeesV1 {
+    /// ADR-0087 Decision 4 as shipped: 5 % burned, 1 % to the owner.
+    pub const V1: Self = Self { burn_permille: PALW_MODEL_BURN_PERMILLE_V1, leg_permille: PALW_MODEL_REGISTRANT_PERMILLE_V1 };
+    /// ADR-0114: 5 % burned, 5 % to the owner.
+    pub const V2: Self = Self { burn_permille: PALW_MODEL_BURN_PERMILLE_V1, leg_permille: PALW_MODEL_OWNER_LEG_PERMILLE_V2 };
+
+    /// The schedule in force: V2 once ADR-0114's fence is active at the move's DAA, V1 before it.
+    pub const fn at(leg_v2_active: bool) -> Self {
+        if leg_v2_active { Self::V2 } else { Self::V1 }
+    }
+}
 /// The sink script's tag: `OP_RETURN <tag> <class id>`.
 pub const PALW_MODEL_SINK_TAG_V1: &[u8; 8] = b"MSKMDL01";
 const OP_RETURN: u8 = 0x6a;
@@ -227,12 +255,7 @@ impl PalwModelMarketV1 {
     /// the whole collected total, the supply enters the curve, and `seed_sompi` records what the
     /// pair opened with. The first payer keeps the record (Decision 3).
     pub fn open_from_pledge_v1(&self, daa: u64) -> Self {
-        Self {
-            opened_daa: daa,
-            position_units: PALW_MODEL_SUPPLY_UNITS_V1,
-            seed_sompi: self.seed_pledged_sompi,
-            ..*self
-        }
+        Self { opened_daa: daa, position_units: PALW_MODEL_SUPPLY_UNITS_V1, seed_sompi: self.seed_pledged_sompi, ..*self }
     }
 
     /// The product the next move must not fall under: the row's own `reserve × units`.
@@ -266,8 +289,15 @@ pub struct PalwModelFeeSplitV1 {
 }
 
 pub fn palw_model_fee_split_v1(gross: u64) -> PalwModelFeeSplitV1 {
-    let burn = ((gross as u128 * PALW_MODEL_BURN_PERMILLE_V1 as u128) / 1000) as u64;
-    let registrant = ((gross as u128 * PALW_MODEL_REGISTRANT_PERMILLE_V1 as u128) / 1000) as u64;
+    palw_model_fee_split_with(gross, PalwModelFeesV1::V1)
+}
+
+/// The same split under an explicit schedule (ADR-0114). The two legs are each rounded down, so the
+/// remainder stays on the net leg and `burn + registrant + net == gross` under every schedule.
+pub fn palw_model_fee_split_with(gross: u64, fees: PalwModelFeesV1) -> PalwModelFeeSplitV1 {
+    debug_assert!(fees.burn_permille + fees.leg_permille <= 1000, "a schedule never takes more than the leg");
+    let burn = ((gross as u128 * fees.burn_permille as u128) / 1000) as u64;
+    let registrant = ((gross as u128 * fees.leg_permille as u128) / 1000) as u64;
     PalwModelFeeSplitV1 { gross, burn, registrant, net: gross - burn - registrant }
 }
 
@@ -282,6 +312,11 @@ pub struct PalwModelBuyQuoteV1 {
 }
 
 pub fn palw_model_buy_quote_v1(market: &PalwModelMarketV1, msk_in: u64) -> Option<PalwModelBuyQuoteV1> {
+    palw_model_buy_quote_with(market, msk_in, PalwModelFeesV1::V1)
+}
+
+/// [`palw_model_buy_quote_v1`] under the schedule the fence names at the move's DAA (ADR-0114).
+pub fn palw_model_buy_quote_with(market: &PalwModelMarketV1, msk_in: u64, schedule: PalwModelFeesV1) -> Option<PalwModelBuyQuoteV1> {
     // ADR-0090: a row with no reserve is not a market (the fold never writes one; a reader may
     // synthesise one for a line that has no seed) — it quotes nothing rather than the whole curve.
     // ADR-0094: a row that has been paid into but has not reached its floor is not a market — it
@@ -289,7 +324,7 @@ pub fn palw_model_buy_quote_v1(market: &PalwModelMarketV1, msk_in: u64) -> Optio
     if !market.is_open() || market.closed_to_buys || msk_in == 0 || market.position_units == 0 || market.msk_reserve == 0 {
         return None;
     }
-    let fees = palw_model_fee_split_v1(msk_in);
+    let fees = palw_model_fee_split_with(msk_in, schedule);
     let k = market.k();
     let x_after = market.msk_reserve as u128 + fees.net as u128;
     let units_after = k.div_ceil(x_after);
@@ -325,6 +360,15 @@ pub struct PalwModelSellQuoteV1 {
 }
 
 pub fn palw_model_sell_quote_v1(market: &PalwModelMarketV1, units_in: u64) -> Option<PalwModelSellQuoteV1> {
+    palw_model_sell_quote_with(market, units_in, PalwModelFeesV1::V1)
+}
+
+/// [`palw_model_sell_quote_v1`] under the schedule the fence names at the move's DAA (ADR-0114).
+pub fn palw_model_sell_quote_with(
+    market: &PalwModelMarketV1,
+    units_in: u64,
+    schedule: PalwModelFeesV1,
+) -> Option<PalwModelSellQuoteV1> {
     if units_in == 0 || !market.is_open() {
         return None;
     }
@@ -340,7 +384,7 @@ pub fn palw_model_sell_quote_v1(market: &PalwModelMarketV1, units_in: u64) -> Op
     if gross == 0 {
         return None;
     }
-    let fees = palw_model_fee_split_v1(gross as u64);
+    let fees = palw_model_fee_split_with(gross as u64, schedule);
     let after = PalwModelMarketV1 {
         msk_reserve: market.msk_reserve - fees.gross,
         position_units: units_after as u64,
@@ -673,6 +717,46 @@ mod tests {
         assert!(s.fees.net <= 94 * 94 * MSK / 100, "at most 0.94² of the gross came back: {}", s.fees.net);
         assert!(s.fees.net > 80 * MSK, "and most of it did: {}", s.fees.net);
         assert_eq!(s.after.position_units, PALW_MODEL_SUPPLY_UNITS_V1);
+    }
+
+    /// **ADR-0114's schedule, as the ADR's worked table**: the same two buys of 1,000 MSK and the
+    /// sell of everything bought, from the least seed, with the owner's leg at 5 %. Every number is
+    /// the curve's own arithmetic; the V1 table above is untouched by the schedule existing.
+    #[test]
+    fn the_v2_schedule_pays_the_owner_five_percent_and_leaves_the_v1_table_alone() {
+        assert_eq!(PalwModelFeesV1::at(false), PalwModelFeesV1::V1);
+        assert_eq!(PalwModelFeesV1::at(true), PalwModelFeesV1::V2);
+        assert_eq!(PalwModelFeesV1::V2, PalwModelFeesV1 { burn_permille: 50, leg_permille: 50 }, "5 % burned, 5 % to the owner");
+        let m0 = seeded();
+        let v1 = palw_model_buy_quote_v1(&m0, 1_000 * MSK).unwrap();
+        assert_eq!(palw_model_buy_quote_with(&m0, 1_000 * MSK, PalwModelFeesV1::V1), Some(v1), "V1 through the new door is V1");
+        let b1 = palw_model_buy_quote_with(&m0, 1_000 * MSK, PalwModelFeesV1::V2).expect("a buy");
+        assert_eq!((b1.fees.burn, b1.fees.registrant, b1.fees.net), (50 * MSK, 50 * MSK, 900 * MSK));
+        assert_eq!(b1.units_out, 4_459, "900 MSK into a 100,000 MSK reserve releases 4,459 whole positions");
+        assert_eq!(b1.after.msk_reserve, 100_900 * MSK);
+        assert_eq!(b1.after.price_sompi_per_position_v1(), 20_361_584);
+        let b2 = palw_model_buy_quote_with(&b1.after, 1_000 * MSK, PalwModelFeesV1::V2).expect("a second buy");
+        assert_eq!(b2.units_out, 4_381);
+        assert_eq!(b2.after.msk_reserve, 101_800 * MSK);
+        let held = b1.units_out + b2.units_out;
+        let s = palw_model_sell_quote_with(&b2.after, held, PalwModelFeesV1::V2).expect("the sell");
+        assert_eq!(s.fees.gross, 179_982_400_000);
+        assert_eq!((s.fees.burn, s.fees.registrant, s.fees.net), (8_999_120_000, 8_999_120_000, 161_984_160_000));
+        assert_eq!(s.fees.burn + s.fees.registrant + s.fees.net, s.fees.gross, "the split is exact");
+        assert_eq!(s.after.msk_reserve, 10_000_017_600_000, "the reserve ends above the seed");
+        let legs = b1.fees.registrant + b2.fees.registrant + s.fees.registrant;
+        let burned = b1.fees.burn + b2.fees.burn + s.fees.burn;
+        assert_eq!(
+            2_000 * MSK + m0.seed_sompi,
+            s.after.msk_reserve + s.fees.net + burned + legs,
+            "M2: nothing minted, nothing vanishes"
+        );
+        // The round trip the ADR names: a join and a leave of what it bought return at most 0.9² of
+        // the MSK — a fifth goes to the burn and the owner, and the slippage is on top.
+        let b = palw_model_buy_quote_with(&m0, 100 * MSK, PalwModelFeesV1::V2).unwrap();
+        let back = palw_model_sell_quote_with(&b.after, b.units_out, PalwModelFeesV1::V2).unwrap();
+        assert!(back.fees.net <= 90 * 90 * MSK / 100, "at most 0.9² came back: {}", back.fees.net);
+        assert_eq!(back.fees.net, 8_089_273_800, "80.892738 MSK of 100");
     }
 
     /// A closed market refuses buys and honours sells (M6, at this layer).

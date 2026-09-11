@@ -947,8 +947,19 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         use kaspa_consensus_core::palw_model_market_v1::{PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1, PALW_MODEL_SUPPLY_UNITS_V1};
         let line_id = parse_hash64(&request.line_id, "line id")?;
         let session = self.consensus_manager.consensus().unguarded_session();
+        // ADR-0114: the schedule the fold would settle a move under at the virtual's DAA — served
+        // with the row so a quote made off it is the fold's, and with the height it changes at.
+        let params = &self.config.params;
+        let schedule = params.palw_model_fees_at(session.get_virtual_daa_score());
+        let leg_v2_activation_daa = params.palw_model_leg_v2_fence().map(|f| f.daa_score()).unwrap_or(0);
         let Some((market, opened, status)) = session.palw_model_market_v1(line_id) else {
-            return Ok(GetPalwModelMarketResponse { line_id: line_id.to_string(), ..Default::default() });
+            return Ok(GetPalwModelMarketResponse {
+                line_id: line_id.to_string(),
+                burn_permille: schedule.burn_permille,
+                leg_permille: schedule.leg_permille,
+                leg_v2_activation_daa,
+                ..Default::default()
+            });
         };
         Ok(GetPalwModelMarketResponse {
             found: true,
@@ -972,6 +983,9 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             seed_pledged_sompi: market.seed_pledged_sompi,
             buyback_sompi: market.buyback_sompi,
             retired_units: market.retired_units,
+            burn_permille: schedule.burn_permille,
+            leg_permille: schedule.leg_permille,
+            leg_v2_activation_daa,
         })
     }
 

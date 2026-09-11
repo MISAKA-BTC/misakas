@@ -11296,6 +11296,10 @@ pub struct PalwTransitionExtrasV1 {
     /// `Params::palw_model_evm` resolved at the block's DAA (ADR-0089 Decision 9). Below it the
     /// action list is empty by construction and no settlement is written.
     pub evm_market_active: bool,
+    /// `Params::palw_model_leg_v2` resolved at the block's DAA (ADR-0114). Below it every move is
+    /// split 5 % burned / 1 % to the owner, past it 5 % / 5 %; `false` by `Default`, so every caller
+    /// that does not set it keeps the schedule every existing row was written under.
+    pub model_leg_v2_active: bool,
     /// ADR-0089 Decision 6: the actions the block's EVM execution queued, in sequence order —
     /// applied after every carrier-borne object, each quoted on the row as it then stands.
     pub evm_actions: Vec<crate::evm::model_market::PalwEvmMarketActionV1>,
@@ -11507,24 +11511,17 @@ fn model_seed_v1(
         // Decision 2: opening happens once. An open market takes no further seed, as before.
         Some(open) if open.is_open() => return Err(PalwStateV2Error::ModelMarketAlreadySeeded(*line_id)),
         Some(pledged) if accumulate => {
-            let total = pledged
-                .seed_pledged_sompi
-                .checked_add(msk_seed)
-                .ok_or(PalwStateV2Error::Overflow("model seed accumulation"))?;
+            let total =
+                pledged.seed_pledged_sompi.checked_add(msk_seed).ok_or(PalwStateV2Error::Overflow("model seed accumulation"))?;
             // Decision 3: the row keeps naming the FIRST payer; a later sompi claims nothing.
             let grown = PalwModelMarketV1 { msk_reserve: total, seed_pledged_sompi: total, ..pledged };
             if total >= PALW_MODEL_SEED_MIN_SOMPI_V1 { grown.open_from_pledge_v1(ctx.daa_score) } else { grown }
         }
         Some(_) => return Err(PalwStateV2Error::ModelMarketAlreadySeeded(*line_id)),
-        None if msk_seed >= PALW_MODEL_SEED_MIN_SOMPI_V1 => {
-            PalwModelMarketV1::seed_v1(ctx.daa_score, msk_seed, *seeder)
-        }
+        None if msk_seed >= PALW_MODEL_SEED_MIN_SOMPI_V1 => PalwModelMarketV1::seed_v1(ctx.daa_score, msk_seed, *seeder),
         None if accumulate => PalwModelMarketV1::pledge_v1(ctx.daa_score, msk_seed, *seeder),
         None => {
-            return Err(PalwStateV2Error::ModelSeedTooSmall {
-                want: PALW_MODEL_SEED_MIN_SOMPI_V1,
-                got: msk_seed,
-            });
+            return Err(PalwStateV2Error::ModelSeedTooSmall { want: PALW_MODEL_SEED_MIN_SOMPI_V1, got: msk_seed });
         }
     };
     builder.write_model_market(*line_id, Some(market));
@@ -11544,7 +11541,7 @@ fn model_buy_v1(
     msk_in: u64,
     min_units_out: u64,
 ) -> Result<crate::palw_model_market_v1::PalwModelBuyQuoteV1, PalwStateV2Error> {
-    use crate::palw_model_market_v1::palw_model_buy_quote_v1;
+    use crate::palw_model_market_v1::palw_model_buy_quote_with;
     // **ADR-0042 Decision 10's queue has room, or this move does not happen** (audit M-10).
     // Checked first, before any read that could leave a half-applied move: the fee legs below are
     // rows in `pending_payouts`, which is in the state-root preimage, and this is the only bound on
@@ -11569,7 +11566,9 @@ fn model_buy_v1(
     if !market.is_open() {
         return Err(PalwStateV2Error::ModelMarketMissing(*line_id));
     }
-    let quote = palw_model_buy_quote_v1(&market, msk_in).ok_or(PalwStateV2Error::ModelBuyReleasesNothing(*line_id))?;
+    // ADR-0114: the schedule the fence names at this block's DAA — the one place the fold chooses it.
+    let schedule = crate::palw_model_market_v1::PalwModelFeesV1::at(builder.extras.model_leg_v2_active);
+    let quote = palw_model_buy_quote_with(&market, msk_in, schedule).ok_or(PalwStateV2Error::ModelBuyReleasesNothing(*line_id))?;
     if quote.units_out < min_units_out {
         return Err(PalwStateV2Error::ModelBuyBelowFloor { want: min_units_out, got: quote.units_out });
     }
@@ -11601,7 +11600,7 @@ fn model_sell_v1(
     // and nonce and there is no detached message to replay.
     signed_held_units: Option<u64>,
 ) -> Result<crate::palw_model_market_v1::PalwModelSellQuoteV1, PalwStateV2Error> {
-    use crate::palw_model_market_v1::palw_model_sell_quote_v1;
+    use crate::palw_model_market_v1::palw_model_sell_quote_with;
     // **ADR-0042 Decision 10's queue has room, or this move does not happen** (audit M-10).
     // Checked first, before any read that could leave a half-applied move: the fee legs below are
     // rows in `pending_payouts`, which is in the state-root preimage, and this is the only bound on
@@ -11625,7 +11624,8 @@ fn model_sell_v1(
     {
         return Err(PalwStateV2Error::ModelSellPositionMoved { signed, held });
     }
-    let quote = palw_model_sell_quote_v1(&market, units_in).ok_or(PalwStateV2Error::ModelSellPaysNothing(*line_id))?;
+    let schedule = crate::palw_model_market_v1::PalwModelFeesV1::at(builder.extras.model_leg_v2_active);
+    let quote = palw_model_sell_quote_with(&market, units_in, schedule).ok_or(PalwStateV2Error::ModelSellPaysNothing(*line_id))?;
     if quote.fees.net < min_msk_out {
         return Err(PalwStateV2Error::ModelSellBelowFloor { want: min_msk_out, got: quote.fees.net });
     }
@@ -24242,6 +24242,67 @@ pub(crate) mod tests {
             invariants(&s3, class, 100 * MSK);
         }
 
+        /// **ADR-0114: past the fence the owner is paid 5 % of a join and of a leave, below it 1 %** —
+        /// chosen by the block's extras and by nothing else, so the same objects on the same parent
+        /// write the V1 rows below the height and the V2 rows past it.
+        #[test]
+        fn past_the_leg_fence_the_owner_is_paid_five_percent_of_every_move() {
+            use crate::palw_model_market_v1::{PalwModelFeesV1, palw_model_sell_quote_with};
+            let p = economy_params();
+            let class = h64(2);
+            let mut objects = register_class_and_bond();
+            let mut future = registration(class, 100, Some(bond_key(1)));
+            if let PalwConsensusObjectV2::ClassRegistered { activation_daa, slash_value_per_pwu, .. } = &mut future {
+                *activation_daa = 200;
+                *slash_value_per_pwu = 5;
+            }
+            objects.push(future);
+            let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
+            let (s1b, _) = apply(&s1, &p, &ctx(2, 101, 2), &[seed(class, holder(9), SEED)], None);
+            let (s2, _) = apply(&s1b, &p, &ctx(3, 250, 3), &[], None);
+            let v2 = PalwTransitionExtrasV1 { model_benefits_active: true, model_leg_v2_active: true, ..Default::default() };
+            let apply_v2 = |parent: &PalwChainStateV2, c: &PalwBlockContextV2, objects: &[PalwConsensusObjectV2]| {
+                let (state, _) = apply_palw_transition_v2_with_extras(parent, &p, c, objects, None, false, false, false, false, &v2)
+                    .expect("applies");
+                state.assert_internal_consistency(&p).expect("internal consistency after apply");
+                state
+            };
+            let registrant_payload = s2.bond(&bond_key(1)).unwrap().payout_payload;
+
+            // Below the fence: the row every existing chain wrote.
+            let (s3_v1, _) = apply(&s2, &p, &ctx(4, 251, 4), &[buy(class, holder(1), 100 * MSK, 0)], None);
+            let m_v1 = *s3_v1.model_market(&class).unwrap();
+            assert_eq!((m_v1.registrant_paid_sompi, m_v1.burned_sompi), (MSK, 5 * MSK), "1 % to the owner, 5 % burned");
+
+            // Past it: the same buy on the same parent.
+            let s3 = apply_v2(&s2, &ctx(4, 251, 4), &[buy(class, holder(1), 100 * MSK, 0)]);
+            let m3 = *s3.model_market(&class).unwrap();
+            assert_eq!((m3.registrant_paid_sompi, m3.burned_sompi), (5 * MSK, 5 * MSK), "5 % to the owner, 5 % burned");
+            assert_eq!(m3.msk_reserve, SEED + 90 * MSK, "90 % joins the reserve");
+            assert_eq!(paid(&s3), 5 * MSK);
+            assert!(s3.pending_payouts_iter().all(|(_, p)| p.payload == registrant_payload), "paid to the owner's payload");
+            assert!(s3.model_position(&class, &holder(1)) < s3_v1.model_position(&class, &holder(1)), "a bigger leg buys fewer");
+            invariants(&s3, class, 100 * MSK);
+
+            // A leave past the fence: the owner's leg is the burn's size and the seller gets 90 %.
+            let held = s3.model_position(&class, &holder(1));
+            let sq = palw_model_sell_quote_with(&m3, held, PalwModelFeesV1::V2).unwrap();
+            let s4 = apply_v2(&s3, &ctx(5, 252, 5), &[sell_from(&s3, class, holder(1), held, 0)]);
+            let m4 = *s4.model_market(&class).unwrap();
+            assert_eq!(sq.fees.registrant, sq.fees.burn, "the owner's leg equals the burn");
+            assert_eq!(m4.registrant_paid_sompi, m3.registrant_paid_sompi + sq.fees.registrant);
+            let rows: Vec<(Hash64, u64)> = s4.pending_payouts_iter().map(|(_, p)| (p.payload, p.amount)).collect();
+            assert!(
+                rows.contains(&(registrant_payload, sq.fees.registrant)),
+                "the leave's owner leg is a payout to the owner: {rows:?}"
+            );
+            assert!(rows.contains(&(holder(1), sq.fees.net)), "and the seller's 90 % a payout to the seller: {rows:?}");
+            // M2 across the leave: the join's 5 MSK owner payout left the queue with the coinbase that
+            // honoured it, so it is counted beside what is still pending.
+            assert!(!rows.contains(&(registrant_payload, 5 * MSK)), "the join's owner leg was paid out already");
+            assert_eq!(100 * MSK + SEED, m4.msk_reserve + paid(&s4) + m4.burned_sompi + 5 * MSK, "M2 with the paid-out leg");
+        }
+
         /// M7: replaying the deltas reproduces the state root; and a carriage of a chain with no
         /// move is byte-identical to the legacy layout, while one with a move carries the tail.
         #[test]
@@ -25273,6 +25334,7 @@ pub(crate) mod tests {
                 // lane's rule, so this fixture stands past it.
                 model_benefits_active: true,
                 evm_market_active: true,
+                model_leg_v2_active: false,
                 evm_actions: actions,
                 court_responder_coverage_active: false,
                 fp_da_pins_active: false,
@@ -25478,6 +25540,7 @@ pub(crate) mod tests {
                 model_lines_active: true,
                 model_benefits_active: false,
                 evm_market_active: false,
+                model_leg_v2_active: false,
                 evm_actions: vec![buy(0, 1, class, MSK, 0)],
                 court_responder_coverage_active: false,
                 fp_da_pins_active: false,
