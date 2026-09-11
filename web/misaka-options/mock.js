@@ -22,10 +22,21 @@ const BLOCK_MS = 6000;
 const START_BLOCK = 41200, START_DAA = 118500;
 const CHAIN_ID = '0x4d534b';
 const ACCOUNT = '0xa11ce4d5f0b2c8e97a3d6f1b2c3d4e5f60718293';
-// `?mockwallet=misaka`: the mock wallet poses as MISAKA Wallet, which holds MSK on the post-quantum lane and
-// moves what a payment is short of to the EVM account inside the same confirmation — 5 MSK on the EVM account,
-// so the store's top-up path (`wallet.topsUp`) is what gets exercised.
-const MOCK_MISAKA = new URLSearchParams(location.search).get('mockwallet') === 'misaka';
+// `?mockwallet=`: the wallets this mock browser has, so the site's wallet chooser can be exercised without
+// extensions. Absent (or empty): one plain wallet on window.ethereum that announces nothing, as it always
+// was. Otherwise a comma list, announced in that order (EIP-6963, the way the real extensions do it):
+//   misaka          MISAKA Wallet (rdns com.misakachain.wallet). It holds MSK on the post-quantum lane and
+//                   moves what a payment is short of to the EVM account inside the same confirmation, so
+//                   the store's top-up path (`wallet.topsUp`) is what a join with it exercises
+//   misaka-legacy   MISAKA Wallet reachable only through its global (window.misaka; here `M.misaka`)
+//   phantom         announced as Phantom (app.phantom); it cannot top up
+//   metamask        announced as MetaMask (io.metamask); it cannot top up
+//   injected        a wallet on window.ethereum (here `M.ethereum`) that announces nothing: "Browser wallet"
+//   none            no wallet at all
+// e.g. `?mock=1&mockwallet=misaka,phantom,metamask`. Every one of them signs for the same mock account, which
+// holds 5 MSK on the EVM lane when MISAKA Wallet is in the list (the rest is "post-quantum"), else 150,000.
+const WALLET_KINDS = (new URLSearchParams(location.search).get('mockwallet') || 'injected').toLowerCase().split(',').map((k) => k.trim()).filter((k) => k && k !== 'none');
+const MOCK_MISAKA = WALLET_KINDS.some((k) => k === 'misaka' || k === 'misaka-legacy');
 const OTHERS = ['0x0b0b5c1a9d2e3f4a5b6c7d8e9f0a1b2c3d4e5f60', '0x0c4a7e1f2b3c4d5e6f708192a3b4c5d6e7f80912', '0x0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e', '0x0e5f6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5', '0x0f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f70', '0x0a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d'];
 const CLASS_A = '4277d84f7d91528cc04aa366d51ee1c2e4f7902c4f6b16a213dead1c7e227977db732f18ed6183db3d944d44726ebd3feff7b15c48f9dba11cd526684f35f1b7';
 const CLASS_B = '5bd9ae3d91df80650caffe3126a38bafb0b4feb9b046a416d353a7c3f71af6eab5aadf9b1ce41650007a980f1cc6044ef218424f4cbb8299ef9e92c97b99ef8e';
@@ -341,49 +352,85 @@ M.evm = async (method, params) => {
 };
 const strip0x = (s) => String(s || '').toLowerCase();
 
-// ---- the wallet (EIP-1193) ------------------------------------------------------------------
-const handlers = {};
-M.ethereum = {
-  isMisakaMock: true,
-  isMisakaWallet: MOCK_MISAKA || undefined,
-  on(ev, fn) { (handlers[ev] = handlers[ev] || []).push(fn); },
-  removeListener(ev, fn) { handlers[ev] = (handlers[ev] || []).filter((f) => f !== fn); },
-  async request({ method, params }) {
-    switch (method) {
-      case 'eth_requestAccounts': case 'eth_accounts': return [ACCOUNT];
-      case 'eth_chainId': return CHAIN_ID;
-      case 'wallet_switchEthereumChain': case 'wallet_addEthereumChain': return null;
-      case 'eth_sendTransaction': {
-        const tx = params[0];
-        const to = strip0x(tx.to);
-        let line = null; for (const [l, f] of world.facades) if (strip0x(f) === to) line = l;
-        if (!line) throw Object.assign(new Error('mock wallet: the recipient is not a line facade'), { code: -32000 });
-        const sel = strip(tx.data).slice(0, 8); const a = argWords(tx.data);
-        const rec = { hash: '0x' + h64('tx/' + world.block + '/' + Math.random()), from: strip0x(tx.from), to, line, sentAt: now() };
-        const wei = BigInt(tx.value || '0x0');
-        if (sel === ABI.selector(SIG.buy)) { if (wei === 0n || wei % MO.NATIVE_SCALE_WEI !== 0n) throw Object.assign(new Error('execution reverted: BadValue()'), { code: -32000 }); Object.assign(rec, { kind: 'buy', sompi: wei / MO.NATIVE_SCALE_WEI, minUnits: ABI.u(a[0]) }); }
-        else if (sel === ABI.selector(SIG.sell)) Object.assign(rec, { kind: 'sell', units: ABI.u(a[0]), minMsk: ABI.u(a[1]) });
-        else if (sel === ABI.selector(SIG.seed)) {
-          // ADR-0090: the writer reverts at the call for a bad value or a seed under the floor
-          if (wei === 0n || wei % MO.NATIVE_SCALE_WEI !== 0n) throw Object.assign(new Error('execution reverted: BadValue()'), { code: -32000 });
-          if (wei / MO.NATIVE_SCALE_WEI < C.seedMinSompi) throw Object.assign(new Error('execution reverted: SeedTooSmall()'), { code: -32000 });
-          Object.assign(rec, { kind: 'seed', sompi: wei / MO.NATIVE_SCALE_WEI });
-        }
-        else throw Object.assign(new Error('execution reverted: NonTransferable()'), { code: -32000 });
-        await new Promise((r) => setTimeout(r, 600));    // "confirm in wallet"
-        // MISAKA Wallet's top-up (autobridge.planTopUp): the shortfall plus a 10,000-sompi gas reserve lands on
-        // the EVM account before the transaction is sent. The real one waits for the claim (~two blocks).
-        if (M.ethereum.isMisakaWallet && (rec.kind === 'buy' || rec.kind === 'seed')) {
-          const bal = world.balances.get(rec.from) || 0n;
-          if (wei > bal) world.balances.set(rec.from, wei + 10000n * MO.NATIVE_SCALE_WEI);
-        }
-        world.pendingTx.push(rec);
-        return rec.hash;
+// ---- the wallets (EIP-1193, announced with EIP-6963) ----------------------------------------------
+// one request handler for every mock wallet; `w` is the wallet asked (only MISAKA Wallet tops up)
+async function walletRequest(w, method, params) {
+  switch (method) {
+    case 'eth_requestAccounts': case 'eth_accounts': return [ACCOUNT];
+    case 'eth_chainId': return CHAIN_ID;
+    case 'wallet_switchEthereumChain': case 'wallet_addEthereumChain': return null;
+    case 'eth_sendTransaction': {
+      const tx = params[0];
+      const to = strip0x(tx.to);
+      let line = null; for (const [l, f] of world.facades) if (strip0x(f) === to) line = l;
+      if (!line) throw Object.assign(new Error('mock wallet: the recipient is not a line facade'), { code: -32000 });
+      const sel = strip(tx.data).slice(0, 8); const a = argWords(tx.data);
+      const rec = { hash: '0x' + h64('tx/' + world.block + '/' + Math.random()), from: strip0x(tx.from), to, line, sentAt: now() };
+      const wei = BigInt(tx.value || '0x0');
+      if (sel === ABI.selector(SIG.buy)) { if (wei === 0n || wei % MO.NATIVE_SCALE_WEI !== 0n) throw Object.assign(new Error('execution reverted: BadValue()'), { code: -32000 }); Object.assign(rec, { kind: 'buy', sompi: wei / MO.NATIVE_SCALE_WEI, minUnits: ABI.u(a[0]) }); }
+      else if (sel === ABI.selector(SIG.sell)) Object.assign(rec, { kind: 'sell', units: ABI.u(a[0]), minMsk: ABI.u(a[1]) });
+      else if (sel === ABI.selector(SIG.seed)) {
+        // ADR-0090: the writer reverts at the call for a bad value or a seed under the floor
+        if (wei === 0n || wei % MO.NATIVE_SCALE_WEI !== 0n) throw Object.assign(new Error('execution reverted: BadValue()'), { code: -32000 });
+        if (wei / MO.NATIVE_SCALE_WEI < C.seedMinSompi) throw Object.assign(new Error('execution reverted: SeedTooSmall()'), { code: -32000 });
+        Object.assign(rec, { kind: 'seed', sompi: wei / MO.NATIVE_SCALE_WEI });
       }
-      default: return M.evm(method, params);
+      else throw Object.assign(new Error('execution reverted: NonTransferable()'), { code: -32000 });
+      await new Promise((r) => setTimeout(r, 600));    // "confirm in wallet"
+      // MISAKA Wallet's top-up (autobridge.planTopUp): the shortfall plus a 10,000-sompi gas reserve lands on
+      // the EVM account before the transaction is sent. The real one waits for the claim (~two blocks).
+      if (w.isMisakaWallet && (rec.kind === 'buy' || rec.kind === 'seed')) {
+        const bal = world.balances.get(rec.from) || 0n;
+        if (wei > bal) world.balances.set(rec.from, wei + 10000n * MO.NATIVE_SCALE_WEI);
+      }
+      world.pendingTx.push(rec);
+      return rec.hash;
     }
-  },
+    default: return M.evm(method, params);
+  }
+}
+// Stand-ins, not the real wallets: the names and rdns those announce, and plain lettered icons.
+const letterIcon = (fill, letter) => 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="' + fill + '"/><text x="16" y="21.5" font-family="Arial,Helvetica,sans-serif" font-size="15" font-weight="700" text-anchor="middle" fill="#ffffff">' + letter + '</text></svg>');
+const WALLET_SPECS = {
+  misaka: { name: 'MISAKA Wallet', rdns: 'com.misakachain.wallet', misaka: true, icon: letterIcon('#0f6e63', 'M') },
+  'misaka-legacy': { misaka: true },
+  phantom: { name: 'Phantom', rdns: 'app.phantom', icon: letterIcon('#5b4bb7', 'P') },
+  metamask: { name: 'MetaMask', rdns: 'io.metamask', icon: letterIcon('#b8641a', 'MM') },
+  injected: {},
 };
+function makeWallet(kind, spec) {
+  const handlers = {};
+  const w = {
+    isMisakaMock: true,
+    isMisakaWallet: spec.misaka || undefined,
+    mockKind: kind,
+    calls: [],                                  // the methods this wallet was asked for, in order (tests read it)
+    on(ev, fn) { (handlers[ev] = handlers[ev] || []).push(fn); return w; },
+    removeListener(ev, fn) { handlers[ev] = (handlers[ev] || []).filter((f) => f !== fn); return w; },
+    listenerCount(ev) { return (handlers[ev] || []).length; },
+    emit(ev, data) { for (const fn of (handlers[ev] || []).slice()) fn(data); },   // a test plays the wallet's events
+    async request(args) { const { method, params } = args || {}; if (w.calls.length < 500) w.calls.push(method); return walletRequest(w, method, params); },
+  };
+  return w;
+}
+const uuid4 = () => (window.crypto && crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-8xxx-xxxxxxxxxxxx'.replace(/x/g, () => Math.floor(Math.random() * 16).toString(16)));
+M.wallets = [];
+for (const kind of WALLET_KINDS) {
+  const spec = WALLET_SPECS[kind];
+  if (!spec) { console.warn('[mock] ?mockwallet: no wallet "' + kind + '" (misaka, misaka-legacy, phantom, metamask, injected, none)'); continue; }
+  if (M.wallets.some((x) => x.kind === kind)) continue;
+  M.wallets.push({ kind, provider: makeWallet(kind, spec), info: spec.rdns ? Object.freeze({ uuid: uuid4(), name: spec.name, icon: spec.icon, rdns: spec.rdns }) : null });
+}
+// The legacy globals, as the extensions set them: MISAKA Wallet always sets window.misaka (and takes
+// window.ethereum on MISAKA's own sites); a wallet that only injects has window.ethereum; else the first does.
+const kindOf = (k) => (M.wallets.find((x) => x.kind === k) || {}).provider;
+M.misaka = kindOf('misaka') || kindOf('misaka-legacy');
+M.ethereum = kindOf('injected') || M.misaka || (M.wallets[0] && M.wallets[0].provider);
+function announceWallets() {
+  for (const x of M.wallets) if (x.info) window.dispatchEvent(new CustomEvent('eip6963:announceProvider', { detail: Object.freeze({ info: x.info, provider: x.provider }) }));
+}
+window.addEventListener('eip6963:requestProvider', announceWallets);
+announceWallets();
 
 const WORLD_TAG = 'adr0090-seeded-v1';
 M.init = (mo) => {

@@ -27,6 +27,7 @@ const DEFAULTS = {
   LOG_LOOKBACK_BLOCKS: 5000,
   ADR_URL: 'https://github.com/MISAKA-BTC/misakas/tree/main/docs/adr',
   DOCS_URL: 'https://github.com/MISAKA-BTC/misakas/tree/main/docs',
+  WALLET_URL: 'https://wallet.misakascan.com',   // MISAKA Wallet's hosted page, which links the extension
 };
 const CFG = Object.assign({}, DEFAULTS, window.MISAKA_CONFIG || {});
 const QS = new URLSearchParams(location.search);
@@ -582,42 +583,142 @@ const evm = {
   async chainDaa() { const r = await this.call(ADDR.REGISTRY, ABI.call(SIG.chainDaa)); return ABI.isEmpty(r) ? null : ABI.u(ABI.words(r)[0]); },
 };
 
-const wallet = {
-  provider: null, account: null, chainId: null, listeners: new Set(),
-  // MISAKA Wallet first: it also answers on `window.ethereum`, but only when no other wallet took that
-  // global first — with MetaMask installed beside it, "Connect" reached MetaMask.
-  detect() {
-    const misaka = window.misaka && window.misaka.isMisakaWallet ? window.misaka : null;
-    this.provider = (MOCK && window.MISAKA_MOCK && window.MISAKA_MOCK.ethereum) || misaka || window.ethereum || null;
-    return !!this.provider;
+// ---- which wallet -----------------------------------------------------------------------------
+// A page that talks to `window.ethereum` gets whichever extension claimed that global: with Phantom
+// installed it is Phantom's own "MetaMask or Phantom?" prompt, and MISAKA Wallet is not on it.
+// EIP-6963 has every installed wallet announce itself (`eip6963:announceProvider`, and again each time
+// the page dispatches `eip6963:requestProvider`), so the site lists them all and talks to the one the
+// user picks. The legacy globals are the fallback for a wallet that announces nothing.
+const MISAKA_RDNS = 'com.misakachain.wallet';      // MISAKA Wallet's EIP-6963 rdns (its page-provider.js)
+const WALLET_KEY_ETHEREUM = 'window.ethereum';     // how a pick of the generic row is remembered
+const MISAKA_WALLET_NOTE = 'Recommended — tops up from your UTXO balance automatically';
+const svgUri = (svg) => 'data:image/svg+xml,' + encodeURIComponent(svg);
+const WALLET_ICON_MISAKA = svgUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#132228"/><path d="M7 23V9l9 9 9-9v14" fill="none" stroke="#50d2c1" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+const WALLET_ICON_GENERIC = svgUri('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#1b3039"/><rect x="7" y="10" width="18" height="13" rx="2.5" fill="none" stroke="#a3b6b2" stroke-width="2"/><path d="M19 16.5h6" stroke="#a3b6b2" stroke-width="2" stroke-linecap="round"/></svg>');
+// EIP-6963 makes the icon a data: URI. Only an image one is drawn (any other URL would be a request to
+// a host the wallet chose), and only ever as an <img src>, never as markup; the name is only ever text.
+function walletIcon(icon, fallback) { return typeof icon === 'string' && /^data:image\//i.test(icon) && icon.length <= 262144 ? icon : fallback; }
+function walletName(name, fallback) { const s = typeof name === 'string' ? name.replace(/\s+/g, ' ').trim().slice(0, 48) : ''; return s || fallback; }
+// The wallets this page can talk to, in the chooser's order. `announced`: EIP-6963 announcements
+// ({ info, provider }) in arrival order; `legacy`: { misaka, ethereum }, the globals. One row per rdns
+// and per provider object. MISAKA Wallet first; the others in the order they announced; last,
+// `window.ethereum` when no announcement is that object. `key` is what a pick is remembered by: the
+// rdns (a uuid is new on every page load, so a row without an rdns is not remembered across visits).
+function walletChoices(announced, legacy) {
+  const rows = [], keys = new Set(), seen = new Set();
+  for (const a of announced || []) {
+    const info = (a && a.info) || {}, p = a && a.provider;
+    if (!p || typeof p.request !== 'function' || seen.has(p)) continue;
+    const rdns = typeof info.rdns === 'string' ? info.rdns.trim().toLowerCase() : '';
+    const key = rdns || 'uuid:' + String(info.uuid || '');
+    if (keys.has(key)) continue;
+    keys.add(key); seen.add(p);
+    const misaka = rdns === MISAKA_RDNS;
+    rows.push({ key, rdns, name: walletName(info.name, misaka ? 'MISAKA Wallet' : rdns || 'Wallet'), icon: walletIcon(info.icon, misaka ? WALLET_ICON_MISAKA : WALLET_ICON_GENERIC), provider: p, source: 'EIP-6963', misaka });
+  }
+  const g = legacy || {};
+  if (g.misaka && g.misaka.isMisakaWallet && typeof g.misaka.request === 'function' && !keys.has(MISAKA_RDNS) && !seen.has(g.misaka)) {
+    keys.add(MISAKA_RDNS); seen.add(g.misaka);
+    rows.push({ key: MISAKA_RDNS, rdns: MISAKA_RDNS, name: 'MISAKA Wallet', icon: WALLET_ICON_MISAKA, provider: g.misaka, source: 'window.misaka', misaka: true });
+  }
+  if (g.ethereum && typeof g.ethereum.request === 'function' && !seen.has(g.ethereum)) {
+    rows.push({ key: WALLET_KEY_ETHEREUM, rdns: '', name: 'Browser wallet', icon: WALLET_ICON_GENERIC, provider: g.ethereum, source: 'window.ethereum', misaka: false });
+  }
+  return rows.filter((r) => r.misaka).concat(rows.filter((r) => !r.misaka));
+}
+// The row the page takes without asking: the remembered one while it is still installed, else the only one.
+function initialChoice(rows, remembered) {
+  const r = remembered ? rows.find((x) => x.key === remembered) : null;
+  return r || (rows.length === 1 ? rows[0] : null);
+}
+const walletDiscovery = {
+  announced: new Map(),      // info.uuid -> { info, provider }, in arrival order
+  listeners: new Set(),
+  add(detail) {
+    const info = detail && detail.info, p = detail && detail.provider;
+    if (!info || typeof info.uuid !== 'string' || !info.uuid || !p || typeof p.request !== 'function') return;
+    // mock mode lists mock.js's wallets only: a real extension would sign on a real chain for a simulated one
+    if (MOCK && !p.isMisakaMock) return;
+    const had = this.announced.get(info.uuid);
+    if (had && had.provider === p) return;           // the same wallet answering another request
+    this.announced.set(info.uuid, { info, provider: p });
+    for (const fn of this.listeners) { try { fn(); } catch (e) { console.error(e); } }
   },
+  request() { try { window.dispatchEvent(new Event('eip6963:requestProvider')); } catch (e) { /* no DOM events */ } },
+  legacy() {
+    if (MOCK) { const m = window.MISAKA_MOCK || {}; return { misaka: m.misaka || null, ethereum: m.ethereum || null }; }
+    try { return { misaka: window.misaka || null, ethereum: window.ethereum || null }; } catch (e) { return {}; }
+  },
+  list() { return walletChoices(Array.from(this.announced.values()), this.legacy()); },
+  // a wallet may announce a moment after the page asks: wait (briefly) for the remembered one
+  waitFor(key, ms) {
+    if (!key || this.list().some((r) => r.key === key)) return Promise.resolve();
+    return new Promise((resolve) => {
+      const check = () => { if (this.list().some((r) => r.key === key)) done(); };
+      const done = () => { clearTimeout(t); this.listeners.delete(check); resolve(); };
+      const t = setTimeout(done, ms);
+      this.listeners.add(check);
+    });
+  },
+};
+window.addEventListener('eip6963:announceProvider', (ev) => walletDiscovery.add(ev && ev.detail));
+
+const wallet = {
+  provider: null, choice: null, account: null, chainId: null, listeners: new Set(), bound: null,
+  choices() { return walletDiscovery.list(); },
+  // a wallet to talk to: the chosen one, or one to choose
+  any() { return !!this.provider || this.choices().length > 0; },
   // **Can this wallet pay from more than the EVM account?** MISAKA Wallet keeps MSK on the post-quantum
   // (UTXO) lane and, inside the same confirmation, moves what a transaction is short of to the EVM
   // account before sending it (its eth_sendTransaction plans the top-up; the approval window says how
   // much). So for it the EVM balance is NOT what it can spend — refusing on that balance is what kept
-  // the wallet from ever being asked, and the balance from ever going up.
+  // the wallet from ever being asked, and the balance from ever going up. Keyed on the wallet the user
+  // CHOSE: MISAKA Wallet installed next to the one in use tops nothing up.
   topsUp() { return !!(this.provider && this.provider.isMisakaWallet); },
   emit() { for (const fn of this.listeners) { try { fn(); } catch (e) { /* ignore */ } } },
   onChain() { return this.chainId != null && this.chainId.toLowerCase() === CHAIN_ID_HEX; },
+  // Talk to `row`'s provider from now on and hear its events alone: the last wallet's listeners come
+  // off, and the guard in each handler drops an event a wallet without removeListener still delivers.
+  use(row) {
+    const b = this.bound; this.bound = null;
+    if (b) {
+      const off = typeof b.p.removeListener === 'function' ? 'removeListener' : typeof b.p.off === 'function' ? 'off' : null;
+      if (off) { try { b.p[off]('accountsChanged', b.accounts); b.p[off]('chainChanged', b.chain); } catch (e) { /* the guard holds */ } }
+    }
+    this.choice = row || null; this.provider = row ? row.provider : null;
+    const p = this.provider;
+    if (p && typeof p.on === 'function') {
+      const accounts = (a) => { if (this.provider !== p) return; this.account = a && a.length ? String(a[0]).toLowerCase() : null; this.emit(); };
+      const chain = (c) => { if (this.provider !== p) return; this.chainId = String(c); this.emit(); };
+      try { p.on('accountsChanged', accounts); p.on('chainChanged', chain); this.bound = { p, accounts, chain }; } catch (e) { /* a wallet without events */ }
+    }
+  },
   async init() {
-    if (!this.detect()) return;
-    try {
-      const accts = await this.provider.request({ method: 'eth_accounts' });
-      if (accts && accts.length && store.get('wallet:auto', MOCK)) this.account = accts[0].toLowerCase();
-      this.chainId = String(await this.provider.request({ method: 'eth_chainId' }));
-    } catch (e) { /* not connected */ }
-    if (this.provider.on) {
-      this.provider.on('accountsChanged', (a) => { this.account = a && a.length ? a[0].toLowerCase() : null; this.emit(); });
-      this.provider.on('chainChanged', (c) => { this.chainId = String(c); this.emit(); });
+    walletDiscovery.request();
+    const remembered = store.get('wallet:choice', null);
+    await walletDiscovery.waitFor(remembered, 300);
+    const row = initialChoice(this.choices(), remembered);
+    if (row) {
+      this.use(row);
+      try {
+        const accts = await row.provider.request({ method: 'eth_accounts' });
+        if (accts && accts.length && store.get('wallet:auto', MOCK)) this.account = String(accts[0]).toLowerCase();
+        this.chainId = String(await row.provider.request({ method: 'eth_chainId' }));
+      } catch (e) { /* not connected */ }
     }
     this.emit();
   },
-  async connect() {
-    if (!this.detect()) throw new Error('No EIP-1193 wallet found. Install MetaMask (or another injected wallet) and reload.');
-    const accts = await this.provider.request({ method: 'eth_requestAccounts' });
-    this.account = accts && accts.length ? accts[0].toLowerCase() : null;
+  // Ask `row`'s wallet for an account. Only once it says yes does it become the site's wallet (and the
+  // one remembered for the next visit): a refusal leaves the wallet in use, and its account, as they were.
+  async connectWith(row) {
+    const p = row.provider;
+    const accts = await p.request({ method: 'eth_requestAccounts' });
+    if (!accts || !accts.length) throw new Error(row.name + ' returned no account.');
+    if (this.provider !== p) this.use(row); else this.choice = row;
+    this.account = String(accts[0]).toLowerCase();
     store.set('wallet:auto', true);
-    this.chainId = String(await this.provider.request({ method: 'eth_chainId' }));
+    if (!row.key.startsWith('uuid:')) store.set('wallet:choice', row.key);
+    this.chainId = String(await p.request({ method: 'eth_chainId' }));
     this.emit();
     if (!this.onChain()) await this.ensureChain();
   },
@@ -1188,9 +1289,24 @@ function navigate(hash) { location.hash = hash; }
 function renderNav() {
   const { name } = parseHash();
   for (const a of $$('#navLinks a[data-page]')) a.classList.toggle('active', a.dataset.page === name || (name === 'line' && a.dataset.page === 'lines'));
-  const btn = $('#connectBtn');
-  if (wallet.account) { btn.textContent = shortAddr(wallet.account) + (wallet.onChain() ? '' : ' (wrong chain)'); btn.className = 'btn' + (wallet.onChain() ? '' : ' btn-sell'); btn.title = wallet.account; }
-  else { btn.textContent = 'Connect'; btn.className = 'btn btn-accent'; btn.title = 'Connect an EIP-1193 wallet'; }
+  const btn = $('#connectBtn'), c = wallet.choice;
+  const sig = wallet.account ? [wallet.account, wallet.onChain(), c ? c.key : ''].join('|') : '';
+  if (btn.dataset.sig !== sig) {
+    btn.dataset.sig = sig;
+    btn.textContent = '';
+    if (wallet.account) {
+      if (c) btn.append(el('img', { class: 'btn-wicon', alt: '', src: c.icon }));
+      btn.append(shortAddr(wallet.account) + (wallet.onChain() ? '' : ' (wrong chain)'));
+      btn.className = 'btn' + (wallet.onChain() ? '' : ' btn-sell');
+      btn.title = wallet.account + (c ? ' in ' + c.name : '') + (wallet.onChain() ? '' : ' — not on the MISAKA chain');
+      btn.setAttribute('aria-haspopup', 'true');
+      const am = $('#acctMenu'); if (am && !am.hidden) renderAcctMenu();
+    } else {
+      btn.append('Connect'); btn.className = 'btn btn-accent'; btn.title = 'Connect a wallet';
+      closeAcctMenu();
+      btn.removeAttribute('aria-haspopup'); btn.removeAttribute('aria-expanded');
+    }
+  }
   const dot = $('#netDot'), txt = $('#netText'), pill = $('#netPill');
   const daa = db.chain.daa != null ? fmtInt(db.chain.daa) : null;
   const market = db.armed === true ? 'market armed' : db.armed === false ? 'market dormant' : 'market: unknown';
@@ -1213,21 +1329,173 @@ function renderBanner() {
   b.className = cls; b.textContent = text; b.hidden = !text;
 }
 function bindNav() {
-  $('#connectBtn').addEventListener('click', async () => {
-    if (wallet.account) { if (confirm('Disconnect ' + shortAddr(wallet.account) + ' from this site? (The wallet itself stays connected.)')) wallet.disconnect(); return; }
-    try { await wallet.connect(); toast('Connected ' + shortAddr(wallet.account) + (wallet.onChain() ? ' on MISAKA.' : '.'), 'ok'); }
-    catch (e) { toast(e.message || String(e), 'bad', 'Wallet'); }
-  });
+  // Connected, the header button opens the account menu (change wallet, disconnect); not connected, it
+  // connects the only wallet there is or opens the chooser. The menu hangs under the button (made here,
+  // so the page does not depend on index.html carrying it).
+  const cb = $('#connectBtn');
+  const acct = el('div', { class: 'acct' });
+  cb.parentNode.insertBefore(acct, cb);
+  acct.append(cb, el('div', { class: 'acct-menu', id: 'acctMenu', 'aria-label': 'Account', hidden: true }));
+  cb.addEventListener('click', () => { if (wallet.account) toggleAcctMenu(); else startConnect(); });
+  $('#acctMenu').addEventListener('keydown', (ev) => { if (ev.key === 'Escape') { closeAcctMenu(); cb.focus(); } });
   $('#navToggle').addEventListener('click', () => { const l = $('#navLinks'); l.classList.toggle('open'); $('#navToggle').setAttribute('aria-expanded', l.classList.contains('open')); });
   $('#moreBtn').addEventListener('click', (ev) => { ev.stopPropagation(); const m = $('#moreMenu'); m.hidden = !m.hidden; $('#moreBtn').setAttribute('aria-expanded', !m.hidden); });
   document.addEventListener('click', (ev) => {
     const m = $('#moreMenu'); if (m && !m.hidden && !m.contains(ev.target)) m.hidden = true;
+    const am = $('#acctMenu'); if (am && !am.hidden && !am.contains(ev.target) && !$('#connectBtn').contains(ev.target)) closeAcctMenu();
     const c = ev.target.closest('[data-copy]'); if (c) { ev.preventDefault(); copyText(c.dataset.copy); }
     const row = ev.target.closest('tr[data-href]'); if (row && !ev.target.closest('a, button')) navigate(row.dataset.href);
   });
   $('#lnkExplorer').href = CFG.EXPLORER_URL || '#';
   $('#lnkAdr').href = CFG.ADR_URL || '#';
   $$('#navLinks a').forEach((a) => a.addEventListener('click', () => $('#navLinks').classList.remove('open')));
+}
+
+// ---- the wallet chooser and the account menu ---------------------------------------------------
+// Built node by node, not from markup: a wallet's name and icon are the wallet's own words, so the
+// name is only ever text and the icon only ever an <img src>.
+function el(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const k of Object.keys(attrs || {})) {
+    const v = attrs[k];
+    if (v == null || v === false) continue;
+    if (k === 'class') e.className = v; else e.setAttribute(k, v === true ? '' : String(v));
+  }
+  for (const c of kids) if (c != null && c !== false) e.append(c);
+  return e;
+}
+const hostOf = (url) => { try { return new URL(url).host; } catch (e) { return String(url); } };
+const chooser = { root: null, box: null, title: null, lead: null, list: null, mode: 'connect', busy: false, back: null };
+// Connect: straight to the only wallet there is; with several, or none, the chooser says what there is.
+async function startConnect() {
+  walletDiscovery.request();
+  const rows = wallet.choices();
+  if (rows.length !== 1) { openWalletChooser('connect'); return; }
+  try { await wallet.connectWith(rows[0]); toast('Connected ' + shortAddr(wallet.account) + ' with ' + rows[0].name + (wallet.onChain() ? ' on MISAKA.' : '.'), 'ok'); }
+  catch (e) { toast((e && e.message) || String(e), 'bad', rows[0].name); }
+}
+function openWalletChooser(mode) {
+  walletDiscovery.request();                  // a wallet can announce after the page loaded: ask again
+  closeAcctMenu();
+  if (!chooser.root) buildChooser();
+  chooser.mode = mode === 'change' ? 'change' : 'connect';
+  if (chooser.root.hidden) chooser.back = document.activeElement;
+  chooser.root.hidden = false;
+  renderChooser();
+  const first = chooser.list.querySelector('button, a[href]');
+  if (first && !chooser.list.contains(document.activeElement)) first.focus();
+}
+function closeWalletChooser() {
+  if (!chooser.root || chooser.root.hidden) return;
+  chooser.root.hidden = true;
+  // focus goes back where it came from, unless that was the account menu (closed by now)
+  const back = chooser.back; chooser.back = null;
+  const to = back && back.isConnected && typeof back.focus === 'function' && !back.closest('[hidden]') ? back : $('#connectBtn');
+  if (to) to.focus();
+}
+function buildChooser() {
+  chooser.title = el('span', { id: 'wcTitle' });
+  chooser.lead = el('div', { class: 'wc-lead' });
+  chooser.list = el('ul', { class: 'wc-list', 'aria-labelledby': 'wcTitle' });
+  const close = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'aria-label': 'Close', title: 'Close' }, '✕');
+  close.addEventListener('click', closeWalletChooser);
+  chooser.box = el('div', { class: 'panel wc', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'wcTitle' },
+    el('div', { class: 'panel-h' }, chooser.title, el('span', { class: 'spacer' }), close),
+    el('div', { class: 'panel-b' }, chooser.lead, chooser.list,
+      el('div', { class: 'note tiny wc-foot' }, 'Only wallets installed in this browser are listed. The site asks the one you pick for an account and sends every move through it; no key ever reaches this page.')));
+  chooser.root = el('div', { class: 'wc-back', id: 'walletChooser', hidden: true }, chooser.box);
+  chooser.root.addEventListener('click', (ev) => { if (ev.target === chooser.root) closeWalletChooser(); });
+  document.addEventListener('keydown', (ev) => {
+    if (chooser.root.hidden) return;
+    if (ev.key === 'Escape') { ev.preventDefault(); closeWalletChooser(); return; }
+    if (ev.key !== 'Tab') return;
+    const f = $$('button, a[href]', chooser.box), a = document.activeElement;
+    if (!f.length) return;
+    if (!chooser.box.contains(a)) { ev.preventDefault(); f[0].focus(); }
+    else if (ev.shiftKey && a === f[0]) { ev.preventDefault(); f[f.length - 1].focus(); }
+    else if (!ev.shiftKey && a === f[f.length - 1]) { ev.preventDefault(); f[0].focus(); }
+  });
+  document.body.appendChild(chooser.root);
+  // a wallet that announces while the chooser is open joins the list
+  walletDiscovery.listeners.add(() => { if (!chooser.root.hidden) renderChooser(); });
+}
+function renderChooser() {
+  const rows = wallet.choices(), last = store.get('wallet:choice', null);
+  const a = document.activeElement, focused = a && chooser.list.contains(a) ? a.getAttribute('data-wallet') : null;
+  chooser.title.textContent = chooser.mode === 'change' ? 'Change wallet' : 'Connect a wallet';
+  chooser.lead.textContent = rows.length ? '' : 'No wallet was found in this browser.';
+  chooser.lead.hidden = rows.length > 0;
+  chooser.list.textContent = '';
+  if (!rows.some((r) => r.misaka)) chooser.list.append(el('li', null, missingMisakaRow()));
+  for (const r of rows) chooser.list.append(el('li', null, walletRow(r, last)));
+  const again = focused && $$('[data-wallet]', chooser.list).find((x) => x.getAttribute('data-wallet') === focused);
+  if (again) again.focus();
+}
+function walletRow(r, last) {
+  const current = !!wallet.account && wallet.provider === r.provider;
+  const tag = chooser.busy === r.key ? el('span', { class: 'tag warn' }, 'confirm in the wallet…')
+    : current ? el('span', { class: 'tag ok' }, 'connected')
+    : r.key === last ? el('span', { class: 'tag' }, 'last used') : null;
+  const note = r.misaka ? el('span', { class: 'wc-note' }, MISAKA_WALLET_NOTE)
+    : r.source === 'window.ethereum' ? el('span', { class: 'wc-note dim' }, 'window.ethereum: whichever extension answers it') : null;
+  const b = el('button', { type: 'button', class: 'wc-row' + (r.misaka ? ' rec' : ''), 'data-wallet': r.key, title: r.name + ' (' + r.source + ')', 'aria-disabled': chooser.busy ? 'true' : null },
+    el('img', { class: 'wc-icon', alt: '', src: r.icon }),
+    el('span', { class: 'wc-body' }, el('span', { class: 'wc-name' }, r.name), note),
+    tag);
+  b.addEventListener('click', () => pickWallet(r));
+  return b;
+}
+// MISAKA Wallet is not in this browser: its row stays first, not a wallet to connect but the way to get it.
+function missingMisakaRow() {
+  return el('a', { class: 'wc-row off', href: CFG.WALLET_URL, target: '_blank', rel: 'noopener', 'data-wallet': 'missing:' + MISAKA_RDNS, title: 'Get MISAKA Wallet at ' + CFG.WALLET_URL },
+    el('img', { class: 'wc-icon', alt: '', src: WALLET_ICON_MISAKA }),
+    el('span', { class: 'wc-body' }, el('span', { class: 'wc-name' }, 'MISAKA Wallet — not installed'),
+      el('span', { class: 'wc-note' }, MISAKA_WALLET_NOTE + '. Get it at ' + hostOf(CFG.WALLET_URL) + ', then reload this page.')),
+    el('span', { class: 'tag' }, 'Get it ↗'));
+}
+async function pickWallet(r) {
+  if (chooser.busy) return;
+  chooser.busy = r.key;
+  renderChooser();
+  try { await wallet.connectWith(r); toast('Connected ' + shortAddr(wallet.account) + ' with ' + r.name + (wallet.onChain() ? ' on MISAKA.' : '.'), 'ok'); }
+  catch (e) { toast((e && e.message) || String(e), 'bad', r.name); }
+  chooser.busy = false;
+  if (wallet.account && wallet.provider === r.provider) closeWalletChooser();
+  else if (!chooser.root.hidden) renderChooser();
+}
+function renderAcctMenu() {
+  const m = $('#acctMenu'); if (!m) return;
+  const c = wallet.choice;
+  const item = (label, fn, extra) => {
+    const b = el('button', Object.assign({ type: 'button' }, extra || {}), label);
+    b.addEventListener('click', () => { closeAcctMenu(); fn(); });
+    return b;
+  };
+  m.textContent = '';
+  // (append(null) would print "null": the optional item is filtered out, not passed)
+  m.append(...[
+    el('div', { class: 'acct-who' }, el('img', { class: 'wc-icon sm', alt: '', src: c ? c.icon : WALLET_ICON_GENERIC }), el('span', { class: 'wc-name' }, c ? c.name : 'Wallet')),
+    el('div', { class: 'acct-addr mono', title: wallet.account || '' }, shortAddr(wallet.account)),
+    wallet.onChain() ? null : item('Switch to the MISAKA chain', async () => { try { await wallet.ensureChain(); } catch (e) { toast((e && e.message) || String(e), 'bad', 'Wallet'); } }),
+    item('Change wallet', () => openWalletChooser('change'), { title: 'Pick another installed wallet' }),
+    item('Copy address', () => copyText(wallet.account)),
+    item('Disconnect', () => wallet.disconnect(), { class: 'danger', title: 'Forget the account on this site; the wallet itself stays connected' }),
+  ].filter(Boolean));
+}
+function toggleAcctMenu() {
+  const m = $('#acctMenu'); if (!m) return;
+  if (!m.hidden) { closeAcctMenu(); return; }
+  renderAcctMenu();
+  m.hidden = false;
+  $('#connectBtn').setAttribute('aria-expanded', 'true');
+  const first = m.querySelector('button');
+  if (first) first.focus();
+}
+function closeAcctMenu() {
+  const m = $('#acctMenu');
+  if (!m || m.hidden) return;
+  m.hidden = true;
+  $('#connectBtn').setAttribute('aria-expanded', 'false');
 }
 
 // ============================================================================================
@@ -1335,10 +1603,11 @@ function classStatusOf(rec) {
   const c = rec && rec.classId && db.classes.get(rec.classId);
   return c && c.statusLabel ? { head: c.statusLabel, activationDaa: null, sinceDaa: null, raw: 'registry classRow' } : null;
 }
+const NO_WALLET = 'No wallet found in this browser: install MISAKA Wallet (' + hostOf(CFG.WALLET_URL) + ') or another EIP-1193 wallet, then reload.';
 function seedReasonNotToSend(rec, sompi, balance) {
   const m = rec && rec.market;
-  if (MOCK && !wallet.provider) return 'Mock wallet missing.';
-  if (!wallet.provider) return 'No EIP-1193 wallet found: install MetaMask and reload.';
+  if (MOCK && !wallet.any()) return 'Mock wallet missing.';
+  if (!wallet.any()) return NO_WALLET;
   if (!wallet.account) return 'Connect a wallet to open this store.';
   if (!wallet.onChain()) return 'Switch the wallet to the MISAKA chain (' + CFG.CHAIN_ID + ').';
   if (db.armed === false) return 'The store is not armed on this network: the facade is an empty account, so an opening deposit would be refused.';
@@ -1683,8 +1952,8 @@ async function pageStore(arg) {
     return { minMsk: (q.fees.net * (10000n - bps)) / 10000n };
   }
   function reasonNotToSend(q) {
-    if (MOCK && !wallet.provider) return 'Mock wallet missing.';
-    if (!wallet.provider) return 'No EIP-1193 wallet found: install MetaMask and reload.';
+    if (MOCK && !wallet.any()) return 'Mock wallet missing.';
+    if (!wallet.any()) return NO_WALLET;
     if (!wallet.account) return 'Connect a wallet to join.';
     if (!wallet.onChain()) return 'Switch the wallet to the MISAKA chain (' + CFG.CHAIN_ID + ').';
     if (db.armed === false) return 'The market is not armed on this network: the facade is an empty account.';
@@ -2517,6 +2786,20 @@ function selfTestReport() {
   const ns = normMarket({ found: true, opened: true, openedDaa: 7, mskReserve: 10000000000000, positionUnits: 500000, soldUnits: 0, priceSompiPerPosition: 20000000, seedSompi: 10000000000000, seededBy: lid, classStatus: 'Active' }, 'wrpc');
   eq('normMarket: a seeded row keeps its seed, its seeder and its price', ns.seeded && ns.seedSompi === 10000000000000n && ns.seededBy === lid && ns.price === 20000000n, true);
   eq('safeParse keeps u64 exact', safeParse('{"a":12345678901234567890}').a, '12345678901234567890');
+  // ---- which wallet (EIP-6963): the rows the chooser lists, and the one taken without asking ----
+  const pv = (flags) => Object.assign({ request: async () => null }, flags);
+  const ann = (rdns, name, p, icon) => ({ info: { uuid: 'uuid-' + rdns, name, icon: icon || 'data:image/png;base64,AA==', rdns }, provider: p || pv() });
+  const aMm = ann('io.metamask', 'MetaMask'), aPh = ann('app.phantom', 'Phantom'), aMw = ann(MISAKA_RDNS, 'MISAKA Wallet', pv({ isMisakaWallet: true }));
+  const keysOf = (rows) => rows.map((r) => r.key + (r.source === 'EIP-6963' ? '' : '@' + r.source)).join(' ');
+  eq('wallets: MISAKA Wallet first, the others in announcement order', keysOf(walletChoices([aMm, aPh, aMw], {})), MISAKA_RDNS + ' io.metamask app.phantom');
+  eq('wallets: one row per rdns', keysOf(walletChoices([aMm, ann('io.metamask', 'MetaMask again'), aPh], {})), 'io.metamask app.phantom');
+  const gM = pv({ isMisakaWallet: true }), gE = pv();
+  eq('wallets: nothing announced, the globals are the rows', keysOf(walletChoices([], { misaka: gM, ethereum: gE })), MISAKA_RDNS + '@window.misaka window.ethereum@window.ethereum');
+  eq('wallets: window.ethereum that is window.misaka is one row', keysOf(walletChoices([], { misaka: gM, ethereum: gM })), MISAKA_RDNS + '@window.misaka');
+  eq('wallets: a global an announcement already covers adds no row', keysOf(walletChoices([aMw, aMm], { misaka: gM, ethereum: aMm.provider })), MISAKA_RDNS + ' io.metamask');
+  eq('wallets: an icon that is not an image data: URI is not drawn', walletChoices([ann('x.y', 'X', null, 'https://t.example/p.png')], {})[0].icon, WALLET_ICON_GENERIC);
+  const r2 = walletChoices([aMm, aPh], {});
+  eq('wallets: the remembered one only while it is installed, else the only one', [initialChoice(r2, 'app.phantom'), initialChoice(r2, MISAKA_RDNS), initialChoice(r2, null), initialChoice(walletChoices([aMm], {}), MISAKA_RDNS)].map((r) => (r ? r.key : '-')).join(' '), 'app.phantom - - io.metamask');
   lines.unshift('MISAKA Options self-test: ' + pass + ' passed, ' + fail + ' failed');
   const report = lines.join('\n');
   console[fail ? 'error' : 'info'](report);
@@ -2529,7 +2812,7 @@ async function boot() {
   db.listeners.add(() => { renderNav(); renderBanner(); });
   wallet.listeners.add(renderNav);
   window.addEventListener('hashchange', route);
-  window.MO = { curve, ABI, SIG, EVT, blake2b, keccak256, utf8, hexToBytes, bytesToHex, facadeDerived, holderIdDerived, CURVE_DEFAULTS, bi, toHex, SOMPI_PER_MSK, NATIVE_SCALE_WEI, normMarket, db, history, store, txlog, seedActionData, ACTION_SEED, sompiToWei, parseClassStatus, REFUSAL };
+  window.MO = { curve, ABI, SIG, EVT, blake2b, keccak256, utf8, hexToBytes, bytesToHex, facadeDerived, holderIdDerived, CURVE_DEFAULTS, bi, toHex, SOMPI_PER_MSK, NATIVE_SCALE_WEI, normMarket, db, history, store, txlog, seedActionData, ACTION_SEED, sompiToWei, parseClassStatus, REFUSAL, wallet, walletDiscovery, walletChoices, initialChoice, MISAKA_RDNS };
   if (MOCK) await new Promise((resolve) => { const s = document.createElement('script'); s.src = 'mock.js'; s.onload = resolve; s.onerror = () => { toast('mock.js failed to load', 'bad'); resolve(); }; document.head.appendChild(s); });
   if (MOCK && window.MISAKA_MOCK && window.MISAKA_MOCK.init) window.MISAKA_MOCK.init(window.MO);
   await wallet.init();
