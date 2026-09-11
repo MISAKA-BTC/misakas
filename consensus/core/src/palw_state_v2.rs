@@ -7944,6 +7944,75 @@ pub fn apply_palw_transition_v6(
 /// state root included; **every production caller must reach this one**, for the reason v6's doc
 /// gives about the fences it carries.
 #[allow(clippy::too_many_arguments)]
+/// **A-1 fix — the acceptance filter's view of the fold's step 3 (mainnet audit 2026-09-11).**
+///
+/// The one-shot fold [`apply_palw_transition_v7`] applies every accepted object in step 3, then
+/// runs `activate_due_classes` (3a), the epoch budgets (3b) and the block/merged work (4) ONCE,
+/// after all objects. The acceptance filter used to rehearse each object through a whole-block
+/// transition, so 3a ran between objects and a `ClassLaneCertified` for a class that becomes
+/// `Active` in this very block was accepted by the filter and then refused by the real fold — and
+/// every node disqualified the block, halting the chain (invariants 1 and 7). These two functions
+/// give the filter the fold's step-3 view exactly: `palw_v2_pre_object_base_v1` runs the
+/// pre-object block-level steps once (payout drain, EVM-settlement drain, sweeps, per-class
+/// retarget / growth / reclamation), and `palw_v2_apply_one_object_v1` applies a single object with
+/// nothing else. An object the fold would refuse is then dropped by the filter here, and the block
+/// stands. The two are copied step-for-step from the pre-object body of `apply_palw_transition_v7`,
+/// so the state they leave is the state that fold's step 3 sees.
+pub fn palw_v2_pre_object_base_v1(
+    parent: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<PalwChainStateV2, PalwStateV2Error> {
+    if let Some(last) = &parent.last_point {
+        if ctx.blue_score <= last.blue_score {
+            return Err(PalwStateV2Error::NonMonotonicContext("blue_score must strictly increase along a chain"));
+        }
+        if ctx.daa_score < last.daa_score {
+            return Err(PalwStateV2Error::NonMonotonicContext("daa_score must not decrease along a chain"));
+        }
+    }
+    let mut builder =
+        TransitionBuilder::new(parent, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras);
+    for claim_id in builder.state.pending_payouts.keys().copied().take(PALW_V2_MAX_PAYOUTS_PER_BLOCK).collect::<Vec<_>>() {
+        builder.write_payout(claim_id, None);
+    }
+    for seq in builder.state.evm_settlements.keys().copied().collect::<Vec<_>>() {
+        builder.write_evm_settlement(seq, None);
+    }
+    sweep_deadlines(&mut builder, ctx)?;
+    sweep_court_close_deadlines(&mut builder, ctx)?;
+    sweep_court_deadlines(&mut builder, ctx)?;
+    apply_class_retargets(&mut builder, parent, ctx)?;
+    apply_class_share_growth(&mut builder, parent, ctx);
+    apply_class_reclamation(&mut builder, parent, ctx)?;
+    Ok(builder.checkpoint().0)
+}
+
+/// Companion to [`palw_v2_pre_object_base_v1`]: apply exactly one accepted object to a base, as the
+/// fold's step 3 does, and return the state it leaves. No sweeps, no activation, no budgets — those
+/// block-level steps run once around the whole object list, never between objects.
+pub fn palw_v2_apply_one_object_v1(
+    base: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<PalwChainStateV2, PalwStateV2Error> {
+    let mut builder =
+        TransitionBuilder::new(base, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras);
+    apply_object(&mut builder, ctx, object)?;
+    Ok(builder.checkpoint().0)
+}
+
 pub fn apply_palw_transition_v7(
     parent: &PalwChainStateV2,
     params: &PalwStateParamsV2,

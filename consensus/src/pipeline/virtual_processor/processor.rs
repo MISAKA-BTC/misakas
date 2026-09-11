@@ -5416,6 +5416,38 @@ impl VirtualStateProcessor {
         self.palw_v2_accepted_objects(state, state_params, point, objects, block)
     }
 
+    /// **The REAL one-shot block fold, over the whole accepted list, using the same fences the
+    /// pipeline resolves** — the transition the acceptance rehearsal exists to predict (A-1).
+    ///
+    /// Byte-for-byte the fold the virtual processor runs on a chain candidate's PALW content, for
+    /// an object-only block (no own work, empty mergeset). It resolves the ADR fences at
+    /// `point.daa_score` through the SAME accessors the filter uses, so a divergence this exposes
+    /// is a divergence between the filter and the transition and nothing else. The sibling test
+    /// module calls it to check the filter's one contract: what `palw_v2_accepted_objects` returns,
+    /// this applies on the parent state without error.
+    #[cfg(test)]
+    pub(super) fn palw_v2_block_fold_for_tests(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: &[kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2],
+    ) -> Result<kaspa_consensus_core::palw_state_v2::PalwChainStateV2, kaspa_consensus_core::palw_state_v2::PalwStateV2Error> {
+        kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_extras(
+            state,
+            state_params,
+            point,
+            objects,
+            None,
+            self.palw_unavailable_abstains_at(point.daa_score),
+            self.palw_capability_bound_at(point.daa_score),
+            self.palw_uncertified_weightless_at(point.daa_score),
+            self.palw_da_court_at(point.daa_score),
+            &self.palw_transition_extras_at(point.daa_score),
+        )
+        .map(|(state, _delta)| state)
+    }
+
     /// **How many court re-executions this object is about to buy** (ADR-0075 SA-2), or `None`
     /// when it buys none.
     ///
@@ -5498,8 +5530,33 @@ impl VirtualStateProcessor {
         // fold's job is to answer "what phase will this claim be in when the transition reaches
         // the next object", and that answer does not depend on the point's exact value — only on
         // the objects already applied.
-        let mut folded = state.clone();
-        let mut rehearsal = *point;
+        // **A-1 fix (mainnet audit 2026-09-11): rehearse the fold's step 3, not a whole-block
+        // transition per object.** The real fold applies every object in step 3, then runs
+        // activation, budgets and block/merged work ONCE. Rehearsing each object through a full
+        // transition ran activation between objects, so a `ClassLaneCertified` for a class that
+        // becomes `Active` in this very block was accepted here and refused by the real fold —
+        // disqualifying the block on every node and halting the chain. `folded` is now the fold's
+        // pre-object base (payout/settlement drain, sweeps, retarget/growth/reclamation, once), and
+        // each accepted object advances it by one `apply_object` and nothing else.
+        let mut folded = match kaspa_consensus_core::palw_state_v2::palw_v2_pre_object_base_v1(
+            state,
+            state_params,
+            point,
+            self.palw_unavailable_abstains_at(point.daa_score),
+            self.palw_capability_bound_at(point.daa_score),
+            self.palw_uncertified_weightless_at(point.daa_score),
+            self.palw_da_court_at(point.daa_score),
+            &self.palw_transition_extras_at(point.daa_score),
+        ) {
+            Ok(base) => base,
+            // The pre-object steps are what the real fold runs before any object; if they error the
+            // block is disqualified whatever it carries, so the filter accepts nothing and returns
+            // the parent unchanged (the caller re-folds the parent and sees the same error).
+            Err(why) => {
+                info!("Block {block}: no PALW object is accepted; the pre-object fold fails and the block will be disqualified: {why}");
+                return (Vec::new(), state.clone());
+            }
+        };
         let mut accepted = Vec::with_capacity(objects.len());
         let mut certifications_graded = 0usize;
         // ADR-0080 design A, W9: how many declared closes this block has already completed.
@@ -5855,12 +5912,11 @@ impl VirtualStateProcessor {
                     if spends_the_court_slot {
                         court_closes_completed += 1;
                     }
-                    match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_extras(
+                    match kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_v1(
                         &folded,
                         state_params,
-                        &rehearsal,
-                        std::slice::from_ref(&object),
-                        None,
+                        point,
+                        &object,
                         self.palw_unavailable_abstains_at(point.daa_score),
                         // ADR-0071 SA-1/SA-2/SA-4: the rehearsal has to refuse what the fold
                         // refuses, or an over-long or unaffordable declaration is admitted into a
@@ -5873,7 +5929,7 @@ impl VirtualStateProcessor {
                         self.palw_da_court_at(point.daa_score),
                         &self.palw_transition_extras_at(point.daa_score),
                     ) {
-                        Ok((next, _)) => {
+                        Ok(next) => {
                             if completes_a_group {
                                 // The certification a chunk group carried is applied inside the
                                 // chunk's own arm, so the kinds tally below never names it; say so
@@ -5897,7 +5953,6 @@ impl VirtualStateProcessor {
                                 certifications_graded += 1;
                             }
                             folded = next;
-                            rehearsal.blue_score = rehearsal.blue_score.saturating_add(1);
                             // **ADR-0067: keep the declaration the chain just accepted.** The
                             // state retains the class's economic facts and drops the carriage;
                             // a node that will SERVE the class needs the graph, so it is indexed
