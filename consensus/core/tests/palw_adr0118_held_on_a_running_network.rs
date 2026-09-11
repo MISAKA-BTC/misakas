@@ -35,9 +35,19 @@ fn bundle(params: &Params) -> &PalwConsensusParamsV2 {
     }
 }
 
-/// testnet-11 as shipped, with the held regime armed at `daa` by the one helper the preset uses.
-fn t11_held_at(daa: u64) -> Params {
+/// testnet-11 as it was before its held flag day was scheduled: the shipped preset with the
+/// regime's three fences cleared.
+fn t11_without_the_regime() -> Params {
     let mut params = palw_rc_shipped_params();
+    params.palw_held_context = None;
+    params.palw_shard_court = None;
+    params.palw_fp_da_pins = None;
+    params
+}
+
+/// testnet-11 with the held regime armed at `daa` by the one helper the preset uses.
+fn t11_held_at(daa: u64) -> Params {
+    let mut params = t11_without_the_regime();
     palw_arm_held_regime_at_v1(&mut params, daa);
     params
 }
@@ -102,22 +112,27 @@ fn gate_at(params: &Params, profile: &PalwShapeProfileV3, daa: u64) -> Result<()
     .map(|_| ())
 }
 
-/// **Decision 6: testnet-11 takes the regime at a height of its own.** Dormant as shipped — the
-/// flag-day constant is `None` and the preset arms nothing — and, armed at an unused height by the
-/// helper, the ruleset validates with the network's prompt ids still flat, the schedule gains the
-/// height the fork-id gate refuses a stale node at, and the identity moves. From genesis on the
-/// same bundle it is still refused: a mint that takes the regime states V4 and Merkle itself.
+/// **Decision 6: testnet-11 takes the regime at a height of its own — 7,000, the operator's.** The
+/// shipped preset IS the helper at that height (one spelling), the ruleset validates with the
+/// network's prompt ids still flat, the schedule gains the height the fork-id gate refuses a stale
+/// node at, and the identity moves from the build before it. From genesis on the same bundle it is
+/// still refused: a mint that takes the regime states V4 and Merkle itself.
 #[test]
 fn testnet_11_takes_the_held_regime_at_a_height_of_its_own() {
+    assert_eq!(PALW_RC_HELD_FENCE_DAA, Some(HELD_AT), "the operator's height (2026-09-12), shared with the deep-audit fence");
     let shipped = palw_rc_shipped_params();
-    assert_eq!(PALW_RC_HELD_FENCE_DAA, None, "the operator has named no height; the regime ships dormant");
-    assert!(shipped.palw_held_context.is_none() && shipped.palw_shard_court.is_none() && shipped.palw_fp_da_pins.is_none());
-
     let armed = t11_held_at(HELD_AT);
-    armed.validate_palw_v2().unwrap_or_else(|e| panic!("testnet-11 takes the held regime at {HELD_AT}: {e:?}"));
-    assert_eq!(armed.palw_prompt_ids_form_at(u64::MAX - 1), PalwPromptIdsFormV1::Flat, "the network's genesis form is kept");
-    assert!(!shipped.fence_schedule_v1().contains(&HELD_AT) && armed.fence_schedule_v1().contains(&HELD_AT));
-    assert_ne!(armed.consensus_params_id(), shipped.consensus_params_id(), "a node without the regime is another network");
+    assert_eq!(
+        (shipped.palw_held_context, shipped.palw_shard_court, shipped.palw_fp_da_pins),
+        (armed.palw_held_context, armed.palw_shard_court, armed.palw_fp_da_pins),
+        "the preset arms exactly what the helper does"
+    );
+    assert_eq!(shipped.consensus_params_id(), armed.consensus_params_id());
+    let before = t11_without_the_regime();
+    shipped.validate_palw_v2().unwrap_or_else(|e| panic!("testnet-11 takes the held regime at {HELD_AT}: {e:?}"));
+    assert_eq!(shipped.palw_prompt_ids_form_at(u64::MAX - 1), PalwPromptIdsFormV1::Flat, "the network's genesis form is kept");
+    assert!(!before.fence_schedule_v1().contains(&HELD_AT) && shipped.fence_schedule_v1().contains(&HELD_AT));
+    assert_ne!(shipped.consensus_params_id(), before.consensus_params_id(), "a node without the regime is another network");
 
     let from_genesis = t11_held_at(0);
     let err = format!("{:?}", from_genesis.validate_palw_v2().expect_err("a flat V1 genesis never took the regime"));
@@ -131,10 +146,10 @@ fn testnet_11_takes_the_held_regime_at_a_height_of_its_own() {
 /// node at.
 #[test]
 fn a_held_fence_at_a_scheduled_height_is_invisible_to_the_fork_id_gate() {
-    let shipped = palw_rc_shipped_params().fence_schedule_v1();
-    assert!(shipped.contains(&PALW_RC_AUDIT_FENCE_DAA));
-    assert_eq!(t11_held_at(PALW_RC_AUDIT_FENCE_DAA).fence_schedule_v1(), shipped, "no entry the gate could see");
-    assert_eq!(t11_held_at(HELD_AT).fence_schedule_v1().len(), shipped.len() + 1);
+    let before = t11_without_the_regime().fence_schedule_v1();
+    assert!(before.contains(&PALW_RC_AUDIT_FENCE_DAA));
+    assert_eq!(t11_held_at(PALW_RC_AUDIT_FENCE_DAA).fence_schedule_v1(), before, "no entry the gate could see");
+    assert_eq!(t11_held_at(HELD_AT).fence_schedule_v1().len(), before.len() + 1);
 }
 
 /// **Decision 3: a held class commits its own Merkle ids; every other class keeps the network's.**

@@ -10539,20 +10539,22 @@ pub const PALW_RC_MODEL_LEG_V2_FENCE_DAA: u64 = 3_500;
 /// onto the fleet's own base (ADR-0114's `42438178` lineage = origin/main 8b6661a9 + 5bed4405).
 pub const PALW_RC_AUDIT_FENCE_DAA: u64 = 4_000;
 
-/// **testnet-11's held-regime flag day — NOT SCHEDULED** (ADR-0118; the regime is ADR-0103's).
+/// **testnet-11's held-regime flag day: DAA 7,000** (ADR-0118; the regime is ADR-0103's).
 ///
-/// `None` until the operator names a height; naming one is this line, and
-/// [`palw_arm_held_regime_at_v1`] arms the three fences the regime takes together.
+/// Chosen by the operator on 2026-09-12: the deep-audit flag day's height
+/// (`palw_audit_2026_09_11_deep`), so the regime, ADR-0119's class ladder and the deep fixes ride
+/// ONE release and the fleet re-deploys once. [`palw_arm_held_regime_at_v1`] arms the three fences
+/// the regime takes together.
 ///
 /// **Every fence at one height ships in one build.** `fork_id_v1` digests the FIRED HEIGHTS, not
 /// the fence set, so a node carrying some of a height's fences and not the others advertises the
 /// same fork id and diverges silently past it — where a height of its own is a schedule entry the
 /// gate refuses a stale node at. So the height is one no other entry uses, or one whose other
 /// fences ship in the same release: not 3,500 (ADR-0114, deployed), not 4,000 (the audit and
-/// `palw_prefill_draw`, released without the regime). Proposed: the deep-audit flag day (7,000 at
-/// the time of writing), riding that release so the fleet re-deploys once — the operator's call,
-/// as every flag day is.
-pub const PALW_RC_HELD_FENCE_DAA: Option<u64> = None;
+/// `palw_prefill_draw`, released without the regime). **7,000 is shared with the deep-audit fence,
+/// so no build may carry one of the two without the other**: every node must run the release that
+/// carries both before 7,000.
+pub const PALW_RC_HELD_FENCE_DAA: Option<u64> = Some(7_000);
 
 /// **The held regime on a network minted before it, at one height** (ADR-0118 Decision 6).
 ///
@@ -10979,9 +10981,9 @@ pub fn palw_rc_base_params() -> Params {
     // testnet-11 "until a flag day says otherwise" (`the_share_growth_final_fence_is_dormant_everywhere`,
     // and the ADR-0107 note that the merged-payout question is still the operator's to make).
     params.palw_audit_2026_09_11 = Some(ForkActivation::new(PALW_RC_AUDIT_FENCE_DAA));
-    // **The held regime (ADR-0103) at its own flag day — dormant until the operator names the
-    // height** (ADR-0118). With [`PALW_RC_HELD_FENCE_DAA`] `None` nothing is armed and the identity
-    // is byte-identical to a build without the regime.
+    // **The held regime (ADR-0103) at its flag day, DAA 7,000** (ADR-0118; the operator's height,
+    // shared with the deep-audit fence). Past it no bisection opens, a held class may register,
+    // and the one-move court and the retention pins are in force.
     if let Some(daa) = PALW_RC_HELD_FENCE_DAA {
         palw_arm_held_regime_at_v1(&mut params, daa);
     }
@@ -13800,6 +13802,11 @@ mod consensus_params_id_tests {
         previous.palw_model_leg_v2 = None;
         // The pre-mainnet audit's fence (4000) was scheduled later still.
         previous.palw_audit_2026_09_11 = None;
+        // …and the held regime's flag day (7000, ADR-0118) later than that: the regime, the
+        // one-move court and the retention pins arm together there.
+        previous.palw_held_context = None;
+        previous.palw_shard_court = None;
+        previous.palw_fp_da_pins = None;
         // Scheduled on the same flag day by the 2026-09-06 audit's H-4 (ADR-0084 U-08), so the
         // build the fleet is running does not carry it either.
         previous.palw_court_ladder = None;
@@ -15296,7 +15303,14 @@ mod consensus_params_id_tests {
                 // 3,500: identity unmoved, the fork-id gate keeps builds with and without the fence
                 // peers until 4,000, and every node must carry it past 4,000. Previous (ADR-0114's
                 // owner-leg build): 02c7282b7541011344eabb1ce6cbe6544987e7b6a7fc132413fbfff0a6a37cfd.
-                "09efd285a32f31c883edc5b9b869892b15895bf1194593c067556c94cf8fc694",
+                // **Re-pinned 2026-09-12 for the held regime's flag day** (ADR-0118, the operator's
+                // DAA 7,000): `palw_held_context`, `palw_shard_court` and `palw_fp_da_pins` arm there,
+                // adding the schedule entry 7000. This is the value on `feat/adr-0103-held-context`
+                // alone — the 4,000 release adds `palw_prefill_draw` (4300409b on its own) and the
+                // deep-audit fence shares 7,000 — so the release that carries all three is re-pinned
+                // once it is assembled, and no build may carry one 7,000 fence without the other.
+                // Previous (the audit fence's build): 09efd285a32f31c883edc5b9b869892b15895bf1194593c067556c94cf8fc694.
+                "80524c3b5bfb9c9749394e0a32471da0ec9590325da67131e3d57911345e82e5",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -16058,6 +16072,11 @@ mod consensus_params_id_tests {
         //   hand-written and the model branch never joined it, so a set comparison could not see a
         //   fence the table did not name.** If a card is ever meant to arm them, this is the line
         //   that has to be changed deliberately.
+        // * `palw_held_context` and the one-move court `palw_shard_court` (ADR-0103, ADR-0100) are
+        //   testnet-11's held regime, scheduled at `PALW_RC_HELD_FENCE_DAA` by ADR-0118. A mainnet
+        //   that wants the regime MINTS it — `palw_held_context_mint_v1`, V4 and the tiled ids from
+        //   genesis — and whether one does is a product decision no card has taken. (The regime's
+        //   third fence, the retention pins, a card already states.)
         assert_eq!(
             missing,
             vec![
@@ -16066,7 +16085,9 @@ mod consensus_params_id_tests {
                 "palw_model_benefits",
                 "palw_model_leg_v2",
                 "palw_model_evm",
-                "palw_kary_court"
+                "palw_kary_court",
+                "palw_shard_court",
+                "palw_held_context"
             ],
             "a carded mainnet must arm every fence testnet-11 arms except the four named above \
              (rc: {rc_armed:?}, mainnet: {mainnet_armed:?})"
@@ -16805,6 +16826,7 @@ mod consensus_params_id_tests {
                 PALW_RC_MODEL_BENEFITS_FENCE_DAA,
                 PALW_RC_MODEL_LEG_V2_FENCE_DAA,
                 PALW_RC_AUDIT_FENCE_DAA,
+                PALW_RC_HELD_FENCE_DAA.expect("the held regime's flag day"),
             ],
             "…and a schedule lists every scheduled gate fence's height"
         );
@@ -16885,8 +16907,9 @@ mod consensus_params_id_tests {
         assert_eq!(carded.palw_attempt_header_pins, Some(ForkActivation::always()));
     }
 
-    /// **The free-prompt DA pin is dormant on every shipped preset and visible the moment it is
-    /// not** (ADR-0072 Decision 8, free-prompt half; mainnet audit 2026-09-06 — M-3).
+    /// **The free-prompt DA pin is dormant on every shipped preset but testnet-11's held flag day,
+    /// and visible the moment it is armed** (ADR-0072 Decision 8, free-prompt half; mainnet audit
+    /// 2026-09-06 — M-3; ADR-0118 for the height).
     ///
     /// The same four claims the header-stage fence above is held to, because a bare fence can fail
     /// any one of them alone: `None` everywhere shipped, so no live chain's fingerprint moves and
@@ -16898,14 +16921,19 @@ mod consensus_params_id_tests {
             assert!(p.palw_fp_da_pins.is_none(), "{}: a shipped preset states no free-prompt DA pin fence", p.net);
         }
         let rc = palw_rc_shipped_params();
-        assert!(
-            rc.palw_fp_da_pins.is_none(),
+        assert_eq!(
+            rc.palw_fp_da_pins,
+            PALW_RC_HELD_FENCE_DAA.map(ForkActivation::new),
             "testnet-11's stored claims recorded the retention their own producers wrote; deriving it there is a decision \
-             and a flag day, not an inheritance"
+             and a flag day, not an inheritance — the held regime's (ADR-0118), which needs it at or below its height"
         );
         assert!(devnet_shipped_params().palw_fp_da_pins.is_none(), "devnet inherits the dormant state too");
         // Dormant means the fence reader says so as well, which is what the transition asks.
-        assert!(rc.palw_fp_da_pins_fence().is_none(), "the reader is the one place the rule is decided");
+        assert_eq!(
+            rc.palw_fp_da_pins_fence(),
+            PALW_RC_HELD_FENCE_DAA.map(ForkActivation::new),
+            "the reader is the one place the rule is decided"
+        );
 
         let mut spelled_out = rc.clone();
         spelled_out.palw_fp_da_pins = Some(ForkActivation::never());

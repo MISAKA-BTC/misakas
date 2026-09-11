@@ -138,7 +138,9 @@ fn gate(params: &Params, profile: &PalwShapeProfileV3, shape: PalwAdmissionShape
 fn section_1_1_is_what_the_shipped_presets_read() {
     let dense_v5 = kaspa_consensus_core::palw_context_ladder::palw_a16_context_row_profile_v5(512).expect("graph-v5 at 512");
     for (name, params) in [("testnet-11 (RC)", palw_rc_shipped_params()), ("devnet", devnet_shipped_params())] {
-        assert!(params.palw_held_context.is_none(), "{name}: the fence is dormant on every shipped preset (Invariant 10)");
+        // Invariant 10, as ADR-0118 left it: no shipped preset takes the regime from genesis —
+        // testnet-11 schedules it at a height, where this class (not a held one) keeps its walls.
+        assert!(!params.palw_held_context.is_some_and(|f| f.is_active(0)), "{name}: never from genesis (Invariant 10)");
         let report = fit(&params, &dense_v5, PalwFitRegimeV1::Shipped);
         assert!(report.admitted(), "{name}: the shipped row is admitted at 512 — {:?}", report.refusing_walls());
         for wall in [PalwFitWallV1::GeometryCeiling, PalwFitWallV1::Ladder, PalwFitWallV1::StateChunks, PalwFitWallV1::PublicDaPayload]

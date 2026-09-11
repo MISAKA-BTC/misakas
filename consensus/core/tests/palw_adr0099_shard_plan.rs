@@ -330,14 +330,18 @@ fn an_accusation_binds_its_fields_and_its_shape_is_checked_by_name() {
     ));
 }
 
-/// **Invariant 8 — the fence is dormant on both shipped presets.** Its refusal at assembly and
-/// its fingerprint visibility are `config::params`'s own tests.
+/// **Invariant 8 — the fence is dormant on the devnet, and on testnet-11 it arms with the held
+/// regime at that regime's flag day and nowhere before it** (ADR-0118: the regime refuses the
+/// bisection, so the one-move court must convict from the same height). Its refusal at assembly
+/// and its fingerprint visibility are `config::params`'s own tests.
 #[test]
-fn the_shard_court_fence_is_dormant_on_both_shipped_presets() {
-    for (name, params) in [("testnet-11 (RC)", palw_rc_shipped_params()), ("devnet", devnet_shipped_params())] {
-        assert!(params.palw_shard_court.is_none(), "{name}");
-        assert!(!params.palw_shard_court_active_at(u64::MAX), "{name}");
-    }
+fn the_shard_court_fence_is_dormant_on_the_devnet_and_rides_testnet_11s_held_flag_day() {
+    let devnet = devnet_shipped_params();
+    assert!(devnet.palw_shard_court.is_none() && !devnet.palw_shard_court_active_at(u64::MAX), "devnet");
+    let rc = palw_rc_shipped_params();
+    let held = kaspa_consensus_core::config::params::PALW_RC_HELD_FENCE_DAA.expect("testnet-11 schedules the held regime");
+    assert_eq!(rc.palw_shard_court, rc.palw_held_context, "testnet-11: one height for the regime and its court");
+    assert!(!rc.palw_shard_court_active_at(held - 1) && rc.palw_shard_court_active_at(held), "testnet-11: from {held}, not before");
 }
 
 /// **Invariant 6 — a manifest of a shipped class names the shipped class.** The manifest → geometry
