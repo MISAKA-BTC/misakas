@@ -1352,6 +1352,28 @@ pub fn qwen36_artifact_row_profile_v6(g: PalwQwen36GeometryV1) -> Result<PalwSha
     qwen36_profile_v6(qwen36_geometry_artifact_eps(g))
 }
 
+/// **ADR-0103 Decision 3: the hybrid's graph-v7 — graph-v6 under the held composition.** The
+/// attention half at the held map (v4) and the recurrence half at v2's head-sliced layout
+/// ([`crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v4`]); the graph, the fused head-wide
+/// tile and the per-token lift are graph-v6's. Like v6 it reaches the fenced lift kernel, so a
+/// network admits it only with both `palw_token_lift` and `palw_held_context` armed.
+pub fn qwen36_profile_v7(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
+    let mut profile = qwen36_profile_with_map(
+        g,
+        QWEN36_PRE_IR_V6,
+        QWEN36_LINEAR_IR_V2,
+        QWEN36_ATTN_IR_V2,
+        QWEN36_POST_IR,
+        true,
+        Some(crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v4()),
+    )?;
+    for node in profile.attn_nodes.iter_mut().filter(|n| n.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused) {
+        node.tile_len = g.attn_head_dim.max(crate::palw_step::PALW_STEP_MIN_TILE_LEN);
+    }
+    profile.validate_shape()?;
+    Ok(profile)
+}
+
 fn qwen36_profile_with(
     g: PalwQwen36GeometryV1,
     pre: &[Ir],
@@ -1362,6 +1384,24 @@ fn qwen36_profile_with(
     // `AttnFused` node after projection, so the fused node inherits the budgeted tile of the row it
     // commits. `false` is every shipped row, which is why their ids cannot move.
     fuse_attention: bool,
+) -> Result<PalwShapeProfileV3, PalwStepError> {
+    qwen36_profile_with_map(g, pre, gdn, attn, post, fuse_attention, None)
+}
+
+/// [`qwen36_profile_with`] with the fused row's map named by the caller — `None` is the v3
+/// composition every fused row registers; ADR-0103's graph-v7 names the held one, before the
+/// shape is validated, because the held map is what lifts the product ceiling.
+fn qwen36_profile_with_map(
+    g: PalwQwen36GeometryV1,
+    pre: &[Ir],
+    gdn: &[Ir],
+    attn: &[Ir],
+    post: &[Ir],
+    // **ADR-0082 Decision 1.** Graph v5 fuses the ATTENTION table's four attention nodes into one
+    // `AttnFused` node after projection, so the fused node inherits the budgeted tile of the row it
+    // commits. `false` is every shipped row, which is why their ids cannot move.
+    fuse_attention: bool,
+    map: Option<Hash64>,
 ) -> Result<PalwShapeProfileV3, PalwStepError> {
     let (gdn_span, attn_span) = layer_spans(&g);
     // **The gate is STORED here and DERIVED in the engine, so they must be checked against each
@@ -1450,7 +1490,7 @@ fn qwen36_profile_with(
     // default their registered ids were minted over, and `palw_qwen36_context_row_profile_v1` still
     // overwrites it with the v2 composition for the graph-v3 ladder rows.
     if fuse_attention {
-        profile.state_chunk_map_id = crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v3();
+        profile.state_chunk_map_id = map.unwrap_or_else(crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v3);
     }
     profile.validate_shape()?;
     Ok(profile)
