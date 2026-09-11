@@ -1,0 +1,10 @@
+{
+  "manifest": "misaka-palw/extension-manifest/v1",
+  "kind": "ruleset-candidate",
+  "name": "arm the transparent heartbeat at a future height",
+  "network": "testnet-11",
+  "source": { "note": "ADR-0105 §7: a fence is scheduled in the preset, rebuilt, and announced — this manifest only says what that would print" },
+  "requires": { "ruleset_id": "ecbdbc2222efcc2d32493f2349e7c17f983611697a5d10ffc7ae90458bac8ee5", "fences": { "palw_heartbeat_transparent": 9000000 } },
+  "declares": { "object_id": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000" },
+  "admission": { "object": "none" }
+}

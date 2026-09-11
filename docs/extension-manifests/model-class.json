@@ -1,0 +1,12 @@
+{
+  "manifest": "misaka-palw/extension-manifest/v1",
+  "kind": "model-class",
+  "name": "PALW-BASE-0/rc — the floor, by its ledger row",
+  "network": "testnet-11",
+  "source": { "note": "derived from the pinned seed; every node mints it, nobody converts it" },
+  "artifact": { "root": "bcf2d9eb7357bd6c267df2df6588393ca71c67d7c802903ca7031948303c793dcb78bfe26488f52d0393be08e0cc0777b080e2dce9355d3576036b734545b8df" },
+  "requires": { "ruleset_id": "ecbdbc2222efcc2d32493f2349e7c17f983611697a5d10ffc7ae90458bac8ee5", "fences": { "palw_kary_court": "active" } },
+  "declares": { "object_id": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8", "capabilities": ["attempt", "fp"] },
+  "verification": { "model_id": "PALW-BASE-0/rc" },
+  "admission": { "object": "ClassRegistered" }
+}
