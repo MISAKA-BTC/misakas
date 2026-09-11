@@ -9601,6 +9601,22 @@ fn apply_class_share_growth(builder: &mut TransitionBuilder<'_>, parent: &PalwCh
         Some(budgets) if budgets.epoch_index == closed_epoch => budgets.budget_blocks.clone(),
         _ => return,
     };
+    // **ADR-0107: the closed epoch's VERIFIED work, per class** — attempt claims whose `Final`
+    // happened inside the span, read off the claim records (they outlive the span: arming the
+    // fence is refused where `claim_retirement_daa` is shorter than an epoch). Counted by when the
+    // claim finalized, not by when its block was accepted, so the count needs no second ledger; in
+    // a steady state the two agree, and a class whose claims void never reaches its budget here.
+    let finalized_by_class: Option<BTreeMap<Hash64, u64>> = builder.extras.share_growth_final_active.then(|| {
+        let mut counts: BTreeMap<Hash64, u64> = BTreeMap::new();
+        for claim in builder.state.claims.values() {
+            if let (PalwClaimSourceV2::Attempt, PalwClaimPhaseV2::Final { final_daa }) = (&claim.source, &claim.phase)
+                && final_daa / epoch_length == closed_epoch
+            {
+                *counts.entry(claim.class_id).or_insert(0) += 1;
+            }
+        }
+        counts
+    });
     let use_by_class: BTreeMap<Hash64, crate::palw_class_daa::PalwClassEpochUseV1> = builder
         .state
         .class_shares
@@ -9613,7 +9629,15 @@ fn apply_class_share_growth(builder: &mut TransitionBuilder<'_>, parent: &PalwCh
                 .filter(|counter| counter.epoch_index == closed_epoch)
                 .map(|counter| counter.produced_blocks)
                 .unwrap_or(0);
-            (*class_id, crate::palw_class_daa::PalwClassEpochUseV1 { produced, budget: budgets.get(class_id).copied().unwrap_or(0) })
+            let finalized = finalized_by_class.as_ref().map(|counts| counts.get(class_id).copied().unwrap_or(0));
+            (
+                *class_id,
+                crate::palw_class_daa::PalwClassEpochUseV1 {
+                    produced,
+                    budget: budgets.get(class_id).copied().unwrap_or(0),
+                    finalized,
+                },
+            )
         })
         .collect();
     if use_by_class.values().all(|used| used.produced == 0) {
@@ -12247,6 +12271,11 @@ pub struct PalwTransitionExtrasV1 {
     /// through and keeps `NeedsDissection` a refusal: byte-identical to the transition before the
     /// regime existed.
     pub held_context_ladder: Option<u64>,
+    /// `Params::palw_share_growth_final` resolved at the block's DAA (ADR-0107). Below it a class
+    /// grows its cadence share on the blocks it had ACCEPTED in the closed epoch; past it growth
+    /// also needs that many of its attempt claims to have reached `Final` in the same span. `false`
+    /// by `Default`, so every existing caller and every dormant network is byte-identical.
+    pub share_growth_final_active: bool,
 }
 
 impl<'a> TransitionBuilder<'a> {
@@ -27519,6 +27548,7 @@ pub(crate) mod tests {
                 shard_licensing: None,
                 attn_anchored_root_active: false,
                 held_context_ladder: None,
+                share_growth_final_active: false,
             }
         }
 
@@ -27729,6 +27759,7 @@ pub(crate) mod tests {
                 shard_licensing: None,
                 attn_anchored_root_active: false,
                 held_context_ladder: None,
+                share_growth_final_active: false,
             };
             let (s_off, _) =
                 apply_palw_transition_v2_with_extras(&s, &p, &ctx(3, 251, 3), &[], None, false, false, false, false, &dormant)

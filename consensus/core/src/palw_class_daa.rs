@@ -855,6 +855,18 @@ fn mul_div_u128(a: u128, b: u128, d: u128) -> u128 {
 pub struct PalwClassEpochUseV1 {
     pub produced: u64,
     pub budget: u64,
+    /// **ADR-0107: the class's attempt claims that reached `Final` during the same closed epoch**
+    /// — `Some` only past `Params::palw_share_growth_final`.
+    ///
+    /// `produced` counts blocks when they are ACCEPTED, and a void never takes one back — right for
+    /// the budget (a void refunded would be a free re-roll), wrong as the growth signal, because it
+    /// grows a class on work nobody ever verified. When this is `Some`, growth also requires it to
+    /// reach the budget: the permille a class takes from the floor has to be backed by work that
+    /// survived its panel, its receipts and its challenge window. Decay keeps reading `produced`
+    /// (a class that is producing is not idle, whether or not its claims have finished), so the
+    /// fence changes who GROWS and nothing else. `None` is the rule before the fence, byte for
+    /// byte.
+    pub finalized: Option<u64>,
 }
 
 /// The share table after one epoch of growth and decay, and the reason each permille moved.
@@ -967,6 +979,14 @@ pub fn derive_class_share_growth_v1(
         let Some(used) = use_by_class.get(class_id) else { continue };
         // Filled its allowance: the budget stopped it, which is a statement about its SHARE.
         if used.budget == 0 || used.produced < used.budget {
+            continue;
+        }
+        // **ADR-0107: and the allowance's worth of work was VERIFIED.** Accepted blocks can be
+        // bogus — nothing checks an attempt's execution before its panel does, and a void does
+        // not refund the block — so past the fence the class must also have seen `budget` of its
+        // claims reach `Final` in the same span. Finals lag acceptance by the lattice's windows,
+        // so growth lags too: the conservative direction.
+        if used.finalized.is_some_and(|finalized| finalized < used.budget) {
             continue;
         }
         // **A weightless class does not grow** — see the module note. Its one-block budget is the
@@ -1148,10 +1168,12 @@ mod tests {
         let shares: BTreeMap<_, u16> = [(base, 990u16), (weightless, 0u16), (earning, 10u16)].into_iter().collect();
         // `derive_epoch_budgets_v2` floors every budget at one block, the weightless class's
         // included; producing it is exactly "filled its allowance" for the growth rule.
-        let used: BTreeMap<_, _> =
-            [(weightless, PalwClassEpochUseV1 { produced: 1, budget: 1 }), (earning, PalwClassEpochUseV1 { produced: 3, budget: 3 })]
-                .into_iter()
-                .collect();
+        let used: BTreeMap<_, _> = [
+            (weightless, PalwClassEpochUseV1 { produced: 1, budget: 1, finalized: None }),
+            (earning, PalwClassEpochUseV1 { produced: 3, budget: 3, finalized: None }),
+        ]
+        .into_iter()
+        .collect();
         let out = derive_class_share_growth_v1(&shares, &std::collections::BTreeSet::new(), &used, base, 250, 20, 1);
         assert_eq!(out.shares.get(&weightless).copied(), Some(0), "a zero share is a certification state: it does not grow");
         assert!(!out.grew.contains_key(&weightless), "and nothing is recorded as its growth");
@@ -1929,7 +1951,9 @@ mod tests {
 
     fn used(rows: &[(u64, u64, u64)]) -> BTreeMap<Hash64, PalwClassEpochUseV1> {
         rows.iter()
-            .map(|(id, produced, budget)| (Hash64::from_u64_word(*id), PalwClassEpochUseV1 { produced: *produced, budget: *budget }))
+            .map(|(id, produced, budget)| {
+                (Hash64::from_u64_word(*id), PalwClassEpochUseV1 { produced: *produced, budget: *budget, finalized: None })
+            })
             .collect()
     }
 
@@ -1954,6 +1978,33 @@ mod tests {
         assert_eq!(out.shares[&Hash64::from_u64_word(BASE)], 998, "and the floor funded exactly that");
         assert_eq!(out.grew[&Hash64::from_u64_word(ENTRANT)], 1);
         assert!(out.decayed.is_empty());
+    }
+
+    /// **ADR-0107: past the fence a filled budget grows the class only when as much of its work
+    /// reached `Final`.** The same filled budget, three ways: `finalized: None` is the rule before
+    /// the fence and grows; `Some(budget)` grows the same step; `Some(less)` does not grow — and does
+    /// not decay either, because the class produced and so is not idle.
+    #[test]
+    fn past_the_fence_a_filled_budget_grows_only_on_its_finalized_work() {
+        let entrant = Hash64::from_u64_word(ENTRANT);
+        let run = |finalized: Option<u64>| {
+            let mut use_by_class = used(&[(BASE, 999, 999), (ENTRANT, 1, 1)]);
+            use_by_class.get_mut(&entrant).unwrap().finalized = finalized;
+            derive_class_share_growth_v1(
+                &shares(&[(BASE, 999), (ENTRANT, 1)]),
+                &std::collections::BTreeSet::new(),
+                &use_by_class,
+                Hash64::from_u64_word(BASE),
+                250,
+                500,
+                1,
+            )
+        };
+        assert_eq!(run(None).shares[&entrant], 2, "dormant: the accepted block is the signal");
+        assert_eq!(run(Some(1)).shares[&entrant], 2, "armed: a verified block earns exactly what it earned before");
+        let unverified = run(Some(0));
+        assert_eq!(unverified.shares[&entrant], 1, "armed: nothing verified, nothing earned");
+        assert!(unverified.grew.is_empty() && unverified.decayed.is_empty(), "and a producing class does not decay");
     }
 
     /// The step is a fraction of the class's OWN share, so growth accelerates as a class earns —
