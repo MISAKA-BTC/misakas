@@ -319,7 +319,7 @@ fn the_prompt_cap_passes_the_frame_only_on_a_held_mint() {
 /// name, `WindowTooShort`, never as a budget it did meet.
 #[test]
 fn the_shard_plan_prices_the_fetch_and_the_window_binds_the_shard_count() {
-    use kaspa_consensus_core::palw_held_context_v1::{palw_held_interval_positions_v1, palw_held_replay_row_v1};
+    use kaspa_consensus_core::palw_held_context_v1::{PalwHeldReplayCostV1, palw_held_interval_positions_v1};
     use kaspa_consensus_core::palw_model_fit_v1::stand_ins;
     use kaspa_consensus_core::palw_qwen36_profile::{PalwQwen36GeometryV1, qwen36_profile_v7};
     use kaspa_consensus_core::palw_shard_plan_v1::{
@@ -347,7 +347,7 @@ fn the_shard_plan_prices_the_fetch_and_the_window_binds_the_shard_count() {
         seat_budget_bytes: 256 * GIB,
         bandwidth_bytes_per_second: bandwidth,
         window_receipt_daa: window_receipt,
-        replay_ms_per_position: palw_held_replay_row_v1(&profile).replay_ms_per_position(),
+        replay: PalwHeldReplayCostV1::for_profile_v1(&profile),
         interval_positions: palw_held_interval_positions_v1(&profile),
     };
     let by_bytes = palw_shard_plan_for_seat_v1(&profile, &artifact, 256 * GIB, 92).expect("the bytes fit some plan");

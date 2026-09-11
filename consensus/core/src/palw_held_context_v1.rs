@@ -111,10 +111,96 @@ pub fn palw_held_seat_budget_ms_v1(window_receipt_daa: u64) -> u64 {
     window_receipt_daa.saturating_mul(PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS) / PALW_HELD_SEAT_WINDOW_MARGIN_DIVISOR
 }
 
+/// **How many rows of history cost as much as one position's own work** (ADR-0103 §10.6), read
+/// off the geometry the class registered.
+///
+/// A position replayed against `p` rows of history pays for its projections and its MLP, and then
+/// for the attention over those `p` rows: `2 × heads × head_dim` multiply-accumulates a row in each
+/// attention layer (the scores, and the weighted values). The knee is the first over the second.
+/// The seat's cost at history `p` is then `(1 + p / knee)` positions' worth, so replaying a context
+/// of `n` positions from nothing costs `n + n(n − 1) / 2knee` — a line only while `n` is small
+/// against the knee. ADR-0110 §9.3 measured the curve this describes: from 4,096 to 32,768
+/// positions the seat's recompute grew 41 times.
+///
+/// Counted per layer: an attention layer's `q`, `k`, `v` and `o` projections and its MLP in the
+/// numerator, and its history row in the denominator. A recurrence layer's state is constant in
+/// the history, so it adds its MLP and nothing to the denominator. The unembedding is left out,
+/// because a seat's recompute drops the logits. Leaving work out of the numerator can only make the
+/// knee SMALLER and the history dearer, which is the side a bound must err on. With no attention
+/// layer the history costs nothing, and the knee is `u64::MAX`.
+pub fn palw_held_attention_knee_v1(profile: &PalwShapeProfileV3) -> u64 {
+    let hidden = u128::from(profile.hidden_dim);
+    let q = u128::from(profile.attn_heads).saturating_mul(u128::from(profile.attn_head_dim));
+    let kv = u128::from(profile.attn_kv_heads).saturating_mul(u128::from(profile.attn_head_dim));
+    let mlp = hidden.saturating_mul(u128::from(profile.ffn_dim)).saturating_mul(3);
+    let (mut own, mut history) = (0u128, 0u128);
+    for layer in 0..profile.layer_count {
+        match profile.layer_kind(layer) {
+            PalwLayerKindV1::Attention => {
+                // q and o are `hidden × q` each; k and v are `hidden × kv` each.
+                let projections = hidden.saturating_mul(q.saturating_add(kv)).saturating_mul(2);
+                own = own.saturating_add(projections).saturating_add(mlp);
+                history = history.saturating_add(q.saturating_mul(2));
+            }
+            PalwLayerKindV1::GatedDeltaNet => own = own.saturating_add(mlp),
+        }
+    }
+    if history == 0 {
+        return u64::MAX;
+    }
+    u64::try_from((own / history).max(1)).unwrap_or(u64::MAX)
+}
+
+/// **The seat's replay, priced by where in the context it runs** (ADR-0103 Decision 2, as amended
+/// in §10.6).
+///
+/// The family's measured rate prices a position with an empty history, which is how it was
+/// measured: decode at an interactive context. Every `knee_positions` rows of history add one more
+/// position's worth. Replaying a whole context therefore grows with its square once the context is
+/// past the knee. The route, the width's clock and the shard plan all read this, so none of them
+/// can price the same replay as a line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwHeldReplayCostV1 {
+    /// The family's rate for one position (`palw_held_replay_row_v1`), taken as its cost with
+    /// nothing before it.
+    pub ms_per_position: u64,
+    /// [`palw_held_attention_knee_v1`] of the class.
+    pub knee_positions: u64,
+}
+
+impl PalwHeldReplayCostV1 {
+    /// The class's cost: its family's measured row, and its own knee.
+    pub fn for_profile_v1(profile: &PalwShapeProfileV3) -> Self {
+        Self {
+            ms_per_position: palw_held_replay_row_v1(profile).replay_ms_per_position(),
+            knee_positions: palw_held_attention_knee_v1(profile),
+        }
+    }
+
+    /// Milliseconds to replay the `count` positions that start at history length `first` — each
+    /// against every row before it — rounded up, and saturating at `u64::MAX` (which fits no
+    /// budget).
+    ///
+    /// `Σ_{p = first}^{first + count − 1} (1 + p / knee) = count + (count·first + count(count − 1)/2) / knee`.
+    pub fn replay_ms_v1(&self, first: u64, count: u64) -> u64 {
+        if self.knee_positions == u64::MAX {
+            // No attention layer: the history costs nothing, and the replay is the line exactly.
+            return count.saturating_mul(self.ms_per_position);
+        }
+        let knee = u128::from(self.knee_positions.max(1));
+        let count = u128::from(count);
+        // The rows of history the `count` positions attend to, summed: `count(count − 1)` is a
+        // product of consecutive integers, so the halving is exact.
+        let history = count.saturating_mul(u128::from(first)).saturating_add(count.saturating_mul(count.saturating_sub(1)) / 2);
+        let positions_in_knees = count.saturating_mul(knee).saturating_add(history);
+        u64::try_from(positions_in_knees.saturating_mul(u128::from(self.ms_per_position)).div_ceil(knee)).unwrap_or(u64::MAX)
+    }
+}
+
 /// **The route, derived from the class and the window** — `Recompute` exactly when replaying the
-/// whole context at the family's rate fits the seat's budget.
-pub fn palw_held_seat_route_v1(n_ctx: u32, replay_ms_per_position: u64, window_receipt_daa: u64) -> PalwHeldSeatRouteV1 {
-    if u64::from(n_ctx).saturating_mul(replay_ms_per_position) <= palw_held_seat_budget_ms_v1(window_receipt_daa) {
+/// whole context, its history priced (§10.6), fits the seat's budget.
+pub fn palw_held_seat_route_v1(n_ctx: u32, cost: PalwHeldReplayCostV1, window_receipt_daa: u64) -> PalwHeldSeatRouteV1 {
+    if cost.replay_ms_v1(0, u64::from(n_ctx)) <= palw_held_seat_budget_ms_v1(window_receipt_daa) {
         PalwHeldSeatRouteV1::Recompute
     } else {
         PalwHeldSeatRouteV1::Resume
@@ -130,25 +216,32 @@ pub fn palw_held_seat_route_v1(n_ctx: u32, replay_ms_per_position: u64, window_r
 pub const PALW_HELD_SEAT_INTERVAL_OPENING_CAP_BYTES_V1: u64 = 4 << 20;
 
 /// **The interval width `P`, derived** (ADR-0103 Decision 2): the largest power of two for which
-/// the seat's fetch plus a replay of `P` positions fits its budget, and for which one interval's
-/// opening (the fold's digests, one per 4,096 leaves) fits the transport cap the caller states —
-/// never wider than `n_ctx`, never below 1. Wider is better coverage for the same draw
+/// the seat's fetch plus a replay of the LAST interval fits its budget, and for which one
+/// interval's opening (the fold's digests, one per 4,096 leaves) fits the transport cap the caller
+/// states — never wider than `n_ctx`, never below 1. The last interval is the dearest: its `P`
+/// positions each attend to the `n_ctx − P` rows before them, and its price is
+/// [`PalwHeldReplayCostV1::replay_ms_v1`]'s (§10.6). Wider is better coverage for the same draw
 /// (ADR-0098: a one-token lie is caught with probability ≈ `s·k·P / steps`), so the widest the seat
 /// can afford is the rule.
 pub fn palw_held_seat_interval_positions_v1(
     n_ctx: u32,
-    replay_ms_per_position: u64,
+    cost: PalwHeldReplayCostV1,
     fetch_ms: u64,
     window_receipt_daa: u64,
     leaves_per_position: u64,
     opening_cap_bytes: u64,
 ) -> u32 {
     let budget = palw_held_seat_budget_ms_v1(window_receipt_daa).saturating_sub(fetch_ms);
-    let by_clock = if replay_ms_per_position == 0 { u64::MAX } else { budget / replay_ms_per_position };
+    let n = u64::from(n_ctx);
     // One 64-byte digest per 4,096 leaves (ADR-0086 Decision 1's retention level).
     let by_wire = if leaves_per_position == 0 { u64::MAX } else { opening_cap_bytes.saturating_mul(4096) / 64 / leaves_per_position };
-    let most = by_clock.min(by_wire).min(u64::from(n_ctx)).max(1);
-    let p = 1u64 << (63 - most.leading_zeros());
+    let most = by_wire.min(n).max(1);
+    // The widest the wire and the context allow, halved until the last interval replays in time.
+    // The replay is increasing in both its start and its width, so the first fit is the widest.
+    let mut p = 1u64 << (63 - most.leading_zeros());
+    while p > 1 && cost.replay_ms_v1(n.saturating_sub(p), p) > budget {
+        p >>= 1;
+    }
     p as u32
 }
 
@@ -245,14 +338,118 @@ mod tests {
     fn the_route_and_the_width_are_derived_from_the_window() {
         let ms = PALW_COURT_COST_A16.replay_ms_per_position();
         assert_eq!(ms, 34);
-        assert_eq!(palw_held_seat_route_v1(512, ms, 600), PalwHeldSeatRouteV1::Recompute);
-        assert_eq!(palw_held_seat_route_v1(1 << 21, ms, 600), PalwHeldSeatRouteV1::Resume);
-        let p = palw_held_seat_interval_positions_v1(1 << 21, ms, 0, 600, 103_008, 2 << 20);
+        let cost = PalwHeldReplayCostV1 { ms_per_position: ms, knee_positions: 15_232 };
+        assert_eq!(palw_held_seat_route_v1(512, cost, 600), PalwHeldSeatRouteV1::Recompute);
+        assert_eq!(palw_held_seat_route_v1(1 << 21, cost, 600), PalwHeldSeatRouteV1::Resume);
+        let p = palw_held_seat_interval_positions_v1(1 << 21, cost, 0, 600, 103_008, 2 << 20);
         assert!(p.is_power_of_two());
         assert!(p as u64 * 103_008 / 4096 * 64 <= 2 << 20, "the opening fits the stated cap");
-        assert!(p as u64 * ms <= palw_held_seat_budget_ms_v1(600), "the replay fits the budget");
-        assert_eq!(palw_held_seat_interval_positions_v1(16, ms, 0, 600, 103_008, 2 << 20), 16, "never past the context");
-        assert_eq!(palw_held_seat_interval_positions_v1(1 << 21, ms, u64::MAX, 600, 103_008, 2 << 20), 1, "never below one");
+        assert!(cost.replay_ms_v1((1 << 21) - p as u64, p as u64) <= palw_held_seat_budget_ms_v1(600), "the last interval fits");
+        assert_eq!(palw_held_seat_interval_positions_v1(16, cost, 0, 600, 103_008, 2 << 20), 16, "never past the context");
+        assert_eq!(palw_held_seat_interval_positions_v1(1 << 21, cost, u64::MAX, 600, 103_008, 2 << 20), 1, "never below one");
+    }
+
+    /// **The history is priced** (§10.6). With no attention the replay is the old line to the
+    /// millisecond; with a knee of `k` rows, `n` positions from nothing cost `n + n(n − 1)/2k`
+    /// positions' worth, and the same positions later in the context cost more.
+    #[test]
+    fn the_replay_prices_the_history_and_is_a_line_only_without_attention() {
+        let line = PalwHeldReplayCostV1 { ms_per_position: 34, knee_positions: u64::MAX };
+        for n in [1u64, 512, 1 << 21] {
+            assert_eq!(line.replay_ms_v1(0, n), n * 34, "no history term");
+            assert_eq!(line.replay_ms_v1(1 << 20, n), n * 34, "and none later either");
+        }
+        let cost = PalwHeldReplayCostV1 { ms_per_position: 34, knee_positions: 28 };
+        // 512 + 512·511/56 = 512 + 4,672 positions, at 34 ms.
+        assert_eq!(cost.replay_ms_v1(0, 512), (512 + 4_672) * 34);
+        // One position at history `p` is `1 + p/28` positions' worth, rounded up once.
+        assert_eq!(cost.replay_ms_v1(28, 1), 2 * 34);
+        assert_eq!(cost.replay_ms_v1(29, 1), (34u64 * (28 + 29)).div_ceil(28));
+        // Splitting a replay changes nothing but the rounding.
+        let whole = cost.replay_ms_v1(0, 4_096);
+        let halves = cost.replay_ms_v1(0, 2_048) + cost.replay_ms_v1(2_048, 2_048);
+        assert!(whole.abs_diff(halves) <= 1, "{whole} against {halves}");
+        // Later is dearer, wider is dearer.
+        assert!(cost.replay_ms_v1(1 << 20, 1_024) > cost.replay_ms_v1(0, 1_024));
+        assert!(cost.replay_ms_v1(0, 1_025) > cost.replay_ms_v1(0, 1_024));
+        // A rate that fits nothing saturates rather than wrapping into a budget.
+        let never = PalwHeldReplayCostV1 { ms_per_position: u64::MAX, knee_positions: 1 };
+        assert_eq!(never.replay_ms_v1(u64::MAX, u64::MAX), u64::MAX);
+    }
+
+    /// **The knee is the geometry's**: 28 rows on the context vectors' thinnest row (ADR-0110), and
+    /// 15,232 on the dense tier's real one (Qwen2.5-1.5B: 46,792,704 multiply-accumulates of its own
+    /// a layer against 3,072 a row of history). With no attention layer it is `u64::MAX`.
+    #[test]
+    fn the_knee_is_read_off_the_registered_geometry() {
+        use crate::palw_qwen25_profile::{
+            PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7, qwen25_a16_profile_v7,
+        };
+        let dense = qwen25_a16_artifact_row_profile_v7(PalwQwen25GeometryV1 { n_ctx: 1 << 21, ..QWEN25_1_5B }).unwrap();
+        assert_eq!(palw_held_attention_knee_v1(&dense), 15_232);
+        let thin = qwen25_a16_profile_v7(PalwQwen25GeometryV1 {
+            layer_count: 2,
+            hidden_dim: 8,
+            ffn_dim: 8,
+            attn_heads: 2,
+            attn_kv_heads: 2,
+            attn_head_dim: 4,
+            vocab_size: 64,
+            n_ctx: 4_096,
+            n_threads: 1,
+            rms_eps_q: 1,
+            tile_len: 4,
+        })
+        .unwrap();
+        assert_eq!(palw_held_attention_knee_v1(&thin), 28);
+        let mut no_attention = thin.clone();
+        no_attention.attn_heads = 0;
+        assert_eq!(palw_held_attention_knee_v1(&no_attention), u64::MAX);
+    }
+
+    /// **The route prices the whole prefix with its attention** (§10.6). On the dense tier's real
+    /// row and testnet-11's 600-DAA window, the line put the boundary at 1,058,823 positions; the
+    /// history puts it near 165,000. The linear bound itself now resumes.
+    #[test]
+    fn the_route_prices_the_whole_prefix_with_its_attention() {
+        let cost = PalwHeldReplayCostV1 { ms_per_position: 34, knee_positions: 15_232 };
+        let budget = palw_held_seat_budget_ms_v1(600);
+        assert_eq!(budget, 36_000_000);
+        assert_eq!(palw_held_seat_route_v1(1 << 17, cost, 600), PalwHeldSeatRouteV1::Recompute);
+        assert_eq!(palw_held_seat_route_v1(196_608, cost, 600), PalwHeldSeatRouteV1::Resume);
+        assert_eq!(palw_held_seat_route_v1(1_058_823, cost, 600), PalwHeldSeatRouteV1::Resume, "the line's own bound");
+        let line = PalwHeldReplayCostV1 { knee_positions: u64::MAX, ..cost };
+        assert_eq!(palw_held_seat_route_v1(1_058_823, line, 600), PalwHeldSeatRouteV1::Recompute, "which the line admitted");
+        // The boundary, found: the widest context that still recomputes.
+        let (mut lo, mut hi) = (1u32, 1 << 21);
+        while lo + 1 < hi {
+            let mid = lo + (hi - lo) / 2;
+            if palw_held_seat_route_v1(mid, cost, 600) == PalwHeldSeatRouteV1::Recompute { lo = mid } else { hi = mid }
+        }
+        assert!((160_000..170_000).contains(&lo), "the boundary moved to {lo}");
+    }
+
+    /// **The width's clock is the last interval's, history included.** The dense row at 2M keeps
+    /// the wire's 2,048 positions — its last interval replays in 2.7 h of the 10 — and a fetch
+    /// that leaves less than that halves it.
+    #[test]
+    fn the_width_clock_prices_the_last_interval_against_its_history() {
+        let cost = PalwHeldReplayCostV1 { ms_per_position: 34, knee_positions: 15_232 };
+        let n = 1u32 << 21;
+        let p = palw_held_seat_interval_positions_v1(n, cost, 0, 600, 103_008, PALW_HELD_SEAT_INTERVAL_OPENING_CAP_BYTES_V1);
+        assert_eq!(p, 2_048, "the wire binds, and the clock admits it");
+        let last = cost.replay_ms_v1(u64::from(n - p), u64::from(p));
+        assert!((9_000_000..10_000_000).contains(&last), "2.7 h, not the line's 70 s: {last} ms");
+        let budget = palw_held_seat_budget_ms_v1(600);
+        let tight = palw_held_seat_interval_positions_v1(
+            n,
+            cost,
+            budget - last + 1,
+            600,
+            103_008,
+            PALW_HELD_SEAT_INTERVAL_OPENING_CAP_BYTES_V1,
+        );
+        assert_eq!(tight, 1_024, "one millisecond short of the last interval's replay halves the width");
     }
 
     /// **The class's width is the wire's, or the draw's**: the dense held row at 2M opens 2,048
