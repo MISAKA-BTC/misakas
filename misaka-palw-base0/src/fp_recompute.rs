@@ -699,6 +699,22 @@ pub fn base0_fp_seat_state_held_v1(
     (*held == key).then(|| state.clone())
 }
 
+/// **Keep a state this seat did not recompute but VERIFIED** — a resume opening's chunks, checked
+/// against the committed checkpoint root before this is called (ADR-0103 Decision 2's Resume
+/// route). The row check finds it exactly as it finds a recomputed one: the key is the class, the
+/// context, the prompt and the covered counter, and nothing about where the bytes came from.
+pub fn base0_fp_seat_state_remember_v1(
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    prompt_token_ids: &[u32],
+    state: &Base0FpSeatStateV1,
+) {
+    let key = seat_state_key_v1(profile, ctx, prompt_token_ids, state.covered_decode_call);
+    if let Ok(mut guard) = SEAT_STATE_MEMO.lock() {
+        *guard = Some((key, Hash64::default(), state.clone()));
+    }
+}
+
 /// Drop the memo. For tests that measure how many forward passes a sequence costs, and for a node
 /// that wants the memory back.
 pub fn base0_fp_seat_state_forget_v1() {

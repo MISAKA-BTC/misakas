@@ -200,8 +200,7 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for Base0IntervalKernels<'_> {
         profile: &PalwShapeProfileV3,
         ctx: &PalwJobContextV2,
         start: &crate::fp_interval::Base0FpIntervalStartV1<'_>,
-        first_call: u32,
-        last_call: u32,
+        window: crate::fp_interval::Base0FpWindowV1,
         step_leaf_count: u64,
     ) -> Result<crate::legs::Base0StepTilesV1, String> {
         use crate::engine::{Base0Engine, KvCache};
@@ -228,8 +227,7 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for Base0IntervalKernels<'_> {
             profile,
             ctx,
             start,
-            first_call,
-            last_call,
+            window,
             step_leaf_count,
             |token, position| {
                 if token >= vocab {
@@ -611,7 +609,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
     }
 
     fn fp_interval_count_for(&self, prompt_tokens: u32, decode_tokens_executed: u32) -> Option<u32> {
-        crate::fp_interval::base0_fp_interval_count_for_v1(prompt_tokens, decode_tokens_executed, self.checkpoint_interval())
+        crate::fp_interval::base0_fp_interval_count_for_class_v1(&self.profile, prompt_tokens, decode_tokens_executed, self.checkpoint_interval())
     }
 
     fn checkpoint_root_for_context_v1(

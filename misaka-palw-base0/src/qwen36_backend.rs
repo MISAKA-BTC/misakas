@@ -948,8 +948,7 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for Qwen36IntervalKernels<'_> 
         profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
         ctx: &PalwJobContextV2,
         start: &crate::fp_interval::Base0FpIntervalStartV1<'_>,
-        first_call: u32,
-        last_call: u32,
+        window: crate::fp_interval::Base0FpWindowV1,
         step_leaf_count: u64,
     ) -> Result<crate::legs::Base0StepTilesV1, String> {
         let crate::fp_interval::Base0FpIntervalStartV1::Genesis { .. } = start else {
@@ -966,8 +965,7 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for Qwen36IntervalKernels<'_> 
             profile,
             ctx,
             start,
-            first_call,
-            last_call,
+            window,
             step_leaf_count,
             |token, position| {
                 if token >= vocab {
@@ -1358,7 +1356,12 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
     }
 
     fn fp_interval_count_for(&self, prompt_tokens: u32, decode_tokens_executed: u32) -> Option<u32> {
-        crate::fp_interval::base0_fp_interval_count_for_v1(prompt_tokens, decode_tokens_executed, self.checkpoint_interval()?)
+        crate::fp_interval::base0_fp_interval_count_for_class_v1(
+            self.profile.as_ref()?,
+            prompt_tokens,
+            decode_tokens_executed,
+            self.checkpoint_interval()?,
+        )
     }
 
     fn open_fp_interval(&self, capture: &[u8], index: u32, prompt_token_ids: &[u32]) -> Result<Vec<u8>, String> {
@@ -1397,6 +1400,41 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             return crate::fp_interval::base0_strip_fp_interval_history_v1(&chunked).map_err(|e| e.to_string());
         }
         Ok(chunked)
+    }
+
+    fn fp_held_route_v1(&self, window_receipt_daa: u64) -> Option<kaspa_consensus_core::palw_held_context_v1::PalwHeldSeatRouteV1> {
+        crate::fp_interval::base0_fp_held_route_for_v1(self.profile.as_ref()?, window_receipt_daa)
+    }
+
+    fn open_fp_resume_v1(&self, capture: &[u8], index: u32, prompt_token_ids: &[u32]) -> Result<Vec<u8>, String> {
+        let interval = self.checkpoint_interval().ok_or_else(|| "this backend serves no registered graph".to_string())?;
+        match crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())? {
+            crate::produce::Base0RetentionV1::Folded(material) => crate::fp_interval::base0_open_fp_resume_v1(
+                &material,
+                index,
+                prompt_token_ids,
+                interval,
+                self.step_ladder_cap,
+                None,
+                &|covered| self.fold_anchor_state_v1(&material, prompt_token_ids, covered),
+                self.prompt_ids_form,
+            )
+            .map_err(|e| e.to_string()),
+            crate::produce::Base0RetentionV1::Dense(_) => Err("a dense retention is the attempt lane's; it resumes nothing".to_string()),
+        }
+    }
+
+    fn fp_accept_resume_v1(
+        &self,
+        resume: &[u8],
+        context: &PalwJobContextV2,
+        prompt_token_ids: &[u32],
+        covered: u32,
+    ) -> Result<Hash64, String> {
+        let interval = self.checkpoint_interval().ok_or_else(|| "this backend serves no registered graph".to_string())?;
+        crate::fp_interval::base0_fp_accept_resume_v1(resume, context, prompt_token_ids, covered, interval, self.step_ladder_cap)
+            .map(|state| state.state_chunks_root)
+            .map_err(|e| format!("{e:?}"))
     }
 
     fn verify_fp_interval_opening(

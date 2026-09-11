@@ -152,6 +152,30 @@ pub fn palw_held_seat_interval_positions_v1(
     p as u32
 }
 
+/// **The class's interval width `P`, the number the executor and every seat must agree on**
+/// (ADR-0103 Decision 2) — a function of the CLASS and the transport, never of a host.
+///
+/// The widest power of two whose opening (one 64-byte digest a 4,096 leaves, ADR-0086 Decision 1)
+/// fits the interval lane's cap, and which cuts the class's whole context into at least the draw's
+/// `k` intervals (`PALW_FP_SEAT_INTERVAL_SAMPLES_V1`): a context that fit fewer than `k` intervals
+/// would be drawn whole by every seat, and the point of the unit is that a seat checks a sample of
+/// the positions, the prompt's included. Decision 2 derives `P` "at certification" from
+/// the slowest certified seat's fetch and replay; a certification-time number that the executor
+/// opens by and the seat draws over would have to be a consensus object before either could read
+/// it, so the chain-facing width is this class function and the CLOCK is the certification's check:
+/// the drill certifies the class only where its slowest seat resumes a `P`-position interval inside
+/// `window_receipt` ([`palw_held_seat_interval_positions_v1`] is that check's arithmetic), and a seat
+/// that cannot answers `Incapable`.
+pub fn palw_held_interval_positions_v1(profile: &PalwShapeProfileV3) -> u32 {
+    let n_ctx = u64::from(profile.n_ctx.max(1));
+    let leaves = crate::palw_step::worst_case_step_leaf_count_capped_v1(profile, u64::MAX).unwrap_or(u64::MAX);
+    let leaves_per_position = leaves.div_ceil(n_ctx).max(1);
+    let by_wire = PALW_HELD_SEAT_INTERVAL_OPENING_CAP_BYTES_V1.saturating_mul(4096) / 64 / leaves_per_position;
+    let by_draw = n_ctx / u64::from(crate::palw_fp_interval_v1::PALW_FP_SEAT_INTERVAL_SAMPLES_V1.max(1));
+    let most = by_wire.min(by_draw).max(1);
+    (1u64 << (63 - most.leading_zeros())) as u32
+}
+
 /// **What a seat holding layers `layers` fetches to resume at `positions`** (ADR-0103 Decision 7):
 /// the K and V rows of its attention layers for every position before the interval, and the whole
 /// recurrent state of its recurrence layers. Linear in the context and held off the chain — the
@@ -229,5 +253,17 @@ mod tests {
         assert!(p as u64 * ms <= palw_held_seat_budget_ms_v1(600), "the replay fits the budget");
         assert_eq!(palw_held_seat_interval_positions_v1(16, ms, 0, 600, 103_008, 2 << 20), 16, "never past the context");
         assert_eq!(palw_held_seat_interval_positions_v1(1 << 21, ms, u64::MAX, 600, 103_008, 2 << 20), 1, "never below one");
+    }
+
+    /// **The class's width is the wire's, or the draw's**: the dense held row at 2M opens 2,048
+    /// positions an interval (103,008 leaves a position against 4 MiB of digests); a narrow context
+    /// is cut into the draw's four; the width is a power of two.
+    #[test]
+    fn the_class_width_is_the_wires_and_never_past_the_context() {
+        use crate::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7};
+        let at = |n_ctx: u32| palw_held_interval_positions_v1(&qwen25_a16_artifact_row_profile_v7(PalwQwen25GeometryV1 { n_ctx, ..QWEN25_1_5B }).unwrap());
+        assert_eq!(at(1 << 21), 2_048, "the wire binds at 2M");
+        assert_eq!(at(512), 128, "the draw's k binds a narrow context: four intervals cover it");
+        assert!(at(1 << 21).is_power_of_two());
     }
 }

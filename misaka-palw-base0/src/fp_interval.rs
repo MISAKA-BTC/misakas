@@ -271,6 +271,56 @@ pub struct Base0FpIntervalGeometryV1 {
     /// derivation is `palw_checkpoint_cadence_v1` of the class's registered map and a caller that
     /// forgot it would compare a 403-position state against a 3-position root.
     pub cadence: kaspa_consensus_core::palw_context_ladder::PalwCheckpointCadenceV1,
+    /// **What an interval counts** (ADR-0103 Decision 2): the shipped partition of the decode
+    /// CALLS (interval 0 is the whole prefill), or — for a class under the held map — runs of
+    /// `width` POSITIONS over the whole job, prefill included.
+    pub unit: Base0FpIntervalUnitV1,
+}
+
+/// **The unit a seat's interval counts in** (ADR-0103 Decision 2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Base0FpIntervalUnitV1 {
+    /// Every shipped class: `checkpoint_interval` decode calls an interval, and interval 0 is the
+    /// prefill whole plus the calls up to the first checkpoint.
+    Calls,
+    /// A class under ADR-0103's regime: `width` steps an interval over the whole job, so interval
+    /// 0 is `width` positions and never the whole prefill — at 2M positions the shipped unit's
+    /// interval 0 is the one no seat can replay and the prompt is the part no draw would check.
+    Positions { width: u32 },
+}
+
+/// **A window of the job in STEPS** — the enumeration's own order: step `s ∈ 1..=prefill` is
+/// prefill position `s − 1` (call 0), step `prefill + c` is decode call `c`. Both interval units
+/// are windows of it, which is what lets one replay loop serve both.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Base0FpWindowV1 {
+    pub first_step: u64,
+    pub last_step: u64,
+}
+
+impl Base0FpWindowV1 {
+    /// The shipped window of calls `first_call..=last_call`, in steps.
+    pub fn from_calls_v1(prefill: u32, first_call: u32, last_call: u32) -> Self {
+        let first_step = if first_call == 0 { 1 } else { u64::from(prefill) + u64::from(first_call) };
+        Self { first_step, last_step: u64::from(prefill) + u64::from(last_call) }
+    }
+
+    /// The step's `(call, position)` in the capture's numbering.
+    pub fn coordinate_of_step_v1(prefill: u32, step: u64) -> Option<(u32, u32)> {
+        let prefill = u64::from(prefill);
+        if step == 0 {
+            None
+        } else if step <= prefill {
+            Some((0, u32::try_from(step - 1).ok()?))
+        } else {
+            Some((u32::try_from(step - prefill).ok()?, 0))
+        }
+    }
+
+    /// The step a capture coordinate is, the inverse of [`Self::coordinate_of_step_v1`].
+    pub fn step_of_coordinate_v1(prefill: u32, call: u32, position: u32) -> u64 {
+        if call == 0 { u64::from(position) + 1 } else { u64::from(prefill) + u64::from(call) }
+    }
 }
 
 impl Base0FpIntervalGeometryV1 {
@@ -292,7 +342,83 @@ impl Base0FpIntervalGeometryV1 {
         }
         let decode_calls = decode_tokens_executed.saturating_sub(1);
         let interval_count = decode_calls.div_ceil(checkpoint_interval).max(1);
-        Ok(Self { prompt_tokens, decode_calls, checkpoint_interval, interval_count, cadence })
+        Ok(Self { prompt_tokens, decode_calls, checkpoint_interval, interval_count, cadence, unit: Base0FpIntervalUnitV1::Calls })
+    }
+
+    /// **ADR-0103 Decision 2: the held geometry, from chain data alone** — `⌈(prefill +
+    /// decode_calls) / width⌉` intervals of `width` positions, prefill included. The cadence is the
+    /// held map's (every position), and `width` is the class's
+    /// ([`kaspa_consensus_core::palw_held_context_v1::palw_held_interval_positions_v1`]).
+    pub fn from_chain_facts_held_v1(
+        prompt_tokens: u32,
+        decode_tokens_executed: u32,
+        checkpoint_interval: u32,
+        width: u32,
+    ) -> Result<Self, Base0FpIntervalError> {
+        if checkpoint_interval == 0 || width == 0 {
+            return Err(Base0FpIntervalError::CheckpointIntervalIsZero);
+        }
+        let decode_calls = decode_tokens_executed.saturating_sub(1);
+        let steps = u64::from(prompt_tokens) + u64::from(decode_calls);
+        let interval_count =
+            u32::try_from(steps.div_ceil(u64::from(width)).max(1)).map_err(|_| Base0FpIntervalError::CheckpointIntervalIsZero)?;
+        Ok(Self {
+            prompt_tokens,
+            decode_calls,
+            checkpoint_interval,
+            interval_count,
+            cadence: kaspa_consensus_core::palw_context_ladder::PalwCheckpointCadenceV1::PerPosition,
+            unit: Base0FpIntervalUnitV1::Positions { width },
+        })
+    }
+
+    /// Steps in the whole job.
+    pub fn steps_v1(&self) -> u64 {
+        u64::from(self.prompt_tokens) + u64::from(self.decode_calls)
+    }
+
+    /// **Interval `index` as a window of steps**, in either unit.
+    pub fn window_for(&self, index: u32) -> Option<Base0FpWindowV1> {
+        match self.unit {
+            Base0FpIntervalUnitV1::Calls => {
+                let (first, last) = self.calls_for(index)?;
+                Some(Base0FpWindowV1::from_calls_v1(self.prompt_tokens, first, last))
+            }
+            Base0FpIntervalUnitV1::Positions { width } => {
+                if index >= self.interval_count || self.steps_v1() == 0 {
+                    return None;
+                }
+                let first_step = u64::from(index) * u64::from(width) + 1;
+                let last_step = (u64::from(index) + 1).saturating_mul(u64::from(width)).min(self.steps_v1());
+                (first_step <= last_step).then_some(Base0FpWindowV1 { first_step, last_step })
+            }
+        }
+    }
+
+    /// The interval a step is in.
+    pub fn interval_of_step_v1(&self, step: u64) -> u32 {
+        match self.unit {
+            Base0FpIntervalUnitV1::Calls => {
+                let prefill = u64::from(self.prompt_tokens);
+                if step <= prefill { 0 } else { ((step - prefill - 1) / u64::from(self.checkpoint_interval.max(1))) as u32 }
+            }
+            Base0FpIntervalUnitV1::Positions { width } => (step.saturating_sub(1) / u64::from(width.max(1))) as u32,
+        }
+    }
+
+    /// **The step whose committed logits row seeds interval `index`** — the step before it, when
+    /// that step selected a token (the last prefill position, or a decode call). `None` for
+    /// interval 0, and for a held interval that starts inside the prefill, whose first token is
+    /// the prompt's.
+    pub fn seed_step_v1(&self, index: u32) -> Option<u64> {
+        let window = self.window_for(index)?;
+        let before = window.first_step.checked_sub(1)?;
+        (index > 0 && before >= u64::from(self.prompt_tokens)).then_some(before)
+    }
+
+    /// The seed step's `(call, position)`.
+    pub fn seed_coordinate_v1(&self, index: u32) -> Option<(u32, u32)> {
+        Base0FpWindowV1::coordinate_of_step_v1(self.prompt_tokens, self.seed_step_v1(index)?)
     }
 
     /// The same geometry read off a capture's own binding — the executor's side. It must agree
@@ -321,6 +447,15 @@ impl Base0FpIntervalGeometryV1 {
             return Err(Base0FpIntervalError::CheckpointIntervalIsNotTheCommittedOne { family: family_interval, committed });
         }
         base0_fp_binding_step_space_v1(binding, max_step_leaf_count)?;
+        // ADR-0103 Decision 2: a class under the held map is seated in runs of positions.
+        if kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&binding.shape_profile) {
+            return Self::from_chain_facts_held_v1(
+                binding.job_context.declared_prefill_tokens,
+                binding.job_context.exact_decode_tokens,
+                committed,
+                kaspa_consensus_core::palw_held_context_v1::palw_held_interval_positions_v1(&binding.shape_profile),
+            );
+        }
         Self::from_chain_facts_v1(
             binding.job_context.declared_prefill_tokens,
             binding.job_context.exact_decode_tokens,
@@ -332,7 +467,7 @@ impl Base0FpIntervalGeometryV1 {
     /// `(first_call, last_call)` inclusive, in the capture's call numbering — call 0 is the
     /// prefill, call `c ≥ 1` is decode call `c`.
     pub fn calls_for(&self, index: u32) -> Option<(u32, u32)> {
-        if index >= self.interval_count {
+        if index >= self.interval_count || self.unit != Base0FpIntervalUnitV1::Calls {
             return None;
         }
         if index == 0 {
@@ -356,7 +491,12 @@ impl Base0FpIntervalGeometryV1 {
         if index == 0 || index >= self.interval_count {
             return None;
         }
-        index.checked_mul(self.checkpoint_interval)
+        match self.unit {
+            Base0FpIntervalUnitV1::Calls => index.checked_mul(self.checkpoint_interval),
+            // The seed's CALL — 0 for the last prefill position, which is where interval `j`'s
+            // first decode token was selected.
+            Base0FpIntervalUnitV1::Positions { .. } => self.seed_coordinate_v1(index).map(|(call, _)| call),
+        }
     }
 
     /// **What the anchoring checkpoint's `covered_decode_call` field CARRIES**, in the unit the
@@ -371,10 +511,10 @@ impl Base0FpIntervalGeometryV1 {
     /// which is what `the_anchors_two_units_name_one_state` pins.
     pub fn anchor_covered_call(&self, index: u32) -> Option<u32> {
         use kaspa_consensus_core::palw_context_ladder::PalwCheckpointCadenceV1;
-        let calls = self.anchor_seed_call_v1(index)?;
+        let positions = self.anchor_covered_positions_v1(index)?;
         match self.cadence {
-            PalwCheckpointCadenceV1::PerDecodeCall => Some(calls),
-            PalwCheckpointCadenceV1::PerPosition => self.prompt_tokens.checked_add(calls),
+            PalwCheckpointCadenceV1::PerDecodeCall => positions.checked_sub(self.prompt_tokens),
+            PalwCheckpointCadenceV1::PerPosition => Some(positions),
         }
     }
 
@@ -384,7 +524,10 @@ impl Base0FpIntervalGeometryV1 {
     ///
     /// `prefill + index × interval` under either cadence, because the prefill always ran.
     pub fn anchor_covered_positions_v1(&self, index: u32) -> Option<u32> {
-        self.prompt_tokens.checked_add(self.anchor_seed_call_v1(index)?)
+        if index == 0 {
+            return None;
+        }
+        u32::try_from(self.window_for(index)?.first_step.checked_sub(1)?).ok()
     }
 }
 
@@ -408,6 +551,34 @@ pub fn base0_fp_interval_count_for_v1(prompt_tokens: u32, decode_tokens_executed
         decode_tokens_executed,
         checkpoint_interval,
         kaspa_consensus_core::palw_context_ladder::PalwCheckpointCadenceV1::PerDecodeCall,
+    )
+    .ok()
+    .map(|g| g.interval_count)
+}
+
+/// **The seat's count for THIS class** — the held unit for a class under the held map (ADR-0103
+/// Decision 2), the shipped one otherwise. The one dispatch every family's `fp_interval_count_for`
+/// takes, so no family can seat a held class in calls.
+pub fn base0_fp_interval_count_for_class_v1(
+    profile: &PalwShapeProfileV3,
+    prompt_tokens: u32,
+    decode_tokens_executed: u32,
+    checkpoint_interval: u32,
+) -> Option<u32> {
+    if kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(profile) {
+        return base0_fp_interval_count_for_held_v1(profile, prompt_tokens, decode_tokens_executed);
+    }
+    base0_fp_interval_count_for_v1(prompt_tokens, decode_tokens_executed, checkpoint_interval)
+}
+
+/// **The held count, from the two chain numbers and the class** (ADR-0103 Decision 2) — what a
+/// family's `fp_interval_count_for` answers for a class under the held map.
+pub fn base0_fp_interval_count_for_held_v1(profile: &PalwShapeProfileV3, prompt_tokens: u32, decode_tokens_executed: u32) -> Option<u32> {
+    Base0FpIntervalGeometryV1::from_chain_facts_held_v1(
+        prompt_tokens,
+        decode_tokens_executed,
+        kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+        kaspa_consensus_core::palw_held_context_v1::palw_held_interval_positions_v1(profile),
     )
     .ok()
     .map(|g| g.interval_count)
@@ -463,6 +634,23 @@ fn first_leaf_of_call_v1(
         .ok_or_else(|| Base0FpIntervalError::StepSpace(format!("call {call} has no first leaf in this step space")))
 }
 
+/// The first MAIN leaf of `step` — and, for the step one past the job's last, one past the last of
+/// them. Prefill steps are call 0's positions; the rest are decode calls.
+fn first_leaf_of_step_v1(profile: &PalwShapeProfileV3, ctx: &PalwJobContextV2, step: u64, step_leaf_count: u64) -> Result<u64, Base0FpIntervalError> {
+    let prefill = ctx.declared_prefill_tokens;
+    if step <= u64::from(prefill) {
+        let aux = kv_aux_leaf_count(profile, ctx);
+        if aux != 0 {
+            return Err(Base0FpIntervalError::AuxLeavesAreNotIntervalScoped { got: aux });
+        }
+        let position = u32::try_from(step.saturating_sub(1)).map_err(|_| Base0FpIntervalError::StepSpace(format!("step {step}")))?;
+        return canonical_step_leaf_index(profile, ctx, &PalwStepCoordinateV1 { call_index: 0, node_slot: 0, position, tile_index: 0 })
+            .ok_or_else(|| Base0FpIntervalError::StepSpace(format!("prefill position {position} has no first leaf in this step space")));
+    }
+    let call = u32::try_from(step - u64::from(prefill)).map_err(|_| Base0FpIntervalError::StepSpace(format!("step {step}")))?;
+    first_leaf_of_call_v1(profile, ctx, call, step_leaf_count)
+}
+
 /// The global node slot of the class's LOGITS node — the last slot of the last position table.
 ///
 /// The step space walks `pre`, then each layer's table, then `post`, and every family's capture
@@ -486,20 +674,20 @@ pub fn base0_fp_interval_leaves_v1(
     index: u32,
     step_leaf_count: u64,
 ) -> Result<Base0FpIntervalLeavesV1, Base0FpIntervalError> {
-    let (first_call, last_call) =
-        geometry.calls_for(index).ok_or(Base0FpIntervalError::IntervalOutOfRange { index, count: geometry.interval_count })?;
-    let interval_first = first_leaf_of_call_v1(profile, ctx, first_call, step_leaf_count)?;
-    let range_end = first_leaf_of_call_v1(profile, ctx, last_call + 1, step_leaf_count)?;
-    // The seed row is a step COORDINATE, so it is named by the anchor's CALL and never by the
-    // checkpoint leaf's counter — the two are the same number only under `PerDecodeCall`.
-    let range_first = match geometry.anchor_seed_call_v1(index) {
+    let window = geometry.window_for(index).ok_or(Base0FpIntervalError::IntervalOutOfRange { index, count: geometry.interval_count })?;
+    let interval_first = first_leaf_of_step_v1(profile, ctx, window.first_step, step_leaf_count)?;
+    let range_end = first_leaf_of_step_v1(profile, ctx, window.last_step + 1, step_leaf_count)?;
+    // The seed row is a step COORDINATE, so it is named by the seed STEP's call and position and
+    // never by the checkpoint leaf's counter — the two are the same number only under
+    // `PerDecodeCall`, and a held interval's seed can be the last PREFILL position (call 0).
+    let range_first = match geometry.seed_coordinate_v1(index) {
         None => interval_first,
-        Some(anchor_call) => canonical_step_leaf_index(
+        Some((seed_call, seed_position)) => canonical_step_leaf_index(
             profile,
             ctx,
-            &PalwStepCoordinateV1 { call_index: anchor_call, node_slot: logits_node_slot_v1(profile), position: 0, tile_index: 0 },
+            &PalwStepCoordinateV1 { call_index: seed_call, node_slot: logits_node_slot_v1(profile), position: seed_position, tile_index: 0 },
         )
-        .ok_or_else(|| Base0FpIntervalError::StepSpace(format!("call {anchor_call} has no logits node in this step space")))?,
+        .ok_or_else(|| Base0FpIntervalError::StepSpace(format!("step ({seed_call}, {seed_position}) has no logits node in this step space")))?,
     };
     Ok(Base0FpIntervalLeavesV1 { range_first, interval_first, range_end, seed_row_leaves: interval_first.saturating_sub(range_first) })
 }
@@ -1411,17 +1599,19 @@ fn base0_replay_span_leaves_v1<K: Base0FpIntervalKernelsV1>(
 ) -> Result<Vec<Hash64>, Base0FpIntervalError> {
     let profile = &binding.shape_profile;
     let ctx = &binding.job_context;
-    let call_of = |leaf: u64| -> Result<u32, Base0FpIntervalError> {
+    // In STEPS, which both interval units are windows of (ADR-0103 Decision 2).
+    let step_of = |leaf: u64| -> Result<u64, Base0FpIntervalError> {
         kaspa_consensus_core::palw_step::canonical_step_coordinates(profile, ctx, leaf)
-            .map(|c| c.call_index)
+            .map(|c| Base0FpWindowV1::step_of_coordinate_v1(ctx.declared_prefill_tokens, c.call_index, c.position))
             .ok_or_else(|| Base0FpIntervalError::StepSpace(format!("leaf {leaf} is not a main step coordinate")))
     };
-    let first_needed = call_of(span_first)?;
-    let last_needed = call_of(span_end - 1)?;
-    let interval = interval_of_call_v1(geometry, first_needed);
-    let (first_call, _) = geometry
-        .calls_for(interval)
-        .ok_or(Base0FpIntervalError::IntervalOutOfRange { index: interval, count: geometry.interval_count })?;
+    let first_needed = step_of(span_first)?;
+    let last_needed = step_of(span_end - 1)?;
+    let interval = geometry.interval_of_step_v1(first_needed);
+    let first_step = geometry
+        .window_for(interval)
+        .ok_or(Base0FpIntervalError::IntervalOutOfRange { index: interval, count: geometry.interval_count })?
+        .first_step;
 
     let prompt_usize: Vec<usize> = prompt_token_ids.iter().map(|t| *t as usize).collect();
     // **A fold that retained no state resumes from the prompt** (ADR-0082 Decision 4, amended).
@@ -1434,13 +1624,13 @@ fn base0_replay_span_leaves_v1<K: Base0FpIntervalKernelsV1>(
     // the state recomputed for the starting interval's named anchor (`Base0FpAnchorStateForV1`),
     // else the prompt — the walk this used to take for every interval, tiles and all.
     let covered_call = geometry.anchor_covered_call(interval);
-    let (resume_chunks, first_call): (Option<Vec<Vec<u8>>>, u32) = match covered_call {
-        Some(covered) if anchored => (Some(base0_checkpoint_operands_v1(binding, chunks, &[], covered)?.chunks), first_call),
+    let (resume_chunks, first_step): (Option<Vec<Vec<u8>>>, u64) = match covered_call {
+        Some(covered) if anchored => (Some(base0_checkpoint_operands_v1(binding, chunks, &[], covered)?.chunks), first_step),
         Some(covered) => match anchor_state_for(covered) {
-            Some(state) if state.covered_decode_call == covered => (Some(state.chunks), first_call),
-            _ => (None, 0),
+            Some(state) if state.covered_decode_call == covered => (Some(state.chunks), first_step),
+            _ => (None, 1),
         },
-        None => (None, 0),
+        None => (None, 1),
     };
     let start = match (&resume_chunks, covered_call) {
         (None, _) => Base0FpIntervalStartV1::Genesis { prompt_tokens: &prompt_usize },
@@ -1452,17 +1642,23 @@ fn base0_replay_span_leaves_v1<K: Base0FpIntervalKernelsV1>(
             //
             // Indexed by the anchor's CALL, never by the leaf's counter: `generated` is one id per
             // call and a per-position leaf's counter is a position.
-            let seed_call = geometry.anchor_seed_call_v1(interval).ok_or(Base0FpIntervalError::NoCheckpointAt { covered })?;
-            let seed_token = *generated
-                .get(seed_call as usize)
-                .ok_or_else(|| Base0FpIntervalError::Replay(format!("the retention has no id for call {seed_call}")))?;
-            Base0FpIntervalStartV1::Checkpoint { covered_decode_call: covered, chunks: resume, seed_token }
+            //
+            // A held interval that resumes inside the prefill consumes the prompt's id, not a
+            // selected one, and has no seed at all (ADR-0103 Decision 2).
+            let seed_token = match geometry.seed_coordinate_v1(interval) {
+                Some((seed_call, _)) => *generated
+                    .get(seed_call as usize)
+                    .ok_or_else(|| Base0FpIntervalError::Replay(format!("the retention has no id for call {seed_call}")))?,
+                None if first_step <= u64::from(ctx.declared_prefill_tokens) => 0,
+                None => return Err(Base0FpIntervalError::NoCheckpointAt { covered }),
+            };
+            Base0FpIntervalStartV1::Checkpoint { covered_decode_call: covered, chunks: resume, seed_token, prompt_tokens: &prompt_usize }
         }
         (Some(_), None) => return Err(Base0FpIntervalError::NoCheckpointAt { covered: 0 }),
     };
 
     let replayed = kernels
-        .replay_interval(profile, ctx, &start, first_call, last_needed, binding.step_leaf_count)
+        .replay_interval(profile, ctx, &start, Base0FpWindowV1 { first_step, last_step: last_needed }, binding.step_leaf_count)
         .map_err(Base0FpIntervalError::Replay)?;
     let width = (span_end - span_first) as usize;
     let mut span = vec![None; width];
@@ -1630,8 +1826,11 @@ fn base0_seed_row_tiles_from_rows_v1(
     geometry: &Base0FpIntervalGeometryV1,
     index: u32,
 ) -> Result<Vec<PalwStepTileLeafV1>, Base0FpIntervalError> {
-    let Some(anchor_call) = geometry.anchor_seed_call_v1(index) else {
-        return Ok(Vec::new()); // interval 0 resumes from the prompt and carries no seed row
+    // Interval 0 resumes from the prompt and carries no seed row; nor does a held interval that
+    // resumes inside the prefill (ADR-0103 Decision 2). A held seed can be the LAST PREFILL
+    // position, call 0 at `prefill − 1`, so the coordinate is the seed step's, never `(call, 0)`.
+    let Some((anchor_call, seed_position)) = geometry.seed_coordinate_v1(index) else {
+        return Ok(Vec::new());
     };
     let profile = &binding.shape_profile;
     let slot = logits_node_slot_v1(profile);
@@ -1650,7 +1849,7 @@ fn base0_seed_row_tiles_from_rows_v1(
         .enumerate()
         .map(|(tile_index, chunk)| PalwStepTileLeafV1 {
             version: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_OBJECT_VERSION_V1,
-            coord: PalwStepCoordinateV1 { call_index: anchor_call, node_slot: slot, position: 0, tile_index: tile_index as u32 },
+            coord: PalwStepCoordinateV1 { call_index: anchor_call, node_slot: slot, position: seed_position, tile_index: tile_index as u32 },
             value_count: chunk.len() as u32,
             values_le: chunk.iter().flat_map(|v| v.to_le_bytes()).collect(),
         })
@@ -1736,7 +1935,9 @@ pub fn base0_checkpoint_operands_v1(
 /// the opened chunks and the id derived from the anchor call's committed logits row.
 pub enum Base0FpIntervalStartV1<'a> {
     Genesis { prompt_tokens: &'a [usize] },
-    Checkpoint { covered_decode_call: u32, chunks: &'a [Vec<u8>], seed_token: u32 },
+    /// `prompt_tokens` are read only by a window that resumes INSIDE the prefill (a held interval,
+    /// ADR-0103 Decision 2); `seed_token` only by one that resumes at a decode call.
+    Checkpoint { covered_decode_call: u32, chunks: &'a [Vec<u8>], seed_token: u32, prompt_tokens: &'a [usize] },
 }
 
 /// **The class's OWN kernels, as the seat's replay needs them.**
@@ -1762,8 +1963,7 @@ pub trait Base0FpIntervalKernelsV1 {
         profile: &PalwShapeProfileV3,
         ctx: &PalwJobContextV2,
         start: &Base0FpIntervalStartV1<'_>,
-        first_call: u32,
-        last_call: u32,
+        window: Base0FpWindowV1,
         step_leaf_count: u64,
     ) -> Result<crate::legs::Base0StepTilesV1, String>;
 
@@ -1773,11 +1973,10 @@ pub trait Base0FpIntervalKernelsV1 {
         profile: &PalwShapeProfileV3,
         ctx: &PalwJobContextV2,
         start: &Base0FpIntervalStartV1<'_>,
-        first_call: u32,
-        last_call: u32,
+        window: Base0FpWindowV1,
         step_leaf_count: u64,
     ) -> Result<Vec<(u64, Hash64)>, String> {
-        let partial = self.replay_interval_tiles(profile, ctx, start, first_call, last_call, step_leaf_count)?;
+        let partial = self.replay_interval_tiles(profile, ctx, start, window, step_leaf_count)?;
         let ctx_hash = ctx.context_hash();
         let profile_hash = profile.shape_profile_id();
         Ok(partial.tiles.iter().map(|(i, leaf)| (*i, step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf))).collect())
@@ -1797,15 +1996,14 @@ pub fn base0_fp_replay_interval_v1<F>(
     profile: &PalwShapeProfileV3,
     ctx: &PalwJobContextV2,
     start: &Base0FpIntervalStartV1<'_>,
-    first_call: u32,
-    last_call: u32,
+    window: Base0FpWindowV1,
     step_leaf_count: u64,
     forward: F,
 ) -> Result<Vec<(u64, Hash64)>, String>
 where
     F: FnMut(usize, usize) -> Result<(Vec<i32>, Vec<Base0CapturedRowV1>), String>,
 {
-    let partial = base0_fp_replay_interval_tiles_v1(profile, ctx, start, first_call, last_call, step_leaf_count, forward)?;
+    let partial = base0_fp_replay_interval_tiles_v1(profile, ctx, start, window, step_leaf_count, forward)?;
     let ctx_hash = ctx.context_hash();
     let profile_hash = profile.shape_profile_id();
     Ok(partial.tiles.iter().map(|(i, leaf)| (*i, step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf))).collect())
@@ -1822,8 +2020,7 @@ pub fn base0_fp_replay_interval_tiles_v1<F>(
     profile: &PalwShapeProfileV3,
     ctx: &PalwJobContextV2,
     start: &Base0FpIntervalStartV1<'_>,
-    first_call: u32,
-    last_call: u32,
+    window: Base0FpWindowV1,
     step_leaf_count: u64,
     mut forward: F,
 ) -> Result<crate::legs::Base0StepTilesV1, String>
@@ -1831,60 +2028,71 @@ where
     F: FnMut(usize, usize) -> Result<(Vec<i32>, Vec<Base0CapturedRowV1>), String>,
 {
     use kaspa_consensus_core::palw_step::PalwStepTableV1;
-    let prefill = ctx.declared_prefill_tokens as usize;
+    let prefill = ctx.declared_prefill_tokens as u64;
+    let steps = prefill + u64::from(ctx.exact_decode_tokens.saturating_sub(1));
+    if window.first_step == 0 || window.last_step < window.first_step || window.last_step > steps {
+        return Err(format!("the window {window:?} is not a window of this job's {steps} steps"));
+    }
     // **The size is the caller's, priced against the ruleset's ladder before this was reached.**
     // It used to be re-derived from `(profile, ctx)` at the EXECUTOR's `PALW_STEP_MAX_LEAVES`,
     // which refused the graph-v5 512 row's 6,630,544-leaf honest job outright: no seat could
     // replay an interval of a class the chain admits, so no panel could license one.
     let mut capture = crate::legs::Base0StepCaptureV1::new(step_leaf_count).map_err(|e| format!("{e:?}"))?;
 
-    let mut next: usize = match start {
+    // What the window's steps read: the prompt for its prefill positions, and — for a window that
+    // starts at a decode call — the id the step before it selected.
+    let (prompt_tokens, mut next): (&[usize], Option<usize>) = match start {
         Base0FpIntervalStartV1::Genesis { prompt_tokens } => {
-            if first_call != 0 {
-                return Err("a genesis replay must start at the prefill call".to_string());
+            if window.first_step != 1 {
+                return Err("a genesis replay must start at the first step".to_string());
             }
-            if prompt_tokens.len() < prefill {
-                return Err(format!("the job declares {prefill} prefill tokens and {} were supplied", prompt_tokens.len()));
-            }
-            // Call 0 — prefill. Logits leaves exist only at its LAST position; the earlier rows
-            // predict tokens the prompt already contains, and the step space has no coordinate for
-            // them. The same drop the capture loops make, for the same reason.
-            let mut last_logits = Vec::new();
-            for (position, token) in prompt_tokens.iter().take(prefill).enumerate() {
-                let (logits, mut rows) = forward(*token, position)?;
-                if position + 1 != prefill {
-                    rows.retain(|r| r.table != PalwStepTableV1::Post);
-                }
-                capture.push_call(profile, ctx, 0, position as u32, &rows).map_err(|e| format!("{e:?}"))?;
-                last_logits = logits;
-            }
-            kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&last_logits)
+            (prompt_tokens, None)
         }
-        Base0FpIntervalStartV1::Checkpoint { covered_decode_call, seed_token, .. } => {
-            // **The guard is a statement about CALLS and the leaf's counter may not be one**
+        Base0FpIntervalStartV1::Checkpoint { covered_decode_call, seed_token, prompt_tokens, .. } => {
+            // **The guard is a statement about STEPS and the leaf's counter may not be one**
             // (audit B, C-2). `covered_decode_call` is whatever the class's cadence counts —
             // decode calls on a per-call class, cache POSITIONS on a per-position one — so it is
             // converted to a position count by the one function that answers that
-            // (`palw_checkpoint_positions_at_v1`) and back to the call the position implies. On
-            // every shipped class the two conversions cancel and this is `covered + 1` verbatim.
+            // (`palw_checkpoint_positions_at_v1`), and the checkpoint must hold exactly the steps
+            // before the window.
             let positions =
                 kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(profile, ctx, *covered_decode_call);
-            let anchored_call = (positions as usize).saturating_sub(prefill);
-            if first_call as usize != anchored_call + 1 {
-                return Err("the checkpoint does not cover the call before this interval".to_string());
+            if u64::from(positions) + 1 != window.first_step {
+                return Err("the checkpoint does not cover the step before this window".to_string());
             }
-            *seed_token as usize
+            (prompt_tokens, (window.first_step > prefill).then_some(*seed_token as usize))
         }
     };
+    let prefill_end = window.last_step.min(prefill);
+    if window.first_step <= prefill_end && (prompt_tokens.len() as u64) < prefill_end {
+        return Err(format!("the job declares {prefill} prefill tokens and {} were supplied", prompt_tokens.len()));
+    }
 
-    // Decode calls. The COORDINATE's position is 0 in every decode call (each call has one
-    // position); the cache position is absolute. Conflating them lands every decode row on top of
-    // the first one's.
-    for call in first_call.max(1)..=last_call {
-        let cache_position = prefill + call as usize - 1;
-        let (logits, rows) = forward(next, cache_position)?;
-        capture.push_call(profile, ctx, call, 0, &rows).map_err(|e| format!("{e:?}"))?;
-        next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&logits);
+    for step in window.first_step..=window.last_step {
+        if step <= prefill {
+            // A prefill position. Logits leaves exist only at the LAST one; the earlier rows
+            // predict tokens the prompt already contains, and the step space has no coordinate for
+            // them. The same drop the capture loops make, for the same reason.
+            let position = (step - 1) as usize;
+            let (logits, mut rows) = forward(prompt_tokens[position], position)?;
+            if step != prefill {
+                rows.retain(|r| r.table != PalwStepTableV1::Post);
+            }
+            capture.push_call(profile, ctx, 0, position as u32, &rows).map_err(|e| format!("{e:?}"))?;
+            if step == prefill {
+                next = Some(kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&logits));
+            }
+        } else {
+            // A decode call. The COORDINATE's position is 0 in every decode call (each call has
+            // one position); the cache position is absolute. Conflating them lands every decode row
+            // on top of the first one's.
+            let call = (step - prefill) as u32;
+            let cache_position = (prefill + u64::from(call) - 1) as usize;
+            let token = next.ok_or_else(|| format!("decode call {call} has no id to consume"))?;
+            let (logits, rows) = forward(token, cache_position)?;
+            capture.push_call(profile, ctx, call, 0, &rows).map_err(|e| format!("{e:?}"))?;
+            next = Some(kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&logits));
+        }
     }
 
     // `finish_partial` is correct HERE and nowhere else: a replay deliberately covers a window,
@@ -1974,7 +2182,7 @@ pub fn base0_fp_challenger_replay_tiles_capped_v1<K: Base0FpIntervalKernelsV1>(
         .map_err(|e| format!("{e:?}"))?;
     let leaves_geometry =
         base0_fp_interval_leaves_v1(profile, ctx, &geometry, index, step_leaf_count).map_err(|e| format!("{e:?}"))?;
-    let (first_call, last_call) = geometry.calls_for(index).ok_or_else(|| "the interval names no calls".to_string())?;
+    let window = geometry.window_for(index).ok_or_else(|| "the interval names no window".to_string())?;
     let count = leaves_geometry.range_end - leaves_geometry.range_first;
     let shaped = match fold {
         Some(f) => {
@@ -2000,24 +2208,21 @@ pub fn base0_fp_challenger_replay_tiles_capped_v1<K: Base0FpIntervalKernelsV1>(
     let start = match geometry.anchor_covered_call(index) {
         None => Base0FpIntervalStartV1::Genesis { prompt_tokens: &prompt_usize },
         Some(covered) => {
-            let seed_call = geometry.anchor_seed_call_v1(index).ok_or_else(|| "the interval names no seed call".to_string())?;
-            let seed_token = match fold {
-                Some(_) => {
-                    let (token, hashes) =
-                        seed_row_from_tiles_v1(profile, ctx, &opening.seed_row_tiles, seed_call, leaves_geometry.range_first)
-                            .ok_or_else(|| "the served seed row yields no token".to_string())?;
+            // A held interval that resumes inside the prefill has no seed: its first id is the
+            // prompt's (ADR-0103 Decision 2), and its range opens no seed row.
+            let seed_token = match (geometry.seed_coordinate_v1(index), fold) {
+                (None, _) if leaves_geometry.seed_row_leaves == 0 => 0,
+                (None, _) => return Err("the interval names no seed step".to_string()),
+                (Some(seed), Some(_)) => {
+                    let (token, hashes) = seed_row_from_tiles_v1(profile, ctx, &opening.seed_row_tiles, seed, leaves_geometry.range_first)
+                        .ok_or_else(|| "the served seed row yields no token".to_string())?;
                     seed_hashes = hashes;
                     token
                 }
-                None => seed_token_from_opened_row_v1(
-                    profile,
-                    ctx,
-                    &opening.seed_row_tiles,
-                    &opening.range,
-                    seed_call,
-                    leaves_geometry.range_first,
-                )
-                .ok_or_else(|| "the opened seed row yields no token".to_string())?,
+                (Some(seed), None) => {
+                    seed_token_from_opened_row_v1(profile, ctx, &opening.seed_row_tiles, &opening.range, seed, leaves_geometry.range_first)
+                        .ok_or_else(|| "the opened seed row yields no token".to_string())?
+                }
             };
             let claimed = opening.anchor.as_ref().ok_or_else(|| "the opening names no checkpoint".to_string())?;
             if !checkpoint_claim_is_the_bindings_v1(binding, &claimed.leaf, &claimed.opening, covered) {
@@ -2028,19 +2233,29 @@ pub fn base0_fp_challenger_replay_tiles_capped_v1<K: Base0FpIntervalKernelsV1>(
                     if own.covered_decode_call != covered || own.state_chunks_root != claimed.leaf.state_chunks_root {
                         return Err("this party's recomputed state is not the checkpoint the opening names".to_string());
                     }
-                    Base0FpIntervalStartV1::Checkpoint { covered_decode_call: covered, chunks: &own.chunks, seed_token }
+                    Base0FpIntervalStartV1::Checkpoint {
+                        covered_decode_call: covered,
+                        chunks: &own.chunks,
+                        seed_token,
+                        prompt_tokens: &prompt_usize,
+                    }
                 }
                 None => {
                     let anchor = carried.and_then(|o| o.anchor.as_ref()).ok_or_else(|| "no state to resume from".to_string())?;
                     if !checkpoint_anchor_is_the_bindings_v1(binding, anchor, covered) {
                         return Err("the carried anchor is not the binding's".to_string());
                     }
-                    Base0FpIntervalStartV1::Checkpoint { covered_decode_call: covered, chunks: &anchor.chunks, seed_token }
+                    Base0FpIntervalStartV1::Checkpoint {
+                        covered_decode_call: covered,
+                        chunks: &anchor.chunks,
+                        seed_token,
+                        prompt_tokens: &prompt_usize,
+                    }
                 }
             }
         }
     };
-    let tiles = kernels.replay_interval_tiles(profile, ctx, &start, first_call, last_call, step_leaf_count)?;
+    let tiles = kernels.replay_interval_tiles(profile, ctx, &start, window, step_leaf_count)?;
     if let Some(f) = fold {
         if seed_hashes.len() as u64 != leaves_geometry.seed_row_leaves {
             return Err("the served seed row is not the interval's".to_string());
@@ -2228,7 +2443,7 @@ fn seed_row_from_tiles_v1(
     profile: &PalwShapeProfileV3,
     ctx: &PalwJobContextV2,
     seed_row_tiles: &[PalwStepTileLeafV1],
-    anchor_call: u32,
+    seed: (u32, u32),
     range_first: u64,
 ) -> Option<(u32, Vec<Hash64>)> {
     let ctx_hash = ctx.context_hash();
@@ -2238,7 +2453,7 @@ fn seed_row_from_tiles_v1(
     let mut hashes = Vec::with_capacity(seed_row_tiles.len());
     for (tile_index, leaf) in seed_row_tiles.iter().enumerate() {
         let want_index = range_first + tile_index as u64;
-        if leaf.coord.call_index != anchor_call || leaf.coord.node_slot != slot || leaf.coord.position != 0 {
+        if (leaf.coord.call_index, leaf.coord.position) != seed || leaf.coord.node_slot != slot {
             return None;
         }
         if canonical_step_leaf_index(profile, ctx, &leaf.coord)? != want_index {
@@ -2327,8 +2542,7 @@ pub fn base0_verify_fp_interval_opening_v4_capped_v1<K: Base0FpIntervalKernelsV1
     let Ok(leaves_geometry) = base0_fp_interval_leaves_v1(profile, ctx, &geometry, index, step_leaf_count) else {
         return V::Mismatch;
     };
-    let (Some((first_call, last_call)), count) = (geometry.calls_for(index), leaves_geometry.range_end - leaves_geometry.range_first)
-    else {
+    let (Some(window), count) = (geometry.window_for(index), leaves_geometry.range_end - leaves_geometry.range_first) else {
         return V::Mismatch;
     };
     let fold = &opening.range;
@@ -2348,15 +2562,20 @@ pub fn base0_verify_fp_interval_opening_v4_capped_v1<K: Base0FpIntervalKernelsV1
     let start = match geometry.anchor_covered_call(index) {
         None => Base0FpIntervalStartV1::Genesis { prompt_tokens: &prompt_usize },
         Some(covered) => {
-            let Some(seed_call) = geometry.anchor_seed_call_v1(index) else {
-                return V::Mismatch;
+            // A held interval that resumes inside the prefill has no seed row (ADR-0103 D2).
+            let seed_token = match geometry.seed_coordinate_v1(index) {
+                None if leaves_geometry.seed_row_leaves == 0 => 0,
+                None => return V::Mismatch,
+                Some(seed) => {
+                    let Some((seed_token, seed_hashes)) =
+                        seed_row_from_tiles_v1(profile, ctx, &opening.seed_row_tiles, seed, leaves_geometry.range_first)
+                    else {
+                        return V::Mismatch;
+                    };
+                    own.extend(seed_hashes);
+                    seed_token
+                }
             };
-            let Some((seed_token, seed_hashes)) =
-                seed_row_from_tiles_v1(profile, ctx, &opening.seed_row_tiles, seed_call, leaves_geometry.range_first)
-            else {
-                return V::Mismatch;
-            };
-            own.extend(seed_hashes);
             let Some(claimed) = opening.anchor.as_ref() else {
                 return V::Mismatch;
             };
@@ -2377,13 +2596,18 @@ pub fn base0_verify_fp_interval_opening_v4_capped_v1<K: Base0FpIntervalKernelsV1
                     recomputed: held.state_chunks_root,
                 };
             }
-            Base0FpIntervalStartV1::Checkpoint { covered_decode_call: covered, chunks: &held.chunks, seed_token }
+            Base0FpIntervalStartV1::Checkpoint {
+                covered_decode_call: covered,
+                chunks: &held.chunks,
+                seed_token,
+                prompt_tokens: &prompt_usize,
+            }
         }
     };
     if own.len() as u64 != leaves_geometry.seed_row_leaves {
         return V::Mismatch;
     }
-    let Ok(recomputed) = kernels.replay_interval(profile, ctx, &start, first_call, last_call, step_leaf_count) else {
+    let Ok(recomputed) = kernels.replay_interval(profile, ctx, &start, window, step_leaf_count) else {
         return V::Unverifiable;
     };
     // The interval's own leaves, in order, each exactly once.
@@ -2526,8 +2750,7 @@ pub fn base0_verify_fp_interval_opening_with_state_capped_v1<K: Base0FpIntervalK
     let Ok(leaves_geometry) = base0_fp_interval_leaves_v1(profile, ctx, &geometry, index, step_leaf_count) else {
         return Base0FpIntervalSeatVerdictV1::Mismatch;
     };
-    let (Some((first_call, last_call)), count) = (geometry.calls_for(index), leaves_geometry.range_end - leaves_geometry.range_first)
-    else {
+    let (Some(window), count) = (geometry.window_for(index), leaves_geometry.range_end - leaves_geometry.range_first) else {
         return Base0FpIntervalSeatVerdictV1::Mismatch;
     };
 
@@ -2557,18 +2780,23 @@ pub fn base0_verify_fp_interval_opening_with_state_capped_v1<K: Base0FpIntervalK
             // The seed row is a step coordinate and is named by the anchor's CALL; `covered` is
             // the checkpoint LEAF's counter and is what the leaf is matched on. Under
             // `PerPosition` they differ by the prefill, which is audit B's C-2.
-            let Some(seed_call) = geometry.anchor_seed_call_v1(index) else {
-                return Base0FpIntervalSeatVerdictV1::Mismatch;
-            };
-            let Some(seed_token) = seed_token_from_opened_row_v1(
-                profile,
-                ctx,
-                &opening.seed_row_tiles,
-                &opening.range,
-                seed_call,
-                leaves_geometry.range_first,
-            ) else {
-                return Base0FpIntervalSeatVerdictV1::Mismatch;
+            // A held interval that resumes inside the prefill has no seed row (ADR-0103 D2).
+            let seed_token = match geometry.seed_coordinate_v1(index) {
+                None if leaves_geometry.seed_row_leaves == 0 => 0,
+                None => return Base0FpIntervalSeatVerdictV1::Mismatch,
+                Some(seed) => {
+                    let Some(seed_token) = seed_token_from_opened_row_v1(
+                        profile,
+                        ctx,
+                        &opening.seed_row_tiles,
+                        &opening.range,
+                        seed,
+                        leaves_geometry.range_first,
+                    ) else {
+                        return Base0FpIntervalSeatVerdictV1::Mismatch;
+                    };
+                    seed_token
+                }
             };
             let Some(claimed) = opening.anchor.as_ref() else {
                 return Base0FpIntervalSeatVerdictV1::Mismatch;
@@ -2594,7 +2822,12 @@ pub fn base0_verify_fp_interval_opening_with_state_capped_v1<K: Base0FpIntervalK
                             recomputed: own.state_chunks_root,
                         };
                     }
-                    Base0FpIntervalStartV1::Checkpoint { covered_decode_call: covered, chunks: &own.chunks, seed_token }
+                    Base0FpIntervalStartV1::Checkpoint {
+                        covered_decode_call: covered,
+                        chunks: &own.chunks,
+                        seed_token,
+                        prompt_tokens: &prompt_usize,
+                    }
                 }
                 // ADR-0077 Decision 8, unchanged: no own state, so the carried chunks are the
                 // only state there is — and they must re-derive the root the leaf commits.
@@ -2605,13 +2838,18 @@ pub fn base0_verify_fp_interval_opening_with_state_capped_v1<K: Base0FpIntervalK
                     if !checkpoint_anchor_is_the_bindings_v1(binding, anchor, covered) {
                         return Base0FpIntervalSeatVerdictV1::Mismatch;
                     }
-                    Base0FpIntervalStartV1::Checkpoint { covered_decode_call: covered, chunks: &anchor.chunks, seed_token }
+                    Base0FpIntervalStartV1::Checkpoint {
+                        covered_decode_call: covered,
+                        chunks: &anchor.chunks,
+                        seed_token,
+                        prompt_tokens: &prompt_usize,
+                    }
                 }
             }
         }
     };
 
-    let Ok(recomputed) = kernels.replay_interval(profile, ctx, &start, first_call, last_call, step_leaf_count) else {
+    let Ok(recomputed) = kernels.replay_interval(profile, ctx, &start, window, step_leaf_count) else {
         // The seat could not run the interval — its honest `Unverifiable`, and never an
         // accusation against a producer whose material may be perfectly good.
         return Base0FpIntervalSeatVerdictV1::Unverifiable;
@@ -2657,7 +2895,7 @@ fn seed_token_from_opened_row_v1(
     ctx: &PalwJobContextV2,
     seed_row_tiles: &[PalwStepTileLeafV1],
     range: &PalwStepRangeOpeningV1,
-    anchor_call: u32,
+    seed: (u32, u32),
     range_first: u64,
 ) -> Option<u32> {
     let ctx_hash = ctx.context_hash();
@@ -2669,7 +2907,7 @@ fn seed_token_from_opened_row_v1(
         if step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf) != *range.leaf_hashes.get(tile_index)? {
             return None;
         }
-        if leaf.coord.call_index != anchor_call || leaf.coord.node_slot != slot || leaf.coord.position != 0 {
+        if (leaf.coord.call_index, leaf.coord.position) != seed || leaf.coord.node_slot != slot {
             return None;
         }
         if canonical_step_leaf_index(profile, ctx, &leaf.coord)? != want_index {
@@ -2763,6 +3001,266 @@ pub fn base0_fp_block_leaves_request_decode_v1(index: u32) -> Option<(u32, u64)>
     Some(((index >> 16) & 0x7FFF, (index & 0xFFFF) as u64))
 }
 
+// =================================================================================================
+// ADR-0103 Decision 2 — the Resume route: the state at an interval's start, fetched and verified
+// =================================================================================================
+
+/// **A resume request rides the interval lane under bit 30** (ADR-0103 Decision 2). Bit 31 clear
+/// (bit 31 is the block-leaves request's), bit 30 set, the interval below it. A plain interval
+/// index never reaches bit 30 — a held job at 2M positions has a thousand intervals — so the three
+/// request kinds cannot collide, and the transport keys solicitation, slots and the byte cap by
+/// `(claim, index)` with no new message.
+pub const PALW_BASE0_FP_RESUME_REQUEST_BIT_V1: u32 = 1 << 30;
+
+pub fn base0_fp_resume_request_index_v1(interval_index: u32) -> Option<u32> {
+    (interval_index < PALW_BASE0_FP_RESUME_REQUEST_BIT_V1).then_some(PALW_BASE0_FP_RESUME_REQUEST_BIT_V1 | interval_index)
+}
+
+/// `Some(interval)` for a resume request, `None` for any other index.
+pub fn base0_fp_resume_request_decode_v1(index: u32) -> Option<u32> {
+    (index & PALW_BASE0_FP_BLOCK_LEAVES_REQUEST_BIT_V1 == 0 && index & PALW_BASE0_FP_RESUME_REQUEST_BIT_V1 != 0)
+        .then_some(index & !PALW_BASE0_FP_RESUME_REQUEST_BIT_V1)
+}
+
+pub const PALW_BASE0_FP_RESUME_MAGIC_V1: [u8; 4] = *b"FPR1";
+pub const PALW_BASE0_FP_RESUME_VERSION_V1: u16 = 1;
+
+/// **The state an interval of a held class resumes from, served** (ADR-0103 Decision 2's Resume
+/// route; ADR-0099 §1.2's resume form).
+///
+/// The checkpoint at the interval's start is NAMED (its leaf, opened against the binding's
+/// `checkpoint_merkle_root`) and its state is CARRIED: the chunks of the slices this opening
+/// carries, and every slice's top leaf. A seat verifies what it fetched against the committed root
+/// without a byte of anybody else's state — its slices' leaves fold to their top leaves, which must
+/// be the carried ones, and the carried top leaves fold to the leaf's `state_chunks_root`.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct Base0FpResumeOpeningV1 {
+    pub version: u16,
+    pub interval_index: u32,
+    pub binding: PalwStepBindingV2,
+    pub leaf: kaspa_consensus_core::palw_step_leg::PalwCheckpointLeafV2,
+    pub opening: kaspa_consensus_core::palw_step_leg::PalwStepOpeningV1,
+    /// Every slice's `state_top_leaf_v4`, in slice order.
+    pub top_leaves: Vec<Hash64>,
+    /// The slices carried, ascending.
+    pub slices: Vec<u32>,
+    /// Their chunks: slice by slice, block by block.
+    pub chunks: Vec<Vec<u8>>,
+}
+
+impl Base0FpResumeOpeningV1 {
+    pub fn encode_v1(&self) -> Result<Vec<u8>, Base0FpIntervalError> {
+        let body = borsh::to_vec(self).map_err(|_| Base0FpIntervalError::NotThisFamilysBytes)?;
+        let mut out = Vec::with_capacity(body.len() + 4);
+        out.extend_from_slice(&PALW_BASE0_FP_RESUME_MAGIC_V1);
+        out.extend_from_slice(&body);
+        Ok(out)
+    }
+
+    pub fn decode_v1(bytes: &[u8]) -> Result<Self, Base0FpIntervalError> {
+        let body = bytes.strip_prefix(&PALW_BASE0_FP_RESUME_MAGIC_V1).ok_or(Base0FpIntervalError::NotThisFamilysBytes)?;
+        let decoded: Self = borsh::from_slice(body).map_err(|_| Base0FpIntervalError::NotThisFamilysBytes)?;
+        if decoded.version != PALW_BASE0_FP_RESUME_VERSION_V1 {
+            return Err(Base0FpIntervalError::NotThisFamilysBytes);
+        }
+        Ok(decoded)
+    }
+}
+
+/// **Why a fetched state is refused** — by name, and never replayed from (ADR-0103 Invariant 6).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Base0FpResumeRefusalV1 {
+    /// Not this family's bytes, or not a held class's interval.
+    NotAResumeOpening(String),
+    /// The opening is about another claim, job or checkpoint.
+    NotThisClaims(&'static str),
+    /// A fetched slice's chunks do not fold to its committed top leaf — the chunk the executor
+    /// served is not the state it committed.
+    FetchedChunkDoesNotVerify { slice: u32 },
+    /// The carried top leaves do not fold to the checkpoint's state root.
+    TopLeavesDoNotRoot,
+    /// The opening verified and does not carry every slice: a shard's state, which only a seat
+    /// replaying that shard can resume from.
+    NotTheWholeState { slices: usize, of: u32 },
+}
+
+/// **The route a held class's seat takes, from the class and the ruleset's window** (ADR-0103
+/// Decision 2) — `None` for a class not under the held map. The family's measured replay row is
+/// the rate (`palw_held_replay_row_v1`, the SA-4 source), so every family answers the same way.
+pub fn base0_fp_held_route_for_v1(
+    profile: &PalwShapeProfileV3,
+    window_receipt_daa: u64,
+) -> Option<kaspa_consensus_core::palw_held_context_v1::PalwHeldSeatRouteV1> {
+    use kaspa_consensus_core::palw_held_context_v1 as held;
+    if !kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(profile) {
+        return None;
+    }
+    let rate = held::palw_held_replay_row_v1(profile).replay_ms_per_position();
+    Some(held::palw_held_seat_route_v1(profile.n_ctx, rate, window_receipt_daa))
+}
+
+/// **The executor's side: the resume opening of interval `index`**, carrying `slices` (every slice
+/// when `None` — a seat holding the whole model).
+///
+/// A fold retains no state, so the state is re-derived exactly as the executor re-derives an
+/// opening's span: `anchor_state_for(covered)`, the seat's own recompute function run by the
+/// executor, checked against the committed leaf before a byte is served.
+#[allow(clippy::too_many_arguments)]
+pub fn base0_open_fp_resume_v1(
+    material: &crate::produce::Base0FpMaterialV2,
+    index: u32,
+    prompt_token_ids: &[u32],
+    family_checkpoint_interval: u32,
+    max_step_leaf_count: u64,
+    slices: Option<std::ops::Range<u32>>,
+    anchor_state_for: Base0FpAnchorStateForV1<'_>,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<Vec<u8>, Base0FpIntervalError> {
+    use kaspa_consensus_core::palw_state_chunk_map as map;
+    let binding = &material.binding;
+    let profile = &binding.shape_profile;
+    let ctx = &binding.job_context;
+    if !kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(prompt_ids_form, prompt_token_ids, &ctx.prompt_token_ids_hash) {
+        return Err(Base0FpIntervalError::PromptIdsAreNotTheJobs);
+    }
+    if !map::palw_profile_is_held_v4(profile) {
+        return Err(Base0FpIntervalError::StepSpace("only a held class resumes from served state (ADR-0103 Decision 2)".into()));
+    }
+    let geometry = Base0FpIntervalGeometryV1::from_binding_capped_v1(binding, family_checkpoint_interval, max_step_leaf_count)?;
+    let covered = geometry.anchor_covered_call(index).ok_or(Base0FpIntervalError::NoCheckpointAt { covered: 0 })?;
+    let positions = geometry.anchor_covered_positions_v1(index).ok_or(Base0FpIntervalError::NoCheckpointAt { covered })?;
+    let named = base0_checkpoint_operands_v1(binding, &material.checkpoint_chunks, &material.checkpoint_leaves, covered)?;
+    let state = anchor_state_for(covered).ok_or(Base0FpIntervalError::NoCheckpointAt { covered })?;
+    if state.covered_decode_call != covered || state.state_chunks_root != named.leaf.state_chunks_root {
+        return Err(Base0FpIntervalError::CaptureIsNotTheBindings);
+    }
+    let layout = map::palw_state_layout_v4(profile, positions).map_err(|e| Base0FpIntervalError::Leg(e.to_string()))?;
+    let leaves = map::palw_state_chunk_leaves_for_map_v1(profile, positions, &state.chunks).map_err(|e| Base0FpIntervalError::Leg(format!("{e:?}")))?;
+    let top_leaves = map::palw_state_top_leaves_v4(&layout, &leaves).map_err(|e| Base0FpIntervalError::Leg(format!("{e:?}")))?;
+    let carried: Vec<u32> = slices.unwrap_or(0..layout.slice_count()).filter(|s| *s < layout.slice_count()).collect();
+    let mut chunks = Vec::new();
+    for &slice in &carried {
+        for block in 0..layout.block_count(slice).unwrap_or(0) {
+            let flat = layout.flat_index(slice, block).expect("in range by construction");
+            chunks.push(state.chunks[flat as usize].clone());
+        }
+    }
+    Base0FpResumeOpeningV1 {
+        version: PALW_BASE0_FP_RESUME_VERSION_V1,
+        interval_index: index,
+        binding: binding.clone(),
+        leaf: named.leaf,
+        opening: named.opening,
+        top_leaves,
+        slices: carried,
+        chunks,
+    }
+    .encode_v1()
+}
+
+/// **The seat's side: verify a fetched state, slice by slice, against the committed checkpoint**
+/// (ADR-0103 Decision 2; Invariant 6: a chunk that does not verify is refused by name and never
+/// replayed from). Returns the verified chunks keyed by their flat index — a shard's, or the whole
+/// state's.
+pub fn base0_fp_verify_resume_v1(
+    bytes: &[u8],
+    ctx: &PalwJobContextV2,
+    covered: u32,
+    family_checkpoint_interval: u32,
+    max_step_leaf_count: u64,
+) -> Result<(Base0FpResumeOpeningV1, std::collections::BTreeMap<u64, Vec<u8>>, u32), Base0FpResumeRefusalV1> {
+    use kaspa_consensus_core::palw_state_chunk_map as map;
+    use kaspa_consensus_core::palw_step_leg as leg;
+    let opened = Base0FpResumeOpeningV1::decode_v1(bytes).map_err(|e| Base0FpResumeRefusalV1::NotAResumeOpening(format!("{e:?}")))?;
+    let binding = &opened.binding;
+    if leg::verify_binding_v1(binding).is_err() {
+        return Err(Base0FpResumeRefusalV1::NotThisClaims("the binding does not recompute its own root"));
+    }
+    if binding.job_context != *ctx {
+        return Err(Base0FpResumeRefusalV1::NotThisClaims("the binding is another job's"));
+    }
+    let profile = &binding.shape_profile;
+    if !map::palw_profile_is_held_v4(profile) {
+        return Err(Base0FpResumeRefusalV1::NotAResumeOpening("not a held class".into()));
+    }
+    let geometry = Base0FpIntervalGeometryV1::from_binding_capped_v1(binding, family_checkpoint_interval, max_step_leaf_count)
+        .map_err(|e| Base0FpResumeRefusalV1::NotAResumeOpening(format!("{e:?}")))?;
+    if geometry.anchor_covered_call(opened.interval_index) != Some(covered) {
+        return Err(Base0FpResumeRefusalV1::NotThisClaims("the interval does not resume from this checkpoint"));
+    }
+    if !checkpoint_claim_is_the_bindings_v1(binding, &opened.leaf, &opened.opening, covered) {
+        return Err(Base0FpResumeRefusalV1::NotThisClaims("the named checkpoint is not the binding's"));
+    }
+    let positions = geometry.anchor_covered_positions_v1(opened.interval_index).ok_or(Base0FpResumeRefusalV1::NotThisClaims("no anchor"))?;
+    let layout = map::palw_state_layout_v4(profile, positions).map_err(|e| Base0FpResumeRefusalV1::NotAResumeOpening(e.to_string()))?;
+    if opened.top_leaves.len() != layout.slice_count() as usize
+        || opened.slices.windows(2).any(|w| w[0] >= w[1])
+        || opened.slices.last().is_some_and(|s| *s >= layout.slice_count())
+    {
+        return Err(Base0FpResumeRefusalV1::NotAResumeOpening("the slices are not this layout's".into()));
+    }
+    let map_id = profile.state_chunk_map_id;
+    let mut verified = std::collections::BTreeMap::new();
+    let mut at = 0usize;
+    for &slice in &opened.slices {
+        let blocks = layout.block_count(slice).unwrap_or(0);
+        let mut hashes = Vec::with_capacity(blocks as usize);
+        for block in 0..blocks {
+            let chunk = opened.chunks.get(at).ok_or(Base0FpResumeRefusalV1::FetchedChunkDoesNotVerify { slice })?;
+            if chunk.len() > leg::PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES {
+                return Err(Base0FpResumeRefusalV1::FetchedChunkDoesNotVerify { slice });
+            }
+            hashes.push(leg::state_chunk_leaf_hash_v4(&map_id, slice, block, chunk));
+            at += 1;
+        }
+        let sub_root = leg::state_slice_root_v4(&hashes).map_err(|_| Base0FpResumeRefusalV1::FetchedChunkDoesNotVerify { slice })?;
+        if leg::state_top_leaf_v4(slice, blocks, &sub_root) != opened.top_leaves[slice as usize] {
+            return Err(Base0FpResumeRefusalV1::FetchedChunkDoesNotVerify { slice });
+        }
+    }
+    if at != opened.chunks.len() {
+        return Err(Base0FpResumeRefusalV1::NotAResumeOpening("chunks past the carried slices".into()));
+    }
+    if leg::state_top_root_v4(&opened.top_leaves).ok() != Some(opened.leaf.state_chunks_root) {
+        return Err(Base0FpResumeRefusalV1::TopLeavesDoNotRoot);
+    }
+    let mut at = 0usize;
+    for &slice in &opened.slices {
+        for block in 0..layout.block_count(slice).unwrap_or(0) {
+            verified.insert(layout.flat_index(slice, block).expect("in range"), opened.chunks[at].clone());
+            at += 1;
+        }
+    }
+    Ok((opened, verified, positions))
+}
+
+/// **The whole state, fetched and verified, as the seat's own** — what a seat holding every layer
+/// replays from on the Resume route. Remembered where the row check finds a recomputed state, so
+/// the interval verification that follows cannot tell (and need not) which route produced it: a
+/// seat that resumed and a seat that recomputed reach the same verdict (ADR-0103 Invariant 6).
+pub fn base0_fp_accept_resume_v1(
+    bytes: &[u8],
+    ctx: &PalwJobContextV2,
+    prompt_token_ids: &[u32],
+    covered: u32,
+    family_checkpoint_interval: u32,
+    max_step_leaf_count: u64,
+) -> Result<crate::fp_recompute::Base0FpSeatStateV1, Base0FpResumeRefusalV1> {
+    let (opened, verified, positions) = base0_fp_verify_resume_v1(bytes, ctx, covered, family_checkpoint_interval, max_step_leaf_count)?;
+    let count = opened.leaf.state_chunk_count;
+    if verified.len() != count as usize {
+        return Err(Base0FpResumeRefusalV1::NotTheWholeState { slices: opened.slices.len(), of: opened.top_leaves.len() as u32 });
+    }
+    let state = crate::fp_recompute::Base0FpSeatStateV1 {
+        covered_decode_call: covered,
+        positions,
+        state_chunks_root: opened.leaf.state_chunks_root,
+        chunks: verified.into_values().collect(),
+    };
+    crate::fp_recompute::base0_fp_seat_state_remember_v1(&opened.binding.shape_profile, ctx, prompt_token_ids, &state);
+    Ok(state)
+}
+
 /// **Which interval owns step leaf `leaf`** — the challenger's first question when a court
 /// narrows to a step and it holds no capture (ADR-0085 Decision 3).
 pub fn base0_fp_interval_of_leaf_v1(
@@ -2812,35 +3310,38 @@ pub fn base0_fp_interval_tiles_from_fold_capped_v1<K: Base0FpIntervalKernelsV1>(
     }
     let step_leaf_count = base0_fp_binding_step_space_v1(binding, max_step_leaf_count)?;
     let geometry = Base0FpIntervalGeometryV1::from_binding_capped_v1(binding, family_checkpoint_interval, max_step_leaf_count)?;
-    let (first_call, last_call) =
-        geometry.calls_for(index).ok_or(Base0FpIntervalError::IntervalOutOfRange { index, count: geometry.interval_count })?;
+    let window = geometry.window_for(index).ok_or(Base0FpIntervalError::IntervalOutOfRange { index, count: geometry.interval_count })?;
     let prompt_usize: Vec<usize> = prompt_token_ids.iter().map(|t| *t as usize).collect();
     let anchored = !material.checkpoint_chunks.is_empty();
     let covered_call = geometry.anchor_covered_call(index);
-    let (resume_chunks, replay_first_call): (Option<Vec<Vec<u8>>>, u32) = match covered_call {
+    let (resume_chunks, replay_first_step): (Option<Vec<Vec<u8>>>, u64) = match covered_call {
         Some(covered) if anchored => {
-            (Some(base0_checkpoint_operands_v1(binding, &material.checkpoint_chunks, &[], covered)?.chunks), first_call)
+            (Some(base0_checkpoint_operands_v1(binding, &material.checkpoint_chunks, &[], covered)?.chunks), window.first_step)
         }
         Some(covered) => match anchor_state_for(covered) {
-            Some(state) if state.covered_decode_call == covered => (Some(state.chunks), first_call),
-            _ => (None, 0),
+            Some(state) if state.covered_decode_call == covered => (Some(state.chunks), window.first_step),
+            _ => (None, 1),
         },
-        None => (None, 0),
+        None => (None, 1),
     };
     let start = match (&resume_chunks, covered_call) {
         (None, _) => Base0FpIntervalStartV1::Genesis { prompt_tokens: &prompt_usize },
         (Some(resume), Some(covered)) => {
-            let seed_call = geometry.anchor_seed_call_v1(index).ok_or(Base0FpIntervalError::NoCheckpointAt { covered })?;
-            let seed_token = *material
-                .generated_token_ids
-                .get(seed_call as usize)
-                .ok_or_else(|| Base0FpIntervalError::Replay(format!("the retention has no id for call {seed_call}")))?;
-            Base0FpIntervalStartV1::Checkpoint { covered_decode_call: covered, chunks: resume, seed_token }
+            let seed_token = match geometry.seed_coordinate_v1(index) {
+                Some((seed_call, _)) => *material
+                    .generated_token_ids
+                    .get(seed_call as usize)
+                    .ok_or_else(|| Base0FpIntervalError::Replay(format!("the retention has no id for call {seed_call}")))?,
+                // A held interval that resumes inside the prefill consumes the prompt's id.
+                None if window.first_step <= u64::from(ctx.declared_prefill_tokens) => 0,
+                None => return Err(Base0FpIntervalError::NoCheckpointAt { covered }),
+            };
+            Base0FpIntervalStartV1::Checkpoint { covered_decode_call: covered, chunks: resume, seed_token, prompt_tokens: &prompt_usize }
         }
         (Some(_), None) => unreachable!("an anchor exists only where the geometry names a covered call"),
     };
     kernels
-        .replay_interval_tiles(profile, ctx, &start, replay_first_call, last_call, step_leaf_count)
+        .replay_interval_tiles(profile, ctx, &start, Base0FpWindowV1 { first_step: replay_first_step, last_step: window.last_step }, step_leaf_count)
         .map_err(Base0FpIntervalError::Replay)
 }
 
@@ -3432,8 +3933,7 @@ mod tests {
             profile: &PalwShapeProfileV3,
             ctx: &PalwJobContextV2,
             start: &Base0FpIntervalStartV1<'_>,
-            first_call: u32,
-            last_call: u32,
+            window: Base0FpWindowV1,
             step_leaf_count: u64,
         ) -> Result<crate::legs::Base0StepTilesV1, String> {
             use crate::engine::{Base0Engine, KvCache};
@@ -3446,7 +3946,7 @@ mod tests {
                     KvCache::from_state_chunks(self.0, &geometry, chunks).map_err(|e| format!("{e:?}"))?
                 }
             };
-            base0_fp_replay_interval_tiles_v1(profile, ctx, start, first_call, last_call, step_leaf_count, |token, position| {
+            base0_fp_replay_interval_tiles_v1(profile, ctx, start, window, step_leaf_count, |token, position| {
                 let (logits, probe) = engine.forward_token_probed(&mut cache, token, position).map_err(|e| format!("{e:?}"))?;
                 Ok((logits, crate::legs::base0_captured_rows_v1(&probe)))
             })
@@ -4392,6 +4892,27 @@ mod tests {
     #[allow(clippy::type_complexity)]
     pub(super) fn dense_v7_run()
     -> (crate::artifact::Base0ArtifactV1, PalwShapeProfileV3, PalwJobContextV2, Vec<usize>, crate::produce::Base0ExecutionV1) {
+        // Eight prompt positions and thirteen decode calls at the class's width of eight
+        // (n_ctx 32 over the draw's four): interval 1 starts at the FIRST decode call, seeded by
+        // the last prefill position's row, and interval 2 at a later call, seeded by a call's.
+        dense_v7_run_with(8, 14)
+    }
+
+    /// The held fixture with a prompt that crosses an interval boundary: interval 1 resumes INSIDE
+    /// the prefill (no seed — its first id is the prompt's) and crosses into the decode calls.
+    #[cfg(test)]
+    #[allow(clippy::type_complexity)]
+    pub(super) fn dense_v7_run_mid_prefill()
+    -> (crate::artifact::Base0ArtifactV1, PalwShapeProfileV3, PalwJobContextV2, Vec<usize>, crate::produce::Base0ExecutionV1) {
+        dense_v7_run_with(11, 6)
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::type_complexity)]
+    pub(super) fn dense_v7_run_with(
+        prefill: u32,
+        decode: u32,
+    ) -> (crate::artifact::Base0ArtifactV1, PalwShapeProfileV3, PalwJobContextV2, Vec<usize>, crate::produce::Base0ExecutionV1) {
         use kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1;
         let geometry = PalwQwen25GeometryV1 {
             layer_count: 2,
@@ -4408,7 +4929,7 @@ mod tests {
         };
         let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v7(geometry).expect("a valid graph-v7 A16 profile");
         assert!(kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&profile));
-        dense_run_for(geometry, profile, 3, 4)
+        dense_run_for(geometry, profile, prefill, decode)
     }
 
     /// The graph-v5 fold fixture at a chosen geometry and job size, for a test that needs a tree
@@ -4559,6 +5080,101 @@ mod tests {
     #[test]
     fn every_held_graph_v7_interval_opens_and_a_recomputing_seat_licenses_it() {
         check_every_interval_opens_and_a_recomputing_seat_licenses_it(dense_v7_run());
+    }
+
+    /// **ADR-0103 Invariant 6: a seat that resumes from fetched state and a seat that recomputes
+    /// reach the same verdict, and a fetched chunk that does not verify is refused by name and
+    /// never replayed from.** At every anchored interval of the held run: the executor serves the
+    /// state at the interval's start; the seat verifies it slice by slice against the committed
+    /// checkpoint and it is byte for byte the state its own recompute reaches; the interval
+    /// verifies Valid from it. A byte moved in one fetched chunk names that chunk's slice, and the
+    /// memo holds nothing from it; a shard's slices verify on their own and are not the whole state.
+    #[test]
+    fn a_seat_that_resumes_reaches_the_verdict_a_seat_that_recomputes_does() {
+        let (artifact, profile, ctx, prompt, run) = dense_v7_run();
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let bytes = crate::produce::base0_fp_material_encode_v2(&run, &ids).expect("the fold retains");
+        let material = crate::produce::base0_fp_material_decode_v2(&bytes).expect("decodes");
+        let engine = crate::engine_a16::A16Engine::new(&artifact).expect("an A16 artifact");
+        let plan = engine.plan_from_profile(&profile).expect("the plan");
+        let interval = kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1;
+        let ladder = PALW_STEP_LEG_MAX_LEAVES;
+        let form = kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat;
+        let geometry = Base0FpIntervalGeometryV1::from_binding_v1(&run.binding, interval).expect("a geometry");
+        assert!(geometry.interval_count >= 3);
+        let recompute = |covered: u32| {
+            let mut kernels = crate::fp_recompute::A16RecomputeKernelsV1::new(&artifact, Some(&plan)).ok()?;
+            crate::fp_recompute::base0_fp_recompute_state_at_covered_v1(&profile, &ctx, &ids, &run.generated_token_ids, covered, &mut kernels).ok()
+        };
+        let claim = PalwClaimRootsV1 { execution_root: run.execution_root, trace_root: run.trace_root, anchor: ctx.job_id };
+        let kernels = crate::qwen25_a16_backend::a16_interval_kernels_for_tests_v1(&artifact, Some(&plan));
+        for index in 1..geometry.interval_count {
+            let covered = geometry.anchor_covered_call(index).expect("an anchored interval");
+            let served = base0_open_fp_resume_v1(&material, index, &ids, interval, ladder, None, &recompute, form)
+                .unwrap_or_else(|e| panic!("interval {index}: the executor serves its state: {e:?}"));
+            crate::fp_recompute::base0_fp_seat_state_forget_v1();
+            let resumed = base0_fp_accept_resume_v1(&served, &ctx, &ids, covered, interval, ladder)
+                .unwrap_or_else(|e| panic!("interval {index}: an honest state verifies: {e:?}"));
+            let own = recompute(covered).expect("this seat recomputes");
+            assert_eq!(resumed.state_chunks_root, own.state_chunks_root, "interval {index}: one committed state");
+            assert_eq!(resumed.chunks, own.chunks, "interval {index}: byte for byte");
+            let opened = base0_open_fp_interval_sparse_v1(&material, index, &ids, interval, &kernels, form).expect("the interval opens");
+            assert_eq!(
+                base0_verify_fp_interval_opening_with_state_v1(&opened, claim, index, &ids, run.binding.step_leaf_count, interval, Some(&resumed), &kernels, form),
+                Base0FpIntervalSeatVerdictV1::Valid,
+                "interval {index}: the verdict from the fetched state is the recomputing seat's"
+            );
+        }
+
+        // Tampered: one byte of one fetched chunk moved — refused by the slice it lives in.
+        let index = geometry.interval_count - 1;
+        let covered = geometry.anchor_covered_call(index).expect("anchored");
+        let served = base0_open_fp_resume_v1(&material, index, &ids, interval, ladder, None, &recompute, form).expect("serves");
+        let mut forged = Base0FpResumeOpeningV1::decode_v1(&served).expect("decodes");
+        let first_slice = forged.slices[0];
+        forged.chunks[0][0] ^= 0x5A;
+        crate::fp_recompute::base0_fp_seat_state_forget_v1();
+        assert_eq!(
+            base0_fp_accept_resume_v1(&forged.encode_v1().unwrap(), &ctx, &ids, covered, interval, ladder),
+            Err(Base0FpResumeRefusalV1::FetchedChunkDoesNotVerify { slice: first_slice }),
+        );
+        assert!(
+            crate::fp_recompute::base0_fp_seat_state_held_v1(&profile, &ctx, &ids, covered).is_none(),
+            "a state that did not verify is never the seat's"
+        );
+
+        // A shard's slices verify on their own — the top leaves stand in for the rest — and are
+        // not a whole state to replay from.
+        let shard = base0_open_fp_resume_v1(&material, index, &ids, interval, ladder, Some(0..2), &recompute, form).expect("a shard");
+        let (opened, verified, _) = base0_fp_verify_resume_v1(&shard, &ctx, covered, interval, ladder).expect("the shard verifies locally");
+        assert_eq!(opened.slices, vec![0, 1]);
+        assert!(!verified.is_empty() && (verified.len() as u32) < opened.leaf.state_chunk_count);
+        assert!(matches!(
+            base0_fp_accept_resume_v1(&shard, &ctx, &ids, covered, interval, ladder),
+            Err(Base0FpResumeRefusalV1::NotTheWholeState { .. })
+        ));
+        // And the request index is its own kind on the lane.
+        let packed = base0_fp_resume_request_index_v1(index).expect("inside the bit");
+        assert_eq!(base0_fp_resume_request_decode_v1(packed), Some(index));
+        assert_eq!(base0_fp_resume_request_decode_v1(index), None, "a plain index is not a resume request");
+        assert_eq!(base0_fp_block_leaves_request_decode_v1(packed), None, "nor a block-leaves request");
+        let block = base0_fp_block_leaves_request_index_v1(index, 3).expect("a block request");
+        assert_eq!(base0_fp_resume_request_decode_v1(block), None, "and a block request is not a resume one");
+    }
+
+    /// **ADR-0103 Decision 2 at the prefill**: an interval that resumes inside the prompt — the
+    /// shipped unit's interval 0 would have been the whole prefill — opens with no seed row and a
+    /// recomputing seat licenses it from its own state at that position.
+    #[test]
+    fn a_held_interval_that_resumes_inside_the_prompt_opens_and_is_licensed() {
+        let (_, _, ctx, _, run) = dense_v7_run_mid_prefill();
+        let interval = kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1;
+        let geometry = Base0FpIntervalGeometryV1::from_binding_v1(&run.binding, interval).expect("a geometry");
+        let window = geometry.window_for(1).expect("interval 1");
+        assert!(window.first_step <= u64::from(ctx.declared_prefill_tokens), "interval 1 starts inside the prompt: {window:?}");
+        assert!(window.last_step > u64::from(ctx.declared_prefill_tokens), "and crosses into the decode calls");
+        assert_eq!(geometry.seed_step_v1(1), None, "its first id is the prompt's");
+        check_every_interval_opens_and_a_recomputing_seat_licenses_it(dense_v7_run_mid_prefill());
     }
 
     #[allow(clippy::type_complexity)]

@@ -547,6 +547,36 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         job.decode_token_limit.saturating_sub(1)
     }
 
+    /// **ADR-0103 Decision 2: which route this family's seat takes to an interval's start**, for a
+    /// class under the held map — `Recompute` where the whole context fits `window_receipt` at the
+    /// family's replay rate, `Resume` otherwise; `None` for every other class (the shipped seat
+    /// recomputes, ADR-0082 Decision 9). The seat and the executor both ask it, with the ruleset's
+    /// window, so neither can choose the route the other did not.
+    fn fp_held_route_v1(&self, _window_receipt_daa: u64) -> Option<crate::palw_held_context_v1::PalwHeldSeatRouteV1> {
+        None
+    }
+
+    /// **ADR-0103 Decision 2, the executor's half of the Resume route: the state interval `index`
+    /// resumes from**, served — the checkpoint named, its slices' chunks and every slice's top leaf
+    /// carried. Opaque bytes, read only by the family that wrote them.
+    fn open_fp_resume_v1(&self, _capture: &[u8], _index: u32, _prompt_token_ids: &[u32]) -> Result<Vec<u8>, String> {
+        Err("this execution family serves no resume state".to_string())
+    }
+
+    /// **The seat's half: verify a fetched state against the committed checkpoint and hold it as
+    /// this seat's own** — so the interval verification that follows replays from it exactly as it
+    /// would from a recomputed one. Returns the state's root, the number the seat compares against
+    /// the opening's anchor. A chunk that does not verify is a refusal by name, and nothing is kept.
+    fn fp_accept_resume_v1(
+        &self,
+        _resume: &[u8],
+        _context: &crate::palw_v2::PalwJobContextV2,
+        _prompt_token_ids: &[u32],
+        _covered: u32,
+    ) -> Result<crate::Hash64, String> {
+        Err("this execution family accepts no resume state".to_string())
+    }
+
     /// **The committed output ids of a retained capture, read by the family that wrote it**
     /// (ADR-0082 Decision 9's companion verb). A seat that recomputes the cache teacher-forces the
     /// executor's own answer, so it needs the ids the commitment binds — and it must get them

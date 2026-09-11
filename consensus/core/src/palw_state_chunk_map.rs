@@ -475,6 +475,29 @@ pub fn palw_state_chunk_leaves_for_map_v1(
         .collect()
 }
 
+/// **Every slice's top leaf** — `state_top_leaf_v4(slice, blocks, sub_root)` over the held layout,
+/// from leaves already hashed (ADR-0103 Decisions 2 and 3). What a resume opening carries so that a
+/// seat holding a SHARD checks its fetch locally: it recomputes the top leaves of the slices it
+/// fetched and folds the top root from these, `O(its chunks + slices)`, never the whole state.
+pub fn palw_state_top_leaves_v4(
+    layout: &PalwStateLayoutV4,
+    leaves: &[Hash64],
+) -> Result<Vec<Hash64>, crate::palw_step_leg::PalwStepLegError> {
+    use crate::palw_step_leg::PalwStepLegError;
+    if leaves.len() as u64 != layout.chunk_count() {
+        return Err(PalwStepLegError::StateChunksOutOfRange { got: leaves.len(), max: layout.chunk_count() as usize });
+    }
+    (0..layout.slice_count())
+        .map(|slice| {
+            let blocks = layout.block_count(slice).unwrap_or(0);
+            let hashes: Vec<Hash64> =
+                (0..blocks).map(|block| leaves[layout.flat_index(slice, block).expect("in range by construction") as usize]).collect();
+            let sub_root = crate::palw_step_leg::state_slice_root_v4(&hashes)?;
+            Ok(crate::palw_step_leg::state_top_leaf_v4(slice, blocks, &sub_root))
+        })
+        .collect()
+}
+
 /// **The state root from leaves already hashed under the class's map** (the flat order).
 pub fn palw_state_root_from_leaves_for_map_v1(
     profile: &PalwShapeProfileV3,

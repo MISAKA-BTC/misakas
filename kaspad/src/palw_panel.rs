@@ -1219,6 +1219,15 @@ impl PalwPanelService {
         Some(c.saturating_mul(plurality).saturating_mul(plurality).div_ceil(MAXIMUM_STANDARD_TRANSACTION_MASS))
     }
 
+    /// **This ruleset's `window_receipt`**, the window a held class's seat route is derived against
+    /// (ADR-0103 Decision 2). `0` on a network with no V2 ruleset — where no class is held.
+    fn window_receipt_daa_v1(&self) -> u64 {
+        match &self.consensus_config.params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => bundle.state.window_receipt(),
+            _ => 0,
+        }
+    }
+
     /// This chain's minimum collateral, or `None` on a network with no bonds to register.
     fn collateral_floor(&self) -> Option<u64> {
         match &self.consensus_config.params.palw_consensus_mode {
@@ -4693,18 +4702,20 @@ impl PalwPanelService {
     /// Runs on a blocking thread (the transport arranges that): it reads a file and runs the
     /// family's opening arithmetic.
     fn open_retained_interval(&self, claim: Hash64, interval_index: u32) -> Option<Vec<u8>> {
-        use misaka_palw_base0::fp_interval::base0_fp_block_leaves_request_decode_v1;
+        use misaka_palw_base0::fp_interval::{base0_fp_block_leaves_request_decode_v1, base0_fp_resume_request_decode_v1};
         let bytes = self
             .retained_capture(&claim)
             .or_else(|| std::fs::read(self.config.retention_dir.join("foreign").join(format!("{claim}.material"))).ok())?;
         let session = self.consensus_manager.consensus().unguarded_session();
         // ADR-0086 Decision 6: a block-leaves request rides the same lane under a high-bit index.
         let block_request = base0_fp_block_leaves_request_decode_v1(interval_index);
+        // ADR-0103 Decision 2: so does a held class's resume request, under bit 30.
+        let resume_request = base0_fp_resume_request_decode_v1(interval_index);
         // ADR-0085 §6 item 4: the step leaves the open court sessions on this claim have narrowed
         // to, which the served interval's annex carries when they fall inside it. Read off the
         // CHAIN, never off the request: an asker names nothing here, and a leaf no session names
         // is served no tile.
-        let disputed: Vec<u64> = match (block_request, self.bond) {
+        let disputed: Vec<u64> = match (block_request.or(resume_request.map(|i| (i, 0))), self.bond) {
             (None, Some(bond)) => session
                 .palw_court_duties_v2(vec![PalwBondKeyV2(bond)])
                 .into_iter()
@@ -4738,11 +4749,14 @@ impl PalwPanelService {
                      what: &str|
          -> Option<Vec<u8>> {
             let started = std::time::Instant::now();
-            let answer = match block_request {
-                Some((interval, block)) => backend
+            let answer = match (block_request, resume_request) {
+                (Some((interval, block)), _) => backend
                     .open_fp_block_leaves(capture, interval, block, prompt_ids)
                     .map(|b| (b, format!("block {block} of interval {interval}"))),
-                None => backend.open_fp_interval_with_close(capture, interval_index, prompt_ids, &disputed).map(|b| {
+                (None, Some(interval)) => backend
+                    .open_fp_resume_v1(capture, interval, prompt_ids)
+                    .map(|b| (b, format!("the state interval {interval} resumes from (ADR-0103 Decision 2)"))),
+                (None, None) => backend.open_fp_interval_with_close(capture, interval_index, prompt_ids, &disputed).map(|b| {
                     let named = if disputed.is_empty() {
                         format!("interval {interval_index}")
                     } else {
@@ -5288,6 +5302,13 @@ impl PalwPanelService {
         // backend answers because the backend holds the profile; the real guard is still the
         // geometry re-derivation inside `verify_fp_interval_opening`.
         let covered_bound = backend.checkpoint_covered_bound_for_context_v1(ctx);
+        // **ADR-0103 Decision 2: the route to an interval's start is the class's, derived.** A held
+        // class whose whole context does not fit this ruleset's receipt window at its family's
+        // replay rate is resumed from the state the executor serves — fetched, verified slice by
+        // slice against the committed checkpoint, never replayed from unverified — instead of a
+        // prefix recompute no window holds. Every other class recomputes (ADR-0082 Decision 9).
+        let resumes = backend.fp_held_route_v1(self.window_receipt_daa_v1())
+            == Some(kaspa_consensus_core::palw_held_context_v1::PalwHeldSeatRouteV1::Resume);
         let mut unanswered: Vec<u32> = Vec::new();
         let held: usize = draw.intervals.iter().filter(|i| openings.contains_key(&(duty.claim_id, **i))).count();
         info!(
@@ -5297,11 +5318,18 @@ impl PalwPanelService {
 
         for index in &draw.intervals {
             let candidates = openings.get(&(duty.claim_id, *index)).cloned().unwrap_or_default();
+            // The resume state is asked for beside the interval, so one round trip brings both.
+            let resume_packed =
+                if resumes && *index > 0 { misaka_palw_base0::fp_interval::base0_fp_resume_request_index_v1(*index) } else { None };
             if candidates.is_empty() {
                 unanswered.push(*index);
+                unanswered.extend(resume_packed.filter(|p| !openings.contains_key(&(duty.claim_id, *p))));
                 continue;
             }
             let mut answered = false;
+            // Set when the interval waits on its resume state: the opening is held, and asking
+            // for it again would be a second copy of bytes this seat already has.
+            let mut awaiting_resume = false;
             for bytes in candidates {
                 // **One context per claim** (ADR-0084 Decision 4), enforced rather than assumed.
                 //
@@ -5338,13 +5366,45 @@ impl PalwPanelService {
                         continue;
                     }
                     let (ctx_owned, prompt_owned, output_owned) = (ctx.clone(), prompt_ids.to_vec(), output_ids.to_vec());
-                    let Ok((returned, recomputed)) =
-                        offload(backend, move |b| b.checkpoint_root_for_context_v1(&ctx_owned, &prompt_owned, &output_owned, covered))
-                            .await
-                    else {
+                    let resumed = match resume_packed {
+                        None => None,
+                        Some(packed) => match openings.get(&(duty.claim_id, packed)).and_then(|v| v.first().cloned()) {
+                            // Not held yet: ask, and conclude nothing about this interval this round.
+                            None => {
+                                unanswered.push(packed);
+                                awaiting_resume = true;
+                                break;
+                            }
+                            Some(state_bytes) => Some(state_bytes),
+                        },
+                    };
+                    let Ok((returned, recomputed)) = (match resumed {
+                        // The Resume route: the served state, verified against the committed
+                        // checkpoint and held as this seat's own, so the interval check below
+                        // replays from it exactly as from a recomputed one (ADR-0103 Invariant 6).
+                        Some(state_bytes) => {
+                            offload(backend, move |b| b.fp_accept_resume_v1(&state_bytes, &ctx_owned, &prompt_owned, covered)).await
+                        }
+                        None => {
+                            offload(backend, move |b| b.checkpoint_root_for_context_v1(&ctx_owned, &prompt_owned, &output_owned, covered))
+                                .await
+                        }
+                    }) else {
                         return None;
                     };
                     backend = returned;
+                    if resume_packed.is_some()
+                        && let Err(why) = &recomputed
+                    {
+                        // A state that does not verify is refused by name and never replayed from.
+                        // Nothing is filed: an executor that served another state has served no
+                        // evidence, and the interval goes back to the quorum's Unavailable arm.
+                        warn!(
+                            "[{PALW_PANEL}] claim {}: the state served for interval {index} does not verify against checkpoint                              {checkpoint_index} ({why}) — not replayed from (ADR-0103 Invariant 6)",
+                            duty.claim_id
+                        );
+                        continue;
+                    }
                     let recomputed = match recomputed {
                         Ok(root) => root,
                         Err(why) => {
@@ -5468,17 +5528,26 @@ impl PalwPanelService {
                     PalwFpIntervalVerdictV1::Mismatch | PalwFpIntervalVerdictV1::Unverifiable => continue,
                 }
             }
-            if !answered {
+            if !answered && !awaiting_resume {
                 unanswered.push(*index);
             }
         }
 
         if unanswered.is_empty() {
-            info!(
-                "[{PALW_PANEL}] claim {}: {} interval(s) replayed against this seat's own recomputed state — no history fetched",
-                duty.claim_id,
-                draw.intervals.len()
-            );
+            if resumes {
+                info!(
+                    "[{PALW_PANEL}] claim {}: {} interval(s) replayed from state this seat verified against the committed \
+                     checkpoints (the Resume route, ADR-0103 Decision 2)",
+                    duty.claim_id,
+                    draw.intervals.len()
+                );
+            } else {
+                info!(
+                    "[{PALW_PANEL}] claim {}: {} interval(s) replayed against this seat's own recomputed state — no history fetched",
+                    duty.claim_id,
+                    draw.intervals.len()
+                );
+            }
             return Some(PalwReceiptVerdictV2::Valid);
         }
         // Ask for what is missing and conclude nothing this round. The caller's tail is unchanged:
