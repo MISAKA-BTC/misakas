@@ -4744,7 +4744,7 @@ impl VirtualStateProcessor {
         state.claim_readers_v2(&claim)
     }
 
-    /// A claim's committed roots and price at the tip (ADR-0109 Decision 2) — see the trait doc.
+    /// A claim's committed roots and price at the tip (ADR-0111 Decision 2) — see the trait doc.
     pub fn palw_claim_roots_v2_impl(
         &self,
         claim: kaspa_consensus_core::Hash64,
@@ -7301,7 +7301,7 @@ impl VirtualStateProcessor {
                         &accusation.binding,
                     )
                     .map_err(|e| format!("claim {claim_id}: {e}"))?;
-                    // **ADR-0109 Decision 3: a leaf is demanded only where the chain assigned it.**
+                    // **ADR-0111 Decision 3: a leaf is demanded only where the chain assigned it.**
                     // The demanding seat's own draw — keyed by the network domain, which is held here
                     // and not in the fold — must have put the leaf's interval in that seat's sample,
                     // so no seat can pick the leaf an executor must put on chain.

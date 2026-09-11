@@ -2186,7 +2186,7 @@ pub fn base0_fp_challenger_replay_tiles_capped_v1<K: Base0FpIntervalKernelsV1>(
 /// frontier, so on a fold (V4) those leaves must BE the committed ones — `own_leaves_must_root`.
 /// A seat NAMING a leaf (ADR-0086 Decision 6) asks the opposite question, where its leaves stop
 /// being the executor's, and a lie inside the interval is exactly the case in which they do not
-/// walk: with the check, no lying interval could ever be named (ADR-0109's live drill —
+/// walk: with the check, no lying interval could ever be named (ADR-0111's live drill —
 /// "this party's replay does not reproduce the step leg root", every round, on the one interval
 /// that held the lie). The naming side binds the executor's leaves to its commitment through the
 /// served block instead (`Base0FpBlockLeavesV1::folds_to_v1`).
@@ -3367,7 +3367,7 @@ pub fn base0_fp_interval_of_leaf_v1(
     family_checkpoint_interval: u32,
     leaf: u64,
 ) -> Option<u32> {
-    // The seat's own geometry, spelled once in the core (ADR-0109): a class under the held map
+    // The seat's own geometry, spelled once in the core (ADR-0111): a class under the held map
     // samples intervals of POSITIONS (ADR-0103 Decision 2), so its leaf's interval is its step's,
     // not its call's — the call-unit form this used to take put every prefill leaf in interval 0.
     let geometry = kaspa_consensus_core::palw_leaf_evidence_v1::PalwSeatIntervalGeometryV1::from_parts_v1(
@@ -3594,10 +3594,10 @@ pub fn base0_fp_block_leaves_from_tiles_v1(
 }
 
 // =================================================================================================
-// ADR-0109 Decision 6 — the executor answers every held unit its retention can answer
+// ADR-0111 Decision 6 — the executor answers every held unit its retention can answer
 // =================================================================================================
 
-/// **A held state-chunk accusation's answer, from the retention** (ADR-0103 Decision 4; ADR-0109
+/// **A held state-chunk accusation's answer, from the retention** (ADR-0103 Decision 4; ADR-0111
 /// Decision 6): checkpoint `checkpoint`'s leaf, opened against the binding's checkpoint root, and
 /// chunk `chunk` of its state with the path under the class's map — what
 /// `palw_held_da_check_disclosure_v1` accepts, or a refusal by name.
@@ -3658,7 +3658,7 @@ pub fn base0_fp_held_state_chunk_answer_v1(
     ))
 }
 
-/// **A held step-range accusation's answer, from the retention** (ADR-0103 Decision 4; ADR-0109
+/// **A held step-range accusation's answer, from the retention** (ADR-0103 Decision 4; ADR-0111
 /// Decision 6): the leaf hashes of `[first, first + count)` and the frontier that folds them to the
 /// binding's step root. A fold re-derives the leaves by replaying the retained-level span around the
 /// range — the replay an interval opening's edges and a block's leaves already take — and a dense
@@ -5528,7 +5528,7 @@ mod tests {
         assert_eq!(base0_fp_resume_request_decode_v1(block), None, "and a block request is not a resume one");
     }
 
-    /// **ADR-0109 Decision 6: the executor answers every held unit the court can name, from its
+    /// **ADR-0111 Decision 6: the executor answers every held unit the court can name, from its
     /// retention, and the court takes the answer.** On the held fold (graph-v7, the Merkle prompt
     /// form the mint mandates): the first and last chunk of every checkpoint answer a state-chunk
     /// accusation, and ranges at the step space's two ends, one straddling a retained block and the
@@ -5679,7 +5679,7 @@ mod tests {
         straddles
     }
 
-    /// **ADR-0109 Decision 3: the chain's geometry is the seat's.** The bound a leaf demand is
+    /// **ADR-0111 Decision 3: the chain's geometry is the seat's.** The bound a leaf demand is
     /// admitted under reads the claim's intervals off the binding (`PalwSeatIntervalGeometryV1`);
     /// the seat draws over the family's own count and opens the family's own windows. On a
     /// per-call class and a held one, the two counts agree and every leaf's interval is the window

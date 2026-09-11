@@ -220,7 +220,7 @@ pub fn palw_shard_court_verdict_v1(
 }
 
 /// **The one move, on its content alone** — the adjudication behind both a `ShardCourtAccused`
-/// accusation and a leaf's evidence disclosed to the held DA court (ADR-0109 Decision 1): one
+/// accusation and a leaf's evidence disclosed to the held DA court (ADR-0111 Decision 1): one
 /// function, so a leaf cannot read one way inside an accusation and another inside a disclosure.
 /// The refutation's own profile must hash to the claim's class; a fused site is named as such; the
 /// artifact openings must prove against the class's registered root; then the court's terminal
@@ -267,7 +267,7 @@ pub fn palw_one_move_verdict_v1(
     }
 }
 
-/// **A leaf's evidence** (ADR-0109 Decision 1) — a `ShardCourtAccused` accusation's content
+/// **A leaf's evidence** (ADR-0111 Decision 1) — a `ShardCourtAccused` accusation's content
 /// without the accuser: the refutation's committed half (the output tile and its opening, the
 /// canonical input rows, the KV anchor and the decode pin where the leaf reads them), the artifact
 /// rows its recomputation reads, and the prompt tile its gather reads. What an executor serves a

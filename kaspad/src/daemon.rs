@@ -1665,7 +1665,7 @@ Do you confirm? (y/n)";
                             }
                             if args.palw_drill_answer_only {
                                 warn!(
-                                    "PALW DRILL: this node serves its canonical claims' answer envelope, never the capture (ADR-0109)."
+                                    "PALW DRILL: this node serves its canonical claims' answer envelope, never the capture (ADR-0111)."
                                 );
                             }
                             args.palw_drill_answer_only
@@ -1673,7 +1673,7 @@ Do you confirm? (y/n)";
                         drill_refuse_leaf_evidence: {
                             if args.palw_drill_refuse_leaf_evidence {
                                 warn!(
-                                    "PALW DRILL: this node refuses every leaf-evidence request; seats must demand on chain (ADR-0109)."
+                                    "PALW DRILL: this node refuses every leaf-evidence request; seats must demand on chain (ADR-0111)."
                                 );
                             }
                             args.palw_drill_refuse_leaf_evidence

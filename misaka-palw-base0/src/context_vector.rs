@@ -1041,7 +1041,7 @@ pub fn palw_verify_context_vector_v1(
             .held_step_range_answer_v1(&capture, &ids, first, count as u32)
             .map(|opening| PalwHeldDisclosureV1::StepRange { opening });
         f.availability.push(check(PalwHeldMissingV1::StepRange { first, count: count as u32 }, answer));
-        // A leaf's evidence (ADR-0109): the unit's answer, and the one verdict over it.
+        // A leaf's evidence (ADR-0111): the unit's answer, and the one verdict over it.
         let answer = leaf0_evidence
             .clone()
             .ok_or_else(|| "the executor built no evidence of leaf 0".to_string())
@@ -1058,7 +1058,7 @@ pub fn palw_verify_context_vector_v1(
 /// **The court's second half**: the same job re-executed with the drill's one-tile fault at leaf
 /// 0, retained dense; its interval 0 verified by a seat (a fault), the block's leaves served and
 /// the leaf named from them (ADR-0086 Decision 6), and the executor's evidence at that leaf judged
-/// by the one verdict (ADR-0109 Decision 1).
+/// by the one verdict (ADR-0111 Decision 1).
 #[allow(clippy::too_many_arguments)]
 fn tamper_stage_v1(
     class: &VectorClassV1,

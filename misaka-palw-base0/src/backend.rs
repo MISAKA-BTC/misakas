@@ -865,7 +865,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
         // BASE-0's pin is the whole committed rows (`Base0V1`), which no annex carries, and the
         // court refuses a tiled pin on a flat class at every leaf ("the tiled pin is not its
         // scheme"). A close assembled here would be one the chain can never read, so the family
-        // refuses by name and its caller takes the whole-capture prover — found by ADR-0109's
+        // refuses by name and its caller takes the whole-capture prover — found by ADR-0111's
         // evidence builder, whose decode leaf came back unadjudicable.
         if self.profile.logits_scheme_id != kaspa_consensus_core::palw_step_refute::tiled_logits_scheme_id_v1() {
             return Err("this family commits its logits flat, and a close from served intervals pins them tiled".to_string());
@@ -1743,7 +1743,7 @@ mod tests {
         );
     }
 
-    /// **ADR-0109 Decisions 1 and 2: what an executor serves for a named leaf is the one-move
+    /// **ADR-0111 Decisions 1 and 2: what an executor serves for a named leaf is the one-move
     /// court's object, and both routes build the same one.** Under the Merkle prompt form a held
     /// network mandates: the evidence for the tampered leaf convicts at the class's root and the
     /// ruleset's ladder, the evidence for the same leaf of an honest capture clears, the annex route
@@ -1812,7 +1812,7 @@ mod tests {
     /// in a block, the executor serves the block's leaves, and the seat names the tampered leaf from
     /// its own replay. The naming used to run the close's replay, which walks the committed root
     /// with the seat's OWN leaves — and a lie inside the interval is exactly when they do not walk,
-    /// so no lying interval was ever named (ADR-0109's live drill, every round). An honest block
+    /// so no lying interval was ever named (ADR-0111's live drill, every round). An honest block
     /// names nothing.
     #[test]
     fn a_served_block_names_the_leaf_a_liar_committed() {
@@ -1857,7 +1857,7 @@ mod tests {
         }
     }
 
-    /// **ADR-0109 Decision 6 through the trait a node holds, on the floor's dense retention.** The
+    /// **ADR-0111 Decision 6 through the trait a node holds, on the floor's dense retention.** The
     /// floor keeps its tiles and its checkpoint chunks, so its answers are read and hashed rather
     /// than replayed — and the court takes them against the claim's own root, exactly as it takes
     /// the fold's (`the_executor_answers_every_held_unit_the_court_can_name`).

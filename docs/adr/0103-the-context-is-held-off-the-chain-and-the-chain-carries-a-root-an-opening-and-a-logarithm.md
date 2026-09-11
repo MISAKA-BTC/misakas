@@ -663,9 +663,9 @@ acceptance arm, and on a live devnet by `HELD=1 scripts/misaka-palw-shard-court-
   committed evidence (its output tile and input rows, each with its opening against the step root,
   bounded by the court's close ceiling), whose withholding defaults the executor exactly as a
   missing tile of ids does. (b) is the one that makes silence convictable, and (a) is its
-  off-chain fast path; recommended together. **Closed by [ADR-0109](0109-a-seat-may-demand-the-committed-leaf-it-needs-to-judge.md)**,
+  off-chain fast path; recommended together. **Closed by [ADR-0111](0111-a-seat-may-demand-the-committed-leaf-it-needs-to-judge.md)**,
   which built both — the leaf request rides the interval lane after all, under bit 29 with the leaf
-  in a signed field — and drilled each to a slash with no seat holding the capture (ADR-0109 §8.3).
+  in a signed field — and drilled each to a slash with no seat holding the capture (ADR-0111 §8.3).
 * **A resume opening past the interval lane's 4 MiB** (a 2M shard's state is gigabytes): §4 and §8
   already say the class declares its own lane cap off the plan; no such lane is built.
 * **A shard seat's replay from its own slices.** The fetch is verified slice-locally; replaying one

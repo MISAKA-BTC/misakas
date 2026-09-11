@@ -558,9 +558,9 @@ message PalwIntervalOpeningRequestMessage{
   // The requester's own DAA score when it signed. The server refuses a request older or newer
   // than its freshness window, so a captured request is not a permanent serving right.
   uint64 requestedDaa = 5;
-  // **ADR-0109 Decision 2: a leaf's evidence.** Meaningful only when `intervalIndex` sets bit 29
+  // **ADR-0111 Decision 2: a leaf's evidence.** Meaningful only when `intervalIndex` sets bit 29
   // (`PALW_LEAF_EVIDENCE_REQUEST_BIT_V1`) above the leaf's interval: then this names the step leaf
-  // whose evidence the seat asks for, and the signature binds it. A pre-0109 peer ignores the field
+  // whose evidence the seat asks for, and the signature binds it. A pre-0111 peer ignores the field
   // and reads the index as an interval past every job, which it cannot open.
   uint64 leafIndex = 6;
 }

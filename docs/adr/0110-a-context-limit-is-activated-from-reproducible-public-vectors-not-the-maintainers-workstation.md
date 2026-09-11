@@ -1,13 +1,13 @@
 # ADR-0110 — A context limit is activated from reproducible public vectors, not the maintainer's workstation
 
 * Status: PROPOSED 2026-09-11 on `feat/adr-0103-held-context`, written from the operator's decision
-  of the same day (ADR-0103 §10.5 answered by ADR-0109; this is the other half of that answer).
+  of the same day (ADR-0103 §10.5 answered by ADR-0111; this is the other half of that answer).
   **Decisions 1–5 IMPLEMENTED the same day (§9)**; the 512, 4,096 and 32,768-position vectors pass
   every stage and are pinned. Consensus-inert: no object, acceptance rule, fence, parameter or
   fingerprint moves. A fleet takes it by an ordinary rebuild.
 * Builds on: [0103](0103-the-context-is-held-off-the-chain-and-the-chain-carries-a-root-an-opening-and-a-logarithm.md)
   (§10.5: no 2M claim ran; the "done when" was met at devnet widths and at 2M only in the
-  generators' tables), [0109](0109-a-seat-may-demand-the-committed-leaf-it-needs-to-judge.md) (the
+  generators' tables), [0111](0111-a-seat-may-demand-the-committed-leaf-it-needs-to-judge.md) (the
   last prosecution gap before arming), [0097](0097-a-models-fit-is-a-lookup-and-the-entrance-says-its-limits-before-the-first-token.md) and [0092](0092-the-ladder-is-minted-once-and-the-clock-is-what-binds.md) §5 (a
   figure is a generated artifact, and a figure an ADR prints that the generator does not is a bug in
   the document), and ADR-0108 on `feat/adr-0108-extension-envelope` (Decision 4: a receipt is
@@ -28,7 +28,7 @@ It is evidence, not a vote: no code path reads it, and no number of receipts arm
 ## 1. What was missing
 
 ADR-0103 made every term the chain carries per claim constant or logarithmic in the context, and
-ADR-0109 closed the last prosecution gap. The regime's evidence at 2M is still the generator's
+ADR-0111 closed the last prosecution gap. The regime's evidence at 2M is still the generator's
 arithmetic. No 2M claim ran, because the dense row's cache at 2M is 112 GiB and the maintainer's Mac
 seats nothing that size (ADR-0103 §10.5). The operator's decision states the consequence both ways.
 The code can ship to testnet unarmed. The context is not armed on a result only one workstation
@@ -83,7 +83,7 @@ and runs these stages in order. A stage that fails still lets the later stages r
 | `produce` | the job, executed and retained as the executor retains it (the fold) | a capture, and the answer's ids |
 | `commit` | the binding and the claim's roots, derived from the capture | the roots the chain would record, each printed |
 | `seat` | every interval opened and verified along the class's route (recompute, or resume from served state — ADR-0103 Decision 2) | every interval `Valid` |
-| `court` | the executor's evidence (ADR-0109 Decision 1) at the vector's sampled leaves — the first prefill leaf, an interval's first leaf, the last decode leaf — judged by `palw_one_move_verdict_v1`; then a capture tampered at one of them, verified by a seat and judged the same way | honest leaves `FalseAccusation`; the tampered interval a fault, and its leaf `ExecutorGuilty` |
+| `court` | the executor's evidence (ADR-0111 Decision 1) at the vector's sampled leaves — the first prefill leaf, an interval's first leaf, the last decode leaf — judged by `palw_one_move_verdict_v1`; then a capture tampered at one of them, verified by a seat and judged the same way | honest leaves `FalseAccusation`; the tampered interval a fault, and its leaf `ExecutorGuilty` |
 | `availability` | each held unit (a prompt tile, a state chunk, a step range, a leaf's evidence) answered from the retention and checked by `palw_held_da_check_disclosure_v1` | every answer accepted |
 | `fit` | `palw_model_fit_v2` under the held regime at the vector's width, on the named ruleset | every chain wall constant or logarithmic, and admitted |
 
@@ -134,9 +134,9 @@ Its ADR names, before any height is scheduled:
 
 1. the vectors at the widths the move admits, each with its `vector_id` and the `document_id` the
    release build prints — green in CI up to 32,768 positions, and published above that;
-2. ADR-0109's two drills green on the release build;
+2. ADR-0111's two drills green on the release build;
 3. every open prosecution gap at the widths the move admits closed, or named as accepted (as of this
-   writing, ADR-0085 Decision 3's close from served intervals against a lying interval, ADR-0109
+   writing, ADR-0085 Decision 3's close from served intervals against a lying interval, ADR-0111
    §8.4);
 4. the fingerprint, identity and schedule the release prints, and which of them move.
 
@@ -223,9 +223,11 @@ document if one is given, and refuses a receipt whose context is not this ADR's.
 
 ## 8. Number hygiene
 
-The operator's draft called this ADR 0105. 0104–0108 were resident on other branches when it was
-written (ADR-0109 §7), and ADR-0109 took 0109, so this is 0110. No 0110 was resident on any branch
-on 2026-09-11 when it was first committed.
+The operator's draft called this ADR 0105. 0104–0109 were resident elsewhere when it was written
+(ADR-0111 §7): 0108 and 0109 on `origin/main`, the extension envelope and the bridge liveness. No 0110
+was resident on any branch on 2026-09-11 when it was first committed, and it keeps the number,
+because its vectors are named by it (`0110-dense-v7-…`) and every seed and pin is derived from those
+names. The leaf-demand ADR it builds on, written before it as 0109, is ADR-0111.
 
 ## 9. Implementation record (2026-09-11)
 

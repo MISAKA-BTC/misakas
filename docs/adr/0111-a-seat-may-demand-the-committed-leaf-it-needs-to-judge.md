@@ -1,4 +1,4 @@
-# ADR-0109 — A seat may demand the committed leaf it needs to judge
+# ADR-0111 — A seat may demand the committed leaf it needs to judge
 
 * Status: PROPOSED 2026-09-11 on `feat/adr-0103-held-context` (continuing ADR-0103 at `36f115c4`),
   written from the operator's decision on ADR-0103 §10.5; **IMPLEMENTED the same day (§8), both
@@ -173,13 +173,22 @@ paid back by the charge on the requester.
 and 0107 (share growth, `fix/share-growth-counts-final-work`) are resident on other branches as of
 2026-09-11. The operator's draft called this ADR and the verification-vector one 0104 and 0105.
 
-This ADR was first committed as 0108 (`e251c751`, 15:19:45 +0900) — 102 seconds after
-`f608a066` (15:18:03 +0900) committed ADR-0108, "an extension is a manifest the verifier
-recomputes", on `feat/adr-0108-extension-envelope`, a concurrent session's branch. A concurrent
-claimant renumbers the later writer, and this is the later writer: it is 0109, and every reference
-on this branch — code comments, log lines, the drill's patterns — was renumbered with it. The
-verification-vector ADR takes its number when it is written, from what is resident on every branch
-then, rather than reserving one here.
+This ADR has been renumbered twice on 2026-09-11, each time by the rule it states:
+
+1. It was first committed as 0108 (`e251c751`, 15:19:45 +0900), 102 seconds after `f608a066`
+   (15:18:03) committed ADR-0108, "an extension is a manifest the verifier recomputes", on a
+   concurrent session's `feat/adr-0108-extension-envelope`. That made this ADR the later writer,
+   and it moved to 0109 (`8856efc0`, 16:45:14).
+2. At 17:02:16 the bridge-liveness ADR, "a lock is its own claim, and finality is a label, not a
+   pause", was committed as 0109 on `feat/adr-0109-bridge-liveness`. At 17:37 it and ADR-0108 were
+   merged to `origin/main`. This ADR was the earlier writer of 0109 by seventeen minutes, but the
+   other one is published and this one was not. An unpublished document moves for nothing, and a
+   published one moves for every reader, so this one moved again. The number it took is 0111,
+   because 0110 was already this branch's verification-vector ADR, whose vector names embed its
+   number.
+
+Every reference on this branch moved with each renumbering: code comments, log lines and the drill's
+patterns. The commit subjects of the day still say `adr-0108` and `adr-0109`.
 
 ## 8. Implementation record (2026-09-11)
 
