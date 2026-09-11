@@ -745,6 +745,26 @@ pub async fn select_funding(
     must_exceed: u64,
     policy: FpFundingPolicy,
 ) -> Result<FpFunding, FpSubmitError> {
+    select_funding_where(client, address, must_exceed, policy, |_| true).await
+}
+
+/// [`select_funding`] with one more filter, for a caller whose node cannot see every reservation
+/// at this address.
+///
+/// The locked set is the ASKED node's: its consensus-locked collateral and its OWN panel's fee
+/// chain. A submitter that reaches the chain through a different node than the one whose panel
+/// spends from this address — a pool slot, whose node runs no wRPC and whose submitter asks the
+/// host's explorer node — gets a locked set without that panel's float in it, and largest-first
+/// selection then reaches for exactly the output the panel is about to spend. `keep` is how such
+/// a caller narrows the field to outputs no panel can hold (a mature coinbase is never a panel's
+/// float: the float is carrier change).
+pub async fn select_funding_where(
+    client: &dyn RpcApi,
+    address: &Address,
+    must_exceed: u64,
+    policy: FpFundingPolicy,
+    keep: impl Fn(&FpFunding) -> bool,
+) -> Result<FpFunding, FpSubmitError> {
     let locked = locked_outpoints(client).await?;
     let (pending_spent, pending_change) = mempool_view(client, address).await?;
 
@@ -778,11 +798,42 @@ pub async fn select_funding(
         cursor = page.next_cursor;
     }
     candidates.extend(pending_change.into_iter().filter(|c| !pending_spent.contains(&c.outpoint) && !locked.contains(&c.outpoint)));
-    candidates.sort_by(|a, b| b.entry.amount.cmp(&a.entry.amount));
-    candidates
-        .into_iter()
-        .find(|c| c.entry.amount > must_exceed)
+    choose_funding(candidates, must_exceed, &keep)
         .ok_or_else(|| FpSubmitError::NoFunding { address: address.to_string(), need: must_exceed })
+}
+
+/// The choice itself, once the three filters have run: the caller's `keep`, then largest first,
+/// then strictly above `must_exceed`. Pure, so the ordering and the filter are pinned without a
+/// node.
+fn choose_funding(mut candidates: Vec<FpFunding>, must_exceed: u64, keep: &dyn Fn(&FpFunding) -> bool) -> Option<FpFunding> {
+    candidates.retain(|c| keep(c));
+    candidates.sort_by(|a, b| b.entry.amount.cmp(&a.entry.amount));
+    candidates.into_iter().find(|c| c.entry.amount > must_exceed)
+}
+
+#[cfg(test)]
+mod choose_funding_tests {
+    use super::{FpFunding, choose_funding};
+    use kaspa_consensus_core::tx::{TransactionOutpoint, UtxoEntry};
+
+    /// The script is irrelevant to the choice, so every candidate carries the default one.
+    fn funding(index: u32, amount: u64, coinbase: bool) -> FpFunding {
+        FpFunding {
+            outpoint: TransactionOutpoint::new(kaspa_hashes::Hash64::from_u64_word(u64::from(index)), index),
+            entry: UtxoEntry::new(amount, Default::default(), 10, coinbase),
+        }
+    }
+
+    /// Largest first and strictly above the bound; and a caller that can keep only coinbase
+    /// outputs never gets the (larger) carrier change a panel may be about to spend.
+    #[test]
+    fn the_choice_is_largest_first_above_the_bound_within_the_callers_filter() {
+        let all = vec![funding(1, 5_000, true), funding(2, 90_000, false), funding(3, 20_000, true), funding(4, 1_000, true)];
+        assert_eq!(choose_funding(all.clone(), 1_000, &|_| true).map(|f| f.outpoint.index), Some(2));
+        assert_eq!(choose_funding(all.clone(), 1_000, &|f| f.entry.is_coinbase).map(|f| f.outpoint.index), Some(3));
+        assert_eq!(choose_funding(all.clone(), 20_000, &|f| f.entry.is_coinbase).map(|f| f.outpoint.index), None, "strictly above");
+        assert_eq!(choose_funding(Vec::new(), 0, &|_| true).map(|f| f.outpoint.index), None);
+    }
 }
 
 // -------------------------------------------------------------------------------------------

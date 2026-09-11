@@ -179,6 +179,13 @@ claim would not fit the bond, and it does not start the next job until the previ
 become a claim, or has been reported dropped. It keeps its state in
 `<outbox>/rail-watch-state.json`. `--once` runs one pass, for cron.
 
+**Point `--rpc` at the node whose panel spends from the bond key's address.** The funding it finds
+excludes that node's reserved outputs — its bond collateral and its panel's fee float. A node that
+is not running that panel does not know the float, and could hand it out. If you must submit
+through another node (a host running several nodes behind one RPC, as the pool does), add
+`--coinbase-funding-only`: the watcher then funds only from mature coinbase outputs, which a panel's
+float never is. Also pass `--retention-dir` for the node that serves the claims.
+
 ## 5. What a healthy run prints
 
 For one prompt, in order (DAA figures at today's cadence):

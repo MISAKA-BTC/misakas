@@ -131,6 +131,7 @@ fn main() {
     let mut watch_interval_secs: u64 = 20;
     let mut watch_max_attempts: u32 = 3;
     let mut watch_once = false;
+    let mut watch_coinbase_only = false;
     // `--print-identity`: the gateway's identity.json, assembled from the node and the key.
     let mut print_identity = false;
     let mut bond_flag: Option<String> = None;
@@ -158,6 +159,7 @@ fn main() {
             "--interval" => watch_interval_secs = value("--interval").parse().unwrap_or_else(|e| die(format!("{e}"))),
             "--max-attempts" => watch_max_attempts = value("--max-attempts").parse().unwrap_or_else(|e| die(format!("{e}"))),
             "--once" => watch_once = true,
+            "--coinbase-funding-only" => watch_coinbase_only = true,
             "--print-identity" => print_identity = true,
             "--bond" => bond_flag = Some(value("--bond")),
             "--print-claim" => print_claim = true,
@@ -179,7 +181,7 @@ fn main() {
                  [--fee <sompi>]] [--class-id <128hex>] [--class-leaves <u64>] \
                  [--submit --rpc <host:port> [--retention-dir <dir>] [--capture <material.bin>] [--dsl <fpd1>] \
                  [--anchor-ttl-daa <n>]]\n       misaka-palw-fp-rail --watch <outbox> --bond-key-seed <file> --rpc <host:port> \
-                 [--funding-outpoint <txid:index> --funding-amount <sompi>] [--interval <secs>] [--max-attempts <n>] [--once] \
+                 [--funding-outpoint <txid:index> --funding-amount <sompi>] [--coinbase-funding-only] [--interval <secs>] [--max-attempts <n>] [--once] \
                  [--fee <sompi>] [--class-leaves <u64>] [--retention-dir <dir>] [--anchor-ttl-daa <n>]\
                  \n       misaka-palw-fp-rail --print-identity --bond-key-seed <file> --rpc <host:port> --class-id <128hex> \
                  [--bond <txid:index>]\
@@ -236,6 +238,7 @@ fn main() {
             interval: std::time::Duration::from_secs(watch_interval_secs.max(1)),
             max_attempts: watch_max_attempts.max(1),
             once: watch_once,
+            coinbase_funding_only: watch_coinbase_only,
             funding,
             pass_through,
         });
@@ -831,6 +834,12 @@ mod watch {
         pub interval: Duration,
         pub max_attempts: u32,
         pub once: bool,
+        /// `--coinbase-funding-only`: when the watcher has to FIND funding, take only a mature
+        /// coinbase output. For a submitter whose `--rpc` node is not the node whose panel spends
+        /// from this address (a pool slot asks the host's explorer node): that node's locked set
+        /// does not hold the other panel's fee float, and a float is carrier change, never
+        /// coinbase — so this is the one filter that cannot reach for it.
+        pub coinbase_funding_only: bool,
         /// `--funding-outpoint` / `--funding-amount`: spent once, by the first job that needs
         /// funding; every later job chains off the previous carrier's change.
         pub funding: Option<(String, u64)>,
@@ -1357,22 +1366,30 @@ mod watch {
             coinbase_maturity: params.coinbase_maturity(),
             settlement_long_maturity_daa: params.dns_params.as_ref().map_or(0, |d| d.coinbase_settlement_long_maturity_daa),
         };
-        match runtime.block_on(misaka_palw_fp_submit::select_funding(client, &address, MIN_FUNDING_SOMPI, policy)) {
+        let coinbase_only = config.coinbase_funding_only;
+        match runtime.block_on(misaka_palw_fp_submit::select_funding_where(client, &address, MIN_FUNDING_SOMPI, policy, |f| {
+            !coinbase_only || f.entry.is_coinbase
+        })) {
             Ok(found) => {
                 let outpoint = format!("{}:{}", found.outpoint.transaction_id, found.outpoint.index);
                 if state.operator_funding_used.as_deref() == Some(outpoint.as_str()) {
                     quiet.say("funding", format!("no funding: the only output found at {address} is the one already spent"));
                     return Ok(None);
                 }
-                Ok(Some((outpoint, found.entry.amount, "the lane's funding selector")))
+                Ok(Some((
+                    outpoint,
+                    found.entry.amount,
+                    if coinbase_only { "a mature coinbase output (--coinbase-funding-only)" } else { "the lane's funding selector" },
+                )))
             }
             Err(misaka_palw_fp_submit::FpSubmitError::NoFunding { .. }) => {
                 quiet.say(
                     "funding",
                     format!(
-                        "no funding: {address} holds no mature, unlocked output above {MIN_FUNDING_SOMPI} sompi that the mempool is \
-                         not already spending. Send it some (`misaka wallet send --to {address} --amount 1`), or pass \
-                         --funding-outpoint"
+                        "no funding: {address} holds no mature, unlocked {}output above {MIN_FUNDING_SOMPI} sompi that the mempool \
+                         is not already spending. Send it some (`misaka wallet send --to {address} --amount 1`), or pass \
+                         --funding-outpoint",
+                        if coinbase_only { "COINBASE " } else { "" }
                     ),
                 );
                 Ok(None)
