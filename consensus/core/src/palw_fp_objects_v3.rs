@@ -185,7 +185,7 @@ pub fn palw_fp_objects_from_accepted_txs_under_held_v3<V>(
     txs: &[Transaction],
     network_domain: Hash64,
     freeprompt: &PalwFreePromptParamsV3,
-    _accepted_block: BlockHash,
+    accepted_block: BlockHash,
     panel_da_armed: bool,
     max_step_leaf_count: u64,
     ruleset_caps_armed: bool,
@@ -196,9 +196,55 @@ pub fn palw_fp_objects_from_accepted_txs_under_held_v3<V>(
 where
     V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 {
-    // The ruleset's own numbers, off the bundle rather than typed — the same rule the ladder
-    // beside them follows.
-    let ruleset_caps = ruleset_caps_armed.then(|| (freeprompt.max_prompt_tokens(), freeprompt.max_decode_tokens()));
+    palw_fp_objects_from_accepted_txs_by_class_v1(
+        txs,
+        network_domain,
+        freeprompt,
+        accepted_block,
+        panel_da_armed,
+        |_| PalwFpClassCapsV1 { step_ladder: max_step_leaf_count, held: false },
+        ruleset_caps_armed,
+        held_armed,
+        prompt_ids_form,
+        verify_mldsa87,
+    )
+}
+
+/// **What the walk bounds ONE commitment by, from its class** (ADR-0119 Decision 5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwFpClassCapsV1 {
+    /// The class's step ladder: the network's, or a held class's recorded `2^40`.
+    pub step_ladder: u64,
+    /// A class under the held regime — whose prompt cap, where the ruleset caps are armed, is the
+    /// regime's (`PALW_FP_HELD_MAX_PROMPT_TOKENS_V1`) rather than the frame-bounded advertised one.
+    pub held: bool,
+}
+
+/// The walk **with each commitment bounded by its own class** (ADR-0119 Decision 5).
+///
+/// `class_caps` is the accepting block's parent state read by class id
+/// (`PalwChainStateV2::class_step_ladder_v1` / `class_is_held_v1`): a class under the held regime
+/// recorded its own ladder when it registered, and a commitment of it is bounded by that ladder and
+/// the regime's prompt cap, while every other class's commitment is bounded exactly as before. The
+/// class is read off the commitment's own job, so the bound a commitment meets is a function of the
+/// commitment and the chain, never of the carrier.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_fp_objects_from_accepted_txs_by_class_v1<V, C>(
+    txs: &[Transaction],
+    network_domain: Hash64,
+    freeprompt: &PalwFreePromptParamsV3,
+    _accepted_block: BlockHash,
+    panel_da_armed: bool,
+    class_caps: C,
+    ruleset_caps_armed: bool,
+    held_armed: bool,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    verify_mldsa87: V,
+) -> PalwFpExtractionV3
+where
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+    C: Fn(&Hash64) -> PalwFpClassCapsV1,
+{
     let mut out = PalwFpExtractionV3::default();
     for tx in txs {
         if tx.subnetwork_id != SUBNETWORK_ID_PALW_FP_COMMITMENT {
@@ -213,9 +259,15 @@ where
             }
         };
         // The same stateless rules a peer applies — re-run here rather than assumed, because this
-        // walk must be total over whatever was accepted.
+        // walk must be total over whatever was accepted — at the bounds of the commitment's CLASS.
+        let caps = class_caps(&payload.commitment.job.class_id);
+        let ruleset_caps = ruleset_caps_armed.then(|| {
+            let prompt_cap =
+                if caps.held { crate::palw_freeprompt_v3::PALW_FP_HELD_MAX_PROMPT_TOKENS_V1 } else { freeprompt.max_prompt_tokens() };
+            (prompt_cap, freeprompt.max_decode_tokens())
+        });
         if payload
-            .validate_stateless_under_ruleset_v3(network_domain, panel_da_armed, max_step_leaf_count, ruleset_caps, prompt_ids_form)
+            .validate_stateless_under_ruleset_v3(network_domain, panel_da_armed, caps.step_ladder, ruleset_caps, prompt_ids_form)
             .is_err()
         {
             out.skipped.push((id, "payload is not stateless-admissible"));
@@ -288,6 +340,45 @@ pub fn validate_palw_fp_commitment_tx_under_v3(
     let payload: PalwFpCommitmentTxPayloadV3 =
         borsh::from_slice(payload).map_err(|_| crate::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable)?;
     payload.validate_shape_under_v3(panel_da_admissible, prompt_ids_form)
+}
+
+/// **The isolation door's work-leaves cap** (ADR-0119 Decision 6): the structural
+/// `PALW_FP_STRUCTURAL_WORK_LEAVES_CAP` (`2^32`) on a ruleset that declares no held regime, and the
+/// regime's ladder (`2^40`) on one that does — a held class's job at `2^21` positions is `≈2^38`
+/// leaves. Isolation holds no class and no height, so it asks the height-free question, exactly as
+/// the model market's sink does (ADR-0087 D6, audit M-9); the header-context door refuses a
+/// commitment past the structural cap below the fence ([`palw_fp_work_leaves_before_the_regime_v1`]),
+/// so a build that schedules the regime has the transaction validity of one that does not carry it
+/// at every height before the fence. The walk still bounds each commitment by its CLASS.
+pub fn palw_fp_isolation_work_leaves_cap_v1(held_declared: bool) -> u64 {
+    if held_declared {
+        crate::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1
+    } else {
+        crate::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP
+    }
+}
+
+/// [`validate_palw_fp_commitment_tx_under_v3`] at a stated work-leaves cap
+/// ([`palw_fp_isolation_work_leaves_cap_v1`]).
+pub fn validate_palw_fp_commitment_tx_under_v4(
+    payload: &[u8],
+    panel_da_admissible: bool,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    work_leaves_cap: u64,
+) -> Result<(), crate::palw_freeprompt_v3::PalwFpV3Error> {
+    let payload: PalwFpCommitmentTxPayloadV3 =
+        borsh::from_slice(payload).map_err(|_| crate::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable)?;
+    payload.validate_shape_under_ruleset_v3(panel_da_admissible, work_leaves_cap, None, prompt_ids_form)
+}
+
+/// **The header-context half of the door** (ADR-0119 Decision 6): the work leaves a commitment
+/// declares, when they are past the structural cap — `Some(work_leaves)` is a commitment that only
+/// the held regime's ladder admits, which the containing block's DAA must be past the fence for.
+/// `None` for anything else, including bytes that do not decode (isolation refused those already).
+pub fn palw_fp_work_leaves_before_the_regime_v1(payload: &[u8]) -> Option<u64> {
+    let payload: PalwFpCommitmentTxPayloadV3 = borsh::from_slice(payload).ok()?;
+    let leaves = payload.commitment.work_leaves;
+    (leaves > crate::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP).then_some(leaves)
 }
 
 #[cfg(test)]

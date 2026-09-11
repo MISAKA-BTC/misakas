@@ -7,7 +7,6 @@ use kaspa_consensus_core::dns_finality::{
     validate_stake_unbond_payload,
 };
 use kaspa_consensus_core::palw_carriage::{palw_carriage_tx_kind, validate_palw_carriage_stage1_tx};
-use kaspa_consensus_core::palw_fp_objects_v3::validate_palw_fp_commitment_tx_under_v3;
 use kaspa_consensus_core::palw_lifecycle_objects_v2::validate_palw_lifecycle_tx;
 use kaspa_consensus_core::subnets::{
     SUBNETWORK_ID_PALW_FP_COMMITMENT, SUBNETWORK_ID_PALW_LIFECYCLE, SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER,
@@ -42,6 +41,7 @@ impl TransactionValidator {
             self.palw_panel_da_admissible,
             self.palw_prompt_ids_form,
             self.palw_lifecycle_undecodable_tolerated,
+            kaspa_consensus_core::palw_fp_objects_v3::palw_fp_isolation_work_leaves_cap_v1(self.palw_held_context_fence.is_some()),
         )?;
         check_transaction_version(tx)
     }
@@ -293,6 +293,8 @@ fn check_transaction_subnetwork(
     palw_panel_da_admissible: bool,
     palw_prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     palw_lifecycle_undecodable_tolerated: bool,
+    // ADR-0119 Decision 6: `palw_fp_isolation_work_leaves_cap_v1` — height-free, as isolation is.
+    palw_fp_work_leaves_cap: u64,
 ) -> TxResult<()> {
     if tx.is_coinbase() || tx.subnetwork_id.is_native() {
         Ok(())
@@ -394,8 +396,13 @@ fn check_transaction_subnetwork(
         // carried prompt ids must hash to the job under the network's form — flat everywhere the
         // fence is dormant, the tiled Merkle root on a genesis that armed it. A door that spelled
         // `false, Flat` here would refuse every honest commitment on such a network.
-        validate_palw_fp_commitment_tx_under_v3(&tx.payload, palw_panel_da_admissible, palw_prompt_ids_form)
-            .map_err(TxRuleError::InvalidPalwFpPayload)?;
+        kaspa_consensus_core::palw_fp_objects_v3::validate_palw_fp_commitment_tx_under_v4(
+            &tx.payload,
+            palw_panel_da_admissible,
+            palw_prompt_ids_form,
+            palw_fp_work_leaves_cap,
+        )
+        .map_err(TxRuleError::InvalidPalwFpPayload)?;
         Ok(())
     } else if tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE {
         // ADR-0042 Decisions 7/8 claim lifecycle (0x4b): the licensing, the producer default and

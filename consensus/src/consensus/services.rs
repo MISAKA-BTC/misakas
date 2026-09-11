@@ -175,6 +175,9 @@ impl ConsensusServices {
             // fence tolerates an undecodable/unknown-version 0x4b payload at isolation (the fold
             // skips it at every height anyway); one that does not keeps refusing it as today.
             params.palw_audit_2026_09_11_fence().is_some(),
+            // **ADR-0119 Decision 6: the held regime's fence**, resolved — isolation's work-leaves cap
+            // asks `.is_some()`, the header-context door asks the height.
+            params.palw_held_context_fence(),
         );
 
         let pruning_point_manager = PruningPointManager::new(

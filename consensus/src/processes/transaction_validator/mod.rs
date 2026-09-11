@@ -78,6 +78,13 @@ pub struct TransactionValidator {
     /// one that has declared it admits the shape (the fold still does nothing with it). A build that
     /// SCHEDULES the fence and one that does not thus agree on every payload that decodes.
     palw_lifecycle_undecodable_tolerated: bool,
+
+    /// **ADR-0119 Decision 6: the held regime's fence, resolved** (`Params::palw_held_context_fence()`,
+    /// `never()` read as absence). Isolation derives its height-free work-leaves cap from
+    /// `.is_some()` (the regime's `2^40` where it is declared at all); the header-context door reads
+    /// the fence at the containing block's DAA and refuses a commitment past the structural `2^32`
+    /// below it. `None` on every preset but testnet-11.
+    palw_held_context_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
 }
 
 impl TransactionValidator {
@@ -107,6 +114,8 @@ impl TransactionValidator {
         // **A-2 (mainnet audit 2026-09-11), height-free**: whether the ruleset tolerates an
         // undecodable/unknown-version 0x4b payload at isolation, the audit fence's `.is_some()`.
         palw_lifecycle_undecodable_tolerated: bool,
+        // **ADR-0119 Decision 6: the FENCE**, for the same reason the market's is passed whole.
+        palw_held_context_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
     ) -> Self {
         Self {
             max_tx_inputs,
@@ -126,6 +135,8 @@ impl TransactionValidator {
             palw_model_market_fence,
             palw_validator_payout_bounds_declared,
             palw_lifecycle_undecodable_tolerated,
+            palw_held_context_fence: palw_held_context_fence
+                .filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never()),
         }
     }
 
@@ -165,6 +176,8 @@ impl TransactionValidator {
             // Every shipped preset's door: the audit fence is dormant, so a lifecycle payload this
             // build cannot decode is block-invalid at isolation, exactly as every build does today.
             palw_lifecycle_undecodable_tolerated: false,
+            // Every shipped preset's door but testnet-11's: no held regime, the structural cap.
+            palw_held_context_fence: None,
         }
     }
 

@@ -5328,6 +5328,12 @@ impl PalwChainStateV2 {
         self.class_step_ladders.get(class_id).copied().unwrap_or(network_ladder)
     }
 
+    /// **ADR-0119 Decision 5: is this a class under the held regime** — one that recorded its own
+    /// ladder when it registered, which only a held class does.
+    pub fn class_is_held_v1(&self, class_id: &Hash64) -> bool {
+        self.class_step_ladders.contains_key(class_id)
+    }
+
     /// **ADR-0089 Decision 2: the window** — every row a read precompile may serve, flattened,
     /// at this state's own point (the EVM block's selected parent). Bond keys are resolved to
     /// their payout payloads, statuses to codes, and every line of every class is present
@@ -10278,6 +10284,8 @@ fn apply_object(
             };
             let claim_id = accusation.claim;
             let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
+            // ADR-0119 Decision 4: the CLAIM's ladder — a held class's recorded one, else the network's.
+            let ladder = builder.state.class_step_ladder_v1(&claim.class_id, ladder);
             if claim.phase.is_terminal() {
                 return Err(PalwStateV2Error::WrongPhase { claim: claim_id, edge: "ShardCourtAccused" });
             }
@@ -10338,6 +10346,8 @@ fn apply_object(
             };
             let claim_id = accusation.claim;
             let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
+            // ADR-0119 Decision 4: the CLAIM's ladder.
+            let ladder = builder.state.class_step_ladder_v1(&claim.class_id, ladder);
             if claim.phase.is_terminal() {
                 return Err(PalwStateV2Error::WrongPhase { claim: claim_id, edge: "CheckpointAccused" });
             }
@@ -10442,6 +10452,10 @@ fn apply_object(
             }
             let claim_id = disclosure.claim;
             let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
+            // ADR-0119 Decision 4: the answer is opened at the CLAIM's ladder, the one its demand
+            // was bounded against — else an honest producer's answer past the network's ladder would
+            // be refused and the producer slashed for a silence it did not choose.
+            let ladder = builder.state.class_step_ladder_v1(&claim.class_id, ladder);
             let PalwClaimPhaseV2::DefaultDisputed { accused_daa, missing_event_index, accuser, accuser_exposure, resumed } =
                 claim.phase.clone()
             else {
@@ -11812,8 +11826,16 @@ fn apply_object(
                 .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
             // The site is the CLASS's description of the leaf the ladder terminated on — derived
             // from the coordinate and the registered profile, never supplied by the mover.
-            let derived = crate::palw_court_v2::palw_attn_dispute_site_v2(&claim, binding, &operands, narrowed, filed_anchor)
-                .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
+            // ADR-0119 Decision 4: under the held regime the site's rows open at the claim's ladder.
+            let opening_cap = crate::palw_court_v2::palw_attn_opening_cap_v1(
+                &builder.state,
+                &claim.class_id,
+                builder.extras.held_context_ladder.unwrap_or(crate::palw_step::PALW_STEP_MAX_LEAVES),
+                builder.extras.held_context_ladder.is_some(),
+            );
+            let derived =
+                crate::palw_court_v2::palw_attn_dispute_site_v3(&claim, binding, &operands, narrowed, filed_anchor, opening_cap)
+                    .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
             // The anchor the bottom will need: carried and exactly the site's own, or — past the
             // fence, at a site whose bottom reads a checkpoint — required.
             let needs_anchor = derived.site.every_position_is_checkpointed && derived.site.anchor_covered_decode_call.is_some();

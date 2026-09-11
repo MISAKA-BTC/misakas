@@ -4841,7 +4841,16 @@ impl VirtualStateProcessor {
         let daa_score = self.virtual_stores.read().state.get().ok()?.daa_score;
         let step_ladder = self.palw_court_step_ladder_at(daa_score, court);
         let form = self.palw_prompt_ids_form_at(daa_score);
-        kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v2(&state, session_id, proof, court, step_ladder, form).ok()
+        kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v3(
+            &state,
+            session_id,
+            proof,
+            court,
+            step_ladder,
+            form,
+            self.palw_held_context_at(daa_score),
+        )
+        .ok()
     }
 
     /// The court's half of [`Self::palw_seat_duties_v2_impl`]: the open sessions this node is a
@@ -6560,13 +6569,16 @@ impl VirtualStateProcessor {
                                 .palw_court_params_v2
                                 .as_ref()
                                 .ok_or_else(|| "a court close on a network with no V2 court parameters".to_string())?;
-                            let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v2(
+                            let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v3(
                                 state,
                                 session_id,
                                 proof,
                                 court,
                                 self.palw_court_step_ladder_at(point.daa_score, court),
                                 self.palw_prompt_ids_form_at(point.daa_score),
+                                // ADR-0119 Decision 4: a fused site's rows open at the claim's
+                                // ladder under the held regime.
+                                self.palw_held_context_at(point.daa_score),
                             )
                             .map_err(|e| e.to_string())?;
                             if derived != *verdict {
@@ -6863,13 +6875,15 @@ impl VirtualStateProcessor {
                         .palw_court_params_v2
                         .as_ref()
                         .ok_or_else(|| "a court close on a network with no V2 court parameters".to_string())?;
-                    let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v2(
+                    let derived = kaspa_consensus_core::palw_court_v2::adjudicate_court_close_v3(
                         state,
                         session_id,
                         proof,
                         court,
                         self.palw_court_step_ladder_at(point.daa_score, court),
                         self.palw_prompt_ids_form_at(point.daa_score),
+                        // ADR-0119 Decision 4.
+                        self.palw_held_context_at(point.daa_score),
                     )
                     .map_err(|e| e.to_string())?;
                     if derived != *verdict {
@@ -7429,6 +7443,12 @@ impl VirtualStateProcessor {
                     ) {
                         return Err(format!("claim {claim_id}'s accusation is not signed by the bond it names"));
                     }
+                    // ADR-0119 Decision 4: the shape is bounded at the CLAIM's ladder, so the claim
+                    // is found first — a held class's recorded ladder, every other the network's.
+                    let claim = state
+                        .claim(&claim_id)
+                        .ok_or_else(|| format!("an accusation names claim {claim_id} this chain does not have"))?;
+                    let ladder = state.class_step_ladder_v1(&claim.class_id, ladder);
                     accusation.validate_shape(ladder).map_err(|e| format!("claim {claim_id}: {e}"))?;
                     let bytes = kaspa_consensus_core::palw_shard_court_v1::palw_shard_court_accusation_bytes_v1(accusation);
                     if bytes > court.max_close_bytes() {
@@ -7437,9 +7457,6 @@ impl VirtualStateProcessor {
                             court.max_close_bytes()
                         ));
                     }
-                    let claim = state
-                        .claim(&claim_id)
-                        .ok_or_else(|| format!("an accusation names claim {claim_id} this chain does not have"))?;
                     if claim.bond != accusation.executor_bond
                         || claim.execution_root != accusation.execution_root
                         || claim.trace_root != accusation.trace_root
@@ -7520,7 +7537,8 @@ impl VirtualStateProcessor {
                     kaspa_consensus_core::palw_checkpoint_court_v1::palw_checkpoint_court_verdict_v1(
                         accusation,
                         claim.class_id,
-                        ladder,
+                        // ADR-0119 Decision 4: the CLAIM's ladder.
+                        state.class_step_ladder_v1(&claim.class_id, ladder),
                     )
                     .map_err(|e| format!("claim {claim_id}: the checkpoint accusation does not adjudicate: {e}"))?;
                 }
@@ -7627,7 +7645,8 @@ impl VirtualStateProcessor {
                         &disclosure.missing,
                         &disclosure.binding,
                         &disclosure.disclosure,
-                        ladder,
+                        // ADR-0119 Decision 4: the answer opens at the CLAIM's ladder, as the fold's.
+                        state.class_step_ladder_v1(&claim.class_id, ladder),
                         self.palw_prompt_ids_form_at(point.daa_score),
                     )
                     .map_err(|e| format!("claim {claim_id}: {e}"))?;
@@ -8834,7 +8853,7 @@ impl VirtualStateProcessor {
             .as_ref()
             .map(|bundle| bundle.court.max_step_leaf_count())
             .unwrap_or(kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP);
-        let extraction = kaspa_consensus_core::palw_fp_objects_v3::palw_fp_objects_from_accepted_txs_under_held_v3(
+        let extraction = kaspa_consensus_core::palw_fp_objects_v3::palw_fp_objects_from_accepted_txs_by_class_v1(
             &txs,
             network_domain,
             freeprompt,
@@ -8845,7 +8864,13 @@ impl VirtualStateProcessor {
             // `false`, which on a genesis that arms `PanelDa` would have skipped every private
             // commitment the door had admitted.
             self.palw_panel_da_at(block_daa),
-            ladder,
+            // **ADR-0119 Decision 5: each commitment at its CLASS's bounds**, off the parent state:
+            // a class under the held regime recorded its own ladder when it registered, and every
+            // other class meets the network's ladder, exactly as before.
+            |class_id| kaspa_consensus_core::palw_fp_objects_v3::PalwFpClassCapsV1 {
+                step_ladder: state.class_step_ladder_v1(class_id, ladder),
+                held: state.class_is_held_v1(class_id),
+            },
             // **ADR-0044 Decision 9's two advertised caps, at the same block's DAA** (mainnet audit
             // 2026-09-06, L-2). The bundle's `max_prompt_tokens` and `max_decode_tokens` are inside
             // every node's `palw_ruleset_id_v2` and were read by nothing; past this fence the walk

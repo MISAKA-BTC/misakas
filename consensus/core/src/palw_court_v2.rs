@@ -807,6 +807,21 @@ pub fn adjudicate_court_close_v2(
     state: &PalwChainStateV2,
     session_id: &Hash64,
     proof: &PalwCourtVerdictProofV2,
+    court: &crate::palw_mode_v2::PalwCourtParamsV2,
+    step_ladder: u64,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
+    adjudicate_court_close_v3(state, session_id, proof, court, step_ladder, prompt_ids_form, false)
+}
+
+/// [`adjudicate_court_close_v2`] knowing whether the held regime is in force at the block the close
+/// is judged in (ADR-0119 Decision 4): under it a fused site's rows are opened at the claim's own
+/// ladder ([`palw_attn_opening_cap_v1`]) rather than the structural `2^22`. Decided by the caller at
+/// the BLOCK's DAA, as `step_ladder` is.
+pub fn adjudicate_court_close_v3(
+    state: &PalwChainStateV2,
+    session_id: &Hash64,
+    proof: &PalwCourtVerdictProofV2,
     // **ADR-0049 Decision C's bounds, applied to the OBJECT** (audit H-03).
     //
     // The four cost bounds live in `PalwCourtParamsV2` and are inside `palw_ruleset_id_v2`, and
@@ -827,6 +842,8 @@ pub fn adjudicate_court_close_v2(
     // ADR-0081 Decision 3: which spelling of "here is the prompt" this network admits — decided by
     // the caller at the block's DAA (`palw_prompt_ids_form_at`), genesis-only so it cannot differ.
     prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    // ADR-0119 Decision 4: is the held regime in force at the block's DAA.
+    held_regime: bool,
 ) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
     // The cost gate runs before ANY state is read, which is the cheapest-first ordering a cost
     // bound has to have: an oversized object must be refusable without a lookup, a decode or a
@@ -913,7 +930,14 @@ pub fn adjudicate_court_close_v2(
             let class = state.class(&claim.class_id).ok_or(PalwCourtV2Error::MissingClass(claim.class_id))?;
             let operands = PalwProvenOperandsV1::from_openings_v1(operand_openings, class.artifact_root)
                 .map_err(|e| PalwCourtV2Error::OperandProofInvalid(e.to_string()))?;
-            let derived = palw_attn_dispute_site_v2(claim, binding, &operands, narrowed, bottom.anchor.as_ref())?;
+            let derived = palw_attn_dispute_site_v3(
+                claim,
+                binding,
+                &operands,
+                narrowed,
+                bottom.anchor.as_ref(),
+                palw_attn_opening_cap_v1(state, &claim.class_id, step_ladder, held_regime),
+            )?;
             // The claim's own trace root, the same pin the arithmetic arm applies — so a bottom
             // cannot open rows of an execution that merely shares a class.
             check_arithmetic_close_binding(claim.trace_root, binding_logits_root_of(binding))?;
@@ -1241,6 +1265,37 @@ pub fn palw_attn_dispute_site_v2(
     palw_attn_dispute_site_unpinned_v2(binding, operands, narrowed_leaf, anchor)
 }
 
+/// [`palw_attn_dispute_site_v2`] with the cap the site's rows are opened under stated by the caller
+/// (ADR-0119 Decision 4) — [`palw_attn_opening_cap_v1`], which is `PALW_STEP_MAX_LEAVES` before the
+/// held regime and the claim's own ladder under it.
+pub fn palw_attn_dispute_site_v3(
+    claim: &crate::palw_state_v2::PalwClaimStateV2,
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+    operands: &PalwProvenOperandsV1,
+    narrowed_leaf: u64,
+    anchor: Option<&crate::palw_attn_court_v1::PalwAttnCheckpointAnchorV1>,
+    opening_cap: u64,
+) -> Result<PalwAttnDisputeSiteV2, PalwCourtV2Error> {
+    check_close_profile_is_the_registered_class(claim.class_id, binding)?;
+    check_execution_root_binding(claim.execution_root, binding.committed_execution_root)?;
+    palw_attn_dispute_site_unpinned_v3(binding, operands, narrowed_leaf, anchor, opening_cap)
+}
+
+/// **The cap a fused site's rows are opened under** (ADR-0119 Decision 4).
+///
+/// Before the held regime: the structural `PALW_STEP_MAX_LEAVES` (`2^22`), as it always was — the
+/// fold holds no bundle, and this read no ruleset number so that it could not read one differently
+/// from the acceptance layer. Under the regime: the CLAIM's ladder — a held class's recorded `2^40`,
+/// every other class's the network's step ladder — because past the court-ladder fence a class's
+/// claims are admitted up to the ruleset's ladder (`2^26` on testnet-11), and a bottom capped at
+/// `2^22` opened no row of a dense claim past about 36 prompt tokens: the dissection that is the
+/// regime's only court for a fused leaf would have convicted nobody. Both readers — the acceptance
+/// layer at the block's DAA and the fold through its extras — hold the state and the claim's class,
+/// so both ask this one function.
+pub fn palw_attn_opening_cap_v1(state: &PalwChainStateV2, class_id: &Hash64, step_ladder: u64, held_regime: bool) -> u64 {
+    if held_regime { state.class_step_ladder_v1(class_id, step_ladder) } else { crate::palw_step::PALW_STEP_MAX_LEAVES }
+}
+
 /// **The same derivation without the claim's two pins** (ADR-0093 as built) — for a PARTY
 /// computing its own moves, never for the court.
 ///
@@ -1254,6 +1309,18 @@ pub fn palw_attn_dispute_site_unpinned_v2(
     operands: &PalwProvenOperandsV1,
     narrowed_leaf: u64,
     anchor: Option<&crate::palw_attn_court_v1::PalwAttnCheckpointAnchorV1>,
+) -> Result<PalwAttnDisputeSiteV2, PalwCourtV2Error> {
+    palw_attn_dispute_site_unpinned_v3(binding, operands, narrowed_leaf, anchor, crate::palw_step::PALW_STEP_MAX_LEAVES)
+}
+
+/// [`palw_attn_dispute_site_unpinned_v2`] with the opening cap stated (ADR-0119 Decision 4) — for a
+/// party that builds a bottom the court will open under [`palw_attn_opening_cap_v1`].
+pub fn palw_attn_dispute_site_unpinned_v3(
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+    operands: &PalwProvenOperandsV1,
+    narrowed_leaf: u64,
+    anchor: Option<&crate::palw_attn_court_v1::PalwAttnCheckpointAnchorV1>,
+    opening_cap: u64,
 ) -> Result<PalwAttnDisputeSiteV2, PalwCourtV2Error> {
     use crate::palw_step::PalwStepOpKindV1;
     // `verify_binding` is what makes `committed_execution_root` a PIN rather than a field: it
@@ -1507,7 +1574,7 @@ pub fn palw_attn_dispute_site_unpinned_v2(
             shape_profile_hash,
             step_root: binding.step_merkle_root,
             step_leaf_count: binding.step_leaf_count,
-            max_step_leaf_count: crate::palw_step::PALW_STEP_MAX_LEAVES,
+            max_step_leaf_count: opening_cap,
             checkpoint_merkle_root: binding.checkpoint_merkle_root,
             checkpoint_leaf_count: u64::from(binding.checkpoint_count),
             checkpoint_profile_hash,

@@ -49,7 +49,28 @@ impl TransactionValidator {
         ctx_daa_score: u64,
     ) -> TxResult<()> {
         self.check_tx_is_finalized(tx, lock_time_arg)?;
-        self.check_model_sink_outputs_in_context(tx, ctx_daa_score)
+        self.check_model_sink_outputs_in_context(tx, ctx_daa_score)?;
+        self.check_palw_fp_work_leaves_in_context(tx, ctx_daa_score)
+    }
+
+    /// **ADR-0119 Decision 6, the height-indexed half of the free-prompt door.** Isolation admits a
+    /// commitment up to the held regime's `2^40` leaves on a ruleset that declares the regime at all,
+    /// because it holds no height; below the fence this refuses one past the structural `2^32` —
+    /// the cap every build applies — so a build that schedules the regime and one that does not
+    /// carry it agree on every transaction before the activation, and nothing is committed on the
+    /// strength of the permissive answer. Inert on every preset without the regime: isolation's cap
+    /// there is the structural one and this returns on its first line.
+    fn check_palw_fp_work_leaves_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+        let Some(fence) = self.palw_held_context_fence else {
+            return Ok(());
+        };
+        if fence.is_active(ctx_daa_score) || tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
+            return Ok(());
+        }
+        match kaspa_consensus_core::palw_fp_objects_v3::palw_fp_work_leaves_before_the_regime_v1(&tx.payload) {
+            Some(leaves) => Err(TxRuleError::PalwFpWorkLeavesBeforeHeldActivation(leaves, ctx_daa_score)),
+            None => Ok(()),
+        }
     }
 
     /// **ADR-0087 Decision 6, the height-indexed half of the sink carve-out** (mainnet audit

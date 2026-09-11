@@ -203,6 +203,15 @@ pub enum TxRuleError {
     /// amount, so the sompi are destroyed rather than redirected to the miner.
     #[error("a released bond's spend must burn {owed} sompi and leaves only {left}")]
     BondBurnNotPaid { owed: u64, left: u64 },
+
+    /// **ADR-0119 Decision 6: a free-prompt commitment past the structural work-leaves cap, before
+    /// the held regime.** Isolation admits up to the regime's `2^40` on a ruleset that declares the
+    /// regime, because it holds no height; this is the height-indexed half, asked where the
+    /// containing block's DAA exists. Below the fence the cap is the structural `2^32` every build
+    /// applies, so a build that schedules the regime and one that does not carry it agree on every
+    /// transaction up to the activation.
+    #[error("a free-prompt commitment declares {0} work leaves, past the structural cap, before the held regime (daa {1})")]
+    PalwFpWorkLeavesBeforeHeldActivation(u64, u64),
 }
 
 pub type TxResult<T> = std::result::Result<T, TxRuleError>;
