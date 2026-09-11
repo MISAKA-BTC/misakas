@@ -80,10 +80,10 @@ powershell -ExecutionPolicy Bypass -File .\windows\start-misaka-local-node-wsl.p
 powershell -ExecutionPolicy Bypass -File .\windows\start-misaka-local-node-wsl.ps1 -Command status
 ```
 
-エラー報告用support log作成:
+状態とエラーの診断ログ作成:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\windows\start-misaka-local-node-wsl.ps1 -Command collect-support-log
+powershell -ExecutionPolicy Bypass -File .\windows\start-misaka-local-node-wsl.ps1 -Command collect-diagnostic-log
 ```
 
 validator準備:
