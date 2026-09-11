@@ -955,6 +955,28 @@ impl Base0FpFoldRangeOpeningV1 {
         let (first_block, end_block) = self.whole_blocks_v1(step_leaf_count);
         self.block_roots.len() as u64 == end_block - first_block
     }
+    /// **Every whole block whose served digest is not `leaf_hashes`'** (the range's, in order), by
+    /// block index — the close's question (ADR-0085 Decision 3): one differing block is a lie the
+    /// executor's served leaves for that block can close; more is a commitment that differs past it.
+    /// `None` when the shapes do not match.
+    pub fn blocks_that_differ_v1(&self, leaf_hashes: &[Hash64], step_leaf_count: u64) -> Option<Vec<u64>> {
+        let (first_block, end_block) = self.whole_blocks_v1(step_leaf_count);
+        if self.block_roots.len() as u64 != end_block - first_block || leaf_hashes.len() as u64 != self.leaf_count {
+            return None;
+        }
+        let block = 1u64 << self.retain_level.min(63);
+        let range_end = self.first_leaf_index + self.leaf_count;
+        let mut differing = Vec::new();
+        for (k, served) in (first_block..end_block).zip(&self.block_roots) {
+            let first = k * block;
+            let end = ((k + 1) * block).min(range_end);
+            let slice = &leaf_hashes[(first - self.first_leaf_index) as usize..(end - self.first_leaf_index) as usize];
+            if crate::fp_capture::base0_fold_block_digest_v1(first, slice) != Some(*served) {
+                differing.push(k);
+            }
+        }
+        Some(differing)
+    }
     /// Fold `leaf_hashes` (the range's, in order) over the whole blocks and name the first block
     /// whose digest is not the served one, clipped to the range as `(first_leaf_index, count)`.
     /// `None` when every digest agrees, or when the shapes do not match.
@@ -1101,6 +1123,60 @@ pub fn base0_fp_range_with_served_block_v1(
     let mut leaves = own.to_vec();
     leaves[offset..end].copy_from_slice(&served.leaf_hashes);
     fold.with_leaves_v1(leaves)
+}
+
+/// **The committed range, for a close** (ADR-0085 Decision 3 against a liar): this party's own
+/// leaves with the executor's served leaves for the ONE whole block they differ in. The served
+/// block is believed only once it folds to the digest the opening carries for it, and the caller
+/// still walks the result to the committed root. Refused by name when this party's leaves differ
+/// in no whole block (the difference is at an edge no block covers), when the close holds no
+/// served block for the one that differs, or when more than one differs: a close substitutes the
+/// block a lie is confined to, and a commitment that differs past it is not that
+/// (ADR-0086 Decision 6).
+pub fn base0_fp_committed_range_with_served_block_v1(
+    fold: &Base0FpFoldRangeOpeningV1,
+    own: &[Hash64],
+    served_blocks: &[Base0FpBlockLeavesV1],
+    step_leaf_count: u64,
+    interval: u32,
+) -> Result<PalwStepRangeOpeningV1, String> {
+    let differing = fold
+        .blocks_that_differ_v1(own, step_leaf_count)
+        .ok_or_else(|| format!("this party's replay of interval {interval} is not the served range's shape"))?;
+    let block = match differing.as_slice() {
+        [] => {
+            return Err(format!(
+                "this party's replay does not reproduce the step leg root under the served frontier of interval {interval}, and \
+                 every whole block of the range is its own — the difference is at the range's edge, which no served block covers"
+            ));
+        }
+        [block] => *block,
+        many => {
+            return Err(format!(
+                "this party's replay differs from the served frontier of interval {interval} in {} blocks {many:?}: a close \
+                 substitutes the one block a lie is confined to, and this commitment differs past it (ADR-0086 Decision 6)",
+                many.len()
+            ));
+        }
+    };
+    let len = 1u64 << fold.retain_level.min(63);
+    let (first_block, _) = fold.whole_blocks_v1(step_leaf_count);
+    let served =
+        served_blocks.iter().find(|b| b.interval_index == interval && b.first_leaf_index == block * len).ok_or_else(|| {
+            format!(
+                "this party's replay differs from the served frontier of interval {interval} in block {block}, and the close holds no \
+                 served block for it — the executor's leaves for that block close the lie (ADR-0086 Decision 6's block-leaves lane)"
+            )
+        })?;
+    let digest = fold
+        .block_roots
+        .get((block - first_block) as usize)
+        .ok_or_else(|| format!("interval {interval} carries no digest for block {block}"))?;
+    if !served.folds_to_v1(digest) {
+        return Err(format!("the served block {block} of interval {interval} does not fold to the digest the opening carries"));
+    }
+    base0_fp_range_with_served_block_v1(fold, own, served)
+        .ok_or_else(|| format!("the served block {block} is not inside interval {interval}'s range"))
 }
 
 pub fn base0_fp_interval_close_annex_v1(bytes: &[u8]) -> Option<Base0FpCloseAnnexV1> {
@@ -2177,8 +2253,19 @@ pub fn base0_fp_challenger_replay_tiles_capped_v1<K: Base0FpIntervalKernelsV1>(
         state,
         kernels,
         prompt_ids_form,
-        true,
+        Base0FpServedLeavesV1::Committed { served_blocks: &[] },
     )
+}
+
+/// **What a served interval's replay asks of this party's own leaves** under the served frontier.
+pub enum Base0FpServedLeavesV1<'a> {
+    /// A seat naming a leaf (ADR-0086 Decision 6): its leaves are the question, not the
+    /// commitment's, and nothing walks.
+    Own,
+    /// A close (ADR-0085 Decision 3): the range must walk to the committed root — with this
+    /// party's leaves where they are the executor's, and the executor's served leaves for the one
+    /// block they are not ([`base0_fp_committed_range_with_served_block_v1`]).
+    Committed { served_blocks: &'a [Base0FpBlockLeavesV1] },
 }
 
 /// [`base0_fp_challenger_replay_tiles_capped_v1`]'s body, with the one question the two callers
@@ -2202,7 +2289,7 @@ fn base0_fp_replay_served_interval_v1<K: Base0FpIntervalKernelsV1>(
     state: Option<&crate::fp_recompute::Base0FpSeatStateV1>,
     kernels: &K,
     prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
-    own_leaves_must_root: bool,
+    leaves: Base0FpServedLeavesV1<'_>,
 ) -> Result<(Base0FpIntervalOpeningV2, crate::legs::Base0StepTilesV1), String> {
     let any = base0_fp_interval_opening_decode_any_v1(opening_bytes).map_err(|e| format!("the opening does not decode: {e:?}"))?;
     let carried = match &any {
@@ -2351,11 +2438,23 @@ fn base0_fp_replay_served_interval_v1<K: Base0FpIntervalKernelsV1>(
                 .ok_or_else(|| format!("this party's replay has no leaf {leaf_index}"))?;
             own.push(hash);
         }
-        opening.range = f.with_leaves_v1(own).ok_or_else(|| "this party's replay is not the range's count".to_string())?;
-        if own_leaves_must_root {
-            match step_range_opening_root_capped_v1(binding.step_leaf_count, &opening.range, max_step_leaf_count) {
-                Ok(root) if root == binding.step_merkle_root => {}
-                _ => return Err("this party's replay does not reproduce the step leg root under the served frontier".to_string()),
+        opening.range = f.with_leaves_v1(own.clone()).ok_or_else(|| "this party's replay is not the range's count".to_string())?;
+        if let Base0FpServedLeavesV1::Committed { served_blocks } = leaves {
+            let walks = |range: &PalwStepRangeOpeningV1| {
+                matches!(
+                    step_range_opening_root_capped_v1(binding.step_leaf_count, range, max_step_leaf_count),
+                    Ok(root) if root == binding.step_merkle_root
+                )
+            };
+            // An honest interval walks on this party's own leaves. A lying one walks only with the
+            // executor's leaves for the block the lie is in, which the close must hold.
+            if !walks(&opening.range) {
+                opening.range = base0_fp_committed_range_with_served_block_v1(f, &own, served_blocks, binding.step_leaf_count, index)?;
+                if !walks(&opening.range) {
+                    return Err(format!(
+                        "with the served block substituted, interval {index}'s range still does not walk to the step leg root"
+                    ));
+                }
             }
         }
     }
@@ -3789,7 +3888,7 @@ pub fn base0_fp_name_the_leaf_capped_v1<K: Base0FpIntervalKernelsV1>(
         state.as_ref(),
         kernels,
         prompt_ids_form,
-        false,
+        Base0FpServedLeavesV1::Own,
     )?;
     let ctx_hash = v4.binding.job_context.context_hash();
     let profile_hash = v4.binding.shape_profile.shape_profile_id();
@@ -3815,6 +3914,14 @@ pub fn base0_fp_name_the_leaf_capped_v1<K: Base0FpIntervalKernelsV1>(
 /// step is refused by the builder's anchor check rather than closed wrongly (recorded, ADR-0085 §8).
 /// `state_for` hands back the seat state for a held opening's named anchor, or `None` for
 /// interval 0, which resumes from the prompt.
+///
+/// **Against a liar, `held` also carries the executor's leaves for the block the lie is in**
+/// (ADR-0086 Decision 6's `Base0FpBlockLeavesV1`, under the interval lane's block-leaves index). A
+/// V4 opening carries no leaf hashes, so each interval's range is walked to the committed step root
+/// with this party's own leaves — which a lie inside the interval rules out — and, where that walk
+/// fails, with the served block substituted for the one block this party's leaves differ in
+/// ([`base0_fp_committed_range_with_served_block_v1`]). Without it a lying interval is refused by
+/// name, as it is when more than one block differs. An honest interval needs no block.
 #[allow(clippy::too_many_arguments)]
 pub fn base0_refutation_from_served_intervals_capped_v1<K: Base0FpIntervalKernelsV1>(
     held: &[(u32, Vec<u8>)],
@@ -3845,13 +3952,25 @@ pub fn base0_refutation_from_served_intervals_capped_v1<K: Base0FpIntervalKernel
     let ctx = primary.binding.job_context.clone();
     let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(&profile, &ctx, leaf)
         .ok_or_else(|| format!("leaf {leaf} is not a main step coordinate"))?;
+    // The executor's leaves for a block (ADR-0086 Decision 6), where the close holds them: the
+    // entries of `held` under the interval lane's block-leaves index. A lying interval's range walks
+    // to its committed root only with the block the lie is in, and a block is believed only once it
+    // folds to the digest the interval's own opening carries for it.
+    let blocks_of = |interval: u32| -> Vec<Base0FpBlockLeavesV1> {
+        held.iter()
+            .filter(|(i, _)| base0_fp_block_leaves_request_decode_v1(*i).is_some_and(|(of, _)| of == interval))
+            .filter_map(|(_, bytes)| Base0FpBlockLeavesV1::decode_v1(bytes).ok())
+            .filter(|block| block.interval_index == interval)
+            .collect()
+    };
     let replay = |index: u32, bytes: &[u8]| {
         // The state this node recomputed for the interval's named anchor (ADR-0086 Decision 2) —
         // the caller's to supply, because computing it takes the family's recompute kernels and
         // a memo this function must not reach into (a test supplies it directly; a backend warms
         // its memo and reads it back).
         let state = state_for(bytes);
-        let (v2, tiles) = base0_fp_challenger_replay_tiles_capped_v1(
+        let served_blocks = blocks_of(index);
+        let (v2, tiles) = base0_fp_replay_served_interval_v1(
             bytes,
             claim,
             index,
@@ -3862,6 +3981,7 @@ pub fn base0_refutation_from_served_intervals_capped_v1<K: Base0FpIntervalKernel
             state.as_ref(),
             kernels,
             prompt_ids_form,
+            Base0FpServedLeavesV1::Committed { served_blocks: &served_blocks },
         )?;
         Ok::<_, String>((v2, tiles, state))
     };
@@ -4002,6 +4122,54 @@ mod tests {
         assert_eq!(tail_fold.whole_blocks_v1(leaf_count), (tail_first.div_ceil(block), leaf_count.div_ceil(block)));
         assert_eq!(tail_fold.block_roots.len(), 2);
         assert_eq!(tail_fold.block_roots.last(), tree.retained_nodes().last(), "the tail block's digest is the fold's last node");
+    }
+
+    /// **A close's committed range takes the one served block a lie is in, and refuses every other
+    /// case by name** (ADR-0085 Decision 3 against a liar). On the producer's tree with one leaf of
+    /// block 5 lying, the challenger's own leaves with the served block 5 substituted walk to the
+    /// committed root. Refused by name: no served block; a served block that is not the one that
+    /// differs; a served block whose leaves do not fold to the opening's digest; and two differing
+    /// blocks, where the commitment differs past the block a lie would be confined to.
+    #[test]
+    fn a_close_takes_the_one_served_block_a_lie_is_in_and_refuses_the_rest_by_name() {
+        let leaf_count = PALW_STEP_LEG_MAX_LEAVES + 1;
+        let cap = PALW_STEP_LEG_MAX_LEAVES * 2;
+        let level = crate::fp_capture::palw_base0_sparse_retain_level_v1(cap);
+        let block = 1u64 << level;
+        let honest: Vec<Hash64> = (0..leaf_count).map(|i| Hash64::from_u64_word(i + 7)).collect();
+        let mut producer = honest.clone();
+        producer[(5 * block + 100) as usize] = Hash64::from_u64_word(0xBAD);
+        let tree = crate::fp_capture::Base0SparseStepTreeV1::from_leaves_capped_v1(&producer, level, cap).expect("a tree");
+        let root = tree.root().expect("its root");
+        let (first, end) = (3 * block + 5, 7 * block + 9);
+        let (span_first, span_end) = tree.span_for_range(first, end - first).expect("the span");
+        let range = tree
+            .range_opening_v1(span_first, &producer[span_first as usize..span_end as usize], first, end - first)
+            .expect("the range");
+        let fold = Base0FpFoldRangeOpeningV1::from_range_v1(&range, &tree).expect("the fold form");
+        let own: Vec<Hash64> = honest[first as usize..end as usize].to_vec();
+        let cut = |k: u64, from: &[Hash64]| {
+            Base0FpBlockLeavesV1::cut_v1(0, &fold, leaf_count, k, &|i| from.get(i as usize).copied()).expect("a whole block")
+        };
+        let walks = |r: &PalwStepRangeOpeningV1| step_range_opening_root_capped_v1(leaf_count, r, cap).ok() == Some(root);
+        assert!(!walks(&fold.with_leaves_v1(own.clone()).unwrap()), "the challenger's own leaves do not walk a lying range");
+        assert_eq!(fold.blocks_that_differ_v1(&own, leaf_count), Some(vec![5]));
+
+        let committed = base0_fp_committed_range_with_served_block_v1(&fold, &own, &[cut(5, &producer)], leaf_count, 0)
+            .expect("the one differing block, served, is taken");
+        assert!(walks(&committed), "the substituted range is the committed one");
+        let refused = |served: &[Base0FpBlockLeavesV1], own: &[Hash64]| {
+            base0_fp_committed_range_with_served_block_v1(&fold, own, served, leaf_count, 0).expect_err("refused")
+        };
+        assert!(refused(&[], &own).contains("holds no served block"), "no block");
+        assert!(refused(&[cut(4, &producer)], &own).contains("holds no served block"), "another block is not this one");
+        assert!(refused(&[cut(5, &honest)], &own).contains("does not fold to the digest"), "a block that is not the executor's");
+        let mut two = own.clone();
+        two[(4 * block + 7 - first) as usize] = Hash64::from_u64_word(0x2);
+        let many = refused(&[cut(4, &producer), cut(5, &producer)], &two);
+        assert!(many.contains("2 blocks") && many.contains("[4, 5]"), "two differing blocks: {many}");
+        let producers_own: Vec<Hash64> = producer[first as usize..end as usize].to_vec();
+        assert!(refused(&[], &producers_own).contains("every whole block of the range is its own"), "nothing differs in a block");
     }
 
     /// **The address becomes a leaf** (ADR-0086 X6): from a served block of the producer's leaves

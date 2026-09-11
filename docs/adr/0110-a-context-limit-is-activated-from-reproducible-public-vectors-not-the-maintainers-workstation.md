@@ -135,9 +135,9 @@ Its ADR names, before any height is scheduled:
 1. the vectors at the widths the move admits, each with its `vector_id` and the `document_id` the
    release build prints — green in CI up to 32,768 positions, and published above that;
 2. ADR-0111's two drills green on the release build;
-3. every open prosecution gap at the widths the move admits closed, or named as accepted (as of this
-   writing, ADR-0085 Decision 3's close from served intervals against a lying interval, ADR-0111
-   §8.4);
+3. every open prosecution gap at the widths the move admits closed, or named as accepted (the last
+   one found, ADR-0085 Decision 3's close from served intervals against a lying interval, was
+   closed the day it was found — ADR-0111 §8.5);
 4. the fingerprint, identity and schedule the release prints, and which of them move.
 
 **Decision 7 — what a vector does not prove, said in the document.** A vector proves the protocol at

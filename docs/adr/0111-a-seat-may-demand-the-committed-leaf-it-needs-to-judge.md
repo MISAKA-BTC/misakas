@@ -231,9 +231,9 @@ path from a sampled fault to a named leaf:
    replays without the walk; the executor's leaves are bound to its commitment through the served
    block's digest, and what is named is adjudicated on the executor's own evidence, so a ghost can
    only clear. Pinned by `a_served_block_names_the_leaf_a_liar_committed`; restoring the walk
-   reproduces the drill's error verbatim. **The same walk remains on ADR-0085 Decision 3's close
-   from served intervals**, which therefore cannot close against a lying interval either; it is not
-   on this ADR's path (the evidence is the executor's), and is recorded as its own task.
+   reproduces the drill's error verbatim. **The same walk was on ADR-0085 Decision 3's close from
+   served intervals**, which therefore could not close against a lying interval either. It was not
+   on this ADR's path (the evidence is the executor's), and it was fixed the same day (§8.5).
 
 ### 8.3 The drill runs
 
@@ -255,5 +255,34 @@ worth nothing to it, since the demand's answer is its own evidence and silence w
 
 ### 8.4 What remains before a network arms the held regime
 
-* ADR-0085 Decision 3's close from served intervals against a liar (8.2 item 2).
-* The verification-vector ADR (§6) — the evidence a context limit is armed on.
+* The verification-vector ADR (§6) — the evidence a context limit is armed on (ADR-0110).
+
+### 8.5 The close from served intervals, against a liar
+
+ADR-0085 Decision 3's close (a challenger holding no capture assembles the close from the served
+intervals and its own replay) replayed each served V4 interval and required its own leaves to walk
+to the committed step root under the served frontier. A lie inside the interval rules that out, so
+the close refused every lying interval, and its one test ran an honest executor.
+
+* **The close holds the executor's leaves for the one block its own leaves differ in.** They are
+  ADR-0086 Decision 6's `Base0FpBlockLeavesV1`, carried in `held` under the interval lane's
+  block-leaves index. `base0_fp_committed_range_with_served_block_v1` substitutes them only once
+  they fold to the digest the opening carries, and the result walks to the committed root or the
+  close is refused. The refusals are by name: no served block, a block that is not the one that
+  differs, a block that does not fold, and more than one differing block (a commitment that
+  differs past the block a lie is confined to). An honest interval walks on its own leaves and
+  needs no block. The replay's question is now an enum (`Base0FpServedLeavesV1`): the naming asks
+  for this party's own leaves, and the close asks for the committed range.
+* **The node's close gathers the block.** `close_source_from_served_intervals_v1` names the
+  disputed leaf's block when the opening covers it whole, asks for it on the lane like a missing
+  interval, and hands it to the close.
+
+Pinned by `a_close_from_served_intervals_convicts_a_lying_interval_once_its_block_is_served` (the
+graph-v5 dense row, tiled logits, the drill's one-tile lie). Without the block the close is refused
+by a name that says so. With it, the close is the capture path's object for the same leaf
+(ADR-0085 X1 against a liar too), and the one-move verdict on it is `ExecutorGuilty`. The honest
+capture's close at the same leaf needs no block and is `FalseAccusation`. Also pinned:
+`a_close_takes_the_one_served_block_a_lie_is_in_and_refuses_the_rest_by_name` (every refusal) and
+`the_close_from_served_intervals_holds_and_asks_for_the_disputed_leafs_block` (the node). The honest
+X1 pin (`a_close_from_served_intervals_is_the_close_from_the_capture_and_the_annex_changes_no_verdict`)
+is unchanged and green.
