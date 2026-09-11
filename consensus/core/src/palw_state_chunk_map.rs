@@ -438,14 +438,21 @@ pub fn palw_state_chunks_root_for_map_v1(
     positions: u32,
     chunks: &[Vec<u8>],
 ) -> Result<Hash64, crate::palw_step_leg::PalwStepLegError> {
+    let leaves = palw_state_chunk_leaves_for_map_v1(profile, positions, chunks)?;
+    palw_state_root_from_leaves_for_map_v1(profile, positions, &leaves)
+}
+
+/// **Every chunk's leaf under the class's map, in the flat order** — `(map, index, bytes)` for the
+/// shipped maps, `(map, slice, block, bytes)` for the held one. What a responder keeps beside the
+/// chunks so that a root and any chunk's path are a fold over hashes it already holds.
+pub fn palw_state_chunk_leaves_for_map_v1(
+    profile: &PalwShapeProfileV3,
+    positions: u32,
+    chunks: &[Vec<u8>],
+) -> Result<Vec<Hash64>, crate::palw_step_leg::PalwStepLegError> {
     let map_id = profile.state_chunk_map_id;
     if !palw_map_is_held_v4(&map_id) {
-        let hashes: Vec<Hash64> = chunks
-            .iter()
-            .enumerate()
-            .map(|(i, c)| crate::palw_step_leg::state_chunk_leaf_hash_v1(&map_id, i as u32, c))
-            .collect();
-        return crate::palw_step_leg::state_chunks_root_v1(&hashes);
+        return Ok(chunks.iter().enumerate().map(|(i, c)| crate::palw_step_leg::state_chunk_leaf_hash_v1(&map_id, i as u32, c)).collect());
     }
     let layout = palw_state_layout_v4(profile, positions)
         .map_err(|e| crate::palw_step_leg::PalwStepLegError::HeldLayout(e.to_string()))?;
@@ -455,9 +462,74 @@ pub fn palw_state_chunks_root_for_map_v1(
             max: layout.chunk_count() as usize,
         });
     }
-    palw_state_root_from_hashes_v4(&layout, &map_id, |flat, slice, block| {
-        crate::palw_step_leg::state_chunk_leaf_hash_v4(&map_id, slice, block, &chunks[flat as usize])
-    })
+    chunks
+        .iter()
+        .enumerate()
+        .map(|(flat, c)| {
+            let address = layout.address(flat as u64).ok_or(crate::palw_step_leg::PalwStepLegError::LeafIndexOutOfRange {
+                index: flat as u64,
+                count: layout.chunk_count(),
+            })?;
+            Ok(crate::palw_step_leg::state_chunk_leaf_hash_v4(&map_id, address.slice, address.block, c))
+        })
+        .collect()
+}
+
+/// **The state root from leaves already hashed under the class's map** (the flat order).
+pub fn palw_state_root_from_leaves_for_map_v1(
+    profile: &PalwShapeProfileV3,
+    positions: u32,
+    leaves: &[Hash64],
+) -> Result<Hash64, crate::palw_step_leg::PalwStepLegError> {
+    let map_id = profile.state_chunk_map_id;
+    if !palw_map_is_held_v4(&map_id) {
+        return crate::palw_step_leg::state_chunks_root_v1(leaves);
+    }
+    let layout = palw_state_layout_v4(profile, positions)
+        .map_err(|e| crate::palw_step_leg::PalwStepLegError::HeldLayout(e.to_string()))?;
+    if leaves.len() as u64 != layout.chunk_count() {
+        return Err(crate::palw_step_leg::PalwStepLegError::StateChunksOutOfRange {
+            got: leaves.len(),
+            max: layout.chunk_count() as usize,
+        });
+    }
+    palw_state_root_from_hashes_v4(&layout, &map_id, |flat, _, _| leaves[flat as usize])
+}
+
+/// **One chunk's path from leaves already hashed under the class's map** — the producing side of
+/// [`palw_state_chunk_membership_root_v1`], over hashes a responder holds.
+pub fn palw_state_chunk_path_from_leaves_for_map_v1(
+    profile: &PalwShapeProfileV3,
+    positions: u32,
+    leaves: &[Hash64],
+    flat_index: u32,
+) -> Result<Vec<Hash64>, crate::palw_step_leg::PalwStepLegError> {
+    use crate::palw_step_leg::PalwStepLegError;
+    if !palw_map_is_held_v4(&profile.state_chunk_map_id) {
+        return crate::palw_step_leg::state_chunk_path_v1(leaves, flat_index as usize);
+    }
+    let layout =
+        palw_state_layout_v4(profile, positions).map_err(|e| PalwStepLegError::HeldLayout(e.to_string()))?;
+    if leaves.len() as u64 != layout.chunk_count() {
+        return Err(PalwStepLegError::StateChunksOutOfRange { got: leaves.len(), max: layout.chunk_count() as usize });
+    }
+    let address = layout
+        .address(u64::from(flat_index))
+        .ok_or(PalwStepLegError::LeafIndexOutOfRange { index: u64::from(flat_index), count: layout.chunk_count() })?;
+    let mut top = Vec::with_capacity(layout.slice_count() as usize);
+    let mut block_path = Vec::new();
+    for slice in 0..layout.slice_count() {
+        let blocks = layout.block_count(slice).unwrap_or(0);
+        let hashes: Vec<Hash64> =
+            (0..blocks).map(|block| leaves[layout.flat_index(slice, block).expect("in range by construction") as usize]).collect();
+        if slice == address.slice {
+            block_path = crate::palw_step_leg::state_slice_path_v4(&hashes, address.block as usize)?;
+        }
+        let sub_root = crate::palw_step_leg::state_slice_root_v4(&hashes)?;
+        top.push(crate::palw_step_leg::state_top_leaf_v4(slice, blocks, &sub_root));
+    }
+    block_path.extend(crate::palw_step_leg::state_top_path_v4(&top, address.slice as usize)?);
+    Ok(block_path)
 }
 
 /// The v4 root from a leaf-hash oracle `(flat, slice, block) → leaf` — shared by the whole-state
@@ -537,39 +609,8 @@ pub fn palw_state_chunk_path_for_map_v1(
     chunks: &[Vec<u8>],
     flat_index: u32,
 ) -> Result<Vec<Hash64>, crate::palw_step_leg::PalwStepLegError> {
-    use crate::palw_step_leg::PalwStepLegError;
-    let map_id = profile.state_chunk_map_id;
-    if !palw_map_is_held_v4(&map_id) {
-        let hashes: Vec<Hash64> = chunks
-            .iter()
-            .enumerate()
-            .map(|(i, c)| crate::palw_step_leg::state_chunk_leaf_hash_v1(&map_id, i as u32, c))
-            .collect();
-        return crate::palw_step_leg::state_chunk_path_v1(&hashes, flat_index as usize);
-    }
-    let layout =
-        palw_state_layout_v4(profile, positions).map_err(|e| PalwStepLegError::HeldLayout(e.to_string()))?;
-    let address = layout
-        .address(u64::from(flat_index))
-        .ok_or(PalwStepLegError::LeafIndexOutOfRange { index: u64::from(flat_index), count: layout.chunk_count() })?;
-    let mut top = Vec::with_capacity(layout.slice_count() as usize);
-    let mut block_path = Vec::new();
-    for slice in 0..layout.slice_count() {
-        let blocks = layout.block_count(slice).unwrap_or(0);
-        let hashes: Vec<Hash64> = (0..blocks)
-            .map(|block| {
-                let flat = layout.flat_index(slice, block).expect("in range by construction") as usize;
-                crate::palw_step_leg::state_chunk_leaf_hash_v4(&map_id, slice, block, &chunks[flat])
-            })
-            .collect();
-        if slice == address.slice {
-            block_path = crate::palw_step_leg::state_slice_path_v4(&hashes, address.block as usize)?;
-        }
-        let sub_root = crate::palw_step_leg::state_slice_root_v4(&hashes)?;
-        top.push(crate::palw_step_leg::state_top_leaf_v4(slice, blocks, &sub_root));
-    }
-    block_path.extend(crate::palw_step_leg::state_top_path_v4(&top, address.slice as usize)?);
-    Ok(block_path)
+    let leaves = palw_state_chunk_leaves_for_map_v1(profile, positions, chunks)?;
+    palw_state_chunk_path_from_leaves_for_map_v1(profile, positions, &leaves, flat_index)
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -715,7 +756,10 @@ pub fn hybrid_state_geometry_at_v3(
     positions: u32,
     with_recurrence: bool,
 ) -> Result<PalwHybridStateGeometryV1, PalwStateChunkMapError> {
-    let attn = tiled_kv_state_geometry_v3(profile, positions)?;
+    // ADR-0103 Decision 3: the held composition's attention half is the held map's — the same
+    // tiles, bounded by the proof's depth rather than by a chunk count.
+    let held = palw_map_is_held_v4(&profile.state_chunk_map_id);
+    let attn = if held { tiled_kv_state_geometry_v4(profile, positions)? } else { tiled_kv_state_geometry_v3(profile, positions)? };
     if !with_recurrence {
         // The attention half alone. Not an empty recurrence enumerated at zero heads — an absent
         // one: `gdn_chunk_count` is `2 × layers × heads`, so an empty layer list IS the absence,
@@ -744,7 +788,7 @@ pub fn hybrid_state_geometry_at_v3(
     }
     let geometry = PalwHybridStateGeometryV1 { attn, gdn_layers, gdn_heads: profile.gdn_heads, delta_head_bytes, conv_head_bytes };
     let chunk_count = geometry.chunk_count();
-    if chunk_count > PALW_STEP_LEG_MAX_STATE_CHUNKS as u64 {
+    if !held && chunk_count > PALW_STEP_LEG_MAX_STATE_CHUNKS as u64 {
         return Err(PalwStateChunkMapError::TooManyChunks { got: chunk_count, max: PALW_STEP_LEG_MAX_STATE_CHUNKS });
     }
     Ok(geometry)

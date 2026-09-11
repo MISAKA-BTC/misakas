@@ -2484,13 +2484,17 @@ mod tests {
             "one geometry for both graphs"
         );
         let v6 = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v6(geometry).expect("the v6 projection");
+        // ADR-0103 Decision 3: graph-v7 is graph-v6 on the held composition — the same per-head
+        // fused tile, and the bottom's anchor proving into its slice's sub-root and the top tree.
+        let v7 = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v7(geometry).expect("the v7 projection");
+        assert!(kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&v7));
         let artifact = std::sync::Arc::new(artifact);
         let session = Hash64::from_u64_word(0x5E56);
-        for (graph, profile) in [("v5", v5), ("v6", v6)] {
+        for (graph, profile) in [("v5", v5), ("v6", v6), ("v7", v7)] {
             let backend = Qwen36Backend::from_registered_profile(artifact.clone(), b"misaka-palw-test".to_vec(), profile.clone(), (3, 4))
                 .expect("the fused hybrid is servable");
             assert!(backend.has_fused_site());
-            assert_eq!(backend.supports_dissection(), graph == "v6", "{graph}: the backend says whether its fused tile is one head's");
+            assert_eq!(backend.supports_dissection(), graph != "v5", "{graph}: the backend says whether its fused tile is one head's");
             let root = crate::inventory::qwen36_inventory_v1(&artifact, &profile).expect("the inventory").root();
             let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x0000_9336)).expect("a job");
             let honest = backend.execute(&job, &prompt).expect("runs");

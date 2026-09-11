@@ -1071,8 +1071,9 @@ pub fn base0_fp_interval_opening_seat_state_capped_v1(
 /// `false` would be a caller that could spend the bytes Decision 9 exists to save.
 pub fn base0_fp_class_requires_flat_openings_v1(profile: &PalwShapeProfileV3) -> bool {
     use kaspa_consensus_core::palw_state_chunk_map as map;
-    profile.state_chunk_map_id == map::tiled_kv_state_chunk_map_id_v3()
-        || profile.state_chunk_map_id == map::hybrid_state_chunk_map_id_v3()
+    // ADR-0103 Decision 3: the held maps tile the history exactly as v3 does, so they declare the
+    // same thing about it — `palw_map_addresses_history_tiles_v1` is the one dispatch.
+    map::palw_map_addresses_history_tiles_v1(profile)
 }
 
 /// **The committed root of a set of state chunks under a class's map** — the two consensus
@@ -1083,6 +1084,26 @@ pub fn base0_fp_class_requires_flat_openings_v1(profile: &PalwShapeProfileV3) ->
 /// anchor is the binding's ([`checkpoint_anchor_is_the_bindings_v1`]). A second spelling would be
 /// a second opinion about what a producer committed, and the two would agree until the day the
 /// map's leaf rule moved.
+/// **[`base0_state_chunks_root_v1`] under the class's own map** — the flat tree for every shipped
+/// map, the held map's tree over slice sub-roots for a class under ADR-0103 (whose chunk COUNT is
+/// not a wall: its bound is the proof's depth, which its layout at `positions` already checked).
+/// The one the seat's recompute and the anchor check call, since the held map's root is a function
+/// of the layout and therefore of the profile and the position count, not of the map id alone.
+pub fn base0_state_chunks_root_for_v1(
+    profile: &PalwShapeProfileV3,
+    positions: u32,
+    chunks: &[Vec<u8>],
+) -> Result<Hash64, Base0FpIntervalError> {
+    if !kaspa_consensus_core::palw_state_chunk_map::palw_map_is_held_v4(&profile.state_chunk_map_id) {
+        return base0_state_chunks_root_v1(&profile.state_chunk_map_id, chunks);
+    }
+    if chunks.iter().any(|c| c.len() > kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES) {
+        return Err(Base0FpIntervalError::Leg("a state chunk is outside the leg's byte cap".to_string()));
+    }
+    kaspa_consensus_core::palw_state_chunk_map::palw_state_chunks_root_for_map_v1(profile, positions, chunks)
+        .map_err(|e| Base0FpIntervalError::Leg(format!("{e:?}")))
+}
+
 pub fn base0_state_chunks_root_v1(map_id: &Hash64, chunks: &[Vec<u8>]) -> Result<Hash64, Base0FpIntervalError> {
     use kaspa_consensus_core::palw_step_leg::{
         PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES, PALW_STEP_LEG_MAX_STATE_CHUNKS, state_chunk_leaf_hash_v1, state_chunks_root_v1,
@@ -2675,7 +2696,9 @@ fn checkpoint_anchor_is_the_bindings_v1(binding: &PalwStepBindingV2, anchor: &Pa
     // **The served chunks must re-derive the root the leaf commits.** The check the CHUNKLESS
     // form does not need and this one cannot do without: resuming from unchecked state would let
     // a producer that lied about a step hand over a state consistent with the lie.
-    let Ok(state_root) = base0_state_chunks_root_v1(&binding.state_chunk_map_id, &anchor.chunks) else {
+    let positions =
+        kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(&binding.shape_profile, &binding.job_context, covered);
+    let Ok(state_root) = base0_state_chunks_root_for_v1(&binding.shape_profile, positions, &anchor.chunks) else {
         return false;
     };
     if state_root != anchor.leaf.state_chunks_root {
@@ -4363,6 +4386,31 @@ mod tests {
         dense_v5_run_with(geometry, 3, 4)
     }
 
+    /// **The held twin** (ADR-0103 Decision 3): the same dense row on the held map — graph-v7 —
+    /// the same job, the same engine. Every question the graph-v5 fixture answers is asked of it too.
+    #[cfg(test)]
+    #[allow(clippy::type_complexity)]
+    pub(super) fn dense_v7_run()
+    -> (crate::artifact::Base0ArtifactV1, PalwShapeProfileV3, PalwJobContextV2, Vec<usize>, crate::produce::Base0ExecutionV1) {
+        use kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1;
+        let geometry = PalwQwen25GeometryV1 {
+            layer_count: 2,
+            hidden_dim: 8,
+            ffn_dim: 8,
+            attn_heads: 2,
+            attn_kv_heads: 2,
+            attn_head_dim: 4,
+            vocab_size: 64,
+            n_ctx: 32,
+            n_threads: 1,
+            rms_eps_q: 1,
+            tile_len: 4,
+        };
+        let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v7(geometry).expect("a valid graph-v7 A16 profile");
+        assert!(kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&profile));
+        dense_run_for(geometry, profile, 3, 4)
+    }
+
     /// The graph-v5 fold fixture at a chosen geometry and job size, for a test that needs a tree
     /// wider than one retained block.
     pub(super) fn dense_v5_run_with(
@@ -4372,6 +4420,17 @@ mod tests {
     ) -> (crate::artifact::Base0ArtifactV1, PalwShapeProfileV3, PalwJobContextV2, Vec<usize>, crate::produce::Base0ExecutionV1) {
         use kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v5;
         let profile = qwen25_a16_profile_v5(geometry).expect("a valid graph-v5 A16 profile");
+        dense_run_for(geometry, profile, prefill, decode)
+    }
+
+    /// One dense run, under whichever of the family's rows `profile` is.
+    #[allow(clippy::type_complexity)]
+    pub(super) fn dense_run_for(
+        geometry: kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1,
+        profile: PalwShapeProfileV3,
+        prefill: u32,
+        decode: u32,
+    ) -> (crate::artifact::Base0ArtifactV1, PalwShapeProfileV3, PalwJobContextV2, Vec<usize>, crate::produce::Base0ExecutionV1) {
         let shape = crate::artifact::Base0ShapeV1 {
             n_layers: geometry.layer_count as usize,
             n_heads: geometry.attn_heads as usize,
@@ -4421,7 +4480,19 @@ mod tests {
     /// and what decides the question without a byte of history.
     #[test]
     fn a_graph_v5_material_is_checkable_and_carries_no_state() {
-        let (_artifact, profile, _ctx, prompt, run) = dense_v5_run();
+        check_material_is_checkable_and_carries_no_state(dense_v5_run());
+    }
+
+    #[test]
+    fn a_held_graph_v7_material_is_checkable_and_carries_no_state() {
+        check_material_is_checkable_and_carries_no_state(dense_v7_run());
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn check_material_is_checkable_and_carries_no_state(
+        fixture: (crate::artifact::Base0ArtifactV1, PalwShapeProfileV3, PalwJobContextV2, Vec<usize>, crate::produce::Base0ExecutionV1),
+    ) {
+        let (_artifact, profile, _ctx, prompt, run) = fixture;
         assert_eq!(
             kaspa_consensus_core::palw_context_ladder::palw_checkpoint_cadence_v1(&profile),
             kaspa_consensus_core::palw_context_ladder::PalwCheckpointCadenceV1::PerPosition,
@@ -4482,8 +4553,20 @@ mod tests {
     /// against a 3-position root. Either one alone makes the class unseatable.
     #[test]
     fn every_graph_v5_interval_opens_and_a_recomputing_seat_licenses_it() {
+        check_every_interval_opens_and_a_recomputing_seat_licenses_it(dense_v5_run());
+    }
+
+    #[test]
+    fn every_held_graph_v7_interval_opens_and_a_recomputing_seat_licenses_it() {
+        check_every_interval_opens_and_a_recomputing_seat_licenses_it(dense_v7_run());
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn check_every_interval_opens_and_a_recomputing_seat_licenses_it(
+        fixture: (crate::artifact::Base0ArtifactV1, PalwShapeProfileV3, PalwJobContextV2, Vec<usize>, crate::produce::Base0ExecutionV1),
+    ) {
         use kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1;
-        let (artifact, profile, ctx, prompt, run) = dense_v5_run();
+        let (artifact, profile, ctx, prompt, run) = fixture;
         let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
         let bytes = crate::produce::base0_fp_material_encode_v2(&run, &ids).expect("the fold retains");
         let material = crate::produce::base0_fp_material_decode_v2(&bytes).expect("its own retention decodes");
@@ -4612,8 +4695,20 @@ mod tests {
     /// `verify_kv_anchor` by way of the chunk-count and root rules it applies.
     #[test]
     fn every_step_of_a_graph_v5_class_has_the_anchor_the_court_demands() {
+        check_every_step_has_the_anchor_the_court_demands(dense_v5_run());
+    }
+
+    #[test]
+    fn every_step_of_a_held_graph_v7_class_has_the_anchor_the_court_demands() {
+        check_every_step_has_the_anchor_the_court_demands(dense_v7_run());
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn check_every_step_has_the_anchor_the_court_demands(
+        fixture: (crate::artifact::Base0ArtifactV1, PalwShapeProfileV3, PalwJobContextV2, Vec<usize>, crate::produce::Base0ExecutionV1),
+    ) {
         use kaspa_consensus_core::palw_context_ladder::palw_checkpoint_covered_for_step_v1;
-        let (artifact, profile, ctx, prompt, run) = dense_v5_run();
+        let (artifact, profile, ctx, prompt, run) = fixture;
         assert!(run.checkpoints.chunks.is_empty(), "the fold retained nothing — this is the case that answered None");
 
         // The executor's own cache, run to the end of the job: what it is holding anyway.
@@ -4640,8 +4735,10 @@ mod tests {
             assert_eq!(anchor.chunks.len(), anchor.leaf.state_chunk_count as usize, "the re-derived chunks are the leaf's own");
             // …and they must rebuild the state root the producer committed, which is what makes
             // the re-derivation-from-a-later-cache argument true rather than merely stated.
+            let positions =
+                kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(&profile, &ctx, anchor.leaf.covered_decode_call);
             assert_eq!(
-                base0_state_chunks_root_v1(&profile.state_chunk_map_id, &anchor.chunks).expect("a root"),
+                base0_state_chunks_root_for_v1(&profile, positions, &anchor.chunks).expect("a root"),
                 anchor.leaf.state_chunks_root,
                 "a chunk re-derived from a later cache must be the byte the earlier checkpoint committed"
             );

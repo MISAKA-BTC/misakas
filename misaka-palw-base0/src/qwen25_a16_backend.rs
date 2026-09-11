@@ -2899,18 +2899,38 @@ mod free_prompt_tests {
     ///   ACCUSED capture's own commitments, convicts.
     #[test]
     fn a_real_fused_capture_answers_its_dissection_exactly_and_a_forged_row_is_convicted() {
+        let geometry = v5_geometry();
+        let profile =
+            kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v5(geometry).expect("the v5 projection is a valid profile");
+        real_fused_capture_answers_and_convicts(geometry, profile);
+    }
+
+    /// **The same drill on the held row** (ADR-0103 Decisions 3 and 5): graph-v7 registers the held
+    /// map, so the bottom's anchor chunk proves into its slice's sub-root and the top tree — the
+    /// two-level path the court reads against the class's own layout — and the dissection is
+    /// exact on real committed rows and convicts the forged one, exactly as on graph-v5.
+    #[test]
+    fn a_real_held_fused_capture_answers_its_dissection_exactly_and_a_forged_row_is_convicted() {
+        let geometry = v5_geometry();
+        let profile =
+            kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v7(geometry).expect("the v7 projection is a valid profile");
+        assert!(kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&profile));
+        real_fused_capture_answers_and_convicts(geometry, profile);
+    }
+
+    fn real_fused_capture_answers_and_convicts(
+        geometry: kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1,
+        profile: PalwShapeProfileV3,
+    ) {
         use kaspa_consensus_core::palw_attn_court_v1::{
             PALW_ATTN_COURT_OBJECT_VERSION_V1, PalwAttnCourtVerdictV1, PalwAttnDissectChoiceV1, PalwAttnDissectPhaseV1,
             check_attn_dissect_bottom_v1, palw_attn_opened_lanes_v1,
         };
         use kaspa_consensus_core::palw_attn_dissect::PalwAttnDissectRoundV1;
         use kaspa_consensus_core::palw_bisect::PalwBisectTurnV1;
-        use kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v5;
         use kaspa_consensus_core::palw_step::{PalwStepOpKindV1, canonical_step_coordinates};
 
-        let geometry = v5_geometry();
         let artifact = v5_artifact(geometry);
-        let profile = qwen25_a16_artifact_row_profile_v5(geometry).expect("the v5 projection is a valid profile");
         // Twenty prompt positions and four decode calls: the last position reads 23 rows of
         // history, two court tiles, so the phase plays a round before its bottom.
         let backend = Qwen25A16Backend::from_registered_profile(artifact.clone(), NETWORK.to_vec(), profile.clone(), (20, 4))

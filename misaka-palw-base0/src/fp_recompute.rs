@@ -301,7 +301,7 @@ fn seat_state_here_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
     kernels: &K,
 ) -> Result<Base0FpSeatStateV1, Base0FpRecomputeError> {
     let chunks = kernels.state_chunks(profile, positions)?;
-    let state_chunks_root = crate::fp_interval::base0_state_chunks_root_v1(&profile.state_chunk_map_id, &chunks)
+    let state_chunks_root = crate::fp_interval::base0_state_chunks_root_for_v1(profile, positions, &chunks)
         .map_err(|e| Base0FpRecomputeError::Map(e.to_string()))?;
     Ok(Base0FpSeatStateV1 { covered_decode_call: decode_calls, positions, state_chunks_root, chunks })
 }
@@ -515,7 +515,7 @@ impl Base0FpRecomputeKernelsV1 for Qwen36RecomputeKernelsV1<'_> {
         // recurrence at all — every position for the attention tiles, the derived spacing for the
         // recurrence state, because a `heads × k_dim × v_dim × 4` state is not prefix-stable and a
         // per-position commitment of it would hash 2 MiB a token.
-        if declared == map::hybrid_state_chunk_map_id_v3() {
+        if declared == map::hybrid_state_chunk_map_id_v3() || declared == map::hybrid_state_chunk_map_id_v4() {
             let geometry = map::hybrid_state_geometry_for_covered_v1(profile, positions)
                 .map_err(|e| Base0FpRecomputeError::Map(format!("{e:?}")))?;
             let gdn_geometry = crate::fp_capture::base0_gdn_state_geometry_v2(&layers, heads, dim, dim, kernel)
