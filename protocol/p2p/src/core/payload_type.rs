@@ -182,6 +182,7 @@ mod tests {
                 requester_pubkey: vec![7u8; 2_592],
                 signature: vec![9u8; 4_627],
                 requested_daa: 1_234_567,
+                leaf_index: 1_048_577,
             })),
             response_id: 0,
             request_id: 0,
@@ -195,6 +196,8 @@ mod tests {
         assert_eq!(inner.requester_pubkey.len(), 2_592);
         assert_eq!(inner.signature.len(), 4_627);
         assert_eq!(inner.requested_daa, 1_234_567);
+        // ADR-0111 Decision 2: the leaf a bit-29 request names rides field 6.
+        assert_eq!(inner.leaf_index, 1_048_577);
         assert_eq!(
             KaspadMessagePayloadType::from(decoded.payload.as_ref().unwrap()),
             KaspadMessagePayloadType::PalwIntervalOpeningRequest
