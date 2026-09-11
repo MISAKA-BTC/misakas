@@ -223,4 +223,64 @@ fn main() {
         pct(palw_seat_detection_ppm_v1(n299, k, panel)),
         pct(palw_seat_detection_ppm_v1(n299, k, quorum)),
     );
+    held_coverage_at_2m_v1(k, panel, quorum);
+}
+
+/// **ADR-0103 Decision 9: the deterrent at 2M, priced before it is armed** — ADR-0098 Decision 1's
+/// inverse table over the held unit. Under the held regime a claim's intervals are runs of `P`
+/// positions over the WHOLE job (`N = ⌈(prefill + decode calls) / P⌉`), so a one-token lie
+/// anywhere in a 2M prompt is caught by a seat whose draw includes its interval: `1 − ((N − k)/N)^s`,
+/// which falls as `s·k / N`. The table prints the shipped `k` at the held `N`, and the `k` and the
+/// `s` a panel would need for 50 / 90 / 99 %. This ADR chooses no number; the card's author reads it.
+fn held_coverage_at_2m_v1(k: u32, panel: u32, quorum: u32) {
+    use kaspa_consensus_core::palw_held_context_v1::palw_held_interval_positions_v1;
+    use kaspa_consensus_core::palw_model_fit_v1::stand_ins::KIMI_K3_AS_HYBRID_V1;
+    use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7};
+    use kaspa_consensus_core::palw_qwen36_profile::{PalwQwen36GeometryV1, qwen36_profile_v7};
+    use kaspa_consensus_core::palw_seat_coverage_v1::palw_seats_for_detection_v1;
+    println!("\n\n## 7. The deterrent at 2M under the held regime (ADR-0103 Decision 9)\n");
+    println!(
+        "The held unit (Decision 2) is `P` positions over the whole job, prefill included, so a 2M-position claim of D decode tokens has \
+         **N = ⌈(2,097,152 + D − 1) / P⌉** intervals and a one-token lie in the prompt is caught only by a seat whose draw includes its \
+         interval. `P` is the class's (`palw_held_interval_positions_v1`: the wire's, or the draw's). Nothing here arms anything: it is \
+         the table a network that mints with the fence reads before it chooses `k` and `s`.\n"
+    );
+    let rows: Vec<(&str, Option<u32>)> = vec![
+        (
+            "Qwen2.5-1.5B A16 graph-v7 (dense, held)",
+            qwen25_a16_artifact_row_profile_v7(PalwQwen25GeometryV1 { n_ctx: 1 << 21, ..QWEN25_1_5B })
+                .ok()
+                .map(|p| palw_held_interval_positions_v1(&p)),
+        ),
+        (
+            "Kimi K3 stand-in as graph-v7 (NOT a class)",
+            qwen36_profile_v7(PalwQwen36GeometryV1 { n_ctx: 1 << 21, ..KIMI_K3_AS_HYBRID_V1 }).ok().map(|p| palw_held_interval_positions_v1(&p)),
+        ),
+    ];
+    println!("| row | P | N (D = 1,024) | shipped k = {k}, s = {quorum} | s = {panel} | k for 50 / 90 / 99 % at s = {panel} | s for 90 % at k = {k} |");
+    println!("|---|---|---|---|---|---|---|");
+    for (name, width) in rows {
+        let Some(width) = width else {
+            println!("| {name} | — | the held row does not build | | | | |");
+            continue;
+        };
+        let steps = (1u64 << 21) + 1_023;
+        let n = u32::try_from(steps.div_ceil(u64::from(width))).unwrap_or(u32::MAX);
+        let ks = [500_000u64, 900_000, 990_000]
+            .iter()
+            .map(|t| palw_draws_for_detection_v1(n, panel, *t).map(|k| k.to_string()).unwrap_or_else(|| "—".into()))
+            .collect::<Vec<_>>()
+            .join(" / ");
+        let seats = palw_seats_for_detection_v1(n, k, 900_000, 1_000_000).map(|s| s.to_string()).unwrap_or_else(|| "> 10^6".into());
+        println!(
+            "| {name} | {width} | {n} | {} | {} | {ks} | {seats} |",
+            pct(palw_seat_detection_ppm_v1(n, k, quorum)),
+            pct(palw_seat_detection_ppm_v1(n, k, panel)),
+        );
+    }
+    println!(
+        "\nAt a fixed `k` the catch vanishes with the prompt (`s·k / N`): either `k` or `s` scales with `N` — `s × k × P` positions is the \
+         panel's whole replay, linear in the context and spread over seats, each bounded by its window — or the bonded watchdog, certain \
+         at one inference a claim, is the deterrent and its cost at 2M is that inference's (ADR-0103 Decision 9; ADR-0098 Decision 4).\n"
+    );
 }
