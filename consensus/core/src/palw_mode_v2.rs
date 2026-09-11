@@ -1200,12 +1200,29 @@ impl PalwConsensusParamsV2 {
 
         // The court backstop exceeds the worst-case honest prosecution — DERIVED from the
         // court's shape by ADR-0042 Decision 8's formula, not asserted as a lone number.
+        //
+        // **ADR-0103 Decision 1: a bundle that commits to the held regime's contexts may mint a
+        // ladder no bisection plays.** On such a network every conviction is a one-move object or a
+        // dissection opened at a named leaf, so what the window must hold is the terminal, never
+        // the ladder's rounds — and the ladder is minted at the CARRIER's budget, because a level
+        // of it costs 64 bytes of path and no clock. The bundle alone cannot know the regime is
+        // armed at every height (the fence is `Params::palw_held_context`); what it can check is
+        // that it committed to the regime's contexts (COMPLETE_V4) and that the held clock fits.
+        // `Params::validate_palw_v2` then refuses such a ladder unless the fence is armed from
+        // genesis — a bisection played at any height would be one this window cannot hold.
         let worst_case = self
             .court
             .worst_case_duration_daa()
             .ok_or(PalwModeV2Error::Invalid("the worst-case court duration overflows the DAA score"))?;
         if self.state.window_court() <= worst_case {
-            return Err(PalwModeV2Error::Invalid("window_court does not fit the worst-case honest prosecution"));
+            let held_contexts = self.signature_contexts_root == palw_v2_signature_contexts_root_v4();
+            let held_clock = self
+                .court
+                .worst_case_duration_held_daa(0, crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4)
+                .ok_or(PalwModeV2Error::Invalid("the held court's duration overflows the DAA score"))?;
+            if !held_contexts || self.state.window_court() <= held_clock {
+                return Err(PalwModeV2Error::Invalid("window_court does not fit the worst-case honest prosecution"));
+            }
         }
         // ADR-0042 Decision 1 also states "challenge window > worst-case court duration", and the
         // audit (H2) flagged its absence. It is deliberately NOT added: the ADR's clause assumes a

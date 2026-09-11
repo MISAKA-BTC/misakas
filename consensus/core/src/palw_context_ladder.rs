@@ -2083,6 +2083,7 @@ mod tests {
                     // No dissection: this row has no fused site, and the long form is what a court
                     // with no bottom to stand on charges.
                     dissection: None,
+                    decode_bound: None,
                 },
             )
             .expect("derives")

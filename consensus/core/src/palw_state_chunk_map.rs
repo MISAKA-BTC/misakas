@@ -297,13 +297,23 @@ pub fn tiled_kv_state_geometry_v4(
     let chunks_per_slice = positions.div_ceil(positions_per_chunk);
     let geometry =
         PalwStateChunkGeometryV1 { row_bytes: row_bytes as u32, positions_per_chunk, attn_layers, positions, chunks_per_slice };
-    let slices = 2 * geometry.attn_layers.len() as u64;
-    let depth = crate::palw_step_leg::state_v4_path_len(u64::from(chunks_per_slice), 0)
-        + crate::palw_step_leg::state_v4_path_len(slices + 2 * u64::from(profile.layer_count), 0);
+    let depth = tiled_kv_state_depth_v4(u64::from(chunks_per_slice), geometry.attn_layers.len() as u64, profile.layer_count);
     if depth > crate::palw_step_leg::PALW_STEP_LEG_MAX_STATE_DEPTH_V4 {
         return Err(PalwStateChunkMapError::TreeTooDeep { depth, max: crate::palw_step_leg::PALW_STEP_LEG_MAX_STATE_DEPTH_V4 });
     }
     Ok(geometry)
+}
+
+/// **The held map's proof depth, the one spelling** — the levels a chunk's opening climbs: its
+/// slice's block tree (`chunks_per_slice` wide) and the top tree over the slices, counted at the
+/// widest slice set any checkpoint of the class can carry (the cache's `2 × attention layers` plus
+/// `2 × layer_count` for the recurrence slices a hybrid adds). What
+/// [`tiled_kv_state_geometry_v4`] refuses past [`crate::palw_step_leg::PALW_STEP_LEG_MAX_STATE_DEPTH_V4`]
+/// and what the fit prints as the state wall under ADR-0103 (`palw_model_fit_v1`): one expression,
+/// so the gate and the table cannot disagree about a class's depth.
+pub fn tiled_kv_state_depth_v4(chunks_per_slice: u64, attention_layers: u64, layer_count: u16) -> u32 {
+    crate::palw_step_leg::state_v4_path_len(chunks_per_slice.max(1), 0)
+        + crate::palw_step_leg::state_v4_path_len(2 * attention_layers + 2 * u64::from(layer_count), 0)
 }
 
 /// **Where a flat chunk index lives in the v4 tree**: its slice, its block, and the two counts the

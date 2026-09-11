@@ -13,23 +13,32 @@
 //! in the document.
 //!
 //! ```text
-//! palw-model-fit [--preset rc|devnet] [--daa <score>]
+//! palw-model-fit [--preset rc|devnet|held] [--daa <score>] [--ladder-bits <n>]
 //! ```
 //!
 //! `--daa` is the point of judgement the fences are read at — default `u64::MAX - 1`, every
 //! scheduled fence armed and every `never()` fence dormant — because the question a fit answers is
 //! "on this ruleset, ever", not "at this block".
+//!
+//! **ADR-0103 Decision 8: every wall prints its order.** Each row carries how its need grows with
+//! the context (constant, logarithmic, linear — read off the row's own predicate at the doublings
+//! of the context), and each report prints the HELD terms beside the walls. `--preset held` is
+//! testnet-11's lattice minted with the held regime (`palw_held_context_mint_v1`, the ladder at
+//! `2^--ladder-bits`, default 48 — Decision 1's carrier budget) and prices the held rows (graph-v7);
+//! its section 6 is the table ADR-0103 §1.2 wrote as arithmetic.
 
-use kaspa_consensus_core::config::params::{Params, devnet_shipped_params, palw_rc_shipped_params};
-use kaspa_consensus_core::palw_class_admission_v2::{PalwKaryCourtV1, palw_admission_shape_at_v1};
+use kaspa_consensus_core::config::params::{Params, devnet_shipped_params, palw_held_context_mint_v1, palw_rc_shipped_params};
+use kaspa_consensus_core::palw_class_admission_v2::{PalwHeldAdmissionV1, PalwKaryCourtV1, palw_admission_shape_at_v1};
 use kaspa_consensus_core::palw_context_ladder::{palw_a16_context_row_profile_v5, palw_qwen36_context_row_profile_v5};
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};
 use kaspa_consensus_core::palw_model_fit_v1::{
-    PalwFitVerdictV1, PalwFitWallV1, PalwModelFitReportV1, palw_fewest_layers_refused_at_context_v1, palw_geometry_ceiling_fit_v1,
-    palw_model_fit_v1, palw_widest_context_under_the_geometry_ceiling_v1, stand_ins,
+    PalwFitOrderV1, PalwFitVerdictV1, PalwFitWallV1, PalwHeldTermV1, PalwModelFitReportV1, palw_fewest_layers_refused_at_context_v1,
+    palw_fit_regime_for_v1, palw_geometry_ceiling_fit_v1, palw_model_fit_v2, palw_widest_context_under_the_geometry_ceiling_v1,
+    stand_ins,
 };
 use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
-use kaspa_consensus_core::palw_qwen36_profile::{PalwQwen36GeometryV1, qwen36_artifact_row_profile_v5};
+use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7};
+use kaspa_consensus_core::palw_qwen36_profile::{PalwQwen36GeometryV1, QWEN36_35B_A3B, qwen36_artifact_row_profile_v5, qwen36_profile_v7};
 use kaspa_consensus_core::palw_step::{PalwShapeProfileV3, PalwStepError};
 
 type Build = fn(u32) -> Result<PalwShapeProfileV3, PalwStepError>;
@@ -47,6 +56,49 @@ struct Candidate {
 
 fn kimi_k3(n_ctx: u32) -> Result<PalwShapeProfileV3, PalwStepError> {
     qwen36_artifact_row_profile_v5(PalwQwen36GeometryV1 { n_ctx, ..stand_ins::KIMI_K3_AS_HYBRID_V1 })
+}
+
+fn dense_v7(n_ctx: u32) -> Result<PalwShapeProfileV3, PalwStepError> {
+    qwen25_a16_artifact_row_profile_v7(PalwQwen25GeometryV1 { n_ctx, ..QWEN25_1_5B })
+}
+
+fn hybrid_v7(n_ctx: u32) -> Result<PalwShapeProfileV3, PalwStepError> {
+    qwen36_profile_v7(PalwQwen36GeometryV1 { n_ctx, ..QWEN36_35B_A3B })
+}
+
+fn kimi_k3_v7(n_ctx: u32) -> Result<PalwShapeProfileV3, PalwStepError> {
+    qwen36_profile_v7(PalwQwen36GeometryV1 { n_ctx, ..stand_ins::KIMI_K3_AS_HYBRID_V1 })
+}
+
+/// **The held rows** (ADR-0103 Decision 3): each family's graph-v7, the held map in its id.
+fn held_candidates() -> Vec<Candidate> {
+    vec![
+        Candidate {
+            name: "Qwen2.5-1.5B A16 graph-v7 (dense; the held map)",
+            shipped_n_ctx: Some(512),
+            layer_count: QWEN25_1_5B.layer_count,
+            build: dense_v7,
+            parameters: None,
+        },
+        Candidate {
+            name: "Qwen3.6-35B-A3B graph-v7 (hybrid; the held composition)",
+            shipped_n_ctx: Some(512),
+            layer_count: QWEN36_35B_A3B.layer_count,
+            build: hybrid_v7,
+            parameters: None,
+        },
+        Candidate {
+            name: "Kimi K3 stand-in as graph-v7 (ADR-0097 §1.3 — NOT a class)",
+            shipped_n_ctx: None,
+            layer_count: stand_ins::KIMI_K3_AS_HYBRID_V1.layer_count,
+            build: kimi_k3_v7,
+            parameters: Some(stand_ins::KIMI_K3_TOTAL_PARAMETERS),
+        },
+    ]
+}
+
+fn candidates_for(ruleset: &Ruleset) -> Vec<Candidate> {
+    if ruleset.held { held_candidates() } else { candidates() }
 }
 
 fn candidates() -> Vec<Candidate> {
@@ -79,6 +131,8 @@ struct Ruleset {
     name: &'static str,
     params: Params,
     daa: u64,
+    /// Minted with ADR-0103's regime: the rows priced are the held ones.
+    held: bool,
 }
 
 impl Ruleset {
@@ -89,34 +143,54 @@ impl Ruleset {
         }
     }
 
-    /// The court and the id form a registration of `profile` would be judged under at `daa` —
-    /// `palw_admission_shape_at_v1`, the one spelling the acceptance path uses.
-    fn shape(&self, profile: &PalwShapeProfileV3) -> Result<(Option<PalwKaryCourtV1>, PalwPromptIdsFormV1), String> {
+    /// The court, the id form and the held regime's two fences a registration of `profile` would
+    /// be judged under at `daa` — `palw_admission_shape_at_v1`, the one spelling the acceptance
+    /// path uses.
+    fn shape(&self, profile: &PalwShapeProfileV3) -> Result<(Option<PalwKaryCourtV1>, PalwPromptIdsFormV1, PalwHeldAdmissionV1), String> {
         let shape = palw_admission_shape_at_v1(&self.params, self.bundle(), profile, self.daa)?;
-        Ok((shape.court, self.params.palw_prompt_ids_form_at(self.daa)))
+        Ok((shape.court, self.params.palw_prompt_ids_form_at(self.daa), shape.held))
     }
 
+    /// The report under the regime the gate would read this class under (`palw_fit_regime_for_v1`).
     fn fit(&self, profile: &PalwShapeProfileV3) -> Result<PalwModelFitReportV1, String> {
-        let (court, form) = self.shape(profile)?;
-        Ok(palw_model_fit_v1(profile, self.bundle(), court, form))
+        let (court, form, held) = self.shape(profile)?;
+        Ok(palw_model_fit_v2(profile, self.bundle(), court, form, palw_fit_regime_for_v1(held, profile)))
     }
 }
 
 fn args() -> Ruleset {
     let mut preset = "rc".to_string();
     let mut daa = u64::MAX - 1;
+    let mut ladder_bits = 48u32;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
             "--preset" => preset = it.next().unwrap_or_else(|| panic!("--preset needs a value")),
             "--daa" => daa = it.next().and_then(|v| v.parse().ok()).unwrap_or_else(|| panic!("--daa needs a number")),
-            other => panic!("unknown argument {other:?}\nusage: palw-model-fit [--preset rc|devnet] [--daa <score>]"),
+            "--ladder-bits" => {
+                ladder_bits = it.next().and_then(|v| v.parse().ok()).unwrap_or_else(|| panic!("--ladder-bits needs a number"))
+            }
+            other => panic!("unknown argument {other:?}\nusage: palw-model-fit [--preset rc|devnet|held] [--daa <score>] [--ladder-bits <n>]"),
         }
     }
     match preset.as_str() {
-        "rc" | "testnet-11" => Ruleset { name: "testnet-11 (RC)", params: palw_rc_shipped_params(), daa },
-        "devnet" => Ruleset { name: "devnet", params: devnet_shipped_params(), daa },
-        other => panic!("--preset {other:?}: rc or devnet"),
+        "rc" | "testnet-11" => Ruleset { name: "testnet-11 (RC)", params: palw_rc_shipped_params(), daa, held: false },
+        "devnet" => Ruleset { name: "devnet", params: devnet_shipped_params(), daa, held: false },
+        "held" => Ruleset {
+            name: "testnet-11's lattice minted with the held regime (ADR-0103; NOT a shipped preset)",
+            params: palw_held_context_mint_v1(palw_rc_shipped_params(), 1u64 << ladder_bits)
+                .unwrap_or_else(|e| panic!("the held mint at 2^{ladder_bits} does not assemble: {e:?}")),
+            daa,
+            held: true,
+        },
+        other => panic!("--preset {other:?}: rc, devnet or held"),
+    }
+}
+
+fn order_cell(order: PalwFitOrderV1) -> &'static str {
+    match order {
+        PalwFitOrderV1::Linear => "**linear**",
+        other => other.name(),
     }
 }
 
@@ -157,12 +231,12 @@ fn print_full_report(title: &str, report: &PalwModelFitReportV1) {
         report.prompt_ids_term_on_close_bytes,
         report.answer_tokens_per_job,
     );
-    println!("| wall | need | have | unit | verdict | note |");
-    println!("|---|---|---|---|---|---|");
+    println!("| wall | need | have | unit | verdict | order | note |");
+    println!("|---|---|---|---|---|---|---|");
     for row in &report.rows {
         let need = if row.verdict == PalwFitVerdictV1::Unpriced { "—".to_string() } else { row.need.to_string() };
         println!(
-            "| {} | {need} | {} | {} | {} | {} |",
+            "| {} | {need} | {} | {} | {} | {} | {} |",
             row.wall.name(),
             row.have,
             row.unit,
@@ -171,7 +245,22 @@ fn print_full_report(title: &str, report: &PalwModelFitReportV1) {
                 PalwFitVerdictV1::Refused => "**REFUSED**",
                 PalwFitVerdictV1::Unpriced => "unpriced",
             },
+            order_cell(row.order),
             row.note.replace('|', "\\|")
+        );
+    }
+    println!("\nHeld, not carried (ADR-0103 Decision 8) — regime **{:?}**:\n", report.regime);
+    println!("| held term | need | unit | order | checked against | note |");
+    println!("|---|---|---|---|---|---|");
+    for term in &report.held_terms {
+        println!(
+            "| {} | {} | {} | {} | {} | {} |",
+            term.term.name(),
+            term.need,
+            term.unit,
+            order_cell(term.order),
+            term.term.checked_against(),
+            term.note.replace('|', "\\|")
         );
     }
     println!(
@@ -273,7 +362,7 @@ fn main() {
     if carried == 0 {
         println!("- this ruleset's genesis registers no row with a carried profile.\n");
     }
-    for candidate in candidates() {
+    for candidate in candidates_for(&ruleset) {
         let Some(n_ctx) = candidate.shipped_n_ctx else { continue };
         match (candidate.build)(n_ctx) {
             Ok(profile) => match ruleset.fit(&profile) {
@@ -290,7 +379,7 @@ fn main() {
         "`REFUSED need / have`; a row the family cannot BUILD is refused at the geometry ceiling before any other wall can price it. `unpriced` on the four close walls is what a row the ladder refuses says of its close: the derivation's walk is capped at the ladder (audit D H-5), so the close of a row deeper than the ladder is not a number.\n"
     );
     let contexts: [u32; 8] = [512, 2_048, 8_192, 32_768, 131_072, 524_288, 1_048_576, 2_097_152];
-    for candidate in candidates() {
+    for candidate in candidates_for(&ruleset) {
         println!("### {}\n", candidate.name);
         print!("| n_ctx |");
         for wall in PalwFitWallV1::ALL {
@@ -359,8 +448,10 @@ fn main() {
         print!("---|");
     }
     println!("---|");
-    for candidate in candidates() {
-        let hi = palw_widest_context_under_the_geometry_ceiling_v1(candidate.layer_count);
+    for candidate in candidates_for(&ruleset) {
+        // Held (ADR-0103 Decision 6) there is no `n_ctx × layers` ceiling: the search tops out at
+        // 2^26 positions, where the order sweep still reads four doublings inside `u32`.
+        let hi = if ruleset.held { 1 << 26 } else { palw_widest_context_under_the_geometry_ceiling_v1(candidate.layer_count) };
         print!("| {} |", candidate.name.split(" (").next().unwrap_or(candidate.name));
         let mut fit = u32::MAX;
         for wall in PalwFitWallV1::ALL {
@@ -381,6 +472,12 @@ fn main() {
 
     // ---------------------------------------------------------------------------------------
     println!("## 4. Does a 2M context fit? The geometry ceiling, for every depth\n");
+    if ruleset.held {
+        println!(
+            "Under the held regime a held row meets no `n_ctx × layer_count` ceiling: `validate_geometry` reads the per-position budget instead (`PALW_STEP_MAX_NODES_PER_POSITION` = **{}** nodes a position; ADR-0103 Decision 6) and the context is bounded by the ladder's depth. The table is the shipped ceiling, which every class that registers no held map still meets on this network.\n",
+            kaspa_consensus_core::palw_step::PALW_STEP_MAX_NODES_PER_POSITION
+        );
+    }
     println!(
         "`PALW_STEP_MAX_ENUMERATION` bounds `n_ctx × layer_count` at **{}** (`PalwShapeProfileV3::validate_geometry`). At 2^21 positions the fewest layers refused is **{}**; at 2^20, **{}**.\n",
         kaspa_consensus_core::palw_step::PALW_STEP_MAX_ENUMERATION,
@@ -410,8 +507,9 @@ fn main() {
     );
     println!("| candidate | n_ctx | attention cache | recurrent state | prompt ids | artifact (lower bound) |");
     println!("|---|---|---|---|---|---|");
-    for candidate in candidates() {
-        for n_ctx in [512u32, 32_768, 131_072] {
+    let seat_widths: &[u32] = if ruleset.held { &[512, 32_768, 131_072, 1_048_576, 2_097_152] } else { &[512, 32_768, 131_072] };
+    for candidate in candidates_for(&ruleset) {
+        for &n_ctx in seat_widths {
             let Ok(profile) = (candidate.build)(n_ctx) else { continue };
             let Ok(report) = ruleset.fit(&profile) else { continue };
             println!(
@@ -424,7 +522,10 @@ fn main() {
             );
         }
         // Past the geometry ceiling there is no profile; the cache is still arithmetic, and the
-        // question "1M" is the one this section exists for.
+        // question "1M" is the one this section exists for. A held row has a profile there.
+        if ruleset.held {
+            continue;
+        }
         if let Ok(profile) = (candidate.build)(512) {
             let per_position = (profile.attn_kv_heads as u64) * (profile.attn_head_dim as u64) * 4 * 2;
             let attention_layers = (0..profile.layer_count)
@@ -439,6 +540,44 @@ fn main() {
                     candidate.parameters.map(human).unwrap_or_else(|| "the converter's".into()),
                 );
             }
+        }
+    }
+    println!();
+
+    // ---------------------------------------------------------------------------------------
+    println!("## 6. Every wall's order, and what is held (ADR-0103 Decision 8)\n");
+    println!(
+        "Each cell is the order of the wall's `need` in the context, read by the row's own predicate at the context and six doublings of it (a wider row priced under a ladder that holds it). `**linear**` on a chain wall is what the held regime refuses a class for (`LinearInTheContext`); the held terms are linear by design and are bounded by the budget each names, never by a ruleset number.\n"
+    );
+    print!("| candidate | n_ctx |");
+    for wall in PalwFitWallV1::ALL {
+        print!(" {} |", wall.name());
+    }
+    for term in PalwHeldTermV1::ALL {
+        print!(" {} (held) |", term.name());
+    }
+    println!();
+    print!("|---|---|");
+    for _ in 0..PalwFitWallV1::ALL.len() + PalwHeldTermV1::ALL.len() {
+        print!("---|");
+    }
+    println!();
+    for candidate in candidates_for(&ruleset) {
+        for n_ctx in [512u32, 32_768, 2_097_152] {
+            let short = candidate.name.split(" (").next().unwrap_or(candidate.name);
+            let Ok(profile) = (candidate.build)(n_ctx) else {
+                println!("| {short} | {n_ctx} | the family refuses to build the row (the geometry ceiling) |");
+                continue;
+            };
+            let Ok(report) = ruleset.fit(&profile) else { continue };
+            print!("| {short} | {n_ctx} |");
+            for wall in PalwFitWallV1::ALL {
+                print!(" {} |", report.row(wall).map(|r| order_cell(r.order)).unwrap_or("—"));
+            }
+            for term in PalwHeldTermV1::ALL {
+                print!(" {} |", report.held_term(term).map(|t| order_cell(t.order)).unwrap_or("—"));
+            }
+            println!();
         }
     }
     println!();

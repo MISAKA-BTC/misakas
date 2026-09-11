@@ -372,6 +372,16 @@ pub struct PalwCourtCostShapeV1 {
     /// walk — a cost derivation that consulted a DAA score would price one class two ways
     /// depending on when it was asked. The caller reads the fence and says.
     pub dissection: Option<u8>,
+    /// **The most decode calls one job can make, where the regime states it** (ADR-0103 Decision 4).
+    ///
+    /// `None` — every shipped court — prices the generated-token pin and the generated ids at the
+    /// whole context, "a job may be almost all decode: the bound is the whole context". That is a
+    /// bound and not a measurement: one decode call is one trace event, and a job carries at most
+    /// `PALW_V2_MAX_TRACE_EVENTS` of them whatever its context, so past that width the shipped
+    /// price charges a pin no job can file. Under the held regime the caller states the trace
+    /// cap here and the pin is `min(n_ctx, cap)` — constant in the context, which is why ADR-0082
+    /// U-07b's Merkle output form is not needed for R-held. Never read by the walk from a fence.
+    pub decode_bound: Option<u64>,
 }
 
 /// **What a `palw_kary_court`-armed ruleset has turned on** (ADR-0082 Decisions 3 and 5).
@@ -416,6 +426,22 @@ pub struct PalwAdmissionShapeV1 {
     pub ladder: Option<PalwClassLadderRulesV1>,
     /// ADR-0102: `Params::palw_token_lift` at the height — may a class reach the fenced kernel.
     pub token_lift: bool,
+    /// ADR-0103: `Params::palw_held_context` and `Params::palw_panel_da_at` at the height — may a
+    /// class register a held map, and may its widest job commit with no ids.
+    pub held: PalwHeldAdmissionV1,
+}
+
+/// **ADR-0103: what the held regime's gate reads at the height** — the caller's reading of two
+/// fences, passed in for the reason every fence reaches this gate as an argument (a derivation that
+/// read its own activation would be a rule deciding when it applies). `Default` is both dormant:
+/// every shipped preset, where [`verify_class_admission_v8`] is [`verify_class_admission_v7`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwHeldAdmissionV1 {
+    /// `Params::palw_held_context` active at the height.
+    pub armed: bool,
+    /// `Params::palw_panel_da_at` at the height — whether the widest job of a class may commit its
+    /// prompt with no ids on the chain (ADR-0077 Decision 16).
+    pub panel_da: bool,
 }
 
 pub fn palw_admission_shape_at_v1(
@@ -424,8 +450,11 @@ pub fn palw_admission_shape_at_v1(
     profile: &PalwShapeProfileV3,
     daa_score: u64,
 ) -> Result<PalwAdmissionShapeV1, String> {
+    let held_armed = params.palw_held_context_active_at(daa_score);
     let court = if params.palw_kary_court_active_at(daa_score) {
-        let derived = crate::palw_court_v2::palw_court_params_at_v2(bundle, true)
+        // The court the acceptance path resolves (`palw_court_params_at`): held, its arity is
+        // derived with the leaf ladder's rounds at zero (ADR-0103 Decision 5).
+        let derived = crate::palw_court_v2::palw_court_params_held_at_v2(bundle, true, held_armed)
             .map_err(|e| format!("this ruleset's court has no shape at daa {daa_score}: {e}"))?;
         Some(PalwKaryCourtV1 {
             dissection_arity: derived.dissection_arity(),
@@ -440,7 +469,12 @@ pub fn palw_admission_shape_at_v1(
         .is_some_and(|fence| fence.is_active(daa_score))
         .then(|| crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(profile, court, bundle.court.max_step_leaf_count()))
         .flatten();
-    Ok(PalwAdmissionShapeV1 { court, ladder, token_lift: params.palw_token_lift_active_at(daa_score) })
+    Ok(PalwAdmissionShapeV1 {
+        court,
+        ladder,
+        token_lift: params.palw_token_lift_active_at(daa_score),
+        held: PalwHeldAdmissionV1 { armed: held_armed, panel_da: params.palw_panel_da_at(daa_score) },
+    })
 }
 
 /// **Does a genesis set register a class that reaches a fenced kernel?** (ADR-0102.) Genesis rows
@@ -476,6 +510,7 @@ impl PalwCourtCostShapeV1 {
             count_ids: true,
             prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             dissection: None,
+            decode_bound: None,
         }
     }
 
@@ -493,6 +528,7 @@ impl PalwCourtCostShapeV1 {
             count_ids: true,
             prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             dissection: None,
+            decode_bound: None,
         }
     }
 
@@ -513,6 +549,13 @@ impl PalwCourtCostShapeV1 {
     /// ruleset already froze.
     pub fn with_dissection_v1(mut self, arity: u8) -> Self {
         self.dissection = Some(arity);
+        self
+    }
+
+    /// **The held regime's decode bound** (ADR-0103 Decision 4): the generated-token pin priced at
+    /// `min(n_ctx, decode_calls)`. The caller states the trace cap; nothing here reads a fence.
+    pub fn with_decode_bound_v1(mut self, decode_calls: u64) -> Self {
+        self.decode_bound = Some(decode_calls);
         self
     }
 }
@@ -897,8 +940,11 @@ fn derive_court_cost_walk_v1(
             // on its own. That makes this arm `calls x vocabulary`, and a job may be almost all
             // decode: the bound is the whole context. Only a gather pays it.
             if shape.count_ids && node.op_kind == Op::EmbedLookup {
-                let ids = n_ctx.checked_mul(4).ok_or_else(over)?;
-                let pin = decode_pin_price_v1(profile, n_ctx).ok_or_else(over)?;
+                // ADR-0103 Decision 4: where the regime states the trace cap, a job's decode is at
+                // most that many calls — the whole context only on the shipped reading.
+                let decode = shape.decode_bound.map_or(n_ctx, |bound| bound.min(n_ctx));
+                let ids = decode.checked_mul(4).ok_or_else(over)?;
+                let pin = decode_pin_price_v1(profile, decode).ok_or_else(over)?;
                 evidence = evidence.checked_add(ids).and_then(|e| e.checked_add(pin)).ok_or_else(over)?;
             }
             // The prompt ids ride every refutation that addresses a gather, and a challenger may
@@ -1144,6 +1190,25 @@ pub enum PalwClassAdmissionError {
     /// graph is adjudicable by this build, and what is missing is the fence.
     #[error("the class reaches the per-token lift kernel and this network has not armed palw_token_lift")]
     TokenLiftNeedsItsFence,
+    /// **ADR-0103: the class registers a held (v4) state map and this network has not armed
+    /// `palw_held_context`.** The map is the regime's marker — it is inside the class id, and it is
+    /// what lifts the `n_ctx × layers` ceiling in `validate_geometry` — so a network that has not
+    /// armed the regime must not admit the class that asks for it. Refused by name, for the
+    /// `TokenLiftNeedsItsFence` reason: nothing is wrong with the graph; the fence is missing.
+    #[error("the class registers the held state map and this network has not armed palw_held_context")]
+    HeldMapNeedsItsFence,
+    /// **ADR-0103 Decision 8: under the held regime a chain wall may not grow linearly with the
+    /// context.** Asked before any number is compared: a class whose `wall` still reads `Linear`
+    /// under the regime is a class the chain would carry, walk or wait on in proportion to its
+    /// context, which is the thing the regime exists to remove — refused whatever its numbers are
+    /// today, because the next context up is the same class shape one doubling on.
+    #[error("under the held regime the class's {wall} grows linearly with the context")]
+    LinearInTheContext { wall: &'static str },
+    /// The order sweep could not price `wall` at every doubling it reads, so the gate cannot show
+    /// the wall is not linear — and refuses rather than guess (the fit's `Unpriced`, kept apart from
+    /// `LinearInTheContext` so the refusal names the right problem).
+    #[error("under the held regime the class's {wall} could not be priced across the context sweep")]
+    ChainWallOrderUnknown { wall: &'static str },
 }
 
 /// **The Phase B rules a `palw_context_ladder`-armed network judges a registration under**
@@ -1561,6 +1626,62 @@ pub fn verify_class_admission_v7(
     decode_rules: bool,
     token_lift: bool,
 ) -> Result<PalwClassCatalogEntryV2, PalwClassAdmissionError> {
+    verify_class_admission_v8(
+        bundle,
+        profile,
+        canonical,
+        registration,
+        certified,
+        chain_certified,
+        ladder,
+        court,
+        decode_rules,
+        token_lift,
+        PalwHeldAdmissionV1::default(),
+    )
+}
+
+/// [`verify_class_admission_v7`] under ADR-0103's fence.
+///
+/// `held` is the caller's reading of `Params::palw_held_context` and `Params::palw_panel_da_at` at
+/// the block, both dormant on every shipped preset — where this is [`verify_class_admission_v7`]
+/// byte for byte for every class that registers no held map, and a refusal by name
+/// ([`PalwClassAdmissionError::HeldMapNeedsItsFence`]) for one that does.
+///
+/// Armed, a class that registers no held map is judged exactly as before: the regime is the
+/// CLASS's (its map is in its id), not the network's. A class that registers one is judged under
+/// the regime, and four things move:
+///
+/// * **the order first** (Decision 8): `palw_model_fit_v2` under [`crate::palw_model_fit_v1::PalwFitRegimeV1::Held`]
+///   reads every chain wall's order at the doublings of the class's context, and a wall that reads
+///   `Linear` is refused by name ([`PalwClassAdmissionError::LinearInTheContext`]) before any
+///   number is compared;
+/// * **the state tree's depth** (Decision 3): the held layout must exist at `n_ctx` — its proof
+///   inside `PALW_STEP_LEG_MAX_STATE_DEPTH_V4` — where a v3 class meets a chunk count;
+/// * **the ladder as a depth** (Decision 1): the same comparison, `worst ≤ max_step_leaf_count` —
+///   a network under the fence mints its ladder at the carrier's budget because no round is
+///   played;
+/// * **the window on the held clock** (Decision 5): `palw_attn_court_admits_row_held_v1`, the
+///   dissection opened at the accusation's leaf with no ladder rounds in front of it.
+///
+/// The last of the four is the NETWORK's and applies to every class once the fence is armed: the
+/// acceptance path refuses `CourtOpened` for every claim there, so no class's dispute is charged a
+/// ladder it never plays. The geometry's per-position budget (Decision 6) is `validate_shape`'s,
+/// which reads the map.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_class_admission_v8(
+    bundle: &PalwConsensusParamsV2,
+    profile: &PalwShapeProfileV3,
+    canonical: &PalwJobContextV2,
+    registration: &PalwConsensusObjectV2,
+    certified: &[crate::palw_e2e_adjudicability::PalwE2eFamilyV1],
+    chain_certified: &[crate::palw_e2e_adjudicability::PalwE2eFamilyV1],
+    ladder: Option<PalwClassLadderRulesV1>,
+    court: Option<PalwKaryCourtV1>,
+    decode_rules: bool,
+    token_lift: bool,
+    held: PalwHeldAdmissionV1,
+) -> Result<PalwClassCatalogEntryV2, PalwClassAdmissionError> {
     let PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, pwu_rule, share_permille, .. } = registration else {
         return Err(PalwClassAdmissionError::NotARegistration);
     };
@@ -1578,6 +1699,13 @@ pub fn verify_class_admission_v7(
     // so an unbounded shape decides how much work it costs to reject it. `validate_shape` is where
     // those bounds live; running it after the first consumer is running it too late.
     profile.validate_shape().map_err(|e| PalwClassAdmissionError::Profile(e.to_string()))?;
+    // **ADR-0103: the held map is admitted by its fence, and only by it** — asked immediately after
+    // the shape, because the map is what lifted the context ceiling `validate_shape` just skipped,
+    // so nothing past this line may spend work on a context the network never agreed to carry.
+    let held_class = crate::palw_state_chunk_map::palw_profile_is_held_v4(profile);
+    if held_class && !held.armed {
+        return Err(PalwClassAdmissionError::HeldMapNeedsItsFence);
+    }
 
     let derived_id = profile.shape_profile_id();
     if *class_id != derived_id {
@@ -1727,6 +1855,35 @@ pub fn verify_class_admission_v7(
         }
     }
 
+    // **ADR-0103 Decision 8 — under the held regime, the order first, before any number.** The
+    // walls below compare a need against a ceiling at THIS context; a wall whose need is linear
+    // passes them at a small context and is the wall again one doubling on, which is the thing the
+    // regime exists to remove. So a held class is read at the doublings of its context through the
+    // fit's own rows — the SAME predicates, under the regime — and the first linear wall is the
+    // refusal. Then the state tree's depth (Decision 3), which replaces a v3 class's chunk count.
+    if held_class {
+        let form = court.map_or(crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat, |k| k.prompt_ids_form);
+        let fit = crate::palw_model_fit_v1::palw_model_fit_v2(
+            profile,
+            bundle,
+            court,
+            form,
+            crate::palw_model_fit_v1::palw_fit_regime_for_v1(held, profile),
+        );
+        if let Some(wall) = fit.linear_chain_walls().first() {
+            return Err(PalwClassAdmissionError::LinearInTheContext { wall: wall.name() });
+        }
+        if let Some(wall) = fit.unordered_chain_walls().first() {
+            return Err(PalwClassAdmissionError::ChainWallOrderUnknown { wall: wall.name() });
+        }
+        crate::palw_state_chunk_map::palw_state_layout_v4(profile, profile.n_ctx).map_err(|e| match e {
+            crate::palw_state_chunk_map::PalwStateChunkMapError::TreeTooDeep { depth, max } => {
+                PalwClassAdmissionError::CourtCostExceedsCeiling { what: "held state proof depth", got: depth.into(), ceiling: max.into() }
+            }
+            other => PalwClassAdmissionError::Profile(format!("the held map has no layout at n_ctx {}: {other}", profile.n_ctx)),
+        })?;
+    }
+
     // **Both arms count against the RULESET's ladder, and the `None` arm did not.** It called
     // `worst_case_step_leaf_count_v1`, which counts against `PALW_STEP_MAX_LEAVES` — the
     // executor's constant — so a caller with no explicit rules had its class refused by a number
@@ -1804,6 +1961,9 @@ pub fn verify_class_admission_v7(
     {
         return Err(PalwClassAdmissionError::PricedForADifferentCourt { priced: shape.dissection, court: k.dissection_arity });
     }
+    // ADR-0103 Decision 4: under the held regime the generated-token pin is priced at the trace
+    // cap — the most decode calls a job can file — rather than at the whole context.
+    let shape = if held.armed { shape.with_decode_bound_v1(crate::palw_v2::PALW_V2_MAX_TRACE_EVENTS as u64) } else { shape };
     let cost = derive_court_cost_shaped_v1(profile, shape)?;
     // **In chunks AND in bytes** (ADR-0080 design A; ADR-0049 Decision C). A close rides an
     // `ObjectChunk` group, so what a ruleset pays to RELAY is a count of carriers and half a chunk
@@ -1863,7 +2023,16 @@ pub fn verify_class_admission_v7(
             .court
             .with_dissection_arity(k.dissection_arity)
             .map_err(|e| PalwClassAdmissionError::Profile(format!("the caller's dissection arity is not legal: {e}")))?;
-        crate::palw_attn_court_v1::palw_attn_court_admits_row_v1(&played, history, tile, k.window_court_daa).map_err(|e| match e {
+        // ADR-0103 Decision 5: under the held regime a dissection opens at the accusation's leaf,
+        // so the window holds the history rounds and no leaf ladder. The NETWORK's regime, not the
+        // class's: once the fence is armed no class's dispute bisects (the acceptance path refuses
+        // `CourtOpened` for every claim), so no class's window is charged the ladder's rounds.
+        let admits = if held.armed {
+            crate::palw_attn_court_v1::palw_attn_court_admits_row_held_v1(&played, history, tile, k.window_court_daa)
+        } else {
+            crate::palw_attn_court_v1::palw_attn_court_admits_row_v1(&played, history, tile, k.window_court_daa)
+        };
+        admits.map_err(|e| match e {
             crate::palw_attn_court_v1::PalwAttnCourtError::OverrunsWindow { moves, deadline, reserve, window_court } => {
                 PalwClassAdmissionError::CourtWindowTooShort {
                     needed: moves.saturating_mul(deadline).saturating_add(reserve),

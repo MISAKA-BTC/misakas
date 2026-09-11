@@ -2016,6 +2016,18 @@ impl Params {
             return Ok(());
         };
         bundle.validate()?;
+        // **ADR-0103 Decision 1: a ladder past the bisection's clock is a network on which no
+        // bisection is ever played.** `bundle.validate` admits one only over the COMPLETE_V4 set and
+        // only where the held clock fits; what it cannot see is whether the regime covers every
+        // height. A fence armed later leaves the heights before it playing a bisection this window
+        // cannot hold — so the ladder may pass the clock only on a network minted with the fence.
+        let bisection_fits = bundle.court.worst_case_duration_daa().is_some_and(|worst| worst < bundle.state.window_court());
+        if !bisection_fits && !self.palw_held_context.is_some_and(|f| f != ForkActivation::never() && f.is_active(0)) {
+            return Err(PalwModeV2Error::Invalid(
+                "the court's ladder is past the bisection's clock and palw_held_context is not armed from genesis: a bisection \
+                 at any height could not finish inside window_court (ADR-0103 Decision 1)",
+            ));
+        }
         // **A V2 network's genesis is minted at the ambient target, because the class lottery is
         // its throttle** (mainnet audit, 2026-09-05).
         //
@@ -2054,12 +2066,33 @@ impl Params {
         // the first dispute that its court has no shape; refusing to assemble is the only way
         // this is a rule rather than a runbook note. Dormant, the ruleset is untouched.
         if self.palw_kary_court_fence().is_some() {
-            let Ok(derived) = crate::palw_court_v2::palw_court_params_at_v2(bundle, true) else {
+            // ADR-0103 Decision 5: on a network minted with the held regime no session plays the
+            // leaf ladder, so the court it judges under from genesis derives its arity with the
+            // ladder's rounds at zero — the same derivation `palw_court_params_at` runs there.
+            let held_from_genesis = self.palw_held_context.is_some_and(|f| f != ForkActivation::never() && f.is_active(0));
+            let Ok(derived) = crate::palw_court_v2::palw_court_params_held_at_v2(bundle, true, held_from_genesis) else {
                 return Err(PalwModeV2Error::Invalid(
                     "palw_kary_court is armed and no dissection arity fits this ruleset's court window: the window \
                      cannot hold its own dispute, so the court the fence names has no shape",
                 ));
             };
+            // A held regime armed LATER changes the derivation at its height; the frozen field is
+            // one number, so the court past the fence must derive the same one (or the gate prices a
+            // class for an arity the ruleset id does not name).
+            if self.palw_held_context.is_some_and(|f| f != ForkActivation::never()) && !held_from_genesis {
+                let held = crate::palw_court_v2::palw_court_params_held_at_v2(bundle, true, true).map_err(|_| {
+                    PalwModeV2Error::Invalid(
+                        "palw_held_context is armed and no dissection arity fits this ruleset's court window with the ladder at \
+                         zero (ADR-0103 Decision 5)",
+                    )
+                })?;
+                if held.dissection_arity() != bundle.court.dissection_arity() {
+                    return Err(PalwModeV2Error::Invalid(
+                        "palw_held_context arms after genesis and the arity the held court derives is not the ruleset's frozen \
+                         dissection_arity: mint the regime from genesis, or at an arity both clocks derive (ADR-0103 Decision 5)",
+                    ));
+                }
+            }
             // **ONE spelling of the arity, checked where the ruleset is assembled** (audit D H-1).
             //
             // `palw_court_params_at_v2` OVERWRITES `court.dissection_arity` with the derived value,
@@ -2274,6 +2307,16 @@ impl Params {
                 return Err(PalwModeV2Error::Invalid(
                     "palw_held_context is armed on a network whose prompt ids are flat: a held class's ids never ride, and a \
                      flat digest cannot be opened a tile at a time (ADR-0103 Decision 4; trace format 4)",
+                ));
+            }
+            // The ids never ride above one standard transaction, so a held class's widest job must
+            // be able to commit with none — `PanelDa`, the only mode whose commitment carries the
+            // digest alone. Without it every held class reads its payload wall `Linear` and the
+            // gate refuses them all by that name: a fence that could admit nothing.
+            if !by_then(self.palw_panel_da) {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_held_context is armed without palw_panel_da at or below its height: a held class's widest job commits \
+                     with no ids on the chain, which only PanelDa allows (ADR-0103 Decision 4)",
                 ));
             }
         }
@@ -9979,6 +10022,50 @@ fn palw_rc_arm_phase1(mut params: Params) -> Params {
     params
 }
 
+/// **ADR-0103: the held regime, minted on a shipped lattice** — the one spelling the generator,
+/// the tests and the devnet flag share, so "the network this ADR describes" is a function and not
+/// four hand-copied mutations.
+///
+/// From genesis: the COMPLETE_V4 signing-context set (`palw_signature_contexts_v2`), trace format 4
+/// and the tiled prompt ids (`palw_prompt_ids_merkle`), the k-ary court, the one-move court,
+/// `PanelDa`, and `palw_held_context` itself — every precondition `validate_palw_v2` names — with
+/// the court's ladder minted at `ladder` (Decision 1: at the carrier's budget, since no round is
+/// played). Every other number is the base lattice's. `Err` is `validate_palw_v2`'s refusal,
+/// verbatim: a mint this function cannot assemble is not one a node would start on.
+///
+/// Not a preset and never a default: nothing ships it, and every shipped fingerprint is unmoved by
+/// its existence (the fence stays `None` on every preset).
+pub fn palw_held_context_mint_v1(mut params: Params, ladder: u64) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
+    let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut params.palw_consensus_mode else {
+        return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid("the held regime is a ConsensusV2 ruleset; this base carries no V2 bundle"));
+    };
+    bundle.signature_contexts_root = crate::palw_mode_v2::palw_v2_signature_contexts_root_v4();
+    bundle.trace_format_version = crate::palw_mode_v2::PALW_V2_TRACE_FORMAT_VERSION_MERKLE_IDS;
+    let court = bundle.court;
+    bundle.court = crate::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(
+        ladder,
+        court.turn_deadline_daa(),
+        court.terminal_rounds(),
+        court.max_close_bytes(),
+        court.max_terminal_macs(),
+        court.max_operand_count(),
+    )?
+    .with_dissection_arity(court.dissection_arity())?;
+    params.palw_prompt_ids_merkle = Some(ForkActivation::always());
+    params.palw_signature_contexts_v2 = Some(ForkActivation::always());
+    params.palw_kary_court = Some(ForkActivation::always());
+    params.palw_shard_court = Some(ForkActivation::always());
+    params.palw_panel_da = Some(ForkActivation::always());
+    params.palw_held_context = Some(ForkActivation::always());
+    // ADR-0082 Decision 3: the frozen arity must be the one the held court derives from genesis.
+    let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut params.palw_consensus_mode else { unreachable!("matched above") };
+    let derived = crate::palw_court_v2::palw_court_params_held_at_v2(bundle, true, true)
+        .map_err(|_| crate::palw_mode_v2::PalwModeV2Error::Invalid("no dissection arity fits this lattice's court window with the ladder at zero"))?;
+    bundle.court = bundle.court.with_dissection_arity(derived.dissection_arity())?;
+    params.validate_palw_v2()?;
+    Ok(params)
+}
+
 pub fn palw_rc_shipped_params() -> Params {
     // The artifact root is the one thing code cannot mint. Without it there is no class to
     // register and therefore no ruleset to assemble — that, and only that, is what falls back to
@@ -12679,6 +12766,7 @@ mod consensus_params_id_tests {
             }
             p.palw_signature_contexts_v2 = Some(ForkActivation::always());
             p.palw_shard_court = shard_court.map(ForkActivation::new);
+            p.palw_panel_da = Some(ForkActivation::always());
             p.palw_held_context = Some(ForkActivation::new(held_at));
             p
         };
@@ -12705,6 +12793,14 @@ mod consensus_params_id_tests {
         no_kary.palw_kary_court = None;
         let err = refused(no_kary);
         assert!(err.contains("palw_kary_court"), "the k-ary court: {err}");
+        let mut no_panel = held(v4, true, Some(100), 200);
+        no_panel.palw_panel_da = None;
+        let err = refused(no_panel);
+        assert!(err.contains("palw_held_context") && err.contains("palw_panel_da"), "the ids off the commitment: {err}");
+        let mut late_panel = held(v4, true, Some(100), 200);
+        late_panel.palw_panel_da = Some(ForkActivation::new(201));
+        let err = refused(late_panel);
+        assert!(err.contains("palw_panel_da"), "PanelDa after the fence: {err}");
 
         // Outside ConsensusV2 the fence answers nothing.
         let mut legacy = MAINNET_PARAMS.clone();

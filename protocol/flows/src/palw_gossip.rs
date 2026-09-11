@@ -2047,6 +2047,17 @@ mod tests {
     /// still has the material lane's two bounds — a slot ceiling and a per-peer share of it — so a
     /// forger cannot make the seat attempt unbounded replays, and cannot be the only voice for an
     /// interval however fast it sends.
+    /// **The held regime's width derivation reads the cap this lane enforces** (ADR-0103
+    /// Decision 2): consensus-core mirrors the constant because it cannot read this crate, and a
+    /// mirror nobody compares is two numbers.
+    #[test]
+    fn the_held_regimes_opening_cap_is_this_lanes_cap() {
+        assert_eq!(
+            PALW_INTERVAL_OPENING_MAX_BYTES as u64,
+            kaspa_consensus_core::palw_held_context_v1::PALW_HELD_SEAT_INTERVAL_OPENING_CAP_BYTES_V1
+        );
+    }
+
     #[test]
     fn an_interval_opening_is_admitted_only_when_solicited_and_within_its_slots() {
         let center = PalwGossipCenter::default();

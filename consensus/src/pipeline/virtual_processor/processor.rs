@@ -6885,7 +6885,7 @@ impl VirtualStateProcessor {
                             bundle.court.max_step_leaf_count(),
                         )
                     });
-                    kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v7(
+                    kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v8(
                         bundle,
                         &carriage.profile,
                         &carriage.canonical,
@@ -6899,6 +6899,13 @@ impl VirtualStateProcessor {
                         false,
                         // ADR-0102: the per-token lift kernel is admitted by its fence alone.
                         self.palw_token_lift_at(point.daa_score),
+                        // ADR-0103: the held map is admitted by its fence alone, and a held class's
+                        // walls are read under the regime — the PanelDa fence says whether its
+                        // widest job commits with no ids.
+                        kaspa_consensus_core::palw_class_admission_v2::PalwHeldAdmissionV1 {
+                            armed: self.palw_held_context_at(point.daa_score),
+                            panel_da: self.palw_panel_da_at(point.daa_score),
+                        },
                     )
                     .map_err(|e| format!("class {class_id} is not admissible: {e}"))?;
                 }

@@ -121,6 +121,14 @@ pub fn palw_held_seat_route_v1(n_ctx: u32, replay_ms_per_position: u64, window_r
     }
 }
 
+/// **The interval lane's transport cap**, in bytes — `protocol/flows`'s
+/// `PALW_INTERVAL_OPENING_MAX_BYTES`, mirrored here because consensus-core cannot read the flows
+/// crate and the width derivation below must be stated against the cap a seat will actually meet
+/// (the flows crate pins the two equal). An interval's opening is the fold's digests over its
+/// leaves (ADR-0086 Decision 1), so this bounds `P` from the wire side; a RESUME opening is not an
+/// interval opening and is not bounded by it (ADR-0103 §4: the class declares its own, off the plan).
+pub const PALW_HELD_SEAT_INTERVAL_OPENING_CAP_BYTES_V1: u64 = 4 << 20;
+
 /// **The interval width `P`, derived** (ADR-0103 Decision 2): the largest power of two for which
 /// the seat's fetch plus a replay of `P` positions fits its budget, and for which one interval's
 /// opening (the fold's digests, one per 4,096 leaves) fits the transport cap the caller states —
