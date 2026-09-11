@@ -1022,7 +1022,7 @@ impl Base0CheckpointCaptureV1 {
             return Err(LegError::CheckpointStateUnavailable { chunk_index: u64::from(positions) });
         }
         let tile = kaspa_consensus_core::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4;
-        let closes = positions >= tile && positions % tile == 0;
+        let closes = positions >= tile && positions.is_multiple_of(tile);
         // The block that moved: the one that just closed, or the one still filling.
         let block = if closes {
             positions / tile - 1

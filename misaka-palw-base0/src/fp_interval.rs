@@ -3158,6 +3158,10 @@ pub fn base0_open_fp_resume_v1(
     .encode_v1()
 }
 
+/// What [`base0_fp_verify_resume_v1`] returns: the opening, its verified chunks keyed by flat
+/// index, and the position count the checkpoint covers.
+pub type Base0FpVerifiedResumeV1 = (Base0FpResumeOpeningV1, std::collections::BTreeMap<u64, Vec<u8>>, u32);
+
 /// **The seat's side: verify a fetched state, slice by slice, against the committed checkpoint**
 /// (ADR-0103 Decision 2; Invariant 6: a chunk that does not verify is refused by name and never
 /// replayed from). Returns the verified chunks keyed by their flat index — a shard's, or the whole
@@ -3168,7 +3172,7 @@ pub fn base0_fp_verify_resume_v1(
     covered: u32,
     family_checkpoint_interval: u32,
     max_step_leaf_count: u64,
-) -> Result<(Base0FpResumeOpeningV1, std::collections::BTreeMap<u64, Vec<u8>>, u32), Base0FpResumeRefusalV1> {
+) -> Result<Base0FpVerifiedResumeV1, Base0FpResumeRefusalV1> {
     use kaspa_consensus_core::palw_state_chunk_map as map;
     use kaspa_consensus_core::palw_step_leg as leg;
     let opened = Base0FpResumeOpeningV1::decode_v1(bytes).map_err(|e| Base0FpResumeRefusalV1::NotAResumeOpening(format!("{e:?}")))?;

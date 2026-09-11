@@ -8533,7 +8533,7 @@ fn open_da_session_v2(
         let mut disputed = claim.clone();
         disputed.phase = PalwClaimPhaseV2::DefaultDisputed {
             accused_daa: ctx.daa_score,
-            missing_event_index: missing_event_index,
+            missing_event_index,
             accuser: *accuser,
             accuser_exposure: exposure,
             resumed: Box::new(claim.phase.clone()),
@@ -22869,7 +22869,7 @@ pub(crate) mod tests {
             space_size: 1 << 26,
             signature: vec![1; 8],
         };
-        let err = held_apply(&s3, &p, &ctx(4, 110, 4), &[open.clone()], None, &held_extras()).expect_err("refused");
+        let err = held_apply(&s3, &p, &ctx(4, 110, 4), std::slice::from_ref(&open), None, &held_extras()).expect_err("refused");
         assert_eq!(err, PalwStateV2Error::BisectionRefusedUnderHeldContext(claim_id));
         let dormant = held_apply(&s3, &p, &ctx(4, 110, 4), &[open], None, &PalwTransitionExtrasV1::default());
         assert!(!matches!(dormant, Err(PalwStateV2Error::BisectionRefusedUnderHeldContext(_))), "dormant, the refusal is not this one");
@@ -22886,7 +22886,7 @@ pub(crate) mod tests {
             let (p, s3, claim_id) = held_setup(&forged);
             let accuse = held_checkpoint_accusation(&forged, claim_id, 11, 1, 0, 4);
             assert_eq!(
-                held_apply(&s3, &p, &ctx(4, 110, 4), &[accuse.clone()], None, &PalwTransitionExtrasV1::default()).expect_err("dormant"),
+                held_apply(&s3, &p, &ctx(4, 110, 4), std::slice::from_ref(&accuse), None, &PalwTransitionExtrasV1::default()).expect_err("dormant"),
                 PalwStateV2Error::HeldContextDormant
             );
             let (s4, _) = held_apply(&s3, &p, &ctx(4, 110, 4), &[accuse], None, &held_extras()).expect("convicts");
@@ -22946,10 +22946,10 @@ pub(crate) mod tests {
         };
         let court_only = PalwTransitionExtrasV1 { shard_court_ladder: Some(1 << 26), ..Default::default() };
         assert!(matches!(
-            held_apply(&s3, &p, &ctx(4, 110, 4), &[accuse.clone()], None, &court_only).expect_err("dormant"),
+            held_apply(&s3, &p, &ctx(4, 110, 4), std::slice::from_ref(&accuse), None, &court_only).expect_err("dormant"),
             PalwStateV2Error::ShardCourtNeedsDissection { leaf: l, .. } if l == leaf
         ));
-        let (s4, _) = held_apply(&s3, &p, &ctx(4, 110, 4), &[accuse.clone()], None, &held_extras()).expect("the dissection opens");
+        let (s4, _) = held_apply(&s3, &p, &ctx(4, 110, 4), std::slice::from_ref(&accuse), None, &held_extras()).expect("the dissection opens");
         let (_, session) = s4.court_sessions.iter().find(|(_, s)| s.claim == claim_id).expect("a session on the claim");
         assert_eq!(session.ladder.terminal_index(), Some(leaf), "the ladder is terminal on the named leaf");
         assert!(session.dissection.is_none(), "the responder's root claim is the first move");
