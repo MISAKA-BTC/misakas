@@ -35,7 +35,7 @@ not by hashing.
 > |---|---|---|
 > | producing blocks for a model class | `kaspad --palw-produce --palw-class-artifact=<file>` | [testnet11-join-mining.md](testnet11-join-mining.md) §5–6c |
 > | **seating a panel** on a model class | `kaspad --palw-panel --palw-class-artifact=<file>`, once per class | join-mining §6c — a seat re-executes the claim, so it needs the weights |
-> | answering people's prompts | `misaka-palw-gateway --worker palw-a16-fp-worker` (or `palw-qwen36-fp-worker`) | join-mining §7 |
+> | answering people's prompts | `misaka-palw-gateway --worker palw-a16-fp-worker` (or `palw-qwen36-fp-worker`), plus `misaka-palw-fp-rail --watch` to submit and `kaspad --palw-produce --palw-panel --palw-class-artifact=<file>` to serve and be paid | [testnet11-free-prompt-mining.md](testnet11-free-prompt-mining.md) (and join-mining §7) |
 >
 > None of them is this document's §2, and none of them is `misaka-palw-worker`: that crate's
 > free-prompt arms were deleted by ADR-0077 Decision 5 (consensus refuses their null execution

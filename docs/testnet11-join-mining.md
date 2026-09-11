@@ -121,9 +121,17 @@ The address is ML-DSA-87 P2PKH (`misakatest:…`). It is where rewards are paid,
 collateral returns if the bond is ever retired — the registration names one payee for both.
 
 The easiest way to get that first transfer is the public faucet on the explorer:
-<https://misakascan.com/#/faucet> pays 0.5 tMSK per address (once, ever) as a regular
-transaction — exactly the non-coinbase output the bond path needs, and over a hundred times
-the 0.004 MSK collateral floor.
+<https://misakascan.com/#/faucet> pays **12 tMSK** per address (once, ever) as a regular
+transaction — exactly the non-coinbase output the bond path needs, and enough for the floor bond
+§3 sizes (11.2 MSK with its change and fee). (The service's configured grant as of 2026-09-11; this
+page said 0.5 until then, which covered no bond the node now sizes.)
+
+**If you will also mine with a model through the free-prompt lane, split the grant BEFORE you
+register.** After registration the carrier's change is the node's own fee float (`--palw-fee-outpoint`)
+and nothing else may spend it, so the free-prompt submitter needs a second output at the same
+address. Send part of the grant to yourself first — `misaka wallet send --to <your address> --amount
+0.5 --key-file <seed> --yes` — and the registration takes the larger output while the 0.5 MSK stays
+free (see [testnet11-free-prompt-mining.md](testnet11-free-prompt-mining.md)).
 
 **Fund it with a normal transfer, not with mining rewards.** Two separate rules bite a coinbase
 output: `coinbase_maturity`, and the ADR-0018 DNS settlement floor
@@ -314,9 +322,9 @@ Qwen2.5-A16 is the same command with `--palw-producer-class=71bbb755…`,
 
 `--palw-bond-collateral` is redundant in those commands — with `--palw-producer-class` present the
 node computes the same number itself — and it is written out anyway because it makes the amount you
-have to fund visible in the command that needs it. **The faucet's 0.5 tMSK covers neither tier and
-no longer covers the floor**: it was enough while the node sized one claim, and one claim is the
-sizing this section exists to correct.
+have to fund visible in the command that needs it. **The faucet's 12 tMSK covers the floor and neither
+model tier** (this sentence said 0.5 tMSK and "no longer covers the floor" until the grant was
+raised; see §2).
 
 Passing a value below what the class needs is allowed and warned about, by name:
 
@@ -429,8 +437,14 @@ Every block you produce opens a **claim** that lives on chain for hours (bind �
 challenge → court; the whole lattice is several thousand DAA). Until it resolves, **your node is
 the party responsible for serving that claim's execution material** — the panel seats verify what
 you produced from the bytes you broadcast, and a claim whose material nobody can obtain is
-**voided and slashed against your bond**. That is the data-availability half of the protocol, not
-a bug: work you cannot show is work nobody can check.
+**voided**, and its reward with it. That is the data-availability half of the protocol, not a
+bug: work you cannot show is work nobody can check.
+
+(Corrected 2026-09-11: this said "voided and slashed". On testnet-11 a seat's `Unavailable`
+abstains rather than accuses (ADR-0065 D4 is armed), so a claim nobody could verify ends
+`voided (receipt_timeout)` and the bond is not charged. What does take the stake is a court
+conviction, or a data-availability accusation (`misaka palw da-accuse`) that your node leaves
+unanswered — both of which need your node, and your retained material, to answer.)
 
 Practical rules:
 
@@ -441,7 +455,10 @@ Practical rules:
   as long as your material reached at least one live seat while you were up. A node that was
   never well-connected has no such safety net — check your peer count before relying on it;
 * your retention directory (`palw-retention/` under the app dir) is the durable copy the node
-  itself re-serves after a restart. Do not delete it while claims are unresolved.
+  itself re-serves after a restart. Do not delete it while claims are unresolved. The producer
+  prunes it itself after 48 hours — except a free-prompt claim's capture, which it keeps while
+  the chain still holds that claim live (the windows are DAA counts, and at testnet-11's measured
+  cadence 48 hours is well inside them).
 
 On 2026-08-28 five outside floor producers mined for a few hours, stopped their nodes, and every
 in-flight claim of theirs defaulted with the stake slashed — this section and the pull transport
@@ -542,6 +559,13 @@ The floor needs none: its weights derive from a seed on every node.
 
 ## 7. Mining with your own model — a prompt someone types, mined (ADR-0077)
 
+> **Running the gateway and seeing `v3 executed`, and wondering whether that is mining?** It is
+> not yet: the gateway never submits, and the pay comes from receipt blocks your own producer
+> mines days later. [testnet11-free-prompt-mining.md](testnet11-free-prompt-mining.md) is the
+> end-to-end page — the node flags, the bond size per answer length, the watcher that submits
+> every job (`misaka-palw-fp-rail --watch`), `misaka palw claim` to follow a claim, the log
+> sequence of a healthy run, and a worked example from the live chain.
+
 Everything above mines the **attempt lane**: the node picks the job, runs it, and the block is the
 product. This section is the other lane. A person types a prompt, your model answers it, and *that
 inference* — the one the person actually received — is the claim. One inference, one commitment:
@@ -556,11 +580,21 @@ in, by these names:
 | `submitted` | the `0x4a` commitment transaction was accepted; the claim exists | `Provisional` |
 | `bound` | a panel of five seats was drawn for it | `PanelBound` |
 | `certified` | the seats replayed it and filed `Valid`; a receipt is licensed | `ReceiptLicensed` |
-| `spent` | the receipt matured and one of its quanta paid for a block | `Final`, then spent |
+| `spent` | the claim is final, its quanta were drawn, and each winning quantum was mined as a receipt block by the executor's OWN producer (same bond) — each one paid a block reward to that producer's pay address | `Final`, then `quanta_spent` |
+
+(Corrected 2026-09-11: the last row said a quantum "paid for a block". A free-prompt claim carries
+no escrow and writes no payout row; a winning quantum licenses a block, and the block's own
+coinbase is the pay. It can only be spent by the claim's bond, only inside its use window, and
+only by a running `kaspad --palw-produce` holding that bond's key.)
 
 On testnet-11's windows that is **about 80 hours to `Final`, and about 93 hours from commitment to
 spendability** — bind, receipt, challenge and then maturity. Fraud-proof safety, not a progress bar
 someone forgot to speed up. Show the stage; do not promise a block.
+
+(Those hours assume the frozen 120 s cadence, 30 DAA an hour. The live chain has run far slower —
+about 13 DAA an hour on 2026-09-10/11 — so the same DAA counts are days: the worked example in
+[testnet11-free-prompt-mining.md](testnet11-free-prompt-mining.md) went from commitment on
+2026-09-05 to its receipt blocks on 2026-09-10.)
 
 The four windows are DAA-score counts in the shipped bundle — bind 600, receipt 600, challenge
 1,200, receipt maturity 400 — and the cadence is the frozen 120 s
@@ -587,6 +621,11 @@ constant is a consensus value whose own doc states the premise it was sized agai
 new claim per block"), and raising it is a ruleset move that owes its own argument. A claim past
 the ceiling is not refused — it waits in the payout queue, one more block per eight claims ahead
 of it.
+
+(Corrected 2026-09-11: a free-prompt claim writes no payout row — it is paid through the receipt
+blocks its executor mines, one per winning quantum — so the payout-row term above does not bound
+this lane; `palw_fp_lane_ceiling_v1` carries the same premise. What bounds it in practice is the
+panel's replay capacity and each bond's exposure ceiling.)
 
 **What a claim earns, and what it does not.** Past `Params::palw_fp_decode_rules` (ADR-0082
 Decision 10, dormant on every network today) a free-prompt claim's quanta are earned by the leaves
@@ -630,7 +669,8 @@ behaviour there is today.
                                                    ▼
                                         <outbox>/fp-job-<id>.*
                                                    │
-                                    misaka-palw-fp-rail --submit --rpc  ──▶ the chain
+                        misaka-palw-fp-rail --watch <outbox> --rpc  ──▶ the chain
+                        (every committed job; `--artifact <stem> --submit` does one)
 ```
 
 * **the gateway** parses the stranger's HTTP, builds the prompt segment-wise, streams the answer,
@@ -639,7 +679,9 @@ behaviour there is today.
   family worker a producer runs, and every job it answers is captured. There is no un-captured
   chat binary left in this tree.
 * **the rail** holds the bond key (or asks the signer sidecar for one digest), signs, submits, and
-  stages the capture into the node's retention directory — one step, not three.
+  stages the capture into the node's retention directory — one step, not three. **Nothing reaches
+  the chain until it runs**: the gateway never submits. `--watch <outbox>` runs it for every
+  committed job, one at a time, funding each carrier from the previous one's change.
 
 ### 7.2 Run it
 
@@ -647,41 +689,40 @@ You need what §1–§4 already gave you (a registered, Active bond and its key)
 artifact and tokenizer.
 
 ```bash
-# 1. the identity the gateway commits under — the class you are serving, and your bond
-cat > ~/.misaka/fp-identity.json <<'JSON'
-{ "network_domain": "<128 hex — misaka node security-report prints it>",
-  "class_id":       "<128 hex — kaspad --palw-dump-classes>",
-  "bond_txid":      "<128 hex>", "bond_index": 0,
-  "executor_pubkey":"<misaka-palw-fp-rail --bond-key-seed <f> --print-bond-pubkey>",
-  "operator_id":    "<128 hex>" }
-JSON
+# 1. the identity the gateway commits under — every field from the node, except the key's
+./target/release/misaka-palw-fp-rail --print-identity --bond-key-seed ~/.misaka/miner.seed \
+  --rpc 127.0.0.1:27210 --class-id <128 hex — kaspad --palw-dump-classes> > ~/.misaka/fp-identity/identity.json
 
-# 2. the gateway, on loopback, with the worker under it
-MISAKA_PALW_ARTIFACT=/srv/misaka/qwen25-1.5b-a16.palwart \
+# 2. the gateway, on loopback, with the worker under it. The artifact must be the
+#    tokenizer-BOUND one (testnet11-free-prompt-mining.md §2), and your node must load the same
+#    file with --palw-class-artifact: its panel serves your claims' openings to their seats.
+MISAKA_PALW_ARTIFACT=/srv/misaka/qwen25-1.5b-a16.bound.palwart \
 MISAKA_PALW_TOKENIZER=/srv/misaka/qwen2.5-1.5b/tokenizer.json \
 MISAKA_PALW_NETWORK_ID=testnet-11 \
 MISAKA_PALW_CONFINEMENT=linux-seccomp-landlock \
 ./target/release/misaka-palw-gateway \
   --listen 127.0.0.1:8790 \
-  --worker $PWD/target/release/palw-a16-fp-worker \   # ABSOLUTE, not ./ — see below
+  --worker $PWD/target/release/palw-a16-fp-worker \
   --outbox ~/.misaka/fp-outbox \
-  --identity ~/.misaka/fp-identity.json \
-  --rpc 127.0.0.1:27210 \
-  --class-leaves <the class's canonical leaves — --palw-dump-classes>
+  --identity ~/.misaka/fp-identity/identity.json \
+  --rpc 127.0.0.1:27210
+# (--worker must be ABSOLUTE, not ./ — see below)
 
-# 3. ask it something — and see §7.2a first: on a 16-token class this is the size that fits
+# 3. ask it something (the class is 512 tokens wide, prompt and answer together — §7.2a)
 curl -s localhost:8790/v1/chat/completions -H 'content-type: application/json' \
   -d '{"messages":[{"role":"user","content":"the capital of France is"}],
-       "max_tokens":3,"stream":true}'
+       "max_tokens":32,"stream":true}'
 
-# 4. the one handoff: sign, submit, stage the capture and its answer envelope
-./target/release/misaka-palw-fp-rail \
-  --artifact ~/.misaka/fp-outbox/fp-job-<id> \
-  --bond-key-seed ~/.misaka/miner.seed \
-  --funding-outpoint <txid>:1 --funding-amount <sompi> \
-  --capture ~/.misaka/fp-outbox/traces/<id>/material.bin \
-  --submit --rpc 127.0.0.1:27210
+# 4. carry every committed job to the chain: sign, fund, submit, stage the capture and its answer
+./target/release/misaka-palw-fp-rail --watch ~/.misaka/fp-outbox \
+  --bond-key-seed ~/.misaka/miner.seed --rpc 127.0.0.1:27210
+#    (one job by hand instead: --artifact ~/.misaka/fp-outbox/fp-job-<id> --capture
+#     ~/.misaka/fp-outbox/traces/<id>/material.bin --funding-outpoint <txid>:<i> --funding-amount
+#     <sompi> --submit — its JSON names `next_funding`, the change the next job can spend)
 ```
+
+Keep the seed out of `identity.json`'s directory and out of the outbox: the gateway refuses to
+start if it can reach a signing secret in either.
 
 **Where the files go (ADR-0084 Decision 5).** Without `--retention-dir` the rail asks the node
 for the directory its panel serves from (`getPalwProducerFacts` → `palwRetentionDir`, which is
@@ -709,30 +750,26 @@ with the file sitting in the directory you ran from. `$PWD/...` is the fix.
 claim* — by name, from the chain rather than from config:
 
 ```
-"chain": { "registered": true, "fp_certified": true, "bond_active": true, "exposure_room": … }
+"chain": { "registered": true, "fp_certified": true, "bond_known": true, "exposure_room": …, "bond_active": … }
 ```
 
 `registered` false means this network does not know your class. `fp_certified` false means the
 class is not seated on the free-prompt lane (ADR-0075 `ClassLaneCertified`) and a commitment would
 be refused as `FreePromptLaneUncertified`.
 
-**`bond_active` false is usually not about your bond, and this is the field that wastes an
-afternoon.** It is computed as "the bond is known AND there is no not-ready reason", and the
-not-ready reasons are CLASS-level as well as bond-level. So a bond that is registered, funded and
-holding exposure room reports `bond_active: false` whenever its CLASS is out of epoch budget —
-which is the normal state of any class registered mid-epoch, for the rest of that epoch. **Read
-`bond_not_ready_reason` beside it**; it is in the same `/health` and it names the actual cause:
-
-```
-"bond_active": false,
-"bond_not_ready_reason": "this class's epoch budget is already spent"
-```
-
-Measured on a devnet drill: a class registered at DAA 31 against a 1,000-DAA epoch answered every
-request and wrote no commitment for the rest of that epoch. Nothing was broken; the class was
-registered mid-epoch. A class seated at genesis has budget from block one. Either way **the user still gets their answer** — the
-answer is the product — and the commitment waits in the outbox with the reason attached. A gateway
-that silently answered without committing would be lying about what you staked on it.
+`bond_known` false means the chain has no bond at the outpoint `identity.json` names.
+**`bond_active` is the attempt lane's readiness, not a condition of committing.** It is "the bond
+is known AND the producer may produce", so it reads false whenever the class is out of ATTEMPT
+epoch budget — every class registered mid-epoch, for the rest of that epoch — or the ceiling cannot
+fit one more canonical attempt claim; `bond_not_ready_reason` beside it names which. The
+transition that admits a free-prompt commitment reads neither, and until 2026-09-11 the gateway
+did: a devnet drill's class registered at DAA 31 answered every request and wrote no commitment for
+the rest of its 1,000-DAA epoch — reported here then as "nothing was broken", while the chain would
+have taken every one of those claims. The gateway now commits on `bond_known`, and prices each
+answer at its own exposure once it has run (a 256-token answer on the A16 class is five canonical
+claims' worth, not one). Either way **the user still gets their answer** — the answer is the
+product — and a commitment that is withheld waits in the outbox with the reason attached. A
+gateway that silently answered without committing would be lying about what you staked on it.
 
 ### 7.2a How wide the answer can be, today
 
@@ -741,37 +778,24 @@ serves the width the CLASS registers, read from the catalog row and never from t
 rotary span, because a runtime answering wider than the court admits would be exactly the
 two-products split ADR-0077 R0 closes.
 
-| class registered on testnet-11 | `n_ctx` (prompt + answer) |
-|---|---|
-| `QWEN25-A16` (dense 1.5B) | **16** — the widest |
-| `PALW-BASE-0` (the integer floor) | 12 |
-| `QWEN36` (hybrid 35B) | 8 |
-
-(The three genesis rows, as of Relaunch 5e; entrant classes registered later carry their own
-width, and `--palw-dump-classes` is the only source that cannot go stale.)
-
-Measured against the shipped Qwen2.5 tokenizer, the ChatML wrapper the gateway must send —
-`<|im_start|>user\n … <|im_end|>\n<|im_start|>assistant\n` — is **8 tokens** before your first
-word. So on the widest class:
-
-| what you send | prompt tokens | decode tokens left |
-|---|---|---|
-| `"hello"` | 9 | 7 |
-| `"one quiet note"` | 11 | 5 |
-| `"the capital of France is"` | 13 | 3 |
-| `"Name the second highest mountain in Japan."` | 16 | 0 |
-| `"Write a short MIDI melody in C major, four bars, as JSON."` | 23 | **refused — over the class's whole width** |
-
-Over the width, the worker refuses the job and names the numbers rather than trimming:
+**The A16 class on the free-prompt lane today, `4277d84f…` (`Qwen/Qwen2.5-1.5B/graph-v5@512`,
+re-seated at genesis by Relaunch 5f), is 512 tokens wide.** The ChatML wrapper the gateway sends —
+`<|im_start|>user\n … <|im_end|>\n<|im_start|>assistant\n` — is 8 of them before your first
+word, and the gateway's default answer is 256 tokens, so a prompt of up to ~240 tokens takes the
+default. Over the width, the worker refuses the job and names the numbers rather than trimming:
 
 ```
-prompt 23 + decode ceiling 256 exceeds max_context_tokens 16
+prompt 300 + decode ceiling 256 exceeds max_context_tokens 512
 ```
 
-That is the current state and it is being worked on: the ladder in ADR-0077 Decision 13 registers
-rows at 512, 2,048 and 8,192, and a row's width is inside its class id, so a wider row is a new
-class registered beside these rather than a setting on your node. Until one exists, size your
-requests from the table above, and do not build a demo that asks for a paragraph.
+Every class's width is inside its class id, so a wider row is a new class registered beside this
+one rather than a setting on your node (the ladder in ADR-0077 Decision 13: 512, 2,048, 8,192).
+`--palw-dump-classes` prints each row's width and is the source that cannot go stale; the table
+this section used to carry (A16 16, floor 12, QWEN36 8) was Relaunch 5e's genesis rows.
+
+**The answer length is also the claim's size** — its quanta, its share of the draw, and the
+exposure it reserves on your bond — so it is worth choosing rather than defaulting:
+[testnet11-free-prompt-mining.md](testnet11-free-prompt-mining.md) §3 has the table.
 
 ### 7.3 What a stranger's prompt costs you, and the knobs that bound it
 
@@ -833,19 +857,21 @@ curl -s localhost:8790/v1/chat/completions -H 'content-type: application/json' \
 ```
 
 > **The width, before you size a request.** `max_tokens` plus the prompt must fit the CLASS's
-> registered `n_ctx`, which is the whole budget — prompt and answer together. The widest model
-> class this network registers today is **16** (`QWEN25-A16`; the floor is 12, `QWEN36` is 8), and
-> the ChatML wrapper is 8 of those before your first word, so the numbers above are what actually
-> fits rather than what reads well. Over the width the worker refuses the whole job — `prompt 23 +
-> decode ceiling 256 exceeds max_context_tokens 16` — instead of trimming it.
+> registered `n_ctx`, which is the whole budget — prompt and answer together. The A16 class on the
+> free-prompt lane today (`4277d84f…`, graph-v5@512) is **512** wide, and the ChatML wrapper is 8
+> of those before your first word. Over the width the worker refuses the whole job — `prompt N +
+> decode ceiling M exceeds max_context_tokens 512` — instead of trimming it.
 >
-> Which means, stated where you meet it rather than discovered later: **a derivation from a real
-> inference does not fit on any class registered today.** The shortest MIDI DSL that ships in this
-> repository is 118 tokens and the shortest CAD DSL is 76; 16 is the whole job. The transformer
-> half works at full size offline, and widening the rows is the work in progress —
-> [testnet11-ask-for-a-file.md](testnet11-ask-for-a-file.md) is the page for both, with the
-> measurements. This paragraph is dated 2026-09-03; `--palw-dump-classes` is the source that
-> cannot go stale.
+> **A derivation fits at this width, with one condition.** Measured on 2026-09-04 against the
+> bound A16 artifact: a CAD box derived at `max_tokens` 56 and a two-note MIDI at 97, both verified
+> by `palw-derive verify` with `binding_checked: true`. The condition is ADR-0077's exact budget:
+> the model keeps generating after its end-of-turn token until `max_tokens`, and the grammar reads
+> the whole committed rendering, so a derivation succeeds only when `max_tokens` equals the
+> answer's own length (measure it once on an exemplar; the output is deterministic).
+> [testnet11-ask-for-a-file.md](testnet11-ask-for-a-file.md) has the transformer side. (Until
+> 2026-09-11 this block said the widest class was 16 tokens and that no derivation fit — true of
+> Relaunch 5e's rows, not of this chain's.) `--palw-dump-classes` is the source that cannot go
+> stale.
 
 The response carries the DSL as the answer, the artifact (inline under
 `--artifact-inline-max`, else by a handle at `GET /v1/artifacts/<derived-id>`), and a signed
