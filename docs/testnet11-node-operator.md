@@ -79,9 +79,14 @@ lane.
 > after the fingerprint; that line is the check:
 >
 > ```
-> [INFO ] Consensus params fingerprint: ecbdbc2222efcc2d32493f2349e7c17f983611697a5d10ffc7ae90458bac8ee5 (network testnet-11)
-> [INFO ] Consensus fence schedule: 1150, 1900, 2150, 2400, 2125000 (schedule id …)
+> [INFO ] Consensus params fingerprint: 02c7282b7541011344eabb1ce6cbe6544987e7b6a7fc132413fbfff0a6a37cfd (network testnet-11)
+> [INFO ] Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 2125000 (schedule id …)
 > ```
+>
+> **2026-09-11, the fifth fence: ADR-0114 at DAA 3,500** (the model store's owner fee 1 % → 5 %).
+> A build with it prints the two lines above; a build without it prints `ecbdbc22…` and no `3500`,
+> peers with the new builds until 3,500 (both log `schedules a FUTURE fence differently` — expected),
+> and forks off at 3,500. Rebuild before then.
 >
 > A build from `891a1a14` up to `a5f1bdf7` prints `060e3597…` on the first line and the same second
 > line: same ruleset, and it peers with the builds after it (both log `schedules a FUTURE fence
@@ -187,8 +192,9 @@ lane.
 > > first rode 1900, where the gate could not see it at all — two builds peering and then disagreeing
 > > about which closes are valid. Moving it to 2150 is what makes the difference visible.
 >
-> * consensus fingerprint: **`ecbdbc2222efcc2d32493f2349e7c17f983611697a5d10ffc7ae90458bac8ee5`**
->   (2026-09-11: the first value that carries ADR-0095's 2400 fence). Builds from `891a1a14` up to
+> * consensus fingerprint: **`02c7282b7541011344eabb1ce6cbe6544987e7b6a7fc132413fbfff0a6a37cfd`**
+>   (2026-09-11: carries ADR-0114's fence at DAA 3,500; the value before it, `ecbdbc22…`, was the first
+>   to carry ADR-0095's 2400 fence and stays a peer until 3,500). Builds from `891a1a14` up to
 >   `a5f1bdf7` print **`060e3597cd2950bc183b215b5ff87538e72dd788cab43829dca6bc72bcb5ac89`** for the
 >   same ruleset and stay peers; the pre-flag-day value `71b35c25…` names the same genesis and the
 >   same peering identity, and is refused by the gate as above.

@@ -2,9 +2,12 @@
 
 * Status: PROPOSED 2026-09-11 at the operator's request ("追加で現在の売買の burn 5% 開発者への手数料 1% から
   burn 5% 開発者への手数料 5% にあげて　つまり売って買うと 20% は fee として持ってかれるようにして").
-  **IMPLEMENTED the same day, dormant**: `Params::palw_model_leg_v2` is `None` on every preset, so no
-  fingerprint moves and every chain keeps every row it has. testnet-11 takes it only when the operator
-  names a height (§5); that height is a flag day.
+  **IMPLEMENTED the same day**, and **scheduled on testnet-11 at DAA 3,500** by the operator the same
+  day (asked with the chain at ≈3,399: "DAA 3,500 で有効化"): `PALW_RC_MODEL_LEG_V2_FENCE_DAA`. Every
+  other preset keeps `palw_model_leg_v2 = None`. testnet-11's printed fingerprint moves `ecbdbc22…` →
+  `02c7282b…`; the identity does not, so the fleet rolls one host at a time and builds with and without
+  the fence stay peers until 3,500 (`the_owner_leg_flag_day_keeps_every_current_node_until_3500`).
+  **3,500 is a flag day: every node must run a build carrying the fence before it.**
 * Amends: [0087](0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md) Decision 4 (the split of
   every MSK leg: 5 % burned, 1 % to the class's registrant), [0088](0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md)
   Decision 8 (that leg is the line OWNER's, and an adopted contributor takes `contributor_permille_of_leg`
@@ -76,7 +79,7 @@ ADR-0095's memberships (a position still pays its holder nothing), and the carri
 move. A contributor's `contributor_permille_of_leg` is a share OF the leg, so past the fence the same
 permille pays five times the MSK.
 
-## 5. Arming it on testnet-11 — the operator's call
+## 5. Arming it on testnet-11 — done at DAA 3,500 (2026-09-11)
 
 1. Choose a DAA `H` far enough ahead for **every** node to be rebuilt — the fleet and the outside nodes
    seen on the explorer (09-10's DAA 2,400 fence was crossed unannounced and the outside nodes forked off
@@ -87,6 +90,11 @@ permille pays five times the MSK.
    (Some-only write), the fence-normalised identity does not, and builds with and without it stay peers
    with a "schedules a FUTURE fence differently" warning until `H`; past `H` a node without it forks off.
 3. Re-pin `shipped_presets_have_pinned_fingerprints` for testnet-11 in the same commit, and announce `H`.
+
+Done with `H = 3,500`: the fence joins testnet-11's schedule (`1150, 1900, 2150, 2400, 3500, 2125000`) and
+its fork-id gate set, the fingerprint is re-pinned to `02c7282b7541011344eabb1ce6cbe6544987e7b6a7fc132413fbfff0a6a37cfd`,
+the tests that reconstruct the 2,400 flag day's builds set the new fence to `None` (it was not theirs), and
+README / testnet11-join-mining / testnet11-node-operator print the new startup lines and the notice.
 
 ## 6. A gap this ADR inherits and names
 
