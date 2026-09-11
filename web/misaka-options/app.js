@@ -1914,15 +1914,26 @@ async function pageStore(arg) {
     const m = rec && rec.market; if (!m) return null;
     if (!m.seeded) return { invalid: 'Not seeded yet: no curve to quote against.' };
     if (entry.side === 'buy') {
-      const sompi = parseDec(entry.amount, 8); if (!sompi || sompi <= 0n) return null;
+      // A join is entered as HOW MANY memberships (operator, 2026-09-11), and the site pays the least MSK
+      // that releases them — `curve.buyCostForUnits`, the chain's own arithmetic run until it gives at least
+      // that many. Anything more would stay in the reserve: the fold refunds no fraction of a membership.
+      if (String(entry.amount).trim() === '') return null;
+      const want = parseDec(entry.amount, 0);
+      if (want == null) return { invalid: 'Memberships are whole numbers: enter an integer.' };
+      if (want <= 0n) return null;
       if (m.closedToBuys) {
         // the wRPC reports closedToBuys for a retired line AND for a class that is not Active; say which
         const cs = classStatusOf(rec);
         if (cs && cs.head !== 'Active') return { invalid: 'The class is ' + cs.head + (cs.activationDaa != null ? ' (activates at DAA ' + fmtInt(cs.activationDaa) + ')' : '') + ': buys wait for Active; sells still queue.' };
         return { invalid: 'This line is closed to buys (retired); sells still queue.' };
       }
-      const q = curve.buyQuote(m, sompi); if (!q) return { invalid: 'The curve releases no whole position for this amount (a position is whole: the least buy releases exactly one).' };
-      return { kind: 'buy', sompi, unitsOut: q.unitsOut, fees: q.fees, priceAfter: q.priceAfter, source: 'local' };
+      const cost = curve.buyCostForUnits(m, want);
+      if (!cost) {
+        const left = bi(m.positionUnits) > 0n ? bi(m.positionUnits) - 1n : 0n;
+        return { invalid: 'The store cannot release that many: at most ' + fmtPos(left) + ' memberships can be bought from it now.' };
+      }
+      const q = cost.quote;
+      return { kind: 'buy', want, sompi: cost.gross, unitsOut: q.unitsOut, fees: q.fees, priceAfter: q.priceAfter, source: 'local' };
     }
     if (String(entry.amount).trim() === '') return null;
     const units = parseDec(entry.amount, 0);
@@ -1950,6 +1961,18 @@ async function pageStore(arg) {
     return q;
   }
   function mins(q) { return q.kind === 'buy' ? { minUnits: 0n } : { minMsk: 0n }; }
+  // The most whole memberships `sompi` pays for at the row as it stands (0 when it buys none). Monotone in
+  // the count, so a binary search over [0, units in the curve) on the chain's own cost finds it exactly.
+  function maxAffordableUnits(m, sompi) {
+    if (!m || !m.seeded || m.closedToBuys || sompi <= 0n) return 0n;
+    let lo = 0n, hi = bi(m.positionUnits) > 0n ? bi(m.positionUnits) - 1n : 0n;
+    while (lo < hi) {
+      const mid = (lo + hi + 1n) / 2n;
+      const c = curve.buyCostForUnits(m, mid);
+      if (c && c.gross <= sompi) lo = mid; else hi = mid - 1n;
+    }
+    return lo;
+  }
   function reasonNotToSend(q) {
     if (MOCK && !wallet.any()) return 'Mock wallet missing.';
     if (!wallet.any()) return NO_WALLET;
@@ -1960,7 +1983,7 @@ async function pageStore(arg) {
     if (!rec) return 'No line selected.';
     if (rec.market && !rec.market.seeded) return 'This store is not open yet: it takes an opening deposit first.';
     if (rec.facadeSource !== 'registry') return 'Facade address not confirmed by the registry window yet.';
-    if (!q) return 'Enter an amount.';
+    if (!q) return entry.side === 'buy' ? 'Enter how many memberships.' : 'Enter an amount.';
     if (q.invalid) return q.invalid;
     if (q.kind === 'buy' && rec.market && rec.market.closedToBuys) return 'This line is closed to buys (retired); sells still queue.';
     if (q.kind === 'buy') { const cs = classStatusOf(rec); if (cs && cs.head !== 'Active') return 'The class is ' + cs.head + (cs.activationDaa != null ? ' (activates at DAA ' + fmtInt(cs.activationDaa) + ')' : '') + ': buys wait for Active.'; }
@@ -1980,7 +2003,9 @@ async function pageStore(arg) {
       if (q.kind === 'buy') {
         const avg = q.unitsOut > 0n ? q.sompi / q.unitsOut : null;
         rows = h`
-          <div class="r"><span>Memberships you get</span><span class="v">${fmtPos(q.unitsOut)}</span></div>
+          <div class="r tot"><span>You pay (fees included)</span><span class="v">${fmtMsk(q.sompi)} MSK</span></div>
+          <div class="r"><span>Memberships you get</span><span class="v">${fmtPos(q.unitsOut)}</span></div>${q.want != null && q.unitsOut < q.want ? h`
+          <div class="r warn tiny"><span>The node's row has moved: this MSK now releases ${fmtPos(q.unitsOut)}, not ${fmtPos(q.want)}. Re-enter the count to re-price.</span></div>` : ''}
           <div class="r"><span>Price each</span><span class="v">${avg != null ? fmtPrice(avg) : '—'} MSK</span></div>
           <div class="r"><span>Price after this join</span><span class="v">${fmtPrice(q.priceAfter)} MSK</span></div>
           <div class="r"><span>How far it moves the price</span><span class="v ${impact > 5 ? 'down' : ''}">${fmtPct(impact)}</span></div>
@@ -2000,7 +2025,7 @@ async function pageStore(arg) {
       }
       rows += h`<div class="r dim tiny"><span>Quoted by</span><span>${q.source === 'node' ? 'the node (AMM precompile)' : 'local arithmetic on the market row'}</span></div>`.s;
     } else if (q && q.invalid) rows = h`<div class="err">${q.invalid}</div>`.s;
-    else rows = h`<div class="dim small">Enter an amount to see what it costs. ${m && price != null ? 'One membership is ' + fmtPrice(price) + ' MSK right now.' : ''}</div>`.s;
+    else rows = h`<div class="dim small">${entry.side === 'buy' ? 'Enter how many memberships to see what they cost.' : 'Enter how many memberships to give up.'} ${m && price != null ? 'One membership is ' + fmtPrice(price) + ' MSK right now.' : ''}</div>`.s;
     box.innerHTML = rows;
     const btn = $('#sendBtn'), why = $('#sendWhy');
     if (!btn) return;
@@ -2033,8 +2058,8 @@ async function pageStore(arg) {
         ${entry.side === 'buy' ? availHint() : raw('')}
         <div class="avail"><span class="muted">Your membership</span><span class="v" id="posV">${entry.position != null ? fmtPos(entry.position) + ' ' + (rec ? rec.symbol : '') : acct ? '—' : '—'}</span></div>
         <div class="field">
-          <label for="amt">${entry.side === 'buy' ? 'What you pay (MSK, fees included)' : 'Memberships to give up (whole)'}</label>
-          <div class="inp"><input id="amt" inputmode="${entry.side === 'buy' ? 'decimal' : 'numeric'}" autocomplete="off" placeholder="0" value="${entry.amount}" aria-describedby="quoteBox"><span class="unit">${entry.side === 'buy' ? 'MSK' : 'memberships'}</span></div>
+          <label for="amt">${entry.side === 'buy' ? 'Memberships to buy (whole)' : 'Memberships to give up (whole)'}</label>
+          <div class="inp"><input id="amt" inputmode="numeric" autocomplete="off" placeholder="0" value="${entry.amount}" aria-describedby="quoteBox"><span class="unit">memberships</span></div>
           <div class="pcts">${[25, 50, 75, 100].map((p) => h`<button data-pct="${p}" ${entry.side === 'buy' ? (entry.balance == null ? 'disabled' : '') : (entry.position == null ? 'disabled' : '')}>${p}%</button>`)}</div>
         </div>
         <div class="quote" id="quoteBox"></div>
@@ -2046,7 +2071,7 @@ async function pageStore(arg) {
     amt.addEventListener('input', () => { entry.amount = amt.value; entry.nodeQuote = null; entry.quote = localQuote(); renderQuote(); nodeQuote(entry.quote); });
     $$('#entry .pcts button').forEach((b) => b.addEventListener('click', () => {
       const p = BigInt(b.dataset.pct);
-      if (entry.side === 'buy' && entry.balance != null) { const reserve = 10n ** 16n; const wei = entry.balance > reserve ? entry.balance - reserve : 0n; entry.amount = fmtScaled(((wei / NATIVE_SCALE_WEI) * p) / 100n, 8, 8).replace(/,/g, ''); }
+      if (entry.side === 'buy' && entry.balance != null) { const reserve = 10n ** 16n; const wei = entry.balance > reserve ? entry.balance - reserve : 0n; entry.amount = ((maxAffordableUnits(rec && rec.market, wei / NATIVE_SCALE_WEI) * p) / 100n).toString(); }
       if (entry.side === 'sell' && entry.position != null) entry.amount = ((entry.position * p) / 100n).toString();
       amt.value = entry.amount; entry.nodeQuote = null; entry.quote = localQuote(); renderQuote(); nodeQuote(entry.quote);
     }));

@@ -270,7 +270,7 @@ minMskOutSompi)`; a seed is `seed()` with `value = seed sompi × 1e10` (at least
 else the writer reverts `SeedTooSmall()` at the call). Gas is left to the wallet's estimate. No
 private key ever touches this site.
 
-The site sends no floor (`minUnitsOut` / `minMskOutSompi` = 0): a move fills at the row's price when the fold applies it. A join that would release no membership, or a leave that would pay nothing, is refused by the fold itself and refunded. The fold quotes the action on the
+A join is entered as a count of whole memberships; the site pays the least MSK that releases that many (`curve.buyCostForUnits`, the chain's own arithmetic), because the fold refunds no fraction of a membership. The site sends no floor (`minUnitsOut` / `minMskOutSompi` = 0): a move fills at the row's price when the fold applies it. A join that would release no membership, or a leave that would pay nothing, is refused by the fold itself and refunded. The fold quotes the action on the
 row *as it then stands* after the block's carrier-borne moves, so a floor that is too tight is
 refused rather than filled worse; a refused buy or seed is refunded at the next block, and the site
 shows the refusal reason from the `Refused` event (1 not armed, 2 line missing, 3 class or line
