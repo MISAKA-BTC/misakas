@@ -47,6 +47,9 @@ const MOCK_QS = new URLSearchParams(location.search);
 const SLOW_BLOCKS = Math.max(0, Number(MOCK_QS.get('mockslow') || 0) | 0);
 const DROP_ONCE = MOCK_QS.get('mockdrop') === '1';
 const MOCK_BASE_FEE = 1000000000n;
+// ?mocklegv2=1: the chain past ADR-0112's height (the owner's leg is 5 %); the mock's own fold stays the site's curve
+const MOCK_LEG_V2 = MOCK_QS.get('mocklegv2') === '1';
+const feesC = () => Object.assign({}, C, { legPermille: MOCK_LEG_V2 ? 50n : C.legPermille });   // the mock fold's schedule
 const WALLET_KINDS = (MOCK_QS.get('mockwallet') || 'injected').toLowerCase().split(',').map((k) => k.trim()).filter((k) => k && k !== 'none');
 const MOCK_MISAKA = WALLET_KINDS.some((k) => k === 'misaka' || k === 'misaka-legacy');
 const OTHERS = ['0x0b0b5c1a9d2e3f4a5b6c7d8e9f0a1b2c3d4e5f60', '0x0c4a7e1f2b3c4d5e6f708192a3b4c5d6e7f80912', '0x0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e', '0x0e5f6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5', '0x0f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f70', '0x0a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d'];
@@ -92,7 +95,7 @@ function applyBuy(line, account, sompi, minUnits) {
   const cls = world.classes.get(world.lines.get(line).row.classId);
   if (!m.seeded) return { kind: 'Refused', actionId: 1, amount: sompi, reason: 6 };
   if (cls.status !== 0) return { kind: 'Refused', actionId: 1, amount: sompi, reason: 3 };
-  const q = curve.buyQuote(m.row, sompi);
+  const q = curve.buyQuote(m.row, sompi, feesC());
   if (!q) return { kind: 'Refused', actionId: 1, amount: sompi, reason: m.row.closedToBuys ? 3 : 4 };
   if (q.unitsOut < minUnits) return { kind: 'Refused', actionId: 1, amount: sompi, reason: 5 };
   m.row = q.after; m.row.ownerPaid = (m.row.ownerPaid || 0n) + q.fees.leg;
@@ -104,7 +107,7 @@ function applySell(line, account, units, minMsk) {
   if (!m.seeded) return { kind: 'Refused', actionId: 2, amount: units, reason: 6 };
   const held = posGet(line, holderOf(account));
   if (units > held) return { kind: 'Refused', actionId: 2, amount: units, reason: 7 };
-  const q = curve.sellQuote(m.row, units);
+  const q = curve.sellQuote(m.row, units, feesC());
   if (!q) return { kind: 'Refused', actionId: 2, amount: units, reason: 8 };
   if (q.fees.net < minMsk) return { kind: 'Refused', actionId: 2, amount: units, reason: 5 };
   m.row = q.after; m.row.ownerPaid = (m.row.ownerPaid || 0n) + q.fees.leg;
@@ -260,7 +263,7 @@ function marketResponse(line) {
   if (!l || !m) return { found: false, lineId: line };
   const r = m.row, cls = world.classes.get(l.row.classId);
   const price = curve.price(r);
-  return { found: true, lineId: line, opened: m.seeded, openedDaa: m.openedDaa, mskReserve: num(r.mskReserve), positionUnits: num(r.positionUnits), soldUnits: num(r.soldUnits), burnedSompi: num(r.burnedSompi), registrantPaidSompi: num(r.ownerPaid || 0n), closedToBuys: !!r.closedToBuys || cls.status !== 0, priceSompiPerPosition: price == null ? 0 : num(price), supplyUnits: num(C.supplyUnits), virtualSompi: 0, classStatus: classStatusString(cls), contributorPaidSompi: num(r.contributorPaid || 0n), seedSompi: m.seeded ? num(r.seedSompi) : 0, seededBy: m.seeded ? r.seededBy : '', seedMinSompi: num(C.seedMinSompi), buybackSompi: num(r.buybackSompi || 0n), retiredUnits: num(r.retiredUnits || 0n) };
+  return { found: true, lineId: line, opened: m.seeded, openedDaa: m.openedDaa, mskReserve: num(r.mskReserve), positionUnits: num(r.positionUnits), soldUnits: num(r.soldUnits), burnedSompi: num(r.burnedSompi), registrantPaidSompi: num(r.ownerPaid || 0n), closedToBuys: !!r.closedToBuys || cls.status !== 0, priceSompiPerPosition: price == null ? 0 : num(price), supplyUnits: num(C.supplyUnits), virtualSompi: 0, classStatus: classStatusString(cls), contributorPaidSompi: num(r.contributorPaid || 0n), seedSompi: m.seeded ? num(r.seedSompi) : 0, seededBy: m.seeded ? r.seededBy : '', seedMinSompi: num(C.seedMinSompi), buybackSompi: num(r.buybackSompi || 0n), retiredUnits: num(r.retiredUnits || 0n), burnPermille: 50, legPermille: MOCK_LEG_V2 ? 50 : 10, legV2ActivationDaa: MOCK_LEG_V2 ? START_DAA : 0 };
 }
 const rootsInForce = (classId) => { const roots = []; for (const l of world.lines.values()) if (l.row.classId === classId) for (const v of l.versions) if (v.inForce) roots.push(v.root); return roots; };
 const versionResponse = (v) => Object.assign({}, v, { attemptClaims: num(v.attemptClaims), fpClaims: num(v.fpClaims), workLeaves: v.workLeaves.toString() });
@@ -307,12 +310,12 @@ function ethCall(to, data) {
   }
   if (to === '000000000000000000000000000000000000f011') {
     // ADR-0090: the third word of constants() is the least seed (it carried the virtual reserve before)
-    if (sel === S('constants')) return out(W(C.supplyUnits), W(C.unitsPerPosition), W(C.seedMinSompi), W(C.burnPermille), W(C.legPermille));
+    if (sel === S('constants')) return out(W(C.supplyUnits), W(C.unitsPerPosition), W(C.seedMinSompi), W(feesC().burnPermille), W(feesC().legPermille));
     const m = world.markets.get(id2(0));
     if (sel === S('market')) return m ? out(W(m.openedDaa), W(m.row.mskReserve), W(m.row.positionUnits), W(m.row.soldUnits), W(m.row.burnedSompi), W(m.row.ownerPaid || 0n), W(m.row.contributorPaid || 0n), W(m.row.closedToBuys ? 1 : 0), W(m.seeded ? 1 : 0), W(m.row.buybackSompi || 0n), W(m.row.retiredUnits || 0n)) : out(...Array(11).fill(W(0)));
     if (sel === S('price')) { const p = m ? curve.price(m.row) : null; return out(W(p == null ? 0 : p)); }
-    if (sel === S('quoteBuy')) { const q = m && curve.buyQuote(m.row, ABI.u(a[2])); return q ? out(W(q.unitsOut), W(q.fees.burn), W(q.fees.leg), W(q.fees.net), W(q.priceAfter)) : out(...Array(5).fill(W(0))); }
-    if (sel === S('quoteSell')) { const q = m && curve.sellQuote(m.row, ABI.u(a[2])); return q ? out(W(q.fees.gross), W(q.fees.burn), W(q.fees.leg), W(q.fees.net), W(q.priceAfter)) : out(...Array(5).fill(W(0))); }
+    if (sel === S('quoteBuy')) { const q = m && curve.buyQuote(m.row, ABI.u(a[2]), feesC()); return q ? out(W(q.unitsOut), W(q.fees.burn), W(q.fees.leg), W(q.fees.net), W(q.priceAfter)) : out(...Array(5).fill(W(0))); }
+    if (sel === S('quoteSell')) { const q = m && curve.sellQuote(m.row, ABI.u(a[2]), feesC()); return q ? out(W(q.fees.net), W(q.fees.burn), W(q.fees.leg), W(q.fees.net), W(q.priceAfter)) : out(...Array(5).fill(W(0))); }
     return '0x';
   }
   if (to === '000000000000000000000000000000000000f012') {
@@ -331,8 +334,8 @@ function ethCall(to, data) {
     if (sel === ABI.selector('lineId()')) return out(line.slice(0, 64), line.slice(64));
     if (sel === ABI.selector('circulating()')) return out(W(m.row.soldUnits));
     if (sel === ABI.selector('price()')) { const p = curve.price(m.row); return out(W(p == null ? 0 : p)); }
-    if (sel === ABI.selector('quoteBuy(uint256)')) { const q = curve.buyQuote(m.row, ABI.u(a[0])); return q ? out(W(q.unitsOut), W(q.priceAfter)) : out(W(0), W(0)); }
-    if (sel === ABI.selector('quoteSell(uint256)')) { const q = curve.sellQuote(m.row, ABI.u(a[0])); return q ? out(W(q.fees.net), W(q.priceAfter)) : out(W(0), W(0)); }
+    if (sel === ABI.selector('quoteBuy(uint256)')) { const q = curve.buyQuote(m.row, ABI.u(a[0]), feesC()); return q ? out(W(q.unitsOut), W(q.priceAfter)) : out(W(0), W(0)); }
+    if (sel === ABI.selector('quoteSell(uint256)')) { const q = curve.sellQuote(m.row, ABI.u(a[0]), feesC()); return q ? out(W(q.fees.net), W(q.priceAfter)) : out(W(0), W(0)); }
     return '0x';
   }
   return '0x';
