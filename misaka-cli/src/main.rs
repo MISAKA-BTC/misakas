@@ -805,7 +805,8 @@ enum PalwCmd {
         wait: bool,
     },
     /// **ADR-0087: buy positions of a line from its curve.** The carrier pays `--msk` into the
-    /// line's sink; the fold credits 94 % to the curve (5 % burned, 1 % to the line's owner) and
+    /// line's sink; the fold credits the net leg to the curve (5 % burned, and 1 % to the line's
+    /// owner — 5 % past ADR-0114's fence; the preview prints the schedule the node serves) and
     /// the curve's positions to the key's payout payload. Refused on chain when fewer than
     /// `--min-positions` would be released.
     ModelBuy {
@@ -825,7 +826,7 @@ enum PalwCmd {
         yes: bool,
     },
     /// **ADR-0087: sell positions back to the curve.** Signed by the key whose payout payload
-    /// holds them; the net leg (94 % of what the curve pays) reaches the same payload through the
+    /// holds them; the net leg (94 % of what the curve pays, 90 % past ADR-0114) reaches the same payload through the
     /// coinbase. Refused on chain when the net would be under `--min-msk`.
     ModelSell {
         #[command(flatten)]
@@ -995,7 +996,7 @@ enum PalwCmd {
         /// `<txid>:<index>`, or `owner`.
         #[arg(long)]
         maintainer: Option<String>,
-        /// The share of the owner's 1 % leg an adopted contributor takes while its version is
+        /// The share of the owner's leg (1 %, 5 % past ADR-0114) an adopted contributor takes while its version is
         /// current, in permille (0..=1000).
         #[arg(long)]
         contributor_permille: Option<u16>,

@@ -31,7 +31,14 @@ pub const EVM_MEMPOOL_MAX_TXS: usize = 4_096;
 /// Maximum total raw bytes in the pool (independent of the UTXO mempool RAM budget, §14.1).
 pub const EVM_MEMPOOL_MAX_TOTAL_BYTES: usize = 16 * 1024 * 1024;
 /// Seconds a pending tx is retained before TTL expiry.
-pub const EVM_MEMPOOL_TX_TTL_SECS: u64 = 3_600;
+///
+/// **ADR-0115: a day, not an hour.** On testnet-11 a transaction is carried only when a producer that
+/// holds it wins a draw — a block every 15–60 minutes, a template fixed for the whole draw, and stalls
+/// of hours on record (09-10) — so an hour dropped valid transactions nobody had had the chance to
+/// carry, silently (09-11: two joins held by the explorer and four pool slots expired unexecuted). What
+/// executed leaves the pool by `prune_below_state_nonce`, on every template and every relay tick, so the
+/// TTL bounds only what can never execute; the count, byte and per-sender caps bound the rest.
+pub const EVM_MEMPOOL_TX_TTL_SECS: u64 = 86_400;
 /// Replacement (same sender + nonce) requires BOTH `max_fee_per_gas` and
 /// `max_priority_fee_per_gas` to grow by at least this percentage — the standard
 /// anti-churn fee-bump rule (priority too, so a tip-less churn can't replace).
@@ -212,6 +219,11 @@ impl EvmMempool {
 
     pub fn total_bytes(&self) -> usize {
         self.total_bytes
+    }
+
+    /// ADR-0115: every pending tx's hash — what the relay announces again to every peer.
+    pub fn hashes(&self) -> Vec<EvmH256> {
+        self.txs.keys().copied().collect()
     }
 
     pub fn contains(&self, hash: &EvmH256) -> bool {
@@ -1075,6 +1087,10 @@ mod tests {
         assert_eq!(pool.get_raw(&EvmH256::from_bytes([0xFF; 32])), None);
         pool.remove(&h);
         assert_eq!(pool.total_bytes(), 20);
+        // ADR-0115: the relay announces every pending hash again.
+        assert_eq!(pool.hashes().len(), pool.len());
+        // ADR-0115: a day — a transaction outlives many slow blocks and a stall of hours.
+        assert_eq!(EVM_MEMPOOL_TX_TTL_SECS, 24 * 3600);
         // Within TTL: nothing expires. Past TTL: everything goes.
         pool.expire(1_000 + EVM_MEMPOOL_TX_TTL_SECS);
         assert_eq!(pool.len(), 1);

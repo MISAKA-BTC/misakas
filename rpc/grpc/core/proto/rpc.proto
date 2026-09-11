@@ -1564,6 +1564,10 @@ message GetPalwModelMarketResponseMessage {
   uint64 buybackSompi = 19;
   uint64 retiredUnits = 20;
   uint64 seedPledgedSompi = 21;
+  // ADR-0114: the fee schedule in force at the node's virtual DAA, and the owner leg's height.
+  uint64 burnPermille = 22;
+  uint64 legPermille = 23;
+  uint64 legV2ActivationDaa = 24;
   RPCError error = 1000;
 }
 

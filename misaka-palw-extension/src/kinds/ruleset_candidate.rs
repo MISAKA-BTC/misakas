@@ -62,6 +62,7 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         "palw_model_market" => params.palw_model_market = Some(at),
         "palw_model_lines" => params.palw_model_lines = Some(at),
         "palw_model_benefits" => params.palw_model_benefits = Some(at),
+        "palw_model_leg_v2" => params.palw_model_leg_v2 = Some(at),
         "palw_model_evm" => params.palw_model_evm = Some(at),
         "palw_chunk_cap_charge" => params.palw_chunk_cap_charge = Some(at),
         "palw_prompt_ids_merkle" => params.palw_prompt_ids_merkle = Some(at),

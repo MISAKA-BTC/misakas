@@ -13,10 +13,22 @@ use crate::node::Ctx;
 use crate::wallet::connect;
 use crate::{CliError, CliResult, OutputFormat, exit};
 use kaspa_consensus_core::palw_model_market_v1::{
-    PALW_MODEL_POSITION_SUPPLY_V1, PALW_MODEL_POSITION_UNITS_V1, PALW_MODEL_SELL_MLDSA87_CONTEXT, PalwModelMarketV1,
-    palw_model_buy_quote_v1, palw_model_holder_of_pubkey_v1, palw_model_sell_message_v1, palw_model_sell_quote_v1,
+    PALW_MODEL_POSITION_SUPPLY_V1, PALW_MODEL_POSITION_UNITS_V1, PALW_MODEL_SELL_MLDSA87_CONTEXT, PalwModelFeesV1, PalwModelMarketV1,
+    palw_model_buy_quote_with, palw_model_holder_of_pubkey_v1, palw_model_sell_message_v1, palw_model_sell_quote_with,
     palw_model_sink_spk_v1,
 };
+
+/// ADR-0114: the schedule the node says a move is settled under at its tip (a node from before
+/// ADR-0114 serves 50/10, which is what its fold does). Quotes are made with it, never with a
+/// schedule this build assumes, so a preview agrees with the fold on either side of the fence.
+fn served_schedule(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> PalwModelFeesV1 {
+    PalwModelFeesV1 { burn_permille: r.burn_permille, leg_permille: r.leg_permille }
+}
+
+/// "5 %", "1 %": a permille as the percentage the CLI prints.
+fn pct(permille: u64) -> String {
+    if permille.is_multiple_of(10) { format!("{} %", permille / 10) } else { format!("{}.{} %", permille / 10, permille % 10) }
+}
 use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
 use kaspa_consensus_core::tx::{TransactionOutput, UtxoEntry};
 use kaspa_rpc_core::api::rpc::RpcApi;
@@ -108,6 +120,9 @@ fn market_json(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> serde_json::Va
         "supply_units": r.supply_units,
         "virtual_sompi": r.virtual_sompi,
         "class_status": r.class_status,
+        "burn_permille": r.burn_permille,
+        "owner_leg_permille": r.leg_permille,
+        "owner_leg_v2_activation_daa": r.leg_v2_activation_daa,
     })
 }
 
@@ -123,7 +138,9 @@ pub async fn show(ctx: &Ctx, line_id: &str, quote_msk: Option<String>, json: boo
     let _ = nv.client.disconnect().await;
     let as_json = json || ctx.output == OutputFormat::Json;
     let quote = match quote_msk.as_deref().map(parse_msk_amount).transpose()? {
-        Some(msk_in) if r.found => palw_model_buy_quote_v1(&market_from_response(&r), msk_in).map(|q| (msk_in, q)),
+        Some(msk_in) if r.found => {
+            palw_model_buy_quote_with(&market_from_response(&r), msk_in, served_schedule(&r)).map(|q| (msk_in, q))
+        }
         _ => None,
     };
     if as_json {
@@ -164,7 +181,19 @@ pub async fn show(ctx: &Ctx, line_id: &str, quote_msk: Option<String>, json: boo
         println!("  price          {} per position", msk(r.price_sompi_per_position));
         println!("  sold (gross)   {} positions", r.sold_units / PALW_MODEL_POSITION_UNITS_V1);
         println!("  burned         {}", msk(r.burned_sompi));
-        println!("  owner          {} paid (the 1 % leg)", msk(r.registrant_paid_sompi));
+        println!(
+            "  owner          {} paid (the owner's leg, {} of every move now)",
+            msk(r.registrant_paid_sompi),
+            pct(r.leg_permille)
+        );
+        if r.leg_v2_activation_daa > 0 {
+            println!(
+                "  fees           burn {} + owner {} (ADR-0114: the owner's leg is 5 % from DAA {})",
+                pct(r.burn_permille),
+                pct(r.leg_permille),
+                r.leg_v2_activation_daa
+            );
+        }
         println!("  contributor    {} paid", msk(r.contributor_paid_sompi));
         println!(
             "  mining bought  {} (5 % of every block's reward on this line; {} positions retired)",
@@ -173,8 +202,8 @@ pub async fn show(ctx: &Ctx, line_id: &str, quote_msk: Option<String>, json: boo
         );
         if let Some((msk_in, q)) = &quote {
             println!("quote: a buy of {} now", msk(*msk_in));
-            println!("  burn 5 %       {}", msk(q.fees.burn));
-            println!("  registrant 1 % {}", msk(q.fees.registrant));
+            println!("  burn {:<9} {}", pct(r.burn_permille), msk(q.fees.burn));
+            println!("  owner {:<8} {}", pct(r.leg_permille), msk(q.fees.registrant));
             println!("  into the curve {}", msk(q.fees.net));
             println!("  positions out  {} ({} units)", q.units_out / PALW_MODEL_POSITION_UNITS_V1, q.units_out);
             println!("  price after    {} per position", msk(q.after.price_sompi_per_position_v1()));
@@ -419,7 +448,7 @@ pub async fn buy(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_text
         return Err(CliError::new(exit::GENERIC, format!("this chain holds no line {line}")));
     }
     let market = market_from_response(&r);
-    let Some(quote) = palw_model_buy_quote_v1(&market, msk_in) else {
+    let Some(quote) = palw_model_buy_quote_with(&market, msk_in, served_schedule(&r)) else {
         return Err(CliError::new(exit::GENERIC, format!("a buy of {} releases nothing (closed to buys, or too small)", msk(msk_in))));
     };
     let min_units_out = min_positions.saturating_mul(PALW_MODEL_POSITION_UNITS_V1);
@@ -444,8 +473,8 @@ pub async fn buy(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_text
     if ctx.output != OutputFormat::Json {
         println!("buy {} of line {line}", msk(msk_in));
         println!("  holder         {holder}");
-        println!("  burn 5 %       {}", msk(quote.fees.burn));
-        println!("  registrant 1 % {}", msk(quote.fees.registrant));
+        println!("  burn {:<9} {}", pct(r.burn_permille), msk(quote.fees.burn));
+        println!("  owner {:<8} {}", pct(r.leg_permille), msk(quote.fees.registrant));
         println!("  into the curve {}", msk(quote.fees.net));
         println!(
             "  positions out  {} at least {min_positions} ({} units)",
@@ -516,7 +545,7 @@ pub async fn sell(
         ));
     }
     let market = market_from_response(&r);
-    let Some(quote) = palw_model_sell_quote_v1(&market, units_in) else {
+    let Some(quote) = palw_model_sell_quote_with(&market, units_in, served_schedule(&r)) else {
         return Err(CliError::new(exit::GENERIC, "the curve pays nothing for this sell".to_string()));
     };
     if quote.fees.net < min_msk_out {
@@ -554,8 +583,8 @@ pub async fn sell(
         println!("sell {positions} positions of line {line}");
         println!("  holder         {holder}");
         println!("  gross          {}", msk(quote.fees.gross));
-        println!("  burn 5 %       {}", msk(quote.fees.burn));
-        println!("  registrant 1 % {}", msk(quote.fees.registrant));
+        println!("  burn {:<9} {}", pct(r.burn_permille), msk(quote.fees.burn));
+        println!("  owner {:<8} {}", pct(r.leg_permille), msk(quote.fees.registrant));
         println!("  paid to you    {} (coinbase payout), at least {}", msk(quote.fees.net), msk(min_msk_out));
         println!("  price after    {} per position", msk(quote.after.price_sompi_per_position_v1()));
     }

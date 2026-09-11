@@ -534,8 +534,9 @@ mod tests {
                 crate::config::params::PALW_RC_DA_COURT_FENCE_DAA,
                 crate::config::params::PALW_RC_COURT_LADDER_FENCE_DAA,
                 crate::config::params::PALW_RC_MODEL_BENEFITS_FENCE_DAA,
+                crate::config::params::PALW_RC_MODEL_LEG_V2_FENCE_DAA,
             ],
-            "testnet-11's gate set is ADR-0083's flag day and ADR-0062's, and deriving the list must not widen it"
+            "testnet-11's gate set is its flag days (ADR-0083, ADR-0062, ADR-0084 U-08, ADR-0095, ADR-0114), and deriving the list must not widen it"
         );
     }
 
@@ -586,6 +587,7 @@ mod tests {
             "palw_model_market" => params.palw_model_market = Some(at),
             "palw_model_lines" => params.palw_model_lines = Some(at),
             "palw_model_benefits" => params.palw_model_benefits = Some(at),
+            "palw_model_leg_v2" => params.palw_model_leg_v2 = Some(at),
             "palw_model_evm" => params.palw_model_evm = Some(at),
             "palw_chunk_cap_charge" => params.palw_chunk_cap_charge = Some(at),
             "palw_prompt_ids_merkle" => params.palw_prompt_ids_merkle = Some(at),
@@ -693,7 +695,9 @@ mod tests {
                 // same fork id, peer, and disagree past the height. A rule added to a named height is
                 // invisible here; a height is not. Measured before it moved: identical fork ids at
                 // 1899, 1900 and 2500.
-                ("testnet-11", vec![1150, 1900, 2150, 2400, 2_125_000]),
+                //
+                // **And 3500, the owner leg's flag day** (ADR-0114, scheduled 2026-09-11 at ≈3,399).
+                ("testnet-11", vec![1150, 1900, 2150, 2400, 3500, 2_125_000]),
                 ("devnet", vec![]),
                 ("simnet", vec![]),
             ],
@@ -722,13 +726,15 @@ mod tests {
         /// ADR-0095's own height — the membership writes rows that enter the state root, so it
         /// cannot ride the registry's fence on a chain where the registry is already live.
         const ADR_0095: u64 = 2400;
+        /// ADR-0114's own height — the owner's leg becomes 5 %.
+        const ADR_0114: u64 = 3500;
         const CRESCENDO_T11: u64 = 2_125_000;
         for (name, params) in shipped() {
             if name == "testnet-11" {
                 assert_eq!(
                     fork_id_gate_fences_v1(&params),
-                    vec![ADR_0083, ADR_0062, ADR_0084_U08, ADR_0095],
-                    "{name}: armed by ADR-0083's fence, ADR-0062's, ADR-0084 U-08's and ADR-0095's, and nothing else"
+                    vec![ADR_0083, ADR_0062, ADR_0084_U08, ADR_0095, ADR_0114],
+                    "{name}: armed by ADR-0083's fence, ADR-0062's, ADR-0084 U-08's, ADR-0095's and ADR-0114's, and nothing else"
                 );
                 assert!(fork_id_gate_armed_v1(&params));
                 continue;
@@ -745,7 +751,7 @@ mod tests {
         }
 
         let t11 = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
-        assert_eq!(t11.fence_schedule_v1(), vec![ADR_0083, ADR_0062, ADR_0084_U08, ADR_0095, CRESCENDO_T11]);
+        assert_eq!(t11.fence_schedule_v1(), vec![ADR_0083, ADR_0062, ADR_0084_U08, ADR_0095, ADR_0114, CRESCENDO_T11]);
         let genesis = t11.genesis.hash;
         // The un-upgraded build: same genesis, schedule [2_125_000] — it has crossed nothing and names
         // crescendo as its next fence, which is exactly what its digest and next look like on the wire.
@@ -1063,7 +1069,9 @@ mod tests {
     fn an_un_upgraded_node_keeps_the_upgraded_build_until_the_new_fence() {
         const ADR_0095: u64 = 2400;
         const CRESCENDO_T11: u64 = 2_125_000;
-        let upgraded = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
+        // The builds of that day: ADR-0114's fence (3500) was scheduled later, and is not theirs.
+        let mut upgraded = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
+        upgraded.palw_model_leg_v2 = None;
         let mut un_upgraded = upgraded.clone();
         un_upgraded.palw_model_benefits = None;
         assert_eq!(upgraded.fence_schedule_v1(), vec![1150, 1900, 2150, ADR_0095, CRESCENDO_T11]);
@@ -1126,6 +1134,42 @@ mod tests {
         assert!(evaluate_fork_id_v1(&before_second, 1900, second.fired.as_bytes().as_slice(), second.next).refuses());
     }
 
+    /// **ADR-0114's flag day, before it happens: the fleet's current build keeps the upgraded one
+    /// until 3500, and not one score longer** — the rolling restart the 2400 day could not do.
+    ///
+    /// The build the fleet runs on 2026-09-11 (`e458683e`) schedules everything up to 2400 and not
+    /// 3500; the upgraded build adds 3500. Between the fleet's restart (DAA ≈3,400) and the height the
+    /// two must stay peers — they agree about every block either can produce — and at 3500 each refuses
+    /// the other on that height.
+    #[test]
+    fn the_owner_leg_flag_day_keeps_every_current_node_until_3500() {
+        const ADR_0114: u64 = 3500;
+        const CRESCENDO_T11: u64 = 2_125_000;
+        let upgraded = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
+        let mut current = upgraded.clone();
+        current.palw_model_leg_v2 = None;
+        assert_eq!(upgraded.fence_schedule_v1(), vec![1150, 1900, 2150, 2400, ADR_0114, CRESCENDO_T11]);
+        assert_eq!(current.fence_schedule_v1(), vec![1150, 1900, 2150, 2400, CRESCENDO_T11], "the fleet's build before ADR-0114");
+        let new_peer = fork_id_v1(&upgraded, 3400);
+        let old_peer = fork_id_v1(&current, 3400);
+        assert_eq!(new_peer.fired, old_peer.fired, "one history: both crossed every fence through 2400");
+        assert_eq!((new_peer.next, old_peer.next), (ADR_0114, CRESCENDO_T11));
+        for local_daa in [3399, 3400, 3450, ADR_0114 - 1] {
+            assert!(
+                !evaluate_fork_id_v1(&current, local_daa, new_peer.fired.as_bytes().as_slice(), new_peer.next).refuses(),
+                "the current build keeps the upgraded peer at {local_daa}"
+            );
+            assert!(
+                !evaluate_fork_id_v1(&upgraded, local_daa, old_peer.fired.as_bytes().as_slice(), old_peer.next).refuses(),
+                "the upgraded build keeps the current peer at {local_daa}"
+            );
+        }
+        for local_daa in [ADR_0114, ADR_0114 + 1] {
+            assert!(evaluate_fork_id_v1(&current, local_daa, new_peer.fired.as_bytes().as_slice(), new_peer.next).refuses(), "…and refuses it at {local_daa}");
+            assert!(evaluate_fork_id_v1(&upgraded, local_daa, old_peer.fired.as_bytes().as_slice(), old_peer.next).refuses(), "…both ways at {local_daa}");
+        }
+    }
+
     /// **A peer kept on a warning is judged again at the height its verdict turns** — the second
     /// defect of 2026-09-10, where a node that met six un-upgraded peers at its own DAA 0 kept them
     /// past the fence they lacked.
@@ -1137,7 +1181,9 @@ mod tests {
     #[test]
     fn a_kept_peer_is_judged_again_exactly_where_its_verdict_turns() {
         const ADR_0095: u64 = 2400;
-        let upgraded = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
+        // The 2400 flag day's two builds (ADR-0114's 3500 came later; its own day is pinned below).
+        let mut upgraded = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
+        upgraded.palw_model_leg_v2 = None;
         let mut un_upgraded = upgraded.clone();
         un_upgraded.palw_model_benefits = None;
 

@@ -309,6 +309,10 @@ pub struct PalwEvmMarketFencesV1 {
     pub lines_active: bool,
     /// `Params::palw_model_evm` (ADR-0089 D9): the four addresses and the facades exist.
     pub evm_active: bool,
+    /// `Params::palw_model_leg_v2` (ADR-0114): the AMM's quotes and `constants()` use the 5 % owner
+    /// leg. Changes no address and no handler — only what a quote says — so it is not part of
+    /// [`Self::window_exists`].
+    pub leg_v2_active: bool,
 }
 
 impl PalwEvmMarketFencesV1 {

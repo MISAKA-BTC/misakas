@@ -509,6 +509,8 @@ pub struct VirtualStateProcessor {
     pub(super) palw_model_lines: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0095 §4.11 as corrected: the membership's own fence.
     pub(super) palw_model_benefits: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0114: `Params::palw_model_leg_v2_fence` — the five-percent owner leg's height.
+    pub(super) palw_model_leg_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **ADR-0089 Decision 9's fence, `None` on every shipped preset.** Past it the EVM's
     /// window and hand exist and the block's EVM actions reach its transition. Resolved at the
     /// BLOCK's DAA.
@@ -1018,6 +1020,7 @@ impl VirtualStateProcessor {
             palw_model_market: params.palw_model_market_fence(),
             palw_model_lines: params.palw_model_lines_fence(),
             palw_model_benefits: params.palw_model_benefits_fence(),
+            palw_model_leg_v2: params.palw_model_leg_v2_fence(),
             palw_model_evm: params.palw_model_evm_fence(),
             palw_context_ladder: params.palw_context_ladder,
             palw_epoch_boundary_budget: params.palw_epoch_boundary_budget,
@@ -7799,6 +7802,11 @@ impl VirtualStateProcessor {
         self.palw_model_benefits.is_some_and(|fence| fence.is_active(daa_score))
     }
 
+    /// ADR-0114, resolved at the BLOCK's own DAA like every other fence.
+    pub(super) fn palw_model_leg_v2_active_at(&self, daa_score: u64) -> bool {
+        self.palw_model_leg_v2.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
     /// **ADR-0089 Decision 9, resolved in exactly one place, at the BLOCK's own DAA.**
     pub(super) fn palw_model_evm_active_at(&self, daa_score: u64) -> bool {
         self.palw_model_evm.is_some_and(|fence| fence.is_active(daa_score))
@@ -7810,6 +7818,7 @@ impl VirtualStateProcessor {
             market_active: self.palw_model_market_active_at(daa_score),
             lines_active: self.palw_model_lines_active_at(daa_score),
             evm_active: self.palw_model_evm_active_at(daa_score),
+            leg_v2_active: self.palw_model_leg_v2_active_at(daa_score),
         }
     }
 
@@ -7820,6 +7829,8 @@ impl VirtualStateProcessor {
             model_lines_active: self.palw_model_lines_active_at(daa_score),
             model_benefits_active: self.palw_model_benefits_active_at(daa_score),
             evm_market_active: self.palw_model_evm_active_at(daa_score),
+            // Written explicitly like the fences below it: this one decides what every move pays.
+            model_leg_v2_active: self.palw_model_leg_v2_active_at(daa_score),
             // Written explicitly, never left to `..Default::default()`: an unwritten default inside
             // a struct the fold reads is the one fault no golden can see, and this field decides
             // whether a producer's collateral is destroyed.

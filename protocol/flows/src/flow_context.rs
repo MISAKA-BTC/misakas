@@ -60,7 +60,7 @@ use std::{
     ops::Deref,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -87,6 +87,11 @@ use uuid::Uuid;
 // disconnects the peer, so all EVM gossip is version-filtered to the exact peer set
 // that understands it (EVM-tx ≥101, deposit-claim ≥102).
 const PROTOCOL_VERSION: u32 = 105;
+
+/// ADR-0115: how often the P2P service ticks the EVM relay ([`FlowContext::evm_relay_tick`]).
+pub const EVM_RELAY_TICK: Duration = Duration::from_secs(15);
+/// ADR-0115: every this many ticks (five minutes) the pool is announced again in full.
+pub const EVM_REANNOUNCE_EVERY_TICKS: u64 = 20;
 /// The last protocol version WITHOUT the EVM relay messages (still accepted).
 const PROTOCOL_VERSION_NO_EVM_RELAY: u32 = 100;
 /// The minimum protocol version that understands the EVM-tx relay messages.
@@ -287,7 +292,9 @@ mod tests {
         use kaspa_consensus_core::network::{NetworkId, NetworkType};
         const ADR_0095: u64 = 2400;
         const CRESCENDO_T11: u64 = 2_125_000;
-        let upgraded = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11));
+        // The 2400 day's builds: ADR-0114's 3500 was scheduled later and is not theirs.
+        let mut upgraded = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11));
+        upgraded.palw_model_leg_v2 = None;
         let mut un_upgraded = upgraded.clone();
         un_upgraded.palw_model_benefits = None;
 
@@ -436,6 +443,8 @@ pub struct FlowContextInner {
     // the UTXO tx spread (independent queue, longer batching interval).
     evm_transactions_spread: AsyncRwLock<EvmTransactionsSpread>,
     shared_evm_transaction_requests: Arc<Mutex<HashMap<EvmH256, RequestScopeMetadata>>>,
+    // ADR-0115: ticks of the EVM relay's own clock (`evm_relay_tick`), independent of block arrival.
+    evm_relay_ticks: AtomicU64,
     // kaspa-pq EVM Lane §14.2 / §9.2: pending EVM deposit-claim gossip state.
     // Identity is the deposit-lock outpoint (one claim per lock); same low-priority
     // profile as the EVM-tx spread.
@@ -670,6 +679,7 @@ impl FlowContext {
                 shared_transaction_requests: Arc::new(Mutex::new(HashMap::new())),
                 evm_transactions_spread: AsyncRwLock::new(EvmTransactionsSpread::new(hub.clone())),
                 shared_evm_transaction_requests: Arc::new(Mutex::new(HashMap::new())),
+                evm_relay_ticks: AtomicU64::new(0),
                 evm_deposit_claims_spread: AsyncRwLock::new(EvmDepositClaimsSpread::new(hub.clone())),
                 shared_evm_deposit_claim_requests: Arc::new(Mutex::new(HashMap::new())),
                 is_ibd_running: Default::default(),
@@ -1608,7 +1618,17 @@ impl FlowContext {
                 "no committed EVM state snapshot at the sink (early / pre-activation) — retry".to_string(),
             ));
         };
-        let hash = self.mining_manager().clone().submit_evm_transaction_with_state(raw, Some(st))?;
+        let hash = match self.mining_manager().clone().submit_evm_transaction_with_state(raw, Some(st)) {
+            Ok(hash) => hash,
+            // ADR-0115: a client sending a pending transaction again is asking for it to travel. The
+            // first announcement went out once, to whoever was connected then — a producer that was
+            // restarting never heard of it — so the duplicate is announced again before it is reported.
+            Err(EvmMempoolError::Duplicate(hash)) => {
+                self.broadcast_evm_transactions(once(hash)).await;
+                return Err(EvmMempoolError::Duplicate(hash));
+            }
+            Err(e) => return Err(e),
+        };
         self.broadcast_evm_transactions(once(hash)).await;
         Ok(hash)
     }
@@ -1618,9 +1638,44 @@ impl FlowContext {
     /// the pre-H-1 ingress — no canonical-state read, no new dependency.
     #[cfg(not(feature = "evm"))]
     pub async fn submit_rpc_evm_transaction(&self, raw: Vec<u8>) -> Result<EvmH256, EvmMempoolError> {
-        let hash = self.mining_manager().clone().submit_evm_transaction(raw)?;
+        let hash = match self.mining_manager().clone().submit_evm_transaction(raw) {
+            Ok(hash) => hash,
+            // ADR-0115: the evm build's rule, kept identical here.
+            Err(EvmMempoolError::Duplicate(hash)) => {
+                self.broadcast_evm_transactions(once(hash)).await;
+                return Err(EvmMempoolError::Duplicate(hash));
+            }
+            Err(e) => return Err(e),
+        };
         self.broadcast_evm_transactions(once(hash)).await;
         Ok(hash)
+    }
+
+    /// **ADR-0115: the EVM relay's own clock.** Called every [`EVM_RELAY_TICK`] by the P2P service,
+    /// whether or not blocks arrive (on testnet-11 they are 15–60 minutes apart, and the relay used to
+    /// move only when one did). Every tick flushes what the spread has queued; every
+    /// [`EVM_REANNOUNCE_EVERY_TICKS`] ticks the pool is expired and pruned against the committed state
+    /// and every pending hash is announced again to every EVM-relay peer. A peer asks only for the
+    /// hashes it lacks, so an announcement a peer already heard costs 32 bytes and nothing else — and a
+    /// producer that restarted, or connected after the first announcement, gets the transaction at the
+    /// next round instead of never.
+    pub async fn evm_relay_tick(&self) {
+        self.evm_transactions_spread.write().await.flush_due().await;
+        let tick = self.evm_relay_ticks.fetch_add(1, Ordering::Relaxed) + 1;
+        if !tick.is_multiple_of(EVM_REANNOUNCE_EVERY_TICKS) {
+            return;
+        }
+        let session = self.consensus().unguarded_session();
+        // The same gate as every tx relay: a node that is catching up has nothing current to offer.
+        if !self.is_nearly_synced(&session).await {
+            return;
+        }
+        self.mining_manager().clone().maintain_evm_pool(&session).await;
+        let hashes = self.mining_manager().clone().evm_pending_hashes();
+        if !hashes.is_empty() {
+            debug!("EVM relay: announcing {} pending transactions again (ADR-0115)", hashes.len());
+            self.broadcast_evm_transactions(hashes).await;
+        }
     }
 
     /// §14.2 / §9.2: queue deposit-lock outpoints for claim-inv broadcast to
@@ -1879,6 +1934,22 @@ impl ConnectionInitializer for FlowContext {
         // Launch all flows. Note we launch only after the ready signal was exchanged
         for flow in flows {
             flow.launch();
+        }
+
+        // **ADR-0115: a peer that connects after a transaction was announced never heard of it.** Tell
+        // it what the pool holds, once, now — it asks only for what it lacks (and ignores all of it while
+        // it is still syncing; the relay's clock covers that case a few minutes later).
+        if applied_protocol_version >= PROTOCOL_VERSION_EVM_RELAY {
+            let hashes = self.mining_manager().clone().evm_pending_hashes();
+            for chunk in hashes.chunks(crate::flowcontext::evm_transactions::MAX_INV_PER_EVM_TX_INV_MSG) {
+                let msg = make_message!(
+                    Payload::InvEvmTransactions,
+                    kaspa_p2p_lib::pb::InvEvmTransactionsMessage { hashes: chunk.iter().map(|h| h.as_bytes().to_vec()).collect() }
+                );
+                if router.enqueue(msg).await.is_err() {
+                    break;
+                }
+            }
         }
 
         if router.is_outbound() || peer_version.address.is_some() {

@@ -43,8 +43,8 @@ use kaspa_consensus_core::evm::model_market::{
 };
 use kaspa_consensus_core::evm::{EVM_NATIVE_SCALE, EvmAddress, EvmLog};
 use kaspa_consensus_core::palw_model_market_v1::{
-    PALW_MODEL_BURN_PERMILLE_V1, PALW_MODEL_POSITION_UNITS_V1, PALW_MODEL_REGISTRANT_PERMILLE_V1, PALW_MODEL_SEED_MIN_SOMPI_V1,
-    PALW_MODEL_SUPPLY_UNITS_V1, PalwModelMarketV1, palw_model_buy_quote_v1, palw_model_sell_quote_v1,
+    PALW_MODEL_POSITION_UNITS_V1, PALW_MODEL_SEED_MIN_SOMPI_V1, PALW_MODEL_SUPPLY_UNITS_V1, PalwModelFeesV1, PalwModelMarketV1,
+    palw_model_buy_quote_with, palw_model_sell_quote_with,
 };
 use kaspa_hashes::{EvmH256, Hash64};
 use revm::handler::register::EvmHandler;
@@ -568,6 +568,12 @@ impl MarketHandlers {
         }
     }
 
+    /// ADR-0114: the fee schedule every quote this window gives is made under — the fold's, at the
+    /// same DAA, because both read it off the same fence.
+    fn schedule(&self) -> PalwModelFeesV1 {
+        PalwModelFeesV1::at(self.fences.leg_v2_active)
+    }
+
     pub fn fences(&self) -> PalwEvmMarketFencesV1 {
         self.fences
     }
@@ -855,7 +861,7 @@ impl MarketHandlers {
             x if x == s.quote_buy_of => {
                 let a = Args::parse(input, 3)?;
                 let msk_in = a.u64(2)?;
-                match self.market_row(&a.hash64(0)).and_then(|(m, _)| palw_model_buy_quote_v1(&m, msk_in)) {
+                match self.market_row(&a.hash64(0)).and_then(|(m, _)| palw_model_buy_quote_with(&m, msk_in, self.schedule())) {
                     Some(q) => Out::default()
                         .u64(q.units_out)
                         .u64(q.fees.burn)
@@ -869,7 +875,7 @@ impl MarketHandlers {
             x if x == s.quote_sell_of => {
                 let a = Args::parse(input, 3)?;
                 let units_in = a.u64(2)?;
-                match self.market_row(&a.hash64(0)).and_then(|(m, _)| palw_model_sell_quote_v1(&m, units_in)) {
+                match self.market_row(&a.hash64(0)).and_then(|(m, _)| palw_model_sell_quote_with(&m, units_in, self.schedule())) {
                     Some(q) => Out::default()
                         .u64(q.fees.net)
                         .u64(q.fees.burn)
@@ -886,8 +892,10 @@ impl MarketHandlers {
                     .u64(PALW_MODEL_SUPPLY_UNITS_V1)
                     .u64(PALW_MODEL_POSITION_UNITS_V1)
                     .u64(PALW_MODEL_SEED_MIN_SOMPI_V1)
-                    .u64(PALW_MODEL_BURN_PERMILLE_V1)
-                    .u64(PALW_MODEL_REGISTRANT_PERMILLE_V1)
+                    // ADR-0114: the schedule in force at this block, so a reader of `constants()` prices a
+                    // move the way the fold will settle it.
+                    .u64(self.schedule().burn_permille)
+                    .u64(self.schedule().leg_permille)
                     .finish()
             }
             _ => return Err(Malformed),
@@ -973,14 +981,14 @@ impl MarketHandlers {
             }
             x if x == s.quote_buy => {
                 let a = Args::parse(input, 1)?;
-                match a.u256_as_u64(0).and_then(|msk_in| palw_model_buy_quote_v1(&row?, msk_in)) {
+                match a.u256_as_u64(0).and_then(|msk_in| palw_model_buy_quote_with(&row?, msk_in, self.schedule())) {
                     Some(q) => Out::default().u64(q.units_out).u64(q.after.price_sompi_per_position_v1()).finish(),
                     None => Out::default().zeros(2).finish(),
                 }
             }
             x if x == s.quote_sell => {
                 let a = Args::parse(input, 1)?;
-                match a.u256_as_u64(0).and_then(|units| palw_model_sell_quote_v1(&row?, units)) {
+                match a.u256_as_u64(0).and_then(|units| palw_model_sell_quote_with(&row?, units, self.schedule())) {
                     Some(q) => Out::default().u64(q.fees.net).u64(q.after.price_sompi_per_position_v1()).finish(),
                     None => Out::default().zeros(2).finish(),
                 }
@@ -1486,6 +1494,43 @@ pub mod abi {
 mod tests {
     use super::*;
 
+    /// **ADR-0114: past the fence the window prices a move under the 5 % owner leg, below it 1 %** —
+    /// `constants()` says which, and `quoteBuy` agrees with the fold's own function at either value.
+    #[test]
+    fn adr0112_the_window_quotes_under_the_schedule_in_force() {
+        use kaspa_consensus_core::palw_model_market_v1::{PALW_MODEL_SEED_MIN_SOMPI_V1, PalwModelMarketV1};
+        let line = Hash64::from_u64_word(9);
+        let row = PalwModelMarketV1::seed_v1(7, PALW_MODEL_SEED_MIN_SOMPI_V1, Hash64::from_u64_word(1));
+        let mut view = PalwEvmViewV1 { chain_daa: 42, chain_id: 1, ..Default::default() };
+        view.markets.insert(line, row);
+        let view = std::sync::Arc::new(view);
+        let word = |out: &[u8], i: usize| u64::from_be_bytes(out[i * 32 + 24..i * 32 + 32].try_into().unwrap());
+        for (leg_v2_active, leg) in [(false, 10u64), (true, 50u64)] {
+            let m = MarketHandlers::new(
+                view.clone(),
+                PalwEvmMarketFencesV1 { market_active: true, lines_active: true, evm_active: true, leg_v2_active },
+                1,
+            );
+            let Ok(c) = m.amm(&sel().constants) else { panic!("constants() answers") };
+            assert_eq!((word(&c, 3), word(&c, 4)), (50, leg), "burn and owner permille at leg_v2_active={leg_v2_active}");
+            let msk_in = 1_000 * 100_000_000u64;
+            let mut input = sel().quote_buy_of.to_vec();
+            input.extend_from_slice(&line.as_byte_slice()[..32]);
+            input.extend_from_slice(&line.as_byte_slice()[32..]);
+            let mut amount = [0u8; 32];
+            amount[24..].copy_from_slice(&msk_in.to_be_bytes());
+            input.extend_from_slice(&amount);
+            let Ok(q) = m.amm(&input) else { panic!("quoteBuy answers") };
+            let want = palw_model_buy_quote_with(&row, msk_in, PalwModelFeesV1::at(leg_v2_active)).unwrap();
+            assert_eq!(
+                (word(&q, 0), word(&q, 1), word(&q, 2), word(&q, 3)),
+                (want.units_out, want.fees.burn, want.fees.registrant, want.fees.net),
+                "the window's quote is the fold's at leg_v2_active={leg_v2_active}"
+            );
+            assert_eq!(word(&q, 2), leg * 100_000_000, "1,000 MSK pays the owner {leg} MSK");
+        }
+    }
+
     /// **ADR-0091 B7: `market()`'s two new words are the row's, and every earlier word keeps its
     /// offset.** The window is a read of the fold's row, so the check is the encoding: eleven
     /// words, the ADR's two at the end, and an unknown line still eleven zeros.
@@ -1501,7 +1546,7 @@ mod tests {
         view.markets.insert(line, row);
         let m = MarketHandlers::new(
             std::sync::Arc::new(view),
-            PalwEvmMarketFencesV1 { market_active: true, lines_active: true, evm_active: true },
+            PalwEvmMarketFencesV1 { market_active: true, lines_active: true, evm_active: true, leg_v2_active: false },
             1,
         );
         let mut input = sel().market.to_vec();
