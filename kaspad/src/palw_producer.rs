@@ -213,15 +213,24 @@ fn free_prompt_claim_still_owed(session: &kaspa_consensusmanager::ConsensusProxy
 /// The phase half of [`free_prompt_claim_still_owed`], separated so it can be pinned without a
 /// consensus instance. Owed while a seat, a redrawn seat, a challenger or an accuser can still ask
 /// for an opening; not once the claim is `Final` (nothing can open a challenge on it any more) or
-/// `Voided` (there is nothing left to defend). An attempt claim is never "owed" here — its seats
-/// replay the anchor's job instead (ADR-0084 Decision 7) and it keeps the wall-clock horizon.
+/// `Voided` (there is nothing left to defend).
+///
+/// **C-05 (mainnet audit 2026-09-11): an ATTEMPT claim is owed too, in the same phases.** The rule
+/// used to keep only free-prompt captures, on the reasoning that attempt seats LICENSE by replaying
+/// the anchor's job (ADR-0084 D7) — but a court session or a data-availability accusation needs the
+/// producer's actual capture, and those windows are DAA counts up to `trace_retention_daa` (5,400
+/// DAA), far longer than the 48 h wall-clock horizon at a slow cadence. Pruning an attempt capture
+/// while the chain can still accuse it convicted honest producers of withholding (`ProducerWithholding`)
+/// and slashed them. The retention obligation is the chain's, so it is kept for either lane while the
+/// claim is in a phase the chain can still accuse. (A dense attempt capture is ~0.8 GB/block; a busy
+/// dense producer must give `palw-retention` its own volume — an operator concern, not a chain one.)
 fn free_prompt_retention_is_owed(
     source: &kaspa_consensus_core::palw_state_v2::PalwClaimSourceV2,
     phase: &kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2,
 ) -> bool {
-    use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2 as P, PalwClaimSourceV2 as S};
-    matches!(source, S::FreePrompt { .. })
-        && matches!(phase, P::Provisional | P::PanelBound { .. } | P::ReceiptLicensed { .. } | P::DefaultDisputed { .. })
+    use kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2 as P;
+    let _ = source; // both lanes are owed in an accusable phase (C-05)
+    matches!(phase, P::Provisional | P::PanelBound { .. } | P::ReceiptLicensed { .. } | P::DefaultDisputed { .. })
 }
 
 impl PalwProducerService {
@@ -1059,20 +1068,25 @@ mod retention_tests {
     use super::free_prompt_retention_is_owed;
     use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2 as P, PalwClaimSourceV2 as S, PalwVoidReasonV2 as R};
 
-    /// **A live free-prompt claim's capture outlives the wall-clock horizon; nothing else does.**
+    /// **A live claim's capture outlives the wall-clock horizon; a settled one does not.**
     /// Every phase in which a seat, a redrawn panel, a challenger or an accuser can still ask the
-    /// executor for an opening keeps the file; `Final` and every void release it; an attempt claim
-    /// is never kept past the horizon by this rule, whatever its phase.
+    /// executor for an opening keeps the file; `Final` and every void release it. C-05: this holds
+    /// for BOTH lanes now — an attempt claim the chain can still accuse is kept, whatever its age.
     #[test]
-    fn a_live_free_prompt_claim_keeps_its_capture_and_nothing_else_does() {
+    fn a_live_claim_keeps_its_capture_on_either_lane_and_a_settled_one_does_not() {
         let fp = S::FreePrompt { quanta: 8, spent: Default::default() };
         for live in [P::Provisional, P::PanelBound { bound_daa: 10 }, P::ReceiptLicensed { licensed_daa: 20 }] {
             assert!(free_prompt_retention_is_owed(&fp, &live), "{live:?} can still be asked about");
-            assert!(!free_prompt_retention_is_owed(&S::Attempt, &live), "an attempt claim keeps the clock");
+            assert!(free_prompt_retention_is_owed(&S::Attempt, &live), "an attempt claim is accusable at {live:?}, so it is kept (C-05)");
         }
-        assert!(!free_prompt_retention_is_owed(&fp, &P::Final { final_daa: 30 }));
+        for settled in [P::Final { final_daa: 30 }] {
+            assert!(!free_prompt_retention_is_owed(&fp, &settled), "free-prompt {settled:?} releases the capture");
+            assert!(!free_prompt_retention_is_owed(&S::Attempt, &settled), "attempt {settled:?} releases the capture");
+        }
         for reason in [R::BindTimeout, R::ReceiptTimeout, R::CourtFraud, R::ProducerWithholding] {
-            assert!(!free_prompt_retention_is_owed(&fp, &P::Voided { voided_daa: 40, reason }));
+            let voided = P::Voided { voided_daa: 40, reason };
+            assert!(!free_prompt_retention_is_owed(&fp, &voided));
+            assert!(!free_prompt_retention_is_owed(&S::Attempt, &voided));
         }
     }
 }
