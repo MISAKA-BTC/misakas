@@ -4,8 +4,10 @@
   consensus-inert** (§9): the leaf, its preimage, the tree, the layout rules and every opening are
   the ones the court already verifies — what changed is how a node BUILDS them, and every root,
   count, byte total, placement and document id it builds is byte-identical to the materializing
-  builder's (§1.3, §1.4). No preset, fingerprint or rule moves. W8 is measured on the 2B and
-  extrapolated for the 35B (no 35B artifact on this host); W9 and W10 are stated, not built.
+  builder's (§1.3, §1.4). No preset, fingerprint or rule moves. W8 is the ADDER's run, not an
+  operator's (ADR-0099: the adder measures, the chain recomputes) — this ADR is what lets an
+  adder's machine measure a model larger than its memory; measured here on the 2B, extrapolated
+  for the 35B (§1.5). W9 and W10 are stated, not built.
 * Builds on: [0049](0049-palw-adjudication-contract.md) Decision G (the canonical inventory and its layout
   rules), [0099](0099-the-adder-measures-the-chain-recomputes-and-a-seat-holds-a-shard.md) (the shard plan, which places inventory rows),
   [0100](0100-a-model-is-data-and-the-court-the-measure-and-the-licence-are-built-for-a-shard.md)
@@ -63,16 +65,20 @@ exponent table, and the fuzz corpus's tiny class under v5 and v6 — were printe
 that serve, the refusal *message* for the five that do not. The emitter reproduces every line
 (`the_emitter_reproduces_the_materializing_builders_record`).
 
-### 1.5 The 35B, extrapolated (W8)
+### 1.5 The 35B: the adder's measurement (W8)
 
-Not measured: the 33.5 GiB artifact is not on this host. From its geometry (40 layers, 256 routed
+Not run here, and not the operator's to run: under ADR-0099 whoever ADDS a model measures it, on
+the machine that holds its artifact, and any node re-derives the document's deterministic half
+with `palw-class verify --artifact`. What this ADR owes that adder is that the measurement fits the
+machine, whatever the model. From the 35B-A3B's geometry (40 layers, 256 routed
 experts, `moe_dim` 512, hidden 2048, the 2B's tile of 8 rows): ≈ 13.8 M leaves in ≈ 113 k tensors.
 The stream holds the plan (one small entry per tensor), one read block and the frontier's
 `⌈log₂ n⌉ = 24` peaks; the materialized digest (one 64-byte leaf plus a coordinate per row) would
 hold ≈ 2 GB, and the copy ≥ 33.5 GiB. What will dominate the stream's RSS is the reader's own
 parameter store — every per-row triple of every expert, ≈ 0.7 GB, resident since `open_artifact` —
-which is the loader's design, not the inventory's. The run that turns this into a measurement is
-§6 step 1.
+which is the loader's design, not the inventory's. So an adder with a 24 GB machine and a 33.5 GiB
+artifact can now measure it (the copy could not have been built there at all); the RSS their run
+prints is theirs to report, beside the replay rate the document already calls self-reported.
 
 ## 2. The requirement
 
@@ -165,8 +171,9 @@ its root is `artifact_root_v1`'s at every size (pinned for 1–300 leaves, aroun
 
 ## 6. Order of work
 
-1. **W8 on a host holding the 35B-A3B:** `palw-class measure` under `/usr/bin/time`, the RSS
-   recorded here, the document's root compared with a second run. Needs the operator's host.
+1. **W8 is the adder's, and it needs nothing more from this tree.** Whoever adds the 35B-A3B runs
+   `palw-class measure` where the artifact is; a second party's `verify --artifact` on its own
+   copy is the check. No fleet host and no operator run is on the path (ADR-0099).
 2. **W9 — openings from the stream, a separate ADR.** The plan already IS the recipe for any
    tensor's rows (`Q36PlannedTensorV1`), so an opening needs only the root (cached once per holding
    as a digest, ≈ 64 B per leaf, or recomputed) and the one tensor's rows re-read; a `.pidx`
@@ -200,11 +207,12 @@ renumbers the LATER writer). What the branches held when this was written:
 |---|---|---|---|
 | 0102 | the embedding lift (`feat/adr-0099-sharded-seat`, `3e9c3b59`) | 04:22 JST | keeps 0102 |
 | 0102 | the close cut (`feat/adr-0096-partb-drill`, `90ec2317`) | 05:02 JST | renumbered **0104** (`fix/panel-pays-consensus-rent`) |
-| 0102 | the heartbeat trap (`b805fc3d`, released to testnet-11 on `release/t11-2026-09-11`) | 05:45 JST | the later 0102 writer; **0105 is left for it** |
+| 0102 | the heartbeat trap (`b805fc3d`, released to testnet-11 on `release/t11-2026-09-11`) | 05:45 JST | renumbered **0105** on `main` (`40ac431b`) |
 | 0103 | the held context (`docs/adr-0103-the-context-is-held-off-the-chain`, `bd280d15`) | 05:21 JST | keeps 0103 |
 | 0103 | this ADR | ~10:00 JST | renumbered **0106** |
+| 0107 | the share-growth ADR (`fix/share-growth-counts-final-work`) | 2026-09-11 | 0107 |
 
-**The next free number is 0107.**
+**The next free number is 0108** (the same statement `main`'s README makes since `40ac431b`).
 
 * **2026-09-11** — written and implemented the same day:
   * `consensus/core/src/palw_artifact.rs` — `artifact_leaf_parts_v1`, `PalwArtifactLeafHasherV1`,
