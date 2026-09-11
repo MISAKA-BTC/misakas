@@ -583,25 +583,44 @@ fn qwen36_execute_streaming_v1(
 
     // Call 0 — prefill. Post rows exist only at its LAST position; earlier rows predict tokens
     // the prompt already contains, and the step space has no coordinate for them.
+    //
+    // **In one pass over the weights when the class takes no checkpoint inside it** (ADR-0117
+    // Decision 2): every prompt position through a layer before the next layer is read, which is
+    // the same rows in the same capture order (`forward_prefill_planned`), with each layer's
+    // tensors and its positions' experts read once for the prompt instead of once a position. A
+    // class whose cadence wants a checkpoint after a prefill position needs the cache as it stands
+    // after EACH position — which a layer-major pass never holds — and keeps the stepped pass.
+    let one_pass = (0..prefill).all(|position| !checkpoints.wants_checkpoint_after_v1(0, position as u32));
     let mut last_logits = Vec::new();
-    for (position, token) in prompt.iter().take(prefill).enumerate() {
-        let (logits, trace) =
-            engine.forward_token_planned(plan, &mut cache, *token, position).map_err(|e| format!("prefill at {position}: {e}"))?;
-        let mut rows = qwen36_captured_rows_v1(profile, &trace);
-        if position + 1 != prefill {
-            rows.retain(|r| r.table != kaspa_consensus_core::palw_step::PalwStepTableV1::Post);
-        }
-        capture.push_call(profile, ctx, 0, position as u32, &rows).map_err(|e| format!("{e:?}"))?;
-        // **A checkpoint after a PREFILL position, when the class's cadence says so** (ADR-0082
-        // Decision 4, amended). The sentinel-mapped hybrid wants none of these and this is `false`
-        // at every position; a class that registered the composed map wants one after every
-        // position, and before this the hybrid producer took NO checkpoint at any coordinate and
-        // then sealed at a count that is `prefill + decode_calls`.
-        if checkpoints.wants_checkpoint_after_v1(0, position as u32) {
-            qwen36_push_checkpoint_v1(&mut checkpoints, &artifact.shape, &cache)
-                .map_err(|e| format!("the prefill checkpoint at position {position}: {e}"))?;
+    if one_pass {
+        let (logits, traces) =
+            engine.forward_prefill_planned(plan, &mut cache, &prompt[..prefill], 0).map_err(|e| format!("the prefill: {e}"))?;
+        for (position, trace) in traces.iter().enumerate() {
+            capture
+                .push_call(profile, ctx, 0, position as u32, &qwen36_captured_rows_v1(profile, trace))
+                .map_err(|e| format!("{e:?}"))?;
         }
         last_logits = logits;
+    } else {
+        for (position, token) in prompt.iter().take(prefill).enumerate() {
+            let (logits, trace) =
+                engine.forward_token_planned(plan, &mut cache, *token, position).map_err(|e| format!("prefill at {position}: {e}"))?;
+            let mut rows = qwen36_captured_rows_v1(profile, &trace);
+            if position + 1 != prefill {
+                rows.retain(|r| r.table != kaspa_consensus_core::palw_step::PalwStepTableV1::Post);
+            }
+            capture.push_call(profile, ctx, 0, position as u32, &rows).map_err(|e| format!("{e:?}"))?;
+            // **A checkpoint after a PREFILL position, when the class's cadence says so** (ADR-0082
+            // Decision 4, amended). The sentinel-mapped hybrid wants none of these and this is
+            // `false` at every position; a class that registered the composed map wants one after
+            // every position, and before this the hybrid producer took NO checkpoint at any
+            // coordinate and then sealed at a count that is `prefill + decode_calls`.
+            if checkpoints.wants_checkpoint_after_v1(0, position as u32) {
+                qwen36_push_checkpoint_v1(&mut checkpoints, &artifact.shape, &cache)
+                    .map_err(|e| format!("the prefill checkpoint at position {position}: {e}"))?;
+            }
+            last_logits = logits;
+        }
     }
     let mut next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&last_logits) as u32;
     generated.push(next);
