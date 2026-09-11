@@ -4952,6 +4952,16 @@ mod tests {
         prefill: u32,
         decode: u32,
     ) -> (crate::artifact::Base0ArtifactV1, PalwShapeProfileV3, PalwJobContextV2, Vec<usize>, crate::produce::Base0ExecutionV1) {
+        dense_v7_run_with_form(prefill, decode, kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::type_complexity)]
+    pub(super) fn dense_v7_run_with_form(
+        prefill: u32,
+        decode: u32,
+        form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    ) -> (crate::artifact::Base0ArtifactV1, PalwShapeProfileV3, PalwJobContextV2, Vec<usize>, crate::produce::Base0ExecutionV1) {
         use kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1;
         let geometry = PalwQwen25GeometryV1 {
             layer_count: 2,
@@ -4968,7 +4978,7 @@ mod tests {
         };
         let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v7(geometry).expect("a valid graph-v7 A16 profile");
         assert!(kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&profile));
-        dense_run_for(geometry, profile, prefill, decode)
+        dense_run_for_form(geometry, profile, prefill, decode, form)
     }
 
     /// The graph-v5 fold fixture at a chosen geometry and job size, for a test that needs a tree
@@ -4991,6 +5001,20 @@ mod tests {
         prefill: u32,
         decode: u32,
     ) -> (crate::artifact::Base0ArtifactV1, PalwShapeProfileV3, PalwJobContextV2, Vec<usize>, crate::produce::Base0ExecutionV1) {
+        dense_run_for_form(geometry, profile, prefill, decode, kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat)
+    }
+
+    /// [`dense_run_for`] with the job's prompt committed under `form` — the held regime's ids are
+    /// the Merkle root (ADR-0103 Decision 4), so its rows are exercised under that form too.
+    #[cfg(test)]
+    #[allow(clippy::type_complexity)]
+    pub(super) fn dense_run_for_form(
+        geometry: kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1,
+        profile: PalwShapeProfileV3,
+        prefill: u32,
+        decode: u32,
+        form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    ) -> (crate::artifact::Base0ArtifactV1, PalwShapeProfileV3, PalwJobContextV2, Vec<usize>, crate::produce::Base0ExecutionV1) {
         let shape = crate::artifact::Base0ShapeV1 {
             n_layers: geometry.layer_count as usize,
             n_heads: geometry.attn_heads as usize,
@@ -5012,7 +5036,7 @@ mod tests {
             geometry.vocab_size as usize,
             prefill,
             decode,
-            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            form,
         );
         let engine = crate::engine_a16::A16Engine::new(&artifact).expect("an A16 artifact");
         let plan = engine.plan_from_profile(&profile).expect("the v5 declaration is this engine's program");
@@ -5130,15 +5154,39 @@ mod tests {
     /// memo holds nothing from it; a shard's slices verify on their own and are not the whole state.
     #[test]
     fn a_seat_that_resumes_reaches_the_verdict_a_seat_that_recomputes_does() {
-        let (artifact, profile, ctx, prompt, run) = dense_v7_run();
+        check_a_seat_that_resumes_reaches_the_verdict_a_seat_that_recomputes_does(
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        );
+    }
+
+    /// **The held rows under the ids the held regime mandates** (ADR-0103 Decision 4; §10.3 item
+    /// 12). Every fixture above commits its prompt flat — the default a shipped preset runs — and
+    /// the held mint makes the Merkle root mandatory, which is where the live drill found the seat's
+    /// recompute refusing an honest job's own ids. The same intervals, resumes and verdicts, with
+    /// the job's prompt committed as the tiled root.
+    #[test]
+    fn the_held_rows_open_resume_and_license_under_the_merkle_prompt_form() {
+        let merkle = kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1;
+        check_a_seat_that_resumes_reaches_the_verdict_a_seat_that_recomputes_does(merkle);
+        check_every_interval_opens_and_a_recomputing_seat_licenses_it_under(dense_v7_run_with_form(8, 14, merkle), merkle);
+        check_every_interval_opens_and_a_recomputing_seat_licenses_it_under(dense_v7_run_with_form(11, 6, merkle), merkle);
+    }
+
+    fn check_a_seat_that_resumes_reaches_the_verdict_a_seat_that_recomputes_does(
+        form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    ) {
+        let (artifact, profile, ctx, prompt, run) = dense_v7_run_with_form(8, 14, form);
         let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        assert!(
+            kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(form, &ids, &ctx.prompt_token_ids_hash),
+            "the fixture commits its prompt under the form it is run under"
+        );
         let bytes = crate::produce::base0_fp_material_encode_v2(&run, &ids).expect("the fold retains");
         let material = crate::produce::base0_fp_material_decode_v2(&bytes).expect("decodes");
         let engine = crate::engine_a16::A16Engine::new(&artifact).expect("an A16 artifact");
         let plan = engine.plan_from_profile(&profile).expect("the plan");
         let interval = kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1;
         let ladder = PALW_STEP_LEG_MAX_LEAVES;
-        let form = kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat;
         let geometry = Base0FpIntervalGeometryV1::from_binding_v1(&run.binding, interval).expect("a geometry");
         assert!(geometry.interval_count >= 3);
         let recompute = |covered: u32| {
@@ -5150,7 +5198,7 @@ mod tests {
                 &run.generated_token_ids,
                 covered,
                 &mut kernels,
-                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                form,
             )
             .ok()
         };
@@ -5229,6 +5277,22 @@ mod tests {
     fn check_every_interval_opens_and_a_recomputing_seat_licenses_it(
         fixture: (crate::artifact::Base0ArtifactV1, PalwShapeProfileV3, PalwJobContextV2, Vec<usize>, crate::produce::Base0ExecutionV1),
     ) {
+        check_every_interval_opens_and_a_recomputing_seat_licenses_it_under(
+            fixture,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        )
+    }
+
+    fn check_every_interval_opens_and_a_recomputing_seat_licenses_it_under(
+        fixture: (
+            crate::artifact::Base0ArtifactV1,
+            PalwShapeProfileV3,
+            PalwJobContextV2,
+            Vec<usize>,
+            crate::produce::Base0ExecutionV1,
+        ),
+        form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    ) {
         use kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1;
         let (artifact, profile, ctx, prompt, run) = fixture;
         let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
@@ -5244,15 +5308,8 @@ mod tests {
         let claim = PalwClaimRootsV1 { execution_root: run.execution_root, trace_root: run.trace_root, anchor: ctx.job_id };
         let kernels = crate::qwen25_a16_backend::a16_interval_kernels_for_tests_v1(&artifact, Some(&plan));
         for index in 0..geometry.interval_count {
-            let opened = base0_open_fp_interval_sparse_v1(
-                &material,
-                index,
-                &ids,
-                interval,
-                &kernels,
-                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
-            )
-            .unwrap_or_else(|e| panic!("interval {index} must open from a fold that retained nothing: {e}"));
+            let opened = base0_open_fp_interval_sparse_v1(&material, index, &ids, interval, &kernels, form)
+                .unwrap_or_else(|e| panic!("interval {index} must open from a fold that retained nothing: {e}"));
             // A folded class is served FLAT: the anchor is named, never carried.
             assert!(
                 opened.starts_with(&PALW_BASE0_FP_INTERVAL_MAGIC_V4),
@@ -5278,7 +5335,7 @@ mod tests {
                         &run.generated_token_ids,
                         covered,
                         &mut kernels,
-                        kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                        form,
                     )
                     .expect("this seat can recompute its own state");
                     base0_fp_interval_opening_seat_state_v1(&opened, &ids, interval)
@@ -5297,7 +5354,7 @@ mod tests {
                     interval,
                     state.as_ref(),
                     &kernels,
-                    kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                    form,
                 ),
                 Base0FpIntervalSeatVerdictV1::Valid,
                 "interval {index}: a seat holding its own state must license an honest graph-v5 opening"
