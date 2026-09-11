@@ -131,7 +131,10 @@ pub(crate) fn verify(cx: &mut VerifyCx<'_>) -> Result<KindOutcomeV1, PalwExtensi
         Some(word) => match lane_of(word) {
             Some(lane) => Some(lane),
             None => {
-                return Ok(KindOutcomeV1::at(cx.refuse("verification.lane", format!("`{word}` is not `attempt` or `fp`")), Structural));
+                return Ok(KindOutcomeV1::at(
+                    cx.refuse("verification.lane", format!("`{word}` is not `attempt` or `fp`")),
+                    Structural,
+                ));
             }
         },
         None => None,

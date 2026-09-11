@@ -160,8 +160,8 @@ fn exit_for(report: &PalwExtensionReportV1) -> CliResult {
             exit::EXTENSION_RULESET_CHANGE,
             format!("ruleset change{} — {reason}", if *flag_day { " (flag day)" } else { "" }),
         )),
-        PalwExtensionClassificationV1::Expressible { would_be_refused: Some(why), admission_object, .. } => {
-            Err(CliError::new(exit::EXTENSION_REFUSED, format!("expressible as {admission_object}, but would be refused: {why}")))
+        PalwExtensionClassificationV1::Expressible { would_be_refused: Some(_), .. } => {
+            Err(CliError::new(exit::EXTENSION_REFUSED, report.classification.summary()))
         }
         PalwExtensionClassificationV1::Expressible { .. } if report.depth_not_reached() => Err(CliError::new(
             exit::EXTENSION_DEPTH_NOT_REACHED,
@@ -358,17 +358,13 @@ pub async fn submit(ctx: &Ctx, manifest: &Path, ks: &KeySource, bond: Option<&st
     let net = network_of(&mf)?;
     let kind = mf.parsed.manifest.kind;
     match kind {
-        PalwExtensionKindV1::DerivedTransformer => {
-            return Err(CliError::generic(
-                "admission.object: none — a transformer is not a chain object; each derivation over it rides per claim as a DerivedArtifactV1 (`misaka palw fp-submit`, ADR-0078)",
-            ));
-        }
-        PalwExtensionKindV1::RulesetCandidate => {
-            return Err(CliError::new(
-                exit::EXTENSION_RULESET_CHANGE,
-                "a ruleset candidate is a release, not an object: nothing rides (ADR-0108 Decision 6) — schedule the height in the preset, rebuild, and give the notice the fork-id gate makes necessary (ADR-0105 §7)",
-            ));
-        }
+        PalwExtensionKindV1::DerivedTransformer => Err(CliError::generic(
+            "admission.object: none — a transformer is not a chain object; each derivation over it rides per claim as a DerivedArtifactV1 (`misaka palw fp-submit`, ADR-0078)",
+        )),
+        PalwExtensionKindV1::RulesetCandidate => Err(CliError::new(
+            exit::EXTENSION_RULESET_CHANGE,
+            "a ruleset candidate is a release, not an object: nothing rides (ADR-0108 Decision 6) — schedule the height in the preset, rebuild, and give the notice the fork-id gate makes necessary (ADR-0105 §7)",
+        )),
         PalwExtensionKindV1::FamilyCertification | PalwExtensionKindV1::LaneCertification => {
             let env = PalwExtensionEnvV1::genesis(net);
             let report = verify_parsed_v1(&mf.parsed, &mf.dir, &env, PalwExtensionDepthV1::Vectors)

@@ -140,8 +140,16 @@ impl PalwExtensionClassificationV1 {
     /// One line a script or a person reads first.
     pub fn summary(&self) -> String {
         match self {
+            // A kind nothing rides for (a transformer, whose derivations ride per claim) says so
+            // rather than reading "expressible now as none".
+            Self::Expressible { admission_object, would_be_refused: None, .. } if admission_object == "none" => {
+                "expressible now — no chain object rides for this kind".to_string()
+            }
             Self::Expressible { admission_object, would_be_refused: None, weightless, .. } => {
                 format!("expressible now as {admission_object}{}", if *weightless { " (weightless)" } else { "" })
+            }
+            Self::Expressible { admission_object, would_be_refused: Some(why), .. } if admission_object == "none" => {
+                format!("expressible, but would be refused: {why}")
             }
             Self::Expressible { admission_object, would_be_refused: Some(why), .. } => {
                 format!("expressible as {admission_object}, but would be refused: {why}")

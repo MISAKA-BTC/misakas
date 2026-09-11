@@ -397,9 +397,11 @@ a millisecond to a transition, or a field to `Params`.
   asks the gate this build has, and will ask the walls those ADRs add when they land, without a change
   here.
 * **Lifting the chain-class seal** (Decision 8) waits on paid seats.
-* **Not verified:** a Full-depth run over the 34 GiB Qwen3.6 tier on a fleet host; a `submit` of a
-  `model-class` against a live network (the object-building path is the SDK's, already exercised by
-  `kaspad --palw-register-class`; the CLI wiring is exercised in dry-run).
+* **Not verified:** a Full-depth run over the 34 GiB Qwen3.6 mmap tier on a fleet host (the 1.7 GiB
+  dense tier was measured — §9); a `submit` of a `model-class` against a live network (the
+  object-building path is the SDK's, already exercised by `kaspad --palw-register-class`; the CLI
+  wiring is exercised in dry-run, and every node-reaching path was exercised only as far as the
+  connection refusal).
 
 ## 9. Number hygiene and implementation record
 
@@ -407,6 +409,83 @@ a millisecond to a transition, or a field to `Params`.
 0106–0107 are resident on other branches; 0105 landed here). This ADR takes **0108**. A concurrent
 claimant renumbers the later writer. **The next free number is 0109.**
 
-Implementation, 2026-09-11, on `feat/adr-0108-extension-envelope` — see the commit log for the
-measured results (§7's invariants, the crate's tests, the CLI's dry runs, and the `cargo tree -i`
-output I-9 requires).
+Implementation, 2026-09-11, on `feat/adr-0108-extension-envelope`, on top of `main` `40ac431b`.
+
+**What was built.** One crate, `misaka-palw-extension` (`manifest.rs`, `report.rs`, `verify.rs`,
+`kinds/{model_class,certification,derived_transformer,ruleset_candidate}.rs`, `receipt.rs`); one CLI
+module, `misaka-cli/src/palw_extension.rs`, behind `misaka palw extension` with the five verbs of §4;
+one operator guide, [`docs/palw-extension-envelope.md`](../palw-extension-envelope.md), with a
+runnable example manifest per kind in [`docs/extension-manifests/`](../extension-manifests/).
+Consensus-inert as promised: nothing under `consensus/`, `kaspad/`, `protocol/` or `rpc/` moved, and
+the only edit outside the new crate and its CLI module is one summary line in `palw_fp.rs`'s
+`submit-object` so a registration prints as a line rather than as its whole `Debug`.
+
+**Measured, 2026-09-11 (this Mac, `cargo test` debug builds).**
+
+* **Tests: 23 in the crate, all passing** — 15 in `tests/invariants.rs` (one per I-1…I-10, plus the
+  three extra cases §7 implies: a kernel outside the vocabulary, a container no lineage sniffs, a
+  class no family covers), 6 in `tests/doc_examples.rs` (every example manifest in `docs/`, so a
+  stale example is a failing test), 2 unit tests (every fence of `palw_fences_v1` can be set by name;
+  the class probe answers as the SDK's `preflight_admission` does, row for row, over the whole
+  ledger). `cargo test -p misaka-cli`: **97 passing**, unchanged.
+* **I-9, the `cargo tree -i` this ADR requires** — nothing that decides anything can read a receipt:
+
+  ```console
+  $ cargo tree -i misaka-palw-extension
+  misaka-palw-extension v1.1.0 (…/misaka-palw-extension)
+  └── misaka-cli v1.1.0 (…/misaka-cli)
+  ```
+
+  The CLI is the only edge in. A test in the crate re-reads the six deciders' manifests
+  (`kaspad`, `consensus`, `consensus/core`, the SDK, derive, base0) and fails if any names this crate.
+* **Gates.** `cargo clippy -p misaka-palw-extension -p misaka-cli --tests --no-deps -- -D warnings`
+  clean; `cargo check --workspace --exclude misaka-palw-worker` clean (1 m 13 s);
+  `sh scripts/ci-gates.sh --group fast` all green; `rustfmt --edition 2024 --check` clean on all 15
+  touched `.rs` files; `python3 scripts/check-repin-enumeration.py` unchanged at `main`'s baseline of
+  7 unclassified files (79 in-scope files, 294 occurrences) — no literal in this work needs re-pinning,
+  because every hex value in the tests and the examples is recomputed by the build rather than written
+  down.
+* **A Full-depth run over real weights**, the case Decision 3 exists for: the published
+  `qwen25-1.5b-a16.palwart` (1,795,427,276 bytes), `context-profile` at `n_ctx` 24 —
+  **43.5 s, 5.8 GB peak RSS**, root recomputed and matched, 1,589,424 pwu per inference. (For scale,
+  `palw-class inspect` over the same file is 66.8 s because it pairs every row of the lineage; the
+  verifier pairs the one class the manifest names.) The 34 GiB mmap tier remains unmeasured (§8).
+* **The CLI, in dry run**, on the six example manifests: `inspect` 0; `verify` 0 for the
+  context-profile at Vectors, the family certification, the transformer; 20 for the floor
+  (already registered) and the lane binding (see below); 23 for `--depth full` with no artifact
+  present; 22 for the candidate. `submit` refuses a transformer (1, naming `admission.object: none`)
+  and a candidate (22, naming the tier), refuses a class with no `--bond` (1), and cuts the 754,377-byte
+  family drill into 8 `ObjectChunk` carriers before reaching the node. Everything node-reaching was
+  exercised only to the connection refusal (4): there was no local node.
+* **Receipts**: signed with an ML-DSA-87 key, the id is over the unsigned bytes (signing does not move
+  it), a changed report byte fails by name, another ruleset is refused naming `verifier.ruleset_id`,
+  and a signature under any other context does not verify.
+
+**Three things the implementation learned from the tree, which changed the design.**
+
+1. **A lane binding's covering family must be one the CHAIN certified.** `ClassLaneCertified` searches
+   `state.certified_family_records(lane)`, which only `FamilyCertified` objects write; the
+   compile-time RC set is not in it, and testnet-11's genesis carries no `FamilyCertified` at all
+   (measured: 3 `ClassRegistered` + 8 `BondRegistered`). So every lane binding is
+   `NoCertifiedFamilyCovers` until someone files the family first, and the report says so and names
+   the drill that fixes it. The attempt lane additionally refuses a class that already holds a share
+   (`ClassAlreadyWeighted`) — the floor holds 1000‰, so the obvious example would have been refused
+   twice. The example is the graph-v5@512 row's free-prompt lane instead.
+2. **The chain does not refuse a second class over registered weights.** Nothing in the
+   `ClassRegistered` transition reads `registered_artifact_roots`; that is the SDK's candidate rule
+   (the 2026-08-28 mispairing). Reporting it as a refusal would have been a limit rendered as a
+   verdict, so it is a named check and the tier stays *expressible* — which matters exactly for
+   Decision 7's case, since the inventory root does not depend on `n_ctx` and a new width therefore
+   registers weights the chain already holds.
+3. **A court-capable row registers its inventory root, not the artifact digest.** The chain arm
+   (`dense_artifact_by_registered_root`) accepts either; Full depth computes both and says which
+   matched, because a manifest that names the wrong one is refused against its own file and the
+   cheapest way to learn the right value is the refusal that prints both.
+
+**Exit codes.** §4's draft proposed 2/3/4/5; those were taken (clap's argument error, and
+`NETWORK_MISMATCH` / `CONNECTION` / `NODE_NOT_SYNCED` in `misaka-cli`'s `exit` module), so the tiers
+took 20–23. §4 carries the real numbers.
+
+**Not done here, and deliberately:** the `getPalwRegistrationTerms` RPC (§8) — the library already
+takes live terms through `PalwExtensionEnvV1::chain_terms` and every report says which terms it
+judged against; the chain-class seal (Decision 8); a `service-descriptor` kind (§8).
