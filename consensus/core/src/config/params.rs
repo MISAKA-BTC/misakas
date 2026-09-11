@@ -10429,10 +10429,11 @@ pub const PALW_RC_MODEL_BENEFITS_FENCE_DAA: u64 = 2_400;
 /// Every seat must run a build carrying this fence BEFORE this height or it forks off at it — the DAA
 /// 2,400 fence was crossed unannounced once and the outside nodes left at ≈2,241; announce this one.
 pub const PALW_RC_MODEL_LEG_V2_FENCE_DAA: u64 = 3_500;
-/// **testnet-11's SECOND flag day for the 2026-09-11 pre-mainnet audit fixes** (`palw_audit_2026_09_11`,
-/// and the audit's dense-court fences `palw_fused_dissectable` / `palw_attn_anchored_root` and
-/// share-census fence `palw_share_growth_final` ride the same height). A live chain gets the fixes
-/// at a height, not a re-genesis (ADR-0083 path (a)).
+/// **testnet-11's SECOND flag day for the 2026-09-11 pre-mainnet audit fixes** (`palw_audit_2026_09_11`).
+/// A live chain gets the fixes at a height, not a re-genesis (ADR-0083 path (a)). Only this fence
+/// arms on testnet-11; the audit's share-census fence (`palw_share_growth_final`, B-2/ADR-0107) and
+/// dense-court fences (`palw_fused_dissectable` / `palw_attn_anchored_root`, AC-D8) are mainnet-card
+/// corrections and stay dormant on testnet-11 until the operator decides otherwise.
 ///
 /// **It MUST be a height no other schedule entry uses, and NOT 3,500.** ADR-0114's owner-leg flag
 /// day already schedules 3,500 (fleet fingerprint `02c7282b`, schedule id `8934a9b1`,
@@ -10846,12 +10847,14 @@ pub fn palw_rc_base_params() -> Params {
     params.palw_model_lines = Some(ForkActivation::new(PALW_RC_DA_COURT_FENCE_DAA));
     params.palw_model_benefits = Some(ForkActivation::new(PALW_RC_MODEL_BENEFITS_FENCE_DAA));
     params.palw_model_leg_v2 = Some(ForkActivation::new(PALW_RC_MODEL_LEG_V2_FENCE_DAA));
-    // **The 2026-09-11 audit flag day.** The audit fixes, and the dense-court and share-census
-    // fences that carry audit corrections, all activate together at one height on testnet-11.
+    // **The 2026-09-11 audit flag day.** The audit's state-transition and acceptance-filter fixes
+    // (A-1, A-2, B-5, AC-SLOT, and the deep court/panel findings) activate together on testnet-11
+    // at one height, behind this ONE fence. The share-census fence (`palw_share_growth_final`,
+    // B-2/ADR-0107) and the dense-court fences (`palw_fused_dissectable` / `palw_attn_anchored_root`,
+    // AC-D8) are deliberately NOT armed here: they are mainnet-card corrections, dormant on
+    // testnet-11 "until a flag day says otherwise" (`the_share_growth_final_fence_is_dormant_everywhere`,
+    // and the ADR-0107 note that the merged-payout question is still the operator's to make).
     params.palw_audit_2026_09_11 = Some(ForkActivation::new(PALW_RC_AUDIT_FENCE_DAA));
-    params.palw_share_growth_final = Some(ForkActivation::new(PALW_RC_AUDIT_FENCE_DAA));
-    params.palw_fused_dissectable = Some(ForkActivation::new(PALW_RC_AUDIT_FENCE_DAA));
-    params.palw_attn_anchored_root = Some(ForkActivation::new(PALW_RC_AUDIT_FENCE_DAA));
     params.palw_model_evm = Some(ForkActivation::new(PALW_RC_DA_COURT_FENCE_DAA));
     params.palw_court_ladder = Some(ForkActivation::new(PALW_RC_COURT_LADDER_FENCE_DAA));
     // **The EVM lane is ON from DAA 0, inherited from `TESTNET_PARAMS` and kept deliberately.**
@@ -13628,6 +13631,8 @@ mod consensus_params_id_tests {
         previous.palw_model_evm = None;
         // ADR-0114's fence (3500) was scheduled five flag days later.
         previous.palw_model_leg_v2 = None;
+        // The pre-mainnet audit's fence (4000) was scheduled later still.
+        previous.palw_audit_2026_09_11 = None;
         // Scheduled on the same flag day by the 2026-09-06 audit's H-4 (ADR-0084 U-08), so the
         // build the fleet is running does not carry it either.
         previous.palw_court_ladder = None;
@@ -15115,7 +15120,16 @@ mod consensus_params_id_tests {
                 // without it peers until 3500 (`the_owner_leg_flag_day_keeps_every_current_node_until_3500`);
                 // past 3500 every node must be on this build. Previous (every build through
                 // e458683e): ecbdbc2222efcc2d32493f2349e7c17f983611697a5d10ffc7ae90458bac8ee5.
-                "02c7282b7541011344eabb1ce6cbe6544987e7b6a7fc132413fbfff0a6a37cfd",
+                // **Re-pinned again 2026-09-11 for the SECOND flag day** (the pre-mainnet audit,
+                // `PALW_RC_AUDIT_FENCE_DAA` = 4,000): `palw_audit_2026_09_11` arms at 4,000, adding
+                // one schedule entry (1150/1900/2150/2400/3500/4000/2125000). Only THIS fence arms on
+                // testnet-11 — the audit's share-census fence (`palw_share_growth_final`) and
+                // dense-court fences (`palw_fused_dissectable` / `palw_attn_anchored_root`) are
+                // mainnet-card corrections and stay dormant here. Same rolling-restart contract as
+                // 3,500: identity unmoved, the fork-id gate keeps builds with and without the fence
+                // peers until 4,000, and every node must carry it past 4,000. Previous (ADR-0114's
+                // owner-leg build): 02c7282b7541011344eabb1ce6cbe6544987e7b6a7fc132413fbfff0a6a37cfd.
+                "09efd285a32f31c883edc5b9b869892b15895bf1194593c067556c94cf8fc694",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -15907,6 +15921,9 @@ mod consensus_params_id_tests {
         let expected: std::collections::BTreeSet<&str> = [
             "palw_attempt_header_pins",
             "palw_attempt_work",
+            // The 2026-09-11 pre-mainnet audit's fence: a card arms it from genesis (correct there),
+            // testnet-11 schedules it at PALW_RC_AUDIT_FENCE_DAA.
+            "palw_audit_2026_09_11",
             "palw_capability_bound",
             "palw_certification_rent",
             "palw_chunk_cap_charge",
@@ -16620,6 +16637,7 @@ mod consensus_params_id_tests {
                 PALW_RC_COURT_LADDER_FENCE_DAA,
                 PALW_RC_MODEL_BENEFITS_FENCE_DAA,
                 PALW_RC_MODEL_LEG_V2_FENCE_DAA,
+                PALW_RC_AUDIT_FENCE_DAA,
             ],
             "…and a schedule lists every scheduled gate fence's height"
         );
