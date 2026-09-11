@@ -187,10 +187,15 @@ fn bind_tokenizer(
     drop(artifact_bytes);
     let (bytes, commitment, before, after) = match outcome {
         TokenizerBindOutcomeV1::AlreadyBound { commitment, artifact_digest } => {
-            println!("already bound: {} declares tokenizer {commitment} (artifact digest {artifact_digest}); nothing written", input.display());
+            println!(
+                "already bound: {} declares tokenizer {commitment} (artifact digest {artifact_digest}); nothing written",
+                input.display()
+            );
             return Ok(());
         }
-        TokenizerBindOutcomeV1::Bound { bytes, commitment, digest_before, digest_after } => (bytes, commitment, digest_before, digest_after),
+        TokenizerBindOutcomeV1::Bound { bytes, commitment, digest_before, digest_after } => {
+            (bytes, commitment, digest_before, digest_after)
+        }
     };
     let tmp = out.with_extension("tmp");
     std::fs::write(&tmp, &bytes).map_err(|e| format!("{}: {e}", tmp.display()))?;
@@ -210,14 +215,20 @@ fn bind_tokenizer(
                 println!("  {model}: registered root {a}  (unchanged — this row registers the inventory root)");
                 kept.push(model.clone());
             } else {
-                println!("  {model}: registered root {a} → {b}  (MOVED — this row registers the artifact digest; for it this is a new artifact)");
+                println!(
+                    "  {model}: registered root {a} → {b}  (MOVED — this row registers the artifact digest; for it this is a new artifact)"
+                );
                 moved.push(model.clone());
             }
         }
     }
     let refusal = match wanted {
-        Some(model) if moved.iter().any(|m| m == model) => Some(format!("binding moved the registered root of {model}, the class named by --model-id")),
-        Some(model) if !kept.iter().any(|m| m == model) => Some(format!("{model} does not pair with this artifact — run `palw-class inspect`")),
+        Some(model) if moved.iter().any(|m| m == model) => {
+            Some(format!("binding moved the registered root of {model}, the class named by --model-id"))
+        }
+        Some(model) if !kept.iter().any(|m| m == model) => {
+            Some(format!("{model} does not pair with this artifact — run `palw-class inspect`"))
+        }
         None if kept.is_empty() => Some("binding moved the registered root of every class this artifact pairs with".to_string()),
         _ => None,
     };
@@ -424,7 +435,7 @@ fn held_measurement(loaded: &misaka_palw_sdk::PalwLoadedArtifactV1, name: Option
         // artifact by name on exactly that.
         let manifest = PalwModelManifestV1::from_hybrid_token_lift(name.unwrap_or_else(|| loaded.summary.clone()), &g, None);
         let profile = manifest.profile(MEASURE_CONTEXTS[0]).map_err(|e| format!("the hybrid manifest builds no profile: {e:?}"))?;
-        // **ADR-0103: streamed, not materialized.** Each row is checked, hashed into the root and
+        // **ADR-0106: streamed, not materialized.** Each row is checked, hashed into the root and
         // dropped where it is read; what is kept is one entry per tensor (its rows' bytes summed —
         // placement reads a row's tensor, layer and length only). So measuring a 33 GiB artifact
         // holds one read block, not the artifact: the same root and bytes as the materializing

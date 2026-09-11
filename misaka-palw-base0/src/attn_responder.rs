@@ -90,7 +90,8 @@ pub fn base0_attn_site_evidence_v1(
             .iter()
             .position(|o| o.tensor_name == *name && o.layer == *layer && o.row_start == 0)
             .ok_or_else(|| format!("the inventory holds no row {name} at layer {layer:?}"))?;
-        let opening = open_artifact_leaf_v1(operands, index as u32).ok_or_else(|| format!("the inventory row {name} does not open"))?;
+        let opening =
+            open_artifact_leaf_v1(operands, index as u32).ok_or_else(|| format!("the inventory row {name} does not open"))?;
         operand_openings.push(opening);
     }
     let proven = PalwProvenOperandsV1::from_openings_v1(&operand_openings, artifact_root).map_err(|e| e.to_string())?;
@@ -122,8 +123,9 @@ pub fn base0_attn_site_evidence_v1(
             let before = tiles.leaves.get(..narrowed as usize).ok_or_else(|| format!("the honest rows end before leaf {narrowed}"))?;
             let mut prefix = before.to_vec();
             prefix.push(accused_out_tile.opening.leaf_hash);
-            let tree = PalwStepPrefixTreeV1::build_capped_v1(binding.step_leaf_count, &prefix, &accused_out_tile.opening, step_ladder_cap)
-                .map_err(|e| format!("the honest rows before the disputed leaf are not the accused's: {e}"))?;
+            let tree =
+                PalwStepPrefixTreeV1::build_capped_v1(binding.step_leaf_count, &prefix, &accused_out_tile.opening, step_ladder_cap)
+                    .map_err(|e| format!("the honest rows before the disputed leaf are not the accused's: {e}"))?;
             if tree.root() != binding.step_merkle_root {
                 return Err(
                     "the honest rows before the disputed leaf and the accused's opened tile do not root to the accused's binding \
@@ -140,7 +142,10 @@ pub fn base0_attn_site_evidence_v1(
                 let leaf = by_index.get(&index).ok_or_else(|| format!("the capture holds no committed row at leaf {index}"))?;
                 let leaf_hash = *tiles.leaves.get(index as usize).ok_or_else(|| format!("leaf {index} is outside the capture"))?;
                 let siblings = tree.path_v1(index as usize).map_err(|e| format!("{e:?}"))?;
-                Ok(PalwAttnRowOpeningV1 { leaf: (*leaf).clone(), opening: PalwStepOpeningV1 { leaf_index: index, leaf_hash, siblings } })
+                Ok(PalwAttnRowOpeningV1 {
+                    leaf: (*leaf).clone(),
+                    opening: PalwStepOpeningV1 { leaf_index: index, leaf_hash, siblings },
+                })
             }
             Tree::Prefix(tree, accused_out_tile) => {
                 if index == narrowed {
@@ -171,7 +176,9 @@ pub fn base0_attn_site_evidence_v1(
     let q_row = lanes_of(&query.leaf);
     let qh = q_row
         .get(s.query_lane_offset..s.query_lane_offset + s.d_head)
-        .ok_or_else(|| format!("the query row holds {} lanes and the head's slice ends at {}", q_row.len(), s.query_lane_offset + s.d_head))?
+        .ok_or_else(|| {
+            format!("the query row holds {} lanes and the head's slice ends at {}", q_row.len(), s.query_lane_offset + s.d_head)
+        })?
         .to_vec();
 
     // The history: every K and V row the site reads, as the cache writers committed them. A
@@ -229,8 +236,11 @@ pub fn base0_attn_site_evidence_v1(
                 Some(kept) if !kept.is_empty() => kept.clone(),
                 _ => anchor_chunks(covered)?,
             };
-            let chunk_hashes: Vec<Hash64> =
-                chunks.iter().enumerate().map(|(n, bytes)| state_chunk_leaf_hash_v1(&binding.state_chunk_map_id, n as u32, bytes)).collect();
+            let chunk_hashes: Vec<Hash64> = chunks
+                .iter()
+                .enumerate()
+                .map(|(n, bytes)| state_chunk_leaf_hash_v1(&binding.state_chunk_map_id, n as u32, bytes))
+                .collect();
             if state_chunks_root_v1(&chunk_hashes).ok() != Some(leaves[i].state_chunks_root) {
                 return Err(format!("the anchor's state at counter {covered} does not root to the committed checkpoint"));
             }
@@ -245,14 +255,5 @@ pub fn base0_attn_site_evidence_v1(
         }
     };
 
-    Ok(PalwAttnSiteEvidenceV1 {
-        narrowed,
-        binding: binding.clone(),
-        out_tile,
-        query,
-        operand_openings,
-        inputs,
-        anchor,
-        cache_rows,
-    })
+    Ok(PalwAttnSiteEvidenceV1 { narrowed, binding: binding.clone(), out_tile, query, operand_openings, inputs, anchor, cache_rows })
 }

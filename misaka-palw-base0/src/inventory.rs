@@ -45,9 +45,9 @@ use kaspa_consensus_core::palw_artifact::{
     PalwArtifactInventoryDigestV1, PalwArtifactInventoryStreamV1, PalwArtifactInventorySummaryV1, PalwArtifactInventoryV1,
     PalwArtifactOperandV1, PalwArtifactRowDigestV1, PalwInventoryError, artifact_leaf_parts_v1,
 };
-use kaspa_consensus_core::palw_shard_plan_v1::PalwInventoryRowMetaV1;
 use kaspa_consensus_core::palw_base0_ops::ScaleParams;
 use kaspa_consensus_core::palw_base0_profile::{PalwBase0GeometryV1, base0_tensor_names_v1};
+use kaspa_consensus_core::palw_shard_plan_v1::PalwInventoryRowMetaV1;
 
 use crate::artifact::{ArtifactError, Base0ArtifactV1};
 use crate::operands::{BASE0_LAYER_PREFIX, Base0OperandV1, OperandError, base0_resolve_operand_v1};
@@ -478,7 +478,7 @@ pub fn qwen36_registers_inventory_root_v1(profile: &kaspa_consensus_core::palw_s
 ///
 /// The rows are [`qwen36_visit_inventory_rows_v1`]'s, each one's bytes kept. The same emitter with
 /// a sink that keeps each row's LEAF is [`qwen36_inventory_digest_v1`], and with one that keeps
-/// nothing per row, [`qwen36_inventory_summary_v1`] — one layout, three sinks (ADR-0103), so the
+/// nothing per row, [`qwen36_inventory_summary_v1`] — one layout, three sinks (ADR-0106), so the
 /// materialized and the streamed inventory cannot be two descriptions.
 pub fn qwen36_inventory_v1(
     artifact: &crate::qwen36::Qwen36ArtifactV1,
@@ -492,7 +492,7 @@ pub fn qwen36_inventory_v1(
     PalwArtifactInventoryV1::new(rows).map_err(InventoryBuildError::NotCanonical)
 }
 
-/// **The same inventory as LEAVES** (ADR-0103): every row [`qwen36_inventory_v1`] holds, hashed
+/// **The same inventory as LEAVES** (ADR-0106): every row [`qwen36_inventory_v1`] holds, hashed
 /// where it was read and dropped — a coordinate, a length and a leaf per row. What an opening is
 /// built from without holding the bytes it opens ([`PalwArtifactInventoryDigestV1::opening_v1`]).
 pub fn qwen36_inventory_digest_v1(
@@ -513,7 +513,7 @@ pub fn qwen36_inventory_digest_v1(
     PalwArtifactInventoryDigestV1::new(rows).map_err(InventoryBuildError::NotCanonical)
 }
 
-/// **Root, leaf count and bytes, with nothing kept per row** (ADR-0103): the rows arrive in
+/// **Root, leaf count and bytes, with nothing kept per row** (ADR-0106): the rows arrive in
 /// canonical order, so each is checked, hashed into the Merkle frontier and dropped. Holds one read
 /// block and the frontier's `log₂ n` peaks, whatever the artifact's size.
 pub fn qwen36_inventory_summary_v1(
@@ -557,7 +557,7 @@ fn q36_missing(name: &str) -> InventoryBuildError {
     InventoryBuildError::Operand(OperandError::UnknownTensor { name: name.to_string() })
 }
 
-/// **A parameter table the way the engine READS it, never widened into a copy** (ADR-0103): a table
+/// **A parameter table the way the engine READS it, never widened into a copy** (ADR-0106): a table
 /// as wide as its reader rides verbatim, a singleton answers every lane, and a head-tiled table
 /// repeats its period — the three rules the builder once applied by materializing the table.
 struct Q36ParamViewV1 {
@@ -632,7 +632,7 @@ struct Q36PlannedTensorV1 {
     rows: Q36RowsV1,
 }
 
-/// **The emitter's only state: one scratch buffer and the size of one read** (ADR-0103). Every
+/// **The emitter's only state: one scratch buffer and the size of one read** (ADR-0106). Every
 /// row it hands over is a slice of `buf` (or of a planned row), so what the emitter holds is one
 /// read block or one row — never a tensor, whatever the artifact's size.
 struct Q36RowReaderV1<'a> {
@@ -722,7 +722,7 @@ impl Q36RowReaderV1<'_> {
     }
 }
 
-/// **ADR-0103: the ONE place a Qwen3.6-family inventory's rows are laid out**, handed to `sink` in
+/// **ADR-0106: the ONE place a Qwen3.6-family inventory's rows are laid out**, handed to `sink` in
 /// CANONICAL order — by `(tensor, layer, byte offset)`, each coordinate once — as they are read.
 ///
 /// Two passes over the graph, one over the bytes. The plan walks the profile slot by slot and
@@ -855,7 +855,8 @@ fn qwen36_inventory_plan_v1(
     // The engine's per-head read (`rows[vh.min(len - 1)]`), one value head at a time.
     let per_head = |rows: &[A16QuantParams], vh: usize| -> A16QuantParams { rows[vh.min(rows.len().saturating_sub(1))] };
     let mut plan: Vec<Q36PlannedTensorV1> = Vec::new();
-    let mut add = |name: &str, layer: Option<u16>, rows: Q36RowsV1| plan.push(Q36PlannedTensorV1 { name: name.to_string(), layer, rows });
+    let mut add =
+        |name: &str, layer: Option<u16>, rows: Q36RowsV1| plan.push(Q36PlannedTensorV1 { name: name.to_string(), layer, rows });
     // A parameter tensor read through a view: checked now, read when its turn comes.
     let params = |stored: String, rule: Q36ViewRuleV1, chunk: usize, what: &str| -> Result<Q36RowsV1, InventoryBuildError> {
         q36_view(param_rows(&stored)?, rule, what)?;
@@ -1006,7 +1007,9 @@ fn qwen36_inventory_plan_v1(
                         None
                     };
                     let rule = match head_tiled {
-                        Some(heads) if heads > 0 && width.is_multiple_of(heads) => Q36ViewRuleV1::HeadTiled { period: width / heads, width },
+                        Some(heads) if heads > 0 && width.is_multiple_of(heads) => {
+                            Q36ViewRuleV1::HeadTiled { period: width / heads, width }
+                        }
                         _ => Q36ViewRuleV1::Lanes { width },
                     };
                     add(name, layer, params(sub(name, layer), rule, tile, name)?);
@@ -1026,7 +1029,11 @@ fn qwen36_inventory_plan_v1(
                 return Err(missing(&format!("{name}: the wide-norm row is not a whole number of heads")));
             }
             let store = param_rows(&sub(name, layer))?;
-            add(name, layer, Q36RowsV1::Small((0..width / hd).map(|vh| ((vh * w) as u32, per_head(&store, vh).to_wire().to_vec())).collect()));
+            add(
+                name,
+                layer,
+                Q36RowsV1::Small((0..width / hd).map(|vh| ((vh * w) as u32, per_head(&store, vh).to_wire().to_vec())).collect()),
+            );
         } else if kidv == k_mul_wide {
             if name.ends_with(".ffn_expert_gated.a16") {
                 let l = layer.ok_or_else(|| missing(name))?;
@@ -1036,7 +1043,8 @@ fn qwen36_inventory_plan_v1(
                 let experts = expert_count(l, "_gate.weight");
                 for e in 0..experts {
                     for stage in ["_silu.a16", "_gated.a16"] {
-                        let rows = params(format!("blk.{l}.ffn_expert.{e}{stage}"), Q36ViewRuleV1::Lanes { width: block_rows }, chunk, name)?;
+                        let rows =
+                            params(format!("blk.{l}.ffn_expert.{e}{stage}"), Q36ViewRuleV1::Lanes { width: block_rows }, chunk, name)?;
                         add(&format!("{prefix}ffn_expert.{e}{stage}"), layer, rows);
                     }
                 }
@@ -1453,12 +1461,13 @@ mod graph_v5 {
 }
 
 #[cfg(test)]
-pub(crate) mod adr0103_cases {
-    //! The fixture cases ADR-0103's equality is held on — each an artifact and a profile the
+pub(crate) mod adr0106_cases {
+    //! The fixture cases ADR-0106's equality is held on — each an artifact and a profile the
     //! Qwen3.6 builder serves (or refuses by name).
     use kaspa_consensus_core::palw_base0_a16::A16QuantParams;
     use kaspa_consensus_core::palw_qwen36_profile::{
-        PalwQwen36GeometryV1, qwen36_artifact_row_profile_v6, qwen36_profile_v1, qwen36_profile_v2, qwen36_profile_v5, qwen36_profile_v6,
+        PalwQwen36GeometryV1, qwen36_artifact_row_profile_v6, qwen36_profile_v1, qwen36_profile_v2, qwen36_profile_v5,
+        qwen36_profile_v6,
     };
     use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
 
@@ -1469,7 +1478,8 @@ pub(crate) mod adr0103_cases {
         let mut out = Vec::new();
         let base = std::sync::Arc::new(crate::qwen36::test_fixture(4, 8));
         let g = crate::qwen36_plan::fixture_geometry_of(&base.shape, 4);
-        let graphs: [(&str, fn(PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, _>); 5] = [
+        type Graph = fn(PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, kaspa_consensus_core::palw_step::PalwStepError>;
+        let graphs: [(&str, Graph); 5] = [
             ("v1", qwen36_profile_v1),
             ("v2", qwen36_profile_v2),
             ("v5", qwen36_profile_v5),
@@ -1528,7 +1538,7 @@ pub(crate) mod adr0103_cases {
         }
     }
 
-    /// **ADR-0103's acceptance, pinned: the emitter reproduces the materializing builder's record.**
+    /// **ADR-0106's acceptance, pinned: the emitter reproduces the materializing builder's record.**
     /// Every line below was printed by the builder BEFORE the emitter existed (the tree at
     /// `252b7b3b`), and every refusal is the same refusal by name — a root the refactor moved would
     /// be a defect, never a migration.
@@ -1554,7 +1564,7 @@ pub(crate) mod adr0103_cases {
         assert_eq!(lines, RECORD, "the case list and every line are the record's");
     }
 
-    /// **The digest IS the inventory, on every case and at every read size** (ADR-0103 W2–W4): the
+    /// **The digest IS the inventory, on every case and at every read size** (ADR-0106 W2–W4): the
     /// same rows in the same order (each the materialized row digested), the same summary, the same
     /// refusal; read sizes down to one byte change nothing, because a block always starts on a row;
     /// and an opening built from the digest plus the row's own bytes is the materialized opening
@@ -1590,16 +1600,21 @@ pub(crate) mod adr0103_cases {
             );
             for block in [1usize, 7, 64, 4096] {
                 let mut rows = Vec::new();
-                crate::inventory::qwen36_visit_inventory_rows_in_blocks_v1(&artifact, &profile, block, &mut |name, layer, row_start, bytes| {
-                    rows.push(PalwArtifactRowDigestV1 {
-                        tensor_name: name.to_string(),
-                        layer,
-                        row_start,
-                        byte_len: bytes.len() as u32,
-                        leaf_hash: kaspa_consensus_core::palw_artifact::artifact_leaf_parts_v1(name, layer, row_start, bytes),
-                    });
-                    Ok(())
-                })
+                crate::inventory::qwen36_visit_inventory_rows_in_blocks_v1(
+                    &artifact,
+                    &profile,
+                    block,
+                    &mut |name, layer, row_start, bytes| {
+                        rows.push(PalwArtifactRowDigestV1 {
+                            tensor_name: name.to_string(),
+                            layer,
+                            row_start,
+                            byte_len: bytes.len() as u32,
+                            leaf_hash: kaspa_consensus_core::palw_artifact::artifact_leaf_parts_v1(name, layer, row_start, bytes),
+                        });
+                        Ok(())
+                    },
+                )
                 .expect("the same artifact serves at every read size");
                 assert_eq!(rows, expected, "{case}: a {block}-byte read yields the same rows, already canonical");
             }
@@ -1627,7 +1642,11 @@ pub(crate) mod adr0103_cases {
     fn a_tensor_planned_twice_keeps_the_first_planned_row_of_each_offset() {
         use crate::inventory::{Q36PlannedTensorV1, Q36RowsV1};
         let artifact = crate::qwen36::test_fixture(4, 8);
-        let small = |name: &str, rows: Vec<(u32, Vec<u8>)>| Q36PlannedTensorV1 { name: name.to_string(), layer: None, rows: Q36RowsV1::Small(rows) };
+        let small = |name: &str, rows: Vec<(u32, Vec<u8>)>| Q36PlannedTensorV1 {
+            name: name.to_string(),
+            layer: None,
+            rows: Q36RowsV1::Small(rows),
+        };
         let plan = vec![
             small("b", vec![(0, vec![1]), (1, vec![2])]),
             small("a", vec![(0, vec![7])]),
@@ -1663,7 +1682,11 @@ pub(crate) mod adr0103_cases {
                     }
                 }
             }
-            assert_eq!(twice, ["blk.{layer}.attn_rope.a16", "blk.{layer}.attn_rope.a16.clamp"], "{case}: the one full-attention layer's rotation");
+            assert_eq!(
+                twice,
+                ["blk.{layer}.attn_rope.a16", "blk.{layer}.attn_rope.a16.clamp"],
+                "{case}: the one full-attention layer's rotation"
+            );
         }
     }
 
@@ -1678,11 +1701,11 @@ pub(crate) mod adr0103_cases {
             if !(case.starts_with("per-token-lift/v6") || case.starts_with("group-exponents/")) {
                 continue;
             }
-            let path = std::env::temp_dir().join(format!("misaka-adr0103-{}-{}.palwq36", case.replace('/', "-"), std::process::id()));
+            let path = std::env::temp_dir().join(format!("misaka-adr0106-{}-{}.palwq36", case.replace('/', "-"), std::process::id()));
             let plan: Vec<(String, usize)> =
                 owned.tensor_names().iter().map(|n| (n.to_string(), owned.tensor(n).expect("present").len())).collect();
-            let mut writer =
-                crate::qwen36::Qwen36Writer::create(&path, &owned.shape, &owned.rope, owned.params_map(), plan.clone()).expect("created");
+            let mut writer = crate::qwen36::Qwen36Writer::create(&path, &owned.shape, &owned.rope, owned.params_map(), plan.clone())
+                .expect("created");
             for (name, _) in &plan {
                 writer.push(name, owned.tensor(name).expect("present")).expect("appended");
             }

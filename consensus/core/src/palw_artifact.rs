@@ -63,7 +63,7 @@ pub fn artifact_leaf_v1(operand: &PalwArtifactOperandV1) -> Hash64 {
     artifact_leaf_parts_v1(&operand.tensor_name, operand.layer, operand.row_start, &operand.bytes)
 }
 
-/// **The same leaf over BORROWED parts** (ADR-0103) — so a row can be hashed where it is read and
+/// **The same leaf over BORROWED parts** (ADR-0106) — so a row can be hashed where it is read and
 /// discarded, instead of being copied into an owned operand first. [`artifact_leaf_v1`] is this.
 pub fn artifact_leaf_parts_v1(tensor_name: &str, layer: Option<u16>, row_start: u32, bytes: &[u8]) -> Hash64 {
     let mut hasher = PalwArtifactLeafHasherV1::new(tensor_name, layer, row_start, bytes.len() as u32);
@@ -71,7 +71,7 @@ pub fn artifact_leaf_parts_v1(tensor_name: &str, layer: Option<u16>, row_start: 
     hasher.finish().expect("the length was the slice's own")
 }
 
-/// **A leaf hashed as a STREAM** (ADR-0103): the position and the length first — the preimage
+/// **A leaf hashed as a STREAM** (ADR-0106): the position and the length first — the preimage
 /// carries the length before the bytes — then the bytes in any chunking, so a row larger than any
 /// buffer is still one leaf. [`Self::finish`] refuses a stream whose absorbed length is not the
 /// declared one, which is the only way a streamed leaf could differ from [`artifact_leaf_parts_v1`].
@@ -146,7 +146,7 @@ pub fn artifact_root_v1(leaves: &[Hash64]) -> Option<Hash64> {
     Some(level[0])
 }
 
-/// **The same root as a STREAM** (ADR-0103): one peak per level, a leaf pushed as a binary carry,
+/// **The same root as a STREAM** (ADR-0106): one peak per level, a leaf pushed as a binary carry,
 /// and the peaks folded from the LOWEST level up at the end — which is exactly what promotion does,
 /// because an unpaired node is carried up untouched until something above pairs with it. No leaf
 /// vector and no level copy; pinned against [`artifact_root_v1`] for every size.
@@ -619,7 +619,7 @@ pub struct PalwArtifactInventoryV1 {
     operands: Vec<PalwArtifactOperandV1>,
 }
 
-/// **The layout rules, one row at a time — their one spelling** (ADR-0103). A row is its
+/// **The layout rules, one row at a time — their one spelling** (ADR-0106). A row is its
 /// `(tensor, layer, byte offset, byte length)`; the held inventory, the digest one and a stream are
 /// all checked by this walk, so a streamed inventory is refused by the same rule, at the same row,
 /// with the same error as the held one — "the stream is the same inventory" cannot drift into "the
@@ -653,7 +653,8 @@ impl PalwInventoryLayoutCheckerV1 {
             // Within one tensor the rows must tile it: the next row starts exactly where the
             // previous ended. Across tensors the previous end says nothing.
             if (p_name.as_str(), *p_layer) == (name, layer) {
-                let end = p_start.checked_add(*p_len).ok_or(PalwInventoryError::GapOrOverlap { tensor: name.to_string(), at: *p_start })?;
+                let end =
+                    p_start.checked_add(*p_len).ok_or(PalwInventoryError::GapOrOverlap { tensor: name.to_string(), at: *p_start })?;
                 if end != start {
                     return Err(PalwInventoryError::GapOrOverlap { tensor: name.to_string(), at: end });
                 }
@@ -709,7 +710,7 @@ impl PalwArtifactInventoryV1 {
         artifact_root_v1(&leaves).expect("a non-empty inventory has a root")
     }
 
-    /// The three numbers a streamed build is held to (ADR-0103), computed the materialized way.
+    /// The three numbers a streamed build is held to (ADR-0106), computed the materialized way.
     pub fn summary(&self) -> PalwArtifactInventorySummaryV1 {
         PalwArtifactInventorySummaryV1 {
             root: self.root(),
@@ -746,7 +747,7 @@ impl PalwArtifactInventoryV1 {
     }
 }
 
-/// **One inventory row without its bytes** (ADR-0103): the coordinate, the length and the leaf the
+/// **One inventory row without its bytes** (ADR-0106): the coordinate, the length and the leaf the
 /// bytes hashed to — what a measurement, a root and a placement need, and all a stream keeps.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwArtifactRowDigestV1 {
@@ -770,7 +771,7 @@ impl PalwArtifactRowDigestV1 {
     }
 }
 
-/// **What a measurement and a registration read of an inventory** (ADR-0103): its root, its leaf
+/// **What a measurement and a registration read of an inventory** (ADR-0106): its root, its leaf
 /// count and the bytes its rows cover — the three numbers the materialized and the streamed build
 /// must agree on byte for byte (a root that moves between them is a defect, never a migration).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -780,7 +781,7 @@ pub struct PalwArtifactInventorySummaryV1 {
     pub artifact_bytes: u64,
 }
 
-/// **An inventory consumed as a stream** (ADR-0103): rows arriving in canonical order, each checked
+/// **An inventory consumed as a stream** (ADR-0106): rows arriving in canonical order, each checked
 /// by the one layout rule, hashed into the frontier and counted — the summary, with nothing kept
 /// per row. This is what makes a whole-artifact measurement hold one read, not the artifact.
 #[derive(Clone, Debug, Default)]
@@ -812,7 +813,7 @@ impl PalwArtifactInventoryStreamV1 {
     }
 }
 
-/// **The canonical layout, as leaves** (ADR-0103): the same rows [`PalwArtifactInventoryV1`] holds,
+/// **The canonical layout, as leaves** (ADR-0106): the same rows [`PalwArtifactInventoryV1`] holds,
 /// in the same order, under the same checks — with each row's bytes hashed where they were read and
 /// never kept. Its root IS the materialized inventory's; an opening is built from it by handing back
 /// the one row's bytes ([`Self::opening_v1`]), which are checked against the leaf, so the court's
@@ -868,7 +869,9 @@ impl PalwArtifactInventoryDigestV1 {
     /// bytes that are not that row's.
     pub fn opening_v1(&self, index: u32, bytes: Vec<u8>) -> Option<PalwArtifactOpeningV1> {
         let row = self.rows.get(index as usize)?;
-        if row.byte_len as usize != bytes.len() || artifact_leaf_parts_v1(&row.tensor_name, row.layer, row.row_start, &bytes) != row.leaf_hash {
+        if row.byte_len as usize != bytes.len()
+            || artifact_leaf_parts_v1(&row.tensor_name, row.layer, row.row_start, &bytes) != row.leaf_hash
+        {
             return None;
         }
         let mut level: Vec<Hash64> = self.rows.iter().map(|r| r.leaf_hash).collect();
@@ -918,7 +921,7 @@ mod streaming_tests {
         PalwArtifactOperandV1 { tensor_name: name.to_string(), layer, row_start: start, bytes: bytes.to_vec() }
     }
 
-    /// **ADR-0103 W1: the parts leaf and the streamed leaf are the operand leaf**, and a stream
+    /// **ADR-0106 W1: the parts leaf and the streamed leaf are the operand leaf**, and a stream
     /// that absorbed a different length than it declared is refused rather than hashed.
     #[test]
     fn the_parts_leaf_and_the_streamed_leaf_are_the_operand_leaf() {
@@ -937,7 +940,7 @@ mod streaming_tests {
         assert_eq!(short.finish(), Err((10, 3)));
     }
 
-    /// **ADR-0103 W7: the frontier's root is `artifact_root_v1`'s, at every size** — promotion at
+    /// **ADR-0106 W7: the frontier's root is `artifact_root_v1`'s, at every size** — promotion at
     /// every level is exercised by the sizes below 300 and a few past powers of two.
     #[test]
     fn the_frontier_root_is_the_promoting_root_at_every_size() {
@@ -953,7 +956,7 @@ mod streaming_tests {
         assert_eq!(frontier.leaf_count(), leaves.len() as u64);
     }
 
-    /// **ADR-0103 W2: the digest inventory is the materialized one** — the same checks refuse the
+    /// **ADR-0106 W2: the digest inventory is the materialized one** — the same checks refuse the
     /// same layouts, the root is the same root, and an opening from the digest plus the row's bytes
     /// is the materialized opening byte for byte (and bytes that are not the row's open nothing).
     #[test]
@@ -966,7 +969,8 @@ mod streaming_tests {
             op("z", None, 0, &[11]),
         ];
         let full = PalwArtifactInventoryV1::new(rows.clone()).expect("a canonical layout");
-        let digest = PalwArtifactInventoryDigestV1::new(rows.iter().map(PalwArtifactRowDigestV1::of).collect()).expect("the same layout");
+        let digest =
+            PalwArtifactInventoryDigestV1::new(rows.iter().map(PalwArtifactRowDigestV1::of).collect()).expect("the same layout");
         assert_eq!(digest.root(), full.root());
         assert_eq!(digest.leaf_count() as usize, full.operands().len());
         for (i, row) in rows.iter().enumerate() {

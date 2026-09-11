@@ -12547,9 +12547,7 @@ mod consensus_params_id_tests {
         never.palw_token_lift = Some(ForkActivation::never());
         never.validate_palw_v2().expect("Some(never()) is absence");
         // The kernel is adjudicable and outside the root the bundle commits to.
-        assert!(
-            crate::palw_step_refute::fenced_kernel_ids_v1().is_disjoint(&crate::palw_step_refute::catalogued_kernel_ids_v1())
-        );
+        assert!(crate::palw_step_refute::fenced_kernel_ids_v1().is_disjoint(&crate::palw_step_refute::catalogued_kernel_ids_v1()));
         // A genesis that registers a v6 row needs the fence from genesis.
         let v6 = crate::palw_qwen36_profile::qwen36_artifact_row_profile_v6(crate::palw_qwen36_profile::PalwQwen36GeometryV1 {
             n_ctx: 512,
@@ -12574,7 +12572,14 @@ mod consensus_params_id_tests {
         };
         carriage.profile = v6;
         let crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
-            class_id, artifact_root, slash_value_per_pwu, pwu_rule, initial_target, share_permille, activation_daa, ..
+            class_id,
+            artifact_root,
+            slash_value_per_pwu,
+            pwu_rule,
+            initial_target,
+            share_permille,
+            activation_daa,
+            ..
         } = template
         else {
             unreachable!()
@@ -12637,7 +12642,9 @@ mod consensus_params_id_tests {
             node.tile_len = 2 * two_heads.attn_head_dim;
         }
         let mut with_two_heads = from_genesis.clone();
-        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut with_two_heads.palw_consensus_mode else { unreachable!() };
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut with_two_heads.palw_consensus_mode else {
+            unreachable!()
+        };
         let template = bundle
             .genesis_objects
             .iter()
@@ -12650,7 +12657,14 @@ mod consensus_params_id_tests {
         };
         carriage.profile = two_heads;
         let crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
-            class_id, artifact_root, slash_value_per_pwu, pwu_rule, initial_target, share_permille, activation_daa, ..
+            class_id,
+            artifact_root,
+            slash_value_per_pwu,
+            pwu_rule,
+            initial_target,
+            share_permille,
+            activation_daa,
+            ..
         } = template
         else {
             unreachable!()

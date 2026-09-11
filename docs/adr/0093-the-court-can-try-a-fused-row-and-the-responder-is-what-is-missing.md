@@ -6,7 +6,10 @@
   kernels, drilled on real captures before anything relies on it (§7's condition). Step 5 is
   settled by a fact the design did not have: the exemption it would narrow was never armed on any
   preset, and is now pinned unarmed. Step 6 — the fleet upgrade that makes testnet-11's dense
-  graph-v5 producers defendable — is the operator's.
+  graph-v5 producers defendable — is the operator's. **Amended 2026-09-11 (§10):** Decision 6
+  (admission refuses an undissectable fused class past its own fence, `None` everywhere) and
+  Decision 7 (a forged FOLD is bottomed from the challenger's honest prefix and the root claim's
+  own tile — no row served by the accused) are built; §9's straddling finding is corrected.
 * Builds on: [0082](0082-the-close-is-flat-in-the-context.md) Decisions 2 and 3 (the k-ary history
   dissection and its arity), [0069](0069-e2e-adjudicability-is-the-price-of-weight.md)
   (adjudicability is the price of weight),
@@ -282,3 +285,70 @@ and the producer guard.
 * ~~The admission refusal for classes whose fused sites cannot be dissected~~ — §10, Decision 6.
 * Step 6.
 
+## 10. Amended 2026-09-11: Decisions 6 and 7
+
+**Decision 6 — admission refuses a fused class no dissection can try, past its own fence.**
+`Params::palw_fused_dissectable` (`None` on every preset; `Some`-only in the fingerprint, the fence
+schedule and the fork-id probe, so no shipped fingerprint moves). Past it,
+`verify_class_admission_v8` refuses a fused class whose output tile is not inside one head —
+`FusedTileStraddlesHeads { tile_len, d_head }`, the output half of
+`palw_fused_sites_are_dissectable_v1` (`palw_fused_output_tiles_are_one_heads_v1`), the predicate
+the backends' `supports_dissection` already reads, so the gate and the backend are one spelling. A
+genesis row is judged likewise when the fence is armed from genesis
+(`palw_genesis_holds_undissectable_fused_class_v1` in `validate_palw_v2`). It is a fence and not a
+fix because a live chain may already hold such a class. No shipped row fails it — the dense graph-v5
+row's fused tile is 8 lanes over 128, the hybrid graph-v5's 8 (2B, 35B-A3B) or 4 (27B) over 256 at
+every `n_ctx` probed, graph-v6's the head itself — so the class it exists for is a REGISTRANT's
+graph: the dense row with its fused tile widened to two heads, which the gate admitted before this
+fence and the court then refuses to dissect. Pinned both ways
+(`an_undissectable_fused_class_is_refused_by_its_fence_alone`,
+`the_dissectable_fused_fence_is_dormant_visible_when_armed_and_judges_genesis_from_genesis`).
+
+**Decision 7 — a forged fold is bottomed from the challenger's honest prefix and the root claim's
+own tile; the accused serves nothing.** The hole was worse than §9 said: at `Terminal` the move is
+a close the accused never files against itself, so the whole-session backstop ends an unclosed
+session on the CHALLENGER's side — a bottom the challenger cannot assemble acquits the forger. A
+served-interval bottom (ADR-0085's twin, as §9 guessed) would not close it, because a forger need
+not serve. What the challenger holds is enough without the accused:
+
+* the court narrowed to the FIRST leaf the challenger could not reproduce (its choice rule is the
+  first child its own execution does not reproduce), so every committed leaf before the disputed
+  one is a leaf the challenger's own re-execution computes;
+* the accused's root claim — which it must file, or its silence convicts — carries the committed
+  output tile at that leaf, opened against the accused's own root.
+
+`PalwStepPrefixTreeV1` rebuilds the accused's tree over `[0, i]` from exactly those two: nodes wholly
+inside the prefix from the prefix's leaves, the node just right of it at each level from the right
+siblings on `i`'s own path, every left sibling on that path compared with the prefix's node as it
+is built. Every row a bottom opens (the query row, the cache rows, the output tile) is at or before
+`i`, and the leaves after `i` — which a fold does not keep and a forger need not reveal — are never
+needed. The evidence refuses by name unless the rebuilt root IS the binding's. The checkpoint leg is
+the fold's own retained leaves (`base0_checkpoint_leg_of_retention_v1`, now the one spelling of
+"which retention a fold's leg has", shared with the interval lane's anchor). The trait verb takes the
+tile (`attn_site_evidence(…, accused_out_tile)`); the panel's close reads it off the chain
+(`attn_root_out_tiles_from_chain_v1` over `walk_accepted_lifecycle_objects_v1`: the accepted
+`CourtAttnRootClaimed` for the session, walking the selected chain's accepted lifecycle transactions
+down to the session's own opening height) and keeps only a tile whose opening proves against the
+claim's root at the narrowed leaf. Nothing on chain moves.
+
+Tests: `the_prefix_and_the_last_leafs_path_open_every_leaf_before_it_against_the_accused_root` and
+`a_prefix_that_is_not_the_committed_one_is_refused_or_roots_elsewhere` (every leaf count to 40,
+every `i`, every `j`, a forged suffix); `a_forged_fold_is_bottomed_from_the_honest_prefix_and_the_root_claims_tile`
+(dense tier: one forged execution retained both ways — the fold alone refused by name, the fold with
+the tile equal to the dense capture's evidence opening for opening, a tile that is not the accused's
+refused, the least lie convicted from the fold's evidence); the same equality on the hybrid tier
+inside its fused test; `the_walk_visits_what_the_chain_accepted_newest_first_and_stops_at_the_height`
+(the chain read on a mock chain); the production wiring pinned in the panel's source test.
+
+**Corrected.** §9 said the attempt lane (dense) was unaffected. It is for the drill's forgery (a
+committed tile altered, the execution itself honest) and not in general: the evidence reads the
+checkpoint leg from a re-execution, and a forger whose downstream execution follows its lie commits
+different checkpoint leaves after the disputed call — the re-execution's leg does not root to the
+binding, the evidence refuses by name, and the backstop acquits. A fold carries its checkpoint
+leaves (Decision 7 reads them); the dense retention (`Base0RetainedMaterialV1`) carries tiles, rows,
+ids and, under the per-position cadence, no chunks — no leaves. The fix has Decision 7's shape: the
+dense retention carries its checkpoint leaves (a material version `verify_material` checks against
+the binding's checkpoint root, so a producer cannot serve the capture without them), or the
+accused's anchor is filed on chain with its root claim. **Not built.**
+
+**Still not done:** the dense retention's checkpoint leaves (above); a live devnet drill; step 6.

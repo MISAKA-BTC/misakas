@@ -1003,9 +1003,7 @@ pub fn base0_fp_interval_opening_anchor_v1(opening_bytes: &[u8]) -> Option<(u32,
 ///
 /// `None` for bytes that are not this family's opening; it decodes and reads a header and spends
 /// no forward pass.
-pub fn base0_fp_interval_opening_job_context_v1(
-    opening_bytes: &[u8],
-) -> Option<kaspa_consensus_core::palw_v2::PalwJobContextV2> {
+pub fn base0_fp_interval_opening_job_context_v1(opening_bytes: &[u8]) -> Option<kaspa_consensus_core::palw_v2::PalwJobContextV2> {
     let any = base0_fp_interval_opening_decode_any_v1(opening_bytes).ok()?;
     Some(match &any {
         Base0FpIntervalOpeningAnyV1::WithHistory(o) => o.binding.job_context.clone(),
@@ -1664,8 +1662,8 @@ pub fn base0_checkpoint_operands_v1(
     // the only form such a class may serve anyway
     // ([`base0_fp_class_requires_flat_openings_v1`]).
     let per_position = palw_checkpoint_cadence_v1(&binding.shape_profile) == PalwCheckpointCadenceV1::PerPosition;
-    let checkpoints =
-        crate::legs::base0_checkpoint_leg_of_retention_v1(binding, chunks, leaves).map_err(|e| Base0FpIntervalError::Leg(format!("{e:?}")))?;
+    let checkpoints = crate::legs::base0_checkpoint_leg_of_retention_v1(binding, chunks, leaves)
+        .map_err(|e| Base0FpIntervalError::Leg(format!("{e:?}")))?;
     // The leg the chunks re-derive must be the one the CLAIM committed, checked before anything
     // resumes: resuming from unchecked state would let a producer that lied about a step hand over
     // a state consistent with the lie and watch the replay agree with it.

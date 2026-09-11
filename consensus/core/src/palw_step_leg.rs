@@ -498,7 +498,8 @@ impl PalwStepPrefixTreeV1 {
     /// The accused's opening of leaf `j ≤ i`, exactly as [`step_opening_v1`] over the accused's
     /// whole leaf vector would build it.
     pub fn opening_v1(&self, j: u64) -> Result<PalwStepOpeningV1, PalwStepLegError> {
-        let leaf_hash = *self.leaf_hashes.get(j as usize).ok_or(PalwStepLegError::LeafIndexOutOfRange { index: j, count: self.leaf_count })?;
+        let leaf_hash =
+            *self.leaf_hashes.get(j as usize).ok_or(PalwStepLegError::LeafIndexOutOfRange { index: j, count: self.leaf_count })?;
         let (mut at, mut width) = (j, self.leaf_count);
         let mut siblings = Vec::new();
         for (depth, level) in self.levels[..self.levels.len() - 1].iter().enumerate() {
@@ -2099,7 +2100,11 @@ mod tests {
             let tree = PalwStepMerkleTreeV1::build_capped_v1(&leaves, PALW_STEP_LEG_MAX_LEAVES).expect("builds");
             assert_eq!(tree.root(), step_merkle_root_v1(&leaves).expect("the rebuilt root"), "n = {n}");
             for i in 0..n {
-                assert_eq!(tree.path_v1(i).expect("a path"), step_merkle_path_v1(&leaves, i).expect("the rebuilt path"), "n = {n}, i = {i}");
+                assert_eq!(
+                    tree.path_v1(i).expect("a path"),
+                    step_merkle_path_v1(&leaves, i).expect("the rebuilt path"),
+                    "n = {n}, i = {i}"
+                );
             }
             assert!(tree.path_v1(n).is_err());
         }
@@ -3217,7 +3222,11 @@ mod prefix_tree_tests {
                     match PalwStepPrefixTreeV1::build_capped_v1(n, &ours, &last, PALW_STEP_LEG_MAX_LEAVES) {
                         Err(PalwStepLegError::PrefixIsNotTheCommittedOne { .. }) => {}
                         Err(other) => panic!("n {n}, i {i}, m {m}: refused for the wrong reason: {other}"),
-                        Ok(tree) => assert_ne!(tree.root(), root, "n {n}, i {i}, m {m}: a different prefix must not root to the accused's tree"),
+                        Ok(tree) => assert_ne!(
+                            tree.root(),
+                            root,
+                            "n {n}, i {i}, m {m}: a different prefix must not root to the accused's tree"
+                        ),
                     }
                 }
             }

@@ -1,4 +1,4 @@
-# ADR-0103 — An inventory is a stream of leaves, not a copy of the model
+# ADR-0106 — An inventory is a stream of leaves, not a copy of the model
 
 * Status: PROPOSED 2026-09-11 on `feat/adr-0099-sharded-seat`; **W1–W7 IMPLEMENTED the same day,
   consensus-inert** (§9): the leaf, its preimage, the tree, the layout rules and every opening are
@@ -192,8 +192,19 @@ its root is `artifact_root_v1`'s at every size (pinned for 1–300 leaves, aroun
 
 ## 9. Number hygiene and implementation record
 
-0103 is the next free number after ADR-0102 (whose §9 says so). Claimed on
-`feat/adr-0099-sharded-seat` on 2026-09-11. **The next free number is 0104.**
+Written as ADR-0103 on `feat/adr-0099-sharded-seat` on 2026-09-11 (~10:00 JST) and **renumbered
+0106 the same day**, under the rule every ADR's hygiene section states (a concurrent claimant
+renumbers the LATER writer). What the branches held when this was written:
+
+| number | claimant | first committed | outcome |
+|---|---|---|---|
+| 0102 | the embedding lift (`feat/adr-0099-sharded-seat`, `3e9c3b59`) | 04:22 JST | keeps 0102 |
+| 0102 | the close cut (`feat/adr-0096-partb-drill`, `90ec2317`) | 05:02 JST | renumbered **0104** (`fix/panel-pays-consensus-rent`) |
+| 0102 | the heartbeat trap (`b805fc3d`, released to testnet-11 on `release/t11-2026-09-11`) | 05:45 JST | the later 0102 writer; **0105 is left for it** |
+| 0103 | the held context (`docs/adr-0103-the-context-is-held-off-the-chain`, `bd280d15`) | 05:21 JST | keeps 0103 |
+| 0103 | this ADR | ~10:00 JST | renumbered **0106** |
+
+**The next free number is 0107.**
 
 * **2026-09-11** — written and implemented the same day:
   * `consensus/core/src/palw_artifact.rs` — `artifact_leaf_parts_v1`, `PalwArtifactLeafHasherV1`,
@@ -204,6 +215,6 @@ its root is `artifact_root_v1`'s at every size (pinned for 1–300 leaves, aroun
   * `misaka-palw-base0/src/qwen36.rs` — `tensor_len`, `read_tensor_range_into`.
   * `misaka-palw-base0/src/inventory.rs` — the plan (`qwen36_inventory_plan_v1`), the canonical
     emission (`qwen36_emit_plan_v1`), `qwen36_visit_inventory_rows_v1`, the four sinks, the
-    `adr0103_cases` record and tests.
+    `adr0106_cases` record and tests.
   * `misaka-palw-sdk` — `palw-class measure`/`verify` through `qwen36_inventory_measure_v1`;
     `registered_root_of` through `qwen36_inventory_summary_v1`.

@@ -116,11 +116,14 @@ call c ≥ 1). The inventory commits the store one row per token (a calibrated s
 one-row store tiled across the vocabulary); the plan compiles the node to the op the engine already
 runs. A class is its graph: a new class id over the same artifact, and every earlier class stays the
 chain fact it is. **Amended 2026-09-11 (ADR-0093 §9): graph-v6's fused output row is cut at the
-head.** The fusion inherits the values node's tile — 512 lanes on every hybrid geometry against a
-256-lane head — so a graph-v5 hybrid's fused leaf is two heads' and the court refuses to dissect
-it (`FusedTileStraddlesHeads`); graph-v6 sets that one node's tile to `attn_head_dim`, which
-moved its class ids (none was registered anywhere) and makes every graph-v6 fused leaf
-dissectable.
+head.** The fusion inherits the tile of the attention-table node it replaces, budgeted per
+geometry — so a graph-v5 hybrid's fused leaf is dissectable only where that budget happens to fall
+inside a head (it does at the shipped geometries: 8 lanes at the 2B and 35B-A3B, 4 at the 27B, over
+256-lane heads; it does not at the fuzz fixture's tiny geometry, where the court refuses it as
+`FusedTileStraddlesHeads`); graph-v6 sets that one node's tile to `attn_head_dim`, which moved its
+class ids (none was registered anywhere) and makes every graph-v6 fused leaf dissectable at every
+geometry. *Corrected 2026-09-11 (ADR-0093 §10): this paragraph first said the inherited tile was
+"512 lanes on every hybrid geometry", generalizing from the fixture.*
 
 **Decision 2 — A kernel a network has not armed is not in its identity.** The adjudicator gains a
 second table, `KERNEL_CATALOG_FENCED_V1`: resolved like any other kernel, excluded from

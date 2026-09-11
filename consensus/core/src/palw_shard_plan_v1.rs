@@ -441,7 +441,7 @@ impl From<&PalwArtifactOperandV1> for PalwInventoryRowMetaV1 {
     }
 }
 
-/// The same meta from a streamed row (ADR-0103): a placement reads a row's coordinate and length,
+/// The same meta from a streamed row (ADR-0106): a placement reads a row's coordinate and length,
 /// never its bytes.
 impl From<&crate::palw_artifact::PalwArtifactRowDigestV1> for PalwInventoryRowMetaV1 {
     fn from(r: &crate::palw_artifact::PalwArtifactRowDigestV1) -> Self {

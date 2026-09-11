@@ -2689,7 +2689,8 @@ mod tests {
                 fused_dissectable,
             );
             if !fused_dissectable {
-                let v7 = verify_class_admission_v7(&bundle, profile, &canonical, &registration, &[], &[], rules, Some(court), false, true);
+                let v7 =
+                    verify_class_admission_v7(&bundle, profile, &canonical, &registration, &[], &[], rules, Some(court), false, true);
                 assert_eq!(format!("{v7:?}"), format!("{v8:?}"), "dormant, v8 is v7");
             }
             v8

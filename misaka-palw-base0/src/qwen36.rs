@@ -299,7 +299,7 @@ impl Qwen36ArtifactV1 {
         }
     }
 
-    /// **A tensor's byte length, without touching one of its bytes** (ADR-0103) — present exactly
+    /// **A tensor's byte length, without touching one of its bytes** (ADR-0106) — present exactly
     /// when [`Self::tensor`] would answer: an absent name and an extent that leaves the mapping are
     /// the same refusals here.
     pub fn tensor_len(&self, name: &str) -> Result<usize, Qwen36Error> {
@@ -315,7 +315,7 @@ impl Qwen36ArtifactV1 {
         }
     }
 
-    /// **`buf.len()` bytes of a tensor from byte `at`, copied into the caller's buffer** (ADR-0103)
+    /// **`buf.len()` bytes of a tensor from byte `at`, copied into the caller's buffer** (ADR-0106)
     /// — a mapped store reads them through the file descriptor, never the mapping, for the reason
     /// [`Self::artifact_root`] gives: a whole-artifact pass that faults the map runs at the fault
     /// rate and leaves every page it touched resident, and one that reads leaves only its buffer.

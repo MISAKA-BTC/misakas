@@ -2810,8 +2810,10 @@ impl PalwPanelService {
                                 let not_before = duty.session_deadline_daa.saturating_sub(window);
                                 let span = current_daa.saturating_sub(not_before).saturating_add(64).min(1 << 16) as usize;
                                 let sid = duty.session_id;
-                                let filed =
-                                    session.clone().spawn_blocking(move |c| attn_root_out_tiles_from_chain_v1(c, sid, not_before, span)).await;
+                                let filed = session
+                                    .clone()
+                                    .spawn_blocking(move |c| attn_root_out_tiles_from_chain_v1(c, sid, not_before, span))
+                                    .await;
                                 let execution_root = duty.execution_root;
                                 let tile = filed
                                     .into_iter()
@@ -2837,9 +2839,10 @@ impl PalwPanelService {
                         Some(held) => held.clone(),
                         None => {
                             let carried: Option<Vec<u32>> = fp_job.as_ref().map(|job| job.prompt_token_ids.clone());
-                            let Ok((_offloaded, built)) =
-                                offload(backend, move |b| b.attn_site_evidence(&source, narrowed, carried.as_deref(), accused_out_tile.as_ref()))
-                                    .await
+                            let Ok((_offloaded, built)) = offload(backend, move |b| {
+                                b.attn_site_evidence(&source, narrowed, carried.as_deref(), accused_out_tile.as_ref())
+                            })
+                            .await
                             else {
                                 *court_stalls.entry("the dissection evidence task did not finish").or_default() += 1;
                                 continue;
@@ -2877,7 +2880,8 @@ impl PalwPanelService {
                                 }
                             };
                             let params = &self.consensus_config.params;
-                            let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode
+                            let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) =
+                                &params.palw_consensus_mode
                             else {
                                 continue;
                             };
@@ -2941,8 +2945,12 @@ impl PalwPanelService {
                                     continue;
                                 }
                             };
-                            let choice =
-                                PalwAttnDissectChoiceV1 { version: PALW_ATTN_COURT_OBJECT_VERSION_V1, session_id: duty.session_id, round: phase.round(), child };
+                            let choice = PalwAttnDissectChoiceV1 {
+                                version: PALW_ATTN_COURT_OBJECT_VERSION_V1,
+                                session_id: duty.session_id,
+                                round: phase.round(),
+                                child,
+                            };
                             let message = borsh::to_vec(&choice).expect("a dissection choice is borsh-serializable");
                             let Some(signature) = self.sign(&message, PALW_COURT_V2_MLDSA87_ATTN_CHALLENGER_CONTEXT) else {
                                 *court_stalls.entry("no signing key for a dissection choice").or_default() += 1;
@@ -2957,7 +2965,10 @@ impl PalwPanelService {
                         }
                         AttnMove::Close => {
                             let Some(phase) = duty.dissection.as_ref() else { continue };
-                            let bottom = match evidence.site_v1(duty.artifact_root, true).and_then(|anchored| evidence.bottom_v1(&anchored, phase)) {
+                            let bottom = match evidence
+                                .site_v1(duty.artifact_root, true)
+                                .and_then(|anchored| evidence.bottom_v1(&anchored, phase))
+                            {
                                 Ok(bottom) => bottom,
                                 Err(why) => {
                                     *court_stalls.entry("the dissection's bottom does not assemble").or_default() += 1;
@@ -2986,7 +2997,11 @@ impl PalwPanelService {
                                 *court_stalls.entry("the bottom's verdict is the other party's").or_default() += 1;
                                 continue;
                             }
-                            info!("[{PALW_PANEL}] session {} closes its dissection as {verdict:?} at tile {}", duty.session_id, phase.terminal_tile().unwrap_or(0));
+                            info!(
+                                "[{PALW_PANEL}] session {} closes its dissection as {verdict:?} at tile {}",
+                                duty.session_id,
+                                phase.terminal_tile().unwrap_or(0)
+                            );
                             PalwConsensusObjectV2::CourtClosed { session_id: duty.session_id, verdict, proof }
                         }
                     };
@@ -6033,13 +6048,13 @@ mod tests {
 #[cfg(test)]
 mod accepted_objects_walk_tests {
     use super::*;
+    use kaspa_consensus_core::BlockHash;
     use kaspa_consensus_core::BlockHashMap;
     use kaspa_consensus_core::acceptance_data::{AcceptanceData, AcceptedTxEntry, MergesetBlockAcceptanceData};
     use kaspa_consensus_core::block::Block;
     use kaspa_consensus_core::errors::consensus::{ConsensusError, ConsensusResult};
     use kaspa_consensus_core::header::Header;
     use kaspa_consensus_core::trusted::ExternalGhostdagData;
-    use kaspa_consensus_core::BlockHash;
 
     /// A selected chain and the blocks it merged — the five reads the walk makes, nothing else.
     #[derive(Default)]
@@ -6116,9 +6131,7 @@ mod accepted_objects_walk_tests {
         // Side block 13 (merged by 3): claims 5 and 6, only index 0 accepted. Side block 14 (merged
         // by 4): claims 7 and 8 and a native transaction, all accepted. Side block 11 (merged by the
         // lowest chain block): claim 9, accepted — but below any height the tests ask for.
-        let side = |n: u64, txs: Vec<Transaction>| {
-            Block::new(Header::from_precomputed_hash(hash(n), vec![]), txs)
-        };
+        let side = |n: u64, txs: Vec<Transaction>| Block::new(Header::from_precomputed_hash(hash(n), vec![]), txs);
         chain.blocks.insert(hash(13), side(13, vec![lifecycle(5), lifecycle(6)]));
         chain.blocks.insert(hash(14), side(14, vec![lifecycle(7), other(), lifecycle(8)]));
         chain.blocks.insert(hash(11), side(11, vec![lifecycle(9)]));

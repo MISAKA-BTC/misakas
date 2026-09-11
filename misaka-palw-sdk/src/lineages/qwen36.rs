@@ -93,7 +93,7 @@ pub fn registered_root_of(
     }
     // Derived outside the lock: a pass over the whole artifact must not hold up a reader of
     // another graph's root. Two racing derivations of one graph agree, so the second write is moot.
-    // Streamed (ADR-0103): the pass hashes each row where it reads it, so a node deriving the root
+    // Streamed (ADR-0106): the pass hashes each row where it reads it, so a node deriving the root
     // of a 33 GiB holding holds one read block of it, not a copy.
     let derived = misaka_palw_base0::inventory::qwen36_inventory_summary_v1(&held.artifact, profile)
         .map(|summary| summary.root)
@@ -182,7 +182,9 @@ impl PalwModelLineageV1 for Qwen36LineageV1 {
         table.shape_matches(&mapping.shape)?;
         // ADR-0102: the computed root for the rows the chain already registered that way, the
         // operand-inventory root for a graph-v6 row — one rule, `registered_root_of`.
-        registered_root_of(artifact, &entry.profile).expect("a holding of this lineage").map_err(|e| format!("{}: {e}", entry.model_id))
+        registered_root_of(artifact, &entry.profile)
+            .expect("a holding of this lineage")
+            .map_err(|e| format!("{}: {e}", entry.model_id))
     }
 
     fn resolve(
