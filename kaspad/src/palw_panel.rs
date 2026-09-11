@@ -4525,6 +4525,10 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::ClassShardPlanDeclared { .. } => "ClassShardPlanDeclared",
         PalwConsensusObjectV2::BondShardsDeclared { .. } => "BondShardsDeclared",
         PalwConsensusObjectV2::ShardReceiptLicensed { .. } => "ShardReceiptLicensed",
+        // ADR-0103 — the held regime's checkpoint court and held DA court.
+        PalwConsensusObjectV2::CheckpointAccused { .. } => "CheckpointAccused",
+        PalwConsensusObjectV2::DefaultAccusedHeld { .. } => "DefaultAccusedHeld",
+        PalwConsensusObjectV2::MaterialDisclosedHeld { .. } => "MaterialDisclosedHeld",
     }
 }
 

@@ -331,6 +331,37 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
             }
             Ok(())
         }
+        // **ADR-0103: the held regime's three objects ride signed and bounded**, for the shard
+        // court's reasons: the signature is checked at acceptance against the registered key (the
+        // accuser's, or the claim's producer's for an answer), each object answers to the close
+        // ceiling a court close does, and whether the regime is armed is the acceptance layer's.
+        PalwConsensusObjectV2::CheckpointAccused { accusation } if accusation.signature.is_empty() => Err(
+            "a checkpoint accusation must carry the accuser's signature — a bond key is a public outpoint, so without one anyone could accuse under a stranger's identity",
+        ),
+        PalwConsensusObjectV2::CheckpointAccused { accusation } => {
+            if crate::palw_checkpoint_court_v1::palw_checkpoint_court_accusation_bytes_v1(accusation) > crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES {
+                return Err("a checkpoint accusation is above the close-byte ceiling this ruleset prices");
+            }
+            Ok(())
+        }
+        PalwConsensusObjectV2::DefaultAccusedHeld { accusation } if accusation.signature.is_empty() => {
+            Err("a held data-availability accusation must carry the accuser's signature")
+        }
+        PalwConsensusObjectV2::DefaultAccusedHeld { accusation } => {
+            if crate::palw_held_da_v1::palw_held_da_bytes_v1(accusation.as_ref()) > crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES {
+                return Err("a held data-availability accusation is above the close-byte ceiling this ruleset prices");
+            }
+            Ok(())
+        }
+        PalwConsensusObjectV2::MaterialDisclosedHeld { disclosure } if disclosure.signature.is_empty() => {
+            Err("a held disclosure must carry the producer's signature — unsigned, a third party could bind the producer to material it never published")
+        }
+        PalwConsensusObjectV2::MaterialDisclosedHeld { disclosure } => {
+            if crate::palw_held_da_v1::palw_held_da_bytes_v1(disclosure.as_ref()) > crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES {
+                return Err("a held disclosure is above the close-byte ceiling this ruleset prices");
+            }
+            Ok(())
+        }
         PalwConsensusObjectV2::DefaultAccused { signature, .. } if !signature.is_empty() => Ok(()),
         PalwConsensusObjectV2::DefaultAccused { .. } => Err(
             "a data-availability accusation must carry the accuser's signature — a bond key is a public outpoint, so without one anyone could accuse under a stranger's identity",
