@@ -388,3 +388,24 @@ fn the_held_devnet_mint_assembles_from_the_floor_only_devnet() {
     assert_eq!(bundle(&held).court.max_step_leaf_count(), ladder, "the devnet's own ladder");
     assert_ne!(held.consensus_params_id(), floor.consensus_params_id(), "the fingerprint says the network moved");
 }
+
+/// **Invariant 9 — the regime moves no economics.** Everything the held mint changes is a court,
+/// a carriage or a map: the state parameters (windows, quanta sources, collateral floor), the bond
+/// parameters and the free-prompt lane's pricing (quanta per canonical job, the per-receipt cap,
+/// the maturity) are the base lattice's byte for byte, and `palw_fp_decode_rules` — ADR-0082
+/// Decision 10's numerator, the one thing that makes a claim's earnings its decode leaves' — is
+/// untouched by the mint (and refused at assembly on every network today, audit D M-1), so a held
+/// network prices a claim exactly as its base does. No bond grows with the context.
+#[test]
+fn the_held_mint_moves_no_economics() {
+    let base = palw_rc_shipped_params();
+    let held = held_network(1 << 48);
+    let (b, h) = (bundle(&base), bundle(&held));
+    assert_eq!(b.state, h.state, "windows, quanta sources, collateral floor: the base's");
+    assert_eq!(b.bond, h.bond, "the bond parameters: the base's");
+    assert_eq!(b.freeprompt.quanta_per_canonical_job(), h.freeprompt.quanta_per_canonical_job());
+    assert_eq!(b.freeprompt.max_quanta_per_receipt(), h.freeprompt.max_quanta_per_receipt());
+    assert_eq!(b.freeprompt.max_decode_tokens(), h.freeprompt.max_decode_tokens());
+    assert_eq!(b.freeprompt.receipt_maturity_daa(), h.freeprompt.receipt_maturity_daa());
+    assert_eq!(base.palw_fp_decode_rules, held.palw_fp_decode_rules, "Decision 10's numerator is not the mint's to arm");
+}

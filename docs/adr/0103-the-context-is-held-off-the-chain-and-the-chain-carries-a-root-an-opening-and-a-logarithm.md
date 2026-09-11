@@ -1,11 +1,12 @@
 # ADR-0103 — The context is held off the chain, and the chain carries a root, an opening and a logarithm
 
 * Status: PROPOSED 2026-09-11 on `docs/adr-0103-the-context-is-held-off-the-chain` (from
-  `feat/adr-0099-sharded-seat` at `3e9c3b59`). **Design only.** Nothing here is implemented and
-  nothing here is armed by this document: the fence it names (`Params::palw_held_context`) is
-  declared with §6's first step, `None` on every shipped preset and Some-only in the fingerprint,
-  and a network that wants what this ADR describes MINTS with it (ADR-0092 Decision 4). Testnet-11
-  does not move. Every number in §1 is one the tree's generators already printed or an ADR already
+  `feat/adr-0099-sharded-seat` at `3e9c3b59`); **IMPLEMENTED 2026-09-11 on
+  `feat/adr-0103-held-context`** (§10: what each Decision became, the generator's numbers, ten
+  corrections to the text below, and what is not done). Nothing is armed: the fence
+  (`Params::palw_held_context`) is `None` on every shipped preset and Some-only in the fingerprint,
+  and a network that wants what this ADR describes MINTS with it (ADR-0092 Decision 4;
+  `palw_held_context_mint_v1`). Testnet-11 does not move. Every number in §1 is one the tree's generators already printed or an ADR already
   recorded, cited by section; every number in §3 that is not is labelled *arithmetic* and is the
   generator's to print before it is normative (ADR-0092 §5).
 * Builds on: [0097](0097-a-models-fit-is-a-lookup-and-the-entrance-says-its-limits-before-the-first-token.md)
@@ -281,7 +282,8 @@ accusation is the challenge, the responder's root claim is the first clocked mov
 moves are `1 + 2 × ⌈log_k(p / 16)⌉ + terminal`, and `palw_court_arity_v1` and
 `palw_attn_court_admits_row_v1` take `ladder = 0` for a class under the fence (the leaf ladder that
 term counted is Decision 1's, and it is not played). The responder is ADR-0093's, unchanged and
-still unbuilt: a family with no `attn_tile_claim` is refused under the fence exactly as
+still unbuilt (*2026-09-11: built before this branch, `c9be7676`, and drilled on the held rows —
+§10.3 item 9*): a family with no `attn_tile_claim` is refused under the fence exactly as
 `FusedAttentionNeedsTheKaryCourt` refuses today, and ADR-0093 D2's narrowing of the mercy arm rides
 this activation. The carrier half of the pair rule is unchanged (ADR-0082 D3: `k × (4 + 8 + 8 ×
 lanes)` inside one carrier at the widest registered tile; at a 128-lane head every legal arity
@@ -493,3 +495,121 @@ for one carrier is cut once, and every filer shares the cut* (authored and commi
 writer". The later writer is the close-cut ADR, by both dates; it takes 0104 when it lands beside
 this file, and every citation of it here says "the close-cut ADR" rather than a number, so nothing
 dangles when it does. Neither branch is edited by this one.
+
+## 10. Implementation record (2026-09-11)
+
+Built on `feat/adr-0103-held-context`, branched from `252b7b3b` (ADR-0093's responder, `c9be7676`,
+already in it), commits `c204bf0f` … the branch head. **The fence is `None` on every shipped
+preset, and both shipped fingerprints are byte-identical** (`shipped_presets_have_pinned_fingerprints`
+green); testnet-11 does not move. A network that wants this ADR mints with
+`palw_held_context_mint_v1` — the one spelling the generator, the tests and `kaspad
+--palw-held-context-devnet` share.
+
+### 10.1 What each Decision became
+
+| Decision | where it lives | what pins it |
+|---|---|---|
+| **1** the one-move court is the court | `palw_checkpoint_court_v1.rs` (`CheckpointAccused`, tag 42, a COMPLETE_V4 context: the chunk opened against the checkpoint root, the cache-write rows against the step root, the composition recomputed); `CourtOpened` refused by name once the fence is armed (acceptance and fold); a ladder past the bisection's clock admitted only over COMPLETE_V4 (`PalwConsensusParamsV2::validate`) and only with the fence armed from genesis (`Params::validate_palw_v2`) | the checkpoint court's tests on v3 and v4; the regime's fold tests; `a_ladder_past_the_clock_needs_the_regime_from_genesis` |
+| **2** the seat's unit is positions, and a seat resumes | `palw_held_context_v1.rs` (intervals, route, `P`, fetch); base0's interval geometry counts in STEPS (`Base0FpIntervalUnitV1::Positions`, one replay loop over windows); the Resume route (`Base0FpResumeOpeningV1` under a bit-30 request on the interval lane, `base0_fp_verify_resume_v1`'s slice-local check, `base0_fp_accept_resume_v1`); seam verbs `fp_held_route_v1` / `open_fp_resume_v1` / `fp_accept_resume_v1`; the panel derives the route from the class and `window_receipt` and asks for the state beside the interval | `every_held_graph_v7_interval_opens_and_a_recomputing_seat_licenses_it`, `a_held_interval_that_resumes_inside_the_prompt_opens_and_is_licensed`, `a_seat_that_resumes_reaches_the_verdict_a_seat_that_recomputes_does`, `a_held_class_seats_its_prompt_in_intervals_and_a_lie_in_it_is_a_fault` |
+| **3** map v4 | `palw_step_leg.rs` (leaf `(map, slice, block)`, promote-odd slice trees, the frontier, the depth cap 48); `palw_state_chunk_map.rs` (layouts, one dispatch for leaves, roots, paths, top leaves); graph-v7 rows (`qwen25_a16_profile_v7`, `qwen36_profile_v7`); the producer's per-position capture folds a held checkpoint as an APPEND (per-slice frontiers — one tile a slice and `depth` nodes a position) | `the_held_fold_is_an_append_and_its_root_is_the_courts`, `the_held_composition_folds_and_its_root_is_the_courts`; both fused dissection drills on graph-v7 (dense and hybrid) |
+| **4** the ids never ride | Merkle prompt ids and `PanelDa` required at or below the fence (assembly); the payload wall under the fence; a PublicDa carrier past one standard transaction skipped by name (`palw_fp_objects_from_accepted_txs_under_held_v3`); the held DA court (`palw_held_da_v1.rs`, tags 43/44, the `held_da_missing` collection behind tail 0xA3) | `under_the_held_regime_public_ids_past_one_transaction_are_skipped_by_name`, the held DA court's fold tests |
+| **5** a fused leaf's dissection opens at the leaf | `open_at_named_leaf`, `worst_case_duration_held_daa`, `palw_court_arity_held_v1`, `palw_attn_court_admits_row_held_v1`, `palw_court_params_held_at_v2` | the fold tests; invariant 3 in `palw_adr0103_held_context.rs` |
+| **6** one position | closed-form coordinates and index; the per-position budget in `validate_geometry`/`validate_shape` for a held map | `the_registration_gate_visits_the_same_nodes_at_every_context` and D6's own tests |
+| **7** the plan prices the fetch | `PalwShardV1::fetch_bytes_at_v1`, `palw_shard_resume_ms_v1`, `palw_shard_plan_for_seat_within_window_v1`; `palw-shard-plan` prints the column | `the_shard_plan_prices_the_fetch_and_the_window_binds_the_shard_count` |
+| **8** every wall's order | `palw_model_fit_v1.rs` (`PalwFitOrderV1`, the held and held-network regimes, the held terms); `verify_class_admission_v8` (`HeldMapNeedsItsFence`, `LinearInTheContext`, `ChainWallOrderUnknown`); `palw-model-fit --preset held` (`docs/palw-model-fit-held-2026-09-11.md`) | `consensus/core/tests/palw_adr0103_held_context.rs` |
+| **9** priced before armed | `palw-seat-coverage` §7 | `the_held_mint_moves_no_economics` |
+
+### 10.2 The normative numbers (the generator's, replacing §1.2's and §3's arithmetic)
+
+`palw-model-fit --preset held` — testnet-11's lattice minted with the fence at a `2^48` ladder:
+
+| | dense graph-v7 at 512 | at 32,768 | at 2^21 |
+|---|---|---|---|
+| per-position budget (nodes) | 677, constant | 677 | 677 |
+| ladder as a depth | 26 levels, logarithmic | 32 | 38 |
+| close | 87,743 B, logarithmic | 88,127 | 88,511 — 64 bytes a doubling |
+| window | 13 moves → 762 DAA | 25 → 1,266 | **37 moves × 42 + 216 = 1,770 DAA at arity 2** |
+| state proof | 12 levels | 18 | 24 |
+| ids on the commitment | 0 (PanelDa) | 0 | 0 |
+| held: retention / fetch / replay | 28 MiB / — / 512 | 1.8 GiB / — / 2,048 | 112 GiB / 112 GiB (Resume) / 2,048 positions |
+
+Every chain wall of the dense, the hybrid and the K3 stand-in's graph-v7 rows reads constant or
+logarithmic from 512 to 2M, and every one admits; the K3 stand-in's ladder binds first, at
+43,821,980 positions. Decision 5's table is confirmed at arity 2. D7: at a 512 GiB seat the dense
+row resumes its last 2M interval on one shard at 100 Mbit/s and above (2.7 h of the window's 10);
+the K3 stand-in needs six. D9: the shipped `k = 4` catches a one-token lie in a 2M prompt with
+1.94 % at five seats on the dense row (`N` = 1,025) and 0.03 % on the K3 stand-in (`N` = 65,568,
+`P` = 32); 90 % needs `k` = 379 or `s` = 589 on the dense row.
+
+### 10.3 Corrections to this ADR, found while building it
+
+1. **§1.1 called the close already flat. It is not, on either shipped preset**: the order column
+   reads it `Linear` — the prompt ids are flat there, and the generated-token pin is priced at the
+   whole context (`decode_pin_price_v1(profile, n_ctx)`). Under the fence the pin is priced at the
+   trace cap (`PalwCourtCostShapeV1::decode_bound`), because one job decodes at most
+   `PALW_V2_MAX_TRACE_EVENTS` calls; which is also why Decision 4's Merkle OUTPUT-id form
+   (ADR-0082 U-07b) is not needed for R-held — the output-id term is bounded by the cap — and it is
+   not built.
+2. **Decision 8's classifier read `C`, `2C` and `4C` by the second difference.** Three points
+   cannot tell a logarithm with a ceiling (a dissection at arity 64 gains one round in six
+   doublings: first differences `0, 1`) from a line. It reads seven (`C … 2^6·C`) and calls a need
+   linear when its last growth is at least eight times its first nonzero growth.
+3. **Decision 1's ladder is a NETWORK number and the regime was written per class.** A ladder past
+   the bisection's clock makes the bisection unplayable for every class, so `CourtOpened` is refused
+   for every claim once the fence is armed, every class's window is read on the held clock, such a
+   ladder is admitted only with the fence from genesis, and a class that registers no held map on a
+   held network keeps its shipped walls (`PalwFitRegimeV1::HeldNetwork`) — never refused for an
+   order.
+4. **Decision 4's "PublicDa is refused by name where `C × 4 > PALW_STANDARD_TX_BYTES`"** became: the
+   fence requires `PanelDa` at or below its height; a held class judged without it reads its
+   payload wall `Linear` and is refused `LinearInTheContext` at every width (invariant 7's first
+   clause and invariant 8 need the stricter reading); and at the commitment, a PublicDa carrier
+   past one standard transaction is skipped by name.
+5. **Decision 2's `P` "derived at certification"** would have had to be a consensus object before
+   the executor could open by it and a seat draw over it. `P` is a class function
+   (`palw_held_interval_positions_v1`: the widest power of two whose opening fits the interval
+   lane's cap and which cuts the context into at least the draw's `k` intervals), and the CLOCK is
+   the certification drill's check (`palw_held_seat_interval_positions_v1`,
+   `palw_shard_plan_for_seat_within_window_v1`).
+6. **The seventh wall.** The advertised free-prompt cap was bounded by the IPC frame's 4,096 ids
+   (`PALW_V2_MAX_PROMPT_TOKENS`), which made a 2M prompt inexpressible whatever the six terms said.
+   A held mint advertises the regime's own (`PALW_FP_HELD_MAX_PROMPT_TOKENS_V1` = `2^26`), admitted
+   only over COMPLETE_V4 with the fence from genesis. The worker's request frame
+   (`PALW_V2_MAX_FRAME_BYTES`, 256 KiB — about 60,000 ids) is a node-local transport bound and is
+   not raised here.
+7. **A soundness gap this regime exposed:** nothing tied a checkpoint chunk to the committed
+   cache-write rows it summarises. Under the fence a dissection's bottom and a seat's resume both
+   stand on checkpoints, so `CheckpointAccused` is the object that makes a false checkpoint
+   convictable, not a convenience beside the shard court.
+8. **The data-availability court is not required at the fence's height.** The held DA court arms
+   with `palw_da_court` (it reuses ADR-0062's `DefaultDisputed` phase with a sentinel index); a
+   held network without it withholds into ADR-0077 SA-5's void.
+9. **Decision 5 said the responder was "unchanged and still unbuilt".** ADR-0093's responder was
+   built before this branch (`c9be7676`); both fused dissection drills run on the held rows here —
+   exact on real committed rows, and a forged row convicted at its bottom.
+10. **Decision 9's premise** — "a claim's reservation is its decode leaves' whatever its prompt" — is
+    ADR-0082 Decision 10's numerator, which `validate_palw_v2` refuses to arm on any network today
+    (audit D M-1). The mint changes no economics (`the_held_mint_moves_no_economics`); a network
+    that wants Decision 9's sentence at 2M arms Decision 10 with it, which is not this ADR's move.
+
+### 10.4 What was run
+
+The consensus-core suite, the base0 library suite, kaspad's PALW tests and the SDK's — green; the
+ADR-0103 integration tests (invariants 2, 3, 5, 8, 9 and 10 at 2M on the held mint, §1.1 pinned
+as the shipped presets' limitations); invariant 4 on the producer's capture; invariant 6 at the
+seat (resume against recompute, a tampered fetched chunk refused by its slice, a shard's slices
+verified alone); invariant 7 at the carrier and the held DA court; invariant 1 in the fold and the
+acceptance arm, and on a live devnet by `HELD=1 scripts/misaka-palw-shard-court-devnet-drill.sh`
+(§10.5).
+
+### 10.5 What is not done
+
+* **No 2M claim ran.** The dense row's cache at 2M is 112 GiB and its recompute 54.6 hours
+  (§1.2); this Mac seats neither. The "done when" is met at devnet widths — the held graph-v7
+  rows' intervals, resumes and convictions in the tests, the one-move drill under the fence — and
+  at 2M in the generators' tables.
+* **A resume opening past the interval lane's 4 MiB** (a 2M shard's state is gigabytes): §4 and §8
+  already say the class declares its own lane cap off the plan; no such lane is built.
+* **A shard seat's replay from its own slices.** The fetch is verified slice-locally; replaying one
+  shard from that state is ADR-0099's shard replay and is not rebuilt here.
+* **The worker's request frame** for prompts past ~60,000 ids (§10.3 item 6).
