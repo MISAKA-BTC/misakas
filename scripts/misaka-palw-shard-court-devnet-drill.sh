@@ -129,6 +129,14 @@ log "    $committed"
 if [ "$LEAF" = "slow" ]; then
   log "2/5 waiting for a seat to demand the named leaf's evidence on chain (ADR-0108 Decision 3)"
   accused="$(wait_log "demanding it on chain \\(ADR-0108 Decision 3\\)" "a seat's demand")"
+elif [ "$LEAF" = "fast" ]; then
+  # The fast path's own line, not any accusation: a capture-route accusation here would mean a seat
+  # held the capture after all, and the run would prove nothing about ADR-0108.
+  log "2/5 waiting for a seat to accuse on the executor's own evidence (ADR-0108 fast path)"
+  accused="$(wait_log "accusing leaf [0-9]+ in the one-move court on the executor's own evidence" "a fast-path accusation")"
+  if grep -h -E "accusing leaf [0-9]+ in the one-move court \\(session" "$WORK_DIR"/node-*.log >/dev/null 2>&1; then
+    die "a seat accused from a capture — node-0 served one, so this run does not exercise the fast path"
+  fi
 else
   log "2/5 waiting for a seat to accuse it in the one-move court"
   accused="$(wait_log "accusing leaf [0-9]+ in the one-move court" "a seat's accusation")"
