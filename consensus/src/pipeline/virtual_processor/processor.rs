@@ -572,6 +572,9 @@ pub struct VirtualStateProcessor {
     /// the acceptance rehearsal, the fold (through the extras' ladder) and the court's shape all
     /// read it through that, so a node cannot admit a move its fold refuses.
     pub(super) palw_held_context: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// The 2026-09-11 audit fence, resolved once in [`Self::palw_audit_2026_09_11_at`]; the
+    /// acceptance arm (A-1, AC-SLOT) and the fold's extras both read it there.
+    pub(super) palw_audit_2026_09_11: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// Rate limiter for [`Self::palw_warn_if_maturity_outruns_the_registry`] — the DAA score the
     /// shortfall was last reported at, or `PALW_SHORTFALL_NEVER_REPORTED`. **Log state only**:
     /// nothing consensus-visible reads it, so two nodes that report at different moments still
@@ -1037,6 +1040,7 @@ impl VirtualStateProcessor {
             palw_fused_dissectable: params.palw_fused_dissectable_fence(),
             palw_attn_anchored_root: params.palw_attn_anchored_root_fence(),
             palw_held_context: params.palw_held_context_fence(),
+            palw_audit_2026_09_11: params.palw_audit_2026_09_11_fence(),
             palw_frontier_provenance: params.palw_frontier_provenance,
             palw_validator_payout_bounds: params.palw_validator_payout_bounds_fence(),
             finality_depth: params.blockrate.finality_depth,
@@ -5337,6 +5341,10 @@ impl VirtualStateProcessor {
         // both validate against the parent state (where the quantum is unspent), so both were
         // entitled and the coinbase paid a full worker share for each. Weighed once, paid N times.
         // Dedup the (claim, quantum) here exactly as the attempt arm dedups the attempt identity.
+        // **Gated to the audit flag day (`palw_audit_2026_09_11`):** below the fence the pay set is
+        // byte-identical to before the fix (both siblings paid), so a fenced build and an unfenced
+        // one agree on every block's coinbase before the height.
+        let audit_active = self.palw_audit_2026_09_11_at(point.daa_score);
         let mut seen_here_quanta: std::collections::HashSet<(kaspa_consensus_core::Hash64, u32)> = Default::default();
         // **Blues AND reds.** This iterated `mergeset_blues` alone, so the set could never contain a
         // red — and the coinbase's reds loop had no skip to apply one anyway. At the frozen 120 s
@@ -5419,8 +5427,8 @@ impl VirtualStateProcessor {
                     Ok(Some(envelope)) => {
                         // B-5: at most one sibling per (claim, quantum) is entitled; the fold folds
                         // the quantum's weight once, so paying a second spend of it mints reward the
-                        // chain never counted.
-                        if !seen_here_quanta.insert((envelope.spend.claim_id, envelope.spend.quantum_index)) {
+                        // chain never counted. Only past the audit fence (below it, unchanged).
+                        if audit_active && !seen_here_quanta.insert((envelope.spend.claim_id, envelope.spend.quantum_index)) {
                             debug!(
                                 "merged block {blue} spends a certified quantum ({}, {}) already paid in this mergeset",
                                 envelope.spend.claim_id, envelope.spend.quantum_index
@@ -5698,24 +5706,36 @@ impl VirtualStateProcessor {
         // disqualifying the block on every node and halting the chain. `folded` is now the fold's
         // pre-object base (payout/settlement drain, sweeps, retarget/growth/reclamation, once), and
         // each accepted object advances it by one `apply_object` and nothing else.
-        let mut folded = match kaspa_consensus_core::palw_state_v2::palw_v2_pre_object_base_v1(
-            state,
-            state_params,
-            point,
-            self.palw_unavailable_abstains_at(point.daa_score),
-            self.palw_capability_bound_at(point.daa_score),
-            self.palw_uncertified_weightless_at(point.daa_score),
-            self.palw_da_court_at(point.daa_score),
-            &self.palw_transition_extras_at(point.daa_score),
-        ) {
-            Ok(base) => base,
-            // The pre-object steps are what the real fold runs before any object; if they error the
-            // block is disqualified whatever it carries, so the filter accepts nothing and returns
-            // the parent unchanged (the caller re-folds the parent and sees the same error).
-            Err(why) => {
-                info!("Block {block}: no PALW object is accepted; the pre-object fold fails and the block will be disqualified: {why}");
-                return (Vec::new(), state.clone());
+        // **A-1/AC-SLOT are gated to the audit flag day (`palw_audit_2026_09_11`).** Below the
+        // fence this filter reproduces the pre-audit behavior EXACTLY — it rehearses each object
+        // through a whole-block transition at a synthetic point, and charges the court slot on the
+        // acceptance check — so a build with the fence and one without fold every block before the
+        // height identically. Past the fence it folds the transition's step 3 (A-1) and charges the
+        // slot only after a move applies (AC-SLOT).
+        let audit_active = self.palw_audit_2026_09_11_at(point.daa_score);
+        // The old path's synthetic chain point; unused past the fence.
+        let mut rehearsal = *point;
+        let mut folded = if audit_active {
+            match kaspa_consensus_core::palw_state_v2::palw_v2_pre_object_base_v1(
+                state,
+                state_params,
+                point,
+                self.palw_unavailable_abstains_at(point.daa_score),
+                self.palw_capability_bound_at(point.daa_score),
+                self.palw_uncertified_weightless_at(point.daa_score),
+                self.palw_da_court_at(point.daa_score),
+                &self.palw_transition_extras_at(point.daa_score),
+            ) {
+                Ok(base) => base,
+                // The pre-object steps are what the real fold runs before any object; if they error
+                // the block is disqualified whatever it carries, so the filter accepts nothing.
+                Err(why) => {
+                    info!("Block {block}: no PALW object is accepted; the pre-object fold fails and the block will be disqualified: {why}");
+                    return (Vec::new(), state.clone());
+                }
             }
+        } else {
+            state.clone()
         };
         let mut accepted = Vec::with_capacity(objects.len());
         let mut certifications_graded = 0usize;
@@ -6066,33 +6086,51 @@ impl VirtualStateProcessor {
             }
             match self.palw_v2_validate_objects(&folded, state_params, point, std::slice::from_ref(&object)) {
                 Ok(()) => {
-                    match kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_v1(
-                        &folded,
-                        state_params,
-                        point,
-                        &object,
-                        self.palw_unavailable_abstains_at(point.daa_score),
-                        // ADR-0071 SA-1/SA-2/SA-4: the rehearsal has to refuse what the fold
-                        // refuses, or an over-long or unaffordable declaration is admitted into a
-                        // block's object list and the whole block dies at the fold instead.
-                        self.palw_capability_bound_at(point.daa_score),
-                        // The rehearsal exists to predict the fold; a policy it did not carry
-                        // would be a policy the two disagree about, and they would then compute
-                        // different state roots for the same block.
-                        self.palw_uncertified_weightless_at(point.daa_score),
-                        self.palw_da_court_at(point.daa_score),
-                        &self.palw_transition_extras_at(point.daa_score),
-                    ) {
+                    // **AC-SLOT below the fence: the slot is charged on the acceptance check** (the
+                    // pre-audit behavior). Past the fence it is charged only after the move applies.
+                    if !audit_active && spends_the_court_slot {
+                        court_closes_completed += 1;
+                    }
+                    let applied = if audit_active {
+                        kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_v1(
+                            &folded,
+                            state_params,
+                            point,
+                            &object,
+                            self.palw_unavailable_abstains_at(point.daa_score),
+                            self.palw_capability_bound_at(point.daa_score),
+                            self.palw_uncertified_weightless_at(point.daa_score),
+                            self.palw_da_court_at(point.daa_score),
+                            &self.palw_transition_extras_at(point.daa_score),
+                        )
+                    } else {
+                        // The pre-audit path: rehearse the object through a whole-block transition
+                        // at a synthetic point one blue score along. Byte-identical to before the
+                        // audit fence existed.
+                        kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_extras(
+                            &folded,
+                            state_params,
+                            &rehearsal,
+                            std::slice::from_ref(&object),
+                            None,
+                            self.palw_unavailable_abstains_at(point.daa_score),
+                            self.palw_capability_bound_at(point.daa_score),
+                            self.palw_uncertified_weightless_at(point.daa_score),
+                            self.palw_da_court_at(point.daa_score),
+                            &self.palw_transition_extras_at(point.daa_score),
+                        )
+                        .map(|(next, _)| next)
+                    };
+                    match applied {
                         Ok(next) => {
-                            // **AC-SLOT: the block's court slot is spent only by a move that
-                            // ACTUALLY APPLIES.** Charging it on the acceptance check alone let a
-                            // fold-failing move — a replayed root-claim signature over a junk
-                            // binding, say — burn the block's one slot and drop the honest mover
-                            // behind it, every block, until that mover was convicted on its
-                            // deadline. A move the fold refuses is dropped just below and leaves
-                            // the slot for the next.
-                            if spends_the_court_slot {
+                            // **AC-SLOT past the fence: the slot is spent only by a move that
+                            // ACTUALLY APPLIES.** A move the fold refuses is dropped below and
+                            // leaves the slot for the next.
+                            if audit_active && spends_the_court_slot {
                                 court_closes_completed += 1;
+                            }
+                            if !audit_active {
+                                rehearsal.blue_score = rehearsal.blue_score.saturating_add(1);
                             }
                             if completes_a_group {
                                 // The certification a chunk group carried is applied inside the
@@ -7928,6 +7966,7 @@ impl VirtualStateProcessor {
             // reason the lines above give — an unwritten default here would refuse, or admit, a
             // responder's whole defense by omission.
             attn_anchored_root_active: self.palw_attn_anchored_root_at(daa_score),
+            audit_2026_09_11_active: self.palw_audit_2026_09_11_at(daa_score),
             // ADR-0100: the one-move court's ladder rides to the fold when the court is armed —
             // the SAME ladder the acceptance arm adjudicates at, so both derive one verdict.
             // Written explicitly for the reason the two lines above give.
@@ -8051,6 +8090,10 @@ impl VirtualStateProcessor {
     /// **ADR-0093 Decision 8, resolved in exactly one place.**
     fn palw_attn_anchored_root_at(&self, daa_score: u64) -> bool {
         self.palw_attn_anchored_root.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    fn palw_audit_2026_09_11_at(&self, daa_score: u64) -> bool {
+        self.palw_audit_2026_09_11.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// **Whether a claim's panel is drawn per shard, and into how many** — the ONE decision the

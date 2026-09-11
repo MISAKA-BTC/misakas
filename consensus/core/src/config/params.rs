@@ -1519,6 +1519,21 @@ pub struct Params {
     /// `palw_shard_court` armed at or below its height, and (c) on a network whose prompt ids are
     /// flat — a held class's ids never ride, and a flat digest cannot be opened one tile at a time.
     pub palw_held_context: Option<ForkActivation>,
+    /// **The 2026-09-11 pre-mainnet audit's consensus fixes, gated to one coordinated activation.**
+    ///
+    /// A single fence for the audit findings whose corrections change the state-transition or the
+    /// acceptance filter — A-1 (the acceptance filter folds the fold's step 3, closing the
+    /// activation-crossing halt), B-4 (one inference is one block), B-5 (a certified quantum is paid
+    /// once), AC-SLOT (a fold-failing court move does not spend the block slot), A-2 (an undecodable
+    /// lifecycle payload is tolerated at isolation), and the court/panel fixes B-1, C-01, C-02, C-03,
+    /// C-08 and BC-SYBIL. Below the fence every one of them reproduces the pre-fix behavior exactly,
+    /// so a build carrying this fence and one without it fold every block before the height
+    /// identically; at the height the whole set activates together. Scheduled on testnet-11 at
+    /// [`PALW_RC_AUDIT_FENCE_DAA`] (a live chain gets its fixes at a height, ADR-0083 path (a)),
+    /// `always()` on a mainnet card (correct from genesis), `None` on every other preset. It moves
+    /// the fingerprint, so the fleet upgrades to the fenced build before the height — the coordinated
+    /// flag day the operator chose.
+    pub palw_audit_2026_09_11: Option<ForkActivation>,
 
     /// **ADR-0083 Decision 1 — the difficulty window counts only rows priced by `bits`.**
     ///
@@ -3241,6 +3256,9 @@ impl Params {
         if self.palw_held_context == Some(ForkActivation::never()) {
             self.palw_held_context = None;
         }
+        if self.palw_audit_2026_09_11 == Some(ForkActivation::never()) {
+            self.palw_audit_2026_09_11 = None;
+        }
         // ADR-0083 Decision 1, the same shape: a bare fence, `never()` is absence.
         if self.palw_difficulty_priced_rows == Some(ForkActivation::never()) {
             self.palw_difficulty_priced_rows = None;
@@ -3737,8 +3755,20 @@ impl Params {
         }
     }
 
+    /// The audit fence, resolved off a ConsensusV2 ruleset (the only mode any audit fix runs on).
+    pub fn palw_audit_2026_09_11_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_audit_2026_09_11) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
     pub fn palw_held_context_active_at(&self, daa_score: u64) -> bool {
         self.palw_held_context_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
+    pub fn palw_audit_2026_09_11_active_at(&self, daa_score: u64) -> bool {
+        self.palw_audit_2026_09_11_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
     /// ADR-0081 Decision 3's fence with the mode condition already folded in — `Some` only on a
@@ -3862,6 +3892,7 @@ impl Params {
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
+            palw_audit_2026_09_11,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -3918,6 +3949,7 @@ impl Params {
             ("palw_fused_dissectable", *palw_fused_dissectable),
             ("palw_attn_anchored_root", *palw_attn_anchored_root),
             ("palw_held_context", *palw_held_context),
+            ("palw_audit_2026_09_11", *palw_audit_2026_09_11),
             ("palw_difficulty_priced_rows", *palw_difficulty_priced_rows),
             ("palw_receipt_rows_unpriced", *palw_receipt_rows_unpriced),
             ("palw_attempt_header_pins", *palw_attempt_header_pins),
@@ -4106,6 +4138,10 @@ impl Params {
             h.write(b"palw_held_context");
             h.write(held.daa_score().to_le_bytes());
         }
+        if let Some(activation) = self.palw_audit_2026_09_11 {
+            h.write(b"palw_audit_2026_09_11");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0083 Decision 1's fence, NAMED for the same reason: it changes the bits every header
         // past it must carry, so an operator reading the schedule must see it.
         if let Some(priced) = self.palw_difficulty_priced_rows {
@@ -4270,6 +4306,7 @@ impl Params {
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
+            palw_audit_2026_09_11,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -4590,6 +4627,9 @@ impl Params {
         if let Some(activation) = palw_held_context.as_mut() {
             fork(activation, visit);
         }
+        if let Some(activation) = palw_audit_2026_09_11.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0083 Decision 1. Some-only, likewise.
         if let Some(activation) = palw_difficulty_priced_rows.as_mut() {
             fork(activation, visit);
@@ -4850,6 +4890,7 @@ impl Params {
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
+            palw_audit_2026_09_11,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -5205,6 +5246,10 @@ impl Params {
         // to a build without the field, the map, the objects or the gate.
         if let Some(activation) = palw_held_context {
             h.write(b"palw_held_context");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_audit_2026_09_11 {
+            h.write(b"palw_audit_2026_09_11");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0083 Decision 1, Some-only for the same reason: arming it changes the `bits` every
@@ -5579,6 +5624,7 @@ impl Params {
             palw_fused_dissectable: self.palw_fused_dissectable,
             palw_attn_anchored_root: self.palw_attn_anchored_root,
             palw_held_context: self.palw_held_context,
+            palw_audit_2026_09_11: self.palw_audit_2026_09_11,
             palw_difficulty_priced_rows: self.palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced: self.palw_receipt_rows_unpriced,
             palw_attempt_header_pins: self.palw_attempt_header_pins,
@@ -6541,6 +6587,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
     palw_held_context: None,
+    palw_audit_2026_09_11: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -6717,6 +6764,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
     palw_held_context: None,
+    palw_audit_2026_09_11: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -6875,6 +6923,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
     palw_held_context: None,
+    palw_audit_2026_09_11: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -10320,6 +10369,8 @@ fn mainnet_card_base_v1(mut base: Params, dense_tier_pinned: bool) -> Params {
     // fences are STATED, and this one has no reason to wait. testnet-11 leaves it dormant — arming
     // it there is a flag day, and the census it changes is the same one two live chains committed.
     base.palw_share_growth_final = Some(ForkActivation::always());
+    // The 2026-09-11 audit's consensus fixes are correct from a mainnet card's genesis.
+    base.palw_audit_2026_09_11 = Some(ForkActivation::always());
     base
 }
 
@@ -10378,6 +10429,21 @@ pub const PALW_RC_MODEL_BENEFITS_FENCE_DAA: u64 = 2_400;
 /// Every seat must run a build carrying this fence BEFORE this height or it forks off at it — the DAA
 /// 2,400 fence was crossed unannounced once and the outside nodes left at ≈2,241; announce this one.
 pub const PALW_RC_MODEL_LEG_V2_FENCE_DAA: u64 = 3_500;
+/// **testnet-11's SECOND flag day for the 2026-09-11 pre-mainnet audit fixes** (`palw_audit_2026_09_11`,
+/// and the audit's dense-court fences `palw_fused_dissectable` / `palw_attn_anchored_root` and
+/// share-census fence `palw_share_growth_final` ride the same height). A live chain gets the fixes
+/// at a height, not a re-genesis (ADR-0083 path (a)).
+///
+/// **It MUST be a height no other schedule entry uses, and NOT 3,500.** ADR-0114's owner-leg flag
+/// day already schedules 3,500 (fleet fingerprint `02c7282b`, schedule id `8934a9b1`,
+/// 1150/1900/2150/2400/3500/2125000). `fork_id_v1` digests the FIRED HEIGHTS, not the fence set —
+/// so a build that adds a DIFFERENT fence at 3,500 advertises the SAME fork id as the 02c7282b
+/// fleet, stays connected through the gate, and then silently diverges past 3,500. A fresh height
+/// here adds a new schedule entry the gate can see, so a not-yet-upgraded node is refused FROM this
+/// height rather than diverging at it. **Provisional** — set with deployment margin over the tip
+/// at release time (t11 advances ~4–5 DAA/h; leave external operators room to upgrade), and rebased
+/// onto the fleet's own base (ADR-0114's `42438178` lineage = origin/main 8b6661a9 + 5bed4405).
+pub const PALW_RC_AUDIT_FENCE_DAA: u64 = 4_000;
 
 /// **testnet-11's third flag day: the refutation ladder** (ADR-0084 U-08, the 2026-09-06 audit's
 /// H-4, ADR-0092 §9 step 2).
@@ -10780,6 +10846,12 @@ pub fn palw_rc_base_params() -> Params {
     params.palw_model_lines = Some(ForkActivation::new(PALW_RC_DA_COURT_FENCE_DAA));
     params.palw_model_benefits = Some(ForkActivation::new(PALW_RC_MODEL_BENEFITS_FENCE_DAA));
     params.palw_model_leg_v2 = Some(ForkActivation::new(PALW_RC_MODEL_LEG_V2_FENCE_DAA));
+    // **The 2026-09-11 audit flag day.** The audit fixes, and the dense-court and share-census
+    // fences that carry audit corrections, all activate together at one height on testnet-11.
+    params.palw_audit_2026_09_11 = Some(ForkActivation::new(PALW_RC_AUDIT_FENCE_DAA));
+    params.palw_share_growth_final = Some(ForkActivation::new(PALW_RC_AUDIT_FENCE_DAA));
+    params.palw_fused_dissectable = Some(ForkActivation::new(PALW_RC_AUDIT_FENCE_DAA));
+    params.palw_attn_anchored_root = Some(ForkActivation::new(PALW_RC_AUDIT_FENCE_DAA));
     params.palw_model_evm = Some(ForkActivation::new(PALW_RC_DA_COURT_FENCE_DAA));
     params.palw_court_ladder = Some(ForkActivation::new(PALW_RC_COURT_LADDER_FENCE_DAA));
     // **The EVM lane is ON from DAA 0, inherited from `TESTNET_PARAMS` and kept deliberately.**
@@ -11199,6 +11271,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
     palw_held_context: None,
+    palw_audit_2026_09_11: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,

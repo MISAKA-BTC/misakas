@@ -12271,6 +12271,12 @@ pub struct PalwTransitionExtrasV1 {
     /// through and keeps `NeedsDissection` a refusal: byte-identical to the transition before the
     /// regime existed.
     pub held_context_ladder: Option<u64>,
+    /// `Params::palw_audit_2026_09_11` resolved at the block's DAA. `false` (every dormant network,
+    /// and testnet-11 below its flag day) selects the pre-audit fold at every site the audit fixes
+    /// touch; `true` selects the fixed behavior. The fixes that live in the acceptance filter (A-1,
+    /// AC-SLOT) read the fence off `Params` directly in the processor; the ones the fold decides
+    /// read it here.
+    pub audit_2026_09_11_active: bool,
     /// `Params::palw_share_growth_final` resolved at the block's DAA (ADR-0107). Below it a class
     /// grows its cadence share on the blocks it had ACCEPTED in the closed epoch; past it growth
     /// also needs that many of its attempt claims to have reached `Final` in the same span. `false`
@@ -27587,6 +27593,7 @@ pub(crate) mod tests {
                 shard_licensing: None,
                 attn_anchored_root_active: false,
                 held_context_ladder: None,
+                audit_2026_09_11_active: false,
                 share_growth_final_active: false,
             }
         }
@@ -27798,6 +27805,7 @@ pub(crate) mod tests {
                 shard_licensing: None,
                 attn_anchored_root_active: false,
                 held_context_ladder: None,
+                audit_2026_09_11_active: false,
                 share_growth_final_active: false,
             };
             let (s_off, _) =
