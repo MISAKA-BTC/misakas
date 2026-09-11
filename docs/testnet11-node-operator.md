@@ -95,11 +95,6 @@ lane.
 > build with only one of them (the audit's alone prints `09efd285…`) shows the same second line and
 > the gate cannot tell it apart — it parts silently at 4,000. Check the first line.
 >
-> The same build changes one thing at once, not at a height: a producer keeps an attempt's capture
-> while the chain can still accuse the claim (up to the 5,400-DAA trace retention) instead of
-> pruning it after 48 h — a pruned capture let an honest producer be convicted of withholding.
-> `palw-retention` grows accordingly; a dense producer (≈0.8 GB per capture) wants its own volume.
->
 > A build from `891a1a14` up to `a5f1bdf7` prints `060e3597…` on the first line and the same second
 > line: same ruleset, and it peers with the builds after it (both log `schedules a FUTURE fence
 > differently` for the other — expected here, not a refusal). No second line, or no `2400` in it,
