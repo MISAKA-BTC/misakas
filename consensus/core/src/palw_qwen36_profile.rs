@@ -1332,12 +1332,15 @@ pub fn qwen36_artifact_row_profile_v5(g: PalwQwen36GeometryV1) -> Result<PalwSha
 /// A class IS its graph, so this is a new class id, and every `graph-v5` class stays exactly the
 /// live chain fact it is. The artifact is UNCHANGED.
 ///
-/// **And its fused output tile IS the head** (ADR-0093 as built). The fusion inherits the values
-/// node's tile, which the hybrid tables budget at the geometry's `tile_len` — 512 lanes against a
-/// 256-lane head on every shipped hybrid geometry — so a graph-v5 hybrid's fused leaf covers two
-/// heads, and the court refuses to dissect it (`FusedTileStraddlesHeads`: a dissection is one
-/// head's softmax). Graph-v6 cuts that one node's row at the head, so every fused leaf is one
-/// head's and the dissection ADR-0082 built can try it; nothing else about the graph moves.
+/// **And its fused output tile IS the head** (ADR-0093 as built). The fusion inherits the tile of
+/// the attention-table node it replaces, which the hybrid tables budget per geometry: 8 lanes at
+/// the shipped 2B and 35B geometries and 4 at the 27B (inside their 256-lane heads, every `n_ctx`
+/// probed), but the whole 64-lane row over 16-lane heads at the fuzz corpus's tiny geometry —
+/// where a graph-v5 fused leaf covers four heads and the court refuses to dissect it
+/// (`FusedTileStraddlesHeads`: a dissection is one head's softmax). So whether a graph-v5 fused
+/// leaf is dissectable is a property of the budget; graph-v6 makes it one of the graph, cutting
+/// that one node's row at the head at every geometry. Nothing else about the graph moves.
+/// (Corrected 2026-09-11: this comment first said 512 lanes on every shipped geometry.)
 pub fn qwen36_profile_v6(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
     let mut profile = qwen36_profile_with(g, QWEN36_PRE_IR_V6, QWEN36_LINEAR_IR_V2, QWEN36_ATTN_IR_V2, QWEN36_POST_IR, true)?;
     for node in profile.attn_nodes.iter_mut().filter(|n| n.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused) {

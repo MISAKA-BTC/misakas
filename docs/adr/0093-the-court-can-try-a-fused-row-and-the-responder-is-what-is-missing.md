@@ -236,14 +236,20 @@ armed), as it already refused one the DA court could default.
 
 **Found on the way.**
 
-* **The hybrid graph-v5 fused tile is two heads.** The fusion inherits the values node's tile —
-  512 on every hybrid geometry — against a 256-lane head, so a hybrid graph-v5 fused leaf is
-  refused by the court as `FusedTileStraddlesHeads`, and admission (which checks the query
-  slice's tile, not the output's) does not refuse such a class. Graph-v6 (ADR-0102) now cuts that
-  one node's row at the head, so its fused leaves are dissectable; graph-v5 hybrids report
-  `supports_dissection() == false` and are not produced under where the k-ary court is armed.
-  Refusing them at admission is a refusal of classes a live chain may already hold — a fence of
-  its own, not taken here.
+* **A fused tile wider than a head is undissectable, and admission never asked.** The fusion
+  inherits the tile of the attention-table node it replaces, which the hybrid tables budget per
+  geometry: at the fuzz corpus's tiny geometry (the fixture the hybrid test executes) that is the
+  whole 64-lane row over 16-lane heads, so its graph-v5 fused leaf is refused by the court as
+  `FusedTileStraddlesHeads`, and admission (which checks the query slice's tile, not the
+  output's) does not refuse such a class. Graph-v6 (ADR-0102) cuts that one node's row at the
+  head, so its fused leaves are dissectable at every geometry by construction; a backend whose
+  class fails the check reports `supports_dissection() == false` and is not produced under where
+  the k-ary court is armed. The admission refusal is §10's Decision 6.
+  *Corrected 2026-09-11:* this bullet first said the tile was "512 on every hybrid geometry",
+  generalizing from the fixture. Probed over the shipped geometries (2B and 35B-A3B: 8 lanes;
+  27B: 4 lanes; every `n_ctx` from 8 to 131,072), the graph-v5 fused tile is inside its 256-lane
+  head — so the shipped graph-v5 hybrid rows ARE dissectable and their backends say so; what
+  graph-v6's head-width tile buys is that the property no longer depends on the budget.
 * **The gap guard read the wrong half of a file.** It cut "production" at the first
   `#[cfg(test)]`, and `qwen25_a16_backend.rs` carries a test-only helper a thousand lines above its
   trait impl — so the guard could never have gone red for that family. It now cuts at the first
@@ -273,6 +279,6 @@ and the producer guard.
   no rows, and its re-execution is not the same execution"). The attempt lane retains dense
   captures and is unaffected. The missing piece is the bottom's twin of ADR-0085's close from
   served intervals: the accused's rows around the one tile, served with their paths.
-* The admission refusal for classes whose fused sites cannot be dissected (a fence of its own).
+* ~~The admission refusal for classes whose fused sites cannot be dissected~~ — §10, Decision 6.
 * Step 6.
 

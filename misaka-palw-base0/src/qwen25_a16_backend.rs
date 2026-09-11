@@ -831,8 +831,9 @@ impl Qwen25A16Backend {
         &self,
         material: &[u8],
         carried_prompt: Option<&[u32]>,
+        accused_out_tile_carried: bool,
     ) -> Result<
-        (kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, crate::legs::Base0StepTilesV1, crate::legs::Base0CheckpointsV1, Vec<u32>, Vec<u32>),
+        (kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, crate::legs::Base0StepTilesV1, bool, crate::legs::Base0CheckpointsV1, Vec<u32>, Vec<u32>),
         String,
     > {
         let retention =
@@ -869,16 +870,29 @@ impl Qwen25A16Backend {
             self.step_ladder_cap,
             &mut |_| {},
         )?;
-        let tiles = match &retention {
-            crate::produce::Base0RetentionV1::Dense(_) => self.tiles_from_material_v1(&retention)?,
-            crate::produce::Base0RetentionV1::Folded(_) => {
-                if rerun.binding.committed_execution_root != binding.committed_execution_root {
-                    return Err("a folded capture keeps no rows, and its re-execution is not the same execution".to_string());
-                }
-                rerun.tiles
+        // `true` in the middle: the rows are an honest PREFIX, not the capture's own (ADR-0093
+        // Decision 7) — a fold whose re-execution is another execution, read with the accused's
+        // opened output tile and against the fold's own checkpoint leaves.
+        match &retention {
+            crate::produce::Base0RetentionV1::Dense(_) => {
+                Ok((binding, self.tiles_from_material_v1(&retention)?, false, rerun.checkpoints, prompt_ids, generated))
             }
-        };
-        Ok((binding, tiles, rerun.checkpoints, prompt_ids, generated))
+            crate::produce::Base0RetentionV1::Folded(fold) => {
+                if rerun.binding.committed_execution_root == binding.committed_execution_root {
+                    return Ok((binding, rerun.tiles, false, rerun.checkpoints, prompt_ids, generated));
+                }
+                if !accused_out_tile_carried {
+                    return Err(
+                        "a folded capture keeps no rows, and its re-execution is not the same execution — its bottom needs the \
+                         accused's opened output tile (its root claim's)"
+                            .to_string(),
+                    );
+                }
+                let leg = crate::legs::base0_checkpoint_leg_of_retention_v1(&binding, &fold.checkpoint_chunks, &fold.checkpoint_leaves)
+                    .map_err(|e| format!("the fold's checkpoint leg does not rebuild: {e:?}"))?;
+                Ok((binding, rerun.tiles, true, leg, prompt_ids, generated))
+            }
+        }
     }
 
     /// The dense tiles either retention can answer with: the ones it kept, or the ones a
@@ -1868,17 +1882,23 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         material: &[u8],
         narrowed: u64,
         carried_prompt: Option<&[u32]>,
+        accused_out_tile: Option<&kaspa_consensus_core::palw_attn_court_v1::PalwAttnRowOpeningV1>,
     ) -> Result<kaspa_consensus_core::palw_attn_responder_v1::PalwAttnSiteEvidenceV1, String> {
         if !self.court_capable {
             return Err("the v1 class carries no capture to read a fused site out of".to_string());
         }
-        let (binding, tiles, checkpoints, prompt_ids, generated) = self.attn_capture_parts_v1(material, carried_prompt)?;
+        let (binding, tiles, prefix, checkpoints, prompt_ids, generated) =
+            self.attn_capture_parts_v1(material, carried_prompt, accused_out_tile.is_some())?;
+        let rows = match (prefix, accused_out_tile) {
+            (true, Some(accused_out_tile)) => crate::attn_responder::Base0AttnRowsV1::HonestPrefix { honest: &tiles, accused_out_tile },
+            _ => crate::attn_responder::Base0AttnRowsV1::Committed(&tiles),
+        };
         let inventory = crate::inventory::a16_inventory_v1(&self.artifact, &self.profile).map_err(|e| format!("{e:?}"))?;
         let (artifact, plan) = (&self.artifact, self.plan.as_ref());
         let (profile, ctx, generated) = (&binding.shape_profile, &binding.job_context, &generated);
         crate::attn_responder::base0_attn_site_evidence_v1(
             &binding,
-            &tiles,
+            rows,
             &checkpoints,
             narrowed,
             inventory.operands(),
@@ -2935,7 +2955,7 @@ mod free_prompt_tests {
         };
 
         for &narrowed in &fused_at_last {
-            let evidence = backend.attn_site_evidence(&honest.material, narrowed, None).expect("the honest capture yields its evidence");
+            let evidence = backend.attn_site_evidence(&honest.material, narrowed, None, None).expect("the honest capture yields its evidence");
             let site = evidence.site_v1(root, false).expect("the site derives");
             let anchored = evidence.site_v1(root, true).expect("and with its anchor");
             assert!(anchored.site.every_position_is_checkpointed, "the v5 row registers the tiled map: the anchor route");
@@ -2982,7 +3002,7 @@ mod free_prompt_tests {
         // hazard ADR-0093 Decision 4 names, which is why inputs must be the capture's exactly.
         {
             let narrowed = fused_at_last[0];
-            let mut skewed = backend.attn_site_evidence(&honest.material, narrowed, None).expect("evidence");
+            let mut skewed = backend.attn_site_evidence(&honest.material, narrowed, None, None).expect("evidence");
             let site = skewed.site_v1(root, false).expect("site");
             let anchored = skewed.site_v1(root, true).expect("site");
             let committed = palw_attn_opened_lanes_v1(&skewed.out_tile, &anchored.binding, site.head_lanes.2 as usize).expect("opens");
@@ -3021,7 +3041,7 @@ mod free_prompt_tests {
                 let honest_round = skewed.round_v1(&site, &phase).expect("computes");
                 // The skewed responder's round no longer folds to the honest root it filed.
                 assert!(phase.clone().apply_round(&honest_round, daa, 10).is_err(), "a skewed input breaks the fold");
-                let exact = backend.attn_site_evidence(&honest.material, narrowed, None).expect("evidence").round_v1(&site, &phase).expect("computes");
+                let exact = backend.attn_site_evidence(&honest.material, narrowed, None, None).expect("evidence").round_v1(&site, &phase).expect("computes");
                 phase.apply_round(&exact, daa, 10).expect("the exact round folds");
                 let last = (phase.child_ranges().len() - 1) as u8;
                 choose(&mut phase, last, daa + 1);
@@ -3032,8 +3052,8 @@ mod free_prompt_tests {
         // ---- forged: the output tile of the last fused leaf moved by one lane ----
         let narrowed = *fused_at_last.last().expect("a fused leaf");
         let lying = backend.execute_with_injected_fault(&job, &prompt, narrowed).expect("a forged capture commits");
-        let accused = backend.attn_site_evidence(&lying.material, narrowed, None).expect("the accused capture's commitments open");
-        let challenger = backend.attn_site_evidence(&honest.material, narrowed, None).expect("the challenger's own evidence");
+        let accused = backend.attn_site_evidence(&lying.material, narrowed, None, None).expect("the accused capture's commitments open");
+        let challenger = backend.attn_site_evidence(&honest.material, narrowed, None, None).expect("the challenger's own evidence");
         let site = accused.site_v1(root, false).expect("the site derives");
         let anchored = accused.site_v1(root, true).expect("and with its anchor");
         let honest_root = accused.root_claim_v1(&site).expect("the inputs are the history's");
@@ -3079,6 +3099,149 @@ mod free_prompt_tests {
             check_attn_dissect_bottom_v1(&phase, &bottom, &anchored.binding, &anchored.site, true),
             Ok(PalwAttnCourtVerdictV1::ExecutorGuilty),
             "the forged row is convicted at the tile its lie hides in"
+        );
+    }
+
+    /// **ADR-0093 Decision 7: a forged FOLD is bottomed without one row the accused must serve.**
+    ///
+    /// The free-prompt lane retains a fold — no rows — and a forged fold's re-execution is the
+    /// honest execution, so the capture alone opens nothing it committed. What the challenger has
+    /// instead is enough: its own rows before the disputed leaf (the court narrowed to the first
+    /// leaf it could not reproduce) and the accused's own opened output tile, which the root claim
+    /// carried on chain. Pinned on one forged execution retained both ways:
+    ///
+    /// * the fold without the tile is refused by name — the limitation, with its remedy in the words;
+    /// * the fold WITH the tile yields the dense capture's evidence exactly, opening for opening;
+    /// * a tile that is not the accused's (the honest one, at the same leaf) opens nothing;
+    /// * the least lie's dissection, bottomed out of the fold's evidence, convicts.
+    #[test]
+    fn a_forged_fold_is_bottomed_from_the_honest_prefix_and_the_root_claims_tile() {
+        use kaspa_consensus_core::palw_attn_court_v1::{
+            PALW_ATTN_COURT_OBJECT_VERSION_V1, PalwAttnCourtVerdictV1, PalwAttnDissectChoiceV1, PalwAttnDissectPhaseV1,
+            check_attn_dissect_bottom_v1, palw_attn_opened_lanes_v1,
+        };
+        use kaspa_consensus_core::palw_bisect::PalwBisectTurnV1;
+        use kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v5;
+        use kaspa_consensus_core::palw_step::{PalwStepOpKindV1, canonical_step_coordinates};
+
+        let geometry = v5_geometry();
+        let artifact = v5_artifact(geometry);
+        let profile = qwen25_a16_artifact_row_profile_v5(geometry).expect("the v5 projection is a valid profile");
+        let backend = Qwen25A16Backend::from_registered_profile(artifact.clone(), NETWORK.to_vec(), profile.clone(), (20, 4))
+            .expect("the fused row is servable");
+        let root = crate::inventory::a16_inventory_v1(&artifact, &profile).expect("the inventory").root();
+        let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x0093)).expect("the anchor implies a job");
+        let honest = backend.execute(&job, &prompt).expect("the fused class runs");
+        let binding = crate::produce::base0_material_decode_any_v1(&honest.material).expect("decodes").binding().clone();
+        let last_call = job.exact_decode_tokens.saturating_sub(1);
+        let narrowed = (0..binding.step_leaf_count)
+            .rfind(|i| {
+                let c = canonical_step_coordinates(&profile, &binding.job_context, *i).expect("a coordinate");
+                c.call_index == last_call && profile.resolve_node_slot(c.node_slot).is_some_and(|(n, _)| n.op_kind == PalwStepOpKindV1::AttnFused)
+            })
+            .expect("a fused leaf at the last call");
+
+        // One forged execution, retained both ways: the drill's dense capture, and its fold.
+        let lying = backend.execute_with_injected_fault(&job, &prompt, narrowed).expect("a forged capture commits");
+        let cap = backend.step_ladder_cap;
+        let mut run = a16_execute_for_attempt_capped_v1(&artifact, &profile, backend.plan.as_ref(), &job, &prompt, cap).expect("runs");
+        {
+            let (ctx_hash, profile_hash) = (job.context_hash(), profile.shape_profile_id());
+            let slot = run.tiles.tiles.iter_mut().find(|(i, _)| *i == narrowed).expect("the tile");
+            slot.1.values_le[0] = slot.1.values_le[0].wrapping_add(1);
+            run.tiles.leaves[narrowed as usize] = kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &slot.1);
+        }
+        run.binding = crate::legs::base0_binding_from_capture_with_profile_capped_v1(
+            &profile,
+            &job,
+            &run.tiles,
+            &run.checkpoints,
+            &kaspa_consensus_core::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(
+                kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+            ),
+            run.trace_root,
+            crate::produce::base0_activation_leg_root_v1(&job),
+            cap,
+        )
+        .expect("the forged binding");
+        run.step_tree = Some(
+            crate::fp_capture::Base0SparseStepTreeV1::from_leaves_capped_v1(
+                &run.tiles.leaves,
+                crate::fp_capture::palw_base0_sparse_retain_level_v1(cap),
+                cap,
+            )
+            .expect("the fold of the forged leaves"),
+        );
+        let prompt_ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let fold = crate::produce::base0_fp_material_encode_v2(&run, &prompt_ids).expect("the fold retains");
+        assert_eq!(
+            crate::produce::base0_material_decode_any_v1(&fold).expect("decodes").binding(),
+            crate::produce::base0_material_decode_any_v1(&lying.material).expect("decodes").binding(),
+            "one forged execution, two retentions"
+        );
+
+        // Without the accused's tile: refused by name.
+        let refused = backend.attn_site_evidence(&fold, narrowed, None, None).expect_err("a fold keeps no rows");
+        assert!(refused.contains("root claim"), "the refusal names the remedy: {refused}");
+        // With it: the dense capture's evidence, exactly.
+        let from_dense = backend.attn_site_evidence(&lying.material, narrowed, None, None).expect("the dense capture opens");
+        let from_fold =
+            backend.attn_site_evidence(&fold, narrowed, None, Some(&from_dense.out_tile)).expect("the fold opens through the prefix");
+        assert_eq!(from_fold, from_dense, "the fold's evidence IS the dense capture's, opening for opening");
+        // A tile that is not the accused's opens nothing.
+        let honest_tile = backend.attn_site_evidence(&honest.material, narrowed, None, None).expect("the honest capture opens").out_tile;
+        let wrong = backend.attn_site_evidence(&fold, narrowed, None, Some(&honest_tile)).expect_err("not the accused's tile");
+        assert!(wrong.contains("do not root") || wrong.contains("not the accused"), "{wrong}");
+
+        // The least lie's dissection, bottomed out of the FOLD's evidence.
+        let session = Hash64::from_u64_word(0x5E57);
+        let site = from_fold.site_v1(root, false).expect("the site derives");
+        let anchored = from_fold.site_v1(root, true).expect("and with its anchor");
+        let honest_root = from_fold.root_claim_v1(&site).expect("the inputs are the history's");
+        let forged_tile = palw_attn_opened_lanes_v1(&from_fold.out_tile, &anchored.binding, site.head_lanes.2 as usize).expect("opens");
+        let values = site.site.params.values;
+        let finalize = |v: &[i64]| kaspa_consensus_core::palw_base0_a16::a16_attn_finalize_v1(v, values);
+        let lane = (0..forged_tile.len()).find(|l| finalize(&honest_root.claim.v_acc)[*l] != forged_tile[*l]).expect("a moved lane");
+        let (mut lo, mut hi) = (-(1i64 << 44), 1i64 << 44);
+        let at = |delta: i64| {
+            let mut v = honest_root.claim.v_acc.clone();
+            v[lane] += delta;
+            finalize(&v)[lane]
+        };
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if at(mid) < forged_tile[lane] { lo = mid + 1 } else { hi = mid }
+        }
+        let mut lying_root = honest_root.clone();
+        lying_root.claim.v_acc[lane] += lo;
+        let mut phase = PalwAttnDissectPhaseV1::open_with_arity(
+            session,
+            &lying_root,
+            site.head_lanes,
+            site.history_positions,
+            &forged_tile,
+            values,
+            2,
+            site.tile_positions,
+            0,
+            10,
+            true,
+        )
+        .expect("the lie opens the phase");
+        let mut daa = 1;
+        while phase.turn() != PalwBisectTurnV1::Terminal {
+            let mut round = from_fold.round_v1(&site, &phase).expect("computes");
+            round.children[0].v_acc[lane] += lo;
+            phase.apply_round(&round, daa, 10).expect("the forger's disclosure folds to its own lie");
+            let choice = PalwAttnDissectChoiceV1 { version: PALW_ATTN_COURT_OBJECT_VERSION_V1, session_id: session, round: phase.round(), child: 0 };
+            phase.apply_choice(&choice, daa + 1, 10).expect("a legal choice");
+            daa += 2;
+        }
+        let bottom = from_fold.bottom_v1(&anchored, &phase).expect("the bottom opens the accused's commitments through the prefix");
+        assert_eq!(
+            check_attn_dissect_bottom_v1(&phase, &bottom, &anchored.binding, &anchored.site, true),
+            Ok(PalwAttnCourtVerdictV1::ExecutorGuilty),
+            "the forged fold is convicted at the tile its lie hides in"
         );
     }
 

@@ -309,11 +309,20 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     /// prompt is re-derived from the anchor), as [`Self::refutation_for_free_prompt_index`] takes
     /// them. `Err` by default: a family that cannot answer says so through
     /// [`Self::supports_dissection`] before a court is armed over it.
+    ///
+    /// `accused_out_tile` is the accused's committed output tile, opened — the one its
+    /// `CourtAttnRootClaimed` carried on chain (ADR-0093 Decision 7). A FOLD keeps no rows and is
+    /// re-executed; when that re-execution is not the committed execution (a forged claim), the
+    /// evidence is built from the re-execution's rows BEFORE the disputed leaf — the court narrowed
+    /// to the first leaf the challenger could not reproduce, so they are the accused's own — and
+    /// this tile, opened against the accused's root without one row the accused must serve. `None`
+    /// keeps the capture's own rows, and a forged fold is refused by name.
     fn attn_site_evidence(
         &self,
         _material: &[u8],
         _narrowed: u64,
         _carried_prompt: Option<&[u32]>,
+        _accused_out_tile: Option<&crate::palw_attn_court_v1::PalwAttnRowOpeningV1>,
     ) -> Result<crate::palw_attn_responder_v1::PalwAttnSiteEvidenceV1, String> {
         Err("this family cannot read a fused site out of its capture".to_string())
     }

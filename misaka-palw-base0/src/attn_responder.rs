@@ -15,7 +15,7 @@ use kaspa_consensus_core::palw_attn_court_v1::{PalwAttnCheckpointAnchorV1, PalwA
 use kaspa_consensus_core::palw_attn_responder_v1::{PalwAttnAnchorEvidenceV1, PalwAttnSiteEvidenceV1, PalwAttnSiteInputsV1};
 use kaspa_consensus_core::palw_step::{PalwStepCoordinateV1, canonical_step_leaf_index};
 use kaspa_consensus_core::palw_step_leg::{
-    PalwStepMerkleTreeV1, PalwStepOpeningV1, PalwStepTileLeafV1, state_chunk_leaf_hash_v1, state_chunks_root_v1,
+    PalwStepMerkleTreeV1, PalwStepOpeningV1, PalwStepPrefixTreeV1, PalwStepTileLeafV1, state_chunk_leaf_hash_v1, state_chunks_root_v1,
     step_merkle_path_capped_v1, step_merkle_root_capped_v1,
 };
 use kaspa_hashes::Hash64;
@@ -24,15 +24,34 @@ fn lanes_of(leaf: &PalwStepTileLeafV1) -> Vec<i32> {
     leaf.values_le.chunks_exact(4).map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect()
 }
 
+/// **Where a fused site's committed rows are read from** (ADR-0093 Decisions 1 and 7).
+pub enum Base0AttnRowsV1<'a> {
+    /// The capture's OWN committed rows: a dense capture's tiles, or a fold re-executed into the
+    /// same execution (its root reproduced). Opened against the tree they build, which must be the
+    /// binding's.
+    Committed(&'a crate::legs::Base0StepTilesV1),
+    /// **A fold whose re-execution is NOT the committed execution** — the forged claim a fold
+    /// cannot re-derive, because it keeps no rows. The rows before the disputed leaf are the
+    /// challenger's own (`honest`): the court narrowed to the FIRST leaf the challenger could not
+    /// reproduce, so every earlier committed leaf is one the challenger's execution computes. The
+    /// disputed leaf is the accused's own opened output tile — its root claim's, on chain. Opened
+    /// against the accused's root through [`PalwStepPrefixTreeV1`], and refused by name unless that
+    /// root IS the binding's: a prefix that is not the accused's opens nothing.
+    HonestPrefix { honest: &'a crate::legs::Base0StepTilesV1, accused_out_tile: &'a PalwAttnRowOpeningV1 },
+}
+
 /// **The evidence one capture yields about the fused site at `narrowed`.**
 ///
-/// * `binding` / `tiles` — the CAPTURE's own commitment and its committed rows: the accused's
-///   retained tiles when the capture is the accused's, so the openings prove against the claim's
-///   step tree even when the execution is a forgery (the bottom must open what the claim
-///   committed, not what an honest re-execution computes). Refused unless they root to the binding.
-/// * `checkpoints` — the checkpoint leg, from a re-execution: a capture retains none under the
-///   per-position cadence. Refused unless its leaves root to the capture's own
-///   `checkpoint_merkle_root`, so a leg that is not the capture's is never passed off as its anchor.
+/// * `binding` / `rows` — the CAPTURE's own commitment and where its committed rows come from
+///   ([`Base0AttnRowsV1`]): the accused's retained tiles when the capture is the accused's, so the
+///   openings prove against the claim's step tree even when the execution is a forgery (the bottom
+///   must open what the claim committed, not what an honest re-execution computes); or, for a
+///   fold that re-executes into another execution, the honest prefix and the accused's opened
+///   output tile. Refused unless they root to the binding.
+/// * `checkpoints` — the checkpoint leg: a re-execution's for a capture that reproduces its own
+///   execution, the fold's own retained leaves otherwise. Refused unless its leaves root to the
+///   capture's own `checkpoint_merkle_root`, so a leg that is not the capture's is never passed off
+///   as its anchor.
 /// * `operands` / `artifact_root` — the family's operand inventory under the class's profile; the
 ///   site's four registered narrowings are opened out of it by the one description of their names
 ///   (`palw_attn_site_operand_names_v2`), so the openings filed are the ones the court asks for.
@@ -46,7 +65,7 @@ fn lanes_of(leaf: &PalwStepTileLeafV1) -> Vec<i32> {
 #[allow(clippy::too_many_arguments)]
 pub fn base0_attn_site_evidence_v1(
     binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
-    tiles: &crate::legs::Base0StepTilesV1,
+    rows: Base0AttnRowsV1<'_>,
     checkpoints: &crate::legs::Base0CheckpointsV1,
     narrowed: u64,
     operands: &[PalwArtifactOperandV1],
@@ -56,6 +75,9 @@ pub fn base0_attn_site_evidence_v1(
 ) -> Result<PalwAttnSiteEvidenceV1, String> {
     let profile = &binding.shape_profile;
     let ctx = &binding.job_context;
+    let tiles = match rows {
+        Base0AttnRowsV1::Committed(tiles) | Base0AttnRowsV1::HonestPrefix { honest: tiles, .. } => tiles,
+    };
     if tiles.tiles.is_empty() || tiles.leaves.is_empty() {
         return Err("the capture holds no dense rows; a fused site's evidence opens committed rows".to_string());
     }
@@ -78,23 +100,73 @@ pub fn base0_attn_site_evidence_v1(
 
     // The committed rows by index, and the tree they root — built once for every opening below.
     let by_index: HashMap<u64, &PalwStepTileLeafV1> = tiles.tiles.iter().map(|(i, leaf)| (*i, leaf)).collect();
-    let tree = PalwStepMerkleTreeV1::build_capped_v1(&tiles.leaves, step_ladder_cap).map_err(|e| format!("{e:?}"))?;
-    if tree.root() != binding.step_merkle_root {
-        return Err("the capture's leaves do not root to its own binding".to_string());
+    enum Tree<'a> {
+        Whole(PalwStepMerkleTreeV1),
+        Prefix(PalwStepPrefixTreeV1, &'a PalwAttnRowOpeningV1),
     }
+    let tree = match rows {
+        Base0AttnRowsV1::Committed(_) => {
+            let tree = PalwStepMerkleTreeV1::build_capped_v1(&tiles.leaves, step_ladder_cap).map_err(|e| format!("{e:?}"))?;
+            if tree.root() != binding.step_merkle_root {
+                return Err("the capture's leaves do not root to its own binding".to_string());
+            }
+            Tree::Whole(tree)
+        }
+        Base0AttnRowsV1::HonestPrefix { accused_out_tile, .. } => {
+            if accused_out_tile.opening.leaf_index != narrowed {
+                return Err(format!(
+                    "the accused's opened output tile is leaf {}, and the court narrowed to {narrowed}",
+                    accused_out_tile.opening.leaf_index
+                ));
+            }
+            let before = tiles.leaves.get(..narrowed as usize).ok_or_else(|| format!("the honest rows end before leaf {narrowed}"))?;
+            let mut prefix = before.to_vec();
+            prefix.push(accused_out_tile.opening.leaf_hash);
+            let tree = PalwStepPrefixTreeV1::build_capped_v1(binding.step_leaf_count, &prefix, &accused_out_tile.opening, step_ladder_cap)
+                .map_err(|e| format!("the honest rows before the disputed leaf are not the accused's: {e}"))?;
+            if tree.root() != binding.step_merkle_root {
+                return Err(
+                    "the honest rows before the disputed leaf and the accused's opened tile do not root to the accused's binding \
+                     — the first divergence is not this leaf"
+                        .to_string(),
+                );
+            }
+            Tree::Prefix(tree, accused_out_tile)
+        }
+    };
     let opening = |index: u64| -> Result<PalwAttnRowOpeningV1, String> {
-        let leaf = by_index.get(&index).ok_or_else(|| format!("the capture holds no committed row at leaf {index}"))?;
-        let leaf_hash = *tiles.leaves.get(index as usize).ok_or_else(|| format!("leaf {index} is outside the capture"))?;
-        let siblings = tree.path_v1(index as usize).map_err(|e| format!("{e:?}"))?;
-        Ok(PalwAttnRowOpeningV1 { leaf: (*leaf).clone(), opening: PalwStepOpeningV1 { leaf_index: index, leaf_hash, siblings } })
+        match &tree {
+            Tree::Whole(tree) => {
+                let leaf = by_index.get(&index).ok_or_else(|| format!("the capture holds no committed row at leaf {index}"))?;
+                let leaf_hash = *tiles.leaves.get(index as usize).ok_or_else(|| format!("leaf {index} is outside the capture"))?;
+                let siblings = tree.path_v1(index as usize).map_err(|e| format!("{e:?}"))?;
+                Ok(PalwAttnRowOpeningV1 { leaf: (*leaf).clone(), opening: PalwStepOpeningV1 { leaf_index: index, leaf_hash, siblings } })
+            }
+            Tree::Prefix(tree, accused_out_tile) => {
+                if index == narrowed {
+                    return Ok((*accused_out_tile).clone());
+                }
+                if index > narrowed {
+                    return Err(format!("leaf {index} is after the disputed leaf, where the honest rows are not the accused's"));
+                }
+                let leaf = by_index.get(&index).ok_or_else(|| format!("the honest rows hold no row at leaf {index}"))?;
+                Ok(PalwAttnRowOpeningV1 { leaf: (*leaf).clone(), opening: tree.opening_v1(index).map_err(|e| format!("{e:?}"))? })
+            }
+        }
     };
     let index_of = |call_index: u32, node_slot: u32, position: u32, tile_index: u32| -> Result<u64, String> {
         canonical_step_leaf_index(profile, ctx, &PalwStepCoordinateV1 { call_index, node_slot, position, tile_index })
             .ok_or_else(|| format!("({call_index}, {node_slot}, {position}, {tile_index}) is not a canonical coordinate of this job"))
     };
 
-    // The output tile the ladder narrowed to, and the query row the disputed head reads.
+    // The output tile the ladder narrowed to, and the query row the disputed head reads. On the
+    // prefix route the tile is the accused's, carried in: its preimage must open against the
+    // accused's own commitment, which the site's bottom binding checks lane by lane.
     let out_tile = opening(narrowed)?;
+    if matches!(tree, Tree::Prefix(..)) {
+        kaspa_consensus_core::palw_attn_court_v1::palw_attn_opened_lanes_v1(&out_tile, &site.binding, site.head_lanes.2 as usize)
+            .map_err(|e| format!("the accused's opened output tile does not open against its own binding: {e}"))?;
+    }
     let query = opening(index_of(s.disputed.call_index, s.query_slot, s.disputed.position, s.query_tile_index)?)?;
     let q_row = lanes_of(&query.leaf);
     let qh = q_row

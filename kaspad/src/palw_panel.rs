@@ -2116,6 +2116,10 @@ impl PalwPanelService {
         // the dissection reads the same one.
         let mut attn_evidence: HashMap<(Hash64, bool), Arc<kaspa_consensus_core::palw_attn_responder_v1::PalwAttnSiteEvidenceV1>> =
             HashMap::new();
+        // ADR-0093 Decision 7: the accused's opened output tile per session, read off the chain once
+        // (with the DAA of the last look, so a miss is retried on a throttle, never every tick).
+        let mut attn_root_tiles: HashMap<Hash64, (u64, Option<kaspa_consensus_core::palw_attn_court_v1::PalwAttnRowOpeningV1>)> =
+            HashMap::new();
         let mut receipts: HashMap<Hash64, Vec<PalwSeatReceiptV2>> = HashMap::new();
         // **Keyed by the PANEL, not by the claim** (ADR-0060's redraw, found while landing
         // ADR-0065 D4). A claim whose panel concludes nothing is revived once and binds a SECOND
@@ -2501,6 +2505,7 @@ impl PalwPanelService {
             let court_duties = session.palw_court_duties_v2(vec![bond_key]);
             let mut court_stalls: BTreeMap<&'static str, usize> = BTreeMap::new();
             attn_evidence.retain(|(session_id, _), _| court_duties.iter().any(|d| d.session_id == *session_id));
+            attn_root_tiles.retain(|session_id, _| court_duties.iter().any(|d| d.session_id == *session_id));
             for duty in &court_duties {
                 let move_round = court_move_round_v1(duty);
                 if let Some(sent_daa) = court_moved.get(&(duty.session_id, move_round, duty.i_am_responder))
@@ -2784,12 +2789,57 @@ impl PalwPanelService {
                         capture.to_vec()
                     };
                     let key = (duty.session_id, from_accused);
+                    // **The bottom is opened against the ACCUSED's commitments, and a fold keeps
+                    // none of its rows** (ADR-0093 Decision 7). What a forged fold cannot re-derive
+                    // is its output tile — so the close reads it where the accused was made to file
+                    // it: its root claim, on chain. Only a tile whose opening proves against THIS
+                    // claim's root at THIS leaf is kept; the evidence then re-checks it against the
+                    // accused's binding before a row is opened.
+                    let accused_out_tile = if mv == AttnMove::Close {
+                        match attn_root_tiles.get(&duty.session_id) {
+                            Some((_, Some(tile))) => Some(tile.clone()),
+                            Some((looked, None)) if current_daa < looked.saturating_add(25) => None,
+                            _ => {
+                                let params = &self.consensus_config.params;
+                                let (window, cap) = match &params.palw_consensus_mode {
+                                    kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
+                                        (bundle.state.window_court(), bundle.court.max_step_leaf_count())
+                                    }
+                                    _ => (0, 0),
+                                };
+                                let not_before = duty.session_deadline_daa.saturating_sub(window);
+                                let span = current_daa.saturating_sub(not_before).saturating_add(64).min(1 << 16) as usize;
+                                let sid = duty.session_id;
+                                let filed =
+                                    session.clone().spawn_blocking(move |c| attn_root_out_tiles_from_chain_v1(c, sid, not_before, span)).await;
+                                let execution_root = duty.execution_root;
+                                let tile = filed
+                                    .into_iter()
+                                    .find(|(binding, tile)| {
+                                        binding.committed_execution_root == execution_root
+                                            && tile.opening.leaf_index == narrowed
+                                            && kaspa_consensus_core::palw_step_leg::step_opening_root_capped_v1(
+                                                binding.step_leaf_count,
+                                                &tile.opening,
+                                                cap,
+                                            )
+                                            .is_ok_and(|root| root == binding.step_merkle_root)
+                                    })
+                                    .map(|(_, tile)| tile);
+                                attn_root_tiles.insert(duty.session_id, (current_daa, tile.clone()));
+                                tile
+                            }
+                        }
+                    } else {
+                        None
+                    };
                     let evidence = match attn_evidence.get(&key) {
                         Some(held) => held.clone(),
                         None => {
                             let carried: Option<Vec<u32>> = fp_job.as_ref().map(|job| job.prompt_token_ids.clone());
                             let Ok((_offloaded, built)) =
-                                offload(backend, move |b| b.attn_site_evidence(&source, narrowed, carried.as_deref())).await
+                                offload(backend, move |b| b.attn_site_evidence(&source, narrowed, carried.as_deref(), accused_out_tile.as_ref()))
+                                    .await
                             else {
                                 *court_stalls.entry("the dissection evidence task did not finish").or_default() += 1;
                                 continue;
@@ -4528,6 +4578,76 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
     }
 }
 
+/// **Every lifecycle object the selected chain ACCEPTED, newest first, down to `not_before_daa`**
+/// (ADR-0093 Decision 7) — back from the sink along selected parents, through each chain block's
+/// acceptance data (the merged blocks' transactions it accepted, in reverse), stopping below the
+/// height or after `max_chain_blocks` chain blocks. A transaction the chain did not accept, or on
+/// another subnetwork, or whose payload does not decode, is never visited.
+fn walk_accepted_lifecycle_objects_v1(
+    consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
+    not_before_daa: u64,
+    max_chain_blocks: usize,
+    visit: &mut dyn FnMut(PalwConsensusObjectV2),
+) {
+    let mut cursor = consensus.get_sink();
+    for _ in 0..max_chain_blocks {
+        let Ok(header) = consensus.get_header(cursor) else { return };
+        if header.daa_score < not_before_daa {
+            return;
+        }
+        if let Ok(acceptance) = consensus.get_block_acceptance_data(cursor) {
+            for merged in acceptance.iter().rev() {
+                if merged.accepted_transactions.is_empty() {
+                    continue;
+                }
+                let Ok(block) = consensus.get_block(merged.block_hash) else { continue };
+                for entry in merged.accepted_transactions.iter().rev() {
+                    let Some(tx) = block.transactions.get(entry.index_within_block as usize) else { continue };
+                    if tx.subnetwork_id != SUBNETWORK_ID_PALW_LIFECYCLE {
+                        continue;
+                    }
+                    if let Ok(payload) = borsh::from_slice::<PalwLifecycleTxPayloadV2>(&tx.payload) {
+                        visit(payload.object);
+                    }
+                }
+            }
+        }
+        let Ok(ghostdag) = consensus.get_ghostdag_data(cursor) else { return };
+        if ghostdag.selected_parent == cursor {
+            return;
+        }
+        cursor = ghostdag.selected_parent;
+    }
+}
+
+/// **The accused's opened output tile, read back off the chain** (ADR-0093 Decision 7).
+///
+/// A forged fold's bottom needs the one thing only the accused could file — and the chain made it
+/// file it: its `CourtAttnRootClaimed` carries the committed output tile at the narrowed leaf,
+/// opened against the accused's own root. The session record keeps the phase and not the tile, so
+/// the tile is read from the accepted object ([`walk_accepted_lifecycle_objects_v1`], down to the
+/// session's own opening — no root claim about it is older). Every root claim filed for
+/// `session_id` in that span is returned with the binding it named, OLDEST first: the first that
+/// stood is the one that opened the phase, and the caller keeps only one whose opening proves
+/// against the claim's root, so a refused or foreign object cannot be the tile.
+fn attn_root_out_tiles_from_chain_v1(
+    consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
+    session_id: Hash64,
+    not_before_daa: u64,
+    max_chain_blocks: usize,
+) -> Vec<(kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, kaspa_consensus_core::palw_attn_court_v1::PalwAttnRowOpeningV1)> {
+    let mut found = Vec::new();
+    walk_accepted_lifecycle_objects_v1(consensus, not_before_daa, max_chain_blocks, &mut |object| {
+        if let PalwConsensusObjectV2::CourtAttnRootClaimed { session_id: filed, binding, out_tile, .. } = object
+            && filed == session_id
+        {
+            found.push((*binding, out_tile));
+        }
+    });
+    found.reverse();
+    found
+}
+
 /// **A backend computation runs OFF the async runtime.** A seat's re-execution, a canonical
 /// inference, a refutation with its operand openings: seconds to minutes of CPU on a small host,
 /// and the panel's `worker` is a tokio task. A worker thread that runs one cannot park on the I/O
@@ -5911,6 +6031,124 @@ mod tests {
 }
 
 #[cfg(test)]
+mod accepted_objects_walk_tests {
+    use super::*;
+    use kaspa_consensus_core::BlockHashMap;
+    use kaspa_consensus_core::acceptance_data::{AcceptanceData, AcceptedTxEntry, MergesetBlockAcceptanceData};
+    use kaspa_consensus_core::block::Block;
+    use kaspa_consensus_core::errors::consensus::{ConsensusError, ConsensusResult};
+    use kaspa_consensus_core::header::Header;
+    use kaspa_consensus_core::trusted::ExternalGhostdagData;
+    use kaspa_consensus_core::BlockHash;
+
+    /// A selected chain and the blocks it merged — the five reads the walk makes, nothing else.
+    #[derive(Default)]
+    struct Chain {
+        sink: BlockHash,
+        headers: HashMap<BlockHash, Arc<Header>>,
+        parents: HashMap<BlockHash, BlockHash>,
+        acceptance: HashMap<BlockHash, Arc<AcceptanceData>>,
+        blocks: HashMap<BlockHash, Block>,
+    }
+
+    impl kaspa_consensus_core::api::ConsensusApi for Chain {
+        fn get_sink(&self) -> BlockHash {
+            self.sink
+        }
+        fn get_header(&self, hash: BlockHash) -> ConsensusResult<Arc<Header>> {
+            self.headers.get(&hash).cloned().ok_or(ConsensusError::HeaderNotFound(hash))
+        }
+        fn get_ghostdag_data(&self, hash: BlockHash) -> ConsensusResult<ExternalGhostdagData> {
+            let selected_parent = *self.parents.get(&hash).ok_or(ConsensusError::HeaderNotFound(hash))?;
+            Ok(ExternalGhostdagData {
+                blue_score: 0,
+                blue_work: 0.into(),
+                selected_parent,
+                mergeset_blues: vec![],
+                mergeset_reds: vec![],
+                blues_anticone_sizes: BlockHashMap::default(),
+            })
+        }
+        fn get_block_acceptance_data(&self, hash: BlockHash) -> ConsensusResult<Arc<AcceptanceData>> {
+            self.acceptance.get(&hash).cloned().ok_or(ConsensusError::HeaderNotFound(hash))
+        }
+        fn get_block(&self, hash: BlockHash) -> ConsensusResult<Block> {
+            self.blocks.get(&hash).cloned().ok_or(ConsensusError::HeaderNotFound(hash))
+        }
+    }
+
+    fn hash(n: u64) -> BlockHash {
+        BlockHash::from_u64_word(n)
+    }
+
+    fn lifecycle(claim: u64) -> Transaction {
+        let object = PalwConsensusObjectV2::ProducerDefaulted { claim: Hash64::from_u64_word(claim), receipts: vec![] };
+        let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).expect("encodes");
+        Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_PALW_LIFECYCLE, 0, payload)
+    }
+
+    fn other() -> Transaction {
+        Transaction::new(TX_VERSION, vec![], vec![], 0, kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE, 0, vec![1, 2, 3])
+    }
+
+    fn claim_of(object: &PalwConsensusObjectV2) -> u64 {
+        match object {
+            PalwConsensusObjectV2::ProducerDefaulted { claim, .. } => {
+                (0..64u64).find(|n| Hash64::from_u64_word(*n) == *claim).expect("a test claim")
+            }
+            _ => panic!("only the test's objects ride this chain"),
+        }
+    }
+
+    /// **ADR-0093 Decision 7's read: accepted objects only, newest first, down to the height.**
+    /// Four chain blocks at DAA 10/20/30/40 merging three side blocks: a lifecycle object the chain
+    /// ACCEPTED is visited, one it did not is not, another subnetwork's transaction is not, and the
+    /// walk stops below `not_before_daa` and after `max_chain_blocks`.
+    #[test]
+    fn the_walk_visits_what_the_chain_accepted_newest_first_and_stops_at_the_height() {
+        let mut chain = Chain { sink: hash(4), ..Default::default() };
+        for (block, daa, parent) in [(1u64, 10u64, 1u64), (2, 20, 1), (3, 30, 2), (4, 40, 3)] {
+            let mut header = Header::from_precomputed_hash(hash(block), vec![hash(parent)]);
+            header.daa_score = daa;
+            chain.headers.insert(hash(block), Arc::new(header));
+            chain.parents.insert(hash(block), hash(parent));
+        }
+        // Side block 13 (merged by 3): claims 5 and 6, only index 0 accepted. Side block 14 (merged
+        // by 4): claims 7 and 8 and a native transaction, all accepted. Side block 11 (merged by the
+        // lowest chain block): claim 9, accepted — but below any height the tests ask for.
+        let side = |n: u64, txs: Vec<Transaction>| {
+            Block::new(Header::from_precomputed_hash(hash(n), vec![]), txs)
+        };
+        chain.blocks.insert(hash(13), side(13, vec![lifecycle(5), lifecycle(6)]));
+        chain.blocks.insert(hash(14), side(14, vec![lifecycle(7), other(), lifecycle(8)]));
+        chain.blocks.insert(hash(11), side(11, vec![lifecycle(9)]));
+        let accepted = |block: u64, indices: &[u32]| MergesetBlockAcceptanceData {
+            block_hash: hash(block),
+            accepted_transactions: indices
+                .iter()
+                .map(|i| AcceptedTxEntry { transaction_id: Default::default(), index_within_block: *i })
+                .collect(),
+        };
+        chain.acceptance.insert(hash(4), Arc::new(vec![accepted(14, &[0, 1, 2])]));
+        chain.acceptance.insert(hash(3), Arc::new(vec![accepted(13, &[0])]));
+        chain.acceptance.insert(hash(2), Arc::new(vec![]));
+        chain.acceptance.insert(hash(1), Arc::new(vec![accepted(11, &[0])]));
+
+        let walk = |not_before: u64, max: usize| {
+            let mut seen = Vec::new();
+            walk_accepted_lifecycle_objects_v1(&chain, not_before, max, &mut |o| seen.push(claim_of(&o)));
+            seen
+        };
+        assert_eq!(walk(15, 100), vec![8, 7, 5], "accepted lifecycle objects only, newest first, down to DAA 15");
+        assert_eq!(walk(0, 100), vec![8, 7, 5, 9], "and the lowest block when the height allows it");
+        assert_eq!(walk(35, 100), vec![8, 7], "a height stops the walk");
+        assert_eq!(walk(0, 1), vec![8, 7], "and so does the block cap");
+        // Nothing in this chain is a root claim: the tile read finds none rather than a wrong one.
+        assert!(attn_root_out_tiles_from_chain_v1(&chain, Hash64::from_u64_word(1), 0, 100).is_empty());
+    }
+}
+
+#[cfg(test)]
 mod replay_rule_tests {
     use super::replay_licenses_v1;
     use kaspa_consensus_core::palw_backend::PalwReplayRootsV1;
@@ -6037,6 +6275,16 @@ mod court_responder_coverage_pin {
             assert!(panel.contains(built), "the panel builds `{built}` — the dissection's move");
         }
         assert!(panel.contains("b.attn_site_evidence("), "and every number comes from the capture's evidence");
+        // ADR-0093 Decision 7, in PRODUCTION code (cut at the test modules, not at the first
+        // `#[cfg(test)]`): the close reads the accused's tile off the chain and hands it to the
+        // evidence, so a forged fold's bottom is built from the root claim the accused filed.
+        let production = &whole[..whole.find("#[cfg(test)]\nmod tests {").expect("the test module")];
+        let close = production.find("let accused_out_tile = if mv == AttnMove::Close").expect("the close reads the accused's tile");
+        assert!(production[close..].contains("attn_root_out_tiles_from_chain_v1(c, sid, not_before, span)"), "off the chain");
+        assert!(
+            production[close..].contains("b.attn_site_evidence(&source, narrowed, carried.as_deref(), accused_out_tile.as_ref())"),
+            "and into the evidence the bottom is built from"
+        );
         assert_eq!(producer.matches("CourtAttnRootClaimed").count(), 0, "the producer does not file court moves at all");
         for (name, params) in [
             ("mainnet", kaspa_consensus_core::config::params::MAINNET_PARAMS),

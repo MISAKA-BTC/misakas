@@ -585,7 +585,7 @@ impl PalwClassSdk {
                 entry.model_id
             )
         })?;
-        kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v7(
+        kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v8(
             bundle,
             &entry.profile,
             &canonical,
@@ -596,6 +596,7 @@ impl PalwClassSdk {
             shape.court,
             false,
             shape.token_lift,
+            shape.fused_dissectable,
         )
         .map_err(|e| {
             format!("the {} registration would be refused by the admission gate, so nothing was signed or funded: {e}", entry.model_id)

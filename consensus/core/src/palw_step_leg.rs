@@ -210,6 +210,10 @@ pub enum PalwStepLegError {
     CheckpointNotCanonical { index: u32, got: u32, expected: u32 },
     #[error("state chunk count {got} exceeds the {max} cap")]
     StateChunksOutOfRange { got: usize, max: usize },
+    /// ADR-0093 Decision 7: a prefix the challenger holds is not the accused's committed prefix —
+    /// a left sibling on the accused's own path disagrees with the prefix's node at `level`.
+    #[error("the prefix is not the committed one: the accused's path disagrees with it at level {level}")]
+    PrefixIsNotTheCommittedOne { level: u32 },
 }
 
 impl From<PalwStepError> for PalwStepLegError {
@@ -393,6 +397,123 @@ impl PalwStepMerkleTreeV1 {
             index /= 2;
         }
         Ok(path)
+    }
+}
+
+/// **The ACCUSED's step tree over the prefix `[0, i]`, from what a challenger holds without the
+/// accused** (ADR-0093 Decision 7).
+///
+/// A court that narrowed to leaf `i` by the first child the challenger could not reproduce has
+/// established that the accused's leaves before `i` ARE the challenger's own — and the accused's
+/// OWN opening of `i` is on chain (the root claim carries the committed output tile, opened). That
+/// is enough to open every leaf `j ≤ i` against the accused's root, with no row served by the
+/// accused: a node wholly inside the prefix is built from the prefix's leaves, the node just right
+/// of the prefix at each level is the right sibling on `i`'s own path, and nothing else is on the
+/// path of any `j ≤ i`. The leaves after `i` — which a fold does not keep and a forger need not
+/// reveal — are never needed.
+///
+/// Every LEFT sibling on `i`'s path is compared with the prefix's own node as the tree is built,
+/// and the caller compares [`Self::root`] with the committed root: a prefix that is not the
+/// accused's is refused, never opened.
+#[derive(Clone, Debug)]
+pub struct PalwStepPrefixTreeV1 {
+    leaf_count: u64,
+    leaf_hashes: Vec<Hash64>,
+    /// `levels[ℓ]` is the accused tree's nodes `0..=(i >> ℓ)` at level `ℓ`.
+    levels: Vec<Vec<Hash64>>,
+    /// The accused's node just right of the prefix at level `ℓ`, where the prefix's last node
+    /// pairs with one — the right siblings of `i`'s path.
+    right: Vec<Option<Hash64>>,
+}
+
+impl PalwStepPrefixTreeV1 {
+    /// `prefix_leaf_hashes` are leaves `0..=i` (the last is the accused's `i`), `last` the accused's
+    /// opening of `i` in a tree of `leaf_count` leaves.
+    pub fn build_capped_v1(
+        leaf_count: u64,
+        prefix_leaf_hashes: &[Hash64],
+        last: &PalwStepOpeningV1,
+        max_step_leaf_count: u64,
+    ) -> Result<Self, PalwStepLegError> {
+        if leaf_count == 0 || leaf_count > max_step_leaf_count {
+            return Err(PalwStepLegError::LeafCountOutOfRange { got: leaf_count, max: max_step_leaf_count });
+        }
+        let k = prefix_leaf_hashes.len() as u64;
+        if k == 0 || k > leaf_count {
+            return Err(PalwStepLegError::LeafIndexOutOfRange { index: k.saturating_sub(1), count: leaf_count });
+        }
+        let i = k - 1;
+        if last.leaf_index != i || last.leaf_hash != prefix_leaf_hashes[i as usize] {
+            return Err(PalwStepLegError::LeafPreimageMismatch { leaf: "prefix's last" });
+        }
+        let cap = step_leg_max_opening_siblings_v1(max_step_leaf_count);
+        if last.siblings.len() > cap {
+            return Err(PalwStepLegError::OpeningTooDeep { got: last.siblings.len(), max: cap });
+        }
+        let mut levels: Vec<Vec<Hash64>> =
+            vec![prefix_leaf_hashes.iter().enumerate().map(|(j, leaf)| step_merkle_leaf(j as u64, leaf)).collect()];
+        let mut right = Vec::new();
+        let (mut at, mut width) = (i, leaf_count);
+        let mut path = last.siblings.iter();
+        while width > 1 {
+            let level = levels.last().expect("at least the leaf level");
+            let promoted = !width.is_multiple_of(2) && at == width - 1;
+            let mut outside = None;
+            if !promoted {
+                let sibling = *path.next().ok_or(PalwStepLegError::OpeningPathTooShort)?;
+                if at.is_multiple_of(2) {
+                    outside = Some(sibling);
+                } else if level[(at - 1) as usize] != sibling {
+                    return Err(PalwStepLegError::PrefixIsNotTheCommittedOne { level: right.len() as u32 });
+                }
+            }
+            let mut next = Vec::with_capacity(level.len().div_ceil(2));
+            let mut chunks = level.chunks_exact(2);
+            for pair in &mut chunks {
+                next.push(keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[pair[0].as_byte_slice(), pair[1].as_byte_slice()]));
+            }
+            if let [odd] = chunks.remainder() {
+                next.push(match outside {
+                    Some(sibling) => keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[odd.as_byte_slice(), sibling.as_byte_slice()]),
+                    None => *odd,
+                });
+            }
+            right.push(outside);
+            levels.push(next);
+            at /= 2;
+            width = width.div_ceil(2);
+        }
+        if path.next().is_some() {
+            return Err(PalwStepLegError::OpeningPathTooLong { extra: 1 });
+        }
+        Ok(Self { leaf_count, leaf_hashes: prefix_leaf_hashes.to_vec(), levels, right })
+    }
+
+    /// The root this prefix and the accused's path imply — the caller's to compare with the
+    /// committed one.
+    pub fn root(&self) -> Hash64 {
+        self.levels.last().and_then(|top| top.first().copied()).expect("a built tree has a root")
+    }
+
+    /// The accused's opening of leaf `j ≤ i`, exactly as [`step_opening_v1`] over the accused's
+    /// whole leaf vector would build it.
+    pub fn opening_v1(&self, j: u64) -> Result<PalwStepOpeningV1, PalwStepLegError> {
+        let leaf_hash = *self.leaf_hashes.get(j as usize).ok_or(PalwStepLegError::LeafIndexOutOfRange { index: j, count: self.leaf_count })?;
+        let (mut at, mut width) = (j, self.leaf_count);
+        let mut siblings = Vec::new();
+        for (depth, level) in self.levels[..self.levels.len() - 1].iter().enumerate() {
+            let promoted = !width.is_multiple_of(2) && at == width - 1;
+            if !promoted {
+                let partner = at ^ 1;
+                siblings.push(match level.get(partner as usize) {
+                    Some(node) => *node,
+                    None => self.right[depth].ok_or(PalwStepLegError::OpeningPathTooShort)?,
+                });
+            }
+            at /= 2;
+            width = width.div_ceil(2);
+        }
+        Ok(PalwStepOpeningV1 { leaf_index: j, leaf_hash, siblings })
     }
 }
 
@@ -3045,6 +3166,62 @@ mod state_chunk_opening_tests {
         // And the leaf is bound to BOTH the index and the chunk hash.
         assert_ne!(state_chunk_tree_leaf_v1(0, &h), state_chunk_tree_leaf_v1(1, &h));
         assert_ne!(state_chunk_tree_leaf_v1(0, &h), state_chunk_tree_leaf_v1(0, &Hash64::from_bytes([8; 64])));
+    }
+}
+
+#[cfg(test)]
+mod prefix_tree_tests {
+    use super::*;
+
+    fn leaf(tag: u64, j: u64) -> Hash64 {
+        Hash64::from_u64_word(tag.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ j)
+    }
+
+    /// **ADR-0093 Decision 7: the accused's tree over `[0, i]` is rebuilt from an honest prefix and
+    /// the accused's own opening of `i` — whatever the accused committed after `i`.** Every leaf
+    /// count to 40, every `i`, a suffix unlike the honest one: the root is the accused's, and every
+    /// `j ≤ i` opens exactly as the accused's whole tree opens it, verifying under the one checker.
+    #[test]
+    fn the_prefix_and_the_last_leafs_path_open_every_leaf_before_it_against_the_accused_root() {
+        for n in 1..=40u64 {
+            for i in 0..n {
+                let accused: Vec<Hash64> = (0..n).map(|j| if j <= i { leaf(1, j) } else { leaf(2, j) }).collect();
+                let root = step_merkle_root_v1(&accused).expect("a tree");
+                let last = step_opening_v1(&accused, i).expect("the accused's opening of i");
+                let tree = PalwStepPrefixTreeV1::build_capped_v1(n, &accused[..=i as usize], &last, PALW_STEP_LEG_MAX_LEAVES)
+                    .unwrap_or_else(|e| panic!("n {n}, i {i}: {e}"));
+                assert_eq!(tree.root(), root, "n {n}, i {i}");
+                for j in 0..=i {
+                    let opening = tree.opening_v1(j).expect("opens");
+                    assert_eq!(opening, step_opening_v1(&accused, j).expect("the whole tree's"), "n {n}, i {i}, j {j}");
+                    assert_eq!(step_opening_root_v1(n, &opening).expect("verifies"), root);
+                }
+                assert!(tree.opening_v1(i + 1).is_err(), "nothing past the prefix opens");
+            }
+        }
+    }
+
+    /// **A prefix that is not the accused's never yields the accused's root.** One leaf before `i`
+    /// differs: the build refuses by name where a left sibling disagrees, and where it cannot see
+    /// the difference (a leaf that only enters through the right siblings), the root differs.
+    #[test]
+    fn a_prefix_that_is_not_the_committed_one_is_refused_or_roots_elsewhere() {
+        for n in 2..=24u64 {
+            for i in 1..n {
+                for m in 0..i {
+                    let accused: Vec<Hash64> = (0..n).map(|j| leaf(3, j)).collect();
+                    let root = step_merkle_root_v1(&accused).expect("a tree");
+                    let last = step_opening_v1(&accused, i).expect("the accused's opening of i");
+                    let mut ours = accused[..=i as usize].to_vec();
+                    ours[m as usize] = leaf(4, m);
+                    match PalwStepPrefixTreeV1::build_capped_v1(n, &ours, &last, PALW_STEP_LEG_MAX_LEAVES) {
+                        Err(PalwStepLegError::PrefixIsNotTheCommittedOne { .. }) => {}
+                        Err(other) => panic!("n {n}, i {i}, m {m}: refused for the wrong reason: {other}"),
+                        Ok(tree) => assert_ne!(tree.root(), root, "n {n}, i {i}, m {m}: a different prefix must not root to the accused's tree"),
+                    }
+                }
+            }
+        }
     }
 }
 

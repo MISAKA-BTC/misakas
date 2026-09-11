@@ -1752,6 +1752,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         material: &[u8],
         narrowed: u64,
         carried_prompt: Option<&[u32]>,
+        accused_out_tile: Option<&kaspa_consensus_core::palw_attn_court_v1::PalwAttnRowOpeningV1>,
     ) -> Result<kaspa_consensus_core::palw_attn_responder_v1::PalwAttnSiteEvidenceV1, String> {
         let (Some(plan), Some(registered)) = (&self.plan, &self.profile) else {
             return Err("a backend with no registered graph carries no capture to read a fused site out of".to_string());
@@ -1786,23 +1787,37 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             self.step_ladder_cap,
         )?;
         // The rows are the CAPTURE's (the bottom opens what the claim committed); a fold keeps
-        // none and is re-executed, which must then be the same execution.
-        let tiles = match &retention {
-            crate::produce::Base0RetentionV1::Dense(_) => self.tiles_from_material_v1(&retention)?,
-            crate::produce::Base0RetentionV1::Folded(_) => {
-                if rerun.binding.committed_execution_root != binding.committed_execution_root {
-                    return Err("a folded capture keeps no rows, and its re-execution is not the same execution".to_string());
+        // none and is re-executed. When that re-execution is another execution (a forged claim),
+        // its rows before the disputed leaf are an honest PREFIX, read with the accused's opened
+        // output tile and against the fold's own checkpoint leaves (ADR-0093 Decision 7).
+        let (tiles, prefix, checkpoints) = match &retention {
+            crate::produce::Base0RetentionV1::Dense(_) => (self.tiles_from_material_v1(&retention)?, false, rerun.checkpoints),
+            crate::produce::Base0RetentionV1::Folded(fold) => {
+                if rerun.binding.committed_execution_root == binding.committed_execution_root {
+                    (rerun.tiles, false, rerun.checkpoints)
+                } else if accused_out_tile.is_none() {
+                    return Err(
+                        "a folded capture keeps no rows, and its re-execution is not the same execution — its bottom needs the \
+                         accused's opened output tile (its root claim's)"
+                            .to_string(),
+                    );
+                } else {
+                    let leg = crate::legs::base0_checkpoint_leg_of_retention_v1(&binding, &fold.checkpoint_chunks, &fold.checkpoint_leaves)
+                        .map_err(|e| format!("the fold's checkpoint leg does not rebuild: {e:?}"))?;
+                    (rerun.tiles, true, leg)
                 }
-                rerun.tiles
             }
         };
-        let checkpoints = rerun.checkpoints;
+        let rows = match (prefix, accused_out_tile) {
+            (true, Some(accused_out_tile)) => crate::attn_responder::Base0AttnRowsV1::HonestPrefix { honest: &tiles, accused_out_tile },
+            _ => crate::attn_responder::Base0AttnRowsV1::Committed(&tiles),
+        };
         let inventory = crate::inventory::qwen36_inventory_v1(&self.artifact, registered).map_err(|e| format!("{e:?}"))?;
         let artifact = &self.artifact;
         let (profile, ctx, generated) = (&binding.shape_profile, &binding.job_context, &generated);
         crate::attn_responder::base0_attn_site_evidence_v1(
             &binding,
-            &tiles,
+            rows,
             &checkpoints,
             narrowed,
             inventory.operands(),
@@ -2454,14 +2469,50 @@ mod tests {
         }
     }
 
+    /// The drill's forgery at `leaf` — one lane of its tile moved, the commitment re-derived exactly
+    /// as `execute_with_injected_fault` re-derives it — retained as a FOLD, the free-prompt lane's
+    /// retention (ADR-0093 Decision 7's case).
+    fn forged_fold_v1(backend: &Qwen36Backend, job: &PalwJobContextV2, prompt: &[usize], leaf: u64) -> Vec<u8> {
+        let (plan, profile) = (backend.plan.as_ref().expect("a plan"), backend.profile.as_ref().expect("a registered graph"));
+        let cap = backend.step_ladder_cap;
+        let mut run = qwen36_execute_for_attempt_capped_v1(&backend.artifact, profile, plan, job, prompt, cap).expect("runs");
+        {
+            let (ctx_hash, profile_hash) = (job.context_hash(), profile.shape_profile_id());
+            let slot = run.tiles.tiles.iter_mut().find(|(i, _)| *i == leaf).expect("the tile");
+            slot.1.values_le[0] = slot.1.values_le[0].wrapping_add(1);
+            run.tiles.leaves[leaf as usize] = kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &slot.1);
+        }
+        run.binding = crate::legs::base0_binding_from_capture_with_profile_capped_v1(
+            profile,
+            job,
+            &run.tiles,
+            &run.checkpoints,
+            &qwen36_checkpoint_profile_v1(profile),
+            run.trace_root,
+            crate::produce::base0_activation_leg_root_v1(job),
+            cap,
+        )
+        .expect("the forged binding");
+        run.step_tree = Some(
+            crate::fp_capture::Base0SparseStepTreeV1::from_leaves_capped_v1(
+                &run.tiles.leaves,
+                crate::fp_capture::palw_base0_sparse_retain_level_v1(cap),
+                cap,
+            )
+            .expect("the fold of the forged leaves"),
+        );
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        crate::produce::base0_fp_material_encode_v2(&run, &ids).expect("the fold retains")
+    }
+
     /// **ADR-0093 as built, on the HYBRID tier: a real fused capture answers its own dissection.**
     ///
-    /// Graph-v5's hybrid fused tile is the tables' `tile_len`, wider than a head, so its fused leaf
-    /// is two heads' and the court refuses to dissect it by name — PINNED here as the limitation it
-    /// is (the admission gate checks the query slice's tile and not the output's, so such a class
-    /// can be admitted; ADR-0093's record names the fence that refusal would need). Graph-v6 cuts
-    /// the fused row at the head: every fused leaf of the last position answered from the backend's
-    /// evidence —
+    /// At THIS fixture's geometry graph-v5's hybrid fused tile is the whole 64-lane row over 16-lane
+    /// heads (the shipped geometries budget 8 or 4 lanes, inside their heads), so its fused leaf is
+    /// several heads' and the court refuses to dissect it by name — PINNED here as the limitation
+    /// it is; admission refuses such a class past `Params::palw_fused_dissectable` (ADR-0093
+    /// Decision 6). Graph-v6 cuts the fused row at the head: every fused leaf of the last position
+    /// answered from the backend's evidence —
     /// the root finalizes to the committed tile, and the bottom, served out of the composed map's
     /// anchor (the recurrence's chunks rooted beside the cache's), recomputes it exactly. The job
     /// stays below the recurrence's spacing (see the graph-v5 test above), so a history is one
@@ -2505,12 +2556,12 @@ mod tests {
                 .collect();
             assert!(!fused.is_empty(), "the hybrid's attention layer has a fused site at the last position");
             if graph == "v5" {
-                let refused = backend.attn_site_evidence(&honest.material, fused[0], None).expect_err("a two-head fused tile");
+                let refused = backend.attn_site_evidence(&honest.material, fused[0], None, None).expect_err("a two-head fused tile");
                 assert!(refused.contains("ONE head"), "refused by name: {refused}");
                 continue;
             }
             for &narrowed in &fused {
-                let evidence = backend.attn_site_evidence(&honest.material, narrowed, None).expect("the honest capture yields its evidence");
+                let evidence = backend.attn_site_evidence(&honest.material, narrowed, None, None).expect("the honest capture yields its evidence");
                 let site = evidence.site_v1(root, false).expect("the site derives");
                 let anchored = evidence.site_v1(root, true).expect("and with its anchor");
                 let root_claim = evidence.root_claim_v1(&site).expect("the root computes");
@@ -2542,7 +2593,7 @@ mod tests {
 
                 // Forged: the output tile moved, the least lie that finalizes to it, convicted.
                 let lying = backend.execute_with_injected_fault(&job, &prompt, narrowed).expect("a forged capture commits");
-                let accused = backend.attn_site_evidence(&lying.material, narrowed, None).expect("the accused's commitments open");
+                let accused = backend.attn_site_evidence(&lying.material, narrowed, None, None).expect("the accused's commitments open");
                 let accused_site = accused.site_v1(root, true).expect("site");
                 let forged = palw_attn_opened_lanes_v1(&accused.out_tile, &accused_site.binding, site.head_lanes.2 as usize).expect("opens");
                 assert!(open(&root_claim, &forged).is_err(), "an honest root cannot finalize to a forged tile");
@@ -2568,6 +2619,15 @@ mod tests {
                     Ok(PalwAttnCourtVerdictV1::ExecutorGuilty),
                     "leaf {narrowed}: the forged hybrid row is convicted"
                 );
+
+                // ADR-0093 Decision 7 on the hybrid tier: the same forgery retained as a FOLD opens
+                // nothing alone, and with the accused's own tile (its root claim's) it IS the dense
+                // capture's evidence — so the conviction above is the fold's too.
+                let fold = forged_fold_v1(&backend, &job, &prompt, narrowed);
+                assert!(backend.attn_site_evidence(&fold, narrowed, None, None).is_err(), "leaf {narrowed}: a forged fold alone opens nothing");
+                let from_fold =
+                    backend.attn_site_evidence(&fold, narrowed, None, Some(&accused.out_tile)).expect("the fold opens through the prefix");
+                assert_eq!(from_fold, accused, "leaf {narrowed}: the hybrid fold's evidence IS the dense capture's");
             }
         }
     }

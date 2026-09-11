@@ -1664,22 +1664,8 @@ pub fn base0_checkpoint_operands_v1(
     // the only form such a class may serve anyway
     // ([`base0_fp_class_requires_flat_openings_v1`]).
     let per_position = palw_checkpoint_cadence_v1(&binding.shape_profile) == PalwCheckpointCadenceV1::PerPosition;
-    let checkpoints = if per_position {
-        crate::legs::Base0CheckpointCaptureV1::from_leaves_v1(
-            &binding.job_context,
-            &binding.shape_profile,
-            &binding.checkpoint_profile,
-            leaves,
-        )
-    } else {
-        crate::legs::Base0CheckpointCaptureV1::from_chunks_v1(
-            &binding.job_context,
-            &binding.shape_profile,
-            &binding.checkpoint_profile,
-            chunks,
-        )
-    }
-    .map_err(|e| Base0FpIntervalError::Leg(format!("{e:?}")))?;
+    let checkpoints =
+        crate::legs::base0_checkpoint_leg_of_retention_v1(binding, chunks, leaves).map_err(|e| Base0FpIntervalError::Leg(format!("{e:?}")))?;
     // The leg the chunks re-derive must be the one the CLAIM committed, checked before anything
     // resumes: resuming from unchecked state would let a producer that lied about a step hand over
     // a state consistent with the lie and watch the replay agree with it.

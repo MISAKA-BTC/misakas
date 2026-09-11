@@ -416,6 +416,9 @@ pub struct PalwAdmissionShapeV1 {
     pub ladder: Option<PalwClassLadderRulesV1>,
     /// ADR-0102: `Params::palw_token_lift` at the height — may a class reach the fenced kernel.
     pub token_lift: bool,
+    /// ADR-0093 Decision 6: `Params::palw_fused_dissectable` at the height — must a fused class's
+    /// output tile be one head's.
+    pub fused_dissectable: bool,
 }
 
 pub fn palw_admission_shape_at_v1(
@@ -440,7 +443,12 @@ pub fn palw_admission_shape_at_v1(
         .is_some_and(|fence| fence.is_active(daa_score))
         .then(|| crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(profile, court, bundle.court.max_step_leaf_count()))
         .flatten();
-    Ok(PalwAdmissionShapeV1 { court, ladder, token_lift: params.palw_token_lift_active_at(daa_score) })
+    Ok(PalwAdmissionShapeV1 {
+        court,
+        ladder,
+        token_lift: params.palw_token_lift_active_at(daa_score),
+        fused_dissectable: params.palw_fused_dissectable_active_at(daa_score),
+    })
 }
 
 /// **Does a genesis set register a class that reaches a fenced kernel?** (ADR-0102.) Genesis rows
@@ -1144,6 +1152,19 @@ pub enum PalwClassAdmissionError {
     /// graph is adjudicable by this build, and what is missing is the fence.
     #[error("the class reaches the per-token lift kernel and this network has not armed palw_token_lift")]
     TokenLiftNeedsItsFence,
+    /// **ADR-0093 Decision 6: a fused output tile that is not inside one head cannot be dissected.**
+    ///
+    /// A dissection is one head's softmax; `palw_attn_dispute_site_v2` refuses a tile spanning two
+    /// heads at dispute time (`FusedTileStraddlesHeads`), so a class whose fused tile is wider than
+    /// a head — or does not divide it — is a class whose fused leaves no party can play. The query
+    /// half of the same shape has always been refused here
+    /// ([`Self::FusedQuerySliceStraddlesTiles`]); this is the output half, refused only past
+    /// `Params::palw_fused_dissectable`, because a live chain may already hold such a class.
+    #[error(
+        "the class's fused attention commits {tile_len}-lane output tiles over {d_head}-lane heads — a tile that is not \
+         inside one head is no dissection's, and palw_fused_dissectable refuses such a class (ADR-0093 Decision 6)"
+    )]
+    FusedTileStraddlesHeads { tile_len: u32, d_head: u32 },
 }
 
 /// **The Phase B rules a `palw_context_ladder`-armed network judges a registration under**
@@ -1385,17 +1406,44 @@ pub fn palw_fused_query_slice_is_openable_v1(profile: &PalwShapeProfileV3) -> Re
 /// the head is two heads' and the court refuses it as `FusedTileStraddlesHeads`), and each head's
 /// query slice is inside one tile of the rotated-query row ([`palw_fused_query_slice_is_openable_v1`]).
 ///
-/// NOT an admission rule — admission checks the query half only, and adding the output half is a
-/// refusal of classes a live chain may already hold, which is a fence of its own. It is what a
-/// BACKEND says about itself (`supports_dissection`), so a node never advertises, or produces
-/// under, a turn the court will refuse to play. `true` for a class with no fused site.
+/// What a BACKEND says about itself (`supports_dissection`), so a node never advertises, or
+/// produces under, a turn the court will refuse to play — and, past `Params::palw_fused_dissectable`
+/// (ADR-0093 Decision 6), what admission requires: the query half was always refused here, the
+/// output half ([`palw_fused_output_tiles_are_one_heads_v1`]) only past the fence, because a live
+/// chain may already hold a class that fails it. `true` for a class with no fused site.
 pub fn palw_fused_sites_are_dissectable_v1(profile: &PalwShapeProfileV3) -> bool {
-    let d_head = u64::from(profile.attn_head_dim);
-    let fused: Vec<_> = profile.attn_nodes.iter().filter(|n| n.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused).collect();
-    fused.is_empty()
-        || (d_head > 0
-            && fused.iter().all(|n| n.tile_len > 0 && d_head.is_multiple_of(u64::from(n.tile_len)))
-            && palw_fused_query_slice_is_openable_v1(profile).is_ok())
+    !palw_profile_has_fused_attention_v1(profile)
+        || (palw_fused_output_tiles_are_one_heads_v1(profile).is_ok() && palw_fused_query_slice_is_openable_v1(profile).is_ok())
+}
+
+/// **The output half of a dissectable fused site** (ADR-0093 Decision 6): every fused node's
+/// output tile is inside ONE head — its `tile_len` divides the head width, so no tile starts in
+/// one head and ends in the next. The one spelling of the arithmetic `palw_attn_dispute_site_v2`
+/// refuses as `FusedTileStraddlesHeads`, asked of the class. `Ok` for a class with no fused site.
+pub fn palw_fused_output_tiles_are_one_heads_v1(profile: &PalwShapeProfileV3) -> Result<(), PalwClassAdmissionError> {
+    let d_head = profile.attn_head_dim;
+    // Every table, as `palw_profile_has_fused_attention_v1` reads them: a fused node is judged
+    // wherever it sits.
+    let fused = [&profile.pre_nodes, &profile.gdn_nodes, &profile.attn_nodes, &profile.post_nodes]
+        .into_iter()
+        .flatten()
+        .filter(|n| n.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused);
+    for node in fused {
+        if d_head == 0 || node.tile_len == 0 || !d_head.is_multiple_of(node.tile_len) {
+            return Err(PalwClassAdmissionError::FusedTileStraddlesHeads { tile_len: node.tile_len, d_head });
+        }
+    }
+    Ok(())
+}
+
+/// **Does a genesis set register a fused class no dissection can try?** (ADR-0093 Decision 6.)
+/// Genesis rows are verified against the committed catalog rather than through the gate, so
+/// `Params::validate_palw_v2` asks this where `palw_fused_dissectable` is armed from genesis.
+pub fn palw_genesis_holds_undissectable_fused_class_v1(bundle: &PalwConsensusParamsV2) -> bool {
+    bundle.genesis_objects.iter().any(|object| {
+        matches!(object, PalwConsensusObjectV2::ClassRegistered { admission: Some(carriage), .. }
+            if !palw_fused_sites_are_dissectable_v1(&carriage.profile))
+    })
 }
 
 /// Every kernel a profile's graph can reach, read off the graph.
@@ -1561,6 +1609,42 @@ pub fn verify_class_admission_v7(
     decode_rules: bool,
     token_lift: bool,
 ) -> Result<PalwClassCatalogEntryV2, PalwClassAdmissionError> {
+    verify_class_admission_v8(
+        bundle,
+        profile,
+        canonical,
+        registration,
+        certified,
+        chain_certified,
+        ladder,
+        court,
+        decode_rules,
+        token_lift,
+        false,
+    )
+}
+
+/// [`verify_class_admission_v7`] under ADR-0093 Decision 6's fence.
+///
+/// `fused_dissectable` is `Params::palw_fused_dissectable` at the block, read by the CALLER, and
+/// `false` on every shipped preset, where this is [`verify_class_admission_v7`] byte for byte. `true`
+/// refuses a fused class whose output tile is not inside one head
+/// ([`PalwClassAdmissionError::FusedTileStraddlesHeads`]) — the half of a dissectable site the
+/// gate did not ask; nothing else moves.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_class_admission_v8(
+    bundle: &PalwConsensusParamsV2,
+    profile: &PalwShapeProfileV3,
+    canonical: &PalwJobContextV2,
+    registration: &PalwConsensusObjectV2,
+    certified: &[crate::palw_e2e_adjudicability::PalwE2eFamilyV1],
+    chain_certified: &[crate::palw_e2e_adjudicability::PalwE2eFamilyV1],
+    ladder: Option<PalwClassLadderRulesV1>,
+    court: Option<PalwKaryCourtV1>,
+    decode_rules: bool,
+    token_lift: bool,
+    fused_dissectable: bool,
+) -> Result<PalwClassCatalogEntryV2, PalwClassAdmissionError> {
     let PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, pwu_rule, share_permille, .. } = registration else {
         return Err(PalwClassAdmissionError::NotARegistration);
     };
@@ -1687,6 +1771,12 @@ pub fn verify_class_admission_v7(
     // (fixer FA's note 6). See [`palw_fused_query_slice_is_openable_v1`].
     if fused {
         palw_fused_query_slice_is_openable_v1(profile)?;
+    }
+    // **ADR-0093 Decision 6: and the output half, past its fence.** A fused tile that is not one
+    // head's is a leaf no dissection can try; before the fence such a class is admitted as it
+    // always was, because a live chain may already hold one.
+    if fused && fused_dissectable {
+        palw_fused_output_tiles_are_one_heads_v1(profile)?;
     }
 
     // **And the half neither of those can see: can anybody actually PLAY this class's dispute?**
@@ -2529,6 +2619,91 @@ mod tests {
         let b = gate(&v6, true).expect("armed, the v6 hybrid is admitted exactly where v5 is");
         assert_eq!(a.reachable_kernels.len() + 1, b.reachable_kernels.len(), "the entry records the fenced kernel too");
         assert!(!b.reachable_kernels.is_disjoint(&fenced));
+    }
+
+    /// **ADR-0093 Decision 6: past its fence, a fused class no dissection can try is refused by
+    /// name — and before it, nothing moves.** Every shipped fused row is dissectable (its budgeted
+    /// fused tile divides the head: 8 lanes over the dense row's 128, 8 over the 2B hybrid's 256,
+    /// the head itself under graph-v6); the class the fence exists for is a REGISTRANT's graph —
+    /// here the dense graph-v5 row with its fused tile widened to two heads, which admission took
+    /// before this fence and the court then refuses to dissect. The predicate the backends read
+    /// (`palw_fused_sites_are_dissectable_v1`) and the gate's refusal are one spelling.
+    #[test]
+    fn an_undissectable_fused_class_is_refused_by_its_fence_alone() {
+        use crate::palw_qwen36_profile::{QWEN35_2B, qwen36_artifact_row_profile_v5, qwen36_artifact_row_profile_v6};
+        let court = kary_court_v1();
+        let geometry = crate::palw_qwen36_profile::PalwQwen36GeometryV1 { n_ctx: 512, ..QWEN35_2B };
+        let hybrid_v5 = qwen36_artifact_row_profile_v5(geometry).expect("the v5 hybrid projects");
+        let hybrid_v6 = qwen36_artifact_row_profile_v6(geometry).expect("the v6 hybrid projects");
+        let dense_v5 = crate::palw_context_ladder::palw_a16_context_row_profile_v5(512).expect("the dense v5 row projects");
+        let fused_tile = |p: &PalwShapeProfileV3| {
+            p.attn_nodes.iter().find(|n| n.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused).expect("a fused node").tile_len
+        };
+        // The shipped rows, as they are: every fused tile inside one head.
+        assert_eq!((fused_tile(&dense_v5), dense_v5.attn_head_dim), (8, 128));
+        assert_eq!((fused_tile(&hybrid_v5), hybrid_v5.attn_head_dim), (8, 256));
+        assert_eq!((fused_tile(&hybrid_v6), hybrid_v6.attn_head_dim), (256, 256));
+        // A registrant's graph: the same row, its fused output cut two heads wide.
+        let mut two_heads = dense_v5.clone();
+        for node in two_heads.attn_nodes.iter_mut().filter(|n| n.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused) {
+            node.tile_len = 2 * two_heads.attn_head_dim;
+        }
+        two_heads.validate_shape().expect("a well-formed graph: nothing but the court can tell");
+        assert_ne!(two_heads.shape_profile_id(), dense_v5.shape_profile_id(), "a class is its graph");
+        for shipped in [&dense_v5, &hybrid_v5, &hybrid_v6] {
+            assert!(palw_fused_sites_are_dissectable_v1(shipped));
+        }
+        assert!(!palw_fused_sites_are_dissectable_v1(&two_heads));
+
+        let mut bundle = conforming_bundle();
+        bundle.court = PalwCourtParamsV2::with_cost_ceilings(
+            crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+            rc_turn_deadline(),
+            2,
+            crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES,
+            crate::palw_mode_v2::DEFAULT_MAX_TERMINAL_MACS,
+            crate::palw_mode_v2::DEFAULT_MAX_OPERAND_COUNT,
+        )
+        .expect("legal");
+        let gate = |profile: &PalwShapeProfileV3, fused_dissectable: bool| {
+            let rules = crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(
+                profile,
+                Some(court),
+                crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+            );
+            let canonical = context(profile, 510, 2);
+            let ladder = rules.map(|r| r.ladder).unwrap_or(crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES);
+            let counted = crate::palw_step::step_leaf_count_capped_v1(profile, &canonical, ladder).expect("counts");
+            let registration = weightless_registration(profile.shape_profile_id(), counted);
+            let v8 = verify_class_admission_v8(
+                &bundle,
+                profile,
+                &canonical,
+                &registration,
+                &[],
+                &[],
+                rules,
+                Some(court),
+                false,
+                true,
+                fused_dissectable,
+            );
+            if !fused_dissectable {
+                let v7 = verify_class_admission_v7(&bundle, profile, &canonical, &registration, &[], &[], rules, Some(court), false, true);
+                assert_eq!(format!("{v7:?}"), format!("{v8:?}"), "dormant, v8 is v7");
+            }
+            v8
+        };
+        // Dormant, the two-head graph is admitted as such a graph always was; armed, refused by name.
+        gate(&two_heads, false).expect("dormant, the gate never asked the output half");
+        let refused = gate(&two_heads, true).expect_err("armed, a two-head tile is refused");
+        assert_eq!(refused, PalwClassAdmissionError::FusedTileStraddlesHeads { tile_len: 256, d_head: 128 });
+        assert!(format!("{refused}").contains("palw_fused_dissectable"), "the refusal names the fence: {refused}");
+        // The shipped rows: the fence changes nothing about them.
+        for (graph, profile) in [("dense v5", &dense_v5), ("hybrid v5", &hybrid_v5), ("hybrid v6", &hybrid_v6)] {
+            assert_eq!(format!("{:?}", gate(profile, true)), format!("{:?}", gate(profile, false)), "{graph}: untouched by the fence");
+        }
+        gate(&hybrid_v6, true).expect("armed, the v6 hybrid is admitted");
     }
 
     /// **Z11: all three bounds at once, and the refusal names which one.**

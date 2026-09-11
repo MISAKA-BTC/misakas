@@ -501,6 +501,24 @@ pub fn base0_bisect_prefix_state_v1(ctx: &PalwJobContextV2, leaves: &[Hash64], i
     Hash64::from_bytes(out)
 }
 
+/// **A retained checkpoint leg, re-derived the way its CADENCE retains it** (ADR-0082 Decision 4,
+/// amended): a per-call class kept its chunks and the leg is rebuilt from them; a per-position
+/// class kept none — a chunk per position is `Θ(n²)` — and the leg is rebuilt from its LEAVES. The
+/// one spelling of that choice, for every reader of a fold's leg (the interval lane's anchor, the
+/// fused site's evidence).
+pub fn base0_checkpoint_leg_of_retention_v1(
+    binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+    chunks: &[Vec<Vec<u8>>],
+    leaves: &[kaspa_consensus_core::palw_step_leg::PalwCheckpointLeafV2],
+) -> Result<Base0CheckpointsV1, LegError> {
+    use kaspa_consensus_core::palw_context_ladder::{PalwCheckpointCadenceV1, palw_checkpoint_cadence_v1};
+    if palw_checkpoint_cadence_v1(&binding.shape_profile) == PalwCheckpointCadenceV1::PerPosition {
+        Base0CheckpointCaptureV1::from_leaves_v1(&binding.job_context, &binding.shape_profile, &binding.checkpoint_profile, leaves)
+    } else {
+        Base0CheckpointCaptureV1::from_chunks_v1(&binding.job_context, &binding.shape_profile, &binding.checkpoint_profile, chunks)
+    }
+}
+
 /// **The checkpoint leg, captured** — the half that did not exist.
 ///
 /// Until this, `base0_binding_from_capture_v1` committed `checkpoint_count = decode_calls /

@@ -1458,6 +1458,19 @@ pub struct Params {
     /// needs the same refusal. `None` on every preset.
     pub palw_token_lift: Option<ForkActivation>,
 
+    /// **ADR-0093 Decision 6 — admission refuses a fused class the court cannot dissect.**
+    ///
+    /// A dissection tries ONE head's softmax, so a fused output tile wider than a head (or not a
+    /// divisor of it) is two heads' — `palw_attn_dispute_site_v2` refuses it at dispute time
+    /// (`FusedTileStraddlesHeads`) and no responder can answer it. Admission has always checked
+    /// the query half of that shape and never the output half, so such a class (the hybrid
+    /// graph-v5 at 256-lane heads) is admitted and then untriable. Past this fence the gate
+    /// refuses it by name (`FusedTileStraddlesHeads`); before it, nothing changes — a chain may
+    /// already hold such a class, which is why this is a fence and not a fix. A genesis row is
+    /// refused likewise when the fence is armed from genesis (genesis rows do not pass the gate).
+    /// `None` on every preset.
+    pub palw_fused_dissectable: Option<ForkActivation>,
+
     /// **ADR-0083 Decision 1 — the difficulty window counts only rows priced by `bits`.**
     ///
     /// Past this fence `calculate_difficulty_bits` sizes its expected duration by the rows in the
@@ -2224,6 +2237,16 @@ impl Params {
                  not armed from genesis: that kernel is adjudicated only where its fence is (ADR-0102)",
             ));
         }
+        // **ADR-0093 Decision 6 at the genesis door**, the same reason: a fence armed from genesis
+        // judges the genesis rows too, or its first class would be the one it exists to refuse.
+        if self.palw_fused_dissectable.is_some_and(|f| f != ForkActivation::never() && f.is_active(0))
+            && crate::palw_class_admission_v2::palw_genesis_holds_undissectable_fused_class_v1(bundle)
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_fused_dissectable is armed from genesis and this ruleset's genesis set registers a fused class whose \
+                 output tile no dissection can try (ADR-0093 Decision 6)",
+            ));
+        }
         if self.palw_credit.is_some()
             || self.palw_fork_choice.is_some()
             || self.palw_schedule.is_some()
@@ -2931,6 +2954,10 @@ impl Params {
         if self.palw_token_lift == Some(ForkActivation::never()) {
             self.palw_token_lift = None;
         }
+        // ADR-0093 Decision 6, likewise.
+        if self.palw_fused_dissectable == Some(ForkActivation::never()) {
+            self.palw_fused_dissectable = None;
+        }
         // ADR-0083 Decision 1, the same shape: a bare fence, `never()` is absence.
         if self.palw_difficulty_priced_rows == Some(ForkActivation::never()) {
             self.palw_difficulty_priced_rows = None;
@@ -3338,6 +3365,19 @@ impl Params {
         self.palw_token_lift_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
+    /// ADR-0093 Decision 6's fence, resolved: `Some` only on a `ConsensusV2` network that armed it.
+    /// The ONE place "must a fused class be dissectable to be admitted" is decided.
+    pub fn palw_fused_dissectable_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_fused_dissectable) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    pub fn palw_fused_dissectable_active_at(&self, daa_score: u64) -> bool {
+        self.palw_fused_dissectable_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
     /// ADR-0081 Decision 3's fence with the mode condition already folded in — `Some` only on a
     /// `ConsensusV2` network that has armed it.
     pub fn palw_prompt_ids_merkle_fence(&self) -> Option<ForkActivation> {
@@ -3455,6 +3495,7 @@ impl Params {
             palw_shard_court,
             palw_shard_licensing,
             palw_token_lift,
+            palw_fused_dissectable,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -3505,6 +3546,7 @@ impl Params {
             ("palw_shard_court", *palw_shard_court),
             ("palw_shard_licensing", *palw_shard_licensing),
             ("palw_token_lift", *palw_token_lift),
+            ("palw_fused_dissectable", *palw_fused_dissectable),
             ("palw_difficulty_priced_rows", *palw_difficulty_priced_rows),
             ("palw_receipt_rows_unpriced", *palw_receipt_rows_unpriced),
             ("palw_attempt_header_pins", *palw_attempt_header_pins),
@@ -3675,6 +3717,11 @@ impl Params {
             h.write(b"palw_token_lift");
             h.write(lift.daa_score().to_le_bytes());
         }
+        // ADR-0093 Decision 6's fence, NAMED likewise: it changes which classes may register.
+        if let Some(dissectable) = self.palw_fused_dissectable {
+            h.write(b"palw_fused_dissectable");
+            h.write(dissectable.daa_score().to_le_bytes());
+        }
         // ADR-0083 Decision 1's fence, NAMED for the same reason: it changes the bits every header
         // past it must carry, so an operator reading the schedule must see it.
         if let Some(priced) = self.palw_difficulty_priced_rows {
@@ -3820,6 +3867,7 @@ impl Params {
             palw_shard_court,
             palw_shard_licensing,
             palw_token_lift,
+            palw_fused_dissectable,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -4118,6 +4166,10 @@ impl Params {
         if let Some(activation) = palw_token_lift.as_mut() {
             fork(activation, visit);
         }
+        // ADR-0093 Decision 6. Some-only, likewise.
+        if let Some(activation) = palw_fused_dissectable.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0083 Decision 1. Some-only, likewise.
         if let Some(activation) = palw_difficulty_priced_rows.as_mut() {
             fork(activation, visit);
@@ -4362,6 +4414,7 @@ impl Params {
             palw_shard_court,
             palw_shard_licensing,
             palw_token_lift,
+            palw_fused_dissectable,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -4682,6 +4735,12 @@ impl Params {
         // the kernel or the field.
         if let Some(activation) = palw_token_lift {
             h.write(b"palw_token_lift");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0093 Decision 6, Some-only for the same reason: a dormant network fingerprints
+        // byte-identically to a build without the field.
+        if let Some(activation) = palw_fused_dissectable {
+            h.write(b"palw_fused_dissectable");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0083 Decision 1, Some-only for the same reason: arming it changes the `bits` every
@@ -5036,6 +5095,7 @@ impl Params {
             palw_shard_court: self.palw_shard_court,
             palw_shard_licensing: self.palw_shard_licensing,
             palw_token_lift: self.palw_token_lift,
+            palw_fused_dissectable: self.palw_fused_dissectable,
             palw_difficulty_priced_rows: self.palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced: self.palw_receipt_rows_unpriced,
             palw_attempt_header_pins: self.palw_attempt_header_pins,
@@ -5992,6 +6052,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_shard_court: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
+    palw_fused_dissectable: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -6160,6 +6221,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_shard_court: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
+    palw_fused_dissectable: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -6310,6 +6372,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_shard_court: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
+    palw_fused_dissectable: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -10530,6 +10593,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_shard_court: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
+    palw_fused_dissectable: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -12536,6 +12600,82 @@ mod consensus_params_id_tests {
         let mut legacy = MAINNET_PARAMS.clone();
         legacy.palw_token_lift = Some(ForkActivation::always());
         assert_eq!(legacy.palw_token_lift_fence(), None);
+    }
+
+    /// **ADR-0093 Decision 6: the dissectable-fused fence is dormant everywhere, visible the moment
+    /// it is not, and armed from genesis it judges the genesis rows.** Every shipped genesis row
+    /// with a fused site is dissectable (the dense graph-v5 row: 8-lane tiles over 128-lane heads),
+    /// so the shipped devnet assembles with the fence armed from genesis; the same row with its
+    /// fused tile widened to two heads does not.
+    #[test]
+    fn the_dissectable_fused_fence_is_dormant_visible_when_armed_and_judges_genesis_from_genesis() {
+        for (name, shipped) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
+        {
+            assert!(shipped.palw_fused_dissectable.is_none(), "{name} must leave ADR-0093 Decision 6 dormant");
+            assert!(!shipped.palw_fused_dissectable_active_at(u64::MAX), "{name}");
+        }
+        let shipped = devnet_shipped_params();
+        assert!(shipped.palw_fused_dissectable.is_none(), "the bundled devnet leaves it dormant too");
+        let mut visible = shipped.clone();
+        visible.palw_fused_dissectable = Some(ForkActivation::new(9_000_000));
+        assert_ne!(visible.consensus_params_id(), shipped.consensus_params_id(), "armed, the fingerprint says so");
+        visible.validate_palw_v2().expect("armed later, the fence assembles over any genesis");
+        let mut never = shipped.clone();
+        never.palw_fused_dissectable = Some(ForkActivation::never());
+        never.validate_palw_v2().expect("Some(never()) is absence");
+        let mut from_genesis = shipped.clone();
+        from_genesis.palw_fused_dissectable = Some(ForkActivation::always());
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &from_genesis.palw_consensus_mode else {
+            panic!("the shipped devnet is ConsensusV2")
+        };
+        assert!(!crate::palw_class_admission_v2::palw_genesis_holds_undissectable_fused_class_v1(bundle));
+        from_genesis.validate_palw_v2().expect("the shipped genesis rows are dissectable");
+        // A genesis row the fence exists to refuse: a fused row whose output tile is two heads.
+        let mut two_heads = crate::palw_context_ladder::palw_a16_context_row_profile_v5(512).expect("projects");
+        for node in two_heads.attn_nodes.iter_mut().filter(|n| n.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused) {
+            node.tile_len = 2 * two_heads.attn_head_dim;
+        }
+        let mut with_two_heads = from_genesis.clone();
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut with_two_heads.palw_consensus_mode else { unreachable!() };
+        let template = bundle
+            .genesis_objects
+            .iter()
+            .find(|o| matches!(o, crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { admission: Some(_), .. }))
+            .cloned()
+            .expect("the bundled devnet registers a class with its admission carriage");
+        let crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { admission: Some(mut carriage), .. } = template.clone()
+        else {
+            unreachable!()
+        };
+        carriage.profile = two_heads;
+        let crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+            class_id, artifact_root, slash_value_per_pwu, pwu_rule, initial_target, share_permille, activation_daa, ..
+        } = template
+        else {
+            unreachable!()
+        };
+        bundle.genesis_objects.push(crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+            class_id,
+            artifact_root,
+            slash_value_per_pwu,
+            pwu_rule,
+            initial_target,
+            share_permille,
+            activation_daa,
+            admission: Some(carriage),
+        });
+        assert!(crate::palw_class_admission_v2::palw_genesis_holds_undissectable_fused_class_v1(bundle));
+        let err = format!("{}", with_two_heads.validate_palw_v2().expect_err("armed from genesis over a two-head genesis row"));
+        assert!(err.contains("palw_fused_dissectable") && err.contains("ADR-0093"), "{err}");
+        // Armed past genesis, the genesis rows are the chain's history, not the fence's to judge.
+        let mut later = with_two_heads.clone();
+        later.palw_fused_dissectable = Some(ForkActivation::new(1));
+        later.validate_palw_v2().expect("armed past genesis, genesis rows stand");
+        // Outside ConsensusV2 the fence answers nothing.
+        let mut legacy = MAINNET_PARAMS.clone();
+        legacy.palw_fused_dissectable = Some(ForkActivation::always());
+        assert_eq!(legacy.palw_fused_dissectable_fence(), None);
     }
 
     /// **The V2 pruning horizon IS the derivation, and the inherited floor never binds** — the
