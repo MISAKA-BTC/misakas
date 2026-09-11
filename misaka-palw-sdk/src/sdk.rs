@@ -491,7 +491,15 @@ impl PalwClassSdk {
                 (canonical.declared_prefill_tokens, canonical.exact_decode_tokens),
                 misaka_palw_base0::classes::ArtifactSourceV1::ConvertedA16,
             )?;
-            return Ok(Box::new(backend.with_prompt_ids_form(self.prompt_ids_form)));
+            // **The ladder the RULESET froze**, as every tabled lineage applies it (the dense
+            // lineage's resolve has the whole note). This arm left the backend at the executor's
+            // 2^22 default: a chain-registered class whose jobs pass 2^22 leaves — every dense row
+            // past a few dozen positions, and every held class, all of which reach a network like
+            // testnet-11 by registration (ADR-0118) — was refused by its own producer and seats,
+            // and its retained blocks were addressed at a level the seats did not derive.
+            return Ok(Box::new(
+                backend.with_step_ladder_cap(self.court.max_step_leaf_count()).with_prompt_ids_form(self.prompt_ids_form),
+            ));
         }
         if let Some(artifact) = crate::lineages::qwen36::qwen36_artifact_by_registered_root(holdings, artifact_root, profile) {
             let backend = misaka_palw_base0::qwen36_backend::Qwen36Backend::from_registered_profile(
@@ -500,7 +508,9 @@ impl PalwClassSdk {
                 profile.clone(),
                 (canonical.declared_prefill_tokens, canonical.exact_decode_tokens),
             )?;
-            return Ok(Box::new(backend.with_prompt_ids_form(self.prompt_ids_form)));
+            return Ok(Box::new(
+                backend.with_step_ladder_cap(self.court.max_step_leaf_count()).with_prompt_ids_form(self.prompt_ids_form),
+            ));
         }
         Err(format!(
             "this node holds no artifact whose digest is the registered root {artifact_root} — fetch the class's \
@@ -1527,5 +1537,26 @@ mod revision_row_tests {
         for path in [small, large, broken] {
             std::fs::remove_file(path).ok();
         }
+    }
+}
+
+#[cfg(test)]
+mod chain_arm_ladder_pin {
+    /// **The chain arm serves at the ladder the ruleset froze, exactly as every tabled lineage
+    /// does.** It left both families at the executor's 2^22 default, so a chain-registered class
+    /// whose jobs pass 2^22 leaves — every dense row past a few dozen positions, and every held
+    /// class, which reaches a live network only by registration (ADR-0118) — was refused by its
+    /// own producer and seats, and its retained blocks were addressed at a level the seats did not
+    /// derive. Pinned in the source because the backend's cap is not visible through the seam.
+    #[test]
+    fn the_chain_arm_applies_the_rulesets_ladder_like_every_lineage() {
+        let source = include_str!("sdk.rs");
+        let arm = &source[source.find("pub fn resolve_chain_registered(").expect("the chain arm")..];
+        let arm = &arm[..arm.find("\n    }\n").expect("the arm's end")];
+        assert_eq!(
+            arm.matches("with_step_ladder_cap(self.court.max_step_leaf_count())").count(),
+            2,
+            "both families the chain arm serves take the ruleset's ladder"
+        );
     }
 }
