@@ -66,7 +66,7 @@ use crate::{
     },
 };
 use kaspa_consensus_core::{
-    BlockHash, BlockHashSet, BlueWorkType, ChainPath, Hash64,
+    BlockHash, BlockHashMap, BlockHashSet, BlueWorkType, ChainPath, Hash64,
     acceptance_data::AcceptanceData,
     api::args::{TransactionValidationArgs, TransactionValidationBatchArgs},
     block::{
@@ -835,7 +835,12 @@ pub(super) struct PalwCarriedObjectV1 {
 /// the walk state) and the transition call (which borrows it). Two arms because a header
 /// declares exactly one lane by its algorithm id.
 pub(super) enum PalwMergedOwnedWorkV1 {
-    Attempt(BlockHash, kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2),
+    /// `(carrying block, attempt, the block's own subsidy)`. The subsidy is
+    /// `calc_block_subsidy(the block's DAA)` — for an attempt block it equals the coinbase-declared
+    /// `mergeset_rewards` subsidy (body validation pins it, and an attempt block is never a heartbeat)
+    /// — and is the pool B-1's escrow is carved from past the deep fence: one value the fold escrows
+    /// and the coinbase withholds, computed once here from the header this function already read.
+    Attempt(BlockHash, kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2, u64),
     Spend(BlockHash, kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3),
 }
 
@@ -1722,6 +1727,28 @@ impl VirtualStateProcessor {
                             self.palw_v2_unentitled_blues(s, &ctx.ghostdag_data, &non_daa, &point)
                         })
                         .unwrap_or_default();
+                    // B-1 (deep fence): and how much of each OTHER merged block's carve is withheld
+                    // and escrowed rather than paid, from the same parent state and the same
+                    // evaluation point. Empty below `palw_audit_2026_09_11_deep` (paid in full, as
+                    // before). Needs no `mergeset_rewards` — it derives each block's subsidy from its
+                    // own header — so it is safe to compute here, before the reward map is filled.
+                    ctx.palw_v2_merged_escrow_withheld = palw_state
+                        .as_ref()
+                        .map(|s| {
+                            use crate::model::stores::daa::DaaStoreReader;
+                            let non_daa = self
+                                .daa_excluded_store
+                                .get_mergeset_non_daa(current)
+                                .expect("the DAA window is written before the UTXO walk reaches this block");
+                            let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                                block: current,
+                                daa_score: header.daa_score,
+                                blue_score: header.blue_score,
+                                subsidy: self.coinbase_manager.calc_block_subsidy(header.daa_score),
+                            };
+                            self.palw_v2_merged_escrow_withheld(s, &ctx.ghostdag_data, &non_daa, &point)
+                        })
+                        .unwrap_or_default();
                     // Audit C-08 part three: and what a released bond's spend must destroy.
                     ctx.palw_v2_bond_burns =
                         palw_state.as_ref().map(|s| self.palw_v2_bond_burn_obligations(s, pov_daa_score)).unwrap_or_default();
@@ -1908,12 +1935,16 @@ impl VirtualStateProcessor {
                                 // Assembled against the walk state (the parent's); the transition
                                 // re-runs the stateful admission per work against its LIVE fold
                                 // state, so order inside the block cannot over-commit a budget.
+                                let merged_non_daa = {
+                                    use crate::model::stores::daa::DaaStoreReader;
+                                    self.daa_excluded_store.get_mergeset_non_daa(current).unwrap_or_default()
+                                };
                                 let (merged_owned, merged_preskips) =
-                                    self.palw_v2_merged_works(current, &ctx.ghostdag_data, state, state_params, &point);
+                                    self.palw_v2_merged_works(&ctx.ghostdag_data, state, state_params, &merged_non_daa, &point);
                                 let merged_refs: Vec<kaspa_consensus_core::palw_state_v2::PalwMergedWorkV1<'_>> = merged_owned
                                     .iter()
                                     .map(|owned| match owned {
-                                        PalwMergedOwnedWorkV1::Attempt(blue, envelope) => {
+                                        PalwMergedOwnedWorkV1::Attempt(blue, envelope, subsidy) => {
                                             kaspa_consensus_core::palw_state_v2::PalwMergedWorkV1 {
                                                 carrying_block: *blue,
                                                 work: kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::Attempt(envelope),
@@ -1928,6 +1959,10 @@ impl VirtualStateProcessor {
                                                     .unwrap_or_else(|| {
                                                         kaspa_consensus_core::palw_attempt_v2::attempt_id_v2(&envelope.attempt)
                                                     }),
+                                                // B-1: the merged block's OWN subsidy — the pool its escrow is carved
+                                                // from past the deep fence, the SAME value `palw_v2_merged_escrow_withheld`
+                                                // hands the coinbase to withhold (both read it from this one field).
+                                                subsidy: *subsidy,
                                             }
                                         }
                                         PalwMergedOwnedWorkV1::Spend(blue, envelope) => {
@@ -1939,6 +1974,9 @@ impl VirtualStateProcessor {
                                                 // A receipt spend is the free-prompt lane (B-5 dedups it on (claim,
                                                 // quantum)); B-4's attempt-execution dedup does not apply, so the key is unread.
                                                 execution_key: kaspa_hashes::Hash64::default(),
+                                                // A receipt spend escrows nothing (it is not an attempt claim), so the
+                                                // subsidy is unread — 0.
+                                                subsidy: 0,
                                             }
                                         }
                                     })
@@ -5319,6 +5357,55 @@ impl VirtualStateProcessor {
             .fold(0u64, |acc, (_, claim)| acc.saturating_add(claim.escrowed_reward))
     }
 
+    /// **B-1 (mainnet audit 2026-09-11, deep fence): the worker carve withheld from each MERGED
+    /// block's coinbase output** — `{ merged block → worker_carve(its own subsidy) }`.
+    ///
+    /// `palw_v2_escrow_withheld_at` above handles the ONE chain block a mergeset has (the selected
+    /// parent), whose claim a prior transition already committed and can be read from state. This
+    /// handles every OTHER merged blue and every entitled in-window red, whose claim THIS accepting
+    /// block's transition creates — not yet in state when the coinbase is built — so the amount is
+    /// SIZED rather than read.
+    ///
+    /// **Alignment is by construction, three ways.** The keys are exactly the Attempt works
+    /// `palw_v2_merged_works` returns — the same function, same parent `state`, same `point` the fold
+    /// folds — so the coinbase withholds for precisely the set the fold will try to escrow. The fold
+    /// may still refuse one in its LIVE state (a budget race, a B-4 execution duplicate); then the
+    /// withheld carve is simply not minted (burned), never released, so the withhold set is a safe
+    /// SUPERSET of the escrow set. The amount is `PalwStateParamsV2::worker_carve` of the merged
+    /// block's own subsidy — read from the SAME `PalwMergedOwnedWorkV1::Attempt` field the fold
+    /// escrows from — so the carve withheld and the carve recorded are one number on both the build
+    /// and validate paths. That subsidy is `calc_block_subsidy(the block's DAA)`, which for an
+    /// attempt block equals the coinbase-declared subsidy the block is actually paid from (body
+    /// validation pins it; an attempt block is never a heartbeat), so the withheld carve never
+    /// exceeds the worker share the coinbase would otherwise pay (`validate_palw_v2`'s carve bound).
+    ///
+    /// **Empty below `palw_audit_2026_09_11_deep`** and on every network without a V2 bundle, where
+    /// merged carves are paid in full at acceptance (ADR-0058 Decision 5) — byte-identical to before.
+    /// Past the fence it re-runs `palw_v2_merged_works` (the fold runs it again at fold time); the
+    /// redundant pass is deterministic in the same inputs and paid only past a provisional flag day.
+    pub(super) fn palw_v2_merged_escrow_withheld(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        ghostdag_data: &GhostdagData,
+        mergeset_non_daa: &BlockHashSet,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+    ) -> BlockHashMap<u64> {
+        let mut withheld = BlockHashMap::default();
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else {
+            return withheld;
+        };
+        if !self.palw_audit_2026_09_11_deep_at(point.daa_score) {
+            return withheld;
+        }
+        let (works, _skips) = self.palw_v2_merged_works(ghostdag_data, state, state_params, mergeset_non_daa, point);
+        for work in &works {
+            if let PalwMergedOwnedWorkV1::Attempt(blue, _, subsidy) = work {
+                withheld.insert(*blue, state_params.worker_carve(*subsidy));
+            }
+        }
+        withheld
+    }
+
     /// **Launch blockers §8: which merged blues this block's coinbase may not pay.**
     ///
     /// The subsidy is what PALW work is paid with, so the chain has to be able to say the producer
@@ -8610,19 +8697,21 @@ impl VirtualStateProcessor {
     /// accepting block.
     pub(super) fn palw_v2_merged_works(
         &self,
-        current: BlockHash,
         ghostdag_data: &GhostdagData,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        // The accepting block's mergeset non-DAA set — passed in rather than read from a stored
+        // block, so the TEMPLATE path (whose virtual block has no hash yet) can supply
+        // `virtual_state.mergeset_non_daa` and the two paths compute one identical work list.
+        mergeset_non_daa: &BlockHashSet,
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
     ) -> (Vec<PalwMergedOwnedWorkV1>, Vec<(BlockHash, String)>) {
-        use crate::model::stores::daa::DaaStoreReader;
         let mut works = Vec::new();
         let mut skips = Vec::new();
         if ghostdag_data.mergeset_blues.len() <= 1 && ghostdag_data.mergeset_reds.is_empty() {
             return (works, skips);
         }
-        let non_daa = self.daa_excluded_store.get_mergeset_non_daa(current).unwrap_or_default();
+        let non_daa = mergeset_non_daa;
         let merged: Vec<BlockHash> =
             ghostdag_data.consensus_ordered_mergeset_without_selected_parent(self.ghostdag_store.as_ref()).collect();
         for blue in merged.iter() {
@@ -8637,7 +8726,14 @@ impl VirtualStateProcessor {
                 }
             };
             match self.palw_v2_check_attempt_admission(&header, state, state_params, point, None) {
-                Ok(Some(envelope)) => works.push(PalwMergedOwnedWorkV1::Attempt(*blue, envelope)),
+                Ok(Some(envelope)) => works.push(PalwMergedOwnedWorkV1::Attempt(
+                    *blue,
+                    envelope,
+                    // B-1: the merged block's own subsidy, the pool its escrow is carved from past
+                    // the deep fence. An attempt block is never a heartbeat, so this equals the
+                    // coinbase-declared subsidy body validation pinned.
+                    self.coinbase_manager.calc_block_subsidy(header.daa_score),
+                )),
                 Ok(None) => match self.palw_v2_check_receipt_spend(&header, state, state_params, point) {
                     Ok(Some(envelope)) => works.push(PalwMergedOwnedWorkV1::Spend(*blue, envelope)),
                     Ok(None) => {}
@@ -14248,6 +14344,24 @@ impl VirtualStateProcessor {
                 )
             })
             .unwrap_or_default();
+        // B-1 (deep fence), construction side: the carve withheld from each OTHER merged block.
+        // Same tip state, same virtual ghostdag/non-DAA and same template point as the validating
+        // walk resolves for the block this template becomes — so the withheld map, and thus the
+        // coinbase, are byte-identical on both paths. Empty below the fence.
+        let palw_merged_escrow_withheld = self
+            .palw_state_params_v2
+            .as_ref()
+            .and_then(|params| self.palw_state_v2_store.read().load_tip_cached(params).ok().flatten())
+            .filter(|(block, _)| *block == virtual_state.ghostdag_data.selected_parent)
+            .map(|(_, state)| {
+                self.palw_v2_merged_escrow_withheld(
+                    &state,
+                    &virtual_state.ghostdag_data,
+                    &virtual_state.mergeset_non_daa,
+                    &self.palw_v2_template_point(&virtual_state),
+                )
+            })
+            .unwrap_or_default();
         let coinbase = self
             .coinbase_manager
             .expected_coinbase_transaction(
@@ -14266,6 +14380,7 @@ impl VirtualStateProcessor {
                 palw_escrow_withheld,
                 &palw_unentitled_blues,
                 self.palw_state_params_v2.is_some(),
+                &palw_merged_escrow_withheld,
             )
             .unwrap();
         txs.insert(0, coinbase.tx);

@@ -1036,6 +1036,15 @@ impl PalwStateParamsV2 {
         self.worker_carve_permille
     }
 
+    /// **The worker carve of one subsidy — what a claim escrows, and what the coinbase withholds.**
+    /// `⌊subsidy · worker_carve_permille / 1000⌋`, the exact number [`apply_attempt`] snapshots into
+    /// `escrowed_reward`. The processor calls this to size the merged-escrow withhold (B-1) from each
+    /// merged block's own subsidy, so the carve the fold records and the carve the coinbase withholds
+    /// are one value computed by one function — the matched pair the coinbase-hash rule requires.
+    pub fn worker_carve(&self, subsidy: u64) -> u64 {
+        worker_carve_v2(self, subsidy)
+    }
+
     /// **Require a claim's collateral to be a fraction of the reward it escrows** (2026-08-30).
     ///
     /// The downside of producing is `pwu_per_inference x slash_value_per_pwu`; the upside is the block's worker
@@ -3308,17 +3317,34 @@ pub struct PalwMergedWorkV1<'a> {
     /// The fold dedups on it past `palw_audit_2026_09_11_deep`. `Hash64::default()` for a non-attempt
     /// work (`None`/`ReceiptSpend`) — unread there — and below the fence, where it is never consulted.
     pub execution_key: Hash64,
+    /// **B-1: the merged block's OWN coinbase-declared subsidy**, the pool its escrow is carved
+    /// FROM past `palw_audit_2026_09_11_deep`. It is the merged block's `mergeset_rewards` subsidy
+    /// (`calc_block_subsidy(MB.daa)` for a normal block, `0` for a heartbeat) — the SAME number the
+    /// coinbase pays that block from — so the escrow the fold records and the carve the coinbase
+    /// withholds are one value. `0` below the fence (unread there) and for non-attempt work.
+    pub subsidy: u64,
 }
 
 /// Where an attempt entered the chain — its own chain block, or a merged blue (ADR-0058).
 ///
-/// The flag is the escrow rule, not a hint: the coinbase withholds escrow only from the
-/// selected parent (the one mergeset member whose claim it can know about before validating),
-/// so a claim created FOR a merged blue must escrow nothing or the withhold and the release
-/// would disagree about whether the carve was ever taken.
+/// The flag is the escrow rule, not a hint: escrow is minted only where the coinbase withholds
+/// it, or the withhold and the release disagree about whether the carve was ever taken.
+///
+/// * **Own work** always escrows, carved from the accepting block's own subsidy — withheld by the
+///   NEXT block's coinbase (`palw_v2_escrow_withheld_at`, the selected-parent lag).
+/// * **Merged work** escrowed NOTHING below `palw_audit_2026_09_11_deep` (ADR-0058 Decision 5: the
+///   coinbase paid the merged carve in full at acceptance, and a claim that escrowed a carve the
+///   coinbase already paid would mint it twice). **Past the deep fence (B-1) it escrows too**,
+///   carved from the MERGED block's own subsidy, and the accepting block's coinbase withholds that
+///   same carve instead of paying it (`palw_v2_merged_escrow_withheld`) — symmetric to own work, so
+///   a merged claim that later voids forfeits its carve like any other.
 struct PalwAttemptOriginV1 {
     carrying_block: BlockHash,
     escrows_reward: bool,
+    /// The subsidy this claim's escrow is carved FROM when `escrows_reward` — the accepting block's
+    /// own subsidy for own work, the merged block's own subsidy for merged work (B-1). Unread when
+    /// `escrows_reward` is false.
+    escrow_subsidy: u64,
     /// **B-4: this attempt's pre_pow-inclusive execution commitment**, threaded from the processor
     /// (own work from this block's header, merged work from the merged block's). `apply_attempt`
     /// dedups on it against the builder's `seen_exec` past `palw_audit_2026_09_11_deep`.
@@ -8283,7 +8309,13 @@ pub fn apply_palw_transition_v7(
                 &mut builder,
                 ctx,
                 envelope,
-                PalwAttemptOriginV1 { carrying_block: ctx.block, escrows_reward: true, execution_key: own_execution_key },
+                PalwAttemptOriginV1 {
+                    carrying_block: ctx.block,
+                    escrows_reward: true,
+                    // Own work always escrows, carved from this block's own subsidy (unchanged).
+                    escrow_subsidy: ctx.subsidy,
+                    execution_key: own_execution_key,
+                },
             )?
         }
         PalwBlockWorkV3::ReceiptSpend(spend) => apply_receipt_spend(&mut builder, ctx, spend)?,
@@ -8323,13 +8355,19 @@ pub fn apply_palw_transition_v7(
                         Err(refused) => Some(refused.to_string()),
                         Ok(_) => {
                             let checkpoint = builder.checkpoint();
+                            // B-1: past the deep fence a merged claim escrows its carve, carved from the
+                            // MERGED block's own subsidy — the accepting coinbase withholds that same
+                            // carve. Below the fence, false → escrows nothing (ADR-0058 D5),
+                            // byte-identical to before. Read before the &mut borrow of `builder`.
+                            let escrows_reward = builder.extras.audit_2026_09_11_deep_active;
                             match apply_attempt(
                                 &mut builder,
                                 ctx,
                                 envelope,
                                 PalwAttemptOriginV1 {
                                     carrying_block: merged.carrying_block,
-                                    escrows_reward: false,
+                                    escrows_reward,
+                                    escrow_subsidy: merged.subsidy,
                                     execution_key: merged.execution_key,
                                 },
                             ) {
@@ -13299,12 +13337,17 @@ fn apply_attempt(
         } else {
             0
         },
-        // For the block's OWN attempt: the claim IS this block, so the block's carve funds
-        // exactly one claim and the "never exceeds the subsidy" bound is structural rather than
-        // arithmetic. For a MERGED blue's attempt (ADR-0058 Decision 5): zero — the coinbase
-        // already paid that blue its worker share in full and withheld nothing, so an escrow
-        // here would be a release with no matching withhold, minted on top of the schedule.
-        escrowed_reward: if origin.escrows_reward { worker_carve_v2(builder.params, ctx.subsidy) } else { 0 },
+        // Carved from `origin.escrow_subsidy` — the accepting block's own subsidy for own work, the
+        // merged block's own subsidy for merged work (B-1). For OWN work the claim IS this block, so
+        // the block's carve funds exactly one claim and "never exceeds the subsidy" is structural.
+        // For a MERGED blue: below `palw_audit_2026_09_11_deep`, `escrows_reward` is false and this is
+        // zero (ADR-0058 Decision 5 — the coinbase paid that blue in full, so an escrow here would be
+        // a release with no matching withhold, minted on top of the schedule). PAST the deep fence
+        // (B-1) `escrows_reward` is true and the carve is taken from the merged block's own subsidy,
+        // which the coinbase withholds from that same block's worker output instead of paying — the
+        // matched pair. Each block's carve is a permille of its OWN subsidy, so N merged escrows in
+        // one accepting block never exceed Σ of the merged blocks' subsidies.
+        escrowed_reward: if origin.escrows_reward { worker_carve_v2(builder.params, origin.escrow_subsidy) } else { 0 },
         work_leaves: 0,
         work_id: None,
         phase: PalwClaimPhaseV2::Provisional,
@@ -19706,7 +19749,7 @@ pub(crate) mod tests {
         // A spend naming a claim that does not exist: refused inside the fold, after checkpoint.
         let ghost = fp_spend(0xDEAD, 0);
         let merged =
-            [PalwMergedWorkV1 { carrying_block: h64(0xB1u64), work: PalwBlockWorkV3::ReceiptSpend(&ghost), execution_key: Hash64::default() }];
+            [PalwMergedWorkV1 { carrying_block: h64(0xB1u64), work: PalwBlockWorkV3::ReceiptSpend(&ghost), execution_key: Hash64::default(), subsidy: 0 }];
         let (with_skip, delta_with, skips) =
             apply_palw_transition_v4(&s1, &p, None, &ctx(2, 101, 2), &[], PalwBlockWorkV3::None, &merged)
                 .expect("the accepting block stands");
@@ -19730,7 +19773,7 @@ pub(crate) mod tests {
         let env = attempt(40, 1);
         let claim_id = attempt_id_v2(&env.attempt);
         let merged =
-            [PalwMergedWorkV1 { carrying_block: h64(0xB2u64), work: PalwBlockWorkV3::Attempt(&env), execution_key: Hash64::default() }];
+            [PalwMergedWorkV1 { carrying_block: h64(0xB2u64), work: PalwBlockWorkV3::Attempt(&env), execution_key: Hash64::default(), subsidy: 0 }];
         let (s2, _, skips) = apply_palw_transition_v4(&s1, &p, None, &ctx(2, 101, 2), &[], PalwBlockWorkV3::None, &merged)
             .expect("the accepting block stands");
         assert_eq!(skips.len(), 1, "skipped, with the missing-params reason");
@@ -19770,8 +19813,8 @@ pub(crate) mod tests {
         // fold has no header, so it is handed the value the processor would derive.
         let shared = h64(0x5EED);
         let merged = [
-            PalwMergedWorkV1 { carrying_block: h64(0xB1), work: PalwBlockWorkV3::Attempt(&a), execution_key: shared },
-            PalwMergedWorkV1 { carrying_block: h64(0xB2), work: PalwBlockWorkV3::Attempt(&b), execution_key: shared },
+            PalwMergedWorkV1 { carrying_block: h64(0xB1), work: PalwBlockWorkV3::Attempt(&a), execution_key: shared, subsidy: 0 },
+            PalwMergedWorkV1 { carrying_block: h64(0xB2), work: PalwBlockWorkV3::Attempt(&b), execution_key: shared, subsidy: 0 },
         ];
 
         // --- Past the deep fence: the second is refused; exactly one claim is minted. ---
@@ -19821,6 +19864,88 @@ pub(crate) mod tests {
         assert!(base.claim(&id_a).is_some() && base.claim(&id_b).is_some(), "both nonce siblings claim below the fence");
         assert!(base_skips.is_empty(), "and nothing is skipped");
         assert_eq!(base.reserved_exposure(&bond_key(1)), 400, "two claims reserve 40 × 5 twice");
+    }
+
+    /// **B-1 (mainnet audit 2026-09-11 deep fence): a merged claim escrows its carve, symmetric to
+    /// own work.** ADR-0058 Decision 5 paid a merged block its worker share in full at acceptance
+    /// and escrowed nothing (`escrowed_reward = 0`), so a merged claim that later voided forfeited
+    /// nothing — the escrow-until-Final invariant was bypassed for the merged lane. Past the deep
+    /// fence the merged claim escrows `worker_carve(the MERGED block's own subsidy)` — the accepting
+    /// block's coinbase withholds that same carve (`palw_v2_merged_escrow_withheld`), so it is a
+    /// deferral, not a second mint — and forfeits it on void like any own-work claim. Below the
+    /// fence the escrow is 0, byte-identical to before. Only the extras flag differs between the two.
+    #[test]
+    fn b1_a_merged_claim_escrows_its_carve_past_the_deep_fence() {
+        // The core fixture's `worker_carve_permille` is 0 (no PALW reward), so set a real carve to
+        // make the escrow observable — 62 %, the ADR-0035 §5 shape.
+        let p = params().with_worker_carve_permille(620).unwrap();
+        let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+
+        // One merged attempt carrying its OWN block's subsidy — the pool B-1 carves the escrow from.
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        const MB_SUBSIDY: u64 = 50_000_000_000;
+        let merged = [PalwMergedWorkV1 {
+            carrying_block: h64(0xB1),
+            work: PalwBlockWorkV3::Attempt(&env),
+            execution_key: Hash64::default(),
+            subsidy: MB_SUBSIDY,
+        }];
+        let carve = p.worker_carve(MB_SUBSIDY);
+        assert!(carve > 0, "62 % of 50 G sompi is a real carve");
+
+        // --- Past the deep fence: the merged claim escrows the carve of the MERGED block's subsidy. ---
+        let armed = PalwTransitionExtrasV1 { audit_2026_09_11_deep_active: true, ..Default::default() };
+        let (deep, _, skips) = apply_palw_transition_v7(
+            &s1,
+            &p,
+            Some(&admission),
+            &ctx(2, 101, 2),
+            &[],
+            PalwBlockWorkV3::None,
+            &merged,
+            Hash64::default(),
+            false,
+            false,
+            false,
+            false,
+            &armed,
+        )
+        .expect("the accepting block stands");
+        deep.assert_internal_consistency(&p).expect("internal consistency, deep-armed");
+        assert!(skips.is_empty(), "the merged attempt is admitted, not skipped");
+        assert_eq!(
+            deep.claim(&claim_id).expect("the merged claim exists").escrowed_reward,
+            carve,
+            "past the fence a merged claim escrows the carve of its OWN block's subsidy"
+        );
+
+        // --- Below the deep fence: the merged claim escrows nothing (ADR-0058 D5), unchanged. ---
+        let (base, _, base_skips) = apply_palw_transition_v7(
+            &s1,
+            &p,
+            Some(&admission),
+            &ctx(2, 101, 2),
+            &[],
+            PalwBlockWorkV3::None,
+            &merged,
+            Hash64::default(),
+            false,
+            false,
+            false,
+            false,
+            &PalwTransitionExtrasV1::default(),
+        )
+        .expect("the accepting block stands");
+        base.assert_internal_consistency(&p).expect("internal consistency, deep-dormant");
+        assert!(base_skips.is_empty(), "still admitted below the fence");
+        assert_eq!(
+            base.claim(&claim_id).expect("the merged claim exists").escrowed_reward,
+            0,
+            "below the fence a merged claim escrows nothing — the coinbase paid it in full"
+        );
     }
 
     /// A spend licenses only what is certified: wrong phase, wrong source, absent claim — each
