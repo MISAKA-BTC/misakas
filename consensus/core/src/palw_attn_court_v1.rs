@@ -432,6 +432,14 @@ pub struct PalwAttnBottomSiteV1 {
     /// because a per-decode-call leg has prefill positions no checkpoint covers and a court that
     /// refused both routes there would refuse to try the leaf at all.
     pub every_position_is_checkpointed: bool,
+    /// **ADR-0103 Decision 3: the held map's slice count at the anchor**, when the class registered
+    /// a held (v4) map — the number the chunk's two-level proof is read against, derived by the
+    /// caller from the class's layout at `anchor_positions`. `None` for every other map, whose
+    /// chunks prove into the flat tree.
+    pub anchor_held_slices: Option<u32>,
+    /// The heads a held hybrid's recurrence slice holds — the block count of every slice past the
+    /// cache's. Zero for a dense class.
+    pub anchor_held_recurrence_heads: u16,
 }
 
 // =================================================================================================
@@ -941,11 +949,19 @@ fn verified_anchor_v1<'a>(
             geometry: geometry.positions,
         });
     }
-    if u64::from(anchor.leaf.state_chunk_count) != geometry.chunk_count() {
-        return Err(PalwAttnCourtError::AnchorChunkCountMismatch {
-            declared: anchor.leaf.state_chunk_count,
-            derived: geometry.chunk_count(),
-        });
+    // A held hybrid's anchor also carries recurrence slices past the cache's, so its whole count
+    // is the attention chunks plus the heads of every recurrence slice; the attention half is what
+    // this bottom reads, and a held dense class has no recurrence slice at all.
+    let derived_count = match site.anchor_held_slices {
+        Some(slices) => {
+            let attn_slices = 2 * geometry.attn_layers.len() as u64;
+            let extra = u64::from(slices).saturating_sub(attn_slices);
+            geometry.chunk_count() + extra * u64::from(site.anchor_held_recurrence_heads)
+        }
+        None => geometry.chunk_count(),
+    };
+    if u64::from(anchor.leaf.state_chunk_count) != derived_count {
+        return Err(PalwAttnCourtError::AnchorChunkCountMismatch { declared: anchor.leaf.state_chunk_count, derived: derived_count });
     }
     if anchor.opening.leaf_index != u64::from(anchor.leaf.checkpoint_index) {
         return Err(PalwAttnCourtError::AnchorNotCommitted);
@@ -1035,9 +1051,34 @@ fn tile_rows_v1(
             }
             // Membership: this chunk, at this index, is in THIS checkpoint's state — proved
             // without the other chunks, which is the whole of Decision 4.
-            let chunk_hash = state_chunk_leaf_hash_v1(&binding.state_chunk_map_id, chunk.chunk_index, &chunk.chunk_bytes);
-            let folded =
-                state_chunk_opening_root_v1(geometry.chunk_count() as usize, chunk.chunk_index, &chunk_hash, &chunk.siblings)?;
+            let folded = match site.anchor_held_slices {
+                // ADR-0103 Decision 3: a held class's chunk proves into its slice's sub-root and
+                // then into the top tree; the flat index is read into `(slice, block)` by the same
+                // arithmetic the enumeration uses, and every count is the class's, never the wire's.
+                Some(slice_count) => {
+                    let per_slice = u64::from(geometry.chunks_per_slice.max(1));
+                    let slice = (u64::from(chunk.chunk_index) / per_slice) as u32;
+                    let block = (u64::from(chunk.chunk_index) % per_slice) as u32;
+                    let chunk_hash = crate::palw_step_leg::state_chunk_leaf_hash_v4(
+                        &binding.state_chunk_map_id,
+                        slice,
+                        block,
+                        &chunk.chunk_bytes,
+                    );
+                    crate::palw_step_leg::state_chunk_opening_root_v4(
+                        slice_count,
+                        slice,
+                        geometry.chunks_per_slice,
+                        block,
+                        &chunk_hash,
+                        &chunk.siblings,
+                    )?
+                }
+                None => {
+                    let chunk_hash = state_chunk_leaf_hash_v1(&binding.state_chunk_map_id, chunk.chunk_index, &chunk.chunk_bytes);
+                    state_chunk_opening_root_v1(geometry.chunk_count() as usize, chunk.chunk_index, &chunk_hash, &chunk.siblings)?
+                }
+            };
             if folded != leaf.state_chunks_root {
                 return Err(PalwAttnCourtError::ChunkNotInCheckpoint { folded, claimed: leaf.state_chunks_root });
             }
@@ -1445,6 +1486,8 @@ mod tests {
                 anchor_covered_decode_call: None,
                 anchor_geometry: None,
                 anchor_positions: 0,
+                anchor_held_slices: None,
+                anchor_held_recurrence_heads: 0,
             }
         }
 

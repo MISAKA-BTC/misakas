@@ -69,6 +69,10 @@ pub const PALW_STEP_LEG_ALL_DOMAINS: &[&[u8]] = &[
     PALW_STEP_LEG_DOMAIN_CHECKPOINT_LEG_V2,
     PALW_STEP_LEG_DOMAIN_EXECUTION_COMMITMENT_V2,
     PALW_STEP_LEG_DOMAIN_EVIDENCE_ID,
+    PALW_STEP_LEG_DOMAIN_STATE_CHUNK_LEAF_V4,
+    PALW_STEP_LEG_DOMAIN_STATE_SLICE_NODE_V4,
+    PALW_STEP_LEG_DOMAIN_STATE_TOP_LEAF_V4,
+    PALW_STEP_LEG_DOMAIN_STATE_TOP_NODE_V4,
 ];
 
 /// Step-tree leaf cap — **the DEFAULT ladder top, not the rule.**
@@ -210,6 +214,12 @@ pub enum PalwStepLegError {
     CheckpointNotCanonical { index: u32, got: u32, expected: u32 },
     #[error("state chunk count {got} exceeds the {max} cap")]
     StateChunksOutOfRange { got: usize, max: usize },
+    /// ADR-0103 Decision 3: a v4 state proof deeper than the held map's bound.
+    #[error("a v4 state proof is {depth} levels deep and the held map admits {max}")]
+    StateTreeTooDeep { depth: u32, max: u32 },
+    /// ADR-0103 Decision 3: the class's held layout could not be derived at this position count.
+    #[error("the held state layout is not derivable: {0}")]
+    HeldLayout(String),
 }
 
 impl From<PalwStepError> for PalwStepLegError {
@@ -1051,6 +1061,264 @@ pub fn state_chunks_root_v1(chunk_hashes: &[Hash64]) -> Result<Hash64, PalwStepL
         level = state_chunk_fold_level_v1(&level);
     }
     Ok(level[0])
+}
+// ---------------------------------------------------------------------------------------------
+// ADR-0103 Decision 3 — the held state tree (map v4)
+// ---------------------------------------------------------------------------------------------
+//
+// **The same chunks, in the same order, under a tree whose index does not move.**
+//
+// [`state_chunk_leaf_hash_v1`] binds a chunk's FLAT index, and the tiled map (v3) numbers its
+// chunks `(kind · layers + layer) · chunks_per_slice + block`. `chunks_per_slice` grows by one
+// every sixteen positions, so at every tile boundary every later chunk's index moves and a chunk
+// whose bytes did not change is a different leaf: ADR-0082 §10.3 measured the re-serialisation at
+// 696,516,608 bytes a job at `n_ctx` 512 — a term quadratic in the context, and the one thing §10.3
+// said only a different index scheme could remove.
+//
+// v4 is that scheme. A leaf binds `(map, slice, block)` — a slice is one `(kind, layer)` series of
+// the cache, or one recurrence `(kind, layer)` whose blocks are its heads — so a block's hash is
+// fixed the moment its sixteenth row is written. Each slice's sub-root is a promote-odd tree over
+// its blocks, maintained by the executor as a frontier ([`PalwStateSliceFrontierV4`]): appending a
+// block merges `O(1)` amortised nodes, replacing the open (last, part-filled) block re-folds
+// `O(log blocks)`. The checkpoint's `state_chunks_root` is a promote-odd tree over the slices'
+// top leaves, each binding `(slice, block_count, sub_root)`. One chunk opens with `log(blocks) +
+// log(slices)` siblings, which is the same order as v3's `log(chunks)`.
+//
+// The flat enumeration a v3 reader walks is unchanged — chunk `i` of a v4 checkpoint is the same
+// bytes as chunk `i` of a v3 one — so every opening form that carries a flat `chunk_index` keeps
+// its wire shape; the map id decides which tree the index is read into.
+
+pub const PALW_STEP_LEG_DOMAIN_STATE_CHUNK_LEAF_V4: &[u8] = b"misaka-palw/state-chunk-leaf/v4";
+pub const PALW_STEP_LEG_DOMAIN_STATE_SLICE_NODE_V4: &[u8] = b"misaka-palw/state-slice-node/v4";
+pub const PALW_STEP_LEG_DOMAIN_STATE_TOP_LEAF_V4: &[u8] = b"misaka-palw/state-top-leaf/v4";
+pub const PALW_STEP_LEG_DOMAIN_STATE_TOP_NODE_V4: &[u8] = b"misaka-palw/state-top-node/v4";
+
+/// **The v4 map's bound, in the unit the tree is read in: siblings, not chunks.** A context of
+/// `2^32` positions at a 16-position tile is `2^28` blocks, and `2 × 1024` attention slices is
+/// `2^11` slices — 39 levels. 48 leaves room for a hybrid's recurrence slices and caps a proof at
+/// 3 KiB of path, which is what replaces `PALW_STEP_LEG_MAX_STATE_CHUNKS` (a COUNT, and therefore a
+/// wall linear in the context) for a class under the held map.
+pub const PALW_STEP_LEG_MAX_STATE_DEPTH_V4: u32 = 48;
+
+/// One v4 chunk's leaf: the map, the slice, the block — never a flat index.
+pub fn state_chunk_leaf_hash_v4(state_chunk_map_id: &Hash64, slice: u32, block: u32, chunk_bytes: &[u8]) -> Hash64 {
+    let mut w = Writer::new();
+    w.hash64(state_chunk_map_id);
+    w.u32(slice);
+    w.u32(block);
+    w.bytes(chunk_bytes);
+    w.keyed64(PALW_STEP_LEG_DOMAIN_STATE_CHUNK_LEAF_V4)
+}
+
+/// The top tree's leaf for one slice: its index, how many blocks it holds, and its sub-root. The
+/// count is inside the leaf so a prover cannot open a block of a slice it has declared shorter.
+pub fn state_top_leaf_v4(slice: u32, block_count: u32, sub_root: &Hash64) -> Hash64 {
+    let mut w = Writer::new();
+    w.u32(slice);
+    w.u32(block_count);
+    w.hash64(sub_root);
+    w.keyed64(PALW_STEP_LEG_DOMAIN_STATE_TOP_LEAF_V4)
+}
+
+fn v4_node(domain: &[u8], left: &Hash64, right: &Hash64) -> Hash64 {
+    keyed64(domain, &[left.as_byte_slice(), right.as_byte_slice()])
+}
+
+/// One level of a promote-odd fold under `domain` — [`state_chunk_fold_level_v1`]'s shape.
+fn v4_fold_level(domain: &[u8], level: &[Hash64]) -> Vec<Hash64> {
+    let mut next = Vec::with_capacity(level.len().div_ceil(2));
+    let mut pairs = level.chunks_exact(2);
+    for pair in &mut pairs {
+        next.push(v4_node(domain, &pair[0], &pair[1]));
+    }
+    if let [odd] = pairs.remainder() {
+        next.push(*odd);
+    }
+    next
+}
+
+fn v4_root(domain: &[u8], leaves: &[Hash64]) -> Result<Hash64, PalwStepLegError> {
+    if leaves.is_empty() {
+        return Err(PalwStepLegError::StateChunksOutOfRange { got: 0, max: usize::MAX });
+    }
+    let mut level = leaves.to_vec();
+    while level.len() > 1 {
+        level = v4_fold_level(domain, &level);
+    }
+    Ok(level[0])
+}
+
+fn v4_path(domain: &[u8], leaves: &[Hash64], mut index: usize) -> Result<Vec<Hash64>, PalwStepLegError> {
+    if index >= leaves.len() {
+        return Err(PalwStepLegError::LeafIndexOutOfRange { index: index as u64, count: leaves.len() as u64 });
+    }
+    let mut level = leaves.to_vec();
+    let mut path = Vec::new();
+    while level.len() > 1 {
+        let promoted = !level.len().is_multiple_of(2) && index == level.len() - 1;
+        if !promoted {
+            path.push(level[if index.is_multiple_of(2) { index + 1 } else { index - 1 }]);
+        }
+        level = v4_fold_level(domain, &level);
+        index /= 2;
+    }
+    Ok(path)
+}
+
+/// **How many siblings a promote-odd path has** at `index` of `width` leaves — derived, so a
+/// verifier can split one carried sibling list into its two trees without the prover saying where.
+pub fn state_v4_path_len(width: u64, index: u64) -> u32 {
+    let (mut width, mut position, mut len) = (width, index, 0u32);
+    while width > 1 {
+        if !(width % 2 == 1 && position == width - 1) {
+            len += 1;
+        }
+        position /= 2;
+        width = width.div_ceil(2);
+    }
+    len
+}
+
+fn v4_root_from_path(
+    domain: &[u8],
+    width: u64,
+    index: u64,
+    leaf: Hash64,
+    siblings: &[Hash64],
+) -> Result<Hash64, PalwStepLegError> {
+    if width == 0 || index >= width {
+        return Err(PalwStepLegError::LeafIndexOutOfRange { index, count: width });
+    }
+    let (mut current, mut position, mut width) = (leaf, index, width);
+    let mut siblings = siblings.iter();
+    while width > 1 {
+        let promoted = width % 2 == 1 && position == width - 1;
+        if !promoted {
+            let sibling = siblings.next().ok_or(PalwStepLegError::OpeningPathTooShort)?;
+            current = if position % 2 == 0 { v4_node(domain, &current, sibling) } else { v4_node(domain, sibling, &current) };
+        }
+        position /= 2;
+        width = width.div_ceil(2);
+    }
+    let extra = siblings.count();
+    if extra != 0 {
+        return Err(PalwStepLegError::OpeningPathTooLong { extra });
+    }
+    Ok(current)
+}
+
+/// A slice's sub-root: a promote-odd tree over its block leaves (each already binding its own
+/// `(slice, block)`).
+pub fn state_slice_root_v4(block_hashes: &[Hash64]) -> Result<Hash64, PalwStepLegError> {
+    v4_root(PALW_STEP_LEG_DOMAIN_STATE_SLICE_NODE_V4, block_hashes)
+}
+
+/// The path proving block `block` inside its slice's sub-root.
+pub fn state_slice_path_v4(block_hashes: &[Hash64], block: usize) -> Result<Vec<Hash64>, PalwStepLegError> {
+    v4_path(PALW_STEP_LEG_DOMAIN_STATE_SLICE_NODE_V4, block_hashes, block)
+}
+
+/// A v4 checkpoint's `state_chunks_root`: a promote-odd tree over the slices' top leaves, in
+/// slice order.
+pub fn state_top_root_v4(top_leaves: &[Hash64]) -> Result<Hash64, PalwStepLegError> {
+    v4_root(PALW_STEP_LEG_DOMAIN_STATE_TOP_NODE_V4, top_leaves)
+}
+
+/// The path proving slice `slice`'s top leaf inside the checkpoint's root.
+pub fn state_top_path_v4(top_leaves: &[Hash64], slice: usize) -> Result<Vec<Hash64>, PalwStepLegError> {
+    v4_path(PALW_STEP_LEG_DOMAIN_STATE_TOP_NODE_V4, top_leaves, slice)
+}
+
+/// **One chunk's membership in a v4 state root** — the block path folded to the slice's sub-root,
+/// the slice's top leaf, and the top path folded to the root. `siblings` is the block path then
+/// the top path; where one ends is derived from `(block, block_count)`. The caller supplies the
+/// counts from the class's own geometry at the checkpoint's position count and compares the
+/// answer with the checkpoint leaf's `state_chunks_root`.
+pub fn state_chunk_opening_root_v4(
+    slice_count: u32,
+    slice: u32,
+    block_count: u32,
+    block: u32,
+    chunk_hash: &Hash64,
+    siblings: &[Hash64],
+) -> Result<Hash64, PalwStepLegError> {
+    let depth = state_v4_path_len(u64::from(block_count), u64::from(block)) + state_v4_path_len(u64::from(slice_count), u64::from(slice));
+    if depth > PALW_STEP_LEG_MAX_STATE_DEPTH_V4 || siblings.len() > PALW_STEP_LEG_MAX_STATE_DEPTH_V4 as usize {
+        return Err(PalwStepLegError::StateTreeTooDeep { depth: depth.max(siblings.len() as u32), max: PALW_STEP_LEG_MAX_STATE_DEPTH_V4 });
+    }
+    let split = state_v4_path_len(u64::from(block_count), u64::from(block)) as usize;
+    if siblings.len() < split {
+        return Err(PalwStepLegError::OpeningPathTooShort);
+    }
+    let (block_path, top_path) = siblings.split_at(split);
+    let sub_root = v4_root_from_path(
+        PALW_STEP_LEG_DOMAIN_STATE_SLICE_NODE_V4,
+        u64::from(block_count),
+        u64::from(block),
+        *chunk_hash,
+        block_path,
+    )?;
+    v4_root_from_path(
+        PALW_STEP_LEG_DOMAIN_STATE_TOP_NODE_V4,
+        u64::from(slice_count),
+        u64::from(slice),
+        state_top_leaf_v4(slice, block_count, &sub_root),
+        top_path,
+    )
+}
+
+/// **One slice's append-only frontier** — what the executor keeps instead of re-hashing the cache.
+///
+/// `closed` holds the perfect subtrees of the closed blocks, largest first (the binary
+/// decomposition of their count); `open` is the last block while it is still filling. The root is
+/// the right-to-left fold of `closed ‖ open`, which is the promote-odd root over the same leaves —
+/// `the_frontier_is_the_promote_odd_root_at_every_width` pins that for every width to 257.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PalwStateSliceFrontierV4 {
+    closed: Vec<(u32, Hash64)>,
+    closed_count: u64,
+    open: Option<Hash64>,
+}
+
+impl PalwStateSliceFrontierV4 {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Blocks in the slice, the open one included.
+    pub fn block_count(&self) -> u64 {
+        self.closed_count + u64::from(self.open.is_some())
+    }
+
+    /// A block that will never change again joins the frontier: `O(1)` amortised node hashes.
+    /// Clears the open block — a closing block is the open block's final value.
+    pub fn push_closed(&mut self, leaf: Hash64) {
+        self.open = None;
+        self.closed.push((0, leaf));
+        self.closed_count += 1;
+        while self.closed.len() >= 2 && self.closed[self.closed.len() - 1].0 == self.closed[self.closed.len() - 2].0 {
+            let (height, right) = self.closed.pop().expect("two entries");
+            let (_, left) = self.closed.pop().expect("two entries");
+            self.closed.push((height + 1, v4_node(PALW_STEP_LEG_DOMAIN_STATE_SLICE_NODE_V4, &left, &right)));
+        }
+    }
+
+    /// The last block, still filling: replaced at every position until it closes.
+    pub fn set_open(&mut self, leaf: Hash64) {
+        self.open = Some(leaf);
+    }
+
+    /// The slice's sub-root, or `None` for a slice with no block.
+    pub fn root(&self) -> Option<Hash64> {
+        let mut acc = self.open;
+        for (_, node) in self.closed.iter().rev() {
+            acc = Some(match acc {
+                None => *node,
+                Some(right) => v4_node(PALW_STEP_LEG_DOMAIN_STATE_SLICE_NODE_V4, node, &right),
+            });
+        }
+        acc
+    }
 }
 
 /// A v2 checkpoint leaf: the v1 chain discipline with the flat state root replaced by the
@@ -1932,7 +2200,10 @@ fn checkpoint_fault(
     if preimage.checkpoint_index == 0 && preimage.prev_checkpoint_leaf_hash != checkpoint_genesis_prev_v2(context_hash) {
         return Some(PalwStepFaultV1::CheckpointGenesisPrevMismatch);
     }
-    if preimage.state_chunk_count == 0 || preimage.state_chunk_count as usize > PALW_STEP_LEG_MAX_STATE_CHUNKS {
+    // ADR-0103 Decision 3: the held map's count has no cap of its own — its bound is the proof's
+    // depth, and the equality with the map's canonical count below is what binds it.
+    let held = crate::palw_state_chunk_map::palw_map_is_held_v4(&binding.state_chunk_map_id);
+    if preimage.state_chunk_count == 0 || (!held && preimage.state_chunk_count as usize > PALW_STEP_LEG_MAX_STATE_CHUNKS) {
         return Some(PalwStepFaultV1::CheckpointIndexNotCanonical);
     }
     // **And the count must be the CLASS's map's for this state** (audit B, M-4). The range check
@@ -1955,10 +2226,14 @@ fn checkpoint_fault(
         &binding.job_context,
         preimage.covered_decode_call,
     );
-    if let Some(canonical_chunks) = crate::palw_state_chunk_map::palw_state_chunk_count_at_v1(&binding.shape_profile, positions)
-        && preimage.state_chunk_count as u64 != canonical_chunks
-    {
-        return Some(PalwStepFaultV1::CheckpointIndexNotCanonical);
+    match crate::palw_state_chunk_map::palw_state_chunk_count_at_v1(&binding.shape_profile, positions) {
+        Some(canonical_chunks) if preimage.state_chunk_count as u64 != canonical_chunks => {
+            return Some(PalwStepFaultV1::CheckpointIndexNotCanonical);
+        }
+        // A held map is one this crate enumerates, so "not derivable" is a leg it cannot have
+        // committed honestly — not the court's missing arithmetic.
+        None if held => return Some(PalwStepFaultV1::CheckpointIndexNotCanonical),
+        _ => {}
     }
     None
 }
@@ -1982,6 +2257,104 @@ mod tests {
             }
             assert!(tree.path_v1(n).is_err());
         }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // ADR-0103 Decision 3 — the held state tree
+    // ---------------------------------------------------------------------------------------------
+
+    /// **The frontier IS the promote-odd root, at every width** — closed blocks only, and closed
+    /// blocks with an open one on the end, from one block to 257. This is the property that lets an
+    /// executor keep `O(log blocks)` state per slice instead of the slice.
+    #[test]
+    fn the_frontier_is_the_promote_odd_root_at_every_width() {
+        let leaf = |i: u64| Hash64::from_u64_word(0x5A00 + i);
+        for width in 1u64..=257 {
+            let leaves: Vec<Hash64> = (0..width).map(leaf).collect();
+            let want = state_slice_root_v4(&leaves).expect("a root");
+            let mut all_closed = PalwStateSliceFrontierV4::new();
+            for l in &leaves {
+                all_closed.push_closed(*l);
+            }
+            assert_eq!(all_closed.root(), Some(want), "all closed at width {width}");
+            assert_eq!(all_closed.block_count(), width);
+            let mut last_open = PalwStateSliceFrontierV4::new();
+            for l in &leaves[..leaves.len() - 1] {
+                last_open.push_closed(*l);
+            }
+            // The open block is replaced at every position before it closes; only its final value
+            // is the leaf, and a stale one must not survive the replacement.
+            last_open.set_open(Hash64::from_u64_word(0xDEAD));
+            last_open.set_open(leaves[leaves.len() - 1]);
+            assert_eq!(last_open.root(), Some(want), "the last block open at width {width}");
+            assert_eq!(last_open.block_count(), width);
+        }
+        assert_eq!(PalwStateSliceFrontierV4::new().root(), None, "a slice with no block has no root");
+    }
+
+    /// **Every chunk of a v4 tree opens to its root, and nothing else does.** Several slices of
+    /// uneven widths; each block's two-level proof folds to the root; a changed byte, a wrong block,
+    /// a wrong slice, a short path and a long path are each refused or fold elsewhere.
+    #[test]
+    fn a_v4_chunk_opens_to_its_root_and_a_tampered_one_does_not() {
+        let map = Hash64::from_u64_word(0x4444);
+        let widths = [1u32, 2, 3, 5, 8, 13, 1];
+        let bytes = |s: u32, b: u32| vec![(s * 31 + b) as u8; 5 + (b % 3) as usize];
+        let slices: Vec<Vec<Hash64>> =
+            widths.iter().enumerate().map(|(s, &w)| (0..w).map(|b| state_chunk_leaf_hash_v4(&map, s as u32, b, &bytes(s as u32, b))).collect()).collect();
+        let top: Vec<Hash64> = slices
+            .iter()
+            .enumerate()
+            .map(|(s, leaves)| state_top_leaf_v4(s as u32, leaves.len() as u32, &state_slice_root_v4(leaves).expect("a sub-root")))
+            .collect();
+        let root = state_top_root_v4(&top).expect("the root");
+        let slice_count = widths.len() as u32;
+        for (s, leaves) in slices.iter().enumerate() {
+            for b in 0..leaves.len() {
+                let mut path = state_slice_path_v4(leaves, b).expect("a block path");
+                path.extend(state_top_path_v4(&top, s).expect("a top path"));
+                let (s32, b32, w) = (s as u32, b as u32, widths[s]);
+                assert_eq!(state_chunk_opening_root_v4(slice_count, s32, w, b32, &leaves[b], &path), Ok(root), "slice {s} block {b}");
+                let forged = state_chunk_leaf_hash_v4(&map, s32, b32, &[0xFF]);
+                assert_ne!(state_chunk_opening_root_v4(slice_count, s32, w, b32, &forged, &path), Ok(root), "a changed byte");
+                // The same bytes under another address are another leaf.
+                assert_ne!(state_chunk_leaf_hash_v4(&map, s32, b32 + 1, &bytes(s32, b32)), leaves[b]);
+                assert_ne!(state_chunk_leaf_hash_v4(&map, s32 + 1, b32, &bytes(s32, b32)), leaves[b]);
+                if !path.is_empty() {
+                    assert!(state_chunk_opening_root_v4(slice_count, s32, w, b32, &leaves[b], &path[..path.len() - 1]).is_err(), "short");
+                }
+                let mut long = path.clone();
+                long.push(Hash64::from_u64_word(1));
+                assert!(state_chunk_opening_root_v4(slice_count, s32, w, b32, &leaves[b], &long).is_err(), "long");
+            }
+        }
+        // A slice's declared block count is inside its top leaf: claiming a wider slice folds
+        // somewhere else.
+        let leaves = &slices[4];
+        let mut path = state_slice_path_v4(leaves, 0).expect("a path");
+        path.extend(state_top_path_v4(&top, 4).expect("a path"));
+        assert_ne!(state_chunk_opening_root_v4(slice_count, 4, widths[4] + 1, 0, &leaves[0], &path), Ok(root));
+    }
+
+    /// **A closed block's leaf never moves** — the property the v3 index did not have (ADR-0082
+    /// §10.3). Under v4 the leaf of `(slice, block)` is a function of its bytes alone, so the same
+    /// bytes at a later checkpoint (more blocks in every slice) are the same leaf; under v3 the flat
+    /// index of every slice past the first moves when `chunks_per_slice` grows, and so does its leaf.
+    #[test]
+    fn a_closed_blocks_leaf_never_moves_under_v4_and_does_under_v3() {
+        let map = Hash64::from_u64_word(0x4444);
+        let bytes = vec![7u8; 64];
+        // Slice 1 block 0 at a checkpoint with 2 blocks a slice, and again with 3.
+        let v4_before = state_chunk_leaf_hash_v4(&map, 1, 0, &bytes);
+        let v4_after = state_chunk_leaf_hash_v4(&map, 1, 0, &bytes);
+        assert_eq!(v4_before, v4_after);
+        let v3_before = state_chunk_leaf_hash_v1(&map, 2, &bytes); // flat index 1·2 + 0
+        let v3_after = state_chunk_leaf_hash_v1(&map, 3, &bytes); // flat index 1·3 + 0
+        assert_ne!(v3_before, v3_after, "v3 re-hashes an unchanged chunk at every tile boundary");
+        assert_eq!(state_v4_path_len(1, 0), 0);
+        assert_eq!(state_v4_path_len(2, 1), 1);
+        assert_eq!(state_v4_path_len(5, 4), 1, "the promoted tail skips two levels");
+        assert_eq!(state_v4_path_len(1 << 17, 12345), 17);
     }
 
     use super::*;

@@ -99,6 +99,13 @@ pub const PALW_STEP_MAX_RMS_EPS_Q: i64 = 1 << 40;
 pub const PALW_STEP_MAX_LAYERS: u16 = 1024;
 /// Most nodes one layer template may declare.
 pub const PALW_STEP_MAX_NODES_PER_TABLE: usize = 64;
+
+/// **ADR-0103 Decision 6: the most node slots one position can have** — `pre ‖ layers × table ‖
+/// post` at the caps `validate_shape` already enforces. It is the per-position budget that replaces
+/// `n_ctx × layer_count` for a class under the held map: what a validating node walks per position,
+/// with no factor of the context.
+pub const PALW_STEP_MAX_NODES_PER_POSITION: u64 =
+    (PALW_STEP_MAX_NODES_PER_TABLE as u64) * (2 + PALW_STEP_MAX_LAYERS as u64);
 /// Tile length bounds (elements per committed tile).
 /// Lowered 16 → 8 → **4** (2026-08-26/27), each time by the same arithmetic: a step's Decision-B
 /// opening is `tile × in_w` bytes and the whole close must ride one ~80 KiB carrier, so the widest
@@ -511,7 +518,17 @@ impl PalwShapeProfileV3 {
         if self.n_ctx == 0 {
             return Err(bad("context length is zero"));
         }
-        if (self.n_ctx as u64).saturating_mul(self.layer_count as u64) > PALW_STEP_MAX_ENUMERATION {
+        // **ADR-0103 Decision 6: a class under the held map is bounded per POSITION, not by the
+        // product.** The product existed to bound two walks that visited every position —
+        // `step_leaf_count_capped_v1` and `canonical_step_coordinates` — and both are closed forms
+        // now, so `n_ctx × layer_count` bounds nothing a validating node spends. What a node still
+        // spends per position is the slot walk, bounded by `PALW_STEP_MAX_LAYERS` (above) and
+        // `PALW_STEP_MAX_NODES_PER_TABLE` (`validate_shape`), whose product is
+        // `PALW_STEP_MAX_NODES_PER_POSITION`; the context itself is bounded by the ladder's depth
+        // at admission. Every other class keeps the product ceiling, byte for byte: the marker is
+        // the registered map, which is inside the class id, so no class that exists today moves.
+        let held = crate::palw_state_chunk_map::palw_map_is_held_v4(&self.state_chunk_map_id);
+        if !held && (self.n_ctx as u64).saturating_mul(self.layer_count as u64) > PALW_STEP_MAX_ENUMERATION {
             return Err(bad("the declared shape drives an enumeration past the work ceiling"));
         }
         if self.hidden_dim == 0 || self.vocab_size == 0 {
@@ -574,8 +591,11 @@ impl PalwShapeProfileV3 {
         }
         // **The work bound, not the answer bound.** See `PALW_STEP_MAX_ENUMERATION`: the leaf
         // enumeration is driven by this product, and it is computed BEFORE anything can compare
-        // against the leaf cap.
-        if (self.n_ctx as u64).saturating_mul(self.layer_count as u64) > PALW_STEP_MAX_ENUMERATION {
+        // against the leaf cap. A class under the held map is bounded per position instead
+        // (ADR-0103 Decision 6; `validate_geometry` above says why).
+        if !crate::palw_state_chunk_map::palw_map_is_held_v4(&self.state_chunk_map_id)
+            && (self.n_ctx as u64).saturating_mul(self.layer_count as u64) > PALW_STEP_MAX_ENUMERATION
+        {
             return Err(bad("the declared shape drives an enumeration past the work ceiling"));
         }
         if self.hidden_dim == 0 || self.vocab_size == 0 {
@@ -852,6 +872,8 @@ pub struct PalwStepCoordinateV1 {
     pub tile_index: u32,
 }
 
+// Only the retained reference walks read this now (ADR-0103 Decision 6).
+#[cfg(test)]
 fn tiles_for(len: u64, tile_len: u32) -> u64 {
     // **Total, because one caller reaches it before the shape is bounded.** `validate_shape`
     // refuses `tile_len < PALW_STEP_MIN_TILE_LEN`, so on every validated profile this branch is
@@ -866,6 +888,8 @@ fn tiles_for(len: u64, tile_len: u32) -> u64 {
     len.div_ceil(tile_len as u64)
 }
 
+// Only the retained reference walks read this now (ADR-0103 Decision 6).
+#[cfg(test)]
 fn node_out_len(node: &PalwStepNodeV1, kv_len: u64) -> u64 {
     match node.out_len {
         PalwStepOutLenV1::Fixed { elements } => elements as u64,
@@ -874,6 +898,8 @@ fn node_out_len(node: &PalwStepNodeV1, kv_len: u64) -> u64 {
 }
 
 /// Leaves contributed by one (call, position) pair across all global node slots.
+// Only the retained reference walks read this now (ADR-0103 Decision 6).
+#[cfg(test)]
 fn leaves_per_position(profile: &PalwShapeProfileV3, kv_len: u64, with_logits: bool) -> u64 {
     let mut leaves = 0u64;
     for node in &profile.pre_nodes {
@@ -1441,10 +1467,35 @@ pub fn prefill_leaf_count_v1(profile: &PalwShapeProfileV3, context: &PalwJobCont
 /// tile; the KV aux series appended after all main leaves, ordered (attention layer, kv head,
 /// K then V, chunk). Returns the coordinates of a main leaf, or `None` for aux leaves (they
 /// have their own coordinate space) and out-of-range indices.
+///
+/// # ADR-0103 Decision 6: read in closed form, never walked
+///
+/// This walked one position per token and one slot per node until it reached the leaf — `O(C ×
+/// nodes)` on every validating node, for an index a stranger's court close names. The walk is now
+/// a closed form over the same [`PalwLeafShapeV1`] the leaf count uses: the step that holds the
+/// leaf is found by a bitwise search over the job's running total
+/// ([`palw_job_running_total_v1`], `O(kv terms)` a probe, at most 34 probes because a job has fewer
+/// than `2^33` steps), and the slot inside the position by the layer multiplicities — every
+/// attention layer contributes the same leaves at one kv length, every recurrence layer likewise —
+/// so the layer is found by a second bitwise search and only one table and the pre/post tables are
+/// walked. Nothing is proportional to the context. The retained walk
+/// (`canonical_step_coordinates_walked_v1`, test-only) is what
+/// `the_closed_form_coordinates_are_the_walk_on_every_shipped_profile` compares it with, leaf by
+/// leaf, over every shipped profile and a sweep of job shapes.
 pub fn canonical_step_coordinates(
     profile: &PalwShapeProfileV3,
     context: &PalwJobContextV2,
     leaf_index: u64,
+) -> Option<PalwStepCoordinateV1> {
+    canonical_step_coordinates_counted_v1(profile, context, leaf_index, &mut 0)
+}
+
+/// [`canonical_step_coordinates`] with the node-visit counter its cost test reads.
+pub(crate) fn canonical_step_coordinates_counted_v1(
+    profile: &PalwShapeProfileV3,
+    context: &PalwJobContextV2,
+    leaf_index: u64,
+    visits: &mut u64,
 ) -> Option<PalwStepCoordinateV1> {
     // **Validate BEFORE enumerating** — `step_leaf_count` and `worst_case_step_leaf_count_v1` both
     // do, and this one did not, which mattered because this is the sibling a STRANGER reaches.
@@ -1452,43 +1503,281 @@ pub fn canonical_step_coordinates(
     // of an attacker's close, and the shape check that would have refused it (`validate_shape`
     // inside `check_step_refutation_v1`) runs later, in `adjudicate_close_proof_v2`. Two of the
     // bounds this restores are the difference between an error and a dead network: `tile_len`
-    // (a zero width divided by zero, one line down the walk) and the `n_ctx × layer_count` work
-    // ceiling (a declared context of four billion, enumerated here before anything can compare
-    // against the leaf cap). Both run in virtual processing, so the block is stored and relayed
-    // first and every node re-reads it on restart.
+    // (a zero width divided by zero) and the work ceiling. Both run in virtual processing, so the
+    // block is stored and relayed first and every node re-reads it on restart.
     profile.validate_shape().ok()?;
-    // **And validate the CONTEXT against the profile, because the walk's LENGTH is the context's,
-    // not the profile's.**
-    //
-    // `validate_shape` above bounds the profile — its `n_ctx`, its layer count, its tile widths.
-    // It says nothing about `declared_prefill_tokens` and `exact_decode_tokens`, which are the two
-    // u32 fields the loop below actually counts, and which arrive inside `binding.job_context`
-    // straight out of an attacker's court close (`palw_court_v2.rs`'s two `DecodeToken` arms).
-    // Nothing between the close and here compares them against anything: the only place in the
-    // tree that asserts `declared_prefill + exact_decode <= max_context_tokens` is an `assert!` in
-    // a test (`palw_fp_execution_v3.rs`). So a close declaring four billion prefill tokens bought
-    // a four-billion-iteration walk on EVERY validating node, in virtual processing — the block is
-    // stored and relayed first, and every node re-walks it on restart.
-    //
-    // **The bound is the class gate's, spelled the way the class gate spells it**, and the spelling
-    // is the whole of it: the FOOTPRINT is `prefill + decode - 1`, not `prefill + decode`. The last
-    // decode call reuses the position the prefill's final token already occupies — which is exactly
-    // what the loop below counts, `prefill` positions on call 0 and one each for `decode - 1`
-    // further calls. `palw_class_admission_v2`'s
-    // `the_canonical_job_is_bounded_by_the_registered_context_in_the_enumerations_form` states it
-    // as an equality and admits it: "a job whose footprint is exactly n_ctx is the declared worst
-    // case, not a violation".
-    //
-    // The first version of this guard wrote `prefill + decode > n_ctx` and so refused the declared
-    // worst case by one. That is not a cosmetic off-by-one: the hybrid class's own canonical job is
-    // (7, 2) against `n_ctx` 8, so `every_qwen36_leaf_adjudicates_and_a_tampered_one_convicts` went
-    // red — the QWEN36 tier could not adjudicate its OWN honest capture, which is the property the
-    // court rests on for that tier. A guard against the impossible that also refuses the maximum is
-    // a denial of service against the honest, wearing the same clothes as the fix.
-    //
-    // A context past this bound could not have been produced by any conforming worker, so refusing
-    // it changes no honest verdict — and `None` becomes `CloseIsNotTheNarrowedStep`, a refusal,
-    // never a panic.
+    // **And validate the CONTEXT against the profile.** The footprint is `prefill + decode - 1`,
+    // the enumeration's own count and the class gate's spelling: a job whose footprint is exactly
+    // `n_ctx` is the declared worst case, not a violation (the first version of this guard refused
+    // it by one, and the QWEN36 tier could not adjudicate its own honest capture). A context past
+    // this bound could not have been produced by any conforming worker, so refusing it changes no
+    // honest verdict — and `None` becomes `CloseIsNotTheNarrowedStep`, a refusal, never a panic.
+    let prefill = context.declared_prefill_tokens as u64;
+    let decode_calls = context.exact_decode_tokens.saturating_sub(1) as u64;
+    if context.exact_decode_tokens == 0 {
+        return None;
+    }
+    if prefill.saturating_add(decode_calls) > u64::from(profile.n_ctx) {
+        return None;
+    }
+    let steps = prefill + decode_calls;
+    if steps == 0 {
+        return None;
+    }
+    let shape = palw_leaf_shape_v1(profile, visits);
+    let leaf = u128::from(leaf_index);
+    if leaf >= palw_job_running_total_v1(&shape, u128::from(steps), u128::from(prefill), visits) {
+        return None; // aux territory or out of range
+    }
+    // The steps wholly before the leaf's own: the largest `t < steps` whose running total is still
+    // at most the leaf, one bit at a time. The running total is non-decreasing in `t`.
+    let mut before = 0u64;
+    for bit in (0..34u32).rev() {
+        let candidate = before + (1u64 << bit);
+        if candidate < steps && palw_job_running_total_v1(&shape, u128::from(candidate), u128::from(prefill), visits) <= leaf {
+            before = candidate;
+        }
+    }
+    let offset = leaf - palw_job_running_total_v1(&shape, u128::from(before), u128::from(prefill), visits);
+    // Step `s` is kv length `s`: position `s − 1` of the prefill call, or decode call `s − prefill`.
+    let s = before + 1;
+    let with_logits = s >= prefill;
+    let (call_index, position) = if s <= prefill { (0u64, s - 1) } else { (s - prefill, 0u64) };
+    let (node_slot, tile_index) = palw_slot_at_offset_v1(profile, s, with_logits, u64::try_from(offset).ok()?, visits)?;
+    Some(PalwStepCoordinateV1 {
+        call_index: u32::try_from(call_index).ok()?,
+        node_slot,
+        position: u32::try_from(position).ok()?,
+        tile_index: u32::try_from(tile_index).ok()?,
+    })
+}
+
+/// The tiles one node commits at kv length `kv_len` — [`tiles_for`] of [`node_out_len`], in `u128`
+/// so no kv length a `u32` context can reach overflows it.
+fn palw_node_tiles_at_v1(node: &PalwStepNodeV1, kv_len: u64) -> u128 {
+    let len = match node.out_len {
+        PalwStepOutLenV1::Fixed { elements } => u128::from(elements),
+        PalwStepOutLenV1::KvScaled { multiplier } => u128::from(multiplier) * u128::from(kv_len),
+    };
+    tiles_u128(len, u128::from(node.tile_len))
+}
+
+/// **How the layers divide one position** at kv length `kv_len`: the leaves one attention layer
+/// commits, the leaves one recurrence layer commits, and the two tables' slot counts. The layer
+/// walk is a multiplicity (module note above [`PalwLeafShapeV1`]), so this is all a position needs.
+struct PalwLayerMultiplicityV1 {
+    attn_leaves: u128,
+    gdn_leaves: u128,
+    attn_slots: u64,
+    gdn_slots: u64,
+    interval: u64,
+    layers: u64,
+}
+
+impl PalwLayerMultiplicityV1 {
+    fn at(profile: &PalwShapeProfileV3, kv_len: u64, visits: &mut u64) -> Self {
+        let mut attn_leaves = 0u128;
+        for node in &profile.attn_nodes {
+            *visits += 1;
+            attn_leaves = attn_leaves.saturating_add(palw_node_tiles_at_v1(node, kv_len));
+        }
+        let mut gdn_leaves = 0u128;
+        for node in &profile.gdn_nodes {
+            *visits += 1;
+            gdn_leaves = gdn_leaves.saturating_add(palw_node_tiles_at_v1(node, kv_len));
+        }
+        Self {
+            attn_leaves,
+            gdn_leaves,
+            attn_slots: profile.attn_nodes.len() as u64,
+            gdn_slots: profile.gdn_nodes.len() as u64,
+            interval: u64::from(profile.full_attention_interval),
+            layers: u64::from(profile.layer_count),
+        }
+    }
+
+    /// Attention layers among `0..l` — `layer_kind`'s rule, `(j + 1) % interval == 0`, counted.
+    fn attn_before(&self, l: u64) -> u64 {
+        if self.interval == 0 { 0 } else { l / self.interval }
+    }
+
+    fn leaves_before(&self, l: u64) -> u128 {
+        let attn = self.attn_before(l);
+        u128::from(l - attn).saturating_mul(self.gdn_leaves).saturating_add(u128::from(attn).saturating_mul(self.attn_leaves))
+    }
+
+    fn slots_before(&self, l: u64) -> u64 {
+        let attn = self.attn_before(l);
+        (l - attn) * self.gdn_slots + attn * self.attn_slots
+    }
+
+    /// The last layer `l < layers` whose predecessors hold at most `x` of the measure — a bitwise
+    /// search over at most `u16` layers.
+    fn layer_holding(&self, x: u128, measure: impl Fn(&Self, u64) -> u128) -> u64 {
+        let mut l = 0u64;
+        for bit in (0..16u32).rev() {
+            let candidate = l + (1u64 << bit);
+            if candidate < self.layers && measure(self, candidate) <= x {
+                l = candidate;
+            }
+        }
+        l
+    }
+}
+
+/// **The slot and tile holding the `offset`-th leaf of one position** at kv length `kv_len` —
+/// pre, then the layers by their multiplicity, then post (which exists only at a logits position).
+fn palw_slot_at_offset_v1(
+    profile: &PalwShapeProfileV3,
+    kv_len: u64,
+    with_logits: bool,
+    offset: u64,
+    visits: &mut u64,
+) -> Option<(u32, u64)> {
+    let mut cursor = u128::from(offset);
+    let mut slot = 0u64;
+    for node in &profile.pre_nodes {
+        *visits += 1;
+        let tiles = palw_node_tiles_at_v1(node, kv_len);
+        if cursor < tiles {
+            return Some((u32::try_from(slot).ok()?, u64::try_from(cursor).ok()?));
+        }
+        cursor -= tiles;
+        slot += 1;
+    }
+    let layers = PalwLayerMultiplicityV1::at(profile, kv_len, visits);
+    let all_layers = layers.leaves_before(layers.layers);
+    if cursor < all_layers {
+        let l = layers.layer_holding(cursor, |m, c| m.leaves_before(c));
+        let mut within = cursor - layers.leaves_before(l);
+        let base = slot + layers.slots_before(l);
+        for (i, node) in profile.layer_table(u16::try_from(l).ok()?).iter().enumerate() {
+            *visits += 1;
+            let tiles = palw_node_tiles_at_v1(node, kv_len);
+            if within < tiles {
+                return Some((u32::try_from(base + i as u64).ok()?, u64::try_from(within).ok()?));
+            }
+            within -= tiles;
+        }
+        return None;
+    }
+    cursor -= all_layers;
+    slot += layers.slots_before(layers.layers);
+    if with_logits {
+        for node in &profile.post_nodes {
+            *visits += 1;
+            let tiles = palw_node_tiles_at_v1(node, kv_len);
+            if cursor < tiles {
+                return Some((u32::try_from(slot).ok()?, u64::try_from(cursor).ok()?));
+            }
+            cursor -= tiles;
+            slot += 1;
+        }
+    }
+    None
+}
+
+/// The inverse: rank of canonical coordinates in the pinned enumeration. `None` when the
+/// coordinates are not canonical for `(profile, context)` — which, on a committed leaf, is
+/// itself the fault (the legs-v1 discipline).
+///
+/// **ADR-0103 Decision 6: in closed form.** The steps before this one are the job's running total
+/// at `s − 1` ([`palw_job_running_total_v1`]); the slots before this one inside the position are the
+/// pre table, the layers by multiplicity and the slot's own table. No position is walked. A sum
+/// past `u64` is `None` (the walk overflowed there, which is a panic under this crate's
+/// `overflow-checks`), and nothing else differs from the walk it replaced —
+/// `the_closed_form_coordinates_are_the_walk_on_every_shipped_profile` holds the two to it.
+pub fn canonical_step_leaf_index(
+    profile: &PalwShapeProfileV3,
+    context: &PalwJobContextV2,
+    coord: &PalwStepCoordinateV1,
+) -> Option<u64> {
+    canonical_step_leaf_index_counted_v1(profile, context, coord, &mut 0)
+}
+
+/// [`canonical_step_leaf_index`] with the node-visit counter its cost test reads.
+pub(crate) fn canonical_step_leaf_index_counted_v1(
+    profile: &PalwShapeProfileV3,
+    context: &PalwJobContextV2,
+    coord: &PalwStepCoordinateV1,
+    visits: &mut u64,
+) -> Option<u64> {
+    let prefill = context.declared_prefill_tokens as u64;
+    let decode_calls = context.exact_decode_tokens.saturating_sub(1) as u64;
+    let call = coord.call_index as u64;
+    if call > decode_calls {
+        return None;
+    }
+    let positions = if call == 0 { prefill } else { 1 };
+    if (coord.position as u64) >= positions {
+        return None;
+    }
+    let s = if call == 0 { coord.position as u64 + 1 } else { prefill + call };
+    let with_logits = if call == 0 { coord.position as u64 + 1 == prefill } else { true };
+    let slot_count = profile.global_node_count();
+    if coord.node_slot >= slot_count {
+        return None;
+    }
+    let post_first = slot_count - profile.post_nodes.len() as u32;
+    let is_post = coord.node_slot >= post_first;
+    if is_post && !with_logits {
+        return None; // post nodes do not exist at non-logit positions
+    }
+    let shape = palw_leaf_shape_v1(profile, visits);
+    let mut index = palw_job_running_total_v1(&shape, u128::from(s - 1), u128::from(prefill), visits);
+    // Slots before this one within the position.
+    let pre = profile.pre_nodes.len() as u64;
+    let slot = u64::from(coord.node_slot);
+    let node = if slot < pre {
+        for n in &profile.pre_nodes[..slot as usize] {
+            *visits += 1;
+            index = index.saturating_add(palw_node_tiles_at_v1(n, s));
+        }
+        &profile.pre_nodes[slot as usize]
+    } else {
+        for n in &profile.pre_nodes {
+            *visits += 1;
+            index = index.saturating_add(palw_node_tiles_at_v1(n, s));
+        }
+        let layers = PalwLayerMultiplicityV1::at(profile, s, visits);
+        let layer_slots = layers.slots_before(layers.layers);
+        let within_layers = slot - pre;
+        if within_layers < layer_slots {
+            let l = layers.layer_holding(u128::from(within_layers), |m, c| u128::from(m.slots_before(c)));
+            index = index.saturating_add(layers.leaves_before(l));
+            let at = (within_layers - layers.slots_before(l)) as usize;
+            let table = profile.layer_table(u16::try_from(l).ok()?);
+            for n in table.get(..at)? {
+                *visits += 1;
+                index = index.saturating_add(palw_node_tiles_at_v1(n, s));
+            }
+            table.get(at)?
+        } else {
+            index = index.saturating_add(layers.leaves_before(layers.layers));
+            let at = (within_layers - layer_slots) as usize;
+            for n in profile.post_nodes.get(..at)? {
+                *visits += 1;
+                index = index.saturating_add(palw_node_tiles_at_v1(n, s));
+            }
+            profile.post_nodes.get(at)?
+        }
+    };
+    if u128::from(coord.tile_index) >= palw_node_tiles_at_v1(node, s) {
+        return None;
+    }
+    u64::try_from(index.saturating_add(u128::from(coord.tile_index))).ok().filter(|v| *v < u64::MAX)
+}
+
+/// **The walk the closed forms replaced, retained as their reference** — [`canonical_step_coordinates`]
+/// as it was before ADR-0103 Decision 6, minus nothing. Test-only: it is the other side of every
+/// equality the closed form is held to.
+#[cfg(test)]
+pub(crate) fn canonical_step_coordinates_walked_v1(
+    profile: &PalwShapeProfileV3,
+    context: &PalwJobContextV2,
+    leaf_index: u64,
+) -> Option<PalwStepCoordinateV1> {
+    profile.validate_shape().ok()?;
     let prefill = context.declared_prefill_tokens as u64;
     let decode_calls = context.exact_decode_tokens.saturating_sub(1) as u64;
     if context.exact_decode_tokens == 0 {
@@ -1508,7 +1797,6 @@ pub fn canonical_step_coordinates(
                 cursor -= here;
                 continue;
             }
-            // Inside this position: walk global slots.
             let slot_count = profile.global_node_count();
             for slot in 0..slot_count {
                 let (node, _layer) = profile.resolve_node_slot(slot).expect("slot < count");
@@ -1518,25 +1806,19 @@ pub fn canonical_step_coordinates(
                 }
                 let tiles = tiles_for(node_out_len(node, kv_len), node.tile_len);
                 if cursor < tiles {
-                    return Some(PalwStepCoordinateV1 {
-                        call_index: call as u32,
-                        node_slot: slot,
-                        position: p as u32,
-                        tile_index: cursor as u32,
-                    });
+                    return Some(PalwStepCoordinateV1 { call_index: call as u32, node_slot: slot, position: p as u32, tile_index: cursor as u32 });
                 }
                 cursor -= tiles;
             }
             unreachable!("leaves_per_position and the slot walk disagree");
         }
     }
-    None // aux territory or out of range
+    None
 }
 
-/// The inverse: rank of canonical coordinates in the pinned enumeration. `None` when the
-/// coordinates are not canonical for `(profile, context)` — which, on a committed leaf, is
-/// itself the fault (the legs-v1 discipline).
-pub fn canonical_step_leaf_index(
+/// [`canonical_step_leaf_index`]'s retained walk — the reference, as above.
+#[cfg(test)]
+pub(crate) fn canonical_step_leaf_index_walked_v1(
     profile: &PalwShapeProfileV3,
     context: &PalwJobContextV2,
     coord: &PalwStepCoordinateV1,
@@ -1552,7 +1834,6 @@ pub fn canonical_step_leaf_index(
         return None;
     }
     let mut index = 0u64;
-    // Whole calls before this one.
     for c in 0..call {
         let ps = if c == 0 { prefill } else { 1 };
         for p in 0..ps {
@@ -1560,13 +1841,11 @@ pub fn canonical_step_leaf_index(
             index += leaves_per_position(profile, kv_len, if c == 0 { p + 1 == prefill } else { true });
         }
     }
-    // Whole positions before this one within the call (prefill only).
     for p in 0..coord.position as u64 {
         index += leaves_per_position(profile, p + 1, p + 1 == prefill);
     }
     let kv_len = if call == 0 { coord.position as u64 + 1 } else { prefill + call };
     let with_logits = if call == 0 { coord.position as u64 + 1 == prefill } else { true };
-    // Slots before this one within the position.
     let slot_count = profile.global_node_count();
     if coord.node_slot >= slot_count {
         return None;
@@ -1582,7 +1861,7 @@ pub fn canonical_step_leaf_index(
     let (node, _) = profile.resolve_node_slot(coord.node_slot)?;
     let is_post = coord.node_slot >= slot_count - profile.post_nodes.len() as u32;
     if is_post && !with_logits {
-        return None; // post nodes do not exist at non-logit positions
+        return None;
     }
     let tiles = tiles_for(node_out_len(node, kv_len), node.tile_len);
     if (coord.tile_index as u64) >= tiles {
@@ -2745,6 +3024,132 @@ mod tests {
             }
         }
         assert!(compared >= 4_000, "the sweep shrank to {compared} comparisons");
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // ADR-0103 Decision 6 — the coordinates in closed form
+    // ---------------------------------------------------------------------------------------------
+
+    /// Job shapes small enough for the retained WALK to run against, and wide enough to cross the
+    /// prefill/decode boundary and the logits position on every profile.
+    fn walkable_job_shapes() -> Vec<(u32, u32)> {
+        vec![(0, 1), (0, 3), (1, 1), (1, 2), (2, 3), (3, 4), (7, 2), (8, 5), (26, 3)]
+    }
+
+    /// **The closed form IS the walk it replaced, leaf by leaf, on every shipped profile.**
+    ///
+    /// For every profile the leaf-count sweep uses and every walkable job shape: the coordinates of
+    /// the first, the last, the one-past-the-last and a spread of interior leaves, compared with the
+    /// retained walk — the whole `Option`, `None`s included — and every coordinate found is ranked
+    /// back by both inverses, which must agree with each other and with the index. A handful of
+    /// coordinates off the enumeration (a slot past the table, a tile past the node, a post node at a
+    /// prefill position) are ranked by both inverses too.
+    #[test]
+    fn the_closed_form_coordinates_are_the_walk_on_every_shipped_profile() {
+        let mut compared = 0u64;
+        for (name, profile) in profiles_under_test() {
+            for &(prefill, decode) in &walkable_job_shapes() {
+                if name == "widest-kv-synthetic" && prefill + decode > 4 {
+                    // The walk sums in `u64` without saturation and this profile's leaves overflow
+                    // it past a few positions; the closed form is exercised there by the cost test.
+                    continue;
+                }
+                let mut ctx = tiny_context();
+                ctx.declared_prefill_tokens = prefill;
+                ctx.exact_decode_tokens = decode;
+                let total = step_leaf_count_capped_v1(&profile, &ctx, u64::MAX).unwrap_or(0);
+                let mut indices = vec![0u64, 1, total / 3, total / 2, total.saturating_sub(1), total, total + 1];
+                let mut x = 0x9E37_79B9_7F4A_7C15u64 ^ u64::from(prefill) << 7 ^ u64::from(decode);
+                for _ in 0..16 {
+                    x ^= x << 13;
+                    x ^= x >> 7;
+                    x ^= x << 17;
+                    indices.push(if total == 0 { x % 8 } else { x % total });
+                }
+                for leaf in indices {
+                    let want = canonical_step_coordinates_walked_v1(&profile, &ctx, leaf);
+                    let got = canonical_step_coordinates(&profile, &ctx, leaf);
+                    assert_eq!(got, want, "{name} at prefill={prefill} decode={decode} leaf={leaf}");
+                    if let Some(coord) = got {
+                        assert_eq!(canonical_step_leaf_index(&profile, &ctx, &coord), Some(leaf), "{name}: the inverse of {coord:?}");
+                        assert_eq!(canonical_step_leaf_index_walked_v1(&profile, &ctx, &coord), Some(leaf), "{name}: the walked inverse");
+                        for off in [
+                            PalwStepCoordinateV1 { tile_index: coord.tile_index + 1_000_000, ..coord },
+                            PalwStepCoordinateV1 { node_slot: profile.global_node_count(), ..coord },
+                            PalwStepCoordinateV1 { node_slot: profile.global_node_count() - 1, position: 0, call_index: 0, ..coord },
+                            PalwStepCoordinateV1 { call_index: coord.call_index + 1, ..coord },
+                        ] {
+                            assert_eq!(
+                                canonical_step_leaf_index(&profile, &ctx, &off),
+                                canonical_step_leaf_index_walked_v1(&profile, &ctx, &off),
+                                "{name}: an off-enumeration coordinate {off:?}"
+                            );
+                        }
+                    }
+                    compared += 1;
+                }
+            }
+        }
+        assert!(compared >= 1_500, "the sweep shrank to {compared} comparisons");
+    }
+
+    /// A graph-v5 dense row re-declared under the held map (ADR-0103 Decision 3) at `n_ctx`: the
+    /// only profile shape the per-position budget admits past the product ceiling.
+    fn held_dense_profile(n_ctx: u32) -> PalwShapeProfileV3 {
+        let mut p = crate::palw_qwen25_profile::qwen25_a16_profile_v5(crate::palw_qwen25_profile::QWEN25_1_5B_A16).expect("the v5 row");
+        p.state_chunk_map_id = crate::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v4();
+        p.n_ctx = n_ctx;
+        p
+    }
+
+    /// **ADR-0103 Invariant 5: a coordinate costs no walk at any context.** The same profile at two
+    /// positions and at two million, the last leaf of the longest job each context admits: the
+    /// node visits both inverses make are bounded by a number with no context in it — the node
+    /// tables, and 34 probes of the running total — and the walk this replaced would have visited
+    /// every slot of every position (reported, not run).
+    #[test]
+    fn a_coordinate_costs_no_walk_at_any_context() {
+        let mut observed = Vec::new();
+        for n_ctx in [2u32, 512, 1 << 21] {
+            let profile = held_dense_profile(n_ctx);
+            profile.validate_shape().expect("the held map is bounded per position, not by the product");
+            let mut ctx = tiny_context();
+            ctx.declared_prefill_tokens = n_ctx - 1;
+            ctx.exact_decode_tokens = 2;
+            let total = step_leaf_count_capped_v1(&profile, &ctx, u64::MAX).expect("the job's leaves");
+            let mut forward = 0u64;
+            let coord = canonical_step_coordinates_counted_v1(&profile, &ctx, total - 1, &mut forward).expect("the last leaf");
+            let mut back = 0u64;
+            assert_eq!(canonical_step_leaf_index_counted_v1(&profile, &ctx, &coord, &mut back), Some(total - 1));
+            observed.push((n_ctx, forward, back, total));
+        }
+        let profile = held_dense_profile(2);
+        let nodes = (profile.pre_nodes.len() + profile.gdn_nodes.len() + profile.attn_nodes.len() + profile.post_nodes.len()) as u64;
+        // Every probe of the running total visits each kv term at most three times, and there are
+        // at most 34 + 2 probes; every table is walked at most once more.
+        let bound = 36 * 3 * nodes + 4 * nodes;
+        for &(n_ctx, forward, back, total) in &observed {
+            assert!(forward <= bound && back <= bound, "n_ctx {n_ctx}: {forward}/{back} visits against a context-free bound of {bound}");
+            let walked = total.saturating_mul(1); // the walk's own cost was at least one visit a leaf's slot
+            assert!(n_ctx < 1 << 21 || walked > 1 << 30, "the replaced walk at 2M would have visited {walked} leaves' slots");
+        }
+    }
+
+    /// **ADR-0103 Decision 6: the product ceiling is the held map's no longer, and only its.** A
+    /// held profile at `2^21 × 28` validates; the same geometry under the v3 map is refused by the
+    /// ceiling in `validate_geometry`'s own sentence — so no class that exists today moves.
+    #[test]
+    fn only_the_held_map_trades_the_product_for_the_per_position_budget() {
+        let held = held_dense_profile(1 << 21);
+        assert!(held.validate_shape().is_ok());
+        let mut tiled = held.clone();
+        tiled.state_chunk_map_id = crate::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v3();
+        assert_eq!(
+            tiled.validate_shape(),
+            Err(PalwStepError::ProfileNotCanonical("the declared shape drives an enumeration past the work ceiling"))
+        );
+        assert!(u64::from(held.global_node_count()) <= PALW_STEP_MAX_NODES_PER_POSITION);
+        assert_eq!(PALW_STEP_MAX_NODES_PER_POSITION, 64 * 1026, "the budget is the two caps validate_shape enforces");
     }
 
     /// **ADR-0082 Decision 10, as an identity: the split is exhaustive.**

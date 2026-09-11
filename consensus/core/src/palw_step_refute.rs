@@ -4023,9 +4023,22 @@ fn verify_kv_anchor<'a>(
     }
 
     let map_id = &binding.state_chunk_map_id;
-    let hashes: Vec<crate::Hash64> =
-        ops.chunks.iter().enumerate().map(|(i, c)| state_chunk_leaf_hash_v1(map_id, i as u32, c)).collect();
-    let root = state_chunks_root_v1(&hashes).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+    // **ADR-0103 Decision 3: a held class's chunks build a two-level root** over the same bytes in
+    // the same order — the leaf binds `(slice, block)` rather than the flat index. Every other map
+    // keeps the flat tree, byte for byte.
+    let root = if map::palw_map_is_held_v4(map_id) {
+        let positions = crate::palw_context_ladder::palw_checkpoint_positions_at_v1(
+            &binding.shape_profile,
+            &binding.job_context,
+            ops.leaf.covered_decode_call,
+        );
+        map::palw_state_chunks_root_for_map_v1(&binding.shape_profile, positions, &ops.chunks)
+            .map_err(|_| PalwStepRefuteError::Unadjudicable)?
+    } else {
+        let hashes: Vec<crate::Hash64> =
+            ops.chunks.iter().enumerate().map(|(i, c)| state_chunk_leaf_hash_v1(map_id, i as u32, c)).collect();
+        state_chunks_root_v1(&hashes).map_err(|_| PalwStepRefuteError::Unadjudicable)?
+    };
     if root != ops.leaf.state_chunks_root {
         return Err(PalwStepRefuteError::InputSetNotCanonical("the carried chunks do not build the leaf's state root"));
     }
@@ -4093,6 +4106,12 @@ fn verify_kv_anchor<'a>(
             .map_err(|_| PalwStepRefuteError::Unadjudicable)?;
         let expected = composition.chunk_count();
         (Ok(composition.attn), KvAnchorElemV1::I32Le, Some(expected))
+    } else if map::palw_map_is_held_v4(&declared) {
+        // ADR-0103 Decision 3: the held layout's attention half is the tiled enumeration with no
+        // count cap; a hybrid's recurrence slices follow it, and only the count reads them here.
+        let layout = map::palw_state_layout_v4(&binding.shape_profile, positions).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+        let expected = layout.chunk_count();
+        (Ok(layout.attn), KvAnchorElemV1::I32Le, Some(expected))
     } else {
         return Err(PalwStepRefuteError::Unadjudicable);
     };

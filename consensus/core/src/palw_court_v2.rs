@@ -1387,6 +1387,8 @@ pub fn palw_attn_dispute_site_unpinned_v2(
         coord.position,
     );
 
+    let mut held_slices: Option<u32> = None;
+    let mut held_heads: u16 = 0;
     let (anchor_geometry, anchor_positions) = match anchor {
         None => (None, 0),
         Some(_) => {
@@ -1396,8 +1398,12 @@ pub fn palw_attn_dispute_site_unpinned_v2(
             // The composed hybrid map's attention slice IS the tiled map's enumeration, at chunk
             // indices `0..attn.chunk_count()`; its recurrence chunks follow and this bottom never
             // reads them — so the v5 hybrid row carries a dissection anchor like the dense one.
+            // ADR-0103 Decision 3: the held maps enumerate the same tiles, so they are tiled maps
+            // here too; only how a chunk proves into the root differs, and the site says which.
+            let held = crate::palw_state_chunk_map::palw_map_is_held_v4(&profile.state_chunk_map_id);
             if profile.state_chunk_map_id != crate::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v3()
                 && profile.state_chunk_map_id != crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v3()
+                && !held
             {
                 return Err(PalwCourtV2Error::NotTheTiledMap);
             }
@@ -1417,9 +1423,17 @@ pub fn palw_attn_dispute_site_unpinned_v2(
                 "no checkpoint of this class covers the disputed position, so a checkpoint-route bottom has no anchor",
             ))?;
             let positions = crate::palw_context_ladder::palw_checkpoint_positions_at_v1(profile, &binding.job_context, covered);
-            let geometry = crate::palw_state_chunk_map::tiled_kv_state_geometry_v3(profile, positions)
-                .map_err(|e| PalwCourtV2Error::TiledGeometryUnavailable { positions, why: e.to_string() })?;
-            (Some(geometry), positions)
+            if held {
+                let layout = crate::palw_state_chunk_map::palw_state_layout_v4(profile, positions)
+                    .map_err(|e| PalwCourtV2Error::TiledGeometryUnavailable { positions, why: e.to_string() })?;
+                held_slices = Some(layout.slice_count());
+                held_heads = layout.gdn_heads;
+                (Some(layout.attn), positions)
+            } else {
+                let geometry = crate::palw_state_chunk_map::tiled_kv_state_geometry_v3(profile, positions)
+                    .map_err(|e| PalwCourtV2Error::TiledGeometryUnavailable { positions, why: e.to_string() })?;
+                (Some(geometry), positions)
+            }
         }
     };
 
@@ -1452,6 +1466,8 @@ pub fn palw_attn_dispute_site_unpinned_v2(
                 crate::palw_context_ladder::palw_checkpoint_cadence_v1(profile),
                 crate::palw_context_ladder::PalwCheckpointCadenceV1::PerPosition
             ),
+            anchor_held_slices: held_slices,
+            anchor_held_recurrence_heads: held_heads,
         },
         head_lanes: (as_u16(head, "the head index")?, as_u16(lane_first, "the lane offset")?, as_u16(lane_span, "the lane count")?),
         history_positions,
