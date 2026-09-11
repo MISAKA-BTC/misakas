@@ -1514,7 +1514,7 @@ pub struct Params {
     /// path for a network with no history.
     pub palw_signature_contexts_v2: Option<ForkActivation>,
 
-    /// **ADR-0102 — a heartbeat never turns a bonded block red.** `None` on every shipped preset,
+    /// **ADR-0105 — a heartbeat never turns a bonded block red.** `None` on every shipped preset,
     /// so the behaviour is byte-identical to not having the field at all.
     ///
     /// Measured on testnet-11 on 2026-09-10 (11:41Z-13:20Z): once a heartbeat was the selected
@@ -1535,7 +1535,7 @@ pub struct Params {
     /// heartbeat that merges it carries its work, so the chain's weight and the DNS work depth are
     /// right, but the heartbeat lane keeps the chain at its recovery cadence while any heartbeat
     /// miner runs. Handing the chain back to the bonded lane is the heartbeat miner's node-side
-    /// yield (ADR-0102 Decision 2), because a consensus rule that held the heartbeat slot for a
+    /// yield (ADR-0105 Decision 2), because a consensus rule that held the heartbeat slot for a
     /// merged bonded block would let a producer whose blocks can never become the sink hold the
     /// clock — ADR-0060 §1's wedge, re-entering through the lane that ended it.
     ///
@@ -1967,7 +1967,7 @@ impl Params {
                  written onto a V2 claim record and its length is the bundle's state params (ADR-0072 Decision 8)",
             ));
         }
-        // **ADR-0102's coloring rule is about heartbeats, and it must not be armable where there
+        // **ADR-0105's coloring rule is about heartbeats, and it must not be armable where there
         // are none.** Armed without the lane (or on a network that is not ConsensusV2, where the
         // lane cannot exist) the fence would enter `consensus_params_id` and fire on nothing — a
         // fence that hashes and does not fire, the shape the two refusals above exist to keep out.
@@ -1978,7 +1978,7 @@ impl Params {
             return Err(PalwModeV2Error::Invalid(
                 "palw_heartbeat_transparent is armed on a network whose heartbeat lane is not: the rule decides how a \
                  heartbeat counts in a bonded block's anticone, and with no heartbeat lane (or no ConsensusV2 ruleset) \
-                 there is nothing for it to decide (ADR-0102)",
+                 there is nothing for it to decide (ADR-0105)",
             ));
         }
         let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
@@ -2898,7 +2898,7 @@ impl Params {
         if self.palw_fp_ruleset_caps == Some(ForkActivation::never()) {
             self.palw_fp_ruleset_caps = None;
         }
-        // ADR-0102, a bare fence: the same collapse for the same reason — `never()` is absence,
+        // ADR-0105, a bare fence: the same collapse for the same reason — `never()` is absence,
         // and a present `never()` would write a name an unset build never writes.
         if self.palw_heartbeat_transparent == Some(ForkActivation::never()) {
             self.palw_heartbeat_transparent = None;
@@ -2960,7 +2960,7 @@ impl Params {
         self.palw_heartbeat_lane_fence()
     }
 
-    /// **ADR-0102's coloring fence with the mode AND the lane folded in** — `Some` only on a
+    /// **ADR-0105's coloring fence with the mode AND the lane folded in** — `Some` only on a
     /// `ConsensusV2` network whose heartbeat lane is armed and which has armed this fence.
     ///
     /// The rule is about how a heartbeat counts in a bonded block's anticone, so without the lane
@@ -3616,7 +3616,7 @@ impl Params {
             h.write(b"palw_signature_contexts_v2");
             h.write(activation.daa_score().to_le_bytes());
         }
-        // ADR-0102's coloring fence. Some-only, at the tail, for the reason its siblings are: it
+        // ADR-0105's coloring fence. Some-only, at the tail, for the reason its siblings are: it
         // changes which blocks are blue past its height, so an operator reading the schedule must
         // see the height, and a preset that leaves it `None` prints the schedule id of a build from
         // before the field existed.
@@ -4045,7 +4045,7 @@ impl Params {
         if let Some(activation) = palw_signature_contexts_v2.as_mut() {
             fork(activation, visit);
         }
-        // ADR-0102's coloring fence. Some-only and at the tail, for the reason
+        // ADR-0105's coloring fence. Some-only and at the tail, for the reason
         // `palw_chunk_cap_charge` states: the schedule id hashes these in sequence, and a
         // `u64::MAX`-for-absence arm would put eight bytes into every preset that leaves it `None`.
         // Visited, so a scheduled height normalises out of the identity (a rolling deploy peers
@@ -4620,7 +4620,7 @@ impl Params {
             h.write(b"palw_signature_contexts_v2");
             h.write(activation.daa_score().to_le_bytes());
         }
-        // ADR-0102's coloring fence. WRITTEN, not only destructured — ADR-0095's
+        // ADR-0105's coloring fence. WRITTEN, not only destructured — ADR-0095's
         // `palw_model_benefits` is the fence that was bound here and never hashed (0448d955), which
         // left the printed fingerprint unable to tell the builds on either side of DAA 2400 apart.
         // Some-only, like every fence above it: arming it changes which blocks are blue and so the
@@ -5890,7 +5890,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_validator_payout_bounds: None,
     palw_epoch_boundary_budget: None,
     palw_fp_ruleset_caps: None,
-    // ADR-0102: dormant on every shipped preset (see the field's doc).
+    // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
@@ -6057,7 +6057,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_validator_payout_bounds: None,
     palw_epoch_boundary_budget: None,
     palw_fp_ruleset_caps: None,
-    // ADR-0102: dormant on every shipped preset (see the field's doc).
+    // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
@@ -6206,7 +6206,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_validator_payout_bounds: None,
     palw_epoch_boundary_budget: None,
     palw_fp_ruleset_caps: None,
-    // ADR-0102: dormant on every shipped preset (see the field's doc).
+    // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
@@ -10425,7 +10425,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_validator_payout_bounds: None,
     palw_epoch_boundary_budget: None,
     palw_fp_ruleset_caps: None,
-    // ADR-0102: dormant on every shipped preset (see the field's doc).
+    // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
@@ -10986,7 +10986,7 @@ mod consensus_params_id_tests {
         assert!(hash_net.palw_heartbeat_lane_fence().is_none());
     }
 
-    /// **ADR-0102's fence: dormant everywhere it ships, a schedule where it is scheduled, a rule
+    /// **ADR-0105's fence: dormant everywhere it ships, a schedule where it is scheduled, a rule
     /// where it is in force from genesis — and refused where there is no heartbeat to be about.**
     ///
     /// The four positions every bare fence is held to (unset, scheduled, at genesis, `never()`),
@@ -10998,7 +10998,7 @@ mod consensus_params_id_tests {
     #[test]
     fn the_heartbeat_transparent_fence_is_dormant_scheduled_or_a_rule_and_never_hides() {
         let t11 = palw_rc_shipped_params();
-        // ADR-0102 §5.1 derives testnet-11's window from this number — 13 recovery slots at two blue
+        // ADR-0105 §5.1 derives testnet-11's window from this number — 13 recovery slots at two blue
         // heartbeats a slot, ~26 minutes, before an exempt draw is red again. If it moves, so does
         // that figure (the pipeline test `the_fence_keeps_a_slow_draw_blue_only_inside_the_merge_depth_window`
         // measures the boundary on a fixture with the same cadence).
@@ -11010,7 +11010,7 @@ mod consensus_params_id_tests {
             ("devnet", Params::from(NetworkId::new(NetworkType::Devnet))),
             ("simnet", Params::from(NetworkId::new(NetworkType::Simnet))),
         ] {
-            assert!(preset.palw_heartbeat_transparent.is_none(), "{name}: ADR-0102 ships dormant on every preset");
+            assert!(preset.palw_heartbeat_transparent.is_none(), "{name}: ADR-0105 ships dormant on every preset");
             assert!(preset.palw_heartbeat_transparent_fence().is_none(), "{name}");
         }
 

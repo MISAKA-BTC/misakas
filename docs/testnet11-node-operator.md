@@ -532,7 +532,7 @@ quarantine — the node logs exactly that at WARN each time it fires.
 ## 7a. If every block is a heartbeat and DNS finality has stopped
 
 This is what testnet-11 did from 11:41Z to ~13:20Z on 2026-09-10, and until
-[ADR-0102](adr/0102-a-heartbeat-never-turns-a-bonded-block-red.md)'s fence is armed on this network
+[ADR-0105](adr/0105-a-heartbeat-never-turns-a-bonded-block-red.md)'s fence is armed on this network
 nothing inside the chain ends it on its own.
 
 **What you see:**
@@ -556,7 +556,7 @@ the episode never reaches 100. It lasts as long as any heartbeat miner runs.
 
 **How to get out.**
 
-* **On a build with ADR-0102 Decision 2** (the heartbeat miner steps aside by itself): nothing to do.
+* **On a build with ADR-0105 Decision 2** (the heartbeat miner steps aside by itself): nothing to do.
   When a bonded block is waiting to be merged, each such miner logs
 
   ```
@@ -581,7 +581,7 @@ the episode never reaches 100. It lasts as long as any heartbeat miner runs.
   header timestamp, which is its template's time, not when it arrived. If it is already more than
   ~30 minutes old, a restart that loses the in-flight draws can push it past the hour and hand the
   chain to the heartbeat lane. Restart producers one at a time, and not all at once.
-* **Run at most one heartbeat miner per operator**, on a build that carries ADR-0102 Decision 2 —
+* **Run at most one heartbeat miner per operator**, on a build that carries ADR-0105 Decision 2 —
   preferably on a node that is not also producing. More miners do not make the clock more alive
   (the width bound merges at most four heartbeats per block), they only add siblings; and a miner on
   a build without the yield undoes the yield of every other one. This replaces the Relaunch 5

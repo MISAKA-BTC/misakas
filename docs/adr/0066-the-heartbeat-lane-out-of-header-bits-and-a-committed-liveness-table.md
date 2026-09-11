@@ -21,10 +21,10 @@ to make. See "What landed" at the foot of this document for exactly what is and 
 > **Security amendment appended (2026-09-02)** — see the last section: Decision 4's table must be verified from the pruning-point snapshot or no leak is computed; the leak is monotone with hysteresis; it never lowers the denominator below `min_active_validators`; `t_leak_daa` enters the identity raw before arming.
 
 > **The two-step ramp met a producer slower than its recovery step (2026-09-10) — see
-> [ADR-0102](0102-a-heartbeat-never-turns-a-bonded-block-red.md).** "One block deep admits two
+> [ADR-0105](0105-a-heartbeat-never-turns-a-bonded-block-red.md).** "One block deep admits two
 > states … the chain is producing, or it is not" assumed a producing chain produces faster than the
 > recovery cadence. With ~17-minute draws, a heartbeat selected parent kept the chain on heartbeats
-> and every bonded block landed red behind them. The slot rule here is unchanged; ADR-0102 fences a
+> and every bonded block landed red behind them. The slot rule here is unchanged; ADR-0105 fences a
 > coloring rule (a heartbeat never turns a bonded block red) and makes the heartbeat miner step
 > aside for a landed draw.
 

@@ -456,7 +456,7 @@ impl ConsensusSessionOwned {
         self.consensus.heartbeat_adapt_block_template(template)
     }
 
-    /// ADR-0102 Decision 2: whether the heartbeat miner should stand aside for a bonded block that
+    /// ADR-0105 Decision 2: whether the heartbeat miner should stand aside for a bonded block that
     /// is waiting to be merged. Reads the virtual state and one header per virtual-mergeset member
     /// — cheaper than the adapter above, the same call profile.
     pub fn heartbeat_yield_hint(&self) -> kaspa_consensus_core::palw_heartbeat_v1::HeartbeatYieldHintV1 {

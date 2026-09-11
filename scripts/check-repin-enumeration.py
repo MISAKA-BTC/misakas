@@ -139,6 +139,9 @@ FROZEN = [
     "misaka-palw-derive/src/registry.rs",
     "misaka-palw-derive/src/source_tree.rs",
     "misaka-palw-derive/tests/evm_runner_gate.rs",
+    # The previous published tree's transformer ids — what testnet-11's derivations name. History,
+    # not a pin: a re-pin of the current tree (transformer_id_pin.rs, MOVES) never touches it.
+    "misaka-palw-derive/tests/transformer_id_prior_tree.rs",
     "misaka-palw-pow-driver/tests/palw_agent_concurrency.rs",
     "misaka-palw-pow-driver/tests/palw_agent_equivalence.rs",
     "misaka-palw-pow-driver/tests/palw_agent_fallback.rs",

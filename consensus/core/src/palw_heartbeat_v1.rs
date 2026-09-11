@@ -76,7 +76,7 @@
 //! fees only) lives with the other coinbase validation in the body processor; the ε fork-choice
 //! rule lives in the GHOSTDAG protocol beside the receipt lane's zero. Both cite this module.
 //!
-//! ## The trap the recovery cadence set for a slow producer (ADR-0102)
+//! ## The trap the recovery cadence set for a slow producer (ADR-0105)
 //!
 //! The two-step ramp assumes a bonded draw takes seconds against a 120 s block. On testnet-11 a
 //! Qwen3.6 draw takes ~17 minutes, and a bonded block's timestamp is its TEMPLATE's. Once a
@@ -165,7 +165,7 @@ pub fn check_heartbeat_slot(
     }
 }
 
-/// **ADR-0102 Decision 2 — what a heartbeat miner is told about the bonded lane.** Node policy,
+/// **ADR-0105 Decision 2 — what a heartbeat miner is told about the bonded lane.** Node policy,
 /// not a rule: no validation path reads it.
 ///
 /// Three answers, because a miner has to act on three different facts and one `Option` would
@@ -309,7 +309,7 @@ mod tests {
         assert!(!crate::pow_layer0::algo_id_carries_no_chain_position(POW_ALGO_ID_PALW_COMMITTED_V2));
     }
 
-    /// **ADR-0102 Decision 2: the hint has three answers, and the two that are not "yield" are
+    /// **ADR-0105 Decision 2: the hint has three answers, and the two that are not "yield" are
     /// told apart.**
     ///
     /// A bonded selected parent ends a heartbeat-led episode (the miner's budget starts over); a

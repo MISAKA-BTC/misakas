@@ -953,7 +953,7 @@ async fn a_heartbeat_chain_of_any_depth_merges_but_a_tree_does_not() {
 /// The ruleset the slow-producer trap was measured on, in miniature: a V2 network at 120 s
 /// (`ghostdag_k = 1`), the heartbeat lane and the attempt-work constant armed from genesis (as on
 /// testnet-11 since Relaunch 5), and a bond funded for more concurrent claims than the scenario
-/// makes. `transparent` arms ADR-0102's coloring fence from genesis on top.
+/// makes. `transparent` arms ADR-0105's coloring fence from genesis on top.
 fn heartbeat_trap_config(transparent: bool) -> kaspa_consensus_core::config::Config {
     use kaspa_consensus_core::config::params::{ForkActivation, PalwAttemptWorkV1, PalwHeartbeatV1};
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
@@ -1088,7 +1088,7 @@ async fn run_the_slow_producer_trap(transparent: bool, draws: usize) -> Heartbea
     }
 }
 
-/// **ADR-0102: the slow-producer trap, reproduced on the rule testnet-11 runs — and closed by the
+/// **ADR-0105: the slow-producer trap, reproduced on the rule testnet-11 runs — and closed by the
 /// fence.**
 ///
 /// Without the fence it is the 2026-09-10 incident exactly: every draw lands RED (eight heartbeats
@@ -1113,7 +1113,7 @@ async fn a_slow_bonded_draw_is_red_behind_heartbeats_until_the_fence_keeps_its_w
     // ---- The rule testnet-11 runs today: the lock-out. ----
     let trapped = run_the_slow_producer_trap(false, 2).await;
     kaspa_core::info!(
-        "ADR-0102 trap, fence dormant: draws (blue, added work) = {:?}; work depth over the episode = {}",
+        "ADR-0105 trap, fence dormant: draws (blue, added work) = {:?}; work depth over the episode = {}",
         trapped.draws,
         trapped.work_depth
     );
@@ -1135,10 +1135,10 @@ async fn a_slow_bonded_draw_is_red_behind_heartbeats_until_the_fence_keeps_its_w
         trapped.work_depth
     );
 
-    // ---- The same DAG with ADR-0102's fence armed. ----
+    // ---- The same DAG with ADR-0105's fence armed. ----
     let fenced = run_the_slow_producer_trap(true, 2).await;
     kaspa_core::info!(
-        "ADR-0102 trap, fence armed: draws (blue, added work) = {:?}; work depth over the episode = {}",
+        "ADR-0105 trap, fence armed: draws (blue, added work) = {:?}; work depth over the episode = {}",
         fenced.draws,
         fenced.work_depth
     );
@@ -1199,7 +1199,7 @@ async fn color_of_a_slow_draw(transparent: bool, slots: u64) -> (bool, u64, u64)
     (merger.mergeset_blues.contains(&draw_hash), floor, ancestor)
 }
 
-/// **ADR-0102's exemption stops at the merge-depth window — the boundary, pinned on both sides.**
+/// **ADR-0105's exemption stops at the merge-depth window — the boundary, pinned on both sides.**
 ///
 /// A classic blue is inside the window by construction, and `check_bounded_merge_depth` relies on
 /// that: it checks reds against the merge-depth root and never blues. A candidate that ignores
@@ -1214,7 +1214,7 @@ async fn the_fence_keeps_a_slow_draw_blue_only_inside_the_merge_depth_window() {
     kaspa_core::log::try_init_logger("info");
     for slots in [8u64, 13, 14] {
         let (blue, floor, ancestor) = color_of_a_slow_draw(true, slots).await;
-        kaspa_core::info!("ADR-0102 window: {slots} slots -> blue={blue}, ancestor blue score {ancestor}, floor {floor}");
+        kaspa_core::info!("ADR-0105 window: {slots} slots -> blue={blue}, ancestor blue score {ancestor}, floor {floor}");
         assert_eq!(blue, ancestor >= floor, "{slots} slots: blue exactly when the draw's chain ancestor is at or above the floor");
     }
     let (inside, _, _) = color_of_a_slow_draw(true, 13).await;
@@ -1224,7 +1224,7 @@ async fn the_fence_keeps_a_slow_draw_blue_only_inside_the_merge_depth_window() {
     assert!(!classic, "with the fence dormant the incident's eight slots already make it red");
 }
 
-/// **ADR-0102 Decision 2: a heartbeat miner that stands aside ends the mode — on the rule testnet-11
+/// **ADR-0105 Decision 2: a heartbeat miner that stands aside ends the mode — on the rule testnet-11
 /// runs today, fence or no fence.**
 ///
 /// The escape the operator used on 2026-09-10 was "stop every heartbeat miner for one draw". This

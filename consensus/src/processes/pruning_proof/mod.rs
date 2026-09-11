@@ -142,7 +142,7 @@ pub struct PruningProofManager {
     /// ADR-0068 Phase 1 (F2): the attempt-work fence, mode folded in — threaded to every
     /// proof-level ghostdag so proof weight and chain weight price an attempt block alike.
     palw_attempt_work_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
-    /// ADR-0102: the coloring rule (a heartbeat never turns a bonded block red), threaded to every
+    /// ADR-0105: the coloring rule (a heartbeat never turns a bonded block red), threaded to every
     /// proof-level ghostdag so the proof colors a level the way the chain colors it.
     palw_heartbeat_transparent: Option<crate::processes::ghostdag::protocol::HeartbeatTransparency>,
     /// ADR-0072 SA-3/SA-4: the attempt lane's activation fence. `None` on every shipped preset, so

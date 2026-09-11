@@ -12837,7 +12837,7 @@ impl VirtualStateProcessor {
         Ok((template, earliest))
     }
 
-    /// **ADR-0102 Decision 2: whether a heartbeat miner should stand aside for a bonded block.**
+    /// **ADR-0105 Decision 2: whether a heartbeat miner should stand aside for a bonded block.**
     ///
     /// Node policy, not a rule — nothing validates against it, and the slot rule the template
     /// adapter applies is unchanged. It answers from the current virtual: the selected parent's lane,

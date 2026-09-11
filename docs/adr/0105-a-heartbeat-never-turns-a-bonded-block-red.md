@@ -1,4 +1,4 @@
-# ADR-0102 — A heartbeat never turns a bonded block red, and the clock steps aside for a draw that has landed
+# ADR-0105 — A heartbeat never turns a bonded block red, and the clock steps aside for a draw that has landed
 
 * Status: PROPOSED 2026-09-11 on `fix/heartbeat-trap-slow-producers` (from `main` at `a5f1bdf7`).
   **Decision 1 IMPLEMENTED behind `Params::palw_heartbeat_transparent`, `None` on every shipped
@@ -352,10 +352,13 @@ drill with the fence armed, which this change did not run.
 
 ## 10. Number hygiene and implementation record
 
-`docs/adr/README.md` on `main` said the next free number was 0099; 0099–0101 are resident on other
-branches (written 2026-09-10, not merged into this `main`), so this ADR takes **0102**, and the
-README's hygiene row now says so. A concurrent claimant renumbers the later writer. **The next free
-number is 0103.**
+Written as **0102**: `docs/adr/README.md` on `main` said the next free number was 0099, and 0099–0101
+were resident on other branches. 0102 had already been taken the same morning on another branch
+(the embedding lift, first written at 04:22), and a concurrent claimant renumbers the later writer —
+this one. The sessions writing 0103 (held context), 0104 (close cut), 0106 (streaming inventory) and
+0107 (share growth) held **0105** for it, so it was renumbered on 2026-09-11 after landing on `main`
+(`ea2fd48e`); the commits of that day and `fix/heartbeat-trap-slow-producers` still say ADR-0102. The
+fence name, the code and every test are unchanged. **The next free number is 0108.**
 
 * **2026-09-11** — written and implemented on `fix/heartbeat-trap-slow-producers`:
   * `consensus/core/src/config/params.rs` — the fence, its accessor, the `validate_palw_v2` refusal,

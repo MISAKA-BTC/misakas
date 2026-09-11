@@ -127,7 +127,7 @@ impl ConsensusServices {
             params.palw_heartbeat_lane_fence(),
             // ADR-0068 Phase 1 (F2): attempt blocks weigh the network constant under this fence.
             params.palw_attempt_work_fence(),
-            // ADR-0102: a heartbeat never turns a bonded block red, past this fence.
+            // ADR-0105: a heartbeat never turns a bonded block red, past this fence.
             crate::processes::ghostdag::protocol::HeartbeatTransparency::from_params(params),
         );
 
@@ -217,7 +217,7 @@ impl ConsensusServices {
             params.palw_consensus_mode.clone(),
             params.palw_heartbeat_lane_fence(),
             params.palw_attempt_work_fence(),
-            // ADR-0102: the coloring rule at every proof level, building and validating alike.
+            // ADR-0105: the coloring rule at every proof level, building and validating alike.
             crate::processes::ghostdag::protocol::HeartbeatTransparency::from_params(params),
             params.palw_attempt_activation,
             is_consensus_exiting,

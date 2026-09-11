@@ -210,7 +210,7 @@ impl ProofContext {
                     ppm.palw_heartbeat_lane,
                     // ADR-0068 Phase 1 (F2): and the attempt constant, validation as building.
                     ppm.palw_attempt_work_lane,
-                    // ADR-0102: and the coloring rule, validation as building.
+                    // ADR-0105: and the coloring rule, validation as building.
                     ppm.palw_heartbeat_transparent,
                 )
             })

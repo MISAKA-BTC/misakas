@@ -55,13 +55,13 @@ pub struct GhostdagManager<T: GhostdagStoreReader, S: RelationsStoreReader, U: R
     /// Mode folded in (`Params::palw_attempt_work_fence`).
     attempt_work_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
-    /// ADR-0102: past this fence a heartbeat never counts against a non-heartbeat block's coloring
+    /// ADR-0105: past this fence a heartbeat never counts against a non-heartbeat block's coloring
     /// (see [`LaneColoring`]). Mode and lane folded in (`Params::palw_heartbeat_transparent_fence`),
     /// carried with the merge depth that bounds how far the exemption may reach.
     heartbeat_transparent: Option<HeartbeatTransparency>,
 }
 
-/// **ADR-0102's fence, with the one number its coloring rule needs beside it.**
+/// **ADR-0105's fence, with the one number its coloring rule needs beside it.**
 ///
 /// The merge depth is not a companion VALUE of the fence (it is `Params::merge_depth`, hashed on its
 /// own); it rides here because the exemption is bounded by it. A classic blue is inside the
@@ -85,7 +85,7 @@ impl HeartbeatTransparency {
     }
 }
 
-/// **ADR-0102: how one mergeset candidate takes part in the k-cluster rule.**
+/// **ADR-0105: how one mergeset candidate takes part in the k-cluster rule.**
 ///
 /// On testnet-11 (2026-09-10) a bonded block drawn for ~17 minutes landed with eight 120-second
 /// heartbeats in its anticone and, at `ghostdag_k = 1`, was colored RED by them: its 2²⁰ never
@@ -120,7 +120,7 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
         heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
         // ADR-0068 Phase 1 (F2): attempt-lane blocks then weigh the network constant.
         attempt_work_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
-        // ADR-0102: a heartbeat never turns a bonded block red. A constructor parameter rather than
+        // ADR-0105: a heartbeat never turns a bonded block red. A constructor parameter rather than
         // a builder, so no site that computes GHOSTDAG — the pruning proof's two included — can
         // forget it and color differently from the chain.
         heartbeat_transparent: Option<HeartbeatTransparency>,
@@ -154,7 +154,7 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
         heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
         // ADR-0068 Phase 1 (F2): and so does the attempt constant — see the struct field.
         attempt_work_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
-        // ADR-0102: and the coloring rule, so proof building and proof validation color a level's
+        // ADR-0105: and the coloring rule, so proof building and proof validation color a level's
         // blocks the way each other does. Heartbeats derive no level, so above level 0 there is no
         // heartbeat for it to be about and the rule is inert there by construction.
         heartbeat_transparent: Option<HeartbeatTransparency>,
@@ -238,7 +238,7 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
         // Get the mergeset in consensus-agreed topological order (topological here means forward in time from blocks to children)
         let ordered_mergeset = self.ordered_mergeset_without_selected_parent(selected_parent, parents);
 
-        // ADR-0102: the selected parent's blue score, from which each `Weighted` candidate's walk
+        // ADR-0105: the selected parent's blue score, from which each `Weighted` candidate's walk
         // floor is derived below. Read only where the fence is configured.
         let transparency_base = self
             .heartbeat_transparent
@@ -246,7 +246,7 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
 
         for (index, blue_candidate) in ordered_mergeset.iter().cloned().enumerate() {
             let lane = self.lane_coloring(blue_candidate);
-            // ADR-0102: the lowest blue score a `Weighted` candidate's coloring walk may reach once it
+            // ADR-0105: the lowest blue score a `Weighted` candidate's coloring walk may reach once it
             // has passed over a heartbeat. The new block's blue score is the selected parent's plus
             // its final mergeset blues, which are at most the blues already added (the selected
             // parent included) plus every candidate not yet colored (this one included). A candidate
@@ -307,7 +307,7 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
         self.is_heartbeat_header(&self.headers_store.get_header(hash).unwrap())
     }
 
-    /// **ADR-0102: which rule colors `candidate`.** Keyed on the candidate's OWN DAA score, which is
+    /// **ADR-0105: which rule colors `candidate`.** Keyed on the candidate's OWN DAA score, which is
     /// fixed before any block that merges it is colored — so the answer never depends on the new
     /// block's GHOSTDAG output, and a block below the fence is colored identically by every build.
     /// No header is read where the fence is not configured.
@@ -364,7 +364,7 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
             // in past-to-future topological order, so even if chain_block == new_block, an existing blue
             // cannot be in the future of a candidate blue
 
-            // ADR-0102: the one direction the two lanes stop counting against each other. A header is
+            // ADR-0105: the one direction the two lanes stop counting against each other. A header is
             // read only past the fence — the classic arm is byte-for-byte the code above this rule.
             let peer_is_heartbeat = lane != LaneColoring::Classic && self.is_heartbeat_block(peer);
             if lane == LaneColoring::Weighted && peer_is_heartbeat {
@@ -434,7 +434,7 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
         // The maximum length of new_block_data.mergeset_blues can be K+1 because
         // it contains the selected parent.
         //
-        // ADR-0102: that bound is a CONSEQUENCE of the k-cluster rule — every mergeset block is in
+        // ADR-0105: that bound is a CONSEQUENCE of the k-cluster rule — every mergeset block is in
         // the selected parent's anticone — so it stops being one for a `Weighted` candidate, which
         // does not count a heartbeat selected parent or heartbeat siblings. Applied to it, this
         // shortcut would be an extra rule, and exactly the one that lets a heartbeat sibling that
@@ -455,13 +455,13 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
         // of blue_candidate to be over K.
         let mut chain_block = ChainBlock { hash: None, data: new_block_data.into() };
         let mut candidate_blue_anticone_size: KType = 0;
-        // ADR-0102: whether this candidate's walk has passed over a heartbeat. Until it has, a
+        // ADR-0105: whether this candidate's walk has passed over a heartbeat. Until it has, a
         // `Weighted` walk counts every peer it meets and ends on `k` exactly as the classic walk
         // does; after it has, only the merge-depth floor bounds it.
         let mut skipped_a_heartbeat = false;
 
         loop {
-            // ADR-0102: a candidate that ignored a heartbeat may not reach below the merge-depth
+            // ADR-0105: a candidate that ignored a heartbeat may not reach below the merge-depth
             // window — see `HeartbeatTransparency`. Checked before the ancestor test on purpose: an
             // exempt candidate whose own chain ancestor is below the window would be a blue deeper
             // than any red `check_bounded_merge_depth` admits. The classic rule reddens such a

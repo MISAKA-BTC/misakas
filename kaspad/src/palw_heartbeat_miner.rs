@@ -13,7 +13,7 @@
 //! this one thread is what keeps the chain's clock (and every PALW timeout sweep) running.
 //! Anyone may run it; the more that do, the harder the lane's own retarget and the same 24/day.
 //!
-//! ## It stands aside for a bonded block that is waiting to be merged (ADR-0102 Decision 2)
+//! ## It stands aside for a bonded block that is waiting to be merged (ADR-0105 Decision 2)
 //!
 //! Measured on testnet-11, 2026-09-10: once a heartbeat was the selected parent, this service kept
 //! the chain on heartbeats for as long as it ran. A Qwen3.6 draw takes ~17 minutes, the recovery
@@ -52,7 +52,7 @@ const NONCES_PER_TEMPLATE: u64 = 1 << 25;
 /// so a bonded block landing mid-wait (which ends the episode) is seen within a minute.
 const MAX_WAIT_MS: u64 = 60_000;
 
-/// **ADR-0102 Decision 2's budget: how long this miner may still stand aside in the current
+/// **ADR-0105 Decision 2's budget: how long this miner may still stand aside in the current
 /// heartbeat-led episode.** Node-local state, deliberately — it is this miner's policy and no peer
 /// needs to agree with it.
 ///
@@ -137,7 +137,7 @@ pub struct PalwHeartbeatMinerService {
     /// reason it went into the producer: the ADR-0068 drill's H node hung in `pthread_join` on
     /// SIGTERM with every server already stopped (finding F1).
     shutdown: kaspa_utils::triggers::SingleTrigger,
-    /// ADR-0102 Decision 2: how long this miner may still stand aside in the current episode.
+    /// ADR-0105 Decision 2: how long this miner may still stand aside in the current episode.
     yield_budget: std::sync::Mutex<HeartbeatYieldBudget>,
 }
 
@@ -259,7 +259,7 @@ impl PalwHeartbeatMinerService {
         session: &kaspa_consensusmanager::ConsensusProxy,
         miner_data: MinerData,
     ) -> Result<Option<kaspa_consensus_core::BlockHash>, String> {
-        // ADR-0102 Decision 2: read the chain's state for the yield before the template, and let a
+        // ADR-0105 Decision 2: read the chain's state for the yield before the template, and let a
         // bonded selected parent refill the budget even on a pass the slot rule is about to hold.
         let hint = session.heartbeat_yield_hint();
         self.with_yield_budget(|budget| budget.observe(hint));
@@ -283,7 +283,7 @@ impl PalwHeartbeatMinerService {
             self.tick(std::time::Duration::from_millis(wait)).await;
             return Ok(None);
         }
-        // **ADR-0102 Decision 2: the slot is open — stand aside if a bonded block is waiting.**
+        // **ADR-0105 Decision 2: the slot is open — stand aside if a bonded block is waiting.**
         //
         // Decided only once the slot is open, so time the slot rule was already holding the lane is
         // never charged to the episode's budget.
@@ -294,7 +294,7 @@ impl PalwHeartbeatMinerService {
                     info!(
                         "[{PALW_HEARTBEAT}] standing aside: the chain runs on heartbeats and a bonded block is waiting to be \
                          merged — waiting until {until} (its timestamp + the nominal hour) or until a bonded block is the \
-                         selected parent, with {} s of this episode's yield budget left (ADR-0102)",
+                         selected parent, with {} s of this episode's yield budget left (ADR-0105)",
                         remaining_ms / 1000
                     );
                 } else {
@@ -305,7 +305,7 @@ impl PalwHeartbeatMinerService {
             }
             HeartbeatYieldDecision::Mine { ended_yield } => {
                 if ended_yield {
-                    info!("[{PALW_HEARTBEAT}] done standing aside ({hint:?}); mining at the slot rule's cadence again (ADR-0102)");
+                    info!("[{PALW_HEARTBEAT}] done standing aside ({hint:?}); mining at the slot rule's cadence again (ADR-0105)");
                 }
             }
         }
