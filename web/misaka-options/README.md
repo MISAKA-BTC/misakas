@@ -270,7 +270,7 @@ minMskOutSompi)`; a seed is `seed()` with `value = seed sompi × 1e10` (at least
 else the writer reverts `SeedTooSmall()` at the call). Gas is left to the wallet's estimate. No
 private key ever touches this site.
 
-The floor is the quote less the slippage tolerance (default 2 %). The fold quotes the action on the
+The floor is the quote less a fixed 50 % tolerance (there is no setting; the widest the removed field ever allowed). The fold quotes the action on the
 row *as it then stands* after the block's carrier-borne moves, so a floor that is too tight is
 refused rather than filled worse; a refused buy or seed is refunded at the next block, and the site
 shows the refusal reason from the `Refused` event (1 not armed, 2 line missing, 3 class or line

@@ -1749,7 +1749,7 @@ async function pageStore(arg) {
   if (!lineId) lineId = normId(store.get('lastLine')) || firstLineId();
   if (lineId) store.set('lastLine', lineId);
   const rec = lineId ? db.upsertLine(lineId, {}) : null;
-  const entry = { side: 'buy', amount: '', slippage: String(store.get('slippage', '2')), quote: null, nodeQuote: null, quoteSeq: 0, busy: false, balance: null, position: null, positionSrc: null };
+  const entry = { side: 'buy', amount: '', quote: null, nodeQuote: null, quoteSeq: 0, busy: false, balance: null, position: null, positionSrc: null };
   const view = { chartTab: 'usage', bottomTab: 'positions', range: store.get('range', 86400000), positions: null, settlements: null, mySettlements: null, versions: null, err: null };
 
   main.innerHTML = h`
@@ -1906,7 +1906,13 @@ async function pageStore(arg) {
   }
 
   // ---- order entry ----------------------------------------------------------------------------
-  function slipBps() { const s = Number(entry.slippage); return isFinite(s) && s >= 0 && s <= 50 ? BigInt(Math.round(s * 100)) : 100n; }
+  // The floor a join or leave is refused below: the quote less a fixed tolerance. There is no setting
+  // for it — the field that set it read "10000" as 1 % without saying so (anything outside 0–50 fell back
+  // to 1 %), and a tolerance of 0 could give a buyer nothing for their MSK. 50 % is the widest the field
+  // ever allowed: a refusal then means the row really moved by half before the fold applied the request,
+  // and a refused join is refunded.
+  const PRICE_TOLERANCE_BPS = 5000n;
+  function slipBps() { return PRICE_TOLERANCE_BPS; }
   function localQuote() {
     const m = rec && rec.market; if (!m) return null;
     if (!m.seeded) return { invalid: 'Not seeded yet: no curve to quote against.' };
@@ -2041,18 +2047,13 @@ async function pageStore(arg) {
           <div class="inp"><input id="amt" inputmode="${entry.side === 'buy' ? 'decimal' : 'numeric'}" autocomplete="off" placeholder="0" value="${entry.amount}" aria-describedby="quoteBox"><span class="unit">${entry.side === 'buy' ? 'MSK' : 'memberships'}</span></div>
           <div class="pcts">${[25, 50, 75, 100].map((p) => h`<button data-pct="${p}" ${entry.side === 'buy' ? (entry.balance == null ? 'disabled' : '') : (entry.position == null ? 'disabled' : '')}>${p}%</button>`)}</div>
         </div>
-        <div class="field">
-          <label for="slip">Refuse if the price moved more than (%)</label>
-          <div class="inp"><input id="slip" inputmode="decimal" value="${entry.slippage}" aria-label="Refuse if the price moved more than this many percent"><span class="unit">${entry.side === 'buy' ? 'min memberships' : 'min MSK'}</span></div>
-        </div>
         <div class="quote" id="quoteBox"></div>
         <div class="field"><button id="sendBtn" class="btn btn-lg btn-accent" disabled>Join</button><div class="reason" id="sendWhy"></div><div class="note tiny" id="sendTopUp"></div></div>
         <div class="note tiny">Your request is applied by the fold after the block that carries it and settles one block later; a result worse than your floor is refused (never partial) and a refused join is refunded. A membership is a whole number, and it never pays you anything: what it gets you is the card above. A membership taken here lives in the EVM namespace and can only be given up from it.</div>
       </div>`.s;
     $$('#entry .seg button').forEach((b) => b.addEventListener('click', () => { entry.side = b.dataset.side; entry.amount = ''; entry.nodeQuote = null; renderEntry(); }));
-    const amt = $('#amt'), slip = $('#slip');
+    const amt = $('#amt');
     amt.addEventListener('input', () => { entry.amount = amt.value; entry.nodeQuote = null; entry.quote = localQuote(); renderQuote(); nodeQuote(entry.quote); });
-    slip.addEventListener('input', () => { entry.slippage = slip.value; store.set('slippage', slip.value); renderQuote(); });
     $$('#entry .pcts button').forEach((b) => b.addEventListener('click', () => {
       const p = BigInt(b.dataset.pct);
       if (entry.side === 'buy' && entry.balance != null) { const reserve = 10n ** 16n; const wei = entry.balance > reserve ? entry.balance - reserve : 0n; entry.amount = fmtScaled(((wei / NATIVE_SCALE_WEI) * p) / 100n, 8, 8).replace(/,/g, ''); }
