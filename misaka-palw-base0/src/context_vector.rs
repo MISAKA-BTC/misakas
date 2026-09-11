@@ -1195,4 +1195,15 @@ mod tests {
             "cc5c328ff6a96c10e104f078656ee58665487c6dd1a61813f5831fc44caa863e3202cf751e970f2b201d975592dec24bf78640dbbe7921809fe1855953ae7f9b",
         );
     }
+
+    /// **The 32,768-position vector** — the release-mode vector job, about ten minutes on a
+    /// loaded M-series host (ADR-0110 §9 has the measured stages).
+    #[test]
+    #[ignore = "the release-mode vector job: about ten minutes in release"]
+    fn the_32k_vector_passes_every_stage_and_is_pinned() {
+        check_pinned(
+            "0110-dense-v7-32k",
+            "1e6dd41850c69f6a34074651c580458544ad6d32e2d840df6c6389c0fe9dd63cbe0338277d977f3fe46ad310648962a897c36af8fe6815fc52a73c86cee54316",
+        );
+    }
 }
