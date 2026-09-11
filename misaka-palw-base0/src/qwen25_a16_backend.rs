@@ -901,6 +901,7 @@ impl Qwen25A16Backend {
             &material.generated_token_ids,
             covered,
             &mut kernels,
+            self.prompt_ids_form,
         )
         .ok()
     }
@@ -1866,6 +1867,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             output_token_ids,
             covered,
             &mut kernels,
+            self.prompt_ids_form,
         )
         .map(|state| state.state_chunks_root)
         .map_err(|e| e.to_string())
@@ -1917,9 +1919,17 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             self.step_ladder_cap,
             &mut |covered| {
                 let mut kernels = crate::fp_recompute::A16RecomputeKernelsV1::new(artifact, plan).map_err(|e| e.to_string())?;
-                crate::fp_recompute::base0_fp_recompute_state_at_covered_v1(profile, ctx, &prompt_ids, generated, covered, &mut kernels)
-                    .map(|state| state.chunks)
-                    .map_err(|e| e.to_string())
+                crate::fp_recompute::base0_fp_recompute_state_at_covered_v1(
+                    profile,
+                    ctx,
+                    &prompt_ids,
+                    generated,
+                    covered,
+                    &mut kernels,
+                    self.prompt_ids_form,
+                )
+                .map(|state| state.chunks)
+                .map_err(|e| e.to_string())
             },
         )
     }
@@ -1940,9 +1950,12 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         let recorder = kaspa_consensus_core::palw_artifact::PalwRecordingOracleV1::new(inventory.operands());
         // The verdict is not ours to read here — this runs the adjudicator only to learn WHICH
         // rows it resolves, and it resolves the same rows whichever way the step reads.
-        let _ = kaspa_consensus_core::palw_step_refute::check_execution_step_refutation_capped_v1(
+        // Carried the way this network's form carries it (ADR-0081 Decision 3): under the Merkle
+        // form the flat check refuses the list before a row is read, and records nothing.
+        let _ = kaspa_consensus_core::palw_step_refute::check_execution_step_refutation_carried_capped_v1(
             refutation,
             &recorder,
+            self.prompt_ids_form,
             self.step_ladder_cap,
         );
         recorder.openings().ok_or_else(|| "the inventory could not open a recorded row".to_string())
@@ -2609,6 +2622,7 @@ mod free_prompt_tests {
                     &dense.generated_token_ids,
                     covered,
                     &mut kernels,
+                    kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
                 )
                 .expect("this seat can recompute its own state");
             }

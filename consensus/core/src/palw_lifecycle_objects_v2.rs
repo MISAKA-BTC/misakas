@@ -1233,6 +1233,7 @@ mod tests {
                 kv_checkpoint: None,
             },
             artifact_openings: vec![],
+            prompt_ids_opening: None,
             signature: vec![7u8; 3],
         }
     }

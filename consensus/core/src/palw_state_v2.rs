@@ -22750,6 +22750,7 @@ pub(crate) mod tests {
                 leaf_index: 0,
                 refutation: refutation(),
                 artifact_openings: vec![],
+                prompt_ids_opening: None,
                 signature: vec![9; 8],
             }),
         };
@@ -22941,6 +22942,7 @@ pub(crate) mod tests {
                     kv_checkpoint: None,
                 },
                 artifact_openings: vec![],
+                prompt_ids_opening: None,
                 signature: vec![9; 8],
             }),
         };
@@ -23101,6 +23103,7 @@ pub(crate) mod tests {
                     kv_checkpoint: None,
                 },
                 artifact_openings: vec![],
+                prompt_ids_opening: None,
                 signature: vec![9; 8],
             }),
         };

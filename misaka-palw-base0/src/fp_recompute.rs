@@ -166,12 +166,20 @@ pub fn base0_fp_recompute_state_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
     output_token_ids: &[u32],
     decode_calls: u32,
     kernels: &mut K,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<Base0FpSeatStateV1, Base0FpRecomputeError> {
     // **The ids are an INPUT on this lane and are refused unless they are the job's** — the rule
     // `refutation_for_free_prompt_index` and `base0_open_fp_interval_v1` both state. A seat that
     // recomputed from another list would compare its own honest arithmetic on a different job
     // against this claim's checkpoint and call the producer a liar.
-    if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(prompt_token_ids) != ctx.prompt_token_ids_hash {
+    // Under the network's own form (ADR-0081 Decision 3): on a Merkle network the slot holds the
+    // tiled root, and hashing the ids flat refused every honest job's own ids — the held drill's
+    // `Incapable` at every interval past the first (2026-09-11).
+    if !kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(
+        prompt_ids_form,
+        prompt_token_ids,
+        &ctx.prompt_token_ids_hash,
+    ) {
         return Err(Base0FpRecomputeError::PromptIdsAreNotTheJobs);
     }
     let prefill = ctx.declared_prefill_tokens as usize;
@@ -227,8 +235,16 @@ pub fn base0_fp_recompute_state_at_position_v1<K: Base0FpRecomputeKernelsV1 + ?S
     output_token_ids: &[u32],
     positions: u32,
     kernels: &mut K,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<Base0FpSeatStateV1, Base0FpRecomputeError> {
-    if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(prompt_token_ids) != ctx.prompt_token_ids_hash {
+    // Under the network's own form (ADR-0081 Decision 3): on a Merkle network the slot holds the
+    // tiled root, and hashing the ids flat refused every honest job's own ids — the held drill's
+    // `Incapable` at every interval past the first (2026-09-11).
+    if !kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(
+        prompt_ids_form,
+        prompt_token_ids,
+        &ctx.prompt_token_ids_hash,
+    ) {
         return Err(Base0FpRecomputeError::PromptIdsAreNotTheJobs);
     }
     let prefill = ctx.declared_prefill_tokens as usize;
@@ -286,9 +302,18 @@ pub fn base0_fp_recompute_state_at_covered_v1<K: Base0FpRecomputeKernelsV1 + ?Si
     output_token_ids: &[u32],
     covered: u32,
     kernels: &mut K,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<Base0FpSeatStateV1, Base0FpRecomputeError> {
     let positions = kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(profile, ctx, covered);
-    let state = base0_fp_recompute_state_at_position_v1(profile, ctx, prompt_token_ids, output_token_ids, positions, kernels)?;
+    let state = base0_fp_recompute_state_at_position_v1(
+        profile,
+        ctx,
+        prompt_token_ids,
+        output_token_ids,
+        positions,
+        kernels,
+        prompt_ids_form,
+    )?;
     Ok(Base0FpSeatStateV1 { covered_decode_call: covered, ..state })
 }
 
@@ -662,6 +687,7 @@ pub fn base0_fp_seat_state_memoized_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
     output_token_ids: &[u32],
     covered: u32,
     kernels: &mut K,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<Base0FpSeatStateV1, Base0FpRecomputeError> {
     let key = seat_state_key_v1(profile, ctx, prompt_token_ids, covered);
     let ids = kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(output_token_ids);
@@ -672,7 +698,8 @@ pub fn base0_fp_seat_state_memoized_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
     {
         return Ok(state.clone());
     }
-    let state = base0_fp_recompute_state_at_covered_v1(profile, ctx, prompt_token_ids, output_token_ids, covered, kernels)?;
+    let state =
+        base0_fp_recompute_state_at_covered_v1(profile, ctx, prompt_token_ids, output_token_ids, covered, kernels, prompt_ids_form)?;
     if let Ok(mut guard) = SEAT_STATE_MEMO.lock() {
         *guard = Some((key, ids, state.clone()));
     }
@@ -764,9 +791,10 @@ pub fn base0_fp_seat_measure_v1<K: Base0FpRecomputeKernelsV1 + ?Sized>(
     output_token_ids: &[u32],
     decode_calls: u32,
     kernels: &mut K,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<(Base0FpSeatStateV1, u64), Base0FpRecomputeError> {
     let started = std::time::Instant::now();
-    let state = base0_fp_recompute_state_v1(profile, ctx, prompt_token_ids, output_token_ids, decode_calls, kernels)?;
+    let state = base0_fp_recompute_state_v1(profile, ctx, prompt_token_ids, output_token_ids, decode_calls, kernels, prompt_ids_form)?;
     let elapsed_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
     let per_position = base0_fp_seat_ms_per_position_v1(elapsed_ms, state.positions);
     Ok((state, per_position))
@@ -871,9 +899,16 @@ mod tests {
         let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
         for leaf in &run.checkpoints.leaves {
             let mut kernels = A16RecomputeKernelsV1::new(&artifact, None).expect("the dense kernels");
-            let state =
-                base0_fp_recompute_state_v1(&profile, &ctx, &ids, &run.generated_token_ids, leaf.covered_decode_call, &mut kernels)
-                    .expect("the seat can run the dense fixture");
+            let state = base0_fp_recompute_state_v1(
+                &profile,
+                &ctx,
+                &ids,
+                &run.generated_token_ids,
+                leaf.covered_decode_call,
+                &mut kernels,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            )
+            .expect("the seat can run the dense fixture");
             assert_eq!(
                 state.state_chunks_root, leaf.state_chunks_root,
                 "checkpoint {} (covering call {}): the seat's recompute must reach the committed state root",
@@ -964,9 +999,16 @@ mod tests {
         for leaf in &run.checkpoints.leaves {
             let positions = leaf.covered_decode_call; // POSITIONS, on this cadence
             let mut kernels = A16RecomputeKernelsV1::new(&artifact, Some(&plan)).expect("the dense kernels");
-            let state =
-                base0_fp_recompute_state_at_position_v1(&profile, &ctx, &ids, &run.generated_token_ids, positions, &mut kernels)
-                    .expect("the seat can stop at any position");
+            let state = base0_fp_recompute_state_at_position_v1(
+                &profile,
+                &ctx,
+                &ids,
+                &run.generated_token_ids,
+                positions,
+                &mut kernels,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            )
+            .expect("the seat can stop at any position");
             assert_eq!(
                 state.state_chunks_root, leaf.state_chunks_root,
                 "checkpoint {} (covering {positions} positions): the seat's recompute must reach the committed state root",
@@ -989,6 +1031,7 @@ mod tests {
             &run.generated_token_ids,
             leaf.covered_decode_call + 1,
             &mut kernels,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         )
         .expect("a neighbouring position also recomputes");
         assert_ne!(state.state_chunks_root, leaf.state_chunks_root, "two positions must not share a state root");
@@ -1123,7 +1166,16 @@ mod tests {
         let mut kernels = CountingKernels { forwards: std::cell::Cell::new(0), chunks: vec![vec![0u8; 8]] };
 
         base0_fp_seat_state_forget_v1();
-        let first = base0_fp_seat_state_memoized_v1(&profile, &ctx, &ids, &output, 1, &mut kernels).expect("a state");
+        let first = base0_fp_seat_state_memoized_v1(
+            &profile,
+            &ctx,
+            &ids,
+            &output,
+            1,
+            &mut kernels,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        )
+        .expect("a state");
         let after_first = kernels.forwards.get();
         assert_eq!(after_first, ids.len() as u32 + 1, "the prefill plus one teacher-forced decode call");
         // The row check's question, asked the way `verify_fp_interval_opening` asks it: by the
@@ -1212,8 +1264,16 @@ mod tests {
         let mut kernels =
             FloorRecompute { engine: crate::engine::Base0Engine::new(&artifact), cache: crate::engine::KvCache::new(&artifact) };
         let started = std::time::Instant::now();
-        let state = base0_fp_recompute_state_v1(&profile, &ctx, &ids, &run.generated_token_ids, covered, &mut kernels)
-            .expect("the seat runs the floor's RC job");
+        let state = base0_fp_recompute_state_v1(
+            &profile,
+            &ctx,
+            &ids,
+            &run.generated_token_ids,
+            covered,
+            &mut kernels,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        )
+        .expect("the seat runs the floor's RC job");
         let elapsed = started.elapsed();
         assert_eq!(state.positions, prefill + covered, "one pass over every position of the job");
 

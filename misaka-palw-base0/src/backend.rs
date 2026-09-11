@@ -260,6 +260,7 @@ impl Base0Backend {
             &material.generated_token_ids,
             covered,
             &mut kernels,
+            self.prompt_ids_form,
         )
         .ok()
     }
@@ -628,6 +629,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
             output_token_ids,
             covered,
             &mut kernels,
+            self.prompt_ids_form,
         )
         .map(|state| state.state_chunks_root)
         .map_err(|e| e.to_string())
@@ -926,9 +928,12 @@ impl PalwExecutionBackendV1 for Base0Backend {
         // so an error return (including `NoFaultFound`, which is what an honest party's own close
         // produces) is not a reason to withhold the openings. The chain re-runs the same check
         // against these rows and says what it means.
-        let _ = kaspa_consensus_core::palw_step_refute::check_execution_step_refutation_capped_v1(
+        // Carried the way this network's form carries it (ADR-0081 Decision 3): under the Merkle
+        // form the flat check refuses the list before a row is read, and records nothing.
+        let _ = kaspa_consensus_core::palw_step_refute::check_execution_step_refutation_carried_capped_v1(
             refutation,
             &recorder,
+            self.prompt_ids_form,
             self.step_ladder_cap,
         );
         recorder.openings().ok_or_else(|| "the inventory cannot open a row its own oracle resolved".to_string())
@@ -1580,6 +1585,104 @@ mod tests {
                 Err(PalwFpExecutionV3Error::ContextDoesNotReproduceTheRoot)
             ),
             "facts measured on one capture do not commit another"
+        );
+    }
+
+    /// **The drill, under the Merkle prompt form** (ADR-0081 Decision 3, which the held mint
+    /// requires — ADR-0103 Decision 4). Found on the live held drill (2026-09-11): the job's
+    /// `prompt_token_ids_hash` is the tiled root there, and two readers still hashed the ids flat —
+    /// the court's adjudicator, so every seat's sample of a free-prompt capture read "no verdict"
+    /// and nobody could accuse, and the seat's prefix recompute, so every interval past the first
+    /// filed `Incapable` on an honest job's own ids. Pinned on one tampered capture and one honest
+    /// one, at the function the acceptance layer and the fold both call: the whole list is refused
+    /// by name, the Merkle carriage (the list out, the gather's one tile opened) convicts the lie
+    /// and clears the truth, and the seat recomputes out of the job's ids.
+    #[test]
+    fn under_the_merkle_prompt_form_the_drill_convicts_and_the_seat_recomputes_the_jobs_ids() {
+        use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1};
+        use kaspa_consensus_core::palw_shard_court_v1::{
+            PALW_SHARD_COURT_VERSION_V1, PalwShardCourtAccusationV1, PalwShardCourtError, PalwShardCourtVerdictV1,
+            palw_shard_court_verdict_v1,
+        };
+        use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
+        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, palw_refutation_prompt_carriage_v1};
+        use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+
+        let backend = floor_backend().with_prompt_ids_form(PalwPromptIdsFormV1::MerkleV1);
+        let prompt: Vec<usize> = vec![2, 7, 1, 8, 2, 8, 1, 8];
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let mut job = free_prompt_job(&backend, prompt.len() as u32, 4);
+        job.prompt_token_ids_hash = prompt_token_ids_commitment_v1(PalwPromptIdsFormV1::MerkleV1, &ids).expect("a commitment");
+        assert_ne!(
+            job.prompt_token_ids_hash,
+            kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&ids),
+            "the two forms commit differently, or this test pins nothing"
+        );
+        let lying =
+            backend.execute_free_prompt_with_injected_fault(&job, &prompt, 0).expect("the drill fault runs under the Merkle form");
+        let honest = backend.execute_free_prompt(&job, &prompt).expect("the floor runs under the Merkle form");
+
+        let inventory = crate::inventory::base0_inventory_v1(&backend.artifact, backend.inventory_geometry).expect("inventory");
+        let class_id = backend.profile().shape_profile_id();
+        let ladder = backend.step_ladder_cap();
+        // The one-move court's object for leaf 0 of `capture`, carried as `form` says — built the
+        // way the seat builds it: the prover's refutation, its artifact rows, then the carriage.
+        let accuse = |capture: &[u8], form: PalwPromptIdsFormV1| -> PalwShardCourtAccusationV1 {
+            let refutation = backend.refutation_for_free_prompt_index(capture, 0, &ids).expect("leaf 0 opens");
+            let artifact_openings = backend.operand_openings_for(&refutation).expect("the prover opens what the court reads");
+            let (refutation, prompt_ids_opening) = palw_refutation_prompt_carriage_v1(form, refutation).expect("the tile opens");
+            PalwShardCourtAccusationV1 {
+                version: PALW_SHARD_COURT_VERSION_V1,
+                claim: Hash64::from_u64_word(0xC1),
+                execution_root: refutation.binding.committed_execution_root,
+                trace_root: Hash64::from_u64_word(0xC2),
+                executor_bond: PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0)),
+                accuser_bond: PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_u64_word(0xB1), 0)),
+                leaf_index: 0,
+                refutation,
+                artifact_openings,
+                prompt_ids_opening,
+                signature: Vec::new(),
+            }
+        };
+        let verdict = |a: &PalwShardCourtAccusationV1| palw_shard_court_verdict_v1(a, class_id, inventory.root(), ladder);
+
+        // The live failure, pinned: the whole list is the FLAT carriage, and on this network's root
+        // it is refused before any arithmetic — the lie is not convicted.
+        let flat = accuse(&lying.outcome.material, PalwPromptIdsFormV1::Flat);
+        assert!(!flat.refutation.prompt_token_ids.is_empty() && flat.prompt_ids_opening.is_none());
+        assert!(
+            matches!(verdict(&flat), Err(PalwShardCourtError::Refutation(PalwStepRefuteError::InputSetNotCanonical(_)))),
+            "a whole list on a Merkle root reads no verdict: {:?}",
+            verdict(&flat)
+        );
+        // The Merkle carriage: no list, the gather's one tile — the lie convicts, the truth clears.
+        let opened = accuse(&lying.outcome.material, PalwPromptIdsFormV1::MerkleV1);
+        assert!(opened.refutation.prompt_token_ids.is_empty(), "the list does not ride");
+        assert_eq!(opened.prompt_ids_opening.as_ref().map(|o| o.tile_index), Some(0), "leaf 0 reads position 0's tile");
+        assert_eq!(verdict(&opened), Ok(PalwShardCourtVerdictV1::ExecutorGuilty), "the tampered leaf must convict");
+        assert_eq!(
+            verdict(&accuse(&honest.outcome.material, PalwPromptIdsFormV1::MerkleV1)),
+            Ok(PalwShardCourtVerdictV1::FalseAccusation),
+            "the same carriage over an honest capture convicts nobody"
+        );
+        // Neither carriage: a gather with no id is unadjudicable, never a conviction.
+        let bare = PalwShardCourtAccusationV1 { prompt_ids_opening: None, ..opened.clone() };
+        assert!(verdict(&bare).is_err(), "a gather with no id convicts nobody: {:?}", verdict(&bare));
+
+        // The interval arm: the state interval 1 resumes from, recomputed out of the job's own ids.
+        let ctx = backend.capture_shape(&lying.outcome.material).expect("a capture").job_context;
+        assert_eq!(ctx.prompt_token_ids_hash, job.prompt_token_ids_hash, "the context carries the Merkle commitment");
+        let covered =
+            kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1.min(ctx.exact_decode_tokens - 1);
+        backend
+            .checkpoint_root_for_context_v1(&ctx, &ids, &lying.output_token_ids, covered)
+            .expect("the seat recomputes from the job's own ids under the Merkle form");
+        let mut foreign = ids.clone();
+        foreign[0] ^= 1;
+        assert!(
+            backend.checkpoint_root_for_context_v1(&ctx, &foreign, &lying.output_token_ids, covered).is_err(),
+            "ids that are not the job's are still refused"
         );
     }
 

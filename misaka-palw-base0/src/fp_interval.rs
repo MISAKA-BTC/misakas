@@ -4507,8 +4507,16 @@ mod tests {
     ) -> crate::fp_recompute::Base0FpSeatStateV1 {
         let binding = &material.0;
         let mut kernels = FloorRecompute::new(artifact);
-        base0_fp_recompute_state_v1(&binding.shape_profile, &binding.job_context, prompt_ids, &material.3, covered, &mut kernels)
-            .expect("the seat can run the floor")
+        base0_fp_recompute_state_v1(
+            &binding.shape_profile,
+            &binding.job_context,
+            prompt_ids,
+            &material.3,
+            covered,
+            &mut kernels,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        )
+        .expect("the seat can run the floor")
     }
 
     /// **(a) Z5's first half: the root a seat recomputes IS the checkpoint the executor committed,
@@ -4770,7 +4778,16 @@ mod tests {
         profile.state_chunk_map_id = Hash64::default();
         let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
         let mut kernels = FloorRecompute::new(&artifact);
-        let refusal = base0_fp_recompute_state_v1(&profile, &ctx, &ids, &[1, 2, 3, 4], 1, &mut kernels).expect_err("refused");
+        let refusal = base0_fp_recompute_state_v1(
+            &profile,
+            &ctx,
+            &ids,
+            &[1, 2, 3, 4],
+            1,
+            &mut kernels,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        )
+        .expect_err("refused");
         assert_eq!(refusal, Base0FpRecomputeError::NoStateChunkMapRegistered);
         assert!(
             refusal.to_string().contains("no state chunk map"),
@@ -4791,7 +4808,16 @@ mod tests {
         wrong[0] = wrong[0].wrapping_add(1);
         let mut kernels = FloorRecompute::new(&artifact);
         assert_eq!(
-            base0_fp_recompute_state_v1(&profile, &ctx, &wrong, &[1, 2, 3, 4], 1, &mut kernels).expect_err("refused"),
+            base0_fp_recompute_state_v1(
+                &profile,
+                &ctx,
+                &wrong,
+                &[1, 2, 3, 4],
+                1,
+                &mut kernels,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+            )
+            .expect_err("refused"),
             Base0FpRecomputeError::PromptIdsAreNotTheJobs
         );
         // And an answer too short to teacher-force the calls asked for is a refusal too, rather
@@ -4799,7 +4825,16 @@ mod tests {
         let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
         let mut kernels = FloorRecompute::new(&artifact);
         assert_eq!(
-            base0_fp_recompute_state_v1(&profile, &ctx, &ids, &[], 1, &mut kernels).expect_err("refused"),
+            base0_fp_recompute_state_v1(
+                &profile,
+                &ctx,
+                &ids,
+                &[],
+                1,
+                &mut kernels,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat
+            )
+            .expect_err("refused"),
             Base0FpRecomputeError::OutputIdsTooShort { need: 1, got: 0 }
         );
     }
@@ -5108,7 +5143,16 @@ mod tests {
         assert!(geometry.interval_count >= 3);
         let recompute = |covered: u32| {
             let mut kernels = crate::fp_recompute::A16RecomputeKernelsV1::new(&artifact, Some(&plan)).ok()?;
-            crate::fp_recompute::base0_fp_recompute_state_at_covered_v1(&profile, &ctx, &ids, &run.generated_token_ids, covered, &mut kernels).ok()
+            crate::fp_recompute::base0_fp_recompute_state_at_covered_v1(
+                &profile,
+                &ctx,
+                &ids,
+                &run.generated_token_ids,
+                covered,
+                &mut kernels,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            )
+            .ok()
         };
         let claim = PalwClaimRootsV1 { execution_root: run.execution_root, trace_root: run.trace_root, anchor: ctx.job_id };
         let kernels = crate::qwen25_a16_backend::a16_interval_kernels_for_tests_v1(&artifact, Some(&plan));
@@ -5234,6 +5278,7 @@ mod tests {
                         &run.generated_token_ids,
                         covered,
                         &mut kernels,
+                        kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
                     )
                     .expect("this seat can recompute its own state");
                     base0_fp_interval_opening_seat_state_v1(&opened, &ids, interval)
@@ -5993,6 +6038,7 @@ mod the_rulesets_ladder {
                 &material.generated_token_ids,
                 covered,
                 &mut recompute,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             )
             .ok()
         };

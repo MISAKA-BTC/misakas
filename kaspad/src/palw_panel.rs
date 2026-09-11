@@ -348,8 +348,11 @@ pub struct PalwPanelConfig {
 enum CaptureSamplesV1 {
     /// Every wanted sample recomputed.
     Cleared,
-    /// Too few samples could be checked — nothing proven either way.
-    NotCleared,
+    /// Too few samples could be checked — nothing proven either way. `refusal` is the first reason a
+    /// draw was not a sample, when one was given: every draw refused for one cause is a seat that
+    /// cannot grade this class at all, and that has to be readable (ADR-0103 §10.3 item 12 was 32
+    /// silent refusals a claim).
+    NotCleared { refusal: Option<String> },
     /// This leaf of the claim's own capture does not recompute — and here is the refutation that
     /// says so, with the artifact rows it multiplies by: exactly the one-move court's object
     /// (ADR-0099 Decision 5 / ADR-0100), built once and kept rather than thrown away.
@@ -357,6 +360,9 @@ enum CaptureSamplesV1 {
         leaf: u64,
         refutation: Box<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1>,
         openings: Vec<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1>,
+        /// The prompt's one tile, where the network commits the ids as a Merkle root (ADR-0103
+        /// Decision 1): the refutation above then carries no id list.
+        prompt_opening: Option<kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsOpeningV1>,
     },
 }
 
@@ -378,6 +384,10 @@ pub struct PalwPanelService {
     /// here whether or not `--palw-challenge` challenges everything; bounded, newest refused.
     /// ADR-0098 Decision 2 reads the same ledger: a claim in it gets no receipt from this seat.
     seat_faults: std::sync::Mutex<crate::palw_fp_seat::PalwSeatFaultLedgerV1>,
+    /// The claims whose capture this seat could not grade at any drawn leaf, already said once —
+    /// the arm re-runs every tick until a verdict, and the reason is the operator's to read once.
+    /// Bounded: cleared at [`Self::SAMPLE_REFUSALS_LOGGED_CAP`], which at worst says it again.
+    sample_refusals_logged: std::sync::Mutex<HashSet<Hash64>>,
     /// **What this node has already opened, so a second ask is not a second replay.**
     ///
     /// Keyed by the request as it was served — the claim, the request index, and the disputed
@@ -532,6 +542,7 @@ impl PalwPanelService {
             served_openings: std::sync::Mutex::new(Vec::new()),
             opening_gate: std::sync::Mutex::new(()),
             seat_faults: std::sync::Mutex::new(Default::default()),
+            sample_refusals_logged: std::sync::Mutex::new(HashSet::new()),
             shutdown: SingleTrigger::default(),
         }
     }
@@ -1494,6 +1505,7 @@ impl PalwPanelService {
     /// asked is not verified either.
     /// Returns what the samples found (ADR-0098 Decision 2): enough samples cleared, too few, or a
     /// leaf of the claim's own capture that does not recompute — which is a fault, not a "no".
+    #[allow(clippy::too_many_arguments)]
     fn fp_capture_samples_clear(
         backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
         capture: &[u8],
@@ -1502,8 +1514,11 @@ impl PalwPanelService {
         artifact_root: Hash64,
         ladder: u64,
         claim: &Hash64,
+        prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> CaptureSamplesV1 {
-        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_capped_v1};
+        use kaspa_consensus_core::palw_step_refute::{
+            PalwStepRefuteError, check_execution_step_refutation_opened_capped_v1, palw_refutation_prompt_carriage_v1,
+        };
         use rand::Rng;
         const SAMPLES: u64 = 4;
         const DRAWS_MAX: u64 = 32;
@@ -1518,18 +1533,43 @@ impl PalwPanelService {
         // them from being confused again. The number arrives as an argument because the caller is
         // the one holding `self.config.court`.
         if step_leaf_count == 0 {
-            return CaptureSamplesV1::NotCleared;
+            return CaptureSamplesV1::NotCleared { refusal: None };
         }
         let wanted = SAMPLES.min(step_leaf_count);
         let mut rng = rand::thread_rng();
         let mut cleared = 0u64;
+        let mut refusal: Option<String> = None;
         for draw in 0..DRAWS_MAX {
             if cleared >= wanted {
                 break;
             }
             let index = if draw == 0 { 0 } else { rng.gen_range(0..step_leaf_count) };
-            let Ok(refutation) = backend.refutation_for_free_prompt_index(capture, index, prompt_token_ids) else { continue };
-            let Ok(openings) = backend.operand_openings_for(&refutation) else { continue };
+            let refutation = match backend.refutation_for_free_prompt_index(capture, index, prompt_token_ids) {
+                Ok(refutation) => refutation,
+                Err(e) => {
+                    refusal.get_or_insert_with(|| format!("leaf {index} does not open: {e}"));
+                    continue;
+                }
+            };
+            let openings = match backend.operand_openings_for(&refutation) {
+                Ok(openings) => openings,
+                Err(e) => {
+                    refusal.get_or_insert_with(|| format!("leaf {index}'s artifact rows do not open: {e}"));
+                    continue;
+                }
+            };
+            // **Graded as the chain will read it** (ADR-0103 Decision 1; ADR-0081 Decision 3). The
+            // prover hands back the whole id list; on a Merkle-form network that is no verdict at
+            // all — the flat comparison refuses it before any arithmetic — so every draw here read
+            // "not a sample" and a seat holding a tampered capture accused nothing (the held drill,
+            // 2026-09-11). The carriage takes the list out and opens the gather's one tile.
+            let (refutation, prompt_opening) = match palw_refutation_prompt_carriage_v1(prompt_ids_form, refutation) {
+                Ok(carried) => carried,
+                Err(e) => {
+                    refusal.get_or_insert_with(|| format!("leaf {index}'s prompt tile does not open: {e}"));
+                    continue;
+                }
+            };
             let proven = match kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&openings, artifact_root) {
                 Ok(proven) => proven,
                 Err(e) => {
@@ -1537,16 +1577,16 @@ impl PalwPanelService {
                     // registered — a class/artifact mismatch on THIS seat, not a fact about the
                     // producer. Say so rather than sample around it.
                     warn!("[{PALW_PANEL}] claim {claim}: the openings for leaf {index} do not prove against the class root: {e:?}");
-                    return CaptureSamplesV1::NotCleared;
+                    return CaptureSamplesV1::NotCleared { refusal: None };
                 }
             };
-            match check_execution_step_refutation_capped_v1(&refutation, &proven, ladder) {
+            match check_execution_step_refutation_opened_capped_v1(&refutation, &proven, prompt_opening.as_ref(), ladder) {
                 Err(PalwStepRefuteError::NoFaultFound) => cleared += 1,
                 Ok(_) => {
                     warn!(
                         "[{PALW_PANEL}] claim {claim}: leaf {index} of the served capture does not recompute — the court's business, not a receipt's"
                     );
-                    return CaptureSamplesV1::FaultAt { leaf: index, refutation: Box::new(refutation), openings };
+                    return CaptureSamplesV1::FaultAt { leaf: index, refutation: Box::new(refutation), openings, prompt_opening };
                 }
                 // **A limit is not a verdict, and it is not a redraw either.** A capture priced
                 // above the ladder this node was handed is one this node cannot check at ANY leaf,
@@ -1562,12 +1602,15 @@ impl PalwPanelService {
                         "[{PALW_PANEL}] claim {claim}: the served capture is priced at {got} leaves and this node's ruleset ladder is \
                          {max} — this seat cannot check it at any leaf, and says so once rather than redrawing"
                     );
-                    return CaptureSamplesV1::NotCleared;
+                    return CaptureSamplesV1::NotCleared { refusal: None };
                 }
-                Err(other) => trace!("[{PALW_PANEL}] claim {claim}: leaf {index} is not a sample ({other:?}) — redrawing"),
+                Err(other) => {
+                    trace!("[{PALW_PANEL}] claim {claim}: leaf {index} is not a sample ({other:?}) — redrawing");
+                    refusal.get_or_insert_with(|| format!("leaf {index}: {other:?}"));
+                }
             }
         }
-        if cleared >= wanted { CaptureSamplesV1::Cleared } else { CaptureSamplesV1::NotCleared }
+        if cleared >= wanted { CaptureSamplesV1::Cleared } else { CaptureSamplesV1::NotCleared { refusal } }
     }
 
     /// **Run the network's own job and make it a claim** (ADR-0074 Decision 1). The job's prompt
@@ -2360,7 +2403,12 @@ impl PalwPanelService {
             // ADR-0085 Decision 4: a claim a seat found faulty is prosecuted whether or not this node
             // challenges everything; the faults are the seat's, the court is the challenger's.
             let seat_faulted: HashSet<Hash64> = self.seat_faults.lock().unwrap().claims().collect();
-            if self.config.challenge || !seat_faulted.is_empty() {
+            // **ADR-0103 Decision 1: the held regime plays no bisection.** The chain refuses
+            // `CourtOpened` for every claim under the fence, so a challenge built here would buy a
+            // carrier the acceptance layer drops, after a whole re-execution to justify it. A fault a
+            // seat found is prosecuted by that seat's one-move accusation (the capture arm below).
+            let bisection_is_played = !self.consensus_config.params.palw_held_context_active_at(current_daa);
+            if bisection_is_played && (self.config.challenge || !seat_faulted.is_empty()) {
                 for target in session.palw_disputable_claims_v2(vec![bond_key]) {
                     if challenged.contains(&target.claim_id) {
                         continue;
@@ -3137,7 +3185,7 @@ impl PalwPanelService {
                             *court_stalls.entry("the close's task did not finish").or_default() += 1;
                             continue;
                         };
-                        let (mut refutation, operand_openings) = match assembled {
+                        let (refutation, operand_openings) = match assembled {
                             Ok(pair) => pair,
                             Err((stall, e)) => {
                                 *court_stalls.entry(stall).or_default() += 1;
@@ -3156,32 +3204,20 @@ impl PalwPanelService {
                         // conversation. A step past the prompt (a decode position) reads no prompt
                         // id, so it carries nothing; an opening that does not build is a stall,
                         // not a close under the other form.
-                        let proof = match self.config.prompt_ids_form {
-                            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat => {
-                                PalwCourtVerdictProofV2::Arithmetic { refutation, operand_openings }
+                        // One spelling of the carriage, shared with the one-move accusation
+                        // (`palw_refutation_prompt_carriage_v1`, ADR-0103 Decision 1).
+                        let proof = match kaspa_consensus_core::palw_step_refute::palw_refutation_prompt_carriage_v1(
+                            self.config.prompt_ids_form,
+                            refutation,
+                        ) {
+                            Ok((refutation, None)) => PalwCourtVerdictProofV2::Arithmetic { refutation, operand_openings },
+                            Ok((refutation, Some(prompt_ids_opening))) => {
+                                PalwCourtVerdictProofV2::ArithmeticOpened { refutation, operand_openings, prompt_ids_opening }
                             }
-                            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1 => {
-                                let ids = std::mem::take(&mut refutation.prompt_token_ids);
-                                let coord = refutation.output_preimage.coord;
-                                if ids.is_empty() || coord.call_index != 0 || coord.position as usize >= ids.len() {
-                                    PalwCourtVerdictProofV2::Arithmetic { refutation, operand_openings }
-                                } else {
-                                    match kaspa_consensus_core::palw_prompt_ids_v1::prompt_ids_opening_v1(&ids, coord.position) {
-                                        Ok(prompt_ids_opening) => PalwCourtVerdictProofV2::ArithmeticOpened {
-                                            refutation,
-                                            operand_openings,
-                                            prompt_ids_opening,
-                                        },
-                                        Err(e) => {
-                                            *court_stalls.entry("the prompt tile the close needs does not open").or_default() += 1;
-                                            warn!(
-                                                "[{PALW_PANEL}] session {}: the prompt-id opening does not build: {e}",
-                                                duty.session_id
-                                            );
-                                            continue;
-                                        }
-                                    }
-                                }
+                            Err(e) => {
+                                *court_stalls.entry("the prompt tile the close needs does not open").or_default() += 1;
+                                warn!("[{PALW_PANEL}] session {}: the prompt-id opening does not build: {e}", duty.session_id);
+                                continue;
                             }
                         };
                         // **The chain says what the evidence means, not us.** A `CourtClosed` must
@@ -3506,6 +3542,7 @@ impl PalwPanelService {
                                     (payload.capture.clone(), prompt_ids.clone(), duty.claim_id);
                                 let (leaves, artifact_root, ladder) =
                                     (shape.step_leaf_count, duty.artifact_root, self.config.court.max_step_leaf_count());
+                                let prompt_ids_form = self.config.prompt_ids_form;
                                 let Ok((_backend, samples)) = offload(backend, move |b| {
                                     Self::fp_capture_samples_clear(
                                         b,
@@ -3515,6 +3552,7 @@ impl PalwPanelService {
                                         artifact_root,
                                         ladder,
                                         &claim_owned,
+                                        prompt_ids_form,
                                     )
                                 })
                                 .await
@@ -3523,11 +3561,23 @@ impl PalwPanelService {
                                 };
                                 match samples {
                                     CaptureSamplesV1::Cleared => {}
-                                    CaptureSamplesV1::NotCleared => continue,
+                                    CaptureSamplesV1::NotCleared { refusal } => {
+                                        // Once per claim: the arm re-runs every tick until a verdict.
+                                        if let Some(why) = refusal
+                                            && self.first_sample_refusal_v1(duty.claim_id)
+                                        {
+                                            warn!(
+                                                "[{PALW_PANEL}] claim {}: no sample of the served capture adjudicates on this seat (first: \
+                                                 {why}) — nothing filed from this arm",
+                                                duty.claim_id
+                                            );
+                                        }
+                                        continue;
+                                    }
                                     // ADR-0098 Decision 2: a leaf of the claim's OWN capture — its roots
                                     // matched, its price matched — that does not recompute is a fault
                                     // this seat found, and it is recorded rather than dropped.
-                                    CaptureSamplesV1::FaultAt { leaf, refutation, openings } => {
+                                    CaptureSamplesV1::FaultAt { leaf, refutation, openings, prompt_opening } => {
                                         self.note_seat_fault_v1(duty.claim_id, leaf, 1);
                                         // **The one thing a seat that found a lie files** (ADR-0098
                                         // Decision 2, ADR-0099 Decision 5): on a network whose
@@ -3571,6 +3621,7 @@ impl PalwPanelService {
                                                 leaf_index: leaf,
                                                 refutation: *refutation,
                                                 artifact_openings: openings,
+                                                prompt_ids_opening: prompt_opening,
                                                 signature: Vec::new(),
                                             };
                                             match accusation.validate_shape(ladder) {
@@ -4923,6 +4974,18 @@ impl PalwPanelService {
         self.seat_faults.lock().unwrap().note(claim, first_leaf_index, leaf_count);
     }
 
+    const SAMPLE_REFUSALS_LOGGED_CAP: usize = 1_024;
+
+    /// Whether this is the first time this seat reports that no drawn leaf of `claim`'s capture
+    /// adjudicates here — see `sample_refusals_logged`.
+    fn first_sample_refusal_v1(&self, claim: Hash64) -> bool {
+        let mut logged = self.sample_refusals_logged.lock().unwrap();
+        if logged.len() >= Self::SAMPLE_REFUSALS_LOGGED_CAP {
+            logged.clear();
+        }
+        logged.insert(claim)
+    }
+
     /// **ADR-0098 Decision 2: has this seat found a fault in `claim`?** When it has, the verdict
     /// block files nothing about the claim — neither a later arm's `Valid` nor the half-window
     /// `Unavailable` — and the fault goes to the court through the challenger's half.
@@ -5400,7 +5463,8 @@ impl PalwPanelService {
                         // Nothing is filed: an executor that served another state has served no
                         // evidence, and the interval goes back to the quorum's Unavailable arm.
                         warn!(
-                            "[{PALW_PANEL}] claim {}: the state served for interval {index} does not verify against checkpoint                              {checkpoint_index} ({why}) — not replayed from (ADR-0103 Invariant 6)",
+                            "[{PALW_PANEL}] claim {}: the state served for interval {index} does not verify against checkpoint \
+                             {checkpoint_index} ({why}) — not replayed from (ADR-0103 Invariant 6)",
                             duty.claim_id
                         );
                         continue;
@@ -6064,7 +6128,7 @@ mod court_responder_coverage_pin {
         assert!(gates[0] < replay, "the first gate precedes the first replay");
         assert!(gates.iter().any(|g| *g > replay && *g < capture), "a gate between the interval arm and the capture arm");
         assert!(gates.iter().any(|g| *g > capture && *g < tail), "a gate before the half-window tail");
-        let fault = at("CaptureSamplesV1::FaultAt { leaf, refutation, openings } => {");
+        let fault = at("CaptureSamplesV1::FaultAt { leaf, refutation, openings, prompt_opening } => {");
         assert!(
             block[fault..].contains("self.note_seat_fault_v1(duty.claim_id, leaf, 1);"),
             "the capture arm records the fault it proves"

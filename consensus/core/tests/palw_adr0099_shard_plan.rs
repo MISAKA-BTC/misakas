@@ -278,6 +278,7 @@ fn an_accusation_binds_its_fields_and_its_shape_is_checked_by_name() {
         leaf_index: 77,
         refutation: refutation(77),
         artifact_openings: vec![],
+        prompt_ids_opening: None,
         signature: vec![1, 2, 3],
     };
     assert_eq!(base.validate_shape(1 << 26), Ok(()));
