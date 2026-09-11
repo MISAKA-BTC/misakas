@@ -374,6 +374,20 @@ fn as_a16_codes(row: &[i32]) -> Result<Vec<i16>, PalwA16OpError> {
 /// a handful of rows costs less than the pool costs to reach.
 const PARALLEL_MIN_CHANNELS: usize = 64;
 
+/// **And below this much work — channels times each channel's reduction length — likewise,
+/// whatever the channel count.** The channel floor alone sent the context vectors' thin row to the
+/// pool on every position: its unembedding is 64 channels of an 8-long dot, 512 multiply-
+/// accumulates, which is less than the pool costs to wake. The workers then spent the job
+/// yielding and waiting. Sampled on the 32,768-position vector, 46% of all thread time was
+/// `swtch_pri` and 34% `__psynch_cvwait`, and that was the vector's system time (ADR-0110 §9.5). A
+/// real projection is thousands of times past this floor, so it changes nothing there.
+const PARALLEL_MIN_WORK: usize = 1 << 16;
+
+/// Whether a call of `out_dim` channels, each a reduction of `work_per_channel`, goes to the pool.
+fn parallel_worth_it(out_dim: usize, work_per_channel: usize) -> bool {
+    out_dim >= PARALLEL_MIN_CHANNELS && out_dim.saturating_mul(work_per_channel) >= PARALLEL_MIN_WORK
+}
+
 /// **Channels are handed out in blocks, not one at a time.**
 ///
 /// The first version mapped `into_par_iter()` over `0..out_dim`, which on the unembedding is
@@ -389,13 +403,14 @@ fn block_size(out_dim: usize) -> usize {
     out_dim.div_ceil(target).max(32)
 }
 
-/// Fill `out` with `channel(c)` for every `c`, in blocks, on the pool when it is worth it.
-fn fill_channels<F>(out_dim: usize, channel: F) -> Vec<i32>
+/// Fill `out` with `channel(c)` for every `c`, in blocks, on the pool when it is worth it —
+/// `work_per_channel` is each channel's reduction length, for [`parallel_worth_it`].
+fn fill_channels<F>(out_dim: usize, work_per_channel: usize, channel: F) -> Vec<i32>
 where
     F: Fn(usize) -> i32 + Sync + Send,
 {
     let mut out = vec![0i32; out_dim];
-    if out_dim < PARALLEL_MIN_CHANNELS {
+    if !parallel_worth_it(out_dim, work_per_channel) {
         for (c, slot) in out.iter_mut().enumerate() {
             *slot = channel(c);
         }
@@ -438,7 +453,7 @@ pub fn a16_matmul_requant_fast(weights: &[i8], x: &[i32], params: &[A16QuantPara
         let p = params[c];
         a16_scale_round(acc, p.multiplier, p.shift).saturating_add(p.zero).clamp(-A16_CODE_MAX, A16_CODE_MAX) as i32
     };
-    Ok(fill_channels(out_dim, channel))
+    Ok(fill_channels(out_dim, n, channel))
 }
 
 /// **Op W3 at speed** — bit-identical to `palw_base0_a16::a16_matmul_rescale`.
@@ -463,7 +478,7 @@ pub fn a16_matmul_rescale_fast(weights: &[i8], x: &[i32], params: &[A16QuantPara
         let p = params[c];
         a16_scale_round(acc, p.multiplier, p.shift).saturating_add(p.zero).clamp(i32::MIN as i64, i32::MAX as i64) as i32
     };
-    Ok(fill_channels(out_dim, channel))
+    Ok(fill_channels(out_dim, n, channel))
 }
 
 // -------------------------------------------------------------------------------------------
@@ -545,7 +560,7 @@ fn batch_projection(
             }
         }
     };
-    if out_dim < PARALLEL_MIN_CHANNELS {
+    if !parallel_worth_it(out_dim, n.saturating_mul(batch)) {
         write(&mut channel_major, 0);
     } else {
         channel_major.par_chunks_mut(block * batch).enumerate().for_each(|(bi, slice)| write(slice, bi * block));
@@ -613,7 +628,7 @@ pub fn a16_attn_scores_fast(
         return Err(PalwA16OpError::LengthMismatch { a: params.len(), b: heads * kv_len });
     }
     let group = heads / kv_heads;
-    Ok(fill_channels(heads * kv_len, |i| {
+    Ok(fill_channels(heads * kv_len, d_head, |i| {
         let (h, j) = (i / kv_len, i % kv_len);
         let qh = &q[h * d_head..(h + 1) * d_head];
         let kv_off = (h / group) * d_head;
@@ -655,7 +670,7 @@ pub fn a16_attn_values_fast(
         return Err(PalwA16OpError::LengthMismatch { a: params.len(), b: heads * d_head });
     }
     let group = heads / kv_heads;
-    Ok(fill_channels(heads * d_head, |idx| {
+    Ok(fill_channels(heads * d_head, kv_len, |idx| {
         let (h, i) = (idx / d_head, idx % d_head);
         let ph = &probs[h * kv_len..(h + 1) * kv_len];
         let kv_off = (h / group) * d_head;
@@ -672,16 +687,20 @@ pub fn a16_attn_values_fast(
 // The fused site at speed — one pass over the history per narrowing, nothing tiled
 // -------------------------------------------------------------------------------------------
 
-/// Below this much work in one head's history a fused call stays on the calling thread. A
-/// history row costs about `2·d_head` multiply-accumulates and one exponent, so the thin context
-/// vectors (`d_head` = 4) go parallel from about 5,000 rows and a real head (`d_head` = 128) from
-/// about 250.
-const FUSED_PARALLEL_MIN_WORK: usize = 1 << 16;
+/// Below this much work in one call — every head's history, a row costing about `2·d_head`
+/// multiply-accumulates and one exponent — a fused call stays on the calling thread. The thin
+/// context vectors (two heads, `d_head` = 4) go parallel from about 22,000 rows of history, a real
+/// row (twelve heads, `d_head` = 128) from about 170.
+const FUSED_PARALLEL_MIN_WORK: usize = 1 << 19;
 
-/// The scratch a fused call reuses: the scores row and the exponents row of one head. Reused so a
-/// long history is not a fresh multi-megabyte allocation, and a fresh page-faulting one, on every
-/// position of every layer. That churn was most of the system time the 32,768-position vector
-/// spent (ADR-0110 §9.5).
+/// The work one task gets once a call is parallel: long runs, so a wake-up of the pool buys a
+/// tenth of a millisecond of arithmetic rather than a few microseconds. The first version cut the
+/// history into 1,024-row runs per head, and the pool spent the 32,768-position vector yielding
+/// (`parallel_worth_it`'s note).
+const FUSED_CHUNK_WORK: usize = 1 << 18;
+
+/// The scratch a fused call reuses: the scores rows and the exponents rows of every head. Reused
+/// so a long history is not a fresh multi-megabyte allocation on every position of every layer.
 #[derive(Default)]
 struct FusedScratchV1 {
     scores: Vec<i32>,
@@ -766,84 +785,104 @@ pub fn a16_attn_fused_uniform_fast(
 
     let group = heads / kv_heads;
     let up = i64::from(up_bits.min(62));
-    let parallel = kv_len.saturating_mul(2 * d_head + 4) >= FUSED_PARALLEL_MIN_WORK;
-    let chunk = kv_len.div_ceil(rayon::current_num_threads().max(1) * 4).max(1_024);
+    // One row of one head: a `d_head` dot for the score, an exponent, a `d_head` accumulation.
+    let row_work = 2 * d_head + 4;
+    let parallel = heads.saturating_mul(kv_len).saturating_mul(row_work) >= FUSED_PARALLEL_MIN_WORK;
+    let chunk = (FUSED_CHUNK_WORK / row_work).max(1_024);
     let narrow = |acc: i64, p: A16QuantParams| {
         a16_scale_round(acc, p.multiplier, p.shift).saturating_add(p.zero).clamp(-A16_CODE_MAX, A16_CODE_MAX) as i32
     };
+    let head = |h: usize| (&q[h * d_head..(h + 1) * d_head], (h / group) * d_head);
+    // W9 over one run of head `h`'s keys, starting at history row `base`, and the run's max.
+    let score_run = |h: usize, base: usize, run: &mut [i32]| -> i64 {
+        let (qh, kv_off) = head(h);
+        let mut max = i64::MIN;
+        for (o, slot) in run.iter_mut().enumerate() {
+            let j = base + o;
+            *slot = narrow(dot_codes(qh, &k_series[j * kv_dim + kv_off..j * kv_dim + kv_off + d_head]), logits);
+            max = max.max(*slot as i64);
+        }
+        max
+    };
+    // W11's exponents over one run against its head's max, and the run's exact sum.
+    let exp_run = |max: i64, scores: &[i32], exps: &mut [i32]| -> i64 {
+        let mut sum = 0i64;
+        for (s, e) in scores.iter().zip(exps.iter_mut()) {
+            *e = kaspa_consensus_core::palw_base0::int_exp(kaspa_consensus_core::palw_base0_ops::softmax_shifted_diff_v1(*s, max, up));
+            sum += *e as i64;
+        }
+        sum
+    };
+    // W11's probabilities, W5's codes and W10's exact sums over one run of head `h`.
+    let value_run = |h: usize, (recip, uniform): (i64, Option<i32>), base: usize, exps: &[i32]| -> Vec<i64> {
+        let (_, kv_off) = head(h);
+        let mut acc = vec![0i64; d_head];
+        for (o, e) in exps.iter().enumerate() {
+            let j = base + o;
+            let prob = match uniform {
+                Some(u) => u,
+                None => ((*e as i64 * recip) >> kaspa_consensus_core::palw_base0::K) as i32,
+            };
+            let code = narrow(prob as i64, probs) as i64;
+            for (a, v) in acc.iter_mut().zip(&v_series[j * kv_dim + kv_off..j * kv_dim + kv_off + d_head]) {
+                *a += code * *v as i64;
+            }
+        }
+        acc
+    };
+    let add = |mut a: Vec<i64>, b: Vec<i64>| {
+        a.iter_mut().zip(b).for_each(|(x, y)| *x += y);
+        a
+    };
 
+    // Three passes, each one region on the pool over every head's runs: the max, then the sum,
+    // then the values — each pass needs the one before it whole.
     let mut out = Vec::with_capacity(heads * d_head);
     let mut run = |scratch: &mut FusedScratchV1| {
-        scratch.scores.resize(kv_len, 0);
-        scratch.exps.resize(kv_len, 0);
-        for h in 0..heads {
-            let qh = &q[h * d_head..(h + 1) * d_head];
-            let kv_off = (h / group) * d_head;
-            // W9 per key, and the row max as it goes.
-            let score_chunk = |base: usize, slice: &mut [i32]| -> i64 {
-                let mut max = i64::MIN;
-                for (o, slot) in slice.iter_mut().enumerate() {
-                    let j = base + o;
-                    let kh = &k_series[j * kv_dim + kv_off..j * kv_dim + kv_off + d_head];
-                    *slot = narrow(dot_codes(qh, kh), logits);
-                    max = max.max(*slot as i64);
+        scratch.scores.resize(heads * kv_len, 0);
+        scratch.exps.resize(heads * kv_len, 0);
+        let FusedScratchV1 { scores, exps } = scratch;
+        let maxes: Vec<i64> = if parallel {
+            scores
+                .par_chunks_mut(kv_len)
+                .enumerate()
+                .map(|(h, row)| row.par_chunks_mut(chunk).enumerate().map(|(c, r)| score_run(h, c * chunk, r)).max().unwrap_or(i64::MIN))
+                .collect()
+        } else {
+            scores.chunks_mut(kv_len).enumerate().map(|(h, row)| score_run(h, 0, row)).collect()
+        };
+        let sums: Vec<i64> = if parallel {
+            scores
+                .par_chunks(kv_len)
+                .zip(exps.par_chunks_mut(kv_len))
+                .enumerate()
+                .map(|(h, (s, e))| s.par_chunks(chunk).zip(e.par_chunks_mut(chunk)).map(|(sr, er)| exp_run(maxes[h], sr, er)).sum())
+                .collect()
+        } else {
+            scores.chunks(kv_len).zip(exps.chunks_mut(kv_len)).enumerate().map(|(h, (s, e))| exp_run(maxes[h], s, e)).collect()
+        };
+        // The row's reciprocal, or the uniform row `softmax_shifted` falls back to.
+        let rows: Vec<(i64, Option<i32>)> = sums
+            .iter()
+            .map(|&sum| {
+                if sum <= 0 {
+                    (0, Some((kaspa_consensus_core::palw_base0::ONE / kv_len as i64) as i32))
+                } else {
+                    (kaspa_consensus_core::palw_base0::int_recip(sum), None)
                 }
-                max
-            };
-            let max = if parallel {
-                scratch.scores.par_chunks_mut(chunk).enumerate().map(|(c, s)| score_chunk(c * chunk, s)).max().unwrap_or(i64::MIN)
-            } else {
-                score_chunk(0, &mut scratch.scores)
-            };
-            // W11's exponents and their exact sum.
-            let exp_chunk = |scores: &[i32], exps: &mut [i32]| -> i64 {
-                let mut sum = 0i64;
-                for (s, e) in scores.iter().zip(exps.iter_mut()) {
-                    *e = kaspa_consensus_core::palw_base0::int_exp(kaspa_consensus_core::palw_base0_ops::softmax_shifted_diff_v1(
-                        *s, max, up,
-                    ));
-                    sum += *e as i64;
-                }
-                sum
-            };
-            let sum: i64 = if parallel {
-                scratch.scores.par_chunks(chunk).zip(scratch.exps.par_chunks_mut(chunk)).map(|(s, e)| exp_chunk(s, e)).sum()
-            } else {
-                exp_chunk(&scratch.scores, &mut scratch.exps)
-            };
-            // W11's probabilities, W5's codes and W10's exact sums, one pass.
-            let (recip, uniform) = if sum <= 0 {
-                (0, Some((kaspa_consensus_core::palw_base0::ONE / kv_len as i64) as i32))
-            } else {
-                (kaspa_consensus_core::palw_base0::int_recip(sum), None)
-            };
-            let value_chunk = |base: usize, exps: &[i32]| -> Vec<i64> {
-                let mut acc = vec![0i64; d_head];
-                for (o, e) in exps.iter().enumerate() {
-                    let j = base + o;
-                    let prob = match uniform {
-                        Some(u) => u,
-                        None => ((*e as i64 * recip) >> kaspa_consensus_core::palw_base0::K) as i32,
-                    };
-                    let code = narrow(prob as i64, probs) as i64;
-                    let row = &v_series[j * kv_dim + kv_off..j * kv_dim + kv_off + d_head];
-                    for (a, v) in acc.iter_mut().zip(row) {
-                        *a += code * *v as i64;
-                    }
-                }
-                acc
-            };
-            let acc = if parallel {
-                scratch.exps.par_chunks(chunk).enumerate().map(|(c, e)| value_chunk(c * chunk, e)).reduce(
-                    || vec![0i64; d_head],
-                    |mut a, b| {
-                        a.iter_mut().zip(b).for_each(|(x, y)| *x += y);
-                        a
-                    },
-                )
-            } else {
-                value_chunk(0, &scratch.exps)
-            };
+            })
+            .collect();
+        let accs: Vec<Vec<i64>> = if parallel {
+            exps.par_chunks(kv_len)
+                .enumerate()
+                .map(|(h, e)| {
+                    e.par_chunks(chunk).enumerate().map(|(c, er)| value_run(h, rows[h], c * chunk, er)).reduce(|| vec![0i64; d_head], add)
+                })
+                .collect()
+        } else {
+            exps.chunks(kv_len).enumerate().map(|(h, e)| value_run(h, rows[h], 0, e)).collect()
+        };
+        for acc in accs {
             out.extend(acc.into_iter().map(|a| narrow(a, values)));
         }
     };
@@ -1348,7 +1387,7 @@ fn grouped_fast(weights: &[i8], exps: &[i8], x: &[i32], params: &[A16QuantParams
         let p = params[c];
         a16_scale_round(acc, p.multiplier, p.shift).saturating_add(p.zero).clamp(lo, hi) as i32
     };
-    Ok(fill_channels(out_dim, channel))
+    Ok(fill_channels(out_dim, n, channel))
 }
 
 #[cfg(test)]
