@@ -15699,7 +15699,14 @@ mod consensus_params_id_tests {
         //   that has to be changed deliberately.
         assert_eq!(
             missing,
-            vec!["palw_model_market", "palw_model_lines", "palw_model_benefits", "palw_model_leg_v2", "palw_model_evm", "palw_kary_court"],
+            vec![
+                "palw_model_market",
+                "palw_model_lines",
+                "palw_model_benefits",
+                "palw_model_leg_v2",
+                "palw_model_evm",
+                "palw_kary_court"
+            ],
             "a carded mainnet must arm every fence testnet-11 arms except the four named above \
              (rc: {rc_armed:?}, mainnet: {mainnet_armed:?})"
         );
@@ -16396,7 +16403,14 @@ mod consensus_params_id_tests {
         // about it being the only one.
         assert_eq!(
             crate::fork_id_v1::fork_id_gate_fences_v1(&later),
-            vec![1150, PALW_RC_DA_COURT_FENCE_DAA, 2000, PALW_RC_COURT_LADDER_FENCE_DAA, PALW_RC_MODEL_BENEFITS_FENCE_DAA, PALW_RC_MODEL_LEG_V2_FENCE_DAA,],
+            vec![
+                1150,
+                PALW_RC_DA_COURT_FENCE_DAA,
+                2000,
+                PALW_RC_COURT_LADDER_FENCE_DAA,
+                PALW_RC_MODEL_BENEFITS_FENCE_DAA,
+                PALW_RC_MODEL_LEG_V2_FENCE_DAA,
+            ],
             "…and a schedule lists every scheduled gate fence's height"
         );
     }

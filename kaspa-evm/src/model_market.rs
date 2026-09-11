@@ -1581,7 +1581,7 @@ mod tests {
         let line = Hash64::from_u64_word(9);
         let m = MarketHandlers::new(
             std::sync::Arc::new(PalwEvmViewV1 { chain_daa: 42, chain_id: 1, ..Default::default() }),
-            PalwEvmMarketFencesV1 { market_active: true, lines_active: true, evm_active: true },
+            PalwEvmMarketFencesV1 { market_active: true, lines_active: true, evm_active: true, leg_v2_active: false },
             1,
         );
         let s = sel();

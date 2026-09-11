@@ -1165,8 +1165,14 @@ mod tests {
             );
         }
         for local_daa in [ADR_0114, ADR_0114 + 1] {
-            assert!(evaluate_fork_id_v1(&current, local_daa, new_peer.fired.as_bytes().as_slice(), new_peer.next).refuses(), "…and refuses it at {local_daa}");
-            assert!(evaluate_fork_id_v1(&upgraded, local_daa, old_peer.fired.as_bytes().as_slice(), old_peer.next).refuses(), "…both ways at {local_daa}");
+            assert!(
+                evaluate_fork_id_v1(&current, local_daa, new_peer.fired.as_bytes().as_slice(), new_peer.next).refuses(),
+                "…and refuses it at {local_daa}"
+            );
+            assert!(
+                evaluate_fork_id_v1(&upgraded, local_daa, old_peer.fired.as_bytes().as_slice(), old_peer.next).refuses(),
+                "…both ways at {local_daa}"
+            );
         }
     }
 
