@@ -344,6 +344,61 @@ const topics = () => ({ bought: ABI.topic(EVT.Bought), sold: ABI.topic(EVT.Sold)
 const ACTION_SEED = 3;
 function seedActionData(lineId) { return '0x01' + '000003' + String(lineId).toLowerCase(); }
 
+// ---- the signed bytes of a transaction, from what the node serves --------------------------------
+// A node answers eth_getTransactionByHash for a PENDING transaction with every signed field. RLP-encoded
+// back they are the exact bytes the wallet broadcast, and keccak256 of those bytes must be the hash —
+// checked, so a node serving some other transaction can never make the site broadcast it. The site keeps
+// the bytes so an order a node forgets (its pool's TTL, a restart) can be broadcast again exactly as it
+// was signed: same hash, same nonce, nothing signed twice.
+const RLP = {
+  bytes(b) { return b.length === 1 && b[0] < 0x80 ? b : concatBytes(RLP.head(b.length, 0x80), b); },
+  head(n, off) {
+    if (n < 56) return Uint8Array.of(off + n);
+    const lb = hexToBytes(n.toString(16));
+    return concatBytes(Uint8Array.of(off + 55 + lb.length), lb);
+  },
+  list(items) { const body = concatBytes(...items); return concatBytes(RLP.head(body.length, 0xc0), body); },
+  int(v) { const n = bi(v); return RLP.bytes(n === 0n ? new Uint8Array(0) : hexToBytes(n.toString(16))); },
+  hex(s) { return RLP.bytes(hexToBytes(String(s || '').replace(/^0x/i, ''))); },
+};
+// The EIP-2718 envelope of a transaction as eth_getTransactionByHash serves it (types 0, 1, 2), or null.
+function encodeRawTx(t) {
+  if (!t || t.r == null || t.s == null) return null;
+  const type = t.type == null ? 0n : bi(t.type);
+  const to = RLP.hex(t.to || '');
+  const data = RLP.hex(t.input != null ? t.input : t.data);
+  const access = () => RLP.list((t.accessList || []).map((a) => RLP.list([RLP.hex(a.address), RLP.list((a.storageKeys || []).map((k) => RLP.hex(k)))])));
+  const y = t.yParity != null ? t.yParity : t.v;
+  if (type === 2n) return concatBytes(Uint8Array.of(2), RLP.list([RLP.int(t.chainId), RLP.int(t.nonce), RLP.int(t.maxPriorityFeePerGas), RLP.int(t.maxFeePerGas), RLP.int(t.gas), to, RLP.int(t.value), data, access(), RLP.int(y), RLP.int(t.r), RLP.int(t.s)]));
+  if (type === 1n) return concatBytes(Uint8Array.of(1), RLP.list([RLP.int(t.chainId), RLP.int(t.nonce), RLP.int(t.gasPrice), RLP.int(t.gas), to, RLP.int(t.value), data, access(), RLP.int(y), RLP.int(t.r), RLP.int(t.s)]));
+  if (type === 0n) return RLP.list([RLP.int(t.nonce), RLP.int(t.gasPrice), RLP.int(t.gas), to, RLP.int(t.value), data, RLP.int(t.v), RLP.int(t.r), RLP.int(t.s)]);
+  return null;
+}
+// ...kept only when those bytes hash to the transaction's own hash.
+function rawTxFromRpc(t) {
+  const bytes = encodeRawTx(t);
+  if (!bytes || '0x' + bytesToHex(keccak256(bytes)) !== String(t.hash || '').toLowerCase()) return null;
+  return '0x' + bytesToHex(bytes);
+}
+// A replacement (a cancel or a change) has to outbid the transaction it replaces: a node takes a second
+// transaction for the same sender and nonce only when its fee cap AND its tip each grow by at least 10 %
+// (EVM_MEMPOOL_REPLACEMENT_BUMP_PCT, integer arithmetic). 25 % + 1 wei clears that on every node, and the
+// cap never goes under twice the base fee now. A zero tip stays zero: 10 % of nothing is nothing.
+function bumpFee(v) { const n = bi(v); return n === 0n ? 0n : (n * 125n) / 100n + 1n; }
+function replacementFees(order, baseFee) {
+  const cap = bumpFee(order.maxFeePerGas), floor = bi(baseFee) * 2n;
+  return { maxFeePerGas: cap > floor ? cap : floor, maxPriorityFeePerGas: bumpFee(order.maxPriorityFeePerGas) };
+}
+// What eth_getTransactionByHash says was signed: the nonce and fees a replacement needs, and the bytes.
+function signedFacts(tx) {
+  return {
+    nonce: Number(bi(tx.nonce)), gas: bi(tx.gas).toString(), value: bi(tx.value).toString(),
+    maxFeePerGas: bi(tx.maxFeePerGas != null ? tx.maxFeePerGas : tx.gasPrice).toString(),
+    maxPriorityFeePerGas: bi(tx.maxPriorityFeePerGas).toString(),
+    raw: rawTxFromRpc(tx), rawTried: true,
+  };
+}
+
 // ============================================================================================
 // 4. the curve: ADR-0087 as amended by ADR-0090, ported from palw_model_market_v1.rs (BigInt, exact)
 // ============================================================================================
@@ -783,6 +838,184 @@ const txlog = {
   update(hash, patch) { const r = this.list.find((x) => x.hash === hash); if (r) { Object.assign(r, patch); this.save(); } return r; },
   forAccount(acct) { return this.list.filter((x) => !acct || x.from === acct).slice().reverse(); },
 };
+
+// ---- orders: what the site sent, followed until the chain settles it or something replaces it ------
+// On testnet-11 an order waits for a producer that holds it to win a draw: a block comes every ~15–30
+// minutes, and a producer fixes its block's contents when it starts drawing, so pending for tens of
+// minutes is normal. Until a block carries it an order can be cancelled or changed (a replacement with
+// the same nonce and a higher fee). A node forgets a pending transaction after its TTL, and a node that
+// restarted never heard of it: while the nonce is still free the site broadcasts the signed bytes again.
+const ORDER_KINDS = new Set(['buy', 'sell', 'seed']);
+const OPEN = new Set(['sent', 'pending', 'dropped']);    // no block carries it yet — it can be replaced
+const FINAL_OK = new Set(['queued', 'settled', 'refused', 'reverted', 'done']);   // carried: its nonce is used
+const RESEND_MS = 120000;
+const orders = {
+  // unfinished orders of `acct`, newest first: open ones and the ones a block carried that the fold has
+  // not settled yet (those can no longer be replaced)
+  open(acct) { return txlog.forAccount(acct).filter((t) => ORDER_KINDS.has(t.kind) && (OPEN.has(t.status) || t.status === 'queued')); },
+  // the newest open transaction per nonce: a cancel or a change supersedes what it replaces
+  heads(acct) {
+    const by = new Map();
+    for (const t of txlog.list) {
+      if (t.from !== acct || !OPEN.has(t.status)) continue;
+      const k = t.nonce != null ? 'n' + t.nonce : 'h' + t.hash;
+      const cur = by.get(k);
+      if (!cur || t.sentAt > cur.sentAt) by.set(k, t);
+    }
+    return Array.from(by.values());
+  },
+  // what the open orders hold back from the EVM balance: the value of each open join (a cancel holds none)
+  // plus its fee ceiling. A carried join is already off the balance, so it is not counted twice.
+  reserved(acct) {
+    let wei = 0n, n = 0;
+    for (const t of this.heads(acct)) {
+      if (t.kind !== 'buy' && t.kind !== 'seed') continue;
+      wei += bi(t.value != null ? t.value : sompiToWei(bi(t.amount))) + bi(t.gas) * bi(t.maxFeePerGas); n++;
+    }
+    return { wei, n };
+  },
+};
+function fmtDur(ms) { const m = Math.round(ms / 60000); return m < 1 ? 'under a minute' : m < 60 ? m + ' min' : Math.floor(m / 60) + ' h ' + (m % 60) + ' min'; }
+const TX_STATUS = {
+  sent: ['Sending', 'tag'], pending: ['Pending', 'tag warn'], dropped: ['Dropped by the node', 'tag bad'], queued: ['In a block · settling', 'tag warn'],
+  settled: ['Settled', 'tag ok'], refused: ['Refused', 'tag bad'], reverted: ['Reverted', 'tag bad'], replaced: ['Replaced', 'tag'], cancelled: ['Cancelled', 'tag'],
+  done: ['Done', 'tag ok'], late: ['Too late', 'tag'], lost: ['Not found', 'tag bad'],
+};
+function txStatusCell(t) {
+  const [txt, cls] = TX_STATUS[t.status] || [t.status, 'tag'];
+  let label = txt, sub = '';
+  if (t.kind === 'cancel') label = t.status === 'done' ? 'Cancelled the order' : t.status === 'late' ? 'Too late' : OPEN.has(t.status) ? 'Cancel pending' : txt;
+  if (t.status === 'pending' || t.status === 'sent') sub = (t.carriedBy ? 'in a block the chain has not taken yet' : 'waiting for a block') + ' · ' + fmtDur(Date.now() - t.sentAt) + (t.resends ? ' · re-broadcast ' + t.resends + '×' : '');
+  if (t.status === 'dropped') sub = t.raw ? 'no node holds it — re-broadcasting the signed transaction' + (t.dropErr ? ' (' + t.dropErr + ')' : '') : 'no node holds it and its signed bytes were never seen — send it again';
+  if (t.status === 'queued') sub = 'the fold settles it one block later';
+  if (t.status === 'late') sub = 'the order was carried before the cancel';
+  if (t.status === 'refused' && t.reason) sub = REFUSAL[t.reason] || String(t.reason);
+  if (t.nonceIgnored) sub = 'the wallet chose its own nonce, so this replaced nothing';
+  if (t.replacedBy && OPEN.has(t.status) && t.kind !== 'cancel') sub = 'being replaced by ' + shortId(t.replacedBy, 8);
+  return h`<span class="${cls}">${label}</span>${sub ? raw(' <span class="dim tiny">' + esc(sub) + '</span>') : ''}`;
+}
+function orderWhat(t) {
+  if (t.kind === 'buy') return 'Join' + (t.want ? ' ×' + fmtInt(t.want) : '');
+  if (t.kind === 'sell') return 'Leave ×' + fmtInt(t.amount);
+  if (t.kind === 'seed') return 'Open the store';
+  return t.kind;
+}
+// Can this wallet send a replacement? One has to sign with the nonce the site names: MISAKA Wallet does;
+// a wallet that picks its own nonce would turn a "change" into a second order.
+function walletKeepsNonce() { return !!(wallet.provider && wallet.provider.isMisakaWallet); }
+const REPLACE_NOTE = 'A cancel or a change is a replacement: the same nonce with a higher fee, which a node takes instead of the order while no block carries it yet. It needs MISAKA Wallet, which signs with the nonce the site names — a wallet that picks its own nonce would send a second order instead.';
+const ORDERS_NOTE = 'An order is a transaction waiting for a block. On testnet-11 a block comes about every 15–30 minutes and a producer fixes a block\'s contents when it starts drawing, so an order usually waits 20–60 minutes to be carried; the fold settles it one block later. Until it is carried you can cancel it or change it. If a node forgets a pending order (a restart, its one-hour pool limit), this page broadcasts the signed transaction again while its nonce is still free.';
+// The open-orders table. `changing` is the hash whose change editor is open.
+function ordersTableHtml(list, changing) {
+  const keeps = walletKeepsNonce();
+  return h`<div class="tbl-wrap"><table class="tbl orders"><thead><tr><th class="l">Sent</th><th class="l">Model</th><th class="l">Order</th><th>Amount</th><th class="l">Status</th><th>Nonce</th><th class="l">Tx</th><th></th></tr></thead><tbody>
+    ${list.map((t) => {
+      const rec = db.line(t.lineId);
+      const replaceable = OPEN.has(t.status) && t.from === wallet.account && !t.replacedBy;
+      const why = !replaceable ? '' : !keeps ? REPLACE_NOTE : t.nonce == null ? 'Its nonce is not known yet (the node has not served it back): try again in a moment.' : '';
+      const acts = replaceable
+        ? h`<button class="btn btn-sm" data-change="${t.hash}" ${why || t.kind === 'seed' ? 'disabled' : ''} title="${why || (t.kind === 'seed' ? 'An opening deposit is cancelled, not changed' : 'Send a new amount in its place (same nonce, higher fee)')}">Change</button> <button class="btn btn-sm btn-ghost" data-cancel="${t.hash}" ${why ? 'disabled' : ''} title="${why || 'Replace it with a zero-value transfer to yourself (same nonce, higher fee): nothing is bought or sold'}">Cancel</button>`
+        : raw('<span class="dim tiny">' + (t.status === 'queued' ? 'carried — can no longer be replaced' : t.replacedBy ? 'replacement sent' : '') + '</span>');
+      const row = h`<tr><td class="l">${fmtTime(t.sentAt)} <span class="dim tiny">${fmtDur(Date.now() - t.sentAt)} ago</span></td><td class="l">${rec ? db.label(rec) : t.label || shortId(t.lineId)}</td><td class="l ${t.kind === 'buy' ? 'up' : t.kind === 'sell' ? 'down' : ''}">${orderWhat(t)}${t.replaces ? raw(' <span class="dim tiny">(change)</span>') : ''}</td><td class="num">${t.kind === 'sell' ? fmtPos(t.amount) + ' memberships' : fmtMsk(t.amount) + ' MSK'}</td><td class="l">${txStatusCell(t)}</td><td class="num">${t.nonce != null ? String(t.nonce) : '—'}</td><td class="l">${idCell(t.hash, 10)}</td><td class="acts">${acts}</td></tr>`;
+      if (changing !== t.hash) return row;
+      return h`${row}<tr class="edit"><td colspan="8"><div class="chg">
+        <label for="chgAmt">${t.kind === 'sell' ? 'Leave with' : 'Join with'}</label>
+        <div class="inp"><input id="chgAmt" inputmode="numeric" autocomplete="off" placeholder="${t.kind === 'buy' ? (t.want || '') : t.amount}"><span class="unit">memberships</span></div>
+        <span class="chg-q" id="chgQuote"></span>
+        <button class="btn btn-sm btn-accent" id="chgSend" disabled>Send change</button> <button class="btn btn-sm btn-ghost" id="chgClose">Close</button>
+      </div><div class="note tiny">The change replaces this order: same nonce, a higher fee (${t.maxFeePerGas != null ? fmtInt(bumpFee(t.maxFeePerGas)) + ' wei per gas cap' : 'fee from the node'}). If a block carries the old order first, the change is refused and the old one settles.</div></td></tr>`;
+    })}
+  </tbody></table></div><div class="note tiny">${ORDERS_NOTE}${keeps ? '' : ' ' + REPLACE_NOTE}</div>`;
+}
+// Send `tx` in place of `order`: its nonce, fees that outbid it. Records the replacement and returns its hash.
+async function replaceOrder(order, tx, extra) {
+  if (order.nonce == null || order.maxFeePerGas == null) {
+    const t = await evm.rpc('eth_getTransactionByHash', [order.hash]).catch(() => null);
+    if (t) txlog.update(order.hash, signedFacts(t));
+    order = txlog.list.find((x) => x.hash === order.hash) || order;
+  }
+  if (order.nonce == null || order.maxFeePerGas == null) throw new Error('The node no longer serves this order, so its nonce and fee are unknown: it cannot be replaced from here.');
+  const head = await evm.rpc('eth_getBlockByNumber', ['latest', false]).catch(() => null);
+  const fees = replacementFees(order, head && head.baseFeePerGas);
+  const full = Object.assign({ from: order.from, nonce: toHex(order.nonce), maxFeePerGas: toHex(fees.maxFeePerGas), maxPriorityFeePerGas: toHex(fees.maxPriorityFeePerGas) }, tx);
+  const hash = String(await wallet.sendTx(full)).toLowerCase();
+  txlog.add(Object.assign({ hash, from: order.from, lineId: order.lineId, label: order.label, sentAt: Date.now(), status: 'sent', nonce: order.nonce, replaces: order.hash, maxFeePerGas: fees.maxFeePerGas.toString(), maxPriorityFeePerGas: fees.maxPriorityFeePerGas.toString() }, extra));
+  txlog.update(order.hash, { replacedBy: hash });
+  // Did the wallet sign with the order's nonce? One that picked its own sent a new transaction instead.
+  const sent = await evm.rpc('eth_getTransactionByHash', [hash]).catch(() => null);
+  if (sent) {
+    txlog.update(hash, signedFacts(sent));
+    if (Number(bi(sent.nonce)) !== order.nonce) {
+      txlog.update(hash, { replaces: null, nonceIgnored: true });
+      txlog.update(order.hash, { replacedBy: null });
+      toast('The wallet signed with nonce ' + Number(bi(sent.nonce)) + ', not the order\'s ' + order.nonce + ', so the order was not replaced' + (extra.kind === 'cancel' ? ' (the zero-value transfer to yourself moves nothing).' : ': this is a second order.'), 'bad', 'Wallet');
+    }
+  }
+  return hash;
+}
+function cancelOrder(order) {
+  return replaceOrder(order, { to: order.from, value: '0x0', data: '0x', gas: toHex(21000n) }, { kind: 'cancel', amount: '0' });
+}
+// A new count for a join (the least MSK that releases it, no floor), or a new count for a leave.
+function changeOrder(order, units, market) {
+  if (order.kind === 'buy') {
+    const cost = curve.buyCostForUnits(market, units);
+    if (!cost) throw new Error('The store cannot release that many memberships now.');
+    const px = cost.quote.unitsOut > 0n ? cost.gross / cost.quote.unitsOut : null;
+    return replaceOrder(order, { to: order.to || db.line(order.lineId).facade, value: toHex(sompiToWei(cost.gross)), data: ABI.call(SIG.buy, ABI.word(0n)) },
+      { kind: 'buy', amount: cost.gross.toString(), want: units.toString(), min: '0', px: px != null ? px.toString() : null, to: order.to });
+  }
+  return replaceOrder(order, { to: order.to || db.line(order.lineId).facade, value: '0x0', data: ABI.call(SIG.sell, ABI.word(units), ABI.word(0n)) },
+    { kind: 'sell', amount: units.toString(), min: '0', to: order.to });
+}
+// Wire a container holding ordersTableHtml(): Cancel, Change, and the change editor. `ctx.changing` is
+// the open editor's hash (kept by the page), `ctx.rerender()` redraws the table.
+function bindOrderActions(box, ctx) {
+  box.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button'); if (!btn || btn.disabled) return;
+    const find = (h2) => txlog.list.find((x) => x.hash === h2);
+    if (btn.dataset.cancel) {
+      const t = find(btn.dataset.cancel); if (!t) return;
+      btn.disabled = true; btn.textContent = 'Confirm in wallet…';
+      try { await cancelOrder(t); toast('Cancel sent. It replaces the order when a node takes it, and completes when a block carries it; if a block carries the order first, the order settles instead.', 'ok', t.label); }
+      catch (err) { toast((err && err.message) || String(err), 'bad', 'Cancel'); }
+      ctx.rerender(); return;
+    }
+    if (btn.dataset.change) { ctx.changing = ctx.changing === btn.dataset.change ? null : btn.dataset.change; ctx.rerender(); if (ctx.changing) await refreshMarket(find(ctx.changing).lineId).catch(() => {}); wireEditor(); return; }
+    if (btn.id === 'chgClose') { ctx.changing = null; ctx.rerender(); return; }
+    if (btn.id === 'chgSend') {
+      const t = find(ctx.changing); const units = parseDec($('#chgAmt', box).value, 0); const m = t && db.line(t.lineId) && db.line(t.lineId).market;
+      if (!t || units == null || units <= 0n || !m) return;
+      btn.disabled = true; btn.textContent = 'Confirm in wallet…';
+      try { await changeOrder(t, units, m); ctx.changing = null; toast('Change sent. It takes the order\'s place when a node takes it; if a block carries the old order first, the change is refused and the old order settles.', 'ok', t.label); }
+      catch (err) { toast((err && err.message) || String(err), 'bad', 'Change'); btn.disabled = false; btn.textContent = 'Send change'; return; }
+      ctx.rerender();
+    }
+  });
+  function wireEditor() {
+    const inp = $('#chgAmt', box); if (!inp) return;
+    const t = txlog.list.find((x) => x.hash === ctx.changing);
+    const upd = () => {
+      const m = t && db.line(t.lineId) && db.line(t.lineId).market, q = $('#chgQuote', box), send = $('#chgSend', box);
+      const units = parseDec(inp.value, 0);
+      let txt = '', ok = false;
+      if (!m || !m.seeded) txt = 'reading the market…';
+      else if (units == null) txt = 'whole memberships only';
+      else if (units > 0n && t.kind === 'buy') {
+        const c = curve.buyCostForUnits(m, units);
+        if (!c) txt = 'the store cannot release that many';
+        else { txt = 'costs ' + fmtMsk(c.gross) + ' MSK (the order pays ' + fmtMsk(t.amount) + ')'; ok = true; }
+      } else if (units > 0n) {
+        const sq = curve.sellQuote(m, units);
+        if (!sq) txt = 'the curve pays nothing for that many';
+        else { txt = 'pays back ' + fmtMsk(sq.fees.net) + ' MSK'; ok = true; }
+      }
+      q.textContent = txt; send.disabled = !ok;
+    };
+    inp.addEventListener('input', upd); inp.focus(); upd();
+  }
+  ctx.wireEditor = wireEditor;
+}
 
 // ============================================================================================
 // 7. the data layer: classes, lines, markets, positions, settlements
