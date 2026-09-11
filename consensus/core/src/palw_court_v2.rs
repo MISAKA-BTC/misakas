@@ -1112,8 +1112,37 @@ pub fn palw_court_params_at_v2(
     bundle: &crate::palw_mode_v2::PalwConsensusParamsV2,
     kary_court_active: bool,
 ) -> Result<crate::palw_mode_v2::PalwCourtParamsV2, PalwCourtV2Error> {
+    palw_court_params_held_at_v2(bundle, kary_court_active, false)
+}
+
+/// **[`palw_court_params_at_v2`] on a network that may have armed `Params::palw_held_context`**
+/// (ADR-0103 Decision 5). Held, the arity is derived with the leaf ladder's rounds at zero
+/// ([`crate::palw_mode_v2::palw_court_arity_held_v1`]) — no session on such a network plays the
+/// ladder, so its rounds are not what the window has to hold. Everything else is the k-ary court's
+/// derivation. The caller resolves both fences at one DAA; `held` without the k-ary court is the
+/// k-ary court's refusal, because `validate_palw_v2` refuses that pair at assembly.
+pub fn palw_court_params_held_at_v2(
+    bundle: &crate::palw_mode_v2::PalwConsensusParamsV2,
+    kary_court_active: bool,
+    held_context_active: bool,
+) -> Result<crate::palw_mode_v2::PalwCourtParamsV2, PalwCourtV2Error> {
     if !kary_court_active {
         return Ok(bundle.court);
+    }
+    if held_context_active {
+        let court = bundle.court;
+        let (history_max, widest_lane_count) = palw_attn_widest_registered_site_v2(bundle);
+        let arity = crate::palw_mode_v2::palw_court_arity_held_v1(
+            bundle.state.window_court(),
+            court.turn_deadline_daa(),
+            history_max,
+            crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4,
+            court.terminal_rounds(),
+            widest_lane_count,
+            court.max_close_chunks(),
+        )
+        .ok_or(PalwCourtV2Error::NoAdmissibleArity { window_court: bundle.state.window_court() })?;
+        return court.with_dissection_arity(arity).map_err(|e| PalwCourtV2Error::BindingInvalid(e.to_string()));
     }
     let court = bundle.court;
     let (history_max, widest_lane_count) = palw_attn_widest_registered_site_v2(bundle);

@@ -1246,6 +1246,25 @@ pub fn palw_attn_court_admits_row_v1(
     }
 }
 
+/// **ADR-0103 Decision 5: the window admission with no leaf ladder** —
+/// [`palw_attn_court_admits_row_v1`]'s inequality over
+/// [`PalwCourtParamsV2::worst_case_duration_held_daa`], the clock a held class's dissection runs
+/// on: it opens at the accusation's named leaf, so the ladder's rounds are nobody's moves.
+pub fn palw_attn_court_admits_row_held_v1(
+    court: &PalwCourtParamsV2,
+    history_positions: u64,
+    tile: u32,
+    window_court: u64,
+) -> Result<u64, PalwAttnCourtError> {
+    let reserve = crate::palw_context_ladder::palw_close_assembly_daa_v1(court.max_close_chunks());
+    let worst = court.worst_case_duration_held_daa(history_positions, tile).ok_or(PalwAttnCourtError::NoAdmissibleArity { window_court })?;
+    let moves = worst / court.turn_deadline_daa().max(1);
+    match worst.checked_add(reserve) {
+        Some(total) if total < window_court => Ok(worst),
+        _ => Err(PalwAttnCourtError::OverrunsWindow { moves, deadline: court.turn_deadline_daa(), reserve, window_court }),
+    }
+}
+
 /// **What one round of this court weighs on the wire**, at the widest output tile a row disputes —
 /// the quantity Z3 bounds and [`crate::palw_mode_v2::palw_court_arity_v1`] refuses an arity for.
 pub fn palw_attn_court_move_bytes_v1(court: &PalwCourtParamsV2, lane_count: usize) -> u64 {

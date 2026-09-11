@@ -1458,6 +1458,33 @@ pub struct Params {
     /// needs the same refusal. `None` on every preset.
     pub palw_token_lift: Option<ForkActivation>,
 
+    /// **ADR-0103 — the context is held off the chain, and the chain carries a root, an opening and
+    /// a logarithm.**
+    ///
+    /// Active, the chain's per-claim work stops growing with the context:
+    ///
+    /// * **Decision 1** — no bisection is played: `CourtOpened` is refused, every conviction is a
+    ///   one-move object (`ShardCourtAccused`, and `CheckpointAccused` for a checkpoint chunk that
+    ///   is not the cache-write rows it claims to hold), and the leaf ladder costs the clock nothing.
+    /// * **Decision 3** — a class may register the held map (`tiled_kv_state_chunk_map_id_v4`, or its
+    ///   hybrid composition): the same chunks under a tree whose index does not move, bounded by
+    ///   depth rather than count. A class registering it is under the regime; the admission gate
+    ///   refuses it while this fence is dormant.
+    /// * **Decision 4** — a data-availability accusation may name a prompt tile, a state chunk or a
+    ///   step range (`DefaultAccusedHeld` / `MaterialDisclosedHeld`).
+    /// * **Decision 5** — a `ShardCourtAccused` at a fused attention leaf opens the dissection at that
+    ///   leaf, and the arity is derived with the ladder's rounds at zero.
+    /// * **Decisions 6 and 8** — a registration is judged by `verify_class_admission_v8`: the
+    ///   per-position budget for a held class, and no chain wall of the class may be linear in the
+    ///   context (`LinearInTheContext`).
+    ///
+    /// A bare fence, top level, `None` on every shipped preset, Some-only in the fingerprint, the
+    /// schedule id and the fork id. [`Self::validate_palw_v2`] refuses arming it (a) over a bundle
+    /// that does not commit to the COMPLETE_V4 signing contexts, (b) without `palw_kary_court` and
+    /// `palw_shard_court` armed at or below its height, and (c) on a network whose prompt ids are
+    /// flat — a held class's ids never ride, and a flat digest cannot be opened one tile at a time.
+    pub palw_held_context: Option<ForkActivation>,
+
     /// **ADR-0083 Decision 1 — the difficulty window counts only rows priced by `bits`.**
     ///
     /// Past this fence `calculate_difficulty_bits` sizes its expected duration by the rows in the
@@ -2163,7 +2190,7 @@ impl Params {
                 ));
             }
             if bundle.signature_contexts_root != crate::palw_mode_v2::palw_v2_signature_contexts_root_v2()
-                && bundle.signature_contexts_root != crate::palw_mode_v2::palw_v2_signature_contexts_root_v3()
+                && !crate::palw_mode_v2::palw_v2_signature_contexts_root_covers_v3(&bundle.signature_contexts_root)
             {
                 return Err(PalwModeV2Error::Invalid(
                     "palw_signature_contexts_v2 is armed but the bundle's signature_contexts_root is not a complete set (V2 or \
@@ -2185,7 +2212,7 @@ impl Params {
         // absence and is exempt.
         if let Some(activation) = self.palw_shard_court
             && activation != ForkActivation::never()
-            && bundle.signature_contexts_root != crate::palw_mode_v2::palw_v2_signature_contexts_root_v3()
+            && !crate::palw_mode_v2::palw_v2_signature_contexts_root_covers_v3(&bundle.signature_contexts_root)
         {
             return Err(PalwModeV2Error::Invalid(
                 "palw_shard_court is armed but the bundle's signature_contexts_root is not the COMPLETE_V3 set: the accusation's \
@@ -2197,7 +2224,7 @@ impl Params {
         if let Some(activation) = self.palw_shard_licensing
             && activation != ForkActivation::never()
         {
-            if bundle.signature_contexts_root != crate::palw_mode_v2::palw_v2_signature_contexts_root_v3() {
+            if !crate::palw_mode_v2::palw_v2_signature_contexts_root_covers_v3(&bundle.signature_contexts_root) {
                 return Err(PalwModeV2Error::Invalid(
                     "palw_shard_licensing is armed but the bundle's signature_contexts_root is not the COMPLETE_V3 set: the \
                      shard plan and a bond's shard list are signed under contexts only V3 commits to",
@@ -2210,6 +2237,43 @@ impl Params {
                 return Err(PalwModeV2Error::Invalid(
                     "palw_shard_licensing is armed without palw_shard_court armed at or below the same height: a panel whose \
                      seats each hold a shard could license a lie no seat of it could convict (ADR-0098 Decision 5)",
+                ));
+            }
+        }
+        // **ADR-0103: the held regime arms over the set that names its contexts, with the one-move
+        // court and the k-ary court under it, on a network whose prompt ids open a tile at a time.**
+        // Each condition is a thing the regime stands on rather than a preference: its three
+        // objects are verified under V4's contexts (audit M-8's rule), it refuses the bisection so
+        // the one-move court must already convict, its dissection is the k-ary court's, and a held
+        // class's ids never ride — a flat digest would make every seat and every close carry them.
+        if let Some(activation) = self.palw_held_context
+            && activation != ForkActivation::never()
+        {
+            if bundle.signature_contexts_root != crate::palw_mode_v2::palw_v2_signature_contexts_root_v4() {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_held_context is armed but the bundle's signature_contexts_root is not the COMPLETE_V4 set: the \
+                     checkpoint court and the held DA court sign under contexts only V4 commits to (ADR-0103)",
+                ));
+            }
+            let by_then = |fence: Option<ForkActivation>| {
+                fence.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= activation.daa_score())
+            };
+            if !by_then(self.palw_kary_court) {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_held_context is armed without palw_kary_court at or below its height: the held regime's \
+                     dissection is the k-ary court's (ADR-0103 Decision 5)",
+                ));
+            }
+            if !by_then(self.palw_shard_court) {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_held_context is armed without palw_shard_court at or below its height: the held regime refuses the \
+                     bisection, so the one-move court must already convict (ADR-0103 Decision 1)",
+                ));
+            }
+            if self.palw_prompt_ids_form_v1() != crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1 {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_held_context is armed on a network whose prompt ids are flat: a held class's ids never ride, and a \
+                     flat digest cannot be opened a tile at a time (ADR-0103 Decision 4; trace format 4)",
                 ));
             }
         }
@@ -2931,6 +2995,10 @@ impl Params {
         if self.palw_token_lift == Some(ForkActivation::never()) {
             self.palw_token_lift = None;
         }
+        // ADR-0103, likewise.
+        if self.palw_held_context == Some(ForkActivation::never()) {
+            self.palw_held_context = None;
+        }
         // ADR-0083 Decision 1, the same shape: a bare fence, `never()` is absence.
         if self.palw_difficulty_priced_rows == Some(ForkActivation::never()) {
             self.palw_difficulty_priced_rows = None;
@@ -3338,6 +3406,19 @@ impl Params {
         self.palw_token_lift_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
+    /// ADR-0103's fence, resolved: `Some` only on a `ConsensusV2` network that armed it. The ONE
+    /// place "is the context held off the chain here" is decided.
+    pub fn palw_held_context_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_held_context) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    pub fn palw_held_context_active_at(&self, daa_score: u64) -> bool {
+        self.palw_held_context_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
     /// ADR-0081 Decision 3's fence with the mode condition already folded in — `Some` only on a
     /// `ConsensusV2` network that has armed it.
     pub fn palw_prompt_ids_merkle_fence(&self) -> Option<ForkActivation> {
@@ -3455,6 +3536,7 @@ impl Params {
             palw_shard_court,
             palw_shard_licensing,
             palw_token_lift,
+            palw_held_context,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -3505,6 +3587,7 @@ impl Params {
             ("palw_shard_court", *palw_shard_court),
             ("palw_shard_licensing", *palw_shard_licensing),
             ("palw_token_lift", *palw_token_lift),
+            ("palw_held_context", *palw_held_context),
             ("palw_difficulty_priced_rows", *palw_difficulty_priced_rows),
             ("palw_receipt_rows_unpriced", *palw_receipt_rows_unpriced),
             ("palw_attempt_header_pins", *palw_attempt_header_pins),
@@ -3675,6 +3758,12 @@ impl Params {
             h.write(b"palw_token_lift");
             h.write(lift.daa_score().to_le_bytes());
         }
+        // ADR-0103's fence, NAMED likewise: it changes which court a claim meets and what a
+        // registration must prove about its own growth.
+        if let Some(held) = self.palw_held_context {
+            h.write(b"palw_held_context");
+            h.write(held.daa_score().to_le_bytes());
+        }
         // ADR-0083 Decision 1's fence, NAMED for the same reason: it changes the bits every header
         // past it must carry, so an operator reading the schedule must see it.
         if let Some(priced) = self.palw_difficulty_priced_rows {
@@ -3820,6 +3909,7 @@ impl Params {
             palw_shard_court,
             palw_shard_licensing,
             palw_token_lift,
+            palw_held_context,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -4118,6 +4208,10 @@ impl Params {
         if let Some(activation) = palw_token_lift.as_mut() {
             fork(activation, visit);
         }
+        // ADR-0103. Some-only, likewise.
+        if let Some(activation) = palw_held_context.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0083 Decision 1. Some-only, likewise.
         if let Some(activation) = palw_difficulty_priced_rows.as_mut() {
             fork(activation, visit);
@@ -4362,6 +4456,7 @@ impl Params {
             palw_shard_court,
             palw_shard_licensing,
             palw_token_lift,
+            palw_held_context,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -4682,6 +4777,12 @@ impl Params {
         // the kernel or the field.
         if let Some(activation) = palw_token_lift {
             h.write(b"palw_token_lift");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0103, Some-only for the same reason: a dormant network fingerprints byte-identically
+        // to a build without the field, the map, the objects or the gate.
+        if let Some(activation) = palw_held_context {
+            h.write(b"palw_held_context");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0083 Decision 1, Some-only for the same reason: arming it changes the `bits` every
@@ -5036,6 +5137,7 @@ impl Params {
             palw_shard_court: self.palw_shard_court,
             palw_shard_licensing: self.palw_shard_licensing,
             palw_token_lift: self.palw_token_lift,
+            palw_held_context: self.palw_held_context,
             palw_difficulty_priced_rows: self.palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced: self.palw_receipt_rows_unpriced,
             palw_attempt_header_pins: self.palw_attempt_header_pins,
@@ -5992,6 +6094,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_shard_court: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
+    palw_held_context: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -6160,6 +6263,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_shard_court: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
+    palw_held_context: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -6310,6 +6414,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_shard_court: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
+    palw_held_context: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -10530,6 +10635,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_shard_court: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
+    palw_held_context: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -12536,6 +12642,74 @@ mod consensus_params_id_tests {
         let mut legacy = MAINNET_PARAMS.clone();
         legacy.palw_token_lift = Some(ForkActivation::always());
         assert_eq!(legacy.palw_token_lift_fence(), None);
+    }
+
+    /// **ADR-0103: the held regime's fence is dormant everywhere, visible the moment it is not, and
+    /// arms only over V4 with the k-ary court, the one-move court and the tiled prompt ids under it.**
+    /// Invariant 10. Every precondition is refused by name with the others satisfied, so each
+    /// refusal is that condition's and no other's.
+    #[test]
+    fn the_held_context_fence_is_dormant_and_arms_only_over_v4_with_its_courts_and_tiled_ids() {
+        for (name, shipped) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
+        {
+            assert!(shipped.palw_held_context.is_none(), "{name} must leave ADR-0103 dormant");
+            assert!(!shipped.palw_held_context_active_at(u64::MAX), "{name}");
+        }
+        let shipped = devnet_shipped_params();
+        assert!(shipped.palw_held_context.is_none(), "the bundled devnet leaves it dormant too");
+        let mut visible = shipped.clone();
+        visible.palw_held_context = Some(ForkActivation::new(9_000_000));
+        assert_ne!(visible.consensus_params_id(), shipped.consensus_params_id(), "armed, the fingerprint says so");
+        assert!(visible.fence_schedule_v1().contains(&9_000_000), "and the schedule names its height");
+        let mut never = shipped.clone();
+        never.palw_held_context = Some(ForkActivation::never());
+        never.validate_palw_v2().expect("Some(never()) is absence");
+
+        // A network that satisfies every precondition: V4 at genesis, the tiled ids, the courts.
+        let held = |root: crate::Hash64, merkle: bool, shard_court: Option<u64>, held_at: u64| -> Params {
+            let mut p = shipped.clone();
+            let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut p.palw_consensus_mode else {
+                panic!("the shipped devnet is ConsensusV2")
+            };
+            bundle.signature_contexts_root = root;
+            if merkle {
+                bundle.trace_format_version = crate::palw_mode_v2::PALW_V2_TRACE_FORMAT_VERSION_MERKLE_IDS;
+                p.palw_prompt_ids_merkle = Some(ForkActivation::always());
+            }
+            p.palw_signature_contexts_v2 = Some(ForkActivation::always());
+            p.palw_shard_court = shard_court.map(ForkActivation::new);
+            p.palw_held_context = Some(ForkActivation::new(held_at));
+            p
+        };
+        let v4 = crate::palw_mode_v2::palw_v2_signature_contexts_root_v4();
+        let ok = held(v4, true, Some(100), 200);
+        assert!(ok.palw_kary_court.is_some(), "the bundled devnet arms the k-ary court");
+        ok.validate_palw_v2().expect("V4, the tiled ids, and both courts at or below the fence");
+        held(v4, true, Some(200), 200).validate_palw_v2().expect("the one-move court AT the fence's height is at or below it");
+        // The one-move court over V4 is still the one-move court: V4 covers V3.
+        let mut court_only = held(v4, true, Some(100), 200);
+        court_only.palw_held_context = None;
+        court_only.validate_palw_v2().expect("the one-move court arms over V4 as over V3");
+
+        let refused = |p: Params| format!("{}", p.validate_palw_v2().expect_err("a precondition is missing"));
+        let err = refused(held(crate::palw_mode_v2::palw_v2_signature_contexts_root_v3(), true, Some(100), 200));
+        assert!(err.contains("palw_held_context") && err.contains("COMPLETE_V4"), "the set: {err}");
+        let err = refused(held(v4, true, None, 200));
+        assert!(err.contains("palw_held_context") && err.contains("palw_shard_court"), "the one-move court: {err}");
+        let err = refused(held(v4, true, Some(300), 200));
+        assert!(err.contains("palw_held_context") && err.contains("palw_shard_court"), "the court after the fence: {err}");
+        let err = refused(held(v4, false, Some(100), 200));
+        assert!(err.contains("palw_held_context") && err.contains("flat"), "the ids: {err}");
+        let mut no_kary = held(v4, true, Some(100), 200);
+        no_kary.palw_kary_court = None;
+        let err = refused(no_kary);
+        assert!(err.contains("palw_kary_court"), "the k-ary court: {err}");
+
+        // Outside ConsensusV2 the fence answers nothing.
+        let mut legacy = MAINNET_PARAMS.clone();
+        legacy.palw_held_context = Some(ForkActivation::always());
+        assert_eq!(legacy.palw_held_context_fence(), None);
     }
 
     /// **The V2 pruning horizon IS the derivation, and the inherited floor never binds** — the
