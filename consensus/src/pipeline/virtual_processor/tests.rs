@@ -12423,3 +12423,255 @@ async fn the_acceptance_filter_output_always_folds_at_a_class_activation_crossin
         "the dropped binding is refused by the fold with CertificationNeedsActiveClass, got {bind_alone:?}"
     );
 }
+
+// ===================================================================================
+#[tokio::test]
+async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
+    use crate::model::stores::ghostdag::{GhostdagData, HashKTypeMap};
+    use kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for;
+    use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_V3_VERSION, PalwReceiptSpendUnsignedV3, fp_quantum_ticket_v3};
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_pwu::palw_ticket_admits_v1;
+    use kaspa_consensus_core::palw_state_v2::{
+        PALW_RECEIPT_TARGET_SEED_V1, PalwBlockContextV2, PalwBlockWorkV3, PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2,
+        PalwConsensusObjectV2 as Obj, PalwMergedWorkV1, PalwPanelSeatV2, PalwPwuRuleV2, PalwStateParamsV2,
+        PalwTransitionExtrasV1, apply_palw_transition_v2, apply_palw_transition_v7,
+    };
+    use kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3;
+    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+    use kaspa_consensus_core::{BlockHashMap, BlockHashSet, blockhash::BlockHashes};
+    use kaspa_hashes::Hash64;
+
+    let h64 = Hash64::from_u64_word;
+
+    // ---- 1. A V2+FP chain on DEVNET windows (receipt maturity 20) so the draw beacon
+    //         sits at a low DAA and the chain need only be a couple dozen blocks. The
+    //         harness registry (row 0 = the harness ML-DSA identity, bond (0xB0,0)) is the
+    //         one `palw_v2_test_carriage`/`palw_v3_test_receipt_carriage_for` sign under. ----
+    let catalog = palw_v2_test_catalog();
+    let bundle = {
+        let registry = {
+            let mut registry = kaspa_consensus_core::palw_fp_devnet_v3::palw_devnet_bond_registry_v1(
+                kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_min_genesis_bonds_v1(),
+            );
+            registry[0].pubkey = crate::consensus::test_consensus::TestConsensus::palw_v2_harness_pubkey();
+            registry[0].operator_pubkey = vec![21u8; 8];
+            for (i, row) in registry.iter_mut().enumerate().skip(1) {
+                row.pubkey = crate::consensus::test_consensus::TestConsensus::palw_v2_registry_pubkey(i as u64);
+            }
+            registry
+        };
+        let mut b = kaspa_consensus_core::palw_fp_devnet_v3::palw_fp_bundle_with_windows_v3(
+            h64(1),
+            catalog.root(),
+            h64(0xC0757),
+            4_096,
+            h64(0xA7),
+            registry,
+            &kaspa_consensus_core::palw_fp_devnet_v3::PALW_DEVNET_WINDOWS_V1,
+        )
+        .expect("the devnet-windowed harness bundle validates");
+        b.class_catalog_root = catalog.root();
+        // Fund every genesis bond generously — every mined attempt block reserves exposure, and
+        // a couple dozen concurrent claims must fit. `verify_palw_genesis_v2` (the UTXO-backing
+        // gate) does not run on this construction path, exactly as `palw_v2_test_bundle_funded_for`.
+        for object in b.genesis_objects.iter_mut() {
+            if let Obj::BondRegistered { collateral, .. } = object {
+                *collateral = 1u64 << 60;
+            }
+        }
+        b
+    };
+    let maturity = bundle.freeprompt.receipt_maturity_daa();
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
+        })
+        .build();
+    let net_domain = palw_network_domain_v2_for(config.params.net.to_string().as_bytes(), Some(config.params.genesis.hash));
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    // ---- 2. A standalone certified (Final) free-prompt claim state, built with the SAME harness
+    //         bond identity (bond (0xB0,0), harness pubkey) so a spend's signature and the
+    //         `bond.pubkey == producer_pubkey` check pass. This is the `state` the coinbase pay-set
+    //         predicate is evaluated against — the selected parent's state, where the quantum is
+    //         still unspent. Built through the public transition API only; no production change. ----
+    let harness_bond = TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0);
+    let harness_bond_key = PalwBondKeyV2(harness_bond);
+    let harness_pubkey = crate::consensus::test_consensus::TestConsensus::palw_v2_harness_pubkey();
+    let base_class = h64(1);
+    let inj_params = PalwStateParamsV2::new(100, 1, 1, 1, 500, 1_000, base_class, 4, 1_000, 100, 1_000, 0)
+        .unwrap()
+        .with_fp_quanta(8, 64)
+        .unwrap();
+    let build_injected = |claim_id: Hash64| -> PalwChainStateV2 {
+        let cx = |w: u64, daa: u64, blue: u64| PalwBlockContextV2 { block: h64(w), daa_score: daa, blue_score: blue, subsidy: 0 };
+        let reg = vec![
+            Obj::ClassRegistered {
+                class_id: base_class,
+                artifact_root: h64(11),
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+                initial_target: u128::MAX / 2,
+                share_permille: 1000,
+                activation_daa: 0,
+                admission: None,
+            },
+            Obj::BondRegistered {
+                bond: harness_bond_key,
+                pubkey: harness_pubkey.clone(),
+                operator_pubkey: vec![21u8; 8],
+                collateral: 1u64 << 40,
+                payout_payload: h64(0x9A11),
+                capable_classes: Default::default(),
+                signature: Vec::new(),
+            },
+        ];
+        let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &inj_params, &cx(1, 1, 1), &reg, None).unwrap();
+        let commit = Obj::FreePromptCommitted {
+            claim: claim_id,
+            class_id: base_class,
+            bond: harness_bond_key,
+            executor_pubkey: harness_pubkey.clone(),
+            work_leaves: 60,
+            prompt_token_ids_hash: h64(0x7E),
+            decode_tokens_executed: 3,
+            trace_root: h64(41),
+            output_root: h64(42),
+            execution_root: h64(43),
+            trace_chunk_count: 4,
+            trace_retention_daa: 999_999,
+        };
+        let (s2, _) = apply_palw_transition_v2(&s1, &inj_params, &cx(2, 2, 2), &[commit], None).unwrap();
+        let seats = vec![PalwPanelSeatV2 { bond: harness_bond_key, operator_id: h64(90) }];
+        let (s3, _) =
+            apply_palw_transition_v2(&s2, &inj_params, &cx(3, 3, 3), &[Obj::PanelBound { claim: claim_id, anchor: h64(77), seats }], None)
+                .unwrap();
+        let (s4, _) =
+            apply_palw_transition_v2(&s3, &inj_params, &cx(4, 4, 4), &[Obj::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }], None)
+                .unwrap();
+        let (s5, _) = apply_palw_transition_v2(&s4, &inj_params, &cx(5, 6, 5), &[], None).unwrap();
+        s5
+    };
+
+    // final_daa is deterministic (6) from the walk above; the draw slot is final_daa + maturity.
+    let probe = build_injected(h64(0xFC));
+    let final_daa = match &probe.claim(&h64(0xFC)).expect("the fixture certifies a claim").phase {
+        PalwClaimPhaseV2::Final { final_daa } => *final_daa,
+        other => panic!("the fixture must reach Final, got {other:?}"),
+    };
+    let slot = final_daa + maturity;
+
+    // ---- 3. Mine attempt blocks until the chain reaches the draw slot, so a beacon exists. ----
+    while ctx.consensus.get_virtual_daa_score() < slot + 2 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let tip = ctx.consensus.get_sink();
+    let vp = ctx.consensus.virtual_processor();
+    let beacon = vp.palw_beacon_fact_of_candidate(tip, slot).expect("the chain reached the draw slot, so a beacon derives");
+
+    // A claim id whose quantum-0 ticket admits under the receipt-lane seed target (MAX/2).
+    let claim_id = (0u64..2_000)
+        .map(|i| h64(0xFC00 + i))
+        .find(|cid| palw_ticket_admits_v1(fp_quantum_ticket_v3(net_domain, beacon.beacon_block, *cid, 0), PALW_RECEIPT_TARGET_SEED_V1))
+        .expect("some claim id wins the receipt lottery under the seed target");
+    let injected = build_injected(claim_id);
+
+    // ---- 4. Two receipt-lane (algo-7) siblings on the SAME parent, each a different block
+    //         (nonce/timestamp) but both spending the SAME quantum 0 of the SAME claim, each with a
+    //         real ML-DSA-87 signature and the correct draw beacon. Cheap to make; the header gate
+    //         accepts both. ----
+    let mut receipts: Vec<Hash64> = Vec::new();
+    for (nonce, ts_bump) in [(0xA1u64, 100u64), (0xA2u64, 200u64)] {
+        let mut r = ctx.consensus.build_block_with_parents_and_transactions(blockhash::NONE, vec![tip], vec![]);
+        r.header.timestamp = ctx.simulated_time + ts_bump;
+        r.header.nonce = nonce;
+        r.header.pow_algo_id = POW_ALGO_ID_PALW_RECEIPT_V3;
+        r.header.palw_commitment =
+            ctx.consensus.palw_v3_test_receipt_carriage_for(&r.header, true, claim_id, 0, harness_bond, beacon.beacon_block);
+        r.header.finalize();
+        let hash = r.header.hash;
+        // The header signature gate accepts a correctly signed spend; the block enters the DAG as a
+        // side block (it never becomes the selected chain — receipt blocks carry 0 blue work).
+        let _ = ctx.consensus.validate_and_insert_block(r.to_immutable()).virtual_state_task.await;
+        receipts.push(hash);
+    }
+    let (r1, r2) = (receipts[0], receipts[1]);
+
+    let point = PalwBlockContextV2 { block: h64(0xC0DE), daa_score: beacon.beacon_daa, blue_score: 1 << 20, subsidy: 0 };
+    let non_daa = BlockHashSet::default();
+    let anticone = || HashKTypeMap::new(BlockHashMap::default());
+
+    // ---- Positive control: a SINGLE valid receipt spend is entitled (paid) — so the harness truly
+    //      produces a spend the pay set accepts. If this failed, an empty result below would be
+    //      "both rejected", not "both paid". ----
+    let gd_one = GhostdagData::new(0, Default::default(), tip, BlockHashes::new(vec![tip]), BlockHashes::new(vec![r1]), anticone());
+    let unentitled_one = vp.palw_v2_unentitled_blues(&injected, &gd_one, &non_daa, &point);
+    assert!(
+        unentitled_one.is_empty(),
+        "positive control: one valid receipt spend must be entitled (paid), so the fixture really produces a valid spend; \
+         got unentitled={unentitled_one:?}"
+    );
+
+    // ---- The finding: TWO siblings spending ONE quantum in one mergeset. ----
+    let gd = GhostdagData::new(0, Default::default(), tip, BlockHashes::new(vec![tip]), BlockHashes::new(vec![r1, r2]), anticone());
+    let unentitled = vp.palw_v2_unentitled_blues(&injected, &gd, &non_daa, &point);
+
+    // Concrete effect: BOTH receipt siblings are paid (neither marked unentitled).
+    let both_paid = !unentitled.contains(&r1) && !unentitled.contains(&r2);
+
+    // Contrast — the FOLD does resolve the conflict: it applies one spend and skips the other with
+    // QuantumAlreadySpent, so the quantum's weight is added exactly once. The pay set below does
+    // NOT share this dedup, which is the whole finding.
+    let unsigned = |challenge: u64| PalwReceiptSpendUnsignedV3 {
+        version: PALW_FP_V3_VERSION,
+        network_domain: net_domain,
+        challenge: h64(challenge),
+        claim_id,
+        quantum_index: 0,
+        beacon_block: beacon.beacon_block,
+        producer_bond: harness_bond,
+        producer_pubkey: harness_pubkey.clone(),
+    };
+    let (spend_a, spend_b) = (unsigned(0xAAAA), unsigned(0xBBBB));
+    let merged = vec![
+        PalwMergedWorkV1 { carrying_block: r1, work: PalwBlockWorkV3::ReceiptSpend(&spend_a) },
+        PalwMergedWorkV1 { carrying_block: r2, work: PalwBlockWorkV3::ReceiptSpend(&spend_b) },
+    ];
+    let fold_point = PalwBlockContextV2 { block: h64(0xF01D), daa_score: 7, blue_score: 6, subsidy: 0 };
+    let (folded, _delta, merged_skips) = apply_palw_transition_v7(
+        &injected,
+        &inj_params,
+        None,
+        &fold_point,
+        &[],
+        PalwBlockWorkV3::None,
+        &merged,
+        false,
+        false,
+        false,
+        false,
+        &PalwTransitionExtrasV1::default(),
+    )
+    .expect("the fold applies");
+    assert_eq!(merged_skips.len(), 1, "the FOLD resolves the double spend: one applied, one skipped (QuantumAlreadySpent)");
+    assert!(folded.safe_weight() > injected.safe_weight(), "the fold folds exactly one quantum's weight");
+
+    // ---- SAFE invariant (fails on 5bed4405 iff the finding is real): of two merged receipt
+    //      siblings spending ONE quantum, exactly one may be paid; the other is the double spend and
+    //      must be `unentitled`. On this commit the receipt arm of `palw_v2_unentitled_blues` has no
+    //      dedup, so the set is EMPTY and both are paid — one certified quantum minting two full
+    //      worker shares. ----
+    assert_eq!(
+        unentitled.len(),
+        1,
+        "B-5: two merged receipt siblings spending the SAME quantum must have all-but-one marked unentitled so the coinbase \
+         pays at most once; the pay set marks {} of the 2 (both_paid={both_paid}) — the fold applied the quantum once \
+         (merged_skips={}) yet the coinbase would pay {} worker shares for it",
+        unentitled.len(),
+        merged_skips.len(),
+        2 - unentitled.len()
+    );
+}

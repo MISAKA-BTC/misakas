@@ -1250,3 +1250,59 @@ mod pq_output_class_enforcement_tests {
         );
     }
 }
+
+/// Audit A-2 (reproduction): the tx-isolation BLOCK rule (body_validation_in_isolation's
+/// `check_transactions_in_isolation` maps any error here to `TxInIsolationValidationFailed`)
+/// refuses a lifecycle carrier whose object kind this build does not know.
+#[cfg(test)]
+mod audit_a2_isolation_tests {
+    use super::*;
+    use kaspa_consensus_core::tx::{TransactionId, TransactionInput, TransactionOutpoint};
+
+    fn carrier(tag: u8) -> Transaction {
+        let mut w = vec![1u8, 0, tag];
+        w.extend_from_slice(&[0x11u8; 64]);
+        w.extend_from_slice(&2u32.to_le_bytes());
+        w.extend_from_slice(&3u32.to_le_bytes());
+        w.extend_from_slice(&[7u8, 7, 7]);
+        Transaction::new(
+            crate::constants::TX_VERSION,
+            vec![TransactionInput {
+                previous_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_u64_word(0xA2), index: 0 },
+                signature_script: vec![],
+                sequence: 0,
+                sig_op_count: 0,
+            }],
+            vec![],
+            0,
+            SUBNETWORK_ID_PALW_LIFECYCLE,
+            0,
+            w,
+        )
+    }
+
+    #[test]
+    fn an_unknown_lifecycle_kind_is_not_block_invalid_at_isolation() {
+        let params = crate::params::MAINNET_PARAMS.clone();
+        let tv = TransactionValidator::new_for_tests(
+            params.max_tx_inputs,
+            params.max_tx_outputs,
+            params.max_signature_script_len,
+            params.max_script_public_key_len,
+            params.coinbase_payload_script_public_key_max_len,
+            params.coinbase_maturity(),
+            params.mergeset_size_limit(),
+            Default::default(),
+        );
+        let known = tv.validate_tx_in_isolation(&carrier(39));
+        let unknown = tv.validate_tx_in_isolation(&carrier(43));
+        eprintln!("A-2 ISOLATION 5bed4405: tag39 (ClassShardPlanDeclared, fence dormant) -> {known:?}; tag43 (a later build's kind) -> {unknown:?}");
+        assert_eq!(known, Ok(()), "the dormant-fence kind this build knows rides");
+        assert_eq!(
+            unknown,
+            Ok(()),
+            "INVARIANT: a lifecycle kind a later build appends under a dormant fence must not be refused at tx isolation \
+             (a block rule) — else the carrying block and every descendant are invalid for this build only"
+        );
+    }
+}
