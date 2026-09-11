@@ -8058,6 +8058,75 @@ pub fn apply_palw_transition_v6(
 /// state root included; **every production caller must reach this one**, for the reason v6's doc
 /// gives about the fences it carries.
 #[allow(clippy::too_many_arguments)]
+/// **A-1 fix — the acceptance filter's view of the fold's step 3 (mainnet audit 2026-09-11).**
+///
+/// The one-shot fold [`apply_palw_transition_v7`] applies every accepted object in step 3, then
+/// runs `activate_due_classes` (3a), the epoch budgets (3b) and the block/merged work (4) ONCE,
+/// after all objects. The acceptance filter used to rehearse each object through a whole-block
+/// transition, so 3a ran between objects and a `ClassLaneCertified` for a class that becomes
+/// `Active` in this very block was accepted by the filter and then refused by the real fold — and
+/// every node disqualified the block, halting the chain (invariants 1 and 7). These two functions
+/// give the filter the fold's step-3 view exactly: `palw_v2_pre_object_base_v1` runs the
+/// pre-object block-level steps once (payout drain, EVM-settlement drain, sweeps, per-class
+/// retarget / growth / reclamation), and `palw_v2_apply_one_object_v1` applies a single object with
+/// nothing else. An object the fold would refuse is then dropped by the filter here, and the block
+/// stands. The two are copied step-for-step from the pre-object body of `apply_palw_transition_v7`,
+/// so the state they leave is the state that fold's step 3 sees.
+pub fn palw_v2_pre_object_base_v1(
+    parent: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<PalwChainStateV2, PalwStateV2Error> {
+    if let Some(last) = &parent.last_point {
+        if ctx.blue_score <= last.blue_score {
+            return Err(PalwStateV2Error::NonMonotonicContext("blue_score must strictly increase along a chain"));
+        }
+        if ctx.daa_score < last.daa_score {
+            return Err(PalwStateV2Error::NonMonotonicContext("daa_score must not decrease along a chain"));
+        }
+    }
+    let mut builder =
+        TransitionBuilder::new(parent, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras);
+    for claim_id in builder.state.pending_payouts.keys().copied().take(PALW_V2_MAX_PAYOUTS_PER_BLOCK).collect::<Vec<_>>() {
+        builder.write_payout(claim_id, None);
+    }
+    for seq in builder.state.evm_settlements.keys().copied().collect::<Vec<_>>() {
+        builder.write_evm_settlement(seq, None);
+    }
+    sweep_deadlines(&mut builder, ctx)?;
+    sweep_court_close_deadlines(&mut builder, ctx)?;
+    sweep_court_deadlines(&mut builder, ctx)?;
+    apply_class_retargets(&mut builder, parent, ctx)?;
+    apply_class_share_growth(&mut builder, parent, ctx);
+    apply_class_reclamation(&mut builder, parent, ctx)?;
+    Ok(builder.checkpoint().0)
+}
+
+/// Companion to [`palw_v2_pre_object_base_v1`]: apply exactly one accepted object to a base, as the
+/// fold's step 3 does, and return the state it leaves. No sweeps, no activation, no budgets — those
+/// block-level steps run once around the whole object list, never between objects.
+pub fn palw_v2_apply_one_object_v1(
+    base: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<PalwChainStateV2, PalwStateV2Error> {
+    let mut builder =
+        TransitionBuilder::new(base, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras);
+    apply_object(&mut builder, ctx, object)?;
+    Ok(builder.checkpoint().0)
+}
+
 pub fn apply_palw_transition_v7(
     parent: &PalwChainStateV2,
     params: &PalwStateParamsV2,
@@ -9532,6 +9601,22 @@ fn apply_class_share_growth(builder: &mut TransitionBuilder<'_>, parent: &PalwCh
         Some(budgets) if budgets.epoch_index == closed_epoch => budgets.budget_blocks.clone(),
         _ => return,
     };
+    // **ADR-0107: the closed epoch's VERIFIED work, per class** — attempt claims whose `Final`
+    // happened inside the span, read off the claim records (they outlive the span: arming the
+    // fence is refused where `claim_retirement_daa` is shorter than an epoch). Counted by when the
+    // claim finalized, not by when its block was accepted, so the count needs no second ledger; in
+    // a steady state the two agree, and a class whose claims void never reaches its budget here.
+    let finalized_by_class: Option<BTreeMap<Hash64, u64>> = builder.extras.share_growth_final_active.then(|| {
+        let mut counts: BTreeMap<Hash64, u64> = BTreeMap::new();
+        for claim in builder.state.claims.values() {
+            if let (PalwClaimSourceV2::Attempt, PalwClaimPhaseV2::Final { final_daa }) = (&claim.source, &claim.phase)
+                && final_daa / epoch_length == closed_epoch
+            {
+                *counts.entry(claim.class_id).or_insert(0) += 1;
+            }
+        }
+        counts
+    });
     let use_by_class: BTreeMap<Hash64, crate::palw_class_daa::PalwClassEpochUseV1> = builder
         .state
         .class_shares
@@ -9544,7 +9629,15 @@ fn apply_class_share_growth(builder: &mut TransitionBuilder<'_>, parent: &PalwCh
                 .filter(|counter| counter.epoch_index == closed_epoch)
                 .map(|counter| counter.produced_blocks)
                 .unwrap_or(0);
-            (*class_id, crate::palw_class_daa::PalwClassEpochUseV1 { produced, budget: budgets.get(class_id).copied().unwrap_or(0) })
+            let finalized = finalized_by_class.as_ref().map(|counts| counts.get(class_id).copied().unwrap_or(0));
+            (
+                *class_id,
+                crate::palw_class_daa::PalwClassEpochUseV1 {
+                    produced,
+                    budget: budgets.get(class_id).copied().unwrap_or(0),
+                    finalized,
+                },
+            )
         })
         .collect();
     if use_by_class.values().all(|used| used.produced == 0) {
@@ -12178,6 +12271,17 @@ pub struct PalwTransitionExtrasV1 {
     /// through and keeps `NeedsDissection` a refusal: byte-identical to the transition before the
     /// regime existed.
     pub held_context_ladder: Option<u64>,
+    /// `Params::palw_audit_2026_09_11` resolved at the block's DAA. `false` (every dormant network,
+    /// and testnet-11 below its flag day) selects the pre-audit fold at every site the audit fixes
+    /// touch; `true` selects the fixed behavior. The fixes that live in the acceptance filter (A-1,
+    /// AC-SLOT) read the fence off `Params` directly in the processor; the ones the fold decides
+    /// read it here.
+    pub audit_2026_09_11_active: bool,
+    /// `Params::palw_share_growth_final` resolved at the block's DAA (ADR-0107). Below it a class
+    /// grows its cadence share on the blocks it had ACCEPTED in the closed epoch; past it growth
+    /// also needs that many of its attempt claims to have reached `Final` in the same span. `false`
+    /// by `Default`, so every existing caller and every dormant network is byte-identical.
+    pub share_growth_final_active: bool,
 }
 
 impl<'a> TransitionBuilder<'a> {
@@ -25905,6 +26009,45 @@ pub(crate) mod tests {
             assert!(matches!(err, PalwStateV2Error::DissectionAlreadyOpen(id) if id == sid), "{err}");
         }
 
+        /// **AC-SLOT reproduction: the fused-terminal court, emitted for the processor-level test.**
+        ///
+        /// The acceptance filter that charges `PALW_COURT_CLOSE_MAX_PER_BLOCK` lives in the
+        /// `consensus` crate and this drill is `#[cfg(test)]` in this one, so the drill cannot be
+        /// reached from there directly. This test builds the drill's court at the fused leaf, pins
+        /// the three fold-level facts the finding rests on, and — when `AC_SLOT_FIXTURE` names a
+        /// path — writes `(carriage, params, honest root claim, session, next daa)` there for
+        /// `consensus/src/pipeline/virtual_processor/tests.rs::ac_slot_*` to load.
+        #[test]
+        fn ac_slot_emit_the_fused_terminal_fixture() {
+            let p = params_with_ladder();
+            let drill = Drill::new(false);
+            let (state, _claim_id, sid, daa) = court_at_the_fused_leaf(&p, &drill);
+            let honest = root_claimed(sid, &drill, 2);
+            // (1) The honest root claim is a move the fold plays: it opens the phase.
+            let (opened, _) = apply(&state, &p, &ctx(daa, daa, daa), std::slice::from_ref(&honest), None);
+            assert!(opened.court_session(&sid).unwrap().dissection.is_some(), "the honest root claim opens the phase");
+            // (2) A copy with the SAME session, root, arity and signature but a foreign binding —
+            // everything the root-claim signature does not cover — still satisfies the slot
+            // predicate the acceptance filter counts on ...
+            let mut junk = honest.clone();
+            if let PalwConsensusObjectV2::CourtAttnRootClaimed { binding, .. } = &mut junk {
+                binding.step_merkle_root = h64(0x0BAD_B1D);
+            }
+            assert!(palw_court_move_spends_the_slot_v1(&state, &junk), "the junk copy satisfies the slot predicate");
+            // (3) ... and the fold refuses it.
+            let err = apply_palw_transition_v2(&state, &p, &ctx(daa, daa, daa), &[junk], None)
+                .expect_err("a root claim over a foreign binding is not a move the fold plays");
+            assert!(matches!(err, PalwStateV2Error::DissectionRefused(id, _) if id == sid), "{err}");
+            if let Ok(path) = std::env::var("AC_SLOT_FIXTURE") {
+                // The carriage is length-delimited: its own decoder refuses any tail after it.
+                let carriage = borsh::to_vec(&PalwStateCarriageV2::from_state(&state)).expect("the carriage serializes");
+                let bytes = borsh::to_vec(&(carriage, p.clone(), honest, sid, daa))
+                    .expect("the fixture serializes");
+                std::fs::write(&path, bytes).expect("the fixture is written");
+                eprintln!("AC-SLOT fixture written to {path}");
+            }
+        }
+
         /// What a ladder's next disclosure must name — the pinned midpoint of its live interval.
         pub(crate) fn ladder_midpoint(ladder: &crate::palw_bisect::PalwBisectLadderV1) -> Option<u64> {
             (ladder.turn() == PalwBisectTurnV1::AwaitDisclosure).then(|| {
@@ -27450,6 +27593,8 @@ pub(crate) mod tests {
                 shard_licensing: None,
                 attn_anchored_root_active: false,
                 held_context_ladder: None,
+                audit_2026_09_11_active: false,
+                share_growth_final_active: false,
             }
         }
 
@@ -27660,6 +27805,8 @@ pub(crate) mod tests {
                 shard_licensing: None,
                 attn_anchored_root_active: false,
                 held_context_ladder: None,
+                audit_2026_09_11_active: false,
+                share_growth_final_active: false,
             };
             let (s_off, _) =
                 apply_palw_transition_v2_with_extras(&s, &p, &ctx(3, 251, 3), &[], None, false, false, false, false, &dormant)

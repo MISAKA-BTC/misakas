@@ -4180,7 +4180,7 @@ async fn palw_v2_a_gossiped_receipt_pool_assembles_the_object_a_block_accepts() 
 
     // The carrier the submitter builds is admissible at the transaction gate…
     let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: object.clone() }).unwrap();
-    validate_palw_lifecycle_tx(&payload).expect("the assembled object may ride a 0x4b transaction");
+    validate_palw_lifecycle_tx(&payload, true).expect("the assembled object may ride a 0x4b transaction");
 
     // …and the OBJECT passes the acceptance validator at the same state — the correspondence.
     let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
@@ -12480,3 +12480,647 @@ fn first_locked_input_names_the_locked_bond_spend() {
     assert_eq!(super::processor::first_locked_input(&tx(&[free]), &locked), None);
     assert_eq!(super::processor::first_locked_input(&tx(&[bond]), &Default::default()), None, "an empty registry locks nothing");
 }
+
+/// **A-1 (Critical) — the acceptance rehearsal and the real block fold disagree at a class's
+/// activation-crossing block, so one accepted list permanently halts the chain.**
+///
+/// `palw_v2_accepted_objects` (the acceptance FILTER) rehearses each object by folding it through
+/// the WHOLE block transition at a synthetic point — `apply_palw_transition_v2_with_extras`, whose
+/// step 3a `activate_due_classes` runs AFTER the objects. So when the block reaches a class X's
+/// `activation_daa`, the FIRST accepted object's own rehearsal transition already flipped X to
+/// `Active` in the folded state, and a later `ClassLaneCertified{X}` — which the transition admits
+/// only for an `Active` class — is validated against that and ACCEPTED.
+///
+/// The real fold the pipeline runs on the chain candidate (`apply_palw_transition_v7` over the
+/// accepted list) applies every object to the PARENT state, where step 3a has not run yet: at the
+/// `ClassLaneCertified` X is still `Registered`, the transition returns
+/// `CertificationNeedsActiveClass`, and the whole block is `StatusDisqualifiedFromChain` on every
+/// node. The filter's one contract — "what it returns, the transition applies" — is broken exactly
+/// at the crossing, and the chain cannot advance past the parent.
+///
+/// The regression asserts the SAFE invariant (the accepted list folds without error), so on the
+/// audited commit it FAILS. It also exhibits the concrete effect: the fold's error is
+/// `CertificationNeedsActiveClass`, which is what disqualifies the block.
+///
+/// The two accepted objects are the finding's minimum: a leading object whose rehearsal transition
+/// crosses the activation (here a partial `ObjectChunk`, which the real pipeline always has an
+/// analogue of — a derived `PanelBound` or a 0x4a `FreePromptCommitted` is ordered ahead of every
+/// lifecycle object), then the `ClassLaneCertified`. Drop the leading object and the filter
+/// correctly refuses the binding, which is why "an object accepted before it" is load-bearing.
+#[tokio::test]
+async fn the_acceptance_filter_output_always_folds_at_a_class_activation_crossing() {
+    use kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1;
+    use kaspa_consensus_core::palw_e2e_adjudicability::{PalwE2eCoveringV1, PalwE2eFamilyV1, palw_e2e_family_id_v1};
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_state_v2::{
+        PalwBlockContextV2, PalwCertifiedFamilyStateV2, PalwCertifiedLaneV1, PalwChainStateV2, PalwConsensusObjectV2,
+        PalwDeltaEntryV2, PalwPwuRuleV2, PalwStateDeltaV2, PalwStateV2Error, apply_delta_v2, apply_palw_transition_v2,
+    };
+    use kaspa_hashes::Hash64;
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 8);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
+            // A-1 lives past the audit flag day; arm it so the filter folds the fold's step 3.
+            p.palw_audit_2026_09_11 = Some(kaspa_consensus_core::config::params::ForkActivation::always());
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    let vp = ctx.consensus.virtual_processor();
+
+    // The post-genesis class X the block activates: a real, shippable profile so its id is its
+    // graph and a chain-certified family can cover it (the finding's precondition).
+    let profile = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(
+        kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY,
+    )
+    .expect("the floor's profile projects");
+    let class_x = profile.shape_profile_id();
+
+    let point = |word: u64, daa: u64, blue: u64| PalwBlockContextV2 {
+        block: Hash64::from_u64_word(word),
+        daa_score: daa,
+        blue_score: blue,
+        subsidy: 0,
+    };
+
+    // S: the parent state at the moment before the crossing. The base class Active, and X
+    // Registered with a FUTURE activation (weightless, so its grant is a no-op and cannot fail).
+    let genesis = PalwChainStateV2::genesis();
+    let base = PalwConsensusObjectV2::ClassRegistered {
+        class_id: bundle.base_class_id,
+        artifact_root: Hash64::from_u64_word(0xA7),
+        slash_value_per_pwu: 5,
+        pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+        initial_target: u128::MAX / 2,
+        share_permille: 1000,
+        activation_daa: 0,
+        admission: None,
+    };
+    let (s1, _) = apply_palw_transition_v2(&genesis, &bundle.state, &point(1, 100, 1), &[base], None).expect("the base registers");
+    let register_x = PalwConsensusObjectV2::ClassRegistered {
+        class_id: class_x,
+        artifact_root: Hash64::from_u64_word(0xB0),
+        slash_value_per_pwu: 5, // the network's one slash value (the base's), or the transition refuses it
+        pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+        initial_target: u128::MAX / 2,
+        share_permille: 0,      // weightless
+        activation_daa: 105,    // in the future relative to registration at daa 101
+        admission: None,
+    };
+    let (s2, _) =
+        apply_palw_transition_v2(&s1, &bundle.state, &point(2, 101, 2), &[register_x], None).expect("X registers, not yet active");
+    assert!(
+        matches!(
+            s2.class(&class_x).map(|c| &c.status),
+            Some(kaspa_consensus_core::palw_state_v2::PalwClassStatusV2::Registered { .. })
+        ),
+        "X must be Registered (not yet Active) going into the crossing block: {:?}",
+        s2.class(&class_x).map(|c| c.status.clone())
+    );
+
+    // A chain-certified free-prompt family that covers X's reachable kernels — installed as state
+    // (rooted, carried, reverted) exactly as `a_chain_certified_class_takes_fp_commitments...` does,
+    // so `ClassLaneCertified`'s coverage check has a family to find.
+    let family = PalwE2eFamilyV1 {
+        family_id: palw_e2e_family_id_v1("A1-COVER"),
+        drilled_class_id: class_x,
+        kernel_ids: reachable_kernels_v1(&profile),
+        covering: PalwE2eCoveringV1 { convicted_leaves: 6, ..Default::default() },
+    };
+    let digest = family.digest();
+    let delta = PalwStateDeltaV2 {
+        point: point(2, 101, 2),
+        entries: vec![PalwDeltaEntryV2::CertifiedFamily {
+            lane: PalwCertifiedLaneV1::FreePrompt,
+            key: digest,
+            old: None,
+            new: Some(PalwCertifiedFamilyStateV2 { family, certified_daa: 101 }),
+        }],
+    };
+    let s = apply_delta_v2(&s2, &delta, &bundle.state).expect("the covering family installs");
+
+    // The crossing block at daa 105: a leading object (a partial chunk the fold accepts) followed by
+    // the binding. In a real block the leading object is a derived `PanelBound` or a 0x4a commitment,
+    // ordered ahead of all lifecycle objects; a partial `ObjectChunk` stands in for "any object the
+    // fold accepts first", and like them it triggers `activate_due_classes` in its rehearsal step.
+    let leading = PalwConsensusObjectV2::ObjectChunk {
+        group: Hash64::from_u64_word(0x00C0_00DE),
+        index: 0,
+        count: 2,
+        bytes: vec![0xAB],
+    };
+    let bind = PalwConsensusObjectV2::ClassLaneCertified {
+        class_id: class_x,
+        lane: PalwCertifiedLaneV1::FreePrompt,
+        profile: Box::new(profile),
+    };
+    let crossing = point(3, 105, 3);
+
+    // The FILTER, driven for real: it rehearses each object through the whole transition, so the
+    // leading object's step 3a flips X Active before the binding is judged, and both are accepted.
+    let (accepted, _folded_sequentially) = vp.palw_v2_accepted_objects_and_state_for_tests(
+        &s,
+        &bundle.state,
+        &crossing,
+        vec![leading.clone(), bind.clone()],
+        crossing.block,
+    );
+    // THE INVARIANT (A-1 fix): the filter now predicts the fold's step 3, so the ClassLaneCertified
+    // for a class that only becomes `Active` at this block's step 3a is DROPPED here — the leading
+    // object is kept, the block stands, and the chain advances.
+    assert_eq!(
+        accepted.len(),
+        1,
+        "the filter must drop the ClassLaneCertified at the activation crossing (X is Active only at step 3a, after \
+         the objects) and keep the leading object. Got {accepted:?}"
+    );
+    assert!(
+        matches!(accepted[0], PalwConsensusObjectV2::ObjectChunk { .. }),
+        "the surviving object is the leading one, not the binding: {accepted:?}"
+    );
+
+    // The filter's one contract: what it returns, the REAL one-shot fold applies on the parent
+    // without error — so the block is not disqualified and the chain does not halt.
+    let folded = vp.palw_v2_block_fold_for_tests(&s, &bundle.state, &crossing, &accepted);
+    assert!(
+        folded.is_ok(),
+        "A-1: the filter's accepted list must fold on the parent without error, or every node disqualifies the block \
+         and the chain halts. Fold error: {:?}",
+        folded.err(),
+    );
+
+    // WHY the binding is dropped, pinned as a positive control: the fold refuses it alone with the
+    // activation-ordering error the finding names — X is still Registered when step 3 reaches it.
+    let bind_alone = vp.palw_v2_block_fold_for_tests(&s, &bundle.state, &crossing, std::slice::from_ref(&bind));
+    assert!(
+        matches!(&bind_alone, Err(PalwStateV2Error::CertificationNeedsActiveClass { class }) if *class == class_x),
+        "the dropped binding is refused by the fold with CertificationNeedsActiveClass, got {bind_alone:?}"
+    );
+}
+
+// ===================================================================================
+#[tokio::test]
+async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
+    use crate::model::stores::ghostdag::{GhostdagData, HashKTypeMap};
+    use kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for;
+    use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_V3_VERSION, PalwReceiptSpendUnsignedV3, fp_quantum_ticket_v3};
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_pwu::palw_ticket_admits_v1;
+    use kaspa_consensus_core::palw_state_v2::{
+        PALW_RECEIPT_TARGET_SEED_V1, PalwBlockContextV2, PalwBlockWorkV3, PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2,
+        PalwConsensusObjectV2 as Obj, PalwMergedWorkV1, PalwPanelSeatV2, PalwPwuRuleV2, PalwStateParamsV2,
+        PalwTransitionExtrasV1, apply_palw_transition_v2, apply_palw_transition_v7,
+    };
+    use kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3;
+    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+    use kaspa_consensus_core::{BlockHashMap, BlockHashSet, blockhash::BlockHashes};
+    use kaspa_hashes::Hash64;
+
+    let h64 = Hash64::from_u64_word;
+
+    // ---- 1. A V2+FP chain on DEVNET windows (receipt maturity 20) so the draw beacon
+    //         sits at a low DAA and the chain need only be a couple dozen blocks. The
+    //         harness registry (row 0 = the harness ML-DSA identity, bond (0xB0,0)) is the
+    //         one `palw_v2_test_carriage`/`palw_v3_test_receipt_carriage_for` sign under. ----
+    let catalog = palw_v2_test_catalog();
+    let bundle = {
+        let registry = {
+            let mut registry = kaspa_consensus_core::palw_fp_devnet_v3::palw_devnet_bond_registry_v1(
+                kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_min_genesis_bonds_v1(),
+            );
+            registry[0].pubkey = crate::consensus::test_consensus::TestConsensus::palw_v2_harness_pubkey();
+            registry[0].operator_pubkey = vec![21u8; 8];
+            for (i, row) in registry.iter_mut().enumerate().skip(1) {
+                row.pubkey = crate::consensus::test_consensus::TestConsensus::palw_v2_registry_pubkey(i as u64);
+            }
+            registry
+        };
+        let mut b = kaspa_consensus_core::palw_fp_devnet_v3::palw_fp_bundle_with_windows_v3(
+            h64(1),
+            catalog.root(),
+            h64(0xC0757),
+            4_096,
+            h64(0xA7),
+            registry,
+            &kaspa_consensus_core::palw_fp_devnet_v3::PALW_DEVNET_WINDOWS_V1,
+        )
+        .expect("the devnet-windowed harness bundle validates");
+        b.class_catalog_root = catalog.root();
+        // Fund every genesis bond generously — every mined attempt block reserves exposure, and
+        // a couple dozen concurrent claims must fit. `verify_palw_genesis_v2` (the UTXO-backing
+        // gate) does not run on this construction path, exactly as `palw_v2_test_bundle_funded_for`.
+        for object in b.genesis_objects.iter_mut() {
+            if let Obj::BondRegistered { collateral, .. } = object {
+                *collateral = 1u64 << 60;
+            }
+        }
+        b
+    };
+    let maturity = bundle.freeprompt.receipt_maturity_daa();
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            // B-5's pay-once dedup lives past the audit flag day; arm it.
+            p.palw_audit_2026_09_11 = Some(kaspa_consensus_core::config::params::ForkActivation::always());
+            *p = p.clone().with_palw_v2_cadence();
+        })
+        .build();
+    let net_domain = palw_network_domain_v2_for(config.params.net.to_string().as_bytes(), Some(config.params.genesis.hash));
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    // ---- 2. A standalone certified (Final) free-prompt claim state, built with the SAME harness
+    //         bond identity (bond (0xB0,0), harness pubkey) so a spend's signature and the
+    //         `bond.pubkey == producer_pubkey` check pass. This is the `state` the coinbase pay-set
+    //         predicate is evaluated against — the selected parent's state, where the quantum is
+    //         still unspent. Built through the public transition API only; no production change. ----
+    let harness_bond = TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0);
+    let harness_bond_key = PalwBondKeyV2(harness_bond);
+    let harness_pubkey = crate::consensus::test_consensus::TestConsensus::palw_v2_harness_pubkey();
+    let base_class = h64(1);
+    let inj_params = PalwStateParamsV2::new(100, 1, 1, 1, 500, 1_000, base_class, 4, 1_000, 100, 1_000, 0)
+        .unwrap()
+        .with_fp_quanta(8, 64)
+        .unwrap();
+    let build_injected = |claim_id: Hash64| -> PalwChainStateV2 {
+        let cx = |w: u64, daa: u64, blue: u64| PalwBlockContextV2 { block: h64(w), daa_score: daa, blue_score: blue, subsidy: 0 };
+        let reg = vec![
+            Obj::ClassRegistered {
+                class_id: base_class,
+                artifact_root: h64(11),
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+                initial_target: u128::MAX / 2,
+                share_permille: 1000,
+                activation_daa: 0,
+                admission: None,
+            },
+            Obj::BondRegistered {
+                bond: harness_bond_key,
+                pubkey: harness_pubkey.clone(),
+                operator_pubkey: vec![21u8; 8],
+                collateral: 1u64 << 40,
+                payout_payload: h64(0x9A11),
+                capable_classes: Default::default(),
+                signature: Vec::new(),
+            },
+        ];
+        let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &inj_params, &cx(1, 1, 1), &reg, None).unwrap();
+        let commit = Obj::FreePromptCommitted {
+            claim: claim_id,
+            class_id: base_class,
+            bond: harness_bond_key,
+            executor_pubkey: harness_pubkey.clone(),
+            work_leaves: 60,
+            prompt_token_ids_hash: h64(0x7E),
+            decode_tokens_executed: 3,
+            trace_root: h64(41),
+            output_root: h64(42),
+            execution_root: h64(43),
+            trace_chunk_count: 4,
+            trace_retention_daa: 999_999,
+        };
+        let (s2, _) = apply_palw_transition_v2(&s1, &inj_params, &cx(2, 2, 2), &[commit], None).unwrap();
+        let seats = vec![PalwPanelSeatV2 { bond: harness_bond_key, operator_id: h64(90) }];
+        let (s3, _) =
+            apply_palw_transition_v2(&s2, &inj_params, &cx(3, 3, 3), &[Obj::PanelBound { claim: claim_id, anchor: h64(77), seats }], None)
+                .unwrap();
+        let (s4, _) =
+            apply_palw_transition_v2(&s3, &inj_params, &cx(4, 4, 4), &[Obj::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }], None)
+                .unwrap();
+        let (s5, _) = apply_palw_transition_v2(&s4, &inj_params, &cx(5, 6, 5), &[], None).unwrap();
+        s5
+    };
+
+    // final_daa is deterministic (6) from the walk above; the draw slot is final_daa + maturity.
+    let probe = build_injected(h64(0xFC));
+    let final_daa = match &probe.claim(&h64(0xFC)).expect("the fixture certifies a claim").phase {
+        PalwClaimPhaseV2::Final { final_daa } => *final_daa,
+        other => panic!("the fixture must reach Final, got {other:?}"),
+    };
+    let slot = final_daa + maturity;
+
+    // ---- 3. Mine attempt blocks until the chain reaches the draw slot, so a beacon exists. ----
+    while ctx.consensus.get_virtual_daa_score() < slot + 2 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let tip = ctx.consensus.get_sink();
+    let vp = ctx.consensus.virtual_processor();
+    let beacon = vp.palw_beacon_fact_of_candidate(tip, slot).expect("the chain reached the draw slot, so a beacon derives");
+
+    // A claim id whose quantum-0 ticket admits under the receipt-lane seed target (MAX/2).
+    let claim_id = (0u64..2_000)
+        .map(|i| h64(0xFC00 + i))
+        .find(|cid| palw_ticket_admits_v1(fp_quantum_ticket_v3(net_domain, beacon.beacon_block, *cid, 0), PALW_RECEIPT_TARGET_SEED_V1))
+        .expect("some claim id wins the receipt lottery under the seed target");
+    let injected = build_injected(claim_id);
+
+    // ---- 4. Two receipt-lane (algo-7) siblings on the SAME parent, each a different block
+    //         (nonce/timestamp) but both spending the SAME quantum 0 of the SAME claim, each with a
+    //         real ML-DSA-87 signature and the correct draw beacon. Cheap to make; the header gate
+    //         accepts both. ----
+    let mut receipts: Vec<Hash64> = Vec::new();
+    for (nonce, ts_bump) in [(0xA1u64, 100u64), (0xA2u64, 200u64)] {
+        let mut r = ctx.consensus.build_block_with_parents_and_transactions(blockhash::NONE, vec![tip], vec![]);
+        r.header.timestamp = ctx.simulated_time + ts_bump;
+        r.header.nonce = nonce;
+        r.header.pow_algo_id = POW_ALGO_ID_PALW_RECEIPT_V3;
+        r.header.palw_commitment =
+            ctx.consensus.palw_v3_test_receipt_carriage_for(&r.header, true, claim_id, 0, harness_bond, beacon.beacon_block);
+        r.header.finalize();
+        let hash = r.header.hash;
+        // The header signature gate accepts a correctly signed spend; the block enters the DAG as a
+        // side block (it never becomes the selected chain — receipt blocks carry 0 blue work).
+        let _ = ctx.consensus.validate_and_insert_block(r.to_immutable()).virtual_state_task.await;
+        receipts.push(hash);
+    }
+    let (r1, r2) = (receipts[0], receipts[1]);
+
+    let point = PalwBlockContextV2 { block: h64(0xC0DE), daa_score: beacon.beacon_daa, blue_score: 1 << 20, subsidy: 0 };
+    let non_daa = BlockHashSet::default();
+    let anticone = || HashKTypeMap::new(BlockHashMap::default());
+
+    // ---- Positive control: a SINGLE valid receipt spend is entitled (paid) — so the harness truly
+    //      produces a spend the pay set accepts. If this failed, an empty result below would be
+    //      "both rejected", not "both paid". ----
+    let gd_one = GhostdagData::new(0, Default::default(), tip, BlockHashes::new(vec![tip]), BlockHashes::new(vec![r1]), anticone());
+    let unentitled_one = vp.palw_v2_unentitled_blues(&injected, &gd_one, &non_daa, &point);
+    assert!(
+        unentitled_one.is_empty(),
+        "positive control: one valid receipt spend must be entitled (paid), so the fixture really produces a valid spend; \
+         got unentitled={unentitled_one:?}"
+    );
+
+    // ---- The finding: TWO siblings spending ONE quantum in one mergeset. ----
+    let gd = GhostdagData::new(0, Default::default(), tip, BlockHashes::new(vec![tip]), BlockHashes::new(vec![r1, r2]), anticone());
+    let unentitled = vp.palw_v2_unentitled_blues(&injected, &gd, &non_daa, &point);
+
+    // Concrete effect: BOTH receipt siblings are paid (neither marked unentitled).
+    let both_paid = !unentitled.contains(&r1) && !unentitled.contains(&r2);
+
+    // Contrast — the FOLD does resolve the conflict: it applies one spend and skips the other with
+    // QuantumAlreadySpent, so the quantum's weight is added exactly once. The pay set below does
+    // NOT share this dedup, which is the whole finding.
+    let unsigned = |challenge: u64| PalwReceiptSpendUnsignedV3 {
+        version: PALW_FP_V3_VERSION,
+        network_domain: net_domain,
+        challenge: h64(challenge),
+        claim_id,
+        quantum_index: 0,
+        beacon_block: beacon.beacon_block,
+        producer_bond: harness_bond,
+        producer_pubkey: harness_pubkey.clone(),
+    };
+    let (spend_a, spend_b) = (unsigned(0xAAAA), unsigned(0xBBBB));
+    let merged = vec![
+        PalwMergedWorkV1 { carrying_block: r1, work: PalwBlockWorkV3::ReceiptSpend(&spend_a) },
+        PalwMergedWorkV1 { carrying_block: r2, work: PalwBlockWorkV3::ReceiptSpend(&spend_b) },
+    ];
+    let fold_point = PalwBlockContextV2 { block: h64(0xF01D), daa_score: 7, blue_score: 6, subsidy: 0 };
+    let (folded, _delta, merged_skips) = apply_palw_transition_v7(
+        &injected,
+        &inj_params,
+        None,
+        &fold_point,
+        &[],
+        PalwBlockWorkV3::None,
+        &merged,
+        false,
+        false,
+        false,
+        false,
+        &PalwTransitionExtrasV1::default(),
+    )
+    .expect("the fold applies");
+    assert_eq!(merged_skips.len(), 1, "the FOLD resolves the double spend: one applied, one skipped (QuantumAlreadySpent)");
+    assert!(folded.safe_weight() > injected.safe_weight(), "the fold folds exactly one quantum's weight");
+
+    // ---- SAFE invariant (fails on 5bed4405 iff the finding is real): of two merged receipt
+    //      siblings spending ONE quantum, exactly one may be paid; the other is the double spend and
+    //      must be `unentitled`. On this commit the receipt arm of `palw_v2_unentitled_blues` has no
+    //      dedup, so the set is EMPTY and both are paid — one certified quantum minting two full
+    //      worker shares. ----
+    assert_eq!(
+        unentitled.len(),
+        1,
+        "B-5: two merged receipt siblings spending the SAME quantum must have all-but-one marked unentitled so the coinbase \
+         pays at most once; the pay set marks {} of the 2 (both_paid={both_paid}) — the fold applied the quantum once \
+         (merged_skips={}) yet the coinbase would pay {} worker shares for it",
+        unentitled.len(),
+        merged_skips.len(),
+        2 - unentitled.len()
+    );
+}
+
+
+// =================================================================================================
+// AC-SLOT (independent mainnet audit, High): the per-block court slot is spent by an object the
+// fold refuses, and the root-claim signature does not cover what the fold refuses it for.
+// =================================================================================================
+
+/// Everything the two AC-SLOT tests need: a consensus with the k-ary court armed, and the ADR-0082
+/// drill's court sitting at its fused terminal — written by consensus-core's
+/// `ac_slot_emit_the_fused_terminal_fixture` to `$AC_SLOT_FIXTURE`, because that drill is
+/// `#[cfg(test)]` in the core crate. The claim's bond is given a real ML-DSA-87 key here, and the
+/// honest root claim is signed under it, so acceptance runs its real signature check.
+struct AcSlotFixture {
+    ctx: TestContext,
+    state: kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+    params: kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+    honest: kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    junk: kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    sid: kaspa_hashes::Hash64,
+    claim: kaspa_hashes::Hash64,
+    daa: u64,
+}
+
+fn ac_slot_fixture() -> AcSlotFixture {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_state_v2::{PalwConsensusObjectV2, PalwStateCarriageV2, PalwStateParamsV2};
+
+    let path = std::env::var("AC_SLOT_FIXTURE")
+        .expect("AC_SLOT_FIXTURE must name the file consensus-core's ac_slot_emit_the_fused_terminal_fixture wrote");
+    let bytes = std::fs::read(&path).expect("the AC-SLOT fixture file exists");
+    #[allow(clippy::type_complexity)]
+    let (carriage, params, mut honest, sid, daa): (
+        Vec<u8>,
+        PalwStateParamsV2,
+        PalwConsensusObjectV2,
+        kaspa_hashes::Hash64,
+        u64,
+    ) = borsh::from_slice(&bytes).expect("the AC-SLOT fixture decodes");
+    let mut carriage: PalwStateCarriageV2 = borsh::from_slice(&carriage).expect("the fixture carriage decodes");
+    let claim = carriage.court_sessions.get(&sid).expect("the drill's session").claim;
+    let bond = carriage.claims.get(&claim).expect("the drill's claim").bond;
+    // The responder: the CLAIM's bond, which is the key a root claim is verified under.
+    let keypair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0xACu8; 32]);
+    carriage.bonds.get_mut(&bond).expect("the claim's bond").pubkey = keypair.verification_key.as_ref().to_vec();
+    let state = carriage.into_state(&params, None).expect("the carriage loads");
+
+    let catalog = palw_v2_test_catalog();
+    let mut bundle = palw_v2_test_bundle(&catalog);
+    // Arming the fence requires the frozen arity to be the derived one (params.rs, audit D H-1).
+    bundle.court = kaspa_consensus_core::palw_court_v2::palw_court_params_at_v2(&bundle, true)
+        .expect("the test bundle derives a dissection arity");
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params({
+            let bundle = bundle.clone();
+            move |p| {
+                p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+                p.palw_kary_court = Some(ForkActivation::always());
+                // AC-SLOT charges the court slot post-apply only past the audit flag day; arm it.
+                p.palw_audit_2026_09_11 = Some(ForkActivation::always());
+                *p = p.clone().with_palw_v2_cadence();
+            }
+        })
+        .build();
+    let ctx = TestContext::new(TestConsensus::new(&config));
+    let arity = ctx
+        .consensus
+        .virtual_processor()
+        .palw_court_params_at(daa)
+        .expect("a V2 bundle")
+        .expect("the armed court derives its params")
+        .dissection_arity();
+
+    // The responder's honest filing: the ruleset's arity, signed over (session, root).
+    if let PalwConsensusObjectV2::CourtAttnRootClaimed { root, arity: declared, signature, .. } = &mut honest {
+        *declared = arity;
+        let message = kaspa_consensus_core::palw_court_v2::palw_attn_root_claim_message_v1(&sid, root);
+        *signature = libcrux_ml_dsa::ml_dsa_87::sign(
+            &keypair.signing_key,
+            &message,
+            kaspa_consensus_core::palw_court_v2::PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT,
+            [0x5Au8; 32],
+        )
+        .expect("ML-DSA-87 sign")
+        .as_ref()
+        .to_vec();
+    } else {
+        panic!("the fixture's honest object is a plain root claim");
+    }
+    // The attacker's copy: the SAME session, root, arity and signature bytes (copied off the
+    // mempool — no key needed), and a foreign binding, which the signature does not cover.
+    let mut junk = honest.clone();
+    if let PalwConsensusObjectV2::CourtAttnRootClaimed { binding, .. } = &mut junk {
+        binding.step_merkle_root = kaspa_hashes::Hash64::from_u64_word(0x0BAD_B1D);
+    }
+    AcSlotFixture { ctx, state, params, honest, junk, sid, claim, daa }
+}
+
+fn ac_slot_point(daa: u64) -> kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+    kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: BlockHash::from_u64_word(0xAC51_0700 + daa),
+        daa_score: daa,
+        blue_score: daa,
+        subsidy: 0,
+    }
+}
+
+/// **AC-SLOT, one block: an object the fold refuses must not spend the block's only court slot.**
+///
+/// `palw_v2_accepted_objects` increments `court_closes_completed` as soon as
+/// `palw_v2_validate_objects` returns `Ok` — BEFORE the rehearsal transition runs — and the
+/// transition's `Err` arm drops the object without giving the slot back. The root claim's
+/// acceptance checks only the fence, the arity and an ML-DSA-87 signature over `(session, root)`,
+/// so a copy of an honest filing with a foreign binding passes acceptance, spends the slot, is
+/// refused by the fold, and the honest filing behind it is dropped for want of a slot.
+#[tokio::test]
+async fn a_fold_failing_court_move_does_not_spend_the_block_slot() {
+    use kaspa_consensus_core::palw_state_v2::{PalwConsensusObjectV2 as PalwConsensusObjectV2Alias, palw_court_move_spends_the_slot_v1};
+    let f = ac_slot_fixture();
+    let vp = f.ctx.consensus.virtual_processor();
+    let point = ac_slot_point(f.daa);
+
+    // Control: alone, the honest filing passes acceptance AND the fold, and opens the phase.
+    let (accepted, folded) =
+        vp.palw_v2_accepted_objects_and_state_for_tests(&f.state, &f.params, &point, vec![f.honest.clone()], point.block);
+    assert_eq!(accepted, vec![f.honest.clone()], "control: the honest root claim is carried");
+    assert!(folded.court_session(&f.sid).unwrap().dissection.is_some(), "control: the honest root claim opens the phase");
+
+    // The junk copy passes the very acceptance check the processor runs (real ML-DSA-87 verify)
+    // and satisfies the slot predicate ...
+    let PalwConsensusObjectV2Alias::CourtAttnRootClaimed { root, signature, .. } = &f.junk else { unreachable!() };
+    kaspa_consensus_core::palw_court_v2::check_court_attn_root_claim_acceptance_v2(
+        &f.state,
+        &f.sid,
+        root,
+        signature,
+        |key, message, sig, context| kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false),
+    )
+    .expect("the replayed signature verifies over the junk copy: it covers only (session, root)");
+    assert!(palw_court_move_spends_the_slot_v1(&f.state, &f.junk), "the junk copy spends the slot by the predicate");
+    // ... and alone it is dropped (the fold refuses it).
+    let alone = vp.palw_v2_accepted_objects_for_tests(&f.state, &f.params, &point, vec![f.junk.clone()], point.block);
+    assert!(alone.is_empty(), "the fold refuses the junk copy");
+
+    // The attack: the junk copy first in the accepting block's order, the honest filing behind it.
+    let (accepted, folded) = vp.palw_v2_accepted_objects_and_state_for_tests(
+        &f.state,
+        &f.params,
+        &point,
+        vec![f.junk.clone(), f.honest.clone()],
+        point.block,
+    );
+    eprintln!(
+        "AC-SLOT one block: carried {} object(s); honest carried = {}; phase opened = {}",
+        accepted.len(),
+        accepted.contains(&f.honest),
+        folded.court_session(&f.sid).unwrap().dissection.is_some()
+    );
+    assert_eq!(
+        accepted,
+        vec![f.honest.clone()],
+        "AC-SLOT: a root claim the fold REFUSED spent the block's only court slot (PALW_COURT_CLOSE_MAX_PER_BLOCK), and the \
+         honest root claim behind it was dropped"
+    );
+}
+
+/// **AC-SLOT, to the rung deadline: a replayed signature cannot crowd the filer into a conviction.**
+///
+/// The responder files its honest root claim in EVERY block; the attacker puts one replayed copy
+/// with a foreign binding ahead of it in every block. Invariant: the filer's move is carried
+/// inside its rung and its honest claim is not voided.
+#[tokio::test]
+async fn a_replayed_root_claim_signature_with_a_foreign_binding_cannot_crowd_out_the_filer() {
+    use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2, apply_palw_transition_v2};
+    let f = ac_slot_fixture();
+    let vp = f.ctx.consensus.virtual_processor();
+    let mut state = f.state.clone();
+    let mut daa = f.daa;
+    let mut filed_at = None;
+    let mut blocks = 0u64;
+    while state.court_session(&f.sid).is_some() && blocks < 400 {
+        let point = ac_slot_point(daa);
+        let accepted =
+            vp.palw_v2_accepted_objects_for_tests(&state, &f.params, &point, vec![f.junk.clone(), f.honest.clone()], point.block);
+        if accepted.contains(&f.honest) {
+            filed_at = Some(daa);
+        }
+        state = apply_palw_transition_v2(&state, &f.params, &point, &accepted, None).expect("the block folds").0;
+        blocks += 1;
+        daa += 1;
+        if filed_at.is_some() {
+            break;
+        }
+    }
+    let phase = state.claim(&f.claim).expect("the claim is a record").phase.clone();
+    eprintln!(
+        "AC-SLOT to the deadline: {blocks} block(s) each carrying [replayed copy, honest filing]; honest filing carried at \
+         {filed_at:?}; session alive = {}; claim phase = {phase:?}",
+        state.court_session(&f.sid).is_some()
+    );
+    assert!(filed_at.is_some(), "AC-SLOT: the responder filed its honest root claim in every one of {blocks} blocks and none was carried");
+    assert!(
+        !matches!(phase, PalwClaimPhaseV2::Voided { .. }),
+        "AC-SLOT: an honest claim was voided because its responder's filing was crowded out: {phase:?}"
+    );
+}
+

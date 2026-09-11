@@ -573,12 +573,51 @@ pub enum PalwLifecycleTxError {
 /// permanently zero. An extractor with no door in front of it extracts nothing.
 ///
 /// The rules are the walk's own, in the walk's order, so admission and extraction cannot
-/// disagree: decode, wire version, and the may-ride table. Everything past that — that the claim
-/// exists, that it is in the right phase, that a court close adjudicates — is stateful and stays
-/// where it is, in the transition and its acceptance checks.
-pub fn validate_palw_lifecycle_tx(payload: &[u8]) -> Result<(), PalwLifecycleTxError> {
-    let payload: PalwLifecycleTxPayloadV2 = borsh::from_slice(payload).map_err(|_| PalwLifecycleTxError::Undecodable)?;
+/// disagree: the may-ride table. Everything past that — that the claim exists, that it is in the
+/// right phase, that a court close adjudicates — is stateful and stays where it is, in the
+/// transition and its acceptance checks.
+///
+/// **A-2 (mainnet audit 2026-09-11): a payload this build cannot decode, or names a wire version
+/// it does not know, is TOLERATED here, not rejected as block-invalid** — but only on a ruleset
+/// that has DECLARED the audit fence (`tolerate_undecodable`, the caller's
+/// `Params::palw_audit_2026_09_11_fence().is_some()`). The extraction walk
+/// (`palw_lifecycle_objects_from_accepted_txs_v2`) SKIPS both cases — it folds nothing for them —
+/// so a block carrying such a carrier is perfectly valid; only this isolation gate said otherwise.
+/// That split every rolling upgrade that appends a lifecycle object kind (or bumps the version):
+/// the newer build appends the variant behind a dormant fence and folds nothing for it, while the
+/// older build failed the whole block at `borsh::from_slice` — a chain split for one transaction,
+/// invisible to the fork-id gate (both builds advertise the same identity). Tolerating makes the
+/// two builds agree (both skip), the only forward-compatible reading: a byte string this build
+/// cannot parse is not a statement this build can call invalid. A payload that DOES decode at the
+/// current version is held to the may-ride table regardless, exactly as before.
+///
+/// **Why ruleset-presence and not a height** (`validate_tx_in_isolation` is context-free by
+/// contract, holds no DAA, and this gate is reached from block-body validation as well as the
+/// mempool): a ruleset that scheduled the audit fence tolerates the undecodable SHAPE from the
+/// moment it ships that preset, and a ruleset that did not — every build in the field today —
+/// refuses it exactly as it always has. The `is_some()` reading is the 0x30/0x31 token-band and
+/// `PanelDa` shape (`params.rs`, `palw_panel_da_admissible`): admitting the shape is part of the
+/// coordinated release, while the *effect* the shape would have is inert here anyway (the fold
+/// skips it at every height). **Residual:** on a fence-scheduled network the shape is admitted
+/// before the fence's own height, so between ship time and the height an adversary-crafted
+/// undecodable carrier is block-valid here where an un-upgraded peer still refuses it; the fold
+/// does nothing with it either way, and the peer is gated out for real at the height. A stricter
+/// height gate would need the DAA threaded into this context-free path (the same admission-layer
+/// threading B-4 defers).
+pub fn validate_palw_lifecycle_tx(payload: &[u8], tolerate_undecodable: bool) -> Result<(), PalwLifecycleTxError> {
+    let payload: PalwLifecycleTxPayloadV2 = match borsh::from_slice(payload) {
+        Ok(payload) => payload,
+        // Unknown/appended object tag (or trailing bytes a newer build wrote): the extraction walk
+        // skips it, so it must not fail the block here — on a ruleset that opted into the audit.
+        Err(_) if tolerate_undecodable => return Ok(()),
+        Err(_) => return Err(PalwLifecycleTxError::Undecodable),
+    };
     if payload.version != PALW_LIFECYCLE_TX_VERSION_V2 {
+        // A wire version this build does not know: extraction skips it, so tolerate it too — on an
+        // audit-armed ruleset; below that, refuse it exactly as every build in the field does.
+        if tolerate_undecodable {
+            return Ok(());
+        }
         return Err(PalwLifecycleTxError::UnsupportedVersion { got: payload.version, expected: PALW_LIFECYCLE_TX_VERSION_V2 });
     }
     palw_lifecycle_object_may_ride_v2(&payload.object).map_err(PalwLifecycleTxError::ObjectMayNotRide)
@@ -1046,12 +1085,42 @@ mod tests {
             vec![0xFF; 8],
         ];
         for payload in cases {
-            let admitted = validate_palw_lifecycle_tx(&payload).is_ok();
+            let admitted = validate_palw_lifecycle_tx(&payload, true).is_ok();
             let extracted = !palw_lifecycle_objects_from_accepted_txs_v2(&[carrier(SUBNETWORK_ID_PALW_LIFECYCLE, payload.clone())])
                 .objects
                 .is_empty();
-            assert_eq!(admitted, extracted, "admission and extraction disagree on {payload:?}");
+            // **A-2: admission never REJECTS a payload the walk folds** (`extracted ⇒ admitted`).
+            // It no longer holds the reverse: a payload the walk SKIPS — one this build cannot
+            // decode, or that names a wire version it does not know — is now TOLERATED at isolation
+            // (Ok) rather than failing the block, because the walk folds nothing for it and an older
+            // build must not split from a newer one over an appended object kind. A decodable,
+            // current-version object that may-not-ride is still rejected, and the walk still skips
+            // it, so those two agree as before.
+            assert!(!extracted || admitted, "admission rejected a payload the walk extracts: {payload:?}");
         }
+        // The two cases where admission is now deliberately more tolerant than extraction: an
+        // unknown wire version, and bytes this build cannot decode. Both are Ok at isolation and
+        // fold nothing.
+        let unknown_version = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: 99, object: panel_bound() }).unwrap();
+        assert!(
+            validate_palw_lifecycle_tx(&unknown_version, true).is_ok(),
+            "an unknown wire version is tolerated at isolation on an audit-armed ruleset (A-2)"
+        );
+        assert!(
+            validate_palw_lifecycle_tx(&[0xFFu8; 8], true).is_ok(),
+            "an undecodable payload is tolerated at isolation on an audit-armed ruleset (A-2)"
+        );
+        // The other side of the fence: a ruleset that has NOT declared the audit fence refuses both
+        // exactly as every build in the field does today, so a fenced build and an unfenced one
+        // agree that such a carrier is block-invalid until the audit ruleset ships.
+        assert!(
+            matches!(validate_palw_lifecycle_tx(&unknown_version, false), Err(PalwLifecycleTxError::UnsupportedVersion { .. })),
+            "an unknown wire version is block-invalid without the audit ruleset"
+        );
+        assert!(
+            matches!(validate_palw_lifecycle_tx(&[0xFFu8; 8], false), Err(PalwLifecycleTxError::Undecodable)),
+            "an undecodable payload is block-invalid without the audit ruleset"
+        );
     }
 
     /// ADR-0075: both certification objects ride the lifecycle subnetwork — admission and
@@ -1081,7 +1150,7 @@ mod tests {
         for object in [bind, family] {
             let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: object.clone() })
                 .expect("serializes");
-            validate_palw_lifecycle_tx(&payload).expect("a certification object may ride");
+            validate_palw_lifecycle_tx(&payload, true).expect("a certification object may ride");
             let tx = carrier(SUBNETWORK_ID_PALW_LIFECYCLE.clone(), payload);
             let extracted = palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(&tx));
             assert!(extracted.skipped.is_empty(), "{:?}", extracted.skipped);
@@ -1118,7 +1187,7 @@ mod tests {
         };
         let payload =
             borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: signed.clone() }).unwrap();
-        validate_palw_lifecycle_tx(&payload).expect("a signed, shaped derivation may ride");
+        validate_palw_lifecycle_tx(&payload, true).expect("a signed, shaped derivation may ride");
         let tx = carrier(SUBNETWORK_ID_PALW_LIFECYCLE.clone(), payload);
         let extracted = palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(&tx));
         assert!(extracted.skipped.is_empty(), "{:?}", extracted.skipped);
@@ -1141,7 +1210,7 @@ mod tests {
             [(unsigned, "signature"), (unshaped, "kind 0"), (overlong, "free-length field"), (short, "free-length field")]
         {
             let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: refused }).unwrap();
-            let err = validate_palw_lifecycle_tx(&payload).expect_err("refused at admission");
+            let err = validate_palw_lifecycle_tx(&payload, true).expect_err("refused at admission");
             assert!(format!("{err:?}").contains(why), "{err:?}");
             let tx = carrier(SUBNETWORK_ID_PALW_LIFECYCLE.clone(), payload);
             let extracted = palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(&tx));
@@ -1169,7 +1238,7 @@ mod tests {
         faster_hex::hex_decode(PAYLOAD.as_bytes(), &mut payload).unwrap();
         assert_eq!(payload.len(), 143);
 
-        validate_palw_lifecycle_tx(&payload)
+        validate_palw_lifecycle_tx(&payload, true)
             .expect("the chain accepted this carrier at DAA 1,945; a build that refuses it cannot sync");
         let decoded: PalwLifecycleTxPayloadV2 = borsh::from_slice(&payload).unwrap();
         assert_eq!(decoded.version, PALW_LIFECYCLE_TX_VERSION_V2);

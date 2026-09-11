@@ -1519,6 +1519,21 @@ pub struct Params {
     /// `palw_shard_court` armed at or below its height, and (c) on a network whose prompt ids are
     /// flat — a held class's ids never ride, and a flat digest cannot be opened one tile at a time.
     pub palw_held_context: Option<ForkActivation>,
+    /// **The 2026-09-11 pre-mainnet audit's consensus fixes, gated to one coordinated activation.**
+    ///
+    /// A single fence for the audit findings whose corrections change the state-transition or the
+    /// acceptance filter — A-1 (the acceptance filter folds the fold's step 3, closing the
+    /// activation-crossing halt), B-4 (one inference is one block), B-5 (a certified quantum is paid
+    /// once), AC-SLOT (a fold-failing court move does not spend the block slot), A-2 (an undecodable
+    /// lifecycle payload is tolerated at isolation), and the court/panel fixes B-1, C-01, C-02, C-03,
+    /// C-08 and BC-SYBIL. Below the fence every one of them reproduces the pre-fix behavior exactly,
+    /// so a build carrying this fence and one without it fold every block before the height
+    /// identically; at the height the whole set activates together. Scheduled on testnet-11 at
+    /// [`PALW_RC_AUDIT_FENCE_DAA`] (a live chain gets its fixes at a height, ADR-0083 path (a)),
+    /// `always()` on a mainnet card (correct from genesis), `None` on every other preset. It moves
+    /// the fingerprint, so the fleet upgrades to the fenced build before the height — the coordinated
+    /// flag day the operator chose.
+    pub palw_audit_2026_09_11: Option<ForkActivation>,
 
     /// **ADR-0117 — a draw is one forward.**
     ///
@@ -1688,6 +1703,27 @@ pub struct Params {
     /// refuses it on a network whose heartbeat lane is not armed. Read it through
     /// [`Self::palw_heartbeat_transparent_fence`] only.
     pub palw_heartbeat_transparent: Option<ForkActivation>,
+
+    /// **ADR-0107: a class's cadence share grows only on work that reached `Final`.**
+    ///
+    /// The growth rule (ADR-0054, `derive_class_share_growth_v1`) reads the closed epoch's
+    /// `produced_blocks`, which the transition increments when an attempt is ACCEPTED — the claim
+    /// still `Provisional` — and which a later void never gives back ("voiding releases exposure,
+    /// never production": correct for the epoch BUDGET, whose job is to stop a re-roll). The same
+    /// counter as the growth SIGNAL means blocks nobody ever verified, and claims that void, earn a
+    /// class permille exactly as certified work does. Past this fence growth also requires that the
+    /// class's attempt claims which reached `Final` during the closed epoch number at least that
+    /// epoch's budget; decay, the budget and the retarget keep reading `produced_blocks`.
+    ///
+    /// **Readable only while the epoch's finals are still in the state**, so `validate_palw_v2`
+    /// refuses arming it unless `claim_retirement_daa` is 0 (claims never retire) or longer than an
+    /// epoch — a claim finalized at the start of the closed epoch must still be there at its end.
+    ///
+    /// **A bare fence, TOP LEVEL**, for the `palw_fp_da_pins` reasons: no companion value for the
+    /// identity to normalise away, and a fence inside the bundle would move `palw_ruleset_id_v2`
+    /// and refuse every old/new pair at the handshake. `None` on every shipped preset; read it
+    /// through [`Self::palw_share_growth_final_fence`] only.
+    pub palw_share_growth_final: Option<ForkActivation>,
 
     /// ADR-0042 Decision 1 (PR-10): the ONE PALW switch on the V2 lineage. `Disabled` on every
     /// shipped preset. A network is in exactly one mode; `ConsensusV2` carries the whole atomic
@@ -2129,6 +2165,27 @@ impl Params {
                  heartbeat counts in a bonded block's anticone, and with no heartbeat lane (or no ConsensusV2 ruleset) \
                  there is nothing for it to decide (ADR-0105)",
             ));
+        }
+        // **ADR-0107 reads the closed epoch's finals off the claim records, so it must not be
+        // armable where those records are gone before the boundary reads them** — or on a network
+        // with no V2 lane at all, where there are no claims and the fence would hash and not fire.
+        if let Some(fence) = self.palw_share_growth_final
+            && fence != ForkActivation::never()
+        {
+            let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_share_growth_final is armed on a network that is not ConsensusV2: it counts V2 attempt claims \
+                     that reached Final, and there are none (ADR-0107)",
+                ));
+            };
+            let retirement = bundle.state.claim_retirement_daa();
+            if retirement != 0 && retirement <= bundle.state.epoch_length() {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_share_growth_final is armed where claims retire within an epoch (claim_retirement_daa <= \
+                     epoch_length): a claim finalized early in the closed epoch would be gone before the boundary counts \
+                     it, and the class would be refused growth it earned (ADR-0107)",
+                ));
+            }
         }
         let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
             return Ok(());
@@ -3222,6 +3279,9 @@ impl Params {
         if self.palw_prefill_draw == Some(ForkActivation::never()) {
             self.palw_prefill_draw = None;
         }
+        if self.palw_audit_2026_09_11 == Some(ForkActivation::never()) {
+            self.palw_audit_2026_09_11 = None;
+        }
         // ADR-0083 Decision 1, the same shape: a bare fence, `never()` is absence.
         if self.palw_difficulty_priced_rows == Some(ForkActivation::never()) {
             self.palw_difficulty_priced_rows = None;
@@ -3259,6 +3319,10 @@ impl Params {
         // and a present `never()` would write a name an unset build never writes.
         if self.palw_heartbeat_transparent == Some(ForkActivation::never()) {
             self.palw_heartbeat_transparent = None;
+        }
+        // ADR-0107, a bare fence: the same collapse for the same reason.
+        if self.palw_share_growth_final == Some(ForkActivation::never()) {
+            self.palw_share_growth_final = None;
         }
         let Some(dns) = self.dns_params.as_mut() else {
             return;
@@ -3327,6 +3391,16 @@ impl Params {
     pub fn palw_heartbeat_transparent_fence(&self) -> Option<ForkActivation> {
         match (self.palw_heartbeat_lane_fence(), self.palw_heartbeat_transparent) {
             (Some(lane), Some(fence)) if lane != ForkActivation::never() => Some(fence),
+            _ => None,
+        }
+    }
+
+    /// **ADR-0107's share-growth rule, read in ONE place** — `Some` only on a `ConsensusV2`
+    /// network that has armed it, for [`Self::palw_fp_da_pins_fence`]'s reason. The transition
+    /// requires Final work for growth past this fence and reads accepted blocks before it.
+    pub fn palw_share_growth_final_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_share_growth_final) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
             _ => None,
         }
     }
@@ -3704,6 +3778,14 @@ impl Params {
         }
     }
 
+    /// The audit fence, resolved off a ConsensusV2 ruleset (the only mode any audit fix runs on).
+    pub fn palw_audit_2026_09_11_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_audit_2026_09_11) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
     pub fn palw_held_context_active_at(&self, daa_score: u64) -> bool {
         self.palw_held_context_fence().is_some_and(|f| f.is_active(daa_score))
     }
@@ -3721,6 +3803,10 @@ impl Params {
     /// OWN block's DAA score, by the producer that builds it and the seat that replays it.
     pub fn palw_prefill_draw_active_at(&self, daa_score: u64) -> bool {
         self.palw_prefill_draw_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
+    pub fn palw_audit_2026_09_11_active_at(&self, daa_score: u64) -> bool {
+        self.palw_audit_2026_09_11_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
     /// ADR-0081 Decision 3's fence with the mode condition already folded in — `Some` only on a
@@ -3845,11 +3931,13 @@ impl Params {
             palw_attn_anchored_root,
             palw_held_context,
             palw_prefill_draw,
+            palw_audit_2026_09_11,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
             palw_signature_contexts_v2,
             palw_heartbeat_transparent,
+            palw_share_growth_final,
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation: _,
             pow_palw_activation: _,
@@ -3901,11 +3989,13 @@ impl Params {
             ("palw_attn_anchored_root", *palw_attn_anchored_root),
             ("palw_held_context", *palw_held_context),
             ("palw_prefill_draw", *palw_prefill_draw),
+            ("palw_audit_2026_09_11", *palw_audit_2026_09_11),
             ("palw_difficulty_priced_rows", *palw_difficulty_priced_rows),
             ("palw_receipt_rows_unpriced", *palw_receipt_rows_unpriced),
             ("palw_attempt_header_pins", *palw_attempt_header_pins),
             ("palw_signature_contexts_v2", *palw_signature_contexts_v2),
             ("palw_heartbeat_transparent", *palw_heartbeat_transparent),
+            ("palw_share_growth_final", *palw_share_growth_final),
         ]
     }
 
@@ -4093,6 +4183,10 @@ impl Params {
             h.write(b"palw_prefill_draw");
             h.write(draw.daa_score().to_le_bytes());
         }
+        if let Some(activation) = self.palw_audit_2026_09_11 {
+            h.write(b"palw_audit_2026_09_11");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0083 Decision 1's fence, NAMED for the same reason: it changes the bits every header
         // past it must carry, so an operator reading the schedule must see it.
         if let Some(priced) = self.palw_difficulty_priced_rows {
@@ -4146,6 +4240,13 @@ impl Params {
         // before the field existed.
         if let Some(activation) = self.palw_heartbeat_transparent {
             h.write(b"palw_heartbeat_transparent");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0107. Some-only, at the tail: it changes which epochs grow a class's share past its
+        // height, so the schedule must show the height, and a preset that leaves it `None` prints
+        // the id of a build from before the field existed.
+        if let Some(activation) = self.palw_share_growth_final {
+            h.write(b"palw_share_growth_final");
             h.write(activation.daa_score().to_le_bytes());
         }
         h.finalize()
@@ -4251,6 +4352,7 @@ impl Params {
             palw_attn_anchored_root,
             palw_held_context,
             palw_prefill_draw,
+            palw_audit_2026_09_11,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -4260,6 +4362,7 @@ impl Params {
             palw_epoch_boundary_budget,
             palw_fp_ruleset_caps,
             palw_heartbeat_transparent,
+            palw_share_growth_final,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation,
@@ -4574,6 +4677,9 @@ impl Params {
         if let Some(activation) = palw_prefill_draw.as_mut() {
             fork(activation, visit);
         }
+        if let Some(activation) = palw_audit_2026_09_11.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0083 Decision 1. Some-only, likewise.
         if let Some(activation) = palw_difficulty_priced_rows.as_mut() {
             fork(activation, visit);
@@ -4619,6 +4725,10 @@ impl Params {
         // Visited, so a scheduled height normalises out of the identity (a rolling deploy peers
         // until it fires) and joins `fence_schedule_v1`, which is what the fork id advertises.
         if let Some(activation) = palw_heartbeat_transparent.as_mut() {
+            fork(activation, visit);
+        }
+        // ADR-0107. Some-only and at the tail, for the same reason as the fence above it.
+        if let Some(activation) = palw_share_growth_final.as_mut() {
             fork(activation, visit);
         }
 
@@ -4831,6 +4941,7 @@ impl Params {
             palw_attn_anchored_root,
             palw_held_context,
             palw_prefill_draw,
+            palw_audit_2026_09_11,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -4840,6 +4951,7 @@ impl Params {
             palw_epoch_boundary_budget,
             palw_fp_ruleset_caps,
             palw_heartbeat_transparent,
+            palw_share_growth_final,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -5193,6 +5305,10 @@ impl Params {
             h.write(b"palw_prefill_draw");
             h.write(activation.daa_score().to_le_bytes());
         }
+        if let Some(activation) = palw_audit_2026_09_11 {
+            h.write(b"palw_audit_2026_09_11");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0083 Decision 1, Some-only for the same reason: arming it changes the `bits` every
         // header past the fence must carry, so it belongs in the fingerprint — and every shipped
         // preset leaves it `None` and fingerprints byte-identically to a build without the field.
@@ -5252,6 +5368,12 @@ impl Params {
         // byte-identically to a build without the field at all.
         if let Some(activation) = palw_heartbeat_transparent {
             h.write(b"palw_heartbeat_transparent");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0107. Some-only, like every fence above it: every preset leaves it `None` and
+        // fingerprints byte-identically to a build without the field.
+        if let Some(activation) = palw_share_growth_final {
+            h.write(b"palw_share_growth_final");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0042 Decisions 1 + 11: the V2 mode decides block validity wholesale, so it is in
@@ -5560,6 +5682,7 @@ impl Params {
             palw_attn_anchored_root: self.palw_attn_anchored_root,
             palw_held_context: self.palw_held_context,
             palw_prefill_draw: self.palw_prefill_draw,
+            palw_audit_2026_09_11: self.palw_audit_2026_09_11,
             palw_difficulty_priced_rows: self.palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced: self.palw_receipt_rows_unpriced,
             palw_attempt_header_pins: self.palw_attempt_header_pins,
@@ -5569,6 +5692,7 @@ impl Params {
             palw_epoch_boundary_budget: self.palw_epoch_boundary_budget,
             palw_fp_ruleset_caps: self.palw_fp_ruleset_caps,
             palw_heartbeat_transparent: self.palw_heartbeat_transparent,
+            palw_share_growth_final: self.palw_share_growth_final,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
@@ -6522,6 +6646,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_attn_anchored_root: None,
     palw_held_context: None,
     palw_prefill_draw: None,
+    palw_audit_2026_09_11: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -6532,6 +6657,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
+    // ADR-0107: dormant on every shipped preset (see the field's doc).
+    palw_share_growth_final: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
@@ -6697,6 +6824,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_attn_anchored_root: None,
     palw_held_context: None,
     palw_prefill_draw: None,
+    palw_audit_2026_09_11: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -6707,6 +6835,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
+    // ADR-0107: dormant on every shipped preset (see the field's doc).
+    palw_share_growth_final: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
@@ -6854,6 +6984,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_attn_anchored_root: None,
     palw_held_context: None,
     palw_prefill_draw: None,
+    palw_audit_2026_09_11: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -6864,6 +6995,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
+    // ADR-0107: dormant on every shipped preset (see the field's doc).
+    palw_share_growth_final: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
@@ -10179,6 +10312,20 @@ fn mainnet_card_params_v1(
 fn mainnet_card_base_v1(mut base: Params, dense_tier_pinned: bool) -> Params {
     if dense_tier_pinned {
         base.palw_kary_court = Some(ForkActivation::always());
+        // **AC-D8 (mainnet audit 2026-09-11): a dense card that arms the k-ary court arms
+        // ADR-0093's D6 and D8 with it, from genesis.** The k-ary court alone leaves two holes on
+        // the fused tier: `palw_fused_dissectable` (D6) is what refuses a registrant's fused class
+        // whose output tile spans two heads — a class no dissection can try, so an honest responder
+        // is convicted by silence — and `palw_attn_anchored_root` (D8) is what lets move 1 carry
+        // its anchor checkpoint, the one path a challenger cannot rebuild once a forger's execution
+        // followed its lie. Both are free to state from genesis (no shipped row fails D6, and
+        // `validate_palw_v2` only needs `palw_kary_court` at or below the anchored-root height,
+        // which `always()` satisfies). Residual (audit C-04): D8 as designed still cannot bottom a
+        // forger who lied at a mid-layer fused tile, because the per-position anchor carries that
+        // forger's own later-layer state — a court-completeness gap the dense tier keeps until D8
+        // carries the sibling chunk hashes, tracked against ADR-0093.
+        base.palw_fused_dissectable = Some(ForkActivation::always());
+        base.palw_attn_anchored_root = Some(ForkActivation::always());
     }
     base.palw_capability_bound = Some(ForkActivation::always());
     base.palw_context_ladder = Some(ForkActivation::always());
@@ -10276,6 +10423,15 @@ fn mainnet_card_base_v1(mut base: Params, dense_tier_pinned: bool) -> Params {
     // it — so a live chain reaches them as a flag day and that is its operator's call. testnet-11
     // leaves them dormant and every coinbase it builds is byte-identical to today's.
     base.palw_validator_payout_bounds = Some(ForkActivation::always());
+    // **B-2 (mainnet audit 2026-09-11): a carded mainnet counts only Final work in the share
+    // census, from genesis** (ADR-0107). Without it, `produced_blocks` is written at Provisional
+    // and never decremented on void, so fake or unfinalised blocks grow a class's cadence share
+    // (observed 1‰→51‰ in 16 epochs). Armed here rather than derived: a card is where a mainnet's
+    // fences are STATED, and this one has no reason to wait. testnet-11 leaves it dormant — arming
+    // it there is a flag day, and the census it changes is the same one two live chains committed.
+    base.palw_share_growth_final = Some(ForkActivation::always());
+    // The 2026-09-11 audit's consensus fixes are correct from a mainnet card's genesis.
+    base.palw_audit_2026_09_11 = Some(ForkActivation::always());
     base
 }
 
@@ -10334,6 +10490,22 @@ pub const PALW_RC_MODEL_BENEFITS_FENCE_DAA: u64 = 2_400;
 /// Every seat must run a build carrying this fence BEFORE this height or it forks off at it — the DAA
 /// 2,400 fence was crossed unannounced once and the outside nodes left at ≈2,241; announce this one.
 pub const PALW_RC_MODEL_LEG_V2_FENCE_DAA: u64 = 3_500;
+/// **testnet-11's SECOND flag day for the 2026-09-11 pre-mainnet audit fixes** (`palw_audit_2026_09_11`).
+/// A live chain gets the fixes at a height, not a re-genesis (ADR-0083 path (a)). Only this fence
+/// arms on testnet-11; the audit's share-census fence (`palw_share_growth_final`, B-2/ADR-0107) and
+/// dense-court fences (`palw_fused_dissectable` / `palw_attn_anchored_root`, AC-D8) are mainnet-card
+/// corrections and stay dormant on testnet-11 until the operator decides otherwise.
+///
+/// **It MUST be a height no other schedule entry uses, and NOT 3,500.** ADR-0114's owner-leg flag
+/// day already schedules 3,500 (fleet fingerprint `02c7282b`, schedule id `8934a9b1`,
+/// 1150/1900/2150/2400/3500/2125000). `fork_id_v1` digests the FIRED HEIGHTS, not the fence set —
+/// so a build that adds a DIFFERENT fence at 3,500 advertises the SAME fork id as the 02c7282b
+/// fleet, stays connected through the gate, and then silently diverges past 3,500. A fresh height
+/// here adds a new schedule entry the gate can see, so a not-yet-upgraded node is refused FROM this
+/// height rather than diverging at it. **Provisional** — set with deployment margin over the tip
+/// at release time (t11 advances ~4–5 DAA/h; leave external operators room to upgrade), and rebased
+/// onto the fleet's own base (ADR-0114's `42438178` lineage = origin/main 8b6661a9 + 5bed4405).
+pub const PALW_RC_AUDIT_FENCE_DAA: u64 = 4_000;
 
 /// **testnet-11's third flag day: the refutation ladder** (ADR-0084 U-08, the 2026-09-06 audit's
 /// H-4, ADR-0092 §9 step 2).
@@ -10736,6 +10908,14 @@ pub fn palw_rc_base_params() -> Params {
     params.palw_model_lines = Some(ForkActivation::new(PALW_RC_DA_COURT_FENCE_DAA));
     params.palw_model_benefits = Some(ForkActivation::new(PALW_RC_MODEL_BENEFITS_FENCE_DAA));
     params.palw_model_leg_v2 = Some(ForkActivation::new(PALW_RC_MODEL_LEG_V2_FENCE_DAA));
+    // **The 2026-09-11 audit flag day.** The audit's state-transition and acceptance-filter fixes
+    // (A-1, A-2, B-5, AC-SLOT, and the deep court/panel findings) activate together on testnet-11
+    // at one height, behind this ONE fence. The share-census fence (`palw_share_growth_final`,
+    // B-2/ADR-0107) and the dense-court fences (`palw_fused_dissectable` / `palw_attn_anchored_root`,
+    // AC-D8) are deliberately NOT armed here: they are mainnet-card corrections, dormant on
+    // testnet-11 "until a flag day says otherwise" (`the_share_growth_final_fence_is_dormant_everywhere`,
+    // and the ADR-0107 note that the merged-payout question is still the operator's to make).
+    params.palw_audit_2026_09_11 = Some(ForkActivation::new(PALW_RC_AUDIT_FENCE_DAA));
     params.palw_model_evm = Some(ForkActivation::new(PALW_RC_DA_COURT_FENCE_DAA));
     params.palw_court_ladder = Some(ForkActivation::new(PALW_RC_COURT_LADDER_FENCE_DAA));
     // **The EVM lane is ON from DAA 0, inherited from `TESTNET_PARAMS` and kept deliberately.**
@@ -11156,6 +11336,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_attn_anchored_root: None,
     palw_held_context: None,
     palw_prefill_draw: None,
+    palw_audit_2026_09_11: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -11166,6 +11347,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
+    // ADR-0107: dormant on every shipped preset (see the field's doc).
+    palw_share_growth_final: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // **Devnet is the ADR-0068 drill network on this branch: ConsensusV2, so no V1 PALW
@@ -13539,6 +13722,8 @@ mod consensus_params_id_tests {
         previous.palw_model_evm = None;
         // ADR-0114's fence (3500) was scheduled five flag days later.
         previous.palw_model_leg_v2 = None;
+        // The pre-mainnet audit's fence (4000) was scheduled later still.
+        previous.palw_audit_2026_09_11 = None;
         // Scheduled on the same flag day by the 2026-09-06 audit's H-4 (ADR-0084 U-08), so the
         // build the fleet is running does not carry it either.
         previous.palw_court_ladder = None;
@@ -15026,7 +15211,16 @@ mod consensus_params_id_tests {
                 // without it peers until 3500 (`the_owner_leg_flag_day_keeps_every_current_node_until_3500`);
                 // past 3500 every node must be on this build. Previous (every build through
                 // e458683e): ecbdbc2222efcc2d32493f2349e7c17f983611697a5d10ffc7ae90458bac8ee5.
-                "02c7282b7541011344eabb1ce6cbe6544987e7b6a7fc132413fbfff0a6a37cfd",
+                // **Re-pinned again 2026-09-11 for the SECOND flag day** (the pre-mainnet audit,
+                // `PALW_RC_AUDIT_FENCE_DAA` = 4,000): `palw_audit_2026_09_11` arms at 4,000, adding
+                // one schedule entry (1150/1900/2150/2400/3500/4000/2125000). Only THIS fence arms on
+                // testnet-11 — the audit's share-census fence (`palw_share_growth_final`) and
+                // dense-court fences (`palw_fused_dissectable` / `palw_attn_anchored_root`) are
+                // mainnet-card corrections and stay dormant here. Same rolling-restart contract as
+                // 3,500: identity unmoved, the fork-id gate keeps builds with and without the fence
+                // peers until 4,000, and every node must carry it past 4,000. Previous (ADR-0114's
+                // owner-leg build): 02c7282b7541011344eabb1ce6cbe6544987e7b6a7fc132413fbfff0a6a37cfd.
+                "09efd285a32f31c883edc5b9b869892b15895bf1194593c067556c94cf8fc694",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -15818,6 +16012,9 @@ mod consensus_params_id_tests {
         let expected: std::collections::BTreeSet<&str> = [
             "palw_attempt_header_pins",
             "palw_attempt_work",
+            // The 2026-09-11 pre-mainnet audit's fence: a card arms it from genesis (correct there),
+            // testnet-11 schedules it at PALW_RC_AUDIT_FENCE_DAA.
+            "palw_audit_2026_09_11",
             "palw_capability_bound",
             "palw_certification_rent",
             "palw_chunk_cap_charge",
@@ -15833,6 +16030,9 @@ mod consensus_params_id_tests {
             "palw_prompt_ids_merkle",
             "palw_receipt_rows_unpriced",
             "palw_signature_contexts_v2",
+            // B-2 (mainnet audit 2026-09-11): a card counts only Final work in the share census
+            // (ADR-0107), armed here and dormant on testnet-11.
+            "palw_share_growth_final",
             "palw_unavailable_abstains",
             "palw_uncertified_weightless",
             "palw_validator_payout_bounds",
@@ -15844,12 +16044,13 @@ mod consensus_params_id_tests {
             "the card's armed set changed. docs/adr/README.md's activation-axis table is written FROM this set; update it \
              in the same commit"
         );
-        // The dense card is this set plus the court its own pinned row needs, and nothing else.
+        // The dense card is this set plus the court its own pinned row needs and the two fences
+        // that complete that court (AC-D8: ADR-0093 D6/D8), and nothing else.
         let dense: std::collections::BTreeSet<&str> = card_armed_names(&mainnet_card_fixture_v1(true));
         assert_eq!(
             dense.difference(&expected).copied().collect::<Vec<_>>(),
-            vec!["palw_kary_court"],
-            "pinning the dense tier states the k-ary court and nothing else"
+            vec!["palw_attn_anchored_root", "palw_fused_dissectable", "palw_kary_court"],
+            "pinning the dense tier states the k-ary court and the two fences (D6/D8) that complete it, and nothing else"
         );
 
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &carded.palw_consensus_mode else {
@@ -16349,6 +16550,32 @@ mod consensus_params_id_tests {
         palw_rc_arm_phase1(params);
     }
 
+    /// **AC-D8 (A-3): a dense card arms ADR-0093 Decisions 6 and 8 with the court they complete.**
+    ///
+    /// The dense-tier card arms `palw_kary_court` from genesis; the court's bottom on the
+    /// per-position dense row needs Decision 8's anchored root claim, and Decision 6 refuses a
+    /// fused class no dissection can try. Both are free from genesis on a fresh card; the test
+    /// shows that first, then asserts the card states them.
+    #[test]
+    fn a_dense_card_arms_the_anchored_root_and_the_dissectable_fence_from_genesis() {
+        let card = mainnet_card_fixture_v1(true);
+        assert_eq!(card.palw_kary_court, Some(ForkActivation::always()), "the dense card runs the k-ary court from genesis");
+        let mut armed = card.clone();
+        armed.palw_attn_anchored_root = Some(ForkActivation::always());
+        armed.palw_fused_dissectable = Some(ForkActivation::always());
+        armed.validate_palw_v2().expect("both fences arm from genesis on the dense card");
+        assert_eq!(
+            card.palw_attn_anchored_root,
+            Some(ForkActivation::always()),
+            "the dense card must arm ADR-0093 Decision 8 (palw_attn_anchored_root) with the court"
+        );
+        assert_eq!(
+            card.palw_fused_dissectable,
+            Some(ForkActivation::always()),
+            "the dense card must arm ADR-0093 Decision 6 (palw_fused_dissectable) with the court"
+        );
+    }
+
     /// **A carded mainnet runs the DAG shape testnet-11 runs, and what still differs is named**
     /// (mainnet audit, 2026-09-05).
     ///
@@ -16501,6 +16728,7 @@ mod consensus_params_id_tests {
                 PALW_RC_COURT_LADDER_FENCE_DAA,
                 PALW_RC_MODEL_BENEFITS_FENCE_DAA,
                 PALW_RC_MODEL_LEG_V2_FENCE_DAA,
+                PALW_RC_AUDIT_FENCE_DAA,
             ],
             "…and a schedule lists every scheduled gate fence's height"
         );
@@ -16640,6 +16868,60 @@ mod consensus_params_id_tests {
         );
         assert_eq!(carded.palw_fp_da_pins, Some(ForkActivation::always()));
         assert_eq!(carded.palw_da_court, Some(ForkActivation::always()), "the court it makes meaningful is armed with it");
+    }
+
+    /// **ADR-0107's share-growth fence is dormant on every shipped preset, visible the moment it is
+    /// not, and refused where the rule it names cannot read what it needs.** The four claims the
+    /// fence above is held to, plus the one that is this fence's own: the boundary counts the
+    /// closed epoch's `Final` claims off their records, so a network whose claims retire within an
+    /// epoch would refuse growth a class earned — refused at assembly, with the reason.
+    #[test]
+    fn the_share_growth_final_fence_is_dormant_everywhere_and_refused_where_it_cannot_read_the_epochs_finals() {
+        for p in [&MAINNET_PARAMS, &TESTNET_PARAMS, &SIMNET_PARAMS, &DEVNET_PARAMS] {
+            assert!(p.palw_share_growth_final.is_none(), "{}: a shipped preset states no ADR-0107 fence", p.net);
+        }
+        let rc = palw_rc_shipped_params();
+        assert!(rc.palw_share_growth_final.is_none(), "testnet-11 grows on accepted blocks until a flag day says otherwise");
+        assert!(devnet_shipped_params().palw_share_growth_final.is_none(), "devnet inherits the dormant state too");
+        assert!(rc.palw_share_growth_final_fence().is_none(), "the reader is the one place the rule is decided");
+
+        let mut spelled_out = rc.clone();
+        spelled_out.palw_share_growth_final = Some(ForkActivation::never());
+        assert_eq!(spelled_out.consensus_identity_id(), rc.consensus_identity_id(), "Some(never()) is absence");
+
+        let mut scheduled = rc.clone();
+        scheduled.palw_share_growth_final = Some(ForkActivation::new(9_000_000));
+        assert_eq!(
+            scheduled.consensus_identity_id(),
+            rc.consensus_identity_id(),
+            "an armed and an un-armed build must peer until the height fires"
+        );
+        assert_ne!(scheduled.consensus_params_id(), rc.consensus_params_id(), "…while the fingerprint names the rule");
+        assert_ne!(scheduled.consensus_schedule_id(), rc.consensus_schedule_id(), "…and the operator log names the height");
+        scheduled.validate_palw_v2().expect("testnet-11's claims outlive an epoch (3000 > 1000), so the rule can read its finals");
+
+        let mut armed = rc.clone();
+        armed.palw_share_growth_final = Some(ForkActivation::always());
+        assert_ne!(armed.consensus_identity_id(), rc.consensus_identity_id(), "at genesis the handshake must see it");
+        armed.validate_palw_v2().expect("armable on the RC");
+        assert_eq!(armed.palw_share_growth_final_fence(), Some(ForkActivation::always()));
+
+        // Fail-closed: no V2 bundle, no claims to count.
+        let mut laneless = TESTNET_PARAMS;
+        laneless.palw_share_growth_final = Some(ForkActivation::always());
+        let e = laneless.validate_palw_v2().expect_err("a fence that hashes and cannot fire is refused at assembly");
+        assert!(format!("{e:?}").contains("palw_share_growth_final"), "{e:?}");
+        assert!(laneless.palw_share_growth_final_fence().is_none(), "and the reader never resolves it off V2");
+
+        // Fail-closed: claims that retire within an epoch are gone before the boundary counts them.
+        let mut short_lived = armed.clone();
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut short_lived.palw_consensus_mode else {
+            unreachable!("the RC is ConsensusV2")
+        };
+        let epoch = bundle.state.epoch_length();
+        bundle.state = bundle.state.clone().with_claim_retirement_daa(epoch).expect("retirement past the abandon hold");
+        let e = short_lived.validate_palw_v2().expect_err("an epoch-long retirement loses the epoch's early finals");
+        assert!(format!("{e:?}").contains("claim_retirement_daa"), "{e:?}");
     }
 
     /// **A card certifies the free-prompt lane of the classes it registers; the RC's pinned set

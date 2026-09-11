@@ -37,7 +37,7 @@ impl TransactionValidator {
         check_transaction_output_value_ranges(tx)?;
         check_duplicate_transaction_inputs(tx)?;
         check_gas(tx)?;
-        check_transaction_subnetwork(tx, self.palw_panel_da_admissible, self.palw_prompt_ids_form)?;
+        check_transaction_subnetwork(tx, self.palw_panel_da_admissible, self.palw_prompt_ids_form, self.palw_lifecycle_undecodable_tolerated)?;
         check_transaction_version(tx)
     }
 
@@ -287,6 +287,7 @@ fn check_transaction_subnetwork(
     tx: &Transaction,
     palw_panel_da_admissible: bool,
     palw_prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    palw_lifecycle_undecodable_tolerated: bool,
 ) -> TxResult<()> {
     if tx.is_coinbase() || tx.subnetwork_id.is_native() {
         Ok(())
@@ -397,7 +398,7 @@ fn check_transaction_subnetwork(
         // chain-derived panel binding, the free-prompt commitment that has its own id — are
         // refused here by the same table the extraction walk applies, so admission and extraction
         // give one answer.
-        validate_palw_lifecycle_tx(&tx.payload).map_err(TxRuleError::InvalidPalwLifecyclePayload)?;
+        validate_palw_lifecycle_tx(&tx.payload, palw_lifecycle_undecodable_tolerated).map_err(TxRuleError::InvalidPalwLifecyclePayload)?;
         Ok(())
     } else {
         Err(TxRuleError::SubnetworksDisabled(tx.subnetwork_id.clone()))
@@ -652,6 +653,8 @@ mod tests {
         use kaspa_hashes::Hash64;
 
         let params = MAINNET_PARAMS.clone();
+        // A-2: this test asserts the lifecycle band (0x4B) TOLERATES an undecodable body, which is
+        // the audit-armed ruleset's door; arm it here (production reads it from the fence).
         let tv = TransactionValidator::new_for_tests(
             params.max_tx_inputs,
             params.max_tx_outputs,
@@ -661,7 +664,8 @@ mod tests {
             params.coinbase_maturity(),
             params.mergeset_size_limit(),
             Default::default(),
-        );
+        )
+        .with_lifecycle_undecodable_tolerated_for_tests(true);
         let base = Transaction::new(
             0,
             vec![TransactionInput {
@@ -774,9 +778,15 @@ mod tests {
         tx.subnetwork_id = SubnetworkId::from_byte(0x4A);
         assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidPalwFpPayload(_)));
 
+        // **A-2: the lifecycle band (0x4B) TOLERATES a payload it cannot decode as a lifecycle
+        // object.** A cross-band body here does not decode as `PalwLifecycleTxPayloadV2`, so it is
+        // Ok at isolation and the extraction walk folds nothing for it — band separation is
+        // enforced at the fold, not by failing the block, so an object kind a later build appends
+        // does not split an older one. (The FP band above still rejects at isolation; only the
+        // lifecycle validator was made forward-compatible.)
         let mut tx = base.clone();
         tx.subnetwork_id = SubnetworkId::from_byte(0x4B);
-        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidPalwLifecyclePayload(_)));
+        assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
 
         // The hard edge moved with them: 0x4C (one past the last routed id) is NOT routed and
         // still rejects with the blanket `SubnetworksDisabled` — an unknown id stays a
@@ -1244,6 +1254,83 @@ mod pq_output_class_enforcement_tests {
         assert!(
             t11.check_coinbase_in_isolation(&coinbase_with(old_cap + 1)).is_ok(),
             "one output past the blues-only cap must be legal — that cap was the 112-block halt"
+        );
+    }
+}
+
+/// Audit A-2 (reproduction): the tx-isolation BLOCK rule (body_validation_in_isolation's
+/// `check_transactions_in_isolation` maps any error here to `TxInIsolationValidationFailed`)
+/// refuses a lifecycle carrier whose object kind this build does not know.
+#[cfg(test)]
+mod audit_a2_isolation_tests {
+    use super::*;
+    use kaspa_consensus_core::tx::{TransactionId, TransactionInput, TransactionOutpoint};
+    use kaspa_core::assert_match;
+
+    fn carrier(tag: u8) -> Transaction {
+        let mut w = vec![1u8, 0, tag];
+        w.extend_from_slice(&[0x11u8; 64]);
+        w.extend_from_slice(&2u32.to_le_bytes());
+        w.extend_from_slice(&3u32.to_le_bytes());
+        w.extend_from_slice(&[7u8, 7, 7]);
+        Transaction::new(
+            crate::constants::TX_VERSION,
+            vec![TransactionInput {
+                previous_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_u64_word(0xA2), index: 0 },
+                signature_script: vec![],
+                sequence: 0,
+                sig_op_count: 0,
+            }],
+            vec![],
+            0,
+            SUBNETWORK_ID_PALW_LIFECYCLE,
+            0,
+            w,
+        )
+    }
+
+    fn tv(tolerate: bool) -> TransactionValidator {
+        let params = crate::params::MAINNET_PARAMS.clone();
+        TransactionValidator::new_for_tests(
+            params.max_tx_inputs,
+            params.max_tx_outputs,
+            params.max_signature_script_len,
+            params.max_script_public_key_len,
+            params.coinbase_payload_script_public_key_max_len,
+            params.coinbase_maturity(),
+            params.mergeset_size_limit(),
+            Default::default(),
+        )
+        .with_lifecycle_undecodable_tolerated_for_tests(tolerate)
+    }
+
+    #[test]
+    fn an_unknown_lifecycle_kind_is_not_block_invalid_at_isolation_on_an_audit_armed_ruleset() {
+        // **Audit-armed** (`palw_audit_2026_09_11` declared): a kind a later build appends is
+        // TOLERATED at isolation, so the carrying block is not invalidated for this build alone.
+        let armed = tv(true);
+        let known = armed.validate_tx_in_isolation(&carrier(39));
+        let unknown = armed.validate_tx_in_isolation(&carrier(43));
+        assert_eq!(known, Ok(()), "the dormant-fence kind this build knows rides");
+        assert_eq!(
+            unknown,
+            Ok(()),
+            "INVARIANT (audit-armed): a lifecycle kind a later build appends must not be refused at tx isolation (a block \
+             rule) — else the carrying block and every descendant are invalid for this build only"
+        );
+    }
+
+    #[test]
+    fn an_unknown_lifecycle_kind_is_block_invalid_below_the_audit_fence() {
+        // **The other side of the fence** (the audit ruleset not declared, every build in the field
+        // today): the unknown kind is still refused, so a fenced build and an unfenced one agree
+        // that such a carrier is block-invalid until the audit ruleset ships. A kind this build DOES
+        // decode still rides — only the undecodable/unknown-version shape differs across the fence.
+        let unarmed = tv(false);
+        assert_eq!(unarmed.validate_tx_in_isolation(&carrier(39)), Ok(()), "a decodable kind rides on either side of the fence");
+        assert_match!(
+            unarmed.validate_tx_in_isolation(&carrier(43)),
+            Err(TxRuleError::InvalidPalwLifecyclePayload(_))
         );
     }
 }

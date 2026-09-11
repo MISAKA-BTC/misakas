@@ -171,6 +171,10 @@ impl ConsensusServices {
             // isolation cap is context-free by contract; the builders ask the height-indexed
             // question at the block's own DAA, which is strictly stronger.
             params.palw_validator_payout_bounds_declared(),
+            // **A-2 (mainnet audit 2026-09-11), height-free**: a ruleset that declares the audit
+            // fence tolerates an undecodable/unknown-version 0x4b payload at isolation (the fold
+            // skips it at every height anyway); one that does not keeps refusing it as today.
+            params.palw_audit_2026_09_11_fence().is_some(),
         );
 
         let pruning_point_manager = PruningPointManager::new(
