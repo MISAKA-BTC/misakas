@@ -846,7 +846,9 @@ pub fn a16_attn_fused_uniform_fast(
             scores
                 .par_chunks_mut(kv_len)
                 .enumerate()
-                .map(|(h, row)| row.par_chunks_mut(chunk).enumerate().map(|(c, r)| score_run(h, c * chunk, r)).max().unwrap_or(i64::MIN))
+                .map(|(h, row)| {
+                    row.par_chunks_mut(chunk).enumerate().map(|(c, r)| score_run(h, c * chunk, r)).max().unwrap_or(i64::MIN)
+                })
                 .collect()
         } else {
             scores.chunks_mut(kv_len).enumerate().map(|(h, row)| score_run(h, 0, row)).collect()
@@ -876,7 +878,10 @@ pub fn a16_attn_fused_uniform_fast(
             exps.par_chunks(kv_len)
                 .enumerate()
                 .map(|(h, e)| {
-                    e.par_chunks(chunk).enumerate().map(|(c, er)| value_run(h, rows[h], c * chunk, er)).reduce(|| vec![0i64; d_head], add)
+                    e.par_chunks(chunk)
+                        .enumerate()
+                        .map(|(c, er)| value_run(h, rows[h], c * chunk, er))
+                        .reduce(|| vec![0i64; d_head], add)
                 })
                 .collect()
         } else {
@@ -1210,11 +1215,8 @@ mod tests {
                     let k: Vec<i32> = (0..n * kv_dim).map(|_| rng.code()).collect();
                     let v: Vec<i32> = (0..n * kv_dim).map(|_| rng.code()).collect();
                     // A real-looking score scale half the time, so the softmax is not all rails.
-                    let logits = if rng.next_u64() % 2 == 0 {
-                        A16QuantParams { multiplier: 1, shift: 26, zero: 0 }
-                    } else {
-                        triple(&mut rng)
-                    };
+                    let logits =
+                        if rng.next_u64() % 2 == 0 { A16QuantParams { multiplier: 1, shift: 26, zero: 0 } } else { triple(&mut rng) };
                     let (probs, values) = (triple(&mut rng), triple(&mut rng));
                     assert_eq!(
                         a16_attn_fused_uniform_fast(&q, &k, &v, heads, kv_heads, d_head, logits, up, probs, values),

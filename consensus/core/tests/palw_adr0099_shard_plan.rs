@@ -387,7 +387,8 @@ fn a_token_lift_manifest_names_graph_v6_and_moves_no_earlier_document() {
             .unwrap()
             .shape_profile_id()
     );
-    let lift = kaspa_consensus_core::palw_step::kernel_semantics_id_v1(kaspa_consensus_core::palw_step_refute::KDESC_A16_REQUANTIZE_BY_TOKEN);
+    let lift =
+        kaspa_consensus_core::palw_step::kernel_semantics_id_v1(kaspa_consensus_core::palw_step_refute::KDESC_A16_REQUANTIZE_BY_TOKEN);
     assert!(kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1(&p6).contains(&lift));
     assert!(!kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1(&p5).contains(&lift));
     // JSON names it; Borsh appends it.

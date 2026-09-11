@@ -262,9 +262,13 @@ pub fn palw_canonical_json_v1(value: &serde_json::Value) -> Vec<u8> {
                 '\u{08}' => out.extend_from_slice(b"\\b"),
                 '\u{0c}' => out.extend_from_slice(b"\\f"),
                 '\n' => out.extend_from_slice(b"\\n"),
-                // Spelled as bytes: the float guard's raw-string detector reads `\` `r` `"` as
-                // the start of a raw string.
-                '\r' => out.extend_from_slice(&[b'\\', b'r']),
+                // Two pushes, not a literal: the float guard's raw-string detector reads `\` `r`
+                // `"` as the start of a raw string, and a slice of the two chars is the one
+                // spelling clippy (`byte_char_slices`) refuses.
+                '\r' => {
+                    out.push(b'\\');
+                    out.push(b'r');
+                }
                 '\t' => out.extend_from_slice(b"\\t"),
                 c if (c as u32) < 0x20 => out.extend_from_slice(format!("\\u{:04x}", c as u32).as_bytes()),
                 c => {
@@ -1178,10 +1182,10 @@ mod tests {
     /// The canonical form: sorted keys, no whitespace, JSON's escapes.
     #[test]
     fn the_canonical_form_sorts_and_escapes() {
-        let v = serde_json::json!({ "b": 1, "a": [true, null, "x\"\n\u{1}"], "A": { "z": -2, "y": "é" } });
+        let v = serde_json::json!({ "b": 1, "a": [true, null, "x\"\n\r\t\u{1}"], "A": { "z": -2, "y": "é" } });
         assert_eq!(
             String::from_utf8(palw_canonical_json_v1(&v)).unwrap(),
-            "{\"A\":{\"y\":\"é\",\"z\":-2},\"a\":[true,null,\"x\\\"\\n\\u0001\"],\"b\":1}"
+            "{\"A\":{\"y\":\"é\",\"z\":-2},\"a\":[true,null,\"x\\\"\\n\\r\\t\\u0001\"],\"b\":1}"
         );
     }
 
@@ -1234,7 +1238,9 @@ mod tests {
             Some(PalwContextVerdictV1::Fail(why)) => assert!(why.contains("ADR-0103 §10.7") && why.contains("2097151"), "{why}"),
             other => panic!("produce must fail by name, got {other:?}"),
         }
-        for stage in [PalwContextStageV1::Commit, PalwContextStageV1::Seat, PalwContextStageV1::Court, PalwContextStageV1::Availability] {
+        for stage in
+            [PalwContextStageV1::Commit, PalwContextStageV1::Seat, PalwContextStageV1::Court, PalwContextStageV1::Availability]
+        {
             assert!(matches!(f.verdicts.get(&stage), Some(PalwContextVerdictV1::Skipped(_))), "{}: skipped by name", stage.name());
         }
         assert!(f.verdicts.contains_key(&PalwContextStageV1::Fit), "the fit reads no run and still reports");
