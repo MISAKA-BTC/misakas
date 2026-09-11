@@ -153,6 +153,53 @@ pub struct Qwen36Backend {
 }
 
 impl Qwen36Backend {
+    /// The prompt a binding's job ran: carried for a free prompt (refused unless the job commits to
+    /// it), re-derived from the anchor for an attempt.
+    fn attn_prompt_ids_v1(
+        &self,
+        binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+        carried_prompt: Option<&[u32]>,
+    ) -> Result<Vec<u32>, String> {
+        Ok(match carried_prompt {
+            Some(ids) => {
+                if !kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(
+                    self.prompt_ids_form,
+                    ids,
+                    &binding.job_context.prompt_token_ids_hash,
+                ) {
+                    return Err("the carried prompt is not the one this capture's job context commits to".to_string());
+                }
+                ids.to_vec()
+            }
+            None => qwen36_prompt_for_anchor(
+                binding.job_context.job_id,
+                self.artifact.shape.vocab,
+                binding.job_context.declared_prefill_tokens,
+            )
+            .iter()
+            .map(|t| *t as u32)
+            .collect(),
+        })
+    }
+
+    /// An honest, dense re-execution of the binding's job through the registered plan.
+    fn attn_rerun_v1(
+        &self,
+        plan: &crate::qwen36_plan::Qwen36ProfilePlanV1,
+        binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+        prompt_ids: &[u32],
+    ) -> Result<crate::produce::Base0ExecutionV1, String> {
+        let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
+        qwen36_execute_for_attempt_capped_v1(
+            &self.artifact,
+            &binding.shape_profile,
+            plan,
+            &binding.job_context,
+            &prompt,
+            self.step_ladder_cap,
+        )
+    }
+
     pub fn new(
         artifact: std::sync::Arc<Qwen36ArtifactV1>,
         model_id: impl Into<String>,
@@ -1762,36 +1809,9 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         let retention =
             crate::produce::base0_material_decode_any_v1(material).map_err(|_| "the capture does not decode".to_string())?;
         let binding = retention.binding().clone();
-        let prompt_ids: Vec<u32> = match carried_prompt {
-            Some(ids) => {
-                if !kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(
-                    self.prompt_ids_form,
-                    ids,
-                    &binding.job_context.prompt_token_ids_hash,
-                ) {
-                    return Err("the carried prompt is not the one this capture's job context commits to".to_string());
-                }
-                ids.to_vec()
-            }
-            None => qwen36_prompt_for_anchor(
-                binding.job_context.job_id,
-                self.artifact.shape.vocab,
-                binding.job_context.declared_prefill_tokens,
-            )
-            .iter()
-            .map(|t| *t as u32)
-            .collect(),
-        };
-        let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
+        let prompt_ids = self.attn_prompt_ids_v1(&binding, carried_prompt)?;
         let generated = retention.generated_token_ids().to_vec();
-        let rerun = qwen36_execute_for_attempt_capped_v1(
-            &self.artifact,
-            &binding.shape_profile,
-            plan,
-            &binding.job_context,
-            &prompt,
-            self.step_ladder_cap,
-        )?;
+        let rerun = self.attn_rerun_v1(plan, &binding, &prompt_ids)?;
         // The rows are the CAPTURE's (the bottom opens what the claim committed); a fold keeps
         // none and is re-executed. When that re-execution is another execution (a forged claim),
         // its rows before the disputed leaf are an honest PREFIX, read with the accused's opened
@@ -1827,7 +1847,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         crate::attn_responder::base0_attn_site_evidence_v1(
             &binding,
             rows,
-            &checkpoints,
+            crate::attn_responder::Base0AttnAnchorSourceV1::Leg(&checkpoints),
             narrowed,
             inventory.operands(),
             inventory.root(),
@@ -1846,6 +1866,52 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
                 .map_err(|e| e.to_string())
             },
         )
+    }
+
+    /// **ADR-0093 Decisions 7 and 8 on the hybrid tier: the bottom's evidence from the accused's
+    /// filing alone** — the dense tier's verb, with this family's engine and recompute kernels.
+    fn attn_site_evidence_from_filing(
+        &self,
+        filing: &kaspa_consensus_core::palw_attn_responder_v1::PalwAttnAccusedFilingV1,
+        narrowed: u64,
+        carried_prompt: Option<&[u32]>,
+    ) -> Result<kaspa_consensus_core::palw_attn_responder_v1::PalwAttnSiteEvidenceV1, String> {
+        let (Some(plan), Some(registered)) = (&self.plan, &self.profile) else {
+            return Err("a backend with no registered graph carries no capture to read a fused site out of".to_string());
+        };
+        let binding = &filing.binding;
+        let prompt_ids = self.attn_prompt_ids_v1(binding, carried_prompt)?;
+        let rerun = self.attn_rerun_v1(plan, binding, &prompt_ids)?;
+        let inventory = crate::inventory::qwen36_inventory_v1(&self.artifact, registered).map_err(|e| format!("{e:?}"))?;
+        let artifact = &self.artifact;
+        let (profile, ctx, generated) = (&binding.shape_profile, &binding.job_context, &rerun.generated_token_ids);
+        let anchor_source = match &filing.anchor {
+            Some(filed) => crate::attn_responder::Base0AttnAnchorSourceV1::Filed(filed),
+            None => crate::attn_responder::Base0AttnAnchorSourceV1::Leg(&rerun.checkpoints),
+        };
+        crate::attn_responder::base0_attn_site_evidence_v1(
+            binding,
+            crate::attn_responder::Base0AttnRowsV1::HonestPrefix { honest: &rerun.tiles, accused_out_tile: &filing.out_tile },
+            anchor_source,
+            narrowed,
+            inventory.operands(),
+            inventory.root(),
+            self.step_ladder_cap,
+            &mut |covered| {
+                let mut kernels = crate::fp_recompute::Qwen36RecomputeKernelsV1::new(artifact, plan);
+                crate::fp_recompute::base0_fp_recompute_state_at_covered_v1(
+                    profile,
+                    ctx,
+                    &prompt_ids,
+                    generated,
+                    covered,
+                    &mut kernels,
+                )
+                .map(|state| state.chunks)
+                .map_err(|e| e.to_string())
+            },
+        )
+        .map_err(|e| crate::attn_responder::base0_attn_name_the_missing_anchor_v1(e, filing))
     }
 
     fn supports_dissection(&self) -> bool {

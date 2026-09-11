@@ -344,11 +344,45 @@ inside its fused test; `the_walk_visits_what_the_chain_accepted_newest_first_and
 committed tile altered, the execution itself honest) and not in general: the evidence reads the
 checkpoint leg from a re-execution, and a forger whose downstream execution follows its lie commits
 different checkpoint leaves after the disputed call — the re-execution's leg does not root to the
-binding, the evidence refuses by name, and the backstop acquits. A fold carries its checkpoint
-leaves (Decision 7 reads them); the dense retention (`Base0RetainedMaterialV1`) carries tiles, rows,
-ids and, under the per-position cadence, no chunks — no leaves. The fix has Decision 7's shape: the
-dense retention carries its checkpoint leaves (a material version `verify_material` checks against
-the binding's checkpoint root, so a producer cannot serve the capture without them), or the
-accused's anchor is filed on chain with its root claim. **Not built.**
+binding, the evidence refuses by name, and the backstop acquits. And it was worse for the lane
+testnet-11 actually runs: a graph-v5 attempt capture at 512 is ~748 MB, over the material cap, so a
+challenger never holds the accused's capture at all, and the close waited on a pull that is never
+answered. Carrying the leaves in the dense material (the fix first proposed here) would not have
+reached that challenger, and a forger chooses what it serves — hence Decision 8 and the filing route
+below.
 
-**Still not done:** the dense retention's checkpoint leaves (above); a live devnet drill; step 6.
+**The filing route (Decision 7, widened).** The challenger's close no longer needs the accused's
+capture: `attn_site_evidence_from_filing` builds the bottom's evidence from the accused's FILING —
+the binding and opened tile its root claim carries (and the anchor, below) — and this node's own
+re-execution of the accused's job, through the same `PalwStepPrefixTreeV1`. The panel's close uses
+the accused's capture when it holds one and falls to the filing when it holds none or the capture
+cannot bottom the accused; it keeps asking for the capture, and no longer waits on it. Pinned on the
+dense tier: the drill forgery's filing yields the dense capture's evidence opening for opening and
+convicts (`a_filing_bottoms_the_accused_without_its_capture_and_its_anchor_convicts_a_deep_forger`).
+
+**Decision 8 — the root claim carries the anchor its bottom will need, past its own fence.** The one
+path no challenger can rebuild once an execution followed its lie is the path to the accused's anchor
+checkpoint (its right siblings are the accused's later checkpoints). The party that holds it for
+certain is the responder, at the one move it cannot skip: move 1, where silence convicts. So a new
+object, `CourtAttnRootClaimedAnchored` (tag 42, appended last), is the root claim plus that anchor,
+opened against the claim's own checkpoint leg; the fold checks it against the site with the bottom's
+own anchor check (`palw_attn_anchor_is_the_sites_v1`, one spelling with `verified_anchor_v1`) and
+opens the same phase as the plain form, storing nothing new. `Params::palw_attn_anchored_root`
+(`None` on every preset, `Some`-only in the fingerprint, threaded through the fold's extras and the
+sync walker, refused unless `palw_kary_court` is armed at or below it): before it the anchored form
+is refused and nothing moves; past it the plain form is refused at a site whose bottom reads a
+checkpoint. The panel files the anchored form past the fence and reads it back off the chain for the
+close (`attn_root_filings_from_chain_v1`). Arming it refuses a root claim from every build before
+this one, so it waits for the network's upgrade. Pinned: through the fold
+(`the_anchored_root_claim_opens_past_its_fence_and_the_plain_one_is_refused_there` — dormant, armed,
+a wrong counter and a forged leaf), the tag (`the_anchored_root_claim_is_tag_42_and_the_plain_one_keeps_its_tag`),
+the fence (`the_anchored_root_fence_is_dormant_visible_when_armed_and_needs_the_kary_court`) and on
+the dense tier a forger whose checkpoints after the disputed call differ: its own capture cannot be
+bottomed, the filing without an anchor is refused naming this Decision, and the filing with its
+anchor convicts; a forged anchor opens nothing.
+
+*Tag coordination:* `feat/adr-0103-held-context` (branched from this one at `3e9c3b59`) appends
+three objects at 42–44; whichever lands on `main` second re-appends after the other. Nothing has
+been filed under any of them on any chain (every fence is `None`), so a renumber moves no history.
+
+**Still not done:** a live devnet drill; step 6 (the fleet upgrade); arming Decision 8.

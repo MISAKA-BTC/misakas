@@ -2020,11 +2020,13 @@ mod adr0093_responder_gap {
                 None => src,
             };
             assert!(production.contains("impl PalwExecutionBackendV1 for"), "{file}: the read reaches the family's trait impl");
-            for verb in ["fn attn_site_evidence", "fn supports_dissection"] {
+            // ADR-0093 Decision 7/8: the filing verb comes with the capture verb — a challenger
+            // that can read an accused's capture must be able to bottom it without one.
+            for verb in ["fn attn_site_evidence(", "fn attn_site_evidence_from_filing(", "fn supports_dissection"] {
                 assert_eq!(
                     production.contains(verb),
                     answers,
-                    "{file}: `{verb}` — a family answers a dissection with both verbs or with neither"
+                    "{file}: `{verb}` — a family answers a dissection with every verb or with none"
                 );
             }
             assert!(!production.contains("fn attn_tile_claim"), "{file}: the retired verb is not implemented");

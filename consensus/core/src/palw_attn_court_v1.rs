@@ -917,6 +917,19 @@ fn opened_lanes_v1(
 /// **Verify the anchor's checkpoint leaf against the claim's checkpoint leg**, and answer with
 /// the leaf. What it does NOT answer is whether this is the RIGHT checkpoint for the disputed
 /// step — see [`PalwAttnBottomSiteV1`].
+/// **Is this the checkpoint the site's bottom anchors at, committed?** (ADR-0093 Decision 8.) The
+/// bottom's own anchor check, asked of an anchor a root claim files: the derived counter exactly,
+/// the geometry that describes it, the chunk count, the leaf's hash and its opening against the
+/// claim's checkpoint leg. One spelling — the bottom and the filing cannot disagree on what an
+/// anchor is.
+pub fn palw_attn_anchor_is_the_sites_v1(
+    anchor: &PalwAttnCheckpointAnchorV1,
+    binding: &PalwAttnBottomBindingV1,
+    site: &PalwAttnBottomSiteV1,
+) -> Result<(), PalwAttnCourtError> {
+    verified_anchor_v1(Some(anchor), binding, site).map(|_| ())
+}
+
 fn verified_anchor_v1<'a>(
     anchor: Option<&'a PalwAttnCheckpointAnchorV1>,
     binding: &PalwAttnBottomBindingV1,

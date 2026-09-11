@@ -129,6 +129,7 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // this list is stateless: a fence is resolved at a DAA score, and this function does not
         // have one.
         PalwConsensusObjectV2::CourtAttnRootClaimed { signature, .. }
+        | PalwConsensusObjectV2::CourtAttnRootClaimedAnchored { signature, .. }
         | PalwConsensusObjectV2::CourtAttnDissected { signature, .. }
         | PalwConsensusObjectV2::CourtAttnChildChosen { signature, .. }
             if !signature.is_empty() =>
@@ -136,6 +137,7 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
             Ok(())
         }
         PalwConsensusObjectV2::CourtAttnRootClaimed { .. }
+        | PalwConsensusObjectV2::CourtAttnRootClaimedAnchored { .. }
         | PalwConsensusObjectV2::CourtAttnDissected { .. }
         | PalwConsensusObjectV2::CourtAttnChildChosen { .. } => Err(
             "a fused-attention dissection move must carry the signature of the party it is attributed to — unsigned, either side could write the other's moves",

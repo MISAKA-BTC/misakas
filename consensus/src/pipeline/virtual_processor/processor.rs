@@ -558,6 +558,10 @@ pub struct VirtualStateProcessor {
     /// `Params::palw_fused_dissectable` (ADR-0093 Decision 6): must a fused registration's output
     /// tile be one head's. Resolved in ONE place, [`Self::palw_fused_dissectable_at`].
     pub(super) palw_fused_dissectable: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// `Params::palw_attn_anchored_root` (ADR-0093 Decision 8): may a root claim carry its anchor,
+    /// and must it. Resolved in ONE place, [`Self::palw_attn_anchored_root_at`]; the acceptance arm
+    /// and the fold's extras both read it through that.
+    pub(super) palw_attn_anchored_root: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// Rate limiter for [`Self::palw_warn_if_maturity_outruns_the_registry`] — the DAA score the
     /// shortfall was last reported at, or `PALW_SHORTFALL_NEVER_REPORTED`. **Log state only**:
     /// nothing consensus-visible reads it, so two nodes that report at different moments still
@@ -1008,6 +1012,7 @@ impl VirtualStateProcessor {
             palw_shard_licensing: params.palw_shard_licensing_fence(),
             palw_token_lift: params.palw_token_lift_fence(),
             palw_fused_dissectable: params.palw_fused_dissectable_fence(),
+            palw_attn_anchored_root: params.palw_attn_anchored_root_fence(),
             palw_frontier_provenance: params.palw_frontier_provenance,
             palw_validator_payout_bounds: params.palw_validator_payout_bounds_fence(),
             finality_depth: params.blockrate.finality_depth,
@@ -6613,7 +6618,16 @@ impl VirtualStateProcessor {
                 // not exist on this chain), then the party's signature, the same split every
                 // other court move uses.
                 // -------------------------------------------------------------------------
-                Obj::CourtAttnRootClaimed { session_id, root, arity, signature, .. } => {
+                Obj::CourtAttnRootClaimed { session_id, root, arity, signature, .. }
+                | Obj::CourtAttnRootClaimedAnchored { session_id, root, arity, signature, .. } => {
+                    // ADR-0093 Decision 8: the anchored form exists only where its fence does. (The
+                    // plain form's refusal past the fence needs the site, so the fold makes it.)
+                    if matches!(object, Obj::CourtAttnRootClaimedAnchored { .. }) && !self.palw_attn_anchored_root_at(point.daa_score)
+                    {
+                        return Err(format!(
+                            "session {session_id}: an anchored root claim before palw_attn_anchored_root is armed (ADR-0093 Decision 8)"
+                        ));
+                    }
                     kaspa_consensus_core::palw_court_v2::palw_attn_move_is_admissible_v2(
                         object,
                         self.palw_kary_court_active_at(point.daa_score),
@@ -7501,6 +7515,10 @@ impl VirtualStateProcessor {
             // claim the producer's own number back.
             fp_da_pins_active: self.palw_fp_da_pins_at(daa_score),
             evm_actions: Vec::new(),
+            // ADR-0093 Decision 8: which form of move 1 opens a phase. Written explicitly for the
+            // reason the lines above give — an unwritten default here would refuse, or admit, a
+            // responder's whole defense by omission.
+            attn_anchored_root_active: self.palw_attn_anchored_root_at(daa_score),
             // ADR-0100: the one-move court's ladder rides to the fold when the court is armed —
             // the SAME ladder the acceptance arm adjudicates at, so both derive one verdict.
             // Written explicitly for the reason the two lines above give.
@@ -7599,6 +7617,11 @@ impl VirtualStateProcessor {
     /// **ADR-0093 Decision 6, resolved in exactly one place.**
     fn palw_fused_dissectable_at(&self, daa_score: u64) -> bool {
         self.palw_fused_dissectable.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0093 Decision 8, resolved in exactly one place.**
+    fn palw_attn_anchored_root_at(&self, daa_score: u64) -> bool {
+        self.palw_attn_anchored_root.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// **Whether a claim's panel is drawn per shard, and into how many** — the ONE decision the
@@ -14880,6 +14903,8 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::CourtCloseChunk { .. } => "CourtCloseChunk",
         // ADR-0082 Decision 2 — the fused-attention dissection's three moves.
         O::CourtAttnRootClaimed { .. } => "CourtAttnRootClaimed",
+        // ADR-0093 Decision 8 — move 1 with its anchor.
+        O::CourtAttnRootClaimedAnchored { .. } => "CourtAttnRootClaimedAnchored",
         O::CourtAttnDissected { .. } => "CourtAttnDissected",
         O::CourtAttnChildChosen { .. } => "CourtAttnChildChosen",
     }

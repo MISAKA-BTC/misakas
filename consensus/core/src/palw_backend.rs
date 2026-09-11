@@ -327,6 +327,26 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Err("this family cannot read a fused site out of its capture".to_string())
     }
 
+    /// **The bottom's evidence from the accused's FILING alone** (ADR-0093 Decisions 7 and 8) —
+    /// for the close whose accused capture this node does not hold (an over-cap attempt capture is
+    /// never pulled) or cannot use. The rows before the disputed leaf are this node's own
+    /// re-execution of the accused's job (the court narrowed to the first leaf it could not
+    /// reproduce, so they are the accused's committed rows — the evidence refuses by name unless
+    /// they root, with the filed tile, to the accused's binding); the output tile and, when filed,
+    /// the anchor are the accused's own, off its root claim. Without a filed anchor the checkpoint
+    /// leg is the re-execution's, which is the accused's only when its execution did not follow its
+    /// lie — otherwise the refusal names the anchored root claim that would have carried it.
+    ///
+    /// `Err` by default, like [`Self::attn_site_evidence`]: the two verbs come together.
+    fn attn_site_evidence_from_filing(
+        &self,
+        _filing: &crate::palw_attn_responder_v1::PalwAttnAccusedFilingV1,
+        _narrowed: u64,
+        _carried_prompt: Option<&[u32]>,
+    ) -> Result<crate::palw_attn_responder_v1::PalwAttnSiteEvidenceV1, String> {
+        Err("this family cannot read a fused site out of a filing".to_string())
+    }
+
     /// **Can this backend take a FUSED dissection's turn?** — deliberately not
     /// [`Self::supports_court`], which is a different turn.
     ///

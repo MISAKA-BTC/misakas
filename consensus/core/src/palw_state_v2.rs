@@ -3237,6 +3237,27 @@ pub enum PalwConsensusObjectV2 {
     ShardReceiptLicensed {
         part: crate::palw_shard_licensing_v1::PalwShardReceiptPartV1,
     },
+    /// **ADR-0093 Decision 8: the root claim with the anchor its bottom will need.** Move 1 of a
+    /// fused dissection exactly as `CourtAttnRootClaimed` — the same root claim, arity, binding,
+    /// opened output tile, operand openings and responder's signature over the root claim — plus
+    /// the checkpoint the disputed step anchors at, opened against the binding's own checkpoint
+    /// leg and checked against the site the class derives before the phase opens. Its bytes are
+    /// self-authenticating (they open against roots the claim committed), so the signature is the
+    /// plain root claim's. The party that files it is the one party that holds that path for
+    /// certain — a challenger cannot rebuild it once the accused's execution followed its lie —
+    /// and silence at this move convicts, so the path cannot be withheld. Refused while
+    /// `Params::palw_attn_anchored_root` is dormant (every shipped preset) and required past it
+    /// wherever the bottom reads a checkpoint. Tag 42, appended last.
+    CourtAttnRootClaimedAnchored {
+        session_id: Hash64,
+        root: crate::palw_attn_dissect::PalwAttnRootClaimV1,
+        arity: u8,
+        binding: Box<crate::palw_step_leg::PalwStepBindingV2>,
+        out_tile: crate::palw_attn_court_v1::PalwAttnRowOpeningV1,
+        anchor: Box<crate::palw_attn_court_v1::PalwAttnCheckpointAnchorV1>,
+        operand_openings: Vec<crate::palw_artifact::PalwArtifactOpeningV1>,
+        signature: Vec<u8>,
+    },
 }
 
 /// The block's own work slot, as the V3 transition consumes it (ADR-0044): a chain-challenge
@@ -3922,6 +3943,7 @@ pub fn palw_court_move_spends_the_slot_v1(state: &PalwChainStateV2, object: &Pal
     use crate::palw_bisect::PalwBisectTurnV1;
     let session_id = match object {
         PalwConsensusObjectV2::CourtAttnRootClaimed { session_id, .. }
+        | PalwConsensusObjectV2::CourtAttnRootClaimedAnchored { session_id, .. }
         | PalwConsensusObjectV2::CourtAttnDissected { session_id, .. }
         | PalwConsensusObjectV2::CourtAttnChildChosen { session_id, .. } => session_id,
         _ => return false,
@@ -3933,7 +3955,8 @@ pub fn palw_court_move_spends_the_slot_v1(state: &PalwChainStateV2, object: &Pal
         // Move 1 OPENS the phase, so what it needs is a phase not open yet and a ladder that has
         // narrowed to the leaf a dissection is about — `DissectionAlreadyOpen` and
         // `LadderNotTerminal`, the fold's own first two refusals.
-        PalwConsensusObjectV2::CourtAttnRootClaimed { root, .. } => {
+        PalwConsensusObjectV2::CourtAttnRootClaimed { root, .. }
+        | PalwConsensusObjectV2::CourtAttnRootClaimedAnchored { root, .. } => {
             session.dissection.is_none()
                 && session.ladder.terminal_index().is_some()
                 && root.version == crate::palw_attn_dissect::PALW_ATTN_DISSECT_OBJECT_VERSION_V1
@@ -11074,7 +11097,33 @@ fn apply_object(
         // uses. What the fold enforces on its own is the arity: an illegal one is refused here,
         // and whether the legal one is the ruleset's derived value is checked where the bundle is.
         // -------------------------------------------------------------------------------------
-        PalwConsensusObjectV2::CourtAttnRootClaimed { session_id, root, arity, binding, out_tile, operand_openings, signature: _ } => {
+        PalwConsensusObjectV2::CourtAttnRootClaimed { .. } | PalwConsensusObjectV2::CourtAttnRootClaimedAnchored { .. } => {
+            // **ADR-0093 Decision 8: move 1 has two forms, and past its fence the one without the
+            // anchor is refused wherever the bottom will read a checkpoint.** Both open the same
+            // phase; the anchored form's anchor is checked against the site the class derives and
+            // then left on the chain for the bottom to read — the phase keeps nothing new.
+            let (session_id, root, arity, binding, out_tile, operand_openings, filed_anchor) = match object {
+                PalwConsensusObjectV2::CourtAttnRootClaimed {
+                    session_id, root, arity, binding, out_tile, operand_openings, ..
+                } => (session_id, root, arity, binding, out_tile, operand_openings, None),
+                PalwConsensusObjectV2::CourtAttnRootClaimedAnchored {
+                    session_id,
+                    root,
+                    arity,
+                    binding,
+                    out_tile,
+                    anchor,
+                    operand_openings,
+                    ..
+                } => (session_id, root, arity, binding, out_tile, operand_openings, Some(anchor.as_ref())),
+                _ => unreachable!("the arm matched one of the two"),
+            };
+            if filed_anchor.is_some() && !builder.extras.attn_anchored_root_active {
+                return Err(PalwStateV2Error::DissectionRefused(
+                    *session_id,
+                    "an anchored root claim before palw_attn_anchored_root is armed (ADR-0093 Decision 8)".to_string(),
+                ));
+            }
             let mut session =
                 builder.state.court_sessions.get(session_id).ok_or(PalwStateV2Error::MissingSession(*session_id))?.clone();
             if session.dissection.is_some() {
@@ -11093,8 +11142,24 @@ fn apply_object(
                 .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
             // The site is the CLASS's description of the leaf the ladder terminated on — derived
             // from the coordinate and the registered profile, never supplied by the mover.
-            let derived = crate::palw_court_v2::palw_attn_dispute_site_v2(&claim, binding, &operands, narrowed, None)
+            let derived = crate::palw_court_v2::palw_attn_dispute_site_v2(&claim, binding, &operands, narrowed, filed_anchor)
                 .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
+            // The anchor the bottom will need: carried and exactly the site's own, or — past the
+            // fence, at a site whose bottom reads a checkpoint — required.
+            let needs_anchor = derived.site.every_position_is_checkpointed && derived.site.anchor_covered_decode_call.is_some();
+            match filed_anchor {
+                Some(anchor) => crate::palw_attn_court_v1::palw_attn_anchor_is_the_sites_v1(anchor, &derived.binding, &derived.site)
+                    .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?,
+                None if builder.extras.attn_anchored_root_active && needs_anchor => {
+                    return Err(PalwStateV2Error::DissectionRefused(
+                        *session_id,
+                        "past palw_attn_anchored_root a root claim whose bottom reads a checkpoint must carry that checkpoint \
+                         (CourtAttnRootClaimedAnchored, ADR-0093 Decision 8)"
+                            .to_string(),
+                    ));
+                }
+                None => {}
+            }
             // **The committed row, opened.** This is the pin that makes the whole protocol be
             // about THIS execution: without it a responder whose committed output was forged
             // could state the honest row's partials, play every round truthfully, and be
@@ -11700,6 +11765,11 @@ pub struct PalwTransitionExtrasV1 {
     /// count a part, and does not otherwise hold. `None` refuses all three sharding objects and is
     /// byte-identical to the transition before they existed.
     pub shard_licensing: Option<crate::palw_shard_licensing_v1::PalwShardLicensingParamsV1>,
+    /// ADR-0093 Decision 8: `Params::palw_attn_anchored_root` resolved at the block's DAA. Below
+    /// it an anchored root claim is refused and a plain one opens the phase as before — so every
+    /// dormant network folds byte-identically; past it the plain form is refused at a site whose
+    /// bottom reads a checkpoint.
+    pub attn_anchored_root_active: bool,
 }
 
 impl<'a> TransitionBuilder<'a> {
@@ -11893,24 +11963,17 @@ fn model_seed_v1(
         // Decision 2: opening happens once. An open market takes no further seed, as before.
         Some(open) if open.is_open() => return Err(PalwStateV2Error::ModelMarketAlreadySeeded(*line_id)),
         Some(pledged) if accumulate => {
-            let total = pledged
-                .seed_pledged_sompi
-                .checked_add(msk_seed)
-                .ok_or(PalwStateV2Error::Overflow("model seed accumulation"))?;
+            let total =
+                pledged.seed_pledged_sompi.checked_add(msk_seed).ok_or(PalwStateV2Error::Overflow("model seed accumulation"))?;
             // Decision 3: the row keeps naming the FIRST payer; a later sompi claims nothing.
             let grown = PalwModelMarketV1 { msk_reserve: total, seed_pledged_sompi: total, ..pledged };
             if total >= PALW_MODEL_SEED_MIN_SOMPI_V1 { grown.open_from_pledge_v1(ctx.daa_score) } else { grown }
         }
         Some(_) => return Err(PalwStateV2Error::ModelMarketAlreadySeeded(*line_id)),
-        None if msk_seed >= PALW_MODEL_SEED_MIN_SOMPI_V1 => {
-            PalwModelMarketV1::seed_v1(ctx.daa_score, msk_seed, *seeder)
-        }
+        None if msk_seed >= PALW_MODEL_SEED_MIN_SOMPI_V1 => PalwModelMarketV1::seed_v1(ctx.daa_score, msk_seed, *seeder),
         None if accumulate => PalwModelMarketV1::pledge_v1(ctx.daa_score, msk_seed, *seeder),
         None => {
-            return Err(PalwStateV2Error::ModelSeedTooSmall {
-                want: PALW_MODEL_SEED_MIN_SOMPI_V1,
-                got: msk_seed,
-            });
+            return Err(PalwStateV2Error::ModelSeedTooSmall { want: PALW_MODEL_SEED_MIN_SOMPI_V1, got: msk_seed });
         }
     };
     builder.write_model_market(*line_id, Some(market));
@@ -24352,6 +24415,100 @@ pub(crate) mod tests {
             }
         }
 
+        /// **ADR-0093 Decision 8 through the fold: the anchored root claim opens the phase past its
+        /// fence and is refused before it; past it, the plain root claim is refused at this site —
+        /// whose bottom reads a checkpoint — and an anchor that is not the site's own is refused.**
+        #[test]
+        fn the_anchored_root_claim_opens_past_its_fence_and_the_plain_one_is_refused_there() {
+            let p = params_with_ladder();
+            let drill = Drill::new(false);
+            let (state, _claim, sid, daa) = court_at_the_fused_leaf(&p, &drill);
+            let anchor = Anchor::build(&drill.profile, &drill.context, &drill.k, &drill.v, drill.kv_dim, ANCHOR_POSITIONS).anchor;
+            let anchored = |a: PalwAttnCheckpointAnchorV1| PalwConsensusObjectV2::CourtAttnRootClaimedAnchored {
+                session_id: sid,
+                root: drill.root_claim.clone(),
+                arity: 2,
+                binding: Box::new(drill.binding.clone()),
+                out_tile: drill.out_tile_opening(),
+                anchor: Box::new(a),
+                operand_openings: drill.openings(),
+                signature: vec![0xAA; 8],
+            };
+            let fold = |armed: bool, object: PalwConsensusObjectV2| {
+                let extras = PalwTransitionExtrasV1 { attn_anchored_root_active: armed, ..Default::default() };
+                apply_palw_transition_v2_with_extras(
+                    &state,
+                    &p,
+                    &ctx(daa, daa, daa),
+                    &[object],
+                    None,
+                    false,
+                    false,
+                    false,
+                    false,
+                    &extras,
+                )
+            };
+            // Dormant: the plain form opens the phase as it always did, the anchored form is refused.
+            let (plain_dormant, _) = fold(false, root_claimed(sid, &drill, 2)).expect("dormant, the plain root claim stands");
+            let refused = fold(false, anchored(anchor.clone())).expect_err("dormant, the anchored form is refused");
+            assert!(format!("{refused:?}").contains("palw_attn_anchored_root"), "{refused:?}");
+            // Armed: the anchored form opens the same phase; the plain one is refused at this site.
+            let (opened, _) = fold(true, anchored(anchor.clone())).expect("armed, the anchored root claim opens the phase");
+            assert_eq!(
+                opened.court_session(&sid).and_then(|s| s.dissection.clone()),
+                plain_dormant.court_session(&sid).and_then(|s| s.dissection.clone()),
+                "the anchored form opens exactly the phase the plain one did — it stores nothing new"
+            );
+            let err = fold(true, root_claimed(sid, &drill, 2))
+                .expect_err("armed, the plain form is refused where the bottom reads a checkpoint");
+            assert!(format!("{err:?}").contains("CourtAttnRootClaimedAnchored"), "{err:?}");
+            // An anchor that is not the site's own checkpoint: another counter, or a forged leaf.
+            let mut wrong_counter = anchor.clone();
+            wrong_counter.leaf.covered_decode_call += 1;
+            assert!(fold(true, anchored(wrong_counter)).is_err(), "an anchor at another counter is refused");
+            let mut wrong_state = anchor.clone();
+            wrong_state.leaf.state_chunks_root = Hash64::from_u64_word(0xBAD);
+            assert!(fold(true, anchored(wrong_state)).is_err(), "an anchor whose leaf is not the committed one is refused");
+        }
+
+        /// **Move 1's two forms keep their places in the object enum** — the anchored form is tag
+        /// 42, appended after `ShardReceiptLicensed` (41), and the plain form keeps its own.
+        #[test]
+        fn the_anchored_root_claim_is_tag_42_and_the_plain_one_keeps_its_tag() {
+            let drill = Drill::new(false);
+            let sid = Hash64::from_u64_word(0x5E5);
+            let anchor = Anchor::build(&drill.profile, &drill.context, &drill.k, &drill.v, drill.kv_dim, ANCHOR_POSITIONS).anchor;
+            let plain = root_claimed(sid, &drill, 2);
+            let PalwConsensusObjectV2::CourtAttnRootClaimed {
+                session_id,
+                root,
+                arity,
+                binding,
+                out_tile,
+                operand_openings,
+                signature,
+            } = plain.clone()
+            else {
+                unreachable!()
+            };
+            let anchored = PalwConsensusObjectV2::CourtAttnRootClaimedAnchored {
+                session_id,
+                root,
+                arity,
+                binding,
+                out_tile,
+                anchor: Box::new(anchor),
+                operand_openings,
+                signature,
+            };
+            assert_eq!(borsh::to_vec(&anchored).unwrap()[0], 42);
+            let plain_tag = borsh::to_vec(&plain).unwrap()[0];
+            assert!(plain_tag < 38, "the plain root claim predates the tail: tag {plain_tag}");
+            let back: PalwConsensusObjectV2 = borsh::from_slice(&borsh::to_vec(&anchored).unwrap()).unwrap();
+            assert_eq!(back, anchored);
+        }
+
         /// **The cache-write route is refused BY NAME for a class that checkpoints every position**
         /// (ADR-0082 Decision 4 as amended by stream K). Stream I measured why: a bottom on that
         /// route can swap the K and V series wholesale, every opening verifies, and an honest
@@ -26276,6 +26433,7 @@ pub(crate) mod tests {
                 fp_da_pins_active: false,
                 shard_court_ladder: None,
                 shard_licensing: None,
+                attn_anchored_root_active: false,
             }
         }
 
@@ -26483,6 +26641,7 @@ pub(crate) mod tests {
                 fp_da_pins_active: false,
                 shard_court_ladder: None,
                 shard_licensing: None,
+                attn_anchored_root_active: false,
             };
             let (s_off, _) =
                 apply_palw_transition_v2_with_extras(&s, &p, &ctx(3, 251, 3), &[], None, false, false, false, false, &dormant)

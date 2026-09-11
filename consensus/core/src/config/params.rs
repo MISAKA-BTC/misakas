@@ -1471,6 +1471,21 @@ pub struct Params {
     /// `None` on every preset.
     pub palw_fused_dissectable: Option<ForkActivation>,
 
+    /// **ADR-0093 Decision 8 — the root claim carries the anchor the bottom will need.**
+    ///
+    /// A dissection's bottom on a class that checkpoints every position opens the checkpoint its
+    /// step anchors at, and the path to that leaf runs through the ACCUSED's later checkpoints —
+    /// which a producer whose execution follows its own lie commits differently from any honest
+    /// run, and which its capture need not carry (a dense capture keeps none; an over-cap capture
+    /// is never pulled). Past this fence the responder files `CourtAttnRootClaimedAnchored` — the
+    /// root claim with that checkpoint opened against its own leg — and the plain root claim is
+    /// refused at a site whose bottom needs an anchor; the anchor is verified at filing, so the
+    /// challenger's bottom reads it off the chain. Before it, nothing moves: the anchored object is
+    /// refused by name and the plain one opens the phase as it always did. Needs `palw_kary_court`
+    /// armed at or below it. `None` on every preset: arming it refuses a root claim from every
+    /// build before this one, so it waits for the network's upgrade.
+    pub palw_attn_anchored_root: Option<ForkActivation>,
+
     /// **ADR-0083 Decision 1 — the difficulty window counts only rows priced by `bits`.**
     ///
     /// Past this fence `calculate_difficulty_bits` sizes its expected duration by the rows in the
@@ -1879,6 +1894,18 @@ impl Params {
             }
         }
         use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
+        // **ADR-0093 Decision 8 needs the court it is a move of.** A root claim is a dissection's
+        // first move; a fence armed where the k-ary court is not has no dissection to anchor. Asked
+        // first: it reads two fences and nothing of the bundle.
+        if let Some(anchored) = self.palw_attn_anchored_root
+            && anchored != ForkActivation::never()
+            && !self.palw_kary_court.is_some_and(|court| court != ForkActivation::never() && court.daa_score() <= anchored.daa_score())
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_attn_anchored_root is armed without palw_kary_court armed at or below the same height: the anchored root \
+                 claim is a move of a dissection the network does not run (ADR-0093 Decision 8)",
+            ));
+        }
         // **ADR-0066 SA-2: an armed leak must have a non-empty re-entry window.** Checked ahead of
         // the V2 gate below, because the inactivity leak is a DNS-overlay rule and a hash-lineage
         // network can arm it too. Exclusion follows `t_leak_daa` of silence and re-inclusion needs
@@ -2958,6 +2985,10 @@ impl Params {
         if self.palw_fused_dissectable == Some(ForkActivation::never()) {
             self.palw_fused_dissectable = None;
         }
+        // ADR-0093 Decision 8, likewise.
+        if self.palw_attn_anchored_root == Some(ForkActivation::never()) {
+            self.palw_attn_anchored_root = None;
+        }
         // ADR-0083 Decision 1, the same shape: a bare fence, `never()` is absence.
         if self.palw_difficulty_priced_rows == Some(ForkActivation::never()) {
             self.palw_difficulty_priced_rows = None;
@@ -3378,6 +3409,19 @@ impl Params {
         self.palw_fused_dissectable_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
+    /// ADR-0093 Decision 8's fence, resolved: `Some` only on a `ConsensusV2` network that armed it.
+    /// The ONE place "must a root claim carry its anchor" is decided.
+    pub fn palw_attn_anchored_root_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_attn_anchored_root) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    pub fn palw_attn_anchored_root_active_at(&self, daa_score: u64) -> bool {
+        self.palw_attn_anchored_root_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
     /// ADR-0081 Decision 3's fence with the mode condition already folded in — `Some` only on a
     /// `ConsensusV2` network that has armed it.
     pub fn palw_prompt_ids_merkle_fence(&self) -> Option<ForkActivation> {
@@ -3496,6 +3540,7 @@ impl Params {
             palw_shard_licensing,
             palw_token_lift,
             palw_fused_dissectable,
+            palw_attn_anchored_root,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -3547,6 +3592,7 @@ impl Params {
             ("palw_shard_licensing", *palw_shard_licensing),
             ("palw_token_lift", *palw_token_lift),
             ("palw_fused_dissectable", *palw_fused_dissectable),
+            ("palw_attn_anchored_root", *palw_attn_anchored_root),
             ("palw_difficulty_priced_rows", *palw_difficulty_priced_rows),
             ("palw_receipt_rows_unpriced", *palw_receipt_rows_unpriced),
             ("palw_attempt_header_pins", *palw_attempt_header_pins),
@@ -3722,6 +3768,11 @@ impl Params {
             h.write(b"palw_fused_dissectable");
             h.write(dissectable.daa_score().to_le_bytes());
         }
+        // ADR-0093 Decision 8's fence, NAMED likewise: it changes which root claims open a phase.
+        if let Some(anchored) = self.palw_attn_anchored_root {
+            h.write(b"palw_attn_anchored_root");
+            h.write(anchored.daa_score().to_le_bytes());
+        }
         // ADR-0083 Decision 1's fence, NAMED for the same reason: it changes the bits every header
         // past it must carry, so an operator reading the schedule must see it.
         if let Some(priced) = self.palw_difficulty_priced_rows {
@@ -3868,6 +3919,7 @@ impl Params {
             palw_shard_licensing,
             palw_token_lift,
             palw_fused_dissectable,
+            palw_attn_anchored_root,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -4170,6 +4222,10 @@ impl Params {
         if let Some(activation) = palw_fused_dissectable.as_mut() {
             fork(activation, visit);
         }
+        // ADR-0093 Decision 8. Some-only, likewise.
+        if let Some(activation) = palw_attn_anchored_root.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0083 Decision 1. Some-only, likewise.
         if let Some(activation) = palw_difficulty_priced_rows.as_mut() {
             fork(activation, visit);
@@ -4415,6 +4471,7 @@ impl Params {
             palw_shard_licensing,
             palw_token_lift,
             palw_fused_dissectable,
+            palw_attn_anchored_root,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -4741,6 +4798,11 @@ impl Params {
         // byte-identically to a build without the field.
         if let Some(activation) = palw_fused_dissectable {
             h.write(b"palw_fused_dissectable");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0093 Decision 8, Some-only for the same reason.
+        if let Some(activation) = palw_attn_anchored_root {
+            h.write(b"palw_attn_anchored_root");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0083 Decision 1, Some-only for the same reason: arming it changes the `bits` every
@@ -5096,6 +5158,7 @@ impl Params {
             palw_shard_licensing: self.palw_shard_licensing,
             palw_token_lift: self.palw_token_lift,
             palw_fused_dissectable: self.palw_fused_dissectable,
+            palw_attn_anchored_root: self.palw_attn_anchored_root,
             palw_difficulty_priced_rows: self.palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced: self.palw_receipt_rows_unpriced,
             palw_attempt_header_pins: self.palw_attempt_header_pins,
@@ -6053,6 +6116,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_fused_dissectable: None,
+    palw_attn_anchored_root: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -6222,6 +6286,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_fused_dissectable: None,
+    palw_attn_anchored_root: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -6373,6 +6438,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_fused_dissectable: None,
+    palw_attn_anchored_root: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -10594,6 +10660,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_shard_licensing: None,
     palw_token_lift: None,
     palw_fused_dissectable: None,
+    palw_attn_anchored_root: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -12690,6 +12757,35 @@ mod consensus_params_id_tests {
         let mut legacy = MAINNET_PARAMS.clone();
         legacy.palw_fused_dissectable = Some(ForkActivation::always());
         assert_eq!(legacy.palw_fused_dissectable_fence(), None);
+    }
+
+    /// **ADR-0093 Decision 8: the anchored-root fence is dormant everywhere, visible the moment it is
+    /// not, and needs the k-ary court at or below it.**
+    #[test]
+    fn the_anchored_root_fence_is_dormant_visible_when_armed_and_needs_the_kary_court() {
+        for (name, shipped) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
+        {
+            assert!(shipped.palw_attn_anchored_root.is_none(), "{name} must leave ADR-0093 Decision 8 dormant");
+            assert!(!shipped.palw_attn_anchored_root_active_at(u64::MAX), "{name}");
+        }
+        let shipped = devnet_shipped_params();
+        assert!(shipped.palw_attn_anchored_root.is_none(), "the bundled devnet leaves it dormant too");
+        assert!(shipped.palw_kary_court.is_some(), "the bundled devnet runs the k-ary court");
+        let mut visible = shipped.clone();
+        visible.palw_attn_anchored_root = Some(ForkActivation::new(9_000_000));
+        assert_ne!(visible.consensus_params_id(), shipped.consensus_params_id(), "armed, the fingerprint says so");
+        visible.validate_palw_v2().expect("armed over the k-ary court, the fence assembles");
+        let mut never = shipped.clone();
+        never.palw_attn_anchored_root = Some(ForkActivation::never());
+        never.validate_palw_v2().expect("Some(never()) is absence");
+        let mut courtless = visible.clone();
+        courtless.palw_kary_court = Some(ForkActivation::new(9_500_000));
+        let err = format!("{}", courtless.validate_palw_v2().expect_err("an anchored root claim of a dissection not yet run"));
+        assert!(err.contains("palw_attn_anchored_root") && err.contains("palw_kary_court"), "{err}");
+        let mut legacy = MAINNET_PARAMS.clone();
+        legacy.palw_attn_anchored_root = Some(ForkActivation::always());
+        assert_eq!(legacy.palw_attn_anchored_root_fence(), None);
     }
 
     /// **The V2 pruning horizon IS the derivation, and the inherited floor never binds** — the

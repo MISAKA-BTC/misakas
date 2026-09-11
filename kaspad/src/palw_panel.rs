@@ -2116,10 +2116,12 @@ impl PalwPanelService {
         // the dissection reads the same one.
         let mut attn_evidence: HashMap<(Hash64, bool), Arc<kaspa_consensus_core::palw_attn_responder_v1::PalwAttnSiteEvidenceV1>> =
             HashMap::new();
-        // ADR-0093 Decision 7: the accused's opened output tile per session, read off the chain once
+        // ADR-0093 Decisions 7 and 8: the accused's filing per session, read off the chain once
         // (with the DAA of the last look, so a miss is retried on a throttle, never every tick).
-        let mut attn_root_tiles: HashMap<Hash64, (u64, Option<kaspa_consensus_core::palw_attn_court_v1::PalwAttnRowOpeningV1>)> =
-            HashMap::new();
+        let mut attn_root_filings: HashMap<
+            Hash64,
+            (u64, Option<kaspa_consensus_core::palw_attn_responder_v1::PalwAttnAccusedFilingV1>),
+        > = HashMap::new();
         let mut receipts: HashMap<Hash64, Vec<PalwSeatReceiptV2>> = HashMap::new();
         // **Keyed by the PANEL, not by the claim** (ADR-0060's redraw, found while landing
         // ADR-0065 D4). A claim whose panel concludes nothing is revived once and binds a SECOND
@@ -2505,7 +2507,7 @@ impl PalwPanelService {
             let court_duties = session.palw_court_duties_v2(vec![bond_key]);
             let mut court_stalls: BTreeMap<&'static str, usize> = BTreeMap::new();
             attn_evidence.retain(|(session_id, _), _| court_duties.iter().any(|d| d.session_id == *session_id));
-            attn_root_tiles.retain(|session_id, _| court_duties.iter().any(|d| d.session_id == *session_id));
+            attn_root_filings.retain(|session_id, _| court_duties.iter().any(|d| d.session_id == *session_id));
             for duty in &court_duties {
                 let move_round = court_move_round_v1(duty);
                 if let Some(sent_daa) = court_moved.get(&(duty.session_id, move_round, duty.i_am_responder))
@@ -2773,31 +2775,17 @@ impl PalwPanelService {
                     // Which capture this move speaks from: the bottom is the accused's, every other
                     // move the party's own.
                     let from_accused = mv == AttnMove::Close || duty.i_am_responder;
-                    let source: Vec<u8> = if mv == AttnMove::Close {
-                        match accused_capture.as_deref() {
-                            Some(accused) => accused.to_vec(),
-                            None => {
-                                if requested.get(&duty.claim_id).is_none_or(|at| current_daa >= at.saturating_add(25)) {
-                                    requested.insert(duty.claim_id, current_daa);
-                                    pull_for_close.push(duty.claim_id);
-                                }
-                                *court_stalls.entry("the dissection's bottom needs the ACCUSED capture — pulling").or_default() += 1;
-                                continue;
-                            }
-                        }
-                    } else {
-                        capture.to_vec()
-                    };
                     let key = (duty.session_id, from_accused);
-                    // **The bottom is opened against the ACCUSED's commitments, and a fold keeps
-                    // none of its rows** (ADR-0093 Decision 7). What a forged fold cannot re-derive
-                    // is its output tile — so the close reads it where the accused was made to file
-                    // it: its root claim, on chain. Only a tile whose opening proves against THIS
-                    // claim's root at THIS leaf is kept; the evidence then re-checks it against the
-                    // accused's binding before a row is opened.
-                    let accused_out_tile = if mv == AttnMove::Close {
-                        match attn_root_tiles.get(&duty.session_id) {
-                            Some((_, Some(tile))) => Some(tile.clone()),
+                    // **The bottom is opened against the ACCUSED's commitments** (ADR-0093 Decisions 7
+                    // and 8). What no capture of this node's can give is the accused's own output
+                    // tile (a fold keeps no rows) and, when its execution followed its lie, the path
+                    // to its anchor — so the close reads them where the accused was made to file
+                    // them: its root claim, on chain. Only a filing whose tile proves against THIS
+                    // claim's root at THIS leaf is kept; the evidence re-checks tile and anchor
+                    // against the accused's binding before a row is opened.
+                    let accused_filing = if mv == AttnMove::Close {
+                        match attn_root_filings.get(&duty.session_id) {
+                            Some((_, Some(filing))) => Some(filing.clone()),
                             Some((looked, None)) if current_daa < looked.saturating_add(25) => None,
                             _ => {
                                 let params = &self.consensus_config.params;
@@ -2812,35 +2800,75 @@ impl PalwPanelService {
                                 let sid = duty.session_id;
                                 let filed = session
                                     .clone()
-                                    .spawn_blocking(move |c| attn_root_out_tiles_from_chain_v1(c, sid, not_before, span))
+                                    .spawn_blocking(move |c| attn_root_filings_from_chain_v1(c, sid, not_before, span))
                                     .await;
                                 let execution_root = duty.execution_root;
-                                let tile = filed
-                                    .into_iter()
-                                    .find(|(binding, tile)| {
-                                        binding.committed_execution_root == execution_root
-                                            && tile.opening.leaf_index == narrowed
-                                            && kaspa_consensus_core::palw_step_leg::step_opening_root_capped_v1(
-                                                binding.step_leaf_count,
-                                                &tile.opening,
-                                                cap,
-                                            )
-                                            .is_ok_and(|root| root == binding.step_merkle_root)
-                                    })
-                                    .map(|(_, tile)| tile);
-                                attn_root_tiles.insert(duty.session_id, (current_daa, tile.clone()));
-                                tile
+                                let filing = filed.into_iter().find(|filing| {
+                                    filing.binding.committed_execution_root == execution_root
+                                        && filing.out_tile.opening.leaf_index == narrowed
+                                        && kaspa_consensus_core::palw_step_leg::step_opening_root_capped_v1(
+                                            filing.binding.step_leaf_count,
+                                            &filing.out_tile.opening,
+                                            cap,
+                                        )
+                                        .is_ok_and(|root| root == filing.binding.step_merkle_root)
+                                });
+                                attn_root_filings.insert(duty.session_id, (current_daa, filing.clone()));
+                                filing
                             }
                         }
                     } else {
                         None
+                    };
+                    // The capture this move reads: the party's own, or — for the close — the accused's
+                    // when held. A close whose accused capture is not held still asks for it (a fold's
+                    // own leaves reach further than a filing alone) but proceeds on the filing: an
+                    // over-cap capture is never served, and waiting on it was the backstop's win for a
+                    // forger.
+                    let source: Option<Vec<u8>> = if mv == AttnMove::Close {
+                        match accused_capture.as_deref() {
+                            Some(accused) => Some(accused.to_vec()),
+                            None => {
+                                if requested.get(&duty.claim_id).is_none_or(|at| current_daa >= at.saturating_add(25)) {
+                                    requested.insert(duty.claim_id, current_daa);
+                                    pull_for_close.push(duty.claim_id);
+                                }
+                                if accused_filing.is_none() {
+                                    *court_stalls
+                                        .entry("the dissection's bottom needs the accused's capture or its filing — pulling, reading the chain")
+                                        .or_default() += 1;
+                                    continue;
+                                }
+                                None
+                            }
+                        }
+                    } else {
+                        Some(capture.to_vec())
                     };
                     let evidence = match attn_evidence.get(&key) {
                         Some(held) => held.clone(),
                         None => {
                             let carried: Option<Vec<u32>> = fp_job.as_ref().map(|job| job.prompt_token_ids.clone());
                             let Ok((_offloaded, built)) = offload(backend, move |b| {
-                                b.attn_site_evidence(&source, narrowed, carried.as_deref(), accused_out_tile.as_ref())
+                                // The capture's own rows first (a fold's with the filed tile); where that
+                                // cannot bottom the accused — or there is no capture — the filing alone.
+                                let from_capture = source.as_ref().map(|bytes| {
+                                    b.attn_site_evidence(
+                                        bytes,
+                                        narrowed,
+                                        carried.as_deref(),
+                                        accused_filing.as_ref().map(|f| &f.out_tile),
+                                    )
+                                });
+                                match (from_capture, accused_filing.as_ref()) {
+                                    (Some(Ok(evidence)), _) => Ok(evidence),
+                                    (Some(Err(why)), Some(filing)) => b
+                                        .attn_site_evidence_from_filing(filing, narrowed, carried.as_deref())
+                                        .map_err(|e| format!("{why}; and from the accused's filing: {e}")),
+                                    (Some(Err(why)), None) => Err(why),
+                                    (None, Some(filing)) => b.attn_site_evidence_from_filing(filing, narrowed, carried.as_deref()),
+                                    (None, None) => Err("no capture and no filing to read the fused site from".to_string()),
+                                }
                             })
                             .await
                             else {
@@ -2901,14 +2929,35 @@ impl PalwPanelService {
                                 "[{PALW_PANEL}] session {}: answering the fused leaf {narrowed} with a root claim over {} positions (head {}, lanes {}+{})",
                                 duty.session_id, root.history_positions, root.head, root.lane_first, root.lane_count
                             );
-                            PalwConsensusObjectV2::CourtAttnRootClaimed {
-                                session_id: duty.session_id,
-                                root,
-                                arity: court.dissection_arity(),
-                                binding: Box::new(evidence.binding.clone()),
-                                out_tile: evidence.out_tile.clone(),
-                                operand_openings: evidence.operand_openings.clone(),
-                                signature,
+                            // ADR-0093 Decision 8: past its fence, move 1 carries the anchor its
+                            // bottom will read — the one path a challenger cannot rebuild once an
+                            // execution followed its lie. Where the site reads no checkpoint the
+                            // evidence carries none, and the plain form is the right one.
+                            let anchor = evidence
+                                .anchor
+                                .as_ref()
+                                .filter(|_| params.palw_attn_anchored_root_active_at(current_daa))
+                                .map(|anchored| Box::new(anchored.anchor.clone()));
+                            match anchor {
+                                Some(anchor) => PalwConsensusObjectV2::CourtAttnRootClaimedAnchored {
+                                    session_id: duty.session_id,
+                                    root,
+                                    arity: court.dissection_arity(),
+                                    binding: Box::new(evidence.binding.clone()),
+                                    out_tile: evidence.out_tile.clone(),
+                                    anchor,
+                                    operand_openings: evidence.operand_openings.clone(),
+                                    signature,
+                                },
+                                None => PalwConsensusObjectV2::CourtAttnRootClaimed {
+                                    session_id: duty.session_id,
+                                    root,
+                                    arity: court.dissection_arity(),
+                                    binding: Box::new(evidence.binding.clone()),
+                                    out_tile: evidence.out_tile.clone(),
+                                    operand_openings: evidence.operand_openings.clone(),
+                                    signature,
+                                },
                             }
                         }
                         AttnMove::Round => {
@@ -4569,6 +4618,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::CourtCloseChunk { .. } => "CourtCloseChunk",
         // ADR-0082 Decision 2 — the fused-attention dissection's three moves.
         PalwConsensusObjectV2::CourtAttnRootClaimed { .. } => "CourtAttnRootClaimed",
+        PalwConsensusObjectV2::CourtAttnRootClaimedAnchored { .. } => "CourtAttnRootClaimedAnchored",
         PalwConsensusObjectV2::CourtAttnDissected { .. } => "CourtAttnDissected",
         PalwConsensusObjectV2::CourtAttnChildChosen { .. } => "CourtAttnChildChosen",
         // ADR-0088 — the registry's ten moves (a line is founded, a version published and
@@ -4635,29 +4685,36 @@ fn walk_accepted_lifecycle_objects_v1(
     }
 }
 
-/// **The accused's opened output tile, read back off the chain** (ADR-0093 Decision 7).
+/// **The accused's filing, read back off the chain** (ADR-0093 Decisions 7 and 8).
 ///
-/// A forged fold's bottom needs the one thing only the accused could file — and the chain made it
-/// file it: its `CourtAttnRootClaimed` carries the committed output tile at the narrowed leaf,
-/// opened against the accused's own root. The session record keeps the phase and not the tile, so
-/// the tile is read from the accepted object ([`walk_accepted_lifecycle_objects_v1`], down to the
-/// session's own opening — no root claim about it is older). Every root claim filed for
-/// `session_id` in that span is returned with the binding it named, OLDEST first: the first that
-/// stood is the one that opened the phase, and the caller keeps only one whose opening proves
-/// against the claim's root, so a refused or foreign object cannot be the tile.
-fn attn_root_out_tiles_from_chain_v1(
+/// A bottom is opened against the ACCUSED's commitments, and two things about them only the accused
+/// can supply once its execution has lied: its committed output tile (a fold keeps no rows) and,
+/// when its execution followed the lie, the path to its anchor checkpoint. The chain made it file
+/// both — the tile in either form of its root claim, the anchor in `CourtAttnRootClaimedAnchored`
+/// — and the session record keeps neither, so they are read from the accepted objects
+/// ([`walk_accepted_lifecycle_objects_v1`], down to the session's own opening: no root claim about
+/// it is older). Every root claim filed for `session_id` in that span is returned, OLDEST first: the
+/// first that stood is the one that opened the phase, and the caller keeps only one whose tile
+/// proves against the claim's own root at the narrowed leaf, so a refused or foreign object is
+/// never the filing.
+fn attn_root_filings_from_chain_v1(
     consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
     session_id: Hash64,
     not_before_daa: u64,
     max_chain_blocks: usize,
-) -> Vec<(kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, kaspa_consensus_core::palw_attn_court_v1::PalwAttnRowOpeningV1)> {
+) -> Vec<kaspa_consensus_core::palw_attn_responder_v1::PalwAttnAccusedFilingV1> {
+    use kaspa_consensus_core::palw_attn_responder_v1::PalwAttnAccusedFilingV1;
     let mut found = Vec::new();
-    walk_accepted_lifecycle_objects_v1(consensus, not_before_daa, max_chain_blocks, &mut |object| {
-        if let PalwConsensusObjectV2::CourtAttnRootClaimed { session_id: filed, binding, out_tile, .. } = object
-            && filed == session_id
-        {
-            found.push((*binding, out_tile));
+    walk_accepted_lifecycle_objects_v1(consensus, not_before_daa, max_chain_blocks, &mut |object| match object {
+        PalwConsensusObjectV2::CourtAttnRootClaimed { session_id: filed, binding, out_tile, .. } if filed == session_id => {
+            found.push(PalwAttnAccusedFilingV1 { binding: *binding, out_tile, anchor: None });
         }
+        PalwConsensusObjectV2::CourtAttnRootClaimedAnchored { session_id: filed, binding, out_tile, anchor, .. }
+            if filed == session_id =>
+        {
+            found.push(PalwAttnAccusedFilingV1 { binding: *binding, out_tile, anchor: Some(*anchor) });
+        }
+        _ => {}
     });
     found.reverse();
     found
@@ -6157,7 +6214,7 @@ mod accepted_objects_walk_tests {
         assert_eq!(walk(35, 100), vec![8, 7], "a height stops the walk");
         assert_eq!(walk(0, 1), vec![8, 7], "and so does the block cap");
         // Nothing in this chain is a root claim: the tile read finds none rather than a wrong one.
-        assert!(attn_root_out_tiles_from_chain_v1(&chain, Hash64::from_u64_word(1), 0, 100).is_empty());
+        assert!(attn_root_filings_from_chain_v1(&chain, Hash64::from_u64_word(1), 0, 100).is_empty());
     }
 }
 
@@ -6292,12 +6349,16 @@ mod court_responder_coverage_pin {
         // `#[cfg(test)]`): the close reads the accused's tile off the chain and hands it to the
         // evidence, so a forged fold's bottom is built from the root claim the accused filed.
         let production = &whole[..whole.find("#[cfg(test)]\nmod tests {").expect("the test module")];
-        let close = production.find("let accused_out_tile = if mv == AttnMove::Close").expect("the close reads the accused's tile");
-        assert!(production[close..].contains("attn_root_out_tiles_from_chain_v1(c, sid, not_before, span)"), "off the chain");
+        let close = production.find("let accused_filing = if mv == AttnMove::Close").expect("the close reads the accused's filing");
+        assert!(production[close..].contains("attn_root_filings_from_chain_v1(c, sid, not_before, span)"), "off the chain");
+        assert!(production[close..].contains("accused_filing.as_ref().map(|f| &f.out_tile)"), "its tile into the capture's evidence");
         assert!(
-            production[close..].contains("b.attn_site_evidence(&source, narrowed, carried.as_deref(), accused_out_tile.as_ref())"),
-            "and into the evidence the bottom is built from"
+            production[close..].contains(".attn_site_evidence_from_filing(filing, narrowed, carried.as_deref())"),
+            "and the filing alone where the capture cannot bottom the accused, or is not held"
         );
+        // ADR-0093 Decision 8: past its fence the responder files move 1 with its anchor.
+        assert!(production.contains("PalwConsensusObjectV2::CourtAttnRootClaimedAnchored {"), "the anchored root claim is filed");
+        assert!(production.contains(".filter(|_| params.palw_attn_anchored_root_active_at(current_daa))"), "past its fence only");
         assert_eq!(producer.matches("CourtAttnRootClaimed").count(), 0, "the producer does not file court moves at all");
         for (name, params) in [
             ("mainnet", kaspa_consensus_core::config::params::MAINNET_PARAMS),

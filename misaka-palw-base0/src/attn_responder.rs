@@ -40,6 +40,36 @@ pub enum Base0AttnRowsV1<'a> {
     HonestPrefix { honest: &'a crate::legs::Base0StepTilesV1, accused_out_tile: &'a PalwAttnRowOpeningV1 },
 }
 
+/// A filing without an anchor, refused because this node's own checkpoint leg is not the accused's:
+/// the accused's execution followed its lie past the disputed call, and only the anchored root
+/// claim (ADR-0093 Decision 8) carries the path a challenger cannot rebuild. Named so, rather than
+/// as the generic leg mismatch it surfaces as.
+pub fn base0_attn_name_the_missing_anchor_v1(
+    why: String,
+    filing: &kaspa_consensus_core::palw_attn_responder_v1::PalwAttnAccusedFilingV1,
+) -> String {
+    if filing.anchor.is_none() && why.contains("checkpoint leaves do not root") {
+        format!(
+            "{why} — the accused's execution followed its lie past the disputed call, and its root claim carries no anchor \
+             (the anchored root claim of ADR-0093 Decision 8 carries it)"
+        )
+    } else {
+        why
+    }
+}
+
+/// **Where the anchor a checkpoint-route bottom reads comes from** (ADR-0093 Decisions 1 and 8).
+pub enum Base0AttnAnchorSourceV1<'a> {
+    /// A checkpoint leg: a re-execution's for a capture that reproduces its own execution, a fold's
+    /// own retained leaves otherwise. Refused unless its leaves root to the binding's leg.
+    Leg(&'a crate::legs::Base0CheckpointsV1),
+    /// The accused's own anchor, off its anchored root claim — checked against the site the class
+    /// derives and against the binding's checkpoint leg (the bottom's own check), its state
+    /// recomputed and required to root to it. The path a challenger cannot rebuild once the
+    /// accused's execution followed its lie.
+    Filed(&'a PalwAttnCheckpointAnchorV1),
+}
+
 /// **The evidence one capture yields about the fused site at `narrowed`.**
 ///
 /// * `binding` / `rows` — the CAPTURE's own commitment and where its committed rows come from
@@ -48,10 +78,10 @@ pub enum Base0AttnRowsV1<'a> {
 ///   must open what the claim committed, not what an honest re-execution computes); or, for a
 ///   fold that re-executes into another execution, the honest prefix and the accused's opened
 ///   output tile. Refused unless they root to the binding.
-/// * `checkpoints` — the checkpoint leg: a re-execution's for a capture that reproduces its own
-///   execution, the fold's own retained leaves otherwise. Refused unless its leaves root to the
-///   capture's own `checkpoint_merkle_root`, so a leg that is not the capture's is never passed off
-///   as its anchor.
+/// * `anchor_source` — where the bottom's anchor comes from ([`Base0AttnAnchorSourceV1`]): a
+///   checkpoint leg (a re-execution's for a capture that reproduces its own execution, the fold's
+///   own retained leaves otherwise), refused unless its leaves root to the capture's own
+///   `checkpoint_merkle_root`; or the accused's filed anchor, checked as the bottom checks it.
 /// * `operands` / `artifact_root` — the family's operand inventory under the class's profile; the
 ///   site's four registered narrowings are opened out of it by the one description of their names
 ///   (`palw_attn_site_operand_names_v2`), so the openings filed are the ones the court asks for.
@@ -66,7 +96,7 @@ pub enum Base0AttnRowsV1<'a> {
 pub fn base0_attn_site_evidence_v1(
     binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
     rows: Base0AttnRowsV1<'_>,
-    checkpoints: &crate::legs::Base0CheckpointsV1,
+    anchor_source: Base0AttnAnchorSourceV1<'_>,
     narrowed: u64,
     operands: &[PalwArtifactOperandV1],
     artifact_root: Hash64,
@@ -218,9 +248,28 @@ pub fn base0_attn_site_evidence_v1(
     let cache_rows = (row_tiles == 1).then_some((k_rows, v_rows));
 
     // The checkpoint the disputed step's evidence must anchor at, with every chunk of its state.
-    let anchor = match s.anchor_covered_decode_call {
-        None => None,
-        Some(covered) => {
+    let anchor = match (s.anchor_covered_decode_call, anchor_source) {
+        (None, _) => None,
+        (Some(covered), Base0AttnAnchorSourceV1::Filed(filed)) => {
+            // The filed anchor, checked exactly as the bottom will check it — against the site
+            // derived WITH it (the anchor's layout is the site's), and the binding's leg.
+            let with_anchor =
+                kaspa_consensus_core::palw_court_v2::palw_attn_dispute_site_unpinned_v2(binding, &proven, narrowed, Some(filed))
+                    .map_err(|e| e.to_string())?;
+            kaspa_consensus_core::palw_attn_court_v1::palw_attn_anchor_is_the_sites_v1(filed, &with_anchor.binding, &with_anchor.site)
+                .map_err(|e| format!("the filed anchor is not the site's committed checkpoint: {e}"))?;
+            let chunks = anchor_chunks(covered)?;
+            let chunk_hashes: Vec<Hash64> = chunks
+                .iter()
+                .enumerate()
+                .map(|(n, bytes)| state_chunk_leaf_hash_v1(&binding.state_chunk_map_id, n as u32, bytes))
+                .collect();
+            if state_chunks_root_v1(&chunk_hashes).ok() != Some(filed.leaf.state_chunks_root) {
+                return Err(format!("the anchor's state at counter {covered} does not root to the filed checkpoint"));
+            }
+            Some(PalwAttnAnchorEvidenceV1 { anchor: filed.clone(), chunks, chunk_hashes })
+        }
+        (Some(covered), Base0AttnAnchorSourceV1::Leg(checkpoints)) => {
             let leaves = &checkpoints.leaves;
             let i = leaves
                 .iter()

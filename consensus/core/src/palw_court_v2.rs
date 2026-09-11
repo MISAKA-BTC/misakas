@@ -1042,8 +1042,13 @@ pub fn palw_attn_move_is_admissible_v2(
     kary_court_active: bool,
 ) -> Result<(), PalwCourtV2Error> {
     use crate::palw_state_v2::PalwConsensusObjectV2 as Obj;
-    let is_dissection =
-        matches!(object, Obj::CourtAttnRootClaimed { .. } | Obj::CourtAttnDissected { .. } | Obj::CourtAttnChildChosen { .. });
+    let is_dissection = matches!(
+        object,
+        Obj::CourtAttnRootClaimed { .. }
+            | Obj::CourtAttnRootClaimedAnchored { .. }
+            | Obj::CourtAttnDissected { .. }
+            | Obj::CourtAttnChildChosen { .. }
+    );
     if is_dissection && !kary_court_active { Err(PalwCourtV2Error::KaryCourtDormant) } else { Ok(()) }
 }
 
