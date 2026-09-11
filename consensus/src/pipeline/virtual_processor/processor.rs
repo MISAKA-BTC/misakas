@@ -5730,7 +5730,9 @@ impl VirtualStateProcessor {
                 // The pre-object steps are what the real fold runs before any object; if they error
                 // the block is disqualified whatever it carries, so the filter accepts nothing.
                 Err(why) => {
-                    info!("Block {block}: no PALW object is accepted; the pre-object fold fails and the block will be disqualified: {why}");
+                    info!(
+                        "Block {block}: no PALW object is accepted; the pre-object fold fails and the block will be disqualified: {why}"
+                    );
                     return (Vec::new(), state.clone());
                 }
             }

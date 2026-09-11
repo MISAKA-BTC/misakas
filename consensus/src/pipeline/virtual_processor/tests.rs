@@ -12535,10 +12535,9 @@ async fn the_acceptance_filter_output_always_folds_at_a_class_activation_crossin
 
     // The post-genesis class X the block activates: a real, shippable profile so its id is its
     // graph and a chain-certified family can cover it (the finding's precondition).
-    let profile = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(
-        kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY,
-    )
-    .expect("the floor's profile projects");
+    let profile =
+        kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .expect("the floor's profile projects");
     let class_x = profile.shape_profile_id();
 
     let point = |word: u64, daa: u64, blue: u64| PalwBlockContextV2 {
@@ -12568,8 +12567,8 @@ async fn the_acceptance_filter_output_always_folds_at_a_class_activation_crossin
         slash_value_per_pwu: 5, // the network's one slash value (the base's), or the transition refuses it
         pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
         initial_target: u128::MAX / 2,
-        share_permille: 0,      // weightless
-        activation_daa: 105,    // in the future relative to registration at daa 101
+        share_permille: 0,   // weightless
+        activation_daa: 105, // in the future relative to registration at daa 101
         admission: None,
     };
     let (s2, _) =
@@ -12608,12 +12607,8 @@ async fn the_acceptance_filter_output_always_folds_at_a_class_activation_crossin
     // the binding. In a real block the leading object is a derived `PanelBound` or a 0x4a commitment,
     // ordered ahead of all lifecycle objects; a partial `ObjectChunk` stands in for "any object the
     // fold accepts first", and like them it triggers `activate_due_classes` in its rehearsal step.
-    let leading = PalwConsensusObjectV2::ObjectChunk {
-        group: Hash64::from_u64_word(0x00C0_00DE),
-        index: 0,
-        count: 2,
-        bytes: vec![0xAB],
-    };
+    let leading =
+        PalwConsensusObjectV2::ObjectChunk { group: Hash64::from_u64_word(0x00C0_00DE), index: 0, count: 2, bytes: vec![0xAB] };
     let bind = PalwConsensusObjectV2::ClassLaneCertified {
         class_id: class_x,
         lane: PalwCertifiedLaneV1::FreePrompt,
@@ -12673,8 +12668,8 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
     use kaspa_consensus_core::palw_pwu::palw_ticket_admits_v1;
     use kaspa_consensus_core::palw_state_v2::{
         PALW_RECEIPT_TARGET_SEED_V1, PalwBlockContextV2, PalwBlockWorkV3, PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2,
-        PalwConsensusObjectV2 as Obj, PalwMergedWorkV1, PalwPanelSeatV2, PalwPwuRuleV2, PalwStateParamsV2,
-        PalwTransitionExtrasV1, apply_palw_transition_v2, apply_palw_transition_v7,
+        PalwConsensusObjectV2 as Obj, PalwMergedWorkV1, PalwPanelSeatV2, PalwPwuRuleV2, PalwStateParamsV2, PalwTransitionExtrasV1,
+        apply_palw_transition_v2, apply_palw_transition_v7,
     };
     use kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3;
     use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
@@ -12743,10 +12738,8 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
     let harness_bond_key = PalwBondKeyV2(harness_bond);
     let harness_pubkey = crate::consensus::test_consensus::TestConsensus::palw_v2_harness_pubkey();
     let base_class = h64(1);
-    let inj_params = PalwStateParamsV2::new(100, 1, 1, 1, 500, 1_000, base_class, 4, 1_000, 100, 1_000, 0)
-        .unwrap()
-        .with_fp_quanta(8, 64)
-        .unwrap();
+    let inj_params =
+        PalwStateParamsV2::new(100, 1, 1, 1, 500, 1_000, base_class, 4, 1_000, 100, 1_000, 0).unwrap().with_fp_quanta(8, 64).unwrap();
     let build_injected = |claim_id: Hash64| -> PalwChainStateV2 {
         let cx = |w: u64, daa: u64, blue: u64| PalwBlockContextV2 { block: h64(w), daa_score: daa, blue_score: blue, subsidy: 0 };
         let reg = vec![
@@ -12787,12 +12780,22 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
         };
         let (s2, _) = apply_palw_transition_v2(&s1, &inj_params, &cx(2, 2, 2), &[commit], None).unwrap();
         let seats = vec![PalwPanelSeatV2 { bond: harness_bond_key, operator_id: h64(90) }];
-        let (s3, _) =
-            apply_palw_transition_v2(&s2, &inj_params, &cx(3, 3, 3), &[Obj::PanelBound { claim: claim_id, anchor: h64(77), seats }], None)
-                .unwrap();
-        let (s4, _) =
-            apply_palw_transition_v2(&s3, &inj_params, &cx(4, 4, 4), &[Obj::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }], None)
-                .unwrap();
+        let (s3, _) = apply_palw_transition_v2(
+            &s2,
+            &inj_params,
+            &cx(3, 3, 3),
+            &[Obj::PanelBound { claim: claim_id, anchor: h64(77), seats }],
+            None,
+        )
+        .unwrap();
+        let (s4, _) = apply_palw_transition_v2(
+            &s3,
+            &inj_params,
+            &cx(4, 4, 4),
+            &[Obj::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }],
+            None,
+        )
+        .unwrap();
         let (s5, _) = apply_palw_transition_v2(&s4, &inj_params, &cx(5, 6, 5), &[], None).unwrap();
         s5
     };
@@ -12917,7 +12920,6 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
     );
 }
 
-
 // =================================================================================================
 // AC-SLOT (independent mainnet audit, High): the per-block court slot is spent by an object the
 // fold refuses, and the root-claim signature does not cover what the fold refuses it for.
@@ -12952,13 +12954,8 @@ fn ac_slot_fixture() -> AcSlotFixture {
         Err(_) => include_bytes!("testdata/ac_slot_fixture.bin").to_vec(),
     };
     #[allow(clippy::type_complexity)]
-    let (carriage, params, mut honest, sid, daa): (
-        Vec<u8>,
-        PalwStateParamsV2,
-        PalwConsensusObjectV2,
-        kaspa_hashes::Hash64,
-        u64,
-    ) = borsh::from_slice(&bytes).expect("the AC-SLOT fixture decodes");
+    let (carriage, params, mut honest, sid, daa): (Vec<u8>, PalwStateParamsV2, PalwConsensusObjectV2, kaspa_hashes::Hash64, u64) =
+        borsh::from_slice(&bytes).expect("the AC-SLOT fixture decodes");
     let mut carriage: PalwStateCarriageV2 = borsh::from_slice(&carriage).expect("the fixture carriage decodes");
     let claim = carriage.court_sessions.get(&sid).expect("the drill's session").claim;
     let bond = carriage.claims.get(&claim).expect("the drill's claim").bond;
@@ -13014,7 +13011,7 @@ fn ac_slot_fixture() -> AcSlotFixture {
     // mempool — no key needed), and a foreign binding, which the signature does not cover.
     let mut junk = honest.clone();
     if let PalwConsensusObjectV2::CourtAttnRootClaimed { binding, .. } = &mut junk {
-        binding.step_merkle_root = kaspa_hashes::Hash64::from_u64_word(0x0BAD_B1D);
+        binding.step_merkle_root = kaspa_hashes::Hash64::from_u64_word(0x00BA_DB1D);
     }
     AcSlotFixture { ctx, state, params, honest, junk, sid, claim, daa }
 }
@@ -13038,7 +13035,9 @@ fn ac_slot_point(daa: u64) -> kaspa_consensus_core::palw_state_v2::PalwBlockCont
 /// refused by the fold, and the honest filing behind it is dropped for want of a slot.
 #[tokio::test]
 async fn a_fold_failing_court_move_does_not_spend_the_block_slot() {
-    use kaspa_consensus_core::palw_state_v2::{PalwConsensusObjectV2 as PalwConsensusObjectV2Alias, palw_court_move_spends_the_slot_v1};
+    use kaspa_consensus_core::palw_state_v2::{
+        PalwConsensusObjectV2 as PalwConsensusObjectV2Alias, palw_court_move_spends_the_slot_v1,
+    };
     let f = ac_slot_fixture();
     let vp = f.ctx.consensus.virtual_processor();
     let point = ac_slot_point(f.daa);
@@ -13121,10 +13120,12 @@ async fn a_replayed_root_claim_signature_with_a_foreign_binding_cannot_crowd_out
          {filed_at:?}; session alive = {}; claim phase = {phase:?}",
         state.court_session(&f.sid).is_some()
     );
-    assert!(filed_at.is_some(), "AC-SLOT: the responder filed its honest root claim in every one of {blocks} blocks and none was carried");
+    assert!(
+        filed_at.is_some(),
+        "AC-SLOT: the responder filed its honest root claim in every one of {blocks} blocks and none was carried"
+    );
     assert!(
         !matches!(phase, PalwClaimPhaseV2::Voided { .. }),
         "AC-SLOT: an honest claim was voided because its responder's filing was crowded out: {phase:?}"
     );
 }
-

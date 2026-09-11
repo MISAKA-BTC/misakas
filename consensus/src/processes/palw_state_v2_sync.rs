@@ -141,7 +141,17 @@ impl PalwStateSyncV2 {
         audit_2026_09_11: Option<kaspa_consensus_core::config::params::ForkActivation>,
     ) -> Result<Self, PalwSyncV2Error> {
         let tip = store.load_tip(&params)?;
-        Ok(Self { params, tip, unavailable_abstains, uncertified_weightless, da_court, court_responder_coverage, attn_anchored_root, share_growth_final, audit_2026_09_11 })
+        Ok(Self {
+            params,
+            tip,
+            unavailable_abstains,
+            uncertified_weightless,
+            da_court,
+            court_responder_coverage,
+            attn_anchored_root,
+            share_growth_final,
+            audit_2026_09_11,
+        })
     }
 
     pub fn tip(&self) -> Option<(&BlockHash, &PalwChainStateV2)> {
