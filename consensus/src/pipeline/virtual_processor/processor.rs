@@ -497,6 +497,9 @@ pub struct VirtualStateProcessor {
     /// numbers the producer wrote, one of which bought permanent immunity from the DA court.
     /// Resolved in exactly one place, [`Self::palw_fp_da_pins_at`], at the BLOCK's own DAA.
     pub(super) palw_fp_da_pins: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0107: share growth counts Final work. Resolved in exactly one place,
+    /// [`Self::palw_share_growth_final_at`], at the BLOCK's own DAA.
+    pub(super) palw_share_growth_final: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **ADR-0087 Decision 6's fence, `None` on every shipped preset.** Past it `ModelBuy` and
     /// `ModelSell` are accepted (a sell's signature checked here, at acceptance); before it both
     /// are refused by name and the fold never sees them. Resolved at the BLOCK's DAA.
@@ -999,6 +1002,7 @@ impl VirtualStateProcessor {
             palw_court_ladder: params.palw_court_ladder_fence(),
             palw_court_responder_coverage: params.palw_court_responder_coverage_fence(),
             palw_fp_da_pins: params.palw_fp_da_pins_fence(),
+            palw_share_growth_final: params.palw_share_growth_final_fence(),
             palw_model_market: params.palw_model_market_fence(),
             palw_model_lines: params.palw_model_lines_fence(),
             palw_model_benefits: params.palw_model_benefits_fence(),
@@ -7587,6 +7591,9 @@ impl VirtualStateProcessor {
             // producer owes its retained trace, and an unwritten default would silently give every
             // claim the producer's own number back.
             fp_da_pins_active: self.palw_fp_da_pins_at(daa_score),
+            // Written explicitly for the same reason again: this one decides whether a boundary
+            // grows a class's share on accepted blocks or on Final work (ADR-0107).
+            share_growth_final_active: self.palw_share_growth_final_at(daa_score),
             evm_actions: Vec::new(),
             // ADR-0093 Decision 8: which form of move 1 opens a phase. Written explicitly for the
             // reason the lines above give — an unwritten default here would refuse, or admit, a
@@ -7621,6 +7628,13 @@ impl VirtualStateProcessor {
     /// beside this one reads the block's score and not the tip's.
     fn palw_fp_da_pins_at(&self, daa_score: u64) -> bool {
         self.palw_fp_da_pins.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0107, resolved in exactly one place, at the BLOCK's own DAA** — the block that
+    /// crosses an epoch boundary decides that boundary's growth, so two nodes folding it must
+    /// read one answer.
+    fn palw_share_growth_final_at(&self, daa_score: u64) -> bool {
+        self.palw_share_growth_final.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// **The fused terminal's responder-coverage rule, resolved in exactly one place** — the reason

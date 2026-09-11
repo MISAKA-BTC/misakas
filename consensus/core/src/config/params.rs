@@ -1636,6 +1636,27 @@ pub struct Params {
     /// [`Self::palw_heartbeat_transparent_fence`] only.
     pub palw_heartbeat_transparent: Option<ForkActivation>,
 
+    /// **ADR-0107: a class's cadence share grows only on work that reached `Final`.**
+    ///
+    /// The growth rule (ADR-0054, `derive_class_share_growth_v1`) reads the closed epoch's
+    /// `produced_blocks`, which the transition increments when an attempt is ACCEPTED — the claim
+    /// still `Provisional` — and which a later void never gives back ("voiding releases exposure,
+    /// never production": correct for the epoch BUDGET, whose job is to stop a re-roll). The same
+    /// counter as the growth SIGNAL means blocks nobody ever verified, and claims that void, earn a
+    /// class permille exactly as certified work does. Past this fence growth also requires that the
+    /// class's attempt claims which reached `Final` during the closed epoch number at least that
+    /// epoch's budget; decay, the budget and the retarget keep reading `produced_blocks`.
+    ///
+    /// **Readable only while the epoch's finals are still in the state**, so `validate_palw_v2`
+    /// refuses arming it unless `claim_retirement_daa` is 0 (claims never retire) or longer than an
+    /// epoch — a claim finalized at the start of the closed epoch must still be there at its end.
+    ///
+    /// **A bare fence, TOP LEVEL**, for the `palw_fp_da_pins` reasons: no companion value for the
+    /// identity to normalise away, and a fence inside the bundle would move `palw_ruleset_id_v2`
+    /// and refuse every old/new pair at the handshake. `None` on every shipped preset; read it
+    /// through [`Self::palw_share_growth_final_fence`] only.
+    pub palw_share_growth_final: Option<ForkActivation>,
+
     /// ADR-0042 Decision 1 (PR-10): the ONE PALW switch on the V2 lineage. `Disabled` on every
     /// shipped preset. A network is in exactly one mode; `ConsensusV2` carries the whole atomic
     /// ruleset and is validated at construction ([`Params::validate_palw_v2`]) — including the
@@ -2076,6 +2097,27 @@ impl Params {
                  heartbeat counts in a bonded block's anticone, and with no heartbeat lane (or no ConsensusV2 ruleset) \
                  there is nothing for it to decide (ADR-0105)",
             ));
+        }
+        // **ADR-0107 reads the closed epoch's finals off the claim records, so it must not be
+        // armable where those records are gone before the boundary reads them** — or on a network
+        // with no V2 lane at all, where there are no claims and the fence would hash and not fire.
+        if let Some(fence) = self.palw_share_growth_final
+            && fence != ForkActivation::never()
+        {
+            let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_share_growth_final is armed on a network that is not ConsensusV2: it counts V2 attempt claims \
+                     that reached Final, and there are none (ADR-0107)",
+                ));
+            };
+            let retirement = bundle.state.claim_retirement_daa();
+            if retirement != 0 && retirement <= bundle.state.epoch_length() {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_share_growth_final is armed where claims retire within an epoch (claim_retirement_daa <= \
+                     epoch_length): a claim finalized early in the closed epoch would be gone before the boundary counts \
+                     it, and the class would be refused growth it earned (ADR-0107)",
+                ));
+            }
         }
         let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
             return Ok(());
@@ -3079,6 +3121,10 @@ impl Params {
         if self.palw_heartbeat_transparent == Some(ForkActivation::never()) {
             self.palw_heartbeat_transparent = None;
         }
+        // ADR-0107, a bare fence: the same collapse for the same reason.
+        if self.palw_share_growth_final == Some(ForkActivation::never()) {
+            self.palw_share_growth_final = None;
+        }
         let Some(dns) = self.dns_params.as_mut() else {
             return;
         };
@@ -3146,6 +3192,16 @@ impl Params {
     pub fn palw_heartbeat_transparent_fence(&self) -> Option<ForkActivation> {
         match (self.palw_heartbeat_lane_fence(), self.palw_heartbeat_transparent) {
             (Some(lane), Some(fence)) if lane != ForkActivation::never() => Some(fence),
+            _ => None,
+        }
+    }
+
+    /// **ADR-0107's share-growth rule, read in ONE place** — `Some` only on a `ConsensusV2`
+    /// network that has armed it, for [`Self::palw_fp_da_pins_fence`]'s reason. The transition
+    /// requires Final work for growth past this fence and reads accepted blocks before it.
+    pub fn palw_share_growth_final_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_share_growth_final) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
             _ => None,
         }
     }
@@ -3617,6 +3673,7 @@ impl Params {
             palw_attempt_header_pins,
             palw_signature_contexts_v2,
             palw_heartbeat_transparent,
+            palw_share_growth_final,
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation: _,
             pow_palw_activation: _,
@@ -3670,6 +3727,7 @@ impl Params {
             ("palw_attempt_header_pins", *palw_attempt_header_pins),
             ("palw_signature_contexts_v2", *palw_signature_contexts_v2),
             ("palw_heartbeat_transparent", *palw_heartbeat_transparent),
+            ("palw_share_growth_final", *palw_share_growth_final),
         ]
     }
 
@@ -3901,6 +3959,13 @@ impl Params {
             h.write(b"palw_heartbeat_transparent");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ADR-0107. Some-only, at the tail: it changes which epochs grow a class's share past its
+        // height, so the schedule must show the height, and a preset that leaves it `None` prints
+        // the id of a build from before the field existed.
+        if let Some(activation) = self.palw_share_growth_final {
+            h.write(b"palw_share_growth_final");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         h.finalize()
     }
 
@@ -4010,6 +4075,7 @@ impl Params {
             palw_epoch_boundary_budget,
             palw_fp_ruleset_caps,
             palw_heartbeat_transparent,
+            palw_share_growth_final,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation,
@@ -4355,6 +4421,10 @@ impl Params {
         if let Some(activation) = palw_heartbeat_transparent.as_mut() {
             fork(activation, visit);
         }
+        // ADR-0107. Some-only and at the tail, for the same reason as the fence above it.
+        if let Some(activation) = palw_share_growth_final.as_mut() {
+            fork(activation, visit);
+        }
 
         let Some(dns) = dns_params.as_mut() else {
             absent = u64::MAX;
@@ -4571,6 +4641,7 @@ impl Params {
             palw_epoch_boundary_budget,
             palw_fp_ruleset_caps,
             palw_heartbeat_transparent,
+            palw_share_growth_final,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -4968,6 +5039,12 @@ impl Params {
             h.write(b"palw_heartbeat_transparent");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ADR-0107. Some-only, like every fence above it: every preset leaves it `None` and
+        // fingerprints byte-identically to a build without the field.
+        if let Some(activation) = palw_share_growth_final {
+            h.write(b"palw_share_growth_final");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0042 Decisions 1 + 11: the V2 mode decides block validity wholesale, so it is in
         // the fingerprint — through the RULESET ID, one hash for the whole atomic bundle, which
         // is the same value the V2 handshake exchanges (two commitments cannot drift when one is
@@ -5280,6 +5357,7 @@ impl Params {
             palw_epoch_boundary_budget: self.palw_epoch_boundary_budget,
             palw_fp_ruleset_caps: self.palw_fp_ruleset_caps,
             palw_heartbeat_transparent: self.palw_heartbeat_transparent,
+            palw_share_growth_final: self.palw_share_growth_final,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
@@ -6240,6 +6318,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
+    // ADR-0107: dormant on every shipped preset (see the field's doc).
+    palw_share_growth_final: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
@@ -6412,6 +6492,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
+    // ADR-0107: dormant on every shipped preset (see the field's doc).
+    palw_share_growth_final: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
@@ -6566,6 +6648,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
+    // ADR-0107: dormant on every shipped preset (see the field's doc).
+    palw_share_growth_final: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
@@ -10790,6 +10874,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
+    // ADR-0107: dormant on every shipped preset (see the field's doc).
+    palw_share_growth_final: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // **Devnet is the ADR-0068 drill network on this branch: ConsensusV2, so no V1 PALW
@@ -16111,6 +16197,60 @@ mod consensus_params_id_tests {
         );
         assert_eq!(carded.palw_fp_da_pins, Some(ForkActivation::always()));
         assert_eq!(carded.palw_da_court, Some(ForkActivation::always()), "the court it makes meaningful is armed with it");
+    }
+
+    /// **ADR-0107's share-growth fence is dormant on every shipped preset, visible the moment it is
+    /// not, and refused where the rule it names cannot read what it needs.** The four claims the
+    /// fence above is held to, plus the one that is this fence's own: the boundary counts the
+    /// closed epoch's `Final` claims off their records, so a network whose claims retire within an
+    /// epoch would refuse growth a class earned — refused at assembly, with the reason.
+    #[test]
+    fn the_share_growth_final_fence_is_dormant_everywhere_and_refused_where_it_cannot_read_the_epochs_finals() {
+        for p in [&MAINNET_PARAMS, &TESTNET_PARAMS, &SIMNET_PARAMS, &DEVNET_PARAMS] {
+            assert!(p.palw_share_growth_final.is_none(), "{}: a shipped preset states no ADR-0107 fence", p.net);
+        }
+        let rc = palw_rc_shipped_params();
+        assert!(rc.palw_share_growth_final.is_none(), "testnet-11 grows on accepted blocks until a flag day says otherwise");
+        assert!(devnet_shipped_params().palw_share_growth_final.is_none(), "devnet inherits the dormant state too");
+        assert!(rc.palw_share_growth_final_fence().is_none(), "the reader is the one place the rule is decided");
+
+        let mut spelled_out = rc.clone();
+        spelled_out.palw_share_growth_final = Some(ForkActivation::never());
+        assert_eq!(spelled_out.consensus_identity_id(), rc.consensus_identity_id(), "Some(never()) is absence");
+
+        let mut scheduled = rc.clone();
+        scheduled.palw_share_growth_final = Some(ForkActivation::new(9_000_000));
+        assert_eq!(
+            scheduled.consensus_identity_id(),
+            rc.consensus_identity_id(),
+            "an armed and an un-armed build must peer until the height fires"
+        );
+        assert_ne!(scheduled.consensus_params_id(), rc.consensus_params_id(), "…while the fingerprint names the rule");
+        assert_ne!(scheduled.consensus_schedule_id(), rc.consensus_schedule_id(), "…and the operator log names the height");
+        scheduled.validate_palw_v2().expect("testnet-11's claims outlive an epoch (3000 > 1000), so the rule can read its finals");
+
+        let mut armed = rc.clone();
+        armed.palw_share_growth_final = Some(ForkActivation::always());
+        assert_ne!(armed.consensus_identity_id(), rc.consensus_identity_id(), "at genesis the handshake must see it");
+        armed.validate_palw_v2().expect("armable on the RC");
+        assert_eq!(armed.palw_share_growth_final_fence(), Some(ForkActivation::always()));
+
+        // Fail-closed: no V2 bundle, no claims to count.
+        let mut laneless = TESTNET_PARAMS;
+        laneless.palw_share_growth_final = Some(ForkActivation::always());
+        let e = laneless.validate_palw_v2().expect_err("a fence that hashes and cannot fire is refused at assembly");
+        assert!(format!("{e:?}").contains("palw_share_growth_final"), "{e:?}");
+        assert!(laneless.palw_share_growth_final_fence().is_none(), "and the reader never resolves it off V2");
+
+        // Fail-closed: claims that retire within an epoch are gone before the boundary counts them.
+        let mut short_lived = armed.clone();
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut short_lived.palw_consensus_mode else {
+            unreachable!("the RC is ConsensusV2")
+        };
+        let epoch = bundle.state.epoch_length();
+        bundle.state = bundle.state.clone().with_claim_retirement_daa(epoch).expect("retirement past the abandon hold");
+        let e = short_lived.validate_palw_v2().expect_err("an epoch-long retirement loses the epoch's early finals");
+        assert!(format!("{e:?}").contains("claim_retirement_daa"), "{e:?}");
     }
 
     /// **A card certifies the free-prompt lane of the classes it registers; the RC's pinned set
