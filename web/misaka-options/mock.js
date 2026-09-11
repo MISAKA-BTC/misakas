@@ -22,6 +22,10 @@ const BLOCK_MS = 6000;
 const START_BLOCK = 41200, START_DAA = 118500;
 const CHAIN_ID = '0x4d534b';
 const ACCOUNT = '0xa11ce4d5f0b2c8e97a3d6f1b2c3d4e5f60718293';
+// `?mockwallet=misaka`: the mock wallet poses as MISAKA Wallet, which holds MSK on the post-quantum lane and
+// moves what a payment is short of to the EVM account inside the same confirmation — 5 MSK on the EVM account,
+// so the store's top-up path (`wallet.topsUp`) is what gets exercised.
+const MOCK_MISAKA = new URLSearchParams(location.search).get('mockwallet') === 'misaka';
 const OTHERS = ['0x0b0b5c1a9d2e3f4a5b6c7d8e9f0a1b2c3d4e5f60', '0x0c4a7e1f2b3c4d5e6f708192a3b4c5d6e7f80912', '0x0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e', '0x0e5f6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5', '0x0f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f70', '0x0a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d'];
 const CLASS_A = '4277d84f7d91528cc04aa366d51ee1c2e4f7902c4f6b16a213dead1c7e227977db732f18ed6183db3d944d44726ebd3feff7b15c48f9dba11cd526684f35f1b7';
 const CLASS_B = '5bd9ae3d91df80650caffe3126a38bafb0b4feb9b046a416d353a7c3f71af6eab5aadf9b1ce41650007a980f1cc6044ef218424f4cbb8299ef9e92c97b99ef8e';
@@ -125,7 +129,7 @@ function seedWorld() {
   world.lines.get(LINE_C).evaluations.set(2, [{ evaluatorId: h128('eval/mmlu-ish'), scorePermille: 612, reportHash: h128('report/1'), postedDaa: 113100, by: bond('C/dev'), isLinesOwn: true }, { evaluatorId: h128('eval/stranger'), scorePermille: 540, reportHash: h128('report/2'), postedDaa: 114400, by: bond('S1'), isLinesOwn: false }]);
   world.lines.get(CLASS_A).evaluations.set(2, [{ evaluatorId: h128('eval/harness-x'), scorePermille: 705, reportHash: h128('report/3'), postedDaa: 105000, by: bond('A/dev'), isLinesOwn: true }]);
   // balances: the mock wallet holds enough to seed a line (150,000 MSK) and the background accounts trade
-  world.balances.set(ACCOUNT, 150000n * MO.SOMPI_PER_MSK * MO.NATIVE_SCALE_WEI);
+  world.balances.set(ACCOUNT, (MOCK_MISAKA ? 5n : 150000n) * MO.SOMPI_PER_MSK * MO.NATIVE_SCALE_WEI);
   for (const a of OTHERS) world.balances.set(a, 60000n * MO.SOMPI_PER_MSK * MO.NATIVE_SCALE_WEI);
   // ADR-0091: every block these Active classes produced since the seed put 5 % of its worker
   // reward into the pair. Applied through the same move the fold performs, so the row stays
@@ -341,6 +345,7 @@ const strip0x = (s) => String(s || '').toLowerCase();
 const handlers = {};
 M.ethereum = {
   isMisakaMock: true,
+  isMisakaWallet: MOCK_MISAKA || undefined,
   on(ev, fn) { (handlers[ev] = handlers[ev] || []).push(fn); },
   removeListener(ev, fn) { handlers[ev] = (handlers[ev] || []).filter((f) => f !== fn); },
   async request({ method, params }) {
@@ -366,6 +371,12 @@ M.ethereum = {
         }
         else throw Object.assign(new Error('execution reverted: NonTransferable()'), { code: -32000 });
         await new Promise((r) => setTimeout(r, 600));    // "confirm in wallet"
+        // MISAKA Wallet's top-up (autobridge.planTopUp): the shortfall plus a 10,000-sompi gas reserve lands on
+        // the EVM account before the transaction is sent. The real one waits for the claim (~two blocks).
+        if (M.ethereum.isMisakaWallet && (rec.kind === 'buy' || rec.kind === 'seed')) {
+          const bal = world.balances.get(rec.from) || 0n;
+          if (wei > bal) world.balances.set(rec.from, wei + 10000n * MO.NATIVE_SCALE_WEI);
+        }
         world.pendingTx.push(rec);
         return rec.hash;
       }

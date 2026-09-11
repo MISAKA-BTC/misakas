@@ -584,7 +584,19 @@ const evm = {
 
 const wallet = {
   provider: null, account: null, chainId: null, listeners: new Set(),
-  detect() { this.provider = (MOCK && window.MISAKA_MOCK && window.MISAKA_MOCK.ethereum) || window.ethereum || null; return !!this.provider; },
+  // MISAKA Wallet first: it also answers on `window.ethereum`, but only when no other wallet took that
+  // global first — with MetaMask installed beside it, "Connect" reached MetaMask.
+  detect() {
+    const misaka = window.misaka && window.misaka.isMisakaWallet ? window.misaka : null;
+    this.provider = (MOCK && window.MISAKA_MOCK && window.MISAKA_MOCK.ethereum) || misaka || window.ethereum || null;
+    return !!this.provider;
+  },
+  // **Can this wallet pay from more than the EVM account?** MISAKA Wallet keeps MSK on the post-quantum
+  // (UTXO) lane and, inside the same confirmation, moves what a transaction is short of to the EVM
+  // account before sending it (its eth_sendTransaction plans the top-up; the approval window says how
+  // much). So for it the EVM balance is NOT what it can spend — refusing on that balance is what kept
+  // the wallet from ever being asked, and the balance from ever going up.
+  topsUp() { return !!(this.provider && this.provider.isMisakaWallet); },
   emit() { for (const fn of this.listeners) { try { fn(); } catch (e) { /* ignore */ } } },
   onChain() { return this.chainId != null && this.chainId.toLowerCase() === CHAIN_ID_HEX; },
   async init() {
@@ -1341,8 +1353,26 @@ function seedReasonNotToSend(rec, sompi, balance) {
   if (rec.facadeSource !== 'registry') return 'Facade address not confirmed by the registry window yet.';
   if (sompi == null) return 'Enter the deposit in MSK (whole sompi, at most 8 decimals).';
   if (sompi < seedMinFor(m)) return 'Under the least deposit of ' + fmtMsk(seedMinFor(m), 8) + ' MSK: the writer reverts SeedTooSmall at the call.';
-  if (balance != null && sompiToWei(sompi) > balance) return 'Insufficient MSK balance in the EVM account.';
+  if (balance != null && sompiToWei(sompi) > balance && !wallet.topsUp()) return 'Insufficient MSK balance in the EVM account.';
   return null;
+}
+// What a MISAKA Wallet will do before sending when the EVM account is short (see `wallet.topsUp`).
+// Informational, never a refusal: the wallet itself checks the post-quantum balance and says so if it
+// cannot cover the payment either.
+function topUpNote(needWei, balance) {
+  if (!wallet.topsUp() || balance == null || needWei == null || needWei <= balance) return '';
+  return 'MISAKA Wallet will first move ' + fmtWeiMsk(needWei - balance) + ' MSK (and a little for gas) from your post-quantum balance to this EVM account, '
+    + 'then send. The move is claimed on chain in about two blocks (roughly 30–45 minutes on testnet-11); keep the wallet window open or come back to it.';
+}
+// The "MSK available" line, and what it means for the connected wallet.
+function availText(balance) {
+  if (balance == null) return wallet.account ? '—' : 'connect a wallet';
+  return fmtWeiMsk(balance) + ' MSK' + (wallet.topsUp() ? ' on the EVM lane' : '');
+}
+function availHint() {
+  return wallet.topsUp()
+    ? h`<div class="note tiny" style="margin-top:2px">MISAKA Wallet also spends your post-quantum balance: whatever the EVM account is short of is moved over when you confirm.</div>`
+    : raw('');
 }
 // Renders the panel into `box`. `st` = { msk, busy, balance }; `getRec` returns the line record
 // (may be null); `onSent(hash)` runs after the wallet accepted the transaction.
@@ -1376,9 +1406,10 @@ function renderSeedPanel(box, st, getRec, onSent) {
         <div class="r"><span>Memberships you receive</span><span class="v">0</span></div>
         <div class="r"><span>Fee on the deposit</span><span class="v">none</span></div>
         <div class="r"><span>Class status</span><span class="v">${cs ? cs.head + (cs.activationDaa != null ? ' (activates at DAA ' + fmtInt(cs.activationDaa) + ')' : '') : '—'}</span></div>
-        <div class="r tot"><span>MSK available</span><span class="v" id="availV">${st.balance != null ? fmtWeiMsk(st.balance) + ' MSK' : wallet.account ? '—' : 'connect a wallet'}</span></div>
+        <div class="r tot"><span>MSK available</span><span class="v" id="availV">${availText(st.balance)}</span></div>
       </div>
-      <div class="field"><button id="seedBtn" class="btn btn-lg btn-accent" ${reason || st.busy ? 'disabled' : ''}>${st.busy ? 'Confirm in wallet…' : 'Open ' + (rec ? rec.symbol : '')}</button><div class="reason" id="seedWhy">${reason || ''}</div></div>
+      ${availHint()}
+      <div class="field"><button id="seedBtn" class="btn btn-lg btn-accent" ${reason || st.busy ? 'disabled' : ''}>${st.busy ? 'Confirm in wallet…' : 'Open ' + (rec ? rec.symbol : '')}</button><div class="reason" id="seedWhy">${reason || ''}</div>${!reason && sompi != null ? h`<div class="note tiny" id="seedTopUp">${topUpNote(sompiToWei(sompi), st.balance)}</div>` : raw('')}</div>
       <div class="note tiny">Sent as <code>seed()</code> on the line's facade with value = deposit × 10<sup>10</sup> wei. The call queues the action (<code>ActionQueued</code>) in the block that carries it; the fold makes the deposit the reserve after that block, and the facade emits <code>Seeded</code> (or <code>Refused</code>: already open, class closed) one block later, when the escrow is burned into the line's sink. A value under the least deposit reverts at the call (<code>SeedTooSmall</code>).</div>
     </div>`.s;
   const amt = $('#seedAmt', box);
@@ -1665,7 +1696,7 @@ async function pageStore(arg) {
     if (q.invalid) return q.invalid;
     if (q.kind === 'buy' && rec.market && rec.market.closedToBuys) return 'This line is closed to buys (retired); sells still queue.';
     if (q.kind === 'buy') { const cs = classStatusOf(rec); if (cs && cs.head !== 'Active') return 'The class is ' + cs.head + (cs.activationDaa != null ? ' (activates at DAA ' + fmtInt(cs.activationDaa) + ')' : '') + ': buys wait for Active.'; }
-    if (q.kind === 'buy' && entry.balance != null && sompiToWei(q.sompi) > entry.balance) return 'Insufficient MSK balance in the EVM account.';
+    if (q.kind === 'buy' && entry.balance != null && sompiToWei(q.sompi) > entry.balance && !wallet.topsUp()) return 'Insufficient MSK balance in the EVM account.';
     if (q.kind === 'sell' && entry.position != null && q.units > entry.position) return 'That is more than the memberships this account holds in the EVM namespace.';
     return null;
   }
@@ -1715,6 +1746,8 @@ async function pageStore(arg) {
     why.textContent = reason && q && !q.invalid ? reason : (reason && !q ? '' : reason || '');
     if (!wallet.account && !reason) why.textContent = '';
     if (reason && (!q || q.invalid)) why.textContent = (!wallet.account || !wallet.onChain() || db.armed !== true || (rec && rec.facadeSource !== 'registry')) ? reason : '';
+    const topUp = $('#sendTopUp');
+    if (topUp) topUp.textContent = !reason && q && !q.invalid && q.kind === 'buy' ? topUpNote(sompiToWei(q.sompi), entry.balance) : '';
   }
   const seedState = { msk: null, busy: false, balance: null };
   function renderEntry() {
@@ -1731,7 +1764,8 @@ async function pageStore(arg) {
       <div class="panel-b">
         <div class="seg wide" role="tablist"><button class="${entry.side === 'buy' ? 'on buy' : ''}" data-side="buy" role="tab" title="Buy a membership from the protocol's curve">Join</button><button class="${entry.side === 'sell' ? 'on sell' : ''}" data-side="sell" role="tab" title="Sell the membership back to the curve; nobody else can buy it from you">Leave</button></div>
         <div class="note tiny" style="margin-top:6px">${entry.side === 'buy' ? 'A membership is bought from the protocol, not from another person, and joining raises the price for the next member.' : 'A membership is sold back to the protocol, not to another person. It cannot be transferred, lent or given away.'}</div>
-        <div class="avail" style="margin-top:10px"><span class="muted">MSK available</span><span class="v" id="availV">${entry.balance != null ? fmtWeiMsk(entry.balance) + ' MSK' : acct ? '—' : 'connect a wallet'}</span></div>
+        <div class="avail" style="margin-top:10px"><span class="muted">MSK available</span><span class="v" id="availV">${availText(entry.balance)}</span></div>
+        ${entry.side === 'buy' ? availHint() : raw('')}
         <div class="avail"><span class="muted">Your membership</span><span class="v" id="posV">${entry.position != null ? fmtPos(entry.position) + ' ' + (rec ? rec.symbol : '') : acct ? '—' : '—'}</span></div>
         <div class="field">
           <label for="amt">${entry.side === 'buy' ? 'What you pay (MSK, fees included)' : 'Memberships to give up (whole)'}</label>
@@ -1743,7 +1777,7 @@ async function pageStore(arg) {
           <div class="inp"><input id="slip" inputmode="decimal" value="${entry.slippage}" aria-label="Refuse if the price moved more than this many percent"><span class="unit">${entry.side === 'buy' ? 'min memberships' : 'min MSK'}</span></div>
         </div>
         <div class="quote" id="quoteBox"></div>
-        <div class="field"><button id="sendBtn" class="btn btn-lg btn-accent" disabled>Join</button><div class="reason" id="sendWhy"></div></div>
+        <div class="field"><button id="sendBtn" class="btn btn-lg btn-accent" disabled>Join</button><div class="reason" id="sendWhy"></div><div class="note tiny" id="sendTopUp"></div></div>
         <div class="note tiny">Your request is applied by the fold after the block that carries it and settles one block later; a result worse than your floor is refused (never partial) and a refused join is refunded. A membership is a whole number, and it never pays you anything: what it gets you is the card above. A membership taken here lives in the EVM namespace and can only be given up from it.</div>
       </div>`.s;
     $$('#entry .seg button').forEach((b) => b.addEventListener('click', () => { entry.side = b.dataset.side; entry.amount = ''; entry.nodeQuote = null; renderEntry(); }));
@@ -1885,7 +1919,7 @@ async function pageStore(arg) {
     // into #posV then labels the NEW store's row with the OLD line's symbol.
     if (!alive()) return;
     const a = $('#availV'), p = $('#posV');
-    if (a) a.textContent = entry.balance != null ? fmtWeiMsk(entry.balance) + ' MSK' : '—';
+    if (a) a.textContent = availText(entry.balance);
     if (p) p.textContent = entry.position != null ? fmtPos(entry.position) + ' ' + rec.symbol : '—';
     $$('#entry .pcts button').forEach((b) => { b.disabled = entry.side === 'buy' ? entry.balance == null : entry.position == null; });
     // the seed panel re-checks its "can send" reason against the balance (not while the user types)
@@ -2121,7 +2155,7 @@ async function pagePortfolio() {
     main.innerHTML = h`
       <div class="page-h"><h1>My memberships</h1><span class="sub mono">${acct}</span>${wallet.onChain() ? '' : raw('<span class="tag bad">wallet not on MISAKA</span>')}</div>
       <div class="grid3">
-        <div class="tile"><div class="k">MSK balance (EVM account)</div><div class="v">${view.balance != null ? fmtWeiMsk(view.balance) : '—'}</div><div class="s">${status.evm === 'up' ? 'eth_getBalance at latest' : 'EVM RPC unreachable'}</div></div>
+        <div class="tile"><div class="k">MSK balance (EVM account)</div><div class="v">${view.balance != null ? fmtWeiMsk(view.balance) : '—'}</div><div class="s">${status.evm === 'up' ? 'eth_getBalance at latest' + (wallet.topsUp() ? ' — MISAKA Wallet also spends its post-quantum balance, moving what a payment is short of when you confirm' : '') : 'EVM RPC unreachable'}</div></div>
         <div class="tile"><div class="k">Models you are a member of</div><div class="v">${p ? p.positions.length : '—'}</div><div class="s">EVM namespace only (a bond's memberships are not this account's)</div></div>
         <div class="tile"><div class="k">If you left every one now</div><div class="v">${p && totalKnown ? fmtMsk(total, 2) + ' MSK' : '—'}</div><div class="s">the net MSK the curves would pay back right now, fees included — a membership itself is never paid anything</div></div>
       </div>
