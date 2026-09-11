@@ -398,6 +398,51 @@ jobs:
         # (ADR-0019 §14).
         run: cargo run -p kaspa-txscript --example kip-10 --features legacy-secp256k1
 
+  # **ADR-0110 Decision 5: the context vectors, in release.** A context limit is armed only from
+  # public vectors anyone can reproduce, and CI reproduces the small ones on every change. The
+  # 512-position vector is in the default suite (`cargo nextest run` above). The 4,096 and
+  # 32,768-position vectors are pinned too, but a debug build takes too long over them, so they run
+  # here in release. Each vector's `document_id` covers every root, count, size and verdict a chain
+  # or a seat would compare. A change that moves any of them at either width fails by name, and the
+  # failure prints the document. The 131,072-position and 2M vectors are external runs (ADR-0110
+  # §9). The step's `run:` line is `scripts/ci-gates.sh`'s `context-vectors` gate, byte for byte.
+  context-vectors:
+    name: Context vectors (release)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # **The compiler is a pin, not a rumour** — the same two steps every job here takes, for the
+      # reason the Test Suite job gives. `scripts/ci-toolchain-pin-check.py` fails the build if
+      # this job stops doing it.
+      - name: Read the pinned toolchain
+        shell: bash
+        run: |
+          channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -1)
+          if [ -z "$channel" ]; then echo "rust-toolchain.toml has no channel"; exit 1; fi
+          echo "RUST_CHANNEL=$channel" >> "$GITHUB_ENV"
+          echo "pinned Rust toolchain: $channel"
+
+      - name: Install the pinned toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: ${{ env.RUST_CHANNEL }}
+
+      - name: Set up Rust cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Run the pinned 4,096 and 32,768-position vectors
+        run: cargo test --release -p misaka-palw-base0 --lib -- --ignored context_vector
+        env:
+          MISAKA_PALW_POW_FIXTURE: "1"
+
 
   # test-release:
   #   name: Test Suite Release
