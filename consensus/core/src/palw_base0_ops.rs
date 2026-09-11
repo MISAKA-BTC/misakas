@@ -324,9 +324,11 @@ pub fn softmax(logits_q: &[i32]) -> Result<Vec<i32>, PalwBase0OpError> {
 /// `(K + e_lg).clamp(0, 62)` with `K = 24`, so 62 is reachable in principle by an artifact nobody
 /// has built; the point of the fix is that such an artifact is now a softmax rather than a class
 /// whose most-suppressed key wins the row. The two callers (this row kernel and `a16_attn_exp_one`) must stay one
-/// expression or the fused site and the shipped softmax part.
+/// expression or the fused site and the shipped softmax part. Public for the same reason: the
+/// engine's fused fast kernel (`misaka_palw_base0::kernels::a16_attn_fused_uniform_fast`) is a
+/// third caller, and it calls this rather than spell the expression again.
 #[inline]
-pub(crate) fn softmax_shifted_diff_v1(v: i32, max: i64, up: i64) -> i32 {
+pub fn softmax_shifted_diff_v1(v: i32, max: i64, up: i64) -> i32 {
     let floor = (i32::MIN as i64) >> up;
     (((v as i64 - max).max(floor)) << up).clamp(i32::MIN as i64, 0) as i32
 }

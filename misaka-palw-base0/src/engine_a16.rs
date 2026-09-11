@@ -158,6 +158,12 @@ impl A16Cache {
     pub fn new(layers: usize) -> Self {
         Self { keys: vec![Vec::new(); layers], values: vec![Vec::new(); layers] }
     }
+
+    /// The rows the cache holds — the positions a walk has run. One forward appends one row to
+    /// every layer, so the first layer's count is every layer's.
+    pub fn rows(&self) -> usize {
+        self.keys.first().map_or(0, Vec::len)
+    }
     /// **This cache's bytes for one state chunk, encoded the way the MAP says — or nothing.**
     ///
     /// The A16 analogue of `KvCache::state_chunk_bytes`, and deliberately not a copy of it. That
@@ -1470,6 +1476,31 @@ impl<'a> A16Engine<'a> {
                 // bit-identical against, so this keeps the executor at the runtime's speed while
                 // computing exactly what `a16_attn_fused_reference_v1` defines. The equality is
                 // held by `the_fused_arm_is_the_reference_composition` below.
+                // On the fast engine the four ops run as one kernel with each narrowing's
+                // parameters read once (`kernels::a16_attn_fused_uniform_fast`, bit-identical to the
+                // composition below and held to it by `the_fast_engine_and_the_catalog_agree_token_for
+                // _token`): the composition tiles a triple over `heads × history` twice a call and
+                // materialises four history-long rows, which is quadratic allocation over a job.
+                PlanOp::AttnFused if self.fast => {
+                    let q = resolve(&node.inputs[0], &rows)?;
+                    let k_series = resolve(&node.inputs[1], &rows)?;
+                    let v_series = resolve(&node.inputs[2], &rows)?;
+                    let li = layer.as_ref().map(|(li, _)| *li).unwrap_or(0);
+                    let p = lp(li);
+                    crate::kernels::a16_attn_fused_uniform_fast(
+                        &q,
+                        &k_series,
+                        &v_series,
+                        shape.n_heads,
+                        shape.n_kv_heads,
+                        shape.d_head,
+                        p.logits,
+                        p.softmax_up,
+                        p.probs,
+                        p.values,
+                    )
+                    .map_err(refuse("attn_fused"))?
+                }
                 PlanOp::AttnFused => {
                     let q = resolve(&node.inputs[0], &rows)?;
                     let k_series = resolve(&node.inputs[1], &rows)?;

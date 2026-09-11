@@ -44,7 +44,7 @@ use crate::palw_class_admission_v2::{
 };
 use crate::palw_context_ladder::{palw_class_ladder_rules_for_court_v1, palw_close_assembly_daa_v1};
 use crate::palw_held_context_v1::{
-    PALW_HELD_SEAT_INTERVAL_OPENING_CAP_BYTES_V1, PalwHeldSeatRouteV1, palw_held_replay_row_v1, palw_held_seat_fetch_bytes_v1,
+    PALW_HELD_SEAT_INTERVAL_OPENING_CAP_BYTES_V1, PalwHeldReplayCostV1, PalwHeldSeatRouteV1, palw_held_seat_fetch_bytes_v1,
     palw_held_seat_interval_positions_v1, palw_held_seat_route_v1,
 };
 use crate::palw_mode_v2::{
@@ -915,7 +915,8 @@ fn palw_fit_at_v1(
 
     // The held terms. Nothing here is compared against a ruleset number; each is priced against
     // the budget `PalwHeldTermV1::checked_against` names.
-    let replay_ms = palw_held_replay_row_v1(profile).replay_ms_per_position();
+    let cost = PalwHeldReplayCostV1::for_profile_v1(profile);
+    let (replay_ms, knee) = (cost.ms_per_position, cost.knee_positions);
     let window_receipt = bundle.state.window_receipt();
     let retention = seat.kv_cache_bytes.saturating_add(seat.recurrent_state_bytes).saturating_add(seat.prompt_ids_bytes);
     let mut held_terms = vec![PalwHeldTermRowV1 {
@@ -930,13 +931,13 @@ fn palw_fit_at_v1(
         // context whichever route is derived — the recompute route fetches nothing and exists only
         // while the whole context fits the budget, so a sweep that crossed the boundary would read
         // a jump from zero as a logarithm. The note says which route the class takes here.
-        let route = palw_held_seat_route_v1(n_ctx, replay_ms, window_receipt);
+        let route = palw_held_seat_route_v1(n_ctx, cost, window_receipt);
         let fetch = palw_held_seat_fetch_bytes_v1(profile, u64::from(n_ctx), 0..profile.layer_count);
         let leaves_per_position =
             worst_case_step_leaf_count_capped_v1(profile, u64::MAX).map(|w| w.div_ceil(u64::from(n_ctx.max(1)))).unwrap_or(u64::MAX);
         let width = palw_held_seat_interval_positions_v1(
             n_ctx,
-            replay_ms,
+            cost,
             0,
             window_receipt,
             leaves_per_position,
@@ -945,8 +946,9 @@ fn palw_fit_at_v1(
         let route_note = match route {
             PalwHeldSeatRouteV1::Resume => "the Resume route: a seat fetches this and replays from it".to_string(),
             PalwHeldSeatRouteV1::Recompute => format!(
-                "the Recompute route: {n_ctx} positions × {replay_ms} ms fit the seat's budget, so a seat recomputes the prefix \
-                 and fetches nothing; resuming would fetch this"
+                "the Recompute route: {n_ctx} positions at {replay_ms} ms, and one more for every {knee} rows of history \
+                 (ADR-0103 §10.6), fit the seat's budget, so a seat recomputes the prefix and fetches nothing; resuming \
+                 would fetch this"
             ),
         };
         held_terms.push(PalwHeldTermRowV1 {
@@ -962,8 +964,8 @@ fn palw_fit_at_v1(
             unit: "positions",
             order: PalwFitOrderV1::Unpriced,
             note: format!(
-                "P, at zero fetch time, {replay_ms} ms a position and {window_receipt} DAA; a seat's bandwidth narrows it \
-                 (Decision 7)"
+                "P, at zero fetch time: the last interval, {replay_ms} ms a position plus one for every {knee} rows of \
+                 history before it (ADR-0103 §10.6), inside {window_receipt} DAA; a seat's bandwidth narrows it (Decision 7)"
             ),
         });
     } else {

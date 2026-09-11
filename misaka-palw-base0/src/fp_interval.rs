@@ -3256,8 +3256,9 @@ pub enum Base0FpResumeRefusalV1 {
 }
 
 /// **The route a held class's seat takes, from the class and the ruleset's window** (ADR-0103
-/// Decision 2) — `None` for a class not under the held map. The family's measured replay row is
-/// the rate (`palw_held_replay_row_v1`, the SA-4 source), so every family answers the same way.
+/// Decision 2) — `None` for a class not under the held map. The price is the family's measured
+/// replay row (`palw_held_replay_row_v1`, the SA-4 source) with the class's own history term
+/// (§10.6), so every family answers the same way.
 pub fn base0_fp_held_route_for_v1(
     profile: &PalwShapeProfileV3,
     window_receipt_daa: u64,
@@ -3266,8 +3267,7 @@ pub fn base0_fp_held_route_for_v1(
     if !kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(profile) {
         return None;
     }
-    let rate = held::palw_held_replay_row_v1(profile).replay_ms_per_position();
-    Some(held::palw_held_seat_route_v1(profile.n_ctx, rate, window_receipt_daa))
+    Some(held::palw_held_seat_route_v1(profile.n_ctx, held::PalwHeldReplayCostV1::for_profile_v1(profile), window_receipt_daa))
 }
 
 /// **The executor's side: the resume opening of interval `index`**, carrying `slices` (every slice
