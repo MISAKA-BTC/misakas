@@ -37,7 +37,12 @@ impl TransactionValidator {
         check_transaction_output_value_ranges(tx)?;
         check_duplicate_transaction_inputs(tx)?;
         check_gas(tx)?;
-        check_transaction_subnetwork(tx, self.palw_panel_da_admissible, self.palw_prompt_ids_form, self.palw_lifecycle_undecodable_tolerated)?;
+        check_transaction_subnetwork(
+            tx,
+            self.palw_panel_da_admissible,
+            self.palw_prompt_ids_form,
+            self.palw_lifecycle_undecodable_tolerated,
+        )?;
         check_transaction_version(tx)
     }
 
@@ -398,7 +403,8 @@ fn check_transaction_subnetwork(
         // chain-derived panel binding, the free-prompt commitment that has its own id — are
         // refused here by the same table the extraction walk applies, so admission and extraction
         // give one answer.
-        validate_palw_lifecycle_tx(&tx.payload, palw_lifecycle_undecodable_tolerated).map_err(TxRuleError::InvalidPalwLifecyclePayload)?;
+        validate_palw_lifecycle_tx(&tx.payload, palw_lifecycle_undecodable_tolerated)
+            .map_err(TxRuleError::InvalidPalwLifecyclePayload)?;
         Ok(())
     } else {
         Err(TxRuleError::SubnetworksDisabled(tx.subnetwork_id.clone()))
@@ -1328,9 +1334,6 @@ mod audit_a2_isolation_tests {
         // decode still rides — only the undecodable/unknown-version shape differs across the fence.
         let unarmed = tv(false);
         assert_eq!(unarmed.validate_tx_in_isolation(&carrier(39)), Ok(()), "a decodable kind rides on either side of the fence");
-        assert_match!(
-            unarmed.validate_tx_in_isolation(&carrier(43)),
-            Err(TxRuleError::InvalidPalwLifecyclePayload(_))
-        );
+        assert_match!(unarmed.validate_tx_in_isolation(&carrier(43)), Err(TxRuleError::InvalidPalwLifecyclePayload(_)));
     }
 }

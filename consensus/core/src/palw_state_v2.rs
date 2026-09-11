@@ -8127,6 +8127,11 @@ pub fn palw_v2_apply_one_object_v1(
     Ok(builder.checkpoint().0)
 }
 
+/// [`apply_palw_transition_v6`] with **ADR-0088's registry fence** (and, later, ADR-0089's EVM
+/// actions) carried in [`PalwTransitionExtrasV1`]. `Default` extras are byte-identical to v6,
+/// state root included; **every production caller must reach this one**, for the reason v6's doc
+/// gives about the fences it carries.
+#[allow(clippy::too_many_arguments)]
 pub fn apply_palw_transition_v7(
     parent: &PalwChainStateV2,
     params: &PalwStateParamsV2,
@@ -26031,7 +26036,7 @@ pub(crate) mod tests {
             // predicate the acceptance filter counts on ...
             let mut junk = honest.clone();
             if let PalwConsensusObjectV2::CourtAttnRootClaimed { binding, .. } = &mut junk {
-                binding.step_merkle_root = h64(0x0BAD_B1D);
+                binding.step_merkle_root = h64(0x00BA_DB1D);
             }
             assert!(palw_court_move_spends_the_slot_v1(&state, &junk), "the junk copy satisfies the slot predicate");
             // (3) ... and the fold refuses it.

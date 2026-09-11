@@ -1095,7 +1095,10 @@ mod retention_tests {
         let fp = S::FreePrompt { quanta: 8, spent: Default::default() };
         for live in [P::Provisional, P::PanelBound { bound_daa: 10 }, P::ReceiptLicensed { licensed_daa: 20 }] {
             assert!(free_prompt_retention_is_owed(&fp, &live), "{live:?} can still be asked about");
-            assert!(free_prompt_retention_is_owed(&S::Attempt, &live), "an attempt claim is accusable at {live:?}, so it is kept (C-05)");
+            assert!(
+                free_prompt_retention_is_owed(&S::Attempt, &live),
+                "an attempt claim is accusable at {live:?}, so it is kept (C-05)"
+            );
         }
         for settled in [P::Final { final_daa: 30 }] {
             assert!(!free_prompt_retention_is_owed(&fp, &settled), "free-prompt {settled:?} releases the capture");
