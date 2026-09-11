@@ -613,6 +613,13 @@ fn cmd_inspect(mut args: VecDeque<String>) {
             "grammar": registry::grammar_by_id(&o.grammar_id).map(|g| g.name()),
             "transformer_id": hex(o.transformer_id),
             "transformer": registry::transformer_by_id(&o.transformer_id).map(|t| t.manifest().name),
+            // Which tree gave the id — this build's, or an earlier published one this build still
+            // resolves (`registry::PRIOR_SOURCE_TREES_SHA256_HEX`); a derivation under an earlier
+            // tree's id verifies only if this build reproduces it byte for byte.
+            "transformer_tree": registry::transformer_by_id_with_tree(&o.transformer_id).map(|(_, tree)| match tree {
+                registry::TransformerIdTree::Current => misaka_palw_derive::SOURCE_TREE_SHA256_HEX.to_string(),
+                registry::TransformerIdTree::Prior(tree) => tree.to_string(),
+            }),
             "kind": o.kind,
             "kind_name": kind::name(o.kind),
             "dsl_hash": hex(o.dsl_hash),

@@ -67,7 +67,8 @@ registered on chain; hex is 64-byte-value hex, i.e. 128 chars):
 same wRPC-borsh endpoint `misaka --rpc` takes) and it reads, per job: the class registry row, the
 free-prompt-certified set (`ClassLaneCertified`, genesis ∪ chain), the executor bond and its
 exposure room, and a fresh anchor. `/health` names all four — `registered`, `fp_certified`,
-`bond_active`, `exposure_room` — and a job on a class the chain does not certify is still
+`bond_known` (with `bond_active` beside it, which is the ATTEMPT lane's readiness and not a
+condition of committing), `exposure_room` — and a job on a class the chain does not certify is still
 **answered**; only its commitment stays in the outbox, with the reason attached.
 
 `anchor.json` is the OFFLINE form, for drills and rehearsals with no node in reach. It supplies the
@@ -114,7 +115,7 @@ worker is not"). `palw-class ledger --network testnet-11` prints it beside the m
 | `--outbox <dir>` | where artifacts, unsigned commitments and retained traces go |
 | `--rpc <host:port>` | the node whose chain this gateway commits to (Decision 3) |
 | `--anchor <json>` | the offline alternative to `--rpc`; cannot submit |
-| `--class-leaves <n>` | the class's `pwu_per_inference`, for the quanta display |
+| `--class-leaves <n>` | the class's `pwu_per_inference`, for the quanta display. Optional with `--rpc`: the chain's own row is read (`class_canonical_leaves` in `/health`) |
 | `--bond-exposure-room-sompi <n>` | SA-1: the operator's own ceiling on the loss. `0` = read it from the chain |
 | `--claim-exposure-sompi <n>` | what one claim reserves. `0` = read it from the chain |
 | `--public-job-budget-permille <n>` | the share of the room strangers' jobs may spend per day (default 200) |
@@ -195,6 +196,22 @@ sign a job whose commitment names a different key), then:
 writes `fp-job-<id>.commitment-tx.borsh` and a `rail.json` summary carrying the claim id and the
 quanta/pwu the job earns. The rail cross-checks the result and the commitment against each other
 before signing (`palw_fp_sign_gate`), so an outbox edited in between is refused.
+
+**Every job, not one: `--watch`.** Nothing reaches the chain until the rail runs, and the gateway
+never runs it. For an operator that means one process beside the gateway, on the node's host:
+
+```bash
+./target/release/misaka-palw-fp-rail --watch ~/.misaka-palw-outbox --bond-key-seed bond.seed --rpc 127.0.0.1:17610
+```
+
+It submits every committed job the outbox holds, one at a time: it checks each claim's own
+exposure against the bond's room before paying a fee, stages the job's `material.bin` as the
+capture, funds each carrier from the previous one's change (the first from `--funding-outpoint`, or
+from the lane's funding selector on a node with `--utxoindex`), and does not start the next job
+until the previous carrier has become a claim — saying so, by name, when the chain dropped the
+commitment instead. State lives in `<outbox>/rail-watch-state.json`; `--once` runs one pass. The
+identity file it signs under can be written from the node with `--print-identity --class-id <id>`.
+The end-to-end page for operators is [testnet11-free-prompt-mining.md](testnet11-free-prompt-mining.md).
 
 **One handoff (ADR-0077 Decision 4).** Add `--submit --rpc <host:port>` and the same command
 finishes the job — it hands the signed transaction to `misaka-palw-fp-submit`, the library
@@ -449,14 +466,14 @@ a `response_format: json_object` request returned `{"capital":"Paris"}` in 7 s w
 - **Prompt budget — read this before sizing anything.** `prompt + decode ceiling` must fit the
   CLASS's registered `n_ctx`, and on this build the worker sets both `n_ctx` and
   `prefill_single_batch_cap` from the class row (`fp_worker.rs`), so there is no separate 512-token
-  prefill allowance: the class's width is the whole budget. Today the widest registered model class
-  is **16 tokens for prompt and answer together** (`QWEN25-A16`; the floor is 12 and `QWEN36` is 8),
-  and the ChatML wrapper alone is 8 of them — so `"hello"` leaves 7 decode tokens and a one-sentence
-  prompt does not fit at all. Over the width the worker refuses the job by name rather than trimming
-  it:
+  prefill allowance: the class's width is the whole budget. The A16 class on testnet-11's
+  free-prompt lane today, `4277d84f…` (`Qwen/Qwen2.5-1.5B/graph-v5@512`), is **512 tokens for
+  prompt and answer together**, and the ChatML wrapper is 8 of them. (Until 2026-09-11 this bullet
+  said 16 — Relaunch 5e's genesis row, not this chain's.) Over the width the worker refuses the job
+  by name rather than trimming it:
 
   ```
-  prompt 23 + decode ceiling 256 exceeds max_context_tokens 16
+  prompt 300 + decode ceiling 256 exceeds max_context_tokens 512
   ```
 
   This bullet used to say "single-batch prefill caps the prompt at 512 tokens", which was true of

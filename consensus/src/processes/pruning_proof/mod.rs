@@ -142,6 +142,9 @@ pub struct PruningProofManager {
     /// ADR-0068 Phase 1 (F2): the attempt-work fence, mode folded in — threaded to every
     /// proof-level ghostdag so proof weight and chain weight price an attempt block alike.
     palw_attempt_work_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0105: the coloring rule (a heartbeat never turns a bonded block red), threaded to every
+    /// proof-level ghostdag so the proof colors a level the way the chain colors it.
+    palw_heartbeat_transparent: Option<crate::processes::ghostdag::protocol::HeartbeatTransparency>,
     /// ADR-0072 SA-3/SA-4: the attempt lane's activation fence. `None` on every shipped preset, so
     /// the proof path's lane resolves to `Unfenced` and this gate is what it was. Threaded here for
     /// the reason `palw_consensus_mode` is: a node that joined by a pruned sync must refuse and
@@ -176,6 +179,7 @@ impl PruningProofManager {
         palw_consensus_mode: kaspa_consensus_core::palw_mode_v2::PalwConsensusMode,
         palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
         palw_attempt_work_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
+        palw_heartbeat_transparent: Option<crate::processes::ghostdag::protocol::HeartbeatTransparency>,
         palw_attempt_activation: Option<kaspa_consensus_core::config::params::ForkActivation>,
         is_consensus_exiting: Arc<AtomicBool>,
     ) -> Self {
@@ -221,6 +225,7 @@ impl PruningProofManager {
             palw_heartbeat_lane,
             palw_attempt_activation,
             palw_attempt_work_lane,
+            palw_heartbeat_transparent,
 
             is_consensus_exiting,
         }

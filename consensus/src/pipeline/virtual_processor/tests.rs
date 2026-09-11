@@ -950,6 +950,365 @@ async fn a_heartbeat_chain_of_any_depth_merges_but_a_tree_does_not() {
     }
 }
 
+/// The ruleset the slow-producer trap was measured on, in miniature: a V2 network at 120 s
+/// (`ghostdag_k = 1`), the heartbeat lane and the attempt-work constant armed from genesis (as on
+/// testnet-11 since Relaunch 5), and a bond funded for more concurrent claims than the scenario
+/// makes. `transparent` arms ADR-0105's coloring fence from genesis on top.
+fn heartbeat_trap_config(transparent: bool) -> kaspa_consensus_core::config::Config {
+    use kaspa_consensus_core::config::params::{ForkActivation, PalwAttemptWorkV1, PalwHeartbeatV1};
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    let catalog = palw_v2_test_catalog();
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle_funded_for(&catalog, 16));
+            *p = p.clone().with_palw_v2_cadence();
+            p.palw_heartbeat = Some(PalwHeartbeatV1 {
+                activation: ForkActivation::always(),
+                work_log2: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
+                max_per_mergeset: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET,
+            });
+            p.palw_attempt_work = Some(PalwAttemptWorkV1 {
+                activation: ForkActivation::always(),
+                work_log2: kaspa_consensus_core::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
+                ticket_bucket_log2: kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2,
+            });
+            if transparent {
+                p.palw_heartbeat_transparent = Some(ForkActivation::always());
+            }
+        })
+        .build();
+    config.params.validate_palw_v2().expect("the trap's ruleset is a runnable one");
+    assert_eq!(config.params.ghostdag_k(), 1, "the 120 s preset — the k the trap needs");
+    assert_eq!(config.params.palw_heartbeat_transparent_fence().is_some(), transparent);
+    config
+}
+
+/// One recovery-cadence slot as the fleet produced it on 2026-09-10: the heartbeat a template
+/// adapts to, plus `siblings` more at the same slot (four miners put 2-4 heartbeats in every slot).
+/// Returns the template's heartbeat, whose parents are the tips — including any bonded block that
+/// has landed.
+async fn mine_heartbeat_slot(ctx: &mut TestContext, nonce: u64, siblings: u64) -> BlockHash {
+    let template = ctx.build_block_template(nonce, ctx.simulated_time);
+    let (heartbeat, _) = ctx.consensus.virtual_processor().heartbeat_adapt_block_template(template).expect("the lane adapts");
+    ctx.simulated_time = ctx.simulated_time.max(heartbeat.block.header.timestamp);
+    let hash = heartbeat.block.header.hash;
+    ctx.validate_and_insert_block(heartbeat.block.clone().to_immutable()).await;
+    for sibling in 0..siblings {
+        let mut block = heartbeat.block.clone();
+        block.header.nonce = nonce ^ (0x5151_0000 + sibling);
+        block.header.finalize();
+        ctx.validate_and_insert_block(block.to_immutable()).await;
+    }
+    hash
+}
+
+/// What one run of the slow-producer scenario measured.
+struct HeartbeatTrapRun {
+    /// Per landed draw: was it colored blue by the heartbeat that merged it, and how much work that
+    /// heartbeat added to its selected parent's.
+    draws: Vec<(bool, kaspa_consensus_core::BlueWorkType)>,
+    /// `blue_work(sink) - blue_work(first heartbeat of the episode)`: the most any DNS anchor inside
+    /// the episode could be buried by — `getDnsConfirmation`'s `workDepth` is this quantity.
+    work_depth: kaspa_consensus_core::BlueWorkType,
+    sink_is_heartbeat: bool,
+    /// The interval the slot rule sets for the next heartbeat at the end of the run.
+    next_heartbeat_interval: u64,
+    /// Did any landed draw ever become a selected-chain block?
+    a_draw_was_selected: bool,
+}
+
+/// **The scenario, measured on testnet-11 on 2026-09-10 (11:41Z-13:20Z), in the pipeline.**
+///
+/// A producing chain; a bonded outage past the nominal hour (the fleet's node restarts), so a
+/// heartbeat takes the chain; then a producer whose every draw takes ~17 minutes: its template is
+/// built on the heartbeat tip, eight recovery-cadence slots of heartbeats (two per slot) land while
+/// it draws, and the draw lands carrying its template's timestamp. The next heartbeat merges it.
+async fn run_the_slow_producer_trap(transparent: bool, draws: usize) -> HeartbeatTrapRun {
+    use crate::model::stores::ghostdag::GhostdagStoreReader;
+    use kaspa_consensus_core::palw_heartbeat_v1 as hb;
+    kaspa_core::log::try_init_logger("info");
+    let config = heartbeat_trap_config(transparent);
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    for _ in 0..2 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let producing = ctx.consensus.get_sink();
+    ctx.simulated_time =
+        ctx.consensus.headers_store.get_header(producing).unwrap().timestamp + hb::HEARTBEAT_NOMINAL_INTERVAL_MS + 60_000;
+    let episode_start = mine_heartbeat_slot(&mut ctx, 100, 1).await;
+
+    // The producer's first draw, on the heartbeat tip.
+    ctx.simulated_time += 1_000;
+    let mut pending = ctx.build_block_template(200, ctx.simulated_time);
+    let mut nonce = 300u64;
+    let mut landed = Vec::new();
+    let mut out = Vec::new();
+    for _ in 0..draws {
+        for _ in 0..8 {
+            ctx.simulated_time += hb::HEARTBEAT_RECOVERY_INTERVAL_MS;
+            mine_heartbeat_slot(&mut ctx, nonce, 1).await;
+            nonce += 16;
+        }
+        let draw = pending.block.header.hash;
+        let drawn_at = pending.block.header.timestamp;
+        ctx.simulated_time += 60_000;
+        assert!(ctx.simulated_time - drawn_at >= 17 * 60_000, "the draw lands ~17 minutes after its template");
+        ctx.validate_and_insert_block(pending.block.clone().to_immutable()).await;
+        landed.push(draw);
+        assert!(
+            ctx.consensus.get_sink() != draw,
+            "a block carrying its template's parents is eight ε behind the heartbeat tip on landing — never the sink"
+        );
+        // The producer starts its next draw on what it sees now; the next slot's heartbeat merges this one.
+        pending = ctx.build_block_template(nonce, ctx.simulated_time);
+        nonce += 16;
+        ctx.simulated_time += hb::HEARTBEAT_RECOVERY_INTERVAL_MS;
+        let merger = mine_heartbeat_slot(&mut ctx, nonce, 1).await;
+        nonce += 16;
+        let merged = ctx.consensus.ghostdag_store().get_data(merger).unwrap();
+        let blue = merged.mergeset_blues.contains(&draw);
+        assert!(blue || merged.mergeset_reds.contains(&draw), "the heartbeat after the draw merges it");
+        let added = merged.blue_work - ctx.consensus.ghostdag_store().get_blue_work(merged.selected_parent).unwrap();
+        out.push((blue, added));
+    }
+
+    let sink = ctx.consensus.get_sink();
+    let sink_header = ctx.consensus.headers_store.get_header(sink).unwrap();
+    let work_depth = ctx.consensus.ghostdag_store().get_blue_work(sink).unwrap()
+        - ctx.consensus.ghostdag_store().get_blue_work(episode_start).unwrap();
+    let a_draw_was_selected = landed.iter().any(|draw| ctx.consensus.services.reachability_service.is_chain_ancestor_of(*draw, sink));
+    HeartbeatTrapRun {
+        draws: out,
+        work_depth,
+        sink_is_heartbeat: sink_header.pow_algo_id == hb::PALW_HEARTBEAT_ALGO_ID,
+        next_heartbeat_interval: hb::heartbeat_interval_ms(sink_header.pow_algo_id),
+        a_draw_was_selected,
+    }
+}
+
+/// **ADR-0105: the slow-producer trap, reproduced on the rule testnet-11 runs — and closed by the
+/// fence.**
+///
+/// Without the fence it is the 2026-09-10 incident exactly: every draw lands RED (eight heartbeats
+/// in its anticone at `k = 1`), the heartbeat that merges it gains two ε and not one unit of the
+/// draw's 2²⁰, no draw is ever a chain block, the chain stays on the recovery cadence — and the
+/// work piled on anything inside the episode stays under testnet-11's `required_work_depth` (100)
+/// however long it runs, which is `pow_confirmed = false` and a paused bridge.
+///
+/// With the fence the same DAG colors every draw BLUE: the merging heartbeat carries its 2²⁰, and
+/// the work depth passes the requirement at the first draw. What the fence deliberately does NOT
+/// do is make the draw a chain block — the heartbeats that merge it carry its work, so the chain
+/// stays heartbeat-led at the recovery cadence while heartbeat miners run. Handing the chain back
+/// is Decision 2's (the miner's yield); see the test below.
+#[tokio::test]
+async fn a_slow_bonded_draw_is_red_behind_heartbeats_until_the_fence_keeps_its_work() {
+    use kaspa_consensus_core::BlueWorkType;
+    use kaspa_consensus_core::palw_heartbeat_v1 as hb;
+    let bonded = BlueWorkType::from(1u64 << kaspa_consensus_core::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2);
+    let required = kaspa_consensus_core::config::params::TESTNET_DNS_PARAMS.required_work_depth;
+    assert_eq!(required, BlueWorkType::from(100u64), "testnet-11's requiredWorkDepth, as getDnsConfirmation printed it");
+
+    // ---- The rule testnet-11 runs today: the lock-out. ----
+    let trapped = run_the_slow_producer_trap(false, 2).await;
+    kaspa_core::info!(
+        "ADR-0105 trap, fence dormant: draws (blue, added work) = {:?}; work depth over the episode = {}",
+        trapped.draws,
+        trapped.work_depth
+    );
+    for (i, (blue, added)) in trapped.draws.iter().enumerate() {
+        assert!(!blue, "draw {i}: eight heartbeats in its anticone at k = 1 color it RED — the incident's 59563aa3 / 1b9225e1");
+        assert!(*added < bonded, "draw {i}: its 2^20 is in no block's blue work (the merger added {added})");
+    }
+    assert!(!trapped.a_draw_was_selected, "no draw ever becomes a chain block");
+    assert!(trapped.sink_is_heartbeat, "the chain is still on heartbeats");
+    assert_eq!(
+        trapped.next_heartbeat_interval,
+        hb::HEARTBEAT_RECOVERY_INTERVAL_MS,
+        "…at the recovery cadence: the mode sustains itself"
+    );
+    assert!(
+        trapped.work_depth < required,
+        "~40 minutes of heartbeats and two bonded draws bury nothing to testnet-11's required work depth: {} < {required} — \
+         pow_confirmed stays false, dns_confirmed stays false, the bridge stays paused",
+        trapped.work_depth
+    );
+
+    // ---- The same DAG with ADR-0105's fence armed. ----
+    let fenced = run_the_slow_producer_trap(true, 2).await;
+    kaspa_core::info!(
+        "ADR-0105 trap, fence armed: draws (blue, added work) = {:?}; work depth over the episode = {}",
+        fenced.draws,
+        fenced.work_depth
+    );
+    for (i, (blue, added)) in fenced.draws.iter().enumerate() {
+        assert!(*blue, "draw {i}: heartbeats no longer count against it, so the merge colors it BLUE");
+        assert!(*added > bonded, "draw {i}: the merging heartbeat carries the draw's whole 2^20 (added {added})");
+    }
+    assert!(
+        fenced.work_depth >= bonded * BlueWorkType::from(2u64),
+        "every draw's work is in the chain's blue work ({})",
+        fenced.work_depth
+    );
+    assert!(fenced.work_depth > required, "the DNS work depth passes testnet-11's requirement at the first draw");
+    // Stated rather than hidden: the fence keeps the work, it does not hand the chain back.
+    assert!(!fenced.a_draw_was_selected, "the heartbeats that merge a draw carry its work, so they stay the chain");
+    assert!(fenced.sink_is_heartbeat);
+}
+
+/// How the heartbeat after a slow draw would color it, when the draw lands after `slots`
+/// recovery-cadence slots (two heartbeats each). Computed with the GHOSTDAG manager over the tips —
+/// the merger's parents — WITHOUT inserting a merger, because a draw colored red beyond the
+/// merge-depth window cannot be merged at all (`ViolatingBoundedMergeDepth`), which is today's
+/// behaviour for such a block and not what is being measured here. Also returns the walk's floor
+/// and the blue score of the draw's selected-chain ancestor, so the boundary is checked against
+/// the formula rather than against a number typed into the test.
+async fn color_of_a_slow_draw(transparent: bool, slots: u64) -> (bool, u64, u64) {
+    use crate::model::stores::ghostdag::GhostdagStoreReader;
+    use kaspa_consensus_core::palw_heartbeat_v1 as hb;
+    let config = heartbeat_trap_config(transparent);
+    let merge_depth = config.params.merge_depth();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..2 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let producing = ctx.consensus.get_sink();
+    ctx.simulated_time =
+        ctx.consensus.headers_store.get_header(producing).unwrap().timestamp + hb::HEARTBEAT_NOMINAL_INTERVAL_MS + 60_000;
+    mine_heartbeat_slot(&mut ctx, 100, 1).await;
+    ctx.simulated_time += 1_000;
+    let draw = ctx.build_block_template(200, ctx.simulated_time);
+    let draw_hash = draw.block.header.hash;
+    let mut nonce = 300u64;
+    for _ in 0..slots {
+        ctx.simulated_time += hb::HEARTBEAT_RECOVERY_INTERVAL_MS;
+        mine_heartbeat_slot(&mut ctx, nonce, 1).await;
+        nonce += 16;
+    }
+    ctx.validate_and_insert_block(draw.block.clone().to_immutable()).await;
+    let tips: Vec<BlockHash> = ctx.consensus.get_tips().into_iter().collect();
+    assert_eq!(tips.len(), 3, "the slot's two heartbeats and the draw");
+    let merger = ctx.consensus.services.ghostdag_manager.ghostdag(&tips);
+    assert_eq!(merger.mergeset_size(), 3, "the merger's mergeset is its selected parent, the sibling and the draw");
+    let store = ctx.consensus.ghostdag_store();
+    // The draw sorts first (its blue work is its template's), so when it is colored the mergeset
+    // holds one blue (the selected parent) and two candidates remain — `most_blues` = 1 + 2.
+    let floor = (store.get_blue_score(merger.selected_parent).unwrap() + 3).saturating_sub(merge_depth);
+    let ancestor = store.get_blue_score(store.get_selected_parent(draw_hash).unwrap()).unwrap();
+    (merger.mergeset_blues.contains(&draw_hash), floor, ancestor)
+}
+
+/// **ADR-0105's exemption stops at the merge-depth window — the boundary, pinned on both sides.**
+///
+/// A classic blue is inside the window by construction, and `check_bounded_merge_depth` relies on
+/// that: it checks reds against the merge-depth root and never blues. A candidate that ignores
+/// heartbeats would otherwise have no depth bound at all — a bonded block withheld through a long
+/// heartbeat-only stretch would be colored blue arbitrarily deep, and its coloring walk would run
+/// back through every heartbeat to its parent, past a pruned node's pruning point if it were old
+/// enough. So the walk has a floor, and the draw is blue exactly while its selected-chain ancestor
+/// sits at or above it. Measured at the incident's eight slots, at the last slot count inside the
+/// window and the first outside it, and with the fence dormant (red at every depth, as today).
+#[tokio::test]
+async fn the_fence_keeps_a_slow_draw_blue_only_inside_the_merge_depth_window() {
+    kaspa_core::log::try_init_logger("info");
+    for slots in [8u64, 13, 14] {
+        let (blue, floor, ancestor) = color_of_a_slow_draw(true, slots).await;
+        kaspa_core::info!("ADR-0105 window: {slots} slots -> blue={blue}, ancestor blue score {ancestor}, floor {floor}");
+        assert_eq!(blue, ancestor >= floor, "{slots} slots: blue exactly when the draw's chain ancestor is at or above the floor");
+    }
+    let (inside, _, _) = color_of_a_slow_draw(true, 13).await;
+    let (outside, _, _) = color_of_a_slow_draw(true, 14).await;
+    assert!(inside && !outside, "at two heartbeats a slot the window is 13 slots (26 minutes): the boundary sits between 13 and 14");
+    let (classic, _, _) = color_of_a_slow_draw(false, 8).await;
+    assert!(!classic, "with the fence dormant the incident's eight slots already make it red");
+}
+
+/// **ADR-0105 Decision 2: a heartbeat miner that stands aside ends the mode — on the rule testnet-11
+/// runs today, fence or no fence.**
+///
+/// The escape the operator used on 2026-09-10 was "stop every heartbeat miner for one draw". This
+/// is that, done by the miner and bounded: when the chain runs on heartbeats and a bonded block is
+/// waiting in the virtual's mergeset, the hint says so and a yielding miner does not mine. The
+/// producer's next draw then lands on a tip nobody stacked ε on, becomes the sink, and the slot
+/// rule's nominal hour holds the lane off again. Measured in both positions of the fence: without
+/// it the first draw's work is still lost (red) but the chain comes back; with it the first draw is
+/// kept too.
+#[tokio::test]
+async fn a_yielding_heartbeat_miner_hands_the_chain_back_to_the_next_draw() {
+    use crate::model::stores::ghostdag::GhostdagStoreReader;
+    use kaspa_consensus_core::palw_heartbeat_v1::{self as hb, HeartbeatYieldHintV1};
+    kaspa_core::log::try_init_logger("info");
+    for transparent in [false, true] {
+        let config = heartbeat_trap_config(transparent);
+        let mut ctx = TestContext::new(TestConsensus::new(&config));
+        for _ in 0..2 {
+            ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+        }
+        assert_eq!(
+            ctx.consensus.virtual_processor().heartbeat_yield_hint(),
+            HeartbeatYieldHintV1::BondedSelectedParent,
+            "a producing chain: nothing to yield to, and the miner's budget is full"
+        );
+        let producing = ctx.consensus.get_sink();
+        ctx.simulated_time =
+            ctx.consensus.headers_store.get_header(producing).unwrap().timestamp + hb::HEARTBEAT_NOMINAL_INTERVAL_MS + 60_000;
+        mine_heartbeat_slot(&mut ctx, 100, 1).await;
+        assert_eq!(
+            ctx.consensus.virtual_processor().heartbeat_yield_hint(),
+            HeartbeatYieldHintV1::NothingToYieldTo,
+            "on heartbeats with no bonded block waiting: the regime the lane exists for — tick"
+        );
+
+        // A slow draw, landing 17 minutes after its template, eight slots behind the tip.
+        ctx.simulated_time += 1_000;
+        let first = ctx.build_block_template(200, ctx.simulated_time);
+        let mut nonce = 300u64;
+        for _ in 0..8 {
+            ctx.simulated_time += hb::HEARTBEAT_RECOVERY_INTERVAL_MS;
+            mine_heartbeat_slot(&mut ctx, nonce, 1).await;
+            nonce += 16;
+        }
+        ctx.simulated_time += 60_000;
+        ctx.validate_and_insert_block(first.block.clone().to_immutable()).await;
+        let first_hash = first.block.header.hash;
+        assert_ne!(ctx.consensus.get_sink(), first_hash, "it lands behind the heartbeat tip");
+        assert_eq!(
+            ctx.consensus.virtual_processor().heartbeat_yield_hint(),
+            HeartbeatYieldHintV1::YieldUntil(first.block.header.timestamp + hb::HEARTBEAT_NOMINAL_INTERVAL_MS),
+            "a bonded block is waiting in the virtual's mergeset: yield until its hour is up"
+        );
+
+        // The producer's next draw starts now; the miners yield, so nothing lands for its 17 minutes.
+        let second = ctx.build_block_template(nonce, ctx.simulated_time);
+        assert!(second.block.header.direct_parents().contains(&first_hash), "it merges the draw that just landed");
+        ctx.simulated_time += 17 * 60_000;
+        ctx.validate_and_insert_block(second.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+        let second_hash = second.block.header.hash;
+        assert_eq!(ctx.consensus.get_sink(), second_hash, "fence {transparent}: with nobody stacking ε, the next draw IS the sink");
+        assert_eq!(ctx.consensus.virtual_processor().heartbeat_yield_hint(), HeartbeatYieldHintV1::BondedSelectedParent);
+        let (_, earliest) = ctx
+            .consensus
+            .virtual_processor()
+            .heartbeat_adapt_block_template(ctx.build_block_template(nonce + 1, ctx.simulated_time))
+            .expect("the lane adapts");
+        assert_eq!(
+            earliest,
+            second.block.header.timestamp + hb::HEARTBEAT_NOMINAL_INTERVAL_MS,
+            "the mode is over: the slot rule holds the lane off for the nominal hour again"
+        );
+
+        // What happened to the FIRST draw's work depends on the fence, and only on the fence.
+        let merged = ctx.consensus.ghostdag_store().get_data(second_hash).unwrap();
+        assert_eq!(
+            merged.mergeset_blues.contains(&first_hash),
+            transparent,
+            "fence {transparent}: the first draw is blue exactly when heartbeats stop counting against it"
+        );
+        assert_eq!(merged.mergeset_reds.contains(&first_hash), !transparent);
+    }
+}
+
 /// **Unit C step 5: the header's committed state root is CHECKED, in both of the two ways a
 /// wrong one can be wrong.**
 ///

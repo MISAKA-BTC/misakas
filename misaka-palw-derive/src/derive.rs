@@ -738,6 +738,32 @@ mod tests {
         assert!(!verify_artifact_bytes(&d.object, b"a different file"));
     }
 
+    /// **A derivation published under the previous tree's id still verifies — by being re-run.**
+    /// testnet-11's objects name ids from the tree before ADR-0096's json kind; this build resolves
+    /// them (`registry::PRIOR_SOURCE_TREES_SHA256_HEX`) and checks them the only way Decision 5
+    /// allows: its own code over the answer, compared byte for byte. The same lies are still caught.
+    #[test]
+    fn an_object_under_the_previous_trees_id_is_verified_by_this_builds_code() {
+        use crate::registry::{PRIOR_SOURCE_TREES_SHA256_HEX, TransformerIdTree, transformer_by_id_with_tree, transformer_by_name};
+        let d = derive_named("music/smf/v1", &binding(), ANSWER).unwrap();
+        assert!(
+            !PRIOR_SOURCE_TREES_SHA256_HEX.is_empty(),
+            "testnet-11's derivations name an earlier tree; an empty list strands them"
+        );
+        for &tree in PRIOR_SOURCE_TREES_SHA256_HEX {
+            let mut manifest = transformer_by_name("music/smf/v1").unwrap().manifest();
+            manifest.source_tree_sha256 = tree;
+            let mut old = d.object.clone();
+            old.transformer_id = crate::ids::transformer_id(&manifest);
+            assert_ne!(old.transformer_id, d.object.transformer_id, "the earlier tree names it differently");
+            assert_eq!(transformer_by_id_with_tree(&old.transformer_id).map(|(_, t)| t), Some(TransformerIdTree::Prior(tree)));
+            assert!(verify(&old, ANSWER).unwrap().all_match(), "an honest object under the earlier id verifies");
+            let mut lie = old.clone();
+            lie.artifact_hash = h(0xEE);
+            assert_eq!(verify(&lie, ANSWER).unwrap().mismatches(), ["artifact_hash"], "and a lie under it is still named");
+        }
+    }
+
     /// **X6's third recomputation**: `output_root` is the THREE-input commitment, not a hash over
     /// the ids. The negative half is the one that matters — a two-input spelling would agree with
     /// the code on a fixed context and diverge everywhere else, so the test moves each input in

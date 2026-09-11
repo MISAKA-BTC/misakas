@@ -935,7 +935,7 @@ fn handle_chat(
     // the inference whether this one may spend exposure — the answer is produced either way; only
     // the commitment is withheld, which is what makes "answer, never commit" a mode and not an
     // outage, and what makes an uncertified class an answer rather than a refusal.
-    let price = ExposurePrice::resolve(config, facts);
+    let mut price = ExposurePrice::resolve(config, facts);
     let mut commit_refusal = facts.commit_refusal();
     if commit_refusal.is_none() {
         commit_refusal = budget.lock().expect("the budget lock is never poisoned").may_commit(config, price).err();
@@ -999,12 +999,34 @@ fn handle_chat(
     // aid otherwise (ADR-0074 Decision 5: a gateway that hardcodes "an eighth" declares a number
     // the network owns).
     let quanta_per_job = if facts.fp_quanta_per_canonical_job > 0 { facts.fp_quanta_per_canonical_job } else { 8 };
-    let quanta = if config.class_leaves == 0 {
+    // The operator's `--class-leaves` where given, else the chain's own canonical job — the flag
+    // was "for the quanta display" and defaulted to 0, so every gateway that did not set it
+    // printed zero quanta for every job.
+    let class_leaves = if config.class_leaves > 0 { config.class_leaves } else { facts.class_canonical_leaves };
+    let quanta = if class_leaves == 0 {
         0
     } else {
         let cap = if facts.fp_max_quanta_per_receipt > 0 { facts.fp_max_quanta_per_receipt } else { u32::MAX };
-        fp_quanta_v3(work_leaves, fp_class_quantum_leaves_v1(config.class_leaves, quanta_per_job), cap)
+        fp_quanta_v3(work_leaves, fp_class_quantum_leaves_v1(class_leaves, quanta_per_job), cap)
     };
+    // **This claim's own price, now that the job has run** (SA-1/SA-7 at their word: refused at
+    // the entrance, not at the transition). The entrance above could only price one CANONICAL
+    // claim, and a free-prompt claim reserves its own quanta's worth — a 256-token answer on
+    // testnet-11's A16 class is five canonical jobs. A gateway that stopped at the lower bound
+    // wrote commitments the transition then refused as `FreePromptExposureCeiling`, after the
+    // rail had paid to carry them. Re-checked against the room and the window budget with the
+    // exact figure, and that figure is what the budget is charged; the operator's own
+    // `--claim-exposure-sompi`, where declared, stays the price (it is their bound to set).
+    if commit_refusal.is_none()
+        && config.claim_exposure_sompi == 0
+        && let Some(exact) = facts.fp_claim_exposure(work_leaves)
+    {
+        let exact = ExposurePrice { room_sompi: price.room_sompi, claim_sompi: u64::try_from(exact).unwrap_or(u64::MAX) };
+        commit_refusal = budget.lock().expect("the budget lock is never poisoned").may_commit(config, exact).err().map(|why| {
+            format!("{why} (this answer's claim is {quanta} quanta; one canonical claim would have been {})", price.claim_sompi)
+        });
+        price = exact;
+    }
 
     // The outbox artifact: the framed result (borsh) + a JSON summary. Everything the executor
     // rail needs to assemble, sign and submit the commitment — and an honest list of what is
@@ -1117,8 +1139,12 @@ fn handle_chat(
         "trace_retention_daa": commitment.trace_retention_daa,
         "trace_dir": config.outbox.join("traces").join(hex(job_id)).display().to_string(),
         "work_leaves": work_leaves,
-        "class_leaves": config.class_leaves,
+        "class_leaves": class_leaves,
         "quanta_at_configured_quantum": quanta,
+        // What this claim reserves on the bond, as the room and budget were checked against it —
+        // the exact figure once the job ran, the canonical one where the chain did not report
+        // the ingredients (or the operator declared --claim-exposure-sompi).
+        "claim_exposure_sompi": price.claim_sompi,
         "answer_untrimmed": rendered_string,
         "job_context_hash": job_context_hash,
         // ADR-0078 X6's binding leg: the whole `PalwJobContextV2` as borsh hex, beside its hash.
@@ -1146,11 +1172,26 @@ fn handle_chat(
         "format": format_json,
         "pending_for_chain_submission": [
             "ML-DSA-87 signature over fp_claim_id (signer sidecar, or the rail's --bond-key-seed)",
-            "misaka-palw-fp-rail --artifact <stem> ... --submit --rpc <host:port> (ADR-0077 Decision 4)",
+            "misaka-palw-fp-rail --watch <outbox> (every job), or --artifact <stem> ... --submit --rpc <host:port> (this one)",
         ],
     });
     std::fs::write(&artifact_json, serde_json::to_vec_pretty(&summary).unwrap())
         .map_err(|e| format!("cannot write {}: {e}", artifact_json.display()))?;
+    // **One line per job, in the log an operator already watches.** The gateway printed nothing
+    // per job, so the only line an operator saw was the worker's `v3 executed` — which is printed
+    // for every job, committed or not, and says nothing about the chain. Outside operators read it
+    // as "mined". This says which of the two happened, and what carries a commitment onward. Ids
+    // and counts only: nothing of the prompt or the answer (ADR-0079 SA-7).
+    match &commit_refusal {
+        None => eprintln!(
+            "[misaka-palw-gateway] {artifact_stem}: committed claim {} ({quanta} quanta, {} sompi of exposure) — in the outbox, \
+             NOT on chain until misaka-palw-fp-rail submits it (--watch {})",
+            hex(claim_id),
+            price.claim_sompi,
+            config.outbox.display()
+        ),
+        Some(why) => eprintln!("[misaka-palw-gateway] {artifact_stem}: answered, not committed — {why}"),
+    }
 
     let finish_reason = if !parsed.calls.is_empty() {
         "tool_calls" // ADR-0096 Decision 2: OpenAI's word for an answer that made calls

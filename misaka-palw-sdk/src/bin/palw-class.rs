@@ -203,7 +203,9 @@ fn bind_tokenizer(
     std::fs::rename(&tmp, out).map_err(|e| format!("{} -> {}: {e}", tmp.display(), out.display()))?;
 
     let sdk = sdk_for(view);
-    let roots = |path: &std::path::Path| -> Result<Vec<(String, Result<Hash64, String>)>, String> {
+    // One row per registered model: its id and the root the artifact registers it under.
+    type ModelRoots = Vec<(String, Result<Hash64, String>)>;
+    let roots = |path: &std::path::Path| -> Result<ModelRoots, String> {
         let loaded = sdk.load_artifact(path)?;
         Ok(sdk.pairings(&loaded).into_iter().map(|(entry, root)| (entry.model_id.to_string(), root)).collect())
     };

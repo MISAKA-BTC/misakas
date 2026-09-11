@@ -106,7 +106,7 @@ pub(crate) async fn connect(ctx: &Ctx) -> Result<Reader, CliError> {
     Ok(Reader { client, network_domain })
 }
 
-fn parse_claim_id(s: &str) -> Result<Hash64, CliError> {
+pub(crate) fn parse_claim_id(s: &str) -> Result<Hash64, CliError> {
     s.trim()
         .parse::<Hash64>()
         .map_err(|_| CliError::new(exit::GENERIC, format!("'{s}' is not a 128-hex claim id (the gateway's `fp_claim_id`)")))

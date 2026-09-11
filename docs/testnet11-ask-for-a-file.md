@@ -423,6 +423,8 @@ who took both halves from one source would be checking nothing.
 
 * [testnet11-join-mining.md](testnet11-join-mining.md) — the bond, the node, the gateway, and
   running the live lane at all.
+* [testnet11-free-prompt-mining.md](testnet11-free-prompt-mining.md) — from an executed job to a
+  paid block: the watcher that submits, following a claim, and where the reward comes from.
 * [palw-freeprompt-gateway.md](palw-freeprompt-gateway.md) — the gateway's own options, the
   worker protocol, and what it refuses.
 * [palw-derived-artifacts.md](palw-derived-artifacts.md) — the same subject at protocol depth:

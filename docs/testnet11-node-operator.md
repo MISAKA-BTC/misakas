@@ -35,7 +35,7 @@ not by hashing.
 > |---|---|---|
 > | producing blocks for a model class | `kaspad --palw-produce --palw-class-artifact=<file>` | [testnet11-join-mining.md](testnet11-join-mining.md) §5–6c |
 > | **seating a panel** on a model class | `kaspad --palw-panel --palw-class-artifact=<file>`, once per class | join-mining §6c — a seat re-executes the claim, so it needs the weights |
-> | answering people's prompts | `misaka-palw-gateway --worker palw-a16-fp-worker` (or `palw-qwen36-fp-worker`) | join-mining §7 |
+> | answering people's prompts | `misaka-palw-gateway --worker palw-a16-fp-worker` (or `palw-qwen36-fp-worker`), plus `misaka-palw-fp-rail --watch` to submit and `kaspad --palw-produce --palw-panel --palw-class-artifact=<file>` to serve and be paid | [testnet11-free-prompt-mining.md](testnet11-free-prompt-mining.md) (and join-mining §7) |
 >
 > None of them is this document's §2, and none of them is `misaka-palw-worker`: that crate's
 > free-prompt arms were deleted by ADR-0077 Decision 5 (consensus refuses their null execution
@@ -67,20 +67,26 @@ lane.
 >         expects fence 2125000 next, not 2400. ... from peer: 169.58.232.113:26311
 > ```
 >
-> **The fingerprint is unchanged — `060e3597…` on both sides.** It carries the height of every other
-> scheduled fence — that is why the 1900 fences and the 2150 ladder each moved it (`71b35c25…` →
-> `b511dd1e…` → `ebd3b321…` → `060e3597…`) — but the commit that added ADR-0095's fence (`14c453d1`)
-> left `palw_model_benefits` out of it, so for this one fence the startup line this page used to tell
-> you to trust cannot tell the two builds apart. (What normalises a scheduled fence away is the
-> handshake's *identity* id, which is what lets two builds peer through a rollout; the fingerprint is
-> not normalised.) The build below prints its fence heights on the next line; the check is that line:
+> **The fingerprint was unchanged — `060e3597…` on both sides.** It carries the height of every
+> other scheduled fence — that is why the 1900 fences and the 2150 ladder each moved it (`71b35c25…`
+> → `b511dd1e…` → `ebd3b321…` → `060e3597…`) — but the commit that added ADR-0095's fence
+> (`14c453d1`) left `palw_model_benefits` out of it, so for this one fence the startup line this page
+> used to tell you to trust could not tell the two builds apart. (What normalises a scheduled fence
+> away is the handshake's *identity* id, which is what lets two builds peer through a rollout; the
+> fingerprint is not normalised.) **Fixed 2026-09-11:** the fingerprint writes that fence now, which
+> moved testnet-11's value to `ecbdbc22…` without moving any rule, and a test fails the build if a
+> fence is ever left out again. Every build with the 2400 fence prints its fence heights on the line
+> after the fingerprint; that line is the check:
 >
 > ```
-> [INFO ] Consensus params fingerprint: 060e3597cd2950bc183b215b5ff87538e72dd788cab43829dca6bc72bcb5ac89 (network testnet-11)
+> [INFO ] Consensus params fingerprint: ecbdbc2222efcc2d32493f2349e7c17f983611697a5d10ffc7ae90458bac8ee5 (network testnet-11)
 > [INFO ] Consensus fence schedule: 1150, 1900, 2150, 2400, 2125000 (schedule id …)
 > ```
 >
-> No such line, or no `2400` in it, means you are on the old build.
+> A build from `891a1a14` up to `a5f1bdf7` prints `060e3597…` on the first line and the same second
+> line: same ruleset, and it peers with the builds after it (both log `schedules a FUTURE fence
+> differently` for the other — expected here, not a refusal). No second line, or no `2400` in it,
+> means you are on the old build.
 >
 > **Do not run `7f4dded4`**, the first build with the 2400 fence. It put ADR-0095's new kinds in the
 > middle of two enums whose borsh discriminant is their position — one the chain carries in every
@@ -158,7 +164,9 @@ lane.
 > on the fleet can end this for you — the refusal is sent by your own binary.
 >
 > **No datadir wipe.** Genesis and the peering identity are unchanged from 5f; only the fingerprint
-> moves. Rebuild, restart, keep your appdir. Confirm with the startup line:
+> moves. Rebuild, restart, keep your appdir. Confirm with the startup line (the value that flag day's
+> builds printed; a build from 2026-09-11 on prints `ecbdbc22…` for the same ruleset — see the top of
+> this section):
 >
 > ```
 > [INFO ] Consensus params fingerprint: 060e3597cd2950bc183b215b5ff87538e72dd788cab43829dca6bc72bcb5ac89 (network testnet-11)
@@ -179,17 +187,19 @@ lane.
 > > first rode 1900, where the gate could not see it at all — two builds peering and then disagreeing
 > > about which closes are valid. Moving it to 2150 is what makes the difference visible.
 >
-> * consensus fingerprint: **`060e3597cd2950bc183b215b5ff87538e72dd788cab43829dca6bc72bcb5ac89`**
->   (2026-09-06 flag day; the pre-flag-day value `71b35c25…` names the same genesis and the same
->   peering identity, and is refused by the gate as above).
+> * consensus fingerprint: **`ecbdbc2222efcc2d32493f2349e7c17f983611697a5d10ffc7ae90458bac8ee5`**
+>   (2026-09-11: the first value that carries ADR-0095's 2400 fence). Builds from `891a1a14` up to
+>   `a5f1bdf7` print **`060e3597cd2950bc183b215b5ff87538e72dd788cab43829dca6bc72bcb5ac89`** for the
+>   same ruleset and stay peers; the pre-flag-day value `71b35c25…` names the same genesis and the
+>   same peering identity, and is refused by the gate as above.
 > * genesis hash: **`ad30b5cb965ad305dfa1dc7516935763ea2623105581b83bb9359c7247157d36b0f8003b337cdad366e3895c8f159e99332be16e258b144dddf483bf9b33edb7`** (`PALW_RC_GENESIS`,
 >   coinbase payload marker `misaka-palw-rc`) — measured from the running node's own startup line,
 >   which is the only value your node will be judged by.
-> * build: **`main` at `891a1a14` or later**. The fingerprint above is necessary and no longer
->   sufficient: the builds on either side of the DAA-2400 fence print the same one (it is the one
->   fence the fingerprint leaves out; see the top of this section). The check is the
->   line after it, `Consensus fence schedule: 1150, 1900, 2150, 2400, 2125000`, which builds from
->   before `891a1a14` do not print. Builds from before `06bf5118` — the 5f tag
+> * build: **`main` at `891a1a14` or later**. Up to `a5f1bdf7` the fingerprint was necessary and not
+>   sufficient: the builds on either side of the DAA-2400 fence printed the same one (it was the one
+>   fence the fingerprint left out; see the top of this section). From 2026-09-11 it carries every
+>   fence. The readable check is the line after it, `Consensus fence schedule: 1150, 1900, 2150,
+>   2400, 2125000`, which builds from before `891a1a14` do not print. Builds from before `06bf5118` — the 5f tag
 >   `testnet-11-relaunch-5f-adr0083-h1150` (`16a2f277`), the fleet's previous `cef2ecdb`, and the 5f
 >   cut `2222e054…` — were on the far side of the gate from the second flag day on; and
 >   `4fcce4b0` / `6dea4f5f` (fingerprints `b511dd1e…` / `ebd3b321…`) from **1900**.
@@ -516,6 +526,68 @@ quarantine — the node logs exactly that at WARN each time it fires.
 > it — and `--clear-quarantine` could not recover it, because the count it preserved was what
 > re-quarantined the node seconds later. A node showing `switched chains N times` for an N far above
 > 5 has hit this. Update before troubleshooting anything else.
+
+---
+
+## 7a. If every block is a heartbeat and DNS finality has stopped
+
+This is what testnet-11 did from 11:41Z to ~13:20Z on 2026-09-10, and until
+[ADR-0105](adr/0105-a-heartbeat-never-turns-a-bonded-block-red.md)'s fence is armed on this network
+nothing inside the chain ends it on its own.
+
+**What you see:**
+
+* every new block on [misakascan](https://misakascan.com) is **algo 8** (a heartbeat — the block page
+  names the lane), usually two to four siblings every ~120 s, and no algo-6/9 block is a chain block;
+* bonded blocks still land, but none of them becomes a chain block;
+* `misaka validator status` (or `getDnsConfirmation` over wRPC) shows `pow_confirmed: false` with
+  `work_depth` far below `required_work_depth` — on 2026-09-10 it was **~10 / 100** — and
+  `dns_health` `DegradedCertificateCensored`, while attestations are still being included;
+* the EVM bridge stays paused (it requires a DNS-confirmed anchor).
+
+**Why it holds.** A heartbeat is allowed one hour after a bonded selected parent and 120 s after a
+heartbeat one. If no bonded block becomes the selected parent for an hour — node restarts that lose
+the producers' in-flight draws are enough — a heartbeat takes the chain, and from then on the lane
+runs every 120 s. A bonded block carries the timestamp and parents of the TEMPLATE it was drawn on;
+a Qwen3.6 draw takes ~17 minutes on the fleet's hosts, so it lands about eight heartbeats behind the
+tip. It is never selected, and at this network's `ghostdag_k = 1` those heartbeats make it a red
+block whose work counts for nothing. Heartbeats weigh 1 each, so the work piled on any anchor inside
+the episode never reaches 100. It lasts as long as any heartbeat miner runs.
+
+**How to get out.**
+
+* **On a build with ADR-0105 Decision 2** (the heartbeat miner steps aside by itself): nothing to do.
+  When a bonded block is waiting to be merged, each such miner logs
+
+  ```
+  [INFO ] [palw-heartbeat-miner] standing aside: the chain runs on heartbeats and a bonded block is waiting to be merged — …
+  ```
+
+  and stops mining until that block's timestamp plus one hour, or until a bonded block is the
+  selected parent. The next bonded draw then lands on a tip nobody extended and takes the chain
+  back. The miner stands aside for **at most one hour per episode**, so a producer whose blocks can
+  never take the chain cannot hold the clock with them. It only works if **every** heartbeat miner
+  on the network does it: one miner on an older build keeps the chain on heartbeats.
+* **On an older build, or if the chain has not come back within the hour**: stop **every** heartbeat
+  miner — remove `--palw-heartbeat-miner-address` and restart — for one bonded draw (on the fleet,
+  ~20 minutes). The next bonded block becomes the sink, `work_depth` jumps past 1,000,000 and DNS
+  confirms within minutes (measured 2026-09-10: sink algo-6 by 13:16Z, DNS confirmed 13:26Z). Then
+  put one miner back (below). If no bonded block lands at all, the producers are the problem, not
+  the heartbeats — check them before anything else.
+
+**How not to get in.**
+
+* **Before restarting a producer, check how old the last bonded CHAIN block's timestamp is** — its
+  header timestamp, which is its template's time, not when it arrived. If it is already more than
+  ~30 minutes old, a restart that loses the in-flight draws can push it past the hour and hand the
+  chain to the heartbeat lane. Restart producers one at a time, and not all at once.
+* **Run at most one heartbeat miner per operator**, on a build that carries ADR-0105 Decision 2 —
+  preferably on a node that is not also producing. More miners do not make the clock more alive
+  (the width bound merges at most four heartbeats per block), they only add siblings; and a miner on
+  a build without the yield undoes the yield of every other one. This replaces the Relaunch 5
+  runbook's "heartbeat miners on every host", which assumed bonded blocks every 120 s.
+* Do not remove the heartbeat lane for good: it is what keeps the chain's clock — and every PALW
+  timeout sweep — running when every bonded lane is down.
 
 ---
 

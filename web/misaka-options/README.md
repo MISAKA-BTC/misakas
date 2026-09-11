@@ -287,6 +287,14 @@ prefix (`mo-mock:`) and never mixes with real data; a new mock world drops the s
 transactions an older mock world left there. The banner and the footer say "mock" whenever it is
 on. Nothing in mock mode is a chain fact; it exists for demos, screenshots and UI work.
 
+`?mock=1&mockwallet=misaka` makes the mock wallet pose as **MISAKA Wallet**: 5 MSK on the EVM account,
+the rest "on the post-quantum lane", and a send that tops the EVM account up by the shortfall plus a
+10,000-sompi gas reserve before it goes out — what the extension's automatic top-up does. It exercises
+`wallet.topsUp()`: for MISAKA Wallet the store does not refuse a join or an opening deposit on the
+EVM balance alone (the wallet moves what is missing inside the same confirmation and says so), and
+the desk says how much will be moved and that the claim takes about two blocks. Any other wallet
+(MetaMask) is still refused with "Insufficient MSK balance in the EVM account", because it cannot top up.
+
 ## What is not available on the public network yet
 
 - On testnet-11 today the `palw_model_market`, `palw_model_lines` and `palw_model_evm` fences are

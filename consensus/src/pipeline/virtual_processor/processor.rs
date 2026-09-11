@@ -13181,6 +13181,33 @@ impl VirtualStateProcessor {
         Ok((template, earliest))
     }
 
+    /// **ADR-0105 Decision 2: whether a heartbeat miner should stand aside for a bonded block.**
+    ///
+    /// Node policy, not a rule — nothing validates against it, and the slot rule the template
+    /// adapter applies is unchanged. It answers from the current virtual: the selected parent's lane,
+    /// and the lane and timestamp of every other block the virtual merges (the tips a template would
+    /// carry as parents, and whatever they bring that the sink has not merged yet). One block deep,
+    /// the slot rule's shape. See [`kaspa_consensus_core::palw_heartbeat_v1::heartbeat_yield_hint_v1`].
+    ///
+    /// **Every failure answers `NothingToYieldTo`**, i.e. "mine as before": a missing header here is
+    /// a node-local fact, and the one thing this hint must never do is hold the clock on one.
+    pub fn heartbeat_yield_hint(&self) -> kaspa_consensus_core::palw_heartbeat_v1::HeartbeatYieldHintV1 {
+        use kaspa_consensus_core::palw_heartbeat_v1 as hb;
+        let virtual_state = self.virtual_stores.read().state.get().unwrap();
+        if !self.palw_heartbeat_lane.is_some_and(|fence| fence.is_active(virtual_state.daa_score)) {
+            return hb::HeartbeatYieldHintV1::NothingToYieldTo;
+        }
+        let ghostdag = &virtual_state.ghostdag_data;
+        let Ok(selected_parent) = self.headers_store.get_header(ghostdag.selected_parent) else {
+            return hb::HeartbeatYieldHintV1::NothingToYieldTo;
+        };
+        let merged: Vec<(u8, u64)> = ghostdag
+            .unordered_mergeset_without_selected_parent()
+            .filter_map(|hash| self.headers_store.get_header(hash).ok().map(|header| (header.pow_algo_id, header.timestamp)))
+            .collect();
+        hb::heartbeat_yield_hint_v1(selected_parent.pow_algo_id, merged)
+    }
+
     fn build_block_template_with_selector_provider<F>(
         &self,
         miner_data: MinerData,

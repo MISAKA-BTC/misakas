@@ -166,6 +166,13 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// ADR-0105 Decision 2: whether a heartbeat miner should stand aside for a bonded block that
+    /// is waiting to be merged. Node policy, not a rule — see
+    /// [`crate::palw_heartbeat_v1::heartbeat_yield_hint_v1`].
+    fn heartbeat_yield_hint(&self) -> crate::palw_heartbeat_v1::HeartbeatYieldHintV1 {
+        unimplemented!()
+    }
+
     fn validate_and_insert_block(&self, block: Block) -> BlockValidationFutures {
         unimplemented!()
     }

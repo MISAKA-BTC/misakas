@@ -137,14 +137,32 @@ impl PalwProducerFactsV2 {
         self.is_base_class || self.epoch_produced_blocks < self.epoch_budget_blocks
     }
 
-    /// Every stateful precondition a producer can check BEFORE running an inference, in one
-    /// answer. `Ok(())` is not a promise the block lands — the chain can move underneath it —
-    /// but each `Err` is a reason it certainly would not have.
-    pub fn ready_to_produce(&self, local_pubkey: &[u8]) -> Result<(), &'static str> {
+    /// **The receipt lane's preconditions, which are a strict subset of the attempt lane's.**
+    ///
+    /// A receipt block spends one quantum of a free-prompt claim that is already `Final`: it
+    /// opens no claim, so it reserves no exposure, and it is counted in the receipt lane's own
+    /// epoch census rather than the attempt class's budget (`apply_receipt_spend`). The two
+    /// attempt-only conditions below therefore say nothing about it — and a producer that
+    /// consulted [`Self::ready_to_produce`] before trying its receipts held its certified quanta
+    /// back for exactly as long as its ATTEMPT lane was full. A quantum's win is spendable only
+    /// inside its use window (`fp_spend_window_contains_v3`, "a win outside the window licenses
+    /// nothing, forever"), so that hold did not delay the free-prompt executor's pay, it cancelled
+    /// it — and the bond most likely to hold on exposure is precisely the one committing
+    /// free-prompt claims, since those fill the same ceiling.
+    pub fn ready_to_spend_receipts(&self, local_pubkey: &[u8]) -> Result<(), &'static str> {
         let bond = self.bond.as_ref().ok_or("the named bond is not registered on this chain")?;
         if bond.registered_pubkey != local_pubkey {
             return Err("the local signing key is not the one this bond registered");
         }
+        Ok(())
+    }
+
+    /// Every stateful precondition a producer can check BEFORE running an inference, in one
+    /// answer. `Ok(())` is not a promise the block lands — the chain can move underneath it —
+    /// but each `Err` is a reason it certainly would not have.
+    pub fn ready_to_produce(&self, local_pubkey: &[u8]) -> Result<(), &'static str> {
+        self.ready_to_spend_receipts(local_pubkey)?;
+        let bond = self.bond.as_ref().ok_or("the named bond is not registered on this chain")?;
         if !self.has_epoch_room() {
             return Err("this class's epoch budget is already spent");
         }
@@ -460,10 +478,42 @@ mod tests {
                 .unwrap();
         assert!(facts.bond.is_none());
         assert_eq!(facts.ready_to_produce(&[7; 4]), Err("the named bond is not registered on this chain"));
+        assert_eq!(facts.ready_to_spend_receipts(&[7; 4]), Err("the named bond is not registered on this chain"));
         // And a class the chain does not know has no facts at all — there is nothing to be told.
         assert!(
             palw_producer_facts_v2(&state, &params, &admission, crate::BlockHash::from_u64_word(1), 101, h64(0xBAD), None).is_none()
         );
+    }
+
+    /// **A full attempt lane does not hold the receipt lane.** A receipt block spends a quantum of
+    /// a claim that is already `Final`: it opens no claim and draws on no attempt budget, so the
+    /// two attempt-only holds must leave it clear — while the two bond holds (unknown bond, wrong
+    /// key) apply to both, because a receipt is signed by the bond's key like any block.
+    #[test]
+    fn a_full_attempt_lane_does_not_hold_the_receipt_lane() {
+        let state = state();
+        let params = state_params();
+        let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
+        let bond_key = PalwBondKeyV2(bond_outpoint());
+        let mut facts =
+            palw_producer_facts_v2(&state, &params, &admission, crate::BlockHash::from_u64_word(1), 101, h64(1), Some(&bond_key))
+                .unwrap();
+        assert_eq!(facts.ready_to_spend_receipts(&[7; 4]), Ok(()));
+
+        // The bond's ceiling is full — the state a bond that commits free-prompt claims reaches.
+        let bond = facts.bond.as_mut().unwrap();
+        bond.reserved_exposure = bond.exposure_ceiling;
+        assert_eq!(facts.ready_to_produce(&[7; 4]), Err("the bond's exposure ceiling leaves no room for another claim"));
+        assert_eq!(facts.ready_to_spend_receipts(&[7; 4]), Ok(()), "a receipt reserves no exposure");
+
+        // And an attempt class whose epoch budget is spent (a non-floor class; the floor is exempt).
+        facts.is_base_class = false;
+        facts.epoch_budget_blocks = 0;
+        assert_eq!(facts.ready_to_produce(&[7; 4]), Err("this class's epoch budget is already spent"));
+        assert_eq!(facts.ready_to_spend_receipts(&[7; 4]), Ok(()), "a receipt draws on no attempt budget");
+
+        // The key still matters to both lanes.
+        assert_eq!(facts.ready_to_spend_receipts(&[9; 4]), Err("the local signing key is not the one this bond registered"));
     }
 }
 
