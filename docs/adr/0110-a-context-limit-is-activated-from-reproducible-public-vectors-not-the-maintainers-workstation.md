@@ -2,8 +2,9 @@
 
 * Status: PROPOSED 2026-09-11 on `feat/adr-0103-held-context`, written from the operator's decision
   of the same day (ADR-0103 §10.5 answered by ADR-0109; this is the other half of that answer).
-  Consensus-inert: no object, acceptance rule, fence, parameter or fingerprint moves. A fleet takes it
-  by an ordinary rebuild.
+  **Decisions 1–5 IMPLEMENTED the same day (§9)**; the 512, 4,096 and 32,768-position vectors pass
+  every stage and are pinned. Consensus-inert: no object, acceptance rule, fence, parameter or
+  fingerprint moves. A fleet takes it by an ordinary rebuild.
 * Builds on: [0103](0103-the-context-is-held-off-the-chain-and-the-chain-carries-a-root-an-opening-and-a-logarithm.md)
   (§10.5: no 2M claim ran; the "done when" was met at devnet widths and at 2M only in the
   generators' tables), [0109](0109-a-seat-may-demand-the-committed-leaf-it-needs-to-judge.md) (the
@@ -118,13 +119,13 @@ receipt, and no count of receipts changes any admission, activation, fence, seat
 reported this `document_id`.
 
 **Decision 5 — CI runs the small widths on every change; the 2M vector is published, not assumed.**
-The 512, 4,096 and 32,768-position vectors run in the test suite, and their documents' `consensus`
-sections are pinned byte for byte, so a change that moves a root, a count or a verdict at any of those
-widths fails by name. The 131,072-position vector runs where the suite's budget allows, and is
-otherwise a named external run. The 2M vector is external: its command is published, and so is the
-first reproduction's document, with the host and the time it took. Its `consensus` section is then
-pinned beside the others. It is pinned because a reproduction exists, not because enough of them
-agreed.
+The 512-position vector runs in the default test suite, and the 4,096 and 32,768-position vectors run
+in the release-mode vector job. Each document's `document_id` is pinned, so a change that moves a
+root, a count, a size or a verdict at any of those widths fails by name. The 131,072-position and 2M
+vectors are external runs. The command is published, and so is the first reproduction's document,
+with the host and the time it took. Its id is then pinned beside the others. It is pinned because a
+reproduction exists, not because enough of them agreed. The measured cost of each width is §9's, and
+the 2M vector's is not small (§9.3).
 
 **Decision 6 — arming a wider context is a release, and the release cites its evidence.** A ruleset
 move that arms `palw_held_context`, or admits a class whose context was unreachable before, is
@@ -225,3 +226,65 @@ document if one is given, and refuses a receipt whose context is not this ADR's.
 The operator's draft called this ADR 0105. 0104–0108 were resident on other branches when it was
 written (ADR-0109 §7), and ADR-0109 took 0109, so this is 0110. No 0110 was resident on any branch
 on 2026-09-11 when it was first committed.
+
+## 9. Implementation record (2026-09-11)
+
+Built on `feat/adr-0103-held-context` (`528d1bbb` and its successors), and merged into the unarmed
+testnet-11 integration branch `integ/t11-adr0103-unarmed`. Nothing consensus-side moved.
+
+### 9.1 Where each Decision lives
+
+| Decision | where | what pins it |
+|---|---|---|
+| **1** the vector | `misaka_palw_base0::context_vector` — `PalwContextVectorV1`, the shipped five (`palw_context_vectors_v1`), the seed `palw_context_vector_seed_v1(name)`, the anchor and the job fields keyed off the seed, the class from `qwen25_a16_profile_v7` at `palw_context_vector_geometry_v1`, the weights from `Base0ArtifactV1::derive_deterministic` | `a_vector_is_a_pure_function_of_its_name_seed_and_geometry` |
+| **2** the stages | `palw_verify_context_vector_v1` over the registered-row `Qwen25A16Backend`, judged under `PalwContextRulesetV1::devnet_held_v1` (the `--palw-held-context-devnet` mint) | the pinned vectors below |
+| **3** the document | `PalwContextFindingsV1::{agreed_json_v1, document_id, document_json_v1}`; `palw_canonical_json_v1`, checked against `misaka_palw_derive::canon_json` on every write | `the_canonical_form_sorts_and_escapes`; `the_document_id_excludes_the_host_and_moves_with_any_consensus_fact` |
+| **4** the receipt | `misaka palw verify-context --sign-with` and `misaka palw verify-receipt` (`misaka-cli/src/palw_verify_context.rs`), ML-DSA-87 under `misaka-palw/context-receipt/v1` | `a_receipt_round_trips_and_refuses_a_changed_byte_or_another_context`; `no_consensus_node_or_sdk_crate_reads_a_receipt` |
+| **5** the pins | `the_512_vector_passes_every_stage_and_is_pinned` (default suite); `the_4k_…` and `the_32k_…` behind `--ignored` (`cargo test --release -p misaka-palw-base0 --lib -- --ignored context_vector`) | themselves; the 512 id is the same from a debug and a release build, and on the feature and the integration branch |
+
+### 9.2 What the three widths measured
+
+The dense graph-v7 row at the thinnest geometry, on one M-series host that was sharing its CPU
+(load average 20–28) — so the host columns are an upper bound, and they are the columns nobody
+compares:
+
+| | 512 | 4,096 | 32,768 | order |
+|---|---|---|---|---|
+| step leaves | 51,180 | 409,580 | 3,276,780 | linear (held by the executor) |
+| capture retained | 81 KB | 610 KB | 4.84 MB | linear (held by the executor) |
+| a leaf's evidence (the one-move object) | 6,931 B | 7,315 B | 7,699 B | **logarithmic** — 128 B a doubling |
+| a prompt tile answer | 457 B | 649 B | 841 B | **logarithmic** |
+| a state chunk answer | 999 B | 1,191 B | 1,383 B | **logarithmic** |
+| the widest step range answer | 66,129 B | 66,321 B | 66,513 B | **logarithmic** |
+| an interval opening (the widest of four) | 6,077 B | 7,741 B | 19,133 B | linear in the interval's blocks, inside the lane's cap by the width rule |
+| produce | 0.57 s | 1.9 s | 42.9 s | host |
+| seat (four intervals, recompute route) | 1.8 s | 5.3 s | 217 s | host |
+| court (three honest leaves and the drill) | 3.6 s | 9.0 s | 254 s | host |
+| availability (five answers) | 0.4 s | 1.3 s | 87 s | host |
+| peak resident | 47 MB | 343 MB | 1.64 GB | host |
+
+Every stage passed at every width. **Everything the chain would carry per claim grew by a constant
+number of bytes a doubling**, which is ADR-0103's R-held measured end to end rather than read off
+a generator. Everything that grew with the context is held by the executor or the seat.
+
+### 9.3 What the widths found
+
+* **The seat's recompute is super-linear in the context on this engine.** From 4,096 to 32,768
+  positions (8×) the seat stage took 41× longer and availability 67×. The recompute replays the
+  prefix, and the attention over it is quadratic, even at the thinnest geometry. ADR-0103 Decision
+  2's route rule prices a recompute linearly (`n_ctx × replay_ms_per_position`), so at wide contexts
+  it is optimistic about when `Recompute` fits the window. A release that arms a wide context must
+  price the seat with a measured curve, or route it to `Resume`. This is recorded against ADR-0103
+  Decision 2; nothing here changes it.
+* **The 2M vector is not an evening's run.** Extrapolated from 32,768 at the measured exponents
+  (n^1.5 to n^2), the thin row at 2M costs 12–28 days of one process on this host. "External" means
+  a large machine for days, or engine work first: a prefill that parallelises across positions, and a
+  seat that resumes rather than recomputes. The 131,072-position vector extrapolates to about three
+  hours and is the next external run.
+
+### 9.4 What remains
+
+* The release-mode vector job in CI (`cargo test --release -p misaka-palw-base0 --lib -- --ignored
+  context_vector`). The tests exist; the workflow step does not.
+* The first external documents for 128K and 2M, and their pins.
+* ADR-0103 Decision 2's route rule against the measured curve (§9.3).
