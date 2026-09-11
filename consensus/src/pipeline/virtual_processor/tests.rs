@@ -4180,7 +4180,7 @@ async fn palw_v2_a_gossiped_receipt_pool_assembles_the_object_a_block_accepts() 
 
     // The carrier the submitter builds is admissible at the transaction gate…
     let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: object.clone() }).unwrap();
-    validate_palw_lifecycle_tx(&payload).expect("the assembled object may ride a 0x4b transaction");
+    validate_palw_lifecycle_tx(&payload, true).expect("the assembled object may ride a 0x4b transaction");
 
     // …and the OBJECT passes the acceptance validator at the same state — the correspondence.
     let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
@@ -12513,7 +12513,7 @@ async fn the_acceptance_filter_output_always_folds_at_a_class_activation_crossin
     use kaspa_consensus_core::palw_e2e_adjudicability::{PalwE2eCoveringV1, PalwE2eFamilyV1, palw_e2e_family_id_v1};
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
     use kaspa_consensus_core::palw_state_v2::{
-        PalwBlockContextV2, PalwCertifiedFamilyStateV2, PalwCertifiedLaneV1, PalwChainStateV2, PalwClassStatusV2, PalwConsensusObjectV2,
+        PalwBlockContextV2, PalwCertifiedFamilyStateV2, PalwCertifiedLaneV1, PalwChainStateV2, PalwConsensusObjectV2,
         PalwDeltaEntryV2, PalwPwuRuleV2, PalwStateDeltaV2, PalwStateV2Error, apply_delta_v2, apply_palw_transition_v2,
     };
     use kaspa_hashes::Hash64;
@@ -12525,6 +12525,8 @@ async fn the_acceptance_filter_output_always_folds_at_a_class_activation_crossin
         .edit_consensus_params(|p| {
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
             *p = p.clone().with_palw_v2_cadence();
+            // A-1 lives past the audit flag day; arm it so the filter folds the fold's step 3.
+            p.palw_audit_2026_09_11 = Some(kaspa_consensus_core::config::params::ForkActivation::always());
         })
         .build();
     let mut ctx = TestContext::new(TestConsensus::new(&config));
@@ -12724,6 +12726,8 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            // B-5's pay-once dedup lives past the audit flag day; arm it.
+            p.palw_audit_2026_09_11 = Some(kaspa_consensus_core::config::params::ForkActivation::always());
             *p = p.clone().with_palw_v2_cadence();
         })
         .build();
@@ -12971,6 +12975,8 @@ fn ac_slot_fixture() -> AcSlotFixture {
             move |p| {
                 p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
                 p.palw_kary_court = Some(ForkActivation::always());
+                // AC-SLOT charges the court slot post-apply only past the audit flag day; arm it.
+                p.palw_audit_2026_09_11 = Some(ForkActivation::always());
                 *p = p.clone().with_palw_v2_cadence();
             }
         })

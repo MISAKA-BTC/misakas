@@ -67,6 +67,17 @@ pub struct TransactionValidator {
     /// SIZE guard: too wide only declines to reject a coinbase the exact-hash rule rejects anyway,
     /// while too narrow refuses a coinbase this node itself built — the 112-block halt.
     palw_validator_payout_bounds_declared: bool,
+
+    /// **A-2 (mainnet audit 2026-09-11): whether this ruleset tolerates an undecodable or
+    /// unknown-wire-version lifecycle (0x4b) payload at isolation** — `true` iff the network
+    /// declares the audit fence (`Params::palw_audit_2026_09_11_fence().is_some()`). Isolation is
+    /// context-free by contract and holds no DAA score, so — exactly like `model_sink_outputs_allowed`
+    /// and `palw_validator_payout_bounds_declared` above — it asks the height-free question. The
+    /// extraction walk skips such a payload (folds nothing) at every height, so a ruleset that has
+    /// NOT declared the fence keeps refusing the shape byte-for-byte as every build does today, and
+    /// one that has declared it admits the shape (the fold still does nothing with it). A build that
+    /// SCHEDULES the fence and one that does not thus agree on every payload that decodes.
+    palw_lifecycle_undecodable_tolerated: bool,
 }
 
 impl TransactionValidator {
@@ -93,6 +104,9 @@ impl TransactionValidator {
         // **ADR-0018 §E's payout bounds, height-free** (mainnet audit 2026-09-06, H-3): the
         // isolation cap has no DAA score, and a size guard must fail wide.
         palw_validator_payout_bounds_declared: bool,
+        // **A-2 (mainnet audit 2026-09-11), height-free**: whether the ruleset tolerates an
+        // undecodable/unknown-version 0x4b payload at isolation, the audit fence's `.is_some()`.
+        palw_lifecycle_undecodable_tolerated: bool,
     ) -> Self {
         Self {
             max_tx_inputs,
@@ -111,6 +125,7 @@ impl TransactionValidator {
             model_sink_outputs_allowed: palw_model_market_fence.is_some(),
             palw_model_market_fence,
             palw_validator_payout_bounds_declared,
+            palw_lifecycle_undecodable_tolerated,
         }
     }
 
@@ -147,6 +162,9 @@ impl TransactionValidator {
             // Every shipped preset's door: ADR-0018 §E's payout bounds are dormant, so the
             // isolation cap is the one testnet-11 enforces.
             palw_validator_payout_bounds_declared: false,
+            // Every shipped preset's door: the audit fence is dormant, so a lifecycle payload this
+            // build cannot decode is block-invalid at isolation, exactly as every build does today.
+            palw_lifecycle_undecodable_tolerated: false,
         }
     }
 
@@ -154,6 +172,14 @@ impl TransactionValidator {
     /// [`Self::new_for_tests`]. Production reads it from `Params` in `services.rs`.
     pub fn with_validator_payout_bounds_for_tests(mut self, declared: bool) -> Self {
         self.palw_validator_payout_bounds_declared = declared;
+        self
+    }
+
+    /// Test-only: flip the height-free A-2 door (tolerate an undecodable/unknown-version 0x4b
+    /// payload at isolation) on a validator built by [`Self::new_for_tests`]. Production derives it
+    /// from `Params::palw_audit_2026_09_11_fence().is_some()` in `services.rs`.
+    pub fn with_lifecycle_undecodable_tolerated_for_tests(mut self, tolerated: bool) -> Self {
+        self.palw_lifecycle_undecodable_tolerated = tolerated;
         self
     }
 
