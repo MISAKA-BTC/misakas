@@ -286,7 +286,15 @@ a generator. Everything that grew with the context is held by the executor or th
 
 ### 9.4 What remains
 
-* The release-mode vector job in CI (`cargo test --release -p misaka-palw-base0 --lib -- --ignored
-  context_vector`). The tests exist; the workflow step does not.
-* The first external documents for 128K and 2M, and their pins.
-* ADR-0103 Decision 2's route rule against the measured curve (§9.3).
+* ~~The release-mode vector job in CI.~~ **Built 2026-09-11.** The `Context vectors (release)` job
+  in `.github/workflows/ci.yaml` runs the `context-vectors` gate of `scripts/ci-gates.sh`
+  (`cargo test --release -p misaka-palw-base0 --lib -- --ignored context_vector`). The gate names
+  both vectors in its evidence and pins the count at two, so a third vector added under that
+  filter turns it red instead of lengthening CI. `workflow-parity` holds the two spellings equal.
+* ~~ADR-0103 Decision 2's route rule against the measured curve.~~ **Amended 2026-09-11** (ADR-0103
+  §10.6): a replay now pays for its history. On this row the 4,096 and 32,768-position vectors take
+  the Resume route. They were re-pinned for that alone: `9c5a772c…` and `848d9352…`, and on a less
+  loaded host the 32,768 run took 398 s. The 512-position pin did not move.
+* The first external documents for 128K and 2M, and their pins. **The 2M vector cannot run on
+  this tree**: ADR-0103 §10.7 found that the A16 tier's attention ops refuse a history longer
+  than 2^18. The widest A16 vector anything here can produce is 262,144 positions.
