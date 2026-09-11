@@ -26038,14 +26038,19 @@ pub(crate) mod tests {
             let err = apply_palw_transition_v2(&state, &p, &ctx(daa, daa, daa), &[junk], None)
                 .expect_err("a root claim over a foreign binding is not a move the fold plays");
             assert!(matches!(err, PalwStateV2Error::DissectionRefused(id, _) if id == sid), "{err}");
+            // The carriage is length-delimited: its own decoder refuses any tail after it.
+            let carriage = borsh::to_vec(&PalwStateCarriageV2::from_state(&state)).expect("the carriage serializes");
+            let bytes = borsh::to_vec(&(carriage, p.clone(), honest, sid, daa)).expect("the fixture serializes");
             if let Ok(path) = std::env::var("AC_SLOT_FIXTURE") {
-                // The carriage is length-delimited: its own decoder refuses any tail after it.
-                let carriage = borsh::to_vec(&PalwStateCarriageV2::from_state(&state)).expect("the carriage serializes");
-                let bytes = borsh::to_vec(&(carriage, p.clone(), honest, sid, daa))
-                    .expect("the fixture serializes");
-                std::fs::write(&path, bytes).expect("the fixture is written");
+                std::fs::write(&path, &bytes).expect("the fixture is written");
                 eprintln!("AC-SLOT fixture written to {path}");
             }
+            // The processor-level tests load the COMMITTED copy, so it must be these bytes: a drill
+            // change that moves them re-commits the file (run this test with AC_SLOT_FIXTURE=<that path>).
+            assert!(
+                bytes.as_slice() == include_bytes!("../../src/pipeline/virtual_processor/testdata/ac_slot_fixture.bin"),
+                "consensus/src/pipeline/virtual_processor/testdata/ac_slot_fixture.bin is stale: re-emit it with AC_SLOT_FIXTURE"
+            );
         }
 
         /// What a ladder's next disclosure must name — the pinned midpoint of its live interval.

@@ -12944,9 +12944,13 @@ fn ac_slot_fixture() -> AcSlotFixture {
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
     use kaspa_consensus_core::palw_state_v2::{PalwConsensusObjectV2, PalwStateCarriageV2, PalwStateParamsV2};
 
-    let path = std::env::var("AC_SLOT_FIXTURE")
-        .expect("AC_SLOT_FIXTURE must name the file consensus-core's ac_slot_emit_the_fused_terminal_fixture wrote");
-    let bytes = std::fs::read(&path).expect("the AC-SLOT fixture file exists");
+    // The fixture is committed (`testdata/ac_slot_fixture.bin`, the bytes consensus-core's
+    // `ac_slot_emit_the_fused_terminal_fixture` emits — that test pins the file byte for byte), so
+    // both tests run in every `cargo test`; `AC_SLOT_FIXTURE` still points them at a fresh one.
+    let bytes = match std::env::var("AC_SLOT_FIXTURE") {
+        Ok(path) => std::fs::read(&path).expect("the AC-SLOT fixture file exists"),
+        Err(_) => include_bytes!("testdata/ac_slot_fixture.bin").to_vec(),
+    };
     #[allow(clippy::type_complexity)]
     let (carriage, params, mut honest, sid, daa): (
         Vec<u8>,
