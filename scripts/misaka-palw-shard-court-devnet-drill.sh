@@ -25,7 +25,9 @@
 #
 # Env: KASPAD_BIN, CLI_BIN (defaults target/release/*), NODES (3), WORK_DIR, TAMPER_LEAF (0 — the
 # embedding gather, the leaf every seat samples first), CANONICAL_INTERVAL (10 DAA), STEP_WAIT (s),
-# P2P_BASE / RPC_BASE (port bases).
+# P2P_BASE / RPC_BASE (port bases), HELD (0; 1 re-runs the drill UNDER ADR-0103's fence —
+# --palw-held-context-devnet on every node, the held regime minted from genesis — which is
+# ADR-0103 Invariant 1: the same tampered leaf, the same one-move conviction, the same slash).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -36,6 +38,7 @@ WORK_DIR="${WORK_DIR:-$REPO_ROOT/.misaka-palw-shard-court-devnet}"
 TAMPER_LEAF="${TAMPER_LEAF:-0}"
 CANONICAL_INTERVAL="${CANONICAL_INTERVAL:-10}"
 STEP_WAIT="${STEP_WAIT:-1800}"
+HELD="${HELD:-0}"
 P2P_BASE="${P2P_BASE:-16510}"
 RPC_BASE="${RPC_BASE:-17810}"
 PREMINE_TXID="6d6973616b612d7072656d696e65$(printf '0%.0s' $(seq 1 100))"   # "misaka-premine", zero-padded
@@ -47,6 +50,9 @@ die() { log "FATAL: $*"; exit 1; }
 for b in "$KASPAD_BIN" "$CLI_BIN"; do [ -x "$b" ] || die "missing binary $b (cargo build --release -p kaspad -p misaka-cli)"; done
 [ "$NODES" -ge 2 ] || die "NODES must be at least 2: a liar and a seat"
 "$KASPAD_BIN" --help 2>/dev/null | grep -q -- "--palw-shard-court-devnet" || die "this kaspad has no --palw-shard-court-devnet (ADR-0100)"
+if [ "$HELD" = "1" ]; then
+  "$KASPAD_BIN" --help 2>/dev/null | grep -q -- "--palw-held-context-devnet" || die "this kaspad has no --palw-held-context-devnet (ADR-0103)"
+fi
 for ((i=0; i<NODES; i++)); do
   for port in $((P2P_BASE + i)) $((RPC_BASE + i)); do
     if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then die "port $port is in use — set P2P_BASE / RPC_BASE"; fi
@@ -73,7 +79,7 @@ for ((i=0; i<NODES; i++)); do
   [ -n "$addr" ] || die "cannot derive bond $i's address"
   args=(--devnet --appdir="$WORK_DIR/node-$i" --listen="127.0.0.1:$((P2P_BASE + i))" --rpclisten-borsh="127.0.0.1:$((RPC_BASE + i))"
         --utxoindex --nodnsseed --disable-upnp --nogrpc --enable-unsynced-mining
-        --palw-devnet-floor-only --palw-shard-court-devnet=0
+        --palw-devnet-floor-only --palw-shard-court-devnet=0 $( [ "$HELD" = "1" ] && echo --palw-held-context-devnet || true )
         --palw-produce --palw-panel --palw-producer-key="$WORK_DIR/keys/bond-$i.seed" --palw-producer-bond="$PREMINE_TXID:$i"
         --palw-producer-pay-address="$addr" --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1 + i))")
   if [ "$i" -eq 0 ]; then

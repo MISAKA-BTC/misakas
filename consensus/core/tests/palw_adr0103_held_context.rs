@@ -344,3 +344,23 @@ fn the_shard_plan_prices_the_fetch_and_the_window_binds_the_shard_count() {
         Err(PalwShardPlanError::WindowTooShort { .. })
     ));
 }
+
+/// **The drill's network is the ADR's network** (ADR-0103 §6 step 6; Invariant 1's re-run). The
+/// floor-only devnet `--palw-held-context-devnet` builds — `palw_held_context_mint_v1` at the
+/// devnet's own ladder — assembles, arms the fence and every precondition from genesis, and moves
+/// the fingerprint (every node of the drill must carry the flag).
+#[test]
+fn the_held_devnet_mint_assembles_from_the_floor_only_devnet() {
+    use kaspa_consensus_core::config::params::{
+        DEVNET_PARAMS, PALW_RC_GENESIS_ARTIFACT_ROOT, palw_devnet_genesis_bonds_v1, palw_v2_params_from_artifacts_on_base,
+    };
+    let floor = palw_v2_params_from_artifacts_on_base(DEVNET_PARAMS.clone(), PALW_RC_GENESIS_ARTIFACT_ROOT, palw_devnet_genesis_bonds_v1())
+        .expect("the floor-only devnet assembles");
+    let ladder = bundle(&floor).court.max_step_leaf_count();
+    let held = palw_held_context_mint_v1(floor.clone(), ladder).expect("the held devnet assembles");
+    assert!(held.palw_held_context_active_at(0), "the fence is armed from genesis");
+    assert!(held.palw_shard_court_active_at(0) && held.palw_kary_court_active_at(0) && held.palw_panel_da_at(0));
+    assert_eq!(held.palw_prompt_ids_form_at(0), PalwPromptIdsFormV1::MerkleV1);
+    assert_eq!(bundle(&held).court.max_step_leaf_count(), ladder, "the devnet's own ladder");
+    assert_ne!(held.consensus_params_id(), floor.consensus_params_id(), "the fingerprint says the network moved");
+}
