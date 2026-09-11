@@ -315,6 +315,30 @@ its verdict; the Studio runs the same files against its `/v1`.
 | `Authorization: Bearer …` | ignored; the pool slot token is the credential |
 | any field not named here | refused by name, never dropped |
 
+**The limits, before the first token (ADR-0097 Decision 2).** `GET /v1/models` carries
+`misaka.limits` and `GET /health` carries the same object (`limits`, schema `misaka.palw.limits.v1`):
+`context_window` (the class's `n_ctx`; prompt and answer together, `prompt_plus_answer_must_fit`),
+`max_output_tokens` (`min(--max-decode-cap, n_ctx − 1)`), `default_output_tokens`,
+`max_prompt_bytes`, `tokenizer_id` and `vocab` (count with the table ADR-0096 Decision 8 serves),
+`eog_token_ids`, `jobs_per_request: 1`, `streaming: true`, and under `features` the word the chain's
+fences decide for each thing the table above accepts — `response_format.json_schema:
+"advisory" | "committed"`, `sampling.temperature: "greedy_only" | "requested"`,
+`require_committed_format: "refused" | "served"` — and under `privacy` whether the ids ride the
+chain (`public_da` / `panel_da_available`) and in which form (`flat` / `merkle`). A client that reads
+this budgets its request as arithmetic and never learns the window from a 400.
+
+When a request does exceed a bound the gateway checks before the chain, the refusal is the
+gateway's ordinary error body — `{"error": {"message", "type": "invalid_request_error"}}`, the
+sentence unchanged — with `error.code` added (`context_length_exceeded`, which is OpenAI's own code
+for the same refusal, or `prompt_bytes_exceeded`) and the numbers under `misaka.refusal`:
+`prompt_tokens`, `decode_ceiling`, `context_window` and `room_for_answer` for the first,
+`prompt_bytes` and `max_prompt_bytes` for the second. The body is the same whether it arrives as a
+400 (`stream: false`) or as an SSE event after the 200 head (`stream: true`). Every
+answer also carries `misaka.decode = {requested_max_tokens, applied_limit, cap, clamped}`, because
+a `max_tokens` past `--max-decode-cap` is clamped and a clamp nobody is told about is a downgrade
+nobody agreed to. Whether a MODEL fits this chain at a width — every wall, with its number — is
+`misaka-palw-base0 --bin palw-model-fit` (ADR-0097 Decision 1), not this gateway's to say.
+
 **Tools are the model's own text (Decision 2).** The shipped classes' models were trained on the
 Hermes-style convention, and the template is the model's (ADR-0077 Decision 6), so the tool list
 rides the system turn as text — created with `You are a helpful assistant.` when the request has

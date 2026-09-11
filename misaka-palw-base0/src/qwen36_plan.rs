@@ -948,6 +948,8 @@ fn plan_table(
 
     let k_embed = kernel_semantics_id_v1(KDESC_A16_EMBED);
     let k_req = kernel_semantics_id_v1(KDESC_A16_REQUANTIZE);
+    // ADR-0102: `graph-v6` declares the lift per token — the op this engine already runs.
+    let k_req_by_token = kernel_semantics_id_v1(kaspa_consensus_core::palw_step_refute::KDESC_A16_REQUANTIZE_BY_TOKEN);
     let k_rms = kernel_semantics_id_v1(KDESC_A16_RMS_NORM);
     let k_scores = kernel_semantics_id_v1(KDESC_A16_ATTN_SCORES);
     let k_soft = kernel_semantics_id_v1(KDESC_A16_SOFTMAX);
@@ -1075,7 +1077,7 @@ fn plan_table(
                 dtype_i8()?;
                 PlanOpV1::EmbedGather
             }
-            (Op::MulElem, None, "embed_lift.a16") if kid == k_req => {
+            (Op::MulElem, None, "embed_lift.a16") if kid == k_req || kid == k_req_by_token => {
                 arity(1)?;
                 width(d, "hidden")?;
                 need(0, W::Fixed(d), "the lift")?;

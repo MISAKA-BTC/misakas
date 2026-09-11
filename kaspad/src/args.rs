@@ -257,8 +257,18 @@ pub struct Args {
     pub palw_challenge: bool,
     /// DRILL ONLY: corrupt one lane of this leaf in every block this node produces.
     pub palw_drill_tamper_leaf: Option<u64>,
+    /// DRILL ONLY (devnet/simnet): this node's canonical free-prompt claims commit a capture with
+    /// one lane of this step leaf corrupted — the one-move court's drill (ADR-0100 §6 step 2).
+    pub palw_drill_tamper_fp_leaf: Option<u64>,
     /// DRILL ONLY: open a court against every licensed claim, reproduced or not.
     pub palw_drill_challenge_all: bool,
+    /// DRILL ONLY (devnet/simnet): this node's canonical free-prompt claims are broadcast and
+    /// served as their ANSWER envelope, never the capture — as at a width no capture fits the
+    /// material cap — so a seat judges them by intervals alone (ADR-0111's drill).
+    pub palw_drill_answer_only: bool,
+    /// DRILL ONLY (devnet/simnet): this node refuses every leaf-evidence request on the interval
+    /// lane, so a seat that named a leaf must demand its evidence on chain (ADR-0111 Decision 3).
+    pub palw_drill_refuse_leaf_evidence: bool,
     /// ADR-0074 Decision 1: run the network's own job when nobody is asking and commit it as a
     /// canonical free-prompt claim, drawn by the chain's beacon like any other.
     pub palw_canonical_claims: bool,
@@ -306,6 +316,16 @@ pub struct Args {
     /// `palw_model_evm` at this DAA score. Refused anywhere but devnet/simnet (the same rule as the
     /// VLT and token fences above — a fence is a release decision on a public network).
     pub palw_model_devnet_daa: Option<u64>,
+    /// ADR-0100 on a private devnet: state the COMPLETE_V3 signing contexts at genesis and arm
+    /// `Params::palw_shard_court` at this DAA.
+    pub palw_shard_court_devnet_daa: Option<u64>,
+    /// ADR-0100 Decision 4 on a private devnet: arm `Params::palw_shard_licensing` at this DAA
+    /// (needs `palw_shard_court_devnet_daa` at or below it).
+    pub palw_shard_licensing_devnet_daa: Option<u64>,
+    /// ADR-0103 on a private devnet: mint the held regime from genesis — the COMPLETE_V4 set, trace
+    /// format 4 and the tiled prompt ids, the k-ary and one-move courts, `PanelDa`, and
+    /// `Params::palw_held_context` (`palw_held_context_mint_v1`, at the devnet's own ladder).
+    pub palw_held_context_devnet: bool,
     /// PALW on a PRIVATE devnet: run the floor-only ruleset (the base class alone, seeded by
     /// ADR-0076 with the whole share, `MAX/278`) instead of the shipped devnet's testnet-11 class
     /// set, whose floor holds a sliver of the share and prices a fixture block at minutes per
@@ -422,7 +442,10 @@ impl Default for Args {
             palw_producer_class: None,
             palw_challenge: false,
             palw_drill_tamper_leaf: None,
+            palw_drill_tamper_fp_leaf: None,
             palw_drill_challenge_all: false,
+            palw_drill_answer_only: false,
+            palw_drill_refuse_leaf_evidence: false,
             palw_canonical_claims: false,
             palw_canonical_class: None,
             palw_canonical_interval_daa: 600,
@@ -446,6 +469,9 @@ impl Default for Args {
             vlt_shadow_only: false,
             vlt_devnet_flat_decay: false,
             palw_model_devnet_daa: None,
+            palw_shard_court_devnet_daa: None,
+            palw_shard_licensing_devnet_daa: None,
+            palw_held_context_devnet: false,
             palw_devnet_floor_only: false,
             tkn_devnet_active_daa: None,
             tkn_devnet_shadow_span: 300,
@@ -625,6 +651,61 @@ impl Args {
             if let Err(e) = config.params.validate_palw_v2() {
                 panic!("--palw-model-devnet={daa} produced a ruleset the node refuses: {e:?}");
             }
+        }
+
+        // **ADR-0100 on a private devnet: the one-move court, and per-shard licensing.** Arming
+        // the court is the ruleset move ADR-0099 §3 named — the genesis states the COMPLETE_V3
+        // signing-context set — so this rewrites the bundle's `signature_contexts_root` and arms
+        // `palw_signature_contexts_v2` from genesis, exactly the mutation
+        // `the_shard_court_arms_only_over_a_bundle_that_commits_to_its_signing_context` makes, and
+        // then asks `validate_palw_v2` the question every other network's assembly asks. Placed
+        // after the floor-only swap, which rebuilds the params. Every node of the drill must carry
+        // the same values: they are in the consensus fingerprint.
+        if let Some(daa) = self.palw_shard_court_devnet_daa {
+            let net = self.network().network_type();
+            if !matches!(net, NetworkType::Devnet | NetworkType::Simnet) {
+                panic!(
+                    "--palw-shard-court-devnet is devnet/simnet only (got {net:?}). Arming the one-move court is a ruleset \
+                     move at genesis and must ship in a release, not a command line."
+                );
+            }
+            let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut config.params.palw_consensus_mode
+            else {
+                panic!("--palw-shard-court-devnet needs a ConsensusV2 network, and {net:?} here is not one");
+            };
+            bundle.signature_contexts_root = kaspa_consensus_core::palw_mode_v2::palw_v2_signature_contexts_root_v3();
+            config.params.palw_signature_contexts_v2 = Some(kaspa_consensus_core::config::params::ForkActivation::always());
+            config.params.palw_shard_court = Some(kaspa_consensus_core::config::params::ForkActivation::new(daa));
+            if let Some(licensing) = self.palw_shard_licensing_devnet_daa {
+                config.params.palw_shard_licensing = Some(kaspa_consensus_core::config::params::ForkActivation::new(licensing));
+            }
+            if let Err(e) = config.params.validate_palw_v2() {
+                panic!("--palw-shard-court-devnet={daa} produced a ruleset the node refuses: {e:?}");
+            }
+        } else if self.palw_shard_licensing_devnet_daa.is_some() {
+            panic!("--palw-shard-licensing-devnet needs --palw-shard-court-devnet at or below it: a panel of shard seats must be able to convict");
+        }
+
+        // **ADR-0103 on a private devnet: the held regime, minted from genesis.** One helper —
+        // `palw_held_context_mint_v1`, the spelling the generator and the tests share — so the
+        // drill's network is the ADR's network and not a hand-copied approximation of it. At the
+        // devnet's own ladder: no round is played under the fence, but a devnet class needs no
+        // ladder past the one it was minted with, and keeping it keeps the drill's classes the
+        // shipped ones. Placed after the courts above, which it supersedes (V4 covers V3).
+        if self.palw_held_context_devnet {
+            let net = self.network().network_type();
+            if !matches!(net, NetworkType::Devnet | NetworkType::Simnet) {
+                panic!(
+                    "--palw-held-context-devnet is devnet/simnet only (got {net:?}). The held regime is a mint, and a mint ships \
+                     in a release, not a command line (ADR-0092 Decision 4)."
+                );
+            }
+            let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else {
+                panic!("--palw-held-context-devnet needs a ConsensusV2 network, and {net:?} here is not one");
+            };
+            let ladder = bundle.court.max_step_leaf_count();
+            config.params = kaspa_consensus_core::config::params::palw_held_context_mint_v1(config.params.clone(), ladder)
+                .unwrap_or_else(|e| panic!("--palw-held-context-devnet produced a ruleset the node refuses: {e:?}"));
         }
 
         // MISAKA Compute Token Program devnet fences — same refusal rules as the VLT block above:
@@ -946,6 +1027,40 @@ pub fn cli() -> Command {
                      exactly. Exists so an HONEST producer can be shown clearing itself — the half of a round trip that a \
                      conviction alone does not prove. Every such dispute costs this bond the claim's stake and loses. \
                      REFUSED on mainnet.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-answer-only")
+                .long("palw-drill-answer-only")
+                .env("KASPAD_PALW_DRILL_ANSWER_ONLY")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "PALW DRILL ONLY: this node's canonical free-prompt claims are broadcast and served as their answer \
+                     envelope, never the capture, so every seat judges them by intervals alone and must obtain a named \
+                     leaf's evidence from the executor (ADR-0111). DEVNET/SIMNET ONLY.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-refuse-leaf-evidence")
+                .long("palw-drill-refuse-leaf-evidence")
+                .env("KASPAD_PALW_DRILL_REFUSE_LEAF_EVIDENCE")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "PALW DRILL ONLY: this node refuses every leaf-evidence request on the interval lane, so a seat that \
+                     named a leaf demands its evidence on chain through the held data-availability court (ADR-0111 \
+                     Decision 3). DEVNET/SIMNET ONLY.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-tamper-fp-leaf")
+                .long("palw-drill-tamper-fp-leaf")
+                .env("KASPAD_PALW_DRILL_TAMPER_FP_LEAF")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "PALW DRILL ONLY: this node's canonical free-prompt claims (--palw-canonical-claims) commit a capture \
+                     with one lane of this step leaf corrupted, the commitment re-derived so only a re-execution sees it — \
+                     so the one-move court (ADR-0100) can be shown convicting on a live chain. DEVNET/SIMNET ONLY.",
                 ),
         )
         .arg(
@@ -1350,6 +1465,38 @@ pub fn cli() -> Command {
                 .env("KASPAD_VLT_DEVNET_FLAT_DECAY"),
         )
         .arg(
+            Arg::new("palw-shard-court-devnet")
+                .long("palw-shard-court-devnet")
+                .value_name("daa-score")
+                .value_parser(clap::value_parser!(u64))
+                .require_equals(false)
+                .help(
+                    "ADR-0100's one-move court on a PRIVATE devnet: state the COMPLETE_V3 signing-context set at genesis and \
+                     arm the court at this DAA score. DEVNET/SIMNET ONLY. Every node of the drill must carry the same value \
+                     (it is in the consensus fingerprint).",
+                )
+                .env("KASPAD_PALW_SHARD_COURT_DEVNET"),
+        )
+        .arg(
+            arg!(--"palw-held-context-devnet" "ADR-0103's held regime on a PRIVATE devnet, minted from genesis: the COMPLETE_V4 \
+                 signing-context set, trace format 4 with the tiled prompt ids, the k-ary and one-move courts, PanelDa and \
+                 palw_held_context — no CourtOpened bisection is accepted, a fused leaf's accusation opens its dissection, and a held \
+                 class may register. DEVNET/SIMNET ONLY; every node of the drill must carry it (it is in the consensus fingerprint).")
+                .env("KASPAD_PALW_HELD_CONTEXT_DEVNET"),
+        )
+        .arg(
+            Arg::new("palw-shard-licensing-devnet")
+                .long("palw-shard-licensing-devnet")
+                .value_name("daa-score")
+                .value_parser(clap::value_parser!(u64))
+                .require_equals(false)
+                .help(
+                    "ADR-0100 Decision 4 on a PRIVATE devnet: arm per-shard licensing at this DAA score. Needs \
+                     --palw-shard-court-devnet at or below it. DEVNET/SIMNET ONLY; in the consensus fingerprint.",
+                )
+                .env("KASPAD_PALW_SHARD_LICENSING_DEVNET"),
+        )
+        .arg(
             Arg::new("palw-model-devnet")
                 .long("palw-model-devnet")
                 .value_name("daa-score")
@@ -1657,10 +1804,16 @@ impl Args {
             palw_producer_class: m.get_one::<String>("palw-producer-class").cloned().or(defaults.palw_producer_class),
             palw_challenge: m.get_one::<bool>("palw-challenge").copied().unwrap_or(defaults.palw_challenge),
             palw_drill_tamper_leaf: m.get_one::<u64>("palw-drill-tamper-leaf").copied().or(defaults.palw_drill_tamper_leaf),
+            palw_drill_tamper_fp_leaf: m.get_one::<u64>("palw-drill-tamper-fp-leaf").copied().or(defaults.palw_drill_tamper_fp_leaf),
             palw_drill_challenge_all: m
                 .get_one::<bool>("palw-drill-challenge-all")
                 .copied()
                 .unwrap_or(defaults.palw_drill_challenge_all),
+            palw_drill_answer_only: m.get_one::<bool>("palw-drill-answer-only").copied().unwrap_or(defaults.palw_drill_answer_only),
+            palw_drill_refuse_leaf_evidence: m
+                .get_one::<bool>("palw-drill-refuse-leaf-evidence")
+                .copied()
+                .unwrap_or(defaults.palw_drill_refuse_leaf_evidence),
             palw_canonical_claims: m.get_one::<bool>("palw-canonical-claims").copied().unwrap_or(defaults.palw_canonical_claims),
             palw_canonical_class: m.get_one::<String>("palw-canonical-class").cloned().or(defaults.palw_canonical_class),
             palw_canonical_interval_daa: m
@@ -1696,6 +1849,12 @@ impl Args {
             vlt_shadow_only: arg_match_unwrap_or::<bool>(&m, "vlt-shadow-only", defaults.vlt_shadow_only),
             vlt_devnet_flat_decay: arg_match_unwrap_or::<bool>(&m, "vlt-devnet-flat-decay", defaults.vlt_devnet_flat_decay),
             palw_model_devnet_daa: m.get_one::<u64>("palw-model-devnet").copied().or(defaults.palw_model_devnet_daa),
+            palw_shard_court_devnet_daa: m.get_one::<u64>("palw-shard-court-devnet").copied().or(defaults.palw_shard_court_devnet_daa),
+            palw_shard_licensing_devnet_daa: m
+                .get_one::<u64>("palw-shard-licensing-devnet")
+                .copied()
+                .or(defaults.palw_shard_licensing_devnet_daa),
+            palw_held_context_devnet: arg_match_unwrap_or::<bool>(&m, "palw-held-context-devnet", defaults.palw_held_context_devnet),
             palw_devnet_floor_only: arg_match_unwrap_or::<bool>(&m, "palw-devnet-floor-only", defaults.palw_devnet_floor_only),
             tkn_devnet_active_daa: m.get_one::<u64>("tkn-devnet").copied(),
             tkn_devnet_shadow_span: arg_match_unwrap_or::<u64>(&m, "tkn-devnet-shadow-span", defaults.tkn_devnet_shadow_span),

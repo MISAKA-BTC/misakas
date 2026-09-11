@@ -1042,8 +1042,13 @@ pub fn palw_attn_move_is_admissible_v2(
     kary_court_active: bool,
 ) -> Result<(), PalwCourtV2Error> {
     use crate::palw_state_v2::PalwConsensusObjectV2 as Obj;
-    let is_dissection =
-        matches!(object, Obj::CourtAttnRootClaimed { .. } | Obj::CourtAttnDissected { .. } | Obj::CourtAttnChildChosen { .. });
+    let is_dissection = matches!(
+        object,
+        Obj::CourtAttnRootClaimed { .. }
+            | Obj::CourtAttnRootClaimedAnchored { .. }
+            | Obj::CourtAttnDissected { .. }
+            | Obj::CourtAttnChildChosen { .. }
+    );
     if is_dissection && !kary_court_active { Err(PalwCourtV2Error::KaryCourtDormant) } else { Ok(()) }
 }
 
@@ -1112,8 +1117,37 @@ pub fn palw_court_params_at_v2(
     bundle: &crate::palw_mode_v2::PalwConsensusParamsV2,
     kary_court_active: bool,
 ) -> Result<crate::palw_mode_v2::PalwCourtParamsV2, PalwCourtV2Error> {
+    palw_court_params_held_at_v2(bundle, kary_court_active, false)
+}
+
+/// **[`palw_court_params_at_v2`] on a network that may have armed `Params::palw_held_context`**
+/// (ADR-0103 Decision 5). Held, the arity is derived with the leaf ladder's rounds at zero
+/// ([`crate::palw_mode_v2::palw_court_arity_held_v1`]) — no session on such a network plays the
+/// ladder, so its rounds are not what the window has to hold. Everything else is the k-ary court's
+/// derivation. The caller resolves both fences at one DAA; `held` without the k-ary court is the
+/// k-ary court's refusal, because `validate_palw_v2` refuses that pair at assembly.
+pub fn palw_court_params_held_at_v2(
+    bundle: &crate::palw_mode_v2::PalwConsensusParamsV2,
+    kary_court_active: bool,
+    held_context_active: bool,
+) -> Result<crate::palw_mode_v2::PalwCourtParamsV2, PalwCourtV2Error> {
     if !kary_court_active {
         return Ok(bundle.court);
+    }
+    if held_context_active {
+        let court = bundle.court;
+        let (history_max, widest_lane_count) = palw_attn_widest_registered_site_v2(bundle);
+        let arity = crate::palw_mode_v2::palw_court_arity_held_v1(
+            bundle.state.window_court(),
+            court.turn_deadline_daa(),
+            history_max,
+            crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4,
+            court.terminal_rounds(),
+            widest_lane_count,
+            court.max_close_chunks(),
+        )
+        .ok_or(PalwCourtV2Error::NoAdmissibleArity { window_court: bundle.state.window_court() })?;
+        return court.with_dissection_arity(arity).map_err(|e| PalwCourtV2Error::BindingInvalid(e.to_string()));
     }
     let court = bundle.court;
     let (history_max, widest_lane_count) = palw_attn_widest_registered_site_v2(bundle);
@@ -1206,9 +1240,26 @@ pub fn palw_attn_dispute_site_v2(
     narrowed_leaf: u64,
     anchor: Option<&crate::palw_attn_court_v1::PalwAttnCheckpointAnchorV1>,
 ) -> Result<PalwAttnDisputeSiteV2, PalwCourtV2Error> {
-    use crate::palw_step::PalwStepOpKindV1;
     check_close_profile_is_the_registered_class(claim.class_id, binding)?;
     check_execution_root_binding(claim.execution_root, binding.committed_execution_root)?;
+    palw_attn_dispute_site_unpinned_v2(binding, operands, narrowed_leaf, anchor)
+}
+
+/// **The same derivation without the claim's two pins** (ADR-0093 as built) — for a PARTY
+/// computing its own moves, never for the court.
+///
+/// Every field of the site is a function of the binding's profile and job context, the narrowed
+/// leaf and the proven operands; the two pins above say only that the binding is the ACCUSED
+/// execution's. A challenger computing which child to name reads the site off its OWN capture —
+/// the same class and job, so the same site — and the court, which alone decides anything, still
+/// derives it through [`palw_attn_dispute_site_v2`] with both pins.
+pub fn palw_attn_dispute_site_unpinned_v2(
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+    operands: &PalwProvenOperandsV1,
+    narrowed_leaf: u64,
+    anchor: Option<&crate::palw_attn_court_v1::PalwAttnCheckpointAnchorV1>,
+) -> Result<PalwAttnDisputeSiteV2, PalwCourtV2Error> {
+    use crate::palw_step::PalwStepOpKindV1;
     // `verify_binding` is what makes `committed_execution_root` a PIN rather than a field: it
     // recomputes the root from the job context, both profile hashes, the leaf and checkpoint
     // counts and their roots, so pinning the root pins every part the derivation below reads.
@@ -1370,6 +1421,8 @@ pub fn palw_attn_dispute_site_v2(
         coord.position,
     );
 
+    let mut held_slices: Option<u32> = None;
+    let mut held_heads: u16 = 0;
     let (anchor_geometry, anchor_positions) = match anchor {
         None => (None, 0),
         Some(_) => {
@@ -1379,8 +1432,12 @@ pub fn palw_attn_dispute_site_v2(
             // The composed hybrid map's attention slice IS the tiled map's enumeration, at chunk
             // indices `0..attn.chunk_count()`; its recurrence chunks follow and this bottom never
             // reads them — so the v5 hybrid row carries a dissection anchor like the dense one.
+            // ADR-0103 Decision 3: the held maps enumerate the same tiles, so they are tiled maps
+            // here too; only how a chunk proves into the root differs, and the site says which.
+            let held = crate::palw_state_chunk_map::palw_map_is_held_v4(&profile.state_chunk_map_id);
             if profile.state_chunk_map_id != crate::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v3()
                 && profile.state_chunk_map_id != crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v3()
+                && !held
             {
                 return Err(PalwCourtV2Error::NotTheTiledMap);
             }
@@ -1400,9 +1457,17 @@ pub fn palw_attn_dispute_site_v2(
                 "no checkpoint of this class covers the disputed position, so a checkpoint-route bottom has no anchor",
             ))?;
             let positions = crate::palw_context_ladder::palw_checkpoint_positions_at_v1(profile, &binding.job_context, covered);
-            let geometry = crate::palw_state_chunk_map::tiled_kv_state_geometry_v3(profile, positions)
-                .map_err(|e| PalwCourtV2Error::TiledGeometryUnavailable { positions, why: e.to_string() })?;
-            (Some(geometry), positions)
+            if held {
+                let layout = crate::palw_state_chunk_map::palw_state_layout_v4(profile, positions)
+                    .map_err(|e| PalwCourtV2Error::TiledGeometryUnavailable { positions, why: e.to_string() })?;
+                held_slices = Some(layout.slice_count());
+                held_heads = layout.gdn_heads;
+                (Some(layout.attn), positions)
+            } else {
+                let geometry = crate::palw_state_chunk_map::tiled_kv_state_geometry_v3(profile, positions)
+                    .map_err(|e| PalwCourtV2Error::TiledGeometryUnavailable { positions, why: e.to_string() })?;
+                (Some(geometry), positions)
+            }
         }
     };
 
@@ -1435,6 +1500,8 @@ pub fn palw_attn_dispute_site_v2(
                 crate::palw_context_ladder::palw_checkpoint_cadence_v1(profile),
                 crate::palw_context_ladder::PalwCheckpointCadenceV1::PerPosition
             ),
+            anchor_held_slices: held_slices,
+            anchor_held_recurrence_heads: held_heads,
         },
         head_lanes: (as_u16(head, "the head index")?, as_u16(lane_first, "the lane offset")?, as_u16(lane_span, "the lane count")?),
         history_positions,
@@ -1451,6 +1518,27 @@ pub fn palw_attn_dispute_site_v2(
             state_chunk_map_id: binding.state_chunk_map_id,
         },
     })
+}
+
+/// **Which registered operand rows a fused site at `narrowed_leaf` reads** (ADR-0093 as built):
+/// `(tensor name, layer)` for the softmax widening byte and the scores, probs and values triples —
+/// each at byte offset 0, which is where [`palw_attn_dispute_site_v2`] reads them. A party opens
+/// exactly these rows from its inventory, so the openings it files are the ones the derivation
+/// asks for, spelled by the same description ([`crate::palw_step_refute::palw_attn_fused_tensors_v1`]).
+pub fn palw_attn_site_operand_names_v2(
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+    narrowed_leaf: u64,
+) -> Result<Vec<(String, Option<u16>)>, PalwCourtV2Error> {
+    let profile = &binding.shape_profile;
+    let coord = crate::palw_step::canonical_step_coordinates(profile, &binding.job_context, narrowed_leaf)
+        .ok_or(PalwCourtV2Error::NotACanonicalLeaf(narrowed_leaf))?;
+    let (node, layer) = profile.resolve_node_slot(coord.node_slot).ok_or(PalwCourtV2Error::NotACanonicalLeaf(narrowed_leaf))?;
+    if node.op_kind != crate::palw_step::PalwStepOpKindV1::AttnFused {
+        return Err(PalwCourtV2Error::NotAFusedLeaf { op: node.op_kind });
+    }
+    let tensors = crate::palw_step_refute::palw_attn_fused_tensors_v1(node.weight_name.as_str())
+        .ok_or(PalwCourtV2Error::FusedGeometryUnservable("the fused node's weight name is not a registered softmax spelling"))?;
+    Ok(vec![(tensors.softmax_up, layer), (tensors.scores, layer), (tensors.probs, layer), (tensors.values, layer)])
 }
 
 /// **ADR-0049 Decision C's ceilings, applied to a close's own payload (audit H-03).**

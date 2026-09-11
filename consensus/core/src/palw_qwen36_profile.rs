@@ -45,10 +45,10 @@ use crate::palw_step::{
 };
 use crate::palw_step_refute::{
     KDESC_A16_ADD_ELEM, KDESC_A16_ATTN_SCORES, KDESC_A16_ATTN_VALUES, KDESC_A16_EMBED, KDESC_A16_MATMUL_RESCALE, KDESC_A16_REQUANTIZE,
-    KDESC_A16_RMS_NORM, KDESC_A16_SOFTMAX, KDESC_Q36_DECAY, KDESC_Q36_GATE_APPLY, KDESC_Q36_GDN_STEP, KDESC_Q36_HEAD_RMS_NORM,
-    KDESC_Q36_L2_NORM, KDESC_Q36_MATMUL_GROUPED, KDESC_Q36_MATMUL_GROUPED_WIDE, KDESC_Q36_MOE_COMBINE, KDESC_Q36_MUL_WIDE,
-    KDESC_Q36_RESCALE_ROW, KDESC_Q36_RMS_NORM_WIDE, KDESC_Q36_ROPE_PARTIAL, KDESC_Q36_ROUTER_TOPK, KDESC_Q36_SIGMOID, KDESC_Q36_SILU,
-    KDESC_Q36_SSM_CONV,
+    KDESC_A16_REQUANTIZE_BY_TOKEN, KDESC_A16_RMS_NORM, KDESC_A16_SOFTMAX, KDESC_Q36_DECAY, KDESC_Q36_GATE_APPLY, KDESC_Q36_GDN_STEP,
+    KDESC_Q36_HEAD_RMS_NORM, KDESC_Q36_L2_NORM, KDESC_Q36_MATMUL_GROUPED, KDESC_Q36_MATMUL_GROUPED_WIDE, KDESC_Q36_MOE_COMBINE,
+    KDESC_Q36_MUL_WIDE, KDESC_Q36_RESCALE_ROW, KDESC_Q36_RMS_NORM_WIDE, KDESC_Q36_ROPE_PARTIAL, KDESC_Q36_ROUTER_TOPK,
+    KDESC_Q36_SIGMOID, KDESC_Q36_SILU, KDESC_Q36_SSM_CONV,
 };
 
 /// The int8 dtype byte, as `palw_qwen25_profile` uses it. Every weight in the tier is `int8` rows
@@ -123,6 +123,12 @@ pub const QWEN36_35B_A3B: PalwQwen36GeometryV1 = PalwQwen36GeometryV1 {
     // JOB a claim may declare, not what the engine serves off-chain. A larger context returns
     // when the recurrence's replay is checkpoint-anchored (the state chunk map is registered;
     // the anchor consumption is wired for attention and not yet for the recurrence).
+    //
+    // **2026-09-10 (ADR-0097 §1.2): on the RC's 27-carrier close that is no longer the binding
+    // wall.** The graph-v5 row is admitted by the close and the window at 512 and refused by the
+    // LADDER alone past 204 (`palw_adr0097_model_fit.rs` pins the 204); the devnet's one-carrier
+    // close refuses the row at 8. Run `misaka-palw-base0 --bin palw-model-fit` for the width; do
+    // not read one off this comment.
     n_ctx: 8,
     n_threads: 1,
     rms_eps_q: 17,
@@ -699,6 +705,15 @@ const QWEN36_PRE_IR: &[Ir] = &[
     // **Per token, not per class.** One scale for a 248,320-row table is one scale for its
     // outliers, and an ordinary row then lands on a fraction of the range.
     n(K::MulElem, KDESC_A16_REQUANTIZE, "embed_lift.a16", Hidden, &[Step(0)]),
+];
+
+/// **ADR-0102: the head of `graph-v6`** — the same gather, and the lift declared as what the
+/// converter writes and the engine executes: ONE triple per token, read at the token's row.
+/// `graph-v5` declared it lane-sliced over `Hidden`, which is a store no calibrated artifact has
+/// (ADR-0070 §7(b)).
+const QWEN36_PRE_IR_V6: &[Ir] = &[
+    n(K::EmbedLookup, KDESC_A16_EMBED, "token_embd.weight", Hidden, &[]),
+    n(K::MulElem, KDESC_A16_REQUANTIZE_BY_TOKEN, "embed_lift.a16", Hidden, &[Step(0)]),
 ];
 
 /// The graph's tail: the final norm and the unembedding.
@@ -1304,6 +1319,63 @@ pub fn qwen36_artifact_row_profile_v5(g: PalwQwen36GeometryV1) -> Result<PalwSha
     qwen36_profile_v5(qwen36_geometry_artifact_eps(g))
 }
 
+/// **`graph-v6`: `graph-v5` with the embedding lift read per TOKEN** (ADR-0102).
+///
+/// Every node of `graph-v5` but one: the lift after the gather names
+/// [`crate::palw_step_refute::KDESC_A16_REQUANTIZE_BY_TOKEN`], whose triple is the position's
+/// token's row of `embed_lift.a16` — what `qwen36-convert` writes (one calibrated triple per
+/// vocabulary row) and what the engine applies (`lift.get(token_id)`). Under `graph-v5` that
+/// store is refused by the inventory and unreadable by the court, so no calibrated hybrid
+/// artifact was court-capable; under `graph-v6` the lift leaf opens one 17-byte row.
+///
+/// A class IS its graph, so this is a new class id, and every `graph-v5` class stays exactly the
+/// live chain fact it is. The artifact is UNCHANGED.
+///
+/// **And its fused output tile IS the head** (ADR-0093 as built). The fusion inherits the tile of
+/// the attention-table node it replaces, which the hybrid tables budget per geometry: 8 lanes at
+/// the shipped 2B and 35B geometries and 4 at the 27B (inside their 256-lane heads, every `n_ctx`
+/// probed), but the whole 64-lane row over 16-lane heads at the fuzz corpus's tiny geometry —
+/// where a graph-v5 fused leaf covers four heads and the court refuses to dissect it
+/// (`FusedTileStraddlesHeads`: a dissection is one head's softmax). So whether a graph-v5 fused
+/// leaf is dissectable is a property of the budget; graph-v6 makes it one of the graph, cutting
+/// that one node's row at the head at every geometry. Nothing else about the graph moves.
+/// (Corrected 2026-09-11: this comment first said 512 lanes on every shipped geometry.)
+pub fn qwen36_profile_v6(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
+    let mut profile = qwen36_profile_with(g, QWEN36_PRE_IR_V6, QWEN36_LINEAR_IR_V2, QWEN36_ATTN_IR_V2, QWEN36_POST_IR, true)?;
+    for node in profile.attn_nodes.iter_mut().filter(|n| n.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused) {
+        node.tile_len = g.attn_head_dim.max(crate::palw_step::PALW_STEP_MIN_TILE_LEN);
+    }
+    profile.validate_shape()?;
+    Ok(profile)
+}
+
+/// **The `graph-v6` row over the epsilon the artifact executes**, paired as the v5 row is.
+pub fn qwen36_artifact_row_profile_v6(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
+    qwen36_profile_v6(qwen36_geometry_artifact_eps(g))
+}
+
+/// **ADR-0103 Decision 3: the hybrid's graph-v7 — graph-v6 under the held composition.** The
+/// attention half at the held map (v4) and the recurrence half at v2's head-sliced layout
+/// ([`crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v4`]); the graph, the fused head-wide
+/// tile and the per-token lift are graph-v6's. Like v6 it reaches the fenced lift kernel, so a
+/// network admits it only with both `palw_token_lift` and `palw_held_context` armed.
+pub fn qwen36_profile_v7(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
+    let mut profile = qwen36_profile_with_map(
+        g,
+        QWEN36_PRE_IR_V6,
+        QWEN36_LINEAR_IR_V2,
+        QWEN36_ATTN_IR_V2,
+        QWEN36_POST_IR,
+        true,
+        Some(crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v4()),
+    )?;
+    for node in profile.attn_nodes.iter_mut().filter(|n| n.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused) {
+        node.tile_len = g.attn_head_dim.max(crate::palw_step::PALW_STEP_MIN_TILE_LEN);
+    }
+    profile.validate_shape()?;
+    Ok(profile)
+}
+
 fn qwen36_profile_with(
     g: PalwQwen36GeometryV1,
     pre: &[Ir],
@@ -1314,6 +1386,24 @@ fn qwen36_profile_with(
     // `AttnFused` node after projection, so the fused node inherits the budgeted tile of the row it
     // commits. `false` is every shipped row, which is why their ids cannot move.
     fuse_attention: bool,
+) -> Result<PalwShapeProfileV3, PalwStepError> {
+    qwen36_profile_with_map(g, pre, gdn, attn, post, fuse_attention, None)
+}
+
+/// [`qwen36_profile_with`] with the fused row's map named by the caller — `None` is the v3
+/// composition every fused row registers; ADR-0103's graph-v7 names the held one, before the
+/// shape is validated, because the held map is what lifts the product ceiling.
+fn qwen36_profile_with_map(
+    g: PalwQwen36GeometryV1,
+    pre: &[Ir],
+    gdn: &[Ir],
+    attn: &[Ir],
+    post: &[Ir],
+    // **ADR-0082 Decision 1.** Graph v5 fuses the ATTENTION table's four attention nodes into one
+    // `AttnFused` node after projection, so the fused node inherits the budgeted tile of the row it
+    // commits. `false` is every shipped row, which is why their ids cannot move.
+    fuse_attention: bool,
+    map: Option<Hash64>,
 ) -> Result<PalwShapeProfileV3, PalwStepError> {
     let (gdn_span, attn_span) = layer_spans(&g);
     // **The gate is STORED here and DERIVED in the engine, so they must be checked against each
@@ -1402,7 +1492,7 @@ fn qwen36_profile_with(
     // default their registered ids were minted over, and `palw_qwen36_context_row_profile_v1` still
     // overwrites it with the v2 composition for the graph-v3 ladder rows.
     if fuse_attention {
-        profile.state_chunk_map_id = crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v3();
+        profile.state_chunk_map_id = map.unwrap_or_else(crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v3);
     }
     profile.validate_shape()?;
     Ok(profile)

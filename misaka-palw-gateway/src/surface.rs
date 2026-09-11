@@ -823,7 +823,7 @@ pub const MODEL_ID: &str = "misaka-palw-fp-v3";
 /// plus the class's own names — the id a chain registers, the model the manifest names, the width
 /// and the template. `created` is the gateway's boot time: the moment this model became reachable
 /// here, and a field OpenAI's SDKs require.
-pub fn models_body(class_id_hex: &str, manifest: &PalwFpWorkerManifestV1, template_id: &str, created: u64) -> Value {
+pub fn models_body(class_id_hex: &str, manifest: &PalwFpWorkerManifestV1, template_id: &str, created: u64, limits: Value) -> Value {
     serde_json::json!({
         "object": "list",
         "data": [{
@@ -837,9 +837,154 @@ pub fn models_body(class_id_hex: &str, manifest: &PalwFpWorkerManifestV1, templa
                 "n_ctx": manifest.n_ctx,
                 "template_id": template_id,
                 "runtime_manifest_hash": faster_hex::hex_string(manifest.runtime_manifest_hash.as_byte_slice()),
+                // ADR-0097 Decision 2: the limits, in the list a client reads before its first
+                // request — so the budget is arithmetic on the client and never a 400 it learns from.
+                "limits": limits,
             },
         }],
     })
+}
+
+// ---------------------------------------------------------------------------------------------
+// The limits — ADR-0097 Decision 2
+// ---------------------------------------------------------------------------------------------
+
+/// What this process was configured with, of the three bounds a request can hit before the chain
+/// is consulted. Copied from `Config` at the call site rather than borrowed, because `Config` is
+/// `main.rs`'s and this module is what the tests build without one.
+#[derive(Clone, Copy, Debug)]
+pub struct SurfaceLimits {
+    /// `--max-decode-cap` as clamped: the most decode tokens any request may ask for.
+    pub max_decode_cap: u32,
+    /// `--max-decode-default`: what a request that names no `max_tokens` gets.
+    pub max_decode_default: u32,
+    /// `--max-prompt-bytes` as clamped: the rendered prompt's byte ceiling.
+    pub max_prompt_bytes: usize,
+}
+
+/// **The schema id of the limits object.** A client that pins it knows which fields to expect;
+/// a new field is a new id.
+pub const LIMITS_SCHEMA_V1: &str = "misaka.palw.limits.v1";
+
+/// **`misaka.limits` — the entrance says its limits before the first token** (ADR-0097 Decision 2).
+///
+/// Every number a stock client needs to budget a request without a round trip that fails:
+/// the class's context window (prompt and answer TOGETHER, `fp_worker.rs`'s rule), the most an
+/// answer may be, the prompt's byte ceiling, the tokenizer the ids are counted in, and — for
+/// each feature the OpenAI surface accepts — whether it is served, advisory, or refused on this
+/// network. The enforcement words are ADR-0096 Decision 3's; the sampling words are ADR-0082
+/// Decision 11's; nothing here is a promise the chain does not already make.
+///
+/// Served identically on `GET /v1/models` (under `misaka.limits`) and `GET /health` (`limits`),
+/// so a client that reads one and an operator that reads the other see one object.
+pub fn limits_body(manifest: &PalwFpWorkerManifestV1, limits: &SurfaceLimits, facts: &ChainFacts) -> Value {
+    // `prompt + decode ceiling ≤ n_ctx`: an answer can never be the whole window, because at
+    // least one prompt token precedes it. The gateway's cap is the operator's; the smaller wins.
+    let max_output_tokens = limits.max_decode_cap.min(manifest.n_ctx.saturating_sub(1)).max(1);
+    let format_enforcement = if facts.fp_decode_constraint_armed { "committed" } else { "advisory" };
+    let sampling = if facts.fp_decode_rules_armed { "requested" } else { "greedy_only" };
+    serde_json::json!({
+        "schema": LIMITS_SCHEMA_V1,
+        // The window, and the rule the worker enforces on it.
+        "context_window": manifest.n_ctx,
+        "prompt_plus_answer_must_fit": true,
+        "prefill_single_batch_cap": manifest.prefill_single_batch_cap,
+        "max_output_tokens": max_output_tokens,
+        "default_output_tokens": limits.max_decode_default.min(max_output_tokens),
+        "max_prompt_bytes": limits.max_prompt_bytes,
+        // The ids are counted in THIS tokenizer; a client that wants to count before it sends
+        // fetches the table this id names (ADR-0096 Decision 8 serves it beside the artifact).
+        "tokenizer_id": faster_hex::hex_string(manifest.tokenizer_id.as_byte_slice()),
+        "vocab": manifest.vocab,
+        "eog_token_ids": manifest.eog_token_ids,
+        // One request is one inference and one claim (ADR-0077 R0); a longer thread or answer is
+        // the app's chain of requests (ADR-0096 Decision 5), never this gateway's.
+        "jobs_per_request": 1,
+        "streaming": true,
+        "features": {
+            "tools": "text_convention",
+            "tool_choice": "advisory",
+            "response_format": { "json_object": format_enforcement, "json_schema": format_enforcement },
+            "require_committed_format": if facts.fp_decode_constraint_armed { "served" } else { "refused" },
+            "sampling": { "temperature": sampling, "seed": sampling, "top_p_top_k_min_p_repeat_penalty": "identity_only" },
+            "n": 1,
+            "logprobs": "refused",
+            "vision": "refused",
+        },
+        "privacy": {
+            "prompt_ids_on_chain": if facts.panel_da_armed { "panel_da_available" } else { "public_da" },
+            "prompt_ids_form": if facts.prompt_ids_merkle { "merkle" } else { "flat" },
+        },
+        // What a refusal looks like, so a client can branch on a code instead of a sentence. The
+        // code is where OpenAI puts one (`error.code`; `context_length_exceeded` is OpenAI's own
+        // value), the numbers ride `misaka.refusal`, and the body is the same on both shapes: a
+        // 400 when `stream` is false, an SSE event after the 200 head when it is true.
+        "refusals": {
+            "codes": ["context_length_exceeded", "prompt_bytes_exceeded"],
+            "code_at": "error.code",
+            "numbers_at": "misaka.refusal",
+        },
+    })
+}
+
+/// The worker's context refusal — `prompt N + decode ceiling M exceeds max_context_tokens C` —
+/// as its three numbers, or `None` for any other message. The sentence is `fp_worker.rs`'s and
+/// the Studio parses the same one (`ceiling_from_refusal`); this reads it once so a client gets
+/// numbers instead of a regex.
+pub fn context_refusal(message: &str) -> Option<(u64, u64, u64)> {
+    let rest = message.split("prompt ").nth(1)?;
+    let (prompt, rest) = rest.split_once(" + decode ceiling ")?;
+    let (ceiling, rest) = rest.split_once(" exceeds max_context_tokens ")?;
+    let window = rest.split(|c: char| !c.is_ascii_digit()).next()?;
+    Some((prompt.trim().parse().ok()?, ceiling.trim().parse().ok()?, window.parse().ok()?))
+}
+
+/// The gateway's own prompt-bytes refusal — `the rendered prompt is B bytes and the cap is K` —
+/// as its two numbers.
+pub fn prompt_bytes_refusal(message: &str) -> Option<(u64, u64)> {
+    let rest = message.split("the rendered prompt is ").nth(1)?;
+    let (bytes, rest) = rest.split_once(" bytes and the cap is ")?;
+    let cap = rest.split(|c: char| !c.is_ascii_digit()).next()?;
+    Some((bytes.trim().parse().ok()?, cap.parse().ok()?))
+}
+
+/// **The gateway's error body — the one spelling** (OpenAI's shape: `{"error": {"message", "type"}}`).
+///
+/// `main.rs`'s `error_body` delegates here, so a refusal built by [`refusal_body`] and an error
+/// built anywhere else in the gateway cannot drift apart. Every client reads `error.message`: the
+/// OpenAI SDKs, and the Studio's `Lane::send` for a 400 and its SSE parser for a stream.
+pub fn error_body(message: &str) -> Value {
+    serde_json::json!({ "error": { "message": message, "type": "invalid_request_error" } })
+}
+
+/// **A refusal a client can branch on** (ADR-0097 Decision 2): [`error_body`], and — when the
+/// sentence is one of the two bounds a request meets before the chain — `error.code` set to a
+/// stable code (`context_length_exceeded` is OpenAI's own value for the same refusal, so a stock
+/// SDK's `err.code` already reads it) and `misaka.refusal` carrying the numbers. It only ADDS:
+/// `error.message` and `error.type` are exactly [`error_body`]'s, and any other message is
+/// [`error_body`] byte for byte.
+pub fn refusal_body(message: &str) -> Value {
+    let refusal = if let Some((prompt_tokens, decode_ceiling, context_window)) = context_refusal(message) {
+        Some(serde_json::json!({
+            "code": "context_length_exceeded",
+            "prompt_tokens": prompt_tokens,
+            "decode_ceiling": decode_ceiling,
+            "context_window": context_window,
+            // What a request with THIS prompt could still ask for, or zero: the arithmetic the
+            // Studio does by hand, done once here.
+            "room_for_answer": context_window.saturating_sub(prompt_tokens),
+        }))
+    } else if let Some((prompt_bytes, cap)) = prompt_bytes_refusal(message) {
+        Some(serde_json::json!({ "code": "prompt_bytes_exceeded", "prompt_bytes": prompt_bytes, "max_prompt_bytes": cap }))
+    } else {
+        None
+    };
+    let mut body = error_body(message);
+    if let Some(refusal) = refusal {
+        body["error"]["code"] = refusal["code"].clone();
+        body["misaka"] = serde_json::json!({ "refusal": refusal });
+    }
+    body
 }
 
 #[cfg(test)]
@@ -1323,7 +1468,14 @@ mod tests {
             special_tokens: vec![("<|im_start|>".into(), 151_644), ("<|im_end|>".into(), 151_645)],
             eog_token_ids: vec![151_645],
         };
-        let body = models_body("ab".repeat(64).as_str(), &manifest, crate::wire::template_id_for(&manifest), 1_757_500_000);
+        let limits = SurfaceLimits { max_decode_cap: 1_024, max_decode_default: 256, max_prompt_bytes: 65_536 };
+        let body = models_body(
+            "ab".repeat(64).as_str(),
+            &manifest,
+            crate::wire::template_id_for(&manifest),
+            1_757_500_000,
+            limits_body(&manifest, &limits, &dormant()),
+        );
         assert_eq!(body["object"], json!("list"));
         assert_eq!(body["data"].as_array().map(Vec::len), Some(1), "one gateway, one class");
         let model = &body["data"][0];
@@ -1336,6 +1488,131 @@ mod tests {
         assert_eq!(model["misaka"]["template_id"], json!(misaka_palw_base0::chat_template::TEMPLATE_ID_CHAT_SEGMENTS_V1));
         assert_eq!(model["misaka"]["model_id"], json!("Qwen/Qwen2.5-1.5B/graph-v5"));
         assert_eq!(MODEL_ID, "misaka-palw-fp-v3");
+        // ADR-0097 Decision 2: the limits ride the list.
+        assert_eq!(model["misaka"]["limits"]["schema"], json!(LIMITS_SCHEMA_V1));
+        assert_eq!(model["misaka"]["limits"]["context_window"], json!(512));
+    }
+
+    fn a16_manifest(n_ctx: u32) -> PalwFpWorkerManifestV1 {
+        PalwFpWorkerManifestV1 {
+            version: 1,
+            model_id: "Qwen/Qwen2.5-1.5B/graph-v5".into(),
+            class_id: Hash64::from_u64_word(1),
+            model_profile_id: Hash64::from_u64_word(2),
+            runtime_manifest_hash: Hash64::from_u64_word(3),
+            runtime_class_id: Hash64::from_u64_word(4),
+            shape_profile_id: Hash64::from_u64_word(5),
+            trace_scheme_id: Hash64::from_u64_word(6),
+            tokenizer_id: Hash64::from_u64_word(7),
+            n_ctx,
+            prefill_single_batch_cap: n_ctx,
+            vocab: 151_936,
+            special_tokens: vec![("<|im_start|>".into(), 151_644), ("<|im_end|>".into(), 151_645)],
+            eog_token_ids: vec![151_645],
+        }
+    }
+
+    /// **ADR-0097 invariant 7.** The limits object says the window, the most an answer can be
+    /// (never the whole window: a prompt token precedes it, and never past the operator's cap),
+    /// the tokenizer, and — per feature — the word the chain's fences decide. On a dormant
+    /// network the format is advisory and the sampler is greedy; arm each fence and the word moves.
+    #[test]
+    fn the_limits_say_the_window_the_answer_ceiling_and_what_each_fence_decides() {
+        let manifest = a16_manifest(512);
+        let limits = SurfaceLimits { max_decode_cap: 1_024, max_decode_default: 256, max_prompt_bytes: 65_536 };
+        let body = limits_body(&manifest, &limits, &dormant());
+        assert_eq!(body["schema"], json!(LIMITS_SCHEMA_V1));
+        assert_eq!(body["context_window"], json!(512));
+        assert_eq!(body["prompt_plus_answer_must_fit"], json!(true));
+        assert_eq!(
+            body["max_output_tokens"],
+            json!(511),
+            "the cap is 1,024 but the window is 512, and one prompt token precedes the answer"
+        );
+        assert_eq!(body["default_output_tokens"], json!(256));
+        assert_eq!(body["max_prompt_bytes"], json!(65_536));
+        assert_eq!(body["tokenizer_id"], json!(faster_hex::hex_string(Hash64::from_u64_word(7).as_byte_slice())));
+        assert_eq!(body["jobs_per_request"], json!(1));
+        assert_eq!(body["streaming"], json!(true));
+        assert_eq!(body["features"]["response_format"]["json_schema"], json!("advisory"));
+        assert_eq!(body["features"]["require_committed_format"], json!("refused"));
+        assert_eq!(body["features"]["sampling"]["temperature"], json!("greedy_only"));
+        assert_eq!(body["privacy"]["prompt_ids_on_chain"], json!("public_da"));
+        assert_eq!(body["privacy"]["prompt_ids_form"], json!("flat"));
+        // Where a refusal's code and numbers are — the places `refusal_body` actually writes.
+        assert_eq!(body["refusals"]["code_at"], json!("error.code"));
+        assert_eq!(body["refusals"]["numbers_at"], json!("misaka.refusal"));
+        let refused = refusal_body("prompt 600 + decode ceiling 8 exceeds max_context_tokens 512");
+        assert_eq!(
+            refused["error"]["code"], body["refusals"]["codes"][0],
+            "the first listed code is the one the window refusal carries"
+        );
+
+        // The operator's cap binds when it is the smaller number.
+        let tight = SurfaceLimits { max_decode_cap: 64, max_decode_default: 256, max_prompt_bytes: 4_096 };
+        let body = limits_body(&manifest, &tight, &dormant());
+        assert_eq!(body["max_output_tokens"], json!(64));
+        assert_eq!(body["default_output_tokens"], json!(64), "a default above the cap is the cap");
+
+        // Each fence moves exactly its own word.
+        let armed = ChainFacts {
+            fp_decode_constraint_armed: true,
+            fp_decode_rules_armed: true,
+            panel_da_armed: true,
+            prompt_ids_merkle: true,
+            ..Default::default()
+        };
+        let body = limits_body(&manifest, &limits, &armed);
+        assert_eq!(body["features"]["response_format"]["json_object"], json!("committed"));
+        assert_eq!(body["features"]["require_committed_format"], json!("served"));
+        assert_eq!(body["features"]["sampling"]["seed"], json!("requested"));
+        assert_eq!(body["privacy"]["prompt_ids_on_chain"], json!("panel_da_available"));
+        assert_eq!(body["privacy"]["prompt_ids_form"], json!("merkle"));
+    }
+
+    /// **ADR-0097 invariant 8.** The two refusals a request meets before the chain carry a code
+    /// where OpenAI puts one (`error.code`) and their numbers under `misaka.refusal`; everything
+    /// a client already read — `error.message`, `error.type` — is [`error_body`]'s exactly, and
+    /// every other message is [`error_body`] byte for byte.
+    ///
+    /// Written after the first version of this test pinned `{"error": "<message>"}` — a string
+    /// where every client reads an object — and passed, because it compared the function with
+    /// itself rather than with the body the gateway already served (found by the Studio half).
+    #[test]
+    fn a_context_refusal_carries_a_code_and_its_numbers_and_the_body_is_the_gateways_own() {
+        let worker = "the worker refused the job: prompt 51 + decode ceiling 476 exceeds max_context_tokens 512";
+        assert_eq!(context_refusal(worker), Some((51, 476, 512)));
+        let body = refusal_body(worker);
+        assert_eq!(body["error"]["message"], json!(worker), "the sentence is where every client reads it");
+        assert_eq!(body["error"]["type"], json!("invalid_request_error"));
+        assert_eq!(body["error"]["code"], json!("context_length_exceeded"), "OpenAI's own code for this refusal");
+        assert_eq!(body["misaka"]["refusal"]["code"], json!("context_length_exceeded"));
+        assert_eq!(body["misaka"]["refusal"]["prompt_tokens"], json!(51));
+        assert_eq!(body["misaka"]["refusal"]["decode_ceiling"], json!(476));
+        assert_eq!(body["misaka"]["refusal"]["context_window"], json!(512));
+        assert_eq!(body["misaka"]["refusal"]["room_for_answer"], json!(461));
+
+        let bytes = "the rendered prompt is 70000 bytes and the cap is 65536 — refused before the job is sent";
+        assert_eq!(prompt_bytes_refusal(bytes), Some((70_000, 65_536)));
+        let body = refusal_body(bytes);
+        assert_eq!(body["error"]["code"], json!("prompt_bytes_exceeded"));
+        assert_eq!(body["misaka"]["refusal"]["max_prompt_bytes"], json!(65_536));
+
+        // It only adds: remove what it added and the gateway's own body is what is left.
+        for message in [worker, bytes] {
+            let mut stripped = refusal_body(message);
+            stripped["error"].as_object_mut().unwrap().remove("code");
+            stripped.as_object_mut().unwrap().remove("misaka");
+            assert_eq!(stripped, error_body(message), "{message}");
+        }
+        let other = "temperature 0.7 is refused by name";
+        assert_eq!(refusal_body(other), error_body(other));
+        assert_eq!(error_body(other), json!({ "error": { "message": other, "type": "invalid_request_error" } }));
+        assert_eq!(
+            context_refusal("prompt 512 + decode ceiling 8 exceeds max_context_tokens"),
+            None,
+            "a sentence missing its window is not the sentence"
+        );
     }
 
     /// SHA-256 over the corpus directory: each file's name, a NUL, its bytes, a NUL, in byte-sorted

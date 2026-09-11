@@ -179,6 +179,13 @@ pub(crate) fn palw_da_court_in_force_v1(config: &Config, daa_score: u64) -> bool
     config.params.palw_da_court.is_some_and(|fence| fence.is_active(daa_score))
 }
 
+/// **ADR-0099 Decision 5 / ADR-0100: whether the one-move court is in force at this DAA** — the
+/// seat's reading of `Params::palw_shard_court`, through the fence's own mode-aware accessor, so
+/// a seat files an accusation exactly on the networks whose acceptance layer takes one.
+pub(crate) fn palw_shard_court_in_force_v1(config: &Config, daa_score: u64) -> bool {
+    config.params.palw_shard_court_active_at(daa_score)
+}
+
 /// **Where a claim's retained capture lives — the one place that decides.**
 ///
 /// The producer writes these files and the panel reads them back to answer a court about its own
@@ -813,6 +820,22 @@ impl PalwProducerService {
                     facts.class_id
                 ));
             }
+        }
+        // **ADR-0093 as built: the same refusal for the dissection's turn.** A claim of a class with
+        // a fused attention site can be disputed down to a fused leaf, where the responder owes a
+        // root claim and — with `palw_court_responder_coverage` retired, unarmed on every preset —
+        // silence is a conviction. A backend that cannot dissect its class (a fused tile wider than
+        // a head, or a family with no evidence verb) would be underwriting a claim it can never
+        // defend there; on a chain whose k-ary court is armed that is a refusal, as the DA court's is.
+        if backend.has_fused_site()
+            && !backend.supports_dissection()
+            && self.consensus_config.params.palw_kary_court_active_at(template.block.header.daa_score)
+        {
+            return Err(format!(
+                "this node will not produce for class {}: its fused attention site cannot be dissected by this build, and a \
+                 claim disputed down to that leaf is convicted by the silence it could not answer (ADR-0093)",
+                facts.class_id
+            ));
         }
         // **Through the seam.** The backend is the class's execution path; this
         // function no longer knows which family it is producing for, which is what lets a second

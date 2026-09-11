@@ -1,7 +1,15 @@
 # ADR-0093 — The court can try a fused row; the responder is what is missing
 
-* Status: PROPOSED 2026-09-06 (design only — §7 is explicit that nothing here is implemented, and
-  why shipping half of it would be worse than shipping none)
+* Status: PROPOSED 2026-09-06 (design only). **§6 steps 2–4 IMPLEMENTED 2026-09-11, together**
+  (§9): both A16 families answer a fused dissection — the root claim, every round, the
+  challenger's choice and the bottom's close — with every number computed by the court's own
+  kernels, drilled on real captures before anything relies on it (§7's condition). Step 5 is
+  settled by a fact the design did not have: the exemption it would narrow was never armed on any
+  preset, and is now pinned unarmed. Step 6 — the fleet upgrade that makes testnet-11's dense
+  graph-v5 producers defendable — is the operator's. **Amended 2026-09-11 (§10):** Decision 6
+  (admission refuses an undissectable fused class past its own fence, `None` everywhere) and
+  Decision 7 (a forged FOLD is bottomed from the challenger's honest prefix and the root claim's
+  own tile — no row served by the accused) are built; §9's straddling finding is corrected.
 * Builds on: [0082](0082-the-close-is-flat-in-the-context.md) Decisions 2 and 3 (the k-ary history
   dissection and its arity), [0069](0069-e2e-adjudicability-is-the-price-of-weight.md)
   (adjudicability is the price of weight),
@@ -181,3 +189,200 @@ kernel instrumentation is exact.
 
 0093 is free: 0092 is the highest in `docs/adr/`, and `git grep -n "ADR-0093"` finds no citation.
 Next free number after this one is 0094.
+
+## 9. As built (2026-09-11)
+
+On `feat/adr-0099-sharded-seat`, after ADR-0102, in one piece — §7 asked that no half ship.
+
+**Decision 1, smaller than designed: a family reads, the court's kernels compute.** The trait
+verb is `attn_site_evidence(material, narrowed, carried_prompt)`, not `attn_tile_claim`: a
+family returns what its capture COMMITTED about the site — the binding, the opened output tile
+and query row, the four registered narrowings opened against the class root, the head's query
+slice and the layer's K and V series, and the bottom's evidence (the anchor checkpoint with every
+chunk of its state, or the cache-write rows) — and `palw_attn_responder_v1` computes the root
+(`a16_attn_root_claim_v1`), every range (`a16_attn_tile_triple_v1` folded by `palw_attn_fold_v1`),
+the challenger's choice and the bottom, the same calls `check_attn_dissect_bottom_v1` makes.
+Decision 4's hazard — statistics "close but not exact" that convict their own producer — has no
+family code to live in. `attn_tile_claim` is retired. `supports_dissection` is true where the
+verb exists AND the class's fused sites can be dissected (`palw_fused_sites_are_dissectable_v1`);
+`has_fused_site` says whether there is anything to dissect.
+
+**Whose rows.** The evidence is read from the capture's OWN committed rows — a dense capture's
+retained tiles, or a fold re-executed and required to reproduce its own root — so a challenger's
+bottom opens the accused's commitments, a forged output tile included; the checkpoint leg comes
+from a re-execution (the per-position cadence retains none) and the anchor's state from the
+seat's recompute kernels, each refused unless it roots to the capture's own binding. Openings
+are walked off `PalwStepMerkleTreeV1`, the step tree built once and pinned path-for-path against
+`step_merkle_path_v1` (a bottom and its rows are ~a thousand paths over millions of leaves).
+
+**Decision 3, the panel.** Four moves in `kaspad/src/palw_panel.rs`, before the ladder's arms: the
+responder's root claim at a fused terminal (the arity the ruleset derives, signed under the
+claim's key) and its rounds; the challenger's choice — the first child its OWN execution's
+recompute does not reproduce, and silence when every child does (an honest disclosure has no
+winning choice); and the bottom's close, assembled from the ACCUSED capture (pulled when not
+held), filed by a party only when the verdict is its own win. Evidence is cached per session and
+capture; the court dedup keys give the dissection its own round space (`court_move_round_v1`), so
+a round that restarts at 0 is never taken for a ladder move already sent. The court duty view
+carries the phase and the class's fused bit (`PalwCourtDutyV2::{dissection, fused_class}`).
+
+**Decision 2 / step 5, settled by a fact.** `palw_court_responder_coverage` — the mercy this ADR
+would narrow — is `None` on every preset: it was never armed. So there is nothing to narrow, and
+the kaspad pin that was to go red "the day a responder exists" now says the opposite thing it
+should: the panel builds all four moves, and the exemption stays unarmed on every preset. The
+consequence is the one §4 feared, now answerable: on a chain whose k-ary court is armed (the RC
+base and devnet, graph-v5 in genesis), a fused terminal's silence is a conviction, and before
+this build no binary could file the root claim — an honest dense graph-v5 producer brought to a
+fused leaf lost its reservation by silence. A node running this build answers; one that does not
+still cannot, which is why step 6 is a fleet upgrade. The producer now refuses to underwrite a
+fused claim it could not defend (`has_fused_site && !supports_dissection` where the k-ary court is
+armed), as it already refused one the DA court could default.
+
+**Found on the way.**
+
+* **A fused tile wider than a head is undissectable, and admission never asked.** The fusion
+  inherits the tile of the attention-table node it replaces, which the hybrid tables budget per
+  geometry: at the fuzz corpus's tiny geometry (the fixture the hybrid test executes) that is the
+  whole 64-lane row over 16-lane heads, so its graph-v5 fused leaf is refused by the court as
+  `FusedTileStraddlesHeads`, and admission (which checks the query slice's tile, not the
+  output's) does not refuse such a class. Graph-v6 (ADR-0102) cuts that one node's row at the
+  head, so its fused leaves are dissectable at every geometry by construction; a backend whose
+  class fails the check reports `supports_dissection() == false` and is not produced under where
+  the k-ary court is armed. The admission refusal is §10's Decision 6.
+  *Corrected 2026-09-11:* this bullet first said the tile was "512 on every hybrid geometry",
+  generalizing from the fixture. Probed over the shipped geometries (2B and 35B-A3B: 8 lanes;
+  27B: 4 lanes; every `n_ctx` from 8 to 131,072), the graph-v5 fused tile is inside its 256-lane
+  head — so the shipped graph-v5 hybrid rows ARE dissectable and their backends say so; what
+  graph-v6's head-width tile buys is that the property no longer depends on the budget.
+* **The gap guard read the wrong half of a file.** It cut "production" at the first
+  `#[cfg(test)]`, and `qwen25_a16_backend.rs` carries a test-only helper a thousand lines above its
+  trait impl — so the guard could never have gone red for that family. It now cuts at the first
+  test module and asserts the trait impl is inside what it reads.
+
+**Tests** (§5): invariant 2 and 3 on REAL captures —
+`a_real_fused_capture_answers_its_dissection_exactly_and_a_forged_row_is_convicted` (the dense
+graph-v5 row executed; both layers, both heads, every court tile of a two-tile history acquitted
+from the anchor; a negative control in which one weight-carrying input code moved breaks the
+fold) and `a_real_hybrid_fused_capture_answers_its_dissection_exactly_and_a_forged_row_is_convicted`
+(graph-v6 through the composed anchor; graph-v5's refusal pinned by name); through the CHAIN —
+`the_parties_moves_from_evidence_acquit_the_honest_and_convict_the_forged_through_the_chain`
+(ADR-0082's drill with every hand-written claim replaced by the evidence functions); invariant 4 —
+the forged arms, where the least lie that finalizes to a forged tile is followed into the child it
+hides in and convicted at that bottom; invariant 1 — `a_family_takes_the_dissections_turn_with_both_verbs_or_neither`
+and the producer guard.
+
+**Not done.**
+
+* A live devnet drill of the dissection: the panel's arms are compile-checked, source-pinned and
+  built from functions the tests play, but no node has yet filed a root claim on a running chain.
+  The classic ladder in front of it is carrier-bound on one host and needs six panel seats, here
+  six holders of the 1.8 GB A16 artifact — a fleet drill.
+* **A forged claim whose capture is a FOLD cannot yet be bottomed.** The free-prompt lane retains a
+  fold (no rows), and the evidence reads the accused's rows by re-executing — which reproduces the
+  honest execution, not the forged one, so the evidence refuses by name ("a folded capture keeps
+  no rows, and its re-execution is not the same execution"). The attempt lane retains dense
+  captures and is unaffected. The missing piece is the bottom's twin of ADR-0085's close from
+  served intervals: the accused's rows around the one tile, served with their paths.
+* ~~The admission refusal for classes whose fused sites cannot be dissected~~ — §10, Decision 6.
+* Step 6.
+
+## 10. Amended 2026-09-11: Decisions 6 and 7
+
+**Decision 6 — admission refuses a fused class no dissection can try, past its own fence.**
+`Params::palw_fused_dissectable` (`None` on every preset; `Some`-only in the fingerprint, the fence
+schedule and the fork-id probe, so no shipped fingerprint moves). Past it,
+`verify_class_admission_v8` refuses a fused class whose output tile is not inside one head —
+`FusedTileStraddlesHeads { tile_len, d_head }`, the output half of
+`palw_fused_sites_are_dissectable_v1` (`palw_fused_output_tiles_are_one_heads_v1`), the predicate
+the backends' `supports_dissection` already reads, so the gate and the backend are one spelling. A
+genesis row is judged likewise when the fence is armed from genesis
+(`palw_genesis_holds_undissectable_fused_class_v1` in `validate_palw_v2`). It is a fence and not a
+fix because a live chain may already hold such a class. No shipped row fails it — the dense graph-v5
+row's fused tile is 8 lanes over 128, the hybrid graph-v5's 8 (2B, 35B-A3B) or 4 (27B) over 256 at
+every `n_ctx` probed, graph-v6's the head itself — so the class it exists for is a REGISTRANT's
+graph: the dense row with its fused tile widened to two heads, which the gate admitted before this
+fence and the court then refuses to dissect. Pinned both ways
+(`an_undissectable_fused_class_is_refused_by_its_fence_alone`,
+`the_dissectable_fused_fence_is_dormant_visible_when_armed_and_judges_genesis_from_genesis`).
+
+**Decision 7 — a forged fold is bottomed from the challenger's honest prefix and the root claim's
+own tile; the accused serves nothing.** The hole was worse than §9 said: at `Terminal` the move is
+a close the accused never files against itself, so the whole-session backstop ends an unclosed
+session on the CHALLENGER's side — a bottom the challenger cannot assemble acquits the forger. A
+served-interval bottom (ADR-0085's twin, as §9 guessed) would not close it, because a forger need
+not serve. What the challenger holds is enough without the accused:
+
+* the court narrowed to the FIRST leaf the challenger could not reproduce (its choice rule is the
+  first child its own execution does not reproduce), so every committed leaf before the disputed
+  one is a leaf the challenger's own re-execution computes;
+* the accused's root claim — which it must file, or its silence convicts — carries the committed
+  output tile at that leaf, opened against the accused's own root.
+
+`PalwStepPrefixTreeV1` rebuilds the accused's tree over `[0, i]` from exactly those two: nodes wholly
+inside the prefix from the prefix's leaves, the node just right of it at each level from the right
+siblings on `i`'s own path, every left sibling on that path compared with the prefix's node as it
+is built. Every row a bottom opens (the query row, the cache rows, the output tile) is at or before
+`i`, and the leaves after `i` — which a fold does not keep and a forger need not reveal — are never
+needed. The evidence refuses by name unless the rebuilt root IS the binding's. The checkpoint leg is
+the fold's own retained leaves (`base0_checkpoint_leg_of_retention_v1`, now the one spelling of
+"which retention a fold's leg has", shared with the interval lane's anchor). The trait verb takes the
+tile (`attn_site_evidence(…, accused_out_tile)`); the panel's close reads it off the chain
+(`attn_root_out_tiles_from_chain_v1` over `walk_accepted_lifecycle_objects_v1`: the accepted
+`CourtAttnRootClaimed` for the session, walking the selected chain's accepted lifecycle transactions
+down to the session's own opening height) and keeps only a tile whose opening proves against the
+claim's root at the narrowed leaf. Nothing on chain moves.
+
+Tests: `the_prefix_and_the_last_leafs_path_open_every_leaf_before_it_against_the_accused_root` and
+`a_prefix_that_is_not_the_committed_one_is_refused_or_roots_elsewhere` (every leaf count to 40,
+every `i`, every `j`, a forged suffix); `a_forged_fold_is_bottomed_from_the_honest_prefix_and_the_root_claims_tile`
+(dense tier: one forged execution retained both ways — the fold alone refused by name, the fold with
+the tile equal to the dense capture's evidence opening for opening, a tile that is not the accused's
+refused, the least lie convicted from the fold's evidence); the same equality on the hybrid tier
+inside its fused test; `the_walk_visits_what_the_chain_accepted_newest_first_and_stops_at_the_height`
+(the chain read on a mock chain); the production wiring pinned in the panel's source test.
+
+**Corrected.** §9 said the attempt lane (dense) was unaffected. It is for the drill's forgery (a
+committed tile altered, the execution itself honest) and not in general: the evidence reads the
+checkpoint leg from a re-execution, and a forger whose downstream execution follows its lie commits
+different checkpoint leaves after the disputed call — the re-execution's leg does not root to the
+binding, the evidence refuses by name, and the backstop acquits. And it was worse for the lane
+testnet-11 actually runs: a graph-v5 attempt capture at 512 is ~748 MB, over the material cap, so a
+challenger never holds the accused's capture at all, and the close waited on a pull that is never
+answered. Carrying the leaves in the dense material (the fix first proposed here) would not have
+reached that challenger, and a forger chooses what it serves — hence Decision 8 and the filing route
+below.
+
+**The filing route (Decision 7, widened).** The challenger's close no longer needs the accused's
+capture: `attn_site_evidence_from_filing` builds the bottom's evidence from the accused's FILING —
+the binding and opened tile its root claim carries (and the anchor, below) — and this node's own
+re-execution of the accused's job, through the same `PalwStepPrefixTreeV1`. The panel's close uses
+the accused's capture when it holds one and falls to the filing when it holds none or the capture
+cannot bottom the accused; it keeps asking for the capture, and no longer waits on it. Pinned on the
+dense tier: the drill forgery's filing yields the dense capture's evidence opening for opening and
+convicts (`a_filing_bottoms_the_accused_without_its_capture_and_its_anchor_convicts_a_deep_forger`).
+
+**Decision 8 — the root claim carries the anchor its bottom will need, past its own fence.** The one
+path no challenger can rebuild once an execution followed its lie is the path to the accused's anchor
+checkpoint (its right siblings are the accused's later checkpoints). The party that holds it for
+certain is the responder, at the one move it cannot skip: move 1, where silence convicts. So a new
+object, `CourtAttnRootClaimedAnchored` (tag 42, appended last), is the root claim plus that anchor,
+opened against the claim's own checkpoint leg; the fold checks it against the site with the bottom's
+own anchor check (`palw_attn_anchor_is_the_sites_v1`, one spelling with `verified_anchor_v1`) and
+opens the same phase as the plain form, storing nothing new. `Params::palw_attn_anchored_root`
+(`None` on every preset, `Some`-only in the fingerprint, threaded through the fold's extras and the
+sync walker, refused unless `palw_kary_court` is armed at or below it): before it the anchored form
+is refused and nothing moves; past it the plain form is refused at a site whose bottom reads a
+checkpoint. The panel files the anchored form past the fence and reads it back off the chain for the
+close (`attn_root_filings_from_chain_v1`). Arming it refuses a root claim from every build before
+this one, so it waits for the network's upgrade. Pinned: through the fold
+(`the_anchored_root_claim_opens_past_its_fence_and_the_plain_one_is_refused_there` — dormant, armed,
+a wrong counter and a forged leaf), the tag (`the_anchored_root_claim_is_tag_42_and_the_plain_one_keeps_its_tag`),
+the fence (`the_anchored_root_fence_is_dormant_visible_when_armed_and_needs_the_kary_court`) and on
+the dense tier a forger whose checkpoints after the disputed call differ: its own capture cannot be
+bottomed, the filing without an anchor is refused naming this Decision, and the filing with its
+anchor convicts; a forged anchor opens nothing.
+
+*Tag coordination:* `feat/adr-0103-held-context` (branched from this one at `3e9c3b59`) appends
+three objects at 42–44; whichever lands on `main` second re-appends after the other. Nothing has
+been filed under any of them on any chain (every fence is `None`), so a renumber moves no history.
+
+**Still not done:** a live devnet drill; step 6 (the fleet upgrade); arming Decision 8.

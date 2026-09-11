@@ -129,6 +129,7 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // this list is stateless: a fence is resolved at a DAA score, and this function does not
         // have one.
         PalwConsensusObjectV2::CourtAttnRootClaimed { signature, .. }
+        | PalwConsensusObjectV2::CourtAttnRootClaimedAnchored { signature, .. }
         | PalwConsensusObjectV2::CourtAttnDissected { signature, .. }
         | PalwConsensusObjectV2::CourtAttnChildChosen { signature, .. }
             if !signature.is_empty() =>
@@ -136,6 +137,7 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
             Ok(())
         }
         PalwConsensusObjectV2::CourtAttnRootClaimed { .. }
+        | PalwConsensusObjectV2::CourtAttnRootClaimedAnchored { .. }
         | PalwConsensusObjectV2::CourtAttnDissected { .. }
         | PalwConsensusObjectV2::CourtAttnChildChosen { .. } => Err(
             "a fused-attention dissection move must carry the signature of the party it is attributed to — unsigned, either side could write the other's moves",
@@ -285,6 +287,83 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // Carriage is deliberately permissionless for the disclosure (SA-3): the object is signed
         // by the producer's bond, so who carried it is irrelevant, and that is precisely what makes
         // suppressing it cost an attacker every producer for a whole window instead of one.
+        // **ADR-0099 Decision 5 / ADR-0100: the one-move court's accusation rides signed and
+        // bounded.** The signature is the accuser's bond key, checked at acceptance against the
+        // registry; the refutation and the openings answer to the same close ceiling a disclosure
+        // does, for the same reason, and the ruleset's own ceiling is applied at acceptance, where
+        // the bundle is. Whether the court is armed is the acceptance layer's, as for every fence.
+        PalwConsensusObjectV2::ShardCourtAccused { accusation } if accusation.signature.is_empty() => Err(
+            "a one-move accusation must carry the accuser's signature — a bond key is a public outpoint, so without one anyone could accuse under a stranger's identity",
+        ),
+        PalwConsensusObjectV2::ShardCourtAccused { accusation } => {
+            if crate::palw_shard_court_v1::palw_shard_court_accusation_bytes_v1(accusation) > crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES {
+                return Err("a one-move accusation is above the close-byte ceiling this ruleset prices");
+            }
+            Ok(())
+        }
+        // **ADR-0100 Decision 4.** The plan and a bond's shard list ride signed — by the class's
+        // registrant and by the bond, checked at acceptance against their registered keys — and
+        // shaped: a count in range, a list inside it. A part rides unsigned like `ReceiptLicensed`
+        // (its receipts are the authority) and bounded: at least one receipt, at most a shard's
+        // worth under any ruleset, a shard inside its plan. Whether per-shard licensing is armed is
+        // the acceptance layer's, for the reason the k-ary court's moves give.
+        PalwConsensusObjectV2::ClassShardPlanDeclared { signature, .. } if signature.is_empty() => {
+            Err("a shard plan must carry its registrant's signature")
+        }
+        PalwConsensusObjectV2::ClassShardPlanDeclared { shard_count, .. } => {
+            if crate::palw_shard_licensing_v1::palw_shard_count_in_range_v1(*shard_count) {
+                Ok(())
+            } else {
+                Err("a shard plan's count is outside the range the chain accepts")
+            }
+        }
+        PalwConsensusObjectV2::BondShardsDeclared { signature, .. } if signature.is_empty() => {
+            Err("a bond's shard list must carry the bond's signature")
+        }
+        PalwConsensusObjectV2::BondShardsDeclared { shard_count, shards, .. } => {
+            crate::palw_shard_licensing_v1::palw_bond_shards_shape_v1(*shard_count, shards)
+        }
+        PalwConsensusObjectV2::ShardReceiptLicensed { part } => {
+            if part.receipts.is_empty() || part.receipts.len() > crate::palw_shard_licensing_v1::PALW_SHARD_PART_MAX_RECEIPTS_V1 {
+                return Err("a shard part carries between one receipt and a shard's worth");
+            }
+            if !crate::palw_shard_licensing_v1::palw_shard_count_in_range_v1(part.shard_count) || part.shard_index >= part.shard_count
+            {
+                return Err("a shard part names a shard outside a plan the chain accepts");
+            }
+            Ok(())
+        }
+        // **ADR-0103: the held regime's three objects ride signed and bounded**, for the shard
+        // court's reasons: the signature is checked at acceptance against the registered key (the
+        // accuser's, or the claim's producer's for an answer), each object answers to the close
+        // ceiling a court close does, and whether the regime is armed is the acceptance layer's.
+        PalwConsensusObjectV2::CheckpointAccused { accusation } if accusation.signature.is_empty() => Err(
+            "a checkpoint accusation must carry the accuser's signature — a bond key is a public outpoint, so without one anyone could accuse under a stranger's identity",
+        ),
+        PalwConsensusObjectV2::CheckpointAccused { accusation } => {
+            if crate::palw_checkpoint_court_v1::palw_checkpoint_court_accusation_bytes_v1(accusation) > crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES {
+                return Err("a checkpoint accusation is above the close-byte ceiling this ruleset prices");
+            }
+            Ok(())
+        }
+        PalwConsensusObjectV2::DefaultAccusedHeld { accusation } if accusation.signature.is_empty() => {
+            Err("a held data-availability accusation must carry the accuser's signature")
+        }
+        PalwConsensusObjectV2::DefaultAccusedHeld { accusation } => {
+            if crate::palw_held_da_v1::palw_held_da_bytes_v1(accusation.as_ref()) > crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES {
+                return Err("a held data-availability accusation is above the close-byte ceiling this ruleset prices");
+            }
+            Ok(())
+        }
+        PalwConsensusObjectV2::MaterialDisclosedHeld { disclosure } if disclosure.signature.is_empty() => {
+            Err("a held disclosure must carry the producer's signature — unsigned, a third party could bind the producer to material it never published")
+        }
+        PalwConsensusObjectV2::MaterialDisclosedHeld { disclosure } => {
+            if crate::palw_held_da_v1::palw_held_da_bytes_v1(disclosure.as_ref()) > crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES {
+                return Err("a held disclosure is above the close-byte ceiling this ruleset prices");
+            }
+            Ok(())
+        }
         PalwConsensusObjectV2::DefaultAccused { signature, .. } if !signature.is_empty() => Ok(()),
         PalwConsensusObjectV2::DefaultAccused { .. } => Err(
             "a data-availability accusation must carry the accuser's signature — a bond key is a public outpoint, so without one anyone could accuse under a stranger's identity",
@@ -1102,6 +1181,65 @@ mod tests {
         assert_eq!(borsh::to_vec(&decoded).unwrap(), payload, "and it re-encodes to the chain's bytes");
     }
 
+    fn checkpoint_accusation() -> crate::palw_checkpoint_court_v1::PalwCheckpointAccusationV1 {
+        crate::palw_checkpoint_court_v1::PalwCheckpointAccusationV1 {
+            version: 1,
+            claim: h64(15),
+            execution_root: h64(16),
+            trace_root: h64(17),
+            executor_bond: bond(8),
+            accuser_bond: bond(9),
+            binding: shard_accusation().refutation.binding,
+            anchor: crate::palw_attn_court_v1::PalwAttnCheckpointAnchorV1 {
+                leaf: crate::palw_step_leg::PalwCheckpointLeafV2 {
+                    version: 2,
+                    checkpoint_index: 0,
+                    covered_decode_call: 1,
+                    prev_checkpoint_leaf_hash: h64(18),
+                    state_chunk_count: 1,
+                    state_chunks_root: h64(19),
+                },
+                opening: crate::palw_step_leg::PalwStepOpeningV1 { leaf_index: 0, leaf_hash: h64(20), siblings: vec![] },
+            },
+            chunk: crate::palw_attn_court_v1::PalwAttnChunkOpeningV1 { chunk_index: 0, chunk_bytes: vec![0; 4], siblings: vec![] },
+            kind: 0,
+            attn_layer: 0,
+            position: 0,
+            rows: Vec::new(),
+            signature: vec![7u8; 3],
+        }
+    }
+
+    fn shard_accusation() -> crate::palw_shard_court_v1::PalwShardCourtAccusationV1 {
+        let (binding, _, _, _) = crate::palw_step_refute::tests::base0_honest_decode_commitment();
+        crate::palw_shard_court_v1::PalwShardCourtAccusationV1 {
+            version: 1,
+            claim: h64(8),
+            execution_root: binding.committed_execution_root,
+            trace_root: h64(9),
+            executor_bond: bond(4),
+            accuser_bond: bond(5),
+            leaf_index: 0,
+            refutation: crate::palw_step_refute::PalwExecutionStepRefutationV1 {
+                binding,
+                output_opening: crate::palw_step_leg::PalwStepOpeningV1 { leaf_index: 0, leaf_hash: h64(10), siblings: vec![] },
+                output_preimage: crate::palw_step_leg::PalwStepTileLeafV1 {
+                    version: 1,
+                    coord: crate::palw_step::PalwStepCoordinateV1 { call_index: 0, position: 0, node_slot: 0, tile_index: 0 },
+                    value_count: 0,
+                    values_le: vec![],
+                },
+                inputs: vec![],
+                prompt_token_ids: vec![],
+                decode_tokens: None,
+                kv_checkpoint: None,
+            },
+            artifact_openings: vec![],
+            prompt_ids_opening: None,
+            signature: vec![7u8; 3],
+        }
+    }
+
     /// **Every lifecycle kind keeps the discriminant a carrier already put on the chain.**
     ///
     /// Borsh numbers an enum's variants by POSITION, and a lifecycle carrier's payload carries that
@@ -1159,6 +1297,68 @@ mod tests {
                     cadence_daa: 1,
                     expires_daa: 2,
                     signature: sig(),
+                },
+            ),
+            // ADR-0099 Decision 5 / ADR-0100: the one-move court, appended after main's last.
+            (38, PalwConsensusObjectV2::ShardCourtAccused { accusation: Box::new(shard_accusation()) }),
+            // ADR-0100 Decision 4, appended after it.
+            (39, PalwConsensusObjectV2::ClassShardPlanDeclared { class_id: line, shard_count: 2, signature: sig() }),
+            (
+                40,
+                PalwConsensusObjectV2::BondShardsDeclared {
+                    bond: bond(6),
+                    class_id: line,
+                    shard_count: 2,
+                    shards: vec![0],
+                    signature: sig(),
+                },
+            ),
+            (
+                41,
+                PalwConsensusObjectV2::ShardReceiptLicensed {
+                    part: crate::palw_shard_licensing_v1::PalwShardReceiptPartV1 {
+                        claim: h64(12),
+                        shard_count: 2,
+                        shard_index: 0,
+                        receipts: Vec::new(),
+                    },
+                },
+            ),
+            // 42 is ADR-0093 Decision 8's `CourtAttnRootClaimedAnchored`, which the testnet-11 fleet
+            // runs (pinned beside its own fixture in palw_state_v2's tests). ADR-0103's checkpoint
+            // court and the held DA court's two moves were written as 42-44 on a branch that did not
+            // have it, and are appended after it where the two branches meet.
+            (43, PalwConsensusObjectV2::CheckpointAccused { accusation: Box::new(checkpoint_accusation()) }),
+            (
+                44,
+                PalwConsensusObjectV2::DefaultAccusedHeld {
+                    accusation: Box::new(crate::palw_held_da_v1::PalwHeldAccusationV1 {
+                        version: 1,
+                        claim: h64(13),
+                        missing: crate::palw_held_da_v1::PalwHeldMissingV1::PromptIdsTile { tile: 0 },
+                        accuser: bond(7),
+                        binding: shard_accusation().refutation.binding,
+                        signature: sig(),
+                    }),
+                },
+            ),
+            (
+                45,
+                PalwConsensusObjectV2::MaterialDisclosedHeld {
+                    disclosure: Box::new(crate::palw_held_da_v1::PalwHeldDisclosureCarriageV1 {
+                        version: 1,
+                        claim: h64(13),
+                        missing: crate::palw_held_da_v1::PalwHeldMissingV1::StepRange { first: 0, count: 1 },
+                        binding: shard_accusation().refutation.binding,
+                        disclosure: crate::palw_held_da_v1::PalwHeldDisclosureV1::StepRange {
+                            opening: crate::palw_step_leg::PalwStepRangeOpeningV1 {
+                                first_leaf_index: 0,
+                                leaf_hashes: vec![h64(14)],
+                                siblings: vec![],
+                            },
+                        },
+                        signature: sig(),
+                    }),
                 },
             ),
         ];

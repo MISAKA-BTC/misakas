@@ -1,0 +1,5 @@
+{ "name": "Kimi K3 (manifest example)", "family": "hybrid-qwen36", "layer_count": 92, "full_attention_interval": 4,
+  "hidden_dim": 7168, "vocab_size": 163840, "attn_heads": 96, "attn_kv_heads": 6,
+  "attn_head_dim": 128, "rope_dims": 64, "gdn_k_heads": 56, "gdn_v_heads": 56,
+  "gdn_head_dim": 128, "gdn_conv_kernel": 4, "n_experts": 896, "experts_per_token": 16,
+  "moe_dim": 3072, "shared_dim": 6144, "attn_output_gate": 1, "total_parameters": 2800000000000 }

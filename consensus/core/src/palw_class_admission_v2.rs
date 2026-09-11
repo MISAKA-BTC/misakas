@@ -372,6 +372,16 @@ pub struct PalwCourtCostShapeV1 {
     /// walk — a cost derivation that consulted a DAA score would price one class two ways
     /// depending on when it was asked. The caller reads the fence and says.
     pub dissection: Option<u8>,
+    /// **The most decode calls one job can make, where the regime states it** (ADR-0103 Decision 4).
+    ///
+    /// `None` — every shipped court — prices the generated-token pin and the generated ids at the
+    /// whole context, "a job may be almost all decode: the bound is the whole context". That is a
+    /// bound and not a measurement: one decode call is one trace event, and a job carries at most
+    /// `PALW_V2_MAX_TRACE_EVENTS` of them whatever its context, so past that width the shipped
+    /// price charges a pin no job can file. Under the held regime the caller states the trace
+    /// cap here and the pin is `min(n_ctx, cap)` — constant in the context, which is why ADR-0082
+    /// U-07b's Merkle output form is not needed for R-held. Never read by the walk from a fence.
+    pub decode_bound: Option<u64>,
 }
 
 /// **What a `palw_kary_court`-armed ruleset has turned on** (ADR-0082 Decisions 3 and 5).
@@ -414,6 +424,27 @@ pub struct PalwKaryCourtV1 {
 pub struct PalwAdmissionShapeV1 {
     pub court: Option<PalwKaryCourtV1>,
     pub ladder: Option<PalwClassLadderRulesV1>,
+    /// ADR-0102: `Params::palw_token_lift` at the height — may a class reach the fenced kernel.
+    pub token_lift: bool,
+    /// ADR-0093 Decision 6: `Params::palw_fused_dissectable` at the height — must a fused class's
+    /// output tile be one head's.
+    pub fused_dissectable: bool,
+    /// ADR-0103: `Params::palw_held_context` and `Params::palw_panel_da_at` at the height — may a
+    /// class register a held map, and may its widest job commit with no ids.
+    pub held: PalwHeldAdmissionV1,
+}
+
+/// **ADR-0103: what the held regime's gate reads at the height** — the caller's reading of two
+/// fences, passed in for the reason every fence reaches this gate as an argument (a derivation that
+/// read its own activation would be a rule deciding when it applies). `Default` is both dormant:
+/// every shipped preset, where [`verify_class_admission_v8`] is [`verify_class_admission_v7`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwHeldAdmissionV1 {
+    /// `Params::palw_held_context` active at the height.
+    pub armed: bool,
+    /// `Params::palw_panel_da_at` at the height — whether the widest job of a class may commit its
+    /// prompt with no ids on the chain (ADR-0077 Decision 16).
+    pub panel_da: bool,
 }
 
 pub fn palw_admission_shape_at_v1(
@@ -422,8 +453,11 @@ pub fn palw_admission_shape_at_v1(
     profile: &PalwShapeProfileV3,
     daa_score: u64,
 ) -> Result<PalwAdmissionShapeV1, String> {
+    let held_armed = params.palw_held_context_active_at(daa_score);
     let court = if params.palw_kary_court_active_at(daa_score) {
-        let derived = crate::palw_court_v2::palw_court_params_at_v2(bundle, true)
+        // The court the acceptance path resolves (`palw_court_params_at`): held, its arity is
+        // derived with the leaf ladder's rounds at zero (ADR-0103 Decision 5).
+        let derived = crate::palw_court_v2::palw_court_params_held_at_v2(bundle, true, held_armed)
             .map_err(|e| format!("this ruleset's court has no shape at daa {daa_score}: {e}"))?;
         Some(PalwKaryCourtV1 {
             dissection_arity: derived.dissection_arity(),
@@ -438,7 +472,36 @@ pub fn palw_admission_shape_at_v1(
         .is_some_and(|fence| fence.is_active(daa_score))
         .then(|| crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(profile, court, bundle.court.max_step_leaf_count()))
         .flatten();
-    Ok(PalwAdmissionShapeV1 { court, ladder })
+    Ok(PalwAdmissionShapeV1 {
+        court,
+        ladder,
+        token_lift: params.palw_token_lift_active_at(daa_score),
+        fused_dissectable: params.palw_fused_dissectable_active_at(daa_score),
+        held: PalwHeldAdmissionV1 { armed: held_armed, panel_da: params.palw_panel_da_at(daa_score) },
+    })
+}
+
+/// **Does a genesis set register a class under the held map?** (ADR-0103.) A genesis row is
+/// verified against the committed catalog, not through [`verify_class_admission_v8`], so
+/// `HeldMapNeedsItsFence` has no door there — `Params::validate_palw_v2` asks this and refuses the
+/// set unless the fence is armed from genesis, the ADR-0102 precedent below.
+pub fn palw_genesis_registers_held_class_v1(bundle: &PalwConsensusParamsV2) -> bool {
+    bundle.genesis_objects.iter().any(|object| {
+        matches!(object, PalwConsensusObjectV2::ClassRegistered { admission: Some(carriage), .. }
+            if crate::palw_state_chunk_map::palw_profile_is_held_v4(&carriage.profile))
+    })
+}
+
+/// **Does a genesis set register a class that reaches a fenced kernel?** (ADR-0102.) Genesis rows
+/// are verified against the committed catalog rather than through the admission gate, so
+/// `Params::validate_palw_v2` asks this and refuses the set unless the fence is armed from
+/// genesis — the `palw_attn_widest_registered_site_v2` precedent for fused rows.
+pub fn palw_genesis_reaches_fenced_kernel_v1(bundle: &PalwConsensusParamsV2) -> bool {
+    let fenced = crate::palw_step_refute::fenced_kernel_ids_v1();
+    bundle.genesis_objects.iter().any(|object| {
+        matches!(object, PalwConsensusObjectV2::ClassRegistered { admission: Some(carriage), .. }
+            if !reachable_kernels_v1(&carriage.profile).is_disjoint(&fenced))
+    })
 }
 
 impl PalwCourtCostShapeV1 {
@@ -462,6 +525,7 @@ impl PalwCourtCostShapeV1 {
             count_ids: true,
             prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             dissection: None,
+            decode_bound: None,
         }
     }
 
@@ -479,6 +543,7 @@ impl PalwCourtCostShapeV1 {
             count_ids: true,
             prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             dissection: None,
+            decode_bound: None,
         }
     }
 
@@ -499,6 +564,13 @@ impl PalwCourtCostShapeV1 {
     /// ruleset already froze.
     pub fn with_dissection_v1(mut self, arity: u8) -> Self {
         self.dissection = Some(arity);
+        self
+    }
+
+    /// **The held regime's decode bound** (ADR-0103 Decision 4): the generated-token pin priced at
+    /// `min(n_ctx, decode_calls)`. The caller states the trace cap; nothing here reads a fence.
+    pub fn with_decode_bound_v1(mut self, decode_calls: u64) -> Self {
+        self.decode_bound = Some(decode_calls);
         self
     }
 }
@@ -883,8 +955,11 @@ fn derive_court_cost_walk_v1(
             // on its own. That makes this arm `calls x vocabulary`, and a job may be almost all
             // decode: the bound is the whole context. Only a gather pays it.
             if shape.count_ids && node.op_kind == Op::EmbedLookup {
-                let ids = n_ctx.checked_mul(4).ok_or_else(over)?;
-                let pin = decode_pin_price_v1(profile, n_ctx).ok_or_else(over)?;
+                // ADR-0103 Decision 4: where the regime states the trace cap, a job's decode is at
+                // most that many calls — the whole context only on the shipped reading.
+                let decode = shape.decode_bound.map_or(n_ctx, |bound| bound.min(n_ctx));
+                let ids = decode.checked_mul(4).ok_or_else(over)?;
+                let pin = decode_pin_price_v1(profile, decode).ok_or_else(over)?;
                 evidence = evidence.checked_add(ids).and_then(|e| e.checked_add(pin)).ok_or_else(over)?;
             }
             // The prompt ids ride every refutation that addresses a gather, and a challenger may
@@ -1122,6 +1197,46 @@ pub enum PalwClassAdmissionError {
     /// enough to enumerate and still take more DAA to prosecute than the lattice leaves for it.
     #[error("prosecuting the class's widest row takes {needed} DAA and this lattice's court window is {window}")]
     CourtWindowTooShort { needed: u64, window: u64 },
+    /// **ADR-0102: the class reaches a kernel this network adjudicates only past its fence.**
+    ///
+    /// The per-token lift (`KDESC_A16_REQUANTIZE_BY_TOKEN`) is in the adjudicator's fenced table,
+    /// outside `court_catalog_root`, and `Params::palw_token_lift` is what admits it. Refused BY
+    /// NAME rather than as a coverage gap for the `FusedAttentionNeedsTheKaryCourt` reason: the
+    /// graph is adjudicable by this build, and what is missing is the fence.
+    #[error("the class reaches the per-token lift kernel and this network has not armed palw_token_lift")]
+    TokenLiftNeedsItsFence,
+    /// **ADR-0093 Decision 6: a fused output tile that is not inside one head cannot be dissected.**
+    ///
+    /// A dissection is one head's softmax; `palw_attn_dispute_site_v2` refuses a tile spanning two
+    /// heads at dispute time (`FusedTileStraddlesHeads`), so a class whose fused tile is wider than
+    /// a head — or does not divide it — is a class whose fused leaves no party can play. The query
+    /// half of the same shape has always been refused here
+    /// ([`Self::FusedQuerySliceStraddlesTiles`]); this is the output half, refused only past
+    /// `Params::palw_fused_dissectable`, because a live chain may already hold such a class.
+    #[error(
+        "the class's fused attention commits {tile_len}-lane output tiles over {d_head}-lane heads — a tile that is not \
+         inside one head is no dissection's, and palw_fused_dissectable refuses such a class (ADR-0093 Decision 6)"
+    )]
+    FusedTileStraddlesHeads { tile_len: u32, d_head: u32 },
+    /// **ADR-0103: the class registers a held (v4) state map and this network has not armed
+    /// `palw_held_context`.** The map is the regime's marker — it is inside the class id, and it is
+    /// what lifts the `n_ctx × layers` ceiling in `validate_geometry` — so a network that has not
+    /// armed the regime must not admit the class that asks for it. Refused by name, for the
+    /// `TokenLiftNeedsItsFence` reason: nothing is wrong with the graph; the fence is missing.
+    #[error("the class registers the held state map and this network has not armed palw_held_context")]
+    HeldMapNeedsItsFence,
+    /// **ADR-0103 Decision 8: under the held regime a chain wall may not grow linearly with the
+    /// context.** Asked before any number is compared: a class whose `wall` still reads `Linear`
+    /// under the regime is a class the chain would carry, walk or wait on in proportion to its
+    /// context, which is the thing the regime exists to remove — refused whatever its numbers are
+    /// today, because the next context up is the same class shape one doubling on.
+    #[error("under the held regime the class's {wall} grows linearly with the context")]
+    LinearInTheContext { wall: &'static str },
+    /// The order sweep could not price `wall` at every doubling it reads, so the gate cannot show
+    /// the wall is not linear — and refuses rather than guess (the fit's `Unpriced`, kept apart from
+    /// `LinearInTheContext` so the refusal names the right problem).
+    #[error("under the held regime the class's {wall} could not be priced across the context sweep")]
+    ChainWallOrderUnknown { wall: &'static str },
 }
 
 /// **The Phase B rules a `palw_context_ladder`-armed network judges a registration under**
@@ -1357,6 +1472,52 @@ pub fn palw_fused_query_slice_is_openable_v1(profile: &PalwShapeProfileV3) -> Re
     Ok(())
 }
 
+/// **Can every fused site of this class be dissected?** (ADR-0093 as built.) The two shape facts
+/// `palw_attn_dispute_site_v2` refuses at dispute time, asked of the class instead: each fused
+/// node's output tile is inside ONE head (a dissection is one head's softmax — a tile wider than
+/// the head is two heads' and the court refuses it as `FusedTileStraddlesHeads`), and each head's
+/// query slice is inside one tile of the rotated-query row ([`palw_fused_query_slice_is_openable_v1`]).
+///
+/// What a BACKEND says about itself (`supports_dissection`), so a node never advertises, or
+/// produces under, a turn the court will refuse to play — and, past `Params::palw_fused_dissectable`
+/// (ADR-0093 Decision 6), what admission requires: the query half was always refused here, the
+/// output half ([`palw_fused_output_tiles_are_one_heads_v1`]) only past the fence, because a live
+/// chain may already hold a class that fails it. `true` for a class with no fused site.
+pub fn palw_fused_sites_are_dissectable_v1(profile: &PalwShapeProfileV3) -> bool {
+    !palw_profile_has_fused_attention_v1(profile)
+        || (palw_fused_output_tiles_are_one_heads_v1(profile).is_ok() && palw_fused_query_slice_is_openable_v1(profile).is_ok())
+}
+
+/// **The output half of a dissectable fused site** (ADR-0093 Decision 6): every fused node's
+/// output tile is inside ONE head — its `tile_len` divides the head width, so no tile starts in
+/// one head and ends in the next. The one spelling of the arithmetic `palw_attn_dispute_site_v2`
+/// refuses as `FusedTileStraddlesHeads`, asked of the class. `Ok` for a class with no fused site.
+pub fn palw_fused_output_tiles_are_one_heads_v1(profile: &PalwShapeProfileV3) -> Result<(), PalwClassAdmissionError> {
+    let d_head = profile.attn_head_dim;
+    // Every table, as `palw_profile_has_fused_attention_v1` reads them: a fused node is judged
+    // wherever it sits.
+    let fused = [&profile.pre_nodes, &profile.gdn_nodes, &profile.attn_nodes, &profile.post_nodes]
+        .into_iter()
+        .flatten()
+        .filter(|n| n.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused);
+    for node in fused {
+        if d_head == 0 || node.tile_len == 0 || !d_head.is_multiple_of(node.tile_len) {
+            return Err(PalwClassAdmissionError::FusedTileStraddlesHeads { tile_len: node.tile_len, d_head });
+        }
+    }
+    Ok(())
+}
+
+/// **Does a genesis set register a fused class no dissection can try?** (ADR-0093 Decision 6.)
+/// Genesis rows are verified against the committed catalog rather than through the gate, so
+/// `Params::validate_palw_v2` asks this where `palw_fused_dissectable` is armed from genesis.
+pub fn palw_genesis_holds_undissectable_fused_class_v1(bundle: &PalwConsensusParamsV2) -> bool {
+    bundle.genesis_objects.iter().any(|object| {
+        matches!(object, PalwConsensusObjectV2::ClassRegistered { admission: Some(carriage), .. }
+            if !palw_fused_sites_are_dissectable_v1(&carriage.profile))
+    })
+}
+
 /// Every kernel a profile's graph can reach, read off the graph.
 ///
 /// Public because the coverage claim and the catalog entry must be built from the same traversal —
@@ -1497,6 +1658,93 @@ pub fn verify_class_admission_v6(
     court: Option<PalwKaryCourtV1>,
     decode_rules: bool,
 ) -> Result<PalwClassCatalogEntryV2, PalwClassAdmissionError> {
+    verify_class_admission_v7(bundle, profile, canonical, registration, certified, chain_certified, ladder, court, decode_rules, false)
+}
+
+/// [`verify_class_admission_v6`] under ADR-0102's fence.
+///
+/// `token_lift` is `Params::palw_token_lift` at the block, read by the CALLER, and `false` on
+/// every shipped preset, where this is [`verify_class_admission_v6`] byte for byte for every
+/// class that reaches no fenced kernel — and a refusal by name
+/// ([`PalwClassAdmissionError::TokenLiftNeedsItsFence`]) for one that does. `true` admits the
+/// fenced kernel into the coverage the gate checks; nothing else moves.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_class_admission_v7(
+    bundle: &PalwConsensusParamsV2,
+    profile: &PalwShapeProfileV3,
+    canonical: &PalwJobContextV2,
+    registration: &PalwConsensusObjectV2,
+    certified: &[crate::palw_e2e_adjudicability::PalwE2eFamilyV1],
+    chain_certified: &[crate::palw_e2e_adjudicability::PalwE2eFamilyV1],
+    ladder: Option<PalwClassLadderRulesV1>,
+    court: Option<PalwKaryCourtV1>,
+    decode_rules: bool,
+    token_lift: bool,
+) -> Result<PalwClassCatalogEntryV2, PalwClassAdmissionError> {
+    verify_class_admission_v8(
+        bundle,
+        profile,
+        canonical,
+        registration,
+        certified,
+        chain_certified,
+        ladder,
+        court,
+        decode_rules,
+        token_lift,
+        false,
+        PalwHeldAdmissionV1::default(),
+    )
+}
+
+/// [`verify_class_admission_v7`] under ADR-0093 Decision 6's fence and ADR-0103's — two fences
+/// that reached this gate on two branches as one version, merged here with both arguments.
+///
+/// `fused_dissectable` is `Params::palw_fused_dissectable` at the block, read by the CALLER, and
+/// `false` on every shipped preset. `true` refuses a fused class whose output tile is not inside one
+/// head ([`PalwClassAdmissionError::FusedTileStraddlesHeads`]) — the half of a dissectable site the
+/// gate did not ask; nothing else moves.
+///
+/// `held` is the caller's reading of `Params::palw_held_context` and `Params::palw_panel_da_at` at
+/// the block, both dormant on every shipped preset — where, with `fused_dissectable` false, this is
+/// [`verify_class_admission_v7`] byte for byte for every class that registers no held map, and a
+/// refusal by name ([`PalwClassAdmissionError::HeldMapNeedsItsFence`]) for one that does.
+///
+/// Armed, a class that registers no held map is judged exactly as before: the regime is the
+/// CLASS's (its map is in its id), not the network's. A class that registers one is judged under
+/// the regime, and four things move:
+///
+/// * **the order first** (Decision 8): `palw_model_fit_v2` under [`crate::palw_model_fit_v1::PalwFitRegimeV1::Held`]
+///   reads every chain wall's order at the doublings of the class's context, and a wall that reads
+///   `Linear` is refused by name ([`PalwClassAdmissionError::LinearInTheContext`]) before any
+///   number is compared;
+/// * **the state tree's depth** (Decision 3): the held layout must exist at `n_ctx` — its proof
+///   inside `PALW_STEP_LEG_MAX_STATE_DEPTH_V4` — where a v3 class meets a chunk count;
+/// * **the ladder as a depth** (Decision 1): the same comparison, `worst ≤ max_step_leaf_count` —
+///   a network under the fence mints its ladder at the carrier's budget because no round is
+///   played;
+/// * **the window on the held clock** (Decision 5): `palw_attn_court_admits_row_held_v1`, the
+///   dissection opened at the accusation's leaf with no ladder rounds in front of it.
+///
+/// The last of the four is the NETWORK's and applies to every class once the fence is armed: the
+/// acceptance path refuses `CourtOpened` for every claim there, so no class's dispute is charged a
+/// ladder it never plays. The geometry's per-position budget (Decision 6) is `validate_shape`'s,
+/// which reads the map.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_class_admission_v8(
+    bundle: &PalwConsensusParamsV2,
+    profile: &PalwShapeProfileV3,
+    canonical: &PalwJobContextV2,
+    registration: &PalwConsensusObjectV2,
+    certified: &[crate::palw_e2e_adjudicability::PalwE2eFamilyV1],
+    chain_certified: &[crate::palw_e2e_adjudicability::PalwE2eFamilyV1],
+    ladder: Option<PalwClassLadderRulesV1>,
+    court: Option<PalwKaryCourtV1>,
+    decode_rules: bool,
+    token_lift: bool,
+    fused_dissectable: bool,
+    held: PalwHeldAdmissionV1,
+) -> Result<PalwClassCatalogEntryV2, PalwClassAdmissionError> {
     let PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, pwu_rule, share_permille, .. } = registration else {
         return Err(PalwClassAdmissionError::NotARegistration);
     };
@@ -1514,6 +1762,13 @@ pub fn verify_class_admission_v6(
     // so an unbounded shape decides how much work it costs to reject it. `validate_shape` is where
     // those bounds live; running it after the first consumer is running it too late.
     profile.validate_shape().map_err(|e| PalwClassAdmissionError::Profile(e.to_string()))?;
+    // **ADR-0103: the held map is admitted by its fence, and only by it** — asked immediately after
+    // the shape, because the map is what lifted the context ceiling `validate_shape` just skipped,
+    // so nothing past this line may spend work on a context the network never agreed to carry.
+    let held_class = crate::palw_state_chunk_map::palw_profile_is_held_v4(profile);
+    if held_class && !held.armed {
+        return Err(PalwClassAdmissionError::HeldMapNeedsItsFence);
+    }
 
     let derived_id = profile.shape_profile_id();
     if *class_id != derived_id {
@@ -1574,12 +1829,23 @@ pub fn verify_class_admission_v6(
     // A4 first: a class whose disputes cannot be adjudicated must not reach any later check, so
     // that a coverage gap can never be reported as some more specific failure.
     let kernel_ids = reachable_kernels_v1(profile);
-    verify_catalog_coverage_v1(&PalwReachableKernelSetV1 { execution_class_id: derived_id, kernel_ids: kernel_ids.clone() })
+    // **ADR-0102: a fenced kernel is admitted by its fence, and only by it.** Asked before the
+    // catalog walk so a class the fence would admit is never reported as a coverage gap; past it
+    // the fenced ids leave the set the identity catalog judges (they are adjudicable — the
+    // resolver reads the fenced table — and they are not in `court_catalog_root`, which is the
+    // point of the fence). `kernel_ids` itself stays whole: the catalog entry records every kernel
+    // the class reaches, and weight asks a certified family to cover all of them.
+    let fenced = crate::palw_step_refute::fenced_kernel_ids_v1();
+    if !token_lift && !kernel_ids.is_disjoint(&fenced) {
+        return Err(PalwClassAdmissionError::TokenLiftNeedsItsFence);
+    }
+    let identity_ids: BTreeSet<Hash64> = kernel_ids.difference(&fenced).copied().collect();
+    verify_catalog_coverage_v1(&PalwReachableKernelSetV1 { execution_class_id: derived_id, kernel_ids: identity_ids.clone() })
         .map_err(|_| PalwClassAdmissionError::CoverageGap)?;
     // The catalogued set is read from the adjudication table itself, which is what
     // `verify_catalog_coverage_v1` compares against — asserted here so a future refactor that
     // pointed the gate at a hand-kept list fails a test rather than certifying quietly.
-    debug_assert!(kernel_ids.is_subset(&catalogued_kernel_ids_v1()), "coverage passed against a set that is not the table");
+    debug_assert!(identity_ids.is_subset(&catalogued_kernel_ids_v1()), "coverage passed against a set that is not the table");
     // **And the STRONG gate, which had no non-test caller at all** (audit H-02).
     //
     // The id check above is set inclusion: it asks whether every kernel this profile names is in
@@ -1612,6 +1878,12 @@ pub fn verify_class_admission_v6(
     // (fixer FA's note 6). See [`palw_fused_query_slice_is_openable_v1`].
     if fused {
         palw_fused_query_slice_is_openable_v1(profile)?;
+    }
+    // **ADR-0093 Decision 6: and the output half, past its fence.** A fused tile that is not one
+    // head's is a leaf no dissection can try; before the fence such a class is admitted as it
+    // always was, because a live chain may already hold one.
+    if fused && fused_dissectable {
+        palw_fused_output_tiles_are_one_heads_v1(profile)?;
     }
 
     // **And the half neither of those can see: can anybody actually PLAY this class's dispute?**
@@ -1650,6 +1922,39 @@ pub fn verify_class_admission_v6(
         if covered.is_none() {
             return Err(PalwClassAdmissionError::NotEndToEndCertified { share: *share_permille });
         }
+    }
+
+    // **ADR-0103 Decision 8 — under the held regime, the order first, before any number.** The
+    // walls below compare a need against a ceiling at THIS context; a wall whose need is linear
+    // passes them at a small context and is the wall again one doubling on, which is the thing the
+    // regime exists to remove. So a held class is read at the doublings of its context through the
+    // fit's own rows — the SAME predicates, under the regime — and the first linear wall is the
+    // refusal. Then the state tree's depth (Decision 3), which replaces a v3 class's chunk count.
+    if held_class {
+        let form = court.map_or(crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat, |k| k.prompt_ids_form);
+        let fit = crate::palw_model_fit_v1::palw_model_fit_v2(
+            profile,
+            bundle,
+            court,
+            form,
+            crate::palw_model_fit_v1::palw_fit_regime_for_v1(held, profile),
+        );
+        if let Some(wall) = fit.linear_chain_walls().first() {
+            return Err(PalwClassAdmissionError::LinearInTheContext { wall: wall.name() });
+        }
+        if let Some(wall) = fit.unordered_chain_walls().first() {
+            return Err(PalwClassAdmissionError::ChainWallOrderUnknown { wall: wall.name() });
+        }
+        crate::palw_state_chunk_map::palw_state_layout_v4(profile, profile.n_ctx).map_err(|e| match e {
+            crate::palw_state_chunk_map::PalwStateChunkMapError::TreeTooDeep { depth, max } => {
+                PalwClassAdmissionError::CourtCostExceedsCeiling {
+                    what: "held state proof depth",
+                    got: depth.into(),
+                    ceiling: max.into(),
+                }
+            }
+            other => PalwClassAdmissionError::Profile(format!("the held map has no layout at n_ctx {}: {other}", profile.n_ctx)),
+        })?;
     }
 
     // **Both arms count against the RULESET's ladder, and the `None` arm did not.** It called
@@ -1729,6 +2034,9 @@ pub fn verify_class_admission_v6(
     {
         return Err(PalwClassAdmissionError::PricedForADifferentCourt { priced: shape.dissection, court: k.dissection_arity });
     }
+    // ADR-0103 Decision 4: under the held regime the generated-token pin is priced at the trace
+    // cap — the most decode calls a job can file — rather than at the whole context.
+    let shape = if held.armed { shape.with_decode_bound_v1(crate::palw_v2::PALW_V2_MAX_TRACE_EVENTS as u64) } else { shape };
     let cost = derive_court_cost_shaped_v1(profile, shape)?;
     // **In chunks AND in bytes** (ADR-0080 design A; ADR-0049 Decision C). A close rides an
     // `ObjectChunk` group, so what a ruleset pays to RELAY is a count of carriers and half a chunk
@@ -1788,7 +2096,16 @@ pub fn verify_class_admission_v6(
             .court
             .with_dissection_arity(k.dissection_arity)
             .map_err(|e| PalwClassAdmissionError::Profile(format!("the caller's dissection arity is not legal: {e}")))?;
-        crate::palw_attn_court_v1::palw_attn_court_admits_row_v1(&played, history, tile, k.window_court_daa).map_err(|e| match e {
+        // ADR-0103 Decision 5: under the held regime a dissection opens at the accusation's leaf,
+        // so the window holds the history rounds and no leaf ladder. The NETWORK's regime, not the
+        // class's: once the fence is armed no class's dispute bisects (the acceptance path refuses
+        // `CourtOpened` for every claim), so no class's window is charged the ladder's rounds.
+        let admits = if held.armed {
+            crate::palw_attn_court_v1::palw_attn_court_admits_row_held_v1(&played, history, tile, k.window_court_daa)
+        } else {
+            crate::palw_attn_court_v1::palw_attn_court_admits_row_v1(&played, history, tile, k.window_court_daa)
+        };
+        admits.map_err(|e| match e {
             crate::palw_attn_court_v1::PalwAttnCourtError::OverrunsWindow { moves, deadline, reserve, window_court } => {
                 PalwClassAdmissionError::CourtWindowTooShort {
                     needed: moves.saturating_mul(deadline).saturating_add(reserve),
@@ -2403,6 +2720,144 @@ mod tests {
         let v2_reg = weightless_registration(v2.shape_profile_id(), v2_counted);
         verify_class_admission_v4(&bundle, &v2, &v2_canonical, &v2_reg, &[], &[], Some(v2_rules))
             .expect("the shipped graph-v2 row is admitted exactly as before");
+    }
+
+    /// **ADR-0102: the per-token lift is admitted by its fence and by nothing else.** The same
+    /// hybrid geometry projected as graph-v5 (the lane-sliced lift) and graph-v6 (the per-token
+    /// one) meets the same gate under the same armed court: dormant, v6 is refused BY NAME before
+    /// any coverage walk and v5 is untouched; armed, v6 meets exactly the verdict v5 does — the
+    /// fence is the only door the kernel adds.
+    #[test]
+    fn the_per_token_lift_is_admitted_by_its_fence_alone() {
+        use crate::palw_qwen36_profile::{QWEN35_2B, qwen36_artifact_row_profile_v5, qwen36_artifact_row_profile_v6};
+        let court = kary_court_v1();
+        let geometry = crate::palw_qwen36_profile::PalwQwen36GeometryV1 { n_ctx: 512, ..QWEN35_2B };
+        let v5 = qwen36_artifact_row_profile_v5(geometry).expect("the v5 hybrid projects");
+        let v6 = qwen36_artifact_row_profile_v6(geometry).expect("the v6 hybrid projects");
+        assert_ne!(v5.shape_profile_id(), v6.shape_profile_id(), "a class is its graph");
+        let fenced = crate::palw_step_refute::fenced_kernel_ids_v1();
+        assert!(reachable_kernels_v1(&v5).is_disjoint(&fenced), "v5 reaches no fenced kernel");
+        assert!(!reachable_kernels_v1(&v6).is_disjoint(&fenced), "v6 reaches the per-token lift");
+        let mut bundle = conforming_bundle();
+        bundle.court = PalwCourtParamsV2::with_cost_ceilings(
+            crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+            rc_turn_deadline(),
+            2,
+            crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES,
+            crate::palw_mode_v2::DEFAULT_MAX_TERMINAL_MACS,
+            crate::palw_mode_v2::DEFAULT_MAX_OPERAND_COUNT,
+        )
+        .expect("legal");
+        let gate = |profile: &PalwShapeProfileV3, token_lift: bool| {
+            let rules = crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(
+                profile,
+                Some(court),
+                crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+            );
+            let canonical = context(profile, 510, 2);
+            let ladder = rules.map(|r| r.ladder).unwrap_or(crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES);
+            let counted = crate::palw_step::step_leaf_count_capped_v1(profile, &canonical, ladder).expect("counts");
+            let registration = weightless_registration(profile.shape_profile_id(), counted);
+            verify_class_admission_v7(&bundle, profile, &canonical, &registration, &[], &[], rules, Some(court), false, token_lift)
+        };
+        assert_eq!(gate(&v6, false).expect_err("dormant"), PalwClassAdmissionError::TokenLiftNeedsItsFence);
+        assert!(format!("{}", PalwClassAdmissionError::TokenLiftNeedsItsFence).contains("palw_token_lift"));
+        let v5_verdict = gate(&v5, false);
+        assert_eq!(format!("{:?}", gate(&v5, true)), format!("{v5_verdict:?}"), "the fence does not touch a v5 row");
+        // Armed, both graphs of the 2B geometry are admitted at 512 under the RC-shaped court —
+        // the positive path, pinned — and the v6 entry records the fenced kernel among the ones
+        // its weight must be certified for.
+        let a = v5_verdict.expect("the v5 hybrid at the 2B geometry is admitted at 512");
+        let b = gate(&v6, true).expect("armed, the v6 hybrid is admitted exactly where v5 is");
+        assert_eq!(a.reachable_kernels.len() + 1, b.reachable_kernels.len(), "the entry records the fenced kernel too");
+        assert!(!b.reachable_kernels.is_disjoint(&fenced));
+    }
+
+    /// **ADR-0093 Decision 6: past its fence, a fused class no dissection can try is refused by
+    /// name — and before it, nothing moves.** Every shipped fused row is dissectable (its budgeted
+    /// fused tile divides the head: 8 lanes over the dense row's 128, 8 over the 2B hybrid's 256,
+    /// the head itself under graph-v6); the class the fence exists for is a REGISTRANT's graph —
+    /// here the dense graph-v5 row with its fused tile widened to two heads, which admission took
+    /// before this fence and the court then refuses to dissect. The predicate the backends read
+    /// (`palw_fused_sites_are_dissectable_v1`) and the gate's refusal are one spelling.
+    #[test]
+    fn an_undissectable_fused_class_is_refused_by_its_fence_alone() {
+        use crate::palw_qwen36_profile::{QWEN35_2B, qwen36_artifact_row_profile_v5, qwen36_artifact_row_profile_v6};
+        let court = kary_court_v1();
+        let geometry = crate::palw_qwen36_profile::PalwQwen36GeometryV1 { n_ctx: 512, ..QWEN35_2B };
+        let hybrid_v5 = qwen36_artifact_row_profile_v5(geometry).expect("the v5 hybrid projects");
+        let hybrid_v6 = qwen36_artifact_row_profile_v6(geometry).expect("the v6 hybrid projects");
+        let dense_v5 = crate::palw_context_ladder::palw_a16_context_row_profile_v5(512).expect("the dense v5 row projects");
+        let fused_tile = |p: &PalwShapeProfileV3| {
+            p.attn_nodes.iter().find(|n| n.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused).expect("a fused node").tile_len
+        };
+        // The shipped rows, as they are: every fused tile inside one head.
+        assert_eq!((fused_tile(&dense_v5), dense_v5.attn_head_dim), (8, 128));
+        assert_eq!((fused_tile(&hybrid_v5), hybrid_v5.attn_head_dim), (8, 256));
+        assert_eq!((fused_tile(&hybrid_v6), hybrid_v6.attn_head_dim), (256, 256));
+        // A registrant's graph: the same row, its fused output cut two heads wide.
+        let mut two_heads = dense_v5.clone();
+        for node in two_heads.attn_nodes.iter_mut().filter(|n| n.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused) {
+            node.tile_len = 2 * two_heads.attn_head_dim;
+        }
+        two_heads.validate_shape().expect("a well-formed graph: nothing but the court can tell");
+        assert_ne!(two_heads.shape_profile_id(), dense_v5.shape_profile_id(), "a class is its graph");
+        for shipped in [&dense_v5, &hybrid_v5, &hybrid_v6] {
+            assert!(palw_fused_sites_are_dissectable_v1(shipped));
+        }
+        assert!(!palw_fused_sites_are_dissectable_v1(&two_heads));
+
+        let mut bundle = conforming_bundle();
+        bundle.court = PalwCourtParamsV2::with_cost_ceilings(
+            crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+            rc_turn_deadline(),
+            2,
+            crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES,
+            crate::palw_mode_v2::DEFAULT_MAX_TERMINAL_MACS,
+            crate::palw_mode_v2::DEFAULT_MAX_OPERAND_COUNT,
+        )
+        .expect("legal");
+        let gate = |profile: &PalwShapeProfileV3, fused_dissectable: bool| {
+            let rules = crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(
+                profile,
+                Some(court),
+                crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+            );
+            let canonical = context(profile, 510, 2);
+            let ladder = rules.map(|r| r.ladder).unwrap_or(crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES);
+            let counted = crate::palw_step::step_leaf_count_capped_v1(profile, &canonical, ladder).expect("counts");
+            let registration = weightless_registration(profile.shape_profile_id(), counted);
+            let v8 = verify_class_admission_v8(
+                &bundle,
+                profile,
+                &canonical,
+                &registration,
+                &[],
+                &[],
+                rules,
+                Some(court),
+                false,
+                true,
+                fused_dissectable,
+                PalwHeldAdmissionV1::default(),
+            );
+            if !fused_dissectable {
+                let v7 =
+                    verify_class_admission_v7(&bundle, profile, &canonical, &registration, &[], &[], rules, Some(court), false, true);
+                assert_eq!(format!("{v7:?}"), format!("{v8:?}"), "dormant, v8 is v7");
+            }
+            v8
+        };
+        // Dormant, the two-head graph is admitted as such a graph always was; armed, refused by name.
+        gate(&two_heads, false).expect("dormant, the gate never asked the output half");
+        let refused = gate(&two_heads, true).expect_err("armed, a two-head tile is refused");
+        assert_eq!(refused, PalwClassAdmissionError::FusedTileStraddlesHeads { tile_len: 256, d_head: 128 });
+        assert!(format!("{refused}").contains("palw_fused_dissectable"), "the refusal names the fence: {refused}");
+        // The shipped rows: the fence changes nothing about them.
+        for (graph, profile) in [("dense v5", &dense_v5), ("hybrid v5", &hybrid_v5), ("hybrid v6", &hybrid_v6)] {
+            assert_eq!(format!("{:?}", gate(profile, true)), format!("{:?}", gate(profile, false)), "{graph}: untouched by the fence");
+        }
+        gate(&hybrid_v6, true).expect("armed, the v6 hybrid is admitted");
     }
 
     /// **Z11: all three bounds at once, and the refusal names which one.**

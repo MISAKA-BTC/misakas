@@ -151,6 +151,7 @@ pub mod palw_attempt_v2;
 pub mod palw_attn_court_v1;
 /// ADR-0082 Decisions 2–3: the history dissection's objects, fold and round arithmetic.
 pub mod palw_attn_dissect;
+pub mod palw_attn_responder_v1;
 pub mod palw_backend;
 pub mod palw_base0;
 pub mod palw_base0_a16;
@@ -174,6 +175,9 @@ pub mod palw_block_commitment;
 pub mod palw_carriage;
 pub mod palw_catalog_coverage;
 pub mod palw_chain_weight;
+/// ADR-0103 Decision 1 — a checkpoint's chunk is tried against the cache-write rows it claims to
+/// hold, in one move. A consensus object behind `Params::palw_held_context`, `None` everywhere.
+pub mod palw_checkpoint_court_v1;
 pub mod palw_class_admission_v2;
 pub mod palw_class_daa;
 pub mod palw_context_ladder;
@@ -217,6 +221,12 @@ pub mod palw_fp_objects_v3;
 pub mod palw_freeprompt_v3;
 pub mod palw_genesis_v2;
 pub mod palw_heartbeat_v1;
+/// ADR-0103 — the context is held off the chain: the seat's interval of positions, its route, its
+/// width and its fetch, as pure functions. Consensus-inert.
+pub mod palw_held_context_v1;
+/// ADR-0103 Decision 4 — a data-availability accusation names a prompt tile, a state chunk or a
+/// step range, and is answered by that unit and its path. Behind `Params::palw_held_context`.
+pub mod palw_held_da_v1;
 pub mod palw_job_identity;
 pub mod palw_job_ledger;
 pub mod palw_job_panel;
@@ -227,12 +237,23 @@ pub mod palw_job_panel;
 /// no one, credits nothing, freezes the class). Consensus-inert — nothing constructs it on
 /// any shipped network; the Track-C change set is its first consumer.
 pub mod palw_job_state;
+/// ADR-0111 — a seat may demand the committed leaf it needs to judge: the seat's assigned
+/// intervals and the interval that owns a leaf, as pure functions of the binding — the bound a
+/// held DA demand for a leaf's evidence is admitted under.
+pub mod palw_leaf_evidence_v1;
 /// MISAKA PALW execution-commitment legs v1 (ADR-0027 consequences): the activation and
 /// checkpoint commitments. Land-stage, consensus-inert.
 pub mod palw_legs;
 pub mod palw_lifecycle_objects_v2;
+/// ADR-0099 Decision 1 — a model is a manifest, and the Measured Model Artifact is what the
+/// network makes of it: the deterministic half any node recomputes and refuses by the field, the
+/// self-reported half carried and labelled. Consensus-inert.
+pub mod palw_measured_model_v1;
 pub mod palw_mode_v2;
 pub mod palw_model_benefits_v1;
+/// ADR-0097 — a model's fit is a lookup: every wall a class meets on a ruleset, named with its
+/// number, from the predicates admission and the court already run. Consensus-inert (a report).
+pub mod palw_model_fit_v1;
 pub mod palw_model_lines_v1;
 pub mod palw_model_market_v1;
 /// ADR-0077 Decision 16 (P-16): `PanelDa`, the privacy mode whose prompt stays off chain — and
@@ -240,9 +261,6 @@ pub mod palw_model_market_v1;
 pub mod palw_panel_da_v1;
 pub mod palw_panel_v2;
 pub mod palw_producer_v2;
-/// ADR-0098 — the panel's coverage of one claim, measured with the draw the seats run
-/// (ADR-0077 Decision 8): the number ADR-0081 Decision 8 asked for and never took. A report.
-pub mod palw_seat_coverage_v1;
 /// ADR-0081 Decision 3 — the one decision of ADR-0081 that survives its refutation: the
 /// prompt's token ids as a tiled Merkle root, so a gather proves ONE id instead of carrying
 /// all of them. Dormant (`Params::palw_prompt_ids_merkle` is `None` on every preset).
@@ -267,6 +285,25 @@ pub mod palw_routing;
 /// Stage-0 shadow ledger that measures `P_check`, no-show and replay cost. Land-stage,
 /// consensus-inert — computed and logged only; nothing consumes it.
 pub mod palw_schedule;
+/// ADR-0098 — the panel's coverage of one claim, measured with the draw the seats run
+/// (ADR-0077 Decision 8): the number ADR-0081 Decision 8 asked for and never took. A report.
+pub mod palw_seat_coverage_v1;
+/// ADR-0101 — a membership is proven by the chain and served by anyone: the signed service
+/// descriptor and the check a client runs against chain facts. Consensus-inert.
+pub mod palw_service_descriptor_v1;
+/// ADR-0099 Decision 5, built by ADR-0100 — the one-move court: the accusation a shard seat files
+/// at a named leaf, its session id, its verdict. A consensus object behind
+/// `Params::palw_shard_court`, `None` on every shipped preset.
+pub mod palw_shard_court_v1;
+/// ADR-0100 Decision 4 — licensing per shard: the part, the per-shard quorum and the progress, as
+/// pure functions. Consensus-inert; the fold is the ADR's stated next step.
+pub mod palw_shard_licensing_v1;
+/// ADR-0099 Decision 3 — a shard is a capability a bond declares, and the panel is drawn per
+/// shard. Consensus-inert.
+pub mod palw_shard_panel_v1;
+/// ADR-0099 Decision 2 — a seat holds a shard, not the model: the plan (contiguous layer ranges,
+/// derived), what a shard costs a seat, and the two transfer forms. Consensus-inert.
+pub mod palw_shard_plan_v1;
 /// MISAKA PALW-S slash objects (ADR-0027): unilateral, objectively-checkable evidence.
 /// Land-stage, consensus-inert — no slashing is enabled by this module existing.
 pub mod palw_slash;

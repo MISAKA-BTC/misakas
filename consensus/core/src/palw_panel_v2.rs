@@ -40,7 +40,7 @@
 use crate::BlockHash;
 use crate::Hash64;
 use crate::palw_state_v2::{
-    PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwPanelSeatV2, PalwStateParamsV2,
+    PalwBlockContextV2, PalwBondKeyV2, PalwBondStateV2, PalwChainStateV2, PalwClaimPhaseV2, PalwPanelSeatV2, PalwStateParamsV2,
 };
 use blake2b_simd::Params;
 
@@ -162,6 +162,68 @@ pub enum PalwPanelV2Error {
     UnmetObligationNotProven { seat: PalwBondKeyV2, why: &'static str },
     #[error("no quorum: {valid} valid and {unavailable} unavailable of {needed} needed")]
     NoQuorum { valid: u16, unavailable: u16, needed: u16 },
+    #[error("claim {0} does not license by parts: its panel is not a declared plan's stratified shape")]
+    NotLicensedByParts(Hash64),
+    #[error("claim {0} licenses by parts; a whole-object licence or default does not apply to it")]
+    LicensedByParts(Hash64),
+    #[error("the part names a {part}-shard plan and the class declared {declared}")]
+    ShardPlanMismatch { declared: u32, part: u32 },
+    #[error("shard {shard} of a {count}-shard plan")]
+    ShardOutOfRange { shard: u32, count: u32 },
+    #[error("shard {shard} has already licensed")]
+    ShardAlreadyLicensed { shard: u32 },
+    #[error("shard {shard}: {needed} seats needed and {available} eligible bonds declared it")]
+    InsufficientEligibleShardBonds { shard: u32, needed: u16, available: u16 },
+    #[error("the stratified draw refused: {0}")]
+    ShardDraw(String),
+}
+
+/// **ADR-0100 Decision 4: the stratified draw, from chain state.** The eligible bonds are the flat
+/// draw's (`palw_panel_eligible_bonds_v2`, one spelling), each carrying the shards of the claim's
+/// class it declared (`BondShardsDeclared`); a bond that declared none is not a candidate. The
+/// draw per shard is `derive_shard_panel_v1` — its own ticket domain with the shard mixed in, one
+/// seat per operator per shard, `params.seat_count` seats and `params.quorum` a shard — and the
+/// result is stored flat, shard-major, which is what makes a stratified panel recognisable by its
+/// length alone (`palw_claim_licenses_by_parts_v1`). A shard short of operators refuses the whole
+/// draw by name: a claim one of whose shards nobody can judge is not a claim anybody can license.
+#[allow(clippy::too_many_arguments)]
+pub fn derive_stratified_panel_v2(
+    state: &PalwChainStateV2,
+    params: &PalwPanelParamsV2,
+    claim_id: &Hash64,
+    anchor_block: BlockHash,
+    min_collateral_sompi: u64,
+    registered_by_daa: Option<u64>,
+    capability_proof: bool,
+    shard_count: u32,
+) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
+    let class_id = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?.class_id;
+    let candidates: Vec<crate::palw_shard_panel_v1::PalwShardCandidateV1> =
+        palw_panel_eligible_bonds_v2(state, claim_id, min_collateral_sompi, registered_by_daa, capability_proof)?
+            .into_iter()
+            .filter_map(|(bond_key, bond)| {
+                state.shards_of_bond(bond_key, &class_id).map(|shards| crate::palw_shard_panel_v1::PalwShardCandidateV1 {
+                    bond: *bond_key,
+                    operator_id: bond.operator_id,
+                    shards: shards.to_vec(),
+                })
+            })
+            .collect();
+    let panel = crate::palw_shard_panel_v1::derive_shard_panel_v1(
+        &candidates,
+        shard_count,
+        params.seat_count,
+        params.quorum,
+        claim_id,
+        anchor_block,
+    )
+    .map_err(|e| match e {
+        crate::palw_shard_panel_v1::PalwShardPanelError::InsufficientEligibleBonds { shard, needed, available } => {
+            PalwPanelV2Error::InsufficientEligibleShardBonds { shard, needed, available }
+        }
+        other => PalwPanelV2Error::ShardDraw(other.to_string()),
+    })?;
+    Ok(panel.seats.into_iter().flatten().collect())
 }
 
 /// The chain fact that fixes a claim's anchor, supplied by the pipeline from its own candidate
@@ -337,26 +399,24 @@ pub fn derive_panel_v2_with_maturity(
 /// escrow burned. The shipped genesis registry has zero slack, and no genesis bond has produced
 /// anything at block 0; `palw_bond_may_judge_class_v3` exempts a class with no registrant bond,
 /// which is exactly the set a genesis assembly registers.
-#[allow(clippy::too_many_arguments)]
-pub fn derive_panel_v2_with_capability_proof(
-    state: &PalwChainStateV2,
-    params: &PalwPanelParamsV2,
+/// **The bonds that may sit on a claim's panel, in the registry's order.** Exclusions per Decision
+/// 7: the executor's bond, the executor's operator, the executor's key — all three read from the
+/// ONE registry, so no second namespace exists for them to diverge in (the P0-7 defect). Shared by
+/// the flat draw and the stratified one (ADR-0100 Decision 4), so a seat predicate added to one
+/// cannot be missing from the other.
+fn palw_panel_eligible_bonds_v2<'a>(
+    state: &'a PalwChainStateV2,
     claim_id: &Hash64,
-    anchor_block: BlockHash,
     min_collateral_sompi: u64,
     registered_by_daa: Option<u64>,
     capability_proof: bool,
-) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
+) -> Result<Vec<(&'a PalwBondKeyV2, &'a PalwBondStateV2)>, PalwPanelV2Error> {
     let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
     let executor_bond = claim.bond;
     let executor = state.bond(&executor_bond).ok_or(PalwPanelV2Error::SeatBondMissing(executor_bond))?;
     let executor_operator = executor.operator_id;
     let executor_key = executor.pubkey.clone();
-
-    // Ticket every eligible bond. Exclusions per Decision 7: the executor's bond, the executor's
-    // operator, the executor's key — all three read from the ONE registry, so no second
-    // namespace exists for them to diverge in (the P0-7 defect).
-    let mut tickets: Vec<(Hash64, PalwBondKeyV2, Hash64)> = Vec::new();
+    let mut eligible = Vec::new();
     for (bond_key, bond) in state.bonds_iter() {
         // **A seat has to have something left to lose** — status AND balance, through the one
         // predicate, so the RPC that reports eligibility and the sortition that decides it cannot
@@ -391,6 +451,25 @@ pub fn derive_panel_v2_with_capability_proof(
         if !crate::palw_state_v2::palw_bond_may_judge_class_v3(state, bond_key, bond, &claim.class_id, capability_proof) {
             continue;
         }
+        eligible.push((bond_key, bond));
+    }
+    Ok(eligible)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn derive_panel_v2_with_capability_proof(
+    state: &PalwChainStateV2,
+    params: &PalwPanelParamsV2,
+    claim_id: &Hash64,
+    anchor_block: BlockHash,
+    min_collateral_sompi: u64,
+    registered_by_daa: Option<u64>,
+    capability_proof: bool,
+) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
+    // Ticket every eligible bond (`palw_panel_eligible_bonds_v2`: the exclusions per Decision 7
+    // and every seat predicate, spelled once for this draw and the stratified one).
+    let mut tickets: Vec<(Hash64, PalwBondKeyV2, Hash64)> = Vec::new();
+    for (bond_key, bond) in palw_panel_eligible_bonds_v2(state, claim_id, min_collateral_sompi, registered_by_daa, capability_proof)? {
         let mut ticket = keyed(PALW_PANEL_V2_DOMAIN_SEAT_TICKET);
         ticket.update(anchor_block.as_byte_slice());
         ticket.update(claim_id.as_byte_slice());
@@ -485,6 +564,39 @@ pub fn validate_panel_bound_v2_with_capability_proof(
     bond_maturity_daa: Option<u64>,
     capability_proof: bool,
 ) -> Result<(), PalwPanelV2Error> {
+    validate_panel_bound_v2_with_shards(
+        state,
+        params,
+        state_params,
+        ctx,
+        claim_id,
+        anchor,
+        proposed_anchor,
+        proposed_seats,
+        bond_maturity_daa,
+        capability_proof,
+        None,
+    )
+}
+
+/// [`validate_panel_bound_v2_with_capability_proof`] for a claim whose class may be sharded
+/// (ADR-0100 Decision 4): `stratified` is `Some(shard_count)` exactly when the caller's
+/// one-place decision says this claim's panel is drawn per shard, and the recomputation is then
+/// [`derive_stratified_panel_v2`]'s — the same function the binding came from.
+#[allow(clippy::too_many_arguments)]
+pub fn validate_panel_bound_v2_with_shards(
+    state: &PalwChainStateV2,
+    params: &PalwPanelParamsV2,
+    state_params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    claim_id: &Hash64,
+    anchor: &PalwAnchorFactV2,
+    proposed_anchor: Hash64,
+    proposed_seats: &[PalwPanelSeatV2],
+    bond_maturity_daa: Option<u64>,
+    capability_proof: bool,
+    stratified: Option<u32>,
+) -> Result<(), PalwPanelV2Error> {
     let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
     if !matches!(claim.phase, PalwClaimPhaseV2::Provisional) {
         return Err(PalwPanelV2Error::WrongPhase { claim: *claim_id, edge: "PanelBound" });
@@ -525,15 +637,28 @@ pub fn validate_panel_bound_v2_with_capability_proof(
         return Err(PalwPanelV2Error::BindOutsideWindow("the bind window has already lapsed"));
     }
 
-    let derived = derive_panel_v2_with_capability_proof(
-        state,
-        params,
-        claim_id,
-        anchor.anchor_block,
-        state_params.min_collateral_sompi(),
-        palw_seat_maturity_floor_v1(anchor.anchor_daa, bond_maturity_daa),
-        capability_proof,
-    )?;
+    let registered_by_daa = palw_seat_maturity_floor_v1(anchor.anchor_daa, bond_maturity_daa);
+    let derived = match stratified {
+        Some(shard_count) => derive_stratified_panel_v2(
+            state,
+            params,
+            claim_id,
+            anchor.anchor_block,
+            state_params.min_collateral_sompi(),
+            registered_by_daa,
+            capability_proof,
+            shard_count,
+        )?,
+        None => derive_panel_v2_with_capability_proof(
+            state,
+            params,
+            claim_id,
+            anchor.anchor_block,
+            state_params.min_collateral_sompi(),
+            registered_by_daa,
+            capability_proof,
+        )?,
+    };
     if derived != proposed_seats {
         return Err(PalwPanelV2Error::PanelMismatch);
     }
@@ -660,6 +785,10 @@ where
 /// The verdict is kept rather than refused because a seat MUST have a way to say "I got nothing"
 /// — deleting it would push those seats into silence, and silence is the one thing this chain has
 /// established it cannot observe.
+///
+/// **ADR-0100 Decision 4.** A claim whose panel was drawn per shard is refused here — it licenses
+/// by parts, through [`validate_shard_receipt_part_v1`]. No plan exists on a network that never
+/// armed that fence, so there this door is exactly what it was.
 #[allow(clippy::too_many_arguments)]
 pub fn validate_receipt_quorum_v2_with_policy<V>(
     state: &PalwChainStateV2,
@@ -675,14 +804,109 @@ pub fn validate_receipt_quorum_v2_with_policy<V>(
 where
     V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 {
+    receipt_quorum_over_seats_v2(
+        state,
+        state_params,
+        ctx,
+        network_domain,
+        claim_id,
+        "ReceiptQuorum",
+        || {
+            let panel = state.panel(claim_id).ok_or(PalwPanelV2Error::NoPanel(*claim_id))?;
+            if crate::palw_shard_licensing_v1::palw_claim_licenses_by_parts_v1(state, claim_id, params.seat_count).is_some() {
+                return Err(PalwPanelV2Error::LicensedByParts(*claim_id));
+            }
+            Ok(panel.seats.clone())
+        },
+        params.quorum,
+        receipts,
+        verify_mldsa87,
+        unavailable_abstains,
+    )
+}
+
+/// **One shard's part** (ADR-0100 Decision 4): the same receipt checks, over the seats of THAT
+/// shard's slice of a stratified panel, at the same quorum a shard's seats are drawn for. Refused
+/// by name: a claim that does not license by parts, a part of another plan, a shard out of range,
+/// a shard already licensed.
+#[allow(clippy::too_many_arguments)]
+pub fn validate_shard_receipt_part_v1<V>(
+    state: &PalwChainStateV2,
+    params: &PalwPanelParamsV2,
+    state_params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    network_domain: Hash64,
+    part: &crate::palw_shard_licensing_v1::PalwShardReceiptPartV1,
+    verify_mldsa87: V,
+    unavailable_abstains: bool,
+) -> Result<PalwReceiptQuorumV2, PalwPanelV2Error>
+where
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+{
+    receipt_quorum_over_seats_v2(
+        state,
+        state_params,
+        ctx,
+        network_domain,
+        &part.claim,
+        "ShardReceiptQuorum",
+        || {
+            let plan = crate::palw_shard_licensing_v1::palw_claim_licenses_by_parts_v1(state, &part.claim, params.seat_count)
+                .ok_or(PalwPanelV2Error::NotLicensedByParts(part.claim))?;
+            if part.shard_count != plan.shard_count {
+                return Err(PalwPanelV2Error::ShardPlanMismatch { declared: plan.shard_count, part: part.shard_count });
+            }
+            if part.shard_index >= plan.shard_count {
+                return Err(PalwPanelV2Error::ShardOutOfRange { shard: part.shard_index, count: plan.shard_count });
+            }
+            if state.shard_licensing_of(&part.claim).is_some_and(|progress| progress.is_licensed(part.shard_index)) {
+                return Err(PalwPanelV2Error::ShardAlreadyLicensed { shard: part.shard_index });
+            }
+            let panel = state.panel(&part.claim).ok_or(PalwPanelV2Error::NoPanel(part.claim))?;
+            let slice = crate::palw_shard_licensing_v1::palw_panel_shard_slice_v1(
+                &panel.seats,
+                plan.shard_count,
+                params.seat_count,
+                part.shard_index,
+            )
+            .ok_or(PalwPanelV2Error::NotLicensedByParts(part.claim))?;
+            Ok(slice.to_vec())
+        },
+        params.quorum,
+        &part.receipts,
+        verify_mldsa87,
+        unavailable_abstains,
+    )
+}
+
+/// The receipt checks both doors apply, over the seats `seats_of` supplies once the claim's phase
+/// and window are known.
+#[allow(clippy::too_many_arguments)]
+fn receipt_quorum_over_seats_v2<V, S>(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    network_domain: Hash64,
+    claim_id: &Hash64,
+    edge: &'static str,
+    seats_of: S,
+    quorum: u16,
+    receipts: &[PalwSeatReceiptV2],
+    verify_mldsa87: V,
+    unavailable_abstains: bool,
+) -> Result<PalwReceiptQuorumV2, PalwPanelV2Error>
+where
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+    S: FnOnce() -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error>,
+{
     let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
     let PalwClaimPhaseV2::PanelBound { bound_daa } = claim.phase else {
-        return Err(PalwPanelV2Error::WrongPhase { claim: *claim_id, edge: "ReceiptQuorum" });
+        return Err(PalwPanelV2Error::WrongPhase { claim: *claim_id, edge });
     };
     let receipt_deadline = bound_daa
         .checked_add(state_params.window_receipt())
         .ok_or(PalwPanelV2Error::ReceiptOutsideWindow { seat: claim.bond, why: "the receipt deadline overflows the DAA score" })?;
-    let panel = state.panel(claim_id).ok_or(PalwPanelV2Error::NoPanel(*claim_id))?;
+    let seats = seats_of()?;
 
     let mut answered: Vec<PalwBondKeyV2> = Vec::new();
     let mut valid: u16 = 0;
@@ -691,7 +915,7 @@ where
         if receipt.claim != *claim_id {
             return Err(PalwPanelV2Error::ReceiptClaimMismatch { got: receipt.claim, expected: *claim_id });
         }
-        if !panel.seats.iter().any(|seat| seat.bond == receipt.seat_bond) {
+        if !seats.iter().any(|seat| seat.bond == receipt.seat_bond) {
             return Err(PalwPanelV2Error::NotASeat(receipt.seat_bond));
         }
         if answered.contains(&receipt.seat_bond) {
@@ -779,16 +1003,16 @@ where
             }
         }
     }
-    if valid >= params.quorum {
+    if valid >= quorum {
         return Ok(PalwReceiptQuorumV2::Licensed { valid });
     }
     // ADR-0065 D4: past the fence there is no second quorum to reach. Reported as `NoQuorum` with
     // the true tally, so an operator reading the log still sees how many seats said they got
     // nothing — the number stops being a verdict, it does not stop being visible.
-    if !unavailable_abstains && unavailable >= params.quorum {
+    if !unavailable_abstains && unavailable >= quorum {
         return Ok(PalwReceiptQuorumV2::ProducerUnavailable { unavailable });
     }
-    Err(PalwPanelV2Error::NoQuorum { valid, unavailable, needed: params.quorum })
+    Err(PalwPanelV2Error::NoQuorum { valid, unavailable, needed: quorum })
 }
 
 #[cfg(test)]
@@ -2102,5 +2326,202 @@ mod tests {
         ops.dedup();
         assert_eq!(ops.len(), 2, "one seat per operator");
         assert!(!ops.contains(&op_id(0x21)), "the executor's operator is never seated");
+    }
+
+    // ---- ADR-0100 Decision 4: the stratified draw and a shard's part, from chain state ----
+
+    fn shard_extras() -> crate::palw_state_v2::PalwTransitionExtrasV1 {
+        crate::palw_state_v2::PalwTransitionExtrasV1 {
+            shard_licensing: Some(crate::palw_shard_licensing_v1::PalwShardLicensingParamsV1 {
+                seats_per_shard: 3,
+                quorum_per_shard: 2,
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn shard_fold(
+        parent: &PalwChainStateV2,
+        c: &PalwBlockContextV2,
+        objects: &[PalwConsensusObjectV2],
+        att: Option<&PalwAttemptEnvelopeV2>,
+    ) -> PalwChainStateV2 {
+        crate::palw_state_v2::apply_palw_transition_v2_with_extras(
+            parent,
+            &state_params(),
+            c,
+            objects,
+            att,
+            false,
+            false,
+            false,
+            false,
+            &shard_extras(),
+        )
+        .expect("the fixture folds")
+        .0
+    }
+
+    /// Class `h64(1)` registered by bond 9, a two-shard plan, and bonds 2..=8 (distinct operators)
+    /// holding shards: 2, 3, 4 → shard 0; 5, 6, 7 → shard 1; 8 → both. `drop` bonds declare none.
+    fn sharded_registry(drop: &[u64]) -> (PalwChainStateV2, Hash64) {
+        let profile =
+            crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY).expect("projects");
+        let mut objects: Vec<PalwConsensusObjectV2> = (1..=9).map(|v| register(v, v as u8 + 6, 0x20 + v)).collect();
+        objects.push(PalwConsensusObjectV2::ClassRegistered {
+            class_id: h64(1),
+            artifact_root: h64(11),
+            slash_value_per_pwu: 5,
+            pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+            initial_target: u128::MAX / 2,
+            share_permille: 1000,
+            activation_daa: 0,
+            admission: Some(Box::new(crate::palw_state_v2::PalwClassAdmissionCarriageV2 {
+                registrant_bond: PalwBondKeyV2(bond_outpoint(9)),
+                canonical: crate::palw_base0_profile::rc_job_context(&profile, 2, 2),
+                profile,
+                signature: Vec::new(),
+            })),
+        });
+        let s1 = shard_fold(&PalwChainStateV2::genesis(), &ctx(1, 100, 1), &objects, None);
+        let mut declarations =
+            vec![PalwConsensusObjectV2::ClassShardPlanDeclared { class_id: h64(1), shard_count: 2, signature: vec![1; 4] }];
+        for (bond, shards) in
+            [(2u64, vec![0u32]), (3, vec![0]), (4, vec![0]), (5, vec![1]), (6, vec![1]), (7, vec![1]), (8, vec![0, 1])]
+        {
+            if drop.contains(&bond) {
+                continue;
+            }
+            declarations.push(PalwConsensusObjectV2::BondShardsDeclared {
+                bond: PalwBondKeyV2(bond_outpoint(bond)),
+                class_id: h64(1),
+                shard_count: 2,
+                shards,
+                signature: vec![1; 4],
+            });
+        }
+        let s2 = shard_fold(&s1, &ctx(2, 101, 2), &declarations, None);
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let s3 = shard_fold(&s2, &ctx(3, 102, 3), &[], Some(&env));
+        (s3, claim_id)
+    }
+
+    /// **The stratified draw seats each shard from the bonds that hold it**, one operator a shard,
+    /// stored shard-major; the binding validator recomputes it only when told the claim is
+    /// sharded, and a shard nobody can fill refuses the whole draw by name.
+    #[test]
+    fn a_stratified_draw_seats_each_shard_from_the_bonds_that_hold_it() {
+        let (state, claim_id) = sharded_registry(&[]);
+        let anchor_block = BlockHash::from_u64_word(0xA1);
+        let seats =
+            derive_stratified_panel_v2(&state, &panel_params(), &claim_id, anchor_block, 0, None, false, 2).expect("both shards fill");
+        assert_eq!(seats.len(), 6, "two shards × three seats");
+        let holds = |bond: &PalwBondKeyV2, shard: u32| state.shards_of_bond(bond, &h64(1)).is_some_and(|list| list.contains(&shard));
+        assert!(seats[..3].iter().all(|seat| holds(&seat.bond, 0)), "shard 0's seats hold shard 0");
+        assert!(seats[3..].iter().all(|seat| holds(&seat.bond, 1)), "shard 1's seats hold shard 1");
+        assert!(seats.iter().all(|seat| seat.bond != PalwBondKeyV2(bond_outpoint(1))), "the executor is never seated");
+        assert_eq!(seats, derive_stratified_panel_v2(&state, &panel_params(), &claim_id, anchor_block, 0, None, false, 2).unwrap());
+
+        let anchor = PalwAnchorFactV2 { anchor_block, anchor_daa: 106, predecessor_daa: 105 };
+        let sp = state_params();
+        validate_panel_bound_v2_with_shards(
+            &state,
+            &panel_params(),
+            &sp,
+            &ctx(4, 107, 4),
+            &claim_id,
+            &anchor,
+            anchor_block,
+            &seats,
+            None,
+            false,
+            Some(2),
+        )
+        .expect("the stratified binding validates as stratified");
+        assert_eq!(
+            validate_panel_bound_v2_with_shards(
+                &state,
+                &panel_params(),
+                &sp,
+                &ctx(4, 107, 4),
+                &claim_id,
+                &anchor,
+                anchor_block,
+                &seats,
+                None,
+                false,
+                None
+            ),
+            Err(PalwPanelV2Error::PanelMismatch),
+            "and not as flat"
+        );
+
+        let (short, short_claim) = sharded_registry(&[3, 4]);
+        assert_eq!(
+            derive_stratified_panel_v2(&short, &panel_params(), &short_claim, anchor_block, 0, None, false, 2),
+            Err(PalwPanelV2Error::InsufficientEligibleShardBonds { shard: 0, needed: 3, available: 2 })
+        );
+    }
+
+    /// **A part is validated over its own shard's seats**, and the whole-object door refuses a
+    /// claim drawn per shard.
+    #[test]
+    fn a_shard_part_is_validated_over_its_shards_seats_and_the_whole_door_is_shut() {
+        let (s3, claim_id) = sharded_registry(&[]);
+        let anchor_block = BlockHash::from_u64_word(0xA1);
+        let seats = derive_stratified_panel_v2(&s3, &panel_params(), &claim_id, anchor_block, 0, None, false, 2).unwrap();
+        let s4 = shard_fold(
+            &s3,
+            &ctx(4, 107, 4),
+            &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: anchor_block, seats: seats.clone() }],
+            None,
+        );
+        let receipt = |seat: &PalwPanelSeatV2| PalwSeatReceiptV2 {
+            claim: claim_id,
+            verdict: PalwReceiptVerdictV2::Valid,
+            seat_bond: seat.bond,
+            signed_daa: 108,
+            signature: vec![1; 8],
+        };
+        let part = |shard: u32, receipts: Vec<PalwSeatReceiptV2>| crate::palw_shard_licensing_v1::PalwShardReceiptPartV1 {
+            claim: claim_id,
+            shard_count: 2,
+            shard_index: shard,
+            receipts,
+        };
+        let yes = |_: &[u8], _: &[u8], _: &[u8], _: &[u8]| true;
+        let no = |_: &[u8], _: &[u8], _: &[u8], _: &[u8]| false;
+        let (pp, sp, at) = (panel_params(), state_params(), ctx(5, 109, 5));
+        let shard0 = part(0, vec![receipt(&seats[0]), receipt(&seats[1])]);
+        assert_eq!(
+            validate_shard_receipt_part_v1(&s4, &pp, &sp, &at, h64(999), &shard0, yes, false),
+            Ok(PalwReceiptQuorumV2::Licensed { valid: 2 })
+        );
+        assert_eq!(
+            validate_shard_receipt_part_v1(&s4, &pp, &sp, &at, h64(999), &shard0, no, false),
+            Err(PalwPanelV2Error::ReceiptSignatureInvalid)
+        );
+        let stray = part(0, vec![receipt(&seats[0]), receipt(&seats[3])]);
+        assert_eq!(
+            validate_shard_receipt_part_v1(&s4, &pp, &sp, &at, h64(999), &stray, yes, false),
+            Err(PalwPanelV2Error::NotASeat(seats[3].bond))
+        );
+        let foreign = crate::palw_shard_licensing_v1::PalwShardReceiptPartV1 { shard_count: 3, ..shard0.clone() };
+        assert_eq!(
+            validate_shard_receipt_part_v1(&s4, &pp, &sp, &at, h64(999), &foreign, yes, false),
+            Err(PalwPanelV2Error::ShardPlanMismatch { declared: 2, part: 3 })
+        );
+        let receipts: Vec<PalwSeatReceiptV2> = seats[..3].iter().map(receipt).collect();
+        assert_eq!(
+            validate_receipt_quorum_v2_with_policy(&s4, &pp, &sp, &at, h64(999), &claim_id, &receipts, yes, false),
+            Err(PalwPanelV2Error::LicensedByParts(claim_id)),
+            "a claim drawn per shard has no whole-object licence"
+        );
+        let s5 = shard_fold(&s4, &ctx(5, 109, 5), &[PalwConsensusObjectV2::ShardReceiptLicensed { part: shard0.clone() }], None);
+        assert_eq!(
+            validate_shard_receipt_part_v1(&s5, &pp, &sp, &ctx(6, 110, 6), h64(999), &shard0, yes, false),
+            Err(PalwPanelV2Error::ShardAlreadyLicensed { shard: 0 })
+        );
     }
 }

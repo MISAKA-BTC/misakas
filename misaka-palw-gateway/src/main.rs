@@ -769,8 +769,18 @@ fn respond_bytes(stream: &mut TcpStream, status: &str, content_type: &str, bytes
     let _ = stream.flush();
 }
 
+/// ADR-0097 Decision 2: the three bounds of THIS process, copied for the surface's limits object.
+fn surface_limits(config: &Config) -> surface::SurfaceLimits {
+    surface::SurfaceLimits {
+        max_decode_cap: config.max_decode_cap,
+        max_decode_default: config.max_decode_default,
+        max_prompt_bytes: config.max_prompt_bytes,
+    }
+}
+
+/// The one spelling lives in `surface` (ADR-0097 Decision 2), so a refusal and an error cannot drift.
 fn error_body(message: &str) -> serde_json::Value {
-    serde_json::json!({ "error": { "message": message, "type": "invalid_request_error" } })
+    surface::error_body(message)
 }
 
 fn hex(h: Hash64) -> String {
@@ -1255,6 +1265,15 @@ fn handle_chat(
         // ADR-0096 Decisions 1 and 4.
         "sampling": sampling,
         "ignored_fields": admitted.ignored_fields,
+        // ADR-0097 Decision 2: what was asked for the answer's length, beside what ran. The cap
+        // is the operator's and the window is the class's; a request past either is clamped, and
+        // a clamp nobody is told about is a downgrade nobody agreed to.
+        "decode": {
+            "requested_max_tokens": admitted.max_tokens,
+            "applied_limit": decode_limit,
+            "cap": config.max_decode_cap,
+            "clamped": admitted.max_tokens.is_some_and(|asked| asked != decode_limit),
+        },
     });
     let mut message = serde_json::json!({ "role": "assistant", "content": shown });
     if !parsed.calls.is_empty() {
@@ -1584,6 +1603,8 @@ fn serve_connection(
                     "runtime_manifest_hash": hex(worker.manifest().runtime_manifest_hash),
                     "template_id": wire::template_id_for(worker.manifest()),
                     "n_ctx": worker.manifest().n_ctx,
+                    // ADR-0097 Decision 2: the same limits object `GET /v1/models` serves.
+                    "limits": surface::limits_body(worker.manifest(), &surface_limits(config), &facts),
                     "class_id": hex(identity.class_id),
                     "network_domain": hex(identity.network_domain),
                     "operator_id": hex(identity.operator_id),
@@ -1719,7 +1740,7 @@ fn serve_connection(
                         // Past the head, an error can only be an event. Decision 2: a stream whose
                         // rendering is not the committed one is CLOSED with an error, and no
                         // commitment was written.
-                        sink.event(&error_body(&e));
+                        sink.event(&surface::refusal_body(&e));
                         sink.done();
                     }
                 }
@@ -1729,7 +1750,7 @@ fn serve_connection(
                 in_flight.fetch_sub(1, Ordering::AcqRel);
                 match outcome {
                     Ok(body) => respond(stream, "200 OK", &body),
-                    Err(e) => respond(stream, "400 Bad Request", &error_body(&e)),
+                    Err(e) => respond(stream, "400 Bad Request", &surface::refusal_body(&e)),
                 }
             }
         }
@@ -1765,6 +1786,7 @@ fn serve_connection(
                 worker.manifest(),
                 wire::template_id_for(worker.manifest()),
                 config.booted_at_unix,
+                surface::limits_body(worker.manifest(), &surface_limits(config), &chain_source.read()),
             ),
         ),
         _ => respond(

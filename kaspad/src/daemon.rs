@@ -1632,9 +1632,54 @@ Do you confirm? (y/n)";
                         canonical_claims: args.palw_canonical_claims,
                         canonical_class: args.palw_canonical_class.clone(),
                         canonical_interval_daa: args.palw_canonical_interval_daa,
+                        drill_tamper_fp_leaf: match args.palw_drill_tamper_fp_leaf {
+                            Some(leaf)
+                                if !matches!(
+                                    network.network_type,
+                                    kaspa_consensus_core::network::NetworkType::Devnet
+                                        | kaspa_consensus_core::network::NetworkType::Simnet
+                                ) =>
+                            {
+                                panic!("--palw-drill-tamper-fp-leaf={leaf} is a drill fault injector and is devnet/simnet only")
+                            }
+                            Some(leaf) => {
+                                warn!(
+                                    "PALW DRILL: this node's canonical claims will commit a capture CORRUPTED at step leaf {leaf}. \
+                                     They are meant to be convicted by the one-move court."
+                                );
+                                Some(leaf)
+                            }
+                            None => None,
+                        },
                         // The same directory the producer writes to, so a node that produces can
                         // answer a court about its own work after its gossip pool has moved on.
                         retention_dir: app_dir.join(network.to_prefixed()).join("palw-retention"),
+                        drill_answer_only: {
+                            let drill = matches!(
+                                network.network_type,
+                                kaspa_consensus_core::network::NetworkType::Devnet
+                                    | kaspa_consensus_core::network::NetworkType::Simnet
+                            );
+                            if (args.palw_drill_answer_only || args.palw_drill_refuse_leaf_evidence) && !drill {
+                                panic!(
+                                    "--palw-drill-answer-only and --palw-drill-refuse-leaf-evidence are drills and are devnet/simnet only"
+                                )
+                            }
+                            if args.palw_drill_answer_only {
+                                warn!(
+                                    "PALW DRILL: this node serves its canonical claims' answer envelope, never the capture (ADR-0111)."
+                                );
+                            }
+                            args.palw_drill_answer_only
+                        },
+                        drill_refuse_leaf_evidence: {
+                            if args.palw_drill_refuse_leaf_evidence {
+                                warn!(
+                                    "PALW DRILL: this node refuses every leaf-evidence request; seats must demand on chain (ADR-0111)."
+                                );
+                            }
+                            args.palw_drill_refuse_leaf_evidence
+                        },
                         drill_challenge_all: match args.palw_drill_challenge_all {
                             true if network.is_mainnet() => {
                                 panic!("--palw-drill-challenge-all is a drill and is refused on mainnet")

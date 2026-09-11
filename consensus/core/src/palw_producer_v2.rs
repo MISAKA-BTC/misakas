@@ -716,6 +716,14 @@ pub struct PalwCourtDutyV2 {
     /// `fp_job_id_v3(job)` off the claim's job material, and the prover is handed the user's
     /// prompt rather than deriving one. `PalwSeatDutyV2` carries the same bit for the same reason.
     pub free_prompt: bool,
+    /// **The disputed class commits a FUSED attention site** (ADR-0082 Decision 2) — the fold's own
+    /// record (`PalwClassStateV2::fused_attention`), so a fused terminal's opening move is the
+    /// responder's root claim rather than a close.
+    pub fused_class: bool,
+    /// **The dissection phase, once a root claim opened one** (ADR-0093 as built): the range under
+    /// dispute, the root's `(m*, S*)`, the children awaiting the challenger's index — everything a
+    /// party's next move is computed against, read off the chain rather than remembered.
+    pub dissection: Option<crate::palw_attn_court_v1::PalwAttnDissectPhaseV1>,
 }
 
 /// Every open session in which `mine` holds the executor's bond or the challenger's.
@@ -766,6 +774,8 @@ pub fn palw_court_duties_v2(state: &PalwChainStateV2, mine: &[PalwBondKeyV2]) ->
             trace_root: claim.trace_root,
             execution_root: claim.execution_root,
             free_prompt: matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. }),
+            fused_class: crate::palw_state_v2::court_session_class_is_fused_v2(state, session),
+            dissection: session.dissection.clone(),
         });
     }
     out
@@ -789,6 +799,10 @@ pub struct PalwDaDutyV2 {
     pub trace_root: Hash64,
     pub execution_root: Hash64,
     pub free_prompt: bool,
+    /// **ADR-0103 Decision 4 / ADR-0111: the unit a HELD accusation named** — a prompt tile, a state
+    /// chunk, a range of leaves or a leaf's evidence — when `missing_event_index` is the held
+    /// sentinel. `None` for an event accusation. The producer answers in this unit or is defaulted.
+    pub held_missing: Option<crate::palw_held_da_v1::PalwHeldMissingV1>,
 }
 
 /// The claims under accusation whose producing bond is in `mine`.
@@ -813,6 +827,7 @@ pub fn palw_da_duties_v2(state: &PalwChainStateV2, state_params: &PalwStateParam
             trace_root: claim.trace_root,
             execution_root: claim.execution_root,
             free_prompt: matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. }),
+            held_missing: state.held_da_missing_of(claim_id),
         });
     }
     out

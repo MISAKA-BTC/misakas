@@ -48,6 +48,8 @@ misaka-palw-base0.workspace = true
 # `ClassRegistered` through the SDK the way `kaspad --palw-register-class` does.
 misaka-palw-extension.workspace = true
 misaka-palw-sdk.workspace = true
+# ADR-0110: `verify-context` reports the process's peak resident set — a host fact, never compared.
+libc.workspace = true
 serde_json.workspace = true
 serde = { workspace = true, features = ["derive"] }
 toml.workspace = true

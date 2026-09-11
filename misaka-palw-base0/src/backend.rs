@@ -200,8 +200,7 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for Base0IntervalKernels<'_> {
         profile: &PalwShapeProfileV3,
         ctx: &PalwJobContextV2,
         start: &crate::fp_interval::Base0FpIntervalStartV1<'_>,
-        first_call: u32,
-        last_call: u32,
+        window: crate::fp_interval::Base0FpWindowV1,
         step_leaf_count: u64,
     ) -> Result<crate::legs::Base0StepTilesV1, String> {
         use crate::engine::{Base0Engine, KvCache};
@@ -224,21 +223,13 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for Base0IntervalKernels<'_> {
             }
         };
         let vocab = self.artifact.shape.vocab;
-        crate::fp_interval::base0_fp_replay_interval_tiles_v1(
-            profile,
-            ctx,
-            start,
-            first_call,
-            last_call,
-            step_leaf_count,
-            |token, position| {
-                if token >= vocab {
-                    return Err(format!("token {token} is outside this class's vocabulary of {vocab}"));
-                }
-                let (logits, probe) = engine.forward_token_probed(&mut cache, token, position).map_err(|e| format!("{e:?}"))?;
-                Ok((logits, crate::legs::base0_captured_rows_v1(&probe)))
-            },
-        )
+        crate::fp_interval::base0_fp_replay_interval_tiles_v1(profile, ctx, start, window, step_leaf_count, |token, position| {
+            if token >= vocab {
+                return Err(format!("token {token} is outside this class's vocabulary of {vocab}"));
+            }
+            let (logits, probe) = engine.forward_token_probed(&mut cache, token, position).map_err(|e| format!("{e:?}"))?;
+            Ok((logits, crate::legs::base0_captured_rows_v1(&probe)))
+        })
     }
 }
 
@@ -262,6 +253,7 @@ impl Base0Backend {
             &material.generated_token_ids,
             covered,
             &mut kernels,
+            self.prompt_ids_form,
         )
         .ok()
     }
@@ -275,6 +267,156 @@ impl Base0Backend {
     /// because the two model tiers answer this differently and a caller reads one seam.
     fn artifact_read_probe_v1(&self) -> Result<(), String> {
         Ok(())
+    }
+
+    /// **The drill's one corruption** (both lanes' `…_with_injected_fault`): one lane of the tile
+    /// at `leaf_index` moved by one, its leaf re-hashed, and the binding re-derived from the
+    /// corrupted capture — so every root the run carries afterwards is the lie's own.
+    fn corrupt_capture_v1(
+        &self,
+        run: &mut crate::produce::Base0ExecutionV1,
+        job: &PalwJobContextV2,
+        leaf_index: u64,
+    ) -> Result<(), String> {
+        let ctx_hash = job.context_hash();
+        let profile_hash = self.profile.shape_profile_id();
+        {
+            let slot = run
+                .tiles
+                .tiles
+                .iter_mut()
+                .find(|(i, _)| *i == leaf_index)
+                .ok_or_else(|| format!("the capture holds no tile at leaf {leaf_index}"))?;
+            slot.1.values_le[0] = slot.1.values_le[0].wrapping_add(1);
+            run.tiles.leaves[leaf_index as usize] =
+                kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &slot.1);
+        }
+        // **Re-derive, do not patch.** The commitment must be the corrupted capture's OWN, or this
+        // is a producer whose roots disagree with its material — which any seat catches without a
+        // court, and which is therefore not the fraud under test.
+        let binding = crate::legs::base0_binding_from_capture_with_profile_capped_v1(
+            &self.profile,
+            job,
+            &run.tiles,
+            &run.checkpoints,
+            &kaspa_consensus_core::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(
+                kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+            ),
+            run.trace_root,
+            crate::produce::base0_activation_leg_root_v1(job),
+            self.step_ladder_cap,
+        )
+        .map_err(|e| format!("{e:?}"))?;
+        run.execution_root = binding.committed_execution_root;
+        run.binding = binding;
+        Ok(())
+    }
+
+    /// **The free-prompt run** behind both of the trait's verbs: the honest one
+    /// (`drill_fault_leaf = None`) and the drill's, whose capture is corrupted at one leaf before
+    /// a single fact is measured off it.
+    fn execute_free_prompt_v1(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_tokens: &[usize],
+        on_token: &mut dyn FnMut(u32),
+        drill_fault_leaf: Option<u64>,
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
+        use kaspa_consensus_core::palw_fp_execution_v3::{
+            PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3, palw_fp_run_facts_for_executed_v1,
+        };
+
+        // ADR-0077 SA-6: an artifact this host can no longer read is a job failure named at the
+        // boundary, not a fault taken three layers into a kernel.
+        self.artifact_read_probe_v1()?;
+
+        // The job declares how many tokens it is a job about, and the caller hands the tokens. If
+        // those two disagree the derivation would build a context for a run that did not happen —
+        // caught here, where the caller can still say which one it meant.
+        if job.prompt_tokens as usize != prompt_tokens.len() {
+            return Err(format!("the job declares {} prompt tokens and {} were supplied", job.prompt_tokens, prompt_tokens.len()));
+        }
+
+        // **What this class is, in the terms the derivation asks for.** The integer family's
+        // identity IS its graph: `rc_job_context` leaves `model_profile_id`, the runtime hashes and
+        // the CU ruleset at their defaults on the attempt lane for the same reason, and a value
+        // invented here would be one the court does not recompute.
+        let class = PalwFpClassFactsV3 {
+            model_profile_id: Hash64::default(),
+            runtime_manifest_hash: Hash64::default(),
+            runtime_class_id: Hash64::default(),
+            shape_profile_id: self.profile.shape_profile_id(),
+            cu_ruleset_id: Hash64::default(),
+        };
+
+        // **This family decodes a declared budget, so the count and the stop reason are known
+        // before the run rather than after it.** ADR-0044 Decision 7's early stop is a property of
+        // a sampler that can emit end-of-generation; `base0_execute_for_attempt_v1` runs
+        // `exact_decode_tokens` and returns, so the ceiling IS what this run executes.
+        //
+        // **The pairing is derived rather than typed** (ADR-0074 Decision 7). Hand-spelling it at
+        // six sites made "the ceiling, and therefore ExactBudgetReached" a property of the
+        // codebase rather than of the run — so a SEAT rebuilding an early-stopping claim's context
+        // rebuilt it at the ceiling too, and the claim was excluded from the interval lane. This
+        // producer still runs its ceiling; the derivation is what makes that a statement about
+        // this call instead of about the type.
+        let shape = palw_fp_run_facts_for_executed_v1(job, job.decode_token_limit);
+
+        // The context the COURT will recompute against — built first, and then run under. The
+        // roots in `shape` are placeholders and are not read: the context is the job's shape, the
+        // roots belong to the execution root derived from it afterwards.
+        let ctx = palw_fp_job_context_v3(job, &class, &shape, RC_NETWORK_ID).map_err(|e| format!("{e:?}"))?;
+
+        let mut run = crate::produce::base0_execute_for_attempt_streaming_capped_v1(
+            &self.artifact,
+            &self.profile,
+            &ctx,
+            prompt_tokens,
+            self.step_ladder_cap,
+            on_token,
+        )
+        .map_err(|e| e.to_string())?;
+        // DRILL ONLY (`execute_free_prompt_with_injected_fault`): corrupted before anything below
+        // is measured, so the facts, the material and the manifest are all the lie's own.
+        if let Some(leaf) = drill_fault_leaf {
+            self.corrupt_capture_v1(&mut run, &ctx, leaf)?;
+        }
+
+        // The four legs, measured. They exist on every attempt this family makes — it is what makes
+        // its claims adjudicable — and this is the first caller that needed them by name.
+        //
+        // The checkpoint and step legs are the DERIVED roots, not the merkle roots the binding
+        // stores: `committed_execution_root` is built from `checkpoint_leg_root_v2` and
+        // `step_leg_root_v1` over those merkle roots plus their counts and profiles. Committing the
+        // bare merkle roots here type-checks, runs, and produces an execution root the court
+        // recomputes differently — which the round trip below caught.
+        let (checkpoint_leg_root, step_leg_root) = crate::legs::base0_leg_roots_from_binding_v1(&run.binding);
+        let facts = PalwFpRunFactsV3 {
+            full_logits_trace_root: run.binding.full_logits_trace_root,
+            activation_leg_root: run.binding.activation_leg_root,
+            checkpoint_leg_root,
+            step_leg_root,
+            // The price (ADR-0074 Decision 5): read off the binding, never declared.
+            step_leaf_count: run.binding.step_leaf_count,
+            ..shape
+        };
+        let material = base0_material_encode_v1(&run).map_err(|e| e.to_string())?;
+        // The free-prompt lane's own manifest (palw_freeprompt_v3), not the attempt lane's the run carries.
+        let (fp_trace_manifest_root, fp_trace_chunk_count) =
+            crate::produce::base0_fp_trace_manifest_v3(&run.binding.job_context, &run.logits_rows)
+                .ok_or_else(|| "the run's rows build no retained-trace manifest".to_string())?;
+        Ok(kaspa_consensus_core::palw_backend::PalwFpRunV1 {
+            outcome: PalwExecutionOutcomeV1 {
+                trace_root: run.trace_root,
+                output_root: run.output_root,
+                execution_root: run.execution_root,
+                trace_manifest_root: fp_trace_manifest_root,
+                trace_chunk_count: fp_trace_chunk_count,
+                material,
+            },
+            facts,
+            output_token_ids: run.generated_token_ids,
+        })
     }
 }
 
@@ -329,96 +471,16 @@ impl PalwExecutionBackendV1 for Base0Backend {
         prompt_tokens: &[usize],
         on_token: &mut dyn FnMut(u32),
     ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
-        use kaspa_consensus_core::palw_fp_execution_v3::{
-            PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3, palw_fp_run_facts_for_executed_v1,
-        };
+        self.execute_free_prompt_v1(job, prompt_tokens, on_token, None)
+    }
 
-        // ADR-0077 SA-6: an artifact this host can no longer read is a job failure named at the
-        // boundary, not a fault taken three layers into a kernel.
-        self.artifact_read_probe_v1()?;
-
-        // The job declares how many tokens it is a job about, and the caller hands the tokens. If
-        // those two disagree the derivation would build a context for a run that did not happen —
-        // caught here, where the caller can still say which one it meant.
-        if job.prompt_tokens as usize != prompt_tokens.len() {
-            return Err(format!("the job declares {} prompt tokens and {} were supplied", job.prompt_tokens, prompt_tokens.len()));
-        }
-
-        // **What this class is, in the terms the derivation asks for.** The integer family's
-        // identity IS its graph: `rc_job_context` leaves `model_profile_id`, the runtime hashes and
-        // the CU ruleset at their defaults on the attempt lane for the same reason, and a value
-        // invented here would be one the court does not recompute.
-        let class = PalwFpClassFactsV3 {
-            model_profile_id: Hash64::default(),
-            runtime_manifest_hash: Hash64::default(),
-            runtime_class_id: Hash64::default(),
-            shape_profile_id: self.profile.shape_profile_id(),
-            cu_ruleset_id: Hash64::default(),
-        };
-
-        // **This family decodes a declared budget, so the count and the stop reason are known
-        // before the run rather than after it.** ADR-0044 Decision 7's early stop is a property of
-        // a sampler that can emit end-of-generation; `base0_execute_for_attempt_v1` runs
-        // `exact_decode_tokens` and returns, so the ceiling IS what this run executes.
-        //
-        // **The pairing is derived rather than typed** (ADR-0074 Decision 7). Hand-spelling it at
-        // six sites made "the ceiling, and therefore ExactBudgetReached" a property of the
-        // codebase rather than of the run — so a SEAT rebuilding an early-stopping claim's context
-        // rebuilt it at the ceiling too, and the claim was excluded from the interval lane. This
-        // producer still runs its ceiling; the derivation is what makes that a statement about
-        // this call instead of about the type.
-        let shape = palw_fp_run_facts_for_executed_v1(job, job.decode_token_limit);
-
-        // The context the COURT will recompute against — built first, and then run under. The
-        // roots in `shape` are placeholders and are not read: the context is the job's shape, the
-        // roots belong to the execution root derived from it afterwards.
-        let ctx = palw_fp_job_context_v3(job, &class, &shape, RC_NETWORK_ID).map_err(|e| format!("{e:?}"))?;
-
-        let run = crate::produce::base0_execute_for_attempt_streaming_capped_v1(
-            &self.artifact,
-            &self.profile,
-            &ctx,
-            prompt_tokens,
-            self.step_ladder_cap,
-            on_token,
-        )
-        .map_err(|e| e.to_string())?;
-
-        // The four legs, measured. They exist on every attempt this family makes — it is what makes
-        // its claims adjudicable — and this is the first caller that needed them by name.
-        //
-        // The checkpoint and step legs are the DERIVED roots, not the merkle roots the binding
-        // stores: `committed_execution_root` is built from `checkpoint_leg_root_v2` and
-        // `step_leg_root_v1` over those merkle roots plus their counts and profiles. Committing the
-        // bare merkle roots here type-checks, runs, and produces an execution root the court
-        // recomputes differently — which the round trip below caught.
-        let (checkpoint_leg_root, step_leg_root) = crate::legs::base0_leg_roots_from_binding_v1(&run.binding);
-        let facts = PalwFpRunFactsV3 {
-            full_logits_trace_root: run.binding.full_logits_trace_root,
-            activation_leg_root: run.binding.activation_leg_root,
-            checkpoint_leg_root,
-            step_leg_root,
-            // The price (ADR-0074 Decision 5): read off the binding, never declared.
-            step_leaf_count: run.binding.step_leaf_count,
-            ..shape
-        };
-        let material = base0_material_encode_v1(&run).map_err(|e| e.to_string())?;
-        // The free-prompt lane's own manifest (palw_freeprompt_v3), not the attempt lane's the run carries.
-        let (fp_trace_manifest_root, fp_trace_chunk_count) =
-            crate::produce::base0_fp_trace_manifest_v3(&run.binding.job_context, &run.logits_rows)
-                .ok_or_else(|| "the run's rows build no retained-trace manifest".to_string())?;
-        Ok(kaspa_consensus_core::palw_backend::PalwFpRunV1 {
-            outcome: PalwExecutionOutcomeV1 {
-                trace_root: run.trace_root,
-                output_root: run.output_root,
-                execution_root: run.execution_root,
-                trace_manifest_root: fp_trace_manifest_root,
-                trace_chunk_count: fp_trace_chunk_count,
-                material,
-            },
-            facts,
-            output_token_ids: run.generated_token_ids,
-        })
+    fn execute_free_prompt_with_injected_fault(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_tokens: &[usize],
+        leaf_index: u64,
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
+        self.execute_free_prompt_v1(job, prompt_tokens, &mut |_| {}, Some(leaf_index))
     }
 
     fn verify_material(&self, material: &[u8], claim: PalwClaimRootsV1) -> PalwMaterialVerdictV1 {
@@ -451,37 +513,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
     ) -> Result<PalwExecutionOutcomeV1, String> {
         let mut run = base0_execute_for_attempt_capped_v1(&self.artifact, &self.profile, job, prompt, self.step_ladder_cap)
             .map_err(|e| e.to_string())?;
-        let ctx_hash = job.context_hash();
-        let profile_hash = self.profile.shape_profile_id();
-        {
-            let slot = run
-                .tiles
-                .tiles
-                .iter_mut()
-                .find(|(i, _)| *i == leaf_index)
-                .ok_or_else(|| format!("the capture holds no tile at leaf {leaf_index}"))?;
-            slot.1.values_le[0] = slot.1.values_le[0].wrapping_add(1);
-            run.tiles.leaves[leaf_index as usize] =
-                kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &slot.1);
-        }
-        // **Re-derive, do not patch.** The commitment must be the corrupted capture's OWN, or this
-        // is a producer whose roots disagree with its material — which any seat catches without a
-        // court, and which is therefore not the fraud under test.
-        let binding = crate::legs::base0_binding_from_capture_with_profile_capped_v1(
-            &self.profile,
-            job,
-            &run.tiles,
-            &run.checkpoints,
-            &kaspa_consensus_core::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(
-                kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
-            ),
-            run.trace_root,
-            crate::produce::base0_activation_leg_root_v1(job),
-            self.step_ladder_cap,
-        )
-        .map_err(|e| format!("{e:?}"))?;
-        run.execution_root = binding.committed_execution_root;
-        run.binding = binding;
+        self.corrupt_capture_v1(&mut run, job, leaf_index)?;
         let material = base0_material_encode_v1(&run).map_err(|e| e.to_string())?;
         Ok(PalwExecutionOutcomeV1 {
             trace_root: run.trace_root,
@@ -571,7 +603,12 @@ impl PalwExecutionBackendV1 for Base0Backend {
     }
 
     fn fp_interval_count_for(&self, prompt_tokens: u32, decode_tokens_executed: u32) -> Option<u32> {
-        crate::fp_interval::base0_fp_interval_count_for_v1(prompt_tokens, decode_tokens_executed, self.checkpoint_interval())
+        crate::fp_interval::base0_fp_interval_count_for_class_v1(
+            &self.profile,
+            prompt_tokens,
+            decode_tokens_executed,
+            self.checkpoint_interval(),
+        )
     }
 
     fn checkpoint_root_for_context_v1(
@@ -590,6 +627,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
             output_token_ids,
             covered,
             &mut kernels,
+            self.prompt_ids_form,
         )
         .map(|state| state.state_chunks_root)
         .map_err(|e| e.to_string())
@@ -719,6 +757,54 @@ impl PalwExecutionBackendV1 for Base0Backend {
         .map_err(|e| format!("{e:?}"))
     }
 
+    fn held_state_chunk_answer_v1(
+        &self,
+        capture: &[u8],
+        prompt_token_ids: &[u32],
+        checkpoint: u32,
+        chunk: u32,
+    ) -> Result<
+        (
+            kaspa_consensus_core::palw_attn_court_v1::PalwAttnCheckpointAnchorV1,
+            kaspa_consensus_core::palw_attn_court_v1::PalwAttnChunkOpeningV1,
+        ),
+        String,
+    > {
+        let retention =
+            crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())?;
+        crate::fp_interval::base0_fp_held_state_chunk_answer_v1(&retention, checkpoint, chunk, &|covered| match &retention {
+            crate::produce::Base0RetentionV1::Folded(material) => self.fold_anchor_state_v1(material, prompt_token_ids, covered),
+            crate::produce::Base0RetentionV1::Dense(_) => None,
+        })
+        .map_err(|e| e.to_string())
+    }
+
+    fn held_step_range_answer_v1(
+        &self,
+        capture: &[u8],
+        prompt_token_ids: &[u32],
+        first: u64,
+        count: u32,
+    ) -> Result<kaspa_consensus_core::palw_step_leg::PalwStepRangeOpeningV1, String> {
+        let retention =
+            crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())?;
+        crate::fp_interval::base0_fp_held_step_range_answer_v1(
+            &retention,
+            first,
+            count,
+            prompt_token_ids,
+            self.checkpoint_interval(),
+            self.step_ladder_cap,
+            &Base0IntervalKernels { artifact: &self.artifact },
+            &|covered| match &retention {
+                crate::produce::Base0RetentionV1::Folded(material) => self.fold_anchor_state_v1(material, prompt_token_ids, covered),
+                crate::produce::Base0RetentionV1::Dense(_) => None,
+            },
+            self.prompt_ids_form,
+        )
+        .map_err(|e| e.to_string())
+    }
+
     fn fp_name_the_leaf_v1(
         &self,
         opening: &[u8],
@@ -775,6 +861,15 @@ impl PalwExecutionBackendV1 for Base0Backend {
         work_leaves: u64,
         leaf: u64,
     ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+        // **The annex pins the decode half as tiled rows; this family commits its logits FLAT.**
+        // BASE-0's pin is the whole committed rows (`Base0V1`), which no annex carries, and the
+        // court refuses a tiled pin on a flat class at every leaf ("the tiled pin is not its
+        // scheme"). A close assembled here would be one the chain can never read, so the family
+        // refuses by name and its caller takes the whole-capture prover — found by ADR-0111's
+        // evidence builder, whose decode leaf came back unadjudicable.
+        if self.profile.logits_scheme_id != kaspa_consensus_core::palw_step_refute::tiled_logits_scheme_id_v1() {
+            return Err("this family commits its logits flat, and a close from served intervals pins them tiled".to_string());
+        }
         // The replay of a served interval resumes from the state this node recomputed for the
         // interval's named anchor (ADR-0086 Decision 2) — warm that memo the way the seat's own
         // row check would have, for every held interval, before assembling.
@@ -840,7 +935,9 @@ impl PalwExecutionBackendV1 for Base0Backend {
         job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
         decode_tokens_executed: u32,
     ) -> Option<PalwJobContextV2> {
-        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_job_context_v3, palw_fp_run_facts_for_executed_v1};
+        use kaspa_consensus_core::palw_fp_execution_v3::{
+            PalwFpClassFactsV3, palw_fp_job_context_v3, palw_fp_run_facts_for_executed_v1,
+        };
         let class = PalwFpClassFactsV3 {
             model_profile_id: Hash64::default(),
             runtime_manifest_hash: Hash64::default(),
@@ -888,9 +985,12 @@ impl PalwExecutionBackendV1 for Base0Backend {
         // so an error return (including `NoFaultFound`, which is what an honest party's own close
         // produces) is not a reason to withhold the openings. The chain re-runs the same check
         // against these rows and says what it means.
-        let _ = kaspa_consensus_core::palw_step_refute::check_execution_step_refutation_capped_v1(
+        // Carried the way this network's form carries it (ADR-0081 Decision 3): under the Merkle
+        // form the flat check refuses the list before a row is read, and records nothing.
+        let _ = kaspa_consensus_core::palw_step_refute::check_execution_step_refutation_carried_capped_v1(
             refutation,
             &recorder,
+            self.prompt_ids_form,
             self.step_ladder_cap,
         );
         recorder.openings().ok_or_else(|| "the inventory cannot open a row its own oracle resolved".to_string())
@@ -1482,6 +1582,327 @@ mod tests {
         }
     }
 
+    /// **The free-prompt drill fault commits a claim, and only a court can see it** (ADR-0100 §6
+    /// step 2). The first live drill run patched the attempt-lane liar's outcome into the honest
+    /// run: the facts still described the honest capture, the commitment's recomputed execution
+    /// root disagreed with the outcome's, and node-0 logged "the run does not assemble into a
+    /// commitment" every interval — no claim, no court. Pinned here both ways: the patched pair is
+    /// refused by name, and the FP verb's run assembles into the liar's own commitment, verifies
+    /// against it (no seat can refuse it), and convicts at the tampered leaf.
+    #[test]
+    fn a_free_prompt_drill_fault_assembles_into_its_own_commitment_and_convicts() {
+        use kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1;
+        use kaspa_consensus_core::palw_backend::PalwFpRunV1;
+        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpExecutionV3Error, palw_fp_commitment_from_context_v3};
+        use kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3;
+        use kaspa_consensus_core::palw_step_refute::check_execution_step_refutation_v1;
+        use kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2;
+
+        let backend = floor_backend();
+        let prompt: Vec<usize> = vec![2, 7, 1, 8, 2, 8];
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let mut job = free_prompt_job(&backend, prompt.len() as u32, 2);
+        job.prompt_token_ids_hash = prompt_token_ids_hash_v2(&ids);
+        let leaf = 0u64; // the drill script's default: the embedding gather every seat samples
+
+        let honest = backend.execute_free_prompt(&job, &prompt).expect("the floor runs");
+        let lying = backend.execute_free_prompt_with_injected_fault(&job, &prompt, leaf).expect("the drill fault runs");
+        let context = backend.capture_shape(&lying.outcome.material).expect("the lie is a capture").job_context;
+        assert_eq!(
+            context,
+            backend.capture_shape(&honest.outcome.material).expect("so is the truth").job_context,
+            "the lie answers the same job"
+        );
+
+        let commitment = palw_fp_commitment_from_context_v3(&job, &context, &lying, 10_000).expect("the lie assembles into a claim");
+        assert_ne!(commitment.execution_root, honest.outcome.execution_root, "a drill that commits the honest root disputes nothing");
+        assert_eq!(commitment.work_leaves, honest.facts.step_leaf_count, "the lie is priced as the truth is");
+
+        // Self-consistent: the liar's material verifies against the liar's claim under the FP anchor.
+        let roots = PalwClaimRootsV1 {
+            execution_root: commitment.execution_root,
+            trace_root: commitment.trace_root,
+            anchor: fp_job_id_v3(&job),
+        };
+        assert_eq!(backend.verify_material(&lying.outcome.material, roots), PalwMaterialVerdictV1::Matches);
+
+        // The court's half: the tampered leaf convicts.
+        let inventory = crate::inventory::base0_inventory_v1(&backend.artifact, backend.inventory_geometry).expect("inventory");
+        let refutation =
+            backend.refutation_for_free_prompt_index(&lying.outcome.material, leaf, &ids).expect("the tampered leaf opens");
+        let openings = backend.operand_openings_for(&refutation).expect("the prover opens what the court reads");
+        let proven = PalwProvenOperandsV1::from_openings_v1(&openings, inventory.root()).expect("recorded openings prove");
+        assert!(check_execution_step_refutation_v1(&refutation, &proven).is_ok(), "the tampered leaf must convict");
+
+        // The live failure, pinned: the liar's outcome under the honest run's facts is refused.
+        let patched = PalwFpRunV1 { outcome: lying.outcome, facts: honest.facts, output_token_ids: honest.output_token_ids };
+        assert!(
+            matches!(
+                palw_fp_commitment_from_context_v3(&job, &context, &patched, 10_000),
+                Err(PalwFpExecutionV3Error::ContextDoesNotReproduceTheRoot)
+            ),
+            "facts measured on one capture do not commit another"
+        );
+    }
+
+    /// **The drill, under the Merkle prompt form** (ADR-0081 Decision 3, which the held mint
+    /// requires — ADR-0103 Decision 4). Found on the live held drill (2026-09-11): the job's
+    /// `prompt_token_ids_hash` is the tiled root there, and two readers still hashed the ids flat —
+    /// the court's adjudicator, so every seat's sample of a free-prompt capture read "no verdict"
+    /// and nobody could accuse, and the seat's prefix recompute, so every interval past the first
+    /// filed `Incapable` on an honest job's own ids. Pinned on one tampered capture and one honest
+    /// one, at the function the acceptance layer and the fold both call: the whole list is refused
+    /// by name, the Merkle carriage (the list out, the gather's one tile opened) convicts the lie
+    /// and clears the truth, and the seat recomputes out of the job's ids.
+    #[test]
+    fn under_the_merkle_prompt_form_the_drill_convicts_and_the_seat_recomputes_the_jobs_ids() {
+        use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1};
+        use kaspa_consensus_core::palw_shard_court_v1::{
+            PALW_SHARD_COURT_VERSION_V1, PalwShardCourtAccusationV1, PalwShardCourtError, PalwShardCourtVerdictV1,
+            palw_shard_court_verdict_v1,
+        };
+        use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
+        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, palw_refutation_prompt_carriage_v1};
+        use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+
+        let backend = floor_backend().with_prompt_ids_form(PalwPromptIdsFormV1::MerkleV1);
+        let prompt: Vec<usize> = vec![2, 7, 1, 8, 2, 8, 1, 8];
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let mut job = free_prompt_job(&backend, prompt.len() as u32, 4);
+        job.prompt_token_ids_hash = prompt_token_ids_commitment_v1(PalwPromptIdsFormV1::MerkleV1, &ids).expect("a commitment");
+        assert_ne!(
+            job.prompt_token_ids_hash,
+            kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&ids),
+            "the two forms commit differently, or this test pins nothing"
+        );
+        let lying =
+            backend.execute_free_prompt_with_injected_fault(&job, &prompt, 0).expect("the drill fault runs under the Merkle form");
+        let honest = backend.execute_free_prompt(&job, &prompt).expect("the floor runs under the Merkle form");
+
+        let inventory = crate::inventory::base0_inventory_v1(&backend.artifact, backend.inventory_geometry).expect("inventory");
+        let class_id = backend.profile().shape_profile_id();
+        let ladder = backend.step_ladder_cap();
+        // The one-move court's object for leaf 0 of `capture`, carried as `form` says — built the
+        // way the seat builds it: the prover's refutation, its artifact rows, then the carriage.
+        let accuse = |capture: &[u8], form: PalwPromptIdsFormV1| -> PalwShardCourtAccusationV1 {
+            let refutation = backend.refutation_for_free_prompt_index(capture, 0, &ids).expect("leaf 0 opens");
+            let artifact_openings = backend.operand_openings_for(&refutation).expect("the prover opens what the court reads");
+            let (refutation, prompt_ids_opening) = palw_refutation_prompt_carriage_v1(form, refutation).expect("the tile opens");
+            PalwShardCourtAccusationV1 {
+                version: PALW_SHARD_COURT_VERSION_V1,
+                claim: Hash64::from_u64_word(0xC1),
+                execution_root: refutation.binding.committed_execution_root,
+                trace_root: Hash64::from_u64_word(0xC2),
+                executor_bond: PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0)),
+                accuser_bond: PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_u64_word(0xB1), 0)),
+                leaf_index: 0,
+                refutation,
+                artifact_openings,
+                prompt_ids_opening,
+                signature: Vec::new(),
+            }
+        };
+        let verdict = |a: &PalwShardCourtAccusationV1| palw_shard_court_verdict_v1(a, class_id, inventory.root(), ladder);
+
+        // The live failure, pinned: the whole list is the FLAT carriage, and on this network's root
+        // it is refused before any arithmetic — the lie is not convicted.
+        let flat = accuse(&lying.outcome.material, PalwPromptIdsFormV1::Flat);
+        assert!(!flat.refutation.prompt_token_ids.is_empty() && flat.prompt_ids_opening.is_none());
+        assert!(
+            matches!(verdict(&flat), Err(PalwShardCourtError::Refutation(PalwStepRefuteError::InputSetNotCanonical(_)))),
+            "a whole list on a Merkle root reads no verdict: {:?}",
+            verdict(&flat)
+        );
+        // The Merkle carriage: no list, the gather's one tile — the lie convicts, the truth clears.
+        let opened = accuse(&lying.outcome.material, PalwPromptIdsFormV1::MerkleV1);
+        assert!(opened.refutation.prompt_token_ids.is_empty(), "the list does not ride");
+        assert_eq!(opened.prompt_ids_opening.as_ref().map(|o| o.tile_index), Some(0), "leaf 0 reads position 0's tile");
+        assert_eq!(verdict(&opened), Ok(PalwShardCourtVerdictV1::ExecutorGuilty), "the tampered leaf must convict");
+        assert_eq!(
+            verdict(&accuse(&honest.outcome.material, PalwPromptIdsFormV1::MerkleV1)),
+            Ok(PalwShardCourtVerdictV1::FalseAccusation),
+            "the same carriage over an honest capture convicts nobody"
+        );
+        // Neither carriage: a gather with no id is unadjudicable, never a conviction.
+        let bare = PalwShardCourtAccusationV1 { prompt_ids_opening: None, ..opened.clone() };
+        assert!(verdict(&bare).is_err(), "a gather with no id convicts nobody: {:?}", verdict(&bare));
+
+        // The interval arm: the state interval 1 resumes from, recomputed out of the job's own ids.
+        let ctx = backend.capture_shape(&lying.outcome.material).expect("a capture").job_context;
+        assert_eq!(ctx.prompt_token_ids_hash, job.prompt_token_ids_hash, "the context carries the Merkle commitment");
+        let covered =
+            kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1.min(ctx.exact_decode_tokens - 1);
+        backend
+            .checkpoint_root_for_context_v1(&ctx, &ids, &lying.output_token_ids, covered)
+            .expect("the seat recomputes from the job's own ids under the Merkle form");
+        let mut foreign = ids.clone();
+        foreign[0] ^= 1;
+        assert!(
+            backend.checkpoint_root_for_context_v1(&ctx, &foreign, &lying.output_token_ids, covered).is_err(),
+            "ids that are not the job's are still refused"
+        );
+    }
+
+    /// **ADR-0111 Decisions 1 and 2: what an executor serves for a named leaf is the one-move
+    /// court's object, and both routes build the same one.** Under the Merkle prompt form a held
+    /// network mandates: the evidence for the tampered leaf convicts at the class's root and the
+    /// ruleset's ladder, the evidence for the same leaf of an honest capture clears, the annex route
+    /// (one interval replayed) and the whole-capture prover give the same refutation (ADR-0085 X1),
+    /// and the evidence fits the court's close ceiling it will be disclosed under.
+    #[test]
+    fn the_executors_leaf_evidence_is_the_one_move_object_by_either_route() {
+        use kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3;
+        use kaspa_consensus_core::palw_leaf_evidence_v1::palw_leaf_evidence_from_capture_v1;
+        use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1};
+        use kaspa_consensus_core::palw_shard_court_v1::{PalwShardCourtVerdictV1, palw_leaf_evidence_bytes_v1};
+
+        let form = PalwPromptIdsFormV1::MerkleV1;
+        let backend = floor_backend().with_prompt_ids_form(form);
+        let prompt: Vec<usize> = vec![2, 7, 1, 8, 2, 8, 1, 8];
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let mut job = free_prompt_job(&backend, prompt.len() as u32, 4);
+        job.prompt_token_ids_hash = prompt_token_ids_commitment_v1(form, &ids).expect("a commitment");
+        let lying = backend.execute_free_prompt_with_injected_fault(&job, &prompt, 0).expect("the drill fault runs");
+        let honest = backend.execute_free_prompt(&job, &prompt).expect("the floor runs");
+        let inventory = crate::inventory::base0_inventory_v1(&backend.artifact, backend.inventory_geometry).expect("inventory");
+        let class_id = backend.profile().shape_profile_id();
+        let ladder = backend.step_ladder_cap();
+        let roots_of = |run: &kaspa_consensus_core::palw_backend::PalwFpRunV1| PalwClaimRootsV1 {
+            execution_root: run.outcome.execution_root,
+            trace_root: run.outcome.trace_root,
+            anchor: fp_job_id_v3(&job),
+        };
+        let build = |run: &kaspa_consensus_core::palw_backend::PalwFpRunV1, leaf: u64| {
+            let work = backend.capture_shape(&run.outcome.material).expect("a shape").step_leaf_count;
+            palw_leaf_evidence_from_capture_v1(&backend, &run.outcome.material, &ids, roots_of(run), work, leaf, form)
+                .expect("the executor builds its leaf's evidence")
+        };
+
+        let guilty = build(&lying, 0);
+        assert_eq!(guilty.leaf_index(), 0);
+        assert!(guilty.refutation.prompt_token_ids.is_empty() && guilty.prompt_ids_opening.is_some(), "the Merkle carriage");
+        assert_eq!(guilty.verdict_v1(class_id, inventory.root(), ladder), Ok(PalwShardCourtVerdictV1::ExecutorGuilty));
+        let clear = build(&honest, 0);
+        assert_eq!(clear.verdict_v1(class_id, inventory.root(), ladder), Ok(PalwShardCourtVerdictV1::FalseAccusation));
+
+        // ADR-0085 X1: the whole-capture prover's object for the same leaf is the annex route's.
+        let by_capture = backend.refutation_for_free_prompt_index(&lying.outcome.material, 0, &ids).expect("the prover opens");
+        let (by_capture, _) =
+            kaspa_consensus_core::palw_step_refute::palw_refutation_prompt_carriage_v1(form, by_capture).expect("the carriage");
+        assert_eq!(guilty.refutation, by_capture, "one object by either route");
+
+        // A leaf past the prefill, too: the decode half of the same builder.
+        let late = binding_leaf_count(&lying.outcome.material) - 1;
+        let decode_leaf = build(&honest, late);
+        assert_eq!(decode_leaf.verdict_v1(class_id, inventory.root(), ladder), Ok(PalwShardCourtVerdictV1::FalseAccusation));
+
+        let bytes = palw_leaf_evidence_bytes_v1(&guilty);
+        assert!(
+            bytes <= kaspa_consensus_core::palw_fp_devnet_v3::PALW_DEVNET_WINDOWS_V1.court_max_close_bytes,
+            "the evidence ({bytes} B) must ride one devnet carrier"
+        );
+    }
+
+    fn binding_leaf_count(capture: &[u8]) -> u64 {
+        base0_material_decode_v1(capture).expect("the family tuple").0.step_leaf_count
+    }
+
+    /// **A served block names the leaf a liar committed** (ADR-0086 Decision 6, the seat's half),
+    /// end to end through the trait a node holds: the lying executor's interval verifies as a fault
+    /// in a block, the executor serves the block's leaves, and the seat names the tampered leaf from
+    /// its own replay. The naming used to run the close's replay, which walks the committed root
+    /// with the seat's OWN leaves — and a lie inside the interval is exactly when they do not walk,
+    /// so no lying interval was ever named (ADR-0111's live drill, every round). An honest block
+    /// names nothing.
+    #[test]
+    fn a_served_block_names_the_leaf_a_liar_committed() {
+        use kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1;
+        use kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3;
+        use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1};
+        let form = PalwPromptIdsFormV1::MerkleV1;
+        let backend = floor_backend().with_prompt_ids_form(form);
+        let prompt: Vec<usize> = vec![2, 7, 1, 8, 2, 8, 1, 8];
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let mut job = free_prompt_job(&backend, prompt.len() as u32, 4);
+        job.prompt_token_ids_hash = prompt_token_ids_commitment_v1(form, &ids).expect("a commitment");
+        let tampered = 0u64;
+        for (run, lying) in [
+            (backend.execute_free_prompt_with_injected_fault(&job, &prompt, tampered).expect("the drill fault runs"), true),
+            (backend.execute_free_prompt(&job, &prompt).expect("the floor runs"), false),
+        ] {
+            let capture = &run.outcome.material;
+            let work = binding_leaf_count(capture);
+            let roots = PalwClaimRootsV1 {
+                execution_root: run.outcome.execution_root,
+                trace_root: run.outcome.trace_root,
+                anchor: fp_job_id_v3(&job),
+            };
+            let opening = backend.open_fp_interval(capture, 0, &ids).expect("interval 0 opens");
+            let verdict = backend.verify_fp_interval_opening(&opening, roots, 0, &ids, work);
+            let block = match (verdict, lying) {
+                (PalwFpIntervalVerdictV1::FaultInRange { first_leaf_index, .. }, true) => {
+                    first_leaf_index >> crate::fp_interval::Base0FpIntervalOpeningV4::decode_v1(&opening).unwrap().range.retain_level
+                }
+                (PalwFpIntervalVerdictV1::Valid, false) => 0,
+                (other, _) => panic!("lying={lying}: interval 0 verifies as {other:?}"),
+            };
+            let served = backend.open_fp_block_leaves(capture, 0, block, &ids).expect("the executor serves the block");
+            let generated = run.output_token_ids.clone();
+            let named = backend.fp_name_the_leaf_v1(&opening, &served, roots, 0, &ids, &generated, work);
+            if lying {
+                assert_eq!(named, Ok(Some(tampered)), "the seat names the leaf the liar committed");
+            } else {
+                assert_eq!(named, Ok(None), "an honest block names nothing");
+            }
+        }
+    }
+
+    /// **ADR-0111 Decision 6 through the trait a node holds, on the floor's dense retention.** The
+    /// floor keeps its tiles and its checkpoint chunks, so its answers are read and hashed rather
+    /// than replayed — and the court takes them against the claim's own root, exactly as it takes
+    /// the fold's (`the_executor_answers_every_held_unit_the_court_can_name`).
+    #[test]
+    fn the_floor_answers_a_held_chunk_and_range_from_its_dense_retention() {
+        use kaspa_consensus_core::palw_held_da_v1::{PalwHeldDisclosureV1, PalwHeldMissingV1, palw_held_da_check_disclosure_v1};
+        let backend = floor_backend();
+        let prompt: Vec<usize> = vec![2, 7, 1, 8, 2, 8, 1, 8];
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let mut job = free_prompt_job(&backend, prompt.len() as u32, 4);
+        job.prompt_token_ids_hash = kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            &ids,
+        )
+        .expect("a commitment");
+        let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs");
+        let capture = &run.outcome.material;
+        let binding = base0_material_decode_v1(capture).expect("the family tuple").0;
+        let (root, ladder) = (run.outcome.execution_root, backend.step_ladder_cap());
+        let leaves = binding.step_leaf_count;
+        for (first, count) in [(0u64, 1u32), (leaves - 5, 5), (leaves / 3, 64)] {
+            let opening = backend.held_step_range_answer_v1(capture, &ids, first, count).expect("the floor answers a range");
+            palw_held_da_check_disclosure_v1(
+                &root,
+                &PalwHeldMissingV1::StepRange { first, count },
+                &binding,
+                &PalwHeldDisclosureV1::StepRange { opening },
+                ladder,
+            )
+            .unwrap_or_else(|e| panic!("[{first}, +{count}): the court refuses the floor's answer: {e:?}"));
+        }
+        assert!(binding.checkpoint_count >= 1, "the floor checkpoints");
+        for checkpoint in 0..binding.checkpoint_count {
+            let (anchor, chunk) = backend.held_state_chunk_answer_v1(capture, &ids, checkpoint, 0).expect("the floor answers a chunk");
+            palw_held_da_check_disclosure_v1(
+                &root,
+                &PalwHeldMissingV1::StateChunk { checkpoint, chunk: 0 },
+                &binding,
+                &PalwHeldDisclosureV1::StateChunk { anchor, chunk },
+                ladder,
+            )
+            .unwrap_or_else(|e| panic!("checkpoint {checkpoint}: the court refuses the floor's answer: {e:?}"));
+        }
+    }
+
     /// **Decision 2: the stream is the run, not a replay of it.**
     ///
     /// The streamed ids must be the committed ids, in decode order, and the run they come out of
@@ -1889,43 +2310,44 @@ mod end_to_end_tests {
 
 #[cfg(test)]
 mod adr0093_responder_gap {
-    /// **ADR-0093 §6 step 1: the gap, pinned at the source.**
+    /// **ADR-0093 §6, as built: a family takes a fused dissection's turn with BOTH verbs or
+    /// neither.**
     ///
-    /// No shipped family can take a fused dissection's turn, because none implements
-    /// `attn_tile_claim`. That is the whole of the 2026-09-06 audit's C-2 that the audit's own
-    /// fixes did not close — they stopped the conviction, they did not build the responder.
+    /// This guard used to pin that no family implemented the responder and to fail the day one
+    /// did. It did: the two A16 families (`qwen25_a16_backend.rs`, `qwen36_backend.rs`) read a
+    /// fused site's evidence out of their captures (`attn_site_evidence`) and say so
+    /// (`supports_dissection`); the floor (`backend.rs`) has no fused site and implements neither.
+    /// What stays pinned is the pairing — a family that advertised the turn without the verb
+    /// behind it would be convicted by its own silence — and the §6 step 5 question it used to
+    /// point at is answered in the kaspad pin `court_responder_coverage_pin`: the exemption stays
+    /// unarmed.
     ///
-    /// Read off the source rather than off constructed backends, the way
-    /// `palw_step_ladder_tree_guard` reads the walkers: a backend needs a `ResolvedClassV1` to
-    /// exist, and the fact being pinned is "nobody overrides these", which is a property of the
-    /// files.
-    ///
-    /// It fails in BOTH directions, which is the point. It fails if a family advertises the turn
-    /// without the verb behind it, and it fails the day a family implements the verb — at which
-    /// point the reader is sent to ADR-0093 §6 step 5 (the fold's mercy arm must then be narrowed,
-    /// behind its own fence) and §5 invariant 3 (the drill that must pass before anyone relies on
-    /// the answer).
+    /// Read off the source, as before: production only, so a test stub cannot trip it — and
+    /// "production" ends at the first test MODULE, not the first `#[cfg(test)]`. The old guard cut
+    /// at the latter, and `qwen25_a16_backend.rs` carries a test-only helper function a thousand
+    /// lines above its trait impl, so every line the guard existed to read in that file was outside
+    /// what it read: it could not have gone red for the family it named first.
     #[test]
-    fn no_shipped_family_can_take_a_fused_dissections_turn_yet() {
+    fn a_family_takes_the_dissections_turn_with_both_verbs_or_neither() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let families = ["backend.rs", "qwen25_a16_backend.rs", "qwen36_backend.rs"];
-        for file in families {
+        for (file, answers) in [("backend.rs", false), ("qwen25_a16_backend.rs", true), ("qwen36_backend.rs", true)] {
             let path = dir.join(file);
             let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-            // Production only: the guard must not trip on a future test fixture that stubs one.
-            let production: String = match src.find("\n#[cfg(test)]") {
+            let production: String = match src.find("\n#[cfg(test)]\nmod ") {
                 Some(cut) => src[..cut].to_string(),
                 None => src,
             };
-            for verb in ["fn attn_tile_claim", "fn supports_dissection"] {
-                assert!(
-                    !production.contains(verb),
-                    "{file} implements `{verb}`. If the fused responder now exists here, this test has \
-                     done its job — read ADR-0093 §6 step 5 and §5 invariant 3 before deleting this line, \
-                     because a family that answers a dissection changes what the fold's mercy arm may \
-                     excuse, and that is its own fence and its own height."
+            assert!(production.contains("impl PalwExecutionBackendV1 for"), "{file}: the read reaches the family's trait impl");
+            // ADR-0093 Decision 7/8: the filing verb comes with the capture verb — a challenger
+            // that can read an accused's capture must be able to bottom it without one.
+            for verb in ["fn attn_site_evidence(", "fn attn_site_evidence_from_filing(", "fn supports_dissection"] {
+                assert_eq!(
+                    production.contains(verb),
+                    answers,
+                    "{file}: `{verb}` — a family answers a dissection with every verb or with none"
                 );
             }
+            assert!(!production.contains("fn attn_tile_claim"), "{file}: the retired verb is not implemented");
         }
     }
 }

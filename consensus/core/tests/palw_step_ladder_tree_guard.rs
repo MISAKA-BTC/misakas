@@ -247,7 +247,9 @@ fn the_seat_still_grades_its_samples_and_does_it_at_the_rulesets_ladder() {
     let panel = std::fs::read_to_string(repo_root().join("kaspad/src/palw_panel.rs")).expect("kaspad/src/palw_panel.rs is in the tree");
     let body = panel.split("fn fp_capture_samples_clear").nth(1).expect("the seat's sample check still exists");
     let body = &body[..body.len().min(4_000)];
-    assert!(body.contains("check_execution_step_refutation_capped_v1"), "the seat must still adjudicate its samples");
+    // ADR-0103 §10.3 item 11: the seat grades the carriage the chain will read — the opened check,
+    // at the ruleset's ladder like every `_capped_v1` entry.
+    assert!(body.contains("check_execution_step_refutation_opened_capped_v1"), "the seat must still adjudicate its samples");
     assert!(
         panel.contains("self.config.court.max_step_leaf_count()"),
         "and the ladder it grades at must come from the ruleset the node runs, not from a constant"

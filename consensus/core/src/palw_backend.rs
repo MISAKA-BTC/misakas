@@ -292,31 +292,59 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         false
     }
 
-    /// **ADR-0093 Decision 1: the fused-attention responder's whole backend obligation.**
+    /// **ADR-0093 Decision 1, as built: everything this capture yields about the fused site at
+    /// `narrowed`** — the binding, the opened output tile and query row, the site's registered
+    /// narrowings opened against the class root, the site's INPUTS (the disputed head's query
+    /// slice and the layer's K and V series over the whole history), and the evidence its bottom
+    /// is served from: the anchor the disputed step must carry, with every chunk of its state, or
+    /// the cache-write rows.
     ///
-    /// The online-softmax statistics this family's attention formed over `[first, first + count)`
-    /// of the disputed site's key positions — `(m*, S*, V*)`, the triple
-    /// [`crate::palw_attn_dissect::palw_attn_fold_v1`] composes. Because the fold composes, a
-    /// family that can answer for ONE history tile can answer every rung of a dissection: the
-    /// panel folds tiles into children, children into parents, and parents into the root claim.
-    /// A backend therefore never sees a session and never implements a court.
+    /// ADR-0093 made the obligation one history tile's triple; built, it is smaller: every number a
+    /// move carries is COMPUTED from this evidence by the court's own kernels
+    /// ([`crate::palw_attn_responder_v1`]), so a family reads what it committed and never does the
+    /// arithmetic. Decision 4's hazard — statistics "close but not exact" that convict their own
+    /// producer while it holds the claim's collateral — has no family code to live in.
     ///
-    /// `None` by default, the shape `disclose_trace_event` uses: a family that has not implemented
-    /// it cannot take a dissection's turn, and [`Self::supports_dissection`] is where it says so
-    /// before a court is armed over it rather than after it has been convicted.
+    /// `carried_prompt` is the user's ids for a free-prompt claim and `None` for an attempt (whose
+    /// prompt is re-derived from the anchor), as [`Self::refutation_for_free_prompt_index`] takes
+    /// them. `Err` by default: a family that cannot answer says so through
+    /// [`Self::supports_dissection`] before a court is armed over it.
     ///
-    /// **Exact or absent, never approximate.** `palw_attn_fold_check_v1` is integer arithmetic and
-    /// does not care why two numbers disagree, so a family that answers with statistics that are
-    /// close but not exact convicts itself while holding the claim's collateral (ADR-0093
-    /// Decision 4). Returning `None` is always safe; returning a rounded triple is not.
-    fn attn_tile_claim(
+    /// `accused_out_tile` is the accused's committed output tile, opened — the one its
+    /// `CourtAttnRootClaimed` carried on chain (ADR-0093 Decision 7). A FOLD keeps no rows and is
+    /// re-executed; when that re-execution is not the committed execution (a forged claim), the
+    /// evidence is built from the re-execution's rows BEFORE the disputed leaf — the court narrowed
+    /// to the first leaf the challenger could not reproduce, so they are the accused's own — and
+    /// this tile, opened against the accused's root without one row the accused must serve. `None`
+    /// keeps the capture's own rows, and a forged fold is refused by name.
+    fn attn_site_evidence(
         &self,
         _material: &[u8],
-        _site: &crate::palw_attn_court_v1::PalwAttnBottomSiteV1,
-        _first: u64,
-        _count: u64,
-    ) -> Option<crate::palw_attn_dissect::PalwAttnRangeClaimV1> {
-        None
+        _narrowed: u64,
+        _carried_prompt: Option<&[u32]>,
+        _accused_out_tile: Option<&crate::palw_attn_court_v1::PalwAttnRowOpeningV1>,
+    ) -> Result<crate::palw_attn_responder_v1::PalwAttnSiteEvidenceV1, String> {
+        Err("this family cannot read a fused site out of its capture".to_string())
+    }
+
+    /// **The bottom's evidence from the accused's FILING alone** (ADR-0093 Decisions 7 and 8) —
+    /// for the close whose accused capture this node does not hold (an over-cap attempt capture is
+    /// never pulled) or cannot use. The rows before the disputed leaf are this node's own
+    /// re-execution of the accused's job (the court narrowed to the first leaf it could not
+    /// reproduce, so they are the accused's committed rows — the evidence refuses by name unless
+    /// they root, with the filed tile, to the accused's binding); the output tile and, when filed,
+    /// the anchor are the accused's own, off its root claim. Without a filed anchor the checkpoint
+    /// leg is the re-execution's, which is the accused's only when its execution did not follow its
+    /// lie — otherwise the refusal names the anchored root claim that would have carried it.
+    ///
+    /// `Err` by default, like [`Self::attn_site_evidence`]: the two verbs come together.
+    fn attn_site_evidence_from_filing(
+        &self,
+        _filing: &crate::palw_attn_responder_v1::PalwAttnAccusedFilingV1,
+        _narrowed: u64,
+        _carried_prompt: Option<&[u32]>,
+    ) -> Result<crate::palw_attn_responder_v1::PalwAttnSiteEvidenceV1, String> {
+        Err("this family cannot read a fused site out of a filing".to_string())
     }
 
     /// **Can this backend take a FUSED dissection's turn?** — deliberately not
@@ -327,9 +355,18 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     /// repair, and two call sites branch on it. One boolean cannot answer for two unrelated turns,
     /// so widening it would report a disclosure gap that does not exist. This is the second answer.
     ///
-    /// `false` until [`Self::attn_tile_claim`] is implemented, and a family that overrides one
-    /// without the other is advertising a turn it cannot take.
+    /// `true` exactly where [`Self::attn_site_evidence`] is implemented — a family that overrides
+    /// one without the other is advertising a turn it cannot take, and the source guard in
+    /// `misaka-palw-base0` fails on it.
     fn supports_dissection(&self) -> bool {
+        false
+    }
+
+    /// **Does this backend's class commit a fused attention site at all?** (ADR-0093 as built.) A
+    /// claim of such a class disputed down to a fused leaf is answered by a root claim, which only
+    /// a backend that [`Self::supports_dissection`] can file; a producer asks both before it
+    /// underwrites a claim it could not defend there. `false` by default: the floor has none.
+    fn has_fused_site(&self) -> bool {
         false
     }
 
@@ -539,6 +576,36 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         job.decode_token_limit.saturating_sub(1)
     }
 
+    /// **ADR-0103 Decision 2: which route this family's seat takes to an interval's start**, for a
+    /// class under the held map — `Recompute` where the whole context fits `window_receipt` at the
+    /// family's replay rate, `Resume` otherwise; `None` for every other class (the shipped seat
+    /// recomputes, ADR-0082 Decision 9). The seat and the executor both ask it, with the ruleset's
+    /// window, so neither can choose the route the other did not.
+    fn fp_held_route_v1(&self, _window_receipt_daa: u64) -> Option<crate::palw_held_context_v1::PalwHeldSeatRouteV1> {
+        None
+    }
+
+    /// **ADR-0103 Decision 2, the executor's half of the Resume route: the state interval `index`
+    /// resumes from**, served — the checkpoint named, its slices' chunks and every slice's top leaf
+    /// carried. Opaque bytes, read only by the family that wrote them.
+    fn open_fp_resume_v1(&self, _capture: &[u8], _index: u32, _prompt_token_ids: &[u32]) -> Result<Vec<u8>, String> {
+        Err("this execution family serves no resume state".to_string())
+    }
+
+    /// **The seat's half: verify a fetched state against the committed checkpoint and hold it as
+    /// this seat's own** — so the interval verification that follows replays from it exactly as it
+    /// would from a recomputed one. Returns the state's root, the number the seat compares against
+    /// the opening's anchor. A chunk that does not verify is a refusal by name, and nothing is kept.
+    fn fp_accept_resume_v1(
+        &self,
+        _resume: &[u8],
+        _context: &crate::palw_v2::PalwJobContextV2,
+        _prompt_token_ids: &[u32],
+        _covered: u32,
+    ) -> Result<crate::Hash64, String> {
+        Err("this execution family accepts no resume state".to_string())
+    }
+
     /// **The committed output ids of a retained capture, read by the family that wrote it**
     /// (ADR-0082 Decision 9's companion verb). A seat that recomputes the cache teacher-forces the
     /// executor's own answer, so it needs the ids the commitment binds — and it must get them
@@ -575,6 +642,35 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         _prompt_token_ids: &[u32],
     ) -> Result<Vec<u8>, String> {
         Err("this execution family serves no block leaves".to_string())
+    }
+
+    /// **ADR-0111 Decision 6, the executor's answer to a held state-chunk accusation** (ADR-0103
+    /// Decision 4): checkpoint `checkpoint`'s leaf opened against the binding's checkpoint root, and
+    /// chunk `chunk` of its state with the path under the class's map, built from this executor's
+    /// retention. The default refuses by name — and the court reads a refusal as silence, so a
+    /// family that executes a held class answers here or its executor is slashed for withholding.
+    fn held_state_chunk_answer_v1(
+        &self,
+        _capture: &[u8],
+        _prompt_token_ids: &[u32],
+        _checkpoint: u32,
+        _chunk: u32,
+    ) -> Result<(crate::palw_attn_court_v1::PalwAttnCheckpointAnchorV1, crate::palw_attn_court_v1::PalwAttnChunkOpeningV1), String>
+    {
+        Err("this execution family answers no held state chunk".to_string())
+    }
+
+    /// **ADR-0111 Decision 6, the executor's answer to a held step-range accusation**: the leaf
+    /// hashes of `[first, first + count)` and the frontier that folds them to the binding's step
+    /// root, from this executor's retention. Refused by name by default, as above.
+    fn held_step_range_answer_v1(
+        &self,
+        _capture: &[u8],
+        _prompt_token_ids: &[u32],
+        _first: u64,
+        _count: u32,
+    ) -> Result<crate::palw_step_leg::PalwStepRangeOpeningV1, String> {
+        Err("this execution family answers no held step range".to_string())
     }
 
     /// **ADR-0086 Decision 6, the seat's half: name the leaf a served block disagrees on**, from
@@ -741,6 +837,27 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         _leaf_index: u64,
     ) -> Result<PalwExecutionOutcomeV1, String> {
         Err("this backend has no drill fault".to_string())
+    }
+
+    /// **The same DRILL fault on the free-prompt lane** (ADR-0100 §6 step 2): run the job, corrupt
+    /// one lane of the tile at `leaf_index`, and hand back the run the corrupted capture IS — its
+    /// four leg roots and its execution root re-derived from the capture, so
+    /// [`crate::palw_fp_execution_v3::palw_fp_commitment_from_context_v3`] assembles the liar's
+    /// commitment exactly as it assembles an honest one.
+    ///
+    /// It is its own verb because the attempt-lane one cannot serve here: its outcome carries a
+    /// re-derived execution root, but the free-prompt commitment recomputes that root from the
+    /// run's FACTS, and facts measured on the honest run describe a capture that was never
+    /// committed — the assembly refuses the pair by name (`ContextDoesNotReproduceTheRoot`), and a
+    /// drill that never commits a claim convicts nobody. Same rule as the attempt lane: callers
+    /// refuse to reach this on a network carrying value.
+    fn execute_free_prompt_with_injected_fault(
+        &self,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_tokens: &[usize],
+        _leaf_index: u64,
+    ) -> Result<PalwFpRunV1, String> {
+        Err("this backend has no free-prompt drill fault".to_string())
     }
 }
 

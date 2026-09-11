@@ -40,6 +40,9 @@ mod palw_fp;
 /// ADR-0088 Decision 12: `palw line-… / version-… / proposal-… / evaluate` — the model registry.
 mod palw_line;
 mod palw_model;
+mod palw_shard_court;
+mod palw_shard_licensing;
+mod palw_verify_context;
 #[cfg(feature = "evm-send")]
 mod prea;
 /// ADR-0079 Decision 13: `node security-report` — the host posture, printed from live state.
@@ -532,6 +535,67 @@ enum PalwCmd {
         #[arg(long)]
         out: std::path::PathBuf,
     },
+    /// Sign a one-move accusation (ADR-0099 Decision 5 / ADR-0100): a named leaf of a claim's own
+    /// execution that does not recompute, with its refutation. Reads an unsigned borsh
+    /// `PalwShardCourtAccusationV1`, signs it under your bond key and writes a
+    /// `PalwConsensusObjectV2::ShardCourtAccused` for `palw submit-object`.
+    ShardAccuse {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// The unsigned accusation (borsh `PalwShardCourtAccusationV1`), as a seat or a tool wrote it.
+        #[arg(long)]
+        accusation: std::path::PathBuf,
+        /// Your own bond outpoint, `txid:index` — any Active bond above the floor, never the claim's.
+        #[arg(long)]
+        bond: String,
+        /// The ladder to check the named leaf against locally (default: the shipped court's 2^26).
+        #[arg(long, default_value_t = 1u64 << 26)]
+        ladder: u64,
+        /// Where to write the signed object.
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
+    /// Declare a class's shard plan (ADR-0100 Decision 4), signed by the class's registrant bond:
+    /// claims bound afterwards draw a panel per shard and license by parts. Declared once.
+    /// Writes a `PalwConsensusObjectV2::ClassShardPlanDeclared` for `palw submit-object`.
+    ShardPlan {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex class id (a class registered by a bond — a genesis class has no registrant).
+        #[arg(long)]
+        class: String,
+        /// How many shards (2..=1024). A shard holds at least one layer; `palw-shard-plan` prices a count.
+        #[arg(long)]
+        count: u32,
+        /// The class's registrant bond outpoint, `txid:index` — its key signs.
+        #[arg(long)]
+        bond: String,
+        /// Where to write the signed object.
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
+    /// Declare which shards of a class your bond holds (ADR-0100 Decision 4) — a refinement of the
+    /// class your bond declared in capable_classes. Writes a `BondShardsDeclared`; an empty
+    /// `--shards ""` withdraws.
+    BondShards {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// Your bond outpoint, `txid:index`.
+        #[arg(long)]
+        bond: String,
+        /// 128-hex class id.
+        #[arg(long)]
+        class: String,
+        /// The class's plan's shard count (it must match the declared plan).
+        #[arg(long)]
+        count: u32,
+        /// Comma-separated shard indices, ascending, e.g. `0,1`; empty withdraws.
+        #[arg(long, default_value = "")]
+        shards: String,
+        /// Where to write the signed object.
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
     CourtClose {
         #[command(flatten)]
         key: KeyArgs,
@@ -581,6 +645,43 @@ enum PalwCmd {
         /// JSON output (`--output json` does the same).
         #[arg(long)]
         json: bool,
+    },
+    /// **ADR-0110: run a context vector through the network's own pipeline** — produce, commit,
+    /// seat, court, availability, fit — and write one canonical document whose `document_id`
+    /// covers what every honest machine must agree on and nothing this host measured. No node is
+    /// contacted. `--sign-with` writes a receipt: evidence that this key reproduced the vector,
+    /// never a vote — nothing reads it, and no count of receipts arms anything.
+    VerifyContext {
+        /// A shipped vector by name (`--list` names them).
+        #[arg(long, conflicts_with = "vector_file")]
+        vector: Option<String>,
+        /// A vector that is not shipped, as its JSON document — its document says `shipped: false`.
+        #[arg(long)]
+        vector_file: Option<std::path::PathBuf>,
+        /// List the shipped vectors, their ids and where each is meant to run.
+        #[arg(long)]
+        list: bool,
+        /// A comma-separated subset of produce,commit,seat,court,availability,fit (default: all).
+        #[arg(long)]
+        stages: Option<String>,
+        /// Write the canonical document here.
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+        /// Where the receipt goes (default: beside `--out`, as `<out>.receipt.json`).
+        #[arg(long)]
+        receipt_out: Option<std::path::PathBuf>,
+        /// Sign a receipt with the ML-DSA-87 seed in this perms-checked file.
+        #[arg(long)]
+        sign_with: Option<String>,
+    },
+    /// **ADR-0110: check a context receipt** — its signature under the receipt context, and, with
+    /// `--document`, that the document's recomputed id is the one the receipt signed.
+    VerifyReceipt {
+        /// The receipt JSON `verify-context --sign-with` wrote.
+        receipt: std::path::PathBuf,
+        /// The document it is a receipt for.
+        #[arg(long)]
+        document: Option<std::path::PathBuf>,
     },
     /// **ADR-0087: a line's model market** as the tip holds it — reserve, positions in the curve,
     /// price, sold, burned, paid, status — and a quote for a buy (`--quote-msk`). Nothing signs.
@@ -1587,6 +1688,20 @@ async fn main() -> std::process::ExitCode {
         Command::Palw(PalwCmd::DaAccuse { key, claim, row, tile, bond, out }) => {
             palw_da::accuse(&ctx, &key.source(), palw_da::DaAccuseArgs { claim: &claim, row, tile, bond: &bond, out: &out }).await
         }
+        Command::Palw(PalwCmd::ShardPlan { key, class, count, bond, out }) => {
+            palw_shard_licensing::shard_plan(&ctx, &key.source(), &class, count, &bond, &out).await
+        }
+        Command::Palw(PalwCmd::BondShards { key, bond, class, count, shards, out }) => {
+            palw_shard_licensing::bond_shards(&ctx, &key.source(), &bond, &class, count, &shards, &out).await
+        }
+        Command::Palw(PalwCmd::ShardAccuse { key, accusation, bond, ladder, out }) => {
+            palw_shard_court::accuse(
+                &ctx,
+                &key.source(),
+                palw_shard_court::ShardAccuseArgs { accusation: &accusation, bond: &bond, ladder, out: &out },
+            )
+            .await
+        }
         Command::Palw(PalwCmd::CourtClose { key, close, class, side, deadline_at, state, restart, offline, yes }) => {
             palw_court::court_close(
                 &ctx,
@@ -1606,6 +1721,20 @@ async fn main() -> std::process::ExitCode {
         }
         Command::Palw(PalwCmd::Certified { class_id, json }) => palw_fp::certified(&ctx, &class_id, json).await,
         Command::Palw(PalwCmd::Claim { claim_ids, outbox, json }) => palw_claim::show(&ctx, &claim_ids, outbox.as_deref(), json).await,
+        Command::Palw(PalwCmd::VerifyContext { vector, vector_file, list, stages, out, receipt_out, sign_with }) => {
+            palw_verify_context::verify_context(palw_verify_context::VerifyContextArgs {
+                vector: vector.as_deref(),
+                vector_file: vector_file.as_deref(),
+                list,
+                stages: stages.as_deref(),
+                out: out.as_deref(),
+                receipt_out: receipt_out.as_deref(),
+                key: sign_with.map(|path| keys::KeySource { key_file: Some(path), key_stdin: false }),
+            })
+        }
+        Command::Palw(PalwCmd::VerifyReceipt { receipt, document }) => {
+            palw_verify_context::verify_receipt(&receipt, document.as_deref())
+        }
         Command::Palw(PalwCmd::Derived { claim_id, json }) => palw_derived::show(&ctx, &claim_id, json).await,
         Command::Palw(PalwCmd::ModelShow { line_id, quote_msk, json }) => palw_model::show(&ctx, &line_id, quote_msk, json).await,
         Command::Palw(PalwCmd::ModelPositions { holder, key, json }) => {

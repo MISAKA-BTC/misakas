@@ -13,10 +13,11 @@ repository.workspace = true
 kaspa-consensus-core.workspace = true
 kaspa-hashes.workspace = true
 misaka-palw-base0.workspace = true
-
-[dev-dependencies]
+# ADR-0100 `palw-class measure` / `verify`: the Measured Model Artifact is JSON, signed by the
+# adder's bond key and verified by anyone holding the public key.
 kaspa-pq-validator-core.workspace = true
 kaspa-txscript.workspace = true
+serde_json.workspace = true
 
 [[bin]]
 name = "palw-class"

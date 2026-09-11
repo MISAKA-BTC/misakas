@@ -167,6 +167,16 @@ interval. On a wider cadence a mid-interval step's anchor is a state the seat's 
 through and does not keep; the builder's anchor check refuses it by name rather than closing
 wrongly. Recorded in §8.
 
+**2026-09-11 — against a liar ([ADR-0111](0111-a-seat-may-demand-the-committed-leaf-it-needs-to-judge.md) §8.5).**
+The pin above runs an honest executor, and the path it pins could not close a lying interval. A
+V4 opening carries no leaf hashes, so the replay walked the committed root with the closer's OWN
+leaves, and a lie inside the interval is exactly what stops that walk. The close now also holds
+the executor's leaves for the one block the closer's leaves differ in (ADR-0086 Decision 6's
+block-leaves lane). It substitutes them once they fold to the opening's digest, and walks the root
+over the committed range. The node asks for that block beside the interval. Against the drill's
+one-tile lie on the graph-v5 dense row, the served close is the capture path's object and
+convicts.
+
 ## 8. What is deliberately not decided
 
 * A served-interval close for a mid-interval step on a class whose checkpoint cadence is wider

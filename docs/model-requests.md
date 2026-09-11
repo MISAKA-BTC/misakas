@@ -83,3 +83,34 @@ Related: [ADR-0096](adr/0096-the-app-you-already-use-is-the-entrance-and-the-sha
 [docs/palw-model-onboarding-sdk.md](palw-model-onboarding-sdk.md),
 [docs/palw-certify-a-new-model.md](palw-certify-a-new-model.md),
 [docs/components-manifest.md](components-manifest.md).
+
+## A model too large for one seat (ADR-0099)
+
+A request for a model no single seat can hold is answered by the same tool that prices any
+model: write the manifest — the family and the geometry's public numbers, as
+`docs/model-manifests/kimi-k3-stand-in.json` does for Kimi K3 — and run
+
+```bash
+cargo run -p misaka-palw-base0 --bin palw-shard-plan -- --manifest <model.json> --measured-out <dir>
+```
+
+It prints every wall of ADR-0097 at 512 / 32,768 / 131,072 / 1,048,576 positions, the artifact's
+bytes per layer, the shard plans a seat budget allows and what each shard's seat must hold and be
+served, and writes the Measured Model Artifact any node recomputes (`--verify <file>`). The replay
+rate is the adder's to measure (`palw-certify`, `--replay-ms`); the network's own certification
+drill is what verifies it. A manifest that fits no ruleset is the case ADR-0097 Decision 5
+describes — a different mint — and the document says so by the wall.
+
+If you HOLD the converted artifact, measure it rather than a manifest (ADR-0100 Decision 3): the
+geometry is read off the file, the bytes off its inventory, and the document carries the root the
+class registers —
+
+```bash
+cargo run -p misaka-palw-sdk --bin palw-class -- measure --network testnet-11 --key-file <bond seed> --out <model>.measured.json <model>.palwart
+```
+
+and anyone recomputes it with `palw-class verify --network testnet-11 [--artifact <model>.palwart] <model>.measured.json`
+(without the artifact, the artifact's own fields are named as needing one; with it, every field
+and the signature). On the shipped A16 artifact this reproduces the genesis class id and the
+registered root; an artifact of an architecture this tree has no graph for is refused by name.
+

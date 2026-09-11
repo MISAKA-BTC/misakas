@@ -435,6 +435,28 @@ pub fn qwen25_a16_profile_v5(geometry: PalwQwen25GeometryV1) -> Result<PalwShape
     )
 }
 
+/// **ADR-0103 Decision 3: graph-v7 — graph-v5 under the held map.** The same graph, the same
+/// fused attention, the same artifact and inventory; the one difference is the registered
+/// `state_chunk_map_id` ([`crate::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v4`]), which is
+/// inside the class id, so graph-v7 is a new class over the same weights. It is the dense family's
+/// row under ADR-0103's regime: its checkpoint root is the two-level tree whose index does not move,
+/// `validate_geometry` bounds it per position instead of by `n_ctx × layers`, and the admission
+/// gate refuses it while `Params::palw_held_context` is dormant. No preset registers it.
+pub fn qwen25_a16_profile_v7(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
+    qwen25_a16_profile_inner(
+        geometry,
+        crate::palw_base0_profile::QWEN25_A16_PRE_IR_V2,
+        crate::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v4(),
+        QWEN25_A16_HEAD_TENSOR_V2,
+        true,
+    )
+}
+
+/// **The `graph-v7` row over the epsilon the artifact executes**, paired as the v5 row is.
+pub fn qwen25_a16_artifact_row_profile_v7(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
+    qwen25_a16_profile_v7(qwen25_geometry_artifact_eps(geometry))
+}
+
 /// **The `graph-v5` row over the epsilon the artifact executes** — the pairing any v5 row that has
 /// to be SERVED must be built from, exactly as [`qwen25_a16_artifact_row_profile_v1`] is for v2.
 pub fn qwen25_a16_artifact_row_profile_v5(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
@@ -895,6 +917,11 @@ pub fn qwen25_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProf
 /// **Why 512 and not the ladder's ceiling** (5f genesis card §2): the demonstration corpus costs up
 /// to 286 decode tokens, which needs a decode budget of 503 and therefore `n_ctx` 512; and the RC
 /// bundle's `2^26` ladder admits at most 574, so 1,024 is not the next rung but a different cap.
+///
+/// **2026-09-10 (ADR-0097 §1.2): the ladder's figure above is stale — on this graph-v5 row it is
+/// 651, pinned by `palw_adr0097_model_fit.rs` — and the wall that actually holds the row at 512 is
+/// the COURT WINDOW, which refuses 513 by name at the shipped arity.** Widths are the generator's
+/// (`misaka-palw-base0 --bin palw-model-fit`), never a comment's.
 pub const QWEN25_A16_GRAPH_V5_N_CTX: u32 = 512;
 
 /// **The graph the 5f genesis registers for the dense tier** — [`qwen25_a16_profile_v5`] over the

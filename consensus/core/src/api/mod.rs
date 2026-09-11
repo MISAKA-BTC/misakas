@@ -738,6 +738,13 @@ pub trait ConsensusApi: Send + Sync {
         Vec::new()
     }
 
+    /// **A claim's committed roots and price, at the tip** — `(execution_root, trace_root,
+    /// work_leaves)` — what an executor serving a leaf's evidence off chain binds its answer to
+    /// (ADR-0111 Decision 2). `None` for a claim this chain does not hold.
+    fn palw_claim_roots_v2(&self, _claim: crate::Hash64) -> Option<(crate::Hash64, crate::Hash64, u64)> {
+        None
+    }
+
     /// **Where a bond's rewards are paid — the payload, not a script.**
     ///
     /// A panel needs it to recognise its own money: every lifecycle carrier it builds pays change

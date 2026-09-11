@@ -46,8 +46,12 @@ const CONSENSUS_PATH: &[&str] = &[
     "src/artifact.rs",
     "src/backend.rs",
     "src/classes.rs",
+    // ADR-0110's verifier drives the family's own arithmetic over a vector, so it holds no float
+    // either — its host timings are integer milliseconds.
+    "src/context_vector.rs",
     "src/engine.rs",
     "src/engine_a16.rs",
+    "src/attn_responder.rs",
     "src/inventory.rs",
     "src/kernels.rs",
     "src/legs.rs",
@@ -131,8 +135,13 @@ const EXEMPT: &[(&str, &str)] = &[
     ("src/reference.rs", "the float reference forward: it measures the checkpoint's ranges so the PTQ can pick scales"),
     ("src/bin/base0-depth-sweep.rs", "measurement tool"),
     ("src/bin/base0-class-sizing.rs", "measurement tool"),
+    // ADR-0097's generator: it prints every wall a class meets, from consensus-core's own
+    // predicates, and formats byte counts for a person to read (`human()` is the only float).
+    ("src/bin/palw-model-fit.rs", "measurement tool: reports the walls a class meets; executes no class arithmetic"),
     // ADR-0098's generator: it measures the seats' draw and prints percentages for a person.
     ("src/bin/palw-seat-coverage.rs", "measurement tool: reports the panel's coverage; executes no class arithmetic"),
+    // ADR-0099's generator: the shard plan and what a shard costs a seat, in GiB for a person.
+    ("src/bin/palw-shard-plan.rs", "measurement tool: reports the shard plan; executes no class arithmetic"),
     (
         "src/bin/palw-tile-measure.rs",
         "measurement tool: U-00's close sweep over derive_court_cost_shaped_v1; it prices, it computes no engine arithmetic",

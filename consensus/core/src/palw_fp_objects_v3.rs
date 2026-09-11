@@ -142,7 +142,46 @@ where
 /// `palw_ruleset_id_v2` — are read off the bundle this walk already holds and a carrier above
 /// either is SKIPPED like every other refusal here. `false` on every shipped preset, where the
 /// walk behaves byte for byte as it did before the fence existed.
+#[allow(clippy::too_many_arguments)]
 pub fn palw_fp_objects_from_accepted_txs_under_ruleset_v3<V>(
+    txs: &[Transaction],
+    network_domain: Hash64,
+    freeprompt: &PalwFreePromptParamsV3,
+    accepted_block: BlockHash,
+    panel_da_armed: bool,
+    max_step_leaf_count: u64,
+    ruleset_caps_armed: bool,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    verify_mldsa87: V,
+) -> PalwFpExtractionV3
+where
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+{
+    palw_fp_objects_from_accepted_txs_under_held_v3(
+        txs,
+        network_domain,
+        freeprompt,
+        accepted_block,
+        panel_da_armed,
+        max_step_leaf_count,
+        ruleset_caps_armed,
+        false,
+        prompt_ids_form,
+        verify_mldsa87,
+    )
+}
+
+/// The same walk **under ADR-0103's regime** (Decision 4: the ids never ride above one standard
+/// transaction).
+///
+/// `held_armed` is `Params::palw_held_context` resolved at the accepting block's DAA. Past it a
+/// `PublicDa` carrier whose ids are more than one standard transaction's bytes is SKIPPED by name,
+/// like every refusal here: such a prompt commits under `PanelDa` (which the regime's assembly
+/// requires) and its ids are served under the root, never carried. `false` is the ruleset walk byte
+/// for byte — and on every shipped network the rule could not fire anyway, since no admitted
+/// prompt there reaches 30,000 ids.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_fp_objects_from_accepted_txs_under_held_v3<V>(
     txs: &[Transaction],
     network_domain: Hash64,
     freeprompt: &PalwFreePromptParamsV3,
@@ -150,6 +189,7 @@ pub fn palw_fp_objects_from_accepted_txs_under_ruleset_v3<V>(
     panel_da_armed: bool,
     max_step_leaf_count: u64,
     ruleset_caps_armed: bool,
+    held_armed: bool,
     prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     verify_mldsa87: V,
 ) -> PalwFpExtractionV3
@@ -179,6 +219,11 @@ where
             .is_err()
         {
             out.skipped.push((id, "payload is not stateless-admissible"));
+            continue;
+        }
+        // **ADR-0103 Decision 4: the ids never ride above one standard transaction.**
+        if held_armed && palw_fp_public_ids_exceed_one_transaction_v1(&payload) {
+            out.skipped.push((id, "the held regime carries no prompt above one standard transaction: commit it under PanelDa"));
             continue;
         }
         // Who authored this commitment. Skipped rather than fatal, for the reason this whole walk
@@ -226,6 +271,13 @@ where
         });
     }
     out
+}
+
+/// **Do this carrier's ids ride past one standard transaction?** (ADR-0103 Decision 4.) Four bytes
+/// an id against `PALW_STANDARD_TX_BYTES` — the D4 wall's own arithmetic (`C × 4`), one spelling
+/// for the walk and for a builder that wants the walk's answer before it signs.
+pub fn palw_fp_public_ids_exceed_one_transaction_v1(payload: &PalwFpCommitmentTxPayloadV3) -> bool {
+    (payload.prompt_token_ids.len() as u64).saturating_mul(4) > crate::palw_mode_v2::PALW_STANDARD_TX_BYTES
 }
 
 pub fn validate_palw_fp_commitment_tx_under_v3(
@@ -356,6 +408,41 @@ mod tests {
             .len(),
             1
         );
+    }
+
+    /// **ADR-0103 Decision 4: under the held regime the ids never ride above one standard
+    /// transaction.** A PublicDa carrier one id past `PALW_STANDARD_TX_BYTES / 4` is skipped by name
+    /// under the fence and credited without it (the rule is dormant, and on a shipped network it
+    /// could not fire); one AT the line is credited under both.
+    #[test]
+    fn under_the_held_regime_public_ids_past_one_transaction_are_skipped_by_name() {
+        let fp = freeprompt();
+        let line = (crate::palw_mode_v2::PALW_STANDARD_TX_BYTES / 4) as u32;
+        let walk = |p: &PalwFpCommitmentTxPayloadV3, held: bool| {
+            let mut p = p.clone();
+            p.commitment.job.max_context_tokens = p.commitment.job.prompt_tokens + p.commitment.job.decode_token_limit;
+            palw_fp_objects_from_accepted_txs_under_held_v3(
+                &[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(&p).unwrap())],
+                net(),
+                &fp,
+                h64(1),
+                false,
+                crate::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP,
+                false,
+                held,
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                |_, _, _, _| true,
+            )
+        };
+        let at_line = payload(line, 4);
+        let past = payload(line + 1, 4);
+        assert!(!palw_fp_public_ids_exceed_one_transaction_v1(&at_line));
+        assert!(palw_fp_public_ids_exceed_one_transaction_v1(&past));
+        assert_eq!(walk(&at_line, true).objects.len(), 1, "at the line the ids fit one transaction");
+        assert_eq!(walk(&past, false).objects.len(), 1, "dormant, the walk is the ruleset walk");
+        let held = walk(&past, true);
+        assert!(held.objects.is_empty());
+        assert!(held.skipped[0].1.contains("PanelDa"), "{:?}", held.skipped);
     }
 
     /// The signed message is the claim id under the commitment's own context, and the key it is

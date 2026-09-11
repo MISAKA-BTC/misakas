@@ -95,6 +95,13 @@ pub const KDESC_A16_MATMUL_REQUANT: &str = "a16/matmul/i8xi16-i64-exact-requant1
 pub const KDESC_A16_MATMUL_RESCALE: &str = "a16/matmul/i8xi16-i64-exact-rescale32/v1";
 pub const KDESC_A16_RMS_NORM: &str = "a16/rms-norm/i64-sumsq-intrsqrt/v1";
 pub const KDESC_A16_REQUANTIZE: &str = "a16/requantize/lane-sliced/i128-mul-rshift-sat16/v1";
+/// **ADR-0102: the requantization whose ONE triple is the position's token's row of the store** —
+/// the hybrid's embedding lift, which the converter calibrates per token (one scale for a
+/// 248,320-row table would be one scale for its outliers). The same `a16_requant` arithmetic as
+/// [`KDESC_A16_REQUANTIZE`]; what differs is which triple, so it is a different kernel and a
+/// different class: the court resolves the token from the carried ids exactly as the gather does
+/// and opens that one row, never a per-lane table the store does not have.
+pub const KDESC_A16_REQUANTIZE_BY_TOKEN: &str = "a16/requantize/token-row/i128-mul-rshift-sat16/v1";
 pub const KDESC_A16_ADD_ELEM: &str = "a16/add-elem/lane-sliced/i32-exact/v1";
 pub const KDESC_A16_SOFTMAX: &str = "a16/softmax/rowmax-shifted-intexp-intrecip/v1";
 pub const KDESC_A16_ATTN_SCORES: &str = "a16/attn-scores/i16xi16-i64-gqa/v1";
@@ -293,6 +300,26 @@ pub fn catalogued_kernel_ids_v1() -> std::collections::BTreeSet<Hash64> {
     KERNEL_CATALOG.iter().map(|(d, _)| kernel_semantics_id_v1(d)).collect()
 }
 
+/// **Kernels this build adjudicates that a network adjudicates only past a FENCE** (ADR-0102).
+///
+/// [`catalogued_kernel_ids_v1`] is a consensus identity: `palw_court_catalog_root_v1` hashes it
+/// into every V2 bundle's `court_catalog_root`, so a kernel appended there moves every shipped
+/// preset's fingerprint the moment the binary ships — a flag day for a network that registers no
+/// class reaching it. A kernel here is resolved by the adjudicator like any other, and the
+/// admission gate admits a class that reaches it only where its fence is armed
+/// (`Params::palw_token_lift` for the one kernel this table has); the fence is what enters the
+/// network's identity, at the height it arms. On a network where it is dormant no class can reach
+/// the kernel — this build refuses the registration by name and a build without the kernel refuses
+/// it as a coverage gap — so the two builds agree on every block, which is the property the
+/// catalog root exists to protect.
+const KERNEL_CATALOG_FENCED_V1: &[(&str, KernelProgram)] =
+    &[(KDESC_A16_REQUANTIZE_BY_TOKEN, KernelProgram::Qwen36(Qwen36Op::RequantizeByToken))];
+
+/// The fenced kernels' ids — disjoint from [`catalogued_kernel_ids_v1`] by construction.
+pub fn fenced_kernel_ids_v1() -> std::collections::BTreeSet<Hash64> {
+    KERNEL_CATALOG_FENCED_V1.iter().map(|(d, _)| kernel_semantics_id_v1(d)).collect()
+}
+
 /// The ten BASE-0 kernels, for a caller assembling that class's reachable set (ADR-0040 D + H).
 pub const KDESC_BASE0_ALL: &[&str] = &[
     KDESC_BASE0_MATMUL,
@@ -347,6 +374,8 @@ enum Base0Op {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Qwen36Op {
     Embed,
+    /// ADR-0102: the embedding lift, one triple per token.
+    RequantizeByToken,
     MatMulRequant,
     MatMulRescale,
     RmsNorm,
@@ -606,6 +635,7 @@ pub fn kernel_can_serve_node_v1(node: &crate::palw_step::PalwStepNodeV1, table_i
         KernelProgram::Qwen36(
             Qwen36Op::RmsNorm
             | Qwen36Op::Requantize
+            | Qwen36Op::RequantizeByToken
             | Qwen36Op::Softmax
             | Qwen36Op::RopePartial
             | Qwen36Op::L2Norm
@@ -706,7 +736,11 @@ pub fn kernel_can_serve_node_v1(node: &crate::palw_step::PalwStepNodeV1, table_i
 }
 
 fn resolve_kernel(id: &Hash64) -> Option<KernelProgram> {
-    KERNEL_CATALOG.iter().find(|(d, _)| kernel_semantics_id_v1(d) == *id).map(|(_, p)| *p)
+    // The fenced table too: which kernels a network may REACH is the admission gate's question
+    // (a class reaching a fenced kernel is refused wherever its fence is dormant), and a court
+    // that could not recompute a kernel an admitted class reaches would end its disputes
+    // `Unadjudicable` — the hole A4 exists to close.
+    KERNEL_CATALOG.iter().chain(KERNEL_CATALOG_FENCED_V1).find(|(d, _)| kernel_semantics_id_v1(d) == *id).map(|(_, p)| *p)
 }
 
 /// Recompute one BASE-0 node's output row (ADR-0040 Decision D).
@@ -1338,6 +1372,26 @@ fn qwen36_row(
             let x = lane_input(0)?;
             let p = stream_params(lane_param_base, x.len())?;
             Ok(out(a16::a16_requant(&x, &p).map_err(shape16)?))
+        }
+        // **ADR-0102: the embedding lift, adjudicated the way the engine executes it** — the
+        // gathered row of the position's token, lifted by THAT token's triple across every lane
+        // (`qwen36.rs`'s `lift.get(token_id)`). The token comes from the carried ids the court has
+        // already matched against the job context, by the gather's own rule; the triple is the ONE
+        // row of the store at the token's offset, opened like any registered operand. A per-lane
+        // read of a per-token store is the request no inventory could serve, which is why the
+        // lane-sliced kernel above refuses such a store and this one exists.
+        Qwen36Op::RequantizeByToken => {
+            need(1)?;
+            let x = lane_input(0)?;
+            let (coord, prompt_ids, generated_ids) = gather;
+            let token = if coord.call_index == 0 {
+                prompt_ids.at(coord.position).ok_or(PalwStepRefuteError::Unadjudicable)?
+            } else {
+                let produced = (coord.call_index as usize).checked_sub(1).ok_or(PalwStepRefuteError::Unadjudicable)?;
+                *generated_ids.get(produced).ok_or(PalwStepRefuteError::Unadjudicable)?
+            };
+            let triple = params_named(node.weight_name.as_str(), token as usize, 1)?[0];
+            Ok(out(a16::a16_requant(&x, &vec![triple; x.len()]).map_err(shape16)?))
         }
         Qwen36Op::RescaleRow => {
             need(1)?;
@@ -3969,9 +4023,22 @@ fn verify_kv_anchor<'a>(
     }
 
     let map_id = &binding.state_chunk_map_id;
-    let hashes: Vec<crate::Hash64> =
-        ops.chunks.iter().enumerate().map(|(i, c)| state_chunk_leaf_hash_v1(map_id, i as u32, c)).collect();
-    let root = state_chunks_root_v1(&hashes).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+    // **ADR-0103 Decision 3: a held class's chunks build a two-level root** over the same bytes in
+    // the same order — the leaf binds `(slice, block)` rather than the flat index. Every other map
+    // keeps the flat tree, byte for byte.
+    let root = if map::palw_map_is_held_v4(map_id) {
+        let positions = crate::palw_context_ladder::palw_checkpoint_positions_at_v1(
+            &binding.shape_profile,
+            &binding.job_context,
+            ops.leaf.covered_decode_call,
+        );
+        map::palw_state_chunks_root_for_map_v1(&binding.shape_profile, positions, &ops.chunks)
+            .map_err(|_| PalwStepRefuteError::Unadjudicable)?
+    } else {
+        let hashes: Vec<crate::Hash64> =
+            ops.chunks.iter().enumerate().map(|(i, c)| state_chunk_leaf_hash_v1(map_id, i as u32, c)).collect();
+        state_chunks_root_v1(&hashes).map_err(|_| PalwStepRefuteError::Unadjudicable)?
+    };
     if root != ops.leaf.state_chunks_root {
         return Err(PalwStepRefuteError::InputSetNotCanonical("the carried chunks do not build the leaf's state root"));
     }
@@ -4039,6 +4106,12 @@ fn verify_kv_anchor<'a>(
             .map_err(|_| PalwStepRefuteError::Unadjudicable)?;
         let expected = composition.chunk_count();
         (Ok(composition.attn), KvAnchorElemV1::I32Le, Some(expected))
+    } else if map::palw_map_is_held_v4(&declared) {
+        // ADR-0103 Decision 3: the held layout's attention half is the tiled enumeration with no
+        // count cap; a hybrid's recurrence slices follow it, and only the count reads them here.
+        let layout = map::palw_state_layout_v4(&binding.shape_profile, positions).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+        let expected = layout.chunk_count();
+        (Ok(layout.attn), KvAnchorElemV1::I32Le, Some(expected))
     } else {
         return Err(PalwStepRefuteError::Unadjudicable);
     };
@@ -4092,6 +4165,61 @@ pub fn check_execution_step_refutation_v1(
     weights: &dyn PalwWeightOracleV1,
 ) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
     check_execution_step_refutation_opened_v1(refutation, weights, None)
+}
+
+/// **The prompt carriage a refutation rides in, for the network's form** (ADR-0081 Decision 3,
+/// carried by ADR-0103 Decision 1's one-move court).
+///
+/// Every prover builds a refutation with the whole id list — the flat form's carriage, which the
+/// flat adjudicator reads. Under the Merkle form the list is taken OUT and the one tile a prefill
+/// leaf's gather reads is opened instead, for
+/// [`check_execution_step_refutation_opened_capped_v1`] to read: what a court carries then grows
+/// with a path and never with the prompt, which is the whole of the held regime's close term. A
+/// decode leaf's gather reads the generated ids (the decode pin), never the prompt, so it carries
+/// neither; a leaf that reads no id at a prefill position carries one tile it does not need, which
+/// is a bounded cost and never a different verdict. The bisection close's `ArithmeticOpened` arm
+/// and the one-move accusation both take their carriage from here — one spelling of "which tile".
+///
+/// Found by the held drill (2026-09-11): on a Merkle-form network a free-prompt refutation that
+/// carried the whole list was refused by the flat comparison before any arithmetic
+/// (`InputSetNotCanonical`), so every seat's sample of every leaf read "no verdict", no seat could
+/// accuse, and the one-move court convicted nobody.
+pub fn palw_refutation_prompt_carriage_v1(
+    form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    mut refutation: PalwExecutionStepRefutationV1,
+) -> Result<
+    (PalwExecutionStepRefutationV1, Option<crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1>),
+    crate::palw_prompt_ids_v1::PalwPromptIdsError,
+> {
+    if form == crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat || refutation.prompt_token_ids.is_empty() {
+        return Ok((refutation, None));
+    }
+    let ids = std::mem::take(&mut refutation.prompt_token_ids);
+    let coord = refutation.output_preimage.coord;
+    if coord.call_index != 0 || coord.position as usize >= ids.len() {
+        return Ok((refutation, None));
+    }
+    let opening = crate::palw_prompt_ids_v1::prompt_ids_opening_v1(&ids, coord.position)?;
+    Ok((refutation, Some(opening)))
+}
+
+/// **The court's check of a refutation a prover built with the whole id list, carried the way the
+/// network's form carries it** — [`palw_refutation_prompt_carriage_v1`], then the opened check.
+///
+/// What a family's `operand_openings_for` runs to learn WHICH artifact rows the court will resolve:
+/// it must resolve them the way the chain will read the object, or it records the rows of a check
+/// the chain never runs. Under the Merkle form the flat check refuses the whole list before any
+/// row is read, so a recorder behind it recorded nothing and the one-move court's accusation at an
+/// embedding leaf carried no table row to adjudicate with (the held drill, 2026-09-11).
+pub fn check_execution_step_refutation_carried_capped_v1(
+    refutation: &PalwExecutionStepRefutationV1,
+    weights: &dyn PalwWeightOracleV1,
+    form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    max_step_leaf_count: u64,
+) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    let (carried, prompt_ids_opening) = palw_refutation_prompt_carriage_v1(form, refutation.clone())
+        .map_err(|e| PalwStepRefuteError::InputSetNotCanonical(e.refusal()))?;
+    check_execution_step_refutation_opened_capped_v1(&carried, weights, prompt_ids_opening.as_ref(), max_step_leaf_count)
 }
 
 /// [`check_execution_step_refutation_v1`] against the ruleset's `max_step_leaf_count` — the court's
@@ -6240,6 +6368,90 @@ pub(crate) mod tests {
         assert_eq!(check_execution_step_refutation_v1(&whole, &NoWeights), Err(PalwStepRefuteError::NoFaultFound));
     }
 
+    /// **ADR-0103 Decision 1's carriage: the list rides on a flat network, one tile on a Merkle
+    /// one** (`palw_refutation_prompt_carriage_v1`). A prefill leaf opens the tile holding ITS
+    /// position — and that tile authenticates against the job's Merkle root, which is the only way
+    /// the court reads it; a decode leaf reads the generated ids and carries neither; a refutation
+    /// that addresses no gather is untouched. The one-move court's bytes grow by the tile it rides.
+    #[test]
+    fn a_refutation_rides_the_list_on_a_flat_network_and_one_tile_on_a_merkle_one() {
+        use crate::palw_prompt_ids_v1::{
+            PALW_PROMPT_IDS_TILE_LEN, PalwPromptIdsFormV1, prompt_token_ids_root_v1, verify_prompt_ids_opening_v1,
+        };
+        let ids: Vec<u32> = (0..70u32).map(|i| i * 3 + 1).collect();
+        let root = prompt_token_ids_root_v1(&ids).expect("70 ids commit");
+        // The carriage reads only the list and the leaf's coordinate; the fixture's own job is any.
+        let (binding, material, rows) = honest_execution();
+        let coord = PalwStepCoordinateV1 { call_index: 1, node_slot: 1, position: 0, tile_index: 0 };
+        let mut refutation = build_refutation(&binding, &material, &rows, coord);
+        refutation.prompt_token_ids = ids.clone();
+        let at = |call_index: u32, position: u32| {
+            let mut r = refutation.clone();
+            r.output_preimage.coord.call_index = call_index;
+            r.output_preimage.coord.position = position;
+            r
+        };
+
+        // Flat: the prover's object, byte for byte.
+        let (same, none) = palw_refutation_prompt_carriage_v1(PalwPromptIdsFormV1::Flat, at(0, 40)).expect("flat carries");
+        assert_eq!(same, at(0, 40));
+        assert!(none.is_none());
+
+        // Merkle at prefill position 40: the list is out, and tile 1 (positions 32..64) rides.
+        let (carried, tile) = palw_refutation_prompt_carriage_v1(PalwPromptIdsFormV1::MerkleV1, at(0, 40)).expect("the tile opens");
+        assert!(carried.prompt_token_ids.is_empty(), "the list does not ride");
+        let tile = tile.expect("a prefill leaf rides its tile");
+        assert_eq!(tile.tile_index, 40 / PALW_PROMPT_IDS_TILE_LEN);
+        let window = verify_prompt_ids_opening_v1(&root, 70, &tile).expect("the tile binds the job's root");
+        assert_eq!(window.at(40), Some(ids[40]), "the window reads the leaf's own position");
+        assert_eq!(window.at(0), None, "and nothing it does not carry");
+
+        // Merkle at a decode leaf: the gather reads the generated ids, so neither rides.
+        let (decode, none) = palw_refutation_prompt_carriage_v1(PalwPromptIdsFormV1::MerkleV1, at(3, 72)).expect("decode carries");
+        assert!(decode.prompt_token_ids.is_empty() && none.is_none());
+
+        // A refutation that addresses no gather is untouched on either form.
+        let mut bare = at(0, 40);
+        bare.prompt_token_ids.clear();
+        let (untouched, none) = palw_refutation_prompt_carriage_v1(PalwPromptIdsFormV1::MerkleV1, bare.clone()).expect("carries");
+        assert_eq!(untouched, bare);
+        assert!(none.is_none());
+
+        // The one-move court prices the tile it carries.
+        let accusation = |prompt_ids_opening| crate::palw_shard_court_v1::PalwShardCourtAccusationV1 {
+            version: crate::palw_shard_court_v1::PALW_SHARD_COURT_VERSION_V1,
+            claim: Hash64::from_u64_word(1),
+            execution_root: binding.committed_execution_root,
+            trace_root: Hash64::from_u64_word(2),
+            executor_bond: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(
+                crate::tx::TransactionId::from_u64_word(3),
+                0,
+            )),
+            accuser_bond: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(
+                crate::tx::TransactionId::from_u64_word(4),
+                0,
+            )),
+            leaf_index: carried.output_opening.leaf_index,
+            refutation: carried.clone(),
+            artifact_openings: vec![],
+            prompt_ids_opening,
+            signature: vec![],
+        };
+        let bare_bytes = crate::palw_shard_court_v1::palw_shard_court_accusation_bytes_v1(&accusation(None));
+        let tile_bytes = borsh::to_vec(&tile).expect("borsh").len() as u64;
+        assert_eq!(
+            crate::palw_shard_court_v1::palw_shard_court_accusation_bytes_v1(&accusation(Some(tile.clone()))),
+            bare_bytes + tile_bytes
+        );
+        // The wire order, pinned at the tail a round trip cannot see reordered: the tile rides after
+        // the artifact openings and before the signature.
+        let mut signed = accusation(Some(tile.clone()));
+        signed.signature = vec![0xA5; 3];
+        let wire = borsh::to_vec(&signed).expect("borsh");
+        let tail = [borsh::to_vec(&Some(tile)).expect("borsh"), borsh::to_vec(&signed.signature).expect("borsh")].concat();
+        assert!(wire.ends_with(&tail), "… artifact_openings, prompt_ids_opening, signature");
+    }
+
     /// **G5c: the KV sentinels resolve to the cache-role nodes over the position history.**
     ///
     /// `canonical_input_leaves` used to answer `None` for them — "KV / checkpoint arms:
@@ -7150,6 +7362,22 @@ mod catalog_through_line_tests {
         let tabled: BTreeSet<&str> = KERNEL_CATALOG.iter().map(|(d, _)| *d).collect();
         assert_eq!(listed, tabled, "KDESC_ALL and KERNEL_CATALOG have drifted apart");
         assert_eq!(KDESC_ALL.len(), KERNEL_CATALOG.len(), "a duplicate descriptor would hide a gap");
+    }
+
+    /// **ADR-0102: a fenced kernel resolves, and is not in the identity.** Resolvable, or an
+    /// admitted class reaching it would end its disputes `Unadjudicable`; out of
+    /// `catalogued_kernel_ids_v1`, or shipping it would move `court_catalog_root` — and with it
+    /// every V2 preset's fingerprint — on networks that never arm its fence.
+    #[test]
+    fn a_fenced_kernel_resolves_and_stays_out_of_the_identity() {
+        let fenced = super::fenced_kernel_ids_v1();
+        assert!(!fenced.is_empty());
+        assert!(fenced.contains(&kernel_semantics_id_v1(super::KDESC_A16_REQUANTIZE_BY_TOKEN)));
+        for id in &fenced {
+            assert!(resolve_kernel(id).is_some(), "fenced but not adjudicable: {id}");
+        }
+        assert!(fenced.is_disjoint(&super::catalogued_kernel_ids_v1()), "a fenced kernel inside the identity is a flag day");
+        assert!(!KDESC_ALL.contains(&super::KDESC_A16_REQUANTIZE_BY_TOKEN));
     }
 
     /// ADR-0040 Decision H's tenth op included: the closed BASE-0 catalog is closed on this side

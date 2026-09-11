@@ -543,6 +543,30 @@ pub struct VirtualStateProcessor {
     /// rehearsal, the fold and the state walk must all get the same answer for the same block, or
     /// a node that admits an object its fold refuses computes a state root nobody shares.
     pub(super) palw_da_court: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// `Params::palw_shard_court` (ADR-0099 Decision 5, built by ADR-0100): the one-move court.
+    /// Resolved in ONE place, [`Self::palw_shard_court_at`], for the reason the DA court's field
+    /// gives — the acceptance rehearsal, the fold (through the extras' ladder) and the state walk
+    /// must get the same answer for the same block.
+    pub(super) palw_shard_court: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// `Params::palw_shard_licensing` (ADR-0100 Decision 4). Resolved in ONE place,
+    /// [`Self::palw_shard_licensing_at`]; the panel draw, its validation and the fold's extras all
+    /// read it through that, so a node cannot bind what its fold refuses.
+    pub(super) palw_shard_licensing: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// `Params::palw_token_lift` (ADR-0102): may a registration reach the per-token lift kernel.
+    /// Resolved in ONE place, [`Self::palw_token_lift_at`], at the block the registration is
+    /// judged in.
+    pub(super) palw_token_lift: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// `Params::palw_fused_dissectable` (ADR-0093 Decision 6): must a fused registration's output
+    /// tile be one head's. Resolved in ONE place, [`Self::palw_fused_dissectable_at`].
+    pub(super) palw_fused_dissectable: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// `Params::palw_attn_anchored_root` (ADR-0093 Decision 8): may a root claim carry its anchor,
+    /// and must it. Resolved in ONE place, [`Self::palw_attn_anchored_root_at`]; the acceptance arm
+    /// and the fold's extras both read it through that.
+    pub(super) palw_attn_anchored_root: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// `Params::palw_held_context` (ADR-0103). Resolved in ONE place, [`Self::palw_held_context_at`];
+    /// the acceptance rehearsal, the fold (through the extras' ladder) and the court's shape all
+    /// read it through that, so a node cannot admit a move its fold refuses.
+    pub(super) palw_held_context: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// Rate limiter for [`Self::palw_warn_if_maturity_outruns_the_registry`] — the DAA score the
     /// shortfall was last reported at, or `PALW_SHORTFALL_NEVER_REPORTED`. **Log state only**:
     /// nothing consensus-visible reads it, so two nodes that report at different moments still
@@ -1000,6 +1024,12 @@ impl VirtualStateProcessor {
             palw_fp_ruleset_caps: params.palw_fp_ruleset_caps,
             palw_uncertified_weightless: params.palw_uncertified_weightless,
             palw_da_court: params.palw_da_court,
+            palw_shard_court: params.palw_shard_court_fence(),
+            palw_shard_licensing: params.palw_shard_licensing_fence(),
+            palw_token_lift: params.palw_token_lift_fence(),
+            palw_fused_dissectable: params.palw_fused_dissectable_fence(),
+            palw_attn_anchored_root: params.palw_attn_anchored_root_fence(),
+            palw_held_context: params.palw_held_context_fence(),
             palw_frontier_provenance: params.palw_frontier_provenance,
             palw_validator_payout_bounds: params.palw_validator_payout_bounds_fence(),
             finality_depth: params.blockrate.finality_depth,
@@ -4843,6 +4873,16 @@ impl VirtualStateProcessor {
         state.claim_readers_v2(&claim)
     }
 
+    /// A claim's committed roots and price at the tip (ADR-0111 Decision 2) — see the trait doc.
+    pub fn palw_claim_roots_v2_impl(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Option<(kaspa_consensus_core::Hash64, kaspa_consensus_core::Hash64, u64)> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        state.claim(&claim).map(|c| (c.execution_root, c.trace_root, c.work_leaves))
+    }
+
     /// The payout payload the chain has registered for `bond`, if it is registered at all.
     pub fn palw_bond_payout_payload_v2_impl(
         &self,
@@ -6107,6 +6147,76 @@ impl VirtualStateProcessor {
             Self::verify_mldsa87_with_context_bool(key, message, sig, context)
         };
 
+        // **ADR-0100 Decision 4: a claim drawn per shard gets its next ready PART**, one shard a
+        // call, by the same greedy rule as the whole licence below and checked by the same
+        // function the chain will check it with, at the same point.
+        if self.palw_shard_licensing_at(point.daa_score)
+            && let Some(plan) = kaspa_consensus_core::palw_shard_licensing_v1::palw_claim_licenses_by_parts_v1(
+                &state,
+                &claim,
+                panel_params.seat_count(),
+            )
+        {
+            let seats = state.panel(&claim)?.seats.clone();
+            let licensed = state.shard_licensing_of(&claim).cloned();
+            for shard in 0..plan.shard_count {
+                if licensed.as_ref().is_some_and(|progress| progress.is_licensed(shard)) {
+                    continue;
+                }
+                let Some(slice) = kaspa_consensus_core::palw_shard_licensing_v1::palw_panel_shard_slice_v1(
+                    &seats,
+                    plan.shard_count,
+                    panel_params.seat_count(),
+                    shard,
+                ) else {
+                    continue;
+                };
+                let mut kept: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2> = Vec::new();
+                let mut ready = false;
+                for candidate in candidates.iter().filter(|candidate| slice.iter().any(|seat| seat.bond == candidate.seat_bond)) {
+                    if kept.iter().any(|receipt| receipt.seat_bond == candidate.seat_bond) {
+                        continue;
+                    }
+                    let mut attempt = kept.clone();
+                    attempt.push(candidate.clone());
+                    let part = kaspa_consensus_core::palw_shard_licensing_v1::PalwShardReceiptPartV1 {
+                        claim,
+                        shard_count: plan.shard_count,
+                        shard_index: shard,
+                        receipts: attempt.clone(),
+                    };
+                    match kaspa_consensus_core::palw_panel_v2::validate_shard_receipt_part_v1(
+                        &state,
+                        panel_params,
+                        state_params,
+                        &point,
+                        network_domain,
+                        &part,
+                        verify,
+                        self.palw_unavailable_abstains_at(point.daa_score),
+                    ) {
+                        Ok(_) => {
+                            kept = attempt;
+                            ready = true;
+                        }
+                        Err(kaspa_consensus_core::palw_panel_v2::PalwPanelV2Error::NoQuorum { .. }) => kept = attempt,
+                        Err(_) => {}
+                    }
+                }
+                if ready {
+                    return Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ShardReceiptLicensed {
+                        part: kaspa_consensus_core::palw_shard_licensing_v1::PalwShardReceiptPartV1 {
+                            claim,
+                            shard_count: plan.shard_count,
+                            shard_index: shard,
+                            receipts: kept,
+                        },
+                    });
+                }
+            }
+            return None;
+        }
+
         let mut kept: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2> = Vec::new();
         let mut verdict: Option<Q> = None;
         for candidate in candidates {
@@ -6174,7 +6284,7 @@ impl VirtualStateProcessor {
                     // `point.daa_score` would make the derived panel change from block to block
                     // around the fence height, and a `PanelBound` that missed the block it was
                     // built for would be refused as a mismatch rather than accepted late.
-                    kaspa_consensus_core::palw_panel_v2::validate_panel_bound_v2_with_capability_proof(
+                    kaspa_consensus_core::palw_panel_v2::validate_panel_bound_v2_with_shards(
                         state,
                         panel_params,
                         state_params,
@@ -6188,10 +6298,19 @@ impl VirtualStateProcessor {
                         // a pure function of the claim, so the rule that narrows it must be one
                         // too — and the assembler below resolves it at the same point.
                         self.palw_capability_bound_at(anchor_fact.anchor_daa),
+                        // ADR-0100 Decision 4: the same one-place decision the binding made.
+                        self.palw_stratified_shard_count(state, &claim_record.class_id, anchor_fact.anchor_daa),
                     )
                     .map_err(|e| e.to_string())?;
                 }
                 Obj::CourtOpened { session_id, claim, challenger_bond, space, space_size, signature } => {
+                    // **ADR-0103 Decision 1: the held regime plays no bisection.** Refused here and
+                    // in the fold, for the DA court's doubled-fence reason.
+                    if self.palw_held_context_at(point.daa_score) {
+                        return Err(format!(
+                            "claim {claim}: the held regime plays no bisection — accuse the leaf in one move (ADR-0103 Decision 1)"
+                        ));
+                    }
                     // The object now DECLARES the space, because the transition opens a ladder
                     // from it — but the ruleset still DECIDES it. H2's rule is unchanged: a space
                     // the accuser chose is a ladder depth the accuser chose, so a declaration that
@@ -6641,7 +6760,16 @@ impl VirtualStateProcessor {
                 // not exist on this chain), then the party's signature, the same split every
                 // other court move uses.
                 // -------------------------------------------------------------------------
-                Obj::CourtAttnRootClaimed { session_id, root, arity, signature, .. } => {
+                Obj::CourtAttnRootClaimed { session_id, root, arity, signature, .. }
+                | Obj::CourtAttnRootClaimedAnchored { session_id, root, arity, signature, .. } => {
+                    // ADR-0093 Decision 8: the anchored form exists only where its fence does. (The
+                    // plain form's refusal past the fence needs the site, so the fold makes it.)
+                    if matches!(object, Obj::CourtAttnRootClaimedAnchored { .. }) && !self.palw_attn_anchored_root_at(point.daa_score)
+                    {
+                        return Err(format!(
+                            "session {session_id}: an anchored root claim before palw_attn_anchored_root is armed (ADR-0093 Decision 8)"
+                        ));
+                    }
                     kaspa_consensus_core::palw_court_v2::palw_attn_move_is_admissible_v2(
                         object,
                         self.palw_kary_court_active_at(point.daa_score),
@@ -6905,7 +7033,7 @@ impl VirtualStateProcessor {
                             bundle.court.max_step_leaf_count(),
                         )
                     });
-                    kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v6(
+                    kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v8(
                         bundle,
                         &carriage.profile,
                         &carriage.canonical,
@@ -6917,6 +7045,17 @@ impl VirtualStateProcessor {
                         ladder.flatten(),
                         court,
                         false,
+                        // ADR-0102: the per-token lift kernel is admitted by its fence alone.
+                        self.palw_token_lift_at(point.daa_score),
+                        // ADR-0093 Decision 6: past its fence, a fused tile must be one head's.
+                        self.palw_fused_dissectable_at(point.daa_score),
+                        // ADR-0103: the held map is admitted by its fence alone, and a held class's
+                        // walls are read under the regime — the PanelDa fence says whether its
+                        // widest job commits with no ids.
+                        kaspa_consensus_core::palw_class_admission_v2::PalwHeldAdmissionV1 {
+                            armed: self.palw_held_context_at(point.daa_score),
+                            panel_da: self.palw_panel_da_at(point.daa_score),
+                        },
                     )
                     .map_err(|e| format!("class {class_id} is not admissible: {e}"))?;
                 }
@@ -7128,6 +7267,321 @@ impl VirtualStateProcessor {
                     ) {
                         return Err(format!("claim {claim}'s accusation is not signed by the bond it names"));
                     }
+                }
+                // **ADR-0099 Decision 5, built by ADR-0100: the one-move court's accusation.** Two
+                // gates in the order every court move uses — the FENCE, then the accuser's bond
+                // key over the session id — then the object's shape, the ruleset's own close
+                // ceiling, the claim it names, and the verdict DERIVED here at the ladder the fold
+                // will derive it at too (the extras carry that ladder to the fold). A fused site is
+                // refused, because its verdict convicts nobody; an accusation whose refutation does
+                // not adjudicate is refused too — P0-8's rule on both sides. The FENCE is checked
+                // here as well as in the fold, for the DA court's reason.
+                Obj::ShardCourtAccused { accusation } => {
+                    let claim_id = accusation.claim;
+                    if !self.palw_shard_court_at(point.daa_score) {
+                        return Err(format!(
+                            "claim {claim_id}: the one-move court is not armed on this network (ADR-0099 Decision 5)"
+                        ));
+                    }
+                    let court = self
+                        .palw_court_params_v2
+                        .as_ref()
+                        .ok_or_else(|| "a one-move accusation on a network with no V2 court parameters".to_string())?;
+                    let ladder = self.palw_court_step_ladder_at(point.daa_score, court);
+                    let record = state
+                        .bond(&accusation.accuser_bond)
+                        .ok_or_else(|| format!("an accusation names bond {:?} this chain does not have", accusation.accuser_bond))?;
+                    let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                        self.network_id_bytes.as_slice(),
+                        Some(self.genesis.hash),
+                    );
+                    let session_id =
+                        kaspa_consensus_core::palw_shard_court_v1::palw_shard_court_session_id_v1(domain.as_byte_slice(), accusation);
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &record.pubkey,
+                        session_id.as_byte_slice(),
+                        &accusation.signature,
+                        kaspa_consensus_core::palw_shard_court_v1::PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT,
+                    ) {
+                        return Err(format!("claim {claim_id}'s accusation is not signed by the bond it names"));
+                    }
+                    accusation.validate_shape(ladder).map_err(|e| format!("claim {claim_id}: {e}"))?;
+                    let bytes = kaspa_consensus_core::palw_shard_court_v1::palw_shard_court_accusation_bytes_v1(accusation);
+                    if bytes > court.max_close_bytes() {
+                        return Err(format!(
+                            "claim {claim_id}: the accusation carries {bytes} bytes and this ruleset prices a close at {}",
+                            court.max_close_bytes()
+                        ));
+                    }
+                    let claim = state
+                        .claim(&claim_id)
+                        .ok_or_else(|| format!("an accusation names claim {claim_id} this chain does not have"))?;
+                    if claim.bond != accusation.executor_bond
+                        || claim.execution_root != accusation.execution_root
+                        || claim.trace_root != accusation.trace_root
+                    {
+                        return Err(format!("claim {claim_id}: the accusation's executor or roots are not the claim's"));
+                    }
+                    let class = state
+                        .class(&claim.class_id)
+                        .ok_or_else(|| format!("claim {claim_id} names class {} this chain does not have", claim.class_id))?;
+                    match kaspa_consensus_core::palw_shard_court_v1::palw_shard_court_verdict_v1(
+                        accusation,
+                        claim.class_id,
+                        class.artifact_root,
+                        ladder,
+                    ) {
+                        // ADR-0103 Decision 5: under the held regime the accusation at a fused leaf IS
+                        // the challenge — the fold opens the dissection there. Dormant, refused.
+                        Ok(kaspa_consensus_core::palw_shard_court_v1::PalwShardCourtVerdictV1::NeedsDissection)
+                            if !self.palw_held_context_at(point.daa_score) =>
+                        {
+                            return Err(format!(
+                                "claim {claim_id}: leaf {} is a fused-attention site; its terminal is the dissection, not one move",
+                                accusation.leaf_index
+                            ));
+                        }
+                        Ok(_) => {}
+                        Err(e) => return Err(format!("claim {claim_id}: the accusation does not adjudicate: {e}")),
+                    }
+                }
+                // **ADR-0103 Decision 1: the checkpoint court.** The shard court's gates in its order —
+                // the fence, the accuser's key over the session id, the ceiling, the claim — and the
+                // verdict DERIVED here at the ladder the fold derives it at.
+                Obj::CheckpointAccused { accusation } => {
+                    let claim_id = accusation.claim;
+                    if !self.palw_held_context_at(point.daa_score) {
+                        return Err(format!("claim {claim_id}: the held regime is not armed on this network (ADR-0103)"));
+                    }
+                    let court = self
+                        .palw_court_params_v2
+                        .as_ref()
+                        .ok_or_else(|| "a checkpoint accusation on a network with no V2 court parameters".to_string())?;
+                    let ladder = self.palw_court_step_ladder_at(point.daa_score, court);
+                    let record = state
+                        .bond(&accusation.accuser_bond)
+                        .ok_or_else(|| format!("an accusation names bond {:?} this chain does not have", accusation.accuser_bond))?;
+                    let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                        self.network_id_bytes.as_slice(),
+                        Some(self.genesis.hash),
+                    );
+                    let session_id = kaspa_consensus_core::palw_checkpoint_court_v1::palw_checkpoint_court_session_id_v1(
+                        domain.as_byte_slice(),
+                        accusation,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &record.pubkey,
+                        session_id.as_byte_slice(),
+                        &accusation.signature,
+                        kaspa_consensus_core::palw_checkpoint_court_v1::PALW_CHECKPOINT_COURT_MLDSA87_ACCUSE_CONTEXT,
+                    ) {
+                        return Err(format!("claim {claim_id}'s checkpoint accusation is not signed by the bond it names"));
+                    }
+                    let bytes = kaspa_consensus_core::palw_checkpoint_court_v1::palw_checkpoint_court_accusation_bytes_v1(accusation);
+                    if bytes > court.max_close_bytes() {
+                        return Err(format!(
+                            "claim {claim_id}: the checkpoint accusation carries {bytes} bytes and this ruleset prices a close at {}",
+                            court.max_close_bytes()
+                        ));
+                    }
+                    let claim = state
+                        .claim(&claim_id)
+                        .ok_or_else(|| format!("an accusation names claim {claim_id} this chain does not have"))?;
+                    if claim.bond != accusation.executor_bond
+                        || claim.execution_root != accusation.execution_root
+                        || claim.trace_root != accusation.trace_root
+                    {
+                        return Err(format!("claim {claim_id}: the accusation's executor or roots are not the claim's"));
+                    }
+                    kaspa_consensus_core::palw_checkpoint_court_v1::palw_checkpoint_court_verdict_v1(
+                        accusation,
+                        claim.class_id,
+                        ladder,
+                    )
+                    .map_err(|e| format!("claim {claim_id}: the checkpoint accusation does not adjudicate: {e}"))?;
+                }
+                // **ADR-0103 Decision 4: the held DA court's two moves.** The fence, the DA court's
+                // own fence, the signer (the accuser's key; the claim's producer for an answer), the
+                // ceiling, and the unit bounded — or answered — against the claim's own roots.
+                Obj::DefaultAccusedHeld { accusation } => {
+                    let claim_id = accusation.claim;
+                    if !self.palw_held_context_at(point.daa_score) || !self.palw_da_court_at(point.daa_score) {
+                        return Err(format!(
+                            "claim {claim_id}: a held accusation needs the held regime and the data-availability court (ADR-0103)"
+                        ));
+                    }
+                    let court = self.palw_court_params_v2.as_ref().ok_or("no court params")?;
+                    let bytes = kaspa_consensus_core::palw_held_da_v1::palw_held_da_bytes_v1(accusation.as_ref());
+                    if bytes > court.max_close_bytes() {
+                        return Err(format!("claim {claim_id}: the held accusation carries {bytes} bytes, above the close ceiling"));
+                    }
+                    let record = state
+                        .bond(&accusation.accuser)
+                        .ok_or_else(|| format!("an accusation names bond {:?} this chain does not have", accusation.accuser))?;
+                    let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                        self.network_id_bytes.as_slice(),
+                        Some(self.genesis.hash),
+                    );
+                    let message =
+                        kaspa_consensus_core::palw_held_da_v1::palw_held_da_accusation_message_v1(domain.as_byte_slice(), accusation);
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &record.pubkey,
+                        message.as_byte_slice(),
+                        &accusation.signature,
+                        kaspa_consensus_core::palw_held_da_v1::PALW_HELD_DA_MLDSA87_ACCUSE_CONTEXT,
+                    ) {
+                        return Err(format!("claim {claim_id}'s held accusation is not signed by the bond it names"));
+                    }
+                    let claim = state
+                        .claim(&claim_id)
+                        .ok_or_else(|| format!("an accusation names claim {claim_id} this chain does not have"))?;
+                    kaspa_consensus_core::palw_held_da_v1::palw_held_da_check_accusation_v1(
+                        &claim.execution_root,
+                        &accusation.missing,
+                        &accusation.binding,
+                    )
+                    .map_err(|e| format!("claim {claim_id}: {e}"))?;
+                    // **ADR-0111 Decision 3: a leaf is demanded only where the chain assigned it.**
+                    // The demanding seat's own draw — keyed by the network domain, which is held here
+                    // and not in the fold — must have put the leaf's interval in that seat's sample,
+                    // so no seat can pick the leaf an executor must put on chain.
+                    if let kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1::StepLeaf { leaf } = accusation.missing {
+                        let panel =
+                            state.panel(&claim_id).ok_or_else(|| format!("claim {claim_id} has no bound panel to demand from"))?;
+                        let seat_index = panel
+                            .seats
+                            .iter()
+                            .position(|seat| seat.bond == accusation.accuser)
+                            .ok_or_else(|| format!("claim {claim_id}: a leaf's evidence is demanded by a seat of its panel"))?;
+                        kaspa_consensus_core::palw_leaf_evidence_v1::palw_leaf_demand_is_the_seats_v1(
+                            &domain,
+                            &panel.anchor,
+                            &claim_id,
+                            seat_index as u8,
+                            &accusation.binding,
+                            leaf,
+                        )
+                        .map_err(|e| format!("claim {claim_id}: {e}"))?;
+                    }
+                }
+                Obj::MaterialDisclosedHeld { disclosure } => {
+                    let claim_id = disclosure.claim;
+                    if !self.palw_held_context_at(point.daa_score) || !self.palw_da_court_at(point.daa_score) {
+                        return Err(format!(
+                            "claim {claim_id}: a held disclosure needs the held regime and the data-availability court (ADR-0103)"
+                        ));
+                    }
+                    let court = self.palw_court_params_v2.as_ref().ok_or("no court params")?;
+                    let ladder = self.palw_court_step_ladder_at(point.daa_score, court);
+                    let bytes = kaspa_consensus_core::palw_held_da_v1::palw_held_da_bytes_v1(disclosure.as_ref());
+                    if bytes > court.max_close_bytes() {
+                        return Err(format!("claim {claim_id}: the held disclosure carries {bytes} bytes, above the close ceiling"));
+                    }
+                    let claim = state
+                        .claim(&claim_id)
+                        .ok_or_else(|| format!("a disclosure names claim {claim_id} this chain does not have"))?;
+                    let producer = state
+                        .bond(&claim.bond)
+                        .ok_or_else(|| format!("claim {claim_id}'s producing bond is not in this chain's registry"))?;
+                    let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                        self.network_id_bytes.as_slice(),
+                        Some(self.genesis.hash),
+                    );
+                    let message =
+                        kaspa_consensus_core::palw_held_da_v1::palw_held_da_disclosure_message_v1(domain.as_byte_slice(), disclosure);
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &producer.pubkey,
+                        message.as_byte_slice(),
+                        &disclosure.signature,
+                        kaspa_consensus_core::palw_held_da_v1::PALW_HELD_DA_MLDSA87_DISCLOSE_CONTEXT,
+                    ) {
+                        return Err(format!("claim {claim_id}'s held disclosure is not signed by the bond that produced it"));
+                    }
+                    kaspa_consensus_core::palw_held_da_v1::palw_held_da_check_disclosure_v1(
+                        &claim.execution_root,
+                        &disclosure.missing,
+                        &disclosure.binding,
+                        &disclosure.disclosure,
+                        ladder,
+                    )
+                    .map_err(|e| format!("claim {claim_id}: {e}"))?;
+                }
+                // **ADR-0100 Decision 4: per-shard licensing's three objects.** The fence first, the
+                // same doubled-fence doctrine as every court move; then each object's authority:
+                // the class's registrant over a plan, the bond over its shard list, and over a part
+                // the seats' own receipts, checked exactly as a whole licence checks them, over
+                // that shard's seats.
+                Obj::ClassShardPlanDeclared { class_id, shard_count, signature } => {
+                    if !self.palw_shard_licensing_at(point.daa_score) {
+                        return Err(format!("class {class_id}: per-shard licensing is not armed on this network (ADR-0100)"));
+                    }
+                    let class = state
+                        .class(class_id)
+                        .ok_or_else(|| format!("a shard plan names class {class_id} this chain does not have"))?;
+                    let registrant = class
+                        .registrant_bond
+                        .ok_or_else(|| format!("class {class_id} was registered at genesis and has no registrant"))?;
+                    let record = state.bond(&registrant).ok_or_else(|| format!("class {class_id}'s registrant bond is gone"))?;
+                    let message = kaspa_consensus_core::palw_shard_licensing_v1::palw_class_shard_plan_message_v1(
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        class_id,
+                        *shard_count,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &record.pubkey,
+                        message.as_byte_slice(),
+                        signature,
+                        kaspa_consensus_core::palw_shard_licensing_v1::PALW_SHARD_PLAN_MLDSA87_CONTEXT,
+                    ) {
+                        return Err(format!("class {class_id}'s shard plan is not signed by its registrant"));
+                    }
+                }
+                Obj::BondShardsDeclared { bond, class_id, shard_count, shards, signature } => {
+                    if !self.palw_shard_licensing_at(point.daa_score) {
+                        return Err(format!("bond {bond:?}: per-shard licensing is not armed on this network (ADR-0100)"));
+                    }
+                    let record =
+                        state.bond(bond).ok_or_else(|| format!("a shard list names bond {bond:?} this chain does not have"))?;
+                    let message = kaspa_consensus_core::palw_shard_licensing_v1::palw_bond_shards_message_v1(
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        bond,
+                        class_id,
+                        *shard_count,
+                        shards,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &record.pubkey,
+                        message.as_byte_slice(),
+                        signature,
+                        kaspa_consensus_core::palw_shard_licensing_v1::PALW_BOND_SHARDS_MLDSA87_CONTEXT,
+                    ) {
+                        return Err(format!("bond {bond:?}'s shard list is not signed by the bond"));
+                    }
+                }
+                Obj::ShardReceiptLicensed { part } => {
+                    if !self.palw_shard_licensing_at(point.daa_score) {
+                        return Err(format!("claim {}: per-shard licensing is not armed on this network (ADR-0100)", part.claim));
+                    }
+                    kaspa_consensus_core::palw_panel_v2::validate_shard_receipt_part_v1(
+                        state,
+                        panel_params,
+                        state_params,
+                        point,
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        part,
+                        Self::verify_mldsa87_with_context_bool,
+                        self.palw_unavailable_abstains_at(point.daa_score),
+                    )
+                    .map_err(|e| format!("claim {} shard {}: the part does not carry a quorum: {e}", part.claim, part.shard_index))?;
                 }
                 // **ADR-0062 SA-2: the disclosure is signed by the CLAIM's bond, and bounded by the
                 // ruleset's close ceiling before a single Merkle path is walked.**
@@ -7375,6 +7829,38 @@ impl VirtualStateProcessor {
             // claim the producer's own number back.
             fp_da_pins_active: self.palw_fp_da_pins_at(daa_score),
             evm_actions: Vec::new(),
+            // ADR-0093 Decision 8: which form of move 1 opens a phase. Written explicitly for the
+            // reason the lines above give — an unwritten default here would refuse, or admit, a
+            // responder's whole defense by omission.
+            attn_anchored_root_active: self.palw_attn_anchored_root_at(daa_score),
+            // ADR-0100: the one-move court's ladder rides to the fold when the court is armed —
+            // the SAME ladder the acceptance arm adjudicates at, so both derive one verdict.
+            // Written explicitly for the reason the two lines above give.
+            shard_court_ladder: if self.palw_shard_court_at(daa_score) {
+                self.palw_court_params_v2.as_ref().map(|court| self.palw_court_step_ladder_at(daa_score, court))
+            } else {
+                None
+            },
+            // ADR-0100 Decision 4: one shard's seats and quorum ride to the fold when per-shard
+            // licensing is armed — the panel parameters the draw and the acceptance layer use.
+            shard_licensing: if self.palw_shard_licensing_at(daa_score) {
+                self.palw_panel_params_v2.as_ref().map(|panel| {
+                    kaspa_consensus_core::palw_shard_licensing_v1::PalwShardLicensingParamsV1 {
+                        seats_per_shard: panel.seat_count(),
+                        quorum_per_shard: panel.quorum(),
+                    }
+                })
+            } else {
+                None
+            },
+            // ADR-0103: the held regime's ladder rides to the fold when it is armed — the SAME leaf
+            // cap the acceptance arms open against. Written explicitly for the reason every field
+            // above gives: this one decides whether a bisection is a legal move at all.
+            held_context_ladder: if self.palw_held_context_at(daa_score) {
+                self.palw_court_params_v2.as_ref().map(|court| self.palw_court_step_ladder_at(daa_score, court))
+            } else {
+                None
+            },
         }
     }
 
@@ -7431,6 +7917,54 @@ impl VirtualStateProcessor {
 
     fn palw_da_court_at(&self, daa_score: u64) -> bool {
         self.palw_da_court.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0103, resolved in exactly one place.**
+    pub(super) fn palw_held_context_at(&self, daa_score: u64) -> bool {
+        self.palw_held_context.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0099 Decision 5 / ADR-0100, resolved in exactly one place**, for the DA court's
+    /// reason. The fold does not read this: it reads the ladder [`Self::palw_transition_extras_at`]
+    /// carries, which is `Some` exactly when this is true.
+    fn palw_shard_court_at(&self, daa_score: u64) -> bool {
+        self.palw_shard_court.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0100 Decision 4, resolved in exactly one place.**
+    fn palw_shard_licensing_at(&self, daa_score: u64) -> bool {
+        self.palw_shard_licensing.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0102, resolved in exactly one place.**
+    fn palw_token_lift_at(&self, daa_score: u64) -> bool {
+        self.palw_token_lift.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0093 Decision 6, resolved in exactly one place.**
+    fn palw_fused_dissectable_at(&self, daa_score: u64) -> bool {
+        self.palw_fused_dissectable.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0093 Decision 8, resolved in exactly one place.**
+    fn palw_attn_anchored_root_at(&self, daa_score: u64) -> bool {
+        self.palw_attn_anchored_root.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **Whether a claim's panel is drawn per shard, and into how many** — the ONE decision the
+    /// binding and its validation share: the fence at the claim's ANCHOR (the panel is a pure
+    /// function of the claim, the reason ADR-0065 D1 and ADR-0071 SA-3 are read there too) and a
+    /// plan its class declared.
+    fn palw_stratified_shard_count(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        class_id: &kaspa_hashes::Hash64,
+        anchor_daa: u64,
+    ) -> Option<u32> {
+        if !self.palw_shard_licensing_at(anchor_daa) {
+            return None;
+        }
+        state.class_shard_plan(class_id).map(|plan| plan.shard_count)
     }
 
     /// **ADR-0075 D14, resolved in exactly one place: WHAT a certification slot may be spent on.**
@@ -7575,8 +8109,12 @@ impl VirtualStateProcessor {
     ) -> Option<Result<kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2, String>> {
         let bundle = self.palw_v2_bundle.as_ref()?;
         Some(
-            kaspa_consensus_core::palw_court_v2::palw_court_params_at_v2(bundle, self.palw_kary_court_active_at(daa_score))
-                .map_err(|e| e.to_string()),
+            kaspa_consensus_core::palw_court_v2::palw_court_params_held_at_v2(
+                bundle,
+                self.palw_kary_court_active_at(daa_score),
+                self.palw_held_context_at(daa_score),
+            )
+            .map_err(|e| e.to_string()),
         )
     }
 
@@ -8070,21 +8608,38 @@ impl VirtualStateProcessor {
             };
             // A registry too small to seat a panel yields nothing rather than a short one: a
             // partial jury is `derive_panel_v2`'s fail-closed refusal, and it stays that.
-            let Ok(seats) = kaspa_consensus_core::palw_panel_v2::derive_panel_v2_with_capability_proof(
-                state,
-                panel_params,
-                claim_id,
-                anchor.anchor_block,
-                min_collateral,
-                // ADR-0065 D1, from the claim's own anchor — the same input the acceptance layer
-                // uses, through the same one-place subtraction.
-                kaspa_consensus_core::palw_panel_v2::palw_seat_maturity_floor_v1(
-                    anchor.anchor_daa,
-                    self.palw_bond_maturity_at(anchor.anchor_daa),
+            // ADR-0065 D1, from the claim's own anchor — the same input the acceptance layer
+            // uses, through the same one-place subtraction.
+            let maturity_floor = kaspa_consensus_core::palw_panel_v2::palw_seat_maturity_floor_v1(
+                anchor.anchor_daa,
+                self.palw_bond_maturity_at(anchor.anchor_daa),
+            );
+            // ADR-0071 SA-3, from the same anchor as the acceptance layer's sibling call.
+            let capability_bound = self.palw_capability_bound_at(anchor.anchor_daa);
+            // ADR-0100 Decision 4: a class with a plan draws per shard, or not at all — a flat
+            // panel of a sharded class would ask shard seats to judge a whole model.
+            let drawn = match self.palw_stratified_shard_count(state, &claim.class_id, anchor.anchor_daa) {
+                Some(shard_count) => kaspa_consensus_core::palw_panel_v2::derive_stratified_panel_v2(
+                    state,
+                    panel_params,
+                    claim_id,
+                    anchor.anchor_block,
+                    min_collateral,
+                    maturity_floor,
+                    capability_bound,
+                    shard_count,
                 ),
-                // ADR-0071 SA-3, from the same anchor as the acceptance layer's sibling call.
-                self.palw_capability_bound_at(anchor.anchor_daa),
-            ) else {
+                None => kaspa_consensus_core::palw_panel_v2::derive_panel_v2_with_capability_proof(
+                    state,
+                    panel_params,
+                    claim_id,
+                    anchor.anchor_block,
+                    min_collateral,
+                    maturity_floor,
+                    capability_bound,
+                ),
+            };
+            let Ok(seats) = drawn else {
                 continue;
             };
             out.push(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::PanelBound {
@@ -8125,7 +8680,7 @@ impl VirtualStateProcessor {
             .as_ref()
             .map(|bundle| bundle.court.max_step_leaf_count())
             .unwrap_or(kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP);
-        let extraction = kaspa_consensus_core::palw_fp_objects_v3::palw_fp_objects_from_accepted_txs_under_ruleset_v3(
+        let extraction = kaspa_consensus_core::palw_fp_objects_v3::palw_fp_objects_from_accepted_txs_under_held_v3(
             &txs,
             network_domain,
             freeprompt,
@@ -8143,6 +8698,9 @@ impl VirtualStateProcessor {
             // reads them off the bundle it already holds. `None` on every shipped preset — both
             // live chains have accepted jobs above them since genesis.
             self.palw_fp_ruleset_caps.is_some_and(|fence| fence.is_active(block_daa)),
+            // ADR-0103 Decision 4: under the held regime no PublicDa carrier's ids ride past one
+            // standard transaction.
+            self.palw_held_context_at(block_daa),
             self.palw_prompt_ids_form_at(block_daa),
             // Who authored the commitment. Unverified, a 0x4a transaction from any stranger created
             // a claim bound to any bond outpoint it named — the genesis premine bond among them.
@@ -14690,6 +15248,13 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::BondRegistered { .. } => "BondRegistered",
         O::ModelBuy { .. } => "ModelBuy",
         O::ModelSeed { .. } => "ModelSeed",
+        O::ShardCourtAccused { .. } => "ShardCourtAccused",
+        O::ClassShardPlanDeclared { .. } => "ClassShardPlanDeclared",
+        O::BondShardsDeclared { .. } => "BondShardsDeclared",
+        O::ShardReceiptLicensed { .. } => "ShardReceiptLicensed",
+        O::CheckpointAccused { .. } => "CheckpointAccused",
+        O::DefaultAccusedHeld { .. } => "DefaultAccusedHeld",
+        O::MaterialDisclosedHeld { .. } => "MaterialDisclosedHeld",
         O::ModelSell { .. } => "ModelSell",
         O::ModelLineFounded { .. } => "ModelLineFounded",
         O::ModelVersionPublished { .. } => "ModelVersionPublished",
@@ -14724,6 +15289,8 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::CourtCloseChunk { .. } => "CourtCloseChunk",
         // ADR-0082 Decision 2 — the fused-attention dissection's three moves.
         O::CourtAttnRootClaimed { .. } => "CourtAttnRootClaimed",
+        // ADR-0093 Decision 8 — move 1 with its anchor.
+        O::CourtAttnRootClaimedAnchored { .. } => "CourtAttnRootClaimedAnchored",
         O::CourtAttnDissected { .. } => "CourtAttnDissected",
         O::CourtAttnChildChosen { .. } => "CourtAttnChildChosen",
     }
