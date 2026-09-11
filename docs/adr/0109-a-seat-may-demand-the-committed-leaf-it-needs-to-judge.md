@@ -1,9 +1,10 @@
 # ADR-0109 — A seat may demand the committed leaf it needs to judge
 
 * Status: PROPOSED 2026-09-11 on `feat/adr-0103-held-context` (continuing ADR-0103 at `36f115c4`),
-  written from the operator's decision on ADR-0103 §10.5. Nothing is armed: the new unit rides the
-  held regime (`Params::palw_held_context`, `None` on every shipped preset) and ADR-0062's court, so
-  no shipped fingerprint, identity, schedule or fork id moves. Testnet-11 does not move.
+  written from the operator's decision on ADR-0103 §10.5; **IMPLEMENTED the same day (§8), both
+  paths drilled to a slash on a live devnet**. Nothing is armed: the new unit rides the held regime
+  (`Params::palw_held_context`, `None` on every shipped preset) and ADR-0062's court, so no shipped
+  fingerprint, identity, schedule or fork id moves. Testnet-11 does not move.
 * Builds on: [0103](0103-the-context-is-held-off-the-chain-and-the-chain-carries-a-root-an-opening-and-a-logarithm.md)
   (Decision 1: the one-move court is the court; §10.3 item 11: the prompt tile rides the accusation;
   §10.5: the gap this ADR closes), [0100](0100-a-model-is-data-and-the-court-the-measure-and-the-licence-are-built-for-a-shard.md)
@@ -66,9 +67,13 @@ executor for the evidence of the leaf it named, on the transport that already ca
 requests (ADR-0077 Decision 8): the request index sets bit 29 above the leaf's interval, and the
 leaf itself rides a new field that the request's signature binds. The executor answers with the
 evidence built from its retention by ADR-0085's path — the leaf's interval replayed from its
-anchor, the annex for that one leaf, the refutation assembled from it — so an answer costs one
-interval's replay, never the job's. It is served only to a key the lane already authorises for the
-claim, once per `(bond, claim, leaf)`. The seat runs Decision 1's verdict at its own artifact root:
+anchor, the annex for that one leaf, the refutation assembled from it — so an honest executor's
+answer costs one interval's replay, never the job's. (Where that path cannot serve the leaf — a
+family that commits its logits flat, or an interval whose committed leaves are not the executor's
+own replay, which is a liar's — the builder takes the whole-capture prover, ADR-0085 X1's same
+object, at the cost of the executor's own retention.) It is served only to a key the lane already
+authorises for the claim, charged to that bond's request rate and throttled per `(peer, claim,
+request)` exactly as every interval request is. The seat runs Decision 1's verdict at its own artifact root:
 guilty, it files `ShardCourtAccused` (ADR-0100); not guilty, it files nothing and says that its
 replay and the court disagree, which is a determinism fault and not a claim's.
 
@@ -175,3 +180,71 @@ claimant renumbers the later writer, and this is the later writer: it is 0109, a
 on this branch — code comments, log lines, the drill's patterns — was renumbered with it. The
 verification-vector ADR takes its number when it is written, from what is resident on every branch
 then, rather than reserving one here.
+
+## 8. Implementation record (2026-09-11)
+
+Built on `feat/adr-0103-held-context`, continuing ADR-0103 at `36f115c4`: commits `e251c751` …
+the branch head. **Nothing on a shipped preset moves**: the unit, its admission and its
+adjudication ride the held regime and ADR-0062's court, both `None` on every shipped preset, so
+both shipped fingerprints are byte-identical (`shipped_presets_have_pinned_fingerprints` green) and
+testnet-11 does not move. The one rule that changed is the held fence's own (Decision 5), which no
+shipped preset arms.
+
+### 8.1 What each Decision became
+
+| Decision | where it lives | what pins it |
+|---|---|---|
+| **1** one unit, one verdict | `PalwLeafEvidenceV1` and `palw_one_move_verdict_v1` (`palw_shard_court_v1.rs`); `palw_shard_court_verdict_v1` is the shape check plus the same function; `palw_leaf_evidence_from_capture_v1` (`palw_leaf_evidence_v1.rs`) the one builder — the annex route, the whole-capture prover where the family refuses it, the artifact rows, the prompt carriage | `the_executors_leaf_evidence_is_the_one_move_object_by_either_route` (guilty convicts, honest clears, X1 equality, a decode leaf, one devnet carrier) |
+| **2** the fast path | request index bit 29 (`palw_leaf_evidence_request_index_v1`), `leafIndex = 6` on `PalwIntervalOpeningRequestMessage`, the signed message tag 3 (`palw_fp_leaf_request_message_v1`); the resolver answers a leaf request before any interval arithmetic; the seat's `pursue_named_leaf_v1` | `the_panel_pursues_a_named_leaf_serves_its_evidence_and_answers_the_held_court`; the leaf-request signature round trip |
+| **3** the demand, bounded | `PalwHeldMissingV1::StepLeaf` (appended); the binding half in `palw_held_da_check_accusation_v1` (in the step space, not fused); the chain half at acceptance (`palw_leaf_demand_is_the_seats_v1`: a seat of the bound panel, a leaf in its drawn interval — the seat's own geometry, `PalwSeatIntervalGeometryV1`, in both units) and in the fold (once per seat per claim: `held_leaf_demands`, delta tag 40, carriage tail `0xA4`, root block `held_leaf_demands`) | the two fold tests; `the_chains_interval_geometry_is_the_seats_on_both_units`; the delta tag pin |
+| **4** the answer adjudicated | `MaterialDisclosedHeld` with `PalwHeldDisclosureV1::StepLeaf` — `ExecutorGuilty` voids `CourtFraud`, `FalseAccusation` closes refuted, anything else is `HeldDaRefused` | the fold tests |
+| **5** the fence needs the court | `Params::validate_palw_v2`: `palw_held_context` refuses without `palw_da_court` and `palw_fp_da_pins` at or below it; `palw_held_context_mint_v1` arms both from genesis | the fence test's refusal cases |
+| **6** both halves ship | the executor answers all four held units (`held_da_answer_v1` has no catch-all arm; the state chunk and the step range through `held_state_chunk_answer_v1` / `held_step_range_answer_v1`, every family); `PalwDaDutyV2.held_missing` tells it which | `the_executor_answers_every_held_unit_the_court_can_name` (held fold, every checkpoint, ranges across a block edge and at the widest, the court's own check); `the_floor_answers_a_held_chunk_and_range_from_its_dense_retention`; the no-catch-all pin |
+| **7** the burden is the chain's | Decision 3's bound; the lane's rate and throttle for the fast path | as above |
+
+### 8.2 What the live drill found (both fixed, both pinned)
+
+`scripts/misaka-palw-shard-court-devnet-drill.sh` with `HELD=1 LEAF=fast` runs the executor with
+`--palw-drill-answer-only` — it serves its claims' answer envelope and never the capture — so a
+seat judges by intervals alone. Its first two runs found two defects older than this ADR, on the
+path from a sampled fault to a named leaf:
+
+1. **The first fault gate stopped a fault still addressed at a block.** The interval arm notes a
+   `FaultInRange` as a block, asks for the block's leaves, and names the leaf from them on a later
+   round (ADR-0086 Decision 6) — which the gate, stopping the verdict block the moment any fault was
+   held, never let run. `de6fb0da`: a free-prompt claim whose fault is a block runs the interval arm
+   again; the ledger never replaces a named leaf with a block, so the fall-through ends the round
+   the leaf is named.
+2. **The naming could never name a leaf in a lying interval.** It ran the close's replay, which on
+   a fold puts the seat's own leaves under the served frontier and requires them to walk to the
+   committed root — exactly what a lie inside the interval prevents ("this party's replay does not
+   reproduce the step leg root under the served frontier", every round). `6dffa805`: the naming
+   replays without the walk; the executor's leaves are bound to its commitment through the served
+   block's digest, and what is named is adjudicated on the executor's own evidence, so a ghost can
+   only clear. Pinned by `a_served_block_names_the_leaf_a_liar_committed`; restoring the walk
+   reproduces the drill's error verbatim. **The same walk remains on ADR-0085 Decision 3's close
+   from served intervals**, which therefore cannot close against a lying interval either; it is not
+   on this ADR's path (the evidence is the executor's), and is recorded as its own task.
+
+### 8.3 The drill runs
+
+Three nodes on one host, the floor-only devnet minted with `--palw-held-context-devnet`, node-0
+the liar (step leaf 0 of its canonical free-prompt claims tampered and re-committed) and running
+`--palw-drill-answer-only`, so no seat holds a capture:
+
+| run | binary | what happened |
+|---|---|---|
+| 1 | `be3c5101` | the seat verified interval 0 as a fault in block 0, asked for the block, held it — and nothing followed: 8.2 item 1 |
+| 2 | `de6fb0da` | the block was read every round and named no leaf ("does not reproduce the step leg root under the served frontier"): 8.2 item 2 |
+| 3, `LEAF=fast` | `6dffa805` | **PASS.** Claim `14b3ed4c…` committed 16:47:08; at 16:53:09 node-1 found the fault in block 0 of interval 0 and asked for the block (`0x80000000`); at 16:53:11 the block named leaf 0; at 16:53:13 it asked for the leaf's evidence (`0x20000000`) and node-0 served 25,029 bytes in 29 ms; at 16:53:15 it filed `ShardCourtAccused` on the executor's own evidence, and node-2 did the same ten seconds later. Block `a7591092…` carried it at 16:55:29; the claim read `voided court_fraud` on node-1 and node-2; bond 0's collateral fell 1,110,106,160 → 1,110,067,640 sompi |
+| 4, `LEAF=slow` | `8856efc0` | **PASS.** node-0 also runs `--palw-drill-refuse-leaf-evidence`. Claim `c31aa3bd…` committed 17:00:55; at 17:07:02–04 both seats named leaf 0 and asked, and node-0 refused; at 17:12:24, `PALW_LEAF_EVIDENCE_FAST_PATH_DAA_V1` later, both demanded it on chain; block `0d6679a1…` carried one `DefaultAccusedHeld` at 17:13:17 (the other seat's demand was dropped with its block standing — one session a claim); at 17:13:18 node-0 answered "the held accusation of `StepLeaf { leaf: 0 }` from the retained capture — deadline DAA 124"; block `a9cfa992…` carried the `MaterialDisclosedHeld` at 17:15:34 and the fold's one-move verdict on it voided the claim `court_fraud`, on node-1 and node-2; bond 0's collateral fell by the same 38,520 sompi |
+
+Invariant 5 holds on a live devnet: a seat that holds no capture convicts a tampered claim through
+the fast path, and through the slow path when the executor refuses the fast one — and a refusal is
+worth nothing to it, since the demand's answer is its own evidence and silence would have been
+`ProducerWithholding`.
+
+### 8.4 What remains before a network arms the held regime
+
+* ADR-0085 Decision 3's close from served intervals against a liar (8.2 item 2).
+* The verification-vector ADR (§6) — the evidence a context limit is armed on.

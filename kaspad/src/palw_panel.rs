@@ -5769,8 +5769,10 @@ impl PalwPanelService {
                             offload(backend, move |b| b.fp_accept_resume_v1(&state_bytes, &ctx_owned, &prompt_owned, covered)).await
                         }
                         None => {
-                            offload(backend, move |b| b.checkpoint_root_for_context_v1(&ctx_owned, &prompt_owned, &output_owned, covered))
-                                .await
+                            offload(backend, move |b| {
+                                b.checkpoint_root_for_context_v1(&ctx_owned, &prompt_owned, &output_owned, covered)
+                            })
+                            .await
                         }
                     }) else {
                         return None;
