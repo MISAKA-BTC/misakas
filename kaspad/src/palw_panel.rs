@@ -1287,31 +1287,23 @@ impl PalwPanelService {
 
     /// **What this object owes the CHAIN, on top of what its carrier owes the relay** (ADR-0102).
     ///
-    /// A carrier's fee is normally the node's own relay minimum for its real mass, so our mempool
-    /// cannot refuse what we built. That is not the same question the acceptance layer asks of a
-    /// close declaration: it prices the ADJUDICATION the declaration buys —
-    /// `palw_court_close_min_fee_v1(count)`, the relay fee for the whole close's counted bytes —
-    /// and drops a declaration that underpays, with the block standing. The declaration itself is
-    /// small (its digests are 64 bytes a chunk), so its own relay minimum is nowhere near that,
-    /// and a node paying only the relay minimum would have its declaration dropped, open no
-    /// group, and — because the resume reads the chain and sees no group — file the whole carriage
-    /// again on the next pass. A fee bleed, discovered at whichever carrier the operator happened
-    /// to be watching.
+    /// A carrier's fee is normally this node's own relay minimum for its real mass, so our mempool
+    /// cannot refuse what we built. That is not the question the acceptance layer asks of a close
+    /// declaration: it prices the ADJUDICATION the declaration buys, and the declaration object is
+    /// small — its digests are 64 bytes a chunk — so its own relay minimum is nowhere near it. A
+    /// node paying only that would have the declaration dropped, open no group, and, because the
+    /// resume reads the chain and sees no group, file the whole carriage again on the next pass.
     ///
-    /// Behind the same fence the acceptance layer reads it behind, and at the DAA the mover is
-    /// standing at, because a fee paid before the rule is armed is a fee nobody asked for.
-    ///
-    /// **The certification lane has the same shape and is deliberately not answered here**:
-    /// `palw_certification_min_fee_v1` prices a `FamilyCertified` the same way, this node has
-    /// never paid it either, and closing that is a change to how certifications are funded rather
-    /// than to how a close is carried. Both are dormant while `palw_certification_rent` is `None`
-    /// on every shipped preset, which is what makes it safe to close them one at a time.
-    fn consensus_rent_for(&self, object: &PalwConsensusObjectV2, current_daa: u64) -> u64 {
-        let PalwConsensusObjectV2::CourtCloseDeclared { count, .. } = object else { return 0 };
-        if !self.consensus_config.params.palw_certification_rent.is_some_and(|fence| fence.is_active(current_daa)) {
-            return 0;
-        }
-        kaspa_consensus_core::palw_state_v2::palw_court_close_min_fee_v1(u64::from(*count))
+    /// **The rule is `palw_carrier_min_fee_v1`, which `misaka-cli` reads too, and it is paid
+    /// whether or not the fence is armed.** The first version of this gated on
+    /// `palw_certification_rent` at the DAA the carrier is BUILT at, reasoning that a fee paid
+    /// before the rule is armed is a fee nobody asked for. It is judged at the DAA it LANDS at, so
+    /// a fence arming in between drops it — and for a declaration that is not a retry but a lost
+    /// dispute and a forfeited deposit. Measured, the premium for being early is under a third of
+    /// one MSK on the widest close a shipped ruleset admits, and it is burned rather than paid to
+    /// anyone. Two filers answering this differently was the larger defect of the two.
+    fn consensus_rent_for(&self, object: &PalwConsensusObjectV2) -> u64 {
+        kaspa_consensus_core::palw_state_v2::palw_carrier_min_fee_v1(object)
     }
 
     fn persist_fee_outpoint(&self, outpoint: TransactionOutpoint) {
@@ -1336,19 +1328,7 @@ impl PalwPanelService {
         funding_outpoint: TransactionOutpoint,
         funding: &UtxoEntry,
     ) -> Result<Transaction, String> {
-        self.build_lifecycle_tx_with_outputs(object, funding_outpoint, funding, &[], 0)
-    }
-
-    /// [`Self::build_lifecycle_tx`] with a floor under the fee — what the CHAIN charges this
-    /// object, from [`Self::consensus_rent_for`], which the relay minimum knows nothing about.
-    fn build_lifecycle_tx_paying_rent(
-        &self,
-        object: &PalwConsensusObjectV2,
-        funding_outpoint: TransactionOutpoint,
-        funding: &UtxoEntry,
-        current_daa: u64,
-    ) -> Result<Transaction, String> {
-        self.build_lifecycle_tx_with_outputs(object, funding_outpoint, funding, &[], self.consensus_rent_for(object, current_daa))
+        self.build_lifecycle_tx_with_outputs(object, funding_outpoint, funding, &[])
     }
 
     /// [`Self::build_lifecycle_tx`] with outputs AHEAD of the change.
@@ -1363,7 +1343,6 @@ impl PalwPanelService {
         funding_outpoint: TransactionOutpoint,
         funding: &UtxoEntry,
         extra_outputs: &[kaspa_consensus_core::tx::TransactionOutput],
-        min_fee: u64,
     ) -> Result<Transaction, String> {
         let kp = self.keypair.as_ref().ok_or("no signing key")?;
         // **Refuse before signing, and name the field.**
@@ -1435,8 +1414,11 @@ impl PalwPanelService {
         };
         let priced = build(1, dummy_sig_script)?;
         // The relay's price for what we built, floored by what the CHAIN charges this object — see
-        // `consensus_rent_for`. Zero for every object but a close declaration on an armed network.
-        let fee = relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&priced).compute_mass).max(min_fee);
+        // `consensus_rent_for`. Read from the object HERE, in the one builder every carrier this
+        // node files goes through, rather than at the call sites: a rent a caller has to remember
+        // to ask for is a rent the next lane forgets, and forgetting it costs the carrier.
+        let fee =
+            relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&priced).compute_mass).max(self.consensus_rent_for(object));
 
         let unsigned = build(fee, vec![])?;
         let mtx = MutableTransaction::with_entries(unsigned, vec![funding.clone()]);
@@ -1517,7 +1499,7 @@ impl PalwPanelService {
         let storm = self.consensus_config.params.storage_mass_parameter;
         let build = |collateral: u64| -> Result<(u64, Transaction), String> {
             let (object, output) = self.build_bond_registration(collateral)?;
-            let tx = self.build_lifecycle_tx_with_outputs(&object, funding_outpoint, funding, std::slice::from_ref(&output), 0)?;
+            let tx = self.build_lifecycle_tx_with_outputs(&object, funding_outpoint, funding, std::slice::from_ref(&output))?;
             Ok((collateral, tx))
         };
         let storage_mass = |tx: &Transaction| {
@@ -4195,7 +4177,7 @@ impl PalwPanelService {
                             still_owed = true;
                             break;
                         };
-                        match self.build_lifecycle_tx_paying_rent(object, funding_outpoint, &funding_entry, current_daa) {
+                        match self.build_lifecycle_tx(object, funding_outpoint, &funding_entry) {
                             Ok(tx) => {
                                 let txid = tx.id();
                                 let change = tx.outputs[0].clone();

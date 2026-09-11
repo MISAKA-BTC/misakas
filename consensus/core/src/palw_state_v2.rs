@@ -3476,6 +3476,59 @@ pub fn palw_object_rent_ceiling_v1(object: &PalwConsensusObjectV2) -> u64 {
     }
 }
 
+/// **What a FILER must put on a carrier so the chain will not drop it** — the one spelling, read
+/// by every builder of a lifecycle carrier.
+///
+/// Not [`palw_object_rent_ceiling_v1`], and the two are easy to confuse because they answer about
+/// the same sompi. That one says how much of a fee is BURNED rather than paid to the miner; it is
+/// read where the folded state is not in hand, so it must answer for a chunk without knowing which
+/// chunk opens a group or which completes one. **This** one says what a carrier must PAY, and its
+/// reader is about to build the carrier, so it knows the object's own index and count. Where they
+/// differ, they differ for that reason.
+///
+/// Three acceptance rules drop an underpaying carrier, and this is their sum per object:
+///
+/// * **the chunk SLOT** ([`palw_object_chunk_group_rent_v1`]) — charged to the chunk that OPENS a
+///   group, which is index 0: carriers are chained on one another's change, so no later one can be
+///   mined first.
+/// * **the close's ADJUDICATION** ([`palw_court_close_min_fee_v1`]) — charged to the declaration,
+///   because a chunk carries no count and chunks arrive in any order.
+/// * **the GRADING** ([`palw_certification_min_fee_v1`]) — charged to a `FamilyCertified`, and to
+///   the chunk that COMPLETES one, because that chunk carries the object into its block. A single
+///   chunk cannot say how many vectors the assembled object holds, so it pays for the most the
+///   rules allow ([`PALW_CERTIFICATION_MAX_VECTORS`]).
+///
+/// **Paid whether or not the fence is armed, and that is a decision rather than an oversight.**
+/// The `palw_certification_rent` fence decides when the chain starts DROPPING underpayers; it does
+/// not decide what the carrier costs to build. A filer that gated on it would have to evaluate the
+/// fence at the DAA it builds at, while the carrier is judged at the DAA it LANDS at — so a fence
+/// arming in between drops the carrier. For a close declaration that is not a retry: the group
+/// never opens, the declaring side loses its assembly deposit, and under W7 a close that cannot
+/// assemble convicts the side that declared it. The premium for being early is the rent itself,
+/// which for the widest close a shipped ruleset admits is under a third of one MSK, and which is
+/// BURNED at the acceptance layer rather than paid to anyone — so overpaying enriches no adversary
+/// and the asymmetry is entirely one-sided.
+///
+/// `index` and `count` may come off a file an operator hands a tool, so the comparison widens to
+/// `u16`: `255 + 1` on a `u8` is a panic rather than a refusal.
+pub fn palw_carrier_min_fee_v1(object: &PalwConsensusObjectV2) -> u64 {
+    match object {
+        PalwConsensusObjectV2::ObjectChunk { index, count, .. } => {
+            let opener = if *index == 0 { palw_object_chunk_group_rent_v1() } else { 0 };
+            let completing = if u16::from(*index) + 1 == u16::from(*count) {
+                palw_certification_min_fee_v1(PALW_CERTIFICATION_MAX_VECTORS)
+            } else {
+                0
+            };
+            opener.max(completing)
+        }
+        // Every other object owes exactly what the chain's own ceiling says — a certification's
+        // grading, a close declaration's adjudication, and ADR-0088 Decision 11's three rent-priced
+        // registry objects among them; the rest read 0 and pay carriage only.
+        other => palw_object_rent_ceiling_v1(other),
+    }
+}
+
 pub fn palw_object_chunk_group_id_v1(object_bytes: &[u8]) -> Hash64 {
     let mut state = keyed(PALW_STATE_V2_DOMAIN_OBJECT_CHUNK_GROUP);
     state.update(&(object_bytes.len() as u64).to_le_bytes());
@@ -20404,6 +20457,70 @@ pub(crate) mod tests {
         assert_eq!(palw_object_rent_ceiling_v1(&chunk), palw_object_chunk_group_rent_v1());
         let bond = PalwConsensusObjectV2::BondRetireRequested { bond: bond_key(1), signature: vec![] };
         assert_eq!(palw_object_rent_ceiling_v1(&bond), 0, "no rule prices a retirement, so its whole fee is the miner's");
+    }
+
+    /// **What a filer pays covers every rule that would drop it** (ADR-0102).
+    ///
+    /// The acceptance filter holds exactly three `carrier_fee < owed` refusals, and this asserts
+    /// [`palw_carrier_min_fee_v1`] answers at least each one, on the object that rule reads. It is
+    /// the test the panel could not have: the node's carrier builder needs a key, a wallet and a
+    /// funded outpoint, so the floor is pinned where it is a pure function — and both filers
+    /// (`misaka-cli`'s `carrier_rent_v1` and the panel's `consensus_rent_for`) are one-line
+    /// delegates to it, so pinning it here pins both.
+    ///
+    /// Stated as `>=` rather than `==` on purpose: a filer that overpays keeps its carrier, and a
+    /// filer that underpays by one sompi loses it. Only one of those directions is a defect.
+    #[test]
+    fn a_filers_floor_covers_every_rule_that_would_drop_its_carrier() {
+        // 1. the chunk SLOT — charged to the opener, which is index 0, and to nobody else.
+        let opener = PalwConsensusObjectV2::ObjectChunk { group: h64(7), index: 0, count: 3, bytes: vec![1] };
+        assert!(palw_carrier_min_fee_v1(&opener) >= palw_object_chunk_group_rent_v1(), "the opener does not pay for its slot");
+        let middle = PalwConsensusObjectV2::ObjectChunk { group: h64(7), index: 1, count: 3, bytes: vec![1] };
+        assert_eq!(palw_carrier_min_fee_v1(&middle), 0, "an extending chunk buys nothing and must not be charged");
+
+        // 2. the close's ADJUDICATION — charged to the declaration, never to a chunk of it.
+        let declaration = declare_close(h64(0xC0), PalwCourtSideV1::Executor, 4);
+        assert!(
+            palw_carrier_min_fee_v1(&declaration) >= palw_court_close_min_fee_v1(4),
+            "a close declaration does not pay for the adjudication it buys"
+        );
+        assert_eq!(
+            palw_carrier_min_fee_v1(&close_chunk(h64(0xC0), PalwCourtSideV1::Executor, 0, 4)),
+            0,
+            "the declaration bought the grading; charging its chunks again taxes the carrier that completes"
+        );
+
+        // 3. the GRADING — charged to a `FamilyCertified`, and to the chunk that COMPLETES one,
+        //    which cannot know the vector count and so must pay for the most the rules allow.
+        let completing = PalwConsensusObjectV2::ObjectChunk { group: h64(7), index: 2, count: 3, bytes: vec![1] };
+        assert!(
+            palw_carrier_min_fee_v1(&completing) >= palw_certification_min_fee_v1(PALW_CERTIFICATION_MAX_VECTORS),
+            "the completing chunk carries the certification into its block and must have paid to grade it"
+        );
+        // A one-part group is both opener and completer, so it owes the larger of the two.
+        let alone = PalwConsensusObjectV2::ObjectChunk { group: h64(7), index: 0, count: 1, bytes: vec![1] };
+        assert!(palw_carrier_min_fee_v1(&alone) >= palw_object_chunk_group_rent_v1());
+        assert!(palw_carrier_min_fee_v1(&alone) >= palw_certification_min_fee_v1(PALW_CERTIFICATION_MAX_VECTORS));
+
+        // And an object no rule prices costs its carrier nothing beyond carriage — every court
+        // move the node's panel files but the declaration reads here.
+        for unpriced in [
+            PalwConsensusObjectV2::BondRetireRequested { bond: bond_key(1), signature: vec![] },
+            a_court_close(h64(0xC0), PalwCourtVerdictV2::ExecutorGuilty),
+        ] {
+            assert_eq!(palw_carrier_min_fee_v1(&unpriced), 0, "a rule nobody wrote must not become a fee");
+        }
+
+        // **The widest legal group, and the reason the comparison widens to `u16`.** Indices run
+        // `0..count`, so the chunk that completes a 255-part group is index 254.
+        let last = PalwConsensusObjectV2::ObjectChunk { group: h64(7), index: 254, count: 255, bytes: vec![1] };
+        assert!(palw_carrier_min_fee_v1(&last) >= palw_certification_min_fee_v1(PALW_CERTIFICATION_MAX_VECTORS));
+        // `index: 255, count: 255` is out of range and completes nothing — the transition refuses
+        // it as `ChunkIndexOutOfRange`. What the widening buys is that this ANSWERS: on a `u8` the
+        // completion test would be `255 + 1`, which panics in a debug build rather than refusing,
+        // and the value reaching it comes off a file an operator hands a tool.
+        let past_the_end = PalwConsensusObjectV2::ObjectChunk { group: h64(7), index: 255, count: 255, bytes: vec![1] };
+        assert_eq!(palw_carrier_min_fee_v1(&past_the_end), 0, "a chunk past the end of its group buys nothing");
     }
 
     #[test]

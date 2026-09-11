@@ -192,11 +192,9 @@ chain.
   the declaration object is small — its digests are 64 bytes a chunk. `build_lifecycle_tx` paid the
   carrier's own relay minimum, so the declaration would have been dropped, no group would have
   opened, and the resume — reading no group — would have re-filed the whole carriage every pass.
-  `build_lifecycle_tx_paying_rent` floors the fee with what the chain charges, behind the same
-  `palw_certification_rent` fence the acceptance layer reads it behind. **The certification lane
-  has the identical gap and is named, not fixed**: this node has never paid
-  `palw_certification_min_fee_v1` either. Both are dormant while the fence is `None` on every
-  shipped preset, which is what makes closing them one at a time safe.
+  The builder now floors the fee with what the chain charges. **This entry claimed, when it was
+  first written, that the certification lane "has the identical gap"; it does not, and §11 records
+  what the follow-up measured.**
 * **A carriage kept across ticks re-files what is still in flight.** A split close is the first
   move this loop holds AFTER sending; the bitmap only moves when a carrier reaches a block, and the
   panel ticks every couple of seconds. Rate-limited by `COURT_MOVE_REPLAN_DAA`, the window the
@@ -253,3 +251,47 @@ Until that lands, what stands behind the split path is the state layer's own cov
 the lapse, the signature) plus this ADR's eight. **No split close has been filed on a live chain**,
 and devnet's `max_close_chunks = 1` refuses one, so a drill that exercises it needs a network whose
 court pays for more than one carrier.
+
+## 11. The certification gap this ADR named, measured — and the one that was really there
+
+§9 recorded, as a known-and-deferred defect, that "the certification lane has the identical gap":
+that the panel had never paid `palw_certification_min_fee_v1` for a `FamilyCertified`. **That was
+wrong, and it was wrong in the way a plausible sentence is wrong — by asserting a call site nobody
+had looked for.** The panel does not file a `FamilyCertified`. It does not file an `ObjectChunk`
+either. Every construction of either object in the tree is inside `consensus/`: the production
+arms, the rent functions and their tests. The objects the panel builds are `CourtOpened`,
+`CourtDisclosed`, `CourtVerdictPosted`, `CourtClosed` (now with its declaration and chunks),
+`MaterialDisclosed`, `ClassRegistered`, `BondRegistered` and an assembled `ReceiptLicensed` — and
+of those, only the close declaration is priced by any rule.
+
+Certifications are filed by `misaka palw submit-object`, from a file `palw-certify` writes, and
+**that path already paid every rent**: `misaka-cli`'s `carrier_rent_v1` had worked out all three
+charges, including the one this ADR's author did not know about — that the chunk which COMPLETES a
+certification group owes the grading rent, and cannot know the vector count, so it must pay for
+`PALW_CERTIFICATION_MAX_VECTORS`.
+
+**The acceptance filter holds exactly three refusals**, all behind `palw_certification_rent`:
+the chunk SLOT charged to the opener (`palw_object_chunk_group_rent_v1`), the close's ADJUDICATION
+charged to the declaration (`palw_court_close_min_fee_v1`), and the GRADING charged to a
+`FamilyCertified` or to the chunk completing one (`palw_certification_min_fee_v1`). Separately and
+**not** behind that fence, `palw_object_rent_ceiling_v1` decides how much of a carrier's fee is
+BURNED rather than paid to the miner — which is where ADR-0088 Decision 11's three model-registry
+objects are priced. Burning is not dropping: an underpaying model object is not refused, it simply
+burns its whole fee.
+
+**So the real defect was not a missing payment but a second answer.** After §9, two filers priced
+the same carrier by different rules: `misaka-cli` paid unconditionally, and the panel paid only
+when the fence read armed at the DAA it BUILT at. A carrier is judged at the DAA it LANDS at, so a
+fence arming in between drops it — and a dropped declaration is not a retry but a lost dispute and
+a forfeited assembly deposit. Measured, the premium for paying early is 28,125,000 sompi, under a
+third of one MSK, on the widest close a shipped ruleset admits; and it is burned rather than paid
+to anyone, so overpaying enriches no adversary. The fence check was removed, the rule was promoted
+to `palw_carrier_min_fee_v1` in `palw_state_v2` beside the ceiling it must not be confused with,
+and both filers are one-line delegates. The panel's builder reads it for every carrier rather than
+at the call sites, so no future lane can forget it.
+
+`a_filers_floor_covers_every_rule_that_would_drop_its_carrier` pins each of the three against the
+object its rule reads. The panel's own builder needs a key, a wallet and a funded outpoint, so the
+floor is pinned where it is a pure function — which covers both filers, because both delegate. The
+test found an off-by-one in its own author's assumption on its first run: in a 255-part group the
+completing chunk is index **254**, and index 255 completes nothing.
