@@ -328,3 +328,22 @@ faults and copies before it says anything about disks. What it says about disks 
 against 11 MB/s, and that is Decision 6's measurement to make.
 
 **The fleet** (Decision 6): not run.
+
+### 10.4 The integration and the `main` merge
+
+Two things this ADR changed were in use on the fleet lineage, and neither branch alone showed it:
+ADR-0106's inventory test asks `Qwen36ArtifactV1::extent` whether a reopened artifact is the
+mapped store, and hands `tensor`'s result to the writer as `&[i8]`. `extent` had gone with the
+`MADV` residency it served; it stays, as the directory read it is, and the test borrows the
+handle. On `integ/t11-adr0103-unarmed` after that: `misaka-palw-base0` 432 passed, 0 failed,
+10 ignored; the SDK suite and `kaspad`'s `palw_backends` (12) pass.
+
+On `merge/0103-0110-0111-into-main`: the release build prints the t11 fingerprint `ecbdbc22…`
+and schedule `8cacc12a…`, both unchanged, with all 26 fleet flags and
+`--palw-class-resident-bytes`; `shipped_presets_have_pinned_fingerprints` is in the
+consensus-core suite that passes there (2,069). The Lints job's three gates (`fmt`, `clippy`,
+`pq-guard`, on the pinned 1.93.0) pass. `origin/main`'s own run of that job stops at its first
+step — rustfmt reports 28 files — so its clippy had never run; behind it were four clippy errors
+in consensus-core's tests, and four findings this lineage had added (three rustfmt diffs, a
+`byte_char_slices`, and an `is_multiple_of` that only shows once the crates before it are clean).
+This lineage's are fixed on the feature branch; `origin/main`'s on the merge.
