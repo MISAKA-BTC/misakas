@@ -882,6 +882,9 @@ pub struct PalwOpeningRequestV1<'a> {
     /// The interval asked for, or `None` for a whole-capture pull. It is part of the signed
     /// message, so one signature cannot be replayed as a request for every interval of a claim.
     pub interval_index: Option<u32>,
+    /// **ADR-0109 Decision 2: the step leaf whose evidence is asked for**, when the index is a
+    /// leaf-evidence request (bit 29). Part of the signed message, like the index.
+    pub leaf_index: Option<u64>,
     /// The requester's DAA score when it signed.
     pub requested_daa: u64,
     /// The requester's ML-DSA-87 public key. The bond is DERIVED from it on chain; a carried bond
@@ -1024,7 +1027,7 @@ struct PalwOpeningLane {
     /// directory AND the family backends that can open a retained capture (`open_fp_interval`).
     /// A closure rather than a file read because an opening is COMPUTED from the capture, not
     /// copied out of it. Runs on a blocking thread with no lock held.
-    resolver: Mutex<Option<std::sync::Arc<dyn Fn(Hash64, u32) -> Option<Vec<u8>> + Send + Sync>>>,
+    resolver: Mutex<Option<std::sync::Arc<dyn Fn(Hash64, u32, Option<u64>) -> Option<Vec<u8>> + Send + Sync>>>,
     /// Serve throttle, keyed by the ASKER as well as the interval: two seats of one panel
     /// legitimately draw the same interval seconds apart, and a throttle keyed on the interval
     /// alone would answer the first and silence the second. What must not repeat is one peer
@@ -1094,7 +1097,10 @@ impl PalwGossipCenter {
     }
 
     /// Register the opener a serve consults — panel service only; see the field's doc.
-    pub fn set_interval_opening_resolver(&self, resolver: std::sync::Arc<dyn Fn(Hash64, u32) -> Option<Vec<u8>> + Send + Sync>) {
+    pub fn set_interval_opening_resolver(
+        &self,
+        resolver: std::sync::Arc<dyn Fn(Hash64, u32, Option<u64>) -> Option<Vec<u8>> + Send + Sync>,
+    ) {
         *self.openings.resolver.lock().unwrap() = Some(resolver);
     }
 
@@ -1129,12 +1135,14 @@ impl PalwGossipCenter {
         self.charge_opening_peer_rate(peer)?;
         let authorizer = { self.openings.authorizer.lock().unwrap().clone() };
         let Some(authorizer) = authorizer else { return Err(PalwServeRefusalV1::NotServing) };
-        let (claim, interval_index, requested_daa) = (request.claim, request.interval_index, request.requested_daa);
+        let (claim, interval_index, leaf_index, requested_daa) =
+            (request.claim, request.interval_index, request.leaf_index, request.requested_daa);
         let (pubkey, signature) = (request.requester_pubkey.to_vec(), request.signature.to_vec());
         let verified = tokio::task::spawn_blocking(move || {
             authorizer(&PalwOpeningRequestV1 {
                 claim,
                 interval_index,
+                leaf_index,
                 requested_daa,
                 requester_pubkey: &pubkey,
                 signature: &signature,
@@ -1274,7 +1282,8 @@ impl PalwGossipCenter {
         // Cleared however this future ends — see `InFlightMark`. The blocking task itself is not
         // cancellable, so the opening still finishes and still reaches the panel's own cache.
         let _mark = InFlightMark { lane: &self.openings, key: (claim, interval_index) };
-        let opened = tokio::task::spawn_blocking(move || resolver(claim, interval_index)).await;
+        let leaf_index = request.leaf_index;
+        let opened = tokio::task::spawn_blocking(move || resolver(claim, interval_index, leaf_index)).await;
         let Some(bytes) = opened.ok().flatten() else {
             self.refund_serve_budget(peer, reservation);
             return Err(PalwServeRefusalV1::NotHeld);
@@ -1591,6 +1600,7 @@ mod tests {
         let request = PalwOpeningRequestV1 {
             claim: other_private_claim,
             interval_index: None,
+            leaf_index: None,
             requested_daa: 0,
             requester_pubkey: &[],
             signature: &[],
@@ -1919,8 +1929,14 @@ mod tests {
         let claim = h64(101);
         let (key, sig) = signed_request();
 
-        let unsigned =
-            PalwOpeningRequestV1 { claim, interval_index: Some(0), requested_daa: 10, requester_pubkey: &[], signature: &[] };
+        let unsigned = PalwOpeningRequestV1 {
+            claim,
+            leaf_index: None,
+            interval_index: Some(0),
+            requested_daa: 10,
+            requester_pubkey: &[],
+            signature: &[],
+        };
         assert_eq!(check_opening_request_shape(&unsigned), Err(PalwServeRefusalV1::Unsigned));
         assert_eq!(PalwServeRefusalV1::Unsigned.name(), "unsigned");
 
@@ -1948,7 +1964,14 @@ mod tests {
         let bond = h64(0xB0);
         center.set_opening_authorizer(one_bond_authorizer(key.clone(), bond));
 
-        let ok = PalwOpeningRequestV1 { claim, interval_index: Some(3), requested_daa: 900, requester_pubkey: &key, signature: &sig };
+        let ok = PalwOpeningRequestV1 {
+            claim,
+            leaf_index: None,
+            interval_index: Some(3),
+            requested_daa: 900,
+            requester_pubkey: &key,
+            signature: &sig,
+        };
         assert_eq!(center.authorize_serve(peer(1), &ok).await, Ok(bond));
 
         let stranger_key = vec![0xCCu8; 2_592];
@@ -1985,7 +2008,14 @@ mod tests {
         assert!(!center.serves_openings());
         let claim = h64(103);
         let (key, sig) = signed_request();
-        let req = PalwOpeningRequestV1 { claim, interval_index: Some(0), requested_daa: 5, requester_pubkey: &key, signature: &sig };
+        let req = PalwOpeningRequestV1 {
+            claim,
+            leaf_index: None,
+            interval_index: Some(0),
+            requested_daa: 5,
+            requester_pubkey: &key,
+            signature: &sig,
+        };
         assert_eq!(center.resolve_interval_opening_for_serve(peer(1), &req).await, Err(PalwServeRefusalV1::NotServing));
         assert_eq!(center.authorize_serve(peer(1), &req).await, Err(PalwServeRefusalV1::NotServing));
         assert_eq!(PalwServeRefusalV1::NotServing.name(), "not-serving");
@@ -2007,7 +2037,7 @@ mod tests {
         center.set_opening_authorizer(one_bond_authorizer(key.clone(), h64(0xB1)));
         let opens = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counter = opens.clone();
-        center.set_interval_opening_resolver(std::sync::Arc::new(move |_, index| {
+        center.set_interval_opening_resolver(std::sync::Arc::new(move |_, index, _| {
             counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Some(vec![index as u8; 512])
         }));
@@ -2016,6 +2046,7 @@ mod tests {
         let ask = |interval: u32| PalwOpeningRequestV1 {
             claim,
             interval_index: Some(interval),
+            leaf_index: None,
             requested_daa: 900,
             requester_pubkey: &key,
             signature: &sig,
@@ -2056,7 +2087,7 @@ mod tests {
 
         // An opener that outgrows the cap is refused rather than emitted: the far end would drop
         // it, and a serve the other end cannot take only spends this node's egress.
-        center.set_interval_opening_resolver(std::sync::Arc::new(|_, _| Some(vec![0u8; PALW_INTERVAL_OPENING_MAX_BYTES + 1])));
+        center.set_interval_opening_resolver(std::sync::Arc::new(|_, _, _| Some(vec![0u8; PALW_INTERVAL_OPENING_MAX_BYTES + 1])));
         assert_eq!(center.resolve_interval_opening_for_serve(peer(5), &ask(1)).await, Err(PalwServeRefusalV1::Oversized));
     }
 
@@ -2068,6 +2099,17 @@ mod tests {
     /// still has the material lane's two bounds — a slot ceiling and a per-peer share of it — so a
     /// forger cannot make the seat attempt unbounded replays, and cannot be the only voice for an
     /// interval however fast it sends.
+    /// **The held regime's width derivation reads the cap this lane enforces** (ADR-0103
+    /// Decision 2): consensus-core mirrors the constant because it cannot read this crate, and a
+    /// mirror nobody compares is two numbers.
+    #[test]
+    fn the_held_regimes_opening_cap_is_this_lanes_cap() {
+        assert_eq!(
+            PALW_INTERVAL_OPENING_MAX_BYTES as u64,
+            kaspa_consensus_core::palw_held_context_v1::PALW_HELD_SEAT_INTERVAL_OPENING_CAP_BYTES_V1
+        );
+    }
+
     #[test]
     fn an_interval_opening_is_admitted_only_when_solicited_and_within_its_slots() {
         let center = PalwGossipCenter::default();

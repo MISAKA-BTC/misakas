@@ -282,6 +282,19 @@ pub mod palw_service_descriptor_v1;
 /// at a named leaf, its session id, its verdict. A consensus object behind
 /// `Params::palw_shard_court`, `None` on every shipped preset.
 pub mod palw_shard_court_v1;
+/// ADR-0103 Decision 1 — a checkpoint's chunk is tried against the cache-write rows it claims to
+/// hold, in one move. A consensus object behind `Params::palw_held_context`, `None` everywhere.
+pub mod palw_checkpoint_court_v1;
+/// ADR-0103 — the context is held off the chain: the seat's interval of positions, its route, its
+/// width and its fetch, as pure functions. Consensus-inert.
+pub mod palw_held_context_v1;
+/// ADR-0103 Decision 4 — a data-availability accusation names a prompt tile, a state chunk or a
+/// step range, and is answered by that unit and its path. Behind `Params::palw_held_context`.
+pub mod palw_held_da_v1;
+/// ADR-0109 — a seat may demand the committed leaf it needs to judge: the seat's assigned
+/// intervals and the interval that owns a leaf, as pure functions of the binding — the bound a
+/// held DA demand for a leaf's evidence is admitted under.
+pub mod palw_leaf_evidence_v1;
 /// ADR-0100 Decision 4 — licensing per shard: the part, the per-shard quorum and the progress, as
 /// pure functions. Consensus-inert; the fold is the ADR's stated next step.
 pub mod palw_shard_licensing_v1;

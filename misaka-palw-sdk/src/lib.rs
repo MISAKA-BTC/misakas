@@ -301,7 +301,8 @@ mod tests {
         assert!(armed.court.is_some(), "devnet arms palw_kary_court at genesis");
         s.preflight_admission(bundle, &row, root, &armed).expect("the fused row is admissible under the court the ruleset arms");
 
-        let dormant = PalwAdmissionShapeV1 { court: None, ladder: None, token_lift: false, fused_dissectable: false };
+        let dormant =
+            PalwAdmissionShapeV1 { court: None, ladder: None, token_lift: false, fused_dissectable: false, held: Default::default() };
         let err = s.preflight_admission(bundle, &row, root, &dormant).expect_err("no court, no fused row");
         assert!(err.contains("has no dissection to try it with"), "{err}");
     }
@@ -357,7 +358,13 @@ mod tests {
             bundle.court.max_step_leaf_count(),
         )
         .expect("the graph-v5 row has ladder rules under the court");
-        let with_rules = PalwAdmissionShapeV1 { court: Some(court), ladder: Some(rules), token_lift: false, fused_dissectable: false };
+        let with_rules = PalwAdmissionShapeV1 {
+            court: Some(court),
+            ladder: Some(rules),
+            token_lift: false,
+            fused_dissectable: false,
+            held: shape.held,
+        };
         let priced = s.preflight_admission(bundle, &row, root, &with_rules).expect("the same row, the rules stated");
         assert_eq!(format!("{priced:?}"), format!("{admitted:?}"), "one price for the fused row under one court");
     }

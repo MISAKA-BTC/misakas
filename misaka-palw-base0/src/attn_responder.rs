@@ -15,8 +15,8 @@ use kaspa_consensus_core::palw_attn_court_v1::{PalwAttnCheckpointAnchorV1, PalwA
 use kaspa_consensus_core::palw_attn_responder_v1::{PalwAttnAnchorEvidenceV1, PalwAttnSiteEvidenceV1, PalwAttnSiteInputsV1};
 use kaspa_consensus_core::palw_step::{PalwStepCoordinateV1, canonical_step_leaf_index};
 use kaspa_consensus_core::palw_step_leg::{
-    PalwStepMerkleTreeV1, PalwStepOpeningV1, PalwStepPrefixTreeV1, PalwStepTileLeafV1, state_chunk_leaf_hash_v1, state_chunks_root_v1,
-    step_merkle_path_capped_v1, step_merkle_root_capped_v1,
+    PalwStepMerkleTreeV1, PalwStepOpeningV1, PalwStepPrefixTreeV1, PalwStepTileLeafV1, step_merkle_path_capped_v1,
+    step_merkle_root_capped_v1,
 };
 use kaspa_hashes::Hash64;
 
@@ -259,12 +259,26 @@ pub fn base0_attn_site_evidence_v1(
             kaspa_consensus_core::palw_attn_court_v1::palw_attn_anchor_is_the_sites_v1(filed, &with_anchor.binding, &with_anchor.site)
                 .map_err(|e| format!("the filed anchor is not the site's committed checkpoint: {e}"))?;
             let chunks = anchor_chunks(covered)?;
-            let chunk_hashes: Vec<Hash64> = chunks
-                .iter()
-                .enumerate()
-                .map(|(n, bytes)| state_chunk_leaf_hash_v1(&binding.state_chunk_map_id, n as u32, bytes))
-                .collect();
-            if state_chunks_root_v1(&chunk_hashes).ok() != Some(filed.leaf.state_chunks_root) {
+            // Under the CLASS's map, as the leg's branch below (ADR-0103 Decision 3) — the flat
+            // leaf and root this branch was written with are the v3 map's, and a held class's
+            // filed anchor roots its chunks under the held map's tree over slice sub-roots.
+            let positions = kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(
+                &binding.shape_profile,
+                &binding.job_context,
+                covered,
+            );
+            let chunk_hashes: Vec<Hash64> = kaspa_consensus_core::palw_state_chunk_map::palw_state_chunk_leaves_for_map_v1(
+                &binding.shape_profile,
+                positions,
+                &chunks,
+            )
+            .map_err(|e| format!("the anchor's chunks at counter {covered} are not the map's: {e:?}"))?;
+            let root = kaspa_consensus_core::palw_state_chunk_map::palw_state_root_from_leaves_for_map_v1(
+                &binding.shape_profile,
+                positions,
+                &chunk_hashes,
+            );
+            if root.ok() != Some(filed.leaf.state_chunks_root) {
                 return Err(format!("the anchor's state at counter {covered} does not root to the filed checkpoint"));
             }
             Some(PalwAttnAnchorEvidenceV1 { anchor: filed.clone(), chunks, chunk_hashes })
@@ -285,12 +299,25 @@ pub fn base0_attn_site_evidence_v1(
                 Some(kept) if !kept.is_empty() => kept.clone(),
                 _ => anchor_chunks(covered)?,
             };
-            let chunk_hashes: Vec<Hash64> = chunks
-                .iter()
-                .enumerate()
-                .map(|(n, bytes)| state_chunk_leaf_hash_v1(&binding.state_chunk_map_id, n as u32, bytes))
-                .collect();
-            if state_chunks_root_v1(&chunk_hashes).ok() != Some(leaves[i].state_chunks_root) {
+            // The leaves and the root under the CLASS's map (ADR-0103 Decision 3): the held map's
+            // leaf binds `(slice, block)` and its root is a tree over slice sub-roots.
+            let positions = kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(
+                &binding.shape_profile,
+                &binding.job_context,
+                covered,
+            );
+            let chunk_hashes: Vec<Hash64> = kaspa_consensus_core::palw_state_chunk_map::palw_state_chunk_leaves_for_map_v1(
+                &binding.shape_profile,
+                positions,
+                &chunks,
+            )
+            .map_err(|e| format!("the anchor's chunks at counter {covered} are not the map's: {e:?}"))?;
+            let root = kaspa_consensus_core::palw_state_chunk_map::palw_state_root_from_leaves_for_map_v1(
+                &binding.shape_profile,
+                positions,
+                &chunk_hashes,
+            );
+            if root.ok() != Some(leaves[i].state_chunks_root) {
                 return Err(format!("the anchor's state at counter {covered} does not root to the committed checkpoint"));
             }
             Some(PalwAttnAnchorEvidenceV1 {

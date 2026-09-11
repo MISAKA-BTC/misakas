@@ -1117,8 +1117,37 @@ pub fn palw_court_params_at_v2(
     bundle: &crate::palw_mode_v2::PalwConsensusParamsV2,
     kary_court_active: bool,
 ) -> Result<crate::palw_mode_v2::PalwCourtParamsV2, PalwCourtV2Error> {
+    palw_court_params_held_at_v2(bundle, kary_court_active, false)
+}
+
+/// **[`palw_court_params_at_v2`] on a network that may have armed `Params::palw_held_context`**
+/// (ADR-0103 Decision 5). Held, the arity is derived with the leaf ladder's rounds at zero
+/// ([`crate::palw_mode_v2::palw_court_arity_held_v1`]) — no session on such a network plays the
+/// ladder, so its rounds are not what the window has to hold. Everything else is the k-ary court's
+/// derivation. The caller resolves both fences at one DAA; `held` without the k-ary court is the
+/// k-ary court's refusal, because `validate_palw_v2` refuses that pair at assembly.
+pub fn palw_court_params_held_at_v2(
+    bundle: &crate::palw_mode_v2::PalwConsensusParamsV2,
+    kary_court_active: bool,
+    held_context_active: bool,
+) -> Result<crate::palw_mode_v2::PalwCourtParamsV2, PalwCourtV2Error> {
     if !kary_court_active {
         return Ok(bundle.court);
+    }
+    if held_context_active {
+        let court = bundle.court;
+        let (history_max, widest_lane_count) = palw_attn_widest_registered_site_v2(bundle);
+        let arity = crate::palw_mode_v2::palw_court_arity_held_v1(
+            bundle.state.window_court(),
+            court.turn_deadline_daa(),
+            history_max,
+            crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4,
+            court.terminal_rounds(),
+            widest_lane_count,
+            court.max_close_chunks(),
+        )
+        .ok_or(PalwCourtV2Error::NoAdmissibleArity { window_court: bundle.state.window_court() })?;
+        return court.with_dissection_arity(arity).map_err(|e| PalwCourtV2Error::BindingInvalid(e.to_string()));
     }
     let court = bundle.court;
     let (history_max, widest_lane_count) = palw_attn_widest_registered_site_v2(bundle);
@@ -1392,6 +1421,8 @@ pub fn palw_attn_dispute_site_unpinned_v2(
         coord.position,
     );
 
+    let mut held_slices: Option<u32> = None;
+    let mut held_heads: u16 = 0;
     let (anchor_geometry, anchor_positions) = match anchor {
         None => (None, 0),
         Some(_) => {
@@ -1401,8 +1432,12 @@ pub fn palw_attn_dispute_site_unpinned_v2(
             // The composed hybrid map's attention slice IS the tiled map's enumeration, at chunk
             // indices `0..attn.chunk_count()`; its recurrence chunks follow and this bottom never
             // reads them — so the v5 hybrid row carries a dissection anchor like the dense one.
+            // ADR-0103 Decision 3: the held maps enumerate the same tiles, so they are tiled maps
+            // here too; only how a chunk proves into the root differs, and the site says which.
+            let held = crate::palw_state_chunk_map::palw_map_is_held_v4(&profile.state_chunk_map_id);
             if profile.state_chunk_map_id != crate::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v3()
                 && profile.state_chunk_map_id != crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v3()
+                && !held
             {
                 return Err(PalwCourtV2Error::NotTheTiledMap);
             }
@@ -1422,9 +1457,17 @@ pub fn palw_attn_dispute_site_unpinned_v2(
                 "no checkpoint of this class covers the disputed position, so a checkpoint-route bottom has no anchor",
             ))?;
             let positions = crate::palw_context_ladder::palw_checkpoint_positions_at_v1(profile, &binding.job_context, covered);
-            let geometry = crate::palw_state_chunk_map::tiled_kv_state_geometry_v3(profile, positions)
-                .map_err(|e| PalwCourtV2Error::TiledGeometryUnavailable { positions, why: e.to_string() })?;
-            (Some(geometry), positions)
+            if held {
+                let layout = crate::palw_state_chunk_map::palw_state_layout_v4(profile, positions)
+                    .map_err(|e| PalwCourtV2Error::TiledGeometryUnavailable { positions, why: e.to_string() })?;
+                held_slices = Some(layout.slice_count());
+                held_heads = layout.gdn_heads;
+                (Some(layout.attn), positions)
+            } else {
+                let geometry = crate::palw_state_chunk_map::tiled_kv_state_geometry_v3(profile, positions)
+                    .map_err(|e| PalwCourtV2Error::TiledGeometryUnavailable { positions, why: e.to_string() })?;
+                (Some(geometry), positions)
+            }
         }
     };
 
@@ -1457,6 +1500,8 @@ pub fn palw_attn_dispute_site_unpinned_v2(
                 crate::palw_context_ladder::palw_checkpoint_cadence_v1(profile),
                 crate::palw_context_ladder::PalwCheckpointCadenceV1::PerPosition
             ),
+            anchor_held_slices: held_slices,
+            anchor_held_recurrence_heads: held_heads,
         },
         head_lanes: (as_u16(head, "the head index")?, as_u16(lane_first, "the lane offset")?, as_u16(lane_span, "the lane count")?),
         history_positions,

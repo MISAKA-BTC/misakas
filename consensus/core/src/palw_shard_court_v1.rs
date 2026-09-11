@@ -41,10 +41,11 @@
 
 use crate::Hash64;
 use crate::palw_artifact::{PalwArtifactOpeningV1, PalwProvenOperandsV1};
+use crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1;
 use crate::palw_shard_plan_v1::PalwShardV1;
 use crate::palw_state_v2::PalwBondKeyV2;
 use crate::palw_step::{PalwShapeProfileV3, PalwStepOpKindV1, canonical_step_coordinates};
-use crate::palw_step_refute::{PalwExecutionStepRefutationV1, PalwStepRefuteError, check_execution_step_refutation_capped_v1};
+use crate::palw_step_refute::{PalwExecutionStepRefutationV1, PalwStepRefuteError, check_execution_step_refutation_opened_capped_v1};
 use crate::palw_v2::PalwJobContextV2;
 
 pub const PALW_SHARD_COURT_VERSION_V1: u16 = 1;
@@ -78,6 +79,16 @@ pub struct PalwShardCourtAccusationV1 {
     /// registered root.
     pub refutation: PalwExecutionStepRefutationV1,
     pub artifact_openings: Vec<PalwArtifactOpeningV1>,
+    /// **The prompt's one tile, where the network commits the ids as a Merkle root** (ADR-0103
+    /// Decision 1, carrying ADR-0081 Decision 3's opening into the one-move court). Under the
+    /// Merkle form the refutation carries no id list and a prefill gather's tile rides here, opened
+    /// against the job's root by the adjudicator before any id is read
+    /// ([`crate::palw_step_refute::palw_refutation_prompt_carriage_v1`] builds the pair), so an
+    /// accusation grows with a path and never with the prompt. `None` on a flat network and for a
+    /// leaf that reads no prompt id. Outside the session id for the refutation's reason: it is
+    /// bound by the job's own root, a wrong one is refused by the arithmetic rather than believed,
+    /// and a different opening of the same tile does not exist.
+    pub prompt_ids_opening: Option<PalwPromptIdsOpeningV1>,
     /// The accuser's ML-DSA-87 over [`palw_shard_court_session_id_v1`], under
     /// [`PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT`], verified against the bond's registered key.
     pub signature: Vec<u8>,
@@ -102,11 +113,13 @@ pub fn palw_shard_court_session_id_v1(network_domain: &[u8], a: &PalwShardCourtA
     Hash64::from_bytes(s.finalize().as_bytes().try_into().expect("64 bytes"))
 }
 
-/// The bytes a ceiling prices: the refutation and the artifact openings, on the wire.
+/// The bytes a ceiling prices: the refutation, the artifact openings and the prompt tile, on the
+/// wire.
 pub fn palw_shard_court_accusation_bytes_v1(a: &PalwShardCourtAccusationV1) -> u64 {
     let refutation = borsh::to_vec(&a.refutation).map(|b| b.len() as u64).unwrap_or(u64::MAX);
     let openings = borsh::to_vec(&a.artifact_openings).map(|b| b.len() as u64).unwrap_or(u64::MAX);
-    refutation.saturating_add(openings)
+    let prompt = a.prompt_ids_opening.as_ref().map_or(0, |o| borsh::to_vec(o).map(|b| b.len() as u64).unwrap_or(u64::MAX));
+    refutation.saturating_add(openings).saturating_add(prompt)
 }
 
 /// What a false accusation costs its accuser: the claim's own reservation, capped at the registry
@@ -195,25 +208,131 @@ pub fn palw_shard_court_verdict_v1(
     ladder: u64,
 ) -> Result<PalwShardCourtVerdictV1, PalwShardCourtError> {
     accusation.validate_shape(ladder)?;
-    let profile = &accusation.refutation.binding.shape_profile;
+    palw_one_move_verdict_v1(
+        &accusation.refutation,
+        &accusation.artifact_openings,
+        accusation.prompt_ids_opening.as_ref(),
+        accusation.leaf_index,
+        class_id,
+        artifact_root,
+        ladder,
+    )
+}
+
+/// **The one move, on its content alone** — the adjudication behind both a `ShardCourtAccused`
+/// accusation and a leaf's evidence disclosed to the held DA court (ADR-0109 Decision 1): one
+/// function, so a leaf cannot read one way inside an accusation and another inside a disclosure.
+/// The refutation's own profile must hash to the claim's class; a fused site is named as such; the
+/// artifact openings must prove against the class's registered root; then the court's terminal
+/// check runs at the ruleset's ladder, with the prompt tile (where one rides) opened against the
+/// job's own root inside it. The caller compares the binding's roots to the claim's.
+pub fn palw_one_move_verdict_v1(
+    refutation: &PalwExecutionStepRefutationV1,
+    artifact_openings: &[PalwArtifactOpeningV1],
+    prompt_ids_opening: Option<&PalwPromptIdsOpeningV1>,
+    leaf_index: u64,
+    class_id: Hash64,
+    artifact_root: Hash64,
+    ladder: u64,
+) -> Result<PalwShardCourtVerdictV1, PalwShardCourtError> {
+    if leaf_index >= ladder {
+        return Err(PalwShardCourtError::LeafPastTheLadder { leaf: leaf_index, ladder });
+    }
+    if refutation.output_opening.leaf_index != leaf_index {
+        return Err(PalwShardCourtError::RefutationNamesAnotherLeaf {
+            named: leaf_index,
+            refuted: refutation.output_opening.leaf_index,
+        });
+    }
+    let profile = &refutation.binding.shape_profile;
     let declared = profile.shape_profile_id();
     if declared != class_id {
         return Err(PalwShardCourtError::ClassMismatch { declared, class: class_id });
     }
-    let coord = canonical_step_coordinates(profile, &accusation.refutation.binding.job_context, accusation.leaf_index)
-        .ok_or(PalwShardCourtError::LeafHasNoCoordinates { leaf: accusation.leaf_index })?;
+    let coord = canonical_step_coordinates(profile, &refutation.binding.job_context, leaf_index)
+        .ok_or(PalwShardCourtError::LeafHasNoCoordinates { leaf: leaf_index })?;
     if let Some((node, _)) = profile.resolve_node_slot(coord.node_slot)
         && node.op_kind == PalwStepOpKindV1::AttnFused
     {
         return Ok(PalwShardCourtVerdictV1::NeedsDissection);
     }
-    let proven = PalwProvenOperandsV1::from_openings_v1(&accusation.artifact_openings, artifact_root)
+    let proven = PalwProvenOperandsV1::from_openings_v1(artifact_openings, artifact_root)
         .map_err(|e| PalwShardCourtError::ArtifactOpenings(format!("{e:?}")))?;
-    match check_execution_step_refutation_capped_v1(&accusation.refutation, &proven, ladder) {
+    // The prompt tile, where one rides, is opened against the job's own root inside the check
+    // (the commitment is the discriminator: a flat network's root refuses a Merkle opening by name).
+    match check_execution_step_refutation_opened_capped_v1(refutation, &proven, prompt_ids_opening, ladder) {
         Ok(_) => Ok(PalwShardCourtVerdictV1::ExecutorGuilty),
         Err(PalwStepRefuteError::NoFaultFound) => Ok(PalwShardCourtVerdictV1::FalseAccusation),
         Err(other) => Err(PalwShardCourtError::Refutation(other)),
     }
+}
+
+/// **A leaf's evidence** (ADR-0109 Decision 1) — a `ShardCourtAccused` accusation's content
+/// without the accuser: the refutation's committed half (the output tile and its opening, the
+/// canonical input rows, the KV anchor and the decode pin where the leaf reads them), the artifact
+/// rows its recomputation reads, and the prompt tile its gather reads. What an executor serves a
+/// seat off chain and discloses to the held DA court on chain; adjudicated by
+/// [`palw_one_move_verdict_v1`] and nothing else.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwLeafEvidenceV1 {
+    pub refutation: PalwExecutionStepRefutationV1,
+    pub artifact_openings: Vec<PalwArtifactOpeningV1>,
+    pub prompt_ids_opening: Option<PalwPromptIdsOpeningV1>,
+}
+
+impl PalwLeafEvidenceV1 {
+    /// The leaf this evidence is of.
+    pub fn leaf_index(&self) -> u64 {
+        self.refutation.output_opening.leaf_index
+    }
+
+    /// Decision 1's verdict on this evidence alone.
+    pub fn verdict_v1(
+        &self,
+        class_id: Hash64,
+        artifact_root: Hash64,
+        ladder: u64,
+    ) -> Result<PalwShardCourtVerdictV1, PalwShardCourtError> {
+        palw_one_move_verdict_v1(
+            &self.refutation,
+            &self.artifact_openings,
+            self.prompt_ids_opening.as_ref(),
+            self.leaf_index(),
+            class_id,
+            artifact_root,
+            ladder,
+        )
+    }
+
+    /// The accusation a seat files from this evidence: every content field is the evidence's.
+    #[allow(clippy::too_many_arguments)]
+    pub fn into_accusation_v1(
+        self,
+        claim: Hash64,
+        execution_root: Hash64,
+        trace_root: Hash64,
+        executor_bond: PalwBondKeyV2,
+        accuser_bond: PalwBondKeyV2,
+    ) -> PalwShardCourtAccusationV1 {
+        PalwShardCourtAccusationV1 {
+            version: PALW_SHARD_COURT_VERSION_V1,
+            claim,
+            execution_root,
+            trace_root,
+            executor_bond,
+            accuser_bond,
+            leaf_index: self.leaf_index(),
+            refutation: self.refutation,
+            artifact_openings: self.artifact_openings,
+            prompt_ids_opening: self.prompt_ids_opening,
+            signature: Vec::new(),
+        }
+    }
+}
+
+/// The bytes a leaf's evidence occupies on the wire — the same ceiling an accusation meets.
+pub fn palw_leaf_evidence_bytes_v1(evidence: &PalwLeafEvidenceV1) -> u64 {
+    borsh::to_vec(evidence).map(|b| b.len() as u64).unwrap_or(u64::MAX)
 }
 
 /// **The filer's rule, not the chain's:** a seat holding `shard` names only a leaf whose node

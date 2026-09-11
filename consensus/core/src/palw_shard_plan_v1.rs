@@ -186,6 +186,85 @@ impl PalwShardV1 {
         let resume = self.kv_cache_bytes.saturating_add(self.recurrent_state_bytes);
         (recompute, resume)
     }
+
+    /// **ADR-0103 Decision 7: what a seat of this shard FETCHES to resume at `positions`** — the
+    /// K and V rows its attention layers wrote before the interval, and the whole state of its
+    /// recurrent layers: `Σ attention 2 × positions × kv_row + Σ recurrent state`. Linear in the
+    /// position, worst at the job's last interval, and held off the chain — the one linear term
+    /// the regime keeps, bounded here by the shard and in the plan by the window.
+    pub fn fetch_bytes_at_v1(&self, kv_row_bytes: u64, positions: u64) -> u64 {
+        u64::from(self.attention_layers)
+            .saturating_mul(2)
+            .saturating_mul(kv_row_bytes)
+            .saturating_mul(positions)
+            .saturating_add(self.recurrent_state_bytes)
+    }
+}
+
+/// **ADR-0103 Decision 7: a seat's budget in bytes AND in time** — what "the fewest shards a seat
+/// can hold AND resume inside `window_receipt`" is asked against. Every field is a host fact or a
+/// ruleset number the caller states; nothing here is measured.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwSeatResumeBudgetV1 {
+    /// What the seat can hold resident: artifact, cache, state.
+    pub seat_budget_bytes: u64,
+    /// What the seat can fetch, in bytes a second.
+    pub bandwidth_bytes_per_second: u64,
+    /// The ruleset's receipt window.
+    pub window_receipt_daa: u64,
+    /// The family's replay rate for ONE whole-model position (`palw_held_replay_row_v1`); a shard
+    /// replays its share of the layers.
+    pub replay_ms_per_position: u64,
+    /// The class's interval width `P` (`palw_held_interval_positions_v1`).
+    pub interval_positions: u32,
+}
+
+/// **What one shard's seat spends to resume and replay the job's LAST interval** (ADR-0103
+/// Decision 7), in milliseconds: the fetch of its state at `n_ctx − P` positions at the stated
+/// bandwidth, plus `P` positions of its layers' share of the family's replay. The last interval is
+/// the worst one, so a plan that fits it fits every interval.
+pub fn palw_shard_resume_ms_v1(plan: &PalwShardPlanV1, shard: &PalwShardV1, layer_count: u16, budget: &PalwSeatResumeBudgetV1) -> u64 {
+    let start = u64::from(plan.n_ctx.saturating_sub(budget.interval_positions));
+    let fetch = shard.fetch_bytes_at_v1(plan.kv_row_bytes, start);
+    let fetch_ms = crate::palw_held_context_v1::palw_held_fetch_ms_v1(fetch, budget.bandwidth_bytes_per_second);
+    let replay_ms = budget
+        .replay_ms_per_position
+        .saturating_mul(u64::from(budget.interval_positions))
+        .saturating_mul(u64::from(shard.layer_count))
+        .div_ceil(u64::from(layer_count.max(1)));
+    fetch_ms.saturating_add(replay_ms)
+}
+
+/// **The fewest shards a seat can hold AND resume inside `window_receipt`** (ADR-0103 Decision 7)
+/// — [`palw_shard_plan_for_seat_v1`] with the fetch column: the smallest shard count, up to
+/// `max_shards`, whose widest seat fits the byte budget and whose slowest shard resumes the job's
+/// last interval inside the seat's share of the window (`palw_held_seat_budget_ms_v1`, the drill's
+/// margin). More shards never make either worse — a shard can always be split — so the first fit
+/// is the answer. The certification drill certifies the class at this plan only where its slowest
+/// seat actually meets the number (ADR-0075 D7; ADR-0099 U-02/U-03).
+pub fn palw_shard_plan_for_seat_within_window_v1(
+    profile: &PalwShapeProfileV3,
+    artifact: &PalwArtifactBytesV1,
+    budget: &PalwSeatResumeBudgetV1,
+    max_shards: u32,
+) -> Result<PalwShardPlanV1, PalwShardPlanError> {
+    let most = max_shards.min(u32::from(profile.layer_count)).max(1);
+    let window_ms = crate::palw_held_context_v1::palw_held_seat_budget_ms_v1(budget.window_receipt_daa);
+    let mut smallest_widest = u64::MAX;
+    let mut fastest_slowest = u64::MAX;
+    for shards in 1..=most {
+        let plan = palw_shard_plan_v1(profile, artifact, shards)?;
+        smallest_widest = smallest_widest.min(plan.widest_seat_bytes);
+        let slowest = plan.shards.iter().map(|s| palw_shard_resume_ms_v1(&plan, s, profile.layer_count, budget)).max().unwrap_or(0);
+        fastest_slowest = fastest_slowest.min(slowest);
+        if plan.widest_seat_bytes <= budget.seat_budget_bytes && slowest <= window_ms {
+            return Ok(plan);
+        }
+    }
+    if smallest_widest > budget.seat_budget_bytes {
+        return Err(PalwShardPlanError::BudgetTooSmall { budget: budget.seat_budget_bytes, max_shards: most, smallest_widest });
+    }
+    Err(PalwShardPlanError::WindowTooShort { window_ms, max_shards: most, fastest_resume_ms: fastest_slowest })
 }
 
 /// A plan: the shards, and what crosses between them.
@@ -199,6 +278,9 @@ pub struct PalwShardPlanV1 {
     pub boundary_row_bytes: u64,
     /// `max` over shards of [`PalwShardV1::seat_bytes`].
     pub widest_seat_bytes: u64,
+    /// One attention layer's K (or V) row at one position, `kv_heads × head_dim × 4` — what the
+    /// fetch column (ADR-0103 Decision 7) is counted in.
+    pub kv_row_bytes: u64,
 }
 
 impl PalwShardPlanV1 {
@@ -227,6 +309,12 @@ pub enum PalwShardPlanError {
     TooManyShards { shards: u32, layers: u16 },
     #[error("no plan of up to {max_shards} shards keeps a seat under {budget} bytes: the smallest widest seat is {smallest_widest}")]
     BudgetTooSmall { budget: u64, max_shards: u32, smallest_widest: u64 },
+    /// ADR-0103 Decision 7: every plan that fits the bytes leaves a shard whose resume of the last
+    /// interval does not fit the seat's share of `window_receipt`.
+    #[error(
+        "no plan of up to {max_shards} shards resumes the last interval inside {window_ms} ms: the fastest slowest shard takes {fastest_resume_ms}"
+    )]
+    WindowTooShort { window_ms: u64, max_shards: u32, fastest_resume_ms: u64 },
 }
 
 /// The per-layer weight the partition balances: the layer's artifact bytes plus the state its
@@ -416,6 +504,7 @@ pub fn palw_shard_plan_v1(
         shards,
         boundary_row_bytes: (profile.hidden_dim as u64).saturating_mul(4),
         widest_seat_bytes,
+        kv_row_bytes: (profile.attn_kv_heads as u64).saturating_mul(profile.attn_head_dim as u64).saturating_mul(4),
     })
 }
 

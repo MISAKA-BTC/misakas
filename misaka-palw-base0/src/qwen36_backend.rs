@@ -862,6 +862,7 @@ impl Qwen36Backend {
             &material.generated_token_ids,
             covered,
             &mut kernels,
+            self.prompt_ids_form,
         )
         .ok()
     }
@@ -995,8 +996,7 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for Qwen36IntervalKernels<'_> 
         profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
         ctx: &PalwJobContextV2,
         start: &crate::fp_interval::Base0FpIntervalStartV1<'_>,
-        first_call: u32,
-        last_call: u32,
+        window: crate::fp_interval::Base0FpWindowV1,
         step_leaf_count: u64,
     ) -> Result<crate::legs::Base0StepTilesV1, String> {
         let crate::fp_interval::Base0FpIntervalStartV1::Genesis { .. } = start else {
@@ -1009,26 +1009,18 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for Qwen36IntervalKernels<'_> 
         let mut cache = Qwen36Cache::new(&self.artifact.shape);
         let vocab = self.artifact.shape.vocab;
         let max_position = self.artifact.shape.max_position;
-        crate::fp_interval::base0_fp_replay_interval_tiles_v1(
-            profile,
-            ctx,
-            start,
-            first_call,
-            last_call,
-            step_leaf_count,
-            |token, position| {
-                if token >= vocab {
-                    return Err(format!("token {token} is outside this class's vocabulary of {vocab}"));
-                }
-                if position >= max_position {
-                    return Err(format!("the job runs past the rotary table at position {position}"));
-                }
-                let (logits, trace) = engine
-                    .forward_token_planned(self.plan, &mut cache, token, position)
-                    .map_err(|e| format!("forward at {position}: {e}"))?;
-                Ok((logits, qwen36_captured_rows_v1(profile, &trace)))
-            },
-        )
+        crate::fp_interval::base0_fp_replay_interval_tiles_v1(profile, ctx, start, window, step_leaf_count, |token, position| {
+            if token >= vocab {
+                return Err(format!("token {token} is outside this class's vocabulary of {vocab}"));
+            }
+            if position >= max_position {
+                return Err(format!("the job runs past the rotary table at position {position}"));
+            }
+            let (logits, trace) = engine
+                .forward_token_planned(self.plan, &mut cache, token, position)
+                .map_err(|e| format!("forward at {position}: {e}"))?;
+            Ok((logits, qwen36_captured_rows_v1(profile, &trace)))
+        })
     }
 }
 
@@ -1405,7 +1397,12 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
     }
 
     fn fp_interval_count_for(&self, prompt_tokens: u32, decode_tokens_executed: u32) -> Option<u32> {
-        crate::fp_interval::base0_fp_interval_count_for_v1(prompt_tokens, decode_tokens_executed, self.checkpoint_interval()?)
+        crate::fp_interval::base0_fp_interval_count_for_class_v1(
+            self.profile.as_ref()?,
+            prompt_tokens,
+            decode_tokens_executed,
+            self.checkpoint_interval()?,
+        )
     }
 
     fn open_fp_interval(&self, capture: &[u8], index: u32, prompt_token_ids: &[u32]) -> Result<Vec<u8>, String> {
@@ -1444,6 +1441,43 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             return crate::fp_interval::base0_strip_fp_interval_history_v1(&chunked).map_err(|e| e.to_string());
         }
         Ok(chunked)
+    }
+
+    fn fp_held_route_v1(&self, window_receipt_daa: u64) -> Option<kaspa_consensus_core::palw_held_context_v1::PalwHeldSeatRouteV1> {
+        crate::fp_interval::base0_fp_held_route_for_v1(self.profile.as_ref()?, window_receipt_daa)
+    }
+
+    fn open_fp_resume_v1(&self, capture: &[u8], index: u32, prompt_token_ids: &[u32]) -> Result<Vec<u8>, String> {
+        let interval = self.checkpoint_interval().ok_or_else(|| "this backend serves no registered graph".to_string())?;
+        match crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())? {
+            crate::produce::Base0RetentionV1::Folded(material) => crate::fp_interval::base0_open_fp_resume_v1(
+                &material,
+                index,
+                prompt_token_ids,
+                interval,
+                self.step_ladder_cap,
+                None,
+                &|covered| self.fold_anchor_state_v1(&material, prompt_token_ids, covered),
+                self.prompt_ids_form,
+            )
+            .map_err(|e| e.to_string()),
+            crate::produce::Base0RetentionV1::Dense(_) => {
+                Err("a dense retention is the attempt lane's; it resumes nothing".to_string())
+            }
+        }
+    }
+
+    fn fp_accept_resume_v1(
+        &self,
+        resume: &[u8],
+        context: &PalwJobContextV2,
+        prompt_token_ids: &[u32],
+        covered: u32,
+    ) -> Result<Hash64, String> {
+        let interval = self.checkpoint_interval().ok_or_else(|| "this backend serves no registered graph".to_string())?;
+        crate::fp_interval::base0_fp_accept_resume_v1(resume, context, prompt_token_ids, covered, interval, self.step_ladder_cap)
+            .map(|state| state.state_chunks_root)
+            .map_err(|e| format!("{e:?}"))
     }
 
     fn verify_fp_interval_opening(
@@ -1594,6 +1628,57 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             }
         }
         .map_err(|e| format!("{e:?}"))
+    }
+
+    fn held_state_chunk_answer_v1(
+        &self,
+        capture: &[u8],
+        prompt_token_ids: &[u32],
+        checkpoint: u32,
+        chunk: u32,
+    ) -> Result<
+        (
+            kaspa_consensus_core::palw_attn_court_v1::PalwAttnCheckpointAnchorV1,
+            kaspa_consensus_core::palw_attn_court_v1::PalwAttnChunkOpeningV1,
+        ),
+        String,
+    > {
+        let retention =
+            crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())?;
+        crate::fp_interval::base0_fp_held_state_chunk_answer_v1(&retention, checkpoint, chunk, &|covered| match &retention {
+            crate::produce::Base0RetentionV1::Folded(material) => self.fold_anchor_state_v1(material, prompt_token_ids, covered),
+            crate::produce::Base0RetentionV1::Dense(_) => None,
+        })
+        .map_err(|e| e.to_string())
+    }
+
+    fn held_step_range_answer_v1(
+        &self,
+        capture: &[u8],
+        prompt_token_ids: &[u32],
+        first: u64,
+        count: u32,
+    ) -> Result<kaspa_consensus_core::palw_step_leg::PalwStepRangeOpeningV1, String> {
+        let (Some(interval), Some(plan)) = (self.checkpoint_interval(), self.plan.as_ref()) else {
+            return Err("this class commits no checkpoint leg".to_string());
+        };
+        let retention =
+            crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())?;
+        crate::fp_interval::base0_fp_held_step_range_answer_v1(
+            &retention,
+            first,
+            count,
+            prompt_token_ids,
+            interval,
+            self.step_ladder_cap,
+            &Qwen36IntervalKernels { artifact: &self.artifact, plan },
+            &|covered| match &retention {
+                crate::produce::Base0RetentionV1::Folded(material) => self.fold_anchor_state_v1(material, prompt_token_ids, covered),
+                crate::produce::Base0RetentionV1::Dense(_) => None,
+            },
+            self.prompt_ids_form,
+        )
+        .map_err(|e| e.to_string())
     }
 
     fn fp_name_the_leaf_v1(
@@ -1770,6 +1855,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             output_token_ids,
             covered,
             &mut kernels,
+            self.prompt_ids_form,
         )
         .map(|state| state.state_chunks_root)
         .map_err(|e| e.to_string())
@@ -1861,6 +1947,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
                     generated,
                     covered,
                     &mut kernels,
+                    self.prompt_ids_form,
                 )
                 .map(|state| state.chunks)
                 .map_err(|e| e.to_string())
@@ -1906,6 +1993,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
                     generated,
                     covered,
                     &mut kernels,
+                    self.prompt_ids_form,
                 )
                 .map(|state| state.chunks)
                 .map_err(|e| e.to_string())
@@ -1934,9 +2022,12 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         let recorder = kaspa_consensus_core::palw_artifact::PalwRecordingOracleV1::new(inventory.operands());
         // The verdict is not ours to read here — this runs the adjudicator only to learn WHICH
         // rows it resolves, and it resolves the same rows whichever way the step reads.
-        let _ = kaspa_consensus_core::palw_step_refute::check_execution_step_refutation_capped_v1(
+        // Carried the way this network's form carries it (ADR-0081 Decision 3): under the Merkle
+        // form the flat check refuses the list before a row is read, and records nothing.
+        let _ = kaspa_consensus_core::palw_step_refute::check_execution_step_refutation_carried_capped_v1(
             refutation,
             &recorder,
+            self.prompt_ids_form,
             self.step_ladder_cap,
         );
         recorder.openings().ok_or_else(|| "the inventory could not open a recorded row".to_string())
@@ -2538,6 +2629,7 @@ mod tests {
                 &run.generated_token_ids,
                 positions,
                 &mut kernels,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             )
             .expect("the seat can stop at any position of a per-position class");
             assert_eq!(
@@ -2617,14 +2709,18 @@ mod tests {
             "one geometry for both graphs"
         );
         let v6 = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v6(geometry).expect("the v6 projection");
+        // ADR-0103 Decision 3: graph-v7 is graph-v6 on the held composition — the same per-head
+        // fused tile, and the bottom's anchor proving into its slice's sub-root and the top tree.
+        let v7 = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v7(geometry).expect("the v7 projection");
+        assert!(kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&v7));
         let artifact = std::sync::Arc::new(artifact);
         let session = Hash64::from_u64_word(0x5E56);
-        for (graph, profile) in [("v5", v5), ("v6", v6)] {
+        for (graph, profile) in [("v5", v5), ("v6", v6), ("v7", v7)] {
             let backend =
                 Qwen36Backend::from_registered_profile(artifact.clone(), b"misaka-palw-test".to_vec(), profile.clone(), (3, 4))
                     .expect("the fused hybrid is servable");
             assert!(backend.has_fused_site());
-            assert_eq!(backend.supports_dissection(), graph == "v6", "{graph}: the backend says whether its fused tile is one head's");
+            assert_eq!(backend.supports_dissection(), graph != "v5", "{graph}: the backend says whether its fused tile is one head's");
             let root = crate::inventory::qwen36_inventory_v1(&artifact, &profile).expect("the inventory").root();
             let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x0000_9336)).expect("a job");
             let honest = backend.execute(&job, &prompt).expect("runs");

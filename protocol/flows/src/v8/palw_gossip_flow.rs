@@ -81,6 +81,7 @@ impl PalwGossipFlow {
                     let request = crate::palw_gossip::PalwOpeningRequestV1 {
                         claim,
                         interval_index: None,
+                        leaf_index: None,
                         requested_daa: inner.requested_daa,
                         requester_pubkey: &inner.requester_pubkey,
                         signature: &inner.signature,

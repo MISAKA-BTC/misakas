@@ -2012,6 +2012,7 @@ impl FlowContext {
         pubkey: Vec<u8>,
         signature: Vec<u8>,
         requested_daa: u64,
+        leaf_index: Option<u64>,
     ) {
         if !self.palw_v2_active() {
             return;
@@ -2024,6 +2025,7 @@ impl FlowContext {
                 requester_pubkey: pubkey,
                 signature,
                 requested_daa,
+                leaf_index: leaf_index.unwrap_or(0),
             }
         );
         self.hub().broadcast_to_peers_with_min_version(msg, PROTOCOL_VERSION_PALW_INTERVAL).await;

@@ -799,6 +799,10 @@ pub struct PalwDaDutyV2 {
     pub trace_root: Hash64,
     pub execution_root: Hash64,
     pub free_prompt: bool,
+    /// **ADR-0103 Decision 4 / ADR-0109: the unit a HELD accusation named** — a prompt tile, a state
+    /// chunk, a range of leaves or a leaf's evidence — when `missing_event_index` is the held
+    /// sentinel. `None` for an event accusation. The producer answers in this unit or is defaulted.
+    pub held_missing: Option<crate::palw_held_da_v1::PalwHeldMissingV1>,
 }
 
 /// The claims under accusation whose producing bond is in `mine`.
@@ -823,6 +827,7 @@ pub fn palw_da_duties_v2(state: &PalwChainStateV2, state_params: &PalwStateParam
             trace_root: claim.trace_root,
             execution_root: claim.execution_root,
             free_prompt: matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. }),
+            held_missing: state.held_da_missing_of(claim_id),
         });
     }
     out

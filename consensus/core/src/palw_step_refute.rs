@@ -4023,9 +4023,22 @@ fn verify_kv_anchor<'a>(
     }
 
     let map_id = &binding.state_chunk_map_id;
-    let hashes: Vec<crate::Hash64> =
-        ops.chunks.iter().enumerate().map(|(i, c)| state_chunk_leaf_hash_v1(map_id, i as u32, c)).collect();
-    let root = state_chunks_root_v1(&hashes).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+    // **ADR-0103 Decision 3: a held class's chunks build a two-level root** over the same bytes in
+    // the same order — the leaf binds `(slice, block)` rather than the flat index. Every other map
+    // keeps the flat tree, byte for byte.
+    let root = if map::palw_map_is_held_v4(map_id) {
+        let positions = crate::palw_context_ladder::palw_checkpoint_positions_at_v1(
+            &binding.shape_profile,
+            &binding.job_context,
+            ops.leaf.covered_decode_call,
+        );
+        map::palw_state_chunks_root_for_map_v1(&binding.shape_profile, positions, &ops.chunks)
+            .map_err(|_| PalwStepRefuteError::Unadjudicable)?
+    } else {
+        let hashes: Vec<crate::Hash64> =
+            ops.chunks.iter().enumerate().map(|(i, c)| state_chunk_leaf_hash_v1(map_id, i as u32, c)).collect();
+        state_chunks_root_v1(&hashes).map_err(|_| PalwStepRefuteError::Unadjudicable)?
+    };
     if root != ops.leaf.state_chunks_root {
         return Err(PalwStepRefuteError::InputSetNotCanonical("the carried chunks do not build the leaf's state root"));
     }
@@ -4093,6 +4106,12 @@ fn verify_kv_anchor<'a>(
             .map_err(|_| PalwStepRefuteError::Unadjudicable)?;
         let expected = composition.chunk_count();
         (Ok(composition.attn), KvAnchorElemV1::I32Le, Some(expected))
+    } else if map::palw_map_is_held_v4(&declared) {
+        // ADR-0103 Decision 3: the held layout's attention half is the tiled enumeration with no
+        // count cap; a hybrid's recurrence slices follow it, and only the count reads them here.
+        let layout = map::palw_state_layout_v4(&binding.shape_profile, positions).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+        let expected = layout.chunk_count();
+        (Ok(layout.attn), KvAnchorElemV1::I32Le, Some(expected))
     } else {
         return Err(PalwStepRefuteError::Unadjudicable);
     };
@@ -4146,6 +4165,61 @@ pub fn check_execution_step_refutation_v1(
     weights: &dyn PalwWeightOracleV1,
 ) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
     check_execution_step_refutation_opened_v1(refutation, weights, None)
+}
+
+/// **The prompt carriage a refutation rides in, for the network's form** (ADR-0081 Decision 3,
+/// carried by ADR-0103 Decision 1's one-move court).
+///
+/// Every prover builds a refutation with the whole id list — the flat form's carriage, which the
+/// flat adjudicator reads. Under the Merkle form the list is taken OUT and the one tile a prefill
+/// leaf's gather reads is opened instead, for
+/// [`check_execution_step_refutation_opened_capped_v1`] to read: what a court carries then grows
+/// with a path and never with the prompt, which is the whole of the held regime's close term. A
+/// decode leaf's gather reads the generated ids (the decode pin), never the prompt, so it carries
+/// neither; a leaf that reads no id at a prefill position carries one tile it does not need, which
+/// is a bounded cost and never a different verdict. The bisection close's `ArithmeticOpened` arm
+/// and the one-move accusation both take their carriage from here — one spelling of "which tile".
+///
+/// Found by the held drill (2026-09-11): on a Merkle-form network a free-prompt refutation that
+/// carried the whole list was refused by the flat comparison before any arithmetic
+/// (`InputSetNotCanonical`), so every seat's sample of every leaf read "no verdict", no seat could
+/// accuse, and the one-move court convicted nobody.
+pub fn palw_refutation_prompt_carriage_v1(
+    form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    mut refutation: PalwExecutionStepRefutationV1,
+) -> Result<
+    (PalwExecutionStepRefutationV1, Option<crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1>),
+    crate::palw_prompt_ids_v1::PalwPromptIdsError,
+> {
+    if form == crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat || refutation.prompt_token_ids.is_empty() {
+        return Ok((refutation, None));
+    }
+    let ids = std::mem::take(&mut refutation.prompt_token_ids);
+    let coord = refutation.output_preimage.coord;
+    if coord.call_index != 0 || coord.position as usize >= ids.len() {
+        return Ok((refutation, None));
+    }
+    let opening = crate::palw_prompt_ids_v1::prompt_ids_opening_v1(&ids, coord.position)?;
+    Ok((refutation, Some(opening)))
+}
+
+/// **The court's check of a refutation a prover built with the whole id list, carried the way the
+/// network's form carries it** — [`palw_refutation_prompt_carriage_v1`], then the opened check.
+///
+/// What a family's `operand_openings_for` runs to learn WHICH artifact rows the court will resolve:
+/// it must resolve them the way the chain will read the object, or it records the rows of a check
+/// the chain never runs. Under the Merkle form the flat check refuses the whole list before any
+/// row is read, so a recorder behind it recorded nothing and the one-move court's accusation at an
+/// embedding leaf carried no table row to adjudicate with (the held drill, 2026-09-11).
+pub fn check_execution_step_refutation_carried_capped_v1(
+    refutation: &PalwExecutionStepRefutationV1,
+    weights: &dyn PalwWeightOracleV1,
+    form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    max_step_leaf_count: u64,
+) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    let (carried, prompt_ids_opening) = palw_refutation_prompt_carriage_v1(form, refutation.clone())
+        .map_err(|e| PalwStepRefuteError::InputSetNotCanonical(e.refusal()))?;
+    check_execution_step_refutation_opened_capped_v1(&carried, weights, prompt_ids_opening.as_ref(), max_step_leaf_count)
 }
 
 /// [`check_execution_step_refutation_v1`] against the ruleset's `max_step_leaf_count` — the court's
@@ -6292,6 +6366,90 @@ pub(crate) mod tests {
         let mut whole = flat.clone();
         whole.prompt_token_ids = ids.clone();
         assert_eq!(check_execution_step_refutation_v1(&whole, &NoWeights), Err(PalwStepRefuteError::NoFaultFound));
+    }
+
+    /// **ADR-0103 Decision 1's carriage: the list rides on a flat network, one tile on a Merkle
+    /// one** (`palw_refutation_prompt_carriage_v1`). A prefill leaf opens the tile holding ITS
+    /// position — and that tile authenticates against the job's Merkle root, which is the only way
+    /// the court reads it; a decode leaf reads the generated ids and carries neither; a refutation
+    /// that addresses no gather is untouched. The one-move court's bytes grow by the tile it rides.
+    #[test]
+    fn a_refutation_rides_the_list_on_a_flat_network_and_one_tile_on_a_merkle_one() {
+        use crate::palw_prompt_ids_v1::{
+            PALW_PROMPT_IDS_TILE_LEN, PalwPromptIdsFormV1, prompt_token_ids_root_v1, verify_prompt_ids_opening_v1,
+        };
+        let ids: Vec<u32> = (0..70u32).map(|i| i * 3 + 1).collect();
+        let root = prompt_token_ids_root_v1(&ids).expect("70 ids commit");
+        // The carriage reads only the list and the leaf's coordinate; the fixture's own job is any.
+        let (binding, material, rows) = honest_execution();
+        let coord = PalwStepCoordinateV1 { call_index: 1, node_slot: 1, position: 0, tile_index: 0 };
+        let mut refutation = build_refutation(&binding, &material, &rows, coord);
+        refutation.prompt_token_ids = ids.clone();
+        let at = |call_index: u32, position: u32| {
+            let mut r = refutation.clone();
+            r.output_preimage.coord.call_index = call_index;
+            r.output_preimage.coord.position = position;
+            r
+        };
+
+        // Flat: the prover's object, byte for byte.
+        let (same, none) = palw_refutation_prompt_carriage_v1(PalwPromptIdsFormV1::Flat, at(0, 40)).expect("flat carries");
+        assert_eq!(same, at(0, 40));
+        assert!(none.is_none());
+
+        // Merkle at prefill position 40: the list is out, and tile 1 (positions 32..64) rides.
+        let (carried, tile) = palw_refutation_prompt_carriage_v1(PalwPromptIdsFormV1::MerkleV1, at(0, 40)).expect("the tile opens");
+        assert!(carried.prompt_token_ids.is_empty(), "the list does not ride");
+        let tile = tile.expect("a prefill leaf rides its tile");
+        assert_eq!(tile.tile_index, 40 / PALW_PROMPT_IDS_TILE_LEN);
+        let window = verify_prompt_ids_opening_v1(&root, 70, &tile).expect("the tile binds the job's root");
+        assert_eq!(window.at(40), Some(ids[40]), "the window reads the leaf's own position");
+        assert_eq!(window.at(0), None, "and nothing it does not carry");
+
+        // Merkle at a decode leaf: the gather reads the generated ids, so neither rides.
+        let (decode, none) = palw_refutation_prompt_carriage_v1(PalwPromptIdsFormV1::MerkleV1, at(3, 72)).expect("decode carries");
+        assert!(decode.prompt_token_ids.is_empty() && none.is_none());
+
+        // A refutation that addresses no gather is untouched on either form.
+        let mut bare = at(0, 40);
+        bare.prompt_token_ids.clear();
+        let (untouched, none) = palw_refutation_prompt_carriage_v1(PalwPromptIdsFormV1::MerkleV1, bare.clone()).expect("carries");
+        assert_eq!(untouched, bare);
+        assert!(none.is_none());
+
+        // The one-move court prices the tile it carries.
+        let accusation = |prompt_ids_opening| crate::palw_shard_court_v1::PalwShardCourtAccusationV1 {
+            version: crate::palw_shard_court_v1::PALW_SHARD_COURT_VERSION_V1,
+            claim: Hash64::from_u64_word(1),
+            execution_root: binding.committed_execution_root,
+            trace_root: Hash64::from_u64_word(2),
+            executor_bond: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(
+                crate::tx::TransactionId::from_u64_word(3),
+                0,
+            )),
+            accuser_bond: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(
+                crate::tx::TransactionId::from_u64_word(4),
+                0,
+            )),
+            leaf_index: carried.output_opening.leaf_index,
+            refutation: carried.clone(),
+            artifact_openings: vec![],
+            prompt_ids_opening,
+            signature: vec![],
+        };
+        let bare_bytes = crate::palw_shard_court_v1::palw_shard_court_accusation_bytes_v1(&accusation(None));
+        let tile_bytes = borsh::to_vec(&tile).expect("borsh").len() as u64;
+        assert_eq!(
+            crate::palw_shard_court_v1::palw_shard_court_accusation_bytes_v1(&accusation(Some(tile.clone()))),
+            bare_bytes + tile_bytes
+        );
+        // The wire order, pinned at the tail a round trip cannot see reordered: the tile rides after
+        // the artifact openings and before the signature.
+        let mut signed = accusation(Some(tile.clone()));
+        signed.signature = vec![0xA5; 3];
+        let wire = borsh::to_vec(&signed).expect("borsh");
+        let tail = [borsh::to_vec(&Some(tile)).expect("borsh"), borsh::to_vec(&signed.signature).expect("borsh")].concat();
+        assert!(wire.ends_with(&tail), "… artifact_openings, prompt_ids_opening, signature");
     }
 
     /// **G5c: the KV sentinels resolve to the cache-role nodes over the position history.**

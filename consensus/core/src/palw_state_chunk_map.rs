@@ -182,7 +182,12 @@ pub fn tiled_kv_chunk_bytes_v3(profile: &PalwShapeProfileV3) -> Option<u64> {
 /// has one.
 pub fn palw_map_addresses_history_tiles_v1(profile: &PalwShapeProfileV3) -> bool {
     let declared = profile.state_chunk_map_id;
-    declared == tiled_kv_state_chunk_map_id_v3() || declared == hybrid_state_chunk_map_id_v3()
+    // ADR-0103 Decision 3: the held map tiles the history exactly as v3 does — same tile, same
+    // per-position cadence — and differs only in how a chunk is hashed and rooted.
+    declared == tiled_kv_state_chunk_map_id_v3()
+        || declared == hybrid_state_chunk_map_id_v3()
+        || declared == tiled_kv_state_chunk_map_id_v4()
+        || declared == hybrid_state_chunk_map_id_v4()
 }
 
 /// **How many positions of the cache one chunk of THIS class's map addresses.**
@@ -211,6 +216,431 @@ pub fn palw_hybrid_state_chunk_map_name_v3() -> String {
 /// `state_chunk_map_id` for a hybrid class whose attention half is [v3](tiled_kv_state_chunk_map_id_v3).
 pub fn hybrid_state_chunk_map_id_v3() -> Hash64 {
     state_chunk_map_id_v1(&palw_hybrid_state_chunk_map_name_v3())
+}
+
+// -------------------------------------------------------------------------------------------------
+// ADR-0103 Decision 3 — the held map (v4): the same chunks, and an index that does not move
+// -------------------------------------------------------------------------------------------------
+
+/// **The tiled cache map whose leaves bind `(slice, block)` (v4).**
+///
+/// Every rule of [`PALW_TILED_KV_STATE_CHUNK_MAP_NAME_V3`] — the `i32` rows, kind-major, layer
+/// ascending, sixteen positions a chunk, the flat enumeration a reader walks — except the two that
+/// made a per-position checkpoint quadratic: the leaf binds the chunk's slice and block rather
+/// than its flat index ([`crate::palw_step_leg::state_chunk_leaf_hash_v4`]), and the root is a
+/// tree over per-slice sub-roots ([`crate::palw_step_leg::state_top_root_v4`]). A block's leaf is
+/// fixed the moment it closes, so an executor extends a frontier instead of re-hashing the cache,
+/// and the chunk COUNT stops being a wall: the bound is the proof's depth
+/// ([`crate::palw_step_leg::PALW_STEP_LEG_MAX_STATE_DEPTH_V4`]).
+///
+/// A class that registers it is a DIFFERENT class — `state_chunk_map_id` is inside the class id —
+/// and it is the marker of a class under ADR-0103's regime: `validate_geometry` reads the
+/// per-position budget instead of the `n_ctx × layers` product for it, and the admission gate
+/// refuses it unless `Params::palw_held_context` is armed. No shipped row registers it.
+pub const PALW_TILED_KV_STATE_CHUNK_MAP_NAME_V4: &str = "palw-integer-kv/i32-le/kind-major(k,v)/layer-asc/position-asc/row=attn_kv_heads*attn_head_dim*4/\
+     chunk=min(positions,16)/leaf=(slice,block)/root=slice-subroots/v4";
+
+/// `state_chunk_map_id` for a dense class under the held map.
+pub fn tiled_kv_state_chunk_map_id_v4() -> Hash64 {
+    state_chunk_map_id_v1(PALW_TILED_KV_STATE_CHUNK_MAP_NAME_V4)
+}
+
+/// A hybrid's composition with its attention half at v4 and its recurrence half at v2's
+/// head-sliced layout — v3's composition with the one half that moved.
+pub fn palw_hybrid_state_chunk_map_name_v4() -> String {
+    format!("palw-hybrid-state/attn={PALW_TILED_KV_STATE_CHUNK_MAP_NAME_V4}/gdn={PALW_GDN_STATE_CHUNK_MAP_NAME_V2}/v4")
+}
+
+/// `state_chunk_map_id` for a hybrid class under the held map.
+pub fn hybrid_state_chunk_map_id_v4() -> Hash64 {
+    state_chunk_map_id_v1(&palw_hybrid_state_chunk_map_name_v4())
+}
+
+/// **Is this map the held one?** The one dispatch every reader of a state root goes through, for
+/// the reason [`palw_map_addresses_history_tiles_v1`] is one dispatch.
+pub fn palw_map_is_held_v4(map_id: &Hash64) -> bool {
+    *map_id == tiled_kv_state_chunk_map_id_v4() || *map_id == hybrid_state_chunk_map_id_v4()
+}
+
+/// **Is this class under ADR-0103's regime?** A class is its map, so a class is under the regime
+/// exactly when it registered a held map — a fact inside its id, never a flag beside it.
+pub fn palw_profile_is_held_v4(profile: &PalwShapeProfileV3) -> bool {
+    palw_map_is_held_v4(&profile.state_chunk_map_id)
+}
+
+/// **The v4 geometry of the attention cache** — [`tiled_kv_state_geometry_v3`]'s arithmetic with
+/// the chunk-count cap replaced by the depth cap. Built from the profile rather than from v1/v2,
+/// because those two refuse a chunk count past `PALW_STEP_LEG_MAX_STATE_CHUNKS` before v4 could
+/// relax it.
+pub fn tiled_kv_state_geometry_v4(
+    profile: &PalwShapeProfileV3,
+    positions: u32,
+) -> Result<PalwStateChunkGeometryV1, PalwStateChunkMapError> {
+    if profile.lane != PalwStepLaneV1::Int32 {
+        return Err(PalwStateChunkMapError::NotTheIntegerFamily { lane: profile.lane });
+    }
+    if positions == 0 {
+        return Err(PalwStateChunkMapError::ZeroPositions);
+    }
+    let row_bytes = (profile.attn_kv_heads as u64).saturating_mul(profile.attn_head_dim as u64).saturating_mul(4);
+    if row_bytes == 0 {
+        return Err(PalwStateChunkMapError::ZeroRowWidth { kv_heads: profile.attn_kv_heads, head_dim: profile.attn_head_dim });
+    }
+    if row_bytes.saturating_mul(PALW_ATTN_HISTORY_TILE_V4 as u64) > PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES as u64 {
+        return Err(PalwStateChunkMapError::RowExceedsChunk { row_bytes, max: PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES });
+    }
+    let attn_layers: Vec<u16> = (0..profile.layer_count).filter(|&l| profile.layer_kind(l) == PalwLayerKindV1::Attention).collect();
+    if attn_layers.is_empty() {
+        return Err(PalwStateChunkMapError::NoAttentionLayers);
+    }
+    let positions_per_chunk = PALW_ATTN_HISTORY_TILE_V4.min(positions);
+    let chunks_per_slice = positions.div_ceil(positions_per_chunk);
+    let geometry =
+        PalwStateChunkGeometryV1 { row_bytes: row_bytes as u32, positions_per_chunk, attn_layers, positions, chunks_per_slice };
+    let depth = tiled_kv_state_depth_v4(u64::from(chunks_per_slice), geometry.attn_layers.len() as u64, profile.layer_count);
+    if depth > crate::palw_step_leg::PALW_STEP_LEG_MAX_STATE_DEPTH_V4 {
+        return Err(PalwStateChunkMapError::TreeTooDeep { depth, max: crate::palw_step_leg::PALW_STEP_LEG_MAX_STATE_DEPTH_V4 });
+    }
+    Ok(geometry)
+}
+
+/// **The held map's proof depth, the one spelling** — the levels a chunk's opening climbs: its
+/// slice's block tree (`chunks_per_slice` wide) and the top tree over the slices, counted at the
+/// widest slice set any checkpoint of the class can carry (the cache's `2 × attention layers` plus
+/// `2 × layer_count` for the recurrence slices a hybrid adds). What
+/// [`tiled_kv_state_geometry_v4`] refuses past [`crate::palw_step_leg::PALW_STEP_LEG_MAX_STATE_DEPTH_V4`]
+/// and what the fit prints as the state wall under ADR-0103 (`palw_model_fit_v1`): one expression,
+/// so the gate and the table cannot disagree about a class's depth.
+pub fn tiled_kv_state_depth_v4(chunks_per_slice: u64, attention_layers: u64, layer_count: u16) -> u32 {
+    crate::palw_step_leg::state_v4_path_len(chunks_per_slice.max(1), 0)
+        + crate::palw_step_leg::state_v4_path_len(2 * attention_layers + 2 * u64::from(layer_count), 0)
+}
+
+/// **Where a flat chunk index lives in the v4 tree**: its slice, its block, and the two counts the
+/// proof is read against.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwStateChunkAddressV4 {
+    pub slice: u32,
+    pub block: u32,
+    /// Blocks in this slice — `chunks_per_slice` for a cache slice, the head count for a
+    /// recurrence one.
+    pub block_count: u32,
+    /// Slices in this checkpoint's tree.
+    pub slice_count: u32,
+}
+
+/// **The held layout of one checkpoint**: the attention cache's slices, then — when this
+/// checkpoint carries it — the recurrence's `(kind, layer)` slices, whose blocks are its heads.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwStateLayoutV4 {
+    pub attn: PalwStateChunkGeometryV1,
+    /// The recurrence layers this checkpoint carries, ascending; empty when it carries none.
+    pub gdn_layers: Vec<u16>,
+    pub gdn_heads: u16,
+    pub delta_head_bytes: u64,
+    pub conv_head_bytes: u64,
+}
+
+impl PalwStateLayoutV4 {
+    pub fn attn_slices(&self) -> u32 {
+        2 * self.attn.attn_layers.len() as u32
+    }
+
+    pub fn gdn_slices(&self) -> u32 {
+        if self.gdn_layers.is_empty() { 0 } else { 2 * self.gdn_layers.len() as u32 }
+    }
+
+    pub fn slice_count(&self) -> u32 {
+        self.attn_slices() + self.gdn_slices()
+    }
+
+    /// Blocks in `slice`.
+    pub fn block_count(&self, slice: u32) -> Option<u32> {
+        if slice < self.attn_slices() {
+            Some(self.attn.chunks_per_slice)
+        } else if slice < self.slice_count() {
+            Some(u32::from(self.gdn_heads))
+        } else {
+            None
+        }
+    }
+
+    /// Chunks in the whole checkpoint — the flat count a v3 reader would see.
+    pub fn chunk_count(&self) -> u64 {
+        self.attn.chunk_count() + u64::from(self.gdn_slices()) * u64::from(self.gdn_heads)
+    }
+
+    /// The flat index a reader walks, read into the tree.
+    pub fn address(&self, flat_index: u64) -> Option<PalwStateChunkAddressV4> {
+        let attn = self.attn.chunk_count();
+        let slice_count = self.slice_count();
+        if flat_index < attn {
+            let per_slice = u64::from(self.attn.chunks_per_slice);
+            return Some(PalwStateChunkAddressV4 {
+                slice: (flat_index / per_slice) as u32,
+                block: (flat_index % per_slice) as u32,
+                block_count: self.attn.chunks_per_slice,
+                slice_count,
+            });
+        }
+        let within = flat_index - attn;
+        let heads = u64::from(self.gdn_heads);
+        if heads == 0 || within >= u64::from(self.gdn_slices()) * heads {
+            return None;
+        }
+        Some(PalwStateChunkAddressV4 {
+            slice: self.attn_slices() + (within / heads) as u32,
+            block: (within % heads) as u32,
+            block_count: self.gdn_heads as u32,
+            slice_count,
+        })
+    }
+
+    /// The inverse of [`Self::address`].
+    pub fn flat_index(&self, slice: u32, block: u32) -> Option<u64> {
+        if slice < self.attn_slices() {
+            (block < self.attn.chunks_per_slice).then(|| u64::from(slice) * u64::from(self.attn.chunks_per_slice) + u64::from(block))
+        } else if slice < self.slice_count() && block < u32::from(self.gdn_heads) {
+            Some(self.attn.chunk_count() + u64::from(slice - self.attn_slices()) * u64::from(self.gdn_heads) + u64::from(block))
+        } else {
+            None
+        }
+    }
+}
+
+/// **The held layout at a checkpoint covering `positions`**, for either held map. The recurrence
+/// rides at its derived spacing exactly as it does under v3
+/// ([`crate::palw_context_ladder::palw_checkpoint_leaf_carries_recurrence_v1`]).
+pub fn palw_state_layout_v4(profile: &PalwShapeProfileV3, positions: u32) -> Result<PalwStateLayoutV4, PalwStateChunkMapError> {
+    let attn = tiled_kv_state_geometry_v4(profile, positions)?;
+    if profile.state_chunk_map_id != hybrid_state_chunk_map_id_v4() {
+        return Ok(PalwStateLayoutV4 { attn, gdn_layers: Vec::new(), gdn_heads: 0, delta_head_bytes: 0, conv_head_bytes: 0 });
+    }
+    let with_recurrence = crate::palw_context_ladder::palw_checkpoint_leaf_carries_recurrence_v1(profile, positions);
+    if !with_recurrence {
+        return Ok(PalwStateLayoutV4 {
+            attn,
+            gdn_layers: Vec::new(),
+            gdn_heads: profile.gdn_heads,
+            delta_head_bytes: 0,
+            conv_head_bytes: 0,
+        });
+    }
+    let gdn_layers: Vec<u16> = (0..profile.layer_count).filter(|&l| profile.layer_kind(l) == PalwLayerKindV1::GatedDeltaNet).collect();
+    let delta_head_bytes = gdn_delta_head_slice_bytes_v1(profile)
+        .ok_or(PalwStateChunkMapError::ZeroRowWidth { kv_heads: profile.gdn_heads, head_dim: profile.gdn_head_k_dim })?;
+    let conv_head_bytes = gdn_conv_head_slice_bytes_v2(profile)
+        .ok_or(PalwStateChunkMapError::ZeroRowWidth { kv_heads: profile.gdn_heads, head_dim: profile.gdn_head_v_dim })?;
+    Ok(PalwStateLayoutV4 { attn, gdn_layers, gdn_heads: profile.gdn_heads, delta_head_bytes, conv_head_bytes })
+}
+
+/// **A checkpoint's state root over chunks in the flat order**, under whichever tree the class's
+/// map names — the one spelling the producer, the seat and the court share. `chunks` are the
+/// bytes in the order [`integer_kv_state_chunk_entry_v1`] / [`hybrid_state_chunk_entry_v3`]
+/// enumerate them, which v4 keeps.
+pub fn palw_state_chunks_root_for_map_v1(
+    profile: &PalwShapeProfileV3,
+    positions: u32,
+    chunks: &[Vec<u8>],
+) -> Result<Hash64, crate::palw_step_leg::PalwStepLegError> {
+    let leaves = palw_state_chunk_leaves_for_map_v1(profile, positions, chunks)?;
+    palw_state_root_from_leaves_for_map_v1(profile, positions, &leaves)
+}
+
+/// **Every chunk's leaf under the class's map, in the flat order** — `(map, index, bytes)` for the
+/// shipped maps, `(map, slice, block, bytes)` for the held one. What a responder keeps beside the
+/// chunks so that a root and any chunk's path are a fold over hashes it already holds.
+pub fn palw_state_chunk_leaves_for_map_v1(
+    profile: &PalwShapeProfileV3,
+    positions: u32,
+    chunks: &[Vec<u8>],
+) -> Result<Vec<Hash64>, crate::palw_step_leg::PalwStepLegError> {
+    let map_id = profile.state_chunk_map_id;
+    if !palw_map_is_held_v4(&map_id) {
+        return Ok(chunks
+            .iter()
+            .enumerate()
+            .map(|(i, c)| crate::palw_step_leg::state_chunk_leaf_hash_v1(&map_id, i as u32, c))
+            .collect());
+    }
+    let layout =
+        palw_state_layout_v4(profile, positions).map_err(|e| crate::palw_step_leg::PalwStepLegError::HeldLayout(e.to_string()))?;
+    if chunks.len() as u64 != layout.chunk_count() {
+        return Err(crate::palw_step_leg::PalwStepLegError::StateChunksOutOfRange {
+            got: chunks.len(),
+            max: layout.chunk_count() as usize,
+        });
+    }
+    chunks
+        .iter()
+        .enumerate()
+        .map(|(flat, c)| {
+            let address = layout.address(flat as u64).ok_or(crate::palw_step_leg::PalwStepLegError::LeafIndexOutOfRange {
+                index: flat as u64,
+                count: layout.chunk_count(),
+            })?;
+            Ok(crate::palw_step_leg::state_chunk_leaf_hash_v4(&map_id, address.slice, address.block, c))
+        })
+        .collect()
+}
+
+/// **Every slice's top leaf** — `state_top_leaf_v4(slice, blocks, sub_root)` over the held layout,
+/// from leaves already hashed (ADR-0103 Decisions 2 and 3). What a resume opening carries so that a
+/// seat holding a SHARD checks its fetch locally: it recomputes the top leaves of the slices it
+/// fetched and folds the top root from these, `O(its chunks + slices)`, never the whole state.
+pub fn palw_state_top_leaves_v4(
+    layout: &PalwStateLayoutV4,
+    leaves: &[Hash64],
+) -> Result<Vec<Hash64>, crate::palw_step_leg::PalwStepLegError> {
+    use crate::palw_step_leg::PalwStepLegError;
+    if leaves.len() as u64 != layout.chunk_count() {
+        return Err(PalwStepLegError::StateChunksOutOfRange { got: leaves.len(), max: layout.chunk_count() as usize });
+    }
+    (0..layout.slice_count())
+        .map(|slice| {
+            let blocks = layout.block_count(slice).unwrap_or(0);
+            let hashes: Vec<Hash64> =
+                (0..blocks).map(|block| leaves[layout.flat_index(slice, block).expect("in range by construction") as usize]).collect();
+            let sub_root = crate::palw_step_leg::state_slice_root_v4(&hashes)?;
+            Ok(crate::palw_step_leg::state_top_leaf_v4(slice, blocks, &sub_root))
+        })
+        .collect()
+}
+
+/// **The state root from leaves already hashed under the class's map** (the flat order).
+pub fn palw_state_root_from_leaves_for_map_v1(
+    profile: &PalwShapeProfileV3,
+    positions: u32,
+    leaves: &[Hash64],
+) -> Result<Hash64, crate::palw_step_leg::PalwStepLegError> {
+    let map_id = profile.state_chunk_map_id;
+    if !palw_map_is_held_v4(&map_id) {
+        return crate::palw_step_leg::state_chunks_root_v1(leaves);
+    }
+    let layout =
+        palw_state_layout_v4(profile, positions).map_err(|e| crate::palw_step_leg::PalwStepLegError::HeldLayout(e.to_string()))?;
+    if leaves.len() as u64 != layout.chunk_count() {
+        return Err(crate::palw_step_leg::PalwStepLegError::StateChunksOutOfRange {
+            got: leaves.len(),
+            max: layout.chunk_count() as usize,
+        });
+    }
+    palw_state_root_from_hashes_v4(&layout, &map_id, |flat, _, _| leaves[flat as usize])
+}
+
+/// **One chunk's path from leaves already hashed under the class's map** — the producing side of
+/// [`palw_state_chunk_membership_root_v1`], over hashes a responder holds.
+pub fn palw_state_chunk_path_from_leaves_for_map_v1(
+    profile: &PalwShapeProfileV3,
+    positions: u32,
+    leaves: &[Hash64],
+    flat_index: u32,
+) -> Result<Vec<Hash64>, crate::palw_step_leg::PalwStepLegError> {
+    use crate::palw_step_leg::PalwStepLegError;
+    if !palw_map_is_held_v4(&profile.state_chunk_map_id) {
+        return crate::palw_step_leg::state_chunk_path_v1(leaves, flat_index as usize);
+    }
+    let layout = palw_state_layout_v4(profile, positions).map_err(|e| PalwStepLegError::HeldLayout(e.to_string()))?;
+    if leaves.len() as u64 != layout.chunk_count() {
+        return Err(PalwStepLegError::StateChunksOutOfRange { got: leaves.len(), max: layout.chunk_count() as usize });
+    }
+    let address = layout
+        .address(u64::from(flat_index))
+        .ok_or(PalwStepLegError::LeafIndexOutOfRange { index: u64::from(flat_index), count: layout.chunk_count() })?;
+    let mut top = Vec::with_capacity(layout.slice_count() as usize);
+    let mut block_path = Vec::new();
+    for slice in 0..layout.slice_count() {
+        let blocks = layout.block_count(slice).unwrap_or(0);
+        let hashes: Vec<Hash64> =
+            (0..blocks).map(|block| leaves[layout.flat_index(slice, block).expect("in range by construction") as usize]).collect();
+        if slice == address.slice {
+            block_path = crate::palw_step_leg::state_slice_path_v4(&hashes, address.block as usize)?;
+        }
+        let sub_root = crate::palw_step_leg::state_slice_root_v4(&hashes)?;
+        top.push(crate::palw_step_leg::state_top_leaf_v4(slice, blocks, &sub_root));
+    }
+    block_path.extend(crate::palw_step_leg::state_top_path_v4(&top, address.slice as usize)?);
+    Ok(block_path)
+}
+
+/// The v4 root from a leaf-hash oracle `(flat, slice, block) → leaf` — shared by the whole-state
+/// builder above and by callers that hold memoized block hashes.
+pub fn palw_state_root_from_hashes_v4(
+    layout: &PalwStateLayoutV4,
+    _map_id: &Hash64,
+    mut leaf: impl FnMut(u64, u32, u32) -> Hash64,
+) -> Result<Hash64, crate::palw_step_leg::PalwStepLegError> {
+    let mut top = Vec::with_capacity(layout.slice_count() as usize);
+    for slice in 0..layout.slice_count() {
+        let blocks = layout.block_count(slice).unwrap_or(0);
+        let mut hashes = Vec::with_capacity(blocks as usize);
+        for block in 0..blocks {
+            let flat = layout.flat_index(slice, block).expect("in range by construction");
+            hashes.push(leaf(flat, slice, block));
+        }
+        let sub_root = crate::palw_step_leg::state_slice_root_v4(&hashes)?;
+        top.push(crate::palw_step_leg::state_top_leaf_v4(slice, blocks, &sub_root));
+    }
+    crate::palw_step_leg::state_top_root_v4(&top)
+}
+
+/// **One chunk's leaf hash under the class's map** — the flat index for v1/v2/v3, `(slice,
+/// block)` for v4.
+pub fn palw_state_chunk_leaf_for_map_v1(
+    profile: &PalwShapeProfileV3,
+    positions: u32,
+    flat_index: u32,
+    chunk_bytes: &[u8],
+) -> Option<Hash64> {
+    let map_id = profile.state_chunk_map_id;
+    if !palw_map_is_held_v4(&map_id) {
+        return Some(crate::palw_step_leg::state_chunk_leaf_hash_v1(&map_id, flat_index, chunk_bytes));
+    }
+    let address = palw_state_layout_v4(profile, positions).ok()?.address(u64::from(flat_index))?;
+    Some(crate::palw_step_leg::state_chunk_leaf_hash_v4(&map_id, address.slice, address.block, chunk_bytes))
+}
+
+/// **One chunk's membership, folded to the root it claims**, under the class's map. The v1 tree
+/// is `state_chunk_opening_root_v1(count, index, …)`; the v4 one splits `siblings` into its two
+/// paths by the counts the class's own geometry derives at `positions` — nothing about the tree's
+/// shape is the prover's to say.
+pub fn palw_state_chunk_membership_root_v1(
+    profile: &PalwShapeProfileV3,
+    positions: u32,
+    flat_index: u32,
+    chunk_hash: &Hash64,
+    siblings: &[Hash64],
+) -> Result<Hash64, crate::palw_step_leg::PalwStepLegError> {
+    use crate::palw_step_leg::PalwStepLegError;
+    if !palw_map_is_held_v4(&profile.state_chunk_map_id) {
+        let count = palw_state_chunk_count_at_v1(profile, positions)
+            .ok_or_else(|| PalwStepLegError::HeldLayout("this map's chunk count is not derivable here".into()))?;
+        return crate::palw_step_leg::state_chunk_opening_root_v1(count as usize, flat_index, chunk_hash, siblings);
+    }
+    let layout = palw_state_layout_v4(profile, positions).map_err(|e| PalwStepLegError::HeldLayout(e.to_string()))?;
+    let address = layout
+        .address(u64::from(flat_index))
+        .ok_or(PalwStepLegError::LeafIndexOutOfRange { index: u64::from(flat_index), count: layout.chunk_count() })?;
+    crate::palw_step_leg::state_chunk_opening_root_v4(
+        address.slice_count,
+        address.slice,
+        address.block_count,
+        address.block,
+        chunk_hash,
+        siblings,
+    )
+}
+
+/// **The path the producer serves for one chunk**, under the class's map — the producing side of
+/// [`palw_state_chunk_membership_root_v1`].
+pub fn palw_state_chunk_path_for_map_v1(
+    profile: &PalwShapeProfileV3,
+    positions: u32,
+    chunks: &[Vec<u8>],
+    flat_index: u32,
+) -> Result<Vec<Hash64>, crate::palw_step_leg::PalwStepLegError> {
+    let leaves = palw_state_chunk_leaves_for_map_v1(profile, positions, chunks)?;
+    palw_state_chunk_path_from_leaves_for_map_v1(profile, positions, &leaves, flat_index)
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -356,7 +786,10 @@ pub fn hybrid_state_geometry_at_v3(
     positions: u32,
     with_recurrence: bool,
 ) -> Result<PalwHybridStateGeometryV1, PalwStateChunkMapError> {
-    let attn = tiled_kv_state_geometry_v3(profile, positions)?;
+    // ADR-0103 Decision 3: the held composition's attention half is the held map's — the same
+    // tiles, bounded by the proof's depth rather than by a chunk count.
+    let held = palw_map_is_held_v4(&profile.state_chunk_map_id);
+    let attn = if held { tiled_kv_state_geometry_v4(profile, positions)? } else { tiled_kv_state_geometry_v3(profile, positions)? };
     if !with_recurrence {
         // The attention half alone. Not an empty recurrence enumerated at zero heads — an absent
         // one: `gdn_chunk_count` is `2 × layers × heads`, so an empty layer list IS the absence,
@@ -385,7 +818,7 @@ pub fn hybrid_state_geometry_at_v3(
     }
     let geometry = PalwHybridStateGeometryV1 { attn, gdn_layers, gdn_heads: profile.gdn_heads, delta_head_bytes, conv_head_bytes };
     let chunk_count = geometry.chunk_count();
-    if chunk_count > PALW_STEP_LEG_MAX_STATE_CHUNKS as u64 {
+    if !held && chunk_count > PALW_STEP_LEG_MAX_STATE_CHUNKS as u64 {
         return Err(PalwStateChunkMapError::TooManyChunks { got: chunk_count, max: PALW_STEP_LEG_MAX_STATE_CHUNKS });
     }
     Ok(geometry)
@@ -467,6 +900,11 @@ pub fn palw_state_chunk_count_at_v1(profile: &PalwShapeProfileV3, positions: u32
         // recurrence rides its derived spacing, so two checkpoints of one leg can honestly have
         // different chunk counts and the rule has to be asked per checkpoint.
         return hybrid_state_geometry_for_covered_v1(profile, positions).ok().map(|g| g.chunk_count());
+    }
+    // ADR-0103 Decision 3: the held map's count is the same flat count, with no count cap — its
+    // bound is the proof's depth.
+    if palw_map_is_held_v4(&declared) {
+        return palw_state_layout_v4(profile, positions).ok().map(|l| l.chunk_count());
     }
     None
 }
@@ -770,6 +1208,9 @@ pub enum PalwStateChunkMapError {
     ZeroPositions,
     #[error("the layout needs {got} chunks and the leg admits at most {max}")]
     TooManyChunks { got: u64, max: usize },
+    /// ADR-0103 Decision 3: the held map's bound is a proof's depth, not a chunk count.
+    #[error("the held layout's proofs are {depth} levels deep and the map admits {max}")]
+    TreeTooDeep { depth: u32, max: u32 },
 }
 
 /// Which half of the cache a chunk belongs to. The discriminants are the enumeration order.

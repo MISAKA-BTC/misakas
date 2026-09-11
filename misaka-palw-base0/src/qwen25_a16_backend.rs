@@ -943,6 +943,7 @@ impl Qwen25A16Backend {
             &material.generated_token_ids,
             covered,
             &mut kernels,
+            self.prompt_ids_form,
         )
         .ok()
     }
@@ -1089,8 +1090,7 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for A16IntervalKernels<'_> {
         profile: &PalwShapeProfileV3,
         ctx: &PalwJobContextV2,
         start: &crate::fp_interval::Base0FpIntervalStartV1<'_>,
-        first_call: u32,
-        last_call: u32,
+        window: crate::fp_interval::Base0FpWindowV1,
         step_leaf_count: u64,
     ) -> Result<crate::legs::Base0StepTilesV1, String> {
         let engine = A16Engine::new(self.artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
@@ -1105,26 +1105,18 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for A16IntervalKernels<'_> {
             }
         };
         let vocab = self.artifact.shape.vocab;
-        crate::fp_interval::base0_fp_replay_interval_tiles_v1(
-            profile,
-            ctx,
-            start,
-            first_call,
-            last_call,
-            step_leaf_count,
-            |token, position| {
-                if token >= vocab {
-                    return Err(format!("token {token} is outside this class's vocabulary of {vocab}"));
+        crate::fp_interval::base0_fp_replay_interval_tiles_v1(profile, ctx, start, window, step_leaf_count, |token, position| {
+            if token >= vocab {
+                return Err(format!("token {token} is outside this class's vocabulary of {vocab}"));
+            }
+            let (logits, trace) = match self.plan {
+                Some(plan) => {
+                    engine.forward_token_planned(plan, &mut cache, token, position).map_err(|e| format!("planned forward: {e:?}"))?
                 }
-                let (logits, trace) = match self.plan {
-                    Some(plan) => engine
-                        .forward_token_planned(plan, &mut cache, token, position)
-                        .map_err(|e| format!("planned forward: {e:?}"))?,
-                    None => engine.forward_token_traced(&mut cache, token, position).map_err(|e| format!("forward: {e:?}"))?,
-                };
-                Ok((logits, crate::legs::a16_captured_rows_v1(&trace)))
-            },
-        )
+                None => engine.forward_token_traced(&mut cache, token, position).map_err(|e| format!("forward: {e:?}"))?,
+            };
+            Ok((logits, crate::legs::a16_captured_rows_v1(&trace)))
+        })
     }
 }
 
@@ -1517,7 +1509,12 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         if !self.court_capable {
             return None;
         }
-        crate::fp_interval::base0_fp_interval_count_for_v1(prompt_tokens, decode_tokens_executed, self.checkpoint_interval())
+        crate::fp_interval::base0_fp_interval_count_for_class_v1(
+            &self.profile,
+            prompt_tokens,
+            decode_tokens_executed,
+            self.checkpoint_interval(),
+        )
     }
 
     fn open_fp_interval(&self, capture: &[u8], index: u32, prompt_token_ids: &[u32]) -> Result<Vec<u8>, String> {
@@ -1597,6 +1594,48 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
     /// it must be the one the honest producer ran under: a context that differed would name a
     /// different job, and the state kept for the row check that follows would be looked up under a
     /// key no opening produces (which reads as `Unverifiable`, never as an accusation).
+    fn fp_held_route_v1(&self, window_receipt_daa: u64) -> Option<kaspa_consensus_core::palw_held_context_v1::PalwHeldSeatRouteV1> {
+        crate::fp_interval::base0_fp_held_route_for_v1(&self.profile, window_receipt_daa)
+    }
+
+    fn open_fp_resume_v1(&self, capture: &[u8], index: u32, prompt_token_ids: &[u32]) -> Result<Vec<u8>, String> {
+        match crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())? {
+            crate::produce::Base0RetentionV1::Folded(material) => crate::fp_interval::base0_open_fp_resume_v1(
+                &material,
+                index,
+                prompt_token_ids,
+                self.checkpoint_interval(),
+                self.step_ladder_cap,
+                None,
+                &|covered| self.fold_anchor_state_v1(&material, prompt_token_ids, covered),
+                self.prompt_ids_form,
+            )
+            .map_err(|e| e.to_string()),
+            crate::produce::Base0RetentionV1::Dense(_) => {
+                Err("a dense retention is the attempt lane's; it resumes nothing".to_string())
+            }
+        }
+    }
+
+    fn fp_accept_resume_v1(
+        &self,
+        resume: &[u8],
+        context: &PalwJobContextV2,
+        prompt_token_ids: &[u32],
+        covered: u32,
+    ) -> Result<Hash64, String> {
+        crate::fp_interval::base0_fp_accept_resume_v1(
+            resume,
+            context,
+            prompt_token_ids,
+            covered,
+            self.checkpoint_interval(),
+            self.step_ladder_cap,
+        )
+        .map(|state| state.state_chunks_root)
+        .map_err(|e| format!("{e:?}"))
+    }
+
     fn fp_recompute_checkpoint_root(
         &self,
         job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
@@ -1701,6 +1740,54 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             }
         }
         .map_err(|e| format!("{e:?}"))
+    }
+
+    fn held_state_chunk_answer_v1(
+        &self,
+        capture: &[u8],
+        prompt_token_ids: &[u32],
+        checkpoint: u32,
+        chunk: u32,
+    ) -> Result<
+        (
+            kaspa_consensus_core::palw_attn_court_v1::PalwAttnCheckpointAnchorV1,
+            kaspa_consensus_core::palw_attn_court_v1::PalwAttnChunkOpeningV1,
+        ),
+        String,
+    > {
+        let retention =
+            crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())?;
+        crate::fp_interval::base0_fp_held_state_chunk_answer_v1(&retention, checkpoint, chunk, &|covered| match &retention {
+            crate::produce::Base0RetentionV1::Folded(material) => self.fold_anchor_state_v1(material, prompt_token_ids, covered),
+            crate::produce::Base0RetentionV1::Dense(_) => None,
+        })
+        .map_err(|e| e.to_string())
+    }
+
+    fn held_step_range_answer_v1(
+        &self,
+        capture: &[u8],
+        prompt_token_ids: &[u32],
+        first: u64,
+        count: u32,
+    ) -> Result<kaspa_consensus_core::palw_step_leg::PalwStepRangeOpeningV1, String> {
+        let retention =
+            crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())?;
+        crate::fp_interval::base0_fp_held_step_range_answer_v1(
+            &retention,
+            first,
+            count,
+            prompt_token_ids,
+            self.checkpoint_interval(),
+            self.step_ladder_cap,
+            &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
+            &|covered| match &retention {
+                crate::produce::Base0RetentionV1::Folded(material) => self.fold_anchor_state_v1(material, prompt_token_ids, covered),
+                crate::produce::Base0RetentionV1::Dense(_) => None,
+            },
+            self.prompt_ids_form,
+        )
+        .map_err(|e| e.to_string())
     }
 
     fn fp_name_the_leaf_v1(
@@ -1879,6 +1966,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             output_token_ids,
             covered,
             &mut kernels,
+            self.prompt_ids_form,
         )
         .map(|state| state.state_chunks_root)
         .map_err(|e| e.to_string())
@@ -1945,6 +2033,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                     generated,
                     covered,
                     &mut kernels,
+                    self.prompt_ids_form,
                 )
                 .map(|state| state.chunks)
                 .map_err(|e| e.to_string())
@@ -1992,6 +2081,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                     generated,
                     covered,
                     &mut kernels,
+                    self.prompt_ids_form,
                 )
                 .map(|state| state.chunks)
                 .map_err(|e| e.to_string())
@@ -2016,9 +2106,12 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         let recorder = kaspa_consensus_core::palw_artifact::PalwRecordingOracleV1::new(inventory.operands());
         // The verdict is not ours to read here — this runs the adjudicator only to learn WHICH
         // rows it resolves, and it resolves the same rows whichever way the step reads.
-        let _ = kaspa_consensus_core::palw_step_refute::check_execution_step_refutation_capped_v1(
+        // Carried the way this network's form carries it (ADR-0081 Decision 3): under the Merkle
+        // form the flat check refuses the list before a row is read, and records nothing.
+        let _ = kaspa_consensus_core::palw_step_refute::check_execution_step_refutation_carried_capped_v1(
             refutation,
             &recorder,
+            self.prompt_ids_form,
             self.step_ladder_cap,
         );
         recorder.openings().ok_or_else(|| "the inventory could not open a recorded row".to_string())
@@ -2685,6 +2778,7 @@ mod free_prompt_tests {
                     &dense.generated_token_ids,
                     covered,
                     &mut kernels,
+                    kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
                 )
                 .expect("this seat can recompute its own state");
             }
@@ -3006,18 +3100,38 @@ mod free_prompt_tests {
     ///   ACCUSED capture's own commitments, convicts.
     #[test]
     fn a_real_fused_capture_answers_its_dissection_exactly_and_a_forged_row_is_convicted() {
+        let geometry = v5_geometry();
+        let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v5(geometry)
+            .expect("the v5 projection is a valid profile");
+        real_fused_capture_answers_and_convicts(geometry, profile);
+    }
+
+    /// **The same drill on the held row** (ADR-0103 Decisions 3 and 5): graph-v7 registers the held
+    /// map, so the bottom's anchor chunk proves into its slice's sub-root and the top tree — the
+    /// two-level path the court reads against the class's own layout — and the dissection is
+    /// exact on real committed rows and convicts the forged one, exactly as on graph-v5.
+    #[test]
+    fn a_real_held_fused_capture_answers_its_dissection_exactly_and_a_forged_row_is_convicted() {
+        let geometry = v5_geometry();
+        let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v7(geometry)
+            .expect("the v7 projection is a valid profile");
+        assert!(kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&profile));
+        real_fused_capture_answers_and_convicts(geometry, profile);
+    }
+
+    fn real_fused_capture_answers_and_convicts(
+        geometry: kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1,
+        profile: PalwShapeProfileV3,
+    ) {
         use kaspa_consensus_core::palw_attn_court_v1::{
             PALW_ATTN_COURT_OBJECT_VERSION_V1, PalwAttnCourtVerdictV1, PalwAttnDissectChoiceV1, PalwAttnDissectPhaseV1,
             check_attn_dissect_bottom_v1, palw_attn_opened_lanes_v1,
         };
         use kaspa_consensus_core::palw_attn_dissect::PalwAttnDissectRoundV1;
         use kaspa_consensus_core::palw_bisect::PalwBisectTurnV1;
-        use kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v5;
         use kaspa_consensus_core::palw_step::{PalwStepOpKindV1, canonical_step_coordinates};
 
-        let geometry = v5_geometry();
         let artifact = v5_artifact(geometry);
-        let profile = qwen25_a16_artifact_row_profile_v5(geometry).expect("the v5 projection is a valid profile");
         // Twenty prompt positions and four decode calls: the last position reads 23 rows of
         // history, two court tiles, so the phase plays a round before its bottom.
         let backend = Qwen25A16Backend::from_registered_profile(artifact.clone(), NETWORK.to_vec(), profile.clone(), (20, 4))
@@ -3553,6 +3667,56 @@ mod free_prompt_tests {
             anchor.leaf.state_chunks_root = Hash64::from_u64_word(0xBAD);
         }
         assert!(backend.attn_site_evidence_from_filing(&forged_anchor, narrowed, None).is_err(), "a forged anchor is refused");
+    }
+
+    /// **ADR-0103 Decision 2, through the seam a node holds: a held class is seated in runs of
+    /// positions, and a lie in the PROMPT is a fault in the interval that holds it.**
+    ///
+    /// The graph-v7 row at `n_ctx` 32 is cut into eight-position intervals, so a twenty-position
+    /// prompt is three intervals of the job's own — where the shipped unit made it ONE interval 0
+    /// that a seat either replayed whole or never checked. The chain's count (`fp_interval_count_for`)
+    /// is the capture's; the honest interval 0 is licensed; and the same interval of a capture whose
+    /// first embedding gather was moved and re-committed is a fault at that leaf.
+    #[test]
+    fn a_held_class_seats_its_prompt_in_intervals_and_a_lie_in_it_is_a_fault() {
+        use kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1;
+        let geometry = v5_geometry();
+        let artifact = v5_artifact(geometry);
+        let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v7(geometry)
+            .expect("the v7 projection is a valid profile");
+        let backend = Qwen25A16Backend::from_registered_profile(artifact, NETWORK.to_vec(), profile.clone(), (20, 4))
+            .expect("the held row is servable");
+        let width = kaspa_consensus_core::palw_held_context_v1::palw_held_interval_positions_v1(&profile);
+        assert_eq!(width, 8, "n_ctx 32 over the draw's four");
+        let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x0103)).expect("a job");
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let steps = u64::from(job.declared_prefill_tokens) + u64::from(job.exact_decode_tokens - 1);
+        let chain_count = backend.fp_interval_count_for(job.declared_prefill_tokens, job.exact_decode_tokens).expect("a count");
+        assert_eq!(u64::from(chain_count), steps.div_ceil(u64::from(width)), "⌈(prefill + decode calls) / P⌉");
+        assert!(u64::from(width) < u64::from(job.declared_prefill_tokens), "interval 0 is P positions, not the prompt");
+
+        let honest = backend.execute(&job, &prompt).expect("the held class runs");
+        assert_eq!(backend.fp_interval_count(&honest.material), Some(chain_count), "the capture's count is the chain's");
+        let claim = |o: &PalwExecutionOutcomeV1| PalwClaimRootsV1 {
+            execution_root: o.execution_root,
+            trace_root: o.trace_root,
+            anchor: job.job_id,
+        };
+        let leaves = crate::produce::base0_material_decode_any_v1(&honest.material).expect("decodes").binding().step_leaf_count;
+        let opened = backend.open_fp_interval(&honest.material, 0, &ids).expect("interval 0 opens");
+        assert_eq!(backend.verify_fp_interval_opening(&opened, claim(&honest), 0, &ids, leaves), PalwFpIntervalVerdictV1::Valid);
+
+        let lying = backend.execute_with_injected_fault(&job, &prompt, 0).expect("a lie in the prompt commits");
+        let opened = backend.open_fp_interval(&lying.material, 0, &ids).expect("the liar's interval 0 opens");
+        // A V4 opening names the BLOCK a fault is in (ADR-0086 Decision 6); the block-leaves lane
+        // names the leaf from there.
+        match backend.verify_fp_interval_opening(&opened, claim(&lying), 0, &ids, leaves) {
+            PalwFpIntervalVerdictV1::FaultInRange { first_leaf_index, leaf_count } => {
+                assert!(first_leaf_index == 0 && leaf_count > 0, "the block that holds leaf 0: {first_leaf_index} + {leaf_count}")
+            }
+            PalwFpIntervalVerdictV1::Fault { leaf_index } => assert_eq!(leaf_index, 0),
+            other => panic!("the lie in the prompt must be a fault in the interval that holds it, got {other:?}"),
+        }
     }
 
     /// **A `graph-v5` row is court-capable, and it says so through the constructor the chain uses.**

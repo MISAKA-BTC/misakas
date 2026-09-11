@@ -133,6 +133,50 @@ pub fn palw_fp_verify_opening_request_v1(
         .unwrap_or(false)
 }
 
+/// **ADR-0109 Decision 2: a leaf-evidence request's signed message** — the interval request's
+/// domain with its own tag (3), binding the request index AND the leaf, so one signature can be
+/// replayed neither as a request for another leaf nor as a plain interval request.
+pub fn palw_fp_leaf_request_message_v1(network_domain: Hash64, claim: Hash64, index: u32, leaf: u64, requested_daa: u64) -> Hash64 {
+    let mut state = keyed(PALW_FP_OPENING_REQUEST_DOMAIN);
+    state.update(network_domain.as_byte_slice());
+    state.update(claim.as_byte_slice());
+    state.update(&[3u8]);
+    state.update(&index.to_le_bytes());
+    state.update(&leaf.to_le_bytes());
+    state.update(&requested_daa.to_le_bytes());
+    finish(state)
+}
+
+/// Sign a leaf-evidence request with the bond's key (ADR-0109 Decision 2).
+pub fn palw_fp_sign_leaf_request_v1(
+    signing_key: &libcrux_ml_dsa::ml_dsa_87::MLDSA87SigningKey,
+    network_domain: Hash64,
+    claim: Hash64,
+    index: u32,
+    leaf: u64,
+    requested_daa: u64,
+) -> Option<Vec<u8>> {
+    let message = palw_fp_leaf_request_message_v1(network_domain, claim, index, leaf, requested_daa);
+    libcrux_ml_dsa::ml_dsa_87::sign(signing_key, message.as_byte_slice(), PALW_FP_OPENING_REQUEST_MLDSA87_CONTEXT, [0u8; 32])
+        .ok()
+        .map(|sig| sig.as_ref().to_vec())
+}
+
+/// Verify a leaf-evidence request's signature under the requester's registry key.
+pub fn palw_fp_verify_leaf_request_v1(
+    pubkey: &[u8],
+    signature: &[u8],
+    network_domain: Hash64,
+    claim: Hash64,
+    index: u32,
+    leaf: u64,
+    requested_daa: u64,
+) -> bool {
+    let message = palw_fp_leaf_request_message_v1(network_domain, claim, index, leaf, requested_daa);
+    kaspa_txscript::verify_mldsa87_with_context(pubkey, message.as_byte_slice(), signature, PALW_FP_OPENING_REQUEST_MLDSA87_CONTEXT)
+        .unwrap_or(false)
+}
+
 /// **The key the transport rate-limits a bond under** (ADR-0077 SA-2's "rate-limited per bond").
 ///
 /// A hash of the bond's outpoint rather than the outpoint itself, so that the transport crate can
@@ -1038,6 +1082,42 @@ mod tests {
         assert_ne!(base, palw_fp_opening_request_message_v1(h(1), h(2), None, 400), "the whole-capture pull is another message");
         assert_ne!(base, palw_fp_opening_request_message_v1(h(1), h(2), Some(3), 401), "daa");
         assert_eq!(base, palw_fp_opening_request_message_v1(h(1), h(2), Some(3), 400), "pure");
+    }
+
+    /// **ADR-0109 Decision 2: a leaf request signs its leaf, and is neither another leaf's request
+    /// nor a plain interval request.** The same domain and context as the interval lane, its own
+    /// tag: a captured leaf request cannot be replayed for another leaf, and a captured interval
+    /// request cannot be turned into a leaf request by adding a field the signature never covered.
+    #[test]
+    fn a_leaf_request_signs_its_leaf_and_is_no_other_request() {
+        let index = kaspa_consensus_core::palw_leaf_evidence_v1::palw_leaf_evidence_request_index_v1(2).expect("an index");
+        let base = palw_fp_leaf_request_message_v1(h(1), h(2), index, 77, 400);
+        assert_ne!(base, palw_fp_leaf_request_message_v1(h(1), h(2), index, 78, 400), "another leaf");
+        assert_ne!(base, palw_fp_leaf_request_message_v1(h(9), h(2), index, 77, 400), "another network");
+        assert_ne!(base, palw_fp_leaf_request_message_v1(h(1), h(9), index, 77, 400), "another claim");
+        assert_ne!(base, palw_fp_leaf_request_message_v1(h(1), h(2), index + 1, 77, 400), "another index");
+        assert_ne!(base, palw_fp_leaf_request_message_v1(h(1), h(2), index, 77, 401), "another daa");
+        assert_ne!(base, palw_fp_opening_request_message_v1(h(1), h(2), Some(index), 400), "not the plain request for that index");
+
+        let keypair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([5u8; 32]);
+        let pubkey = keypair.verification_key.as_ref().to_vec();
+        let signature = palw_fp_sign_leaf_request_v1(&keypair.signing_key, h(1), h(2), index, 77, 400).expect("signs");
+        assert!(palw_fp_verify_leaf_request_v1(&pubkey, &signature, h(1), h(2), index, 77, 400));
+        assert!(!palw_fp_verify_leaf_request_v1(&pubkey, &signature, h(1), h(2), index, 78, 400), "another leaf");
+        assert!(!palw_fp_verify_opening_request_v1(&pubkey, &signature, h(1), h(2), Some(index), 400), "not a plain request");
+        let plain = palw_fp_sign_opening_request_v1(&keypair.signing_key, h(1), h(2), Some(index), 400).expect("signs");
+        assert!(!palw_fp_verify_leaf_request_v1(&pubkey, &plain, h(1), h(2), index, 77, 400), "a plain request is no leaf request");
+
+        // The index kinds: a leaf request is bit 29 above its interval, and no other kind.
+        use kaspa_consensus_core::palw_leaf_evidence_v1::palw_leaf_evidence_request_decode_v1;
+        assert_eq!(palw_leaf_evidence_request_decode_v1(index), Some(2));
+        assert_eq!(palw_leaf_evidence_request_decode_v1(2), None, "a plain interval");
+        let resume = misaka_palw_base0::fp_interval::base0_fp_resume_request_index_v1(2).expect("resume");
+        let block = misaka_palw_base0::fp_interval::base0_fp_block_leaves_request_index_v1(2, 3).expect("block");
+        assert_eq!(palw_leaf_evidence_request_decode_v1(resume), None, "a resume request");
+        assert_eq!(palw_leaf_evidence_request_decode_v1(block), None, "a block request");
+        assert_eq!(misaka_palw_base0::fp_interval::base0_fp_resume_request_decode_v1(index), None, "nor is a leaf request a resume");
+        assert_eq!(misaka_palw_base0::fp_interval::base0_fp_block_leaves_request_decode_v1(index), None, "nor a block request");
     }
 
     /// **The bond's key signs both a receipt and a request, and neither signature is the other.**

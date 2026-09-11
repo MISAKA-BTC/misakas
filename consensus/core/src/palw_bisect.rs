@@ -385,6 +385,47 @@ impl PalwBisectLadderV1 {
         Ok(ladder)
     }
 
+    /// **Open a ladder already narrowed to the leaf an accusation named** (ADR-0103 Decision 5).
+    ///
+    /// Under the held regime no bisection is played: a one-move accusation names its leaf, and at
+    /// a fused attention site the adjudication is the dissection, whose first move is the
+    /// responder's root claim. The ladder that dissection hangs off is the one a bisection would
+    /// have converged to — `[leaf, leaf + 1)` at `Terminal`, round 0 — under the id [`Self::open`]
+    /// derives from the same six inputs, so every reader of a converged ladder (`terminal_index`,
+    /// the sweep's fused-terminal clock, the root claim's arm) reads this one unchanged. Round 0 is
+    /// the truth: no rung was played, so the responder has shown nothing yet, and the sweep's
+    /// opening-rung rules apply to its silence exactly as they apply to any unanswered opening.
+    #[allow(clippy::too_many_arguments)]
+    pub fn open_at_named_leaf(
+        job_context_hash: &Hash64,
+        committed_root: &Hash64,
+        challenger_id: &Hash64,
+        responder_id: &Hash64,
+        space: PalwBisectSpaceV1,
+        space_size: u64,
+        leaf: u64,
+        opened_at_daa: u64,
+        first_deadline_daa: u64,
+    ) -> Result<Self, PalwBisectError> {
+        let mut ladder = Self::open(
+            job_context_hash,
+            committed_root,
+            challenger_id,
+            responder_id,
+            space,
+            space_size,
+            opened_at_daa,
+            first_deadline_daa,
+        )?;
+        if leaf >= space_size {
+            return Err(PalwBisectError::SpaceOutOfRange { got: leaf, max: space_size });
+        }
+        ladder.lo = leaf;
+        ladder.hi = leaf + 1;
+        ladder.turn = PalwBisectTurnV1::Terminal;
+        Ok(ladder)
+    }
+
     /// One rung window past the block that accepted the move.
     ///
     /// A zero `w_round` would make every move instantly overdue, so it is refused here rather

@@ -720,6 +720,8 @@ mod tests {
             crate::palw_service_descriptor_v1::PALW_SERVICE_DESCRIPTOR_ALL_DOMAINS,
             crate::palw_shard_court_v1::PALW_SHARD_COURT_ALL_DOMAINS,
             crate::palw_shard_licensing_v1::PALW_SHARD_LICENSING_ALL_DOMAINS,
+            crate::palw_checkpoint_court_v1::PALW_CHECKPOINT_COURT_ALL_DOMAINS,
+            crate::palw_held_da_v1::PALW_HELD_DA_ALL_DOMAINS,
             crate::palw_slash::PALW_S_ALL_DOMAINS,
             crate::palw_state_v2::PALW_STATE_V2_ALL_DOMAINS,
             crate::palw_step::PALW_STEP_ALL_DOMAINS,

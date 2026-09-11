@@ -345,8 +345,15 @@ impl PalwAttnSiteEvidenceV1 {
                     .get(chunk_index as usize)
                     .cloned()
                     .ok_or(PalwAttnResponderError::EvidenceMissing("anchor chunk"))?;
-                let siblings = crate::palw_step_leg::state_chunk_path_v1(&evidence.chunk_hashes, chunk_index as usize)
-                    .map_err(|_| PalwAttnResponderError::EvidenceMissing("anchor chunk path"))?;
+                // The path under the class's map (ADR-0103 Decision 3: the held map's two-level
+                // proof), folded from the leaves the evidence already holds.
+                let siblings = crate::palw_state_chunk_map::palw_state_chunk_path_from_leaves_for_map_v1(
+                    &self.binding.shape_profile,
+                    site.site.anchor_positions,
+                    &evidence.chunk_hashes,
+                    chunk_index as u32,
+                )
+                .map_err(|_| PalwAttnResponderError::EvidenceMissing("anchor chunk path"))?;
                 Ok(PalwAttnChunkOpeningV1 { chunk_index: chunk_index as u32, chunk_bytes, siblings })
             };
             let after = |series: Option<&Vec<PalwAttnRowOpeningV1>>| -> Result<Vec<PalwAttnRowOpeningV1>, PalwAttnResponderError> {

@@ -25,7 +25,14 @@
 #
 # Env: KASPAD_BIN, CLI_BIN (defaults target/release/*), NODES (3), WORK_DIR, TAMPER_LEAF (0 — the
 # embedding gather, the leaf every seat samples first), CANONICAL_INTERVAL (10 DAA), STEP_WAIT (s),
-# P2P_BASE / RPC_BASE (port bases).
+# P2P_BASE / RPC_BASE (port bases), HELD (0; 1 re-runs the drill UNDER ADR-0103's fence —
+# --palw-held-context-devnet on every node, the held regime minted from genesis — which is
+# ADR-0103 Invariant 1: the same tampered leaf, the same one-move conviction, the same slash),
+# LEAF (unset; ADR-0109's two paths, HELD=1 only: `fast` — node-0 serves its claims' answer
+# envelope and never the capture, so a seat judges by intervals alone, names the leaf off the
+# block-leaves lane and convicts on the evidence node-0 serves it on request; `slow` — node-0 also
+# refuses that request, so the seat demands the leaf's evidence on chain, node-0 answers the
+# demand, and the fold's one-move verdict on the answer is the conviction).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -36,6 +43,15 @@ WORK_DIR="${WORK_DIR:-$REPO_ROOT/.misaka-palw-shard-court-devnet}"
 TAMPER_LEAF="${TAMPER_LEAF:-0}"
 CANONICAL_INTERVAL="${CANONICAL_INTERVAL:-10}"
 STEP_WAIT="${STEP_WAIT:-1800}"
+HELD="${HELD:-0}"
+LEAF="${LEAF:-}"
+case "$LEAF" in
+  ""|fast|slow) ;;
+  *) printf '[shard-court-drill] FATAL: LEAF is fast or slow\n' >&2; exit 1 ;;
+esac
+if [ -n "$LEAF" ] && [ "$HELD" != "1" ]; then
+  printf '[shard-court-drill] FATAL: LEAF needs HELD=1: the leaf demand is the held regime'"'"'s\n' >&2; exit 1
+fi
 P2P_BASE="${P2P_BASE:-16510}"
 RPC_BASE="${RPC_BASE:-17810}"
 PREMINE_TXID="6d6973616b612d7072656d696e65$(printf '0%.0s' $(seq 1 100))"   # "misaka-premine", zero-padded
@@ -47,6 +63,9 @@ die() { log "FATAL: $*"; exit 1; }
 for b in "$KASPAD_BIN" "$CLI_BIN"; do [ -x "$b" ] || die "missing binary $b (cargo build --release -p kaspad -p misaka-cli)"; done
 [ "$NODES" -ge 2 ] || die "NODES must be at least 2: a liar and a seat"
 "$KASPAD_BIN" --help 2>/dev/null | grep -q -- "--palw-shard-court-devnet" || die "this kaspad has no --palw-shard-court-devnet (ADR-0100)"
+if [ "$HELD" = "1" ]; then
+  "$KASPAD_BIN" --help 2>/dev/null | grep -q -- "--palw-held-context-devnet" || die "this kaspad has no --palw-held-context-devnet (ADR-0103)"
+fi
 for ((i=0; i<NODES; i++)); do
   for port in $((P2P_BASE + i)) $((RPC_BASE + i)); do
     if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then die "port $port is in use — set P2P_BASE / RPC_BASE"; fi
@@ -73,11 +92,13 @@ for ((i=0; i<NODES; i++)); do
   [ -n "$addr" ] || die "cannot derive bond $i's address"
   args=(--devnet --appdir="$WORK_DIR/node-$i" --listen="127.0.0.1:$((P2P_BASE + i))" --rpclisten-borsh="127.0.0.1:$((RPC_BASE + i))"
         --utxoindex --nodnsseed --disable-upnp --nogrpc --enable-unsynced-mining
-        --palw-devnet-floor-only --palw-shard-court-devnet=0
+        --palw-devnet-floor-only --palw-shard-court-devnet=0 $( [ "$HELD" = "1" ] && echo --palw-held-context-devnet || true )
         --palw-produce --palw-panel --palw-producer-key="$WORK_DIR/keys/bond-$i.seed" --palw-producer-bond="$PREMINE_TXID:$i"
         --palw-producer-pay-address="$addr" --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1 + i))")
   if [ "$i" -eq 0 ]; then
     args+=(--palw-canonical-claims --palw-canonical-interval-daa="$CANONICAL_INTERVAL" --palw-drill-tamper-fp-leaf="$TAMPER_LEAF")
+    [ -n "$LEAF" ] && args+=(--palw-drill-answer-only)
+    [ "$LEAF" = "slow" ] && args+=(--palw-drill-refuse-leaf-evidence)
   else
     args+=(--connect="127.0.0.1:$P2P_BASE")
   fi
@@ -105,8 +126,21 @@ wait_log "PALW DRILL: this canonical claim commits a capture corrupted" "the cor
 committed="$(wait_log "committed canonical claim [0-9a-f]{128}" "the canonical claim's commitment" "$WORK_DIR/node-0.log")"
 log "    $committed"
 
-log "2/5 waiting for a seat to accuse it in the one-move court"
-accused="$(wait_log "accusing leaf [0-9]+ in the one-move court" "a seat's accusation")"
+if [ "$LEAF" = "slow" ]; then
+  log "2/5 waiting for a seat to demand the named leaf's evidence on chain (ADR-0109 Decision 3)"
+  accused="$(wait_log "demanding it on chain \\(ADR-0109 Decision 3\\)" "a seat's demand")"
+elif [ "$LEAF" = "fast" ]; then
+  # The fast path's own line, not any accusation: a capture-route accusation here would mean a seat
+  # held the capture after all, and the run would prove nothing about ADR-0109.
+  log "2/5 waiting for a seat to accuse on the executor's own evidence (ADR-0109 fast path)"
+  accused="$(wait_log "accusing leaf [0-9]+ in the one-move court on the executor's own evidence" "a fast-path accusation")"
+  if grep -h -E "accusing leaf [0-9]+ in the one-move court \\(session" "$WORK_DIR"/node-*.log >/dev/null 2>&1; then
+    die "a seat accused from a capture — node-0 served one, so this run does not exercise the fast path"
+  fi
+else
+  log "2/5 waiting for a seat to accuse it in the one-move court"
+  accused="$(wait_log "accusing leaf [0-9]+ in the one-move court" "a seat's accusation")"
+fi
 CLAIM="$(echo "$accused" | grep -oE "claim [0-9a-f]{128}" | head -1 | awk '{print $2}')"
 [ -n "$CLAIM" ] || die "the accusation line names no claim: $accused"
 log "    $accused"
@@ -118,10 +152,19 @@ bond_collateral() {
     | grep -E "^  $PREMINE_TXID:0 " | grep -oE "collateral [0-9]+" | head -1 | awk '{print $2}' || true
 }
 before_collateral="$(bond_collateral)"
-wait_log "submitted ShardCourtAccused" "the accusation's carrier" >/dev/null
+if [ "$LEAF" = "slow" ]; then
+  log "3/5 waiting for the demand, node-0's answer and a block that carries it"
+  demanded="$(wait_log "PALW lifecycle carried .*DefaultAccusedHeld" "a block carrying the demand")"
+  log "    $demanded"
+  answered="$(wait_log "answering the held accusation of StepLeaf" "node-0's answer" "$WORK_DIR/node-0.log")"
+  log "    $answered"
+  carried="$(wait_log "PALW lifecycle carried .*MaterialDisclosedHeld" "a block carrying the answer")"
+else
+  wait_log "submitted ShardCourtAccused" "the accusation's carrier" >/dev/null
 
-log "3/5 waiting for a block to carry it"
-carried="$(wait_log "PALW lifecycle carried .*ShardCourtAccused" "a block carrying ShardCourtAccused")"
+  log "3/5 waiting for a block to carry it"
+  carried="$(wait_log "PALW lifecycle carried .*ShardCourtAccused" "a block carrying ShardCourtAccused")"
+fi
 log "    $carried"
 
 log "4/5 reading the claim's phase from two nodes"
@@ -146,6 +189,12 @@ log "    before ${before_collateral:-?} sompi, after ${after_collateral:-?} somp
 if [ -n "$before_collateral" ] && [ -n "$after_collateral" ]; then
   [ "$after_collateral" -lt "$before_collateral" ] || die "bond 0's collateral did not fall ($before_collateral → $after_collateral)"
 fi
-dropped="$(grep -h -c "a PALW lifecycle object was dropped, and the block stands" "$WORK_DIR"/node-*.log | paste -sd+ - | bc 2>/dev/null || echo 0)"
+# One count over every log: `grep -c` on one stream prints one number, and `|| true` (not `|| echo 0`)
+# keeps pipefail's non-zero exit on no match from printing a second zero.
+dropped="$(cat "$WORK_DIR"/node-*.log | grep -c "a PALW lifecycle object was dropped, and the block stands" || true)"
 log "    duplicate accusations dropped with the block standing: $dropped (every seat on the panel files once)"
-log "PASS — the one-move court convicted a corrupted free-prompt claim on a live devnet"
+case "$LEAF" in
+  fast) log "PASS — a seat that held no capture convicted a corrupted free-prompt claim on the executor's own evidence (ADR-0109 fast path)" ;;
+  slow) log "PASS — a seat that held no capture demanded the leaf on chain, and the executor's answer convicted it (ADR-0109 slow path)" ;;
+  *) log "PASS — the one-move court convicted a corrupted free-prompt claim on a live devnet" ;;
+esac

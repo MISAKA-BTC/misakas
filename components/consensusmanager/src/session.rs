@@ -240,6 +240,14 @@ impl ConsensusSessionOwned {
         self.consensus.palw_claim_readers_v2(claim)
     }
 
+    /// A claim's committed roots and price at the tip (ADR-0109 Decision 2).
+    pub fn palw_claim_roots_v2(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Option<(kaspa_consensus_core::Hash64, kaspa_consensus_core::Hash64, u64)> {
+        self.consensus.palw_claim_roots_v2(claim)
+    }
+
     /// Where a bond's rewards are paid, as the registered payload. See the trait's doc: a panel
     /// reads it to recognise its own unspent outputs when its remembered fee outpoints have died.
     pub fn palw_bond_payout_payload_v2(
