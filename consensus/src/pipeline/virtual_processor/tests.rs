@@ -12480,3 +12480,183 @@ fn first_locked_input_names_the_locked_bond_spend() {
     assert_eq!(super::processor::first_locked_input(&tx(&[free]), &locked), None);
     assert_eq!(super::processor::first_locked_input(&tx(&[bond]), &Default::default()), None, "an empty registry locks nothing");
 }
+
+/// **A-1 (Critical) — the acceptance rehearsal and the real block fold disagree at a class's
+/// activation-crossing block, so one accepted list permanently halts the chain.**
+///
+/// `palw_v2_accepted_objects` (the acceptance FILTER) rehearses each object by folding it through
+/// the WHOLE block transition at a synthetic point — `apply_palw_transition_v2_with_extras`, whose
+/// step 3a `activate_due_classes` runs AFTER the objects. So when the block reaches a class X's
+/// `activation_daa`, the FIRST accepted object's own rehearsal transition already flipped X to
+/// `Active` in the folded state, and a later `ClassLaneCertified{X}` — which the transition admits
+/// only for an `Active` class — is validated against that and ACCEPTED.
+///
+/// The real fold the pipeline runs on the chain candidate (`apply_palw_transition_v7` over the
+/// accepted list) applies every object to the PARENT state, where step 3a has not run yet: at the
+/// `ClassLaneCertified` X is still `Registered`, the transition returns
+/// `CertificationNeedsActiveClass`, and the whole block is `StatusDisqualifiedFromChain` on every
+/// node. The filter's one contract — "what it returns, the transition applies" — is broken exactly
+/// at the crossing, and the chain cannot advance past the parent.
+///
+/// The regression asserts the SAFE invariant (the accepted list folds without error), so on the
+/// audited commit it FAILS. It also exhibits the concrete effect: the fold's error is
+/// `CertificationNeedsActiveClass`, which is what disqualifies the block.
+///
+/// The two accepted objects are the finding's minimum: a leading object whose rehearsal transition
+/// crosses the activation (here a partial `ObjectChunk`, which the real pipeline always has an
+/// analogue of — a derived `PanelBound` or a 0x4a `FreePromptCommitted` is ordered ahead of every
+/// lifecycle object), then the `ClassLaneCertified`. Drop the leading object and the filter
+/// correctly refuses the binding, which is why "an object accepted before it" is load-bearing.
+#[tokio::test]
+async fn the_acceptance_filter_output_always_folds_at_a_class_activation_crossing() {
+    use kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1;
+    use kaspa_consensus_core::palw_e2e_adjudicability::{PalwE2eCoveringV1, PalwE2eFamilyV1, palw_e2e_family_id_v1};
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_state_v2::{
+        PalwBlockContextV2, PalwCertifiedFamilyStateV2, PalwCertifiedLaneV1, PalwChainStateV2, PalwClassStatusV2, PalwConsensusObjectV2,
+        PalwDeltaEntryV2, PalwPwuRuleV2, PalwStateDeltaV2, PalwStateV2Error, apply_delta_v2, apply_palw_transition_v2,
+    };
+    use kaspa_hashes::Hash64;
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 8);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    let vp = ctx.consensus.virtual_processor();
+
+    // The post-genesis class X the block activates: a real, shippable profile so its id is its
+    // graph and a chain-certified family can cover it (the finding's precondition).
+    let profile = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(
+        kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY,
+    )
+    .expect("the floor's profile projects");
+    let class_x = profile.shape_profile_id();
+
+    let point = |word: u64, daa: u64, blue: u64| PalwBlockContextV2 {
+        block: Hash64::from_u64_word(word),
+        daa_score: daa,
+        blue_score: blue,
+        subsidy: 0,
+    };
+
+    // S: the parent state at the moment before the crossing. The base class Active, and X
+    // Registered with a FUTURE activation (weightless, so its grant is a no-op and cannot fail).
+    let genesis = PalwChainStateV2::genesis();
+    let base = PalwConsensusObjectV2::ClassRegistered {
+        class_id: bundle.base_class_id,
+        artifact_root: Hash64::from_u64_word(0xA7),
+        slash_value_per_pwu: 5,
+        pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+        initial_target: u128::MAX / 2,
+        share_permille: 1000,
+        activation_daa: 0,
+        admission: None,
+    };
+    let (s1, _) = apply_palw_transition_v2(&genesis, &bundle.state, &point(1, 100, 1), &[base], None).expect("the base registers");
+    let register_x = PalwConsensusObjectV2::ClassRegistered {
+        class_id: class_x,
+        artifact_root: Hash64::from_u64_word(0xB0),
+        slash_value_per_pwu: 5, // the network's one slash value (the base's), or the transition refuses it
+        pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+        initial_target: u128::MAX / 2,
+        share_permille: 0,      // weightless
+        activation_daa: 105,    // in the future relative to registration at daa 101
+        admission: None,
+    };
+    let (s2, _) =
+        apply_palw_transition_v2(&s1, &bundle.state, &point(2, 101, 2), &[register_x], None).expect("X registers, not yet active");
+    assert!(
+        matches!(
+            s2.class(&class_x).map(|c| &c.status),
+            Some(kaspa_consensus_core::palw_state_v2::PalwClassStatusV2::Registered { .. })
+        ),
+        "X must be Registered (not yet Active) going into the crossing block: {:?}",
+        s2.class(&class_x).map(|c| c.status.clone())
+    );
+
+    // A chain-certified free-prompt family that covers X's reachable kernels — installed as state
+    // (rooted, carried, reverted) exactly as `a_chain_certified_class_takes_fp_commitments...` does,
+    // so `ClassLaneCertified`'s coverage check has a family to find.
+    let family = PalwE2eFamilyV1 {
+        family_id: palw_e2e_family_id_v1("A1-COVER"),
+        drilled_class_id: class_x,
+        kernel_ids: reachable_kernels_v1(&profile),
+        covering: PalwE2eCoveringV1 { convicted_leaves: 6, ..Default::default() },
+    };
+    let digest = family.digest();
+    let delta = PalwStateDeltaV2 {
+        point: point(2, 101, 2),
+        entries: vec![PalwDeltaEntryV2::CertifiedFamily {
+            lane: PalwCertifiedLaneV1::FreePrompt,
+            key: digest,
+            old: None,
+            new: Some(PalwCertifiedFamilyStateV2 { family, certified_daa: 101 }),
+        }],
+    };
+    let s = apply_delta_v2(&s2, &delta, &bundle.state).expect("the covering family installs");
+
+    // The crossing block at daa 105: a leading object (a partial chunk the fold accepts) followed by
+    // the binding. In a real block the leading object is a derived `PanelBound` or a 0x4a commitment,
+    // ordered ahead of all lifecycle objects; a partial `ObjectChunk` stands in for "any object the
+    // fold accepts first", and like them it triggers `activate_due_classes` in its rehearsal step.
+    let leading = PalwConsensusObjectV2::ObjectChunk {
+        group: Hash64::from_u64_word(0x00C0_00DE),
+        index: 0,
+        count: 2,
+        bytes: vec![0xAB],
+    };
+    let bind = PalwConsensusObjectV2::ClassLaneCertified {
+        class_id: class_x,
+        lane: PalwCertifiedLaneV1::FreePrompt,
+        profile: Box::new(profile),
+    };
+    let crossing = point(3, 105, 3);
+
+    // The FILTER, driven for real: it rehearses each object through the whole transition, so the
+    // leading object's step 3a flips X Active before the binding is judged, and both are accepted.
+    let (accepted, _folded_sequentially) = vp.palw_v2_accepted_objects_and_state_for_tests(
+        &s,
+        &bundle.state,
+        &crossing,
+        vec![leading.clone(), bind.clone()],
+        crossing.block,
+    );
+    // THE INVARIANT (A-1 fix): the filter now predicts the fold's step 3, so the ClassLaneCertified
+    // for a class that only becomes `Active` at this block's step 3a is DROPPED here — the leading
+    // object is kept, the block stands, and the chain advances.
+    assert_eq!(
+        accepted.len(),
+        1,
+        "the filter must drop the ClassLaneCertified at the activation crossing (X is Active only at step 3a, after \
+         the objects) and keep the leading object. Got {accepted:?}"
+    );
+    assert!(
+        matches!(accepted[0], PalwConsensusObjectV2::ObjectChunk { .. }),
+        "the surviving object is the leading one, not the binding: {accepted:?}"
+    );
+
+    // The filter's one contract: what it returns, the REAL one-shot fold applies on the parent
+    // without error — so the block is not disqualified and the chain does not halt.
+    let folded = vp.palw_v2_block_fold_for_tests(&s, &bundle.state, &crossing, &accepted);
+    assert!(
+        folded.is_ok(),
+        "A-1: the filter's accepted list must fold on the parent without error, or every node disqualifies the block \
+         and the chain halts. Fold error: {:?}",
+        folded.err(),
+    );
+
+    // WHY the binding is dropped, pinned as a positive control: the fold refuses it alone with the
+    // activation-ordering error the finding names — X is still Registered when step 3 reaches it.
+    let bind_alone = vp.palw_v2_block_fold_for_tests(&s, &bundle.state, &crossing, std::slice::from_ref(&bind));
+    assert!(
+        matches!(&bind_alone, Err(PalwStateV2Error::CertificationNeedsActiveClass { class }) if *class == class_x),
+        "the dropped binding is refused by the fold with CertificationNeedsActiveClass, got {bind_alone:?}"
+    );
+}
