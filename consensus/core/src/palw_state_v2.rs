@@ -7560,7 +7560,22 @@ impl<'a> TransitionBuilder<'a> {
                 PalwSeatAnswerV2::Incapable => continue,
             };
             if took != served_won {
-                self.slash_seat(receipt.seat_bond, claim.reserved, seat_cap)?;
+                // **BC-SYBIL (mainnet audit 2026-09-11 deep fence): a seat's stake at risk is the
+                // claim's own reserved exposure, not the flat `min_collateral` floor.** Below the
+                // fence a dissenting seat lost at most `min_collateral` (0.004 MSK) however much the
+                // claim was worth, so a Sybil that owned a quorum could corrupt a high-value verdict
+                // for pocket change. Past the fence it risks up to `claim.reserved` — the same
+                // `pwu × slash_value_per_pwu` the executor stands behind — clamped to its own
+                // collateral by `slash_bond`. Safe against a registrant griefing seats with an
+                // arbitrary slash value because the draw only seats bonds that DECLARED
+                // `capable_classes` for this class (`palw_bond_may_judge_class_v2`), so a seat only
+                // ever risks capital on a class it opted into; BASE-0 (forced-capable) is
+                // chain-defined, so its `reserved` is bounded. Below the fence, unchanged.
+                if self.extras.audit_2026_09_11_deep_active {
+                    self.slash_bond(receipt.seat_bond, claim.reserved)?;
+                } else {
+                    self.slash_seat(receipt.seat_bond, claim.reserved, seat_cap)?;
+                }
             }
         }
         Ok(())
@@ -15924,6 +15939,51 @@ pub(crate) mod tests {
         assert!(after_off < before_off, "today the un-fed seat pays: {before_off} -> {after_off}");
         let (before_on, after_on) = charged(true);
         assert_eq!(after_on, before_on, "past the fence it does not — `Withheld` is not a side");
+    }
+
+    /// **BC-SYBIL (mainnet audit 2026-09-11 deep fence): a dissenting seat risks the claim's own
+    /// reserved stake, not the flat `min_collateral` floor.** Below the fence a seat that
+    /// contradicts its panel's quorum loses at most `min_collateral` (100 in the fixture) however
+    /// much the claim was worth — so a Sybil that owns a quorum corrupts a high-value verdict for
+    /// pocket change (the "juror who cannot be meaningfully fined"). Past the deep fence it loses up
+    /// to `claim.reserved` (200 = 40 pwu × 5 slash-value), clamped to its own collateral — the same
+    /// stake the executor stands behind. `unavailable_abstains` is left `false` so `Withheld` is a
+    /// chargeable side, isolating the dissent case whose penalty this raises; only the extras flag
+    /// differs between the two runs.
+    #[test]
+    fn bc_sybil_a_dissenting_seat_risks_the_claims_reserve_past_the_deep_fence() {
+        let p = params();
+        let genesis = PalwChainStateV2::genesis();
+        let drop_for = |deep: bool| {
+            let extras = PalwTransitionExtrasV1 { audit_2026_09_11_deep_active: deep, ..Default::default() };
+            let step = |parent: &PalwChainStateV2, c: &PalwBlockContextV2, objs: &[PalwConsensusObjectV2], work: PalwBlockWorkV3<'_>| {
+                apply_palw_transition_v7(parent, &p, None, c, objs, work, &[], Hash64::default(), false, false, false, false, &extras)
+                    .expect("applies")
+                    .0
+            };
+            let s1 = step(&genesis, &ctx(1, 100, 1), &register_class_and_bond(), PalwBlockWorkV3::None);
+            let env = attempt(40, 1);
+            let claim_id = attempt_id_v2(&env.attempt);
+            let s2 = step(&s1, &ctx(2, 101, 2), &[], PalwBlockWorkV3::Attempt(&env));
+            let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
+            let s3 = step(
+                &s2,
+                &ctx(3, 105, 3),
+                &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }],
+                PalwBlockWorkV3::None,
+            );
+            let before = s3.bond(&bond_key(1)).expect("registered").collateral;
+            // The quorum licenses; this seat filed `Withheld`, the losing side — the dissenter.
+            let s4 = step(
+                &s3,
+                &ctx(4, 106, 4),
+                &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(false) }],
+                PalwBlockWorkV3::None,
+            );
+            before - s4.bond(&bond_key(1)).expect("registered").collateral
+        };
+        assert_eq!(drop_for(false), 100, "below the deep fence a dissenting seat loses only min_collateral (100)");
+        assert_eq!(drop_for(true), 200, "past the deep fence it loses the claim's whole reserved stake (200 = 40 × 5)");
     }
 
     #[test]
