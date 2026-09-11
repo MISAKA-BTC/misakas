@@ -5276,14 +5276,31 @@ impl PalwPanelService {
             return Err(CloseFromServedV1::Missing(missing));
         }
         let primary = primary.expect("checked above").clone();
-        let work_leaves = Base0FpIntervalOpeningV4::decode_v1(&primary)
-            .map_err(|e| CloseFromServedV1::Refused(format!("the held opening is not V4: {e:?}")))?
-            .binding
-            .step_leaf_count;
+        let primary_v4 = Base0FpIntervalOpeningV4::decode_v1(&primary)
+            .map_err(|e| CloseFromServedV1::Refused(format!("the held opening is not V4: {e:?}")))?;
+        let work_leaves = primary_v4.binding.step_leaf_count;
+        // **The executor's leaves for the block the disputed leaf is in** (ADR-0085 Decision 3
+        // against a liar; ADR-0086 Decision 6's block-leaves lane). A V4 opening carries no leaf
+        // hashes, and this seat's own replay walks to the committed root only where the executor's
+        // leaves ARE its own — which a lie inside the interval rules out. So the close holds the
+        // block beside the opening, and asks for it on the same lane when it does not. A leaf in a
+        // block the opening does not cover whole has no block to ask for, and the close says so.
+        let block = leaf >> primary_v4.range.retain_level.min(63);
+        let (first_block, end_block) = primary_v4.range.whole_blocks_v1(work_leaves);
+        let block_request = (first_block..end_block)
+            .contains(&block)
+            .then(|| misaka_palw_base0::fp_interval::base0_fp_block_leaves_request_index_v1(wanted, block))
+            .flatten();
+        let served_block =
+            block_request.and_then(|index| openings.get(&(*claim, index)).and_then(|v| v.first()).map(|b| (index, b.clone())));
+        if let (Some(index), None) = (block_request, served_block.as_ref()) {
+            return Err(CloseFromServedV1::Missing(vec![index]));
+        }
         let mut held = vec![(wanted, primary)];
         if let Some(prev) = previous {
             held.push((wanted - 1, prev.clone()));
         }
+        held.extend(served_block);
         Ok((held, prompt_ids, output_ids, work_leaves))
     }
 
@@ -6989,6 +7006,22 @@ mod court_responder_coverage_pin {
             assert!(answer.contains(unit), "the held answer has no arm {unit}");
         }
         assert!(!answer.contains("other =>") && !answer.contains("_ =>"), "no held unit falls to a catch-all refusal");
+    }
+
+    /// **ADR-0085 Decision 3 against a liar, pinned where the close's inputs are gathered**: the
+    /// close from served intervals holds the executor's leaves for the disputed leaf's block beside
+    /// the opening, and asks for them on the interval lane when it does not — without them a lying
+    /// interval's range never walks to its committed root, and the close refuses every liar.
+    #[test]
+    fn the_close_from_served_intervals_holds_and_asks_for_the_disputed_leafs_block() {
+        const MARKER: &str = "mod court_responder_coverage_pin";
+        let whole = include_str!("palw_panel.rs");
+        let source = &whole[..whole.find(MARKER).expect("this module is in this file")];
+        let gather = &source[source.find("fn close_source_from_served_intervals_v1(").expect("the close's gathering")..];
+        let gather = &gather[..gather.find("\n    }\n").expect("its end")];
+        assert!(gather.contains("base0_fp_block_leaves_request_index_v1(wanted, block)"), "the disputed leaf's block is named");
+        assert!(gather.contains("return Err(CloseFromServedV1::Missing(vec![index]));"), "and asked for when it is not held");
+        assert!(gather.contains("held.extend(served_block);"), "and handed to the close when it is");
     }
 
     /// **ADR-0093 as built: the panel FILES the fused terminal's root claim now — and the exemption

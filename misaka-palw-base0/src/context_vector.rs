@@ -240,7 +240,9 @@ pub fn palw_canonical_json_v1(value: &serde_json::Value) -> Vec<u8> {
                 '\u{08}' => out.extend_from_slice(b"\\b"),
                 '\u{0c}' => out.extend_from_slice(b"\\f"),
                 '\n' => out.extend_from_slice(b"\\n"),
-                '\r' => out.extend_from_slice(b"\\r"),
+                // Spelled as bytes: the float guard's raw-string detector reads `\` `r` `"` as
+                // the start of a raw string.
+                '\r' => out.extend_from_slice(&[b'\\', b'r']),
                 '\t' => out.extend_from_slice(b"\\t"),
                 c if (c as u32) < 0x20 => out.extend_from_slice(format!("\\u{:04x}", c as u32).as_bytes()),
                 c => {

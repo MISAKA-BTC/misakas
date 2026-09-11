@@ -3677,6 +3677,110 @@ mod free_prompt_tests {
     /// that a seat either replayed whole or never checked. The chain's count (`fp_interval_count_for`)
     /// is the capture's; the honest interval 0 is licensed; and the same interval of a capture whose
     /// first embedding gather was moved and re-committed is a fault at that leaf.
+    /// **ADR-0085 Decision 3 against a liar: a close from served intervals convicts once the block
+    /// the lie sits in is served** (ADR-0086 Decision 6's block-leaves lane).
+    ///
+    /// A V4 opening carries no leaf hashes, so the challenger's replay supplies its own. Under the
+    /// served frontier those walk to the committed step root only when they ARE the committed
+    /// leaves, which a lie inside the interval rules out. The close used to require that walk and
+    /// refused every lying interval, and its only test ran an honest executor. With the executor's
+    /// own leaves for the block substituted (`base0_fp_range_with_served_block_v1`), the range is
+    /// the committed one and the close is about the leaf the lie is in. Pinned on the graph-v5 dense
+    /// row, whose logits are tiled so the served close applies, at a width whose interval 0 holds
+    /// whole retained blocks (the drill's capture is dense, and a dense tuple opens interval 0):
+    ///
+    /// * without the block, the close is refused by name, and the name says what is missing;
+    /// * with it, the close assembles, is the capture path's object for the same leaf (ADR-0085
+    ///   X1), and the one-move verdict on it is `ExecutorGuilty`;
+    /// * the same close against the honest capture at the same leaf needs no block and is
+    ///   `FalseAccusation`.
+    #[test]
+    fn a_close_from_served_intervals_convicts_a_lying_interval_once_its_block_is_served() {
+        use kaspa_consensus_core::palw_shard_court_v1::{PalwLeafEvidenceV1, PalwShardCourtVerdictV1};
+        use kaspa_consensus_core::palw_step::{PalwStepOpKindV1, canonical_step_coordinates};
+        // Wide enough that interval 0 holds whole 4,096-leaf blocks.
+        let geometry = PalwQwen25GeometryV1 {
+            layer_count: 2,
+            hidden_dim: 32,
+            ffn_dim: 64,
+            attn_heads: 4,
+            attn_kv_heads: 2,
+            attn_head_dim: 8,
+            vocab_size: 128,
+            n_ctx: 64,
+            n_threads: 1,
+            rms_eps_q: 1,
+            tile_len: 4,
+        };
+        let artifact = v5_artifact(geometry);
+        let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v5(geometry)
+            .expect("the v5 projection is a valid profile");
+        let backend = Qwen25A16Backend::from_registered_profile(artifact.clone(), NETWORK.to_vec(), profile.clone(), (40, 4))
+            .expect("the dense row is servable");
+        let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x0085)).expect("a job");
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let honest = backend.execute(&job, &prompt).expect("the class runs");
+        let root = crate::inventory::a16_inventory_v1(&artifact, &profile).expect("the inventory").root();
+        let ladder = backend.step_ladder_cap;
+
+        // A leaf inside a whole block of interval 0 that is not a fused site: its close is
+        // arithmetic, and its block is one the executor can serve.
+        let interval_0 = crate::fp_interval::Base0FpIntervalOpeningV4::decode_v1(
+            &backend.open_fp_interval(&honest.material, 0, &ids).expect("interval 0 opens"),
+        )
+        .expect("V4");
+        let leaf_count = crate::produce::base0_material_decode_any_v1(&honest.material).expect("decodes").binding().step_leaf_count;
+        let (first_block, end_block) = interval_0.range.whole_blocks_v1(leaf_count);
+        assert!(end_block > first_block + 1, "the fixture's interval 0 holds whole blocks ({first_block}..{end_block})");
+        let block_len = 1u64 << interval_0.range.retain_level;
+        let leaf = ((first_block + 1) * block_len..end_block * block_len)
+            .find(|l| {
+                canonical_step_coordinates(&profile, &job, *l).is_some_and(|c| {
+                    profile.resolve_node_slot(c.node_slot).is_some_and(|(n, _)| n.op_kind != PalwStepOpKindV1::AttnFused)
+                })
+            })
+            .expect("a whole block past the first holds a leaf that is not a fused site");
+        assert_eq!(backend.fp_interval_of_leaf_v1(&job, leaf), Some(0), "the leaf is interval 0's");
+
+        let close_of = |outcome: &PalwExecutionOutcomeV1, with_block: bool| {
+            let claim =
+                PalwClaimRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, anchor: job.job_id };
+            let annexed = backend.open_fp_interval_with_close(&outcome.material, 0, &ids, &[leaf]).expect("the annex");
+            let generated = backend.fp_committed_output_ids(&outcome.material).expect("the answer's ids");
+            let mut held = vec![(0u32, annexed)];
+            if with_block {
+                let block = leaf >> interval_0.range.retain_level;
+                let served = backend.open_fp_block_leaves(&outcome.material, 0, block, &ids).expect("the executor serves the block");
+                let index = crate::fp_interval::base0_fp_block_leaves_request_index_v1(0, block).expect("a block request index");
+                held.push((index, served));
+            }
+            backend.refutation_from_served_intervals(&held, claim, &ids, &generated, leaf_count, leaf)
+        };
+        let verdict_of = |refutation: kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1| {
+            let artifact_openings = backend.operand_openings_for(&refutation).expect("the rows the step reads open");
+            let (refutation, prompt_ids_opening) =
+                kaspa_consensus_core::palw_step_refute::palw_refutation_prompt_carriage_v1(backend.prompt_ids_form, refutation)
+                    .expect("the carriage");
+            PalwLeafEvidenceV1 { refutation, artifact_openings, prompt_ids_opening }.verdict_v1(
+                profile.shape_profile_id(),
+                root,
+                ladder,
+            )
+        };
+
+        let lying = backend.execute_with_injected_fault(&job, &prompt, leaf).expect("a lie commits");
+        let close = close_of(&lying, true).expect("with the block served, the lying interval closes");
+        let refused = close_of(&lying, false).expect_err("without the block, the lying interval does not close");
+        assert!(refused.contains("block"), "the refusal names what is missing: {refused}");
+        let by_capture = backend.refutation_for_index(&lying.material, leaf).expect("the capture path closes the same leaf");
+        assert_eq!(close, by_capture, "ADR-0085 X1: one object by either route, against a liar too");
+        assert_eq!(verdict_of(close), Ok(PalwShardCourtVerdictV1::ExecutorGuilty), "the liar's close convicts");
+
+        let clear = close_of(&honest, false).expect("the honest interval closes without a block");
+        assert_eq!(clear, close_of(&honest, true).expect("and with one"), "an honest range needs no block");
+        assert_eq!(verdict_of(clear), Ok(PalwShardCourtVerdictV1::FalseAccusation), "the honest close clears");
+    }
+
     #[test]
     fn a_held_class_seats_its_prompt_in_intervals_and_a_lie_in_it_is_a_fault() {
         use kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1;
