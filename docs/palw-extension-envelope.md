@@ -55,7 +55,7 @@ One JSON document. Its canonical form is RFC 8785 (sorted keys, no duplicate key
 its identity is a hash of those canonical bytes:
 
 ```text
-extension_id = BLAKE2b-512( key = "misaka-palw/extension-manifest/v1", canonical bytes )
+extension_id = BLAKE2b-512( key = "misaka-palw/extension-manifest/v1", len_le64(canonical bytes) ‖ canonical bytes )
 ```
 
 Two people who write the same manifest get the same id; an editor that reorders the keys does not
