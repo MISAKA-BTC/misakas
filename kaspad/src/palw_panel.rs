@@ -3428,29 +3428,40 @@ impl PalwPanelService {
                     // rest of the panel licenses). Silence is never charged; the fault goes to the
                     // court through the challenger's half, and nothing here replays the claim again.
                     if self.seat_found_fault_v1(&duty.claim_id) {
-                        // **ADR-0108 Decision 6: a NAMED leaf this seat could not accuse from a
-                        // capture is pursued, not dropped** — the executor's evidence if it has
-                        // answered, the fast-path ask if not yet, the demand on chain past the
-                        // patience. What files is the court's object, never a receipt.
-                        if duty.free_prompt
-                            && let Some((key, object, accusation)) = self
-                                .pursue_named_leaf_v1(
-                                    duty,
-                                    network_domain,
-                                    current_daa,
-                                    &interval_openings,
-                                    accused.contains(&duty.claim_id),
-                                )
-                                .await
-                        {
-                            if accusation {
-                                accused.insert(duty.claim_id);
+                        // **A fault still addressed at a BLOCK is not finished with** (ADR-0086
+                        // Decision 6, found by ADR-0108's drill): only the interval arm below names
+                        // the leaf from the block's served leaves, and this gate used to stop it for
+                        // good the moment the block was noted — the leaves arrived and were never
+                        // read, so no leaf was ever named. A free-prompt claim whose fault is a block
+                        // runs the interval arm again, which files nothing while the fault stands
+                        // (`FaultInRange` answers `None`), and the gate after it stops the capture arm.
+                        let fault_is_a_block = duty.free_prompt
+                            && self.seat_faults.lock().unwrap().address(&duty.claim_id).is_some_and(|(_, count)| count > 1);
+                        if !fault_is_a_block {
+                            // **ADR-0108 Decision 6: a NAMED leaf this seat could not accuse from a
+                            // capture is pursued, not dropped** — the executor's evidence if it has
+                            // answered, the fast-path ask if not yet, the demand on chain past the
+                            // patience. What files is the court's object, never a receipt.
+                            if duty.free_prompt
+                                && let Some((key, object, accusation)) = self
+                                    .pursue_named_leaf_v1(
+                                        duty,
+                                        network_domain,
+                                        current_daa,
+                                        &interval_openings,
+                                        accused.contains(&duty.claim_id),
+                                    )
+                                    .await
+                            {
+                                if accusation {
+                                    accused.insert(duty.claim_id);
+                                }
+                                if !court_pending.iter().any(|(sid, _, _, _)| *sid == key) {
+                                    court_pending.push((key, 0, false, object));
+                                }
                             }
-                            if !court_pending.iter().any(|(sid, _, _, _)| *sid == key) {
-                                court_pending.push((key, 0, false, object));
-                            }
+                            break 'verdict None;
                         }
-                        break 'verdict None;
                     }
                     // **The free-prompt lane: the seat REPLAYS the job** (FP-R6). An attempt
                     // claim's job is derived from its anchor, so the arm below re-hashes the
