@@ -542,13 +542,31 @@ pub enum PalwLifecycleTxError {
 /// permanently zero. An extractor with no door in front of it extracts nothing.
 ///
 /// The rules are the walk's own, in the walk's order, so admission and extraction cannot
-/// disagree: decode, wire version, and the may-ride table. Everything past that — that the claim
-/// exists, that it is in the right phase, that a court close adjudicates — is stateful and stays
-/// where it is, in the transition and its acceptance checks.
+/// disagree: the may-ride table. Everything past that — that the claim exists, that it is in the
+/// right phase, that a court close adjudicates — is stateful and stays where it is, in the
+/// transition and its acceptance checks.
+///
+/// **A-2 (mainnet audit 2026-09-11): a payload this build cannot decode, or names a wire version
+/// it does not know, is TOLERATED here, not rejected as block-invalid.** The extraction walk
+/// (`palw_lifecycle_objects_from_accepted_txs_v2`) SKIPS both cases — it folds nothing for them —
+/// so a block carrying such a carrier is perfectly valid; only this isolation gate said otherwise.
+/// That split every rolling upgrade that appends a lifecycle object kind (or bumps the version):
+/// the newer build appends the variant behind a dormant fence and folds nothing for it, while the
+/// older build failed the whole block at `borsh::from_slice` — a chain split for one transaction,
+/// invisible to the fork-id gate (both builds advertise the same identity). Tolerating here makes
+/// the two builds agree (both skip), which is the only forward-compatible reading: a byte string
+/// this build cannot parse is not a statement this build can call invalid. A payload that DOES
+/// decode at the current version is still held to the may-ride table, exactly as before.
 pub fn validate_palw_lifecycle_tx(payload: &[u8]) -> Result<(), PalwLifecycleTxError> {
-    let payload: PalwLifecycleTxPayloadV2 = borsh::from_slice(payload).map_err(|_| PalwLifecycleTxError::Undecodable)?;
+    let payload: PalwLifecycleTxPayloadV2 = match borsh::from_slice(payload) {
+        Ok(payload) => payload,
+        // Unknown/appended object tag (or trailing bytes a newer build wrote): the extraction walk
+        // skips it, so it must not fail the block here.
+        Err(_) => return Ok(()),
+    };
     if payload.version != PALW_LIFECYCLE_TX_VERSION_V2 {
-        return Err(PalwLifecycleTxError::UnsupportedVersion { got: payload.version, expected: PALW_LIFECYCLE_TX_VERSION_V2 });
+        // A wire version this build does not know: extraction skips it, so tolerate it here too.
+        return Ok(());
     }
     palw_lifecycle_object_may_ride_v2(&payload.object).map_err(PalwLifecycleTxError::ObjectMayNotRide)
 }
