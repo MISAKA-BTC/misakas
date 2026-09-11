@@ -112,6 +112,8 @@ pub struct PalwProducerConfig {
     pub class_artifacts: Vec<std::path::PathBuf>,
     /// ADR-0067 tier ④: the byte bound on resident artifacts (0 = unbounded).
     pub class_cache_bytes: u64,
+    /// ADR-0112: how much of a mapped class's weights this node keeps in memory.
+    pub class_residency: misaka_palw_sdk::PalwWeightResidencyV1,
 }
 
 pub struct PalwProducerService {
@@ -255,8 +257,13 @@ impl PalwProducerService {
         // the class they deployed 1.7 GiB for.
         let sdk =
             misaka_palw_sdk::PalwClassSdk::builtin_v1(config.court, config.prompt_ids_form, config.network_id.as_bytes().to_vec());
-        let class_holdings =
-            crate::palw_backends::load_class_holdings_v1(PALW_PRODUCER, &sdk, &config.class_artifacts, config.class_cache_bytes);
+        let class_holdings = crate::palw_backends::load_class_holdings_v1(
+            PALW_PRODUCER,
+            &sdk,
+            &config.class_artifacts,
+            config.class_cache_bytes,
+            config.class_residency,
+        );
         Self {
             config,
             shutdown: kaspa_utils::triggers::SingleTrigger::default(),
@@ -777,6 +784,9 @@ impl PalwProducerService {
         // every other service on the runtime is short one worker.
         let (job_for_blocking, prompt_for_blocking) = (job.clone(), prompt.clone());
         let tamper = self.config.drill_tamper_leaf;
+        // ADR-0112 Decision 8: what one draw reads from storage, printed beside the draw. The
+        // number that said the fleet's draws were page faults, made a line an operator can watch.
+        let storage_before = crate::palw_backends::storage_snapshot_v1(&self.class_holdings);
         let (run, answer_ids) = tokio::task::spawn_blocking(move || {
             let run = match tamper {
                 None => backend.execute(&job_for_blocking, &prompt_for_blocking),
@@ -789,6 +799,7 @@ impl PalwProducerService {
         })
         .await
         .map_err(|e| format!("the execution task did not finish: {e}"))??;
+        crate::palw_backends::log_draw_storage_v1(PALW_PRODUCER, &storage_before, &self.class_holdings);
 
         // Every field is fixed now: the roots are the execution's, the six chain facts are
         // `facts`', and the challenge binds the position — this template, this timestamp, this

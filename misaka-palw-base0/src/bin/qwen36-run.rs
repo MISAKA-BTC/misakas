@@ -2,17 +2,20 @@
 //!
 //! ```text
 //! qwen36-run --artifact <file.palwq36> [--tokens "9707,11,1879"] [--generate N]
+//!            [--resident-gib G | --resident page-cache]
 //! ```
 //!
-//! The artifact is memory-mapped, so opening a 33 GiB class costs the header. The resident set is
-//! whatever the mixture actually touched — eight experts of 256 per layer per token — which is the
-//! property that lets a machine with less RAM than the model produce a block on it.
+//! The artifact is memory-mapped, so opening a 33 GiB class costs the header. What of it is in
+//! memory is the residency's decision (ADR-0112): a fifth of the weights by default, `G` GiB
+//! with `--resident-gib`, or the kernel's page cache with `--resident page-cache` — the path
+//! before ADR-0112, kept so the two can be measured against each other. The report ends with the
+//! residency's numbers: hits, misses, evictions, and the bytes the loader read from the file.
 //!
 //! Token ids rather than text: a Qwen3.6 tokenizer is a separate piece, and what is being measured
 //! here is the engine.
 
 use misaka_palw_base0::engine::argmax_lowest;
-use misaka_palw_base0::qwen36::{Qwen36Cache, Qwen36Engine, open_artifact};
+use misaka_palw_base0::qwen36::{Qwen36Cache, Qwen36Engine, Qwen36ResidencyPolicyV1, open_artifact_with_residency};
 use misaka_palw_base0::qwen36_reference::qwen36_score_fidelity;
 
 fn die(message: String) -> ! {
@@ -27,14 +30,24 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let path = flag(&args, "--artifact")
-        .unwrap_or_else(|| die("usage: qwen36-run --artifact <file> [--root-only] [--tokens ids] [--generate N]".into()));
+        .unwrap_or_else(|| {
+            die("usage: qwen36-run --artifact <file> [--root-only] [--tokens ids] [--generate N] [--resident-gib G | --resident page-cache]".into())
+        });
     let tokens: Vec<usize> = flag(&args, "--tokens")
         .map(|v| v.split(',').filter_map(|t| t.trim().parse().ok()).collect())
         .unwrap_or_else(|| vec![9707, 11, 1879, 0, 3555, 374]);
     let generate: usize = flag(&args, "--generate").and_then(|v| v.parse().ok()).unwrap_or(8);
 
     let started = std::time::Instant::now();
-    let artifact = open_artifact(std::path::Path::new(path)).unwrap_or_else(|e| die(format!("{path}: {e}")));
+    // `--root-only` needs no weights in memory: the root pass streams the file either way.
+    let policy = match (flag(&args, "--resident-gib").and_then(|v| v.parse::<f64>().ok()), flag(&args, "--resident")) {
+        _ if args.iter().any(|a| a == "--root-only") => Qwen36ResidencyPolicyV1::PageCache,
+        (Some(gib), _) if gib > 0.0 => Qwen36ResidencyPolicyV1::Bytes((gib * (1u64 << 30) as f64) as u64),
+        (_, Some("page-cache")) => Qwen36ResidencyPolicyV1::PageCache,
+        (_, Some(other)) => die(format!("--resident {other}: say page-cache, or give --resident-gib")),
+        _ => Qwen36ResidencyPolicyV1::FifthOfTheWeights,
+    };
+    let artifact = open_artifact_with_residency(std::path::Path::new(path), policy).unwrap_or_else(|e| die(format!("{path}: {e}")));
 
     // **`--root-only`: the operator's own copy of the check the node makes.** An artifact is the
     // class the chain named only if its computed root is the registered one, so this prints that
@@ -65,10 +78,18 @@ fn main() {
         shape.vocab
     );
 
-    let engine = match flag(&args, "--expert-cache-gib").and_then(|v| v.parse::<f64>().ok()) {
-        Some(gib) if gib > 0.0 => Qwen36Engine::with_residency(&artifact, (gib * (1u64 << 30) as f64) as usize),
-        _ => Qwen36Engine::new(&artifact),
-    };
+    if let Some(s) = artifact.residency_stats() {
+        println!(
+            "residency: budget {:.2} GiB = {:.2} GiB pinned (the always-set) + {:.2} GiB for routed experts; opened in {:?}",
+            s.budget_bytes as f64 / (1u64 << 30) as f64,
+            s.pinned_bytes as f64 / (1u64 << 30) as f64,
+            s.expert_budget_bytes() as f64 / (1u64 << 30) as f64,
+            started.elapsed()
+        );
+    } else {
+        println!("residency: the page cache decides (no loader)");
+    }
+    let engine = Qwen36Engine::new(&artifact);
     let mut cache = Qwen36Cache::new(shape);
 
     let prefill_started = std::time::Instant::now();
@@ -265,12 +286,15 @@ fn main() {
     println!("  gdn heads with state  {filled}/{heads}");
     println!("  logits nonzero        {}/{}", logits.iter().filter(|v| **v != 0).count(), logits.len());
     println!("  produced token ids    {produced:?}");
-    if let Some((hits, misses, evictions, bytes)) = engine.residency_stats() {
+    if let Some(s) = artifact.residency_stats() {
         println!(
-            "  expert residency      {hits} hits / {} lookups ({:.1} %), {evictions} evictions, {:.2} GiB resident",
-            hits + misses,
-            100.0 * hits as f64 / (hits + misses).max(1) as f64,
-            bytes as f64 / (1u64 << 30) as f64
+            "  expert residency      {} hits / {} lookups ({:.1} %), {} evictions, {:.2} GiB of experts resident, {:.2} GiB read from the file since open",
+            s.hits,
+            s.hits + s.misses,
+            100.0 * s.hits as f64 / (s.hits + s.misses).max(1) as f64,
+            s.evictions,
+            s.resident_expert_bytes as f64 / (1u64 << 30) as f64,
+            s.bytes_read as f64 / (1u64 << 30) as f64
         );
     }
 }

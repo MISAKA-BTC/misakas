@@ -539,10 +539,7 @@ impl<'a> Qwen36Engine<'a> {
             };
 
             let out: Vec<i32> = match &node.op {
-                PlanOpV1::EmbedGather => {
-                    let embed = a.tensor_sized("token_embd.weight", s.vocab * d)?;
-                    embed[token_id * d..(token_id + 1) * d].iter().map(|c| *c as i32).collect()
-                }
+                PlanOpV1::EmbedGather => a.embedding_row(token_id, d)?.iter().map(|c| *c as i32).collect(),
                 PlanOpV1::EmbedLift => {
                     let x = resolve(&node.inputs[0], &rows)?;
                     let lift = a.param_rows("embed_lift.a16")?;
@@ -857,10 +854,10 @@ impl<'a> Qwen36Engine<'a> {
                     let x = resolve(&node.inputs[0], &rows)?;
                     let up = a.scalar(&name_of(name))?.clamp(0, 62) as u8;
                     let routed = q36_router_topk(&x, *k, up).map_err(op_refuse("router_topk"))?;
-                    // Hand the kernel every byte the chosen experts will read, before any of them
-                    // is computed — residency, which changes no bit of arithmetic.
+                    // Hand the residency every expert the router chose, before any of them is
+                    // computed (ADR-0112 Decision 4) — which changes no bit of arithmetic.
                     if let Some((li, _)) = layer.as_ref() {
-                        self.admit_experts(*li, &routed.iter().map(|r| r.expert as usize).collect::<Vec<_>>());
+                        a.admit_experts(*li, &routed.iter().map(|r| r.expert as usize).collect::<Vec<_>>());
                     }
                     // The committed row: ids then weights, the order the engine's own probe rows
                     // (`ffn_choice`, `ffn_weight`) already use.

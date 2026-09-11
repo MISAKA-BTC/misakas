@@ -40,7 +40,7 @@ pub mod lineages {
 }
 pub mod sdk;
 
-pub use lineage::{PalwClassEntryV1, PalwLoadedArtifactV1, PalwModelLineageV1};
+pub use lineage::{PalwClassEntryV1, PalwLoadedArtifactV1, PalwModelLineageV1, PalwWeightResidencyV1};
 pub use sdk::{PalwCandidateError, PalwClassSdk, PalwRegistrationCandidateV1, builtin_lineages_v1};
 
 #[cfg(test)]
@@ -154,7 +154,7 @@ mod tests {
         fn sniffs(&self, head: &[u8; 8]) -> bool {
             head == b"TESTLIN1"
         }
-        fn load(&self, _path: &std::path::Path) -> Result<PalwLoadedArtifactV1, String> {
+        fn load(&self, _path: &std::path::Path, _residency: PalwWeightResidencyV1) -> Result<PalwLoadedArtifactV1, String> {
             Err("the test lineage loads nothing".into())
         }
         fn registered_weight_keys(&self, _artifact: &PalwLoadedArtifactV1) -> Vec<Hash64> {

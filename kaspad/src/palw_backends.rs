@@ -389,7 +389,13 @@ fn held_artifacts() -> &'static Mutex<HashMap<HeldArtifactKey, PalwLoadedArtifac
 /// process, so that line still counts artifacts), a line naming the file for one another duty
 /// already holds, and a warning for each path not held and why. A file about to be mapped is
 /// announced first, because a cold root pass over 33 GiB is minutes of otherwise silent startup.
-pub fn load_class_holdings_v1(role: &str, sdk: &PalwClassSdk, paths: &[PathBuf], bound_bytes: u64) -> Vec<PalwLoadedArtifactV1> {
+pub fn load_class_holdings_v1(
+    role: &str,
+    sdk: &PalwClassSdk,
+    paths: &[PathBuf],
+    bound_bytes: u64,
+    residency: misaka_palw_sdk::PalwWeightResidencyV1,
+) -> Vec<PalwLoadedArtifactV1> {
     // Held across the whole load on purpose: the guarantee is "once", so a second duty asking
     // for a file the first is still hashing waits for that holding rather than starting its own
     // pass. Nothing under the lock calls back in. A load that panicked (the root pass on a file
@@ -397,12 +403,140 @@ pub fn load_class_holdings_v1(role: &str, sdk: &PalwClassSdk, paths: &[PathBuf],
     // the map as it stands rather than losing every holding to one bad file.
     let mut held = held_artifacts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let (holdings, skipped) = sdk.load_artifacts_bounded_with_v1(paths, bound_bytes, |path| {
-        held_or_load_locked(&mut held, role, path, |p| sdk.load_artifact(p))
+        held_or_load_locked(&mut held, role, path, |p| sdk.load_artifact_with(p, residency))
     });
     for (path, why) in &skipped {
         warn!("[{role}] class artifact {} is not held: {why}", path.display());
     }
+    // ADR-0112 Decision 8: the budget's arithmetic, printed where the operator reads the log —
+    // and a warning when the host cannot hold what the budget pins, because a budget the kernel
+    // reclaims is the page cache with extra steps.
+    for holding in &holdings {
+        let Some(stats) = misaka_palw_sdk::lineages::qwen36::residency_stats_of(holding) else { continue };
+        let available = mem_available_bytes_v1();
+        info!(
+            "[{role}] residency for {}: budget {:.2} GiB = {:.2} GiB pinned (the always-set) + {:.2} GiB for routed experts \
+             (about {:.1} tokens of them); the host reports {} available (ADR-0112)",
+            holding.path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| holding.lineage_id.to_string()),
+            gib(stats.budget_bytes),
+            gib(stats.pinned_bytes),
+            gib(stats.expert_budget_bytes()),
+            stats.expert_budget_bytes() as f64 / stats.token_expert_bytes.max(1) as f64,
+            available.map_or("no MemAvailable on this platform".to_string(), |a| format!("{:.2} GiB", gib(a)))
+        );
+        if let Some(available) = available
+            && stats.budget_bytes > available
+        {
+            warn!(
+                "[{role}] the residency budget ({:.2} GiB) is more than this host has available ({:.2} GiB): the kernel will \
+                 reclaim what the budget pins and every draw will page — lower --palw-class-resident-bytes, or free the host",
+                gib(stats.budget_bytes),
+                gib(available)
+            );
+        }
+    }
     holdings
+}
+
+fn gib(bytes: u64) -> f64 {
+    bytes as f64 / (1u64 << 30) as f64
+}
+
+/// **The residency policy from the operator's flag** (ADR-0112 Decision 2): nothing said is a
+/// fifth of the artifact's weights; `0` is no loader, the page cache; a number is the number.
+pub fn palw_class_residency_v1(resident_bytes: Option<u64>) -> misaka_palw_sdk::PalwWeightResidencyV1 {
+    use misaka_palw_sdk::PalwWeightResidencyV1 as Residency;
+    match resident_bytes {
+        None => Residency::FifthOfTheWeights,
+        Some(0) => Residency::PageCache,
+        Some(bytes) => Residency::Bytes(bytes),
+    }
+}
+
+/// `MemAvailable` of this host in bytes, where the kernel says it (Linux); `None` elsewhere.
+fn mem_available_bytes_v1() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_to_string("/proc/meminfo").ok()?.lines().find_map(|line| {
+            let rest = line.strip_prefix("MemAvailable:")?.trim();
+            rest.strip_suffix("kB")?.trim().parse::<u64>().ok().map(|kb| kb.saturating_mul(1024))
+        })
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+/// Bytes this process has caused to be read from the storage layer since it started
+/// (`/proc/self/io`'s `read_bytes`, Linux) — page faults included, which is what made it the
+/// number that explained the fleet's draws. `None` off Linux, and the line then says so rather
+/// than printing a zero.
+pub fn process_storage_read_bytes_v1() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_to_string("/proc/self/io")
+            .ok()?
+            .lines()
+            .find_map(|line| line.strip_prefix("read_bytes:")?.trim().parse::<u64>().ok())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+/// What one draw starts from: the process's storage counter, and each mapped holding's residency
+/// numbers (ADR-0112 Decision 8).
+pub struct PalwStorageSnapshotV1 {
+    process_read_bytes: Option<u64>,
+    holdings: Vec<(String, misaka_palw_base0::qwen36::Qwen36ResidencyStatsV1)>,
+}
+
+pub fn storage_snapshot_v1(holdings: &[PalwLoadedArtifactV1]) -> PalwStorageSnapshotV1 {
+    PalwStorageSnapshotV1 {
+        process_read_bytes: process_storage_read_bytes_v1(),
+        holdings: holdings
+            .iter()
+            .filter_map(|h| {
+                let stats = misaka_palw_sdk::lineages::qwen36::residency_stats_of(h)?;
+                let name = h.path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| h.lineage_id.to_string());
+                Some((name, stats))
+            })
+            .collect(),
+    }
+}
+
+/// **The draw's storage line** (ADR-0112 Decision 8): what the process read from storage during
+/// the draw, and what the class loader read of it — with the loader's hit rate and what it holds.
+/// The number the fleet lacked: 12.8 GiB through 3 million page faults a draw was found with a
+/// sampler, not a log.
+pub fn log_draw_storage_v1(role: &str, before: &PalwStorageSnapshotV1, holdings: &[PalwLoadedArtifactV1]) {
+    let after = storage_snapshot_v1(holdings);
+    let mib = |bytes: u64| bytes as f64 / (1u64 << 20) as f64;
+    let process = match (before.process_read_bytes, after.process_read_bytes) {
+        (Some(a), Some(b)) => format!("{:.1} MiB", mib(b.saturating_sub(a))),
+        _ => "an amount this platform does not count".to_string(),
+    };
+    if after.holdings.is_empty() {
+        info!("[{role}] this draw read {process} from storage (no mapped class holds a residency: the page cache decides)");
+        return;
+    }
+    for (name, now) in &after.holdings {
+        let then = before.holdings.iter().find(|(n, _)| n == name).map(|(_, s)| *s).unwrap_or_default();
+        let lookups = now.hits.saturating_sub(then.hits) + now.misses.saturating_sub(then.misses);
+        info!(
+            "[{role}] this draw read {process} from storage; the loader for {name} read {:.1} MiB in {} misses of {lookups} expert \
+             lookups ({:.1} % hits), evicted {}, and holds {:.2} of {:.2} GiB of routed experts beside {:.2} GiB pinned",
+            mib(now.bytes_read.saturating_sub(then.bytes_read)),
+            now.misses.saturating_sub(then.misses),
+            100.0 * now.hits.saturating_sub(then.hits) as f64 / lookups.max(1) as f64,
+            now.evictions.saturating_sub(then.evictions),
+            gib(now.resident_expert_bytes),
+            gib(now.expert_budget_bytes()),
+            gib(now.pinned_bytes)
+        );
+    }
 }
 
 /// One path's half of [`load_class_holdings_v1`], under a lock the caller already holds.
@@ -606,14 +740,21 @@ mod tests {
     /// one. `layers` changes the file's size, which is what a replaced artifact looks like to the
     /// holdings' key.
     fn write_qwen36_fixture(path: &Path, layers: usize) {
+        write_qwen36_fixture_with(path, layers, 8)
+    }
+
+    /// The same, with the routed expert count stated: ADR-0112's default budget is a fifth of
+    /// the weights, and at the fixture's width only the class's own 256 experts a layer put a
+    /// fifth above the floor.
+    fn write_qwen36_fixture_with(path: &Path, layers: usize, experts: usize) {
         use misaka_palw_base0::qwen36::{Qwen36Writer, qwen36_dev_fixture};
-        let owned = qwen36_dev_fixture(layers, 8);
+        let owned = qwen36_dev_fixture(layers, experts);
         let plan: Vec<(String, usize)> =
             owned.tensor_names().iter().map(|n| (n.to_string(), owned.tensor(n).expect("present").len())).collect();
         let mut writer =
             Qwen36Writer::create(path, &owned.shape, &owned.rope, owned.params_map(), plan.clone()).expect("the file is created");
         for (name, _) in &plan {
-            writer.push(name, owned.tensor(name).expect("present")).expect("the tensor is appended");
+            writer.push(name, &owned.tensor(name).expect("present")).expect("the tensor is appended");
         }
         writer.finish().expect("the plan is filled");
     }
@@ -648,13 +789,59 @@ mod tests {
     /// constructors each ask for the operator's list; the second answer is the first's holding —
     /// the same `Arc`, the same mapping, the root computed once — which is the whole of the fix
     /// for the testnet-11 double mapping.
+    /// **ADR-0112 on the node's own door**: a holding loaded under the default policy carries its
+    /// residency — the summary names the budget, the stats say what is pinned — and one loaded
+    /// with the page cache carries none. The flag's three spellings map as Decision 2 says.
+    #[test]
+    fn a_budgeted_holding_reports_its_residency() {
+        use misaka_palw_sdk::PalwWeightResidencyV1 as Residency;
+        let _guard = exclusive();
+        let path = temp_artifact("budgeted");
+        write_qwen36_fixture_with(&path, 2, 256);
+        assert_eq!(palw_class_residency_v1(None), Residency::FifthOfTheWeights);
+        assert_eq!(palw_class_residency_v1(Some(0)), Residency::PageCache);
+        assert_eq!(palw_class_residency_v1(Some(7 << 30)), Residency::Bytes(7 << 30));
+
+        let budgeted = load_class_holdings_v1("test-budget", &sdk(), std::slice::from_ref(&path), 0, Residency::FifthOfTheWeights);
+        assert_eq!(budgeted.len(), 1, "held");
+        let stats = misaka_palw_sdk::lineages::qwen36::residency_stats_of(&budgeted[0]).expect("a budgeted holding has stats");
+        assert!(stats.pinned_bytes > 0 && stats.budget_bytes > stats.pinned_bytes, "{stats:?}");
+        assert!(budgeted[0].summary.contains("resident within"), "{}", budgeted[0].summary);
+        // The holding is shared by file identity, so a second duty asking under ANOTHER policy
+        // gets the holding the first made: one mapping, one residency, per file per process.
+        let again = load_class_holdings_v1("test-budget-2", &sdk(), std::slice::from_ref(&path), 0, Residency::PageCache);
+        assert!(
+            misaka_palw_sdk::lineages::qwen36::residency_stats_of(&again[0]).is_some(),
+            "the first duty's residency is the process's"
+        );
+        evict_held_artifacts_v1(std::slice::from_ref(&path));
+
+        let paged = load_class_holdings_v1("test-paged", &sdk(), std::slice::from_ref(&path), 0, Residency::PageCache);
+        assert!(misaka_palw_sdk::lineages::qwen36::residency_stats_of(&paged[0]).is_none(), "the page cache decides: no stats");
+        assert!(paged[0].summary.contains("page cache"), "{}", paged[0].summary);
+        evict_held_artifacts_v1(std::slice::from_ref(&path));
+        std::fs::remove_file(&path).ok();
+    }
+
     #[test]
     fn two_duties_naming_one_artifact_share_one_mapping() {
         let _serial = exclusive();
         let path = temp_artifact("shared");
         write_qwen36_fixture(&path, 1);
-        let producer = load_class_holdings_v1("test-producer", &sdk(), std::slice::from_ref(&path), 0);
-        let panel = load_class_holdings_v1("test-panel", &sdk(), std::slice::from_ref(&path), 0);
+        let producer = load_class_holdings_v1(
+            "test-producer",
+            &sdk(),
+            std::slice::from_ref(&path),
+            0,
+            misaka_palw_sdk::PalwWeightResidencyV1::PageCache,
+        );
+        let panel = load_class_holdings_v1(
+            "test-panel",
+            &sdk(),
+            std::slice::from_ref(&path),
+            0,
+            misaka_palw_sdk::PalwWeightResidencyV1::PageCache,
+        );
         assert_eq!((producer.len(), panel.len()), (1, 1), "both duties hold the file");
         assert!(
             std::sync::Arc::ptr_eq(&producer[0].payload(), &panel[0].payload()),
@@ -675,13 +862,15 @@ mod tests {
     fn a_replaced_artifact_is_mapped_and_hashed_afresh() {
         let path = temp_artifact("replaced");
         write_qwen36_fixture(&path, 1);
-        let first = load_class_holdings_v1("test", &sdk(), std::slice::from_ref(&path), 0);
+        let first =
+            load_class_holdings_v1("test", &sdk(), std::slice::from_ref(&path), 0, misaka_palw_sdk::PalwWeightResidencyV1::PageCache);
         // Replaced by rename, the way an operator drops in a new artifact: the old mapping stays
         // valid on its own inode, and the path now names a file of another size.
         let staged = temp_artifact("replaced-staged");
         write_qwen36_fixture(&staged, 2);
         std::fs::rename(&staged, &path).expect("renamed over the old artifact");
-        let second = load_class_holdings_v1("test", &sdk(), std::slice::from_ref(&path), 0);
+        let second =
+            load_class_holdings_v1("test", &sdk(), std::slice::from_ref(&path), 0, misaka_palw_sdk::PalwWeightResidencyV1::PageCache);
         assert_eq!((first.len(), second.len()), (1, 1));
         assert!(!std::sync::Arc::ptr_eq(&first[0].payload(), &second[0].payload()), "a different file is a different holding");
         assert_ne!(qwen36_parts(&first[0]).0, qwen36_parts(&second[0]).0, "the new file's root is derived from the new file");
@@ -696,8 +885,19 @@ mod tests {
         let path = temp_artifact("bounded");
         write_qwen36_fixture(&path, 1);
         let size = std::fs::metadata(&path).expect("the fixture exists").len();
-        assert_eq!(load_class_holdings_v1("test", &sdk(), std::slice::from_ref(&path), 0).len(), 1, "unbounded: held");
-        let bounded = load_class_holdings_v1("test", &sdk(), std::slice::from_ref(&path), size - 1);
+        assert_eq!(
+            load_class_holdings_v1("test", &sdk(), std::slice::from_ref(&path), 0, misaka_palw_sdk::PalwWeightResidencyV1::PageCache)
+                .len(),
+            1,
+            "unbounded: held"
+        );
+        let bounded = load_class_holdings_v1(
+            "test",
+            &sdk(),
+            std::slice::from_ref(&path),
+            size - 1,
+            misaka_palw_sdk::PalwWeightResidencyV1::PageCache,
+        );
         assert!(bounded.is_empty(), "the bound skips the file whether or not the process already holds it");
         std::fs::remove_file(&path).ok();
     }

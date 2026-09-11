@@ -162,80 +162,351 @@ impl Qwen36ShapeV1 {
 ///
 /// `Owned` is a fixture or a small class. `Mapped` is a 33 GiB file that does not fit in RAM and
 /// is not supposed to: the mixture reads eight of 256 experts per token, so the resident set is a
-/// fraction of the file and the page cache already implements that policy.
+/// fraction of the file. Which fraction, and who decides, is [`Qwen36ResidencyV1`]'s question
+/// (ADR-0112). With a residency the forward pass never touches a mapped weight page: every byte
+/// the arithmetic reads arrives through a read sized to its tensor, into memory this process owns
+/// and counts. Without one the page cache decides — the behaviour before ADR-0112, which the
+/// fleet measured at 11 MB/s through three million page faults a draw.
 enum Store {
     Owned(BTreeMap<String, Vec<i8>>),
     Mapped { map: crate::mmap::ReadOnlyMap, directory: BTreeMap<String, (usize, usize)> },
 }
 
+/// A tensor's codes, wherever they are held: borrowed from an owned store or the mapping, or a
+/// handle on bytes the residency holds. Derefs to the codes, so every kernel reads it as `&[i8]`.
+/// The handle keeps its bytes alive for as long as a projection holds it, which is what lets the
+/// residency evict an expert the moment its budget says so without any reader observing it.
+pub enum TensorBytes<'a> {
+    Borrowed(&'a [i8]),
+    Held(std::sync::Arc<Vec<i8>>),
+}
+
+impl std::ops::Deref for TensorBytes<'_> {
+    type Target = [i8];
+    fn deref(&self) -> &[i8] {
+        match self {
+            Self::Borrowed(s) => s,
+            Self::Held(v) => v.as_slice(),
+        }
+    }
+}
+
+impl std::fmt::Debug for TensorBytes<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let held = matches!(self, Self::Held(_));
+        write!(f, "TensorBytes({} codes, {})", self.len(), if held { "held" } else { "borrowed" })
+    }
+}
+
+impl PartialEq for TensorBytes<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        **self == **other
+    }
+}
+
 pub struct Qwen36ArtifactV1 {
     pub shape: Qwen36ShapeV1,
     store: Store,
+    /// Parameter rows the process holds outright: every row of an owned store, and every
+    /// non-expert row of a mapping. A budgeted mapping's expert rows ride with their expert
+    /// (`Qwen36ResidencyV1`), read when it is admitted and given back when it is evicted.
     params: BTreeMap<String, Vec<u8>>,
     pub rope: RopeTableV1,
+    /// ADR-0112: who decides which weights are in memory. `None` leaves it to the page cache.
+    residency: Option<Qwen36ResidencyV1>,
 }
 
-/// **An expert-residency cache: which of the mixture's weights this machine keeps in memory.**
+/// **ADR-0112 Decision 2's ratio**: with no budget stated, a mapped class is held within a fifth
+/// of its weight bytes.
+pub const QWEN36_RESIDENT_FRACTION_DENOMINATOR_V1: u64 = 5;
+
+/// **How much of a mapped class's weights this process keeps in memory** (ADR-0112 Decision 2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Qwen36ResidencyPolicyV1 {
+    /// No loader: weights are read through the mapping and the kernel's page cache decides —
+    /// the behaviour before ADR-0112, kept so the two can be measured against each other.
+    PageCache,
+    /// Hold at most this many bytes of weights, the pinned always-set included.
+    Bytes(u64),
+    /// Hold at most a fifth of the artifact's weight bytes — the ratio ADR-0112 certifies.
+    FifthOfTheWeights,
+}
+
+impl Qwen36ResidencyPolicyV1 {
+    /// The budget in bytes for an artifact of `weight_bytes`, or `None` for the page cache.
+    pub fn budget_for(self, weight_bytes: u64) -> Option<u64> {
+        match self {
+            Self::PageCache => None,
+            Self::Bytes(b) => Some(b),
+            Self::FifthOfTheWeights => Some(weight_bytes.div_ceil(QWEN36_RESIDENT_FRACTION_DENOMINATOR_V1)),
+        }
+    }
+}
+
+/// **The residency: which of a mapped class's weights this process holds, under a budget it
+/// states** (ADR-0112 Decisions 1, 3 and 4).
 ///
-/// The mixture reads eight of two hundred and fifty-six experts per layer per token, so 97 % of
-/// the weights are untouched on any given step — which is the property that makes a memory map the
-/// right shape, and it is not the whole story. The kernel's page cache is an LRU over PAGES with
-/// no idea what an expert is, and eight effectively-random experts per layer per token are enough
-/// to evict the weights that EVERY token needs: the norms, the four GatedDeltaNet projections,
-/// attention, the router, the shared expert and the 508 MiB unembedding. Measured on a 24 GiB
-/// machine against a 33 GiB artifact, that is the difference between reading a few hundred
-/// megabytes per token and reading gigabytes.
+/// The mixture reads eight of two hundred and fifty-six experts per layer per token, so 93 % of
+/// the class is untouched on any given step. The page cache is an LRU over PAGES with no idea what
+/// an expert is, and it reads a cold page through a mapping as one synchronous 4 KiB fault — on
+/// the fleet's virtio disks 11 MB/s, against 845 MB/s for a read sized to a tensor, measured on
+/// the same file the same day (ADR-0112 §1). So residency is decided here, in two tiers, because
+/// there are two access patterns:
 ///
-/// So residency is decided here instead:
+/// * **The always-set is pinned.** Every tensor that is neither a routed expert's nor the
+///   embedding table — the norms, the recurrence's and attention's projections, the routers, the
+///   shared experts, the unembedding: 1.86 GiB of the 33.27 GiB class — is read once at open,
+///   through the file descriptor, into memory this process owns, and never given back. Every
+///   token reads all of it.
+/// * **Routed experts are an LRU** of owned buffers under what the budget leaves. A layer's eight
+///   are read together, in parallel, the moment its router commits (`admit_experts`): one expert
+///   is 3.09 MiB in three tensors and five parameter rows, and eight of them land in tens of
+///   milliseconds where the page cache took the better part of a second. An expert read outside
+///   an admission — a test, the inventory pass — is admitted on the way, so nothing depends on
+///   the prefetch.
 ///
-/// * **The always-set is pinned.** Everything that is not a routed expert is asked for once, at
-///   open, and never given back. It is about 2 GiB and it is needed by every token, so it is the
-///   last thing that should be evicted and the page cache had no way to know that.
-/// * **Routed experts are an LRU with a byte budget.** Admission is `MADV_WILLNEED`, eviction is
-///   `MADV_DONTNEED` — which on a private read-only mapping drops resident pages and re-reads on
-///   the next touch, so nothing is lost and nothing is written.
-/// * **The eight are prefetched before the first is computed.** The router commits before any
-///   expert runs, so all twenty-four ranges (gate, up and down for each) are handed to the kernel
-///   at once and the read of the eighth overlaps the arithmetic of the first.
+/// The embedding table (0.47 GiB) is neither: a token reads one row of it, which
+/// [`Qwen36ArtifactV1::embedding_row`] reads directly.
+///
+/// The budget has a floor: the always-set plus one token's routed experts, the least a forward
+/// pass can run in without re-reading what it just read. A budget below it is refused at open,
+/// by name and with the numbers (`a_budget_below_the_floor_is_refused_by_name`).
 ///
 /// # What it does NOT do
 ///
 /// It does not change one bit of arithmetic. Residency is a decision about where bytes are, and
-/// the class's whole claim is that the answer does not depend on that — which is also why the same
-/// policy is what a GPU tier would use, with the placement decision widened from
-/// "resident or not" to "resident where".
-#[derive(Debug)]
-pub struct Qwen36Residency {
-    /// `(offset, len)` per admitted tensor, most recently used last.
-    order: std::collections::VecDeque<(String, usize, usize)>,
-    resident: std::collections::BTreeSet<String>,
-    bytes: usize,
+/// the class's whole claim is that the answer does not depend on that
+/// (`a_budgeted_artifact_computes_what_an_owned_one_does_at_a_fifth_of_its_size`) — which is
+/// also why the same policy is what a GPU tier would use, with the placement decision widened
+/// from "resident or not" to "resident where".
+pub struct Qwen36ResidencyV1 {
+    /// The whole budget, pinned set included.
     budget: usize,
+    pinned_bytes: usize,
+    pinned: std::collections::HashMap<String, std::sync::Arc<Vec<i8>>>,
+    /// Every routed expert's parts in the file — the directory a miss reads from.
+    experts: std::collections::HashMap<(usize, usize), ExpertExtentsV1>,
+    /// The expert parameter rows by name, in the artifact's canonical order — what the root pass
+    /// absorbs, in the position an owned store's rows would have had.
+    expert_param_extents: BTreeMap<String, (usize, usize)>,
+    /// The widest expert, in bytes.
+    expert_bytes: usize,
+    /// How many layers carry routed experts, and how many a token routes to in each.
+    expert_layers: usize,
+    experts_per_token: usize,
+    inner: std::sync::Mutex<ResidencyInnerV1>,
+}
+
+/// One routed expert's parts in the file: `(name, offset, len)` per weight tensor (the codes and,
+/// where the class carries them, the group exponents) and per parameter row.
+#[derive(Default)]
+struct ExpertExtentsV1 {
+    tensors: Vec<(String, usize, usize)>,
+    params: Vec<(String, usize, usize)>,
+    bytes: usize,
+}
+
+/// One routed expert, held.
+struct HeldExpertV1 {
+    tensors: Vec<(String, std::sync::Arc<Vec<i8>>)>,
+    params: Vec<(String, std::sync::Arc<Vec<u8>>)>,
+    bytes: usize,
+}
+
+struct ResidencyInnerV1 {
+    held: std::collections::HashMap<(usize, usize), HeldExpertV1>,
+    /// Most recently used last.
+    order: std::collections::VecDeque<(usize, usize)>,
+    bytes: usize,
     hits: u64,
     misses: u64,
     evictions: u64,
+    bytes_read: u64,
 }
 
-impl Qwen36Residency {
-    /// A cache holding at most `budget` bytes of routed experts. A budget of zero disables
-    /// admission entirely and leaves the page cache to it, which is the honest way to measure
-    /// whether any of this helps.
-    pub fn new(budget: usize) -> Self {
-        Self {
-            order: std::collections::VecDeque::new(),
-            resident: std::collections::BTreeSet::new(),
-            bytes: 0,
-            budget,
-            hits: 0,
-            misses: 0,
-            evictions: 0,
+/// The residency's numbers, for a log line or a test (ADR-0112 Decision 8).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Qwen36ResidencyStatsV1 {
+    pub budget_bytes: u64,
+    pub pinned_bytes: u64,
+    /// The routed experts held right now, in bytes — never past `budget_bytes − pinned_bytes`
+    /// between admissions.
+    pub resident_expert_bytes: u64,
+    pub hits: u64,
+    pub misses: u64,
+    pub evictions: u64,
+    /// Bytes this loader read from the file since open: the pinned set once, then every miss.
+    pub bytes_read: u64,
+    /// One token's routed experts, in bytes: what the expert budget is counted in tokens of.
+    pub token_expert_bytes: u64,
+}
+
+impl Qwen36ResidencyStatsV1 {
+    /// What the budget leaves for routed experts.
+    pub fn expert_budget_bytes(&self) -> u64 {
+        self.budget_bytes.saturating_sub(self.pinned_bytes)
+    }
+}
+
+/// `blk.{layer}.ffn_expert.{expert}_{role}` → `((layer, expert), role)`. The one name-shaped
+/// rule the artifact format has (the writer's naming), applied here for tensors and parameter
+/// rows alike. The shared expert is `ffn_shared_expert_…` and does not match, which is right: it
+/// runs for every token and is pinned.
+fn expert_key_v1(name: &str) -> Option<((usize, usize), &str)> {
+    let rest = name.strip_prefix("blk.")?;
+    let (layer, rest) = rest.split_once(".ffn_expert.")?;
+    let (expert, role) = rest.split_once('_')?;
+    Some(((layer.parse().ok()?, expert.parse().ok()?), role))
+}
+
+impl Qwen36ResidencyV1 {
+    fn stats(&self) -> Qwen36ResidencyStatsV1 {
+        let inner = self.inner.lock().expect("the residency lock is never poisoned");
+        Qwen36ResidencyStatsV1 {
+            budget_bytes: self.budget as u64,
+            pinned_bytes: self.pinned_bytes as u64,
+            resident_expert_bytes: inner.bytes as u64,
+            hits: inner.hits,
+            misses: inner.misses,
+            evictions: inner.evictions,
+            bytes_read: inner.bytes_read,
+            token_expert_bytes: self.one_token_expert_bytes() as u64,
         }
     }
 
-    /// Hits, misses, evictions and resident bytes — the four numbers that say whether the budget
-    /// is the right one, and the reason this is reported rather than assumed.
-    pub fn stats(&self) -> (u64, u64, u64, usize) {
-        (self.hits, self.misses, self.evictions, self.bytes)
+    fn expert_budget(&self) -> usize {
+        self.budget.saturating_sub(self.pinned_bytes)
+    }
+
+    /// The least budget this class's forward pass runs in: the always-set, and one token's
+    /// routed experts across every layer that has them.
+    fn floor(&self) -> usize {
+        self.pinned_bytes.saturating_add(self.one_token_expert_bytes())
+    }
+
+    fn one_token_expert_bytes(&self) -> usize {
+        self.expert_bytes.saturating_mul(self.experts_per_token).saturating_mul(self.expert_layers)
+    }
+
+    /// Read one expert's parts through the file descriptor: the read a miss costs.
+    fn read_expert(map: &crate::mmap::ReadOnlyMap, extents: &ExpertExtentsV1) -> Result<HeldExpertV1, Qwen36Error> {
+        let unreadable = |name: &str, e: std::io::Error| Qwen36Error::Unreadable(format!("{name}: {e}"));
+        let mut tensors = Vec::with_capacity(extents.tensors.len());
+        for (name, offset, len) in &extents.tensors {
+            tensors.push((name.clone(), std::sync::Arc::new(map.read_i8_at(*offset, *len).map_err(|e| unreadable(name, e))?)));
+        }
+        let mut params = Vec::with_capacity(extents.params.len());
+        for (name, offset, len) in &extents.params {
+            params.push((name.clone(), std::sync::Arc::new(map.read_u8_at(*offset, *len).map_err(|e| unreadable(name, e))?)));
+        }
+        Ok(HeldExpertV1 { tensors, params, bytes: extents.bytes })
+    }
+
+    /// Put a read expert in, most recently used, and give back the coldest until the budget
+    /// holds. An expert held by a projection in flight stays alive through its handle; only the
+    /// residency's count drops, which is the transient the floor is sized for.
+    fn insert_locked(&self, inner: &mut ResidencyInnerV1, key: (usize, usize), held: HeldExpertV1) {
+        inner.bytes_read += held.bytes as u64;
+        if let Some(previous) = inner.held.insert(key, held) {
+            // Two threads missed the same expert at once; one read is kept, the other's bytes
+            // were read for nothing and are not counted twice as resident.
+            inner.bytes = inner.bytes.saturating_sub(previous.bytes);
+            inner.order.retain(|k| *k != key);
+        }
+        inner.bytes += inner.held[&key].bytes;
+        inner.order.push_back(key);
+        let budget = self.expert_budget();
+        while inner.bytes > budget {
+            let Some(cold) = inner.order.pop_front() else { break };
+            if let Some(gone) = inner.held.remove(&cold) {
+                inner.bytes = inner.bytes.saturating_sub(gone.bytes);
+                inner.evictions += 1;
+            }
+        }
+    }
+
+    fn touch_locked(inner: &mut ResidencyInnerV1, key: (usize, usize)) {
+        if let Some(i) = inner.order.iter().position(|k| *k == key) {
+            inner.order.remove(i);
+            inner.order.push_back(key);
+        }
+    }
+
+    /// **The prefetch** (ADR-0112 Decision 4): every chosen expert of `layer` not yet held, read
+    /// together and in parallel, before any of them is computed.
+    fn admit(&self, map: &crate::mmap::ReadOnlyMap, layer: usize, chosen: &[usize]) {
+        let missing: Vec<(usize, usize)> = {
+            let mut inner = self.inner.lock().expect("the residency lock is never poisoned");
+            let mut missing = Vec::new();
+            for expert in chosen {
+                let key = (layer, *expert);
+                if inner.held.contains_key(&key) {
+                    inner.hits += 1;
+                    Self::touch_locked(&mut inner, key);
+                } else if self.experts.contains_key(&key) && !missing.contains(&key) {
+                    inner.misses += 1;
+                    missing.push(key);
+                }
+            }
+            missing
+        };
+        if missing.is_empty() {
+            return;
+        }
+        // Off the lock: the reads are the slow part, and another duty's forward pass on the same
+        // artifact must not wait behind them. A read that fails here is not an error yet — the
+        // projection that needs the expert reads it again and reports the failure by name.
+        use rayon::prelude::*;
+        let read: Vec<((usize, usize), HeldExpertV1)> =
+            missing.par_iter().filter_map(|key| Self::read_expert(map, &self.experts[key]).ok().map(|held| (*key, held))).collect();
+        let mut inner = self.inner.lock().expect("the residency lock is never poisoned");
+        for (key, held) in read {
+            self.insert_locked(&mut inner, key, held);
+        }
+    }
+
+    /// One part of one expert — a hit, or a miss admitted on the way.
+    fn expert_part<T>(
+        &self,
+        map: &crate::mmap::ReadOnlyMap,
+        key: (usize, usize),
+        name: &str,
+        part: impl Fn(&HeldExpertV1) -> Option<T>,
+    ) -> Result<T, Qwen36Error> {
+        let extents = self.experts.get(&key).ok_or_else(|| Qwen36Error::MissingTensor(name.to_string()))?;
+        {
+            let mut inner = self.inner.lock().expect("the residency lock is never poisoned");
+            if let Some(held) = inner.held.get(&key) {
+                let found = part(held);
+                inner.hits += 1;
+                Self::touch_locked(&mut inner, key);
+                return found.ok_or_else(|| Qwen36Error::MissingTensor(name.to_string()));
+            }
+            inner.misses += 1;
+        }
+        let held = Self::read_expert(map, extents)?;
+        let found = part(&held);
+        let mut inner = self.inner.lock().expect("the residency lock is never poisoned");
+        self.insert_locked(&mut inner, key, held);
+        found.ok_or_else(|| Qwen36Error::MissingTensor(name.to_string()))
+    }
+
+    fn expert_tensor(
+        &self,
+        map: &crate::mmap::ReadOnlyMap,
+        key: (usize, usize),
+        name: &str,
+    ) -> Result<std::sync::Arc<Vec<i8>>, Qwen36Error> {
+        self.expert_part(map, key, name, |held| held.tensors.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone()))
+    }
+
+    fn expert_param(
+        &self,
+        map: &crate::mmap::ReadOnlyMap,
+        key: (usize, usize),
+        name: &str,
+    ) -> Result<std::sync::Arc<Vec<u8>>, Qwen36Error> {
+        self.expert_part(map, key, name, |held| held.params.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone()))
     }
 }
 
@@ -245,10 +516,18 @@ impl Qwen36Residency {
 pub enum Qwen36Error {
     MissingTensor(String),
     MissingParams(String),
-    BadTensor { name: String, want: usize, got: usize },
+    BadTensor {
+        name: String,
+        want: usize,
+        got: usize,
+    },
     BadParams(String),
     OpRefused(&'static str, String),
     Position,
+    /// ADR-0112: a residency budget this class cannot run in, with the floor and its terms.
+    Residency(String),
+    /// The file could not be read where the directory said a tensor or a row was.
+    Unreadable(String),
 }
 
 impl std::fmt::Display for Qwen36Error {
@@ -260,6 +539,8 @@ impl std::fmt::Display for Qwen36Error {
             Self::BadParams(n) => write!(f, "parameter row {n} is malformed"),
             Self::OpRefused(w, why) => write!(f, "the op {w} refused its input: {why}"),
             Self::Position => write!(f, "the position is past the rotary table"),
+            Self::Residency(why) => write!(f, "{why}"),
+            Self::Unreadable(why) => write!(f, "the artifact is unreadable: {why}"),
         }
     }
 }
@@ -269,7 +550,7 @@ impl std::error::Error for Qwen36Error {}
 impl Qwen36ArtifactV1 {
     pub fn new(shape: Qwen36ShapeV1, rope: RopeTableV1) -> Result<Self, ArtifactError> {
         shape.validate()?;
-        Ok(Self { shape, store: Store::Owned(BTreeMap::new()), params: BTreeMap::new(), rope })
+        Ok(Self { shape, store: Store::Owned(BTreeMap::new()), params: BTreeMap::new(), rope, residency: None })
     }
 
     pub fn with_tensor(mut self, name: impl Into<String>, values: Vec<i8>) -> Self {
@@ -287,16 +568,75 @@ impl Qwen36ArtifactV1 {
         self
     }
 
-    pub fn tensor(&self, name: &str) -> Result<&[i8], Qwen36Error> {
+    /// A tensor's codes: from the owned store, from the residency (a pinned tensor's handle, or
+    /// a routed expert's — admitted on the way if it is not held), or, with no residency or for
+    /// the embedding table, a slice of the mapping.
+    pub fn tensor(&self, name: &str) -> Result<TensorBytes<'_>, Qwen36Error> {
         match &self.store {
-            Store::Owned(t) => t.get(name).map(|v| &v[..]).ok_or_else(|| Qwen36Error::MissingTensor(name.to_string())),
+            Store::Owned(t) => {
+                t.get(name).map(|v| TensorBytes::Borrowed(&v[..])).ok_or_else(|| Qwen36Error::MissingTensor(name.to_string()))
+            }
             Store::Mapped { map, directory } => {
+                if let Some(residency) = &self.residency {
+                    if let Some((key, _)) = expert_key_v1(name) {
+                        return residency.expert_tensor(map, key, name).map(TensorBytes::Held);
+                    }
+                    if let Some(held) = residency.pinned.get(name) {
+                        return Ok(TensorBytes::Held(held.clone()));
+                    }
+                    // The embedding table is neither pinned nor an expert: a token reads one row
+                    // of it (`embedding_row`), and a caller asking for the whole table — a test,
+                    // the inventory — reads it through the mapping.
+                }
                 let (offset, len) = *directory.get(name).ok_or_else(|| Qwen36Error::MissingTensor(name.to_string()))?;
                 // A directory entry that leaves the mapping is a truncated file, which is a
                 // refusal rather than a fault — the bytes are data a producer was handed.
-                map.i8_slice(offset, len).ok_or_else(|| Qwen36Error::BadTensor { name: name.to_string(), want: len, got: 0 })
+                map.i8_slice(offset, len).map(TensorBytes::Borrowed).ok_or_else(|| Qwen36Error::BadTensor {
+                    name: name.to_string(),
+                    want: len,
+                    got: 0,
+                })
             }
         }
+    }
+
+    /// **One token's embedding row** — `d` codes at row `token_id` of `token_embd.weight`. Under
+    /// a residency the row is read directly (2 KiB through the file descriptor), so the 0.47 GiB
+    /// table is neither pinned nor faulted; otherwise it is a slice of the table.
+    pub fn embedding_row(&self, token_id: usize, d: usize) -> Result<Vec<i8>, Qwen36Error> {
+        const TABLE: &str = "token_embd.weight";
+        let want = self.shape.vocab.saturating_mul(d);
+        if let (Store::Mapped { map, directory }, Some(_)) = (&self.store, &self.residency) {
+            let (offset, len) = *directory.get(TABLE).ok_or_else(|| Qwen36Error::MissingTensor(TABLE.to_string()))?;
+            if len != want {
+                return Err(Qwen36Error::BadTensor { name: TABLE.to_string(), want, got: len });
+            }
+            let at = offset.checked_add(token_id.saturating_mul(d)).ok_or(Qwen36Error::Position)?;
+            return map.read_i8_at(at, d).map_err(|e| Qwen36Error::Unreadable(format!("{TABLE}: {e}")));
+        }
+        let table = self.tensor_sized(TABLE, want)?;
+        Ok(table[token_id * d..(token_id + 1) * d].to_vec())
+    }
+
+    /// **Hand the residency every routed expert `chosen` of `layer`, before any of them is
+    /// computed** (ADR-0112 Decision 4). Called with the routing the moment it commits, so the
+    /// eight reads are in flight together rather than one at a time behind the arithmetic that
+    /// consumes them. Nothing without a residency; changes no bit of arithmetic with one.
+    pub fn admit_experts(&self, layer: usize, chosen: &[usize]) {
+        if let (Store::Mapped { map, .. }, Some(residency)) = (&self.store, &self.residency) {
+            residency.admit(map, layer, chosen);
+        }
+    }
+
+    /// The residency's numbers, or `None` when the page cache decides.
+    pub fn residency_stats(&self) -> Option<Qwen36ResidencyStatsV1> {
+        self.residency.as_ref().map(Qwen36ResidencyV1::stats)
+    }
+
+    /// The least residency budget this artifact's forward pass runs in — its always-set plus one
+    /// token's routed experts — or `None` for an owned store, which holds everything anyway.
+    pub fn residency_floor_bytes(&self) -> Option<u64> {
+        self.residency.as_ref().map(|r| r.floor() as u64)
     }
 
     /// **The artifact's identity: one digest over everything a forward pass reads.**
@@ -360,9 +700,32 @@ impl Qwen36ArtifactV1 {
             rope.extend_from_slice(&v.to_le_bytes());
         }
         absorb(&mut state, b"rope", "", &rope);
-        // BTreeMaps, so both stores absorb in one canonical order.
-        for (name, bytes) in &self.params {
-            absorb(&mut state, b"param", name, bytes);
+        // BTreeMaps, so both stores absorb in one canonical order — and a budgeted mapping's
+        // expert rows, which live in the file rather than in `params`, take the place in that
+        // order an owned store's rows would have had: two sorted lists merged by name.
+        let expert_rows = self.residency.as_ref().map(|r| &r.expert_param_extents);
+        let mut owned = self.params.iter().peekable();
+        let mut extents = expert_rows.map(|m| m.iter()).into_iter().flatten().peekable();
+        let mut row = vec![0u8; 0];
+        loop {
+            let take_owned = match (owned.peek(), extents.peek()) {
+                (None, None) => break,
+                (Some(_), None) => true,
+                (None, Some(_)) => false,
+                (Some((a, _)), Some((b, _))) => a <= b,
+            };
+            if take_owned {
+                let (name, bytes) = owned.next().expect("peeked");
+                absorb(&mut state, b"param", name, bytes);
+            } else {
+                let (name, (offset, len)) = extents.next().expect("peeked");
+                let Store::Mapped { map, .. } = &self.store else { unreachable!("expert extents exist only for a mapping") };
+                row.resize(*len, 0);
+                map.read_exact_at(*offset as u64, &mut row).unwrap_or_else(|e| {
+                    panic!("the artifact became unreadable at parameter row {name} while computing its root: {e}")
+                });
+                absorb(&mut state, b"param", name, &row);
+            }
         }
         match &self.store {
             Store::Owned(tensors) => {
@@ -412,50 +775,6 @@ impl Qwen36ArtifactV1 {
         Hash64::from_bytes(out)
     }
 
-    /// `(offset, len)` of a tensor inside the mapping, or `None` when the artifact is owned
-    /// rather than mapped — residency is a property of a map and there is nothing to advise about
-    /// a `Vec`.
-    pub fn extent(&self, name: &str) -> Option<(usize, usize)> {
-        match &self.store {
-            Store::Owned(_) => None,
-            Store::Mapped { directory, .. } => directory.get(name).copied(),
-        }
-    }
-
-    pub fn will_need(&self, offset: usize, len: usize) {
-        if let Store::Mapped { map, .. } = &self.store {
-            map.will_need(offset, len);
-        }
-    }
-
-    pub fn dont_need(&self, offset: usize, len: usize) {
-        if let Store::Mapped { map, .. } = &self.store {
-            map.dont_need(offset, len);
-        }
-    }
-
-    /// **Ask for everything that is not a routed expert, once.**
-    ///
-    /// The always-set: norms, the four GatedDeltaNet projections, attention, the router, the
-    /// shared expert, the rotary table, the embedding and the unembedding. Every token reads all
-    /// of it, and on a machine smaller than the artifact the page cache will otherwise evict it to
-    /// make room for experts that are read once — which is the whole of why a mapped mixture can
-    /// be slower than its own resident set.
-    ///
-    /// Identified by name: `blk.N.ffn_expert.K_*` is a routed expert and everything else is not.
-    /// A name-shaped rule rather than a flag on the directory, because the artifact format is a
-    /// directory of names and inventing a second classification would be a second thing to keep
-    /// true.
-    pub fn pin_always_set(&self) {
-        let Store::Mapped { map, directory } = &self.store else { return };
-        for (name, (offset, len)) in directory {
-            if name.contains(".ffn_expert.") {
-                continue;
-            }
-            map.will_need(*offset, *len);
-        }
-    }
-
     /// Every tensor name the artifact holds, in order.
     pub fn tensor_names(&self) -> Vec<&str> {
         match &self.store {
@@ -472,7 +791,7 @@ impl Qwen36ArtifactV1 {
         }
     }
 
-    pub(crate) fn tensor_sized(&self, name: &str, want: usize) -> Result<&[i8], Qwen36Error> {
+    pub(crate) fn tensor_sized(&self, name: &str, want: usize) -> Result<TensorBytes<'_>, Qwen36Error> {
         let row = self.tensor(name)?;
         if row.len() != want {
             return Err(Qwen36Error::BadTensor { name: name.to_string(), want, got: row.len() });
@@ -481,8 +800,17 @@ impl Qwen36ArtifactV1 {
     }
 
     /// One parameter row, decoded. Widths are checked by the caller that knows what it asked for.
+    /// A budgeted mapping's expert rows come from the expert's holding (admitted on the way, like
+    /// its tensors); every other row is the process's own.
     pub fn param_rows(&self, name: &str) -> Result<Vec<A16QuantParams>, Qwen36Error> {
-        let bytes = self.params.get(name).ok_or_else(|| Qwen36Error::MissingParams(name.to_string()))?;
+        let held;
+        let bytes: &[u8] = match (&self.store, &self.residency, expert_key_v1(name)) {
+            (Store::Mapped { map, .. }, Some(residency), Some((key, _))) if residency.experts.contains_key(&key) => {
+                held = residency.expert_param(map, key, name).map_err(|_| Qwen36Error::MissingParams(name.to_string()))?;
+                held.as_slice()
+            }
+            _ => self.params.get(name).ok_or_else(|| Qwen36Error::MissingParams(name.to_string()))?,
+        };
         if bytes.is_empty() || !bytes.len().is_multiple_of(A16QuantParams::WIRE_BYTES) {
             return Err(Qwen36Error::BadParams(name.to_string()));
         }
@@ -517,7 +845,7 @@ impl Qwen36ArtifactV1 {
     ///
     /// Absent means the weights carry one scale per output row, which is what a fixture and the
     /// first artifacts hold. Present means a power-of-two scale per 32 elements.
-    pub fn group_exponents(&self, name: &str) -> Option<&[i8]> {
+    pub fn group_exponents(&self, name: &str) -> Option<TensorBytes<'_>> {
         self.tensor(&format!("{name}.exp")).ok()
     }
 
@@ -594,13 +922,10 @@ pub type Qwen36ProbeV1 = Vec<(String, Vec<i32>)>;
 /// One probe entry reduced to a peak.
 pub type Qwen36PeaksV1 = Vec<(String, i32)>;
 
-/// The engine.
+/// The engine. Residency is the artifact's (ADR-0112), so every engine over one artifact — a
+/// producer's, a seat's, a court's, in one process — shares one set of held weights.
 pub struct Qwen36Engine<'a> {
     pub artifact: &'a Qwen36ArtifactV1,
-    /// Present when the caller has chosen a residency budget. Behind a `Mutex` because the
-    /// forward pass takes `&self` and residency is the one thing in it that is stateful — and
-    /// uncontended, because a token is one pass.
-    residency: Option<std::sync::Mutex<Qwen36Residency>>,
 }
 
 impl<'a> Qwen36Engine<'a> {
@@ -617,74 +942,16 @@ impl<'a> Qwen36Engine<'a> {
         let params = a.params_sized(&format!("{name}.a16"), out_dim)?;
         match a.group_exponents(name) {
             Some(exps) if wide => {
-                crate::kernels::q36_matmul_grouped_wide_fast(weights, exps, x, &params).map_err(refuse(name_leak(name)))
+                crate::kernels::q36_matmul_grouped_wide_fast(&weights, &exps, x, &params).map_err(refuse(name_leak(name)))
             }
-            Some(exps) => crate::kernels::q36_matmul_grouped_fast(weights, exps, x, &params).map_err(refuse(name_leak(name))),
-            None if wide => a16_matmul_rescale(weights, x, &params).map_err(refuse(name_leak(name))),
-            None => a16_matmul_requant(weights, x, &params).map_err(refuse(name_leak(name))),
+            Some(exps) => crate::kernels::q36_matmul_grouped_fast(&weights, &exps, x, &params).map_err(refuse(name_leak(name))),
+            None if wide => a16_matmul_rescale(&weights, x, &params).map_err(refuse(name_leak(name))),
+            None => a16_matmul_requant(&weights, x, &params).map_err(refuse(name_leak(name))),
         }
     }
 
     pub fn new(artifact: &'a Qwen36ArtifactV1) -> Self {
-        Self { artifact, residency: None }
-    }
-
-    /// **Take residency into the runtime's own hands**, with `budget` bytes for routed experts.
-    ///
-    /// Pins the always-set on the way in: every tensor that is not a routed expert, asked for once
-    /// and never given back. That is the half that matters most — those weights are read by every
-    /// token, and leaving them to compete with eight fresh experts per layer is what makes a
-    /// memory-mapped mixture slower than its own resident set.
-    pub fn with_residency(artifact: &'a Qwen36ArtifactV1, budget: usize) -> Self {
-        artifact.pin_always_set();
-        Self { artifact, residency: Some(std::sync::Mutex::new(Qwen36Residency::new(budget))) }
-    }
-
-    /// The cache's four numbers, or `None` when the caller left residency to the page cache.
-    pub fn residency_stats(&self) -> Option<(u64, u64, u64, usize)> {
-        self.residency.as_ref().map(|r| r.lock().expect("the residency lock is never poisoned").stats())
-    }
-
-    /// **Hand the kernel every byte the chosen experts need, before computing any of them.**
-    ///
-    /// Called with the routing the moment it commits and before the first expert runs, so the
-    /// twenty-four reads are in flight together rather than one at a time behind the arithmetic
-    /// that consumes them.
-    pub(crate) fn admit_experts(&self, li: usize, chosen: &[usize]) {
-        let Some(cache) = self.residency.as_ref() else { return };
-        let mut cache = cache.lock().expect("the residency lock is never poisoned");
-        for which in chosen {
-            for role in ["_gate.weight", "_up.weight", "_down.weight"] {
-                let name = format!("blk.{li}.ffn_expert.{which}{role}");
-                match self.artifact.extent(&name) {
-                    Some((offset, len)) => {
-                        if cache.resident.contains(&name) {
-                            cache.hits += 1;
-                            // Most recently used last: a hit moves the entry to the back so the
-                            // eviction end of the queue really is the cold end.
-                            if let Some(i) = cache.order.iter().position(|(n, _, _)| n == &name) {
-                                let entry = cache.order.remove(i).expect("the index came from the queue");
-                                cache.order.push_back(entry);
-                            }
-                            continue;
-                        }
-                        cache.misses += 1;
-                        self.artifact.will_need(offset, len);
-                        cache.resident.insert(name.clone());
-                        cache.order.push_back((name, offset, len));
-                        cache.bytes += len;
-                    }
-                    None => continue,
-                }
-            }
-        }
-        while cache.bytes > cache.budget {
-            let Some((name, offset, len)) = cache.order.pop_front() else { break };
-            self.artifact.dont_need(offset, len);
-            cache.resident.remove(&name);
-            cache.bytes = cache.bytes.saturating_sub(len);
-            cache.evictions += 1;
-        }
+        Self { artifact }
     }
 
     /// One position. Returns the committed logit row: i16 codes in i32 lanes, argmax over which
@@ -724,8 +991,7 @@ impl<'a> Qwen36Engine<'a> {
             return Err(Qwen36Error::Position);
         }
 
-        let embed = a.tensor_sized("token_embd.weight", s.vocab * d)?;
-        let row: Vec<i32> = embed[token_id * d..(token_id + 1) * d].iter().map(|c| *c as i32).collect();
+        let row: Vec<i32> = a.embedding_row(token_id, d)?.iter().map(|c| *c as i32).collect();
         // **The lift is per TOKEN, not per class.** One scale for a 248,320-row embedding table is
         // one scale for its outliers, and a prompt's ordinary rows then land on a fraction of the
         // int8 range — the resolution the whole forward pass starts from. A store with one row is
@@ -1057,7 +1323,7 @@ impl<'a> Qwen36Engine<'a> {
         // **The prefetch.** The routing is committed and no expert has run yet, so this is the
         // one moment where every byte the mixture will read is known and none of it is needed
         // instantly — which is exactly when to ask for it.
-        self.admit_experts(li, &routed.iter().map(|r| r.expert as usize).collect::<Vec<_>>());
+        a.admit_experts(li, &routed.iter().map(|r| r.expert as usize).collect::<Vec<_>>());
         let mut outputs = Vec::with_capacity(routed.len() * d);
         let mut weights = Vec::with_capacity(routed.len());
         for r in &routed {
@@ -1349,80 +1615,235 @@ impl<'a> HeaderReader<'a> {
     }
 }
 
-/// Open an artifact file. The header is parsed and the weight region is mapped, so opening a
-/// 33 GiB artifact costs the header and no more.
-pub fn open_artifact(path: &std::path::Path) -> Result<Qwen36ArtifactV1, Qwen36Error> {
-    let map = crate::mmap::ReadOnlyMap::open(path).map_err(|e| Qwen36Error::BadParams(format!("{}: {e}", path.display())))?;
-    map.advise_random();
-    let bytes = map.as_bytes();
-    let bad = |what: &str| Qwen36Error::BadParams(format!("artifact file: {what}"));
+/// What the header says: the shape, the rotary table, where every parameter row's value bytes
+/// and every tensor's codes sit in the file. Parsed from a byte prefix of the file.
+struct ParsedHeaderV1 {
+    shape: Qwen36ShapeV1,
+    rope: RopeTableV1,
+    /// `(name, offset, len)` — absolute offsets of each row's value bytes.
+    params: Vec<(String, usize, usize)>,
+    /// `(name, offset, len)` — absolute offsets of each tensor's codes.
+    tensors: Vec<(String, usize, usize)>,
+}
+
+enum HeaderFailure {
+    /// The bytes ended before the field named did — a short prefix, or a truncated file; the
+    /// caller, which knows how much of the file it handed in, tells the two apart.
+    Short(&'static str),
+    Bad(String),
+}
+
+fn parse_header_v1(bytes: &[u8]) -> Result<ParsedHeaderV1, HeaderFailure> {
+    let bad = |what: &str| HeaderFailure::Bad(format!("artifact file: {what}"));
     let mut r = HeaderReader { b: bytes, i: 0 };
-    if r.take(8).ok_or_else(|| bad("no magic"))? != QWEN36_FILE_MAGIC.as_slice() {
+    macro_rules! need {
+        ($e:expr, $what:expr) => {
+            match $e {
+                Some(v) => v,
+                None => return Err(HeaderFailure::Short($what)),
+            }
+        };
+    }
+    if need!(r.take(8), "magic") != QWEN36_FILE_MAGIC.as_slice() {
         return Err(bad("not a PALW-QWEN36 artifact"));
     }
-    let n_layers = r.usize().ok_or_else(|| bad("layer count"))?;
+    let n_layers = need!(r.usize(), "layer count");
     let mut layer_types = Vec::with_capacity(n_layers);
     for _ in 0..n_layers {
-        layer_types.push(match r.take(1).ok_or_else(|| bad("layer kind"))?[0] {
+        layer_types.push(match need!(r.take(1), "layer kind")[0] {
             0 => Qwen36LayerKind::LinearAttention,
             1 => Qwen36LayerKind::FullAttention,
             _ => return Err(bad("a layer kind this build does not read")),
         });
     }
-    let mut field = || r.usize().ok_or_else(|| Qwen36Error::BadParams("artifact file: shape".into()));
+    let mut field = || r.usize();
     let shape = Qwen36ShapeV1 {
         layer_types,
-        d_model: field()?,
-        n_heads: field()?,
-        n_kv_heads: field()?,
-        head_dim: field()?,
-        rotary_dim: field()?,
-        linear_k_heads: field()?,
-        linear_v_heads: field()?,
-        linear_head_dim: field()?,
-        conv_kernel: field()?,
-        n_experts: field()?,
-        experts_per_token: field()?,
-        moe_dim: field()?,
-        shared_dim: field()?,
-        vocab: field()?,
-        max_position: field()?,
-        eps_q: r.i64().ok_or_else(|| bad("eps"))?,
-        router_up_bits: r.take(1).ok_or_else(|| bad("router bits"))?[0],
+        d_model: need!(field(), "shape"),
+        n_heads: need!(field(), "shape"),
+        n_kv_heads: need!(field(), "shape"),
+        head_dim: need!(field(), "shape"),
+        rotary_dim: need!(field(), "shape"),
+        linear_k_heads: need!(field(), "shape"),
+        linear_v_heads: need!(field(), "shape"),
+        linear_head_dim: need!(field(), "shape"),
+        conv_kernel: need!(field(), "shape"),
+        n_experts: need!(field(), "shape"),
+        experts_per_token: need!(field(), "shape"),
+        moe_dim: need!(field(), "shape"),
+        shared_dim: need!(field(), "shape"),
+        vocab: need!(field(), "shape"),
+        max_position: need!(field(), "shape"),
+        eps_q: need!(r.i64(), "eps"),
+        router_up_bits: need!(r.take(1), "router bits")[0],
     };
-    shape.validate().map_err(|e| Qwen36Error::BadParams(format!("artifact file: {e:?}")))?;
+    shape.validate().map_err(|e| bad(&format!("{e:?}")))?;
 
     let rope = RopeTableV1 {
-        d_head: r.usize().ok_or_else(|| bad("rope d_head"))?,
-        max_position: r.usize().ok_or_else(|| bad("rope max_position"))?,
-        cos_q: r.i32s().ok_or_else(|| bad("rope cos"))?,
-        sin_q: r.i32s().ok_or_else(|| bad("rope sin"))?,
+        d_head: need!(r.usize(), "rope d_head"),
+        max_position: need!(r.usize(), "rope max_position"),
+        cos_q: need!(r.i32s(), "rope cos"),
+        sin_q: need!(r.i32s(), "rope sin"),
     };
 
-    let mut params = BTreeMap::new();
-    let n_params = r.usize().ok_or_else(|| bad("param count"))?;
+    let n_params = need!(r.usize(), "param count");
+    let mut params = Vec::with_capacity(n_params);
     for _ in 0..n_params {
-        let name = r.name().ok_or_else(|| bad("param name"))?;
-        let n = r.usize().ok_or_else(|| bad("param length"))?;
-        params.insert(name, r.take(n).ok_or_else(|| bad("param bytes"))?.to_vec());
+        let name = need!(r.name(), "param name");
+        let n = need!(r.usize(), "param length");
+        let at = r.i;
+        need!(r.take(n), "param bytes");
+        params.push((name, at, n));
     }
 
-    let mut directory = BTreeMap::new();
-    let n_tensors = r.usize().ok_or_else(|| bad("tensor count"))?;
+    let n_tensors = need!(r.usize(), "tensor count");
     let mut entries = Vec::with_capacity(n_tensors);
     for _ in 0..n_tensors {
-        let name = r.name().ok_or_else(|| bad("tensor name"))?;
-        let offset = r.usize().ok_or_else(|| bad("tensor offset"))?;
-        let len = r.usize().ok_or_else(|| bad("tensor length"))?;
+        let name = need!(r.name(), "tensor name");
+        let offset = need!(r.usize(), "tensor offset");
+        let len = need!(r.usize(), "tensor length");
         entries.push((name, offset, len));
     }
-    let data_start = r.usize().ok_or_else(|| bad("data start"))?;
+    let data_start = need!(r.usize(), "data start");
+    let mut tensors = Vec::with_capacity(entries.len());
     for (name, offset, len) in entries {
         let absolute = data_start.checked_add(offset).ok_or_else(|| bad("a tensor offset overflows"))?;
-        directory.insert(name, (absolute, len));
+        tensors.push((name, absolute, len));
+    }
+    Ok(ParsedHeaderV1 { shape, rope, params, tensors })
+}
+
+/// Open an artifact file with the page cache deciding residency — the path before ADR-0112,
+/// kept as it was so the two can be measured against each other. The header is parsed and the
+/// weight region is mapped, so opening a 33 GiB artifact costs the header and no more.
+pub fn open_artifact(path: &std::path::Path) -> Result<Qwen36ArtifactV1, Qwen36Error> {
+    open_artifact_with_residency(path, Qwen36ResidencyPolicyV1::PageCache)
+}
+
+/// **Open an artifact file under a residency policy** (ADR-0112).
+///
+/// With a budget: the header is read through the file descriptor (the 33 GiB class's is
+/// 0.71 GiB of parameter rows, which faulted through the mapping is a minute of 4 KiB faults),
+/// the budget is checked against the class's floor before anything else happens, the always-set
+/// is read into memory this process owns — in parallel, seconds for 1.86 GiB — and every routed
+/// expert's extents are kept for the misses to read from. The file stays mapped: it is where the
+/// embedding table and, with no residency, everything else is read.
+pub fn open_artifact_with_residency(path: &std::path::Path, policy: Qwen36ResidencyPolicyV1) -> Result<Qwen36ArtifactV1, Qwen36Error> {
+    use rayon::prelude::*;
+    let map = crate::mmap::ReadOnlyMap::open(path).map_err(|e| Qwen36Error::BadParams(format!("{}: {e}", path.display())))?;
+    map.advise_random();
+    let unreadable = |what: &str, e: std::io::Error| Qwen36Error::Unreadable(format!("{}: {what}: {e}", path.display()));
+    let ended = |what: &str| Qwen36Error::BadParams(format!("artifact file: {what}: the file ends inside its header"));
+    let header = match policy {
+        Qwen36ResidencyPolicyV1::PageCache => parse_header_v1(map.as_bytes()).map_err(|f| match f {
+            HeaderFailure::Short(what) => ended(what),
+            HeaderFailure::Bad(m) => Qwen36Error::BadParams(m),
+        })?,
+        _ => {
+            // A prefix through the file descriptor, doubled until the header fits in it.
+            let mut n = (64usize << 20).min(map.len());
+            loop {
+                let prefix = map.read_u8_at(0, n).map_err(|e| unreadable("the header", e))?;
+                match parse_header_v1(&prefix) {
+                    Ok(header) => break header,
+                    Err(HeaderFailure::Short(_)) if n < map.len() => n = n.saturating_mul(2).min(map.len()),
+                    Err(HeaderFailure::Short(what)) => return Err(ended(what)),
+                    Err(HeaderFailure::Bad(m)) => return Err(Qwen36Error::BadParams(m)),
+                }
+            }
+        }
+    };
+    let ParsedHeaderV1 { shape, rope, params, tensors } = header;
+    let mut directory = BTreeMap::new();
+    for (name, offset, len) in &tensors {
+        directory.insert(name.clone(), (*offset, *len));
+    }
+    let weight_bytes: usize = tensors.iter().map(|(_, _, len)| *len).sum();
+
+    let Some(budget) = policy.budget_for(weight_bytes as u64) else {
+        // Every parameter row owned, read as the old path read it.
+        let bytes = map.as_bytes();
+        let mut owned = BTreeMap::new();
+        for (name, offset, len) in params {
+            let row = bytes.get(offset..offset + len).ok_or_else(|| ended("param bytes"))?;
+            owned.insert(name, row.to_vec());
+        }
+        return Ok(Qwen36ArtifactV1 { shape, store: Store::Mapped { map, directory }, params: owned, rope, residency: None });
+    };
+    let budget = usize::try_from(budget).map_err(|_| Qwen36Error::Residency("the residency budget does not fit a usize".into()))?;
+
+    // The two tiers, told apart by name (ADR-0112 Decision 3).
+    let mut experts: std::collections::HashMap<(usize, usize), ExpertExtentsV1> = std::collections::HashMap::new();
+    let mut expert_param_extents = BTreeMap::new();
+    let mut owned_params = BTreeMap::new();
+    for (name, offset, len) in params {
+        match expert_key_v1(&name) {
+            Some((key, _)) => {
+                let entry = experts.entry(key).or_default();
+                entry.params.push((name.clone(), offset, len));
+                entry.bytes += len;
+                expert_param_extents.insert(name, (offset, len));
+            }
+            None => {
+                owned_params.insert(name.clone(), map.read_u8_at(offset, len).map_err(|e| unreadable(&name, e))?);
+            }
+        }
+    }
+    let mut pinned_extents = Vec::new();
+    for (name, offset, len) in &tensors {
+        match expert_key_v1(name) {
+            Some((key, _)) => {
+                let entry = experts.entry(key).or_default();
+                entry.tensors.push((name.clone(), *offset, *len));
+                entry.bytes += len;
+            }
+            None if name == "token_embd.weight" => {}
+            None => pinned_extents.push((name.clone(), *offset, *len)),
+        }
+    }
+    let expert_bytes = experts.values().map(|e| e.bytes).max().unwrap_or(0);
+    let expert_layers = experts.keys().map(|(layer, _)| *layer).collect::<std::collections::BTreeSet<_>>().len();
+    let pinned_bytes: usize = pinned_extents.iter().map(|(_, _, len)| *len).sum();
+    let one_token = expert_bytes.saturating_mul(shape.experts_per_token).saturating_mul(expert_layers);
+    let floor = pinned_bytes.saturating_add(one_token);
+    if budget < floor {
+        return Err(Qwen36Error::Residency(format!(
+            "a resident budget of {budget} bytes is below this class's floor of {floor}: the always-set is {pinned_bytes} bytes and \
+             one token's routed experts are {one_token} ({} experts of {expert_bytes} bytes in each of {expert_layers} layers); the \
+             smallest budget this class runs in is {floor} (ADR-0112 Decision 3)",
+            shape.experts_per_token
+        )));
     }
 
-    Ok(Qwen36ArtifactV1 { shape, store: Store::Mapped { map, directory }, params, rope })
+    // The always-set, read once — in parallel, because the reads are the whole cost of opening
+    // under a budget and the device has a queue.
+    let pinned: std::collections::HashMap<String, std::sync::Arc<Vec<i8>>> = pinned_extents
+        .par_iter()
+        .map(|(name, offset, len)| {
+            map.read_i8_at(*offset, *len).map(|codes| (name.clone(), std::sync::Arc::new(codes))).map_err(|e| unreadable(name, e))
+        })
+        .collect::<Result<_, _>>()?;
+
+    let residency = Qwen36ResidencyV1 {
+        budget,
+        pinned_bytes,
+        pinned,
+        experts,
+        expert_param_extents,
+        expert_bytes,
+        expert_layers,
+        experts_per_token: shape.experts_per_token,
+        inner: std::sync::Mutex::new(ResidencyInnerV1 {
+            held: std::collections::HashMap::new(),
+            order: std::collections::VecDeque::new(),
+            bytes: 0,
+            hits: 0,
+            misses: 0,
+            evictions: 0,
+            bytes_read: pinned_bytes as u64,
+        }),
+    };
+    Ok(Qwen36ArtifactV1 { shape, store: Store::Mapped { map, directory }, params: owned_params, rope, residency: Some(residency) })
 }
 
 /// The parameter store a writer needs, taken out of an in-memory artifact.
@@ -1819,7 +2240,7 @@ mod tests {
         let mut writer =
             Qwen36Writer::create(&path, &owned.shape, &owned.rope, owned.params_map(), plan.clone()).expect("the file is created");
         for (name, _) in &plan {
-            writer.push(name, owned.tensor(name).expect("present")).expect("the tensor is appended");
+            writer.push(name, &owned.tensor(name).expect("present")).expect("the tensor is appended");
         }
         let written = writer.finish().expect("the plan is filled");
         assert_eq!(written, owned.weight_bytes());
@@ -1860,7 +2281,7 @@ mod tests {
             owned.tensor_names().iter().map(|n| (n.to_string(), owned.tensor(n).expect("present").len())).collect();
         let mut writer = Qwen36Writer::create(&path, &owned.shape, &owned.rope, owned.params_map(), plan.clone()).expect("created");
         for (name, _) in &plan {
-            writer.push(name, owned.tensor(name).expect("present")).expect("appended");
+            writer.push(name, &owned.tensor(name).expect("present")).expect("appended");
         }
 
         // A measured value for one row, the same width as the placeholder.
@@ -1895,7 +2316,7 @@ mod tests {
             owned.tensor_names().iter().map(|n| (n.to_string(), owned.tensor(n).expect("present").len())).collect();
         let mut writer = Qwen36Writer::create(&path, &owned.shape, &owned.rope, owned.params_map(), plan.clone()).expect("created");
         for (name, _) in &plan {
-            writer.push(name, owned.tensor(name).expect("present")).expect("appended");
+            writer.push(name, &owned.tensor(name).expect("present")).expect("appended");
         }
         writer.finish().expect("closed");
         let mapped = open_artifact(&path).expect("opens");
@@ -1915,7 +2336,7 @@ mod tests {
             owned.tensor_names().iter().map(|n| (n.to_string(), owned.tensor(n).expect("present").len())).collect();
         let mut writer = Qwen36Writer::create(&path, &owned.shape, &owned.rope, owned.params_map(), plan.clone()).expect("created");
         for (name, _) in &plan {
-            writer.push(name, owned.tensor(name).expect("present")).expect("appended");
+            writer.push(name, &owned.tensor(name).expect("present")).expect("appended");
         }
         let mut patch = BTreeMap::new();
         patch.insert("blk.0.not_a_row.a16".to_string(), vec![0u8; A16QuantParams::WIRE_BYTES]);
@@ -1935,7 +2356,7 @@ mod tests {
 
         let mut writer = Qwen36Writer::create(&path, &owned.shape, &owned.rope, owned.params_map(), plan.clone()).expect("created");
         // Out of order.
-        assert!(writer.push(&plan[1].0, owned.tensor(&plan[1].0).expect("present")).is_err());
+        assert!(writer.push(&plan[1].0, &owned.tensor(&plan[1].0).expect("present")).is_err());
         // Right name, wrong length.
         assert!(writer.push(&plan[0].0, &[0i8]).is_err());
         // And a file that is not filled does not close.
@@ -1959,5 +2380,165 @@ mod tests {
         let engine = Qwen36Engine::new(&stripped);
         let mut cache = Qwen36Cache::new(&stripped.shape);
         assert_eq!(engine.forward_token(&mut cache, 1, 0), Err(Qwen36Error::MissingTensor("blk.0.linear_q.weight".to_string())));
+    }
+
+    /// Write an owned fixture to a `.palwq36` in the temp dir, the way the round-trip test does.
+    fn written(owned: &Qwen36ArtifactV1, tag: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("misaka-q36-{tag}-{}.palwq36", std::process::id()));
+        let plan: Vec<(String, usize)> =
+            owned.tensor_names().iter().map(|n| (n.to_string(), owned.tensor(n).expect("present").len())).collect();
+        let mut writer = Qwen36Writer::create(&path, &owned.shape, &owned.rope, owned.params_map(), plan.clone()).expect("created");
+        for (name, _) in &plan {
+            writer.push(name, &owned.tensor(name).expect("present")).expect("appended");
+        }
+        writer.finish().expect("closed");
+        path
+    }
+
+    /// How many positions the residency tests walk: enough for a fifth of the fixture's experts
+    /// to be exhausted and evicted, inside the fixture's 32-position rotary table.
+    const RUN_POSITIONS: usize = 24;
+
+    /// `RUN_POSITIONS` positions through an artifact, the last logit row returned; the
+    /// residency's numbers after every token handed to `check`, so a test can hold the budget at
+    /// every step rather than only at the end.
+    fn run_checked(a: &Qwen36ArtifactV1, mut check: impl FnMut(usize, Option<Qwen36ResidencyStatsV1>)) -> Vec<i32> {
+        let engine = Qwen36Engine::new(a);
+        let mut cache = Qwen36Cache::new(&a.shape);
+        let mut last = Vec::new();
+        for position in 0..RUN_POSITIONS {
+            last = engine.forward_token(&mut cache, (position * 7 + 3) % a.shape.vocab, position).expect("completes");
+            check(position, a.residency_stats());
+        }
+        last
+    }
+
+    /// **ADR-0112's ratio: an artifact held within a fifth of its weight bytes computes what an
+    /// owned one computes, token for token, and never holds more than its budget.** The fixture
+    /// routes 4 of 256 experts a layer over 4 layers (the class's own count; at the fixture's
+    /// width the always-set is a larger share than the class's, so fewer experts would put a
+    /// fifth under the floor). A fifth of it holds the always-set and a sixth of the experts, and
+    /// twenty-four tokens miss and evict throughout. The floor — the tightest budget the class
+    /// runs in — computes the same rows with more evictions, and the page cache path, which is
+    /// the path before ADR-0112, still does too.
+    #[test]
+    fn a_budgeted_artifact_computes_what_an_owned_one_does_at_a_fifth_of_its_size() {
+        let owned = fixture(4, 256);
+        let path = written(&owned, "fifth");
+        let expected = run_checked(&owned, |_, stats| assert!(stats.is_none(), "an owned store has no residency"));
+
+        let fifth = open_artifact_with_residency(&path, Qwen36ResidencyPolicyV1::FifthOfTheWeights).expect("opens");
+        let opened = fifth.residency_stats().expect("budgeted");
+        assert_eq!(opened.budget_bytes, (owned.weight_bytes() as u64).div_ceil(QWEN36_RESIDENT_FRACTION_DENOMINATOR_V1));
+        let floor = fifth.residency_floor_bytes().expect("a floor");
+        assert!(opened.budget_bytes >= floor, "a fifth of this fixture ({}) is above its floor ({floor})", opened.budget_bytes);
+        assert!(opened.pinned_bytes > 0 && opened.bytes_read == opened.pinned_bytes, "the always-set was read at open: {opened:?}");
+        let got = run_checked(&fifth, |position, stats| {
+            let s = stats.expect("budgeted");
+            assert!(s.resident_expert_bytes <= s.expert_budget_bytes(), "position {position}: {s:?} is over its budget");
+        });
+        assert_eq!(got, expected, "a budgeted artifact must compute what an owned one computes");
+        let s = fifth.residency_stats().expect("budgeted");
+        assert!(s.misses > 0, "the experts the router chose were read on their first use: {s:?}");
+        assert!(s.hits + s.misses >= (RUN_POSITIONS * 4 * 4) as u64, "every routed expert of every token was looked up: {s:?}");
+        assert!(s.bytes_read > s.pinned_bytes, "the misses were read from the file: {s:?}");
+
+        // The floor: the tightest budget the class runs in holds at most one token's experts, and
+        // still computes the rows.
+        let tight = open_artifact_with_residency(&path, Qwen36ResidencyPolicyV1::Bytes(floor)).expect("the floor opens");
+        assert_eq!(
+            run_checked(&tight, |position, stats| {
+                let s = stats.expect("budgeted");
+                assert!(
+                    s.resident_expert_bytes <= s.token_expert_bytes,
+                    "position {position}: the floor holds one token's experts: {s:?}"
+                );
+            }),
+            expected,
+            "at the floor too"
+        );
+
+        let paged = open_artifact(&path).expect("opens");
+        assert!(paged.residency_stats().is_none(), "the page cache path has no loader");
+        assert_eq!(run_checked(&paged, |_, _| {}), expected, "and computes the same rows");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// A budget below the floor is refused at open, with the floor and both its terms in the
+    /// message — never opened and left to re-read what it just read.
+    #[test]
+    fn a_budget_below_the_floor_is_refused_by_name() {
+        let owned = fixture(2, 256);
+        let path = written(&owned, "floor");
+        let floor = open_artifact_with_residency(&path, Qwen36ResidencyPolicyV1::FifthOfTheWeights)
+            .expect("opens")
+            .residency_floor_bytes()
+            .expect("a floor");
+        match open_artifact_with_residency(&path, Qwen36ResidencyPolicyV1::Bytes(floor - 1)) {
+            Err(Qwen36Error::Residency(why)) => {
+                assert!(why.contains("floor") && why.contains(&floor.to_string()) && why.contains("always-set"), "{why}");
+            }
+            other => panic!("a budget below the floor must be refused by name, got {:?}", other.map(|_| ())),
+        }
+        assert!(open_artifact_with_residency(&path, Qwen36ResidencyPolicyV1::Bytes(floor)).is_ok(), "the floor itself opens");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// Under a budget: the embedding row read directly is the table's row, the root does not
+    /// depend on where the expert parameter rows live, and an expert read outside an admission
+    /// is admitted on the way — its parameter row a hit on the same holding.
+    #[test]
+    fn the_budgeted_paths_read_what_the_owned_ones_hold() {
+        let owned = fixture(2, 256);
+        let path = written(&owned, "paths");
+        let budgeted = open_artifact_with_residency(&path, Qwen36ResidencyPolicyV1::FifthOfTheWeights).expect("opens");
+        let d = owned.shape.d_model;
+        for token in [0usize, 1, 17, owned.shape.vocab - 1] {
+            assert_eq!(budgeted.embedding_row(token, d).unwrap(), owned.embedding_row(token, d).unwrap(), "row {token}");
+        }
+        assert_eq!(budgeted.artifact_root(), owned.artifact_root(), "one digest, whether the expert rows are owned or in the file");
+        assert_eq!(budgeted.residency_stats().unwrap().misses, 0, "nothing is admitted by a root pass or a row read");
+        let gate = "blk.1.ffn_expert.5_gate.weight";
+        assert_eq!(budgeted.tensor(gate).unwrap(), owned.tensor(gate).unwrap());
+        let s = budgeted.residency_stats().unwrap();
+        assert_eq!((s.misses, s.hits), (1, 0), "one miss admitted the expert: {s:?}");
+        assert_eq!(
+            budgeted.param_rows("blk.1.ffn_expert.5_silu.a16").unwrap(),
+            owned.param_rows("blk.1.ffn_expert.5_silu.a16").unwrap()
+        );
+        assert_eq!(budgeted.residency_stats().unwrap().hits, 1, "its parameter row is a hit on the same holding");
+        // Every tensor, whichever tier holds it — which walks all 512 routed experts through a
+        // budget that holds about 80 of them: the churn the run above cannot promise, because
+        // where a fixture's router goes is the fixture's business.
+        let before = budgeted.residency_stats().unwrap();
+        for name in owned.tensor_names() {
+            assert_eq!(budgeted.tensor(name).unwrap(), owned.tensor(name).unwrap(), "tensor {name}, whichever tier holds it");
+            let s = budgeted.residency_stats().unwrap();
+            assert!(s.resident_expert_bytes <= s.expert_budget_bytes(), "the walk never holds more than the budget: {s:?}");
+        }
+        let after = budgeted.residency_stats().unwrap();
+        let experts = 2 * 256;
+        let capacity = after.expert_budget_bytes() / after.token_expert_bytes.max(1) * 4 * 2;
+        assert!(after.misses - before.misses >= experts as u64 - 1, "every expert not already held was read: {after:?}");
+        assert!(after.evictions >= experts as u64 - capacity - 1, "what the budget could not hold was given back: {after:?}");
+        for name in owned.params_map().keys() {
+            assert_eq!(budgeted.param_rows(name).unwrap(), owned.param_rows(name).unwrap(), "row {name}");
+        }
+        // And after all that churn the forward pass still computes the owned store's rows.
+        assert_eq!(run_checked(&budgeted, |_, _| {}), run_checked(&owned, |_, _| {}), "the rows after the churn");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// The policy's arithmetic: a fifth rounds up, bytes are bytes, the page cache is none.
+    #[test]
+    fn the_residency_policy_arithmetic() {
+        assert_eq!(Qwen36ResidencyPolicyV1::FifthOfTheWeights.budget_for(35_727_649_280), Some(7_145_529_856));
+        assert_eq!(Qwen36ResidencyPolicyV1::FifthOfTheWeights.budget_for(11), Some(3));
+        assert_eq!(Qwen36ResidencyPolicyV1::Bytes(7).budget_for(100), Some(7));
+        assert_eq!(Qwen36ResidencyPolicyV1::PageCache.budget_for(100), None);
+        assert_eq!(expert_key_v1("blk.12.ffn_expert.255_down.weight.exp"), Some(((12, 255), "down.weight.exp")));
+        assert_eq!(expert_key_v1("blk.3.ffn_expert.7_silu.a16"), Some(((3, 7), "silu.a16")));
+        assert_eq!(expert_key_v1("blk.3.ffn_shared_expert_gate.weight"), None, "the shared expert is pinned");
+        assert_eq!(expert_key_v1("token_embd.weight"), None);
     }
 }

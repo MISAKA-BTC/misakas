@@ -89,8 +89,11 @@ impl ReadOnlyMap {
     /// `MADV_SEQUENTIAL`, not under `MADV_WILLNEED`, not with the block device's readahead
     /// window raised. Measured on the same device, same file, same day: 6 MB/s through the map,
     /// 68 MB/s through a default `read()`, 1.3 GB/s through reads this size. A whole-file pass
-    /// belongs on this path; per-token expert access stays on the map, whose resident-set
-    /// behavior is the reason the map exists.
+    /// belongs on this path — and so, since ADR-0112, does every weight a forward pass reads:
+    /// per-token expert access stayed on the map for a while on the theory that the page cache's
+    /// resident-set behaviour was the reason the map existed, and the fleet's draws measured what
+    /// that theory cost (12.8 GiB through three million faults a draw, twenty minutes). The map's
+    /// reason now is the header and the embedding row; the weights go through `read_i8_at`.
     #[cfg(unix)]
     pub fn read_exact_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
         use std::os::unix::fs::FileExt;
@@ -109,6 +112,40 @@ impl ReadOnlyMap {
     pub fn read_exact_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
         let _ = (offset, buf);
         Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "positional reads need the POSIX mapping path"))
+    }
+
+    /// `len` `i8` values at `offset`, read through the file descriptor into memory this process
+    /// owns — the residency loader's read (ADR-0112 Decision 1). The bytes are the mapping's
+    /// bytes; what differs is that they arrive through one read sized to the tensor rather than
+    /// through page faults sized to a page, which on the fleet's disks is the difference between
+    /// 845 MB/s and 11 MB/s. A range that leaves the file is an error with the numbers in it,
+    /// for the reason `i8_slice` says `None`: the offsets are an artifact's directory, which is
+    /// data.
+    pub fn read_i8_at(&self, offset: usize, len: usize) -> std::io::Result<Vec<i8>> {
+        if offset.checked_add(len).is_none_or(|end| end > self.len) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                format!("{len} bytes at {offset} leave a {}-byte file", self.len),
+            ));
+        }
+        let mut out = vec![0i8; len];
+        // SAFETY: `i8` and `u8` share a layout, and the slice covers exactly the vector's `len`.
+        let bytes: &mut [u8] = unsafe { std::slice::from_raw_parts_mut(out.as_mut_ptr() as *mut u8, len) };
+        self.read_exact_at(offset as u64, bytes)?;
+        Ok(out)
+    }
+
+    /// [`Self::read_i8_at`] for bytes that are bytes — a parameter row, a header.
+    pub fn read_u8_at(&self, offset: usize, len: usize) -> std::io::Result<Vec<u8>> {
+        if offset.checked_add(len).is_none_or(|end| end > self.len) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                format!("{len} bytes at {offset} leave a {}-byte file", self.len),
+            ));
+        }
+        let mut out = vec![0u8; len];
+        self.read_exact_at(offset as u64, &mut out)?;
+        Ok(out)
     }
 
     /// Tell the kernel the access pattern is random, which is what a router that picks eight of

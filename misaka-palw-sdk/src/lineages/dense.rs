@@ -146,7 +146,8 @@ impl PalwModelLineageV1 for DenseLineageV1 {
         true
     }
 
-    fn load(&self, path: &Path) -> Result<PalwLoadedArtifactV1, String> {
+    // An owned container: the whole file is read, and the residency policy has nothing to decide.
+    fn load(&self, path: &Path, _residency: crate::lineage::PalwWeightResidencyV1) -> Result<PalwLoadedArtifactV1, String> {
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let artifact = decode_artifact_file_v1(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
         Ok(holding_from_artifact(Arc::new(artifact), Some(path.to_path_buf())))
