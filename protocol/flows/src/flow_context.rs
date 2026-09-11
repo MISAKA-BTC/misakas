@@ -292,9 +292,10 @@ mod tests {
         use kaspa_consensus_core::network::{NetworkId, NetworkType};
         const ADR_0095: u64 = 2400;
         const CRESCENDO_T11: u64 = 2_125_000;
-        // The 2400 day's builds: ADR-0114's 3500 was scheduled later and is not theirs.
+        // The 2400 day's builds: ADR-0114's 3500 and the audit's 4000 were scheduled later and are not theirs.
         let mut upgraded = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11));
         upgraded.palw_model_leg_v2 = None;
+        upgraded.palw_audit_2026_09_11 = None;
         let mut un_upgraded = upgraded.clone();
         un_upgraded.palw_model_benefits = None;
 
