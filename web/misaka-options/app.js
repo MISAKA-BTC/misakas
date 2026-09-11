@@ -414,7 +414,7 @@ const CURVE_DEFAULTS = {
   buybackPermille: 50n,                       // PALW_MODEL_BUYBACK_PERMILLE_V1 (ADR-0091: 5 % of a block's reward)
   legPermille: 10n,                           // PALW_MODEL_REGISTRANT_PERMILLE_V1 (the owner's leg since ADR-0088)
 };
-// ADR-0112: the owner's leg is 5 % past `palw_model_leg_v2`. The site never assumes which side of that
+// ADR-0114: the owner's leg is 5 % past `palw_model_leg_v2`. The site never assumes which side of that
 // height the chain is on: the node serves the schedule in force with every market row (getPalwModelMarket
 // v6: burnPermille, legPermille, legV2ActivationDaa) and the AMM's constants() answer under it too.
 const LEG_V2_PERMILLE = 50n;
@@ -539,10 +539,10 @@ function normMarket(src, source) {
     // ADR-0091: both lanes serve these; a node from before it serves neither (null = not served)
     buybackSompi: src.buybackSompi != null ? bi(src.buybackSompi) : null, retiredUnits: src.retiredUnits != null ? bi(src.retiredUnits) : null,
     classStatus: src.classStatus || '', source, at: Date.now(),
-    // ADR-0112 (wRPC v6): the height the owner's leg becomes 5 % at, 0 when none is scheduled
+    // ADR-0114 (wRPC v6): the height the owner's leg becomes 5 % at, 0 when none is scheduled
     legV2Daa: src.legV2ActivationDaa != null ? bi(src.legV2ActivationDaa) : 0n,
   };
-  // ADR-0112 (wRPC v6): the fee schedule in force at the node's tip, served with the row
+  // ADR-0114 (wRPC v6): the fee schedule in force at the node's tip, served with the row
   if (src.burnPermille != null && src.legPermille != null && (bi(src.burnPermille) > 0n || bi(src.legPermille) > 0n)) m.consts = { burnPermille: bi(src.burnPermille), legPermille: bi(src.legPermille) };
   m.seeded = curve.seeded(m);        // reserve > 0: the same guard the fold's quote applies
   m.opened = m.seeded;
@@ -1194,7 +1194,7 @@ async function refreshChainInfo() {
   try {
     const daa = await evm.chainDaa();
     db.armed = daa != null; db.evmDaa = daa;
-    // re-read every few minutes: ADR-0112's leg changes at a height, and constants() answers under it
+    // re-read every few minutes: ADR-0114's leg changes at a height, and constants() answers under it
     if (db.armed && (!db.constsFromChain || Date.now() - (db.constsFromChain.at || 0) > 300000)) {
       const r = await evm.call(ADDR.AMM, ABI.call(SIG.constants));
       const w = ABI.words(r);
@@ -2388,8 +2388,8 @@ async function pageStore(arg) {
           <div class="r"><span>How far it moves the price</span><span class="v ${impact < -5 ? 'down' : ''}">${fmtPct(impact)}</span></div>`.s;
       }
       rows += h`<div class="r dim tiny"><span>Quoted by</span><span>${q.source === 'node' ? 'the node (AMM precompile)' : 'local arithmetic on the market row'}</span></div>`.s;
-      // ADR-0112: a scheduled change of the owner's leg, said before it bites
-      if (m && m.legV2Daa > 0n && fc.legPermille !== LEG_V2_PERMILLE) rows += h`<div class="r warn tiny"><span>From DAA ${fmtInt(m.legV2Daa)} the owner's fee on every join and leave is ${pctOf(LEG_V2_PERMILLE)} (ADR-0112); an order settled after that height pays it.</span></div>`.s;
+      // ADR-0114: a scheduled change of the owner's leg, said before it bites
+      if (m && m.legV2Daa > 0n && fc.legPermille !== LEG_V2_PERMILLE) rows += h`<div class="r warn tiny"><span>From DAA ${fmtInt(m.legV2Daa)} the owner's fee on every join and leave is ${pctOf(LEG_V2_PERMILLE)} (ADR-0114); an order settled after that height pays it.</span></div>`.s;
     } else if (q && q.invalid) rows = h`<div class="err">${q.invalid}</div>`.s;
     else rows = h`<div class="dim small">${entry.side === 'buy' ? 'Enter how many memberships to see what they cost.' : 'Enter how many memberships to give up.'} ${m && price != null ? 'One membership is ' + fmtPrice(price) + ' MSK right now.' : ''}</div>`.s;
     box.innerHTML = rows;
@@ -2884,7 +2884,7 @@ async function pagePortfolio() {
 
 function pageDocs() {
   const c = db.constsFromChain || CURVE_DEFAULTS;
-  const fees = curve.consts(null);   // the schedule the chain answers under now (ADR-0112), else the launch one
+  const fees = curve.consts(null);   // the schedule the chain answers under now (ADR-0114), else the launch one
   const seedMin = c.seedMinSompi || CURVE_DEFAULTS.seedMinSompi, supply = c.supplyUnits || CURVE_DEFAULTS.supplyUnits;
   const first = curve.price(curve.seed(seedMin, { supplyUnits: supply }));
   $('#main').innerHTML = h`<div class="docs">
@@ -2927,11 +2927,11 @@ function pageDocs() {
     <h2>Fees</h2>
     <table><tr><th>on every MSK leg of a join or a leave</th><th>share</th><th>where it goes</th></tr>
       <tr><td>burn</td><td>${pctOf(fees.burnPermille)}</td><td>destroyed; supply only ever falls</td></tr>
-      <tr><td>the model's owner</td><td>${pctOf(fees.legPermille)}</td><td>the line's owner bond (shared with an adopted contributor when the owner says so); burned for an unowned genesis line${fees.legPermille === LEG_V2_PERMILLE ? '' : ' — 5 % once ADR-0112\'s height is reached on this network'}</td></tr>
+      <tr><td>the model's owner</td><td>${pctOf(fees.legPermille)}</td><td>the line's owner bond (shared with an adopted contributor when the owner says so); burned for an unowned genesis line${fees.legPermille === LEG_V2_PERMILLE ? '' : ' — 5 % once ADR-0114\'s height is reached on this network'}</td></tr>
       <tr><td>net</td><td>${pctOf(1000n - fees.burnPermille - fees.legPermille)}</td><td>into the buy-back reserve on a join; paid to the member on a leave</td></tr>
       <tr><td>the opening deposit</td><td>none</td><td>it is the reserve, not a purchase: every sompi of it enters the curve</td></tr>
       <tr><td>the mining slice</td><td>none</td><td>reserve too: 5 % of a block's reward, whole; what it buys is retired, not held (ADR-0091)</td></tr></table>
-    <p>Joining and then leaving therefore costs ${pctOf(2n * (fees.burnPermille + fees.legPermille))} plus what your own move did to the price (the legs below are the ${pctOf(CURVE_DEFAULTS.legPermille)} owner's leg the chain was launched with; past ADR-0112's height the owner takes ${pctOf(LEG_V2_PERMILLE)} and a round trip leaves about 20 % behind — 100 MSK in, 80.89 MSK back). Worked from a store opened with exactly ${fmtMsk(seedMin, 0)} MSK (first price ${fmtPrice(first)} MSK): a join of 1,000 MSK burns 50, pays 10 to the owner, puts 940 in the reserve and releases 4,656 memberships (price 0.20377757); a second 1,000 MSK join releases 4,570 more (reserve 101,880); leaving with all 9,226 pays 1,879.88976 MSK gross and 1,767.0963744 MSK net, puts 500,000 memberships back and leaves the reserve at 100,000.11024 MSK, above the deposit. A join of 0.1 MSK releases nothing; 0.22 MSK releases exactly one. The <a href="?selftest=1#/docs">self-test</a> checks this site's arithmetic against those golden numbers from the chain's own tests.</p>
+    <p>Joining and then leaving therefore costs ${pctOf(2n * (fees.burnPermille + fees.legPermille))} plus what your own move did to the price (the legs below are the ${pctOf(CURVE_DEFAULTS.legPermille)} owner's leg the chain was launched with; past ADR-0114's height the owner takes ${pctOf(LEG_V2_PERMILLE)} and a round trip leaves about 20 % behind — 100 MSK in, 80.89 MSK back). Worked from a store opened with exactly ${fmtMsk(seedMin, 0)} MSK (first price ${fmtPrice(first)} MSK): a join of 1,000 MSK burns 50, pays 10 to the owner, puts 940 in the reserve and releases 4,656 memberships (price 0.20377757); a second 1,000 MSK join releases 4,570 more (reserve 101,880); leaving with all 9,226 pays 1,879.88976 MSK gross and 1,767.0963744 MSK net, puts 500,000 memberships back and leaves the reserve at 100,000.11024 MSK, above the deposit. A join of 0.1 MSK releases nothing; 0.22 MSK releases exactly one. The <a href="?selftest=1#/docs">self-test</a> checks this site's arithmetic against those golden numbers from the chain's own tests.</p>
     <h2>Listing a model</h2>
     <p>The <a href="#/add">List a model</a> page is the checklist: (1) register the class from a node that holds the artifact (a bond, its key and a fee; not something a browser can do), (2) open the store with at least ${fmtMsk(seedMin, 0)} MSK, (3) approval, which is the class reaching <code>Active</code> at its activation DAA and its lanes being certified (ADR-0054, ADR-0075; a clock and a court, not a vote), (4) members join — and the owner declares what their membership gets them (ADR-0095). The store may be opened before the approval; joins wait for <code>Active</code>.</p>
     <h2>Two doors, one store</h2>
@@ -3618,16 +3618,16 @@ function selfTestReport() {
   const one = curve.buyQuote(m0, (22n * MSK) / 100n);
   eq('P3: a buy of 0.22 MSK releases exactly one', one && one.unitsOut, 1n);
   const rb = curve.buyQuote(m0, 100n * MSK), rs = curve.sellQuote(rb.after, rb.unitsOut);
-  // ADR-0112: the same table under the 5 % owner leg — the chain's palw_model_market_v1 goldens
+  // ADR-0114: the same table under the 5 % owner leg — the chain's palw_model_market_v1 goldens
   const V2 = Object.assign({}, CURVE_DEFAULTS, { legPermille: 50n });
   const v2b1 = curve.buyQuote(m0, 1000n * MSK, V2);
-  eq('ADR-0112: a 1,000 MSK join burns 50, pays the owner 50, puts 900 in', [v2b1.fees.burn, v2b1.fees.leg, v2b1.fees.net].join('/'), [50n * MSK, 50n * MSK, 900n * MSK].join('/'));
-  eq('ADR-0112: …and releases 4,459 memberships (price 20,361,584 sompi)', v2b1.unitsOut + '/' + v2b1.priceAfter, '4459/20361584');
+  eq('ADR-0114: a 1,000 MSK join burns 50, pays the owner 50, puts 900 in', [v2b1.fees.burn, v2b1.fees.leg, v2b1.fees.net].join('/'), [50n * MSK, 50n * MSK, 900n * MSK].join('/'));
+  eq('ADR-0114: …and releases 4,459 memberships (price 20,361,584 sompi)', v2b1.unitsOut + '/' + v2b1.priceAfter, '4459/20361584');
   const v2b2 = curve.buyQuote(v2b1.after, 1000n * MSK, V2);
   const v2s = curve.sellQuote(v2b2.after, v2b1.unitsOut + v2b2.unitsOut, V2);
-  eq('ADR-0112: leaving with all 8,840: gross 179,982,400,000, net 161,984,160,000', v2b2.unitsOut + '/' + v2s.fees.gross + '/' + v2s.fees.net, '4381/179982400000/161984160000');
+  eq('ADR-0114: leaving with all 8,840: gross 179,982,400,000, net 161,984,160,000', v2b2.unitsOut + '/' + v2s.fees.gross + '/' + v2s.fees.net, '4381/179982400000/161984160000');
   const v2rt = curve.sellQuote(curve.buyQuote(m0, 100n * MSK, V2).after, curve.buyQuote(m0, 100n * MSK, V2).unitsOut, V2);
-  eq('ADR-0112: 100 MSK in and straight out returns 80.892738 MSK (a fifth goes to fees)', v2rt.fees.net, 8089273800n);
+  eq('ADR-0114: 100 MSK in and straight out returns 80.892738 MSK (a fifth goes to fees)', v2rt.fees.net, 8089273800n);
   eq('round trip returns at most 0.94² of the gross', rs.fees.net <= (94n * 94n * MSK) / 100n && rs.fees.net > 80n * MSK, true);
   const closed = Object.assign({}, b1.after, { closedToBuys: true });
   eq('a closed market refuses buys', curve.buyQuote(closed, 10n * MSK), null); eq('a closed market honours sells', !!curve.sellQuote(closed, b1.unitsOut), true);

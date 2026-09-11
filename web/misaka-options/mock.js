@@ -47,7 +47,7 @@ const MOCK_QS = new URLSearchParams(location.search);
 const SLOW_BLOCKS = Math.max(0, Number(MOCK_QS.get('mockslow') || 0) | 0);
 const DROP_ONCE = MOCK_QS.get('mockdrop') === '1';
 const MOCK_BASE_FEE = 1000000000n;
-// ?mocklegv2=1: the chain past ADR-0112's height (the owner's leg is 5 %); the mock's own fold stays the site's curve
+// ?mocklegv2=1: the chain past ADR-0114's height (the owner's leg is 5 %); the mock's own fold stays the site's curve
 const MOCK_LEG_V2 = MOCK_QS.get('mocklegv2') === '1';
 const feesC = () => Object.assign({}, C, { legPermille: MOCK_LEG_V2 ? 50n : C.legPermille });   // the mock fold's schedule
 const WALLET_KINDS = (MOCK_QS.get('mockwallet') || 'injected').toLowerCase().split(',').map((k) => k.trim()).filter((k) => k && k !== 'none');
