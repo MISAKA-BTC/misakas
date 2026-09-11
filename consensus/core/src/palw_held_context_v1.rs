@@ -261,7 +261,11 @@ mod tests {
     #[test]
     fn the_class_width_is_the_wires_and_never_past_the_context() {
         use crate::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7};
-        let at = |n_ctx: u32| palw_held_interval_positions_v1(&qwen25_a16_artifact_row_profile_v7(PalwQwen25GeometryV1 { n_ctx, ..QWEN25_1_5B }).unwrap());
+        let at = |n_ctx: u32| {
+            palw_held_interval_positions_v1(
+                &qwen25_a16_artifact_row_profile_v7(PalwQwen25GeometryV1 { n_ctx, ..QWEN25_1_5B }).unwrap(),
+            )
+        };
         assert_eq!(at(1 << 21), 2_048, "the wire binds at 2M");
         assert_eq!(at(512), 128, "the draw's k binds a narrow context: four intervals cover it");
         assert!(at(1 << 21).is_power_of_two());

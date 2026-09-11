@@ -104,8 +104,7 @@ pub const PALW_STEP_MAX_NODES_PER_TABLE: usize = 64;
 /// post` at the caps `validate_shape` already enforces. It is the per-position budget that replaces
 /// `n_ctx × layer_count` for a class under the held map: what a validating node walks per position,
 /// with no factor of the context.
-pub const PALW_STEP_MAX_NODES_PER_POSITION: u64 =
-    (PALW_STEP_MAX_NODES_PER_TABLE as u64) * (2 + PALW_STEP_MAX_LAYERS as u64);
+pub const PALW_STEP_MAX_NODES_PER_POSITION: u64 = (PALW_STEP_MAX_NODES_PER_TABLE as u64) * (2 + PALW_STEP_MAX_LAYERS as u64);
 /// Tile length bounds (elements per committed tile).
 /// Lowered 16 → 8 → **4** (2026-08-26/27), each time by the same arithmetic: a step's Decision-B
 /// opening is `tile × in_w` bytes and the whole close must ride one ~80 KiB carrier, so the widest
@@ -1806,7 +1805,12 @@ pub(crate) fn canonical_step_coordinates_walked_v1(
                 }
                 let tiles = tiles_for(node_out_len(node, kv_len), node.tile_len);
                 if cursor < tiles {
-                    return Some(PalwStepCoordinateV1 { call_index: call as u32, node_slot: slot, position: p as u32, tile_index: cursor as u32 });
+                    return Some(PalwStepCoordinateV1 {
+                        call_index: call as u32,
+                        node_slot: slot,
+                        position: p as u32,
+                        tile_index: cursor as u32,
+                    });
                 }
                 cursor -= tiles;
             }
@@ -3072,7 +3076,11 @@ mod tests {
                     assert_eq!(got, want, "{name} at prefill={prefill} decode={decode} leaf={leaf}");
                     if let Some(coord) = got {
                         assert_eq!(canonical_step_leaf_index(&profile, &ctx, &coord), Some(leaf), "{name}: the inverse of {coord:?}");
-                        assert_eq!(canonical_step_leaf_index_walked_v1(&profile, &ctx, &coord), Some(leaf), "{name}: the walked inverse");
+                        assert_eq!(
+                            canonical_step_leaf_index_walked_v1(&profile, &ctx, &coord),
+                            Some(leaf),
+                            "{name}: the walked inverse"
+                        );
                         for off in [
                             PalwStepCoordinateV1 { tile_index: coord.tile_index + 1_000_000, ..coord },
                             PalwStepCoordinateV1 { node_slot: profile.global_node_count(), ..coord },
@@ -3096,7 +3104,8 @@ mod tests {
     /// A graph-v5 dense row re-declared under the held map (ADR-0103 Decision 3) at `n_ctx`: the
     /// only profile shape the per-position budget admits past the product ceiling.
     fn held_dense_profile(n_ctx: u32) -> PalwShapeProfileV3 {
-        let mut p = crate::palw_qwen25_profile::qwen25_a16_profile_v5(crate::palw_qwen25_profile::QWEN25_1_5B_A16).expect("the v5 row");
+        let mut p =
+            crate::palw_qwen25_profile::qwen25_a16_profile_v5(crate::palw_qwen25_profile::QWEN25_1_5B_A16).expect("the v5 row");
         p.state_chunk_map_id = crate::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v4();
         p.n_ctx = n_ctx;
         p
@@ -3129,7 +3138,10 @@ mod tests {
         // at most 34 + 2 probes; every table is walked at most once more.
         let bound = 36 * 3 * nodes + 4 * nodes;
         for &(n_ctx, forward, back, total) in &observed {
-            assert!(forward <= bound && back <= bound, "n_ctx {n_ctx}: {forward}/{back} visits against a context-free bound of {bound}");
+            assert!(
+                forward <= bound && back <= bound,
+                "n_ctx {n_ctx}: {forward}/{back} visits against a context-free bound of {bound}"
+            );
             let walked = total.saturating_mul(1); // the walk's own cost was at least one visit a leaf's slot
             assert!(n_ctx < 1 << 21 || walked > 1 << 30, "the replaced walk at 2M would have visited {walked} leaves' slots");
         }

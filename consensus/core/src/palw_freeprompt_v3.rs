@@ -807,7 +807,9 @@ impl PalwFreePromptParamsV3 {
     /// COMPLETE_V4 set and `Params::validate_palw_v2` only with the fence armed from genesis.
     pub fn with_held_prompt_cap_v1(mut self, max_prompt_tokens: u32) -> Result<Self, PalwFpV3Error> {
         if max_prompt_tokens == 0 || max_prompt_tokens > PALW_FP_HELD_MAX_PROMPT_TOKENS_V1 {
-            return Err(PalwFpV3Error::InvalidParams("a held network's max_prompt_tokens must be 1..=PALW_FP_HELD_MAX_PROMPT_TOKENS_V1"));
+            return Err(PalwFpV3Error::InvalidParams(
+                "a held network's max_prompt_tokens must be 1..=PALW_FP_HELD_MAX_PROMPT_TOKENS_V1",
+            ));
         }
         self.max_prompt_tokens = max_prompt_tokens;
         Ok(self)

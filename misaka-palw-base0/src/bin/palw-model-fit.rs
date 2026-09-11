@@ -38,7 +38,9 @@ use kaspa_consensus_core::palw_model_fit_v1::{
 };
 use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
 use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7};
-use kaspa_consensus_core::palw_qwen36_profile::{PalwQwen36GeometryV1, QWEN36_35B_A3B, qwen36_artifact_row_profile_v5, qwen36_profile_v7};
+use kaspa_consensus_core::palw_qwen36_profile::{
+    PalwQwen36GeometryV1, QWEN36_35B_A3B, qwen36_artifact_row_profile_v5, qwen36_profile_v7,
+};
 use kaspa_consensus_core::palw_step::{PalwShapeProfileV3, PalwStepError};
 
 type Build = fn(u32) -> Result<PalwShapeProfileV3, PalwStepError>;
@@ -146,7 +148,10 @@ impl Ruleset {
     /// The court, the id form and the held regime's two fences a registration of `profile` would
     /// be judged under at `daa` — `palw_admission_shape_at_v1`, the one spelling the acceptance
     /// path uses.
-    fn shape(&self, profile: &PalwShapeProfileV3) -> Result<(Option<PalwKaryCourtV1>, PalwPromptIdsFormV1, PalwHeldAdmissionV1), String> {
+    fn shape(
+        &self,
+        profile: &PalwShapeProfileV3,
+    ) -> Result<(Option<PalwKaryCourtV1>, PalwPromptIdsFormV1, PalwHeldAdmissionV1), String> {
         let shape = palw_admission_shape_at_v1(&self.params, self.bundle(), profile, self.daa)?;
         Ok((shape.court, self.params.palw_prompt_ids_form_at(self.daa), shape.held))
     }
@@ -170,7 +175,9 @@ fn args() -> Ruleset {
             "--ladder-bits" => {
                 ladder_bits = it.next().and_then(|v| v.parse().ok()).unwrap_or_else(|| panic!("--ladder-bits needs a number"))
             }
-            other => panic!("unknown argument {other:?}\nusage: palw-model-fit [--preset rc|devnet|held] [--daa <score>] [--ladder-bits <n>]"),
+            other => panic!(
+                "unknown argument {other:?}\nusage: palw-model-fit [--preset rc|devnet|held] [--daa <score>] [--ladder-bits <n>]"
+            ),
         }
     }
     match preset.as_str() {

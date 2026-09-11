@@ -19,8 +19,8 @@ use kaspa_consensus_core::palw_class_admission_v2::{
 };
 use kaspa_consensus_core::palw_mode_v2::{PalwConsensusMode, PalwConsensusParamsV2};
 use kaspa_consensus_core::palw_model_fit_v1::{
-    PalwFitOrderV1, PalwFitRegimeV1, PalwFitVerdictV1, PalwFitWallV1, PalwHeldTermV1, PalwModelFitReportV1, palw_geometry_ceiling_fit_v1,
-    palw_model_fit_v2,
+    PalwFitOrderV1, PalwFitRegimeV1, PalwFitVerdictV1, PalwFitWallV1, PalwHeldTermV1, PalwModelFitReportV1,
+    palw_geometry_ceiling_fit_v1, palw_model_fit_v2,
 };
 use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
 use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7};
@@ -66,7 +66,10 @@ fn dense_v7(n_ctx: u32) -> PalwShapeProfileV3 {
 
 /// A registration of `profile` whose canonical job meets ADR-0077 Decision 14's floor exactly
 /// (`n_ctx / 8` positions), counted against `ladder` as the gate recounts it.
-fn registration(profile: &PalwShapeProfileV3, ladder: u64) -> (PalwJobContextV2, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2) {
+fn registration(
+    profile: &PalwShapeProfileV3,
+    ladder: u64,
+) -> (PalwJobContextV2, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2) {
     let decode = 2u32;
     let prefill = (profile.n_ctx / 8).max(2);
     let canonical = PalwJobContextV2 {
@@ -107,8 +110,20 @@ fn registration(profile: &PalwShapeProfileV3, ladder: u64) -> (PalwJobContextV2,
 fn gate(params: &Params, profile: &PalwShapeProfileV3, shape: PalwAdmissionShapeV1) -> Result<(), PalwClassAdmissionError> {
     let b = bundle(params);
     let (canonical, object) = registration(profile, b.court.max_step_leaf_count());
-    verify_class_admission_v8(b, profile, &canonical, &object, &[], &[], shape.ladder, shape.court, false, shape.token_lift, shape.held)
-        .map(|_| ())
+    verify_class_admission_v8(
+        b,
+        profile,
+        &canonical,
+        &object,
+        &[],
+        &[],
+        shape.ladder,
+        shape.court,
+        false,
+        shape.token_lift,
+        shape.held,
+    )
+    .map(|_| ())
 }
 
 /// **§1.1, pinned as the limitations it lists** (Invariant 8's first half). On both shipped
@@ -125,7 +140,8 @@ fn section_1_1_is_what_the_shipped_presets_read() {
         assert!(params.palw_held_context.is_none(), "{name}: the fence is dormant on every shipped preset (Invariant 10)");
         let report = fit(&params, &dense_v5, PalwFitRegimeV1::Shipped);
         assert!(report.admitted(), "{name}: the shipped row is admitted at 512 — {:?}", report.refusing_walls());
-        for wall in [PalwFitWallV1::GeometryCeiling, PalwFitWallV1::Ladder, PalwFitWallV1::StateChunks, PalwFitWallV1::PublicDaPayload] {
+        for wall in [PalwFitWallV1::GeometryCeiling, PalwFitWallV1::Ladder, PalwFitWallV1::StateChunks, PalwFitWallV1::PublicDaPayload]
+        {
             assert_eq!(order(&report, wall), PalwFitOrderV1::Linear, "{name}: §1.1 says the {} is linear", wall.name());
         }
         assert_eq!(order(&report, PalwFitWallV1::CourtWindow), PalwFitOrderV1::Logarithmic, "{name}: the window is the ladder's log");
@@ -304,12 +320,12 @@ fn the_prompt_cap_passes_the_frame_only_on_a_held_mint() {
 #[test]
 fn the_shard_plan_prices_the_fetch_and_the_window_binds_the_shard_count() {
     use kaspa_consensus_core::palw_held_context_v1::{palw_held_interval_positions_v1, palw_held_replay_row_v1};
+    use kaspa_consensus_core::palw_model_fit_v1::stand_ins;
     use kaspa_consensus_core::palw_qwen36_profile::{PalwQwen36GeometryV1, qwen36_profile_v7};
     use kaspa_consensus_core::palw_shard_plan_v1::{
         PalwSeatResumeBudgetV1, PalwShardPlanError, palw_qwen36_artifact_bytes_v1, palw_shard_plan_for_seat_v1,
         palw_shard_plan_for_seat_within_window_v1, palw_shard_plan_v1,
     };
-    use kaspa_consensus_core::palw_model_fit_v1::stand_ins;
     const GIB: u64 = 1 << 30;
     let g = PalwQwen36GeometryV1 { n_ctx: 1 << 21, ..stand_ins::KIMI_K3_AS_HYBRID_V1 };
     let profile = qwen36_profile_v7(g).expect("the held stand-in builds at 2M");
@@ -335,10 +351,17 @@ fn the_shard_plan_prices_the_fetch_and_the_window_binds_the_shard_count() {
         interval_positions: palw_held_interval_positions_v1(&profile),
     };
     let by_bytes = palw_shard_plan_for_seat_v1(&profile, &artifact, 256 * GIB, 92).expect("the bytes fit some plan");
-    let fast = palw_shard_plan_for_seat_within_window_v1(&profile, &artifact, &budget(125_000_000), 92).expect("a gigabit seat resumes");
+    let fast =
+        palw_shard_plan_for_seat_within_window_v1(&profile, &artifact, &budget(125_000_000), 92).expect("a gigabit seat resumes");
     assert!(fast.shard_count >= by_bytes.shard_count, "the window never needs fewer shards than the bytes");
-    let slow = palw_shard_plan_for_seat_within_window_v1(&profile, &artifact, &budget(500_000), 92).expect("a slow seat resumes, sharded");
-    assert!(slow.shard_count > by_bytes.shard_count, "a slow link needs more shards than the bytes alone: {} vs {}", slow.shard_count, by_bytes.shard_count);
+    let slow =
+        palw_shard_plan_for_seat_within_window_v1(&profile, &artifact, &budget(500_000), 92).expect("a slow seat resumes, sharded");
+    assert!(
+        slow.shard_count > by_bytes.shard_count,
+        "a slow link needs more shards than the bytes alone: {} vs {}",
+        slow.shard_count,
+        by_bytes.shard_count
+    );
     assert!(matches!(
         palw_shard_plan_for_seat_within_window_v1(&profile, &artifact, &budget(1), 92),
         Err(PalwShardPlanError::WindowTooShort { .. })
@@ -354,8 +377,9 @@ fn the_held_devnet_mint_assembles_from_the_floor_only_devnet() {
     use kaspa_consensus_core::config::params::{
         DEVNET_PARAMS, PALW_RC_GENESIS_ARTIFACT_ROOT, palw_devnet_genesis_bonds_v1, palw_v2_params_from_artifacts_on_base,
     };
-    let floor = palw_v2_params_from_artifacts_on_base(DEVNET_PARAMS.clone(), PALW_RC_GENESIS_ARTIFACT_ROOT, palw_devnet_genesis_bonds_v1())
-        .expect("the floor-only devnet assembles");
+    let floor =
+        palw_v2_params_from_artifacts_on_base(DEVNET_PARAMS.clone(), PALW_RC_GENESIS_ARTIFACT_ROOT, palw_devnet_genesis_bonds_v1())
+            .expect("the floor-only devnet assembles");
     let ladder = bundle(&floor).court.max_step_leaf_count();
     let held = palw_held_context_mint_v1(floor.clone(), ladder).expect("the held devnet assembles");
     assert!(held.palw_held_context_active_at(0), "the fence is armed from genesis");

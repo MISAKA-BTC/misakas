@@ -399,8 +399,7 @@ impl PalwStateLayoutV4 {
     /// The inverse of [`Self::address`].
     pub fn flat_index(&self, slice: u32, block: u32) -> Option<u64> {
         if slice < self.attn_slices() {
-            (block < self.attn.chunks_per_slice)
-                .then(|| u64::from(slice) * u64::from(self.attn.chunks_per_slice) + u64::from(block))
+            (block < self.attn.chunks_per_slice).then(|| u64::from(slice) * u64::from(self.attn.chunks_per_slice) + u64::from(block))
         } else if slice < self.slice_count() && block < u32::from(self.gdn_heads) {
             Some(self.attn.chunk_count() + u64::from(slice - self.attn_slices()) * u64::from(self.gdn_heads) + u64::from(block))
         } else {
@@ -419,7 +418,13 @@ pub fn palw_state_layout_v4(profile: &PalwShapeProfileV3, positions: u32) -> Res
     }
     let with_recurrence = crate::palw_context_ladder::palw_checkpoint_leaf_carries_recurrence_v1(profile, positions);
     if !with_recurrence {
-        return Ok(PalwStateLayoutV4 { attn, gdn_layers: Vec::new(), gdn_heads: profile.gdn_heads, delta_head_bytes: 0, conv_head_bytes: 0 });
+        return Ok(PalwStateLayoutV4 {
+            attn,
+            gdn_layers: Vec::new(),
+            gdn_heads: profile.gdn_heads,
+            delta_head_bytes: 0,
+            conv_head_bytes: 0,
+        });
     }
     let gdn_layers: Vec<u16> = (0..profile.layer_count).filter(|&l| profile.layer_kind(l) == PalwLayerKindV1::GatedDeltaNet).collect();
     let delta_head_bytes = gdn_delta_head_slice_bytes_v1(profile)
@@ -452,10 +457,14 @@ pub fn palw_state_chunk_leaves_for_map_v1(
 ) -> Result<Vec<Hash64>, crate::palw_step_leg::PalwStepLegError> {
     let map_id = profile.state_chunk_map_id;
     if !palw_map_is_held_v4(&map_id) {
-        return Ok(chunks.iter().enumerate().map(|(i, c)| crate::palw_step_leg::state_chunk_leaf_hash_v1(&map_id, i as u32, c)).collect());
+        return Ok(chunks
+            .iter()
+            .enumerate()
+            .map(|(i, c)| crate::palw_step_leg::state_chunk_leaf_hash_v1(&map_id, i as u32, c))
+            .collect());
     }
-    let layout = palw_state_layout_v4(profile, positions)
-        .map_err(|e| crate::palw_step_leg::PalwStepLegError::HeldLayout(e.to_string()))?;
+    let layout =
+        palw_state_layout_v4(profile, positions).map_err(|e| crate::palw_step_leg::PalwStepLegError::HeldLayout(e.to_string()))?;
     if chunks.len() as u64 != layout.chunk_count() {
         return Err(crate::palw_step_leg::PalwStepLegError::StateChunksOutOfRange {
             got: chunks.len(),
@@ -508,8 +517,8 @@ pub fn palw_state_root_from_leaves_for_map_v1(
     if !palw_map_is_held_v4(&map_id) {
         return crate::palw_step_leg::state_chunks_root_v1(leaves);
     }
-    let layout = palw_state_layout_v4(profile, positions)
-        .map_err(|e| crate::palw_step_leg::PalwStepLegError::HeldLayout(e.to_string()))?;
+    let layout =
+        palw_state_layout_v4(profile, positions).map_err(|e| crate::palw_step_leg::PalwStepLegError::HeldLayout(e.to_string()))?;
     if leaves.len() as u64 != layout.chunk_count() {
         return Err(crate::palw_step_leg::PalwStepLegError::StateChunksOutOfRange {
             got: leaves.len(),
@@ -531,8 +540,7 @@ pub fn palw_state_chunk_path_from_leaves_for_map_v1(
     if !palw_map_is_held_v4(&profile.state_chunk_map_id) {
         return crate::palw_step_leg::state_chunk_path_v1(leaves, flat_index as usize);
     }
-    let layout =
-        palw_state_layout_v4(profile, positions).map_err(|e| PalwStepLegError::HeldLayout(e.to_string()))?;
+    let layout = palw_state_layout_v4(profile, positions).map_err(|e| PalwStepLegError::HeldLayout(e.to_string()))?;
     if leaves.len() as u64 != layout.chunk_count() {
         return Err(PalwStepLegError::StateChunksOutOfRange { got: leaves.len(), max: layout.chunk_count() as usize });
     }
@@ -609,8 +617,7 @@ pub fn palw_state_chunk_membership_root_v1(
             .ok_or_else(|| PalwStepLegError::HeldLayout("this map's chunk count is not derivable here".into()))?;
         return crate::palw_step_leg::state_chunk_opening_root_v1(count as usize, flat_index, chunk_hash, siblings);
     }
-    let layout =
-        palw_state_layout_v4(profile, positions).map_err(|e| PalwStepLegError::HeldLayout(e.to_string()))?;
+    let layout = palw_state_layout_v4(profile, positions).map_err(|e| PalwStepLegError::HeldLayout(e.to_string()))?;
     let address = layout
         .address(u64::from(flat_index))
         .ok_or(PalwStepLegError::LeafIndexOutOfRange { index: u64::from(flat_index), count: layout.chunk_count() })?;

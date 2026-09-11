@@ -434,12 +434,14 @@ fn main() {
 /// `window_receipt` (the drill's margin), per link. Arithmetic over the plan and the family's
 /// measured replay row; the certification drill is what makes a width a number (ADR-0075 D7).
 fn print_held_fetch_column_v1(args: &Args) {
-    use kaspa_consensus_core::palw_held_context_v1::{palw_held_interval_positions_v1, palw_held_replay_row_v1, palw_held_seat_budget_ms_v1};
+    use kaspa_consensus_core::palw_held_context_v1::{
+        palw_held_interval_positions_v1, palw_held_replay_row_v1, palw_held_seat_budget_ms_v1,
+    };
     use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, qwen25_a16_artifact_row_profile_v7};
     use kaspa_consensus_core::palw_qwen36_profile::{PalwQwen36GeometryV1, qwen36_profile_v7};
     use kaspa_consensus_core::palw_shard_plan_v1::{
-        PalwSeatResumeBudgetV1, palw_qwen25_artifact_bytes_v1, palw_qwen36_artifact_bytes_v1, palw_shard_plan_for_seat_within_window_v1,
-        palw_shard_resume_ms_v1,
+        PalwSeatResumeBudgetV1, palw_qwen25_artifact_bytes_v1, palw_qwen36_artifact_bytes_v1,
+        palw_shard_plan_for_seat_within_window_v1, palw_shard_resume_ms_v1,
     };
     let n_ctx = 1u32 << 21;
     let window_receipt = match &palw_rc_shipped_params().palw_consensus_mode {
@@ -498,7 +500,12 @@ fn print_held_fetch_column_v1(args: &Args) {
             let widest_fetch = plan.shards.iter().map(|s| s.fetch_bytes_at_v1(plan.kv_row_bytes, start)).max().unwrap_or(0);
             print!("| {shards} | {} | {} |", gib(plan.widest_seat_bytes), gib(widest_fetch));
             for (_, bandwidth) in links {
-                let slowest = plan.shards.iter().map(|s| palw_shard_resume_ms_v1(&plan, s, profile.layer_count, &budget_at(bandwidth))).max().unwrap_or(0);
+                let slowest = plan
+                    .shards
+                    .iter()
+                    .map(|s| palw_shard_resume_ms_v1(&plan, s, profile.layer_count, &budget_at(bandwidth)))
+                    .max()
+                    .unwrap_or(0);
                 print!(" {:.1} h |", slowest as f64 / 3_600_000.0);
             }
             println!();
@@ -507,7 +514,8 @@ fn print_held_fetch_column_v1(args: &Args) {
         println!("| link | shards |");
         println!("|---|---|");
         for (link, bandwidth) in links {
-            match palw_shard_plan_for_seat_within_window_v1(&profile, &artifact, &budget_at(bandwidth), u32::from(profile.layer_count)) {
+            match palw_shard_plan_for_seat_within_window_v1(&profile, &artifact, &budget_at(bandwidth), u32::from(profile.layer_count))
+            {
                 Ok(plan) => println!("| {link} | **{}** |", plan.shard_count),
                 Err(e) => println!("| {link} | {e} |"),
             }

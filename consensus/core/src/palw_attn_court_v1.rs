@@ -1059,12 +1059,8 @@ fn tile_rows_v1(
                     let per_slice = u64::from(geometry.chunks_per_slice.max(1));
                     let slice = (u64::from(chunk.chunk_index) / per_slice) as u32;
                     let block = (u64::from(chunk.chunk_index) % per_slice) as u32;
-                    let chunk_hash = crate::palw_step_leg::state_chunk_leaf_hash_v4(
-                        &binding.state_chunk_map_id,
-                        slice,
-                        block,
-                        &chunk.chunk_bytes,
-                    );
+                    let chunk_hash =
+                        crate::palw_step_leg::state_chunk_leaf_hash_v4(&binding.state_chunk_map_id, slice, block, &chunk.chunk_bytes);
                     crate::palw_step_leg::state_chunk_opening_root_v4(
                         slice_count,
                         slice,
@@ -1257,7 +1253,8 @@ pub fn palw_attn_court_admits_row_held_v1(
     window_court: u64,
 ) -> Result<u64, PalwAttnCourtError> {
     let reserve = crate::palw_context_ladder::palw_close_assembly_daa_v1(court.max_close_chunks());
-    let worst = court.worst_case_duration_held_daa(history_positions, tile).ok_or(PalwAttnCourtError::NoAdmissibleArity { window_court })?;
+    let worst =
+        court.worst_case_duration_held_daa(history_positions, tile).ok_or(PalwAttnCourtError::NoAdmissibleArity { window_court })?;
     let moves = worst / court.turn_deadline_daa().max(1);
     match worst.checked_add(reserve) {
         Some(total) if total < window_court => Ok(worst),

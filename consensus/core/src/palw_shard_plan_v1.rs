@@ -311,7 +311,9 @@ pub enum PalwShardPlanError {
     BudgetTooSmall { budget: u64, max_shards: u32, smallest_widest: u64 },
     /// ADR-0103 Decision 7: every plan that fits the bytes leaves a shard whose resume of the last
     /// interval does not fit the seat's share of `window_receipt`.
-    #[error("no plan of up to {max_shards} shards resumes the last interval inside {window_ms} ms: the fastest slowest shard takes {fastest_resume_ms}")]
+    #[error(
+        "no plan of up to {max_shards} shards resumes the last interval inside {window_ms} ms: the fastest slowest shard takes {fastest_resume_ms}"
+    )]
     WindowTooShort { window_ms: u64, max_shards: u32, fastest_resume_ms: u64 },
 }
 

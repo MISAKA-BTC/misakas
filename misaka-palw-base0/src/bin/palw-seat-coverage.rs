@@ -254,10 +254,14 @@ fn held_coverage_at_2m_v1(k: u32, panel: u32, quorum: u32) {
         ),
         (
             "Kimi K3 stand-in as graph-v7 (NOT a class)",
-            qwen36_profile_v7(PalwQwen36GeometryV1 { n_ctx: 1 << 21, ..KIMI_K3_AS_HYBRID_V1 }).ok().map(|p| palw_held_interval_positions_v1(&p)),
+            qwen36_profile_v7(PalwQwen36GeometryV1 { n_ctx: 1 << 21, ..KIMI_K3_AS_HYBRID_V1 })
+                .ok()
+                .map(|p| palw_held_interval_positions_v1(&p)),
         ),
     ];
-    println!("| row | P | N (D = 1,024) | shipped k = {k}, s = {quorum} | s = {panel} | k for 50 / 90 / 99 % at s = {panel} | s for 90 % at k = {k} |");
+    println!(
+        "| row | P | N (D = 1,024) | shipped k = {k}, s = {quorum} | s = {panel} | k for 50 / 90 / 99 % at s = {panel} | s for 90 % at k = {k} |"
+    );
     println!("|---|---|---|---|---|---|---|");
     for (name, width) in rows {
         let Some(width) = width else {

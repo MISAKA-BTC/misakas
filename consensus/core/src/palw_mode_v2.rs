@@ -888,7 +888,8 @@ pub fn palw_court_arity_held_v1(
     max_close_chunks: u64,
 ) -> Option<u8> {
     use crate::palw_attn_dissect::{
-        PALW_ATTN_DISSECT_MAX_ARITY, PALW_ATTN_DISSECT_MIN_ARITY, palw_attn_dissect_arity_fits_carrier_v1, palw_attn_dissection_rounds_v1,
+        PALW_ATTN_DISSECT_MAX_ARITY, PALW_ATTN_DISSECT_MIN_ARITY, palw_attn_dissect_arity_fits_carrier_v1,
+        palw_attn_dissection_rounds_v1,
     };
     if window_court == 0 || turn_deadline == 0 {
         return None;
@@ -897,7 +898,11 @@ pub fn palw_court_arity_held_v1(
     let reserve = crate::palw_context_ladder::palw_close_assembly_daa_v1(max_close_chunks);
     let mut arity = PALW_ATTN_DISSECT_MIN_ARITY;
     loop {
-        let history = if history_positions_max == 0 { 0 } else { u64::from(palw_attn_dissection_rounds_v1(history_positions_max, tile, arity)?) };
+        let history = if history_positions_max == 0 {
+            0
+        } else {
+            u64::from(palw_attn_dissection_rounds_v1(history_positions_max, tile, arity)?)
+        };
         let root_claim = u64::from(history_positions_max != 0);
         let moves = history.checked_mul(2)?.checked_add(u64::from(terminal_moves))?.checked_add(root_claim)?;
         if moves.checked_mul(turn_deadline)?.checked_add(reserve)? < window_court {

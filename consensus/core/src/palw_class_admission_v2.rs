@@ -1878,7 +1878,11 @@ pub fn verify_class_admission_v8(
         }
         crate::palw_state_chunk_map::palw_state_layout_v4(profile, profile.n_ctx).map_err(|e| match e {
             crate::palw_state_chunk_map::PalwStateChunkMapError::TreeTooDeep { depth, max } => {
-                PalwClassAdmissionError::CourtCostExceedsCeiling { what: "held state proof depth", got: depth.into(), ceiling: max.into() }
+                PalwClassAdmissionError::CourtCostExceedsCeiling {
+                    what: "held state proof depth",
+                    got: depth.into(),
+                    ceiling: max.into(),
+                }
             }
             other => PalwClassAdmissionError::Profile(format!("the held map has no layout at n_ctx {}: {other}", profile.n_ctx)),
         })?;

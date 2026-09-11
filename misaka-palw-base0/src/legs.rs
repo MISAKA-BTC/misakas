@@ -656,7 +656,9 @@ impl Base0CaptureGeometryV1 {
 /// the same function.
 pub fn base0_capture_geometry_v1(profile: &PalwShapeProfileV3, positions: u32) -> Result<Base0CaptureGeometryV1, LegError> {
     use kaspa_consensus_core::palw_state_chunk_map as map;
-    if profile.state_chunk_map_id == map::hybrid_state_chunk_map_id_v3() || profile.state_chunk_map_id == map::hybrid_state_chunk_map_id_v4() {
+    if profile.state_chunk_map_id == map::hybrid_state_chunk_map_id_v3()
+        || profile.state_chunk_map_id == map::hybrid_state_chunk_map_id_v4()
+    {
         return map::hybrid_state_geometry_for_covered_v1(profile, positions)
             .map(Base0CaptureGeometryV1::Hybrid)
             .map_err(LegError::CheckpointStateMap);
@@ -1022,14 +1024,23 @@ impl Base0CheckpointCaptureV1 {
         let tile = kaspa_consensus_core::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4;
         let closes = positions >= tile && positions % tile == 0;
         // The block that moved: the one that just closed, or the one still filling.
-        let block = if closes { positions / tile - 1 } else if positions < tile { 0 } else { positions / tile };
+        let block = if closes {
+            positions / tile - 1
+        } else if positions < tile {
+            0
+        } else {
+            positions / tile
+        };
         let mut hashed = 0u64;
         let mut bytes_touched = 0u64;
         for slice in 0..attn_slices {
-            let flat = layout.flat_index(slice, block).ok_or(LegError::CheckpointStateUnavailable { chunk_index: u64::from(block) })?;
+            let flat =
+                layout.flat_index(slice, block).ok_or(LegError::CheckpointStateUnavailable { chunk_index: u64::from(block) })?;
             let entry = match geometry.entry(flat).ok_or(LegError::CheckpointStateUnavailable { chunk_index: flat })? {
                 PalwHybridChunkEntryV1::AttentionCache(entry) => entry,
-                PalwHybridChunkEntryV1::RecurrenceState { .. } => return Err(LegError::CheckpointStateUnavailable { chunk_index: flat }),
+                PalwHybridChunkEntryV1::RecurrenceState { .. } => {
+                    return Err(LegError::CheckpointStateUnavailable { chunk_index: flat });
+                }
             };
             let bytes = attn(&entry).ok_or(LegError::CheckpointStateUnavailable { chunk_index: flat })?;
             if bytes.len() as u64 != entry.byte_len() {
@@ -1038,7 +1049,11 @@ impl Base0CheckpointCaptureV1 {
             bytes_touched += bytes.len() as u64;
             let leaf = leg::state_chunk_leaf_hash_v4(&self.state_chunk_map_id, slice, block, &bytes);
             let frontier = &mut frontiers.slices[slice as usize];
-            if closes { frontier.push_closed(leaf) } else { frontier.set_open(leaf) }
+            if closes {
+                frontier.push_closed(leaf)
+            } else {
+                frontier.set_open(leaf)
+            }
             // One leaf, and at most one node per level to fold the root.
             hashed += 1 + u64::from(leg::state_v4_path_len(frontier.block_count(), frontier.block_count().saturating_sub(1)));
         }
@@ -1059,10 +1074,10 @@ impl Base0CheckpointCaptureV1 {
             let heads = layout.block_count(slice).unwrap_or(0);
             let mut leaves = Vec::with_capacity(heads as usize);
             for head in 0..heads {
-                let flat = layout.flat_index(slice, head).ok_or(LegError::CheckpointStateUnavailable { chunk_index: u64::from(head) })?;
-                let bytes = gdn_chunks
-                    .get((flat - attn_count) as usize)
-                    .ok_or(LegError::CheckpointStateUnavailable { chunk_index: flat })?;
+                let flat =
+                    layout.flat_index(slice, head).ok_or(LegError::CheckpointStateUnavailable { chunk_index: u64::from(head) })?;
+                let bytes =
+                    gdn_chunks.get((flat - attn_count) as usize).ok_or(LegError::CheckpointStateUnavailable { chunk_index: flat })?;
                 bytes_touched += bytes.len() as u64;
                 leaves.push(leg::state_chunk_leaf_hash_v4(&self.state_chunk_map_id, slice, head, bytes));
             }
@@ -2555,10 +2570,18 @@ mod a16_row_tests {
             fold.push_with_v1(fill).expect("the held fold takes every position");
             max_hashes_a_checkpoint = max_hashes_a_checkpoint.max(fold.held_hashes_v1() - before);
             let layout = map::palw_state_layout_v4(&profile, positions).expect("a held layout");
-            let depth = map::tiled_kv_state_depth_v4(u64::from(layout.attn.chunks_per_slice), layout.attn.attn_layers.len() as u64, profile.layer_count);
+            let depth = map::tiled_kv_state_depth_v4(
+                u64::from(layout.attn.chunks_per_slice),
+                layout.attn.attn_layers.len() as u64,
+                profile.layer_count,
+            );
             depth_bound = depth_bound.max(2 * u64::from(layout.slice_count()) * u64::from(depth.max(1)));
             let court = map::palw_state_chunks_root_for_map_v1(&profile, positions, &chunks).expect("the court's root");
-            assert_eq!(fold.leaves.last().expect("a leaf").state_chunks_root, court, "position {positions}: the fold's root is the court's");
+            assert_eq!(
+                fold.leaves.last().expect("a leaf").state_chunks_root,
+                court,
+                "position {positions}: the fold's root is the court's"
+            );
             naive.push_chunks(chunks).expect("the naive capture takes it");
         }
         let a = fold.finish_canonical_v1().expect("sealed");

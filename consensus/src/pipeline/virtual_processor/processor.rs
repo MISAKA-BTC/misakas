@@ -7243,8 +7243,12 @@ impl VirtualStateProcessor {
                     {
                         return Err(format!("claim {claim_id}: the accusation's executor or roots are not the claim's"));
                     }
-                    kaspa_consensus_core::palw_checkpoint_court_v1::palw_checkpoint_court_verdict_v1(accusation, claim.class_id, ladder)
-                        .map_err(|e| format!("claim {claim_id}: the checkpoint accusation does not adjudicate: {e}"))?;
+                    kaspa_consensus_core::palw_checkpoint_court_v1::palw_checkpoint_court_verdict_v1(
+                        accusation,
+                        claim.class_id,
+                        ladder,
+                    )
+                    .map_err(|e| format!("claim {claim_id}: the checkpoint accusation does not adjudicate: {e}"))?;
                 }
                 // **ADR-0103 Decision 4: the held DA court's two moves.** The fence, the DA court's
                 // own fence, the signer (the accuser's key; the claim's producer for an answer), the

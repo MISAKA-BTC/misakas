@@ -24,11 +24,13 @@
 use crate::Hash64;
 use crate::palw_attn_court_v1::{PalwAttnCheckpointAnchorV1, PalwAttnChunkOpeningV1};
 use crate::palw_prompt_ids_v1::{PalwPromptIdsOpeningV1, prompt_ids_tile_count_v1, verify_prompt_ids_opening_v1};
-use crate::palw_state_chunk_map::{palw_state_chunk_count_at_v1, palw_state_chunk_leaf_for_map_v1, palw_state_chunk_membership_root_v1};
+use crate::palw_state_chunk_map::{
+    palw_state_chunk_count_at_v1, palw_state_chunk_leaf_for_map_v1, palw_state_chunk_membership_root_v1,
+};
 use crate::palw_state_v2::PalwBondKeyV2;
 use crate::palw_step_leg::{
-    PalwStepBindingV2, PalwStepRangeOpeningV1, checkpoint_leaf_hash_v2, step_opening_root_capped_v1, step_range_opening_root_capped_v1,
-    verify_binding_v1,
+    PalwStepBindingV2, PalwStepRangeOpeningV1, checkpoint_leaf_hash_v2, step_opening_root_capped_v1,
+    step_range_opening_root_capped_v1, verify_binding_v1,
 };
 
 pub const PALW_HELD_DA_VERSION_V1: u16 = 1;
@@ -170,9 +172,13 @@ pub enum PalwHeldDaError {
 /// The binding, authenticated against the claim's own `execution_root`.
 fn authenticated(binding: &PalwStepBindingV2, claim_execution_root: &Hash64) -> Result<(Hash64, Hash64), PalwHeldDaError> {
     if binding.committed_execution_root != *claim_execution_root {
-        return Err(PalwHeldDaError::NotTheClaimsExecution { binding: binding.committed_execution_root, claim: *claim_execution_root });
+        return Err(PalwHeldDaError::NotTheClaimsExecution {
+            binding: binding.committed_execution_root,
+            claim: *claim_execution_root,
+        });
     }
-    let (context_hash, _, checkpoint_profile_hash) = verify_binding_v1(binding).map_err(|e| PalwHeldDaError::Binding(e.to_string()))?;
+    let (context_hash, _, checkpoint_profile_hash) =
+        verify_binding_v1(binding).map_err(|e| PalwHeldDaError::Binding(e.to_string()))?;
     Ok((context_hash, checkpoint_profile_hash))
 }
 
@@ -204,7 +210,8 @@ pub fn palw_held_da_check_accusation_v1(
                 binding.checkpoint_profile.checkpoint_interval,
             )
             .ok_or(outside("the checkpoint covers nothing the class can count"))?;
-            let positions = crate::palw_context_ladder::palw_checkpoint_positions_at_v1(&binding.shape_profile, &binding.job_context, covered);
+            let positions =
+                crate::palw_context_ladder::palw_checkpoint_positions_at_v1(&binding.shape_profile, &binding.job_context, covered);
             let count = palw_state_chunk_count_at_v1(&binding.shape_profile, positions).ok_or(PalwHeldDaError::Layout)?;
             if u64::from(chunk) >= count {
                 return Err(outside("the checkpoint has no such chunk"));
@@ -238,8 +245,12 @@ pub fn palw_held_da_check_disclosure_v1(
             if opening.tile_index != tile {
                 return Err(PalwHeldDaError::AnswerIsAnotherUnit);
             }
-            verify_prompt_ids_opening_v1(&binding.job_context.prompt_token_ids_hash, binding.job_context.declared_prefill_tokens, opening)
-                .map_err(|e| PalwHeldDaError::PromptTile(e.to_string()))?;
+            verify_prompt_ids_opening_v1(
+                &binding.job_context.prompt_token_ids_hash,
+                binding.job_context.declared_prefill_tokens,
+                opening,
+            )
+            .map_err(|e| PalwHeldDaError::PromptTile(e.to_string()))?;
         }
         (PalwHeldMissingV1::StateChunk { checkpoint, chunk }, PalwHeldDisclosureV1::StateChunk { anchor, chunk: opening }) => {
             let leaf = &anchor.leaf;
@@ -247,7 +258,8 @@ pub fn palw_held_da_check_disclosure_v1(
                 return Err(PalwHeldDaError::AnswerIsAnotherUnit);
             }
             if anchor.opening.leaf_index != u64::from(checkpoint)
-                || checkpoint_leaf_hash_v2(&context_hash, &checkpoint_profile_hash, &binding.state_chunk_map_id, leaf) != anchor.opening.leaf_hash
+                || checkpoint_leaf_hash_v2(&context_hash, &checkpoint_profile_hash, &binding.state_chunk_map_id, leaf)
+                    != anchor.opening.leaf_hash
             {
                 return Err(PalwHeldDaError::CheckpointNotCommitted);
             }
@@ -256,8 +268,11 @@ pub fn palw_held_da_check_disclosure_v1(
             if root != binding.checkpoint_merkle_root {
                 return Err(PalwHeldDaError::CheckpointNotCommitted);
             }
-            let positions =
-                crate::palw_context_ladder::palw_checkpoint_positions_at_v1(&binding.shape_profile, &binding.job_context, leaf.covered_decode_call);
+            let positions = crate::palw_context_ladder::palw_checkpoint_positions_at_v1(
+                &binding.shape_profile,
+                &binding.job_context,
+                leaf.covered_decode_call,
+            );
             let hash = palw_state_chunk_leaf_for_map_v1(&binding.shape_profile, positions, chunk, &opening.chunk_bytes)
                 .ok_or(PalwHeldDaError::Layout)?;
             let folded = palw_state_chunk_membership_root_v1(&binding.shape_profile, positions, chunk, &hash, &opening.siblings)
@@ -270,7 +285,8 @@ pub fn palw_held_da_check_disclosure_v1(
             if opening.first_leaf_index != first || opening.leaf_hashes.len() != count as usize {
                 return Err(PalwHeldDaError::AnswerIsAnotherUnit);
             }
-            let root = step_range_opening_root_capped_v1(binding.step_leaf_count, opening, ladder).map_err(|_| PalwHeldDaError::RangeNotCommitted)?;
+            let root = step_range_opening_root_capped_v1(binding.step_leaf_count, opening, ladder)
+                .map_err(|_| PalwHeldDaError::RangeNotCommitted)?;
             if root != binding.step_merkle_root {
                 return Err(PalwHeldDaError::RangeNotCommitted);
             }
@@ -324,15 +340,23 @@ mod tests {
             chunk: PalwAttnChunkOpeningV1 {
                 chunk_index: chunk,
                 chunk_bytes: chunks[chunk as usize].clone(),
-                siblings: crate::palw_state_chunk_map::palw_state_chunk_path_for_map_v1(&b.shape_profile, checkpoint + 1, chunks, chunk)
-                    .expect("a path"),
+                siblings: crate::palw_state_chunk_map::palw_state_chunk_path_for_map_v1(
+                    &b.shape_profile,
+                    checkpoint + 1,
+                    chunks,
+                    chunk,
+                )
+                .expect("a path"),
             },
         };
         palw_held_da_check_disclosure_v1(&root, &missing, b, &answer, LADDER).expect("the chunk and its two-level path");
         let PalwHeldDisclosureV1::StateChunk { anchor, chunk: mut opened } = answer.clone() else { unreachable!() };
         opened.chunk_bytes[0] ^= 1;
         let tampered = PalwHeldDisclosureV1::StateChunk { anchor, chunk: opened };
-        assert_eq!(palw_held_da_check_disclosure_v1(&root, &missing, b, &tampered, LADDER), Err(PalwHeldDaError::ChunkNotInCheckpoint));
+        assert_eq!(
+            palw_held_da_check_disclosure_v1(&root, &missing, b, &tampered, LADDER),
+            Err(PalwHeldDaError::ChunkNotInCheckpoint)
+        );
         // Checkpoint 9 holds ten positions: two kinds × two layers × one tile = four chunks.
         assert_eq!(chunks.len(), 4);
         let other = PalwHeldMissingV1::StateChunk { checkpoint, chunk: chunk - 1 };
@@ -369,7 +393,10 @@ mod tests {
             PalwHeldMissingV1::StepRange { first, count: 0 },
             PalwHeldMissingV1::StepRange { first: b.step_leaf_count - 1, count: 2 },
         ] {
-            assert!(matches!(palw_held_da_check_accusation_v1(&root, &bad, b), Err(PalwHeldDaError::OutsideTheCommitment(_))), "{bad:?}");
+            assert!(
+                matches!(palw_held_da_check_accusation_v1(&root, &bad, b), Err(PalwHeldDaError::OutsideTheCommitment(_))),
+                "{bad:?}"
+            );
         }
 
         // A tile of the prompt ids, under the job's tiled root.

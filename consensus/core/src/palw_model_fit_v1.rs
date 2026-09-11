@@ -426,7 +426,10 @@ pub enum PalwFitRegimeV1 {
 /// held exactly when the network armed the regime at the point of judgement AND the class
 /// registered a held map — `verify_class_admission_v8`'s rule, spelled once for every reader
 /// that is not the gate (the generator, the panel's preflight, a test).
-pub fn palw_fit_regime_for_v1(held: crate::palw_class_admission_v2::PalwHeldAdmissionV1, profile: &PalwShapeProfileV3) -> PalwFitRegimeV1 {
+pub fn palw_fit_regime_for_v1(
+    held: crate::palw_class_admission_v2::PalwHeldAdmissionV1,
+    profile: &PalwShapeProfileV3,
+) -> PalwFitRegimeV1 {
     match (held.armed, crate::palw_state_chunk_map::palw_profile_is_held_v4(profile)) {
         (true, true) => PalwFitRegimeV1::Held { panel_da: held.panel_da },
         (true, false) => PalwFitRegimeV1::HeldNetwork,
@@ -683,7 +686,10 @@ fn palw_fit_at_v1(
                 levels_v1(worst),
                 levels_v1(ladder),
                 "levels (64 bytes of path each)",
-                format!("the whole context as prefill is {worst} leaves; a path to one is {} levels and no round is played", levels_v1(worst)),
+                format!(
+                    "the whole context as prefill is {worst} leaves; a path to one is {} levels and no round is played",
+                    levels_v1(worst)
+                ),
             );
             row.verdict = if worst <= ladder { PalwFitVerdictV1::Admitted } else { PalwFitVerdictV1::Refused };
             rows.push(row);
@@ -926,9 +932,8 @@ fn palw_fit_at_v1(
         // a jump from zero as a logarithm. The note says which route the class takes here.
         let route = palw_held_seat_route_v1(n_ctx, replay_ms, window_receipt);
         let fetch = palw_held_seat_fetch_bytes_v1(profile, u64::from(n_ctx), 0..profile.layer_count);
-        let leaves_per_position = worst_case_step_leaf_count_capped_v1(profile, u64::MAX)
-            .map(|w| w.div_ceil(u64::from(n_ctx.max(1))))
-            .unwrap_or(u64::MAX);
+        let leaves_per_position =
+            worst_case_step_leaf_count_capped_v1(profile, u64::MAX).map(|w| w.div_ceil(u64::from(n_ctx.max(1)))).unwrap_or(u64::MAX);
         let width = palw_held_seat_interval_positions_v1(
             n_ctx,
             replay_ms,

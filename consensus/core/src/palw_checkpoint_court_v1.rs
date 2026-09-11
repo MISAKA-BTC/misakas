@@ -37,7 +37,9 @@ use crate::palw_state_chunk_map::{
 };
 use crate::palw_state_v2::PalwBondKeyV2;
 use crate::palw_step::{PalwLayerKindV1, PalwStepCoordinateV1, PalwStepNodeRoleV1, PalwStepTableV1};
-use crate::palw_step_leg::{PalwStepBindingV2, checkpoint_leaf_hash_v2, step_opening_root_capped_v1, step_tile_leaf_hash_v1, verify_binding_v1};
+use crate::palw_step_leg::{
+    PalwStepBindingV2, checkpoint_leaf_hash_v2, step_opening_root_capped_v1, step_tile_leaf_hash_v1, verify_binding_v1,
+};
 
 pub const PALW_CHECKPOINT_COURT_VERSION_V1: u16 = 1;
 pub const PALW_CHECKPOINT_COURT_DOMAIN_SESSION_V1: &[u8] = b"misaka-palw/checkpoint-court/session/v1";
@@ -175,7 +177,8 @@ pub fn palw_checkpoint_court_verdict_v1(
     if a.binding.committed_execution_root != a.execution_root {
         return Err(E::BindingRootMismatch { binding: a.binding.committed_execution_root, named: a.execution_root });
     }
-    let (context_hash, profile_hash, checkpoint_profile_hash) = verify_binding_v1(&a.binding).map_err(|e| E::Binding(e.to_string()))?;
+    let (context_hash, profile_hash, checkpoint_profile_hash) =
+        verify_binding_v1(&a.binding).map_err(|e| E::Binding(e.to_string()))?;
     if profile_hash != class_id {
         return Err(E::ClassMismatch { declared: profile_hash, class: class_id });
     }
@@ -206,7 +209,8 @@ pub fn palw_checkpoint_court_verdict_v1(
     // The checkpoint, opened against the claim's checkpoint leg.
     let leaf = &a.anchor.leaf;
     if a.anchor.opening.leaf_index != u64::from(leaf.checkpoint_index)
-        || checkpoint_leaf_hash_v2(&context_hash, &checkpoint_profile_hash, &a.binding.state_chunk_map_id, leaf) != a.anchor.opening.leaf_hash
+        || checkpoint_leaf_hash_v2(&context_hash, &checkpoint_profile_hash, &a.binding.state_chunk_map_id, leaf)
+            != a.anchor.opening.leaf_hash
     {
         return Err(E::AnchorNotCommitted);
     }
@@ -274,7 +278,8 @@ pub fn palw_checkpoint_court_verdict_v1(
         if step_tile_leaf_hash_v1(&context_hash, &profile_hash, &row.leaf) != row.opening.leaf_hash {
             return Err(E::RowNotCommitted { tile: t });
         }
-        let at = step_opening_root_capped_v1(a.binding.step_leaf_count, &row.opening, ladder).map_err(|_| E::RowNotCommitted { tile: t })?;
+        let at = step_opening_root_capped_v1(a.binding.step_leaf_count, &row.opening, ladder)
+            .map_err(|_| E::RowNotCommitted { tile: t })?;
         if at != a.binding.step_merkle_root {
             return Err(E::RowNotCommitted { tile: t });
         }
@@ -287,7 +292,11 @@ pub fn palw_checkpoint_court_verdict_v1(
     if committed.len() != chunk_row.len() {
         return Err(E::RowWidth { got: committed.len() / 4, expected: chunk_row.len() / 4 });
     }
-    Ok(if committed.as_slice() == chunk_row { PalwCheckpointCourtVerdictV1::FalseAccusation } else { PalwCheckpointCourtVerdictV1::ExecutorGuilty })
+    Ok(if committed.as_slice() == chunk_row {
+        PalwCheckpointCourtVerdictV1::FalseAccusation
+    } else {
+        PalwCheckpointCourtVerdictV1::ExecutorGuilty
+    })
 }
 
 #[cfg(test)]
@@ -409,11 +418,13 @@ pub(crate) mod tests {
             }
         }
         let step_root = step_merkle_root_v1(&leaves).expect("a step root");
-        let checkpoint_profile =
-            crate::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(crate::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1);
+        let checkpoint_profile = crate::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(
+            crate::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+        );
         let checkpoint_profile_hash = checkpoint_profile.profile_hash();
         let map_id = profile.state_chunk_map_id;
-        let checkpoint_count = crate::palw_context_ladder::palw_checkpoint_count_v1(&profile, &context, checkpoint_profile.checkpoint_interval);
+        let checkpoint_count =
+            crate::palw_context_ladder::palw_checkpoint_count_v1(&profile, &context, checkpoint_profile.checkpoint_interval);
         assert_eq!(checkpoint_count, prefill, "a per-position class checkpoints every position");
         let mut checkpoint_leaves = Vec::new();
         let mut checkpoint_hashes = Vec::new();
@@ -444,7 +455,8 @@ pub(crate) mod tests {
                         .collect()
                 })
                 .collect();
-            let root = crate::palw_state_chunk_map::palw_state_chunks_root_for_map_v1(&profile, positions, &chunks).expect("a state root");
+            let root =
+                crate::palw_state_chunk_map::palw_state_chunks_root_for_map_v1(&profile, positions, &chunks).expect("a state root");
             let leaf = PalwCheckpointLeafV2 {
                 version: 1,
                 checkpoint_index: c,
@@ -526,8 +538,14 @@ pub(crate) mod tests {
                 claim: h64(0xC1A1),
                 execution_root: self.binding.committed_execution_root,
                 trace_root: h64(0x7A),
-                executor_bond: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_u64_word(1), 0)),
-                accuser_bond: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_u64_word(2), 0)),
+                executor_bond: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(
+                    crate::tx::TransactionId::from_u64_word(1),
+                    0,
+                )),
+                accuser_bond: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(
+                    crate::tx::TransactionId::from_u64_word(2),
+                    0,
+                )),
                 binding: self.binding.clone(),
                 anchor: PalwAttnCheckpointAnchorV1 {
                     leaf: self.checkpoint_leaves[c as usize].clone(),
@@ -555,7 +573,8 @@ pub(crate) mod tests {
     fn an_honest_checkpoint_acquits_on_both_maps() {
         for held in [false, true] {
             let fx = held_fixture(held, 20, None);
-            for (c, kind, layer, position) in [(19u32, 0u8, 0u16, 0u32), (19, 1, 1, 19), (7, 0, 1, 3), (16, 1, 0, 16), (15, 0, 0, 15)] {
+            for (c, kind, layer, position) in [(19u32, 0u8, 0u16, 0u32), (19, 1, 1, 19), (7, 0, 1, 3), (16, 1, 0, 16), (15, 0, 0, 15)]
+            {
                 let a = fx.accusation(c, kind, layer, position);
                 assert_eq!(
                     palw_checkpoint_court_verdict_v1(&a, fx.class_id(), LADDER),
