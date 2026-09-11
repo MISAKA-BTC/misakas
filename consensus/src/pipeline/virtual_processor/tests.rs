@@ -12675,3 +12675,209 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
         2 - unentitled.len()
     );
 }
+
+
+// =================================================================================================
+// AC-SLOT (independent mainnet audit, High): the per-block court slot is spent by an object the
+// fold refuses, and the root-claim signature does not cover what the fold refuses it for.
+// =================================================================================================
+
+/// Everything the two AC-SLOT tests need: a consensus with the k-ary court armed, and the ADR-0082
+/// drill's court sitting at its fused terminal — written by consensus-core's
+/// `ac_slot_emit_the_fused_terminal_fixture` to `$AC_SLOT_FIXTURE`, because that drill is
+/// `#[cfg(test)]` in the core crate. The claim's bond is given a real ML-DSA-87 key here, and the
+/// honest root claim is signed under it, so acceptance runs its real signature check.
+struct AcSlotFixture {
+    ctx: TestContext,
+    state: kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+    params: kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+    honest: kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    junk: kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    sid: kaspa_hashes::Hash64,
+    claim: kaspa_hashes::Hash64,
+    daa: u64,
+}
+
+fn ac_slot_fixture() -> AcSlotFixture {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_state_v2::{PalwConsensusObjectV2, PalwStateCarriageV2, PalwStateParamsV2};
+
+    let path = std::env::var("AC_SLOT_FIXTURE")
+        .expect("AC_SLOT_FIXTURE must name the file consensus-core's ac_slot_emit_the_fused_terminal_fixture wrote");
+    let bytes = std::fs::read(&path).expect("the AC-SLOT fixture file exists");
+    #[allow(clippy::type_complexity)]
+    let (carriage, params, mut honest, sid, daa): (
+        Vec<u8>,
+        PalwStateParamsV2,
+        PalwConsensusObjectV2,
+        kaspa_hashes::Hash64,
+        u64,
+    ) = borsh::from_slice(&bytes).expect("the AC-SLOT fixture decodes");
+    let mut carriage: PalwStateCarriageV2 = borsh::from_slice(&carriage).expect("the fixture carriage decodes");
+    let claim = carriage.court_sessions.get(&sid).expect("the drill's session").claim;
+    let bond = carriage.claims.get(&claim).expect("the drill's claim").bond;
+    // The responder: the CLAIM's bond, which is the key a root claim is verified under.
+    let keypair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0xACu8; 32]);
+    carriage.bonds.get_mut(&bond).expect("the claim's bond").pubkey = keypair.verification_key.as_ref().to_vec();
+    let state = carriage.into_state(&params, None).expect("the carriage loads");
+
+    let catalog = palw_v2_test_catalog();
+    let mut bundle = palw_v2_test_bundle(&catalog);
+    // Arming the fence requires the frozen arity to be the derived one (params.rs, audit D H-1).
+    bundle.court = kaspa_consensus_core::palw_court_v2::palw_court_params_at_v2(&bundle, true)
+        .expect("the test bundle derives a dissection arity");
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params({
+            let bundle = bundle.clone();
+            move |p| {
+                p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+                p.palw_kary_court = Some(ForkActivation::always());
+                *p = p.clone().with_palw_v2_cadence();
+            }
+        })
+        .build();
+    let ctx = TestContext::new(TestConsensus::new(&config));
+    let arity = ctx
+        .consensus
+        .virtual_processor()
+        .palw_court_params_at(daa)
+        .expect("a V2 bundle")
+        .expect("the armed court derives its params")
+        .dissection_arity();
+
+    // The responder's honest filing: the ruleset's arity, signed over (session, root).
+    if let PalwConsensusObjectV2::CourtAttnRootClaimed { root, arity: declared, signature, .. } = &mut honest {
+        *declared = arity;
+        let message = kaspa_consensus_core::palw_court_v2::palw_attn_root_claim_message_v1(&sid, root);
+        *signature = libcrux_ml_dsa::ml_dsa_87::sign(
+            &keypair.signing_key,
+            &message,
+            kaspa_consensus_core::palw_court_v2::PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT,
+            [0x5Au8; 32],
+        )
+        .expect("ML-DSA-87 sign")
+        .as_ref()
+        .to_vec();
+    } else {
+        panic!("the fixture's honest object is a plain root claim");
+    }
+    // The attacker's copy: the SAME session, root, arity and signature bytes (copied off the
+    // mempool — no key needed), and a foreign binding, which the signature does not cover.
+    let mut junk = honest.clone();
+    if let PalwConsensusObjectV2::CourtAttnRootClaimed { binding, .. } = &mut junk {
+        binding.step_merkle_root = kaspa_hashes::Hash64::from_u64_word(0x0BAD_B1D);
+    }
+    AcSlotFixture { ctx, state, params, honest, junk, sid, claim, daa }
+}
+
+fn ac_slot_point(daa: u64) -> kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+    kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: BlockHash::from_u64_word(0xAC51_0700 + daa),
+        daa_score: daa,
+        blue_score: daa,
+        subsidy: 0,
+    }
+}
+
+/// **AC-SLOT, one block: an object the fold refuses must not spend the block's only court slot.**
+///
+/// `palw_v2_accepted_objects` increments `court_closes_completed` as soon as
+/// `palw_v2_validate_objects` returns `Ok` — BEFORE the rehearsal transition runs — and the
+/// transition's `Err` arm drops the object without giving the slot back. The root claim's
+/// acceptance checks only the fence, the arity and an ML-DSA-87 signature over `(session, root)`,
+/// so a copy of an honest filing with a foreign binding passes acceptance, spends the slot, is
+/// refused by the fold, and the honest filing behind it is dropped for want of a slot.
+#[tokio::test]
+async fn a_fold_failing_court_move_does_not_spend_the_block_slot() {
+    use kaspa_consensus_core::palw_state_v2::{PalwConsensusObjectV2 as PalwConsensusObjectV2Alias, palw_court_move_spends_the_slot_v1};
+    let f = ac_slot_fixture();
+    let vp = f.ctx.consensus.virtual_processor();
+    let point = ac_slot_point(f.daa);
+
+    // Control: alone, the honest filing passes acceptance AND the fold, and opens the phase.
+    let (accepted, folded) =
+        vp.palw_v2_accepted_objects_and_state_for_tests(&f.state, &f.params, &point, vec![f.honest.clone()], point.block);
+    assert_eq!(accepted, vec![f.honest.clone()], "control: the honest root claim is carried");
+    assert!(folded.court_session(&f.sid).unwrap().dissection.is_some(), "control: the honest root claim opens the phase");
+
+    // The junk copy passes the very acceptance check the processor runs (real ML-DSA-87 verify)
+    // and satisfies the slot predicate ...
+    let PalwConsensusObjectV2Alias::CourtAttnRootClaimed { root, signature, .. } = &f.junk else { unreachable!() };
+    kaspa_consensus_core::palw_court_v2::check_court_attn_root_claim_acceptance_v2(
+        &f.state,
+        &f.sid,
+        root,
+        signature,
+        |key, message, sig, context| kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false),
+    )
+    .expect("the replayed signature verifies over the junk copy: it covers only (session, root)");
+    assert!(palw_court_move_spends_the_slot_v1(&f.state, &f.junk), "the junk copy spends the slot by the predicate");
+    // ... and alone it is dropped (the fold refuses it).
+    let alone = vp.palw_v2_accepted_objects_for_tests(&f.state, &f.params, &point, vec![f.junk.clone()], point.block);
+    assert!(alone.is_empty(), "the fold refuses the junk copy");
+
+    // The attack: the junk copy first in the accepting block's order, the honest filing behind it.
+    let (accepted, folded) = vp.palw_v2_accepted_objects_and_state_for_tests(
+        &f.state,
+        &f.params,
+        &point,
+        vec![f.junk.clone(), f.honest.clone()],
+        point.block,
+    );
+    eprintln!(
+        "AC-SLOT one block: carried {} object(s); honest carried = {}; phase opened = {}",
+        accepted.len(),
+        accepted.contains(&f.honest),
+        folded.court_session(&f.sid).unwrap().dissection.is_some()
+    );
+    assert_eq!(
+        accepted,
+        vec![f.honest.clone()],
+        "AC-SLOT: a root claim the fold REFUSED spent the block's only court slot (PALW_COURT_CLOSE_MAX_PER_BLOCK), and the \
+         honest root claim behind it was dropped"
+    );
+}
+
+/// **AC-SLOT, to the rung deadline: a replayed signature cannot crowd the filer into a conviction.**
+///
+/// The responder files its honest root claim in EVERY block; the attacker puts one replayed copy
+/// with a foreign binding ahead of it in every block. Invariant: the filer's move is carried
+/// inside its rung and its honest claim is not voided.
+#[tokio::test]
+async fn a_replayed_root_claim_signature_with_a_foreign_binding_cannot_crowd_out_the_filer() {
+    use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2, apply_palw_transition_v2};
+    let f = ac_slot_fixture();
+    let vp = f.ctx.consensus.virtual_processor();
+    let mut state = f.state.clone();
+    let mut daa = f.daa;
+    let mut filed_at = None;
+    let mut blocks = 0u64;
+    while state.court_session(&f.sid).is_some() && blocks < 400 {
+        let point = ac_slot_point(daa);
+        let accepted =
+            vp.palw_v2_accepted_objects_for_tests(&state, &f.params, &point, vec![f.junk.clone(), f.honest.clone()], point.block);
+        if accepted.contains(&f.honest) {
+            filed_at = Some(daa);
+        }
+        state = apply_palw_transition_v2(&state, &f.params, &point, &accepted, None).expect("the block folds").0;
+        blocks += 1;
+        daa += 1;
+        if filed_at.is_some() {
+            break;
+        }
+    }
+    let phase = state.claim(&f.claim).expect("the claim is a record").phase.clone();
+    eprintln!(
+        "AC-SLOT to the deadline: {blocks} block(s) each carrying [replayed copy, honest filing]; honest filing carried at \
+         {filed_at:?}; session alive = {}; claim phase = {phase:?}",
+        state.court_session(&f.sid).is_some()
+    );
+    assert!(filed_at.is_some(), "AC-SLOT: the responder filed its honest root claim in every one of {blocks} blocks and none was carried");
+    assert!(
+        !matches!(phase, PalwClaimPhaseV2::Voided { .. }),
+        "AC-SLOT: an honest claim was voided because its responder's filing was crowded out: {phase:?}"
+    );
+}
+

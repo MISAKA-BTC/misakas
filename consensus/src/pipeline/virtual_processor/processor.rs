@@ -5928,12 +5928,6 @@ impl VirtualStateProcessor {
             }
             match self.palw_v2_validate_objects(&folded, state_params, point, std::slice::from_ref(&object)) {
                 Ok(()) => {
-                    // Acceptance has verified the fence and the mover's signature, and the
-                    // predicate above read the folded state: whatever this block does with the
-                    // object now, every validator has been asked for the court work it names.
-                    if spends_the_court_slot {
-                        court_closes_completed += 1;
-                    }
                     match kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_v1(
                         &folded,
                         state_params,
@@ -5952,6 +5946,16 @@ impl VirtualStateProcessor {
                         &self.palw_transition_extras_at(point.daa_score),
                     ) {
                         Ok(next) => {
+                            // **AC-SLOT: the block's court slot is spent only by a move that
+                            // ACTUALLY APPLIES.** Charging it on the acceptance check alone let a
+                            // fold-failing move — a replayed root-claim signature over a junk
+                            // binding, say — burn the block's one slot and drop the honest mover
+                            // behind it, every block, until that mover was convicted on its
+                            // deadline. A move the fold refuses is dropped just below and leaves
+                            // the slot for the next.
+                            if spends_the_court_slot {
+                                court_closes_completed += 1;
+                            }
                             if completes_a_group {
                                 // The certification a chunk group carried is applied inside the
                                 // chunk's own arm, so the kinds tally below never names it; say so
