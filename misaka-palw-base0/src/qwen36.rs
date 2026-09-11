@@ -817,6 +817,16 @@ impl Qwen36ArtifactV1 {
         Hash64::from_bytes(out)
     }
 
+    /// `(offset, len)` of a tensor inside the mapping, or `None` when the artifact is owned
+    /// rather than mapped — what says which store an artifact is without reading a byte of it
+    /// (ADR-0106's inventory pins that a reopened artifact is the mapped store).
+    pub fn extent(&self, name: &str) -> Option<(usize, usize)> {
+        match &self.store {
+            Store::Owned(_) => None,
+            Store::Mapped { directory, .. } => directory.get(name).copied(),
+        }
+    }
+
     /// Every tensor name the artifact holds, in order.
     pub fn tensor_names(&self) -> Vec<&str> {
         match &self.store {
