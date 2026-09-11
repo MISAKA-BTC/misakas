@@ -45,6 +45,9 @@ pub mod backend;
 /// fact is decided, and the only place a prompt's segments are built.
 pub mod chat_template;
 pub mod classes;
+/// ADR-0110: a context vector — a name, a seed and a geometry — and the stages that verify it
+/// through the seam a node holds (produce, commit, seat, court, availability, fit).
+pub mod context_vector;
 /// ADR-0069 Decision 3: the certification drill — the harness that takes a family's own backend
 /// through a real dispute and asks the SHIPPED court which way it reads. Holding the certificate
 /// it returns is the fact that the court convicted a planted fault and acquitted the honest run.

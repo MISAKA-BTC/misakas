@@ -40,6 +40,7 @@ mod palw_line;
 mod palw_model;
 mod palw_shard_court;
 mod palw_shard_licensing;
+mod palw_verify_context;
 #[cfg(feature = "evm-send")]
 mod prea;
 /// ADR-0079 Decision 13: `node security-report` — the host posture, printed from live state.
@@ -546,6 +547,43 @@ enum PalwCmd {
         /// JSON output (`--output json` does the same).
         #[arg(long)]
         json: bool,
+    },
+    /// **ADR-0110: run a context vector through the network's own pipeline** — produce, commit,
+    /// seat, court, availability, fit — and write one canonical document whose `document_id`
+    /// covers what every honest machine must agree on and nothing this host measured. No node is
+    /// contacted. `--sign-with` writes a receipt: evidence that this key reproduced the vector,
+    /// never a vote — nothing reads it, and no count of receipts arms anything.
+    VerifyContext {
+        /// A shipped vector by name (`--list` names them).
+        #[arg(long, conflicts_with = "vector_file")]
+        vector: Option<String>,
+        /// A vector that is not shipped, as its JSON document — its document says `shipped: false`.
+        #[arg(long)]
+        vector_file: Option<std::path::PathBuf>,
+        /// List the shipped vectors, their ids and where each is meant to run.
+        #[arg(long)]
+        list: bool,
+        /// A comma-separated subset of produce,commit,seat,court,availability,fit (default: all).
+        #[arg(long)]
+        stages: Option<String>,
+        /// Write the canonical document here.
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+        /// Where the receipt goes (default: beside `--out`, as `<out>.receipt.json`).
+        #[arg(long)]
+        receipt_out: Option<std::path::PathBuf>,
+        /// Sign a receipt with the ML-DSA-87 seed in this perms-checked file.
+        #[arg(long)]
+        sign_with: Option<String>,
+    },
+    /// **ADR-0110: check a context receipt** — its signature under the receipt context, and, with
+    /// `--document`, that the document's recomputed id is the one the receipt signed.
+    VerifyReceipt {
+        /// The receipt JSON `verify-context --sign-with` wrote.
+        receipt: std::path::PathBuf,
+        /// The document it is a receipt for.
+        #[arg(long)]
+        document: Option<std::path::PathBuf>,
     },
     /// **ADR-0087: a line's model market** as the tip holds it — reserve, positions in the curve,
     /// price, sold, burned, paid, status — and a quote for a buy (`--quote-msk`). Nothing signs.
@@ -1572,6 +1610,20 @@ async fn main() -> std::process::ExitCode {
         }
         Command::Palw(PalwCmd::Certified { class_id, json }) => palw_fp::certified(&ctx, &class_id, json).await,
         Command::Palw(PalwCmd::Claim { claim_ids, outbox, json }) => palw_claim::show(&ctx, &claim_ids, outbox.as_deref(), json).await,
+        Command::Palw(PalwCmd::VerifyContext { vector, vector_file, list, stages, out, receipt_out, sign_with }) => {
+            palw_verify_context::verify_context(palw_verify_context::VerifyContextArgs {
+                vector: vector.as_deref(),
+                vector_file: vector_file.as_deref(),
+                list,
+                stages: stages.as_deref(),
+                out: out.as_deref(),
+                receipt_out: receipt_out.as_deref(),
+                key: sign_with.map(|path| keys::KeySource { key_file: Some(path), key_stdin: false }),
+            })
+        }
+        Command::Palw(PalwCmd::VerifyReceipt { receipt, document }) => {
+            palw_verify_context::verify_receipt(&receipt, document.as_deref())
+        }
         Command::Palw(PalwCmd::Derived { claim_id, json }) => palw_derived::show(&ctx, &claim_id, json).await,
         Command::Palw(PalwCmd::ModelShow { line_id, quote_msk, json }) => palw_model::show(&ctx, &line_id, quote_msk, json).await,
         Command::Palw(PalwCmd::ModelPositions { holder, key, json }) => {
