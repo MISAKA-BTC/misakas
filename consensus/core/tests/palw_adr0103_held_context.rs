@@ -293,3 +293,54 @@ fn the_prompt_cap_passes_the_frame_only_on_a_held_mint() {
     let err = format!("{:?}", shipped.validate_palw_v2().expect_err("a shipped bundle cannot carry it"));
     assert!(err.contains("held regime's contexts") || err.contains("from genesis"), "{err}");
 }
+
+/// **Decision 7 — the plan prices the fetch, and the window binds the shard count.** The K3
+/// stand-in on the held composition at 2M: the fetch column is the shard's state at the last
+/// interval's start (linear in the position, the one linear term the regime keeps), the whole-model
+/// shard fetches exactly its cache and state at that position, and at a seat's gigabit link the
+/// fewest shards that also RESUME inside `window_receipt` is no fewer — and at a slow link strictly
+/// more — than the fewest that merely fit the bytes. A link too slow for any plan is refused by
+/// name, `WindowTooShort`, never as a budget it did meet.
+#[test]
+fn the_shard_plan_prices_the_fetch_and_the_window_binds_the_shard_count() {
+    use kaspa_consensus_core::palw_held_context_v1::{palw_held_interval_positions_v1, palw_held_replay_row_v1};
+    use kaspa_consensus_core::palw_qwen36_profile::{PalwQwen36GeometryV1, qwen36_profile_v7};
+    use kaspa_consensus_core::palw_shard_plan_v1::{
+        PalwSeatResumeBudgetV1, PalwShardPlanError, palw_qwen36_artifact_bytes_v1, palw_shard_plan_for_seat_v1,
+        palw_shard_plan_for_seat_within_window_v1, palw_shard_plan_v1,
+    };
+    use kaspa_consensus_core::palw_model_fit_v1::stand_ins;
+    const GIB: u64 = 1 << 30;
+    let g = PalwQwen36GeometryV1 { n_ctx: 1 << 21, ..stand_ins::KIMI_K3_AS_HYBRID_V1 };
+    let profile = qwen36_profile_v7(g).expect("the held stand-in builds at 2M");
+    let artifact = palw_qwen36_artifact_bytes_v1(&g).scaled_to_total(stand_ins::KIMI_K3_TOTAL_PARAMETERS);
+
+    // The fetch column: the whole model as one shard fetches its whole state at the position.
+    let whole = palw_shard_plan_v1(&profile, &artifact, 1).expect("one shard");
+    let shard = &whole.shards[0];
+    let at = u64::from(g.n_ctx);
+    assert_eq!(shard.fetch_bytes_at_v1(whole.kv_row_bytes, at), shard.kv_cache_bytes + shard.recurrent_state_bytes);
+    assert_eq!(
+        shard.fetch_bytes_at_v1(whole.kv_row_bytes, 2 * at) - shard.fetch_bytes_at_v1(whole.kv_row_bytes, at),
+        shard.fetch_bytes_at_v1(whole.kv_row_bytes, at) - shard.recurrent_state_bytes,
+        "linear in the position: a doubling adds the cache again"
+    );
+
+    let window_receipt = bundle(&palw_rc_shipped_params()).state.window_receipt();
+    let budget = |bandwidth: u64| PalwSeatResumeBudgetV1 {
+        seat_budget_bytes: 256 * GIB,
+        bandwidth_bytes_per_second: bandwidth,
+        window_receipt_daa: window_receipt,
+        replay_ms_per_position: palw_held_replay_row_v1(&profile).replay_ms_per_position(),
+        interval_positions: palw_held_interval_positions_v1(&profile),
+    };
+    let by_bytes = palw_shard_plan_for_seat_v1(&profile, &artifact, 256 * GIB, 92).expect("the bytes fit some plan");
+    let fast = palw_shard_plan_for_seat_within_window_v1(&profile, &artifact, &budget(125_000_000), 92).expect("a gigabit seat resumes");
+    assert!(fast.shard_count >= by_bytes.shard_count, "the window never needs fewer shards than the bytes");
+    let slow = palw_shard_plan_for_seat_within_window_v1(&profile, &artifact, &budget(500_000), 92).expect("a slow seat resumes, sharded");
+    assert!(slow.shard_count > by_bytes.shard_count, "a slow link needs more shards than the bytes alone: {} vs {}", slow.shard_count, by_bytes.shard_count);
+    assert!(matches!(
+        palw_shard_plan_for_seat_within_window_v1(&profile, &artifact, &budget(1), 92),
+        Err(PalwShardPlanError::WindowTooShort { .. })
+    ));
+}

@@ -424,4 +424,94 @@ fn main() {
             println!("- written: `{path}`\n");
         }
     }
+    print_held_fetch_column_v1(&args);
+}
+
+/// **ADR-0103 Decision 7: the fetch column, on the held rows, at 2M.** For each held row (graph-v7:
+/// the dense lineage and the K3 stand-in on the held composition) at `2^21` positions: per shard
+/// count, the widest shard's fetch at the job's last interval and what resuming it costs at three
+/// seat links; then the fewest shards a seat can hold AND resume inside testnet-11's
+/// `window_receipt` (the drill's margin), per link. Arithmetic over the plan and the family's
+/// measured replay row; the certification drill is what makes a width a number (ADR-0075 D7).
+fn print_held_fetch_column_v1(args: &Args) {
+    use kaspa_consensus_core::palw_held_context_v1::{palw_held_interval_positions_v1, palw_held_replay_row_v1, palw_held_seat_budget_ms_v1};
+    use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, qwen25_a16_artifact_row_profile_v7};
+    use kaspa_consensus_core::palw_qwen36_profile::{PalwQwen36GeometryV1, qwen36_profile_v7};
+    use kaspa_consensus_core::palw_shard_plan_v1::{
+        PalwSeatResumeBudgetV1, palw_qwen25_artifact_bytes_v1, palw_qwen36_artifact_bytes_v1, palw_shard_plan_for_seat_within_window_v1,
+        palw_shard_resume_ms_v1,
+    };
+    let n_ctx = 1u32 << 21;
+    let window_receipt = match &palw_rc_shipped_params().palw_consensus_mode {
+        PalwConsensusMode::ConsensusV2(bundle) => bundle.state.window_receipt(),
+        _ => return,
+    };
+    let links: [(&str, u64); 3] = [("10 Gbit/s", 1_250_000_000), ("1 Gbit/s", 125_000_000), ("100 Mbit/s", 12_500_000)];
+    let seat = args.seat_gibs.iter().copied().max().unwrap_or(256) << 30;
+    println!("## ADR-0103 Decision 7 — the fetch column, on the held rows, at 2^21 positions\n");
+    println!(
+        "The seat's budget is `window_receipt` = {window_receipt} DAA over the drill's margin = **{} ms**; a seat of {} GiB. The fetch is the \
+         widest shard's state at the last interval's start (`n_ctx − P`); a shard replays `P` positions of its share of the layers.\n",
+        palw_held_seat_budget_ms_v1(window_receipt),
+        seat >> 30
+    );
+    let rows: Vec<(&str, Result<PalwShapeProfileV3, String>, kaspa_consensus_core::palw_shard_plan_v1::PalwArtifactBytesV1)> = vec![
+        (
+            "Qwen2.5-1.5B A16 graph-v7 (dense, held)",
+            qwen25_a16_artifact_row_profile_v7(PalwQwen25GeometryV1 { n_ctx, ..QWEN25_1_5B }).map_err(|e| format!("{e:?}")),
+            palw_qwen25_artifact_bytes_v1(&QWEN25_1_5B),
+        ),
+        (
+            "Kimi K3 stand-in as graph-v7 (card total; NOT a class)",
+            qwen36_profile_v7(PalwQwen36GeometryV1 { n_ctx, ..stand_ins::KIMI_K3_AS_HYBRID_V1 }).map_err(|e| format!("{e:?}")),
+            palw_qwen36_artifact_bytes_v1(&PalwQwen36GeometryV1 { n_ctx, ..stand_ins::KIMI_K3_AS_HYBRID_V1 })
+                .scaled_to_total(stand_ins::KIMI_K3_TOTAL_PARAMETERS),
+        ),
+    ];
+    for (name, profile, artifact) in rows {
+        let Ok(profile) = profile else {
+            println!("### {name}\n\n- the held row does not build at 2^21\n");
+            continue;
+        };
+        let p = palw_held_interval_positions_v1(&profile);
+        let rate = palw_held_replay_row_v1(&profile).replay_ms_per_position();
+        let budget_at = |bandwidth: u64| PalwSeatResumeBudgetV1 {
+            seat_budget_bytes: seat,
+            bandwidth_bytes_per_second: bandwidth,
+            window_receipt_daa: window_receipt,
+            replay_ms_per_position: rate,
+            interval_positions: p,
+        };
+        println!("### {name} — P = {p} positions, {rate} ms a position (the family's replay row)\n");
+        print!("| shards | widest seat | widest fetch at the last interval |");
+        for (link, _) in links {
+            print!(" resume at {link} |");
+        }
+        println!();
+        println!("|---|---|---|---|---|---|");
+        for shards in [1u32, 2, 4, 8, 16, 32, 64] {
+            if shards > u32::from(profile.layer_count) {
+                continue;
+            }
+            let Ok(plan) = palw_shard_plan_v1(&profile, &artifact, shards) else { continue };
+            let start = u64::from(n_ctx - p);
+            let widest_fetch = plan.shards.iter().map(|s| s.fetch_bytes_at_v1(plan.kv_row_bytes, start)).max().unwrap_or(0);
+            print!("| {shards} | {} | {} |", gib(plan.widest_seat_bytes), gib(widest_fetch));
+            for (_, bandwidth) in links {
+                let slowest = plan.shards.iter().map(|s| palw_shard_resume_ms_v1(&plan, s, profile.layer_count, &budget_at(bandwidth))).max().unwrap_or(0);
+                print!(" {:.1} h |", slowest as f64 / 3_600_000.0);
+            }
+            println!();
+        }
+        println!("\nFewest shards a {} GiB seat can hold AND resume inside the window:\n", seat >> 30);
+        println!("| link | shards |");
+        println!("|---|---|");
+        for (link, bandwidth) in links {
+            match palw_shard_plan_for_seat_within_window_v1(&profile, &artifact, &budget_at(bandwidth), u32::from(profile.layer_count)) {
+                Ok(plan) => println!("| {link} | **{}** |", plan.shard_count),
+                Err(e) => println!("| {link} | {e} |"),
+            }
+        }
+        println!();
+    }
 }
