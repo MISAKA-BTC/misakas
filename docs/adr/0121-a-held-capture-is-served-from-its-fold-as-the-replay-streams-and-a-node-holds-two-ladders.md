@@ -154,6 +154,30 @@ annex's now stops at the last disputed leaf. Memory is §2's bound. The wire is 
 class that is not held; for a held class the one new meaning is the block request's number (D3), in
 the build that first registers one.
 
+**Measured on the real 1.5B weights (2026-09-12, one 12-core M-series host, release build).** The
+held row (graph-v7) over `qwen25-1.5b-a16.palwart`, built at testnet-11's `2^26` ladder, running a
+free-prompt job of 1,024 prompt positions and 4 decode tokens — **105,865,280 step leaves, past the
+`2^26` = 67,108,864 the held producer refused before this ADR** — through every route
+(`a_held_job_past_the_networks_ladder_on_the_real_dense_row`, env-gated):
+
+| route | size | time |
+|---|---|---|
+| the producer's fold (the whole job) | material 4.24 MB | 91 s |
+| interval 0 (512 positions): the executor's opening / the seat's verdict | 830 KB | 45 s / 45 s, Valid |
+| interval 1 (512 positions): opening / verdict | 831 KB | 64 s / 46 s, Valid |
+| interval 2 (3 decode steps): opening / the seat's anchor recompute / verdict | 1.11 MB | 9 s / 24 s / 0.4 s, Valid |
+| a liar (a separate instance) with one wrong tile at leaf 79,010,838, inside interval 1: the seat's verdict | — | 46 s, `FaultInRange` at block 19,289 |
+| the block, asked by its interval number 6,413 / the leaf named from it | 262 KB | 50 s / 8 s, leaf 79,010,838 |
+| the liar's own fold builds its leaf's evidence / the one-move verdict | 16 KB | 4 s, `ExecutorGuilty` |
+
+575 s end to end, a peak of 6.2 GB resident (the artifact, the model's cache and the process's
+buffers; no vector of the job's leaves exists). The same drill runs at fixture scale in the default
+suite, against a `2^12` ladder its job is past
+(`a_held_liar_past_the_networks_ladder_is_named_and_convicted`). The liar is the dense tier's
+drill fault, made in the fold's stream and replayed by the instance that lied
+(`a16_execute_free_prompt_streaming_with_drill_fault_v1`; DRILL ONLY, the trait's contract), and
+it moves exactly one committed tile (`the_drill_liar_moves_one_committed_tile_and_nothing_else`).
+
 ## 5. Invariants the tests hold
 
 * `the_fold_range_root_is_the_consensus_root` — the segmented walk equals the consensus walk over
@@ -176,6 +200,12 @@ the build that first registers one.
   named between the two and the old refusal outside the class's ladder.
 * `the_close_from_served_intervals_holds_and_asks_for_the_disputed_leafs_block` — the close's
   gathering names the block by its class's number.
+* `a_held_liar_past_the_networks_ladder_is_named_and_convicted` — §4's drill at fixture scale: an
+  honest held job past the network's ladder is Valid on its first, middle and last interval; a liar
+  is `FaultInRange`, its block is served by number, the leaf is named, and the one-move court
+  convicts on the liar's own evidence.
+* `the_drill_liar_moves_one_committed_tile_and_nothing_else` — the drill's lie is one tile: the same
+  answer and checkpoints, one retained block different, its own roots.
 
 ## 6. Supersession
 
@@ -197,9 +227,25 @@ first three items (the two knobs, the replays, the retain level) are closed here
   from the interval's anchor) is its own piece of work.
 * **The worker frame and the gateway's prompt limit** (256 KiB, about 60,000 ids; 64 KiB of text),
   which bind only past the network's ladder.
-* **A measured run at scale.** Every bound above is the code's own arithmetic and the fixtures'; a
-  4,096-position held job of the 1.5B row, produced, opened, verified and named end to end on real
-  hardware, has not been run.
+* **An artifact's rotary width.** Found by §4's run: the shipped 1.5B artifact was converted at the
+  512-position row, and its inventory — the root a class registers — commits a rotary row for each of
+  those positions and none past them. A held class registered over that artifact can neither run nor
+  be adjudicated past 512 positions, whatever its ladder (the engine refuses `PositionOutOfRange`;
+  the court would open a row the root does not hold). A held class is registered over an artifact
+  converted at its own `n_ctx` — 512 bytes of rotary table a position at the 1.5B head width, a GiB
+  at `2^21` — and nothing on the chain or in the registration tooling checks it yet. The run
+  extended the table with the same generator (its first 512 rows checked to be the artifact's own).
+* **A lie in a block that straddles an interval's edge.** Blocks are aligned to the step space,
+  intervals are not, so the first and last blocks of every interval's range are whole in neither
+  interval: the V4 opening carries no digest for them, no block answer serves them, and a fault
+  there is addressed by `fold_edge_v1` as the left edge whenever the range does not start on a
+  block boundary — the wrong edge when the lie is on the right. A seat that finds such a fault names
+  no leaf, and a held class has no bisection to fall back on: a liar that knows the geometry can put
+  its lie where the one-move court is never given an address. (The drill lies inside a whole block
+  for that reason.) The remedy is an edge answer — the two edge portions' leaves, at most two blocks,
+  checked by the range root walk the seat already runs (`base0_fold_range_root_v1` over the served
+  edges, the served digests and the siblings) and then compared with the seat's own — a node-side
+  request kind, consensus-inert.
 
 ## 8. Number hygiene
 

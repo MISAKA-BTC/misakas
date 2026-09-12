@@ -6660,6 +6660,55 @@ mod tests {
         straddles
     }
 
+    /// **The dense tier's drill liar lies at exactly one leaf, in the stream of the fold** (ADR-0121's
+    /// measured run needs a held liar past the materialization cap, where the attempt lane's dense
+    /// fault is refused). On the held row: the liar's execution is the honest one — the same answer,
+    /// the same checkpoints — and its fold differs only in the block that holds the lie, so its step
+    /// root and execution root are its own; a leaf outside the job is refused by name.
+    #[test]
+    fn the_drill_liar_moves_one_committed_tile_and_nothing_else() {
+        let form = kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1;
+        let (artifact, profile, ctx, prompt, honest) = dense_v7_run_with_form(8, 14, form);
+        let engine = crate::engine_a16::A16Engine::new(&artifact).expect("an A16 artifact");
+        let plan = engine.plan_from_profile(&profile).expect("the plan");
+        let leaves = honest.binding.step_leaf_count;
+        let leaf = leaves / 2;
+        let lying = crate::qwen25_a16_backend::a16_execute_free_prompt_streaming_with_drill_fault_v1(
+            &artifact,
+            &profile,
+            Some(&plan),
+            &ctx,
+            &prompt,
+            kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES,
+            &mut |_| {},
+            leaf,
+        )
+        .expect("the drill's liar runs");
+        assert_eq!(lying.generated_token_ids, honest.generated_token_ids, "the execution is the honest one");
+        assert_eq!(lying.checkpoints.leaves, honest.checkpoints.leaves, "and so is every checkpoint");
+        assert_ne!(lying.binding.step_merkle_root, honest.binding.step_merkle_root, "the lie is committed");
+        assert_ne!(lying.execution_root, honest.execution_root);
+        let (liar, truth) = (lying.step_tree.expect("a fold"), honest.step_tree.expect("a fold"));
+        let block = leaf >> truth.retain_level();
+        let (liar, truth) = (liar.retained_nodes(), truth.retained_nodes());
+        let differing: Vec<usize> = (0..truth.len()).filter(|i| liar[*i] != truth[*i]).collect();
+        assert_eq!(differing, vec![block as usize], "only the block that holds the lie differs");
+        assert!(
+            crate::qwen25_a16_backend::a16_execute_free_prompt_streaming_with_drill_fault_v1(
+                &artifact,
+                &profile,
+                Some(&plan),
+                &ctx,
+                &prompt,
+                kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES,
+                &mut |_| {},
+                leaves,
+            )
+            .is_err(),
+            "a leaf outside the job is refused"
+        );
+    }
+
     /// **ADR-0121 on the held row: what the executor streams, and how a block is named.** At the
     /// regime's ladder a held class still folds at 12; a block-leaves request's number counts from
     /// the block holding the interval's first leaf, and the executor serves the block that number

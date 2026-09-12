@@ -224,6 +224,7 @@ pub fn a16_execute_for_attempt_streaming_capped_v1(
         max_step_leaf_count,
         crate::legs::Base0CaptureKindV1::DenseTiles,
         on_token,
+        None,
     )
 }
 
@@ -252,7 +253,98 @@ pub fn a16_execute_free_prompt_streaming_v1(
         max_step_leaf_count,
         crate::legs::Base0CaptureKindV1::Fold,
         on_token,
+        None,
     )
+}
+
+/// **DRILL ONLY: the same folded run, with one committed tile made a lie** — the held liar a
+/// seat, a naming and a court are exercised against at a job's real size, where the attempt lane's
+/// dense fault (`execute_with_injected_fault`) cannot reach: past the materialization cap a dense
+/// capture is refused, and a fold hashes each tile as it is produced, so the lie is made in the
+/// stream. The execution itself is honest — only the committed row at `leaf` is moved, as the
+/// floor's drill moves a tile (`corrupt_capture_v1`) — so every other leaf is a seat's own and
+/// the fault is at exactly `leaf`. Never reached on a network carrying value (the trait's contract).
+#[allow(clippy::too_many_arguments)]
+pub fn a16_execute_free_prompt_streaming_with_drill_fault_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &PalwShapeProfileV3,
+    plan: Option<&crate::engine_a16::A16ProfilePlanV1>,
+    ctx: &PalwJobContextV2,
+    prompt: &[usize],
+    max_step_leaf_count: u64,
+    on_token: &mut dyn FnMut(u32),
+    leaf: u64,
+) -> Result<crate::produce::Base0ExecutionV1, String> {
+    a16_execute_streaming_v1(
+        artifact,
+        profile,
+        plan,
+        ctx,
+        prompt,
+        max_step_leaf_count,
+        crate::legs::Base0CaptureKindV1::Fold,
+        on_token,
+        Some(leaf),
+    )
+}
+
+/// Where a drill's lie at `leaf` lands: the call and position its tile is committed at, the row
+/// (table, layer, index within the table) it is cut from, and the lane that starts the tile.
+struct A16DrillFaultSiteV1 {
+    call: u32,
+    position: u32,
+    table: kaspa_consensus_core::palw_step::PalwStepTableV1,
+    layer: u16,
+    index: usize,
+    lane: usize,
+}
+
+impl A16DrillFaultSiteV1 {
+    fn of_leaf(profile: &PalwShapeProfileV3, ctx: &PalwJobContextV2, leaf: u64) -> Result<Self, String> {
+        use kaspa_consensus_core::palw_step::PalwStepTableV1;
+        let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(profile, ctx, leaf)
+            .ok_or_else(|| format!("the drill's leaf {leaf} is not a main step coordinate"))?;
+        let (node, layer) =
+            profile.resolve_node_slot(coord.node_slot).ok_or_else(|| format!("slot {} names no node", coord.node_slot))?;
+        use kaspa_consensus_core::palw_step::PalwLayerKindV1;
+        // The slot walk `resolve_node_slot` takes: pre, then each layer's kind's table, then post.
+        let table_len = |l: u16| match profile.layer_kind(l) {
+            PalwLayerKindV1::GatedDeltaNet => profile.gdn_nodes.len() as u32,
+            PalwLayerKindV1::Attention => profile.attn_nodes.len() as u32,
+        };
+        let pre = profile.pre_nodes.len() as u32;
+        let (table, layer, index) = match layer {
+            None if coord.node_slot < pre => (PalwStepTableV1::Pre, 0, coord.node_slot as usize),
+            None => {
+                let before: u32 = pre + (0..profile.layer_count).map(table_len).sum::<u32>();
+                (PalwStepTableV1::Post, 0, (coord.node_slot - before) as usize)
+            }
+            Some(layer) => {
+                let before: u32 = pre + (0..layer).map(table_len).sum::<u32>();
+                let table = match profile.layer_kind(layer) {
+                    PalwLayerKindV1::GatedDeltaNet => PalwStepTableV1::Gdn,
+                    PalwLayerKindV1::Attention => PalwStepTableV1::Attn,
+                };
+                (table, layer, (coord.node_slot - before) as usize)
+            }
+        };
+        let lane = coord.tile_index as usize * node.tile_len.max(1) as usize;
+        Ok(Self { call: coord.call_index, position: coord.position, table, layer, index, lane })
+    }
+
+    /// Move the committed row the site names, when these are its call's rows.
+    fn apply(&self, call: u32, position: u32, rows: &mut [crate::legs::Base0CapturedRowV1]) -> Result<(), String> {
+        if (call, position) != (self.call, self.position) {
+            return Ok(());
+        }
+        let row = rows
+            .iter_mut()
+            .find(|r| r.table == self.table && r.layer == self.layer && r.index == self.index)
+            .ok_or_else(|| "the drill's fault lands on no committed row".to_string())?;
+        let value = row.row.get_mut(self.lane).ok_or_else(|| "the drill's fault lands past its row".to_string())?;
+        *value = value.wrapping_add(1);
+        Ok(())
+    }
 }
 
 /// **The one capture loop this family has**, over either sink. A second loop would be a second
@@ -267,6 +359,7 @@ fn a16_execute_streaming_v1(
     max_step_leaf_count: u64,
     capture_kind: crate::legs::Base0CaptureKindV1,
     on_token: &mut dyn FnMut(u32),
+    drill_fault_leaf: Option<u64>,
 ) -> Result<crate::produce::Base0ExecutionV1, String> {
     use kaspa_consensus_core::palw_state_chunk_map as map;
 
@@ -320,6 +413,11 @@ fn a16_execute_streaming_v1(
 
     let leaf_count =
         kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(profile, ctx, max_step_leaf_count).map_err(|e| format!("{e:?}"))?;
+    let fault = match drill_fault_leaf {
+        Some(leaf) if leaf < leaf_count => Some(A16DrillFaultSiteV1::of_leaf(profile, ctx, leaf)?),
+        Some(leaf) => return Err(format!("the drill's leaf {leaf} is outside the job's {leaf_count} leaves")),
+        None => None,
+    };
     let mut capture = crate::legs::Base0CaptureSinkV1::for_kind(capture_kind, profile, ctx, leaf_count, max_step_leaf_count)
         .map_err(|e| format!("{e:?}"))?;
     let checkpoint_profile = map::integer_kv_checkpoint_profile_v1(map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1);
@@ -366,6 +464,9 @@ fn a16_execute_streaming_v1(
             if at + 1 != prefill {
                 rows.retain(|r| r.table != kaspa_consensus_core::palw_step::PalwStepTableV1::Post);
             }
+            if let Some(fault) = &fault {
+                fault.apply(0, at as u32, &mut rows)?;
+            }
             capture.push_call(profile, ctx, 0, at as u32, &rows).map_err(|e| format!("{e:?}"))?;
             // **A checkpoint after a PREFILL position, when the class's cadence says so** (ADR-0082
             // Decision 4, amended). A per-call class wants none of these and this is `false` at every
@@ -395,7 +496,10 @@ fn a16_execute_streaming_v1(
         let cache_position = prefill + call - 1;
         let (logits, trace) =
             forward(&engine, &mut cache, next as usize, cache_position).map_err(|e| format!("decode at {cache_position}: {e}"))?;
-        let rows = crate::legs::a16_captured_rows_v1(&trace);
+        let mut rows = crate::legs::a16_captured_rows_v1(&trace);
+        if let Some(fault) = &fault {
+            fault.apply(call as u32, 0, &mut rows)?;
+        }
         capture.push_call(profile, ctx, call as u32, 0, &rows).map_err(|e| format!("{e:?}"))?;
         next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&logits) as u32;
         generated.push(next);
@@ -563,6 +667,12 @@ pub struct Qwen25A16Backend {
     network_ladder: u64,
     /// The network's prompt-commitment form (ADR-0081 Decision 3); see `Base0Backend::prompt_ids_form`.
     prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    /// **DRILL ONLY: the job this instance lied in, and the leaf** — set by
+    /// [`PalwExecutionBackendV1::execute_free_prompt_with_injected_fault`], read by every replay this
+    /// instance runs for that job's context, so the liar's openings, blocks and evidence are its lie
+    /// (a fold keeps no tiles: what it serves it replays). Keyed by the job's context hash, so the
+    /// same instance judges every other job honestly. `None` everywhere but a drill.
+    drill_fault: std::sync::Mutex<Option<(Hash64, u64)>>,
 }
 
 /// **Can a class with this graph carry a capture at all — the ONE spelling of the predicate.**
@@ -645,6 +755,7 @@ impl Qwen25A16Backend {
             court_capable,
             network_ladder: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            drill_fault: std::sync::Mutex::new(None),
         })
     }
 
@@ -684,6 +795,11 @@ impl Qwen25A16Backend {
     /// only the streamed routes answer, and the whole-capture ones refuse by name.
     pub fn materialize_cap(&self) -> u64 {
         self.network_ladder
+    }
+
+    /// DRILL ONLY: the `(job context, leaf)` this instance's drill run lied at, if it ran one.
+    fn drill_fault_v1(&self) -> Option<(Hash64, u64)> {
+        *self.drill_fault.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// **A dense class's artifact must SAY which tokenizer its ids belong to, or this constructor
@@ -803,6 +919,7 @@ impl Qwen25A16Backend {
             court_capable,
             network_ladder: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            drill_fault: std::sync::Mutex::new(None),
         })
     }
 
@@ -852,6 +969,122 @@ impl Qwen25A16Backend {
 }
 
 impl Qwen25A16Backend {
+    /// The free-prompt run behind both of the trait's verbs: the honest one (`drill_fault_leaf =
+    /// None`) and the drill's, whose committed tile at the leaf is a lie
+    /// ([`a16_execute_free_prompt_streaming_with_drill_fault_v1`]).
+    fn execute_free_prompt_v1(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_tokens: &[usize],
+        on_token: &mut dyn FnMut(u32),
+        drill_fault_leaf: Option<u64>,
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
+        use kaspa_consensus_core::palw_fp_execution_v3::{
+            PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3, palw_fp_run_facts_for_executed_v1,
+        };
+
+        // ADR-0077 SA-6: an artifact this host can no longer read is a job failure named at the
+        // boundary, not a fault taken three layers into a kernel.
+        self.artifact_read_probe_v1()?;
+
+        if job.prompt_tokens as usize != prompt_tokens.len() {
+            return Err(format!("the job declares {} prompt tokens and {} were supplied", job.prompt_tokens, prompt_tokens.len()));
+        }
+        // **An empty prompt is refused HERE, where every other malformed job is.** The graceful
+        // answer used to live at the end (`an empty prefill`, after the whole loop), and the
+        // Decision-F probe below indexes `prompt_tokens[0]` before reaching it — so a zero-token
+        // job PANICKED. That is network-reachable: a free-prompt material is gossiped by anyone,
+        // a seat replays it in-process, and a panicked panel task stops filing receipts for every
+        // claim it holds, not just this one.
+        if prompt_tokens.is_empty() {
+            return Err("a job with no prompt tokens is not a job".to_string());
+        }
+        let vocab = self.artifact.shape.vocab;
+        if let Some(bad) = prompt_tokens.iter().find(|t| **t >= vocab) {
+            return Err(format!("token {bad} is outside this class's vocabulary of {vocab}"));
+        }
+
+        // What the derivation asks for. `shape_profile_id` is the class; the rest are the values
+        // this family's job contexts carry, taken from the same profile rather than invented.
+        let class = PalwFpClassFactsV3 {
+            model_profile_id: self.shape_id,
+            runtime_manifest_hash: Hash64::default(),
+            runtime_class_id: self.shape_id,
+            shape_profile_id: self.class_profile_id,
+            cu_ruleset_id: Hash64::default(),
+        };
+        // A declared budget, decoded exactly: the count and the stop reason are known before the
+        // run. The pairing is DERIVED from the count (ADR-0074 Decision 7) rather than typed here,
+        // so that a seat rebuilding this context for an early-stopping claim gets the run that
+        // happened instead of the budget that was asked for.
+        let shape = palw_fp_run_facts_for_executed_v1(job, job.decode_token_limit);
+        // Built BEFORE the run and run under: `palw_fp_execution_root_v3` recomputes the court's
+        // root from this context, so an execution carried out under any other one commits a root
+        // nobody can reproduce.
+        let ctx = palw_fp_job_context_v3(job, &class, &shape, &self.network_id).map_err(|e| format!("{e:?}"))?;
+
+        let prompt_ids: Vec<u32> = prompt_tokens.iter().map(|t| *t as u32).collect();
+        // **The one capture path this family has** (ADR-0049 Decision F's probe, the checkpoint
+        // serializer at the class's declared width, and the selecting-rows retention all live in
+        // it). The free-prompt lane differs from the attempt lane only in where its context and
+        // its tokens come from, so the run itself must not be a second implementation.
+        let run = match drill_fault_leaf {
+            None => a16_execute_free_prompt_streaming_v1(
+                &self.artifact,
+                &self.profile,
+                self.plan.as_ref(),
+                &ctx,
+                prompt_tokens,
+                self.step_ladder_cap(),
+                on_token,
+            )?,
+            Some(leaf) => {
+                let run = a16_execute_free_prompt_streaming_with_drill_fault_v1(
+                    &self.artifact,
+                    &self.profile,
+                    self.plan.as_ref(),
+                    &ctx,
+                    prompt_tokens,
+                    self.step_ladder_cap(),
+                    on_token,
+                    leaf,
+                )?;
+                // What this instance serves for the job from now on replays the lie it committed.
+                *self.drill_fault.lock().unwrap_or_else(|e| e.into_inner()) = Some((ctx.context_hash(), leaf));
+                run
+            }
+        };
+
+        // The four legs, measured — the derived roots the execution root is built from, which is
+        // what `palw_fp_execution_root_v3` recomputes.
+        let (checkpoint_leg_root, step_leg_root) = crate::legs::base0_leg_roots_from_binding_v1(&run.binding);
+        let material = crate::produce::base0_fp_material_encode_v2(&run, &prompt_ids).map_err(|e| e.to_string())?;
+        // The free-prompt lane's own manifest (palw_freeprompt_v3), not the attempt lane's the run carries.
+        let (fp_trace_manifest_root, fp_trace_chunk_count) =
+            crate::produce::base0_fp_trace_manifest_v3(&run.binding.job_context, &run.logits_rows)
+                .ok_or_else(|| "the run's rows build no retained-trace manifest".to_string())?;
+        Ok(kaspa_consensus_core::palw_backend::PalwFpRunV1 {
+            outcome: PalwExecutionOutcomeV1 {
+                trace_root: run.trace_root,
+                output_root: run.output_root,
+                execution_root: run.execution_root,
+                trace_manifest_root: fp_trace_manifest_root,
+                trace_chunk_count: fp_trace_chunk_count,
+                material,
+            },
+            facts: PalwFpRunFactsV3 {
+                full_logits_trace_root: run.trace_root,
+                activation_leg_root: run.binding.activation_leg_root,
+                checkpoint_leg_root,
+                step_leg_root,
+                // The price (ADR-0074 Decision 5): read off the binding, never declared.
+                step_leaf_count: run.binding.step_leaf_count,
+                ..shape
+            },
+            output_token_ids: run.generated_token_ids,
+        })
+    }
+
     /// The one prover behind both [`PalwExecutionBackendV1::refutation_for_index`] and
     /// [`PalwExecutionBackendV1::refutation_for_free_prompt_index`]: `carried` is `None` for an
     /// attempt (the prompt is re-derived from the anchor) and the user's ids for a free prompt.
@@ -1147,12 +1380,15 @@ pub(crate) fn a16_interval_kernels_for_tests_v1<'a>(
     artifact: &'a Base0ArtifactV1,
     plan: Option<&'a crate::engine_a16::A16ProfilePlanV1>,
 ) -> impl crate::fp_interval::Base0FpIntervalKernelsV1 + 'a {
-    A16IntervalKernels { artifact, plan }
+    A16IntervalKernels { artifact, plan, fault: None }
 }
 
 struct A16IntervalKernels<'a> {
     artifact: &'a Base0ArtifactV1,
     plan: Option<&'a crate::engine_a16::A16ProfilePlanV1>,
+    /// DRILL ONLY: the `(job context, leaf)` whose committed tile this replay makes the lie the
+    /// drill's capture committed (`Qwen25A16Backend::drill_fault`); `None` everywhere but a drill.
+    fault: Option<(Hash64, u64)>,
 }
 
 impl crate::fp_interval::Base0FpIntervalKernelsV1 for A16IntervalKernels<'_> {
@@ -1165,6 +1401,22 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for A16IntervalKernels<'_> {
         step_leaf_count: u64,
         sink: &mut dyn FnMut(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1) -> Result<(), String>,
     ) -> Result<(), String> {
+        if let Some((context, leaf)) = self.fault
+            && context == ctx.context_hash()
+        {
+            // The drill's lie, replayed where the capture made it: the tile's first lane moved by
+            // one, as `A16DrillFaultSiteV1::apply` moved the committed row's.
+            let honest = Self { fault: None, ..*self };
+            return honest.replay_interval_into(profile, ctx, start, window, step_leaf_count, &mut |at, mut tile| {
+                if at == leaf
+                    && let Some(lane) = tile.values_le.get_mut(0..4)
+                {
+                    let moved = i32::from_le_bytes([lane[0], lane[1], lane[2], lane[3]]).wrapping_add(1);
+                    lane.copy_from_slice(&moved.to_le_bytes());
+                }
+                sink(at, tile)
+            });
+        }
         let engine = A16Engine::new(self.artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
         let layers = self.artifact.shape.n_layers;
         let row_elements = profile.attn_kv_heads as usize * profile.attn_head_dim as usize;
@@ -1381,93 +1633,18 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         prompt_tokens: &[usize],
         on_token: &mut dyn FnMut(u32),
     ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
-        use kaspa_consensus_core::palw_fp_execution_v3::{
-            PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3, palw_fp_run_facts_for_executed_v1,
-        };
+        self.execute_free_prompt_v1(job, prompt_tokens, on_token, None)
+    }
 
-        // ADR-0077 SA-6: an artifact this host can no longer read is a job failure named at the
-        // boundary, not a fault taken three layers into a kernel.
-        self.artifact_read_probe_v1()?;
-
-        if job.prompt_tokens as usize != prompt_tokens.len() {
-            return Err(format!("the job declares {} prompt tokens and {} were supplied", job.prompt_tokens, prompt_tokens.len()));
-        }
-        // **An empty prompt is refused HERE, where every other malformed job is.** The graceful
-        // answer used to live at the end (`an empty prefill`, after the whole loop), and the
-        // Decision-F probe below indexes `prompt_tokens[0]` before reaching it — so a zero-token
-        // job PANICKED. That is network-reachable: a free-prompt material is gossiped by anyone,
-        // a seat replays it in-process, and a panicked panel task stops filing receipts for every
-        // claim it holds, not just this one.
-        if prompt_tokens.is_empty() {
-            return Err("a job with no prompt tokens is not a job".to_string());
-        }
-        let vocab = self.artifact.shape.vocab;
-        if let Some(bad) = prompt_tokens.iter().find(|t| **t >= vocab) {
-            return Err(format!("token {bad} is outside this class's vocabulary of {vocab}"));
-        }
-
-        // What the derivation asks for. `shape_profile_id` is the class; the rest are the values
-        // this family's job contexts carry, taken from the same profile rather than invented.
-        let class = PalwFpClassFactsV3 {
-            model_profile_id: self.shape_id,
-            runtime_manifest_hash: Hash64::default(),
-            runtime_class_id: self.shape_id,
-            shape_profile_id: self.class_profile_id,
-            cu_ruleset_id: Hash64::default(),
-        };
-        // A declared budget, decoded exactly: the count and the stop reason are known before the
-        // run. The pairing is DERIVED from the count (ADR-0074 Decision 7) rather than typed here,
-        // so that a seat rebuilding this context for an early-stopping claim gets the run that
-        // happened instead of the budget that was asked for.
-        let shape = palw_fp_run_facts_for_executed_v1(job, job.decode_token_limit);
-        // Built BEFORE the run and run under: `palw_fp_execution_root_v3` recomputes the court's
-        // root from this context, so an execution carried out under any other one commits a root
-        // nobody can reproduce.
-        let ctx = palw_fp_job_context_v3(job, &class, &shape, &self.network_id).map_err(|e| format!("{e:?}"))?;
-
-        let prompt_ids: Vec<u32> = prompt_tokens.iter().map(|t| *t as u32).collect();
-        // **The one capture path this family has** (ADR-0049 Decision F's probe, the checkpoint
-        // serializer at the class's declared width, and the selecting-rows retention all live in
-        // it). The free-prompt lane differs from the attempt lane only in where its context and
-        // its tokens come from, so the run itself must not be a second implementation.
-        let run = a16_execute_free_prompt_streaming_v1(
-            &self.artifact,
-            &self.profile,
-            self.plan.as_ref(),
-            &ctx,
-            prompt_tokens,
-            self.step_ladder_cap(),
-            on_token,
-        )?;
-
-        // The four legs, measured — the derived roots the execution root is built from, which is
-        // what `palw_fp_execution_root_v3` recomputes.
-        let (checkpoint_leg_root, step_leg_root) = crate::legs::base0_leg_roots_from_binding_v1(&run.binding);
-        let material = crate::produce::base0_fp_material_encode_v2(&run, &prompt_ids).map_err(|e| e.to_string())?;
-        // The free-prompt lane's own manifest (palw_freeprompt_v3), not the attempt lane's the run carries.
-        let (fp_trace_manifest_root, fp_trace_chunk_count) =
-            crate::produce::base0_fp_trace_manifest_v3(&run.binding.job_context, &run.logits_rows)
-                .ok_or_else(|| "the run's rows build no retained-trace manifest".to_string())?;
-        Ok(kaspa_consensus_core::palw_backend::PalwFpRunV1 {
-            outcome: PalwExecutionOutcomeV1 {
-                trace_root: run.trace_root,
-                output_root: run.output_root,
-                execution_root: run.execution_root,
-                trace_manifest_root: fp_trace_manifest_root,
-                trace_chunk_count: fp_trace_chunk_count,
-                material,
-            },
-            facts: PalwFpRunFactsV3 {
-                full_logits_trace_root: run.trace_root,
-                activation_leg_root: run.binding.activation_leg_root,
-                checkpoint_leg_root,
-                step_leg_root,
-                // The price (ADR-0074 Decision 5): read off the binding, never declared.
-                step_leaf_count: run.binding.step_leaf_count,
-                ..shape
-            },
-            output_token_ids: run.generated_token_ids,
-        })
+    /// DRILL ONLY: the honest run with the committed tile at `leaf` made a lie, in the stream of
+    /// the fold (the trait's contract: never on a network carrying value).
+    fn execute_free_prompt_with_injected_fault(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_tokens: &[usize],
+        leaf_index: u64,
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
+        self.execute_free_prompt_v1(job, prompt_tokens, &mut |_| {}, Some(leaf_index))
     }
 
     fn verify_material(&self, material: &[u8], claim: PalwClaimRootsV1) -> PalwMaterialVerdictV1 {
@@ -1662,7 +1839,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                         prompt_token_ids,
                         self.checkpoint_interval(),
                         self.step_ladder_cap(),
-                        &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
+                        &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1() },
                         &|covered| self.fold_anchor_state_v1(&material, prompt_token_ids, covered),
                         self.prompt_ids_form,
                     )
@@ -1710,7 +1887,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             self.checkpoint_interval(),
             self.step_ladder_cap(),
             state.as_ref(),
-            &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
+            &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1() },
             self.prompt_ids_form,
         )
         .to_consensus_v1()
@@ -1823,7 +2000,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                 prompt_token_ids,
                 self.checkpoint_interval(),
                 self.step_ladder_cap(),
-                &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
+                &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1() },
                 &|covered| self.fold_anchor_state_v1(material, prompt_token_ids, covered),
                 self.prompt_ids_form,
                 disputed,
@@ -1862,7 +2039,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                 prompt_token_ids,
                 self.checkpoint_interval(),
                 self.step_ladder_cap(),
-                &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
+                &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1() },
                 &|covered| self.fold_anchor_state_v1(&material, prompt_token_ids, covered),
             ),
             crate::produce::Base0RetentionV1::Dense((_, tiles, ..)) => {
@@ -1916,7 +2093,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             prompt_token_ids,
             self.checkpoint_interval(),
             cap,
-            &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
+            &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1() },
             &|covered| match &retention {
                 crate::produce::Base0RetentionV1::Folded(material) => self.fold_anchor_state_v1(material, prompt_token_ids, covered),
                 crate::produce::Base0RetentionV1::Dense(_) => None,
@@ -1963,7 +2140,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                     self.step_ladder_cap(),
                 )
             },
-            &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
+            &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1() },
             self.prompt_ids_form,
         )
     }
@@ -1992,7 +2169,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                     prompt_token_ids,
                     self.checkpoint_interval(),
                     self.step_ladder_cap(),
-                    &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
+                    &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1() },
                     &|covered| self.fold_anchor_state_v1(&material, prompt_token_ids, covered),
                     self.prompt_ids_form,
                 )
@@ -2050,7 +2227,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                     self.step_ladder_cap(),
                 )
             },
-            &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
+            &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1() },
             self.prompt_ids_form,
         )
     }
@@ -2974,7 +3151,7 @@ mod free_prompt_tests {
                 index,
                 &ids,
                 interval,
-                &A16IntervalKernels { artifact: &artifact, plan: None },
+                &A16IntervalKernels { artifact: &artifact, plan: None, fault: None },
                 kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             )
             .unwrap_or_else(|e| panic!("interval {index} opens from the fold: {e}"));
@@ -4480,5 +4657,342 @@ mod probe_open_interval {
                 Err(e) => eprintln!("interval {index}: does not open ({:.0?}): {e}", t.elapsed()),
             }
         }
+    }
+}
+
+/// **ADR-0121's measured run: a held job past the network's ladder, end to end.**
+///
+/// One drill, run twice: over a fixture in the default suite (a network ladder of `2^12` so the
+/// fixture's job is past it), and over the real 1.5B artifact when `MISAKA_PALW_HELD_ARTIFACT`
+/// names it. The held row (graph-v7), built at the network's ladder, runs a free-prompt job past
+/// that ladder; then every route the node takes for a held claim, timed and sized: the executor's
+/// interval openings, the seat's own anchor recompute and its verdict on the first, middle and
+/// last interval; and a liar — a separate instance, as a liar is a separate node — whose fold
+/// commits one wrong tile in the last interval: the seat's fault, the block it names by the
+/// interval's count, the leaf named from the served block, and the one-move verdict on the
+/// evidence the liar's own fold builds.
+///
+/// ```text
+/// MISAKA_PALW_HELD_ARTIFACT=/path/qwen25-1.5b-a16.palwart MISAKA_PALW_HELD_POSITIONS=1024 \
+///   cargo test --release -p misaka-palw-base0 --lib -- held_job_past_the_networks_ladder --nocapture
+/// ```
+#[cfg(test)]
+mod held_real_row_probe {
+    use super::*;
+    use kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1;
+    use kaspa_consensus_core::palw_freeprompt_v3::{
+        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFreePromptJobV3, fp_job_id_v3,
+    };
+    use kaspa_consensus_core::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1};
+    use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, qwen25_a16_artifact_row_profile_v7};
+    use kaspa_consensus_core::palw_state_chunk_map::{PALW_HELD_STEP_LADDER_V1, palw_profile_is_held_v4};
+    use kaspa_consensus_core::palw_step::{PalwStepCoordinateV1, PalwStepOpKindV1, canonical_step_leaf_index};
+    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+
+    fn env_u32(name: &str, default: u32) -> u32 {
+        std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+    }
+
+    /// The drill both tests run. `backend` builds one instance of the class at the network's
+    /// ladder — called twice, for the honest party and for the liar.
+    fn drill(
+        label: &str,
+        artifact: &std::sync::Arc<Base0ArtifactV1>,
+        profile: &PalwShapeProfileV3,
+        positions: u32,
+        decode: u32,
+        network: u64,
+        backend: &dyn Fn() -> Qwen25A16Backend,
+    ) {
+        let started = std::time::Instant::now();
+        assert!(palw_profile_is_held_v4(profile));
+        let honest = backend();
+        assert_eq!((honest.step_ladder_cap(), honest.materialize_cap()), (PALW_HELD_STEP_LADDER_V1, network));
+        let form = honest.prompt_ids_form();
+        assert_eq!(form, PalwPromptIdsFormV1::MerkleV1, "a held class commits its own Merkle ids");
+        let vocab = artifact.shape.vocab;
+        let prompt: Vec<usize> = (0..positions as usize).map(|i| (i * 7919 + 1013) % vocab).collect();
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let job = PalwFreePromptJobV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain: Hash64::from_u64_word(0xD0),
+            class_id: profile.shape_profile_id(),
+            executor_bond: TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0),
+            executor_pubkey: vec![0x11; 32],
+            operator_id: Hash64::from_u64_word(0x0B),
+            anchor_block: Hash64::from_u64_word(0xA0),
+            anchor_daa: 4242,
+            job_nonce: [0x5A; 32],
+            tokenizer_id: Hash64::default(),
+            prompt_token_ids_hash: prompt_token_ids_commitment_v1(form, &ids).expect("the ids commit"),
+            prompt_tokens: positions,
+            decode_token_limit: decode,
+            max_context_tokens: profile.n_ctx,
+            privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+        };
+
+        // ---- the producer: the fold, past the network's ladder ----------------------------
+        let t = std::time::Instant::now();
+        let run = honest.execute_free_prompt(&job, &prompt).expect("the held producer runs past the network's ladder");
+        let produced = t.elapsed();
+        let leaves = run.facts.step_leaf_count;
+        assert!(leaves > network, "{leaves} leaves: the job must be past the network's ladder of {network} to measure anything");
+        let capture = run.outcome.material.clone();
+        let output_ids = run.output_token_ids.clone();
+        let claim = PalwClaimRootsV1 {
+            execution_root: run.outcome.execution_root,
+            trace_root: run.outcome.trace_root,
+            anchor: fp_job_id_v3(&job),
+            attempt_draw: None,
+        };
+        let count = honest.fp_interval_count(&capture).expect("a held capture has intervals");
+        assert_eq!(Some(count), honest.fp_interval_count_for(positions, decode), "the executor's count is the chain's");
+        assert!(count >= 3, "the drill needs a first, a middle and a last interval");
+        eprintln!(
+            "{label}: produced {positions}+{decode} positions, {leaves} leaves, material {} bytes, {count} intervals ({produced:.0?})",
+            capture.len()
+        );
+
+        // ---- the seat, on the first, middle and last interval -----------------------------
+        let mut sampled = vec![0, count / 2, count - 1];
+        sampled.dedup();
+        for &index in &sampled {
+            let t = std::time::Instant::now();
+            let opening = honest.open_fp_interval(&capture, index, &ids).unwrap_or_else(|e| panic!("interval {index} opens: {e}"));
+            let opened = t.elapsed();
+            let v4 = crate::fp_interval::Base0FpIntervalOpeningV4::decode_v1(&opening).expect("a V4 opening");
+            let t = std::time::Instant::now();
+            if let Some(anchor) = v4.anchor.as_ref() {
+                let root = honest
+                    .checkpoint_root_for_context_v1(&v4.binding.job_context, &ids, &output_ids, anchor.leaf.covered_decode_call)
+                    .expect("the seat recomputes the anchor");
+                assert_eq!(root, anchor.leaf.state_chunks_root, "interval {index}: the seat's state is the committed checkpoint");
+            }
+            let recomputed = t.elapsed();
+            let t = std::time::Instant::now();
+            let verdict = honest.verify_fp_interval_opening(&opening, claim, index, &ids, leaves);
+            let verified = t.elapsed();
+            assert_eq!(verdict, PalwFpIntervalVerdictV1::Valid, "interval {index} of an honest held capture");
+            eprintln!(
+                "{label}: interval {index}: opening {} bytes (open {opened:.0?}), anchor recompute {recomputed:.0?}, Valid ({verified:.0?})",
+                opening.len()
+            );
+        }
+
+        // ---- a liar: one wrong tile inside the middle interval ------------------------------
+        // Inside: a block that straddles an interval's edge is whole in neither interval, so no
+        // block answer serves it and no seat names a leaf in it (ADR-0086 Decision 6 as built; the
+        // gap is ADR-0121 §7's). The drill lies where the naming route runs.
+        let last = count / 2;
+        let binding = crate::produce::base0_material_decode_any_v1(&capture).expect("the capture decodes").binding().clone();
+        let geometry = crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_capped_v1(
+            &binding,
+            honest.checkpoint_interval(),
+            PALW_HELD_STEP_LADDER_V1,
+        )
+        .expect("the held geometry");
+        let window = geometry.window_for(last).expect("the middle interval's window");
+        let step = window.first_step + (window.last_step - window.first_step) / 2;
+        let (call, position) = crate::fp_interval::Base0FpWindowV1::coordinate_of_step_v1(positions, step).expect("a step of the job");
+        let slot = (0..profile.global_node_count())
+            .find(|slot| {
+                profile.resolve_node_slot(*slot).is_some_and(|(node, layer)| {
+                    layer == Some(1)
+                        && node.op_kind != PalwStepOpKindV1::AttnFused
+                        && !node.input_refs.iter().any(|r| {
+                            *r == kaspa_consensus_core::palw_step::PALW_STEP_INPUT_KV_K
+                                || *r == kaspa_consensus_core::palw_step::PALW_STEP_INPUT_KV_V
+                        })
+                })
+            })
+            .expect("layer 1 has a node that reads no cache");
+        let leaf = canonical_step_leaf_index(
+            profile,
+            &binding.job_context,
+            &PalwStepCoordinateV1 { call_index: call, node_slot: slot, position, tile_index: 0 },
+        )
+        .expect("the lie's leaf");
+        let liar = backend();
+        let t = std::time::Instant::now();
+        let lying = liar.execute_free_prompt_with_injected_fault(&job, &prompt, leaf).expect("the drill's liar runs");
+        let lied = t.elapsed();
+        let lying_capture = lying.outcome.material.clone();
+        let lying_claim = PalwClaimRootsV1 {
+            execution_root: lying.outcome.execution_root,
+            trace_root: lying.outcome.trace_root,
+            anchor: fp_job_id_v3(&job),
+            attempt_draw: None,
+        };
+        assert_ne!(lying_claim.execution_root, claim.execution_root, "the lie is committed");
+        let t = std::time::Instant::now();
+        let opening = liar.open_fp_interval(&lying_capture, last, &ids).expect("the liar serves its interval");
+        let served_in = t.elapsed();
+        let v4 = crate::fp_interval::Base0FpIntervalOpeningV4::decode_v1(&opening).expect("V4");
+        if let Some(anchor) = v4.anchor.as_ref() {
+            let root = honest
+                .checkpoint_root_for_context_v1(
+                    &v4.binding.job_context,
+                    &ids,
+                    &lying.output_token_ids,
+                    anchor.leaf.covered_decode_call,
+                )
+                .expect("the seat recomputes the liar's anchor");
+            assert_eq!(root, anchor.leaf.state_chunks_root, "the liar's checkpoints are honest: only a tile lies");
+        }
+        let t = std::time::Instant::now();
+        let verdict = honest.verify_fp_interval_opening(&opening, lying_claim, last, &ids, leaves);
+        let judged = t.elapsed();
+        let named = match verdict {
+            PalwFpIntervalVerdictV1::Fault { leaf_index } => leaf_index,
+            PalwFpIntervalVerdictV1::FaultInRange { first_leaf_index, leaf_count } => {
+                assert!((first_leaf_index..first_leaf_index + leaf_count).contains(&leaf), "the block holds the lie");
+                let block = first_leaf_index >> v4.range.retain_level;
+                let number = crate::fp_interval::base0_fp_block_request_number_v1(&v4, block).expect("a numbered block");
+                let t = std::time::Instant::now();
+                let served = liar.open_fp_block_leaves(&lying_capture, last, number, &ids).expect("the liar serves the block");
+                let served_took = t.elapsed();
+                let t = std::time::Instant::now();
+                let named = honest
+                    .fp_name_the_leaf_v1(&opening, &served, lying_claim, last, &ids, &lying.output_token_ids, leaves)
+                    .expect("the block names a leaf")
+                    .expect("a leaf differs");
+                eprintln!(
+                    "{label}: block {block} (number {number}, {} bytes, served {served_took:.0?}) names leaf {named} ({:.0?})",
+                    served.len(),
+                    t.elapsed()
+                );
+                named
+            }
+            other => panic!("the seat's verdict on the liar's interval {last} is {other:?}"),
+        };
+        assert_eq!(named, leaf, "the seat names the leaf the drill lied at");
+        let t = std::time::Instant::now();
+        let evidence = kaspa_consensus_core::palw_leaf_evidence_v1::palw_leaf_evidence_from_capture_v1(
+            &liar,
+            &lying_capture,
+            &ids,
+            lying_claim,
+            leaves,
+            leaf,
+            form,
+        )
+        .expect("the liar's own fold builds its leaf's evidence");
+        let built = t.elapsed();
+        let artifact_root = crate::inventory::a16_inventory_v1(artifact, profile).expect("the inventory").root();
+        let one_move = evidence.verdict_v1(profile.shape_profile_id(), artifact_root, PALW_HELD_STEP_LADDER_V1);
+        eprintln!(
+            "{label}: liar at leaf {leaf} (call {call}, position {position}, slot {slot}): produced {lied:.0?}, served interval {last} \
+             ({} bytes, {served_in:.0?}), seat {verdict:?} ({judged:.0?}), evidence {} bytes ({built:.0?}), one-move {one_move:?}",
+            opening.len(),
+            kaspa_consensus_core::palw_shard_court_v1::palw_leaf_evidence_bytes_v1(&evidence)
+        );
+        assert_eq!(
+            one_move,
+            Ok(kaspa_consensus_core::palw_shard_court_v1::PalwShardCourtVerdictV1::ExecutorGuilty),
+            "the court convicts the liar on its own fold's evidence"
+        );
+        eprintln!("{label}: total {:.0?}", started.elapsed());
+    }
+
+    /// The drill at fixture scale, in the default suite: a network ladder of `2^12`, which the
+    /// fixture's job is past, so every route above runs where only the class's ladder admits it.
+    #[test]
+    fn a_held_liar_past_the_networks_ladder_is_named_and_convicted() {
+        use crate::artifact::{Base0ShapeV1, LN_THETA_10000_GEN_Q};
+        let geometry = PalwQwen25GeometryV1 {
+            layer_count: 2,
+            hidden_dim: 32,
+            ffn_dim: 64,
+            attn_heads: 4,
+            attn_kv_heads: 2,
+            attn_head_dim: 8,
+            vocab_size: 128,
+            n_ctx: 128,
+            n_threads: 1,
+            rms_eps_q: 1,
+            tile_len: 4,
+        };
+        let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v7(geometry).expect("a held graph-v7 profile");
+        let shape = Base0ShapeV1 {
+            n_layers: geometry.layer_count as usize,
+            n_heads: geometry.attn_heads as usize,
+            n_kv_heads: geometry.attn_kv_heads as usize,
+            d_head: geometry.attn_head_dim as usize,
+            d_ff: geometry.ffn_dim as usize,
+            vocab: geometry.vocab_size as usize,
+            max_position: geometry.n_ctx as usize,
+            ln_theta_gen_q: LN_THETA_10000_GEN_Q,
+            eps_q: geometry.rms_eps_q,
+        };
+        let artifact = std::sync::Arc::new(
+            Base0ArtifactV1::derive_deterministic(shape, 0x5A16)
+                .expect("a valid shape")
+                .with_a16_params(crate::engine_a16::derived_a16_store(&shape))
+                .expect("the derived store is sorted and unique"),
+        );
+        let network = 1u64 << 12;
+        let backend = || {
+            Qwen25A16Backend::new(artifact.clone(), b"misaka-palw-rc".to_vec(), profile.clone(), (64, 8))
+                .expect("the fixture's declaration is this engine's program")
+                .with_step_ladder_cap(network)
+                .with_prompt_ids_form(PalwPromptIdsFormV1::Flat)
+        };
+        drill("held-fixture", &artifact, &profile, 64, 8, network, &backend);
+    }
+
+    #[test]
+    fn a_held_job_past_the_networks_ladder_on_the_real_dense_row() {
+        let Ok(path) = std::env::var("MISAKA_PALW_HELD_ARTIFACT") else {
+            eprintln!("held-real: skipped — set MISAKA_PALW_HELD_ARTIFACT to the dense .palwart to measure");
+            return;
+        };
+        let positions = env_u32("MISAKA_PALW_HELD_POSITIONS", 1024);
+        let decode = env_u32("MISAKA_PALW_HELD_DECODE", 4);
+        let n_ctx = (positions + decode).next_power_of_two();
+        let started = std::time::Instant::now();
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+        let mut artifact = crate::artifact::decode_artifact_file_v1(&bytes).unwrap_or_else(|e| panic!("{path}: {e}"));
+        drop(bytes);
+        eprintln!("held-real: artifact loaded ({:.0?})", started.elapsed());
+        // **The artifact's RoPE table is a width of its own.** The shipped 1.5B artifact was converted
+        // at the 512-position row, and its inventory — the class's registered root — commits a rotary
+        // row for each of those positions and none past them, so a held class over THAT artifact
+        // cannot run, or be adjudicated, past 512 positions whatever its ladder. A held class is
+        // registered over an artifact converted at its own width; this probe extends the table with
+        // the same generator (its first rows are checked to be the artifact's own) and measures the
+        // node's routes over that artifact.
+        let converted_at = artifact.shape.max_position;
+        if converted_at < n_ctx as usize {
+            let extended = crate::rope::RopeTableV1::generate(artifact.shape.d_head, n_ctx as usize, artifact.shape.ln_theta_gen_q)
+                .expect("the rotary generator extends");
+            let committed = artifact.rope.cos_q.len();
+            assert_eq!(
+                (&extended.cos_q[..committed], &extended.sin_q[..committed]),
+                (&artifact.rope.cos_q[..], &artifact.rope.sin_q[..]),
+                "the generator's first {converted_at} rows are the artifact's own"
+            );
+            artifact.shape.max_position = n_ctx as usize;
+            artifact.rope = extended;
+            eprintln!("held-real: the artifact's RoPE table stops at {converted_at} positions — extended to {n_ctx} for the probe");
+        }
+        let geometry = PalwQwen25GeometryV1 { n_ctx, ..QWEN25_1_5B };
+        let profile = qwen25_a16_artifact_row_profile_v7(geometry).expect("the held row at this width");
+        let artifact = std::sync::Arc::new(artifact);
+        let network = 1u64 << 26;
+        let backend = || {
+            Qwen25A16Backend::from_registered_profile(
+                artifact.clone(),
+                b"misaka-palw-rc".to_vec(),
+                profile.clone(),
+                (positions, decode),
+            )
+            .expect("the held row is servable over the real artifact")
+            .with_step_ladder_cap(network)
+            .with_prompt_ids_form(PalwPromptIdsFormV1::Flat)
+        };
+        drill("held-real", &artifact, &profile, positions, decode, network, &backend);
     }
 }
