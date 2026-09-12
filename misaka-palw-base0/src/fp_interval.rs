@@ -1862,6 +1862,42 @@ fn base0_replay_span_leaves_v1<K: Base0FpIntervalKernelsV1>(
     span_end: u64,
     anchor_state_for: Base0FpAnchorStateForV1<'_>,
 ) -> Result<Vec<Hash64>, Base0FpIntervalError> {
+    let mut span = Vec::with_capacity((span_end - span_first) as usize);
+    base0_replay_span_into_v1(
+        kernels,
+        binding,
+        chunks,
+        generated,
+        prompt_token_ids,
+        geometry,
+        span_first,
+        span_end,
+        anchor_state_for,
+        &mut |_, hash| {
+            span.push(hash);
+            Ok(())
+        },
+    )?;
+    Ok(span)
+}
+
+/// **The span's leaf hashes, STREAMED** (ADR-0121): each handed to `sink` at its index, in leaf
+/// order, every leaf of `[span_first, span_end)` exactly once — the leaves the replay produces
+/// before the span (it resumes at an interval's start) are hashed and dropped. What a caller keeps
+/// is its own business: an opening keeps its two edge blocks, a block answer keeps its block.
+#[allow(clippy::too_many_arguments)]
+fn base0_replay_span_into_v1<K: Base0FpIntervalKernelsV1>(
+    kernels: &K,
+    binding: &PalwStepBindingV2,
+    chunks: &[Vec<Vec<u8>>],
+    generated: &[u32],
+    prompt_token_ids: &[u32],
+    geometry: &Base0FpIntervalGeometryV1,
+    span_first: u64,
+    span_end: u64,
+    anchor_state_for: Base0FpAnchorStateForV1<'_>,
+    sink: &mut dyn FnMut(u64, Hash64) -> Result<(), String>,
+) -> Result<(), Base0FpIntervalError> {
     let profile = &binding.shape_profile;
     let ctx = &binding.job_context;
     // In STEPS, which both interval units are windows of (ADR-0103 Decision 2).
@@ -1927,26 +1963,36 @@ fn base0_replay_span_leaves_v1<K: Base0FpIntervalKernelsV1>(
         (Some(_), None) => return Err(Base0FpIntervalError::NoCheckpointAt { covered: 0 }),
     };
 
-    let replayed = kernels
-        .replay_interval(profile, ctx, &start, Base0FpWindowV1 { first_step, last_step: last_needed }, binding.step_leaf_count)
+    let ctx_hash = ctx.context_hash();
+    let profile_hash = profile.shape_profile_id();
+    let mut next = span_first;
+    kernels
+        .replay_interval_into(
+            profile,
+            ctx,
+            &start,
+            Base0FpWindowV1 { first_step, last_step: last_needed },
+            binding.step_leaf_count,
+            &mut |at, leaf| {
+                if at < span_first || at >= span_end {
+                    return Ok(());
+                }
+                if at != next {
+                    return Err(format!("the replay reached leaf {at} where leaf {next} of the span was due"));
+                }
+                next += 1;
+                sink(at, step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &leaf))
+            },
+        )
         .map_err(Base0FpIntervalError::Replay)?;
-    let width = (span_end - span_first) as usize;
-    let mut span = vec![None; width];
-    for (at, hash) in replayed {
-        if let Some(offset) = at.checked_sub(span_first).filter(|o| (*o as usize) < width) {
-            span[offset as usize] = Some(hash);
-        }
+    if next != span_end {
+        return Err(Base0FpIntervalError::Sparse(crate::fp_capture::Base0SparseCaptureError::SpanDoesNotCoverTheRange {
+            index: next,
+            span_first,
+            span_end,
+        }));
     }
-    span.into_iter()
-        .enumerate()
-        .map(|(offset, hash)| {
-            hash.ok_or(Base0FpIntervalError::Sparse(crate::fp_capture::Base0SparseCaptureError::SpanDoesNotCoverTheRange {
-                index: span_first + offset as u64,
-                span_first,
-                span_end,
-            }))
-        })
-        .collect()
+    Ok(())
 }
 
 /// **Open interval `index` of a FOLDED retention** (ADR-0082 Decision 7, executor half).

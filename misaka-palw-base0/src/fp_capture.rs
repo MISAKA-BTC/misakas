@@ -479,17 +479,66 @@ impl Base0SparseStepTreeV1 {
         // fixed level" means in code.
         let lower = self.span_levels(span_first, span_leaves);
         let upper = self.upper_levels();
+        self.walk_range_siblings_v1(first, count, &|level, position| self.node_at(&lower, &upper, span_first, level, position))
+    }
 
+    /// **The same sibling set from the range's two EDGE blocks alone** (ADR-0121): each edge given as
+    /// `(block_first_leaf, the block's leaves)`, the block the range's first leaf lies in and the one
+    /// its last leaf lies in (one block when the two are the same). A sibling below the retained level
+    /// hangs off an edge inside the edge's own block — see [`Self::span_for_range`] — so the interior
+    /// of a range an executor replays need not be held: its blocks are the retained nodes, and only
+    /// the two it opens partially are asked of the replay.
+    pub fn range_siblings_from_edges_v1(
+        &self,
+        edges: &[(u64, &[Hash64])],
+        first: u64,
+        count: u64,
+    ) -> Result<Vec<Hash64>, Base0SparseCaptureError> {
+        let (span_first, span_end) = self.span_for_range(first, count)?;
+        let block = 1u64 << self.retain_level;
+        for (block_first, leaves) in edges {
+            let end = (block_first + block).min(self.leaf_count);
+            if block_first % block != 0 || *block_first < span_first || end > span_end || leaves.len() as u64 != end - block_first {
+                return Err(Base0SparseCaptureError::SpanNotAligned {
+                    span_first: *block_first,
+                    span_end: block_first + leaves.len() as u64,
+                });
+            }
+        }
+        let towers: Vec<(u64, Vec<Vec<Hash64>>)> = edges.iter().map(|(at, leaves)| (*at, self.span_levels(*at, leaves))).collect();
+        let upper = self.upper_levels();
+        self.walk_range_siblings_v1(first, count, &|level, position| {
+            if level >= self.retain_level {
+                return self.node_at(&[], &upper, span_first, level, position);
+            }
+            towers
+                .iter()
+                .find_map(|(at, lower)| {
+                    let start = at >> level;
+                    position.checked_sub(start).and_then(|offset| lower[level as usize].get(offset as usize)).copied()
+                })
+                .ok_or(Base0SparseCaptureError::SpanDoesNotCoverTheRange { index: position << level, span_first, span_end })
+        })
+    }
+
+    /// The sibling walk itself — `step_merkle_range_siblings_v1`'s order and promote rule, the node at
+    /// `(level, position)` asked of `node`.
+    fn walk_range_siblings_v1(
+        &self,
+        first: u64,
+        count: u64,
+        node: &dyn Fn(u32, u64) -> Result<Hash64, Base0SparseCaptureError>,
+    ) -> Result<Vec<Hash64>, Base0SparseCaptureError> {
         let mut out = Vec::new();
         let (mut a, mut b) = (first, first + count);
         let mut level = 0u32;
         let mut width = self.leaf_count;
         while width > 1 {
             if !a.is_multiple_of(2) {
-                out.push(self.node_at(&lower, &upper, span_first, level, a - 1)?);
+                out.push(node(level, a - 1)?);
             }
             if !b.is_multiple_of(2) && (b != width || width.is_multiple_of(2)) {
-                out.push(self.node_at(&lower, &upper, span_first, level, b)?);
+                out.push(node(level, b)?);
             }
             a /= 2;
             b = b.div_ceil(2);
@@ -1732,6 +1781,35 @@ mod tests {
                         let sparse = tree.range_siblings_v1(span_first, span, first, count).expect("siblings");
                         let dense = step_merkle_range_siblings_v1(&ls, first as usize, count as usize).expect("dense siblings");
                         assert_eq!(sparse, dense, "n={n} level={retain_level} first={first} count={count}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// **The edges alone give the span's siblings** (ADR-0121): over odd and even trees and small
+    /// retained levels, the sibling set computed from the range's two edge blocks is the one the
+    /// whole replayed span gives — so an executor opening an interval need hold only those two blocks.
+    #[test]
+    fn the_edge_blocks_give_the_spans_siblings() {
+        for n in [1usize, 2, 3, 5, 8, 9, 16, 17, 33, 64, 100, 129, 260] {
+            let ls = leaves(n);
+            for retain_level in [0u32, 1, 2, 3, 5] {
+                let tree = Base0SparseStepTreeV1::from_leaves_v1(&ls, retain_level).expect("folds");
+                let block = 1u64 << retain_level;
+                for first in 0..n as u64 {
+                    for count in 1..=(n as u64 - first).min(40) {
+                        let (span_first, span_end) = tree.span_for_range(first, count).expect("a span");
+                        let whole = tree.range_siblings_v1(span_first, &ls[span_first as usize..span_end as usize], first, count);
+                        let edge = |leaf: u64| {
+                            let at = (leaf / block) * block;
+                            let end = (at + block).min(n as u64);
+                            (at, &ls[at as usize..end as usize])
+                        };
+                        let (left, right) = (edge(first), edge(first + count - 1));
+                        let edges: Vec<(u64, &[Hash64])> = if left.0 == right.0 { vec![left] } else { vec![left, right] };
+                        let from_edges = tree.range_siblings_from_edges_v1(&edges, first, count);
+                        assert_eq!(from_edges, whole, "n={n} level={retain_level} first={first} count={count}");
                     }
                 }
             }
