@@ -79,8 +79,8 @@ lane.
 > after the fingerprint; that line is the check:
 >
 > ```
-> [INFO ] Consensus params fingerprint: 4300409bb7127c8ee57bad783e4610e37bbd3c7cc535279d729fda3341d666dd (network testnet-11)
-> [INFO ] Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 4000, 2125000 (schedule id …)
+> [INFO ] Consensus params fingerprint: ae1d61628da50c7becea62f0a8f08c8654d190c60b2e104df0010b121ba4d3d8 (network testnet-11)
+> [INFO ] Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 4000, 6900, 7000, 2125000 (schedule id …)
 > ```
 >
 > **2026-09-11, the fifth fence: ADR-0114 at DAA 3,500** (the model store's owner fee 1 % → 5 %).
@@ -94,6 +94,13 @@ lane.
 > prints `02c7282b…`, peers until 4,000 and forks off at it. Because both fences share the height, a
 > build with only one of them (the audit's alone prints `09efd285…`) shows the same second line and
 > the gate cannot tell it apart — it parts silently at 4,000. Check the first line.
+>
+> **The seventh and eighth heights: DAA 6,900 and 7,000** — ADR-0120's one-million-MSK least seed at
+> 6,900 (a store opens once 1,000,000 MSK is locked into it; pledges made before stay), and at 7,000
+> held context (ADR-0118/0119/0121) with the audit's deep fixes (`palw_audit_2026_09_11_deep`). A
+> build with them prints the two lines above (`ae1d6162…`, `6900, 7000` on the second line); the
+> 3,500 + 4,000 build prints `4300409b…`, peers until 6,900 and forks off at it. 7,000 carries several
+> fences, so the first line is the check there too.
 >
 > A build from `891a1a14` up to `a5f1bdf7` prints `060e3597…` on the first line and the same second
 > line: same ruleset, and it peers with the builds after it (both log `schedules a FUTURE fence
@@ -199,10 +206,10 @@ lane.
 > > first rode 1900, where the gate could not see it at all — two builds peering and then disagreeing
 > > about which closes are valid. Moving it to 2150 is what makes the difference visible.
 >
-> * consensus fingerprint: **`4300409bb7127c8ee57bad783e4610e37bbd3c7cc535279d729fda3341d666dd`**
->   (2026-09-11: carries ADR-0114's fence at DAA 3,500 and the audit's and ADR-0117's at DAA 4,000;
->   `02c7282b…` carries 3,500 alone and stays a peer until 4,000; `ecbdbc22…`, the first to carry
->   ADR-0095's 2400 fence, stays a peer until 3,500). Builds from `891a1a14` up to
+> * consensus fingerprint: **`ae1d61628da50c7becea62f0a8f08c8654d190c60b2e104df0010b121ba4d3d8`**
+>   (2026-09-12: carries ADR-0120's fence at DAA 6,900 and held context's and the audit's deep fixes at
+>   DAA 7,000, on top of 3,500 and 4,000; `4300409b…` carries 3,500 + 4,000 and stays a peer until
+>   6,900; `02c7282b…` carries 3,500 alone; `ecbdbc22…`, the first to carry ADR-0095's 2400 fence). Builds from `891a1a14` up to
 >   `a5f1bdf7` print **`060e3597cd2950bc183b215b5ff87538e72dd788cab43829dca6bc72bcb5ac89`** for the
 >   same ruleset and stay peers; the pre-flag-day value `71b35c25…` names the same genesis and the
 >   same peering identity, and is refused by the gate as above.

@@ -4,15 +4,24 @@
 
 The node binary is still named `kaspad` and the crates keep their upstream `kaspa-*` names (this is a fork, not a rename); the **network**, addresses (`misaka…` mainnet / `misakatest…` testnet / `misakadev…` devnet), and project branding are misakas.
 
-> **Status (2026-09-11).** The live public network is **`testnet-11`** — the PALW release candidate,
+> **Status (2026-09-12).** The live public network is **`testnet-11`** — the PALW release candidate,
 > Relaunch 5f. Explorer at **[misakascan.com](https://misakascan.com)**, web wallet at
 > **[wallet.misakascan.com](https://wallet.misakascan.com)**. Current network identity: consensus
-> fingerprint **`4300409b…`** (the release that schedules ADR-0114's fence at DAA 3,500 and the
-> audit's and ADR-0117's at DAA 4,000; a build with 3,500 alone prints `02c7282b…`, the builds before
-> it `ecbdbc22…`, and `891a1a14`…`a5f1bdf7` print `060e3597…`) — and genesis
+> fingerprint **`ae1d6162…`** (the release that schedules ADR-0120's fence at DAA 6,900 and held
+> context's and the audit's deep fixes at DAA 7,000, on top of 3,500 and 4,000; the 3,500 + 4,000
+> build prints `4300409b…`, a build with 3,500 alone `02c7282b…`, the builds before it `ecbdbc22…`,
+> and `891a1a14`…`a5f1bdf7` print `060e3597…`) — and genesis
 > **`ad30b5cb…`** (three execution classes and the 347M MSK community allocation in genesis).
 >
-> **Rebuild before DAA 3,500 — one build covers 3,500 and 4,000.** From DAA 3,500 the model store's
+> **Rebuild before DAA 6,900 — one build covers 6,900 and 7,000.** From DAA 6,900 a model's store opens
+> only once 1,000,000 MSK is locked into it instead of 100,000 (ADR-0120; pledges made before stay and
+> count toward it, and a store already open stays open). From DAA 7,000 classes that hold their context
+> off the chain become usable (held context, ADR-0118/0119/0121), and the rest of the pre-mainnet
+> audit's fixes apply (`palw_audit_2026_09_11_deep`: court and panel hardening). Both are consensus
+> rules: a node without them keeps peering until their height and forks off at it; the `4300409b…`
+> build forks off at 6,900.
+>
+> **In force since 2026-09-12: DAA 3,500 and 4,000.** From DAA 3,500 the model store's
 > owner fee on every join and leave is 5 % instead of 1 % (ADR-0114; the 5 % burn is unchanged). From
 > DAA 4,000 the pre-mainnet audit's fixes apply (`palw_audit_2026_09_11`: a class-activation crossing
 > can no longer halt the chain, a lifecycle payload a build cannot decode no longer invalidates its
@@ -108,8 +117,8 @@ The log must show this fingerprint and, on the next line, this fence schedule, o
 wrong ruleset:
 
 ```
-Consensus params fingerprint: 4300409bb7127c8ee57bad783e4610e37bbd3c7cc535279d729fda3341d666dd (network testnet-11)
-Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 4000, 2125000 (schedule id …)
+Consensus params fingerprint: ae1d61628da50c7becea62f0a8f08c8654d190c60b2e104df0010b121ba4d3d8 (network testnet-11)
+Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 4000, 6900, 7000, 2125000 (schedule id …)
 ```
 
 A build from `891a1a14` up to `a5f1bdf7` prints `060e3597cd2950bc…` on the first line and the same
@@ -117,9 +126,10 @@ second line. It runs the same ruleset: until 2026-09-11 the fingerprint left ADR
 out (the build that added it never wrote it), and writing it moved the value without moving any rule.
 The two stay peers — the handshake logs `schedules a FUTURE fence differently` between them rather
 than refusing — but rebuilding is how the first line becomes a check again. The second line is the
-one that names heights: a build without `3500` in it forks off at 3,500, one without `4000` at 4,000.
-One case the second line cannot show: `4000` carries two fences, and a build with only one of them
-(the audit's alone prints `09efd285…`) shows the same line and parts silently at 4,000 — the first
+one that names heights: a build without `3500` in it forks off at 3,500, one without `4000` at 4,000,
+one without `6900` at 6,900, one without `7000` at 7,000. One case the second line cannot show: `4000`
+and `7000` each carry more than one fence, and a build with only some of them (at 4,000, the audit's
+alone prints `09efd285…`) shows the same line and parts silently at that height — the first
 line is the check.
 
 and the genesis the network builds on is
