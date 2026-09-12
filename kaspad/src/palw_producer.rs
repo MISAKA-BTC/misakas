@@ -500,7 +500,8 @@ impl PalwProducerService {
         info!("[{PALW_PRODUCER}] starting (bond={bond}, key={})", self.config.key_path);
 
         let mut produced = 0u64;
-        let mut ticks = 0u64;
+        // When the retention pass last ran — see the loop's first lines.
+        let mut retention_pass_at: Option<std::time::Instant> = None;
         // The last hold reason actually printed, and when. A producer can hold for hours on one
         // unchanging cause, and repeating it every 5 s buries the line that would explain it: this
         // loop wrote 5,281 identical warnings on a live testnet node while it produced nothing.
@@ -522,10 +523,15 @@ impl PalwProducerService {
             if !self.tick(std::time::Duration::from_millis(200)).await {
                 break;
             }
-            ticks += 1;
-            if ticks.is_multiple_of(300) {
-                // Every ~60 s: re-serve the retained material of still-licensable claims.
+            // **The retention pass runs every ~60 s of wall clock, not every 300 passes of this
+            // loop.** A pass that draws is one pass however long the draw takes, so "300 ticks" was
+            // 300 draws: ~90 h between prunes at an 18-minute Qwen3.6 draw (a 48 h horizon that
+            // kept files for 60), ~4 h at a 45-second one — and at that pace the attempt captures
+            // the pass exists to prune filled C's 387 GB twice in one night (2026-09-12). It also
+            // runs on the first pass, so a restart clears what accumulated while the node was down.
+            if retention_pass_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(60)) {
                 self.rebroadcast_retained().await;
+                retention_pass_at = Some(std::time::Instant::now());
             }
             let session = self.consensus_manager.consensus().unguarded_session();
             if session.async_is_consensus_in_transitional_ibd_state().await {
