@@ -239,6 +239,12 @@ pub struct Args {
     /// fault. A budget below the class's floor (its always-set plus one token's experts) is
     /// refused at startup, by name and with the numbers.
     pub palw_class_resident_bytes: Option<u64>,
+    /// **How long the producer keeps its own ATTEMPT captures, in minutes.** Seats license an
+    /// attempt claim by replaying its block's job (ADR-0084 Decision 7), and a court or a
+    /// data-availability accusation that later asks this node for a pruned capture is answered from
+    /// one re-made by that same replay, so the file only has to serve the first minutes. A
+    /// free-prompt capture keeps its own rule (48 h, and while the chain can still ask about it).
+    pub palw_attempt_retention_minutes: u64,
     /// **Register the class of this node's converted artifact on the running chain, once.**
     ///
     /// A network is born with the classes its ruleset id commits to; every later one arrives as a
@@ -444,6 +450,7 @@ impl Default for Args {
             palw_class_artifact: Vec::new(),
             palw_class_cache_bytes: 0,
             palw_class_resident_bytes: None,
+            palw_attempt_retention_minutes: 60,
             palw_register_class: None,
             palw_register_bond: false,
             palw_dump_classes: false,
@@ -1165,6 +1172,21 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-attempt-retention-minutes")
+                .long("palw-attempt-retention-minutes")
+                .value_name("minutes")
+                .require_equals(false)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "MISAKA PALW: keep this node's own ATTEMPT captures (<claim>.material, ~0.8 GB a block on a graph-v5 \
+                     class) this many minutes, then prune them. Seats license an attempt claim by replaying its block's \
+                     job, and a court or a data-availability accusation that later asks this node for a pruned capture is \
+                     answered from one re-made by the same replay and checked against the claim's committed roots. \
+                     Free-prompt captures keep their own rule (48 h, and while the chain can still ask about them). \
+                     Default: 60.",
+                ),
+        )
+        .arg(
             Arg::new("palw-register-class")
                 .long("palw-register-class")
                 .num_args(0..=1)
@@ -1823,6 +1845,10 @@ impl Args {
                 .unwrap_or(defaults.palw_class_artifact),
             palw_class_cache_bytes: m.get_one::<u64>("palw-class-cache-bytes").copied().unwrap_or(defaults.palw_class_cache_bytes),
             palw_class_resident_bytes: m.get_one::<u64>("palw-class-resident-bytes").copied().or(defaults.palw_class_resident_bytes),
+            palw_attempt_retention_minutes: m
+                .get_one::<u64>("palw-attempt-retention-minutes")
+                .copied()
+                .unwrap_or(defaults.palw_attempt_retention_minutes),
             palw_register_class: m.get_one::<String>("palw-register-class").cloned().or(defaults.palw_register_class.clone()),
             palw_register_bond: arg_match_unwrap_or::<bool>(&m, "palw-register-bond", defaults.palw_register_bond),
             palw_dump_classes: arg_match_unwrap_or::<bool>(&m, "palw-dump-classes", defaults.palw_dump_classes),

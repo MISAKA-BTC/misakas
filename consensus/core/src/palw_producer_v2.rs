@@ -787,6 +787,9 @@ pub fn palw_court_duties_v2(state: &PalwChainStateV2, mine: &[PalwBondKeyV2]) ->
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwDaDutyV2 {
     pub claim_id: Hash64,
+    /// The block the claim rides — what an attempt claim's job is derived from, so a responder whose
+    /// capture was pruned can re-make it by replaying that job (the court duty carries it already).
+    pub accepted_block: Hash64,
     pub class_id: Hash64,
     pub artifact_root: Hash64,
     /// The bond the claim was produced under — the one that must sign the disclosure.
@@ -818,6 +821,7 @@ pub fn palw_da_duties_v2(state: &PalwChainStateV2, state_params: &PalwStateParam
         let Some(artifact_root) = state.class(&claim.class_id).map(|c| c.artifact_root) else { continue };
         out.push(PalwDaDutyV2 {
             claim_id: *claim_id,
+            accepted_block: claim.accepted_block,
             class_id: claim.class_id,
             artifact_root,
             executor_bond: claim.bond,

@@ -1439,6 +1439,48 @@ impl PalwPanelService {
         Some(self.consensus_config.params.palw_prefill_draw_active_at(daa_score))
     }
 
+    /// **Re-make an attempt capture this node pruned** — by replaying the job the claim's block asked
+    /// for ([`Self::attempt_job_for_claim`]), the same deterministic execution a seat licenses the
+    /// claim with (ADR-0084 Decision 7). The producer keeps an attempt capture for
+    /// `--palw-attempt-retention-minutes` only (`retained_capture_prune_due_v1`): at a draw a minute a
+    /// graph-v5 capture every block is ~30 GB an hour, and two days of them outgrow the host. The
+    /// re-made bytes are evidence on the same terms as the file was — only if they reproduce the
+    /// roots the claim committed to — so a replay that does not is refused here, by name, and never
+    /// answered from.
+    #[allow(clippy::too_many_arguments)]
+    async fn remade_attempt_capture_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        network_domain: Hash64,
+        accepted_block: Hash64,
+        class_id: Hash64,
+        artifact_root: Hash64,
+        executor_bond: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        execution_root: Hash64,
+        trace_root: Hash64,
+    ) -> Result<Vec<u8>, String> {
+        let backend = self.resolve_backend(session, class_id, artifact_root)?;
+        let (job, prompt) = self
+            .attempt_job_for_claim(session, backend.as_ref(), network_domain, accepted_block, class_id, executor_bond)
+            .ok_or("the claim's block is not in this node's store")?;
+        let anchor = self
+            .job_anchor_for_claim(session, backend.as_ref(), network_domain, accepted_block, class_id, executor_bond)
+            .unwrap_or_default();
+        let roots = PalwClaimRootsV1 {
+            execution_root,
+            trace_root,
+            anchor,
+            attempt_draw: self.attempt_draw_for_claim(session, accepted_block),
+        };
+        let work = ReplayWork::Attempt(job, prompt);
+        let (backend, outcome) = offload(backend, move |b| work.run(b)).await?;
+        let material = outcome.ok_or("the replay did not run")?.material;
+        match backend.verify_material(&fp_capture_view(&material, self.config.prompt_ids_form), roots) {
+            PalwMaterialVerdictV1::Matches => Ok(material),
+            _ => Err("the replay does not reproduce the claim's committed roots".to_string()),
+        }
+    }
+
     /// Persist a foreign (gossiped) material under `retention/foreign/`, best-effort.
     ///
     /// Write-once per claim file; pruned by age on every write so the directory stays bounded
@@ -2734,7 +2776,8 @@ impl PalwPanelService {
                         })
                     })
                     .unwrap_or(false);
-                if !pool_has_it
+                let mut accused_held = pool_has_it;
+                if !accused_held
                     && let Some(bytes) = self.retained_capture(&duty.claim_id)
                     && backend.verify_material(&fp_capture_view(&bytes, self.config.prompt_ids_form), roots)
                         == PalwMaterialVerdictV1::Matches
@@ -2751,6 +2794,63 @@ impl PalwPanelService {
                         duty.claim_id,
                         bytes,
                     );
+                    accused_held = true;
+                }
+                // **The responder's own attempt capture, pruned, is re-made — not missed.** The
+                // producer keeps an attempt capture for minutes (`retained_capture_prune_due_v1`), and
+                // silence at its own court now costs the claim; the capture is a deterministic
+                // execution of the job the block asked for, so the responder replays that job — the
+                // same one a seat licenses by — and answers only if the bytes reproduce the committed
+                // roots. Put in the pool, it stays for the session's life like a file read would.
+                if !accused_held && duty.i_am_responder && fp_job.is_none() {
+                    let work = self
+                        .attempt_job_for_claim(
+                            &session,
+                            backend.as_ref(),
+                            network_domain,
+                            duty.accepted_block,
+                            duty.class_id,
+                            &duty.executor_bond,
+                        )
+                        .map(|(job, prompt)| ReplayWork::Attempt(job, prompt));
+                    let remade = match work {
+                        Some(work) => {
+                            let Ok((offloaded, outcome)) = offload(backend, move |b| work.run(b)).await else {
+                                *court_stalls.entry("the responder's re-execution task did not finish").or_default() += 1;
+                                continue;
+                            };
+                            backend = offloaded;
+                            outcome.map(|outcome| outcome.material)
+                        }
+                        None => None,
+                    };
+                    match remade {
+                        Some(bytes)
+                            if backend.verify_material(&fp_capture_view(&bytes, self.config.prompt_ids_form), roots)
+                                == PalwMaterialVerdictV1::Matches =>
+                        {
+                            info!(
+                                "[{PALW_PANEL}] session {}: claim {}'s capture was pruned here — re-made by replaying its block's job",
+                                duty.session_id, duty.claim_id
+                            );
+                            pool_admit_material_v1(
+                                &mut materials,
+                                &mut pool_arrival,
+                                &mut pool_arrival_seq,
+                                &mut pool_bytes,
+                                duty.claim_id,
+                                bytes,
+                            );
+                        }
+                        _ => {
+                            warn!(
+                                "[{PALW_PANEL}] session {}: claim {}'s capture is not held and a replay of its block's job \
+                                 did not reproduce the committed roots",
+                                duty.session_id, duty.claim_id
+                            );
+                            *court_stalls.entry("the responder cannot re-make its pruned capture").or_default() += 1;
+                        }
+                    }
                 }
                 // **The capture is chosen by ROLE** (audit M2-4).
                 //
@@ -3458,7 +3558,9 @@ impl PalwPanelService {
             // accused event out of the capture it already retains — the ids and rows it kept at
             // execution — through the family's `disclose_trace_event`, signs the object's digest
             // under the producing bond, and submits it as a lifecycle carrier through the court
-            // queue: a disclosure is clocked exactly as a rung is. Nothing is re-executed. It never
+            // queue: a disclosure is clocked exactly as a rung is. Nothing is re-executed — except an
+            // attempt capture the producer has pruned, which is re-made by replaying its block's job and
+            // used only if it reproduces the committed roots (`remade_attempt_capture_v1`). It never
             // accuses: a seat that received nothing cannot tell withholding from transport loss,
             // and an accusation against an honest producer is a charge to the accuser.
             let da_duties = session.palw_da_duties_v2(vec![bond_key]);
@@ -3480,11 +3582,48 @@ impl PalwPanelService {
                 if court_pending.iter().any(|(sid, round, responder, _)| *sid == key.0 && *round == key.1 && *responder == key.2) {
                     continue;
                 }
-                let Some(bytes) = self.retained_capture(&duty.claim_id).or_else(|| {
+                let held = self.retained_capture(&duty.claim_id).or_else(|| {
                     std::fs::read(self.config.retention_dir.join("foreign").join(format!("{}.material", duty.claim_id))).ok()
-                }) else {
-                    *court_stalls.entry("no retained capture to answer a data-availability accusation from").or_default() += 1;
-                    continue;
+                });
+                let bytes = match held {
+                    Some(bytes) => bytes,
+                    // **An attempt claim's pruned capture is re-made by replaying its block's job**
+                    // and checked against the committed roots (`remade_attempt_capture_v1`). A
+                    // free-prompt capture is kept while the chain can still ask about it, and a held
+                    // unit is answered from its own retention, so neither comes here.
+                    None if !duty.free_prompt && duty.held_missing.is_none() => {
+                        match self
+                            .remade_attempt_capture_v1(
+                                &session,
+                                network_domain,
+                                duty.accepted_block,
+                                duty.class_id,
+                                duty.artifact_root,
+                                &duty.executor_bond,
+                                duty.execution_root,
+                                duty.trace_root,
+                            )
+                            .await
+                        {
+                            Ok(bytes) => {
+                                info!(
+                                    "[{PALW_PANEL}] claim {}: the accused capture was pruned here — re-made by replaying its block's \
+                                     job to answer the data-availability accusation",
+                                    duty.claim_id
+                                );
+                                bytes
+                            }
+                            Err(why) => {
+                                warn!("[{PALW_PANEL}] claim {}: cannot re-make the pruned capture: {why}", duty.claim_id);
+                                *court_stalls.entry("no retained capture, and no replay that reproduces it").or_default() += 1;
+                                continue;
+                            }
+                        }
+                    }
+                    None => {
+                        *court_stalls.entry("no retained capture to answer a data-availability accusation from").or_default() += 1;
+                        continue;
+                    }
                 };
                 // **ADR-0103 Decision 4 / ADR-0111 Decision 4: a HELD accusation is answered in its
                 // unit** — a leaf's evidence (which the fold then adjudicates), a prompt tile — and an
