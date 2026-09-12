@@ -33,6 +33,26 @@ pub(crate) fn parse_outpoint(s: &str) -> Result<TransactionOutpoint, CliError> {
     Ok(TransactionOutpoint { transaction_id, index })
 }
 
+/// A human can correlate an ML-DSA-87 identity from its ends; printing its several-kilobyte public
+/// key makes the useful registry and exposure lines disappear above the terminal. JSON keeps the
+/// complete value for tooling.
+fn short_identity(value: &str) -> String {
+    if value.len() <= 32 { value.to_string() } else { format!("{}…{}", &value[..16], &value[value.len() - 8..]) }
+}
+
+/// The same whole-claim-lifetime sizing `kaspad --palw-register-bond` and the setup wizard use,
+/// reconstructed from the live class facts. Registry membership alone says nothing about how
+/// many unresolved claims the collateral can sustain.
+fn class_lifetime_collateral(nv: &NodeView, pwu: u64, class_target: &str) -> Option<u64> {
+    let target: u128 = class_target.parse().ok()?;
+    let per_inference = pwu / kaspa_consensus_core::palw_pwu::palw_expected_attempts_v1(target).max(1);
+    let floor = match &nv.params.palw_consensus_mode {
+        PalwConsensusMode::ConsensusV2(bundle) => bundle.state.min_collateral_sompi(),
+        _ => return None,
+    };
+    Some(kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_collateral_for_claim_lifetime_v1(per_inference).max(floor))
+}
+
 /// The network domain a PALW signature is made under — bound to the GENESIS, not just the network
 /// name (audit M2-18), so a signature is a statement about one incarnation of a network. The node
 /// tells us both, which is what keeps this from being a constant the CLI could get wrong.
@@ -98,14 +118,26 @@ pub async fn status(ctx: &Ctx, ks: Option<&KeySource>, class_id: Option<&str>, b
             facts.bond_known && facts.bond_registered_pubkey.eq_ignore_ascii_case(&faster_hex::hex_string(key.public_key()))
         });
         let outpoint = format!("{}:{}", bond.transaction_id, bond.index);
+        let lifetime_collateral = class_lifetime_collateral(&nv, facts.pwu, &facts.class_target);
+        let collateral_shortfall = lifetime_collateral.and_then(|need| need.checked_sub(facts.bond_collateral)).filter(|v| *v > 0);
         match ctx.output {
             OutputFormat::Human if facts.bond_known => {
                 println!("bond:       {outpoint}");
                 println!("registry:   REGISTERED");
                 println!("collateral: {} sompi ({} MSK)", facts.bond_collateral, sompi_to_msk(facts.bond_collateral));
-                println!("operator:   {}", facts.bond_operator_id);
-                println!("pubkey:     {}", facts.bond_registered_pubkey);
+                println!("operator:   {}", short_identity(&facts.bond_operator_id));
+                println!("pubkey:     {} (full value: --output json)", short_identity(&facts.bond_registered_pubkey));
                 println!("exposure:   {} reserved / {} ceiling", facts.bond_reserved_exposure, facts.bond_exposure_ceiling);
+                match (lifetime_collateral, collateral_shortfall) {
+                    (Some(need), Some(short)) => {
+                        println!("sizing:     UNDERSIZED for sustained mining in the inspected class");
+                        println!("            {} required / {} short", need, short);
+                    }
+                    (Some(need), None) => {
+                        println!("sizing:     sufficient for the inspected class's whole claim lifetime ({need} required)")
+                    }
+                    (None, _) => println!("sizing:     unavailable from this node's class facts"),
+                }
                 if let Some(owned) = owned_by_supplied_key {
                     println!(
                         "key:        {}",
@@ -143,6 +175,8 @@ pub async fn status(ctx: &Ctx, ks: Option<&KeySource>, class_id: Option<&str>, b
                     "operator_id": facts.bond_known.then_some(facts.bond_operator_id),
                     "reserved_exposure": facts.bond_known.then_some(facts.bond_reserved_exposure),
                     "exposure_ceiling": facts.bond_known.then_some(facts.bond_exposure_ceiling),
+                    "whole_claim_lifetime_collateral_sompi": facts.bond_known.then_some(lifetime_collateral).flatten(),
+                    "collateral_shortfall_sompi": facts.bond_known.then_some(collateral_shortfall).flatten(),
                     "not_ready_reason": facts.bond_known.then_some(facts.not_ready_reason),
                     "owned_by_supplied_key": owned_by_supplied_key,
                 })
@@ -822,5 +856,11 @@ mod retirement_domain_tests {
             "the two contexts are interchangeable — a capability declaration would authorise a retirement"
         );
         assert_ne!(PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT, PALW_BOND_CAPABILITY_V2_MLDSA87_CONTEXT);
+    }
+
+    #[test]
+    fn a_human_bond_status_does_not_dump_a_whole_mldsa_public_key() {
+        assert_eq!(short_identity("abcd"), "abcd");
+        assert_eq!(short_identity("0123456789abcdef0123456789abcdef01234567"), "0123456789abcdef…01234567");
     }
 }
