@@ -6187,6 +6187,88 @@ impl PalwPanelService {
                         let retain_level = served.as_ref().map(|v4| v4.range.retain_level).unwrap_or_else(|| {
                             misaka_palw_base0::fp_capture::palw_base0_sparse_retain_level_v1(self.config.court.max_step_leaf_count())
                         });
+                        // **A fault at an edge is named from the edges** (ADR-0121 §7). A block that
+                        // straddles the interval's end is whole in no interval: no digest names it and
+                        // the block naming refuses it. Both edges are asked for — the address cannot
+                        // say which edge the lie is in — and named once both are held, by the range's
+                        // own root walk.
+                        if let Some(v4) = served.as_ref() {
+                            let step_leaf_count = v4.binding.step_leaf_count;
+                            let (first_block, end_block) = v4.range.whole_blocks_v1(step_leaf_count);
+                            let size = 1u64 << v4.range.retain_level.min(63);
+                            let at_edge = !first_leaf_index.is_multiple_of(size)
+                                || !(first_block..end_block).contains(&(first_leaf_index >> v4.range.retain_level.min(63)));
+                            if at_edge {
+                                let (left, right) = v4.range.edges_v1(step_leaf_count);
+                                let packed: Vec<u32> = [left, right]
+                                    .into_iter()
+                                    .filter(|(first, end)| first < end)
+                                    .filter_map(|(first, _)| {
+                                        misaka_palw_base0::fp_interval::base0_fp_block_request_number_v1(
+                                            v4,
+                                            first >> v4.range.retain_level.min(63),
+                                        )
+                                    })
+                                    .filter_map(|number| {
+                                        misaka_palw_base0::fp_interval::base0_fp_block_leaves_request_index_v1(interval, number)
+                                    })
+                                    .collect();
+                                let held: Vec<Vec<u8>> = packed
+                                    .iter()
+                                    .filter_map(|p| openings.get(&(duty.claim_id, *p)).and_then(|v| v.first().cloned()))
+                                    .collect();
+                                if packed.is_empty() || held.len() < packed.len() {
+                                    let missing: Vec<u32> =
+                                        packed.iter().copied().filter(|p| !openings.contains_key(&(duty.claim_id, *p))).collect();
+                                    let asked =
+                                        self.request_fp_interval_openings(network_domain, duty.claim_id, &missing, current_daa).await;
+                                    info!(
+                                        "[{PALW_PANEL}] claim {}: asked the executor for the edges of interval {index} ({asked} signed \
+                                         request(s), {} of {} held)",
+                                        duty.claim_id,
+                                        held.len(),
+                                        packed.len()
+                                    );
+                                    return None;
+                                }
+                                let (candidate_for_naming, prompt_owned, output_owned) =
+                                    (bytes.clone(), prompt_ids.to_vec(), output_ids.to_vec());
+                                let Ok((_returned, named)) = offload(backend, move |b| {
+                                    b.fp_name_the_edge_leaf_v1(
+                                        &candidate_for_naming,
+                                        &held,
+                                        roots,
+                                        interval,
+                                        &prompt_owned,
+                                        &output_owned,
+                                        work_leaves,
+                                    )
+                                })
+                                .await
+                                else {
+                                    return None;
+                                };
+                                match named {
+                                    Ok(Some(leaf)) => {
+                                        warn!(
+                                            "[{PALW_PANEL}] claim {}: the served edges of interval {index} name leaf {leaf} — the \
+                                             court's address (ADR-0121 §7)",
+                                            duty.claim_id
+                                        );
+                                        self.note_seat_fault_v1(duty.claim_id, leaf, 1);
+                                    }
+                                    Ok(None) => warn!(
+                                        "[{PALW_PANEL}] claim {}: every served edge leaf of interval {index} is this seat's own",
+                                        duty.claim_id
+                                    ),
+                                    Err(e) => warn!(
+                                        "[{PALW_PANEL}] claim {}: the served edges of interval {index} name no leaf: {e}",
+                                        duty.claim_id
+                                    ),
+                                }
+                                return None;
+                            }
+                        }
                         let block = first_leaf_index >> retain_level.min(63);
                         let number = match served.as_ref() {
                             Some(v4) => misaka_palw_base0::fp_interval::base0_fp_block_request_number_v1(v4, block),
@@ -7331,6 +7413,24 @@ mod court_responder_coverage_pin {
             assert!(answer.contains(unit), "the held answer has no arm {unit}");
         }
         assert!(!answer.contains("other =>") && !answer.contains("_ =>"), "no held unit falls to a catch-all refusal");
+    }
+
+    /// **ADR-0121 §7, pinned where the seat's fault is handled**: a `FaultInRange` whose address is
+    /// not a whole block of the opening asks for BOTH edges of the interval — the address cannot say
+    /// which edge the lie is in — and names the leaf from them through the edge verb, before the
+    /// whole-block path is reached.
+    #[test]
+    fn a_fault_at_an_intervals_edge_asks_for_both_edges_and_names_from_them() {
+        const MARKER: &str = "mod court_responder_coverage_pin";
+        let whole = include_str!("palw_panel.rs");
+        let source = &whole[..whole.find(MARKER).expect("this module is in this file")];
+        let arm =
+            &source[source.find("PalwFpIntervalVerdictV1::FaultInRange { first_leaf_index, leaf_count } => {").expect("the arm")..];
+        let edge = arm.find("let (left, right) = v4.range.edges_v1(step_leaf_count);").expect("the edges are read off the opening");
+        let named = arm.find("b.fp_name_the_edge_leaf_v1(").expect("and named from");
+        let whole_block = arm.find("b.fp_name_the_leaf_v1(").expect("the whole-block path");
+        assert!(edge < named && named < whole_block, "the edge path comes first");
+        assert!(arm[edge..named].contains("[left, right]"), "both edges are asked for");
     }
 
     /// **ADR-0085 Decision 3 against a liar, pinned where the close's inputs are gathered**: the

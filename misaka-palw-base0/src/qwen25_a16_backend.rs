@@ -2145,6 +2145,50 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         )
     }
 
+    /// **ADR-0121 §7: a served edge names the leaf** — the straddling blocks, checked by the range's
+    /// root walk rather than a digest; the same warm-up and replay as a served block.
+    fn fp_name_the_edge_leaf_v1(
+        &self,
+        opening: &[u8],
+        served_edges: &[Vec<u8>],
+        claim: PalwClaimRootsV1,
+        index: u32,
+        prompt_token_ids: &[u32],
+        generated_token_ids: &[u32],
+        work_leaves: u64,
+    ) -> Result<Option<u64>, String> {
+        if let Ok(v4) = crate::fp_interval::Base0FpIntervalOpeningV4::decode_v1(opening)
+            && let Some(anchor) = v4.anchor.as_ref()
+        {
+            let _ = self.checkpoint_root_for_context_v1(
+                &v4.binding.job_context,
+                prompt_token_ids,
+                generated_token_ids,
+                anchor.leaf.covered_decode_call,
+            );
+        }
+        crate::fp_interval::base0_fp_name_the_edge_leaf_capped_v1(
+            opening,
+            served_edges,
+            claim,
+            index,
+            prompt_token_ids,
+            work_leaves,
+            self.checkpoint_interval(),
+            self.step_ladder_cap(),
+            &|bytes| {
+                crate::fp_interval::base0_fp_interval_opening_seat_state_capped_v1(
+                    bytes,
+                    prompt_token_ids,
+                    self.checkpoint_interval(),
+                    self.step_ladder_cap(),
+                )
+            },
+            &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1() },
+            self.prompt_ids_form,
+        )
+    }
+
     fn fp_interval_of_leaf_v1(&self, context: &PalwJobContextV2, leaf: u64) -> Option<u32> {
         let interval = self.checkpoint_interval();
         crate::fp_interval::base0_fp_interval_of_leaf_v1(&self.profile, context, interval, leaf)
@@ -4897,10 +4941,9 @@ mod held_real_row_probe {
         eprintln!("{label}: total {:.0?}", started.elapsed());
     }
 
-    /// The drill at fixture scale, in the default suite: a network ladder of `2^12`, which the
-    /// fixture's job is past, so every route above runs where only the class's ladder admits it.
-    #[test]
-    fn a_held_liar_past_the_networks_ladder_is_named_and_convicted() {
+    /// The fixture class: a held row (graph-v7) small enough for the default suite, whose jobs of a
+    /// few dozen positions are past a `2^12` network ladder.
+    fn fixture() -> (std::sync::Arc<Base0ArtifactV1>, PalwShapeProfileV3) {
         use crate::artifact::{Base0ShapeV1, LN_THETA_10000_GEN_Q};
         let geometry = PalwQwen25GeometryV1 {
             layer_count: 2,
@@ -4933,14 +4976,139 @@ mod held_real_row_probe {
                 .with_a16_params(crate::engine_a16::derived_a16_store(&shape))
                 .expect("the derived store is sorted and unique"),
         );
-        let network = 1u64 << 12;
-        let backend = || {
-            Qwen25A16Backend::new(artifact.clone(), b"misaka-palw-rc".to_vec(), profile.clone(), (64, 8))
-                .expect("the fixture's declaration is this engine's program")
-                .with_step_ladder_cap(network)
-                .with_prompt_ids_form(PalwPromptIdsFormV1::Flat)
+        (artifact, profile)
+    }
+
+    const FIXTURE_NETWORK: u64 = 1 << 12;
+
+    fn fixture_backend(artifact: &std::sync::Arc<Base0ArtifactV1>, profile: &PalwShapeProfileV3) -> Qwen25A16Backend {
+        Qwen25A16Backend::new(artifact.clone(), b"misaka-palw-rc".to_vec(), profile.clone(), (64, 8))
+            .expect("the fixture's declaration is this engine's program")
+            .with_step_ladder_cap(FIXTURE_NETWORK)
+            .with_prompt_ids_form(PalwPromptIdsFormV1::Flat)
+    }
+
+    /// The drill at fixture scale, in the default suite: a network ladder of `2^12`, which the
+    /// fixture's job is past, so every route above runs where only the class's ladder admits it.
+    #[test]
+    fn a_held_liar_past_the_networks_ladder_is_named_and_convicted() {
+        let (artifact, profile) = fixture();
+        drill("held-fixture", &artifact, &profile, 64, 8, FIXTURE_NETWORK, &|| fixture_backend(&artifact, &profile));
+    }
+
+    /// **ADR-0121 §7: a lie in a block that straddles an interval's edge is named from the edges.**
+    /// Such a block is whole in neither interval, so no opening digests it and the block naming
+    /// refuses it; the edges are served as their leaves and checked by the range's root walk. The
+    /// fault is addressed at the left edge whenever the range starts off a block boundary — the
+    /// wrong edge here, where the lie is on the right — and that edge alone does not walk; the right
+    /// one names the leaf, and so do both; an honest executor's edges name nothing.
+    #[test]
+    fn a_lie_in_a_block_that_straddles_an_intervals_edge_is_named_from_the_edges() {
+        let (artifact, profile) = fixture();
+        let honest = fixture_backend(&artifact, &profile);
+        let form = honest.prompt_ids_form();
+        let vocab = artifact.shape.vocab;
+        let prompt: Vec<usize> = (0..64usize).map(|i| (i * 7919 + 1013) % vocab).collect();
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let job = PalwFreePromptJobV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain: Hash64::from_u64_word(0xD0),
+            class_id: profile.shape_profile_id(),
+            executor_bond: TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0),
+            executor_pubkey: vec![0x11; 32],
+            operator_id: Hash64::from_u64_word(0x0B),
+            anchor_block: Hash64::from_u64_word(0xA0),
+            anchor_daa: 4242,
+            job_nonce: [0x5A; 32],
+            tokenizer_id: Hash64::default(),
+            prompt_token_ids_hash: prompt_token_ids_commitment_v1(form, &ids).expect("the ids commit"),
+            prompt_tokens: 64,
+            decode_token_limit: 8,
+            max_context_tokens: profile.n_ctx,
+            privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
         };
-        drill("held-fixture", &artifact, &profile, 64, 8, network, &backend);
+        let run = honest.execute_free_prompt(&job, &prompt).expect("the held producer runs");
+        let (capture, leaves) = (run.outcome.material.clone(), run.facts.step_leaf_count);
+        let claim = PalwClaimRootsV1 {
+            execution_root: run.outcome.execution_root,
+            trace_root: run.outcome.trace_root,
+            anchor: fp_job_id_v3(&job),
+            attempt_draw: None,
+        };
+        let mid = honest.fp_interval_count(&capture).expect("intervals") / 2;
+        let opening = honest.open_fp_interval(&capture, mid, &ids).expect("the interval opens");
+        let v4 = crate::fp_interval::Base0FpIntervalOpeningV4::decode_v1(&opening).expect("V4");
+        let anchor = v4.anchor.as_ref().expect("the middle interval resumes from a checkpoint").leaf.covered_decode_call;
+        honest
+            .checkpoint_root_for_context_v1(&v4.binding.job_context, &ids, &run.output_token_ids, anchor)
+            .expect("the seat recomputes");
+        let (left, right) = v4.range.edges_v1(leaves);
+        assert!(
+            left.0 < left.1 && right.0 < right.1,
+            "the middle interval's range starts and ends inside a block: {left:?} {right:?}"
+        );
+        let r = v4.range.retain_level;
+        let number = |block: u64| crate::fp_interval::base0_fp_block_request_number_v1(&v4, block).expect("a numbered block");
+        let (left_block, right_block) = (left.0 >> r, right.0 >> r);
+
+        // The honest executor's edges walk, and name nothing.
+        let honest_edges = vec![
+            honest.open_fp_block_leaves(&capture, mid, number(left_block), &ids).expect("the left edge is served"),
+            honest.open_fp_block_leaves(&capture, mid, number(right_block), &ids).expect("the right edge is served"),
+        ];
+        assert_eq!(
+            honest.fp_name_the_edge_leaf_v1(&opening, &honest_edges, claim, mid, &ids, &run.output_token_ids, leaves),
+            Ok(None)
+        );
+
+        // A liar on the right edge.
+        let leaf = right.0 + (right.1 - right.0) / 2;
+        let liar = fixture_backend(&artifact, &profile);
+        let lying = liar.execute_free_prompt_with_injected_fault(&job, &prompt, leaf).expect("the drill's liar runs");
+        let lying_capture = lying.outcome.material.clone();
+        let lying_claim = PalwClaimRootsV1 {
+            execution_root: lying.outcome.execution_root,
+            trace_root: lying.outcome.trace_root,
+            anchor: fp_job_id_v3(&job),
+            attempt_draw: None,
+        };
+        let lie = liar.open_fp_interval(&lying_capture, mid, &ids).expect("the liar serves its interval");
+        let verdict = honest.verify_fp_interval_opening(&lie, lying_claim, mid, &ids, leaves);
+        assert_eq!(
+            verdict,
+            PalwFpIntervalVerdictV1::FaultInRange { first_leaf_index: left.0, leaf_count: left.1 - left.0 },
+            "every digest agrees and the root does not: the fault is addressed at the left edge"
+        );
+        let served_left = liar.open_fp_block_leaves(&lying_capture, mid, number(left_block), &ids).expect("the left edge");
+        let served_right = liar.open_fp_block_leaves(&lying_capture, mid, number(right_block), &ids).expect("the right edge");
+        assert!(
+            honest.fp_name_the_leaf_v1(&lie, &served_right, lying_claim, mid, &ids, &lying.output_token_ids, leaves).is_err(),
+            "the block naming refuses an edge: no digest to check it against"
+        );
+        assert!(
+            honest
+                .fp_name_the_edge_leaf_v1(
+                    &lie,
+                    std::slice::from_ref(&served_left),
+                    lying_claim,
+                    mid,
+                    &ids,
+                    &lying.output_token_ids,
+                    leaves
+                )
+                .is_err(),
+            "the addressed edge alone does not walk: the lie is in the edge still the seat's own"
+        );
+        for edges in [vec![served_right.clone()], vec![served_left, served_right]] {
+            assert_eq!(
+                honest.fp_name_the_edge_leaf_v1(&lie, &edges, lying_claim, mid, &ids, &lying.output_token_ids, leaves),
+                Ok(Some(leaf)),
+                "the served edges walk to the committed root and name the lie"
+            );
+        }
     }
 
     #[test]

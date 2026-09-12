@@ -892,6 +892,50 @@ impl PalwExecutionBackendV1 for Base0Backend {
         )
     }
 
+    /// **ADR-0121 §7: a served edge names the leaf** — the straddling blocks, checked by the range's
+    /// root walk rather than a digest; the same warm-up and replay as a served block.
+    fn fp_name_the_edge_leaf_v1(
+        &self,
+        opening: &[u8],
+        served_edges: &[Vec<u8>],
+        claim: PalwClaimRootsV1,
+        index: u32,
+        prompt_token_ids: &[u32],
+        generated_token_ids: &[u32],
+        work_leaves: u64,
+    ) -> Result<Option<u64>, String> {
+        if let Ok(v4) = crate::fp_interval::Base0FpIntervalOpeningV4::decode_v1(opening)
+            && let Some(anchor) = v4.anchor.as_ref()
+        {
+            let _ = self.checkpoint_root_for_context_v1(
+                &v4.binding.job_context,
+                prompt_token_ids,
+                generated_token_ids,
+                anchor.leaf.covered_decode_call,
+            );
+        }
+        crate::fp_interval::base0_fp_name_the_edge_leaf_capped_v1(
+            opening,
+            served_edges,
+            claim,
+            index,
+            prompt_token_ids,
+            work_leaves,
+            self.checkpoint_interval(),
+            self.step_ladder_cap(),
+            &|bytes| {
+                crate::fp_interval::base0_fp_interval_opening_seat_state_capped_v1(
+                    bytes,
+                    prompt_token_ids,
+                    self.checkpoint_interval(),
+                    self.step_ladder_cap(),
+                )
+            },
+            &Base0IntervalKernels { artifact: &self.artifact },
+            self.prompt_ids_form,
+        )
+    }
+
     fn fp_interval_of_leaf_v1(&self, context: &PalwJobContextV2, leaf: u64) -> Option<u32> {
         let interval = self.checkpoint_interval();
         crate::fp_interval::base0_fp_interval_of_leaf_v1(&self.profile, context, interval, leaf)

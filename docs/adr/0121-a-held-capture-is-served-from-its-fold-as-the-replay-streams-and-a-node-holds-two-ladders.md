@@ -15,8 +15,10 @@
   [0085](0085-the-close-is-assembled-from-what-was-served.md) (the close annex and the close from
   served intervals), [0111](0111-a-seat-may-demand-the-committed-leaf-it-needs-to-judge.md)
   (a leaf's evidence), [0082](0082-the-close-is-flat-in-the-context.md) Decision 7 (the fold).
-* Amends: ADR-0086 Decision 6's block index, for a held class only (§3 D3); ADR-0082 Decision 7's
-  "the retain level is the ruleset's ladder's", for a held class only (§3 D3). Closes ADR-0119 §7's
+* Amends: ADR-0086 Decision 6's block index, for a held class only (§3 D3), and its block answer,
+  which now serves a block straddling a range's end as its leaves inside the range, named by the
+  range's root walk (§3 D5); ADR-0082 Decision 7's "the retain level is the ruleset's ladder's", for
+  a held class only (§3 D3). Closes ADR-0119 §7's
   first three items; §7 below keeps the rest.
 
 ## 0. The sentence this ADR is
@@ -147,6 +149,27 @@ re-execution and the fused site's honest re-execution. Two consequences are this
 a held claim past the network's ladder is judged on the interval lane (the held route) and not by
 the whole-capture sampler; and its fused-site dissection evidence is not built on this node (§7).
 
+### D5 — A lie at an interval's edge is named from the edges
+
+Blocks are aligned to the step space and intervals are not, so the first and last blocks of every
+interval's range are whole in neither interval: the V4 opening carries no digest for them and the
+block naming (ADR-0086 Decision 6) refuses them. A fault there reached no leaf — and, the seat's
+address being `fold_edge_v1`'s left edge whenever the range starts off a block boundary, not even
+the right edge — so a liar that knew the geometry could lie where no seat names a leaf, and a held
+class has no bisection to fall back on (found by §4's run; the drill had to be moved inside a
+block). Now:
+
+* the executor serves a block that straddles the range's end as its leaves inside the range
+  (`Base0FpBlockLeavesV1::cut_v1`; the fold's answer takes the seed row's from the opening and
+  replays the rest), under the same request and number as a whole block;
+* a seat whose fault is not a whole block asks for both edges (`Base0FpFoldRangeOpeningV1::
+  edges_v1`) and names the leaf through `fp_name_the_edge_leaf_v1`: the served edges (its own where
+  one is not served), the opening's digests and its siblings must walk to the committed root
+  (`base0_fold_range_root_v1`, the rule the V4 verdict walks) — so an executor cannot serve edges it
+  did not commit — and the leaf named is the first served one that differs from its own replay.
+
+Node-side and consensus-inert: one request kind, a wider answer, a new seat verb.
+
 ## 4. What it costs
 
 Time is what it was: a replay of the interval from its anchor, which every route already paid; the
@@ -206,6 +229,12 @@ it moves exactly one committed tile (`the_drill_liar_moves_one_committed_tile_an
   convicts on the liar's own evidence.
 * `the_drill_liar_moves_one_committed_tile_and_nothing_else` — the drill's lie is one tile: the same
   answer and checkpoints, one retained block different, its own roots.
+* `a_lie_in_a_block_that_straddles_an_intervals_edge_is_named_from_the_edges` — D5: a liar on the
+  right edge of the middle interval is addressed at the left edge; that edge alone does not walk,
+  the right one names the leaf and so do both, the block naming refuses an edge, and an honest
+  executor's edges name nothing.
+* `a_fault_at_an_intervals_edge_asks_for_both_edges_and_names_from_them` — the panel's fault arm
+  asks for both edges and names through the edge verb before the whole-block path.
 
 ## 6. Supersession
 
@@ -235,17 +264,10 @@ first three items (the two knobs, the replays, the retain level) are closed here
   converted at its own `n_ctx` — 512 bytes of rotary table a position at the 1.5B head width, a GiB
   at `2^21` — and nothing on the chain or in the registration tooling checks it yet. The run
   extended the table with the same generator (its first 512 rows checked to be the artifact's own).
-* **A lie in a block that straddles an interval's edge.** Blocks are aligned to the step space,
-  intervals are not, so the first and last blocks of every interval's range are whole in neither
-  interval: the V4 opening carries no digest for them, no block answer serves them, and a fault
-  there is addressed by `fold_edge_v1` as the left edge whenever the range does not start on a
-  block boundary — the wrong edge when the lie is on the right. A seat that finds such a fault names
-  no leaf, and a held class has no bisection to fall back on: a liar that knows the geometry can put
-  its lie where the one-move court is never given an address. (The drill lies inside a whole block
-  for that reason.) The remedy is an edge answer — the two edge portions' leaves, at most two blocks,
-  checked by the range root walk the seat already runs (`base0_fold_range_root_v1` over the served
-  edges, the served digests and the siblings) and then compared with the seat's own — a node-side
-  request kind, consensus-inert.
+* **The served close's gathering, at an edge.** A challenger's close from served intervals (ADR-0085
+  Decision 3) still holds the executor's leaves only for a whole block; a held class convicts through
+  the leaf demand (ADR-0111) once D5 has named the leaf, so the close's edge is left for the classes
+  that use it.
 
 ## 8. Number hygiene
 
