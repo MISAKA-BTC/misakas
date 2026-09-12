@@ -5185,6 +5185,7 @@ impl VirtualStateProcessor {
         let virtual_read = self.virtual_stores.read();
         let candidate_daa = virtual_read.state.get().ok()?.daa_score;
         drop(virtual_read);
+        let budget_fences = self.palw_epoch_budget_fences_at(candidate_daa);
         let mut facts = kaspa_consensus_core::palw_producer_v2::palw_producer_facts_v2(
             &state,
             state_params,
@@ -5194,11 +5195,31 @@ impl VirtualStateProcessor {
             class_id,
             bond.map(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2).as_ref(),
         )?;
+        // The producer reads the same parent snapshot as admission. At a crossing block the
+        // snapshot still carries the closed epoch's table, so the boundary fence must derive the
+        // candidate epoch's budget here too; otherwise the producer would hold a non-floor block
+        // that admission accepts. Recompute the release after installing that derived budget,
+        // because the class's own share is part of the release formula.
+        if budget_fences.boundary_budget_active && facts.epoch_budget_blocks == 0 && !facts.is_base_class {
+            let epoch_index = candidate_daa / state_params.epoch_length();
+            if let Some(budgets) = kaspa_consensus_core::palw_state_v2::palw_epoch_budgets_for_v2(&state, state_params, epoch_index) {
+                if let Some(budget) = budgets.budget_blocks.get(&class_id).copied() {
+                    facts.epoch_budget_blocks = budget;
+                    facts.epoch_budget_released = kaspa_consensus_core::palw_state_v2::palw_epoch_budget_release_v1(
+                        &state,
+                        state_params.epoch_length(),
+                        candidate_daa,
+                        &class_id,
+                        budget,
+                    );
+                }
+            }
+        }
         // ADR-0123: the builder computes the release but cannot know whether it counts — it holds
         // no `Params`. This is the one path every producer and the RPC ask through, and it resolves
         // the fence at the SAME candidate score admission will judge the block at, so a producer
         // holds exactly when the chain would refuse and draws exactly when it would accept.
-        facts.epoch_budget_release_armed = self.palw_epoch_budget_release_at(candidate_daa);
+        facts.epoch_budget_release_armed = budget_fences.budget_release_active;
         Some(facts)
     }
 
@@ -8146,6 +8167,7 @@ impl VirtualStateProcessor {
     }
 
     /// ADR-0089: the three fences the executor reads, at one DAA.
+    #[cfg(feature = "evm")]
     pub(super) fn palw_evm_market_fences_at(&self, daa_score: u64) -> kaspa_consensus_core::evm::model_market::PalwEvmMarketFencesV1 {
         kaspa_consensus_core::evm::model_market::PalwEvmMarketFencesV1 {
             market_active: self.palw_model_market_active_at(daa_score),
@@ -8242,6 +8264,16 @@ impl VirtualStateProcessor {
     /// ADR-0123's budget release at `daa_score` — the one resolver every budget reader shares.
     pub(super) fn palw_epoch_budget_release_at(&self, daa_score: u64) -> bool {
         self.palw_epoch_budget_release.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// Resolve both epoch-budget fences at one block's DAA. Keeping them together at the
+    /// admission boundary makes it impossible for a caller to transpose the two policies while
+    /// forwarding adjacent booleans.
+    fn palw_epoch_budget_fences_at(&self, daa_score: u64) -> kaspa_consensus_core::palw_admission_v2::PalwEpochBudgetFencesV1 {
+        kaspa_consensus_core::palw_admission_v2::PalwEpochBudgetFencesV1 {
+            boundary_budget_active: self.palw_epoch_boundary_budget.is_some_and(|fence| fence.is_active(daa_score)),
+            budget_release_active: self.palw_epoch_budget_release_at(daa_score),
+        }
     }
 
     /// **The fused terminal's responder-coverage rule, resolved in exactly one place** — the reason
@@ -8720,16 +8752,9 @@ impl VirtualStateProcessor {
             &envelope,
             |key, message, sig, context| verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false),
             bootstrap_bond.as_ref(),
-            // ADR-0045 Decision 2's boundary sentence, resolved at the BLOCK's own DAA — the same
-            // score item 7 divides by `epoch_length`, so the fence and the epoch it governs are one
-            // reading. All three consumers of this function (the chain block's own attempt, the
-            // merged-work collector, the payment-entitlement set) get it here, because one predicate
-            // refused at three sites is what made this defect cost a block, its mergeset's claims
-            // and their carves at once.
-            self.palw_epoch_boundary_budget.is_some_and(|fence| fence.is_active(point.daa_score)),
-            // ADR-0123, a SEPARATE resolution from the fence above: two adjacent `bool`s are a
-            // transposition the compiler cannot see, so each is named at its source.
-            self.palw_epoch_budget_release_at(point.daa_score),
+            // ADR-0045/ADR-0123: resolve both budget policies from the same block DAA, and pass
+            // them as named fields so boundary and release cannot be transposed at this callsite.
+            self.palw_epoch_budget_fences_at(point.daa_score),
         )
         .map_err(|e| e.to_string())?;
         Ok(Some(envelope))

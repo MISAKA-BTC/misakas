@@ -8464,8 +8464,8 @@ pub fn apply_palw_transition_v7(
             PalwBlockWorkV3::Attempt(envelope) => match admission {
                 None => Some("a merged attempt on a caller that supplied no admission params".to_string()),
                 Some(admission) => {
-                    // **`boundary_budget: false`, and the value is inert here** (ADR-0045 D2;
-                    // mainnet audit 2026-09-06, M-2). This runs against the LIVE fold state, and
+                    // **the boundary-budget fence is false, and its value is inert here**
+                    // (ADR-0045 D2; mainnet audit 2026-09-06, M-2). This runs against the LIVE fold state, and
                     // step 3b's `ensure_epoch_budgets` has already written the table for
                     // `ctx.daa_score`'s epoch — so the stored snapshot matches and the fence's
                     // branch is unreachable. Passing `true` would be a rule change on every
@@ -8477,12 +8477,13 @@ pub fn apply_palw_transition_v7(
                         admission,
                         ctx,
                         envelope,
-                        false,
-                        // ADR-0123: NOT inert, unlike the boundary fence beside it. The release is
-                        // a function of the live counters, which is exactly what this reads — so
-                        // the fold must release what the processor released for this block, from
-                        // the value resolved once at the block's DAA.
-                        builder.extras.epoch_budget_release_active,
+                        // ADR-0045's boundary fence is inert here: `ensure_epoch_budgets` has
+                        // already installed the live epoch's table. ADR-0123's release is
+                        // resolved once for this block and must remain armed in the fold.
+                        crate::palw_admission_v2::PalwEpochBudgetFencesV1 {
+                            budget_release_active: builder.extras.epoch_budget_release_active,
+                            ..Default::default()
+                        },
                     ) {
                         Err(refused) => Some(refused.to_string()),
                         Ok(_) => {
@@ -9797,7 +9798,11 @@ pub fn palw_epoch_budget_release_v1(
         .map(|(_, counter)| counter.produced_blocks)
         .fold(0u64, u64::saturating_add);
     let others_share = epoch_length.saturating_sub(budget.min(epoch_length));
-    let others_due = (u128::from(pos) * u128::from(others_share)).div_ceil(u128::from(epoch_length));
+    // The product is wider than either input, but two arbitrary u64 inputs can still exceed
+    // u128 at the extreme boundary. Saturating here keeps a malformed or adversarial parameter
+    // from turning a budget check into a consensus panic; the conversion below caps the result
+    // at the largest representable slot count.
+    let others_due = u128::from(pos).saturating_mul(u128::from(others_share)).div_ceil(u128::from(epoch_length));
     let others_due = u64::try_from(others_due).unwrap_or(u64::MAX);
     others_due.saturating_sub(others_produced)
 }
@@ -16702,8 +16707,15 @@ pub(crate) mod tests {
         let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
         let mut env = attempt(40, 1);
         env.attempt.class_id = entrant;
-        let err = crate::palw_admission_v2::check_palw_attempt_admission_v2(&s1, &p, &admission, &ctx(2, 101, 2), &env, false, false)
-            .expect_err("a weightless class admits nothing");
+        let err = crate::palw_admission_v2::check_palw_attempt_admission_v2(
+            &s1,
+            &p,
+            &admission,
+            &ctx(2, 101, 2),
+            &env,
+            crate::palw_admission_v2::PalwEpochBudgetFencesV1::default(),
+        )
+        .expect_err("a weightless class admits nothing");
         assert!(
             matches!(err, crate::palw_admission_v2::PalwAdmissionV2Error::ClassNotYetActive { activation_daa: 500, .. }),
             "got {err:?}"
@@ -16726,9 +16738,24 @@ pub(crate) mod tests {
         // …and now it admits. The class had to become active for this to change, which is what
         // makes the refusal above a real gate rather than an unrelated failure.
         assert!(
-            crate::palw_admission_v2::check_palw_attempt_admission_v2(&s3, &p, &admission, &ctx(4, 501, 4), &env, false, false).is_ok()
+            crate::palw_admission_v2::check_palw_attempt_admission_v2(
+                &s3,
+                &p,
+                &admission,
+                &ctx(4, 501, 4),
+                &env,
+                crate::palw_admission_v2::PalwEpochBudgetFencesV1::default(),
+            )
+            .is_ok()
                 || !matches!(
-                    crate::palw_admission_v2::check_palw_attempt_admission_v2(&s3, &p, &admission, &ctx(4, 501, 4), &env, false, false),
+                    crate::palw_admission_v2::check_palw_attempt_admission_v2(
+                        &s3,
+                        &p,
+                        &admission,
+                        &ctx(4, 501, 4),
+                        &env,
+                        crate::palw_admission_v2::PalwEpochBudgetFencesV1::default(),
+                    ),
                     Err(crate::palw_admission_v2::PalwAdmissionV2Error::ClassNotYetActive { .. })
                 ),
             "after activation the class is no longer refused FOR BEING INACTIVE"
@@ -28982,5 +29009,108 @@ pub(crate) mod tests {
             assert_eq!(apply_delta_v2(&s, &d3, &p).unwrap().state_root(), s3.state_root());
             assert_eq!(revert_delta_v2(&s3, &d3, &p).unwrap().state_root(), s.state_root());
         }
+    }
+}
+
+/// ADR-0123's release rule, tested as the pure function admission and the producer both call.
+#[cfg(test)]
+mod adr_0123_budget_release_tests {
+    use super::*;
+
+    fn class(v: u64) -> Hash64 {
+        Hash64::from_u64_word(v)
+    }
+
+    /// A state holding exactly the given attempt counters for `epoch_index`.
+    fn with_counters(epoch_index: u64, counters: &[(Hash64, u64)]) -> PalwChainStateV2 {
+        let mut state = PalwChainStateV2::genesis();
+        for (id, produced) in counters {
+            state.epoch_counters.insert(*id, PalwEpochCounterV2 { epoch_index, produced_pwu: 1, produced_blocks: *produced });
+        }
+        state
+    }
+
+    /// **The property the whole ADR rests on: a class that can produce always reaches the
+    /// boundary.** The floor's exemption claimed this and could not deliver it on a network where
+    /// nobody wins the floor. Here one fast class is the only producer — every other class is
+    /// stalled at zero — and it must be able to fill EVERY slot `0..length`, for budgets that do
+    /// not divide the epoch evenly as well as ones that do. A single refused slot is the deadlock
+    /// back, one slot later.
+    #[test]
+    fn a_fast_class_can_always_drive_its_epoch_to_the_boundary() {
+        let fast = class(0xFA57);
+        for length in [7u64, 100, 1_000, 1_009] {
+            for budget in [1u64, 2, length / 3, 367.min(length), length / 2, length - 1, length] {
+                let budget = budget.max(1).min(length);
+                // One block per slot: while the fast class is the only producer, the position in the
+                // epoch IS what it has produced.
+                for produced in 0..length {
+                    let state = with_counters(0, &[(fast, produced)]);
+                    let released = palw_epoch_budget_release_v1(&state, length, produced, &fast, budget);
+                    assert!(
+                        produced < budget.saturating_add(released),
+                        "length {length}, budget {budget}: slot {produced} is refused (released {released}) — the epoch \
+                         could not close"
+                    );
+                }
+            }
+        }
+    }
+
+    /// **Slow classes do not break it either.** The other class produces on its own slow cadence
+    /// and the fast class fills every slot it leaves. Whatever the split, every slot is filled by
+    /// someone, so the epoch closes — the release is measured against what the others actually
+    /// produced, not against what they were entitled to.
+    #[test]
+    fn a_slow_class_beside_a_fast_one_still_lets_the_epoch_close() {
+        let (fast, slow) = (class(0xFA57), class(0x510F));
+        let length = 1_000u64;
+        for (budget_fast, slow_every) in [(367u64, 10u64), (100, 3), (900, 7), (1, 2), (500, 1_000)] {
+            let (mut f, mut s) = (0u64, 0u64);
+            for pos in 0..length {
+                if pos % slow_every == 0 {
+                    s += 1; // the slow class took this slot
+                    continue;
+                }
+                let state = with_counters(0, &[(fast, f), (slow, s)]);
+                let released = palw_epoch_budget_release_v1(&state, length, pos, &fast, budget_fast);
+                assert!(
+                    f < budget_fast.saturating_add(released),
+                    "budget {budget_fast}, slow every {slow_every}: slot {pos} is refused to the fast class (f={f}, s={s}, \
+                     released {released})"
+                );
+                f += 1;
+            }
+            assert_eq!(f + s, length, "every slot of the epoch was filled");
+        }
+    }
+
+    /// **Fairness is kept while the others keep pace.** When every other class has produced its
+    /// pro-rata share of the elapsed slots, there is nothing unfilled to hand over: the release is at
+    /// most the one slot `ceil` rounds up, so a fast class cannot out-run a class that is keeping up.
+    #[test]
+    fn a_class_keeping_pace_leaves_nothing_to_borrow() {
+        let (fast, other) = (class(0xFA57), class(0x07E4));
+        let length = 1_000u64;
+        let budget = 367u64;
+        for pos in (0..length).step_by(37) {
+            let on_pace = pos * (length - budget) / length; // what the other class was due, floored
+            let state = with_counters(0, &[(fast, budget), (other, on_pace)]);
+            let released = palw_epoch_budget_release_v1(&state, length, pos, &fast, budget);
+            assert!(released <= 1, "pos {pos}: a class keeping pace still released {released}");
+        }
+    }
+
+    /// Counters stamped with an older epoch have produced nothing in this one, and nothing at all is
+    /// released at an epoch's first slot.
+    #[test]
+    fn a_stale_counter_counts_for_nothing_and_an_epoch_opens_with_no_release() {
+        let (fast, other) = (class(0xFA57), class(0x07E4));
+        // `other` produced 900 in epoch 0; at DAA 1_500 (epoch 1, position 500) that is history.
+        let state = with_counters(0, &[(other, 900)]);
+        let released = palw_epoch_budget_release_v1(&state, 1_000, 1_500, &fast, 367);
+        assert_eq!(released, (500u64 * 633).div_ceil(1_000), "a counter from epoch 0 fills no slot of epoch 1");
+        assert_eq!(palw_epoch_budget_release_v1(&state, 1_000, 2_000, &fast, 367), 0, "position 0 releases nothing");
+        assert_eq!(palw_epoch_budget_release_v1(&state, 0, 5, &fast, 367), 0, "a zero-length epoch releases nothing");
     }
 }

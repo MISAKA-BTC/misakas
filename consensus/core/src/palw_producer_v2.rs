@@ -279,7 +279,7 @@ pub fn palw_producer_facts_v2(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::palw_admission_v2::check_palw_attempt_admission_v2;
+    use crate::palw_admission_v2::{PalwEpochBudgetFencesV1, check_palw_attempt_admission_v2};
     use crate::palw_attempt_v2::{
         PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, challenge_v2, class_ticket_v3, execution_anchor_v3,
     };
@@ -387,7 +387,8 @@ mod tests {
         assert!(won, "a quarter-of-the-space target is winnable in 1e5 tries");
 
         let ctx = PalwBlockContextV2 { block: crate::BlockHash::from_u64_word(2), daa_score: 101, blue_score: 2, subsidy: 0 };
-        check_palw_attempt_admission_v2(&state, &params, &admission, &ctx, &env, false, false).expect("the chain takes it");
+        check_palw_attempt_admission_v2(&state, &params, &admission, &ctx, &env, PalwEpochBudgetFencesV1::default())
+            .expect("the chain takes it");
         crate::palw_admission_v2::check_palw_class_lottery_v3(&state, &env.attempt, anchor).expect("and its draw wins");
     }
 
@@ -446,7 +447,7 @@ mod tests {
         ] {
             let env = build(mutate);
             assert!(
-                check_palw_attempt_admission_v2(&state, &params, &admission, &ctx, &env, false, false).is_err(),
+                check_palw_attempt_admission_v2(&state, &params, &admission, &ctx, &env, PalwEpochBudgetFencesV1::default()).is_err(),
                 "a producer that got the {name} from anywhere but the facts is a producer with no blocks"
             );
         }

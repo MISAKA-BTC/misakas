@@ -16385,7 +16385,6 @@ mod consensus_params_id_tests {
             "palw_da_court",
             "palw_difficulty_priced_rows",
             "palw_epoch_boundary_budget",
-            "palw_epoch_budget_release",
             "palw_fp_da_pins",
             "palw_fp_ruleset_caps",
             "palw_heartbeat",
