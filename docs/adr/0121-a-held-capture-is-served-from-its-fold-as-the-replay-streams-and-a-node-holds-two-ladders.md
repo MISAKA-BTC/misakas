@@ -186,7 +186,12 @@ first three items (the two knobs, the replays, the retain level) are closed here
 
 * **The resume opening's transport.** A resume carries the whole state at the interval's start over
   the same 4 MiB lane, and a class of `n_ctx` `2^21` always takes the Resume route; it needs its own
-  transport, or chunks.
+  transport, or chunks. The arithmetic, for the dense 1.5B row: the cache is 56 KiB a position
+  (2 KV heads × 128 lanes × 4 bytes, K and V, 28 layers), so one 4 MiB answer holds the state of 73
+  positions; cut into parts, the lane's per-peer serve budget (48 MiB a minute) moves about 880
+  positions of state a minute from one executor. A seat resuming deep in a long job is therefore a
+  question of a state-sync lane of its own and of which layers a seat holds (ADR-0099's shards),
+  not of a larger cap on this one.
 * **A fused site's dissection evidence past the network's ladder.** It is built from the honest
   re-execution's dense rows and the whole K/V history; a windowed builder (the rows the site reads,
   from the interval's anchor) is its own piece of work.
