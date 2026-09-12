@@ -125,8 +125,16 @@ pub fn base0_attn_site_evidence_v1(
         operand_openings.push(opening);
     }
     let proven = PalwProvenOperandsV1::from_openings_v1(&operand_openings, artifact_root).map_err(|e| e.to_string())?;
-    let site = kaspa_consensus_core::palw_court_v2::palw_attn_dispute_site_unpinned_v2(binding, &proven, narrowed, None)
-        .map_err(|e| e.to_string())?;
+    // **The rows open under this backend's ladder** (ADR-0119 Decision 4): the court opens a fused
+    // site's rows under the claim's ladder where the held regime is in force — the network's step
+    // ladder for every class this node produces, which is the ladder it was built at — and under the
+    // structural `2^22` before it. Deriving at `2^22` here refused, at the first opening below,
+    // every claim past about 36 prompt tokens on testnet-11's dense row, so the regime's raise of
+    // the court's cap would have been one no honest party could use. Before the regime the panel
+    // files nothing the court's `2^22` would refuse (`attn_root_claim_is_openable_v1`).
+    let site =
+        kaspa_consensus_core::palw_court_v2::palw_attn_dispute_site_unpinned_v3(binding, &proven, narrowed, None, step_ladder_cap)
+            .map_err(|e| e.to_string())?;
     let s = &site.site;
 
     // The committed rows by index, and the tree they root — built once for every opening below.
@@ -253,9 +261,14 @@ pub fn base0_attn_site_evidence_v1(
         (Some(covered), Base0AttnAnchorSourceV1::Filed(filed)) => {
             // The filed anchor, checked exactly as the bottom will check it — against the site
             // derived WITH it (the anchor's layout is the site's), and the binding's leg.
-            let with_anchor =
-                kaspa_consensus_core::palw_court_v2::palw_attn_dispute_site_unpinned_v2(binding, &proven, narrowed, Some(filed))
-                    .map_err(|e| e.to_string())?;
+            let with_anchor = kaspa_consensus_core::palw_court_v2::palw_attn_dispute_site_unpinned_v3(
+                binding,
+                &proven,
+                narrowed,
+                Some(filed),
+                step_ladder_cap,
+            )
+            .map_err(|e| e.to_string())?;
             kaspa_consensus_core::palw_attn_court_v1::palw_attn_anchor_is_the_sites_v1(filed, &with_anchor.binding, &with_anchor.site)
                 .map_err(|e| format!("the filed anchor is not the site's committed checkpoint: {e}"))?;
             let chunks = anchor_chunks(covered)?;
@@ -332,4 +345,27 @@ pub fn base0_attn_site_evidence_v1(
     };
 
     Ok(PalwAttnSiteEvidenceV1 { narrowed, binding: binding.clone(), out_tile, query, operand_openings, inputs, anchor, cache_rows })
+}
+
+#[cfg(test)]
+mod tests {
+    /// **ADR-0119 Decision 4, pinned where it lives: a party derives the fused site at its
+    /// backend's ladder, never at the structural `2^22`.** The court opens the site's rows at the
+    /// claim's ladder under the held regime; a party that derived at `2^22` refused its own first
+    /// opening for every claim past it — on testnet-11's dense row, every claim past about 36 prompt
+    /// tokens — so the regime's raise would have been one no honest party could answer with. A
+    /// capture that large is too heavy for a unit test, so the derivation is pinned by its source.
+    #[test]
+    fn a_party_derives_the_fused_site_at_its_backends_ladder() {
+        let whole = include_str!("attn_responder.rs");
+        let source = &whole[..whole.find("#[cfg(test)]\nmod tests {").expect("the unit tests follow the code")];
+        assert!(!source.contains("palw_attn_dispute_site_unpinned_v2("), "no derivation at the structural cap");
+        let derivations: Vec<&str> =
+            source.match_indices("palw_attn_dispute_site_unpinned_v3(").map(|(at, _)| &source[at..]).collect();
+        assert_eq!(derivations.len(), 2, "the site, and the site with the accused's filed anchor");
+        for call in derivations {
+            let args = &call[..call.find(".map_err").expect("the call ends")];
+            assert!(args.contains("step_ladder_cap"), "derived at the backend's ladder: {args}");
+        }
+    }
 }

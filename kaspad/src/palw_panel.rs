@@ -3083,6 +3083,12 @@ impl PalwPanelService {
                                 }
                             };
                             let params = &self.consensus_config.params;
+                            if !attn_root_claim_is_openable_v1(params, current_daa, evidence.binding.step_leaf_count) {
+                                *court_stalls
+                                    .entry("the court opens a fused site's rows only to 2^22 before the held regime")
+                                    .or_default() += 1;
+                                continue;
+                            }
                             let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) =
                                 &params.palw_consensus_mode
                             else {
@@ -4950,6 +4956,19 @@ fn walk_accepted_lifecycle_objects_v1(
         }
         cursor = ghostdag.selected_parent;
     }
+}
+
+/// **Will the court open this root claim's output tile at `daa`?** (ADR-0119 Decision 4.)
+///
+/// The court opens a fused site's rows under `palw_attn_opening_cap_v1`: the structural `2^22`
+/// before the held regime, the claim's ladder under it. This node's evidence is built at its
+/// backend's ladder — at least the court's under the regime, for every claim this node can
+/// produce — so the one filing the court would refuse is a claim past `2^22` leaves before the
+/// regime, and the root claim is the one move filed without asking the chain first (a close asks
+/// `palw_court_close_verdict_v2`). A root claim the court refuses buys nothing and costs a fee.
+fn attn_root_claim_is_openable_v1(params: &kaspa_consensus_core::config::params::Params, daa: u64, step_leaf_count: u64) -> bool {
+    params.palw_held_context_fence().is_some_and(|fence| fence.is_active(daa))
+        || step_leaf_count <= kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES
 }
 
 /// **The accused's filing, read back off the chain** (ADR-0093 Decisions 7 and 8).
@@ -7252,5 +7271,40 @@ mod held_class_form_pin {
                 assert!(!call.contains("self.config.prompt_ids_form"), "{callee} reads the network's form: {call}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod attn_opening_cap_pin {
+    use super::attn_root_claim_is_openable_v1;
+    use kaspa_consensus_core::config::params::{PALW_RC_HELD_FENCE_DAA, Params};
+    use kaspa_consensus_core::network::{NetworkId, NetworkType};
+    use kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES;
+
+    /// **ADR-0119 Decision 4, on the node: a root claim is filed exactly when the court will open
+    /// it.** Before testnet-11's held regime the court opens a fused site's rows to `2^22` and no
+    /// further, so the panel files no root claim past it (the evidence builds at the backend's
+    /// ladder now, and would otherwise be filed and refused); from the regime's height the court
+    /// opens them at the claim's ladder, and testnet-11's dense row — `6,630,544` leaves at its
+    /// canonical 512 — is answered. The root claim is the one move filed without a dry run, so the
+    /// arm asks this before it signs.
+    #[test]
+    fn a_root_claim_is_filed_exactly_when_the_court_opens_its_rows() {
+        let t11 = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11));
+        let fence = PALW_RC_HELD_FENCE_DAA.expect("testnet-11 schedules the regime");
+        let dense_v5_canonical = 6_630_544;
+        assert!(attn_root_claim_is_openable_v1(&t11, fence - 1, PALW_STEP_MAX_LEAVES), "inside the structural cap, always");
+        assert!(!attn_root_claim_is_openable_v1(&t11, fence - 1, PALW_STEP_MAX_LEAVES + 1), "one past it, not before the regime");
+        assert!(!attn_root_claim_is_openable_v1(&t11, fence - 1, dense_v5_canonical));
+        assert!(attn_root_claim_is_openable_v1(&t11, fence, dense_v5_canonical), "from the regime's height, the dense row");
+        let mut dormant = t11.clone();
+        dormant.palw_held_context = None;
+        assert!(!attn_root_claim_is_openable_v1(&dormant, u64::MAX, dense_v5_canonical), "no regime, no raise");
+
+        let whole = include_str!("palw_panel.rs");
+        let source = &whole[..whole.find("#[cfg(test)]\nmod tests {").expect("the unit tests follow the code")];
+        let root = &source[source.find("AttnMove::Root => {").expect("the root arm")..];
+        let asked = root.find("attn_root_claim_is_openable_v1(params, current_daa, evidence.binding.step_leaf_count)").expect("asked");
+        assert!(asked < root.find("self.sign(&message").expect("signed"), "asked before the root claim is signed");
     }
 }

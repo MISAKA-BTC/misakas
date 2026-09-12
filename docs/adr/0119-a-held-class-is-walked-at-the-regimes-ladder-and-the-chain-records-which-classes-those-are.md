@@ -97,7 +97,15 @@ the structural `2^22` before the held regime, as always; under it, the claim's l
 class's `2^40`, every other class's the network's step ladder. The acceptance layer asks it at the
 block's DAA (`adjudicate_court_close_v3`), the fold through its extras. On testnet-11 this makes the
 shipped dense row's fused leaves dissectable from 7,000 — a consensus change for that row's claims
-past the fence, and the one the deep-audit session's C-01 needs beside it.
+past the fence, and the one the deep-audit session's C-01 needs beside it. On the node, a party
+derives the site at its backend's ladder (`base0_attn_site_evidence_v1`; it derived at `2^22` and
+refused its own first opening past it), and the panel files a root claim — the one move filed
+without asking the chain first — only when the court will open it
+(`attn_root_claim_is_openable_v1`: always under the regime, to `2^22` before it). The court's cap is
+an upper bound (`step_opening_root_capped_v1` bounds the leaf count and the path), so evidence built
+for one tree verifies under any cap that holds it. And an executor's range opening is bounded by its
+tree's own depth, not the default leg's 44 siblings, which refused an honest opening of a claim past
+`2^22` leaves that the chain walks under the ladder that admitted it.
 
 **Decision 5 — the extraction walk bounds a commitment by its class.**
 `palw_fp_objects_from_accepted_txs_by_class_v1` reads the parent state by the commitment's own class
@@ -116,8 +124,9 @@ carry it agree on every transaction before the activation — the refusal a stal
 door, an upgraded node makes one door later — and nothing is committed on the permissive answer.
 
 **Decision 7 — the private free-prompt path runs.** The worker's precheck admits both modes the chain
-carries, PublicDa and PanelDa, and the rail builds a PanelDa commitment with no ids (they reach the
-drawn seats from the staged material, which the submitter already took from the worker's result).
+carries, PublicDa and PanelDa. The rest of the path already handled PanelDa: the commitment builder
+carries no ids under it, and the drawn seats read them from the staged material the submitter took
+from the worker's result.
 
 ## 4. What it costs
 
@@ -126,9 +135,13 @@ drawn seats from the staged material, which the submitter already took from the 
 * **A state collection** that roots and encodes nothing until the first held registration.
 * **A header-context check** on every free-prompt commitment on a ruleset that declares the regime:
   one decode of a payload isolation already decoded.
-* **What it does not buy:** the node's own paths for a job of `2^38` leaves — the producer's
-  retention, the seat's replay, and the backends' ladder cap, which doubles as the allocation guard
-  on a gossiped leaf count — are ADR-0103's sparse-retention design and are being mapped (§7).
+* **What it does not buy: a node that produces or tries a held job past the network's ladder.**
+  Every backend is still built at the network's ladder, so a held class's producer refuses a job
+  past `2^26` leaves on testnet-11 (about 650 positions of the 1.5B dense row) and a seat signs a
+  claim past it `Unavailable`. The chain admits to `2^40`; the gap between the two is claims no
+  honest producer makes, and until the node side lands (§7) no honest seat can verify such a claim
+  (each signs `Unavailable`, and a quorum of those voids it as `ProducerDefaulted`) and no honest challenger can prosecute one —
+  only a quorum of dishonest drawn seats could certify it.
 
 ## 5. Invariants the tests hold
 
@@ -143,7 +156,11 @@ drawn seats from the staged material, which the submitter already took from the 
    claim's class ladder, and every close is judged knowing the regime
    (`every_held_court_arm_of_the_fold_reads_the_claims_class_ladder`,
    `every_held_court_acceptance_arm_reads_the_claims_class_ladder`); the opening cap is `2^22` before
-   the regime and the claim's ladder under it (I-1's test).
+   the regime and the claim's ladder under it (I-1's test); a party derives the site at its backend's
+   ladder and files a root claim exactly when the court opens it
+   (`a_party_derives_the_fused_site_at_its_backends_ladder`,
+   `a_root_claim_is_filed_exactly_when_the_court_opens_its_rows`); a `2^26`-leaf tree serves a
+   49-sibling opening the chain accepts (`a_tree_deeper_than_the_default_leg_serves_its_honest_openings`).
 4. **I-4, the walk**: a held class's commitment past the network's ladder is extracted and every other
    class's is skipped as before (`a_held_class_commitment_is_bounded_by_its_own_ladder_and_every_other_by_the_networks`).
 5. **I-5, the door**: isolation admits `2^40` only where the regime is declared
@@ -164,11 +181,34 @@ drawn seats from the staged material, which the submitter already took from the 
 
 ## 7. What is deliberately not decided yet
 
-* **The node's paths for a job of `2^38` leaves.** Whether the producer, the seat and the court's
-  parties stream at a sparse retain level or materialize per-leaf structures, and how a held backend's
-  ladder is separated from the allocation guard that shares its field, is being mapped before it is
-  decided; so is the worker frame (256 KiB, carrying the prompt ids whole — about 60,000 ids) and the
-  gateway's 64 KiB prompt limit.
+* **The node's held route past the network's ladder** — mapped on 2026-09-12 (every read of a
+  backend's ladder, every job-sized allocation, the producer's and the seat's retention), and a design
+  of its own (the next ADR), because what it found is not a number to raise:
+  * **The backend's ladder is two things.** It prices and refuses a job, and it is the only guard in
+    front of the whole-capture paths that allocate a vector of `step_leaf_count` hashes from a decoded
+    or gossiped count (`leaves_by_position`, the dense re-executions, `verify_material`'s dense arm).
+    At `2^40` a hostile blob could ask for `2^46` bytes. The node needs the class's ladder for pricing,
+    refusal and Merkle walks, and a separate materialization cap — the network's — at every job-sized
+    site, with held claims kept off the whole-capture arms.
+  * **The held route does not stream yet.** The producer's fold does (it holds one open block and
+    the retained nodes), but every interval replay — the executor's openings, the seat's V4 verify,
+    the held DA court's answers, name-the-leaf — allocates a leaf vector the size of the whole job and
+    keeps every tile of the replayed window: tens of gigabytes at 4,096 positions of the 1.5B dense
+    row, by the code's own sizes. The replays must fold digests on the fly and serve openings from the
+    retained digests and the two boundary blocks, which the capture's own documentation already says
+    suffice.
+  * **The retain level must be pinned, not derived.** Producer and seat each derive it from their
+    ladder (`r = max(⌈log2 cap⌉ − 20, 12)`: 12 at `2^26`, 20 at `2^40`); a seat that derives 12 against
+    a producer at 20 addresses the wrong block and names no leaf, and an `r = 20` block is 64 MiB, past
+    the 4 MiB interval lane. The held route keeps `r = 12`, the seat reads it off the opening, and the
+    block-leaves request indexes within the interval (a global 16-bit block index reaches leaf `2^28`).
+  * **Two walls are not the ladder's.** A resume opening carries the whole state over the same 4 MiB
+    lane, and a class of `n_ctx` `2^21` always takes the Resume route; and a fused site's dissection
+    evidence is built from dense rows and the whole K/V history. Each needs its own transport or a
+    windowed builder. (A `2^21`-position job of the 1.5B row also needs a K/V cache of about 120 GB —
+    a host's question, not the protocol's.)
+  * **The worker frame and the gateway's prompt limit** (256 KiB, about 60,000 ids; 64 KiB of text)
+    bind only past the network's ladder, so they move with the rest of this.
 * **The same bottom cap on a network without the regime.** The mainnet card arms the court ladder
   from genesis and not the regime, so its fused rows' bottoms stay at `2^22`; that is the card's
   decision, and the deep audit's.

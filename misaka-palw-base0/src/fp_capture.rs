@@ -496,8 +496,14 @@ impl Base0SparseStepTreeV1 {
             width = width.div_ceil(2);
             level += 1;
         }
-        if out.len() > 2 * PALW_STEP_LEG_MAX_OPENING_SIBLINGS {
-            return Err(Base0SparseCaptureError::OpeningTooDeep { got: out.len(), max: 2 * PALW_STEP_LEG_MAX_OPENING_SIBLINGS });
+        // **The tree's own depth bounds an honest range**: one sibling an edge a level. The default
+        // leg's cap (`2^22`'s 22 levels) refused honest openings of a deeper tree — a claim past
+        // `2^22` leaves, which a ruleset's ladder admits and the chain walks under that ladder's
+        // cap (`step_range_opening_root_capped_v1`, which holds every tree the ladder admits).
+        let max = 2 * kaspa_consensus_core::palw_step_leg::step_leg_max_opening_siblings_v1(self.leaf_count)
+            .max(PALW_STEP_LEG_MAX_OPENING_SIBLINGS);
+        if out.len() > max {
+            return Err(Base0SparseCaptureError::OpeningTooDeep { got: out.len(), max });
         }
         Ok(out)
     }
@@ -1594,6 +1600,34 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// **A tree deeper than `2^22` serves its honest openings** (ADR-0119 §7's sibling cap). The
+    /// range `[2^24 − 1, 2^24 + 1)` of a `2^26 − 1`-leaf tree has an odd edge at each of its 24
+    /// lowest levels on both sides, and the right half's root at the top: 49 siblings, past the
+    /// default leg's 44, which refused it — while the chain walks it under the ladder that admitted
+    /// the claim. Built from its retained
+    /// nodes and the replayed span alone, the way an executor holds a claim that size, with the two
+    /// span blocks' retained nodes the span's own so the tree is one tree.
+    #[test]
+    fn a_tree_deeper_than_the_default_leg_serves_its_honest_openings() {
+        use kaspa_consensus_core::palw_step_leg::step_range_opening_root_capped_v1;
+        let leaf_count = (1u64 << 26) - 1;
+        let retain_level = PALW_BASE0_SPARSE_RETAIN_LEVEL_V1;
+        let retained = (0..level_width(leaf_count, retain_level)).map(|i| Hash64::from_u64_word(i ^ 0x5A5A)).collect();
+        let mut tree = Base0SparseStepTreeV1 { leaf_count, retain_level, retained };
+        let (first, count) = ((1u64 << 24) - 1, 2);
+        let (span_first, span_end) = tree.span_for_range(first, count).expect("a span");
+        let span = leaves((span_end - span_first) as usize);
+        let folded = tree.span_levels(span_first, &span).pop().expect("the span at the retained level");
+        let at = (span_first >> retain_level) as usize;
+        tree.retained[at..at + folded.len()].copy_from_slice(&folded);
+
+        let opening = tree.range_opening_v1(span_first, &span, first, count).expect("an honest opening is served");
+        assert_eq!(opening.siblings.len(), 49, "24 levels on both edges, and the right half's root");
+        assert!(opening.siblings.len() > 2 * PALW_STEP_LEG_MAX_OPENING_SIBLINGS, "past the default leg's cap");
+        let root = tree.root().expect("a shaped tree");
+        assert_eq!(step_range_opening_root_capped_v1(leaf_count, &opening, 1 << 26).expect("the chain walks it"), root);
     }
 
     /// A short fold is refused, for the reason `Base0StepCaptureV1::finish` refuses a short
