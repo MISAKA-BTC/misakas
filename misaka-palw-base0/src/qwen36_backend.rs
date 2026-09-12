@@ -1015,14 +1015,15 @@ struct Qwen36IntervalKernels<'a> {
 }
 
 impl crate::fp_interval::Base0FpIntervalKernelsV1 for Qwen36IntervalKernels<'_> {
-    fn replay_interval_tiles(
+    fn replay_interval_into(
         &self,
         profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
         ctx: &PalwJobContextV2,
         start: &crate::fp_interval::Base0FpIntervalStartV1<'_>,
         window: crate::fp_interval::Base0FpWindowV1,
         step_leaf_count: u64,
-    ) -> Result<crate::legs::Base0StepTilesV1, String> {
+        sink: &mut dyn FnMut(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1) -> Result<(), String>,
+    ) -> Result<(), String> {
         let crate::fp_interval::Base0FpIntervalStartV1::Genesis { .. } = start else {
             return Err(
                 "this class registers no state chunk map, so no committed checkpoint exists to resume from (ADR-0077 Decision 10)"
@@ -1033,18 +1034,26 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for Qwen36IntervalKernels<'_> 
         let mut cache = Qwen36Cache::new(&self.artifact.shape);
         let vocab = self.artifact.shape.vocab;
         let max_position = self.artifact.shape.max_position;
-        crate::fp_interval::base0_fp_replay_interval_tiles_v1(profile, ctx, start, window, step_leaf_count, |token, position| {
-            if token >= vocab {
-                return Err(format!("token {token} is outside this class's vocabulary of {vocab}"));
-            }
-            if position >= max_position {
-                return Err(format!("the job runs past the rotary table at position {position}"));
-            }
-            let (logits, trace) = engine
-                .forward_token_planned(self.plan, &mut cache, token, position)
-                .map_err(|e| format!("forward at {position}: {e}"))?;
-            Ok((logits, qwen36_captured_rows_v1(profile, &trace)))
-        })
+        crate::fp_interval::base0_fp_replay_interval_into_v1(
+            profile,
+            ctx,
+            start,
+            window,
+            step_leaf_count,
+            |token, position| {
+                if token >= vocab {
+                    return Err(format!("token {token} is outside this class's vocabulary of {vocab}"));
+                }
+                if position >= max_position {
+                    return Err(format!("the job runs past the rotary table at position {position}"));
+                }
+                let (logits, trace) = engine
+                    .forward_token_planned(self.plan, &mut cache, token, position)
+                    .map_err(|e| format!("forward at {position}: {e}"))?;
+                Ok((logits, qwen36_captured_rows_v1(profile, &trace)))
+            },
+            sink,
+        )
     }
 }
 

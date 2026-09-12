@@ -2054,9 +2054,23 @@ pub enum Base0FpIntervalStartV1<'a> {
 /// ([`base0_fp_binding_step_space_v1`]) before a byte is replayed. So a family implementing this
 /// needs no ruleset of its own: the number it is handed is the claim's, already priced.
 pub trait Base0FpIntervalKernelsV1 {
-    /// **The interval replayed with its tiles kept** (ADR-0085 Decision 2) — the family's engine
-    /// driving [`base0_fp_replay_interval_tiles_v1`]. The one required verb: a seat's hash check
-    /// is the provided [`Self::replay_interval`] over it, and a challenger's close reads the tiles.
+    /// **The window replayed, streamed** (ADR-0121) — the family's engine driving
+    /// [`base0_fp_replay_interval_into_v1`], every tile handed to `sink` at its leaf index in leaf
+    /// order. The one required verb: the two views below are provided over it, and a caller that
+    /// needs neither the window's tiles nor its hashes whole — a seat folding them, an executor
+    /// keeping an opening's edges — calls this and keeps what it needs.
+    fn replay_interval_into(
+        &self,
+        profile: &PalwShapeProfileV3,
+        ctx: &PalwJobContextV2,
+        start: &Base0FpIntervalStartV1<'_>,
+        window: Base0FpWindowV1,
+        step_leaf_count: u64,
+        sink: &mut dyn FnMut(u64, PalwStepTileLeafV1) -> Result<(), String>,
+    ) -> Result<(), String>;
+
+    /// **The window replayed with its tiles kept** (ADR-0085 Decision 2), in leaf order: what a
+    /// challenger's close reads. `leaves` is empty (see [`base0_fp_replay_interval_tiles_v1`]).
     fn replay_interval_tiles(
         &self,
         profile: &PalwShapeProfileV3,
@@ -2064,9 +2078,16 @@ pub trait Base0FpIntervalKernelsV1 {
         start: &Base0FpIntervalStartV1<'_>,
         window: Base0FpWindowV1,
         step_leaf_count: u64,
-    ) -> Result<crate::legs::Base0StepTilesV1, String>;
+    ) -> Result<crate::legs::Base0StepTilesV1, String> {
+        let mut tiles = Vec::new();
+        self.replay_interval_into(profile, ctx, start, window, step_leaf_count, &mut |index, leaf| {
+            tiles.push((index, leaf));
+            Ok(())
+        })?;
+        Ok(crate::legs::Base0StepTilesV1 { leaves: Vec::new(), tiles })
+    }
 
-    /// The seat's view: the interval's leaf hashes, in leaf order, from the same replay.
+    /// The seat's view: the window's leaf hashes, in leaf order, from the same replay.
     fn replay_interval(
         &self,
         profile: &PalwShapeProfileV3,
@@ -2075,10 +2096,14 @@ pub trait Base0FpIntervalKernelsV1 {
         window: Base0FpWindowV1,
         step_leaf_count: u64,
     ) -> Result<Vec<(u64, Hash64)>, String> {
-        let partial = self.replay_interval_tiles(profile, ctx, start, window, step_leaf_count)?;
         let ctx_hash = ctx.context_hash();
         let profile_hash = profile.shape_profile_id();
-        Ok(partial.tiles.iter().map(|(i, leaf)| (*i, step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf))).collect())
+        let mut out = Vec::new();
+        self.replay_interval_into(profile, ctx, start, window, step_leaf_count, &mut |index, leaf| {
+            out.push((index, step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &leaf)));
+            Ok(())
+        })?;
+        Ok(out)
     }
 }
 
@@ -2089,7 +2114,7 @@ pub trait Base0FpIntervalKernelsV1 {
 /// logits row and the rows the step space commits. Placing rows and deriving the next token stay
 /// here, because a family that re-implemented the coordinate rule would commit its replay at
 /// coordinates the leg does not use, and every comparison would fail for a reason that is not the
-/// producer's.
+/// producer's. The seat's view: the window's leaf hashes, in leaf order.
 #[allow(clippy::too_many_arguments)]
 pub fn base0_fp_replay_interval_v1<F>(
     profile: &PalwShapeProfileV3,
@@ -2102,18 +2127,23 @@ pub fn base0_fp_replay_interval_v1<F>(
 where
     F: FnMut(usize, usize) -> Result<(Vec<i32>, Vec<Base0CapturedRowV1>), String>,
 {
-    let partial = base0_fp_replay_interval_tiles_v1(profile, ctx, start, window, step_leaf_count, forward)?;
     let ctx_hash = ctx.context_hash();
     let profile_hash = profile.shape_profile_id();
-    Ok(partial.tiles.iter().map(|(i, leaf)| (*i, step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf))).collect())
+    let mut out = Vec::new();
+    base0_fp_replay_interval_into_v1(profile, ctx, start, window, step_leaf_count, forward, &mut |index, leaf| {
+        out.push((index, step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &leaf)));
+        Ok(())
+    })?;
+    Ok(out)
 }
 
-/// **The same replay, keeping the TILES** (ADR-0085 Decision 2): the interval's committed rows as
-/// this party computed them, with their leaf hashes, in a partial [`crate::legs::Base0StepTilesV1`]
-/// whose other leaves are zero. A seat's check needs only the hashes ([`base0_fp_replay_interval_v1`]
-/// maps to them); a challenger assembling a court close needs the preimages — the activation
-/// inputs the disputed step reads — and checks each hash against the accused's committed one in
-/// the range opening before it opens anything.
+/// **The same replay, keeping the TILES** (ADR-0085 Decision 2): the window's committed rows as
+/// this party computed them, in leaf order. A seat's check needs only the hashes
+/// ([`base0_fp_replay_interval_v1`]); a challenger assembling a court close needs the preimages —
+/// the activation inputs the disputed step reads — and checks each hash against the accused's
+/// committed one before it opens anything. `leaves` is empty: the window's tiles carry their own
+/// indices, and a vector the size of the whole step space is what ADR-0121 removed from every
+/// replay (it was `2^46` bytes at the held ladder's top).
 #[allow(clippy::too_many_arguments)]
 pub fn base0_fp_replay_interval_tiles_v1<F>(
     profile: &PalwShapeProfileV3,
@@ -2121,8 +2151,42 @@ pub fn base0_fp_replay_interval_tiles_v1<F>(
     start: &Base0FpIntervalStartV1<'_>,
     window: Base0FpWindowV1,
     step_leaf_count: u64,
-    mut forward: F,
+    forward: F,
 ) -> Result<crate::legs::Base0StepTilesV1, String>
+where
+    F: FnMut(usize, usize) -> Result<(Vec<i32>, Vec<Base0CapturedRowV1>), String>,
+{
+    let mut tiles = Vec::new();
+    base0_fp_replay_interval_into_v1(profile, ctx, start, window, step_leaf_count, forward, &mut |index, leaf| {
+        tiles.push((index, leaf));
+        Ok(())
+    })?;
+    Ok(crate::legs::Base0StepTilesV1 { leaves: Vec::new(), tiles })
+}
+
+/// **The replay, STREAMED** (ADR-0121): every tile of the window handed to `sink` at its canonical
+/// leaf index, in leaf order, the moment the engine produces it — nothing the size of the window
+/// or the job is held here. The index is a cursor from the window's first leaf
+/// ([`first_leaf_of_step_v1`]) walked by the fold's own slot walk
+/// (`fp_capture::base0_position_tiles_v1`), so a leaf the replay emits at an index is the leaf the
+/// executor's fold committed there; the walk ends exactly at the leaf after the window, or the
+/// replay is refused.
+///
+/// This was a dense capture sized to the whole step space — a vector of `step_leaf_count` hashes for
+/// a window of a few intervals: 27 GB at 4,096 positions of the 1.5B dense row, and an abort at the
+/// held ladder — and every tile of the window beside it, whether its caller wanted tiles or hashes.
+/// A caller now keeps what it needs: a seat's check folds the hashes as they come, an executor keeps
+/// the blocks at an opening's edges, a close keeps the tiles its step reads.
+#[allow(clippy::too_many_arguments)]
+pub fn base0_fp_replay_interval_into_v1<F>(
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    start: &Base0FpIntervalStartV1<'_>,
+    window: Base0FpWindowV1,
+    step_leaf_count: u64,
+    mut forward: F,
+    sink: &mut dyn FnMut(u64, PalwStepTileLeafV1) -> Result<(), String>,
+) -> Result<(), String>
 where
     F: FnMut(usize, usize) -> Result<(Vec<i32>, Vec<Base0CapturedRowV1>), String>,
 {
@@ -2132,11 +2196,11 @@ where
     if window.first_step == 0 || window.last_step < window.first_step || window.last_step > steps {
         return Err(format!("the window {window:?} is not a window of this job's {steps} steps"));
     }
-    // **The size is the caller's, priced against the ruleset's ladder before this was reached.**
-    // It used to be re-derived from `(profile, ctx)` at the EXECUTOR's `PALW_STEP_MAX_LEAVES`,
-    // which refused the graph-v5 512 row's 6,630,544-leaf honest job outright: no seat could
-    // replay an interval of a class the chain admits, so no panel could license one.
-    let mut capture = crate::legs::Base0StepCaptureV1::new(step_leaf_count).map_err(|e| format!("{e:?}"))?;
+    // **The window's leaves, from the enumeration**: its first leaf, and the leaf after its last.
+    // The size is the caller's, priced against the ruleset's ladder before this was reached.
+    let first = first_leaf_of_step_v1(profile, ctx, window.first_step, step_leaf_count).map_err(|e| format!("{e:?}"))?;
+    let end = first_leaf_of_step_v1(profile, ctx, window.last_step + 1, step_leaf_count).map_err(|e| format!("{e:?}"))?;
+    let mut cursor = first;
 
     // What the window's steps read: the prompt for its prefill positions, and — for a window that
     // starts at a decode call — the id the step before it selected.
@@ -2167,6 +2231,14 @@ where
         return Err(format!("the job declares {prefill} prefill tokens and {} were supplied", prompt_tokens.len()));
     }
 
+    let mut emit = |leaf: PalwStepTileLeafV1| -> Result<(), Base0FpIntervalError> {
+        if cursor >= end {
+            return Err(Base0FpIntervalError::Replay(format!("the replay ran past the window's last leaf {}", end - 1)));
+        }
+        sink(cursor, leaf).map_err(Base0FpIntervalError::Replay)?;
+        cursor += 1;
+        Ok(())
+    };
     for step in window.first_step..=window.last_step {
         if step <= prefill {
             // A prefill position. Logits leaves exist only at the LAST one; the earlier rows
@@ -2177,7 +2249,8 @@ where
             if step != prefill {
                 rows.retain(|r| r.table != PalwStepTableV1::Post);
             }
-            capture.push_call(profile, ctx, 0, position as u32, &rows).map_err(|e| format!("{e:?}"))?;
+            crate::fp_capture::base0_position_tiles_v1(profile, prefill as u32, 0, position as u32, &rows, &mut emit)
+                .map_err(|e| format!("{e}"))?;
             if step == prefill {
                 next = Some(kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&logits));
             }
@@ -2189,15 +2262,16 @@ where
             let cache_position = (prefill + u64::from(call) - 1) as usize;
             let token = next.ok_or_else(|| format!("decode call {call} has no id to consume"))?;
             let (logits, rows) = forward(token, cache_position)?;
-            capture.push_call(profile, ctx, call, 0, &rows).map_err(|e| format!("{e:?}"))?;
+            crate::fp_capture::base0_position_tiles_v1(profile, prefill as u32, call, 0, &rows, &mut emit)
+                .map_err(|e| format!("{e}"))?;
             next = Some(kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&logits));
         }
     }
-
-    // `finish_partial` is correct HERE and nowhere else: a replay deliberately covers a window,
-    // and the leaves it did not touch are not claims about zero — they are simply not this
-    // replay's. Which is why only the touched ones come back.
-    Ok(capture.finish_partial())
+    drop(emit);
+    if cursor != end {
+        return Err(format!("the replay emitted {} leaves and the window holds {}", cursor - first, end - first));
+    }
+    Ok(())
 }
 
 /// **Replay one opened interval and compare every row EXACTLY** (ADR-0077 Decision 8, seat half).
@@ -2414,13 +2488,17 @@ fn base0_fp_replay_served_interval_v1<K: Base0FpIntervalKernelsV1>(
         if seed_hashes.len() as u64 != leaves_geometry.seed_row_leaves {
             return Err("the served seed row is not the interval's".to_string());
         }
+        // The replay's tiles are the window's, in leaf order, each once (ADR-0121): hashed in turn,
+        // they are this party's leaves for the interval.
+        let ctx_hash = ctx.context_hash();
+        let profile_hash = profile.shape_profile_id();
         let mut own = seed_hashes;
+        let mut replayed = tiles.tiles.iter();
         for leaf_index in leaves_geometry.interval_first..leaves_geometry.range_end {
-            let hash = tiles
-                .leaves
-                .get(leaf_index as usize)
-                .copied()
-                .filter(|h| *h != Hash64::default())
+            let hash = replayed
+                .next()
+                .filter(|(at, _)| *at == leaf_index)
+                .map(|(_, leaf)| step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf))
                 .ok_or_else(|| format!("this party's replay has no leaf {leaf_index}"))?;
             own.push(hash);
         }
@@ -4338,14 +4416,15 @@ mod tests {
     struct FloorKernels<'a>(&'a crate::artifact::Base0ArtifactV1);
 
     impl Base0FpIntervalKernelsV1 for FloorKernels<'_> {
-        fn replay_interval_tiles(
+        fn replay_interval_into(
             &self,
             profile: &PalwShapeProfileV3,
             ctx: &PalwJobContextV2,
             start: &Base0FpIntervalStartV1<'_>,
             window: Base0FpWindowV1,
             step_leaf_count: u64,
-        ) -> Result<crate::legs::Base0StepTilesV1, String> {
+            sink: &mut dyn FnMut(u64, PalwStepTileLeafV1) -> Result<(), String>,
+        ) -> Result<(), String> {
             use crate::engine::{Base0Engine, KvCache};
             let engine = Base0Engine::new(self.0);
             let mut cache = match start {
@@ -4356,10 +4435,18 @@ mod tests {
                     KvCache::from_state_chunks(self.0, &geometry, chunks).map_err(|e| format!("{e:?}"))?
                 }
             };
-            base0_fp_replay_interval_tiles_v1(profile, ctx, start, window, step_leaf_count, |token, position| {
-                let (logits, probe) = engine.forward_token_probed(&mut cache, token, position).map_err(|e| format!("{e:?}"))?;
-                Ok((logits, crate::legs::base0_captured_rows_v1(&probe)))
-            })
+            base0_fp_replay_interval_into_v1(
+                profile,
+                ctx,
+                start,
+                window,
+                step_leaf_count,
+                |token, position| {
+                    let (logits, probe) = engine.forward_token_probed(&mut cache, token, position).map_err(|e| format!("{e:?}"))?;
+                    Ok((logits, crate::legs::base0_captured_rows_v1(&probe)))
+                },
+                sink,
+            )
         }
     }
 

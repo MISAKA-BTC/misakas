@@ -1089,14 +1089,15 @@ struct A16IntervalKernels<'a> {
 }
 
 impl crate::fp_interval::Base0FpIntervalKernelsV1 for A16IntervalKernels<'_> {
-    fn replay_interval_tiles(
+    fn replay_interval_into(
         &self,
         profile: &PalwShapeProfileV3,
         ctx: &PalwJobContextV2,
         start: &crate::fp_interval::Base0FpIntervalStartV1<'_>,
         window: crate::fp_interval::Base0FpWindowV1,
         step_leaf_count: u64,
-    ) -> Result<crate::legs::Base0StepTilesV1, String> {
+        sink: &mut dyn FnMut(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1) -> Result<(), String>,
+    ) -> Result<(), String> {
         let engine = A16Engine::new(self.artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
         let layers = self.artifact.shape.n_layers;
         let row_elements = profile.attn_kv_heads as usize * profile.attn_head_dim as usize;
@@ -1109,18 +1110,26 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for A16IntervalKernels<'_> {
             }
         };
         let vocab = self.artifact.shape.vocab;
-        crate::fp_interval::base0_fp_replay_interval_tiles_v1(profile, ctx, start, window, step_leaf_count, |token, position| {
-            if token >= vocab {
-                return Err(format!("token {token} is outside this class's vocabulary of {vocab}"));
-            }
-            let (logits, trace) = match self.plan {
-                Some(plan) => {
-                    engine.forward_token_planned(plan, &mut cache, token, position).map_err(|e| format!("planned forward: {e:?}"))?
+        crate::fp_interval::base0_fp_replay_interval_into_v1(
+            profile,
+            ctx,
+            start,
+            window,
+            step_leaf_count,
+            |token, position| {
+                if token >= vocab {
+                    return Err(format!("token {token} is outside this class's vocabulary of {vocab}"));
                 }
-                None => engine.forward_token_traced(&mut cache, token, position).map_err(|e| format!("forward: {e:?}"))?,
-            };
-            Ok((logits, crate::legs::a16_captured_rows_v1(&trace)))
-        })
+                let (logits, trace) = match self.plan {
+                    Some(plan) => engine
+                        .forward_token_planned(plan, &mut cache, token, position)
+                        .map_err(|e| format!("planned forward: {e:?}"))?,
+                    None => engine.forward_token_traced(&mut cache, token, position).map_err(|e| format!("forward: {e:?}"))?,
+                };
+                Ok((logits, crate::legs::a16_captured_rows_v1(&trace)))
+            },
+            sink,
+        )
     }
 }
 

@@ -689,6 +689,79 @@ fn node_leaf_count_v1(node: &kaspa_consensus_core::palw_step::PalwStepNodeV1, kv
     if node.tile_len == 0 { 0 } else { elements.div_ceil(node.tile_len as u64) }
 }
 
+/// **One position's committed tiles, in the canonical order** — the slot walk the fold
+/// ([`Base0SparseStepCaptureV1::push_call`]) and the streaming replay
+/// (`fp_interval::base0_fp_replay_interval_into_v1`) share, so a leaf a replay emits at a cursor is
+/// the leaf the fold committed there (ADR-0120).
+///
+/// The canonical order is call-major, position-major, slot-major, tile-major, so the tiles of one
+/// `(call, position)` are consecutive leaves and this emits them in that order. `rows` may arrive in
+/// any order within the position; the SET must be the position's own — every slot the enumeration
+/// reaches at the position's `kv_len`, each the width its node's `out_len` implies there, and no post
+/// row at a position that selects no token. Each departure is refused by name, as the fold refuses it.
+pub fn base0_position_tiles_v1<E: From<Base0SparseCaptureError>>(
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    prefill: u32,
+    call_index: u32,
+    position: u32,
+    rows: &[crate::legs::Base0CapturedRowV1],
+    mut emit: impl FnMut(kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1) -> Result<(), E>,
+) -> Result<(), E> {
+    use kaspa_consensus_core::palw_step::PalwStepCoordinateV1;
+    use kaspa_consensus_core::palw_step_leg::{PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepTileLeafV1};
+    // The enumeration's own two facts about a position (`canonical_step_leaf_index`): what the
+    // cache holds when it runs, and whether the logits table exists at it.
+    let (kv_len, with_logits) =
+        if call_index == 0 { (position as u64 + 1, position + 1 == prefill) } else { (prefill as u64 + call_index as u64, true) };
+
+    // Rows by global slot: one `global_node_slot` per ROW, never one per tile.
+    let slot_count = profile.global_node_count();
+    let first_post_slot = slot_count.saturating_sub(profile.post_nodes.len() as u32);
+    let mut by_slot: Vec<(u32, usize)> = Vec::with_capacity(rows.len());
+    for (at, row) in rows.iter().enumerate() {
+        let slot = profile
+            .global_node_slot(row.table, row.layer, row.index)
+            .ok_or(Base0SparseCaptureError::RowIsNotThisGraphs { layer: row.layer, index: row.index })?;
+        by_slot.push((slot, at));
+    }
+    by_slot.sort_unstable_by_key(|(slot, _)| *slot);
+    if by_slot.windows(2).any(|w| w[0].0 == w[1].0) {
+        return Err(Base0SparseCaptureError::TwoRowsForOneSlot.into());
+    }
+
+    // The position's slots, in the order the enumeration walks them, against the rows in hand.
+    let mut supplied = by_slot.iter().peekable();
+    for slot in 0..slot_count {
+        if slot >= first_post_slot && !with_logits {
+            continue; // post nodes do not exist at a position that selects no token
+        }
+        let (node, _) = profile.resolve_node_slot(slot).ok_or(Base0SparseCaptureError::MissingRowForSlot { slot })?;
+        let expected = node_leaf_count_v1(node, kv_len);
+        let Some((_, at)) = supplied.next_if(|(s, _)| *s == slot).copied() else {
+            return Err(Base0SparseCaptureError::MissingRowForSlot { slot }.into());
+        };
+        let row = &rows[at];
+        let tile_len = node.tile_len as usize;
+        if tile_len == 0 || row.row.len().div_ceil(tile_len) as u64 != expected {
+            return Err(Base0SparseCaptureError::RowIsNotTheGraphsWidth { slot, got: row.row.len() as u64, tiles: expected }.into());
+        }
+        for (tile_index, chunk) in row.row.chunks(tile_len).enumerate() {
+            emit(PalwStepTileLeafV1 {
+                version: PALW_STEP_LEG_OBJECT_VERSION_V1,
+                coord: PalwStepCoordinateV1 { call_index, node_slot: slot, position, tile_index: tile_index as u32 },
+                value_count: chunk.len() as u32,
+                values_le: chunk.iter().flat_map(|v| v.to_le_bytes()).collect(),
+            })?;
+        }
+    }
+    // A row for a slot the walk did not reach — a post row at a non-selecting position, or a
+    // slot past the graph — is a row about a different execution.
+    if let Some((slot, _)) = supplied.next() {
+        return Err(Base0SparseCaptureError::RowForASlotThePositionDoesNotHave { slot: *slot }.into());
+    }
+    Ok(())
+}
+
 /// **The free-prompt capture: every leaf hashed the moment the engine produces it, folded, and
 /// thrown away** (ADR-0082 Decision 7).
 ///
@@ -771,73 +844,18 @@ impl Base0SparseStepCaptureV1 {
         position: u32,
         rows: &[crate::legs::Base0CapturedRowV1],
     ) -> Result<(), Base0SparseCaptureError> {
-        use kaspa_consensus_core::palw_step::PalwStepCoordinateV1;
-        use kaspa_consensus_core::palw_step_leg::{PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepTileLeafV1};
         if call_index != self.next_call || position != self.next_position {
             return Err(Base0SparseCaptureError::CallOutOfOrder {
                 expected: (self.next_call, self.next_position),
                 got: (call_index, position),
             });
         }
-        // The enumeration's own two facts about a position (`canonical_step_leaf_index`): what the
-        // cache holds when it runs, and whether the logits table exists at it.
-        let (kv_len, with_logits) = if call_index == 0 {
-            (position as u64 + 1, position + 1 == self.prefill)
-        } else {
-            (self.prefill as u64 + call_index as u64, true)
-        };
-
-        // Rows by global slot: one `global_node_slot` per ROW, never one per tile.
-        let slot_count = profile.global_node_count();
-        let first_post_slot = slot_count.saturating_sub(profile.post_nodes.len() as u32);
-        let mut by_slot: Vec<(u32, usize)> = Vec::with_capacity(rows.len());
-        for (at, row) in rows.iter().enumerate() {
-            let slot = profile
-                .global_node_slot(row.table, row.layer, row.index)
-                .ok_or(Base0SparseCaptureError::RowIsNotThisGraphs { layer: row.layer, index: row.index })?;
-            by_slot.push((slot, at));
-        }
-        by_slot.sort_unstable_by_key(|(slot, _)| *slot);
-        if by_slot.windows(2).any(|w| w[0].0 == w[1].0) {
-            return Err(Base0SparseCaptureError::TwoRowsForOneSlot);
-        }
-
-        // The position's slots, in the order the enumeration walks them, against the rows in hand.
-        let mut supplied = by_slot.iter().peekable();
-        for slot in 0..slot_count {
-            if slot >= first_post_slot && !with_logits {
-                continue; // post nodes do not exist at a position that selects no token
-            }
-            let (node, _) = profile.resolve_node_slot(slot).ok_or(Base0SparseCaptureError::MissingRowForSlot { slot })?;
-            let expected = node_leaf_count_v1(node, kv_len);
-            let Some((_, at)) = supplied.next_if(|(s, _)| *s == slot).copied() else {
-                return Err(Base0SparseCaptureError::MissingRowForSlot { slot });
-            };
-            let row = &rows[at];
-            let tile_len = node.tile_len as usize;
-            if tile_len == 0 || row.row.len().div_ceil(tile_len) as u64 != expected {
-                return Err(Base0SparseCaptureError::RowIsNotTheGraphsWidth { slot, got: row.row.len() as u64, tiles: expected });
-            }
-            for (tile_index, chunk) in row.row.chunks(tile_len).enumerate() {
-                let leaf = PalwStepTileLeafV1 {
-                    version: PALW_STEP_LEG_OBJECT_VERSION_V1,
-                    coord: PalwStepCoordinateV1 { call_index, node_slot: slot, position, tile_index: tile_index as u32 },
-                    value_count: chunk.len() as u32,
-                    values_le: chunk.iter().flat_map(|v| v.to_le_bytes()).collect(),
-                };
-                self.acc.push(kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(
-                    &self.ctx_hash,
-                    &self.profile_hash,
-                    &leaf,
-                ))?;
-                self.cursor += 1;
-            }
-        }
-        // A row for a slot the walk did not reach — a post row at a non-selecting position, or a
-        // slot past the graph — is a row about a different execution.
-        if let Some((slot, _)) = supplied.next() {
-            return Err(Base0SparseCaptureError::RowForASlotThePositionDoesNotHave { slot: *slot });
-        }
+        let (ctx_hash, profile_hash) = (self.ctx_hash, self.profile_hash);
+        base0_position_tiles_v1(profile, self.prefill, call_index, position, rows, |leaf| {
+            self.acc.push(kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &leaf))?;
+            self.cursor += 1;
+            Ok(())
+        })?;
 
         if call_index == 0 && position + 1 < self.prefill {
             self.next_position = position + 1;
