@@ -4941,6 +4941,29 @@ impl PalwChainStateV2 {
         self.classes.get(id)
     }
 
+    /// **C-08 (mainnet audit 2026-09-11 deep fence): can an honest responder build the fused
+    /// ROOT-CLAIM evidence for `class_id` within a node's memory?** C-08 lifts the fused-terminal
+    /// mercy past the deep fence and convicts a responder that withholds the root claim — sound only
+    /// where the responder could actually have filed it. A dense-v5 class can (its rerun is ~13K
+    /// leaves ≈ 3 MB per position, ~1.7 GB at 512 positions). A HELD v7 class cannot: its evidence
+    /// builder re-executes the fold retention densely and holds every tile (~6 MB per position at
+    /// ~103K leaves), which at a few hundred positions exceeds 24 GB — so an honest held-class
+    /// responder would be convicted of `CourtFraud` for a move it has no memory to make, the exact
+    /// case ADR-0093's mercy exists for. ADR-0121 item G (a windowed evidence builder that replays
+    /// only the disputed position from the per-position checkpoint) removes that limit.
+    ///
+    /// **On this branch it is unconditionally `true`: no held class exists here** (the held-class
+    /// registry is e8's ADR-0119, which merges into the same 7,000 build). **The ADR-0119 merge MUST
+    /// change this body to `!self.class_is_held_v1(class_id)`** so held classes keep the mercy until
+    /// ADR-0121's windowed evidence lands (a later flag day). Shipping the merged 7,000 build with
+    /// this returning `true` for a held class would wrongly convict honest held-class producers — a
+    /// MERGE-BLOCKING requirement, coordinated with e8/fd. Kept as a named seam, not a comment, so
+    /// C-08's condition is structurally complete and the merge edit is one method body.
+    pub(crate) fn court_root_evidence_is_buildable_v1(&self, class_id: &Hash64) -> bool {
+        let _ = class_id;
+        true
+    }
+
     /// ADR-0071 SA-3: the production fact recorded under `key`, if the chain holds one.
     /// Keyed by [`palw_capability_fact_key_v1`]; read through
     /// [`palw_bond_produced_on_class_v1`] so the draw and any RPC that reports eligibility ask
@@ -9308,7 +9331,13 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
                         if (session.dissection.is_none() && session.ladder.round() == 0 && !class_holds_weight)
                             || (builder.extras.court_responder_coverage_active
                                 && owes_the_dissection_opening
-                                && !builder.extras.audit_2026_09_11_deep_active) =>
+                                // The deep fence lifts the fused-terminal mercy — but ONLY where an
+                                // honest responder could build the root-claim evidence. A held v7 class
+                                // cannot (OOM until ADR-0121), so its mercy is kept even past the fence;
+                                // see `court_root_evidence_is_buildable_v1` (true on this branch, wired
+                                // to `!class_is_held_v1` by the ADR-0119 merge).
+                                && !(builder.extras.audit_2026_09_11_deep_active
+                                    && builder.state.court_root_evidence_is_buildable_v1(&claim.class_id))) =>
                     {
                         // Ends the session, convicts nobody, and FINES nobody — see
                         // `rearm_after_unanswered_opening` (audit3 H4). Routing this to the
