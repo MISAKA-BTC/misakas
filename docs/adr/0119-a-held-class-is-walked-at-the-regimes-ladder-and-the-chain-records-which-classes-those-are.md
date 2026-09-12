@@ -56,8 +56,7 @@ that decide:
 * **testnet-11's 512-token prompt cap is not enforced at runtime** (`palw_fp_ruleset_caps` is dormant
   there), so it was never the binding wall there; the ladder was.
 * **On the node side**, the free-prompt worker refused every PanelDa job ("a mode the panel cannot
-  replay must not execute", written four days before private prompts landed), and the rail put the
-  prompt ids into a PanelDa commitment transaction, which the chain refuses — so a gateway started
+  replay must not execute", written four days before private prompts landed) — so a gateway started
   `--privacy panel-da` could file nothing, and a held class on a network minted flat, which commits
   under PanelDa only (ADR-0118 Decision 5), had no executor path.
 
@@ -66,7 +65,9 @@ that decide:
 On testnet-11 past its held fence, a held class is admitted, produced, seated and prosecuted at
 the contexts ADR-0116 widened the history for, and no other class's bounds move; below the fence
 every node — upgraded or not — accepts exactly the transactions and blocks it accepted before;
-and no two nodes can bound one claim at two ladders.
+and no two nodes can bound one claim at two ladders. This ADR meets the chain's half — what is
+admitted, bounded and tried — and the node's half up to the network's ladder; the node's held route
+past it is §7's.
 
 ## 3. Decisions
 
@@ -140,8 +141,8 @@ from the worker's result.
   past `2^26` leaves on testnet-11 (about 650 positions of the 1.5B dense row) and a seat signs a
   claim past it `Unavailable`. The chain admits to `2^40`; the gap between the two is claims no
   honest producer makes, and until the node side lands (§7) no honest seat can verify such a claim
-  (each signs `Unavailable`, and a quorum of those voids it as `ProducerDefaulted`) and no honest challenger can prosecute one —
-  only a quorum of dishonest drawn seats could certify it.
+  (each signs `Unavailable`, and a quorum of those voids it as `ProducerDefaulted`) and no honest
+  challenger can prosecute one — only a quorum of dishonest drawn seats could certify it.
 
 ## 5. Invariants the tests hold
 
