@@ -313,6 +313,10 @@ pub struct PalwEvmMarketFencesV1 {
     /// leg. Changes no address and no handler — only what a quote says — so it is not part of
     /// [`Self::window_exists`].
     pub leg_v2_active: bool,
+    /// `Params::palw_model_seed_v2` (ADR-0120): `constants()` names the one-million-MSK floor. The
+    /// writer takes any non-zero seed either way (ADR-0094: the fold collects it), so this changes no
+    /// handler and no address either.
+    pub seed_v2_active: bool,
 }
 
 impl PalwEvmMarketFencesV1 {

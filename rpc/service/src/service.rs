@@ -952,9 +952,13 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         let params = &self.config.params;
         let schedule = params.palw_model_fees_at(session.get_virtual_daa_score());
         let leg_v2_activation_daa = params.palw_model_leg_v2_fence().map(|f| f.daa_score()).unwrap_or(0);
+        // ADR-0120: the least seed the fold would open this pair at, at the virtual's DAA — served with
+        // an unseeded line too, which is the one a seeder is reading it for.
+        let seed_min_sompi = params.palw_model_seed_min_sompi_at(session.get_virtual_daa_score());
         let Some((market, opened, status)) = session.palw_model_market_v1(line_id) else {
             return Ok(GetPalwModelMarketResponse {
                 line_id: line_id.to_string(),
+                seed_min_sompi,
                 burn_permille: schedule.burn_permille,
                 leg_permille: schedule.leg_permille,
                 leg_v2_activation_daa,
@@ -979,7 +983,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             contributor_paid_sompi: market.contributor_paid_sompi,
             seed_sompi: market.seed_sompi,
             seeded_by: if opened { market.seeded_by.to_string() } else { String::new() },
-            seed_min_sompi: kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1,
+            seed_min_sompi,
             seed_pledged_sompi: market.seed_pledged_sompi,
             buyback_sompi: market.buyback_sompi,
             retired_units: market.retired_units,

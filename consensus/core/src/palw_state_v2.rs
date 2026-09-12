@@ -12569,6 +12569,10 @@ pub struct PalwTransitionExtrasV1 {
     /// split 5 % burned / 1 % to the owner, past it 5 % / 5 %; `false` by `Default`, so every caller
     /// that does not set it keeps the schedule every existing row was written under.
     pub model_leg_v2_active: bool,
+    /// `Params::palw_model_seed_v2` resolved at the block's DAA (ADR-0120). Below it a market opens
+    /// once 100,000 MSK is paid in, past it once 1,000,000 MSK is; `false` by `Default`, so every
+    /// caller that does not set it keeps the floor every existing row was opened under.
+    pub model_seed_v2_active: bool,
     /// ADR-0089 Decision 6: the actions the block's EVM execution queued, in sequence order —
     /// applied after every carrier-borne object, each quoted on the row as it then stands.
     pub evm_actions: Vec<crate::evm::model_market::PalwEvmMarketActionV1>,
@@ -12799,7 +12803,12 @@ fn model_seed_v1(
     seeder: &Hash64,
     msk_seed: u64,
 ) -> Result<crate::palw_model_market_v1::PalwModelMarketV1, PalwStateV2Error> {
-    use crate::palw_model_market_v1::{PALW_MODEL_SEED_MIN_SOMPI_V1, PalwModelMarketV1};
+    use crate::palw_model_market_v1::{PalwModelMarketV1, palw_model_seed_min_sompi};
+    // **ADR-0120: the floor is the one in force at this block's DAA** — 100,000 MSK below
+    // `palw_model_seed_v2`, 1,000,000 MSK past it. A line whose pledges were short when the fence
+    // crossed keeps them (every sompi is already in its sink) and opens when they reach the new floor;
+    // a market that opened under the old one stays open — only a still-unopened pair is judged here.
+    let floor = palw_model_seed_min_sompi(builder.extras.model_seed_v2_active);
     // **ADR-0042 Decision 10's queue has room, or this move does not happen** (audit M-10).
     // Checked first, before any read that could leave a half-applied move: the fee legs below are
     // rows in `pending_payouts`, which is in the state-root preimage, and this is the only bound on
@@ -12818,7 +12827,7 @@ fn model_seed_v1(
         return Err(PalwStateV2Error::ModelLineNotActive(*line_id));
     }
     if msk_seed == 0 {
-        return Err(PalwStateV2Error::ModelSeedTooSmall { want: PALW_MODEL_SEED_MIN_SOMPI_V1, got: 0 });
+        return Err(PalwStateV2Error::ModelSeedTooSmall { want: floor, got: 0 });
     }
     // **ADR-0094 Decision 1: the seed accumulates.** A hundred thousand MSK does not fit in one
     // post-quantum transaction — fifteen ML-DSA-87 inputs is the most the 480,000 mass cap allows,
@@ -12840,13 +12849,13 @@ fn model_seed_v1(
                 pledged.seed_pledged_sompi.checked_add(msk_seed).ok_or(PalwStateV2Error::Overflow("model seed accumulation"))?;
             // Decision 3: the row keeps naming the FIRST payer; a later sompi claims nothing.
             let grown = PalwModelMarketV1 { msk_reserve: total, seed_pledged_sompi: total, ..pledged };
-            if total >= PALW_MODEL_SEED_MIN_SOMPI_V1 { grown.open_from_pledge_v1(ctx.daa_score) } else { grown }
+            if total >= floor { grown.open_from_pledge_v1(ctx.daa_score) } else { grown }
         }
         Some(_) => return Err(PalwStateV2Error::ModelMarketAlreadySeeded(*line_id)),
-        None if msk_seed >= PALW_MODEL_SEED_MIN_SOMPI_V1 => PalwModelMarketV1::seed_v1(ctx.daa_score, msk_seed, *seeder),
+        None if msk_seed >= floor => PalwModelMarketV1::seed_v1(ctx.daa_score, msk_seed, *seeder),
         None if accumulate => PalwModelMarketV1::pledge_v1(ctx.daa_score, msk_seed, *seeder),
         None => {
-            return Err(PalwStateV2Error::ModelSeedTooSmall { want: PALW_MODEL_SEED_MIN_SOMPI_V1, got: msk_seed });
+            return Err(PalwStateV2Error::ModelSeedTooSmall { want: floor, got: msk_seed });
         }
     };
     builder.write_model_market(*line_id, Some(market));
@@ -27229,6 +27238,42 @@ pub(crate) mod tests {
             invariants(&s4, class, 2_000 * MSK);
         }
 
+        /// **ADR-0120: past the fence the floor is one million MSK, and nothing paid before it is
+        /// lost.** 100,000 MSK opens a pair below the fence and only pledges past it; a payment that
+        /// brings the collected total to the new floor opens it, the first payer still on the record;
+        /// a pledge short when the fence crosses waits for the new floor; a market that opened under
+        /// the old one stays open, owes nothing and takes no further seed.
+        #[test]
+        fn past_the_seed_fence_the_floor_is_one_million_and_nothing_paid_is_lost() {
+            use crate::palw_model_market_v1::{PALW_MODEL_SEED_MIN_SOMPI_V1 as V1, PALW_MODEL_SEED_MIN_SOMPI_V2 as V2};
+            let p = params();
+            let class = h64(1);
+            let try_at = |parent: &PalwChainStateV2, c: &PalwBlockContextV2, objects: &[PalwConsensusObjectV2], v2: bool| {
+                let e = PalwTransitionExtrasV1 { model_benefits_active: true, model_seed_v2_active: v2, ..Default::default() };
+                apply_palw_transition_v2_with_extras(parent, &p, c, objects, None, false, false, false, false, &e)
+            };
+            let (s1, _) = apply_0094(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond());
+            let (below, _) = try_at(&s1, &ctx(2, 101, 2), &[seed(class, holder(9), V1)], false).expect("below the fence");
+            assert!(below.model_market(&class).unwrap().is_open(), "100,000 MSK opens a pair below the fence");
+            let (past, _) = try_at(&s1, &ctx(2, 101, 2), &[seed(class, holder(9), V1)], true).expect("past the fence");
+            let row = *past.model_market(&class).unwrap();
+            assert!(!row.is_open(), "past the fence the same 100,000 MSK is a pledge");
+            assert_eq!(row.seed_remaining_sompi_under(V2), V2 - V1, "and 900,000 MSK is still owed");
+            let (opened, _) = try_at(&past, &ctx(3, 102, 3), &[seed(class, holder(8), V2 - V1)], true).expect("the crossing payment");
+            let m = *opened.model_market(&class).unwrap();
+            assert!(m.is_open(), "the payment that reaches the new floor opens the pair");
+            assert_eq!(m.seed_sompi, V2, "the whole collected total is the reserve");
+            assert_eq!(m.seeded_by, holder(9), "the first payer stays on the record");
+            let (short, _) = try_at(&s1, &ctx(2, 101, 2), &[seed(class, holder(9), V1 / 2)], false).expect("a short pledge");
+            let (still, _) = try_at(&short, &ctx(3, 102, 3), &[seed(class, holder(9), V1 / 2)], true).expect("its top-up");
+            assert!(!still.model_market(&class).unwrap().is_open(), "100,000 MSK collected across the fence is not the new floor");
+            assert_eq!(below.model_market(&class).unwrap().seed_remaining_sompi_under(V2), 0, "an open market owes nothing");
+            assert!(matches!(
+                try_at(&below, &ctx(3, 102, 3), &[seed(class, holder(9), V1)], true),
+                Err(PalwStateV2Error::ModelMarketAlreadySeeded(_))
+            ));
+        }
+
         /// ADR-0090: one seed a line, at least the floor, and never a leg; the seeder cannot get
         /// it back — no object pays a reserve out but a holder's sell, and the seeder holds nothing.
         #[test]
@@ -28616,6 +28661,7 @@ pub(crate) mod tests {
                 model_benefits_active: true,
                 evm_market_active: true,
                 model_leg_v2_active: false,
+                model_seed_v2_active: false,
                 evm_actions: actions,
                 court_responder_coverage_active: false,
                 fp_da_pins_active: false,
@@ -28830,6 +28876,7 @@ pub(crate) mod tests {
                 model_benefits_active: false,
                 evm_market_active: false,
                 model_leg_v2_active: false,
+                model_seed_v2_active: false,
                 evm_actions: vec![buy(0, 1, class, MSK, 0)],
                 court_responder_coverage_active: false,
                 fp_da_pins_active: false,

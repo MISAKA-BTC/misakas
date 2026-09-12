@@ -43,8 +43,8 @@ use kaspa_consensus_core::evm::model_market::{
 };
 use kaspa_consensus_core::evm::{EVM_NATIVE_SCALE, EvmAddress, EvmLog};
 use kaspa_consensus_core::palw_model_market_v1::{
-    PALW_MODEL_POSITION_UNITS_V1, PALW_MODEL_SEED_MIN_SOMPI_V1, PALW_MODEL_SUPPLY_UNITS_V1, PalwModelFeesV1, PalwModelMarketV1,
-    palw_model_buy_quote_with, palw_model_sell_quote_with,
+    PALW_MODEL_POSITION_UNITS_V1, PALW_MODEL_SUPPLY_UNITS_V1, PalwModelFeesV1, PalwModelMarketV1, palw_model_buy_quote_with,
+    palw_model_sell_quote_with,
 };
 use kaspa_hashes::{EvmH256, Hash64};
 use revm::handler::register::EvmHandler;
@@ -891,7 +891,8 @@ impl MarketHandlers {
                 Out::default()
                     .u64(PALW_MODEL_SUPPLY_UNITS_V1)
                     .u64(PALW_MODEL_POSITION_UNITS_V1)
-                    .u64(PALW_MODEL_SEED_MIN_SOMPI_V1)
+                    // ADR-0120: the floor in force at this block — what the fold will open the pair at.
+                    .u64(kaspa_consensus_core::palw_model_market_v1::palw_model_seed_min_sompi(self.fences.seed_v2_active))
                     // ADR-0114: the schedule in force at this block, so a reader of `constants()` prices a
                     // move the way the fold will settle it.
                     .u64(self.schedule().burn_permille)
@@ -1508,7 +1509,13 @@ mod tests {
         for (leg_v2_active, leg) in [(false, 10u64), (true, 50u64)] {
             let m = MarketHandlers::new(
                 view.clone(),
-                PalwEvmMarketFencesV1 { market_active: true, lines_active: true, evm_active: true, leg_v2_active },
+                PalwEvmMarketFencesV1 {
+                    market_active: true,
+                    lines_active: true,
+                    evm_active: true,
+                    leg_v2_active,
+                    seed_v2_active: false,
+                },
                 1,
             );
             let Ok(c) = m.amm(&sel().constants) else { panic!("constants() answers") };
@@ -1546,7 +1553,13 @@ mod tests {
         view.markets.insert(line, row);
         let m = MarketHandlers::new(
             std::sync::Arc::new(view),
-            PalwEvmMarketFencesV1 { market_active: true, lines_active: true, evm_active: true, leg_v2_active: false },
+            PalwEvmMarketFencesV1 {
+                market_active: true,
+                lines_active: true,
+                evm_active: true,
+                leg_v2_active: false,
+                seed_v2_active: false,
+            },
             1,
         );
         let mut input = sel().market.to_vec();
@@ -1581,7 +1594,13 @@ mod tests {
         let line = Hash64::from_u64_word(9);
         let m = MarketHandlers::new(
             std::sync::Arc::new(PalwEvmViewV1 { chain_daa: 42, chain_id: 1, ..Default::default() }),
-            PalwEvmMarketFencesV1 { market_active: true, lines_active: true, evm_active: true, leg_v2_active: false },
+            PalwEvmMarketFencesV1 {
+                market_active: true,
+                lines_active: true,
+                evm_active: true,
+                leg_v2_active: false,
+                seed_v2_active: false,
+            },
             1,
         );
         let s = sel();

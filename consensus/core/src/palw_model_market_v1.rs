@@ -37,6 +37,17 @@ pub const PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1: u64 = 0;
 /// ADR-0090 Decision 2: the least seed that opens a line's market — 100,000 MSK, every sompi of
 /// which enters the curve, none of which any object ever pays out.
 pub const PALW_MODEL_SEED_MIN_SOMPI_V1: u64 = 100_000 * 100_000_000;
+/// **ADR-0120: the least seed once `Params::palw_model_seed_v2` is in force** — 1,000,000 MSK, ten
+/// times ADR-0090's. Every sompi of it is locked in the line's sink for good, as before; what moves is
+/// only the total at which the pair becomes a market.
+pub const PALW_MODEL_SEED_MIN_SOMPI_V2: u64 = 1_000_000 * 100_000_000;
+
+/// **The least seed in force** (ADR-0120): V2 once the fence is active at the payment's DAA, V1 before
+/// it. The fold, the EVM window, the RPC and the CLI each ask this, so no two of them can hold one
+/// payment to two floors.
+pub const fn palw_model_seed_min_sompi(seed_v2_active: bool) -> u64 {
+    if seed_v2_active { PALW_MODEL_SEED_MIN_SOMPI_V2 } else { PALW_MODEL_SEED_MIN_SOMPI_V1 }
+}
 /// ADR-0091 Decision 1: the part of a claim's escrowed worker reward that buys from the pair of
 /// the line the claim ran, in permille — the other 950 ‰ is named for the miner at `Final`.
 pub const PALW_MODEL_BUYBACK_PERMILLE_V1: u64 = 50;
@@ -225,9 +236,16 @@ impl PalwModelMarketV1 {
         self.seed_sompi > 0
     }
 
-    /// What is still owed before this line is a market. Zero once it is one.
+    /// What is still owed before this line is a market under ADR-0090's floor. Zero once it is one.
     pub fn seed_remaining_sompi(&self) -> u64 {
-        PALW_MODEL_SEED_MIN_SOMPI_V1.saturating_sub(self.seed_pledged_sompi)
+        self.seed_remaining_sompi_under(PALW_MODEL_SEED_MIN_SOMPI_V1)
+    }
+
+    /// What is still owed before this line is a market under `floor` (ADR-0120: the floor in force at
+    /// the reader's height, [`palw_model_seed_min_sompi`]). Zero once it is one — an open market owes
+    /// nothing whatever the floor is now.
+    pub fn seed_remaining_sompi_under(&self, floor: u64) -> u64 {
+        if self.is_open() { 0 } else { floor.saturating_sub(self.seed_pledged_sompi) }
     }
 
     /// ADR-0090 Decision 2: a market opens ONLY by a seed — the whole supply in the curve and the

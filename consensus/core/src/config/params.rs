@@ -1206,6 +1206,14 @@ pub struct Params {
     /// arrives at a height — a node on a build without it forks off there. Meaningless without the
     /// market, so it is read through `palw_model_leg_v2_fence` only, which folds that in.
     pub palw_model_leg_v2: Option<ForkActivation>,
+    /// **ADR-0120 — the least seed is one million MSK, by activation.** `None` on every shipped
+    /// preset: below it a line's market opens once the MSK paid into it reaches
+    /// `PALW_MODEL_SEED_MIN_SOMPI_V1` (100,000 MSK, ADR-0090 and ADR-0094's pledges), past it
+    /// `PALW_MODEL_SEED_MIN_SOMPI_V2` (1,000,000 MSK). It decides which payment opens a market —
+    /// what the fold writes into the rows — so it is a consensus change on a live chain and arrives
+    /// at a height; a node on a build without it forks off there. Meaningless without the market,
+    /// so it is read through `palw_model_seed_v2_fence` only, which folds that in.
+    pub palw_model_seed_v2: Option<ForkActivation>,
     /// **ADR-0089 Decision 9 — the market's EVM face is a consensus rule armed by activation.**
     /// `None` on every shipped preset: below it the four system addresses and the facades are
     /// empty accounts, the writer accepts nothing and the transition takes an empty action list;
@@ -3283,6 +3291,10 @@ impl Params {
         if self.palw_model_leg_v2 == Some(ForkActivation::never()) {
             self.palw_model_leg_v2 = None;
         }
+        // ADR-0120, a bare fence: the same collapse.
+        if self.palw_model_seed_v2 == Some(ForkActivation::never()) {
+            self.palw_model_seed_v2 = None;
+        }
         if self.palw_model_lines == Some(ForkActivation::never()) {
             self.palw_model_lines = None;
         }
@@ -3684,6 +3696,26 @@ impl Params {
         crate::palw_model_market_v1::PalwModelFeesV1::at(self.palw_model_leg_v2_active_at(daa_score))
     }
 
+    /// ADR-0120's fence with the market dependency folded in: a floor for a market that does not
+    /// exist is meaningless, so this is `Some` only where the market is armed too — the ONE place
+    /// ADR-0120 is decided.
+    pub fn palw_model_seed_v2_fence(&self) -> Option<ForkActivation> {
+        match (self.palw_model_market_fence(), self.palw_model_seed_v2) {
+            (Some(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    /// Is ADR-0120's one-million-MSK floor in force at `daa_score`? `false` on every shipped preset.
+    pub fn palw_model_seed_v2_active_at(&self, daa_score: u64) -> bool {
+        matches!(self.palw_model_seed_v2_fence(), Some(fence) if fence.is_active(daa_score))
+    }
+
+    /// The least seed that opens a market at `daa_score` (ADR-0090, ADR-0120), in sompi.
+    pub fn palw_model_seed_min_sompi_at(&self, daa_score: u64) -> u64 {
+        crate::palw_model_market_v1::palw_model_seed_min_sompi(self.palw_model_seed_v2_active_at(daa_score))
+    }
+
     /// Is ADR-0088's model registry in force at `daa_score`? `false` on every shipped preset.
     pub fn palw_model_lines_active_at(&self, daa_score: u64) -> bool {
         matches!(self.palw_model_lines_fence(), Some(fence) if fence.is_active(daa_score))
@@ -3710,6 +3742,7 @@ impl Params {
             lines_active: self.palw_model_lines_active_at(daa_score),
             evm_active: self.palw_model_evm_active_at(daa_score),
             leg_v2_active: self.palw_model_leg_v2_active_at(daa_score),
+            seed_v2_active: self.palw_model_seed_v2_active_at(daa_score),
         }
     }
 
@@ -3999,6 +4032,7 @@ impl Params {
             palw_model_lines,
             palw_model_benefits,
             palw_model_leg_v2,
+            palw_model_seed_v2,
             palw_model_evm,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
@@ -4058,6 +4092,7 @@ impl Params {
             ("palw_model_lines", *palw_model_lines),
             ("palw_model_benefits", *palw_model_benefits),
             ("palw_model_leg_v2", *palw_model_leg_v2),
+            ("palw_model_seed_v2", *palw_model_seed_v2),
             ("palw_model_evm", *palw_model_evm),
             ("palw_chunk_cap_charge", *palw_chunk_cap_charge),
             ("palw_prompt_ids_merkle", *palw_prompt_ids_merkle),
@@ -4426,6 +4461,7 @@ impl Params {
             palw_model_lines,
             palw_model_benefits,
             palw_model_leg_v2,
+            palw_model_seed_v2,
             palw_model_evm,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
@@ -4634,6 +4670,14 @@ impl Params {
         }
         // ADR-0114. A pure fence, the same shape.
         match palw_model_leg_v2.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // ADR-0120. A pure fence, the same shape.
+        match palw_model_seed_v2.as_mut() {
             Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
@@ -5019,6 +5063,7 @@ impl Params {
             palw_model_lines,
             palw_model_benefits,
             palw_model_leg_v2,
+            palw_model_seed_v2,
             palw_model_evm,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
@@ -5305,6 +5350,11 @@ impl Params {
         // ADR-0114: Some-only, so every preset that does not schedule it fingerprints as before.
         if let Some(activation) = palw_model_leg_v2 {
             h.write(b"palw_model_leg_v2");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0120: Some-only, so every preset that does not schedule it fingerprints as before.
+        if let Some(activation) = palw_model_seed_v2 {
+            h.write(b"palw_model_seed_v2");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0089 Decision 9: the same contract.
@@ -5778,6 +5828,7 @@ impl Params {
             palw_model_lines: self.palw_model_lines,
             palw_model_benefits: self.palw_model_benefits,
             palw_model_leg_v2: self.palw_model_leg_v2,
+            palw_model_seed_v2: self.palw_model_seed_v2,
             palw_model_evm: self.palw_model_evm,
             palw_chunk_cap_charge: self.palw_chunk_cap_charge,
             palw_prompt_ids_merkle: self.palw_prompt_ids_merkle,
@@ -6743,6 +6794,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_model_lines: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
+    palw_model_seed_v2: None,
     palw_model_evm: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
@@ -6922,6 +6974,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_model_lines: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
+    palw_model_seed_v2: None,
     palw_model_evm: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
@@ -7083,6 +7136,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_model_lines: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
+    palw_model_seed_v2: None,
     palw_model_evm: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
@@ -10606,6 +10660,15 @@ pub const PALW_RC_MODEL_BENEFITS_FENCE_DAA: u64 = 2_400;
 /// Every seat must run a build carrying this fence BEFORE this height or it forks off at it — the DAA
 /// 2,400 fence was crossed unannounced once and the outside nodes left at ≈2,241; announce this one.
 pub const PALW_RC_MODEL_LEG_V2_FENCE_DAA: u64 = 3_500;
+/// **testnet-11's flag day for the one-million-MSK least seed** (ADR-0120).
+///
+/// Chosen by the operator on 2026-09-12 to ship with the 7,000 release (held context, the audit's deep
+/// fixes) at a height of its OWN: `fork_id_v1` digests fired heights, not fence sets, so a fence that
+/// shared 7,000 would let a build without it peer through the gate and part silently there. Below it a
+/// market opens at 100,000 MSK paid in; at and past it, at 1,000,000 MSK. A line whose pledges are
+/// still short at the height keeps them — every sompi is already locked in its sink — and opens when
+/// they reach the new floor.
+pub const PALW_RC_MODEL_SEED_V2_FENCE_DAA: u64 = 6_900;
 /// **testnet-11's SECOND flag day for the 2026-09-11 pre-mainnet audit fixes** (`palw_audit_2026_09_11`).
 /// A live chain gets the fixes at a height, not a re-genesis (ADR-0083 path (a)). Only this fence
 /// arms on testnet-11; the audit's share-census fence (`palw_share_growth_final`, B-2/ADR-0107) and
@@ -11093,6 +11156,7 @@ pub fn palw_rc_base_params() -> Params {
     params.palw_model_lines = Some(ForkActivation::new(PALW_RC_DA_COURT_FENCE_DAA));
     params.palw_model_benefits = Some(ForkActivation::new(PALW_RC_MODEL_BENEFITS_FENCE_DAA));
     params.palw_model_leg_v2 = Some(ForkActivation::new(PALW_RC_MODEL_LEG_V2_FENCE_DAA));
+    params.palw_model_seed_v2 = Some(ForkActivation::new(PALW_RC_MODEL_SEED_V2_FENCE_DAA));
     // **The 2026-09-11 audit flag day.** The audit's state-transition and acceptance-filter fixes
     // (A-1, A-2, B-5, AC-SLOT, and the deep court/panel findings) activate together on testnet-11
     // at one height, behind this ONE fence. The share-census fence (`palw_share_growth_final`,
@@ -11503,6 +11567,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_model_lines: None,
     palw_model_benefits: None,
     palw_model_leg_v2: None,
+    palw_model_seed_v2: None,
     palw_model_evm: None,
     palw_chunk_cap_charge: None,
     // ADR-0082 Decision 5: NOT armed. At the registered 512 row the flat prompt ids are 82,080
@@ -13934,8 +13999,9 @@ mod consensus_params_id_tests {
         previous.palw_model_lines = None;
         previous.palw_model_benefits = None;
         previous.palw_model_evm = None;
-        // ADR-0114's fence (3500) was scheduled five flag days later.
+        // ADR-0114's fence (3500) was scheduled five flag days later, and ADR-0120's (6900) later still.
         previous.palw_model_leg_v2 = None;
+        previous.palw_model_seed_v2 = None;
         // The pre-mainnet audit's fences were scheduled later still — 4000 shallow, with ADR-0117's
         // draw fence, and 7000 deep.
         previous.palw_audit_2026_09_11 = None;
@@ -14625,8 +14691,9 @@ mod consensus_params_id_tests {
                 market_active: bits & 1 != 0,
                 lines_active: bits & 2 != 0,
                 evm_active: bits & 4 != 0,
-                // ADR-0114 moves what a quote says, never whether a window exists.
+                // ADR-0114 moves what a quote says, never whether a window exists; nor does ADR-0120.
                 leg_v2_active: bits & 1 != 0,
+                seed_v2_active: bits & 2 != 0,
             };
             assert_eq!(f.any_active(), bits != 0, "one window iff some fence is in force");
         }
@@ -15448,15 +15515,18 @@ mod consensus_params_id_tests {
                 // never released) printed 09efd285a32f31c883edc5b9b869892b15895bf1194593c067556c94cf8fc694
                 // and shares this build's fork id — see `PALW_RC_AUDIT_FENCE_DAA` for why it must not run.
                 // Previous (the 4,000 release): 4300409bb7127c8ee57bad783e4610e37bbd3c7cc535279d729fda3341d666dd.
-                // **Re-pinned 2026-09-12 for the 7,000 release** — ONE flag day for the held regime
-                // (ADR-0118: `palw_held_context`, `palw_shard_court`, `palw_fp_da_pins`, with ADR-0119's
-                // held ladder riding it) and the audit's DEEP findings (`palw_audit_2026_09_11_deep`),
-                // adding the one schedule entry 7000 (1150/1900/2150/2400/3500/4000/7000/2125000). The two
-                // branches' own values were intermediate: held alone c2e5ffbef5e0326ee117b0554225b0c97da52fbfcb47585632c01cb12236d7b0,
-                // deep alone d6ebbcab7691aec574e983b2c8dd81a6bd1fc1d340e92a7efba2f7e305449bec.
-                // INTERMEDIATE until ADR-0120's `palw_model_seed_v2` (6,900) joins this release: the
-                // one re-pin of the 7,000 build is taken after it, from the release's startup log.
-                "941300ddff87abfa0a85fb7e6f54d8a8e7fd5e0935c17b351e93e3a43c860bf9",
+                // **Re-pinned 2026-09-12 for the 7,000 release** — the one re-pin of the build that
+                // carries every fence it schedules: ADR-0120's `palw_model_seed_v2` at 6,900 (its own
+                // height, so a build without it is refused there rather than parted from silently), and
+                // at 7,000 the held regime (ADR-0118: `palw_held_context`, `palw_shard_court`,
+                // `palw_fp_da_pins`, with ADR-0119's held ladder riding it) together with the audit's
+                // DEEP findings (`palw_audit_2026_09_11_deep`) — schedule 1150/1900/2150/2400/3500/4000/
+                // 6900/7000/2125000. The branches' own values were intermediate: held alone
+                // c2e5ffbef5e0326ee117b0554225b0c97da52fbfcb47585632c01cb12236d7b0, deep alone
+                // d6ebbcab7691aec574e983b2c8dd81a6bd1fc1d340e92a7efba2f7e305449bec, ADR-0120 alone
+                // 7fa26c269a2c007f077b687eb3ce5cdf5bbd6dbfe263980688fbec5e0ace99e8, held + deep
+                // 941300ddff87abfa0a85fb7e6f54d8a8e7fd5e0935c17b351e93e3a43c860bf9.
+                "ae1d61628da50c7becea62f0a8f08c8654d190c60b2e104df0010b121ba4d3d8",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -16202,6 +16272,8 @@ mod consensus_params_id_tests {
         //   row, this equivalent registers only the floor, and `validate_palw_v2` refuses the fence
         //   on a ruleset whose frozen arity does not match one it can derive. A carded mainnet that
         //   pins the dense tier states it on the base — see the test below.
+        // * `palw_model_seed_v2` (ADR-0120) is the market's least seed, for the same reason: a card
+        //   states what opening a pair costs when it states the market.
         // * `palw_model_leg_v2` (ADR-0114) is a fee schedule on the market those fences arm: a card
         //   states the market's economics when it states the market, and none does yet.
         // * `palw_model_benefits` (ADR-0095) follows the three below for the same reason and one
@@ -16233,6 +16305,7 @@ mod consensus_params_id_tests {
                 "palw_model_lines",
                 "palw_model_benefits",
                 "palw_model_leg_v2",
+                "palw_model_seed_v2",
                 "palw_model_evm",
                 "palw_kary_court",
                 "palw_shard_court",
@@ -16978,6 +17051,7 @@ mod consensus_params_id_tests {
                 PALW_RC_MODEL_BENEFITS_FENCE_DAA,
                 PALW_RC_MODEL_LEG_V2_FENCE_DAA,
                 PALW_RC_AUDIT_FENCE_DAA,
+                PALW_RC_MODEL_SEED_V2_FENCE_DAA,
                 // One entry for 7,000: the deep-audit fence and the held regime share it (ADR-0118).
                 PALW_RC_AUDIT_DEEP_FENCE_DAA,
             ],

@@ -605,8 +605,11 @@ pub fn model_evm_sell(
     call(ctx, ks, &writer_address_hex(), data, 0, gas_limit.or(Some(120_000)), max_fee, nonce, yes, wait)
 }
 
-/// `misaka palw model-evm-seed`: the seed is the call's value — whole sompi, at least the
-/// network's least seed; the writer refuses less before it even queues (`SeedTooSmall`).
+/// `misaka palw model-evm-seed`: the seed is the call's value — whole sompi, at least ADR-0090's
+/// least seed (100,000 MSK), under which this command refuses before anything queues. Past
+/// ADR-0120's height (testnet-11: DAA 6,900) the pair opens only at 1,000,000 MSK paid in, and a
+/// smaller seed is collected toward it (ADR-0094) — `misaka palw model-market` prints the floor the
+/// node's tip is under.
 #[allow(clippy::too_many_arguments)]
 pub fn model_evm_seed(
     ctx: &Ctx,
@@ -628,6 +631,13 @@ pub fn model_evm_seed(
     let least = kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1 as u128;
     if wei / scale < least {
         return Err(CliError::new(exit::GENERIC, format!("a seed of {} sompi is under the least seed of {least} sompi", wei / scale)));
+    }
+    let v2 = kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V2 as u128;
+    if wei / scale < v2 && !ctx.quiet {
+        eprintln!(
+            "model-evm-seed: note — past ADR-0120's height (testnet-11: DAA 6,900) a pair opens at {v2} sompi paid in; this \
+             seed is then collected toward it (see `misaka palw model-market` for the floor now)"
+        );
     }
     let data = kaspa_consensus_core::evm::model_market::send_action_seed_calldata(&line);
     if !ctx.quiet {
