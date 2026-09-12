@@ -76,6 +76,9 @@ pub struct PalwProducerConfig {
     /// Where the execution material behind each published attempt is kept for as long as its
     /// `trace_retention_daa` promises. See `retain_execution` for why this is not optional.
     pub retention_dir: std::path::PathBuf,
+    /// **How long an ATTEMPT capture stays on disk** (`--palw-attempt-retention-minutes`) — see
+    /// [`retained_capture_prune_due_v1`]. Free-prompt captures do not read it.
+    pub attempt_retention: std::time::Duration,
     /// **The operator's `--enable-unsynced-mining`, threaded to the producer** — the same escape
     /// the RPC mining path honours (`rpc/service`: `!enable_unsynced_mining && !is_synced` ⇒
     /// refuse). Without it a PALW network cannot be BORN: `should_mine` requires the sink to be
@@ -205,15 +208,44 @@ pub(crate) fn palw_retained_answer_path(dir: &std::path::Path, claim: &Hash64) -
     dir.join(format!("{claim}{PALW_RETAINED_ANSWER_SUFFIX}"))
 }
 
-/// **Does the chain still hold `claim` as a free-prompt claim someone may yet ask this node
-/// about?** The retention prune's exception (see `rebroadcast_retained`): read off the claim
-/// state at the tip, so a claim the chain has resolved — or never held — is not kept.
-fn free_prompt_claim_still_owed(session: &kaspa_consensusmanager::ConsensusProxy, claim: Hash64) -> bool {
-    session.palw_derived_artifacts_v1(claim).is_some_and(|(state, _, _)| free_prompt_retention_is_owed(&state.source, &state.phase))
+/// The wall-clock horizon of every retained capture that is not an attempt claim's: the bind +
+/// receipt windows at the frozen 120 s cadence are ~40 h, and two days of re-serving covers every
+/// claim that can still be licensed.
+const PALW_RETENTION_HORIZON: std::time::Duration = std::time::Duration::from_secs(48 * 3600);
+
+/// **Is a retained capture due for pruning?** The one decision `rebroadcast_retained` acts on,
+/// pure so it can be pinned without a consensus instance. `age` is the file's (`None` = unreadable,
+/// treated as old, as before); `claim` is the chain's view of the claim at the tip (`None` = never
+/// mined, or dropped).
+///
+/// * **An ATTEMPT claim's capture is due at `attempt_horizon`.** Its seats license it by replaying
+///   the block's job (ADR-0084 Decision 7), never from these bytes, and a court or a
+///   data-availability accusation that asks this node later is answered from a capture re-made by
+///   that same replay and checked against the claim's committed roots (the panel's
+///   `remade_attempt_capture_v1`). So the file only serves the first minutes. It was kept 48 h, and
+///   a graph-v5 capture is ~0.8 GB a block: once ADR-0112/0117 made a Qwen3.6 draw take ~45 s
+///   instead of ~18 min, C's seat2 wrote 53 GB in 1 h 45 min and filled its 387 GB disk
+///   (2026-09-12), taking the node's database down with it.
+/// * **A FREE-PROMPT claim's capture is the one copy anywhere** (graph-v5 captures are over the
+///   transport cap, so only the executor can open an interval): 48 h, and never while the chain can
+///   still ask about it ([`free_prompt_retention_is_owed`]).
+/// * **A claim the chain does not know**: 48 h, as before.
+pub(crate) fn retained_capture_prune_due_v1(
+    age: Option<std::time::Duration>,
+    claim: Option<(&kaspa_consensus_core::palw_state_v2::PalwClaimSourceV2, &kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2)>,
+    attempt_horizon: std::time::Duration,
+) -> bool {
+    use kaspa_consensus_core::palw_state_v2::PalwClaimSourceV2 as S;
+    let age = age.unwrap_or(std::time::Duration::MAX);
+    match claim {
+        Some((S::Attempt, _)) => age >= attempt_horizon,
+        Some((source, phase)) => age >= PALW_RETENTION_HORIZON && !free_prompt_retention_is_owed(source, phase),
+        None => age >= PALW_RETENTION_HORIZON,
+    }
 }
 
-/// The phase half of [`free_prompt_claim_still_owed`], separated so it can be pinned without a
-/// consensus instance. Owed while a seat, a redrawn seat, a challenger or an accuser can still ask
+/// **Can a seat, a redrawn seat, a challenger or an accuser still ask for this free-prompt
+/// claim's capture?** Separated so it can be pinned without a consensus instance. Owed while a seat, a redrawn seat, a challenger or an accuser can still ask
 /// for an opening; not once the claim is `Final` (nothing can open a challenge on it any more) or
 /// `Voided` (there is nothing left to defend). An attempt claim is never "owed" here — its seats
 /// replay the anchor's job instead (ADR-0084 Decision 7) and it keeps the wall-clock horizon.
@@ -402,40 +434,38 @@ impl PalwProducerService {
                 continue;
             };
             let Ok(claim) = stem.parse::<Hash64>() else { continue };
-            // The bind + receipt windows at the frozen 120 s cadence are ~40 h; two days of
-            // re-serving covers every claim that can still be licensed, and stops for the rest.
-            let fresh = entry
-                .metadata()
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|t| now.duration_since(t).ok())
-                .map(|age| age < std::time::Duration::from_secs(48 * 3600))
-                .unwrap_or(false);
-            if !fresh {
-                // **A free-prompt claim the chain still holds live is kept, whatever its age.** The
-                // 48 h horizon is a wall-clock reading of windows that are DAA counts: bind +
-                // receipt is 1,200 DAA, ~40 h only at the frozen 120 s cadence, and testnet-11 has
-                // run at a fraction of that cadence — so the horizon deleted captures of claims
-                // still in their receipt window, or licensed and inside their challenge window. For a
-                // free-prompt claim that is the one copy anywhere: graph-v5 captures are over the
-                // transport cap, so only the executor can open an interval, and a seat or a court
-                // that asks after the delete gets "not held" — a void at best, and an unanswerable
-                // challenge at worst. So the chain decides, not the clock: kept while the claim is
-                // provisional, bound, licensed or under a data-availability accusation; pruned
-                // once it is final or void, or unknown to the chain (never mined, or dropped).
-                //
-                // Attempt claims keep the clock: their seats license by replaying the anchor's job
-                // (ADR-0084 Decision 7) rather than from these bytes, and a graph-v5 attempt
-                // capture is ~0.8 GB per block, which a chain-long horizon would put on the
-                // consensus volume.
-                if free_prompt_claim_still_owed(&session, claim) {
-                    continue;
-                }
+            let age = entry.metadata().and_then(|m| m.modified()).ok().and_then(|t| now.duration_since(t).ok());
+            // Nothing is due before the shorter of the two horizons, so a young file costs no state read.
+            if age.is_some_and(|age| age < self.config.attempt_retention.min(PALW_RETENTION_HORIZON)) {
+                continue;
+            }
+            let chain = session.palw_derived_artifacts_v1(claim);
+            // **A free-prompt claim the chain still holds live is kept, whatever its age.** The 48 h
+            // horizon is a wall-clock reading of windows that are DAA counts: bind + receipt is
+            // 1,200 DAA, ~40 h only at the frozen 120 s cadence, and testnet-11 has run at a
+            // fraction of that cadence — so the horizon deleted captures of claims still in their
+            // receipt window, or licensed and inside their challenge window. For a free-prompt claim
+            // that is the one copy anywhere: graph-v5 captures are over the transport cap, so only
+            // the executor can open an interval, and a seat or a court that asks after the delete
+            // gets "not held" — a void at best, and an unanswerable challenge at worst. So the chain
+            // decides, not the clock: kept while the claim is provisional, bound, licensed or under a
+            // data-availability accusation; pruned once it is final or void, or unknown to the
+            // chain (never mined, or dropped).
+            //
+            // Attempt claims keep a clock of their own, and a short one: their seats license by
+            // replaying the anchor's job (ADR-0084 Decision 7) rather than from these bytes, a court
+            // that asks later gets a capture re-made by the same replay, and a graph-v5 attempt
+            // capture is ~0.8 GB per block (`retained_capture_prune_due_v1`).
+            if retained_capture_prune_due_v1(
+                age,
+                chain.as_ref().map(|(state, _, _)| (&state.source, &state.phase)),
+                self.config.attempt_retention,
+            ) {
                 // **Past the horizon it is not just un-broadcast, it is deleted** (audit M2-22).
-                // Retention grew monotonically on the consensus volume — the same volume RocksDB
-                // is on — because nothing ever removed a file. The obligation ends with the
-                // lattice: a claim older than this can no longer be licensed or disputed, so the
-                // bytes serve nobody.
+                // Retention grew monotonically on the consensus volume — the same volume RocksDB is
+                // on — because nothing ever removed a file. A free-prompt claim this old can no
+                // longer be licensed or disputed, so its bytes serve nobody; an attempt claim that is
+                // still disputed is answered from a replay, not from these bytes.
                 if let Err(e) = std::fs::remove_file(&path) {
                     trace!("[{PALW_PRODUCER}] cannot prune retained material {}: {e}", path.display());
                 }
@@ -1074,7 +1104,7 @@ mod attempt_lane_tests {
 
 #[cfg(test)]
 mod retention_tests {
-    use super::free_prompt_retention_is_owed;
+    use super::{PALW_RETENTION_HORIZON, free_prompt_retention_is_owed, retained_capture_prune_due_v1};
     use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2 as P, PalwClaimSourceV2 as S, PalwVoidReasonV2 as R};
 
     /// **A live free-prompt claim's capture outlives the wall-clock horizon; nothing else does.**
@@ -1092,6 +1122,45 @@ mod retention_tests {
         for reason in [R::BindTimeout, R::ReceiptTimeout, R::CourtFraud, R::ProducerWithholding] {
             assert!(!free_prompt_retention_is_owed(&fp, &P::Voided { voided_daa: 40, reason }));
         }
+    }
+
+    /// **An attempt capture goes at its own short horizon, whatever its phase; a live free-prompt
+    /// capture never goes; everything else goes at 48 h.** The boundary is exact on both clocks, and
+    /// an unreadable age is an old file, as it always was.
+    #[test]
+    fn an_attempt_capture_is_pruned_at_its_own_horizon_and_a_live_free_prompt_one_is_not() {
+        use std::time::Duration;
+        let hour = Duration::from_secs(3600);
+        let fp = S::FreePrompt { quanta: 8, spent: Default::default() };
+        let phases = [
+            P::Provisional,
+            P::PanelBound { bound_daa: 10 },
+            P::ReceiptLicensed { licensed_daa: 20 },
+            P::Final { final_daa: 30 },
+            P::Voided { voided_daa: 40, reason: R::CourtFraud },
+        ];
+        for phase in &phases {
+            // An attempt claim: due at the horizon it is given, to the second, in every phase — a
+            // court asking later is answered from a replay.
+            assert!(!retained_capture_prune_due_v1(Some(hour - Duration::from_secs(1)), Some((&S::Attempt, phase)), hour));
+            assert!(retained_capture_prune_due_v1(Some(hour), Some((&S::Attempt, phase)), hour), "{phase:?}");
+            // The attempt horizon never reaches a free-prompt capture.
+            assert!(!retained_capture_prune_due_v1(Some(hour), Some((&fp, phase)), hour), "{phase:?}");
+        }
+        // A free-prompt capture past 48 h: kept while the chain can still ask, pruned once it cannot.
+        let old = PALW_RETENTION_HORIZON;
+        for live in &phases[..3] {
+            assert!(!retained_capture_prune_due_v1(Some(old * 10), Some((&fp, live)), hour), "{live:?} is still owed");
+        }
+        for settled in &phases[3..] {
+            assert!(!retained_capture_prune_due_v1(Some(old - Duration::from_secs(1)), Some((&fp, settled)), hour));
+            assert!(retained_capture_prune_due_v1(Some(old), Some((&fp, settled)), hour), "{settled:?}");
+        }
+        // A claim the chain does not know keeps the 48 h clock; an unreadable age counts as old.
+        assert!(!retained_capture_prune_due_v1(Some(old - Duration::from_secs(1)), None, hour));
+        assert!(retained_capture_prune_due_v1(Some(old), None, hour));
+        assert!(retained_capture_prune_due_v1(None, None, hour));
+        assert!(retained_capture_prune_due_v1(None, Some((&S::Attempt, &P::Provisional)), hour));
     }
 }
 
