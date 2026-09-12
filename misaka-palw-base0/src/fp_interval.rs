@@ -2689,8 +2689,10 @@ pub fn base0_fp_challenger_replay_tiles_capped_v1<K: Base0FpIntervalKernelsV1>(
 /// **What a served interval's replay asks of this party's own leaves** under the served frontier.
 pub enum Base0FpServedLeavesV1<'a> {
     /// A seat naming a leaf (ADR-0086 Decision 6): its leaves are the question, not the
-    /// commitment's, and nothing walks.
-    Own,
+    /// commitment's, and nothing walks. Only the tiles of `block` (`[first, end)`, the served
+    /// block's leaves) are kept (ADR-0121): the name is the first leaf of that block where the two
+    /// disagree, and the rest of the interval is replayed and dropped.
+    Own { block: (u64, u64) },
     /// A close (ADR-0085 Decision 3): the range must walk to the committed root — with this
     /// party's leaves where they are the executor's, and the executor's served leaves for the one
     /// block they are not ([`base0_fp_committed_range_with_served_block_v1`]).
@@ -2852,6 +2854,18 @@ fn base0_fp_replay_served_interval_v1<K: Base0FpIntervalKernelsV1>(
             }
         }
     };
+    // **Naming keeps one block** (ADR-0121): the served block's own tiles, streamed out of the
+    // replay; the interval's other leaves are hashed and dropped, and no range is rebuilt.
+    if let Base0FpServedLeavesV1::Own { block: (block_first, block_end) } = leaves {
+        let mut kept = Vec::new();
+        kernels.replay_interval_into(profile, ctx, &start, window, step_leaf_count, &mut |index, leaf| {
+            if index >= block_first && index < block_end {
+                kept.push((index, leaf));
+            }
+            Ok(())
+        })?;
+        return Ok((opening, crate::legs::Base0StepTilesV1 { leaves: Vec::new(), tiles: kept }));
+    }
     let tiles = kernels.replay_interval_tiles(profile, ctx, &start, window, step_leaf_count)?;
     if let Some(f) = fold {
         if seed_hashes.len() as u64 != leaves_geometry.seed_row_leaves {
@@ -4322,7 +4336,8 @@ pub fn base0_fp_name_the_leaf_capped_v1<K: Base0FpIntervalKernelsV1>(
     }
     let state = state_for(opening_bytes);
     // The replay WITHOUT the close's root walk: this seat's leaves are the question, not the
-    // commitment's (see `base0_fp_replay_served_interval_v1`).
+    // commitment's (see `base0_fp_replay_served_interval_v1`) — and only the served block's.
+    let block_end = served.first_leaf_index + served.leaf_hashes.len() as u64;
     let (_, tiles) = base0_fp_replay_served_interval_v1(
         opening_bytes,
         claim,
@@ -4334,7 +4349,7 @@ pub fn base0_fp_name_the_leaf_capped_v1<K: Base0FpIntervalKernelsV1>(
         state.as_ref(),
         kernels,
         prompt_ids_form,
-        Base0FpServedLeavesV1::Own,
+        Base0FpServedLeavesV1::Own { block: (served.first_leaf_index, block_end) },
     )?;
     let ctx_hash = v4.binding.job_context.context_hash();
     let profile_hash = v4.binding.shape_profile.shape_profile_id();
