@@ -927,13 +927,18 @@ impl Base0FpFoldRangeOpeningV1 {
         range: &PalwStepRangeOpeningV1,
         tree: &crate::fp_capture::Base0SparseStepTreeV1,
     ) -> Result<Self, Base0FpIntervalError> {
-        let mut this = Self {
-            first_leaf_index: range.first_leaf_index,
-            leaf_count: range.leaf_hashes.len() as u64,
-            retain_level: tree.retain_level(),
-            block_roots: Vec::new(),
-            siblings: range.siblings.clone(),
-        };
+        Self::from_tree_v1(range.first_leaf_index, range.leaf_hashes.len() as u64, tree, range.siblings.clone())
+    }
+
+    /// The same form from the range's bounds and its siblings — what an executor that never held the
+    /// range's leaves builds (ADR-0121): the whole blocks' digests are the tree's retained nodes.
+    pub fn from_tree_v1(
+        first_leaf_index: u64,
+        leaf_count: u64,
+        tree: &crate::fp_capture::Base0SparseStepTreeV1,
+        siblings: Vec<Hash64>,
+    ) -> Result<Self, Base0FpIntervalError> {
+        let mut this = Self { first_leaf_index, leaf_count, retain_level: tree.retain_level(), block_roots: Vec::new(), siblings };
         let (first_block, end_block) = this.whole_blocks_v1(tree.leaf_count());
         this.block_roots = tree
             .retained_nodes()
@@ -1752,12 +1757,27 @@ fn base0_assemble_fp_interval_opening_v1(
     if step_range_opening_root_capped_v1(binding.step_leaf_count, &range, max_step_leaf_count).ok() != Some(binding.step_merkle_root) {
         return Err(Base0FpIntervalError::CaptureIsNotTheBindings);
     }
+    // **The fold, not the leaves** (ADR-0086 Decision 1): the frontier and the retained digests
+    // ride; the range's leaf hashes stay here.
+    let range = Base0FpFoldRangeOpeningV1::from_range_v1(&range, tree)?;
+    base0_emit_fp_interval_opening_v4(binding, leaves_geometry, index, range, seed_row_tiles, anchor)
+}
+
+/// **The V4 opening, emitted** — the half every retention shares once it holds the fold range: the
+/// class's form decided here, once, and the NAMED anchor for every class (ADR-0086 Decision 2): the
+/// seat replays from the state it recomputed for the checkpoint check, chunks and all.
+fn base0_emit_fp_interval_opening_v4(
+    binding: &PalwStepBindingV2,
+    leaves_geometry: &Base0FpIntervalLeavesV1,
+    index: u32,
+    range: Base0FpFoldRangeOpeningV1,
+    seed_row_tiles: Vec<PalwStepTileLeafV1>,
+    anchor: Option<PalwCheckpointKvOperandsV1>,
+) -> Result<Vec<u8>, Base0FpIntervalError> {
     // **The class's declaration decides which FORM is served, here, once** (ADR-0082 Decision 9;
     // audit B, C-1). A class whose map addresses history tiles folds its checkpoints away and is
     // served the NAMED anchor — there are no chunks to carry and Decision 9 forbids carrying them
-    // anyway. Emitting it here rather than assembling the chunked form and stripping it after is
-    // what keeps a chunkless `Base0FpIntervalOpeningV1` — an object whose anchor cannot build its
-    // own state root — from existing at all.
+    // anyway.
     let flat = base0_fp_class_requires_flat_openings_v1(&binding.shape_profile);
     if let Some(a) = anchor.as_ref()
         && !flat
@@ -1765,10 +1785,6 @@ fn base0_assemble_fp_interval_opening_v1(
     {
         return Err(Base0FpIntervalError::CaptureIsNotTheBindings);
     }
-    // **The fold, not the leaves** (ADR-0086 Decision 1): the frontier and the retained digests
-    // ride; the range's leaf hashes stay here. The anchor is NAMED for every class (Decision 2):
-    // the seat replays from the state it recomputed for the checkpoint check, chunks and all.
-    let range = Base0FpFoldRangeOpeningV1::from_range_v1(&range, tree)?;
     let anchor = anchor.map(|a| Base0FpCheckpointClaimV1 { leaf: a.leaf, opening: a.opening });
     Base0FpIntervalOpeningV4 {
         version: PALW_BASE0_FP_INTERVAL_VERSION_V4,
@@ -2085,7 +2101,23 @@ pub fn base0_open_fp_interval_sparse_anchored_capped_v1<K: Base0FpIntervalKernel
     }
     let count = leaves_geometry.range_end - leaves_geometry.range_first;
     let (span_first, span_end) = tree.span_for_range(leaves_geometry.range_first, count)?;
-    let span_leaves = base0_replay_span_leaves_v1(
+    // **The span streamed; the opening from its two edge blocks** (ADR-0121). An opening carries the
+    // frontier and the whole blocks' digests, and the digests are the retained nodes, so what the
+    // replay must yield is the two blocks the range opens partially (a sibling below the retained
+    // level hangs off an edge inside the edge's own block) and the seed row's leaves. Every block of
+    // the span is folded as it completes and compared with the node the executor retained for it: a
+    // replay that is not the committed execution is caught block by block, where the whole-span
+    // opening this replaced caught it only at the root.
+    let block = 1u64 << tree.retain_level();
+    let last_block = ((span_end - 1) / block) * block;
+    let retained = tree.retained_nodes();
+    let (range_first, interval_first, range_end) =
+        (leaves_geometry.range_first, leaves_geometry.interval_first, leaves_geometry.range_end);
+    let mut seed_hashes: Vec<Hash64> = Vec::with_capacity(leaves_geometry.seed_row_leaves as usize);
+    let (mut first_leaves, mut last_leaves, mut current): (Vec<Hash64>, Vec<Hash64>, Vec<Hash64>) =
+        (Vec::new(), Vec::new(), Vec::with_capacity(block as usize));
+    let mut diverged: Option<u64> = None;
+    base0_replay_span_into_v1(
         kernels,
         binding,
         &material.checkpoint_chunks,
@@ -2095,20 +2127,83 @@ pub fn base0_open_fp_interval_sparse_anchored_capped_v1<K: Base0FpIntervalKernel
         span_first,
         span_end,
         anchor_state_for,
+        &mut |index, hash| {
+            if index >= range_first && index < interval_first {
+                seed_hashes.push(hash);
+            }
+            current.push(hash);
+            let block_first = (index / block) * block;
+            if index + 1 == (block_first + block).min(tree.leaf_count()) {
+                let leaves = std::mem::take(&mut current);
+                if retained.get((block_first / block) as usize).copied()
+                    != crate::fp_capture::base0_fold_block_digest_v1(block_first, &leaves)
+                {
+                    diverged.get_or_insert(block_first);
+                }
+                if block_first == span_first {
+                    first_leaves = leaves.clone();
+                }
+                if block_first == last_block {
+                    last_leaves = leaves;
+                }
+            }
+            Ok(())
+        },
     )?;
+    if diverged.is_some() || first_leaves.is_empty() || last_leaves.is_empty() {
+        return Err(Base0FpIntervalError::CaptureIsNotTheBindings);
+    }
 
     let seed_row_tiles = base0_seed_row_tiles_from_rows_v1(binding, &material.logits_rows, &leaves_geometry, &geometry, index)?;
     // The preimages must hash to the leaves the replay just recomputed — the retained rows and the
     // committed leg are two records of one execution, and this is where they are compared.
     let ctx_hash = ctx.context_hash();
     let profile_hash = profile.shape_profile_id();
-    for (offset, leaf) in seed_row_tiles.iter().enumerate() {
-        let at = leaves_geometry.range_first + offset as u64;
-        let recomputed = step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf);
-        let derived = span_leaves.get((at - span_first) as usize).ok_or(Base0FpIntervalError::CaptureHasNoTile { index: at })?;
-        if recomputed != *derived {
-            return Err(Base0FpIntervalError::CaptureIsNotTheBindings);
-        }
+    if seed_row_tiles.len() != seed_hashes.len()
+        || seed_row_tiles
+            .iter()
+            .zip(&seed_hashes)
+            .any(|(leaf, derived)| step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf) != *derived)
+    {
+        return Err(Base0FpIntervalError::CaptureIsNotTheBindings);
+    }
+
+    let edges: Vec<(u64, &[Hash64])> = if last_block == span_first {
+        vec![(span_first, &first_leaves)]
+    } else {
+        vec![(span_first, &first_leaves), (last_block, &last_leaves)]
+    };
+    let siblings = tree.range_siblings_from_edges_v1(&edges, range_first, count)?;
+    let fold = Base0FpFoldRangeOpeningV1::from_tree_v1(range_first, count, tree, siblings)?;
+    // **The opening must reproduce the committed root, checked before it is served** — walked from
+    // the edges' leaves and the retained digests, as a seat will walk it with its own.
+    let leaf_at = |i: u64| -> Option<Hash64> {
+        let in_block = |at: u64, leaves: &[Hash64]| i.checked_sub(at).and_then(|o| leaves.get(o as usize)).copied();
+        in_block(span_first, &first_leaves).or_else(|| in_block(last_block, &last_leaves))
+    };
+    let (first_whole, end_whole) = fold.whole_blocks_v1(tree.leaf_count());
+    let (left_end, right_first) = if fold.block_roots.is_empty() {
+        (range_end, range_end)
+    } else {
+        ((first_whole * block).min(range_end), (end_whole * block).max(range_first).min(range_end))
+    };
+    let left: Vec<Hash64> =
+        (range_first..left_end).map(leaf_at).collect::<Option<_>>().ok_or(Base0FpIntervalError::CaptureIsNotTheBindings)?;
+    let right: Vec<Hash64> =
+        (right_first..range_end).map(leaf_at).collect::<Option<_>>().ok_or(Base0FpIntervalError::CaptureIsNotTheBindings)?;
+    let walked = crate::fp_capture::base0_fold_range_root_v1(
+        binding.step_leaf_count,
+        range_first,
+        count,
+        fold.retain_level,
+        &left,
+        &fold.block_roots,
+        &right,
+        &fold.siblings,
+        max_step_leaf_count,
+    );
+    if walked.ok() != Some(binding.step_merkle_root) {
+        return Err(Base0FpIntervalError::CaptureIsNotTheBindings);
     }
 
     let anchor = match geometry.anchor_covered_call(index) {
@@ -2117,17 +2212,7 @@ pub fn base0_open_fp_interval_sparse_anchored_capped_v1<K: Base0FpIntervalKernel
             Some(base0_checkpoint_operands_v1(binding, &material.checkpoint_chunks, &material.checkpoint_leaves, covered)?)
         }
     };
-    base0_assemble_fp_interval_opening_v1(
-        binding,
-        tree,
-        &leaves_geometry,
-        index,
-        span_first,
-        &span_leaves,
-        seed_row_tiles,
-        anchor,
-        max_step_leaf_count,
-    )
+    base0_emit_fp_interval_opening_v4(binding, &leaves_geometry, index, fold, seed_row_tiles, anchor)
 }
 
 /// The anchor call's logits row, cut into the tiles the leg commits it as.
@@ -4003,19 +4088,35 @@ pub fn base0_fp_block_leaves_from_fold_capped_v1<K: Base0FpIntervalKernelsV1>(
         return Err(Base0FpIntervalError::CaptureIsNotTheBindings);
     }
     let geometry = Base0FpIntervalGeometryV1::from_binding_capped_v1(binding, family_checkpoint_interval, max_step_leaf_count)?;
-    let (span_first, span_end) = material.step_tree.span_for_range(v4.range.first_leaf_index, v4.range.leaf_count)?;
-    let span_leaves = base0_replay_span_leaves_v1(
+    let (first_block, end_block) = v4.range.whole_blocks_v1(binding.step_leaf_count);
+    if block_index < first_block || block_index >= end_block {
+        return Err(Base0FpIntervalError::StepSpace(format!(
+            "block {block_index} is not wholly inside interval {}",
+            v4.interval_index
+        )));
+    }
+    // **The block alone, streamed** (ADR-0121): the replay runs from the interval's anchor to the
+    // block's end and only the block's own leaves are kept — 4,096 hashes, where the span this
+    // replaced held every leaf of the interval.
+    let size = 1u64 << v4.range.retain_level.min(63);
+    let (block_first, block_end) = (block_index * size, ((block_index + 1) * size).min(binding.step_leaf_count));
+    let mut kept: Vec<Hash64> = Vec::with_capacity((block_end - block_first) as usize);
+    base0_replay_span_into_v1(
         kernels,
         binding,
         &material.checkpoint_chunks,
         &material.generated_token_ids,
         prompt_token_ids,
         &geometry,
-        span_first,
-        span_end,
+        block_first,
+        block_end,
         anchor_state_for,
+        &mut |_, hash| {
+            kept.push(hash);
+            Ok(())
+        },
     )?;
-    let leaf = |i: u64| -> Option<Hash64> { i.checked_sub(span_first).and_then(|o| span_leaves.get(o as usize).copied()) };
+    let leaf = |i: u64| -> Option<Hash64> { i.checked_sub(block_first).and_then(|o| kept.get(o as usize).copied()) };
     let cut = Base0FpBlockLeavesV1::cut_v1(v4.interval_index, &v4.range, binding.step_leaf_count, block_index, &leaf)
         .ok_or(Base0FpIntervalError::StepSpace(format!("block {block_index} is not wholly inside interval {}", v4.interval_index)))?;
     cut.encode_v1()
