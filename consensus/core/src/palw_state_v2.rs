@@ -3943,10 +3943,15 @@ fn convict_close_declarer_v1(
             // else, exactly as a late verdict does.
             if !claim.phase.is_terminal() {
                 builder.void_and_slash(session.claim, &claim, ctx.daa_score, PalwVoidReasonV2::CourtFraud)?;
+                // C-03 (deep fence): the guilty responder also pays for the time it kept the court
+                // open — a share of the claim's reserved stake proportional to the session's length.
+                builder.charge_court_time_v1(claim.bond, claim.reserved, session.opened_daa, ctx.daa_score)?;
             }
             Ok(())
         }
-        PalwCourtSideV1::Challenger => rearm_after_challenger_side_close(builder, ctx, session.claim, &claim, session.challenger_bond),
+        PalwCourtSideV1::Challenger => {
+            rearm_after_challenger_side_close(builder, ctx, session.claim, &claim, session.challenger_bond, session.opened_daa)
+        }
     }
 }
 
@@ -7497,6 +7502,41 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
+    /// **C-03 (mainnet audit 2026-09-11 deep fence): bill court time to the LOSING party.**
+    ///
+    /// The court is clocked in DAA but nothing charged for consuming it, so a party that expects to
+    /// lose has a strictly-dominant incentive to play every turn at the last legal DAA — dragging one
+    /// dispute to its whole `window_court` backstop at zero marginal cost, deferring its slash,
+    /// freezing the honest claim, and tying up the challenger's reserved exposure the entire time.
+    /// Past the fence the party a session closes AGAINST pays, on top of its verdict slash, a share
+    /// of the claim's own reserved stake proportional to how long the session ran:
+    /// `claim.reserved × (close − opened) / window_court`, capped at `claim.reserved` (a full-window
+    /// stall). So stalling now costs money that grows with the delay, while prompt play is ~free —
+    /// and the PREVAILING party is billed nothing, which is the "refunded to the winner" the user
+    /// chose, made whole by never being charged rather than by a refund transfer.
+    ///
+    /// Derived at close from the session's `opened_daa` and this block's DAA — no per-move accrual
+    /// state, so no borsh migration. Burned like every other slash. **A no-op below the deep fence**
+    /// (and on every network without a V2 bundle), so the court is byte-identical there; callers may
+    /// invoke it unconditionally.
+    fn charge_court_time_v1(
+        &mut self,
+        loser: PalwBondKeyV2,
+        claim_reserved: u128,
+        opened_daa: u64,
+        close_daa: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        if !self.extras.audit_2026_09_11_deep_active {
+            return Ok(());
+        }
+        let window = self.params.window_court.max(1);
+        let elapsed = close_daa.saturating_sub(opened_daa).min(window);
+        // `claim_reserved` is at most a u64 exposure times a u64 slash value, so this fits u128; the
+        // `/ window` keeps it ≤ `claim_reserved`, the same ceiling the verdict slash used.
+        let charge = claim_reserved.saturating_mul(elapsed as u128) / (window as u128);
+        self.slash_bond(loser, charge)
+    }
+
     /// Void a claim AND take the collateral it put at risk.
     ///
     /// `claim.reserved` is exactly `pwu_per_inference × slash_value_per_pwu` — the number the exposure ceiling
@@ -8500,6 +8540,9 @@ fn rearm_after_challenger_side_close(
     claim_id: Hash64,
     claim: &PalwClaimStateV2,
     challenger_bond: PalwBondKeyV2,
+    // C-03: when the session opened, so the court-time charge below can bill the losing challenger
+    // for how long the session ran. Unread below the deep fence (the charge is a no-op there).
+    session_opened_daa: u64,
 ) -> Result<(), PalwStateV2Error> {
     // **A failed accusation costs the accuser.**
     //
@@ -8516,6 +8559,9 @@ fn rearm_after_challenger_side_close(
     // registrant could make challenging its own class ruinous and buy itself immunity from the
     // court. The floor is the registry's own.
     builder.slash_seat(challenger_bond, claim.reserved, builder.params.min_collateral_sompi())?;
+    // C-03 (deep fence): and it pays for the time it kept the session open — a losing challenger
+    // that stalled to its backstop pays more than one that concedes fast. No-op below the fence.
+    builder.charge_court_time_v1(challenger_bond, claim.reserved, session_opened_daa, ctx.daa_score)?;
     rearm_claim_after_court_close(builder, ctx, claim_id, claim)
 }
 
@@ -9260,10 +9306,13 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
                         // nothing else, exactly as a late verdict does.
                         if !claim.phase.is_terminal() {
                             builder.void_and_slash(session.claim, &claim, ctx.daa_score, PalwVoidReasonV2::CourtFraud)?;
+                            // C-03 (deep fence): the defaulting responder also pays for the time it
+                            // kept the session open (a no-op below the fence).
+                            builder.charge_court_time_v1(claim.bond, claim.reserved, session.opened_daa, ctx.daa_score)?;
                         }
                     }
                     crate::palw_bisect::PalwBisectPartyV1::Challenger => {
-                        rearm_after_challenger_side_close(builder, ctx, session.claim, &claim, session.challenger_bond)?;
+                        rearm_after_challenger_side_close(builder, ctx, session.claim, &claim, session.challenger_bond, session.opened_daa)?;
                     }
                 }
                 continue;
@@ -9315,7 +9364,7 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
         }
         builder.write_court(session_id, None)?;
         // The backstop's own direction, unchanged for a session that declared no close at all.
-        rearm_after_challenger_side_close(builder, ctx, session.claim, &claim, session.challenger_bond)?;
+        rearm_after_challenger_side_close(builder, ctx, session.claim, &claim, session.challenger_bond, session.opened_daa)?;
     }
     Ok(())
 }
@@ -11589,10 +11638,13 @@ fn apply_object(
                         // from evidence alone, so it is the one that most obviously must cost
                         // the executor its stake (audit C5: it did not).
                         builder.void_and_slash(claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::CourtFraud)?;
+                        // C-03 (deep fence): and the convicted responder pays for the time it kept
+                        // the court open (a no-op below the fence).
+                        builder.charge_court_time_v1(claim.bond, claim.reserved, session.opened_daa, ctx.daa_score)?;
                     }
                 }
                 PalwCourtVerdictV2::ChallengerDefeated => {
-                    rearm_after_challenger_side_close(builder, ctx, claim_id, &claim, session.challenger_bond)?;
+                    rearm_after_challenger_side_close(builder, ctx, claim_id, &claim, session.challenger_bond, session.opened_daa)?;
                 }
             }
         }
@@ -16180,6 +16232,57 @@ pub(crate) mod tests {
         assert!(matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
         let (s8, _) = apply(&s7, &p, &ctx(8, 211, 8), &[], None);
         assert!(matches!(s8.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
+    }
+
+    /// **C-03 (mainnet audit 2026-09-11 deep fence): a court is billed to the losing party by how
+    /// long it ran.** The court is clocked in DAA but nothing charged for consuming it, so a party
+    /// that expects to lose has a dominant incentive to play every turn at the last legal DAA —
+    /// dragging the dispute to its whole `window_court` backstop at zero marginal cost, deferring its
+    /// slash and freezing the honest claim. Past the fence the party the session closes AGAINST pays,
+    /// on top of its verdict slash (`claim.reserved`), a share of that stake proportional to the
+    /// elapsed DAA: `claim.reserved × (close − opened) / window_court`. The session here runs 250 of
+    /// a 500-DAA window, so the extra charge is half of `claim.reserved` (200 → 100). Below the fence
+    /// the court is byte-identical — only the verdict slash. Only the extras flag differs.
+    #[test]
+    fn c03_a_guilty_responder_pays_for_the_time_it_kept_the_court_open() {
+        let p = params(); // window_court = 500
+        let genesis = PalwChainStateV2::genesis();
+        let collateral_after_guilty = |deep: bool| {
+            let extras = PalwTransitionExtrasV1 { audit_2026_09_11_deep_active: deep, ..Default::default() };
+            let step = |parent: &PalwChainStateV2, c: &PalwBlockContextV2, objs: &[PalwConsensusObjectV2], work: PalwBlockWorkV3<'_>| {
+                apply_palw_transition_v7(parent, &p, None, c, objs, work, &[], Hash64::default(), false, false, false, false, &extras)
+                    .expect("applies")
+                    .0
+            };
+            let s1 = step(&genesis, &ctx(1, 100, 1), &register_class_and_bond(), PalwBlockWorkV3::None);
+            let env = attempt(40, 1);
+            let claim_id = attempt_id_v2(&env.attempt);
+            let s2 = step(&s1, &ctx(2, 101, 2), &[], PalwBlockWorkV3::Attempt(&env));
+            // License the claim so an open court can keep it alive across the session's span (an
+            // un-bound claim would bind-timeout before the close, and a timeout voids without slashing).
+            let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
+            let s3 = step(&s2, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], PalwBlockWorkV3::None);
+            let s4 = step(&s3, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }], PalwBlockWorkV3::None);
+            // Court opens at DAA 104; closes ExecutorGuilty at DAA 354 — 250 of the 500-DAA window.
+            // An open court freezes the licensed claim's path to Final, so it stays alive until close.
+            let s5 = step(&s4, &ctx(5, 104, 5), &[court_open(claim_id, h64(31), bond_key(1), bond_key(1))], PalwBlockWorkV3::None);
+            let close = PalwConsensusObjectV2::CourtClosed {
+                session_id: court_session_of(claim_id, h64(31), bond_key(1), bond_key(1)),
+                verdict: PalwCourtVerdictV2::ExecutorGuilty,
+                proof: crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic {
+                    refutation: crate::palw_step_refute::tests::skeleton_refutation(),
+                    operand_openings: Vec::new(),
+                },
+            };
+            let s6 = step(&s5, &ctx(6, 354, 6), &[close], PalwBlockWorkV3::None);
+            s6.bond(&bond_key(1)).expect("the responder bond").collateral
+        };
+        assert_eq!(collateral_after_guilty(false), 800, "below the fence only the verdict slash (claim.reserved = 200) applies: 1000 → 800");
+        assert_eq!(
+            collateral_after_guilty(true),
+            700,
+            "past the fence the guilty responder also pays the court-time charge (250/500 × 200 = 100): 1000 → 700"
+        );
     }
 
     #[test]
