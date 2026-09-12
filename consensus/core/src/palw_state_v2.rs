@@ -8097,11 +8097,6 @@ pub fn apply_palw_transition_v6(
     )
 }
 
-/// [`apply_palw_transition_v6`] with **ADR-0088's registry fence** (and, later, ADR-0089's EVM
-/// actions) carried in [`PalwTransitionExtrasV1`]. `Default` extras are byte-identical to v6,
-/// state root included; **every production caller must reach this one**, for the reason v6's doc
-/// gives about the fences it carries.
-#[allow(clippy::too_many_arguments)]
 /// **A-1 fix — the acceptance filter's view of the fold's step 3 (mainnet audit 2026-09-11).**
 ///
 /// The one-shot fold [`apply_palw_transition_v7`] applies every accepted object in step 3, then
@@ -26251,13 +26246,19 @@ pub(crate) mod tests {
             let err = apply_palw_transition_v2(&state, &p, &ctx(daa, daa, daa), &[junk], None)
                 .expect_err("a root claim over a foreign binding is not a move the fold plays");
             assert!(matches!(err, PalwStateV2Error::DissectionRefused(id, _) if id == sid), "{err}");
+            // The carriage is length-delimited: its own decoder refuses any tail after it.
+            let carriage = borsh::to_vec(&PalwStateCarriageV2::from_state(&state)).expect("the carriage serializes");
+            let bytes = borsh::to_vec(&(carriage, p.clone(), honest, sid, daa)).expect("the fixture serializes");
             if let Ok(path) = std::env::var("AC_SLOT_FIXTURE") {
-                // The carriage is length-delimited: its own decoder refuses any tail after it.
-                let carriage = borsh::to_vec(&PalwStateCarriageV2::from_state(&state)).expect("the carriage serializes");
-                let bytes = borsh::to_vec(&(carriage, p.clone(), honest, sid, daa)).expect("the fixture serializes");
-                std::fs::write(&path, bytes).expect("the fixture is written");
+                std::fs::write(&path, &bytes).expect("the fixture is written");
                 eprintln!("AC-SLOT fixture written to {path}");
             }
+            // The processor-level tests load the COMMITTED copy, so it must be these bytes: a drill
+            // change that moves them re-commits the file (run this test with AC_SLOT_FIXTURE=<that path>).
+            assert!(
+                bytes.as_slice() == include_bytes!("../../src/pipeline/virtual_processor/testdata/ac_slot_fixture.bin"),
+                "consensus/src/pipeline/virtual_processor/testdata/ac_slot_fixture.bin is stale: re-emit it with AC_SLOT_FIXTURE"
+            );
         }
 
         /// What a ladder's next disclosure must name — the pinned midpoint of its live interval.

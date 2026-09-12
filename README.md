@@ -7,14 +7,21 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 > **Status (2026-09-11).** The live public network is **`testnet-11`** — the PALW release candidate,
 > Relaunch 5f. Explorer at **[misakascan.com](https://misakascan.com)**, web wallet at
 > **[wallet.misakascan.com](https://wallet.misakascan.com)**. Current network identity: consensus
-> fingerprint **`02c7282b…`** (the release that schedules ADR-0114's fence at DAA 3,500; the builds
-> before it print `ecbdbc22…`, and `891a1a14`…`a5f1bdf7` print `060e3597…`) — and genesis
+> fingerprint **`4300409b…`** (the release that schedules ADR-0114's fence at DAA 3,500 and the
+> audit's and ADR-0117's at DAA 4,000; a build with 3,500 alone prints `02c7282b…`, the builds before
+> it `ecbdbc22…`, and `891a1a14`…`a5f1bdf7` print `060e3597…`) — and genesis
 > **`ad30b5cb…`** (three execution classes and the 347M MSK community allocation in genesis).
 >
-> **Rebuild before DAA 3,500.** From DAA 3,500 the model store's owner fee on every join and leave is
-> 5 % instead of 1 % (ADR-0114; the 5 % burn is unchanged). It is a consensus rule, so a node built
-> without it keeps peering until 3,500 and forks off at it. Rebuild from `main`, restart, keep your
-> appdir, and check the startup lines below.
+> **Rebuild before DAA 3,500 — one build covers 3,500 and 4,000.** From DAA 3,500 the model store's
+> owner fee on every join and leave is 5 % instead of 1 % (ADR-0114; the 5 % burn is unchanged). From
+> DAA 4,000 the pre-mainnet audit's fixes apply (`palw_audit_2026_09_11`: a class-activation crossing
+> can no longer halt the chain, a lifecycle payload a build cannot decode no longer invalidates its
+> block, a certified quantum spent by conflicting receipts is paid once rather than once per receipt,
+> and a court move the fold refuses no longer uses up the block's court slot), and an attempt's draw is one forward — its job
+> has no decode calls (ADR-0117, `palw_prefill_draw`). Both are consensus rules: a node without them
+> keeps peering until their height and forks off at it. Rebuild from `main`, restart, keep your
+> appdir, and check the startup lines below — a node that already rebuilt for 3,500 alone
+> (`02c7282b…`) must rebuild again before 4,000.
 >
 > **Build from `main` at `891a1a14` or later.** The network crossed a fourth fence — ADR-0095's
 > model benefits at **DAA 2400** — on 2026-09-09, and every node built from an earlier `main` has
@@ -101,8 +108,8 @@ The log must show this fingerprint and, on the next line, this fence schedule, o
 wrong ruleset:
 
 ```
-Consensus params fingerprint: 02c7282b7541011344eabb1ce6cbe6544987e7b6a7fc132413fbfff0a6a37cfd (network testnet-11)
-Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 2125000 (schedule id …)
+Consensus params fingerprint: 4300409bb7127c8ee57bad783e4610e37bbd3c7cc535279d729fda3341d666dd (network testnet-11)
+Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 4000, 2125000 (schedule id …)
 ```
 
 A build from `891a1a14` up to `a5f1bdf7` prints `060e3597cd2950bc…` on the first line and the same
@@ -110,7 +117,10 @@ second line. It runs the same ruleset: until 2026-09-11 the fingerprint left ADR
 out (the build that added it never wrote it), and writing it moved the value without moving any rule.
 The two stay peers — the handshake logs `schedules a FUTURE fence differently` between them rather
 than refusing — but rebuilding is how the first line becomes a check again. The second line is the
-one that names heights, and it is the same on both.
+one that names heights: a build without `3500` in it forks off at 3,500, one without `4000` at 4,000.
+One case the second line cannot show: `4000` carries two fences, and a build with only one of them
+(the audit's alone prints `09efd285…`) shows the same line and parts silently at 4,000 — the first
+line is the check.
 
 and the genesis the network builds on is
 `ad30b5cb965ad305…` (the node prints it in any `Genesis mismatch` warning). If your log shows

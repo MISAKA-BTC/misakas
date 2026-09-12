@@ -64,8 +64,8 @@ was withdrawn on 2026-08-29.)
 A node on the right chain logs
 
 ```
-Consensus params fingerprint: 02c7282b7541011344eabb1ce6cbe6544987e7b6a7fc132413fbfff0a6a37cfd (network testnet-11)
-Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 2125000 (schedule id …)
+Consensus params fingerprint: 4300409bb7127c8ee57bad783e4610e37bbd3c7cc535279d729fda3341d666dd (network testnet-11)
+Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 4000, 2125000 (schedule id …)
 ```
 
 (A build from `891a1a14` up to `a5f1bdf7` prints `060e3597…` on the first line for the same ruleset —

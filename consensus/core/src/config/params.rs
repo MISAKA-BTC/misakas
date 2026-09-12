@@ -10548,6 +10548,13 @@ pub const PALW_RC_MODEL_LEG_V2_FENCE_DAA: u64 = 3_500;
 /// height rather than diverging at it. **Provisional** — set with deployment margin over the tip
 /// at release time (t11 advances ~4–5 DAA/h; leave external operators room to upgrade), and rebased
 /// onto the fleet's own base (ADR-0114's `42438178` lineage = origin/main 8b6661a9 + 5bed4405).
+///
+/// **ADR-0117's `palw_prefill_draw` shares this height, deliberately** (operator, 2026-09-11: one
+/// rollout for both). The rule above is about adding a fence at a height an EARLIER build already
+/// schedules; these two were scheduled together and reach main in one merge, so no released build
+/// carries one without the other. The blind spot is exact all the same: a build with the audit
+/// fence and not the draw fence (`a8f00497` alone, fingerprint `09efd285…`) advertises this build's
+/// fork id and diverges silently at 4,000 — it must never run on testnet-11.
 pub const PALW_RC_AUDIT_FENCE_DAA: u64 = 4_000;
 
 /// **testnet-11's held-regime flag day: DAA 7,000** (ADR-0118; the regime is ADR-0103's).
@@ -11002,6 +11009,10 @@ pub fn palw_rc_base_params() -> Params {
     // testnet-11 "until a flag day says otherwise" (`the_share_growth_final_fence_is_dormant_everywhere`,
     // and the ADR-0107 note that the merged-payout question is still the operator's to make).
     params.palw_audit_2026_09_11 = Some(ForkActivation::new(PALW_RC_AUDIT_FENCE_DAA));
+    // **ADR-0117's one-forward draw rides the same flag day** (operator, 2026-09-11: one rollout for
+    // both). From 4,000 an attempt's job is its class's canonical job without the decode calls. The
+    // shared height has a price, named on `PALW_RC_AUDIT_FENCE_DAA`: the two ship only together.
+    params.palw_prefill_draw = Some(ForkActivation::new(PALW_RC_AUDIT_FENCE_DAA));
     // **The held regime (ADR-0103) at its flag day, DAA 7,000** (ADR-0118; the operator's height,
     // shared with the deep-audit fence). Past it no bisection opens, a held class may register,
     // and the one-move court and the retention pins are in force.
@@ -13737,10 +13748,11 @@ mod consensus_params_id_tests {
         assert_eq!(legacy.palw_held_context_fence(), None);
     }
 
-    /// **ADR-0117: the one-forward draw is dormant on every preset, Some-only in the identity, and
-    /// read at the attempt's own height.** Armed, the fingerprint and the schedule say so; the
-    /// switch is exact at its height; `Some(never())` is absence; and outside `ConsensusV2` there
-    /// is no attempt lane for it to change.
+    /// **ADR-0117: the one-forward draw is dormant on every base preset, Some-only in the identity,
+    /// and read at the attempt's own height** — and testnet-11 arms it on the audit's flag day
+    /// (4,000, operator 2026-09-11). Armed, the fingerprint and the schedule say so; the switch is
+    /// exact at its height; `Some(never())` is absence; and outside `ConsensusV2` there is no
+    /// attempt lane for it to change.
     #[test]
     fn the_prefill_draw_fence_is_dormant_and_named_when_armed() {
         for (name, shipped) in
@@ -13764,6 +13776,12 @@ mod consensus_params_id_tests {
         let mut legacy = MAINNET_PARAMS.clone();
         legacy.palw_prefill_draw = Some(ForkActivation::always());
         assert_eq!(legacy.palw_prefill_draw_fence(), None, "outside ConsensusV2 there is no attempt lane to change");
+
+        let t11 = palw_rc_shipped_params();
+        assert_eq!(t11.palw_prefill_draw, Some(ForkActivation::new(PALW_RC_AUDIT_FENCE_DAA)), "testnet-11 arms it at 4,000");
+        assert!(!t11.palw_prefill_draw_active_at(PALW_RC_AUDIT_FENCE_DAA - 1), "below 4,000 testnet-11 draws the canonical job");
+        assert!(t11.palw_prefill_draw_active_at(PALW_RC_AUDIT_FENCE_DAA), "from 4,000, one forward");
+        t11.validate_palw_v2().expect("testnet-11 with the draw fence armed validates");
     }
 
     /// **The V2 pruning horizon IS the derivation, and the inherited floor never binds** — the
@@ -13821,8 +13839,10 @@ mod consensus_params_id_tests {
         previous.palw_model_evm = None;
         // ADR-0114's fence (3500) was scheduled five flag days later.
         previous.palw_model_leg_v2 = None;
-        // The pre-mainnet audit's fence (4000) was scheduled later still.
+        // The pre-mainnet audit's fence (4000) was scheduled later still, and ADR-0117's draw fence
+        // with it.
         previous.palw_audit_2026_09_11 = None;
+        previous.palw_prefill_draw = None;
         // …and the held regime's flag day (7000, ADR-0118) later than that: the regime, the
         // one-move court and the retention pins arm together there.
         previous.palw_held_context = None;
@@ -15324,14 +15344,19 @@ mod consensus_params_id_tests {
                 // 3,500: identity unmoved, the fork-id gate keeps builds with and without the fence
                 // peers until 4,000, and every node must carry it past 4,000. Previous (ADR-0114's
                 // owner-leg build): 02c7282b7541011344eabb1ce6cbe6544987e7b6a7fc132413fbfff0a6a37cfd.
+                // **And once more before it shipped: ADR-0117's `palw_prefill_draw` rides the same
+                // 4,000** (operator, 2026-09-11). The schedule's heights do not move (one height), the
+                // fingerprint does (the fence is written by name). The audit fence alone (a8f00497,
+                // never released) printed 09efd285a32f31c883edc5b9b869892b15895bf1194593c067556c94cf8fc694
+                // and shares this build's fork id — see `PALW_RC_AUDIT_FENCE_DAA` for why it must not run.
+                // Previous (the 4,000 release): 4300409bb7127c8ee57bad783e4610e37bbd3c7cc535279d729fda3341d666dd.
                 // **Re-pinned 2026-09-12 for the held regime's flag day** (ADR-0118, the operator's
                 // DAA 7,000): `palw_held_context`, `palw_shard_court` and `palw_fp_da_pins` arm there,
-                // adding the schedule entry 7000. This is the value on `feat/adr-0103-held-context`
-                // alone — the 4,000 release adds `palw_prefill_draw` (4300409b on its own) and the
-                // deep-audit fence shares 7,000 — so the release that carries all three is re-pinned
-                // once it is assembled, and no build may carry one 7,000 fence without the other.
-                // Previous (the audit fence's build): 09efd285a32f31c883edc5b9b869892b15895bf1194593c067556c94cf8fc694.
-                "80524c3b5bfb9c9749394e0a32471da0ec9590325da67131e3d57911345e82e5",
+                // adding the schedule entry 7000, with ADR-0119's held ladder riding it. This is the
+                // value on `feat/adr-0103-held-context` merged with the 4,000 release — the deep-audit
+                // fence shares 7,000, so the release that carries both is re-pinned once it is
+                // assembled, and no build may carry one 7,000 fence without the other.
+                "c2e5ffbef5e0326ee117b0554225b0c97da52fbfcb47585632c01cb12236d7b0",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -16093,6 +16118,9 @@ mod consensus_params_id_tests {
         //   hand-written and the model branch never joined it, so a set comparison could not see a
         //   fence the table did not name.** If a card is ever meant to arm them, this is the line
         //   that has to be changed deliberately.
+        // * `palw_prefill_draw` (ADR-0117) is armed on testnet-11 on the audit's flag day and stated
+        //   by no card: which job a draw runs is a class decision a card makes with its classes,
+        //   after the one-forward job has run on a live chain.
         // * `palw_held_context` and the one-move court `palw_shard_court` (ADR-0103, ADR-0100) are
         //   testnet-11's held regime, scheduled at `PALW_RC_HELD_FENCE_DAA` by ADR-0118. A mainnet
         //   that wants the regime MINTS it — `palw_held_context_mint_v1`, V4 and the tiled ids from
@@ -16108,7 +16136,8 @@ mod consensus_params_id_tests {
                 "palw_model_evm",
                 "palw_kary_court",
                 "palw_shard_court",
-                "palw_held_context"
+                "palw_held_context",
+                "palw_prefill_draw"
             ],
             "a carded mainnet must arm every fence testnet-11 arms except the four named above \
              (rc: {rc_armed:?}, mainnet: {mainnet_armed:?})"

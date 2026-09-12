@@ -5,9 +5,9 @@
   regime takes a flag day of its own on testnet-11, at a height they will choose, and not the
   audit's 4,000 — and, asked again on 2026-09-12, chose **DAA 7,000**, the deep-audit fence's
   height, so one release carries both. testnet-11 therefore arms the regime at 7,000
-  (`PALW_RC_HELD_FENCE_DAA = Some(7_000)`; its fingerprint on this branch alone is `80524c3b…`, and
-  the release that also carries `palw_prefill_draw` and the deep-audit fence is re-pinned when it
-  is assembled). Every other preset leaves the regime dormant.
+  (`PALW_RC_HELD_FENCE_DAA = Some(7_000)`; its fingerprint on this branch alone was `80524c3b…`,
+  merged with the 4,000 release that carries `palw_prefill_draw` it is `c2e5ffbe…`, and the release
+  that also carries the deep-audit fence is re-pinned when it is assembled). Every other preset leaves the regime dormant.
 * Builds on: [0081](0081-long-context-the-input-is-a-state-chain.md) (Decision 3: the prompt-ids
   form), [0103](0103-the-context-is-held-off-the-chain-and-the-chain-carries-a-root-an-opening-and-a-logarithm.md)
   (the held regime), [0111](0111-a-seat-may-demand-the-committed-leaf-it-needs-to-judge.md) (the

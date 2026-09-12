@@ -707,6 +707,9 @@ mod tests {
                 // scheduled 2026-09-11): `palw_audit_2026_09_11` fires here — the audit's
                 // state-transition and acceptance-filter fixes. (The share-census and dense-court
                 // fences the audit also touches are mainnet-card corrections, dormant on t11.)
+                // ADR-0117's `palw_prefill_draw` fires at 4000 too — one height, so this list does
+                // not move, and a build with only one of the two is invisible to the gate
+                // (`PALW_RC_AUDIT_FENCE_DAA`'s doc).
                 //
                 // **And 7000, the held regime's flag day** (ADR-0118, the operator's height of
                 // 2026-09-12): `palw_held_context`, `palw_shard_court` and `palw_fp_da_pins` fire
@@ -1097,6 +1100,7 @@ mod tests {
         let mut upgraded = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
         upgraded.palw_model_leg_v2 = None;
         upgraded.palw_audit_2026_09_11 = None;
+        upgraded.palw_prefill_draw = None;
         upgraded.palw_share_growth_final = None;
         upgraded.palw_fused_dissectable = None;
         upgraded.palw_attn_anchored_root = None;
@@ -1182,6 +1186,7 @@ mod tests {
         // flag day; clear it (and the fixes riding its height) so this pins the 3500 boundary alone.
         let mut upgraded = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
         upgraded.palw_audit_2026_09_11 = None;
+        upgraded.palw_prefill_draw = None;
         upgraded.palw_share_growth_final = None;
         upgraded.palw_fused_dissectable = None;
         upgraded.palw_attn_anchored_root = None;
