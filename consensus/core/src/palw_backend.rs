@@ -722,6 +722,24 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Err("this execution family assembles no close from served intervals".to_string())
     }
 
+    /// **A leaf's refutation from this executor's own retention** (ADR-0111 Decisions 1–2; ADR-0121)
+    /// — what [`crate::palw_leaf_evidence_v1::palw_leaf_evidence_from_capture_v1`] asks before it
+    /// falls back to the whole-capture prover. The default is ADR-0085's path: the leaf's interval
+    /// opened with the close annex for that leaf, and the close assembled from it
+    /// ([`palw_fp_leaf_refutation_by_annex_v1`]). A family whose retention is a fold builds it from
+    /// the tree and the blocks the step reads instead, holding the step's rows rather than the
+    /// interval's; the object is the same (ADR-0085 X1).
+    fn fp_leaf_refutation_v1(
+        &self,
+        capture: &[u8],
+        prompt_token_ids: &[u32],
+        claim: PalwClaimRootsV1,
+        work_leaves: u64,
+        leaf: u64,
+    ) -> Result<crate::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+        palw_fp_leaf_refutation_by_annex_v1(self, capture, prompt_token_ids, claim, work_leaves, leaf)
+    }
+
     /// **The claim's `output_root`, recomputed from the answer's ids** (ADR-0084 Decision 1;
     /// ADR-0078 X6's rule, `output_commitment_v2(job_context_hash, ids, rendered_hash)`, spelled by
     /// the family that holds the context and the rendered-hash rule).
@@ -871,6 +889,26 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     ) -> Result<PalwFpRunV1, String> {
         Err("this backend has no free-prompt drill fault".to_string())
     }
+}
+
+/// **ADR-0085's path to a leaf's refutation, for a family's own retention**: the leaf's interval
+/// opened with the close annex for that one leaf, and the close assembled from it — a replay of one
+/// interval from its anchor, never of the job. The default of
+/// [`PalwExecutionBackendV1::fp_leaf_refutation_v1`], spelled as a function so a family that
+/// overrides the verb for one retention can still take it for another.
+pub fn palw_fp_leaf_refutation_by_annex_v1<B: PalwExecutionBackendV1 + ?Sized>(
+    backend: &B,
+    capture: &[u8],
+    prompt_token_ids: &[u32],
+    claim: PalwClaimRootsV1,
+    work_leaves: u64,
+    leaf: u64,
+) -> Result<crate::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+    let shape = backend.capture_shape(capture).ok_or("the capture has no shape this family reads")?;
+    let generated = backend.fp_committed_output_ids(capture).unwrap_or_default();
+    let interval = backend.fp_interval_of_leaf_v1(&shape.job_context, leaf).ok_or_else(|| format!("leaf {leaf} is in no interval"))?;
+    let opened = backend.open_fp_interval_with_close(capture, interval, prompt_token_ids, &[leaf])?;
+    backend.refutation_from_served_intervals(&[(interval, opened)], claim, prompt_token_ids, &generated, work_leaves, leaf)
 }
 
 #[cfg(test)]

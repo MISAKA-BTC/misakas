@@ -179,16 +179,9 @@ pub fn palw_leaf_evidence_from_capture_v1(
     leaf: u64,
     form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<crate::palw_shard_court_v1::PalwLeafEvidenceV1, String> {
-    let shape = backend.capture_shape(capture).ok_or("the capture has no shape this family reads")?;
-    let generated = backend.fp_committed_output_ids(capture).unwrap_or_default();
-    let annexed = backend
-        .fp_interval_of_leaf_v1(&shape.job_context, leaf)
-        .ok_or_else(|| format!("leaf {leaf} is in no interval"))
-        .and_then(|interval| {
-            let opened = backend.open_fp_interval_with_close(capture, interval, prompt_token_ids, &[leaf])?;
-            backend.refutation_from_served_intervals(&[(interval, opened)], claim, prompt_token_ids, &generated, work_leaves, leaf)
-        });
-    let refutation = match annexed {
+    // The family's own path first — ADR-0085's annex and served close, or, for a fold, the tree and
+    // the blocks the step reads (ADR-0121) — and the whole-capture prover after it.
+    let refutation = match backend.fp_leaf_refutation_v1(capture, prompt_token_ids, claim, work_leaves, leaf) {
         Ok(refutation) => refutation,
         Err(_) => backend.refutation_for_free_prompt_index(capture, leaf, prompt_token_ids)?,
     };

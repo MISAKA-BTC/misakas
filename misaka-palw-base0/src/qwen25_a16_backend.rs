@@ -1944,6 +1944,42 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         crate::fp_interval::base0_fp_interval_of_leaf_v1(&self.profile, context, interval, leaf)
     }
 
+    /// **A fold answers a leaf from its tree** (ADR-0121): the retained nodes and a replay of the
+    /// blocks the step reads, never the interval; a dense retention keeps ADR-0085's annex path.
+    fn fp_leaf_refutation_v1(
+        &self,
+        capture: &[u8],
+        prompt_token_ids: &[u32],
+        claim: PalwClaimRootsV1,
+        work_leaves: u64,
+        leaf: u64,
+    ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+        match crate::produce::base0_material_decode_any_v1(capture) {
+            Ok(crate::produce::Base0RetentionV1::Folded(material)) => {
+                crate::fp_interval::base0_fp_fold_is_the_claims_v1(&material, claim, work_leaves)?;
+                crate::fp_interval::base0_fp_leaf_refutation_from_fold_v1(
+                    &material,
+                    leaf,
+                    prompt_token_ids,
+                    self.checkpoint_interval(),
+                    self.step_ladder_cap,
+                    &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
+                    &|covered| self.fold_anchor_state_v1(&material, prompt_token_ids, covered),
+                    self.prompt_ids_form,
+                )
+                .map_err(|e| format!("{e:?}"))
+            }
+            _ => kaspa_consensus_core::palw_backend::palw_fp_leaf_refutation_by_annex_v1(
+                self,
+                capture,
+                prompt_token_ids,
+                claim,
+                work_leaves,
+                leaf,
+            ),
+        }
+    }
+
     fn refutation_from_served_intervals(
         &self,
         held: &[(u32, Vec<u8>)],
