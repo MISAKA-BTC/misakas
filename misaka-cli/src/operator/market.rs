@@ -139,6 +139,243 @@ pub(crate) async fn model_list(ctx: &crate::node::Ctx, profile: Profile) -> CliR
     Ok(())
 }
 
+/// **Where a class is in its life** (ADR-0122 §8.2's `REGISTERED → CERTIFIED → LIVE`), from the class
+/// table's status (its `Debug` spelling) and its share.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ClassStage {
+    /// In the registry for a future DAA: adjudicable, no weight until the clock flips it.
+    Registered {
+        activation_daa: u64,
+        pending_share: u16,
+    },
+    /// Active and holding no share: judged like any class, weightless until its block lane is
+    /// certified.
+    Weightless,
+    /// Active and weight-bearing.
+    Live {
+        share: u16,
+    },
+    Frozen {
+        since_daa: u64,
+    },
+    Dormant {
+        since_daa: u64,
+    },
+    Unknown(String),
+}
+
+pub(crate) fn class_stage(status: &str, share: Option<u16>) -> ClassStage {
+    let num = |key: &str| -> u64 {
+        status
+            .split(key)
+            .nth(1)
+            .map(|rest| rest.trim_start_matches([':', ' ']))
+            .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next())
+            .and_then(|d| d.parse().ok())
+            .unwrap_or(0)
+    };
+    match status.split([' ', '{']).next().unwrap_or(status) {
+        "Active" => match share {
+            Some(s) if s > 0 => ClassStage::Live { share: s },
+            _ => ClassStage::Weightless,
+        },
+        "Registered" => ClassStage::Registered {
+            activation_daa: num("activation_daa"),
+            pending_share: num("pending_share_permille").min(u16::MAX as u64) as u16,
+        },
+        "Frozen" => ClassStage::Frozen { since_daa: num("since_daa") },
+        "Dormant" => ClassStage::Dormant { since_daa: num("since_daa") },
+        other => ClassStage::Unknown(other.to_string()),
+    }
+}
+
+/// `misaka model status <model>`: one class's life on one screen — registered, active, its lanes
+/// certified or not, live — with the artifact, the bond it takes, its market, and the next command.
+pub(crate) async fn model_status(ctx: &crate::node::Ctx, profile: Profile, selector: &str) -> CliResult {
+    let node = crate::operator::snapshot::connect_to(
+        &profile.network,
+        profile.rpc.as_deref().or(ctx.rpc.as_deref()),
+        std::time::Duration::from_secs(ctx.timeout_secs.clamp(2, 15)),
+    )
+    .await
+    .map_err(|(url, e)| CliError::new(exit::CONNECTION, format!("{url}: {e}")))?;
+    if !node.ops_0122 {
+        return Err(CliError::new(
+            exit::COMPONENT_DOWN,
+            format!("the node at {} predates getPalwClasses (ADR-0122) — rebuild it from this tree", node.url),
+        ));
+    }
+    let table = node.client().get_palw_classes().await.map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwClasses: {e}")))?;
+    let classes = crate::operator::wizard::class_choices(&node, &table.classes).await;
+    let class = crate::operator::wizard::resolve_model(&classes, selector)
+        .map_err(|why| CliError::new(exit::MODEL, format!("{why} — misaka model list shows every class")))?
+        .clone();
+    let row = table.classes.iter().find(|c| c.class_id == class.id).expect("resolved from this table");
+    let stage = class_stage(&row.status, row.share_permille);
+    let facts = node.client().get_palw_producer_facts(class.id.clone(), String::new(), 0, false).await.ok().filter(|f| f.available);
+    let market = node.client().get_palw_model_market(class.id.clone()).await.ok().filter(|m| m.found);
+    let here: Vec<std::path::PathBuf> = crate::operator::wizard::artifacts_here(&profile.network, Some(&profile.appdir))
+        .into_iter()
+        .chain(profile.artifacts.iter().filter(|p| p.is_file()).cloned())
+        .collect();
+    let tip = node.daa();
+    let name = class.label();
+    let selector_arg = if class.is_base {
+        "base".to_string()
+    } else if class.name.is_empty() {
+        class.id.clone()
+    } else {
+        class.name.clone()
+    };
+    if ctx.output == OutputFormat::Json {
+        let doc = json!({
+            "schema": "misaka.model.status.v1",
+            "network": profile.network,
+            "class_id": class.id,
+            "name": class.name,
+            "base": class.is_base,
+            "status": row.status,
+            "stage": format!("{stage:?}"),
+            "share_permille": row.share_permille,
+            "block_lane_weighted": matches!(stage, ClassStage::Live { .. }),
+            "prompt_lane_certified": row.fp_certified,
+            "held": row.held,
+            "registered_daa": row.registered_daa,
+            "artifact_root": row.artifact_root,
+            "artifacts_here": here.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+            "bond_collateral_sompi": class.collateral,
+            "epoch": facts.as_ref().map(|f| json!({ "index": f.epoch_index, "produced": f.epoch_produced_blocks, "budget": f.epoch_budget_blocks })),
+            "market": market.as_ref().map(|m| json!({ "opened": m.opened, "price_sompi_per_position": m.price_sompi_per_position, "reserve_sompi": m.msk_reserve, "seed_pledged_sompi": m.seed_pledged_sompi, "seed_min_sompi": m.seed_min_sompi })),
+            "tip_daa": tip,
+        });
+        println!("{}", serde_json::to_string_pretty(&doc).expect("serializable"));
+        return Ok(());
+    }
+    let group = crate::operator::status::group;
+    println!("{}", paint::bold(&format!("MODEL · {name} · {}", profile.network)));
+    println!("{}", paint::dim(&format!("class {} · registered at DAA {}", class.id, group(row.registered_daa))));
+    println!();
+    let epoch = facts.as_ref().map(|f| {
+        if f.is_base_class {
+            format!("{} blocks this epoch (the floor has no cap)", group(f.epoch_produced_blocks))
+        } else {
+            format!("{} of its {} blocks this epoch", group(f.epoch_produced_blocks), group(f.epoch_budget_blocks))
+        }
+    });
+    let head = match &stage {
+        ClassStage::Live { share } => paint::green(&format!(
+            "● LIVE — weight-bearing at {share} ‰{}",
+            epoch.as_ref().map(|e| format!(" · {e}")).unwrap_or_default()
+        )),
+        ClassStage::Weightless => {
+            paint::yellow("◐ ACTIVE, WEIGHTLESS — its claims are judged, but it carries no weight until its block lane is certified")
+        }
+        ClassStage::Registered { activation_daa, pending_share } => paint::yellow(&format!(
+            "◐ REGISTERED — becomes active at DAA {} ({}), at {pending_share} ‰",
+            group(*activation_daa),
+            if *activation_daa > tip { format!("in {}", group(activation_daa - tip)) } else { "due now".into() }
+        )),
+        ClassStage::Frozen { since_daa } => {
+            paint::red(&format!("✗ FROZEN since DAA {} — contradicted: no weight and no new claims", group(*since_daa)))
+        }
+        ClassStage::Dormant { since_daa } => paint::dim(&format!("○ DORMANT since DAA {}", group(*since_daa))),
+        ClassStage::Unknown(s) => format!("? {s}"),
+    };
+    println!("{head}");
+    let mark = |done: bool| if done { paint::green("✓") } else { paint::dim("·") };
+    let active = matches!(stage, ClassStage::Live { .. } | ClassStage::Weightless);
+    let weighted = matches!(stage, ClassStage::Live { .. });
+    println!("  {} {:<13} at DAA {}", mark(true), "registered", group(row.registered_daa));
+    println!(
+        "  {} {:<13} {}",
+        mark(active),
+        "active",
+        if active { "adjudicable: its claims are judged like any class's".to_string() } else { "not yet".to_string() }
+    );
+    println!(
+        "  {} {:<13} {}",
+        mark(weighted),
+        "block lane",
+        match &stage {
+            ClassStage::Live { share } => format!("weight-bearing at {share} ‰"),
+            ClassStage::Weightless => "not certified — the next step".to_string(),
+            _ => "—".to_string(),
+        }
+    );
+    println!(
+        "  {} {:<13} {}",
+        mark(row.fp_certified),
+        "prompt lane",
+        if row.fp_certified { "certified: free-prompt claims enter state" } else { "not certified (optional)" }
+    );
+    println!();
+    let root = &row.artifact_root;
+    let artifact = if class.is_base {
+        "none — the floor is derived; every node runs it".to_string()
+    } else {
+        match here.first() {
+            Some(p) => format!(
+                "root {}… · on this host: {} (root not checked: misaka mining setup --verify-artifact)",
+                &root[..16.min(root.len())],
+                crate::operator::host::tilde(p)
+            ),
+            None => format!("root {}… · none on this host", &root[..16.min(root.len())]),
+        }
+    };
+    println!("  {:<11}{artifact}", "Artifact");
+    if let Some(c) = class.collateral {
+        println!("  {:<11}a bond for it locks {}", "Bond", crate::operator::catalog::msk(c as u128));
+    }
+    let market_line = match &market {
+        Some(m) if m.opened => format!("open · {} per position · reserve {}", msk(m.price_sompi_per_position), msk(m.msk_reserve)),
+        Some(m) if m.seed_pledged_sompi > 0 => format!("not open · seed {} of {}", msk(m.seed_pledged_sompi), msk(m.seed_min_sompi)),
+        _ => "not open".to_string(),
+    };
+    println!("  {:<11}{market_line}", "Market");
+    let quoted = if selector_arg.contains(' ') { format!("\"{selector_arg}\"") } else { selector_arg.clone() };
+    let next: Vec<(String, &str)> = match &stage {
+        ClassStage::Live { .. } => {
+            let mut v = vec![(format!("misaka mining setup --model {quoted}"), "mine it")];
+            if market.as_ref().is_some_and(|m| m.opened) {
+                v.push((format!("misaka position quote {} --msk 100", class.id), "hold its positions"));
+            }
+            if !row.fp_certified && !class.is_base {
+                v.push(("palw-certify drill --model-id \"<model id>\" --lane fp …".to_string(), "certify the prompt lane (optional)"));
+            }
+            v
+        }
+        ClassStage::Weightless => vec![
+            (
+                "palw-certify drill --model-id \"<model id>\" --lane attempt --out family-attempt.obj".to_string(),
+                "once per family: skip it when a certified family already covers the kernels",
+            ),
+            (
+                "misaka palw submit-object --key-file <seed> --object family-attempt.obj.chunkN --yes".to_string(),
+                "each chunk, in order",
+            ),
+            (
+                "palw-certify bind --model-id \"<model id>\" --lane attempt --out class-attempt.obj".to_string(),
+                "bind this class to the family",
+            ),
+            (
+                "misaka palw submit-object --key-file <seed> --object class-attempt.obj --yes".to_string(),
+                "then misaka model status again",
+            ),
+        ],
+        ClassStage::Registered { .. } => {
+            vec![("misaka model status again at that DAA".to_string(), "nothing to do: the flip is a clock, not an object")]
+        }
+        _ => Vec::new(),
+    };
+    for (i, (cmd, why)) in next.iter().enumerate() {
+        println!("  {:<11}{:<72} {}", if i == 0 { "Next" } else { "" }, cmd, paint::dim(why));
+    }
+    if matches!(stage, ClassStage::Weightless) {
+        println!("  {:<11}{}", "", paint::dim("docs/palw-certify-a-new-model.md"));
+    }
+    Ok(())
+}
+
 /// The key the position commands sign or read with: `--key-file`, else the mining profile's.
 fn key_source(profile: &Profile) -> Result<crate::keys::KeySource, CliError> {
     let path = profile.key_path.as_ref().ok_or_else(|| {
@@ -345,6 +582,22 @@ pub(crate) async fn position_sell(
 
 #[cfg(test)]
 mod tests {
+    /// The class table spells a status with `Debug`; the stage is read back from that spelling and
+    /// the share, and an Active class with no share is weightless, not live.
+    #[test]
+    fn a_class_stage_is_read_from_the_tables_own_spelling() {
+        use super::{ClassStage as S, class_stage};
+        assert_eq!(class_stage("Active", Some(150)), S::Live { share: 150 });
+        assert_eq!(class_stage("Active", None), S::Weightless);
+        assert_eq!(class_stage("Active", Some(0)), S::Weightless, "a share of nothing carries nothing");
+        assert_eq!(
+            class_stage("Registered { activation_daa: 7000, pending_share_permille: 150 }", None),
+            S::Registered { activation_daa: 7000, pending_share: 150 }
+        );
+        assert_eq!(class_stage("Frozen { since_daa: 812 }", None), S::Frozen { since_daa: 812 });
+        assert_eq!(class_stage("Dormant { since_daa: 9 }", None), S::Dormant { since_daa: 9 });
+        assert_eq!(class_stage("Retired", None), S::Unknown("Retired".into()));
+    }
     use super::*;
 
     #[test]

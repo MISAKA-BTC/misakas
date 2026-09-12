@@ -286,54 +286,115 @@ async fn identity_checks(snap: &Snapshot, out: &mut Vec<Check>) {
             Err(e) => out.push(Check::found(a, "pay address", pay.clone(), catalog::pay_address_invalid(pay, &e.to_string()))),
         }
     }
-    // The fee outpoint: named, or persisted by the panel once it has used one.
+    // The fee outpoint, the way the panel resolves it: only when the node runs with
+    // `--palw-fee-outpoint` (without it the panel files receipts and carries nothing), then the
+    // outpoint it persisted, then the named one, then any spendable output under the key's script.
     if p.produce || p.panel {
         let persisted =
             std::fs::read_to_string(p.persisted_fee_outpoint()).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-        match (&p.fee_outpoint, persisted) {
-            (None, None) => out.push(Check::found(a, "fee outpoint", "none", catalog::fee_outpoint_missing())),
-            (named, persisted) => {
-                let op = persisted.clone().or(named.clone()).unwrap_or_default();
-                let whence = if persisted.is_some() { "persisted by the panel" } else { "named" };
-                let unspent = fee_outpoint_unspent(snap, &op).await;
-                match unspent {
-                    Some(true) => out.push(Check::ok(a, "fee outpoint", format!("{} ({whence}) · unspent", short_op(&op)))),
-                    Some(false) => out.push(Check::found(
-                        a,
-                        "fee outpoint",
-                        format!("{} ({whence})", short_op(&op)),
-                        Finding::error(
-                            "E-FUNDS-FEE-OUTPOINT-SPENT",
-                            crate::exit::FUNDS,
-                            "The panel's fee outpoint is not at the key's address",
-                        )
-                        .reason("the panel carries receipts and answers with it; spent or elsewhere, it carries nothing")
-                        .current(format!("{op}: not among the key's unspent outputs"))
-                        .required("a mature, unbonded UTXO at the producer key's address, ≥ 0.1 MSK")
-                        .fix("misaka mining setup --fee-outpoint auto"),
-                    )),
-                    None => out.push(Check::skip(
-                        a,
-                        "fee outpoint",
-                        format!("{} ({whence}) · not checked: needs the key and --utxoindex", short_op(&op)),
-                    )),
+        let running_unfunded = p.kaspad.as_ref().is_some_and(|(_, args)| args.fee_outpoint.is_none());
+        if running_unfunded && p.produce {
+            out.push(Check::found(
+                a,
+                "fee outpoint",
+                "the running node has no --palw-fee-outpoint",
+                Finding::error("E-FUNDS-PANEL-UNFUNDED", crate::exit::FUNDS, "This node's panel can carry nothing")
+                    .reason(
+                        "without --palw-fee-outpoint kaspad's panel runs receipts-only: it never spends, so this miner's claims \
+                         reach a quorum only if someone else carries it, and it cannot answer a court",
+                    )
+                    .current(format!(
+                        "kaspad pid {} was started without the flag{}",
+                        p.kaspad.as_ref().map(|(k, _)| k.pid).unwrap_or_default(),
+                        persisted
+                            .as_deref()
+                            .map(|o| format!(" (the panel persisted {} and will not read it)", short_op(o)))
+                            .unwrap_or_default()
+                    ))
+                    .fix("restart it with misaka mining start, which passes the persisted or configured outpoint")
+                    .fix("or add --palw-fee-outpoint=<txid>:<index> to its command line"),
+            ));
+        } else {
+            let candidates: Vec<(&str, String)> = persisted
+                .iter()
+                .map(|o| ("persisted by the panel", o.clone()))
+                .chain(p.fee_outpoint.iter().map(|o| ("named", o.clone())))
+                .collect();
+            match fee_funding(snap, &candidates).await {
+                FeeFunding::Unread if candidates.is_empty() => {
+                    out.push(Check::found(a, "fee outpoint", "none", catalog::fee_outpoint_missing()))
                 }
+                FeeFunding::Unread => out.push(Check::skip(
+                    a,
+                    "fee outpoint",
+                    format!("{} · not checked: needs the key and --utxoindex", short_op(&candidates[0].1)),
+                )),
+                FeeFunding::Candidate(whence, op, sompi) => out.push(Check::ok(
+                    a,
+                    "fee outpoint",
+                    format!("{} ({whence}) · unspent · {}", short_op(&op), catalog::msk(sompi as u128)),
+                )),
+                FeeFunding::Scan(op, sompi) if !candidates.is_empty() => out.push(Check::ok(
+                    a,
+                    "fee outpoint",
+                    format!(
+                        "{} spent · the panel's scan takes {} ({}) instead",
+                        short_op(&candidates[0].1),
+                        short_op(&op),
+                        catalog::msk(sompi as u128)
+                    ),
+                )),
+                FeeFunding::Scan(..) => out.push(Check::found(a, "fee outpoint", "none", catalog::fee_outpoint_missing())),
+                FeeFunding::Nothing => out.push(Check::found(
+                    a,
+                    "fee outpoint",
+                    candidates.first().map(|(w, o)| format!("{} ({w})", short_op(o))).unwrap_or_else(|| "none".into()),
+                    Finding::error("E-FUNDS-FEE-OUTPOINT-SPENT", crate::exit::FUNDS, "The panel has nothing to pay its fees with")
+                        .reason("the panel carries receipts and answers with it; spent or elsewhere, it carries nothing")
+                        .current(match candidates.first() {
+                            Some((_, op)) => format!("{op}: not among the key's unspent outputs, and no other output there fits"),
+                            None => "no fee outpoint named, and no spendable output at the key's address".to_string(),
+                        })
+                        .required("a mature, unbonded, non-coinbase UTXO at the producer key's address, ≥ 0.1 MSK")
+                        .fix("misaka mining setup   (it offers a self-send that makes one)"),
+                )),
             }
         }
     }
 }
 
-/// Is `op` among the UTXOs at the key's address? `None` when that cannot be read.
-async fn fee_outpoint_unspent(snap: &Snapshot, op: &str) -> Option<bool> {
-    let node = snap.node.as_ref().ok()?;
+/// What the panel would pay its next carrier with.
+enum FeeFunding {
+    /// A remembered outpoint (persisted or named) that is still unspent at the key's address.
+    Candidate(&'static str, String, u64),
+    /// None of those, but a spendable output the panel's recovery scan would take.
+    Scan(String, u64),
+    Nothing,
+    /// The key's outputs could not be read (no node, no key, or no `--utxoindex`).
+    Unread,
+}
+
+/// The panel's order: the remembered outpoints first, then the scan's rule — under the key's own
+/// script, not coinbase, not bonded collateral, spendable now.
+async fn fee_funding(snap: &Snapshot, candidates: &[(&'static str, String)]) -> FeeFunding {
+    let Ok(node) = snap.node.as_ref() else { return FeeFunding::Unread };
     if !node.server.has_utxo_index {
-        return None;
+        return FeeFunding::Unread;
     }
-    let key = snap.key.as_ref()?.as_ref().ok()?;
-    let addr = kaspa_addresses::Address::try_from(key.address.as_str()).ok()?;
-    let want = crate::bond::parse_outpoint(op).ok()?;
-    let all = crate::wallet::page_all(&node.nv, &addr).await.ok()?;
-    Some(all.iter().any(|u| u.outpoint == want))
+    let Some(Ok(key)) = snap.key.as_ref() else { return FeeFunding::Unread };
+    let Ok(addr) = kaspa_addresses::Address::try_from(key.address.as_str()) else { return FeeFunding::Unread };
+    let Ok(all) = crate::wallet::page_all(&node.nv, &addr).await else { return FeeFunding::Unread };
+    for (whence, op) in candidates {
+        if let Ok(want) = crate::bond::parse_outpoint(op)
+            && let Some(u) = all.iter().find(|u| u.outpoint == want)
+        {
+            return FeeFunding::Candidate(whence, op.clone(), u.amount);
+        }
+    }
+    match all.iter().filter(|u| u.mature && !u.bonded && !u.entry.is_coinbase).max_by_key(|u| u.amount) {
+        Some(u) => FeeFunding::Scan(format!("{}:{}", u.outpoint.transaction_id, u.outpoint.index), u.amount),
+        None => FeeFunding::Nothing,
+    }
 }
 
 fn model_checks(snap: &Snapshot, out: &mut Vec<Check>) {

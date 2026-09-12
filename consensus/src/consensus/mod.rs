@@ -2405,7 +2405,7 @@ impl ConsensusApi for Consensus {
         role: kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1,
         include_terminal: bool,
         limit: usize,
-    ) -> Option<(u64, Vec<kaspa_consensus_core::palw_producer_v2::PalwClaimRowV1>, bool)> {
+    ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwBondClaimsV1> {
         self.virtual_processor.palw_claim_rows_v1_impl(bond, role, include_terminal, limit)
     }
 

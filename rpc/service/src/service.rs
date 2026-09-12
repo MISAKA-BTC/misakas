@@ -1150,11 +1150,12 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Executor => "executor",
             kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Seat => "seat",
         };
-        let Some((tip_daa, rows, truncated)) = read else {
+        let Some(read) = read else {
             return Ok(GetPalwClaimsResponse { bond: request.bond, role: role_name.to_string(), ..Default::default() });
         };
         let outpoint = |b: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2| format!("{}:{}", b.0.transaction_id, b.0.index);
-        let claims = rows
+        let claims = read
+            .rows
             .iter()
             .map(|row| {
                 let (phase, void_reason, phase_daa) = palw_claim_phase_named(&row.phase);
@@ -1182,7 +1183,22 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 }
             })
             .collect();
-        Ok(GetPalwClaimsResponse { available: true, tip_daa, bond: request.bond, role: role_name.to_string(), claims, truncated })
+        let summary = read.bond.as_ref();
+        Ok(GetPalwClaimsResponse {
+            available: true,
+            tip_daa: read.tip_daa,
+            bond: request.bond,
+            role: role_name.to_string(),
+            claims,
+            truncated: read.truncated,
+            bond_known: summary.is_some(),
+            bond_pubkey: summary.map(|b| faster_hex::hex_string(&b.pubkey)).unwrap_or_default(),
+            bond_retiring_since_daa: summary.and_then(|b| b.retiring_since_daa),
+            bond_collateral: summary.map_or(0, |b| b.collateral),
+            bond_slashed: summary.map_or(0, |b| b.slashed),
+            bond_registered_daa: summary.map_or(0, |b| b.registered_daa),
+            bond_capable_classes: summary.map(|b| b.capable_classes.iter().map(|c| c.to_string()).collect()).unwrap_or_default(),
+        })
     }
 
     async fn get_palw_classes_call(

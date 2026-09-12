@@ -173,9 +173,29 @@ pub(crate) async fn verifier_status(ctx: &crate::node::Ctx, profile: Profile) ->
     let bond = profile.bond.clone().ok_or_else(|| {
         CliError::new(exit::CONFIG, "name the bond: --bond <txid>:<index> (or [advanced] bond, or run it on the node's host)")
     })?;
+    if !node.ops_0122 {
+        return Err(CliError::new(
+            exit::COMPONENT_DOWN,
+            format!(
+                "the node at {} predates getPalwClaims (ADR-0122), so it cannot list seat duties — rebuild it from this tree",
+                node.url
+            ),
+        ));
+    }
     let duties = node.client().get_palw_claims(bond.clone(), "seat".into(), false, 200).await.map_err(|e| {
         CliError::new(exit::CONNECTION, format!("getPalwClaims: {e} (a node older than ADR-0122 does not list seat duties)"))
     })?;
+    // What the bond is seated for: a bond judges only the classes it declared, and a registration
+    // declares none.
+    let base = match &node.nv.params.palw_consensus_mode {
+        kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => Some(b.base_class_id.to_string()),
+        _ => None,
+    };
+    let judges: Vec<String> = duties
+        .bond_capable_classes
+        .iter()
+        .map(|c| if Some(c) == base.as_ref() { "base (the floor)".to_string() } else { format!("{}…", &c[..8.min(c.len())]) })
+        .collect();
     let rt = snap.node_status.as_ref();
     let now = node.daa();
     if ctx.output == OutputFormat::Json {
@@ -186,6 +206,8 @@ pub(crate) async fn verifier_status(ctx: &crate::node::Ctx, profile: Profile) ->
                 "bond": bond,
                 "panel_running": rt.map(|r| r.panel_running),
                 "submitter_funded": rt.map(|r| r.panel_submitter),
+                "bond_known": duties.bond_known,
+                "capable_classes": duties.bond_capable_classes,
                 "tip_daa": duties.tip_daa,
                 "duties": duties.claims.iter().map(|c| json!({
                     "claim_id": c.claim_id, "class_id": c.class_id, "executor_bond": c.executor_bond, "phase": c.phase,
@@ -212,6 +234,16 @@ pub(crate) async fn verifier_status(ctx: &crate::node::Ctx, profile: Profile) ->
     };
     println!("{}", paint::bold(&head));
     println!("  bond {bond}");
+    if !duties.bond_known {
+        println!("  {}", paint::red("the registry holds no bond at this outpoint — it is seated for nothing"));
+    } else if judges.is_empty() {
+        println!(
+            "  {} it declared no class, and a bond is drawn only for the classes it declared (misaka verifier setup declares them)",
+            paint::yellow("judges nothing:")
+        );
+    } else {
+        println!("  judges {}", judges.join(", "));
+    }
     if !duties.claims.is_empty() {
         println!("{}", paint::dim(&format!("  {:<12}{:<12}{:<8}{:<18}{:<8}{}", "CLAIM", "CLASS", "SEAT", "PHASE", "LANE", "DUE")));
         for c in &duties.claims {

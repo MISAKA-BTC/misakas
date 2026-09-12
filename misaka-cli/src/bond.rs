@@ -292,28 +292,7 @@ pub async fn capability(
         ));
     }
 
-    let mut spendable: Vec<&crate::wallet::Funding> = all.iter().filter(|u| u.mature && !u.bonded).collect();
-    spendable.sort_by(|a, b| b.amount.cmp(&a.amount));
-    let fee = estimate_fee(&key, &nv.params, 1, false);
-    let funding = spendable.first().ok_or_else(|| {
-        CliError::new(exit::GENERIC, format!("no mature, unbonded UTXO at {addr} to pay the carrier's {fee} sompi fee"))
-    })?;
-    if funding.amount <= fee {
-        return Err(CliError::new(
-            exit::GENERIC,
-            format!("largest spendable UTXO at {addr} holds {} sompi, under the {fee} sompi fee", funding.amount),
-        ));
-    }
-
-    let bond = PalwBondKeyV2(bond_outpoint);
-    let message = kaspa_consensus_core::palw_state_v2::palw_bond_capability_message_v2(network_domain(&nv), &bond, &classes);
-    let signature = key
-        .sign_with_context(message.as_byte_slice(), kaspa_consensus_core::palw_state_v2::PALW_BOND_CAPABILITY_V2_MLDSA87_CONTEXT)
-        .to_vec();
-    let object = PalwConsensusObjectV2::BondCapabilityDeclared { bond, capable_classes: classes.clone(), signature };
-    let tx = key
-        .build_palw_lifecycle_tx(&object, funding.outpoint, &funding.entry, fee)
-        .map_err(|e| CliError::new(exit::GENERIC, format!("build the declaration carrier: {e}")))?;
+    let (tx, fee, funding) = capability_carrier(&nv, &key, &all, bond_outpoint, &classes)?;
     let txid = tx.id();
 
     let listed: Vec<String> = classes.iter().map(|c| c.to_string()).collect();
@@ -321,7 +300,7 @@ pub async fn capability(
         match ctx.output {
             OutputFormat::Human => {
                 println!("bond:    {}:{}", bond_outpoint.transaction_id, bond_outpoint.index);
-                println!("carrier: {txid} (fee {fee} sompi from {}:{})", funding.outpoint.transaction_id, funding.outpoint.index);
+                println!("carrier: {txid} (fee {fee} sompi from {}:{})", funding.transaction_id, funding.index);
                 println!();
                 if listed.is_empty() {
                     println!("This stands the bond DOWN: it declares no classes, so the panel draw will");
@@ -361,6 +340,43 @@ pub async fn capability(
         }
     }
     Ok(())
+}
+
+/// **The signed `BondCapabilityDeclared` carrier**, funded from the largest mature, unbonded output
+/// at the key's address — built and not submitted, so `bond capability` can preview it and
+/// `misaka mining setup` can submit it without either printing the other's lines.
+///
+/// Returns the carrier, its fee and the outpoint it spends.
+pub(crate) fn capability_carrier(
+    nv: &NodeView,
+    key: &kaspa_pq_validator_core::ValidatorKey,
+    all: &[crate::wallet::Funding],
+    bond_outpoint: TransactionOutpoint,
+    classes: &std::collections::BTreeSet<kaspa_consensus_core::Hash64>,
+) -> Result<(kaspa_consensus_core::tx::Transaction, u64, TransactionOutpoint), CliError> {
+    let addr = key.funding_address(nv.params.prefix());
+    let mut spendable: Vec<&crate::wallet::Funding> = all.iter().filter(|u| u.mature && !u.bonded).collect();
+    spendable.sort_by(|a, b| b.amount.cmp(&a.amount));
+    let fee = estimate_fee(key, &nv.params, 1, false);
+    let funding = spendable.first().ok_or_else(|| {
+        CliError::new(exit::GENERIC, format!("no mature, unbonded UTXO at {addr} to pay the carrier's {fee} sompi fee"))
+    })?;
+    if funding.amount <= fee {
+        return Err(CliError::new(
+            exit::GENERIC,
+            format!("largest spendable UTXO at {addr} holds {} sompi, under the {fee} sompi fee", funding.amount),
+        ));
+    }
+    let bond = PalwBondKeyV2(bond_outpoint);
+    let message = kaspa_consensus_core::palw_state_v2::palw_bond_capability_message_v2(network_domain(nv), &bond, classes);
+    let signature = key
+        .sign_with_context(message.as_byte_slice(), kaspa_consensus_core::palw_state_v2::PALW_BOND_CAPABILITY_V2_MLDSA87_CONTEXT)
+        .to_vec();
+    let object = PalwConsensusObjectV2::BondCapabilityDeclared { bond, capable_classes: classes.clone(), signature };
+    let tx = key
+        .build_palw_lifecycle_tx(&object, funding.outpoint, &funding.entry, fee)
+        .map_err(|e| CliError::new(exit::GENERIC, format!("build the declaration carrier: {e}")))?;
+    Ok((tx, fee, funding.outpoint))
 }
 
 /// Which bond a command acts on: named explicitly, or inferred when this key holds exactly one —

@@ -182,6 +182,9 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// What should this machine do? Mine, verify, validate, add a model, hold positions — then
+    /// the setup for it.
+    Init(SetupCliArgs),
     /// Mining, as one purpose: is this host mining, and if not, why and what to do (ADR-0122).
     #[command(subcommand)]
     Mining(MiningCmd),
@@ -327,8 +330,70 @@ impl ProfileArgs {
     }
 }
 
+/// ADR-0122 Decision 7: what `mining setup`, `verifier setup` and `init` take. Every flag is
+/// optional — what is not said is discovered on the chain, or asked.
+#[derive(Args, Debug, Clone, Default)]
+struct SetupCliArgs {
+    /// The configuration to write (default ~/.misaka/mining.toml).
+    #[arg(long, value_name = "FILE")]
+    config: Option<std::path::PathBuf>,
+    /// The key to mine with (default: mining.toml's, else ~/.misaka/miner.seed — made if missing).
+    #[arg(long, value_name = "FILE")]
+    key_file: Option<String>,
+    /// base, a model's name, or a class id (default: asked; without a terminal, the floor).
+    #[arg(long, value_name = "MODEL")]
+    model: Option<String>,
+    /// The node's --appdir (default: a running node's, else ~/.misaka/<network>/node).
+    #[arg(long, value_name = "DIR")]
+    appdir: Option<String>,
+    /// A bond to use, <txid>:<index> (default: this key's, found on the chain — else registered).
+    #[arg(long, value_name = "OUTPOINT")]
+    bond: Option<String>,
+    /// A peer for the node, host:port; repeatable (testnet-11: its public entry point).
+    #[arg(long = "peer", value_name = "HOST:PORT")]
+    peers: Vec<String>,
+    /// The class's artifact file; repeatable.
+    #[arg(long = "artifact", value_name = "FILE")]
+    artifacts: Vec<String>,
+    /// The panel's fee output: `auto` (default), or <txid>:<index>.
+    #[arg(long, value_name = "auto|OUTPOINT")]
+    fee_outpoint: Option<String>,
+    /// Read the artifact through and check its root against the class's (minutes for a large model).
+    #[arg(long)]
+    verify_artifact: bool,
+    /// Answer yes to every question: make the key, register the bond, declare, write the file.
+    #[arg(long)]
+    yes: bool,
+    /// Do not wait for the node to sync or for funds: say what is missing and exit.
+    #[arg(long)]
+    no_wait: bool,
+}
+
+impl SetupCliArgs {
+    fn into_setup(self, network: Option<String>, rpc: Option<String>) -> operator::wizard::SetupArgs {
+        operator::wizard::SetupArgs {
+            network,
+            rpc,
+            config: self.config,
+            key_file: self.key_file,
+            model: self.model,
+            appdir: self.appdir,
+            bond: self.bond,
+            peers: self.peers,
+            artifacts: self.artifacts,
+            fee_outpoint: self.fee_outpoint,
+            verify_artifact: self.verify_artifact,
+            yes: self.yes,
+            no_wait: self.no_wait,
+        }
+    }
+}
+
 #[derive(Subcommand, Debug)]
 enum MiningCmd {
+    /// Set this host up to mine, step by step: node, model, key, funds, bond, artifact, seats, fee
+    /// output, then ~/.misaka/mining.toml. Running it again resumes where it stopped.
+    Setup(SetupCliArgs),
     /// Is this host mining? The miner's state and the one line that says why, the bond, the
     /// works and what they paid. Needs no setup on a node that is already running.
     Status {
@@ -413,6 +478,9 @@ struct DoctorArgs {
 
 #[derive(Subcommand, Debug)]
 enum VerifierCmd {
+    /// Set this host up as a panel seat: the mining setup's key, bond and artifact steps, and the
+    /// classes the bond declares it can judge.
+    Setup(SetupCliArgs),
     /// The claims this bond is seated on, and what it owes them.
     Status {
         #[command(flatten)]
@@ -442,6 +510,14 @@ enum VerifierCmd {
 enum ModelCmd {
     /// Every class: name, status, share, budget, prompt lane, market.
     List {
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// One model's life: registered, active, its lanes certified, live — with its artifact, the bond
+    /// it takes, its market, and the next command.
+    Status {
+        /// base, a model's name, or a class id (or 8+ hex of one).
+        model: String,
         #[command(flatten)]
         profile: ProfileArgs,
     },
@@ -1957,6 +2033,14 @@ async fn main() -> std::process::ExitCode {
         |args: &ProfileArgs| operator::profile::Profile::resolve(&args.overrides(), named_network.as_deref(), ctx.rpc.as_deref());
 
     let result = match cli.command {
+        Command::Init(args) => operator::wizard::init(&ctx, args.into_setup(named_network.clone(), ctx.rpc.clone())).await,
+        Command::Mining(MiningCmd::Setup(args)) => {
+            operator::wizard::run(&ctx, operator::wizard::Purpose::Mine, args.into_setup(named_network.clone(), ctx.rpc.clone())).await
+        }
+        Command::Verifier(VerifierCmd::Setup(args)) => {
+            operator::wizard::run(&ctx, operator::wizard::Purpose::Verify, args.into_setup(named_network.clone(), ctx.rpc.clone()))
+                .await
+        }
         Command::Mining(MiningCmd::Status { profile: args, watch }) => match profile(&args) {
             Ok(p) => operator::status::run(&ctx, p, watch).await,
             Err(e) => Err(e),
@@ -2038,6 +2122,10 @@ async fn main() -> std::process::ExitCode {
         },
         Command::Model(ModelCmd::List { profile: args }) => match profile(&args) {
             Ok(p) => operator::market::model_list(&ctx, p).await,
+            Err(e) => Err(e),
+        },
+        Command::Model(ModelCmd::Status { model, profile: args }) => match profile(&args) {
+            Ok(p) => operator::market::model_status(&ctx, p, &model).await,
             Err(e) => Err(e),
         },
         Command::Position(PositionCmd::List { holder, profile: args }) => match profile(&args) {

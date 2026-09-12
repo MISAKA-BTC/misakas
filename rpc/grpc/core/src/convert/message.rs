@@ -729,6 +729,13 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwClaimsResponse>, protowire::GetPal
         role: item.role.clone(),
         claims: item.claims.iter().map(protowire::RpcPalwClaimRow::from).collect(),
         truncated: item.truncated,
+        bond_known: item.bond_known,
+        bond_pubkey: item.bond_pubkey.clone(),
+        bond_retiring_since_daa: item.bond_retiring_since_daa,
+        bond_collateral: item.bond_collateral,
+        bond_slashed: item.bond_slashed,
+        bond_registered_daa: item.bond_registered_daa,
+        bond_capable_classes: item.bond_capable_classes.clone(),
         error: None,
     }
 });
@@ -1805,6 +1812,13 @@ try_from!(item: &protowire::GetPalwClaimsResponseMessage, RpcResult<kaspa_rpc_co
         role: item.role.clone(),
         claims: item.claims.iter().map(kaspa_rpc_core::RpcPalwClaimRow::try_from).collect::<RpcResult<Vec<_>>>()?,
         truncated: item.truncated,
+        bond_known: item.bond_known,
+        bond_pubkey: item.bond_pubkey.clone(),
+        bond_retiring_since_daa: item.bond_retiring_since_daa,
+        bond_collateral: item.bond_collateral,
+        bond_slashed: item.bond_slashed,
+        bond_registered_daa: item.bond_registered_daa,
+        bond_capable_classes: item.bond_capable_classes.clone(),
     }
 });
 try_from!(item: &protowire::RpcPalwClassRow, kaspa_rpc_core::RpcPalwClassRow, {

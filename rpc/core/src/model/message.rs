@@ -4020,6 +4020,18 @@ pub struct GetPalwClaimsResponse {
     pub claims: Vec<RpcPalwClaimRow>,
     /// `limit` left rows out.
     pub truncated: bool,
+    /// The bond's own registry record. `bond_known` false: no bond at that outpoint.
+    pub bond_known: bool,
+    /// The key it was registered under, hex (who may sign for it).
+    pub bond_pubkey: String,
+    /// `None` while the bond is Active.
+    pub bond_retiring_since_daa: Option<u64>,
+    pub bond_collateral: u64,
+    pub bond_slashed: u64,
+    pub bond_registered_daa: u64,
+    /// The classes this bond is seated for: a bond judges only the classes it declared, and a
+    /// registration declares none.
+    pub bond_capable_classes: Vec<String>,
 }
 
 impl Serializer for GetPalwClaimsResponse {
@@ -4031,6 +4043,13 @@ impl Serializer for GetPalwClaimsResponse {
         store!(String, &self.role, writer)?;
         serialize!(Vec<RpcPalwClaimRow>, &self.claims, writer)?;
         store!(bool, &self.truncated, writer)?;
+        store!(bool, &self.bond_known, writer)?;
+        store!(String, &self.bond_pubkey, writer)?;
+        store!(Option<u64>, &self.bond_retiring_since_daa, writer)?;
+        store!(u64, &self.bond_collateral, writer)?;
+        store!(u64, &self.bond_slashed, writer)?;
+        store!(u64, &self.bond_registered_daa, writer)?;
+        store!(Vec<String>, &self.bond_capable_classes, writer)?;
         Ok(())
     }
 }
@@ -4044,7 +4063,28 @@ impl Deserializer for GetPalwClaimsResponse {
         let role = load!(String, reader)?;
         let claims = deserialize!(Vec<RpcPalwClaimRow>, reader)?;
         let truncated = load!(bool, reader)?;
-        Ok(Self { available, tip_daa, bond, role, claims, truncated })
+        let bond_known = load!(bool, reader)?;
+        let bond_pubkey = load!(String, reader)?;
+        let bond_retiring_since_daa = load!(Option<u64>, reader)?;
+        let bond_collateral = load!(u64, reader)?;
+        let bond_slashed = load!(u64, reader)?;
+        let bond_registered_daa = load!(u64, reader)?;
+        let bond_capable_classes = load!(Vec<String>, reader)?;
+        Ok(Self {
+            available,
+            tip_daa,
+            bond,
+            role,
+            claims,
+            truncated,
+            bond_known,
+            bond_pubkey,
+            bond_retiring_since_daa,
+            bond_collateral,
+            bond_slashed,
+            bond_registered_daa,
+            bond_capable_classes,
+        })
     }
 }
 

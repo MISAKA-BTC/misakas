@@ -989,6 +989,50 @@ pub fn palw_claim_rows_v1(
     (rows, truncated)
 }
 
+/// **The bond itself, read beside its claims** (ADR-0122 §6.5, `getPalwClaims`): what the registry
+/// holds about it.
+///
+/// It is here for the one question no other read answered: which classes this bond is seated for.
+/// A bond judges only the classes it declared (`palw_bond_may_judge_class_v2`), a registration
+/// declares none, and nothing reported the set — so a setup could not tell a declared bond from an
+/// undeclared one, and could only declare again and pay again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwBondSummaryV1 {
+    /// The key the bond was registered under: who may sign for it.
+    pub pubkey: Vec<u8>,
+    /// `None` while Active; the DAA its retirement was requested at otherwise.
+    pub retiring_since_daa: Option<u64>,
+    pub collateral: u64,
+    pub slashed: u64,
+    pub registered_daa: u64,
+    pub capable_classes: Vec<Hash64>,
+}
+
+pub fn palw_bond_summary_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2) -> Option<PalwBondSummaryV1> {
+    let b = state.bond(bond)?;
+    Some(PalwBondSummaryV1 {
+        pubkey: b.pubkey.clone(),
+        retiring_since_daa: match b.status {
+            crate::palw_state_v2::PalwBondStatusV2::Active => None,
+            crate::palw_state_v2::PalwBondStatusV2::Retiring { since_daa } => Some(since_daa),
+        },
+        collateral: b.collateral,
+        slashed: b.slashed,
+        registered_daa: b.registered_daa,
+        capable_classes: b.capable_classes.iter().copied().collect(),
+    })
+}
+
+/// A bond's claims and the bond, at one tip — what `getPalwClaims` answers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwBondClaimsV1 {
+    pub tip_daa: u64,
+    pub rows: Vec<PalwClaimRowV1>,
+    pub truncated: bool,
+    /// `None`: the registry holds no bond at that outpoint.
+    pub bond: Option<PalwBondSummaryV1>,
+}
+
 pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStateParamsV2, mine: &[PalwBondKeyV2]) -> Vec<PalwSeatDutyV2> {
     let mut out = Vec::new();
     for (claim_id, claim) in state.claims_iter() {

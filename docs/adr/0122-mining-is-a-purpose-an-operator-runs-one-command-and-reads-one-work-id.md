@@ -747,8 +747,9 @@ The operator's priority order is kept. Each phase lands on its own and is useful
 | P6 | — | `verifier`, `validator setup/status`, `model add/status/market`, `position list/quote/buy/sell` | CLI | yes |
 
 Nothing in any phase changes a consensus rule, a fence or a fingerprint. P2's reads extend the RPC
-API. A node without them answers "method not found", and every screen already renders without them
-(§6.4).
+API, and every screen still renders without them (§6.4). A node built before them drops the
+connection on an unknown op rather than answering "method not found", so the CLI asks once per
+connection and falls back (§16).
 
 ## 14. Alternatives not taken
 
@@ -777,3 +778,113 @@ API. A node without them answers "method not found", and every screen already re
 * **A wallet with more than one bond key.** One key holds one bond for the life of the chain
   (`DuplicateBondKey`), so a second bond is a second key. `mining.toml` names one; a multi-bond
   operator runs one file per bond (`--config`).
+
+## 16. Implementation notes (P1–P6, 2026-09-12)
+
+What the implementation settled that the decisions above left open, and where it departs from them.
+
+**Files.**
+* `~/.misaka/<network>/run/` holds the supervisor's `state.json`, `supervisor.log`, and each child's
+  output (`kaspad.out`, `gateway.out`, `rail.out`). Setup adds `setup.json` and `setup-kaspad.out`.
+* `mining.toml` has keys §7 did not list: `[advanced] kaspad` (the node binary, when it is not
+  beside `misaka`), and `[advanced.prompt] identity`, `artifact`, `tokenizer`, `gateway` and `rail`.
+
+**Reads.**
+* `getPalwClaims` also returns the bond's own registry record: known, registered key, retiring
+  since, collateral, slashed, registered DAA, and **`bond_capable_classes`**. No other read said
+  which classes a bond is seated for. A registration declares none, and a bond judges only what it
+  declared. Without that field, setup could not tell a declared bond from an undeclared one, and
+  could only declare again and pay again.
+* `not_ready_code` is not a new RPC field. The CLI matches the node's `not_ready_reason` against the
+  `PALW_NOT_READY_*_V2` constants that consensus-core exports and `ready_to_produce` itself uses. The
+  sentence therefore has one spelling.
+* **A log is only evidence for the node that is running.**
+  * The node's own log counts only if its last line is not older than the process start.
+  * A boot line counts only if it is no earlier than start − 300 s.
+  * In testing, a ten-day-old log at the default path read as a fork mismatch.
+* **On a fresh chain, `is_synced` is false even while the producer draws** under
+  `--enable-unsynced-mining`. So status does not report SYNCING when the log or the runtime shows
+  draws, or when unsynced mining is on and the node has a peer. The doctor shows this as info.
+* The RECEIVED and EXECUTING stages print no event line. Before the gateway commits a job there is
+  no id that later lines can share. The first stable id is the outbox stem, at EXECUTED.
+* **A node built before these reads does not answer "method not found": it drops the WebSocket.**
+  Every read after the unknown op on that connection then fails. §13's "a node without them answers
+  'method not found'" was wrong, and against an un-rebuilt node `status` lost its bond, wallet and
+  works. Measured on the devnet with a pre-P2 node. So each connection asks `getPalwNodeStatus`
+  once. A node that drops it is reconnected and marked, and the other two reads are never sent to
+  it.
+
+**Start and stop.**
+* **`--palw-fee-outpoint` is always passed** when the file names one or the panel has persisted one.
+  * Without the flag, kaspad's panel runs receipts-only and never reads the outpoint it persisted.
+  * The daemon's startup gate, however, accepts the persisted file.
+  * So a producer started on the file alone mined and could carry nothing.
+  * This was found while writing setup. The doctor now resolves funding in the panel's own order:
+    persisted, then configured, then any ordinary output at the key.
+  * It also names a running miner that was started without the flag (`E-FUNDS-PANEL-UNFUNDED`).
+* A drain treats "the claims cannot be read" as a reason to keep draining, never as "none owed". Its
+  first check waits 60 s, because a restarting node answers nothing.
+* **The children run in a process group of their own.** In the terminal's group, a Ctrl-C reached
+  kaspad directly, and it stopped at once under a supervisor whose Ctrl-C means "drain". The claims
+  it was defending lost their node, and the supervisor then restarted it as if it had crashed.
+  Stopping the children, and in which order, is the supervisor's job.
+
+**Setup (P5).**
+* **No setup journal.** Each step is done when a fact on disk or on the chain says so, so running
+  setup again *is* the resume. The one state file, `setup.json`, names the node setup started. A run
+  that is killed leaves that node for the next run to adopt.
+* **The bond is registered by `kaspad --palw-register-bond`, on a node setup starts for it.**
+  * Setup passes `--palw-fee-outpoint=<the output it checked>`. Otherwise the registration's scan
+    takes the first ordinary output it meets, which may be too small and would then be retried
+    forever.
+  * Setup reads the outcome from the worker's own log sentences (`registration_note`) and from the
+    registry.
+  * Setup never restarts a node the operator runs. It says so and prints the command instead.
+* **The steps run in a different order from §8.1's table.**
+  * The bond is looked up before funds: a key that holds a bond needs no collateral.
+  * The artifact comes before capability: a bond declares only what the node can run.
+  * Capability comes before the fee output: the declaration's carrier spends the float.
+* **Funding.** Registration needs one mature, non-coinbase output of at least collateral + 0.1 MSK.
+  The collateral is sized as kaspad sizes it: `palw_v2_collateral_for_claim_lifetime_v1` over the
+  class's per-inference pwu, and never below the floor. On the devnet this reads 11.10 MSK for the
+  floor. The rules for the rest:
+  * Mining rewards are coinbase, and the scan skips them. Setup offers a self-send that turns them
+    into an ordinary output.
+  * Enough spread over several outputs is `E-FUNDS-ONE-UTXO`.
+* **Capability.** Setup declares the class served plus the floor, joined with whatever is already
+  declared, because a declaration replaces the whole set.
+* **The fee output**, in this order:
+  1. the one the panel persisted, which is the registration's change;
+  2. the configured one;
+  3. the largest ordinary output of at least 0.1 MSK;
+  4. otherwise a self-send is offered.
+* **Artifacts.** `--verify-artifact` computes the root through the SDK's pairings. Without it, setup
+  finds the file and says the root was not checked: reading a 33 GiB file takes minutes.
+* **`[mining] wallet` is not asked.**
+  * A bond's payee is fixed at registration.
+  * The funding output must be signable by the key.
+  * So the payee is the key's own address. Changing it is a hand edit, for an operator who knows the
+    consequence.
+* **testnet-11's default peer is `169.58.39.220:26311`.** The network carries no DNS seeders, and
+  that is the entry point the join doc names.
+* **A question is answered only by a person.**
+  * Input that closes before a line (a pipe running dry) is *no answer*, never the default. With
+    stdin at EOF, the first build made a key; the same rule would have let a pipe say yes to a
+    capability declaration or a self-send.
+  * Ctrl-C at a question stops setup. The line is read on a detached thread: a read left behind on
+    the runtime's blocking pool kept the process alive after "interrupted".
+  * Both were found by driving the questions through a pseudo-terminal.
+* **Re-running on a set-up host changes nothing it does not have to.** Every step reads ✓. Against a
+  running miner, setup starts no node and spends nothing, and it ends with "already running" rather
+  than "Next: start". When the file does change, setup shows only the changed lines.
+* **`misaka model status <model>`** shows one class's life on one screen: registered, active, the
+  block lane weighted or not, the prompt lane, live. It also shows the class's artifact root and
+  whether the file is on this host, the bond the class takes, its market, and the next command. For
+  a weightless class that is the certify/bind sequence from `docs/palw-certify-a-new-model.md`; for
+  a registered one, "nothing: the flip is a clock". A guided `model add` that runs `palw-certify`
+  and the chunked submissions itself is still open.
+* **`misaka init` asks for the purpose.**
+  * Mine runs `mining setup`; Verify runs `verifier setup`.
+  * Validate, Add a model and Hold positions print the commands that make up that purpose.
+  * Guided flows for those three are still open, as are `validator setup/status` and `model add`
+    (§8.2).

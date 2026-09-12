@@ -723,14 +723,15 @@ pub trait ConsensusApi: Send + Sync {
 
     /// **A bond's claims, as its operator reads them** (ADR-0122 §6.5, `getPalwClaims`): the ones
     /// it made (`Executor`) or the ones whose panels seat it (`Seat`), newest first, with the tip
-    /// DAA they were read at and whether `limit` left rows out. `None` off `ConsensusV2`.
+    /// DAA they were read at, whether `limit` left rows out, and the bond's own registry record.
+    /// `None` off `ConsensusV2`.
     fn palw_claim_rows_v1(
         &self,
         _bond: crate::palw_state_v2::PalwBondKeyV2,
         _role: crate::palw_producer_v2::PalwClaimRoleV1,
         _include_terminal: bool,
         _limit: usize,
-    ) -> Option<(u64, Vec<crate::palw_producer_v2::PalwClaimRowV1>, bool)> {
+    ) -> Option<crate::palw_producer_v2::PalwBondClaimsV1> {
         None
     }
 

@@ -3587,6 +3587,21 @@ async fn palw_v2_a_signed_quorum_licenses_a_claim() {
         let (one, cut) = palw_claim_rows_v1(&state, &bundle.state, &claim.bond, PalwClaimRoleV1::Executor, true, 1);
         assert_eq!(one.len(), 1);
         assert_eq!(cut, all.len() > 1, "a limit says whether it left rows out");
+        // The bond beside its claims: the registry's own record, including the classes it judges —
+        // the one fact no other read reported (a seat is drawn only for a class it declared).
+        use kaspa_consensus_core::palw_producer_v2::palw_bond_summary_v1;
+        let seat = palw_bond_summary_v1(&state, &mine[0]).expect("a seat is a registered bond");
+        let record = state.bond(&mine[0]).expect("registered");
+        assert_eq!(
+            (seat.collateral, seat.pubkey.as_slice(), seat.retiring_since_daa),
+            (record.collateral, record.pubkey.as_slice(), None)
+        );
+        assert!(seat.capable_classes.contains(&claim.class_id), "it was seated for this class, so it declared it");
+        let nobody = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
+            kaspa_consensus_core::tx::TransactionId::from_u64_word(0xDEAD),
+            7,
+        ));
+        assert!(palw_bond_summary_v1(&state, &nobody).is_none(), "no bond there is None, not an empty record");
     }
 
     // Real signatures, from the harness identity every genesis bond registers.

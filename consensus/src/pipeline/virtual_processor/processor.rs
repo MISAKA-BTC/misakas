@@ -5169,13 +5169,14 @@ impl VirtualStateProcessor {
         role: kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1,
         include_terminal: bool,
         limit: usize,
-    ) -> Option<(u64, Vec<kaspa_consensus_core::palw_producer_v2::PalwClaimRowV1>, bool)> {
+    ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwBondClaimsV1> {
         let state_params = self.palw_state_params_v2.as_ref()?;
         let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
         let tip_daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
         let (rows, truncated) =
             kaspa_consensus_core::palw_producer_v2::palw_claim_rows_v1(&state, state_params, &bond, role, include_terminal, limit);
-        Some((tip_daa, rows, truncated))
+        let bond = kaspa_consensus_core::palw_producer_v2::palw_bond_summary_v1(&state, &bond);
+        Some(kaspa_consensus_core::palw_producer_v2::PalwBondClaimsV1 { tip_daa, rows, truncated, bond })
     }
 
     pub fn palw_seat_duties_v2_impl(

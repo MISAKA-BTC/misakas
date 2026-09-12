@@ -80,6 +80,9 @@ pub(crate) struct NodeLog {
     pub(crate) producer_errors: Vec<(i64, String)>,
     pub(crate) panel_started: Option<(i64, String)>,
     pub(crate) bond_registered: Option<(i64, String)>,
+    /// The registration worker's lines (`--palw-register-bond`) in this boot, the last few: what
+    /// `misaka mining setup` shows while it waits for a bond.
+    pub(crate) registration: Vec<(i64, String)>,
     pub(crate) janitor_started: Option<i64>,
     pub(crate) janitor_pruned: Option<(i64, String)>,
     pub(crate) janitor_short: Option<(i64, String)>,
@@ -131,6 +134,11 @@ impl NodeLog {
             } else if let Some(reg) = rest.strip_prefix("registered bond ") {
                 let outpoint = reg.split_whitespace().next().unwrap_or_default().to_string();
                 self.bond_registered = Some((ts, outpoint));
+                self.registration.push((ts, rest.to_string()));
+            } else if registration_note(rest).is_some() {
+                self.registration.push((ts, rest.to_string()));
+                let keep = self.registration.len().saturating_sub(12);
+                self.registration.drain(..keep);
             }
             return;
         }
@@ -159,6 +167,7 @@ impl NodeLog {
         self.producer_stopped = None;
         self.producer_errors.clear();
         self.panel_started = None;
+        self.registration.clear();
         self.janitor_started = None;
     }
 
@@ -216,6 +225,69 @@ impl NodeLog {
             self.producer_errors.drain(..keep);
         }
     }
+}
+
+/// **What one registration line says** — `palw_panel.rs`'s bond registration worker, by the strings
+/// it prints. The wizard reads its node's log with these instead of asking the operator to copy an
+/// outpoint off it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum RegistrationNote {
+    /// Still working, or waiting on something that may clear by itself (funds confirming, sync).
+    Waiting(String),
+    /// The carrier is in this node's mempool: `carrier <txid> admitted …`.
+    Admitted(String),
+    /// `registered bond <txid>:<i> …` — the bond exists on the chain.
+    Registered(String),
+    /// The key already holds this bond: nothing was registered, and nothing needs to be.
+    AlreadyHolds(String),
+    /// The key's bond is retiring: this key can never register again.
+    Retiring(String),
+    /// The node gave up on this carrier or on the registration; the line says why.
+    Failed(String),
+}
+
+pub(crate) fn registration_note(rest: &str) -> Option<RegistrationNote> {
+    let outpoint = |s: &str| s.split_whitespace().next().unwrap_or_default().trim_end_matches([',', '.']).to_string();
+    if let Some(r) = rest.strip_prefix("registered bond ") {
+        return Some(RegistrationNote::Registered(outpoint(r)));
+    }
+    if let Some(r) = rest.strip_prefix("this key already holds bond ") {
+        return Some(RegistrationNote::AlreadyHolds(outpoint(r)));
+    }
+    if let Some(r) = rest.strip_prefix("this key's bond ") {
+        return r.contains(" is RETIRING").then(|| RegistrationNote::Retiring(outpoint(r)));
+    }
+    if let Some(r) = rest.strip_prefix("carrier ") {
+        if r.contains(" admitted to this node's mempool") {
+            return Some(RegistrationNote::Admitted(outpoint(r)));
+        }
+        if r.contains("produced no bond")
+            || r.contains("NOT in any block")
+            || r.contains("reached NO block")
+            || r.contains("reached no block")
+        {
+            return Some(RegistrationNote::Failed(rest.to_string()));
+        }
+        return None;
+    }
+    if let Some(why) = rest.strip_prefix("cannot register a bond yet: ") {
+        return Some(RegistrationNote::Waiting(why.to_string()));
+    }
+    if let Some(r) = rest.strip_prefix("still cannot register a bond") {
+        let why = r.rsplit_once(": ").map(|(_, why)| why).unwrap_or(r);
+        return Some(RegistrationNote::Waiting(why.to_string()));
+    }
+    if rest.starts_with("--palw-register-bond") || rest.starts_with("stopping: no bond was registered") {
+        return Some(RegistrationNote::Failed(rest.to_string()));
+    }
+    if rest.starts_with("no bond yet; registering one")
+        || rest.starts_with("registering this node's bond")
+        || rest.starts_with("sizing collateral at ")
+        || rest.starts_with("raising collateral from ")
+    {
+        return Some(RegistrationNote::Waiting(rest.to_string()));
+    }
+    None
 }
 
 /// `#12 00a1…ff (…)` → `(12, "00a1…ff")`.
@@ -364,6 +436,45 @@ mod tests {
         assert_eq!(log.schedule, Some(vec![1150, 1900, 2150, 7000, 2125000]));
         assert_eq!(log.schedule_id.as_deref(), Some("c9b15873aa"));
         assert_eq!(log.app_dir.as_deref(), Some("/root/.t11"));
+    }
+
+    /// The registration worker's lines, read as the node prints them (`palw_panel.rs`): the setup
+    /// wizard waits on these instead of asking the operator to copy an outpoint off the log.
+    #[test]
+    fn the_registration_worker_is_read_by_its_own_sentences() {
+        use RegistrationNote as N;
+        let txid = "4f2a".repeat(32);
+        let registered = format!(
+            "registered bond {txid}:0 with 1110106160 sompi of collateral, in tx {txid}. Restart with --palw-producer-bond={txid}:0 (and --palw-produce) to mine with it; the collateral is reclaimable at this node's pay address once the bond is retired."
+        );
+        assert_eq!(registration_note(&registered), Some(N::Registered(format!("{txid}:0"))));
+        let held = format!(
+            "this key already holds bond {txid}:0 on this chain — not registering another. Drop --palw-register-bond and run with --palw-producer-bond={txid}:0"
+        );
+        assert_eq!(registration_note(&held), Some(N::AlreadyHolds(format!("{txid}:0"))));
+        let retiring = format!("this key's bond {txid}:0 is RETIRING (since DAA 812), so it can take no new work");
+        assert_eq!(registration_note(&retiring), Some(N::Retiring(format!("{txid}:0"))));
+        let admitted = format!("carrier {txid} admitted to this node's mempool and queued for relay, spending aa:1 for 5 sompi");
+        assert_eq!(registration_note(&admitted), Some(N::Admitted(txid.clone())));
+        let queued = format!("carrier {txid} is NOT in any block after 10 minutes — it is still sitting in this node's mempool");
+        assert!(matches!(registration_note(&queued), Some(N::Failed(_))));
+        let why = "no confirmed UTXO to spend — send at least 1110106160 sompi plus a fee to this node's pay address";
+        assert_eq!(registration_note(&format!("cannot register a bond yet: {why}")), Some(N::Waiting(why.into())));
+        let repeat = format!(
+            "still cannot register a bond — the same refusal, unchanged for 3m across 36 attempts. Nothing about the retry differs, so it will not clear until the funding, the flags or the chain do: {why}"
+        );
+        assert_eq!(registration_note(&repeat), Some(N::Waiting(why.into())));
+        assert!(matches!(registration_note("--palw-register-bond needs --palw-producer-key — not registering"), Some(N::Failed(_))));
+        assert_eq!(registration_note("starting (bond=…)"), None, "not a registration line");
+
+        let log = feed(&[
+            "2026-09-12 10:00:00.000+00:00 [INFO ] Consensus params fingerprint: ae1d6162ffee (network testnet-11)",
+            &format!("2026-09-12 10:00:05.000+00:00 [WARN ] [palw-panel] cannot register a bond yet: {why}"),
+            &format!("2026-09-12 10:01:00.000+00:00 [INFO ] [palw-panel] {admitted}"),
+            &format!("2026-09-12 10:01:30.000+00:00 [INFO ] [palw-panel] {registered}"),
+        ]);
+        assert_eq!(log.registration.len(), 3);
+        assert_eq!(log.bond_registered.as_ref().map(|(_, b)| b.clone()), Some(format!("{txid}:0")));
     }
 
     /// A hold is current until the producer draws or produces again; a new boot forgets the old run.

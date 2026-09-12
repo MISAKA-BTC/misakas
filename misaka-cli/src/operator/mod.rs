@@ -12,11 +12,14 @@
 //! * [`dashboard`] — the same answers on one read-only page at 127.0.0.1:8791 (Decision 9).
 //! * [`roles`] — `rewards` and `verifier status`; [`market`] — `model list` and `position …` (§8.2).
 //! * [`logs`] — every component's lines about one work, by the id they share (Decision 8).
+//! * [`wizard`] — `mining setup`, `verifier setup` and `init`: resumable, and it discovers
+//!   instead of asking (Decision 7).
 //! * [`snapshot`], [`nodelog`], [`procs`], [`host`] — what those read: the node's RPC, its log,
 //!   the process table and the host.
 //!
-//! Everything but the supervisor only reads. The supervisor starts and stops this host's own
-//! mining processes; nothing here signs, spends, or changes the host's configuration.
+//! Most of it only reads. The supervisor starts and stops this host's own mining processes. Three
+//! things sign and spend, each only after showing the move and asking: setup (a bond's collateral,
+//! a capability declaration, a self-send), and `position buy` / `position sell`.
 
 pub(crate) mod catalog;
 pub(crate) mod dashboard;
@@ -32,5 +35,6 @@ pub(crate) mod roles;
 pub(crate) mod snapshot;
 pub(crate) mod status;
 pub(crate) mod supervisor;
+pub(crate) mod wizard;
 pub(crate) mod work;
 pub(crate) mod work_cmd;

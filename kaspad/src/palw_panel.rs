@@ -2586,8 +2586,8 @@ impl PalwPanelService {
                         c.palw_claim_rows_v1(bond_key, kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Executor, true, 500)
                     })
                     .await;
-                if let Some((_, rows, _)) = rows {
-                    for line in own_claim_events_v1(&mut own_phases, &rows) {
+                if let Some(read) = rows {
+                    for line in own_claim_events_v1(&mut own_phases, &read.rows) {
                         info!("[{PALW_PANEL}] {line}");
                     }
                 }

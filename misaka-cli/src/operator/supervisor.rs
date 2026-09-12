@@ -134,13 +134,21 @@ pub(crate) fn kaspad_args(p: &Profile, role: Role) -> Result<Vec<String>, Findin
     if let Some(pay) = &p.pay_address {
         args.push(format!("--palw-producer-pay-address={pay}"));
     }
-    if let Some(fee) = &p.fee_outpoint {
+    // **The flag is what turns the panel's funding on, not the outpoint it names.** kaspad's panel
+    // treats "no --palw-fee-outpoint" as its receipts-only mode and never reads the outpoint it
+    // persisted (`resolve_fee_funding`'s early return), while the daemon's startup gate accepts the
+    // persisted file as enough to produce. A producer started on the file alone therefore mined
+    // and could carry nothing — no quorum, no court answer. So the persisted outpoint is passed as
+    // the flag when the configuration names none: with the flag present the panel tries the
+    // persisted one, then this one, then scans the key's own outputs.
+    let persisted = std::fs::read_to_string(p.persisted_fee_outpoint()).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    if let Some(fee) = p.fee_outpoint.clone().or(persisted) {
         args.push(format!("--palw-fee-outpoint={fee}"));
-    } else if role == Role::Miner && !p.persisted_fee_outpoint().exists() {
+    } else if role == Role::Miner {
         // kaspad panics without one on a ConsensusV2 network: say it here, as a fix.
         return Err(missing(
             "which UTXO funds the panel's carriers",
-            "set [advanced] fee_outpoint = \"<txid>:<index>\" (a mature, unbonded UTXO at the key's address, ≥ 0.1 MSK)",
+            "set [advanced] fee_outpoint = \"<txid>:<index>\" (a mature, unbonded UTXO at the key's address, ≥ 0.1 MSK), or: misaka mining setup",
         ));
     }
     if let Some(class) = &p.class {
@@ -160,7 +168,7 @@ pub(crate) fn kaspad_args(p: &Profile, role: Role) -> Result<Vec<String>, Findin
 }
 
 /// A helper binary: the configured path, else beside this `misaka`. Never a bare name on `$PATH`.
-fn binary(name: &str, configured: Option<&Path>) -> Result<PathBuf, Finding> {
+pub(crate) fn binary(name: &str, configured: Option<&Path>) -> Result<PathBuf, Finding> {
     if let Some(path) = configured {
         return if path.is_file() {
             Ok(path.to_path_buf())
@@ -332,7 +340,7 @@ pub(crate) fn alive(pid: u32) -> bool {
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
 
-fn signal(pid: u32, sig: libc::c_int) -> bool {
+pub(crate) fn signal(pid: u32, sig: libc::c_int) -> bool {
     unsafe { libc::kill(pid as libc::pid_t, sig) == 0 }
 }
 
@@ -536,7 +544,7 @@ fn fail(ctx: &crate::node::Ctx, f: Finding) -> CliResult {
     Err(CliError::new(f.exit, String::new()))
 }
 
-fn step(sev: Severity, name: &str, value: &str) {
+pub(crate) fn step(sev: Severity, name: &str, value: &str) {
     println!(
         "  {} {:<11} {value}",
         sev.paint(match sev {
@@ -648,19 +656,20 @@ async fn detach(plan: &Plan, relaunch: &[String]) -> CliResult {
 // the supervisor
 // ---------------------------------------------------------------------------------------------
 
-struct Child {
-    cmd: Cmd,
-    child: std::process::Child,
-    started: Instant,
+pub(crate) struct Child {
+    pub(crate) cmd: Cmd,
+    pub(crate) child: std::process::Child,
+    pub(crate) started: Instant,
 }
 
-fn spawn(cmd: &Cmd, run_dir: &Path) -> Result<Child, String> {
+pub(crate) fn spawn(cmd: &Cmd, run_dir: &Path) -> Result<Child, String> {
     let out = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(run_dir.join(format!("{}.out", cmd.name)))
         .map_err(|e| format!("{}.out: {e}", cmd.name))?;
     let err = out.try_clone().map_err(|e| e.to_string())?;
+    use std::os::unix::process::CommandExt as _;
     let child = std::process::Command::new(&cmd.program)
         .args(&cmd.args)
         .envs(cmd.env.iter().cloned())
@@ -669,13 +678,18 @@ fn spawn(cmd: &Cmd, run_dir: &Path) -> Result<Child, String> {
         .stdin(std::process::Stdio::null())
         .stdout(out)
         .stderr(err)
+        // **A process group of its own, so a terminal's Ctrl-C reaches the supervisor only.** In the
+        // terminal's group, kaspad got the SIGINT too and stopped at once — under a supervisor whose
+        // Ctrl-C means "drain": the claims it was defending lost their node, and the supervisor then
+        // restarted it as a crash. Stopping the children, and in which order, is the supervisor's.
+        .process_group(0)
         .spawn()
         .map_err(|e| format!("{}: {e}", cmd.program.display()))?;
     Ok(Child { cmd: cmd.clone(), child, started: Instant::now() })
 }
 
 /// SIGTERM, then up to `grace` for the process to exit, then SIGKILL. Says which happened.
-async fn stop_child(c: &mut Child, grace: Duration) -> String {
+pub(crate) async fn stop_child(c: &mut Child, grace: Duration) -> String {
     let pid = c.child.id();
     if !matches!(c.child.try_wait(), Ok(None)) {
         return format!("{} had already exited", c.cmd.name);
@@ -694,7 +708,7 @@ async fn stop_child(c: &mut Child, grace: Duration) -> String {
 }
 
 /// The last lines a child printed, for a failure message.
-fn tail(run_dir: &Path, name: &str, lines: usize) -> String {
+pub(crate) fn tail(run_dir: &Path, name: &str, lines: usize) -> String {
     let text = std::fs::read_to_string(run_dir.join(format!("{name}.out"))).unwrap_or_default();
     let all: Vec<&str> = text.lines().collect();
     all[all.len().saturating_sub(lines)..].join("\n")
@@ -1309,6 +1323,26 @@ mod tests {
         let mut p = profile(MiningToml::default());
         p.network = "testnet-x".into();
         assert_eq!(kaspad_args(&p, Role::Miner).unwrap_err().code, "E-CONFIG-NETWORK");
+    }
+
+    /// The panel funds its carriers only when `--palw-fee-outpoint` is present, so an outpoint
+    /// the panel persisted (after a registration, say) is passed as the flag rather than relied on
+    /// silently — without it the node starts, mines, and carries nothing.
+    #[test]
+    fn a_persisted_fee_outpoint_becomes_the_flag() {
+        let dir = std::env::temp_dir().join(format!("misaka-fee-flag-{}", std::process::id()));
+        let panel = dir.join("misaka-testnet-11").join("palw-panel");
+        std::fs::create_dir_all(&panel).unwrap();
+        std::fs::write(panel.join("palw-fee-outpoint"), "cc:1\n").unwrap();
+        let mut p = profile(MiningToml::default());
+        p.appdir = dir.clone();
+        p.fee_outpoint = None;
+        let args = kaspad_args(&p, Role::Miner).expect("the persisted outpoint is enough");
+        assert!(args.contains(&"--palw-fee-outpoint=cc:1".to_string()), "{args:?}");
+        p.fee_outpoint = Some("aa:1".into());
+        let args = kaspad_args(&p, Role::Miner).unwrap();
+        assert!(args.contains(&"--palw-fee-outpoint=aa:1".to_string()), "the configured one wins: {args:?}");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// Draining keeps everything but the producer.

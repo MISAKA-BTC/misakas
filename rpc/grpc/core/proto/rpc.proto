@@ -1767,6 +1767,13 @@ message GetPalwClaimsResponseMessage {
   string role = 4;
   repeated RpcPalwClaimRow claims = 5;
   bool truncated = 6;
+  bool bondKnown = 7;
+  string bondPubkey = 8;
+  optional uint64 bondRetiringSinceDaa = 9;
+  uint64 bondCollateral = 10;
+  uint64 bondSlashed = 11;
+  uint64 bondRegisteredDaa = 12;
+  repeated string bondCapableClasses = 13;
   RPCError error = 1000;
 }
 

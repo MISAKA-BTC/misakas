@@ -37,6 +37,13 @@ pub(crate) struct NodeRead {
     pub(crate) server: GetServerInfoResponse,
     pub(crate) peers: Option<Vec<RpcPeerInfo>>,
     pub(crate) windows: Option<Windows>,
+    /// `getPalwNodeStatus`, when the node serves it.
+    pub(crate) node_status: Option<kaspa_rpc_core::GetPalwNodeStatusResponse>,
+    /// **Whether the node serves ADR-0122's reads** (`getPalwNodeStatus`, `getPalwClaims`,
+    /// `getPalwClasses`). A node built before them does not answer "method not found": it drops
+    /// the WebSocket, and every read after the unknown op on that connection fails. So the op is
+    /// asked once, here, and a node that drops it is reconnected and never asked again.
+    pub(crate) ops_0122: bool,
 }
 
 impl NodeRead {
@@ -164,23 +171,42 @@ fn log_liveness(log: &Result<NodeLog, String>, profile: &Profile, node_ok: bool)
 
 /// Open the node's wRPC Borsh connection for `profile`, and read its identity and peers.
 pub(crate) async fn connect(profile: &Profile, timeout: Duration) -> Result<NodeRead, (String, String)> {
-    let net = NetworkId::from_str(&profile.network).map_err(|e| (profile.network.clone(), format!("not a network id: {e}")))?;
-    let registry = misaka_endpoints::EndpointRegistry::load(&profile.network);
-    let hostport = misaka_endpoints::resolve(&net, EndpointKind::NodeWrpcBorsh, profile.rpc.as_deref(), registry.as_ref());
+    connect_to(&profile.network, profile.rpc.as_deref(), timeout).await
+}
+
+/// [`connect`] by network and endpoint, for a caller with no profile yet (`misaka mining setup`).
+pub(crate) async fn connect_to(network: &str, rpc: Option<&str>, timeout: Duration) -> Result<NodeRead, (String, String)> {
+    let net = NetworkId::from_str(network).map_err(|e| (network.to_string(), format!("not a network id: {e}")))?;
+    let registry = misaka_endpoints::EndpointRegistry::load(network);
+    let hostport = misaka_endpoints::resolve(&net, EndpointKind::NodeWrpcBorsh, rpc, registry.as_ref());
     let url = format!("ws://{hostport}");
-    let client = KaspaRpcClient::new(WrpcEncoding::Borsh, Some(&url), None, None, None).map_err(|e| (url.clone(), e.to_string()))?;
-    let options = ConnectOptions {
-        block_async_connect: true,
-        connect_timeout: Some(timeout),
-        strategy: ConnectStrategy::Fallback,
-        ..Default::default()
+    let open = || async {
+        let client =
+            KaspaRpcClient::new(WrpcEncoding::Borsh, Some(&url), None, None, None).map_err(|e| (url.clone(), e.to_string()))?;
+        let options = ConnectOptions {
+            block_async_connect: true,
+            connect_timeout: Some(timeout),
+            strategy: ConnectStrategy::Fallback,
+            ..Default::default()
+        };
+        client.connect(Some(options)).await.map_err(|e| (url.clone(), e.to_string()))?;
+        Ok::<KaspaRpcClient, (String, String)>(client)
     };
-    client.connect(Some(options)).await.map_err(|e| (url.clone(), e.to_string()))?;
+    let mut client = open().await?;
     let server = client.get_server_info().await.map_err(|e| (url.clone(), format!("getServerInfo: {e}")))?;
+    let (node_status, ops_0122) = match client.get_palw_node_status().await {
+        Ok(status) => (Some(status), true),
+        // Still connected: the node knows the op and refused this call for its own reason.
+        Err(_) if client.is_connected() => (None, true),
+        Err(_) => {
+            client = open().await?;
+            (None, false)
+        }
+    };
     let peers = client.get_connected_peer_info().await.ok().map(|r| r.peer_info);
     let nv = NodeView::from_parts(client, &server);
     let windows = Windows::of(&nv.params);
-    Ok(NodeRead { nv, url, server, peers, windows })
+    Ok(NodeRead { nv, url, server, peers, windows, node_status, ops_0122 })
 }
 
 /// Read the key file's public half. The seed is dropped (and zeroized by the key type) here.
@@ -224,8 +250,8 @@ impl Snapshot {
         };
         (snap.log_live, snap.boot_current) = log_liveness(&snap.log, &snap.profile, snap.node.is_ok());
         let Ok(node) = snap.node.as_ref() else { return snap };
-        // A node that predates the read answers "method not found": the log stays the account.
-        snap.node_status = node.client().get_palw_node_status().await.ok();
+        // A node that predates the read: the log stays the account.
+        snap.node_status = node.node_status.clone();
 
         if let (Some(class), Some(bond)) = (snap.class_id.clone(), snap.profile.bond.clone()) {
             snap.facts = Some(match crate::bond::parse_outpoint(&bond) {
@@ -340,8 +366,10 @@ async fn gather_works(snap: &Snapshot, node: &NodeRead) -> (Vec<WorkRow>, Vec<St
     };
 
     let node_rows = match &snap.profile.bond {
-        Some(bond) => node.client().get_palw_claims(bond.clone(), "executor".into(), true, 200).await.ok().filter(|r| r.available),
-        None => None,
+        Some(bond) if node.ops_0122 => {
+            node.client().get_palw_claims(bond.clone(), "executor".into(), true, 200).await.ok().filter(|r| r.available)
+        }
+        _ => None,
     };
     let source = if node_rows.is_some() { "node" } else { "log" };
     if let Some(resp) = &node_rows {
