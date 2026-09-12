@@ -587,6 +587,7 @@ mod tests {
             "palw_fp_da_pins" => params.palw_fp_da_pins = Some(at),
             "palw_validator_payout_bounds" => params.palw_validator_payout_bounds = Some(at),
             "palw_epoch_boundary_budget" => params.palw_epoch_boundary_budget = Some(at),
+            "palw_epoch_budget_release" => params.palw_epoch_budget_release = Some(at),
             "palw_fp_ruleset_caps" => params.palw_fp_ruleset_caps = Some(at),
             "palw_model_market" => params.palw_model_market = Some(at),
             "palw_model_lines" => params.palw_model_lines = Some(at),

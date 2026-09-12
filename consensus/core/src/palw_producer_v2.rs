@@ -77,6 +77,16 @@ pub struct PalwProducerFactsV2 {
     /// Admission item 7: blocks of this class this epoch may not exceed this.
     pub epoch_budget_blocks: u64,
     pub epoch_produced_blocks: u64,
+    /// **ADR-0123: the slots this class may borrow past its budget**, from
+    /// [`crate::palw_state_v2::palw_epoch_budget_release_v1`] — the function admission calls. Always
+    /// computed, because it is a pure function of the state this view already holds; whether it
+    /// COUNTS is [`Self::epoch_budget_release_armed`], which only a caller holding `Params` can say.
+    pub epoch_budget_released: u64,
+    /// `Params::palw_epoch_budget_release` resolved at [`Self::daa_score`]. The builder cannot know
+    /// it — it holds no `Params`, and must not, or this view would be a second place a fence is
+    /// read — so it is `false` here and set by the consensus API that answers the question, which is
+    /// the one path every producer and the RPC take.
+    pub epoch_budget_release_armed: bool,
     /// Is this the liveness floor? **The floor is EXEMPT from the epoch budget** — admission says so
     /// at `palw_admission_v2.rs:234`, and the exemption is what makes ADR-0039 W6′'s deadlock
     /// unrepresentable: DAA only advances when blocks are produced, so a floor that could be capped
@@ -134,7 +144,8 @@ impl PalwProducerFactsV2 {
     /// refuses — burning an inference each time and learning nothing.
     pub fn has_epoch_room(&self) -> bool {
         // The floor is exempt, exactly as admission exempts it. See `is_base_class`.
-        self.is_base_class || self.epoch_produced_blocks < self.epoch_budget_blocks
+        let released = if self.epoch_budget_release_armed { self.epoch_budget_released } else { 0 };
+        self.is_base_class || self.epoch_produced_blocks < self.epoch_budget_blocks.saturating_add(released)
     }
 
     /// **The receipt lane's preconditions, which are a strict subset of the attempt lane's.**
@@ -216,6 +227,13 @@ pub fn palw_producer_facts_v2(
         Some(counter) if counter.epoch_index == epoch_index => counter.produced_blocks,
         _ => 0,
     };
+    let epoch_budget_released = crate::palw_state_v2::palw_epoch_budget_release_v1(
+        state,
+        state_params.epoch_length(),
+        daa_score,
+        &class_id,
+        epoch_budget_blocks,
+    );
     let bond = bond.and_then(|key| {
         let bond_state = state.bond(key)?;
         Some(PalwProducerBondFactsV2 {
@@ -244,6 +262,8 @@ pub fn palw_producer_facts_v2(
         epoch_index,
         epoch_budget_blocks,
         epoch_produced_blocks,
+        epoch_budget_released,
+        epoch_budget_release_armed: false,
         bond,
         safe_weight: state.safe_weight(),
         live_total: state.safe_weight().saturating_add(state.bounded_immature()),
@@ -367,7 +387,7 @@ mod tests {
         assert!(won, "a quarter-of-the-space target is winnable in 1e5 tries");
 
         let ctx = PalwBlockContextV2 { block: crate::BlockHash::from_u64_word(2), daa_score: 101, blue_score: 2, subsidy: 0 };
-        check_palw_attempt_admission_v2(&state, &params, &admission, &ctx, &env, false).expect("the chain takes it");
+        check_palw_attempt_admission_v2(&state, &params, &admission, &ctx, &env, false, false).expect("the chain takes it");
         crate::palw_admission_v2::check_palw_class_lottery_v3(&state, &env.attempt, anchor).expect("and its draw wins");
     }
 
@@ -426,7 +446,7 @@ mod tests {
         ] {
             let env = build(mutate);
             assert!(
-                check_palw_attempt_admission_v2(&state, &params, &admission, &ctx, &env, false).is_err(),
+                check_palw_attempt_admission_v2(&state, &params, &admission, &ctx, &env, false, false).is_err(),
                 "a producer that got the {name} from anywhere but the facts is a producer with no blocks"
             );
         }

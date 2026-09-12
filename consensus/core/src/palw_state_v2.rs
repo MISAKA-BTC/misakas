@@ -8478,6 +8478,11 @@ pub fn apply_palw_transition_v7(
                         ctx,
                         envelope,
                         false,
+                        // ADR-0123: NOT inert, unlike the boundary fence beside it. The release is
+                        // a function of the live counters, which is exactly what this reads — so
+                        // the fold must release what the processor released for this block, from
+                        // the value resolved once at the block's DAA.
+                        builder.extras.epoch_budget_release_active,
                     ) {
                         Err(refused) => Some(refused.to_string()),
                         Ok(_) => {
@@ -9738,6 +9743,63 @@ fn activate_due_classes(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
         builder.write_class(class_id, Some(record));
     }
     Ok(())
+}
+
+/// **ADR-0123: the epoch slots a spent class may borrow — the elapsed ones nobody else filled.**
+///
+/// The census budget caps a non-floor class at `budget` blocks per epoch, and the admission
+/// comment at that cap already says what it cannot fix: a class that produced in the closed epoch
+/// is measured against the classes that produced then, and "if those go idle now, it exhausts its
+/// slice". The floor's exemption was meant to be the escape — "the floor can always produce, so
+/// DAA always advances" — but that is a statement about PERMISSION. A floor nobody wins advances
+/// nothing, and because an epoch closes only on DAA, the budget that would refill never refills.
+/// On testnet-11 on 2026-09-12 that was a class at 367 of 367 and a chain at ~4 blocks an hour.
+///
+/// The answer is the capacity the OTHER classes have demonstrably left unused, and three choices
+/// make it safe to hand over:
+///
+/// * **Pro rata by elapsed DAA, never ahead of the epoch.** At position `pos` of an epoch of
+///   `length`, the other classes' share of the slots elapsed so far is
+///   `ceil(pos × (length − budget) / length)`. What they have produced is subtracted; only the
+///   remainder is released. At `pos = 0` nothing is, so a fast class cannot open an epoch by
+///   taking a slower class's slice — which is the fairness the budget exists for, kept.
+/// * **Against the epoch's LENGTH, not the sum of the budgets.** Budgets are floored in their
+///   derivation, so over enough competing classes they sum to less than `length`, and a rule that
+///   released against that sum would leave the last slots of every epoch fillable by nobody — the
+///   same deadlock, one slot later. Measured against `length`, the last slot is always reachable:
+///   at `pos = length − 1` the release is exactly the other classes' unfilled remainder, so the
+///   capped class may produce iff the epoch is not yet full.
+/// * **Attempt production only.** Receipt and heartbeat blocks advance `pos` without spending an
+///   attempt slot, so they widen the release rather than narrow it — the blocks nobody owns are
+///   the first ones a starving chain should be able to reuse.
+///
+/// Returns the slots released TO `class_id`, beyond its own `budget`. Admission and the
+/// producer's own readiness call this one function, so a producer can never hold on a block the
+/// chain would accept, or draw for one it would refuse.
+pub fn palw_epoch_budget_release_v1(
+    state: &PalwChainStateV2,
+    epoch_length: u64,
+    daa_score: u64,
+    class_id: &Hash64,
+    budget: u64,
+) -> u64 {
+    if epoch_length == 0 {
+        return 0;
+    }
+    let epoch_index = daa_score / epoch_length;
+    let pos = daa_score % epoch_length;
+    // Every OTHER class's attempt production in THIS epoch. A counter still stamped with an older
+    // epoch has produced nothing in this one.
+    let others_produced: u64 = state
+        .epoch_counters
+        .iter()
+        .filter(|(id, counter)| *id != class_id && counter.epoch_index == epoch_index)
+        .map(|(_, counter)| counter.produced_blocks)
+        .fold(0u64, u64::saturating_add);
+    let others_share = epoch_length.saturating_sub(budget.min(epoch_length));
+    let others_due = (u128::from(pos) * u128::from(others_share)).div_ceil(u128::from(epoch_length));
+    let others_due = u64::try_from(others_due).unwrap_or(u64::MAX);
+    others_due.saturating_sub(others_produced)
 }
 
 /// **ADR-0045 Decision 2's boundary freeze, as ONE pure function over ONE state** (mainnet audit
@@ -12636,6 +12698,13 @@ pub struct PalwTransitionExtrasV1 {
     /// also needs that many of its attempt claims to have reached `Final` in the same span. `false`
     /// by `Default`, so every existing caller and every dormant network is byte-identical.
     pub share_growth_final_active: bool,
+    /// `Params::palw_epoch_budget_release` resolved at the block's DAA (ADR-0123). The fold
+    /// re-runs admission on every MERGED attempt, and must release exactly what the processor's
+    /// admission released for the same block — a fold that refused a block the processor had
+    /// accepted would drop that block's claim and move the state root on one node and not another.
+    /// So the value is resolved once, where the other fences are, and read here. `false` by
+    /// `Default`, so every existing caller and every dormant network is byte-identical.
+    pub epoch_budget_release_active: bool,
 }
 
 impl PalwTransitionExtrasV1 {
@@ -16633,7 +16702,7 @@ pub(crate) mod tests {
         let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
         let mut env = attempt(40, 1);
         env.attempt.class_id = entrant;
-        let err = crate::palw_admission_v2::check_palw_attempt_admission_v2(&s1, &p, &admission, &ctx(2, 101, 2), &env, false)
+        let err = crate::palw_admission_v2::check_palw_attempt_admission_v2(&s1, &p, &admission, &ctx(2, 101, 2), &env, false, false)
             .expect_err("a weightless class admits nothing");
         assert!(
             matches!(err, crate::palw_admission_v2::PalwAdmissionV2Error::ClassNotYetActive { activation_daa: 500, .. }),
@@ -16657,9 +16726,9 @@ pub(crate) mod tests {
         // …and now it admits. The class had to become active for this to change, which is what
         // makes the refusal above a real gate rather than an unrelated failure.
         assert!(
-            crate::palw_admission_v2::check_palw_attempt_admission_v2(&s3, &p, &admission, &ctx(4, 501, 4), &env, false).is_ok()
+            crate::palw_admission_v2::check_palw_attempt_admission_v2(&s3, &p, &admission, &ctx(4, 501, 4), &env, false, false).is_ok()
                 || !matches!(
-                    crate::palw_admission_v2::check_palw_attempt_admission_v2(&s3, &p, &admission, &ctx(4, 501, 4), &env, false),
+                    crate::palw_admission_v2::check_palw_attempt_admission_v2(&s3, &p, &admission, &ctx(4, 501, 4), &env, false, false),
                     Err(crate::palw_admission_v2::PalwAdmissionV2Error::ClassNotYetActive { .. })
                 ),
             "after activation the class is no longer refused FOR BEING INACTIVE"
@@ -28672,6 +28741,7 @@ pub(crate) mod tests {
                 audit_2026_09_11_active: false,
                 audit_2026_09_11_deep_active: false,
                 share_growth_final_active: false,
+                epoch_budget_release_active: false,
                 prompt_ids_merkle: false,
             }
         }
@@ -28887,6 +28957,7 @@ pub(crate) mod tests {
                 audit_2026_09_11_active: false,
                 audit_2026_09_11_deep_active: false,
                 share_growth_final_active: false,
+                epoch_budget_release_active: false,
                 prompt_ids_merkle: false,
             };
             let (s_off, _) =

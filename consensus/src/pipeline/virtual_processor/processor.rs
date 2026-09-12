@@ -534,6 +534,12 @@ pub struct VirtualStateProcessor {
     /// place, `palw_v2_check_attempt_admission`, at the BLOCK's own DAA, which is the same score
     /// admission divides by `epoch_length`.
     pub(super) palw_epoch_boundary_budget: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **ADR-0123's budget release, `None` on every shipped preset.** Resolved in exactly one
+    /// place, [`Self::palw_epoch_budget_release_at`], and read by all three sites that judge an
+    /// attempt against its budget — admission, the fold (through the transition extras) and the
+    /// producer's own readiness — because three readings of one block's DAA is how a block gets
+    /// accepted by one and dropped by another.
+    pub(super) palw_epoch_budget_release: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **ADR-0044 Decision 9's advertised free-prompt caps, `None` on every shipped preset**
     /// (mainnet audit 2026-09-06, L-2). Past it the extraction walk gives the lane's validation the
     /// two numbers the ruleset advertises — `max_prompt_tokens` and `max_decode_tokens`, both
@@ -1043,6 +1049,7 @@ impl VirtualStateProcessor {
             palw_model_evm: params.palw_model_evm_fence(),
             palw_context_ladder: params.palw_context_ladder,
             palw_epoch_boundary_budget: params.palw_epoch_boundary_budget,
+            palw_epoch_budget_release: params.palw_epoch_budget_release,
             palw_fp_ruleset_caps: params.palw_fp_ruleset_caps,
             palw_uncertified_weightless: params.palw_uncertified_weightless,
             palw_da_court: params.palw_da_court,
@@ -5178,7 +5185,7 @@ impl VirtualStateProcessor {
         let virtual_read = self.virtual_stores.read();
         let candidate_daa = virtual_read.state.get().ok()?.daa_score;
         drop(virtual_read);
-        kaspa_consensus_core::palw_producer_v2::palw_producer_facts_v2(
+        let mut facts = kaspa_consensus_core::palw_producer_v2::palw_producer_facts_v2(
             &state,
             state_params,
             admission,
@@ -5186,7 +5193,13 @@ impl VirtualStateProcessor {
             candidate_daa,
             class_id,
             bond.map(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2).as_ref(),
-        )
+        )?;
+        // ADR-0123: the builder computes the release but cannot know whether it counts — it holds
+        // no `Params`. This is the one path every producer and the RPC ask through, and it resolves
+        // the fence at the SAME candidate score admission will judge the block at, so a producer
+        // holds exactly when the chain would refuse and draws exactly when it would accept.
+        facts.epoch_budget_release_armed = self.palw_epoch_budget_release_at(candidate_daa);
+        Some(facts)
     }
 
     /// **The certified free-prompt quanta `bond` may spend into receipt blocks (FP-R5).**
@@ -8165,6 +8178,9 @@ impl VirtualStateProcessor {
             // Written explicitly for the same reason again: this one decides whether a boundary
             // grows a class's share on accepted blocks or on Final work (ADR-0107).
             share_growth_final_active: self.palw_share_growth_final_at(daa_score),
+            // ADR-0123: the fold re-runs admission on every merged attempt, so it must release what
+            // admission released for this block. Explicit for the reason the lines above give.
+            epoch_budget_release_active: self.palw_epoch_budget_release_at(daa_score),
             evm_actions: Vec::new(),
             // ADR-0093 Decision 8: which form of move 1 opens a phase. Written explicitly for the
             // reason the lines above give — an unwritten default here would refuse, or admit, a
@@ -8221,6 +8237,11 @@ impl VirtualStateProcessor {
     /// read one answer.
     fn palw_share_growth_final_at(&self, daa_score: u64) -> bool {
         self.palw_share_growth_final.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// ADR-0123's budget release at `daa_score` — the one resolver every budget reader shares.
+    pub(super) fn palw_epoch_budget_release_at(&self, daa_score: u64) -> bool {
+        self.palw_epoch_budget_release.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// **The fused terminal's responder-coverage rule, resolved in exactly one place** — the reason
@@ -8706,6 +8727,9 @@ impl VirtualStateProcessor {
             // refused at three sites is what made this defect cost a block, its mergeset's claims
             // and their carves at once.
             self.palw_epoch_boundary_budget.is_some_and(|fence| fence.is_active(point.daa_score)),
+            // ADR-0123, a SEPARATE resolution from the fence above: two adjacent `bool`s are a
+            // transposition the compiler cannot see, so each is named at its source.
+            self.palw_epoch_budget_release_at(point.daa_score),
         )
         .map_err(|e| e.to_string())?;
         Ok(Some(envelope))

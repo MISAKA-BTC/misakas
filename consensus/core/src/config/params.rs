@@ -1162,6 +1162,23 @@ pub struct Params {
     /// `the_boundary_derivation_and_the_folds_snapshot_can_differ_when_growth_is_on`.
     pub palw_epoch_boundary_budget: Option<ForkActivation>,
 
+    /// **ADR-0123: a spent class budget borrows the epoch slots nobody else is filling.**
+    ///
+    /// The census budget (ADR-0045 Decision 2) caps each non-floor class at its share of an
+    /// epoch, and the floor's exemption is what is supposed to keep the chain moving past a cap:
+    /// "the floor can always produce, so DAA always advances". That is true of what the floor is
+    /// PERMITTED to do and false of what it DOES on a network where nobody wins its ticket — on
+    /// testnet-11 on 2026-09-12 a class exhausted 367 of 367 at DAA ~3,761, the only other active
+    /// producer drew once every eight minutes, and the chain fell from ~55 to ~4 blocks an hour
+    /// for the ~199 DAA left before the budget refilled.
+    ///
+    /// Past this fence a class that has spent its budget may keep producing into the slots of the
+    /// epoch that have ELAPSED and that the other classes have NOT filled — pro rata by DAA, so it
+    /// can never take a slot early, and measured against the epoch's length rather than the sum of
+    /// the budgets, so truncation cannot leave a last slot nobody may fill. See
+    /// [`crate::palw_state_v2::palw_epoch_budget_release_v1`]. `None` on every shipped preset.
+    pub palw_epoch_budget_release: Option<ForkActivation>,
+
     /// **ADR-0044 Decision 9's two advertised caps, enforced** (mainnet audit 2026-09-06, L-2).
     /// `None` on every shipped preset, so the behaviour is byte-identical to not having the field.
     ///
@@ -3394,6 +3411,9 @@ impl Params {
         if self.palw_epoch_boundary_budget == Some(ForkActivation::never()) {
             self.palw_epoch_boundary_budget = None;
         }
+        if self.palw_epoch_budget_release == Some(ForkActivation::never()) {
+            self.palw_epoch_budget_release = None;
+        }
         if self.palw_fp_ruleset_caps == Some(ForkActivation::never()) {
             self.palw_fp_ruleset_caps = None;
         }
@@ -4027,6 +4047,7 @@ impl Params {
             palw_fp_da_pins,
             palw_validator_payout_bounds,
             palw_epoch_boundary_budget,
+            palw_epoch_budget_release,
             palw_fp_ruleset_caps,
             palw_model_market,
             palw_model_lines,
@@ -4087,6 +4108,7 @@ impl Params {
             ("palw_fp_da_pins", *palw_fp_da_pins),
             ("palw_validator_payout_bounds", *palw_validator_payout_bounds),
             ("palw_epoch_boundary_budget", *palw_epoch_boundary_budget),
+            ("palw_epoch_budget_release", *palw_epoch_budget_release),
             ("palw_fp_ruleset_caps", *palw_fp_ruleset_caps),
             ("palw_model_market", *palw_model_market),
             ("palw_model_lines", *palw_model_lines),
@@ -4346,6 +4368,10 @@ impl Params {
             h.write(b"palw_epoch_boundary_budget");
             h.write(activation.daa_score().to_le_bytes());
         }
+        if let Some(activation) = self.palw_epoch_budget_release {
+            h.write(b"palw_epoch_budget_release");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         if let Some(activation) = self.palw_fp_ruleset_caps {
             h.write(b"palw_fp_ruleset_caps");
             h.write(activation.daa_score().to_le_bytes());
@@ -4485,6 +4511,7 @@ impl Params {
             palw_fp_da_pins,
             palw_validator_payout_bounds,
             palw_epoch_boundary_budget,
+            palw_epoch_budget_release,
             palw_fp_ruleset_caps,
             palw_heartbeat_transparent,
             palw_share_growth_final,
@@ -4846,6 +4873,9 @@ impl Params {
         if let Some(activation) = palw_epoch_boundary_budget.as_mut() {
             fork(activation, visit);
         }
+        if let Some(activation) = palw_epoch_budget_release.as_mut() {
+            fork(activation, visit);
+        }
         if let Some(activation) = palw_fp_ruleset_caps.as_mut() {
             fork(activation, visit);
         }
@@ -5087,6 +5117,7 @@ impl Params {
             palw_fp_da_pins,
             palw_validator_payout_bounds,
             palw_epoch_boundary_budget,
+            palw_epoch_budget_release,
             palw_fp_ruleset_caps,
             palw_heartbeat_transparent,
             palw_share_growth_final,
@@ -5507,6 +5538,10 @@ impl Params {
             h.write(b"palw_epoch_boundary_budget");
             h.write(activation.daa_score().to_le_bytes());
         }
+        if let Some(activation) = palw_epoch_budget_release {
+            h.write(b"palw_epoch_budget_release");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         if let Some(activation) = palw_fp_ruleset_caps {
             h.write(b"palw_fp_ruleset_caps");
             h.write(activation.daa_score().to_le_bytes());
@@ -5852,6 +5887,7 @@ impl Params {
             palw_fp_da_pins: self.palw_fp_da_pins,
             palw_validator_payout_bounds: self.palw_validator_payout_bounds,
             palw_epoch_boundary_budget: self.palw_epoch_boundary_budget,
+            palw_epoch_budget_release: self.palw_epoch_budget_release,
             palw_fp_ruleset_caps: self.palw_fp_ruleset_caps,
             palw_heartbeat_transparent: self.palw_heartbeat_transparent,
             palw_share_growth_final: self.palw_share_growth_final,
@@ -6818,6 +6854,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_fp_da_pins: None,
     palw_validator_payout_bounds: None,
     palw_epoch_boundary_budget: None,
+    palw_epoch_budget_release: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
@@ -6998,6 +7035,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_fp_da_pins: None,
     palw_validator_payout_bounds: None,
     palw_epoch_boundary_budget: None,
+    palw_epoch_budget_release: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
@@ -7160,6 +7198,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_fp_da_pins: None,
     palw_validator_payout_bounds: None,
     palw_epoch_boundary_budget: None,
+    palw_epoch_budget_release: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
@@ -11609,6 +11648,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_fp_da_pins: None,
     palw_validator_payout_bounds: None,
     palw_epoch_boundary_budget: None,
+    palw_epoch_budget_release: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
@@ -16345,6 +16385,7 @@ mod consensus_params_id_tests {
             "palw_da_court",
             "palw_difficulty_priced_rows",
             "palw_epoch_boundary_budget",
+            "palw_epoch_budget_release",
             "palw_fp_da_pins",
             "palw_fp_ruleset_caps",
             "palw_heartbeat",
