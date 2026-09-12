@@ -185,10 +185,9 @@ budget is the fix, and §8 of ADR-0112 names the node's own working set as what 
 * **The arming height.** A flag day, announced like DAA 3,500's, is the operator's call.
   testnet-11's schedule is unchanged by this ADR.
 * **Re-pricing.** Decision 4's fraction stands until a re-mint can carry the draw's own count.
-* **The dense tier's one-pass prefill.** Its engine has a batched prefill (`forward_prefill`) that
-  only tests call. Its weights are held whole in memory (1.67 GiB), so the pass buys compute
-  locality rather than storage, and the capture loop's order is Decision 2's to reuse when it is
-  wired.
+* ~~**The dense tier's one-pass prefill.**~~ **Built 2026-09-12** (§9.1): the dense engine walks
+  the registered plan a layer at a time over runs of positions, and the capture loop and the
+  interval replays take it.
 
 ## 8. Number hygiene
 
@@ -206,3 +205,38 @@ budget is the fix, and §8 of ADR-0112 names the node's own working set as what 
 The suites on `feat/adr-0103-held-context` after the change: consensus core 2,123 passed (library
 and integration), `misaka-palw-base0` 432, the SDK 25, `kaspad`'s library 87; `misaka-cli` and
 `misaka-palw-job-replay` compile against the new `PalwClaimRootsV1`.
+
+### 9.1 The dense tier's one pass (2026-09-12, at the operator's instruction)
+
+`A16Engine::forward_prefill_planned` walks the registered plan a layer at a time over a run of
+positions. Each projection runs once over the run — `kernels::a16_matmul_requant_batch`, the
+weight row read once for every position, which the kernel tests hold bit-identical to the
+single-row projection — with the sink position alone on its own parameters (ADR-0050). The fused
+attention site reads one concatenation of the layer's history and hands each position its prefix,
+where the stepped walk copied the whole history for every position. Every other node is the
+stepped walk's own evaluation (`eval_node`, extracted from `walk_table` so the two walks are one
+computation), on the pool one position a task. A cache write appends the run's rows in position
+order and a read sees the series that ends at its own row; a plan whose layer reads the cache before
+writing it keeps the stepped walk (`one_pass_prefill_supported`).
+
+It runs where a prefill runs: the dense capture loop — the producer's draw (Decision 1's job) and
+its free-prompt capture, in runs of `A16_PREFILL_RUN_POSITIONS` = 64, a checkpoint after a prefill
+position taken after its run from the rows it reads by index — and, through
+`Base0FpReplayForwardV1`, the interval replays a seat and an executor run (a held interval of
+prompt positions, a shipped class's interval 0). The legacy v1 class, which commits every prompt
+position's logits in its composite root, keeps the stepped walk.
+
+| | stepped | runs of 32 | runs of 64 |
+|---|---|---|---|
+| 256 positions | 8.64 s (33.8 ms a position) | 3.94 s (15.4 ms), 2.20× | — |
+| 508 positions (the 512 row's canonical prefill) | 18.30 s (36.0 ms) | 8.28 s (16.3 ms), 2.24× | 7.47 s (14.7 ms), 2.45× |
+
+The real 1.5B artifact, testnet-11's graph-v5 row, one 12-core M-series host, the prompt the
+env-gated `one_pass_prefill_on_the_real_dense_row` probe builds; every committed row, the cache and
+the last position's logits the same bits in every run. Pinned on the fixture by
+`the_one_pass_prefill_is_the_position_by_position_one` (the v2, v5 and v7 plans, the fast and
+catalog engines, from the sink and from a stepped prefix, runs of every width), and end to end by
+the context vectors, whose documents did not move. The 32,768-position vector's stages, the same
+host, before and after (with ADR-0121's streamed replays beside it): produce 32.6 → 7.7 s, seat
+91.6 → 34.7 s, court 180.7 → 44.2 s, availability 11.5 → 2.1 s — 318.6 s to 91.4 s, the document
+`0b8b191d…` both times.
