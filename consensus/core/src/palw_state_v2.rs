@@ -9287,9 +9287,28 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
                     //
                     // Fenced, and deliberately not merged into the clause above: that one is
                     // unfenced and always was, and it decides a different question.
+                    // **C-08 (mainnet audit 2026-09-11 deep fence): the fused-terminal mercy is
+                    // LIFTED past the fence.** The mercy above exists because, before the deep fence,
+                    // no binary in the field could construct the fused ROOT CLAIM for a dense-v5 class
+                    // — its canonical leaf count exceeds the `PALW_STEP_MAX_LEAVES` (2^22) opening cap,
+                    // so `step_opening_root_capped_v1` refused the very move the responder owed. So a
+                    // guilty fused responder could reach the terminal, file nothing, and have its
+                    // forged claim final unconvicted — the withholding the finding names. e8's
+                    // ADR-0119, on this SAME 7,000 fence, raises that cap to the class's own ladder
+                    // (2^26 for dense v5) and ships the responder that builds the root claim, so past
+                    // the fence the move IS constructible and withholding it is a genuine default.
+                    // The mercy therefore stops applying to the fused terminal past the fence, and the
+                    // silence falls through to the conviction arm below (`void_and_slash` + the C-03
+                    // court-time charge). **This is safe ONLY with ADR-0119's cap-raise and responder
+                    // in the same build — fd requires deep+held to ship as one build, which is exactly
+                    // that guarantee.** The unfenced `round() == 0 && weightless` clause is untouched:
+                    // it is the opening-rung / weightless-family mercy (M2-5), a different question
+                    // that the cap raise does not bear on.
                     crate::palw_bisect::PalwBisectPartyV1::Responder
                         if (session.dissection.is_none() && session.ladder.round() == 0 && !class_holds_weight)
-                            || (builder.extras.court_responder_coverage_active && owes_the_dissection_opening) =>
+                            || (builder.extras.court_responder_coverage_active
+                                && owes_the_dissection_opening
+                                && !builder.extras.audit_2026_09_11_deep_active) =>
                     {
                         // Ends the session, convicts nobody, and FINES nobody — see
                         // `rearm_after_unanswered_opening` (audit3 H4). Routing this to the
@@ -26389,6 +26408,60 @@ pub(crate) mod tests {
             assert!(
                 !matches!(swept.claim(&claim_id).expect("the claim is still a record").phase, PalwClaimPhaseV2::Voided { .. }),
                 "past the fence, a responder is not convicted for failing to file an object no binary in this tree builds"
+            );
+        }
+
+        /// **C-08 (mainnet audit 2026-09-11 deep fence): past the DEEP fence the fused-terminal
+        /// conviction returns — a withholding responder is convicted again.** The responder-coverage
+        /// fence (the test directly above) made a fused-terminal silence convict nobody, because no
+        /// binary could construct the root claim: a dense-v5 class's canonical leaf count exceeds the
+        /// `PALW_STEP_MAX_LEAVES` (2^22) opening cap, so the very move the responder owed was refused.
+        /// e8's ADR-0119, on this SAME 7,000 fence, raises that cap to the class's own ladder and
+        /// ships the responder that builds the root claim — so past the fence the move IS
+        /// constructible, withholding it is a genuine default, and the claim voids `CourtFraud` on the
+        /// responder's own side. That closes the "responder holding evidence can withhold" the finding
+        /// names. **Safe only with ADR-0119's cap-raise + responder in the same build, which fd's
+        /// deep+held one-build rule guarantees.** Same drill and the same coverage bit as the test
+        /// above; only `audit_2026_09_11_deep_active` differs, and it flips the ending back.
+        #[test]
+        fn c08_the_fused_terminal_conviction_returns_past_the_deep_fence() {
+            let p = params_with_ladder();
+            let drill = Drill::new(false);
+            let (state, claim_id, sid, _daa) = court_at_the_fused_leaf(&p, &drill);
+            let session = state.court_session(&sid).expect("the session lives");
+            assert!(session.dissection.is_none(), "nobody has filed a root claim — the withholding scenario");
+            assert_eq!(session.ladder.turn(), PalwBisectTurnV1::Terminal);
+            let after = session.ladder.last_deadline_daa() + 1;
+            assert!(after < session.deadline_daa, "the RUNG is what fires, not the backstop");
+
+            // Responder coverage armed (the mercy is on) AND past the deep fence (which lifts it).
+            let extras = PalwTransitionExtrasV1 {
+                court_responder_coverage_active: true,
+                audit_2026_09_11_deep_active: true,
+                ..Default::default()
+            };
+            let (swept, _) = apply_palw_transition_v2_with_extras(
+                &state,
+                &p,
+                &ctx(after, after, after),
+                &[],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &extras,
+            )
+            .expect("the sweep applies");
+            swept.assert_internal_consistency(&p).expect("internal consistency after apply");
+            swept.assert_deadline_consistency(&p).expect("deadline consistency after apply");
+            assert!(swept.court_session(&sid).is_none(), "the session is decided and gone");
+            assert!(
+                matches!(
+                    swept.claim(&claim_id).expect("the claim is still a record").phase,
+                    PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }
+                ),
+                "past the deep fence a responder that withholds the now-constructible root claim defaults and is convicted"
             );
         }
 
