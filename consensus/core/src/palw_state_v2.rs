@@ -1036,6 +1036,15 @@ impl PalwStateParamsV2 {
         self.worker_carve_permille
     }
 
+    /// **The worker carve of one subsidy — what a claim escrows, and what the coinbase withholds.**
+    /// `⌊subsidy · worker_carve_permille / 1000⌋`, the exact number [`apply_attempt`] snapshots into
+    /// `escrowed_reward`. The processor calls this to size the merged-escrow withhold (B-1) from each
+    /// merged block's own subsidy, so the carve the fold records and the carve the coinbase withholds
+    /// are one value computed by one function — the matched pair the coinbase-hash rule requires.
+    pub fn worker_carve(&self, subsidy: u64) -> u64 {
+        worker_carve_v2(self, subsidy)
+    }
+
     /// **Require a claim's collateral to be a fraction of the reward it escrows** (2026-08-30).
     ///
     /// The downside of producing is `pwu_per_inference x slash_value_per_pwu`; the upside is the block's worker
@@ -3302,17 +3311,44 @@ pub enum PalwBlockWorkV3<'a> {
 pub struct PalwMergedWorkV1<'a> {
     pub carrying_block: BlockHash,
     pub work: PalwBlockWorkV3<'a>,
+    /// **B-4: the pre_pow-inclusive execution commitment of this merged work's attempt**
+    /// (`execution_commitment_v3` under `execution_anchor_v3(net, MB pre_pow, class, bond, nonce)`),
+    /// computed by the processor from the merged block's own header (the fold holds no pre_pow).
+    /// The fold dedups on it past `palw_audit_2026_09_11_deep`. `Hash64::default()` for a non-attempt
+    /// work (`None`/`ReceiptSpend`) — unread there — and below the fence, where it is never consulted.
+    pub execution_key: Hash64,
+    /// **B-1: the merged block's OWN coinbase-declared subsidy**, the pool its escrow is carved
+    /// FROM past `palw_audit_2026_09_11_deep`. It is the merged block's `mergeset_rewards` subsidy
+    /// (`calc_block_subsidy(MB.daa)` for a normal block, `0` for a heartbeat) — the SAME number the
+    /// coinbase pays that block from — so the escrow the fold records and the carve the coinbase
+    /// withholds are one value. `0` below the fence (unread there) and for non-attempt work.
+    pub subsidy: u64,
 }
 
 /// Where an attempt entered the chain — its own chain block, or a merged blue (ADR-0058).
 ///
-/// The flag is the escrow rule, not a hint: the coinbase withholds escrow only from the
-/// selected parent (the one mergeset member whose claim it can know about before validating),
-/// so a claim created FOR a merged blue must escrow nothing or the withhold and the release
-/// would disagree about whether the carve was ever taken.
+/// The flag is the escrow rule, not a hint: escrow is minted only where the coinbase withholds
+/// it, or the withhold and the release disagree about whether the carve was ever taken.
+///
+/// * **Own work** always escrows, carved from the accepting block's own subsidy — withheld by the
+///   NEXT block's coinbase (`palw_v2_escrow_withheld_at`, the selected-parent lag).
+/// * **Merged work** escrowed NOTHING below `palw_audit_2026_09_11_deep` (ADR-0058 Decision 5: the
+///   coinbase paid the merged carve in full at acceptance, and a claim that escrowed a carve the
+///   coinbase already paid would mint it twice). **Past the deep fence (B-1) it escrows too**,
+///   carved from the MERGED block's own subsidy, and the accepting block's coinbase withholds that
+///   same carve instead of paying it (`palw_v2_merged_escrow_withheld`) — symmetric to own work, so
+///   a merged claim that later voids forfeits its carve like any other.
 struct PalwAttemptOriginV1 {
     carrying_block: BlockHash,
     escrows_reward: bool,
+    /// The subsidy this claim's escrow is carved FROM when `escrows_reward` — the accepting block's
+    /// own subsidy for own work, the merged block's own subsidy for merged work (B-1). Unread when
+    /// `escrows_reward` is false.
+    escrow_subsidy: u64,
+    /// **B-4: this attempt's pre_pow-inclusive execution commitment**, threaded from the processor
+    /// (own work from this block's header, merged work from the merged block's). `apply_attempt`
+    /// dedups on it against the builder's `seen_exec` past `palw_audit_2026_09_11_deep`.
+    execution_key: Hash64,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -3907,10 +3943,15 @@ fn convict_close_declarer_v1(
             // else, exactly as a late verdict does.
             if !claim.phase.is_terminal() {
                 builder.void_and_slash(session.claim, &claim, ctx.daa_score, PalwVoidReasonV2::CourtFraud)?;
+                // C-03 (deep fence): the guilty responder also pays for the time it kept the court
+                // open — a share of the claim's reserved stake proportional to the session's length.
+                builder.charge_court_time_v1(claim.bond, claim.reserved, session.opened_daa, ctx.daa_score)?;
             }
             Ok(())
         }
-        PalwCourtSideV1::Challenger => rearm_after_challenger_side_close(builder, ctx, session.claim, &claim, session.challenger_bond),
+        PalwCourtSideV1::Challenger => {
+            rearm_after_challenger_side_close(builder, ctx, session.claim, &claim, session.challenger_bond, session.opened_daa)
+        }
     }
 }
 
@@ -4157,6 +4198,13 @@ pub enum PalwStateV2Error {
     MissingClaim(Hash64),
     #[error("claim {0} already exists (one attempt id, one claim)")]
     DuplicateClaim(Hash64),
+    /// **B-4 (mainnet audit 2026-09-11): one inference is one block.** Two attempts in a block's own
+    /// + mergeset work whose pre_pow-inclusive execution commitment (`execution_commitment_v3` under
+    /// `execution_anchor_v3`) is equal are the SAME inference re-announced under different nonces in
+    /// one bucket; the second is refused so it mints no second claim, no second weight and no second
+    /// coinbase share. Past `palw_audit_2026_09_11_deep` only; below it, unchanged.
+    #[error("execution {0} is already claimed by this block's work (one inference, one block)")]
+    DuplicateExecution(Hash64),
     /// ADR-0065 D4. Named for what it is, because "wrong phase" would have said the claim was the
     /// problem — and an operator reading a refused object needs to know the RULE moved, not go
     /// looking at a claim that is in exactly the phase it should be.
@@ -4424,6 +4472,13 @@ pub enum PalwStateV2Error {
          allowed to delete what this asks it to open (ADR-0062 SA-1/SA-6)"
     )]
     DaOutsideRetention { claim: Hash64, at: u64, window: u64, retention_daa: u64 },
+    #[error(
+        "a court opened for claim {claim} at {at} would run its window ({window}) past the retention \
+         obligation that ends at {retention_daa} — the producer's material may already be deleted there, \
+         so the court could convict it for a lapse the chain itself allowed (mainnet audit 2026-09-11, \
+         the DA path's SA-1/SA-6 mirrored onto the interactive court)"
+    )]
+    CourtOutsideRetention { claim: Hash64, at: u64, window: u64, retention_daa: u64 },
     #[error("claim {0} already carries an open data-availability accusation; one at a time (ADR-0062 SA-1)")]
     DaAccusationAlreadyOpen(Hash64),
     #[error(
@@ -4893,6 +4948,27 @@ impl PalwChainStateV2 {
 
     pub fn class(&self, id: &Hash64) -> Option<&PalwClassStateV2> {
         self.classes.get(id)
+    }
+
+    /// **C-08 (mainnet audit 2026-09-11 deep fence): can an honest responder build the fused
+    /// ROOT-CLAIM evidence for `class_id` within a node's memory?** C-08 lifts the fused-terminal
+    /// mercy past the deep fence and convicts a responder that withholds the root claim — sound only
+    /// where the responder could actually have filed it. A dense-v5 class can (its rerun is ~13K
+    /// leaves ≈ 3 MB per position, ~1.7 GB at 512 positions). A HELD v7 class cannot: its evidence
+    /// builder re-executes the fold retention densely and holds every tile (~6 MB per position at
+    /// ~103K leaves), which at a few hundred positions exceeds 24 GB — so an honest held-class
+    /// responder would be convicted of `CourtFraud` for a move it has no memory to make, the exact
+    /// case ADR-0093's mercy exists for. A windowed builder — the rows the site reads, replayed from
+    /// the interval's anchor — is ADR-0121 §7's, and the evidence's own size (the whole K/V history
+    /// the site reduces over) is a carrier question besides; neither is decided.
+    ///
+    /// **So a held class keeps the mercy: `!self.class_is_held_v1(class_id)`** (ADR-0119's
+    /// registry, merged into the same 7,000 build). Every class that is not held is convicted past
+    /// the deep fence exactly as C-08 wrote it; a held class's honest responder is never convicted
+    /// for a move no node can make. Kept as a named seam, not a comment, so C-08's condition is
+    /// structurally complete and a later flag day that can build the evidence edits one body.
+    pub(crate) fn court_root_evidence_is_buildable_v1(&self, class_id: &Hash64) -> bool {
+        !self.class_is_held_v1(class_id)
     }
 
     /// ADR-0071 SA-3: the production fact recorded under `key`, if the chain holds one.
@@ -6638,6 +6714,13 @@ struct TransitionBuilder<'a> {
     da_court: bool,
     /// ADR-0088 / ADR-0089: the block's extras (fences and EVM inputs), constant for the fold.
     extras: &'a PalwTransitionExtrasV1,
+    /// **B-4: the pre_pow-inclusive execution commitments this block's work has already claimed.**
+    /// One inference is one block — two attempts in this block's own + mergeset work with the same
+    /// `execution_commitment_v3` are the same inference re-announced, and the second is refused
+    /// (`DuplicateExecution`) so it mints no second claim/weight/share. Populated only at an
+    /// attempt's SUCCESSFUL end, so a refused attempt (which the merged loop restores) leaves no
+    /// mark; read only past `palw_audit_2026_09_11_deep`, so below the fence it is never consulted.
+    seen_exec: std::collections::HashSet<Hash64>,
 }
 
 impl<'a> TransitionBuilder<'a> {
@@ -6660,6 +6743,7 @@ impl<'a> TransitionBuilder<'a> {
             uncertified_weightless,
             da_court,
             extras,
+            seen_exec: std::collections::HashSet::new(),
         }
     }
 
@@ -7483,6 +7567,41 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
+    /// **C-03 (mainnet audit 2026-09-11 deep fence): bill court time to the LOSING party.**
+    ///
+    /// The court is clocked in DAA but nothing charged for consuming it, so a party that expects to
+    /// lose has a strictly-dominant incentive to play every turn at the last legal DAA — dragging one
+    /// dispute to its whole `window_court` backstop at zero marginal cost, deferring its slash,
+    /// freezing the honest claim, and tying up the challenger's reserved exposure the entire time.
+    /// Past the fence the party a session closes AGAINST pays, on top of its verdict slash, a share
+    /// of the claim's own reserved stake proportional to how long the session ran:
+    /// `claim.reserved × (close − opened) / window_court`, capped at `claim.reserved` (a full-window
+    /// stall). So stalling now costs money that grows with the delay, while prompt play is ~free —
+    /// and the PREVAILING party is billed nothing, which is the "refunded to the winner" the user
+    /// chose, made whole by never being charged rather than by a refund transfer.
+    ///
+    /// Derived at close from the session's `opened_daa` and this block's DAA — no per-move accrual
+    /// state, so no borsh migration. Burned like every other slash. **A no-op below the deep fence**
+    /// (and on every network without a V2 bundle), so the court is byte-identical there; callers may
+    /// invoke it unconditionally.
+    fn charge_court_time_v1(
+        &mut self,
+        loser: PalwBondKeyV2,
+        claim_reserved: u128,
+        opened_daa: u64,
+        close_daa: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        if !self.extras.audit_2026_09_11_deep_active {
+            return Ok(());
+        }
+        let window = self.params.window_court.max(1);
+        let elapsed = close_daa.saturating_sub(opened_daa).min(window);
+        // `claim_reserved` is at most a u64 exposure times a u64 slash value, so this fits u128; the
+        // `/ window` keeps it ≤ `claim_reserved`, the same ceiling the verdict slash used.
+        let charge = claim_reserved.saturating_mul(elapsed as u128) / (window as u128);
+        self.slash_bond(loser, charge)
+    }
+
     /// Void a claim AND take the collateral it put at risk.
     ///
     /// `claim.reserved` is exactly `pwu_per_inference × slash_value_per_pwu` — the number the exposure ceiling
@@ -7553,7 +7672,22 @@ impl<'a> TransitionBuilder<'a> {
                 PalwSeatAnswerV2::Incapable => continue,
             };
             if took != served_won {
-                self.slash_seat(receipt.seat_bond, claim.reserved, seat_cap)?;
+                // **BC-SYBIL (mainnet audit 2026-09-11 deep fence): a seat's stake at risk is the
+                // claim's own reserved exposure, not the flat `min_collateral` floor.** Below the
+                // fence a dissenting seat lost at most `min_collateral` (0.004 MSK) however much the
+                // claim was worth, so a Sybil that owned a quorum could corrupt a high-value verdict
+                // for pocket change. Past the fence it risks up to `claim.reserved` — the same
+                // `pwu × slash_value_per_pwu` the executor stands behind — clamped to its own
+                // collateral by `slash_bond`. Safe against a registrant griefing seats with an
+                // arbitrary slash value because the draw only seats bonds that DECLARED
+                // `capable_classes` for this class (`palw_bond_may_judge_class_v2`), so a seat only
+                // ever risks capital on a class it opted into; BASE-0 (forced-capable) is
+                // chain-defined, so its `reserved` is bounded. Below the fence, unchanged.
+                if self.extras.audit_2026_09_11_deep_active {
+                    self.slash_bond(receipt.seat_bond, claim.reserved)?;
+                } else {
+                    self.slash_seat(receipt.seat_bond, claim.reserved, seat_cap)?;
+                }
             }
         }
         Ok(())
@@ -7966,6 +8100,9 @@ pub fn apply_palw_transition_v2_with_extras(
         accepted_objects,
         work,
         &[],
+        // No header here (attempt-only wrapper, no merged work) — the own-vs-merged execution dedup
+        // cannot fire, so B-4's own-work key is `default`; below the deep fence it is unread anyway.
+        Hash64::default(),
         unavailable_abstains,
         capability_bound,
         uncertified_weightless,
@@ -8089,6 +8226,10 @@ pub fn apply_palw_transition_v6(
         accepted_objects,
         block_work,
         merged_work,
+        // v6 has no header; a caller that needs the own-work execution key threads it through v7
+        // directly. Its own merged works still carry their own `execution_key`, so merged-vs-merged
+        // dedup is intact; only the own-vs-merged case needs the header, which v6 lacks.
+        Hash64::default(),
         unavailable_abstains,
         capability_bound,
         uncertified_weightless,
@@ -8179,6 +8320,12 @@ pub fn apply_palw_transition_v7(
     accepted_objects: &[PalwConsensusObjectV2],
     block_work: PalwBlockWorkV3<'_>,
     merged_work: &[PalwMergedWorkV1<'_>],
+    // **B-4: the block's OWN attempt's pre_pow-inclusive execution commitment**, computed by the
+    // processor from this block's header (the fold holds no pre_pow). `Hash64::default()` when the
+    // block carries no attempt, and unread below `palw_audit_2026_09_11_deep`. A wrapper that has no
+    // header (rehearsal / genesis / sync) passes `default` — its fold carries no merged work, so the
+    // own-vs-merged dedup cannot fire there and the own attempt is applied identically either way.
+    own_execution_key: Hash64,
     unavailable_abstains: bool,
     capability_bound: bool,
     uncertified_weightless: bool,
@@ -8285,7 +8432,18 @@ pub fn apply_palw_transition_v7(
     match block_work {
         PalwBlockWorkV3::None => {}
         PalwBlockWorkV3::Attempt(envelope) => {
-            apply_attempt(&mut builder, ctx, envelope, PalwAttemptOriginV1 { carrying_block: ctx.block, escrows_reward: true })?
+            apply_attempt(
+                &mut builder,
+                ctx,
+                envelope,
+                PalwAttemptOriginV1 {
+                    carrying_block: ctx.block,
+                    escrows_reward: true,
+                    // Own work always escrows, carved from this block's own subsidy (unchanged).
+                    escrow_subsidy: ctx.subsidy,
+                    execution_key: own_execution_key,
+                },
+            )?
         }
         PalwBlockWorkV3::ReceiptSpend(spend) => apply_receipt_spend(&mut builder, ctx, spend)?,
     }
@@ -8324,11 +8482,21 @@ pub fn apply_palw_transition_v7(
                         Err(refused) => Some(refused.to_string()),
                         Ok(_) => {
                             let checkpoint = builder.checkpoint();
+                            // B-1: past the deep fence a merged claim escrows its carve, carved from the
+                            // MERGED block's own subsidy — the accepting coinbase withholds that same
+                            // carve. Below the fence, false → escrows nothing (ADR-0058 D5),
+                            // byte-identical to before. Read before the &mut borrow of `builder`.
+                            let escrows_reward = builder.extras.audit_2026_09_11_deep_active;
                             match apply_attempt(
                                 &mut builder,
                                 ctx,
                                 envelope,
-                                PalwAttemptOriginV1 { carrying_block: merged.carrying_block, escrows_reward: false },
+                                PalwAttemptOriginV1 {
+                                    carrying_block: merged.carrying_block,
+                                    escrows_reward,
+                                    escrow_subsidy: merged.subsidy,
+                                    execution_key: merged.execution_key,
+                                },
                             ) {
                                 Ok(()) => None,
                                 Err(refused) => {
@@ -8437,6 +8605,9 @@ fn rearm_after_challenger_side_close(
     claim_id: Hash64,
     claim: &PalwClaimStateV2,
     challenger_bond: PalwBondKeyV2,
+    // C-03: when the session opened, so the court-time charge below can bill the losing challenger
+    // for how long the session ran. Unread below the deep fence (the charge is a no-op there).
+    session_opened_daa: u64,
 ) -> Result<(), PalwStateV2Error> {
     // **A failed accusation costs the accuser.**
     //
@@ -8453,6 +8624,9 @@ fn rearm_after_challenger_side_close(
     // registrant could make challenging its own class ruinous and buy itself immunity from the
     // court. The floor is the registry's own.
     builder.slash_seat(challenger_bond, claim.reserved, builder.params.min_collateral_sompi())?;
+    // C-03 (deep fence): and it pays for the time it kept the session open — a losing challenger
+    // that stalled to its backstop pays more than one that concedes fast. No-op below the fence.
+    builder.charge_court_time_v1(challenger_bond, claim.reserved, session_opened_daa, ctx.daa_score)?;
     rearm_claim_after_court_close(builder, ctx, claim_id, claim)
 }
 
@@ -9178,9 +9352,33 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
                     //
                     // Fenced, and deliberately not merged into the clause above: that one is
                     // unfenced and always was, and it decides a different question.
+                    // **C-08 (mainnet audit 2026-09-11 deep fence): the fused-terminal mercy is
+                    // LIFTED past the fence.** The mercy above exists because, before the deep fence,
+                    // no binary in the field could construct the fused ROOT CLAIM for a dense-v5 class
+                    // — its canonical leaf count exceeds the `PALW_STEP_MAX_LEAVES` (2^22) opening cap,
+                    // so `step_opening_root_capped_v1` refused the very move the responder owed. So a
+                    // guilty fused responder could reach the terminal, file nothing, and have its
+                    // forged claim final unconvicted — the withholding the finding names. e8's
+                    // ADR-0119, on this SAME 7,000 fence, raises that cap to the class's own ladder
+                    // (2^26 for dense v5) and ships the responder that builds the root claim, so past
+                    // the fence the move IS constructible and withholding it is a genuine default.
+                    // The mercy therefore stops applying to the fused terminal past the fence, and the
+                    // silence falls through to the conviction arm below (`void_and_slash` + the C-03
+                    // court-time charge). **This is safe ONLY with ADR-0119's cap-raise and responder
+                    // in the same build — fd requires deep+held to ship as one build, which is exactly
+                    // that guarantee.** The unfenced `round() == 0 && weightless` clause is untouched:
+                    // it is the opening-rung / weightless-family mercy (M2-5), a different question
+                    // that the cap raise does not bear on.
                     crate::palw_bisect::PalwBisectPartyV1::Responder
                         if (session.dissection.is_none() && session.ladder.round() == 0 && !class_holds_weight)
-                            || (builder.extras.court_responder_coverage_active && owes_the_dissection_opening) =>
+                            || (builder.extras.court_responder_coverage_active
+                                && owes_the_dissection_opening
+                                // The deep fence lifts the fused-terminal mercy — but ONLY where an
+                                // honest responder could build the root-claim evidence. A held class
+                                // cannot (ADR-0121 §7), so its mercy is kept even past the fence; see
+                                // `court_root_evidence_is_buildable_v1` (`!class_is_held_v1`).
+                                && !(builder.extras.audit_2026_09_11_deep_active
+                                    && builder.state.court_root_evidence_is_buildable_v1(&claim.class_id))) =>
                     {
                         // Ends the session, convicts nobody, and FINES nobody — see
                         // `rearm_after_unanswered_opening` (audit3 H4). Routing this to the
@@ -9197,10 +9395,20 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
                         // nothing else, exactly as a late verdict does.
                         if !claim.phase.is_terminal() {
                             builder.void_and_slash(session.claim, &claim, ctx.daa_score, PalwVoidReasonV2::CourtFraud)?;
+                            // C-03 (deep fence): the defaulting responder also pays for the time it
+                            // kept the session open (a no-op below the fence).
+                            builder.charge_court_time_v1(claim.bond, claim.reserved, session.opened_daa, ctx.daa_score)?;
                         }
                     }
                     crate::palw_bisect::PalwBisectPartyV1::Challenger => {
-                        rearm_after_challenger_side_close(builder, ctx, session.claim, &claim, session.challenger_bond)?;
+                        rearm_after_challenger_side_close(
+                            builder,
+                            ctx,
+                            session.claim,
+                            &claim,
+                            session.challenger_bond,
+                            session.opened_daa,
+                        )?;
                     }
                 }
                 continue;
@@ -9252,7 +9460,7 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
         }
         builder.write_court(session_id, None)?;
         // The backstop's own direction, unchanged for a session that declared no close at all.
-        rearm_after_challenger_side_close(builder, ctx, session.claim, &claim, session.challenger_bond)?;
+        rearm_after_challenger_side_close(builder, ctx, session.claim, &claim, session.challenger_bond, session.opened_daa)?;
     }
     Ok(())
 }
@@ -11394,6 +11602,26 @@ fn apply_object(
             }
             let deadline_daa =
                 ctx.daa_score.checked_add(builder.params.window_court).ok_or(PalwStateV2Error::Overflow("court deadline"))?;
+            // **Court-window bound (mainnet audit 2026-09-11 deep fence): a court's whole window must
+            // fit inside the producer's retention obligation** — the rule the DA-accusation path
+            // already enforces (`DaOutsideRetention`, SA-1/SA-6), mirrored onto the interactive court.
+            // Below the fence `CourtOpened` bounded only its own deadline by `window_court`, so a
+            // court opened near the end of retention ran past `claim.trace_retention_daa` and could
+            // demand material the obligation already let the producer delete — convicting an honest
+            // producer who pruned, and leaving no safe finite retention cap (the disk-growth root of
+            // the C-05 revert). Past the fence such a court is refused, so the court can never demand
+            // what the obligation released and a producer may prune at `trace_retention_daa`.
+            // `validate_palw_v2` requires `min_trace_retention_daa >= window_court` whenever this
+            // fence is armed, so a court can still open on every fresh claim (the obligation always
+            // covers at least one full window from acceptance).
+            if builder.extras.audit_2026_09_11_deep_active && deadline_daa > claim.trace_retention_daa {
+                return Err(PalwStateV2Error::CourtOutsideRetention {
+                    claim: *claim_id,
+                    at: ctx.daa_score,
+                    window: builder.params.window_court,
+                    retention_daa: claim.trace_retention_daa,
+                });
+            }
             // **The opening rung is clocked like every other rung — because a responder now ships.**
             //
             // A rung clock convicts on silence: `declare_no_show` reads whose turn it was and ends
@@ -11530,10 +11758,13 @@ fn apply_object(
                         // from evidence alone, so it is the one that most obviously must cost
                         // the executor its stake (audit C5: it did not).
                         builder.void_and_slash(claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::CourtFraud)?;
+                        // C-03 (deep fence): and the convicted responder pays for the time it kept
+                        // the court open (a no-op below the fence).
+                        builder.charge_court_time_v1(claim.bond, claim.reserved, session.opened_daa, ctx.daa_score)?;
                     }
                 }
                 PalwCourtVerdictV2::ChallengerDefeated => {
-                    rearm_after_challenger_side_close(builder, ctx, claim_id, &claim, session.challenger_bond)?;
+                    rearm_after_challenger_side_close(builder, ctx, claim_id, &claim, session.challenger_bond, session.opened_daa)?;
                 }
             }
         }
@@ -11819,6 +12050,38 @@ fn apply_object(
             let proven_root = builder.state.claim_roots.get(&session.claim).copied().unwrap_or(class.artifact_root);
             let operands = crate::palw_artifact::PalwProvenOperandsV1::from_openings_v1(operand_openings, proven_root)
                 .map_err(|e| PalwStateV2Error::DissectionRefused(*session_id, e.to_string()))?;
+            // **C-01 (mainnet audit 2026-09-11): the dissection binds a CANONICAL leaf count.**
+            // The site is classified under the canonical count `step_leaf_count(profile, context)`
+            // (`canonical_step_coordinates`), but the opened output tile and every prefix row are
+            // authenticated under the DECLARED `binding.step_leaf_count` (its Merkle tree's shape is
+            // a function of that count). The arithmetic path pins the two equal
+            // (`StepLeafCountNotCanonical`, `palw_step_leg.rs`); the dissection path did not, so a
+            // non-canonical count let the accused commit a step tree the court classifies one way and
+            // authenticates another — a terminal remap the honest close cannot convict (it "roots
+            // elsewhere"), acquitting a forged execution. Past the audit fence, refuse a
+            // non-canonical count HERE: a session can then be opened only over a canonical binding,
+            // so the accused's only moves are a canonical one (no remap) or a no-show (which
+            // convicts responder-side). The cap is the claim's OWN count, never `PALW_STEP_MAX_LEAVES`
+            // — spelling it a constant convicts the honest graph-v5 class whose canonical job counts
+            // millions of leaves (the reason `palw_step_leg.rs` reads it this way); `Ok(n) && n ==
+            // claim` is the same predicate at every ladder. Below the fence, unchanged. C-01 is one of
+            // the DEEP findings, so it rides `palw_audit_2026_09_11_deep` (a later flag day than the
+            // shallow fence), not `palw_audit_2026_09_11`.
+            if builder.extras.audit_2026_09_11_deep_active {
+                match crate::palw_step::step_leaf_count_capped_v1(
+                    &binding.shape_profile,
+                    &binding.job_context,
+                    binding.step_leaf_count,
+                ) {
+                    Ok(count) if count == binding.step_leaf_count => {}
+                    _ => {
+                        return Err(PalwStateV2Error::DissectionRefused(
+                            *session_id,
+                            "the root claim's step_leaf_count is not the canonical function of (profile, context) (C-01)".to_string(),
+                        ));
+                    }
+                }
+            }
             // The site is the CLASS's description of the leaf the ladder terminated on — derived
             // from the coordinate and the registered profile, never supplied by the mover.
             // ADR-0119 Decision 4: under the held regime the site's rows open at the claim's ladder.
@@ -12353,11 +12616,17 @@ pub struct PalwTransitionExtrasV1 {
     /// class's ids are a tile tree. `false` — the flat digest — is every shipped preset.
     pub prompt_ids_merkle: bool,
     /// `Params::palw_audit_2026_09_11` resolved at the block's DAA. `false` (every dormant network,
-    /// and testnet-11 below its flag day) selects the pre-audit fold at every site the audit fixes
-    /// touch; `true` selects the fixed behavior. The fixes that live in the acceptance filter (A-1,
-    /// AC-SLOT) read the fence off `Params` directly in the processor; the ones the fold decides
-    /// read it here.
+    /// and testnet-11 below its flag day) selects the pre-audit fold at every site the SHALLOW audit
+    /// fixes (A-1, AC-SLOT, B-5) touch; `true` selects the fixed behavior. The acceptance-filter
+    /// fixes read the fence off `Params` directly in the processor; the ones the fold decides read
+    /// it here.
     pub audit_2026_09_11_active: bool,
+    /// `Params::palw_audit_2026_09_11_deep` resolved at the block's DAA — the audit's DEEP findings
+    /// (B-1 merged-work escrow, C-01 fused-terminal canonical count, B-4 execution dedup). `false`
+    /// (dormant, and testnet-11 below its later flag day) selects the pre-fix fold; `true` selects
+    /// the fixed behavior. Separate from `audit_2026_09_11_active` so the deep set activates at its
+    /// own height, distinct from the shallow fence.
+    pub audit_2026_09_11_deep_active: bool,
     /// `Params::palw_share_growth_final` resolved at the block's DAA (ADR-0107). Below it a class
     /// grows its cadence share on the blocks it had ACCEPTED in the closed epoch; past it growth
     /// also needs that many of its attempt claims to have reached `Final` in the same span. `false`
@@ -13253,6 +13522,14 @@ fn apply_attempt(
     if builder.state.claims.contains_key(&claim_id) {
         return Err(PalwStateV2Error::DuplicateClaim(claim_id));
     }
+    // **B-4: one inference is one block.** A sibling that re-announces THIS block's-work execution
+    // under a different within-bucket nonce has a different `attempt_id` (so `DuplicateClaim` above
+    // lets it through) but the SAME pre_pow-inclusive `execution_commitment_v3` — refuse it so it
+    // mints no second claim, no second weight, no second coinbase share. Only past the deep fence;
+    // below it, `seen_exec` is never consulted and the pay set is byte-identical to before.
+    if builder.extras.audit_2026_09_11_deep_active && builder.seen_exec.contains(&origin.execution_key) {
+        return Err(PalwStateV2Error::DuplicateExecution(origin.execution_key));
+    }
     let bond_key = PalwBondKeyV2(attempt.executor_bond);
     let bond = builder.state.bonds.get(&bond_key).ok_or(PalwStateV2Error::MissingBond(bond_key))?;
     if let PalwBondStatusV2::Retiring { .. } = bond.status {
@@ -13302,12 +13579,17 @@ fn apply_attempt(
         } else {
             0
         },
-        // For the block's OWN attempt: the claim IS this block, so the block's carve funds
-        // exactly one claim and the "never exceeds the subsidy" bound is structural rather than
-        // arithmetic. For a MERGED blue's attempt (ADR-0058 Decision 5): zero — the coinbase
-        // already paid that blue its worker share in full and withheld nothing, so an escrow
-        // here would be a release with no matching withhold, minted on top of the schedule.
-        escrowed_reward: if origin.escrows_reward { worker_carve_v2(builder.params, ctx.subsidy) } else { 0 },
+        // Carved from `origin.escrow_subsidy` — the accepting block's own subsidy for own work, the
+        // merged block's own subsidy for merged work (B-1). For OWN work the claim IS this block, so
+        // the block's carve funds exactly one claim and "never exceeds the subsidy" is structural.
+        // For a MERGED blue: below `palw_audit_2026_09_11_deep`, `escrows_reward` is false and this is
+        // zero (ADR-0058 Decision 5 — the coinbase paid that blue in full, so an escrow here would be
+        // a release with no matching withhold, minted on top of the schedule). PAST the deep fence
+        // (B-1) `escrows_reward` is true and the carve is taken from the merged block's own subsidy,
+        // which the coinbase withholds from that same block's worker output instead of paying — the
+        // matched pair. Each block's carve is a permille of its OWN subsidy, so N merged escrows in
+        // one accepting block never exceed Σ of the merged blocks' subsidies.
+        escrowed_reward: if origin.escrows_reward { worker_carve_v2(builder.params, origin.escrow_subsidy) } else { 0 },
         work_leaves: 0,
         work_id: None,
         phase: PalwClaimPhaseV2::Provisional,
@@ -13335,6 +13617,12 @@ fn apply_attempt(
         _ => PalwEpochCounterV2 { epoch_index, produced_pwu: attempt.pwu as u128, produced_blocks: 1 },
     };
     builder.write_epoch(attempt.class_id, Some(counter));
+    // **B-4: mark this execution claimed**, so a sibling re-announcing it later in this same block's
+    // work is refused above. At the SUCCESSFUL end only — a refused attempt is restored by the
+    // merged loop and must leave no mark, and only past the deep fence.
+    if builder.extras.audit_2026_09_11_deep_active {
+        builder.seen_exec.insert(origin.execution_key);
+    }
     Ok(())
 }
 
@@ -15899,6 +16187,94 @@ pub(crate) mod tests {
         assert_eq!(after_on, before_on, "past the fence it does not — `Withheld` is not a side");
     }
 
+    /// **BC-SYBIL (mainnet audit 2026-09-11 deep fence): a dissenting seat risks the claim's own
+    /// reserved stake, not the flat `min_collateral` floor.** Below the fence a seat that
+    /// contradicts its panel's quorum loses at most `min_collateral` (100 in the fixture) however
+    /// much the claim was worth — so a Sybil that owns a quorum corrupts a high-value verdict for
+    /// pocket change (the "juror who cannot be meaningfully fined"). Past the deep fence it loses up
+    /// to `claim.reserved` (200 = 40 pwu × 5 slash-value), clamped to its own collateral — the same
+    /// stake the executor stands behind. `unavailable_abstains` is left `false` so `Withheld` is a
+    /// chargeable side, isolating the dissent case whose penalty this raises; only the extras flag
+    /// differs between the two runs.
+    #[test]
+    fn bc_sybil_a_dissenting_seat_risks_the_claims_reserve_past_the_deep_fence() {
+        let p = params();
+        let genesis = PalwChainStateV2::genesis();
+        let drop_for = |deep: bool| {
+            let extras = PalwTransitionExtrasV1 { audit_2026_09_11_deep_active: deep, ..Default::default() };
+            let step = |parent: &PalwChainStateV2,
+                        c: &PalwBlockContextV2,
+                        objs: &[PalwConsensusObjectV2],
+                        work: PalwBlockWorkV3<'_>| {
+                apply_palw_transition_v7(parent, &p, None, c, objs, work, &[], Hash64::default(), false, false, false, false, &extras)
+                    .expect("applies")
+                    .0
+            };
+            let s1 = step(&genesis, &ctx(1, 100, 1), &register_class_and_bond(), PalwBlockWorkV3::None);
+            let env = attempt(40, 1);
+            let claim_id = attempt_id_v2(&env.attempt);
+            let s2 = step(&s1, &ctx(2, 101, 2), &[], PalwBlockWorkV3::Attempt(&env));
+            let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
+            let s3 = step(
+                &s2,
+                &ctx(3, 105, 3),
+                &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }],
+                PalwBlockWorkV3::None,
+            );
+            let before = s3.bond(&bond_key(1)).expect("registered").collateral;
+            // The quorum licenses; this seat filed `Withheld`, the losing side — the dissenter.
+            let s4 = step(
+                &s3,
+                &ctx(4, 106, 4),
+                &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(false) }],
+                PalwBlockWorkV3::None,
+            );
+            before - s4.bond(&bond_key(1)).expect("registered").collateral
+        };
+        assert_eq!(drop_for(false), 100, "below the deep fence a dissenting seat loses only min_collateral (100)");
+        assert_eq!(drop_for(true), 200, "past the deep fence it loses the claim's whole reserved stake (200 = 40 × 5)");
+    }
+
+    /// **Court-window bound (mainnet audit 2026-09-11 deep fence): a court whose window would run
+    /// past the claim's retention obligation is refused past the fence, and opens below it.** The
+    /// DA-accusation path already refuses this (`DaOutsideRetention`, SA-1/SA-6 — "the producer was
+    /// already allowed to delete what this asks it to open"); the interactive court did not, so a
+    /// court opened near the end of retention could demand material the obligation released and
+    /// convict an honest producer who pruned. Past the deep fence the court is bound the same way,
+    /// which is what lets a producer safely cap its retention (the C-05 disk root). Same object both
+    /// sides; only the extras flag differs.
+    #[test]
+    fn court_outside_retention_is_refused_past_the_deep_fence() {
+        let p = params(); // window_court = 500
+        let genesis = PalwChainStateV2::genesis();
+        // An attempt whose retention obligation ends at DAA 200 — a court's 500-DAA window cannot fit
+        // inside it. (A fold test sets it directly; admission pins it to accepted + min_trace_retention
+        // in production, and `validate_palw_v2` keeps min_trace_retention ≥ window_court there.)
+        let mut env = attempt(40, 1);
+        env.attempt.trace_retention_daa = 200;
+        let claim_id = attempt_id_v2(&env.attempt);
+        let open = |deep: bool| {
+            let extras = PalwTransitionExtrasV1 { audit_2026_09_11_deep_active: deep, ..Default::default() };
+            let step = |parent: &PalwChainStateV2,
+                        c: &PalwBlockContextV2,
+                        objs: &[PalwConsensusObjectV2],
+                        work: PalwBlockWorkV3<'_>| {
+                apply_palw_transition_v7(parent, &p, None, c, objs, work, &[], Hash64::default(), false, false, false, false, &extras)
+                    .map(|(s, _, _)| s)
+            };
+            let s1 = step(&genesis, &ctx(1, 100, 1), &register_class_and_bond(), PalwBlockWorkV3::None).expect("register");
+            let s2 = step(&s1, &ctx(2, 101, 2), &[], PalwBlockWorkV3::Attempt(&env)).expect("attempt");
+            // Court opened at DAA 102: its backstop is 102 + 500 = 602 > 200 = trace_retention_daa.
+            let court = court_open(claim_id, env.attempt.trace_root, bond_key(1), bond_key(1));
+            step(&s2, &ctx(3, 102, 3), &[court], PalwBlockWorkV3::None)
+        };
+        match open(true) {
+            Err(PalwStateV2Error::CourtOutsideRetention { retention_daa: 200, window: 500, .. }) => {}
+            other => panic!("expected CourtOutsideRetention past the deep fence, got {other:?}"),
+        }
+        assert!(open(false).is_ok(), "below the deep fence a court opens regardless of the obligation (unchanged)");
+    }
+
     #[test]
     fn a_producer_default_voids_the_claim_in_any_immature_phase() {
         let p = params();
@@ -16029,6 +16405,74 @@ pub(crate) mod tests {
         assert!(matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
         let (s8, _) = apply(&s7, &p, &ctx(8, 211, 8), &[], None);
         assert!(matches!(s8.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
+    }
+
+    /// **C-03 (mainnet audit 2026-09-11 deep fence): a court is billed to the losing party by how
+    /// long it ran.** The court is clocked in DAA but nothing charged for consuming it, so a party
+    /// that expects to lose has a dominant incentive to play every turn at the last legal DAA —
+    /// dragging the dispute to its whole `window_court` backstop at zero marginal cost, deferring its
+    /// slash and freezing the honest claim. Past the fence the party the session closes AGAINST pays,
+    /// on top of its verdict slash (`claim.reserved`), a share of that stake proportional to the
+    /// elapsed DAA: `claim.reserved × (close − opened) / window_court`. The session here runs 250 of
+    /// a 500-DAA window, so the extra charge is half of `claim.reserved` (200 → 100). Below the fence
+    /// the court is byte-identical — only the verdict slash. Only the extras flag differs.
+    #[test]
+    fn c03_a_guilty_responder_pays_for_the_time_it_kept_the_court_open() {
+        let p = params(); // window_court = 500
+        let genesis = PalwChainStateV2::genesis();
+        let collateral_after_guilty = |deep: bool| {
+            let extras = PalwTransitionExtrasV1 { audit_2026_09_11_deep_active: deep, ..Default::default() };
+            let step = |parent: &PalwChainStateV2,
+                        c: &PalwBlockContextV2,
+                        objs: &[PalwConsensusObjectV2],
+                        work: PalwBlockWorkV3<'_>| {
+                apply_palw_transition_v7(parent, &p, None, c, objs, work, &[], Hash64::default(), false, false, false, false, &extras)
+                    .expect("applies")
+                    .0
+            };
+            let s1 = step(&genesis, &ctx(1, 100, 1), &register_class_and_bond(), PalwBlockWorkV3::None);
+            let env = attempt(40, 1);
+            let claim_id = attempt_id_v2(&env.attempt);
+            let s2 = step(&s1, &ctx(2, 101, 2), &[], PalwBlockWorkV3::Attempt(&env));
+            // License the claim so an open court can keep it alive across the session's span (an
+            // un-bound claim would bind-timeout before the close, and a timeout voids without slashing).
+            let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
+            let s3 = step(
+                &s2,
+                &ctx(3, 102, 3),
+                &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }],
+                PalwBlockWorkV3::None,
+            );
+            let s4 = step(
+                &s3,
+                &ctx(4, 103, 4),
+                &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
+                PalwBlockWorkV3::None,
+            );
+            // Court opens at DAA 104; closes ExecutorGuilty at DAA 354 — 250 of the 500-DAA window.
+            // An open court freezes the licensed claim's path to Final, so it stays alive until close.
+            let s5 = step(&s4, &ctx(5, 104, 5), &[court_open(claim_id, h64(31), bond_key(1), bond_key(1))], PalwBlockWorkV3::None);
+            let close = PalwConsensusObjectV2::CourtClosed {
+                session_id: court_session_of(claim_id, h64(31), bond_key(1), bond_key(1)),
+                verdict: PalwCourtVerdictV2::ExecutorGuilty,
+                proof: crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic {
+                    refutation: crate::palw_step_refute::tests::skeleton_refutation(),
+                    operand_openings: Vec::new(),
+                },
+            };
+            let s6 = step(&s5, &ctx(6, 354, 6), &[close], PalwBlockWorkV3::None);
+            s6.bond(&bond_key(1)).expect("the responder bond").collateral
+        };
+        assert_eq!(
+            collateral_after_guilty(false),
+            800,
+            "below the fence only the verdict slash (claim.reserved = 200) applies: 1000 → 800"
+        );
+        assert_eq!(
+            collateral_after_guilty(true),
+            700,
+            "past the fence the guilty responder also pays the court-time charge (250/500 × 200 = 100): 1000 → 700"
+        );
     }
 
     #[test]
@@ -19721,7 +20165,12 @@ pub(crate) mod tests {
 
         // A spend naming a claim that does not exist: refused inside the fold, after checkpoint.
         let ghost = fp_spend(0xDEAD, 0);
-        let merged = [PalwMergedWorkV1 { carrying_block: h64(0xB1u64), work: PalwBlockWorkV3::ReceiptSpend(&ghost) }];
+        let merged = [PalwMergedWorkV1 {
+            carrying_block: h64(0xB1u64),
+            work: PalwBlockWorkV3::ReceiptSpend(&ghost),
+            execution_key: Hash64::default(),
+            subsidy: 0,
+        }];
         let (with_skip, delta_with, skips) =
             apply_palw_transition_v4(&s1, &p, None, &ctx(2, 101, 2), &[], PalwBlockWorkV3::None, &merged)
                 .expect("the accepting block stands");
@@ -19744,12 +20193,184 @@ pub(crate) mod tests {
 
         let env = attempt(40, 1);
         let claim_id = attempt_id_v2(&env.attempt);
-        let merged = [PalwMergedWorkV1 { carrying_block: h64(0xB2u64), work: PalwBlockWorkV3::Attempt(&env) }];
+        let merged = [PalwMergedWorkV1 {
+            carrying_block: h64(0xB2u64),
+            work: PalwBlockWorkV3::Attempt(&env),
+            execution_key: Hash64::default(),
+            subsidy: 0,
+        }];
         let (s2, _, skips) = apply_palw_transition_v4(&s1, &p, None, &ctx(2, 101, 2), &[], PalwBlockWorkV3::None, &merged)
             .expect("the accepting block stands");
         assert_eq!(skips.len(), 1, "skipped, with the missing-params reason");
         assert!(s2.claim(&claim_id).is_none(), "and no claim was minted");
         assert_eq!(s2.reserved_exposure(&bond_key(1)), 0, "and nothing was reserved");
+    }
+
+    /// **B-4 (mainnet audit 2026-09-11 deep fence): one inference is one block.** Two merged blues
+    /// re-announce the SAME execution under different within-bucket nonces — distinct `attempt_id`s
+    /// (so the `DuplicateClaim` guard lets both through) but one pre_pow-inclusive
+    /// `execution_commitment_v3`, which the processor threads into the fold as `execution_key`. Past
+    /// `palw_audit_2026_09_11_deep` the fold claims the first and refuses the second
+    /// (`DuplicateExecution`), skipped like any refused merged work — one claim, one reserve, one
+    /// coinbase share. Below the fence `seen_exec` is never consulted and BOTH claim: the pre-fix
+    /// behaviour, byte for byte. Only the extras flag differs between the two folds below.
+    ///
+    /// This closes the INTRA-block half of B-4. The durable CROSS-block half — a sibling that
+    /// re-announces an execution a PAST block already claimed — is not folded: recovering a stored
+    /// claim's `execution_key` would need its accepted block's header (the fold holds only the
+    /// commitment roots), and storing the key would move the state root. The residual is bounded by
+    /// the same bond exposure ceiling every claim answers to, and documented at [`TransitionBuilder`].
+    #[test]
+    fn b4_merged_nonce_siblings_sharing_an_execution_dedup_past_the_deep_fence() {
+        let p = params();
+        let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+
+        // Two attempts of the base class, same execution, different nonces → different attempt_ids.
+        let a = attempt(40, 1);
+        let b = attempt(40, 2);
+        let id_a = attempt_id_v2(&a.attempt);
+        let id_b = attempt_id_v2(&b.attempt);
+        assert_ne!(id_a, id_b, "the nonce siblings are distinct claims — DuplicateClaim would not catch this");
+
+        // The pre_pow-inclusive key the processor computes for BOTH (equal = same inference); the
+        // fold has no header, so it is handed the value the processor would derive.
+        let shared = h64(0x5EED);
+        let merged = [
+            PalwMergedWorkV1 { carrying_block: h64(0xB1), work: PalwBlockWorkV3::Attempt(&a), execution_key: shared, subsidy: 0 },
+            PalwMergedWorkV1 { carrying_block: h64(0xB2), work: PalwBlockWorkV3::Attempt(&b), execution_key: shared, subsidy: 0 },
+        ];
+
+        // --- Past the deep fence: the second is refused; exactly one claim is minted. ---
+        let armed = PalwTransitionExtrasV1 { audit_2026_09_11_deep_active: true, ..Default::default() };
+        let (deep, _, skips) = apply_palw_transition_v7(
+            &s1,
+            &p,
+            Some(&admission),
+            &ctx(2, 101, 2),
+            &[],
+            PalwBlockWorkV3::None,
+            &merged,
+            Hash64::default(),
+            false,
+            false,
+            false,
+            false,
+            &armed,
+        )
+        .expect("the accepting block stands");
+        deep.assert_internal_consistency(&p).expect("internal consistency, deep-armed");
+        assert!(deep.claim(&id_a).is_some(), "the first inference is claimed");
+        assert!(deep.claim(&id_b).is_none(), "the sibling re-announcing the same execution is not");
+        assert_eq!(skips.len(), 1, "the refusal is recorded, not swallowed");
+        assert_eq!(skips[0].0, h64(0xB2), "and it names the second blue");
+        assert!(skips[0].1.contains("already claimed by this block's work"), "with the DuplicateExecution reason: {}", skips[0].1);
+        assert_eq!(deep.reserved_exposure(&bond_key(1)), 200, "one claim reserved, 40 × 5 — the checkpoint restored the second");
+
+        // --- Below the deep fence: BOTH claim — the pre-fix behaviour, unchanged. ---
+        let (base, _, base_skips) = apply_palw_transition_v7(
+            &s1,
+            &p,
+            Some(&admission),
+            &ctx(2, 101, 2),
+            &[],
+            PalwBlockWorkV3::None,
+            &merged,
+            Hash64::default(),
+            false,
+            false,
+            false,
+            false,
+            &PalwTransitionExtrasV1::default(),
+        )
+        .expect("the accepting block stands");
+        base.assert_internal_consistency(&p).expect("internal consistency, deep-dormant");
+        assert!(base.claim(&id_a).is_some() && base.claim(&id_b).is_some(), "both nonce siblings claim below the fence");
+        assert!(base_skips.is_empty(), "and nothing is skipped");
+        assert_eq!(base.reserved_exposure(&bond_key(1)), 400, "two claims reserve 40 × 5 twice");
+    }
+
+    /// **B-1 (mainnet audit 2026-09-11 deep fence): a merged claim escrows its carve, symmetric to
+    /// own work.** ADR-0058 Decision 5 paid a merged block its worker share in full at acceptance
+    /// and escrowed nothing (`escrowed_reward = 0`), so a merged claim that later voided forfeited
+    /// nothing — the escrow-until-Final invariant was bypassed for the merged lane. Past the deep
+    /// fence the merged claim escrows `worker_carve(the MERGED block's own subsidy)` — the accepting
+    /// block's coinbase withholds that same carve (`palw_v2_merged_escrow_withheld`), so it is a
+    /// deferral, not a second mint — and forfeits it on void like any own-work claim. Below the
+    /// fence the escrow is 0, byte-identical to before. Only the extras flag differs between the two.
+    #[test]
+    fn b1_a_merged_claim_escrows_its_carve_past_the_deep_fence() {
+        // The core fixture's `worker_carve_permille` is 0 (no PALW reward), so set a real carve to
+        // make the escrow observable — 62 %, the ADR-0035 §5 shape.
+        let p = params().with_worker_carve_permille(620).unwrap();
+        let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+
+        // One merged attempt carrying its OWN block's subsidy — the pool B-1 carves the escrow from.
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        const MB_SUBSIDY: u64 = 50_000_000_000;
+        let merged = [PalwMergedWorkV1 {
+            carrying_block: h64(0xB1),
+            work: PalwBlockWorkV3::Attempt(&env),
+            execution_key: Hash64::default(),
+            subsidy: MB_SUBSIDY,
+        }];
+        let carve = p.worker_carve(MB_SUBSIDY);
+        assert!(carve > 0, "62 % of 50 G sompi is a real carve");
+
+        // --- Past the deep fence: the merged claim escrows the carve of the MERGED block's subsidy. ---
+        let armed = PalwTransitionExtrasV1 { audit_2026_09_11_deep_active: true, ..Default::default() };
+        let (deep, _, skips) = apply_palw_transition_v7(
+            &s1,
+            &p,
+            Some(&admission),
+            &ctx(2, 101, 2),
+            &[],
+            PalwBlockWorkV3::None,
+            &merged,
+            Hash64::default(),
+            false,
+            false,
+            false,
+            false,
+            &armed,
+        )
+        .expect("the accepting block stands");
+        deep.assert_internal_consistency(&p).expect("internal consistency, deep-armed");
+        assert!(skips.is_empty(), "the merged attempt is admitted, not skipped");
+        assert_eq!(
+            deep.claim(&claim_id).expect("the merged claim exists").escrowed_reward,
+            carve,
+            "past the fence a merged claim escrows the carve of its OWN block's subsidy"
+        );
+
+        // --- Below the deep fence: the merged claim escrows nothing (ADR-0058 D5), unchanged. ---
+        let (base, _, base_skips) = apply_palw_transition_v7(
+            &s1,
+            &p,
+            Some(&admission),
+            &ctx(2, 101, 2),
+            &[],
+            PalwBlockWorkV3::None,
+            &merged,
+            Hash64::default(),
+            false,
+            false,
+            false,
+            false,
+            &PalwTransitionExtrasV1::default(),
+        )
+        .expect("the accepting block stands");
+        base.assert_internal_consistency(&p).expect("internal consistency, deep-dormant");
+        assert!(base_skips.is_empty(), "still admitted below the fence");
+        assert_eq!(
+            base.claim(&claim_id).expect("the merged claim exists").escrowed_reward,
+            0,
+            "below the fence a merged claim escrows nothing — the coinbase paid it in full"
+        );
     }
 
     /// A spend licenses only what is certified: wrong phase, wrong source, absent claim — each
@@ -25590,6 +26211,99 @@ pub(crate) mod tests {
             );
         }
 
+        /// **C-01 (mainnet audit 2026-09-11): a non-canonical `step_leaf_count` cannot open a fused
+        /// dissection past the audit fence.** The bottom classifies the terminal leaf under the
+        /// CANONICAL count `step_leaf_count(profile, context)` (`canonical_step_coordinates`) but
+        /// authenticates the opened output tile and every prefix row under the DECLARED
+        /// `binding.step_leaf_count` (its Merkle tree's shape is a function of that count). Forcing
+        /// the two equal at phase-open closes the terminal remap that let a forged execution "root
+        /// elsewhere" and be acquitted. Below the fence the gate is skipped, so a fenced build and an
+        /// unfenced one fold every block below the height alike.
+        #[test]
+        fn c01_a_non_canonical_step_leaf_count_cannot_open_a_dissection_past_the_fence() {
+            let p = params_with_ladder();
+            let drill = Drill::new(false);
+
+            // The predicate the gate copies from the arithmetic path: the honest drill is canonical.
+            assert_eq!(
+                crate::palw_step::step_leaf_count_capped_v1(
+                    &drill.binding.shape_profile,
+                    &drill.binding.job_context,
+                    drill.binding.step_leaf_count,
+                ),
+                Ok(drill.binding.step_leaf_count),
+                "the honest drill's committed step_leaf_count is the canonical function of (profile, context)"
+            );
+
+            let (state, _claim_id, sid, daa) = court_at_the_fused_leaf(&p, &drill);
+            let c = ctx(daa, daa, daa);
+            let armed = PalwTransitionExtrasV1 { audit_2026_09_11_deep_active: true, ..Default::default() };
+
+            // Honest, canonical: opens the dissection in BOTH regimes — the gate never touches
+            // honest play.
+            let honest = root_claimed(sid, &drill, 2);
+            let (open_armed, _) = apply_palw_transition_v2_with_extras(
+                &state,
+                &p,
+                &c,
+                std::slice::from_ref(&honest),
+                None,
+                false,
+                false,
+                false,
+                false,
+                &armed,
+            )
+            .expect("a canonical root claim opens the dissection past the fence");
+            assert!(open_armed.court_session(&sid).unwrap().dissection.is_some(), "the honest dissection opens armed");
+            let (open_dormant, _) = apply(&state, &p, &c, std::slice::from_ref(&honest), None);
+            assert!(open_dormant.court_session(&sid).unwrap().dissection.is_some(), "and dormant, unchanged");
+
+            // A non-canonical count (the terminal-remap shape). Past the fence the C-01 gate refuses
+            // it — the gate runs before the site derivation. Below the fence the gate is skipped and
+            // the pre-existing binding check refuses it instead, a DIFFERENT reason: the proof the
+            // new refusal is fenced and adds nothing below the height.
+            let mut bad_binding = drill.binding.clone();
+            bad_binding.step_leaf_count += 1;
+            let bad = PalwConsensusObjectV2::CourtAttnRootClaimed {
+                session_id: sid,
+                root: drill.root_claim.clone(),
+                arity: 2,
+                binding: Box::new(bad_binding),
+                out_tile: drill.out_tile_opening(),
+                operand_openings: drill.openings(),
+                signature: vec![0xAA; 8],
+            };
+            let armed_err = apply_palw_transition_v2_with_extras(
+                &state,
+                &p,
+                &c,
+                std::slice::from_ref(&bad),
+                None,
+                false,
+                false,
+                false,
+                false,
+                &armed,
+            )
+            .expect_err("a non-canonical count is refused past the fence");
+            match armed_err {
+                PalwStateV2Error::DissectionRefused(s, ref msg) => {
+                    assert_eq!(s, sid);
+                    assert!(msg.contains("C-01"), "armed, the refusal is the C-01 canonical-count gate, got: {msg}");
+                }
+                other => panic!("expected DissectionRefused past the fence, got {other:?}"),
+            }
+            let dormant_err = apply_palw_transition_v2(&state, &p, &c, std::slice::from_ref(&bad), None)
+                .expect_err("the same count is refused below the fence too, but for the pre-existing reason");
+            match dormant_err {
+                PalwStateV2Error::DissectionRefused(_, ref msg) => {
+                    assert!(!msg.contains("C-01"), "below the fence the C-01 gate is not consulted, got: {msg}");
+                }
+                other => panic!("expected DissectionRefused below the fence, got {other:?}"),
+            }
+        }
+
         /// **ADR-0093 as built: every move computed from EVIDENCE by the court's own kernels, played
         /// through the chain.** The drill's hand-written claims replaced by what
         /// `PalwAttnSiteEvidenceV1` computes from one capture: the honest responder's root and
@@ -25980,6 +26694,109 @@ pub(crate) mod tests {
             assert!(
                 !matches!(swept.claim(&claim_id).expect("the claim is still a record").phase, PalwClaimPhaseV2::Voided { .. }),
                 "past the fence, a responder is not convicted for failing to file an object no binary in this tree builds"
+            );
+        }
+
+        /// **C-08 (mainnet audit 2026-09-11 deep fence): past the DEEP fence the fused-terminal
+        /// conviction returns — a withholding responder is convicted again.** The responder-coverage
+        /// fence (the test directly above) made a fused-terminal silence convict nobody, because no
+        /// binary could construct the root claim: a dense-v5 class's canonical leaf count exceeds the
+        /// `PALW_STEP_MAX_LEAVES` (2^22) opening cap, so the very move the responder owed was refused.
+        /// e8's ADR-0119, on this SAME 7,000 fence, raises that cap to the class's own ladder and
+        /// ships the responder that builds the root claim — so past the fence the move IS
+        /// constructible, withholding it is a genuine default, and the claim voids `CourtFraud` on the
+        /// responder's own side. That closes the "responder holding evidence can withhold" the finding
+        /// names. **Safe only with ADR-0119's cap-raise + responder in the same build, which fd's
+        /// deep+held one-build rule guarantees.** Same drill and the same coverage bit as the test
+        /// above; only `audit_2026_09_11_deep_active` differs, and it flips the ending back.
+        #[test]
+        fn c08_the_fused_terminal_conviction_returns_past_the_deep_fence() {
+            let p = params_with_ladder();
+            let drill = Drill::new(false);
+            let (state, claim_id, sid, _daa) = court_at_the_fused_leaf(&p, &drill);
+            let session = state.court_session(&sid).expect("the session lives");
+            assert!(session.dissection.is_none(), "nobody has filed a root claim — the withholding scenario");
+            assert_eq!(session.ladder.turn(), PalwBisectTurnV1::Terminal);
+            let after = session.ladder.last_deadline_daa() + 1;
+            assert!(after < session.deadline_daa, "the RUNG is what fires, not the backstop");
+
+            // Responder coverage armed (the mercy is on) AND past the deep fence (which lifts it).
+            let extras = PalwTransitionExtrasV1 {
+                court_responder_coverage_active: true,
+                audit_2026_09_11_deep_active: true,
+                ..Default::default()
+            };
+            let (swept, _) = apply_palw_transition_v2_with_extras(
+                &state,
+                &p,
+                &ctx(after, after, after),
+                &[],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &extras,
+            )
+            .expect("the sweep applies");
+            swept.assert_internal_consistency(&p).expect("internal consistency after apply");
+            swept.assert_deadline_consistency(&p).expect("deadline consistency after apply");
+            assert!(swept.court_session(&sid).is_none(), "the session is decided and gone");
+            assert!(
+                matches!(
+                    swept.claim(&claim_id).expect("the claim is still a record").phase,
+                    PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }
+                ),
+                "past the deep fence a responder that withholds the now-constructible root claim defaults and is convicted"
+            );
+        }
+
+        /// **C-08's seam, as merged into the 7,000 build: a HELD class keeps the mercy past the deep
+        /// fence.** The test directly above, with the drill's class recorded as held — the registry
+        /// ADR-0119 writes when a held class registers — and the same two bits. An honest held-class
+        /// responder cannot build the root-claim evidence (it re-executes the fold densely; the
+        /// windowed builder is ADR-0121 §7's), so its silence convicts nobody, while every class that
+        /// is not held is convicted exactly as above.
+        #[test]
+        fn c08_a_held_class_keeps_the_fused_terminal_mercy_past_the_deep_fence() {
+            let p = params_with_ladder();
+            let drill = Drill::new(false);
+            let (mut state, claim_id, sid, _daa) = court_at_the_fused_leaf(&p, &drill);
+            let class_id = drill.profile.shape_profile_id();
+            assert!(state.court_root_evidence_is_buildable_v1(&class_id), "the drill's class is not held: the test above convicts it");
+            // ADR-0119's registry, as a held class's registration writes it.
+            state.class_step_ladders.insert(class_id, crate::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1);
+            assert!(state.class_is_held_v1(&class_id));
+            assert!(!state.court_root_evidence_is_buildable_v1(&class_id), "a held class's root-claim evidence is not buildable");
+            let session = state.court_session(&sid).expect("the session lives");
+            assert!(session.dissection.is_none(), "nobody has filed a root claim — the same silence");
+            let after = session.ladder.last_deadline_daa() + 1;
+            assert!(after < session.deadline_daa, "the RUNG is what fires, not the backstop");
+
+            let extras = PalwTransitionExtrasV1 {
+                court_responder_coverage_active: true,
+                audit_2026_09_11_deep_active: true,
+                ..Default::default()
+            };
+            let (swept, _) = apply_palw_transition_v2_with_extras(
+                &state,
+                &p,
+                &ctx(after, after, after),
+                &[],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &extras,
+            )
+            .expect("the sweep applies");
+            swept.assert_internal_consistency(&p).expect("internal consistency after apply");
+            swept.assert_deadline_consistency(&p).expect("deadline consistency after apply");
+            assert!(swept.court_session(&sid).is_none(), "the session is decided and gone either way");
+            assert!(
+                !matches!(swept.claim(&claim_id).expect("the claim is still a record").phase, PalwClaimPhaseV2::Voided { .. }),
+                "past the deep fence a held class's responder is not convicted for a root claim no node can build"
             );
         }
 
@@ -27807,6 +28624,7 @@ pub(crate) mod tests {
                 attn_anchored_root_active: false,
                 held_context_ladder: None,
                 audit_2026_09_11_active: false,
+                audit_2026_09_11_deep_active: false,
                 share_growth_final_active: false,
                 prompt_ids_merkle: false,
             }
@@ -28020,6 +28838,7 @@ pub(crate) mod tests {
                 attn_anchored_root_active: false,
                 held_context_ladder: None,
                 audit_2026_09_11_active: false,
+                audit_2026_09_11_deep_active: false,
                 share_growth_final_active: false,
                 prompt_ids_merkle: false,
             };

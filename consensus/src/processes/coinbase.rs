@@ -191,6 +191,19 @@ impl CoinbaseManager {
         // would put the stake on one key and the reward on another. `false` outside V2 keeps the
         // legacy lump byte-identical.
         palw_pay_entitled_reds_to_their_miner: bool,
+        // **MISAKA B-1 (mainnet audit 2026-09-11, deep fence): the PALW escrow WITHHELD from each
+        // OTHER merged block's worker reward** — `{ merged block hash → worker_carve(its subsidy) }`.
+        // `palw_escrow_withheld` above handles the one chain block a mergeset has (the selected
+        // parent, whose claim a PRIOR transition already committed); this handles every other merged
+        // blue and every entitled in-window red, whose claim THIS accepting block's transition
+        // creates — so the value cannot be read from committed state and is instead sized by the
+        // processor with the same `PalwStateParamsV2::worker_carve` the fold escrows with
+        // (`palw_v2_merged_escrow_withheld`), keeping the carve recorded and the carve withheld one
+        // number. Withholding a superset of what the fold escrows is safe (the excess is simply not
+        // minted); a shortfall would release an unfunded escrow, which the superset construction
+        // rules out. **Empty below the deep fence and on every network without a V2 bundle**, where
+        // every merged carve is paid in full at acceptance (ADR-0058 Decision 5), byte-identical.
+        palw_merged_escrow_withheld: &BlockHashMap<u64>,
     ) -> CoinbaseResult<CoinbaseTransactionTemplate> {
         // §D base inclusion bounty: the worker-inclusion sub-pool summed over the SAME
         // mergeset blue(∩DAA)+red iteration the Worker carve uses (paid to the includer below).
@@ -242,7 +255,15 @@ impl CoinbaseManager {
             // share at bundle construction (`Params::validate_palw_v2`), so this cannot bite on a
             // network a node will start on — and if a future split made it bite, under-paying the
             // miner is the direction that does not mint.
-            let value = if *blue == ghostdag_data.selected_parent { value.saturating_sub(palw_escrow_withheld) } else { value };
+            let value = if *blue == ghostdag_data.selected_parent {
+                value.saturating_sub(palw_escrow_withheld)
+            } else {
+                // B-1: a NON-selected-parent merged blue's carve is withheld here and escrowed into
+                // its own claim past the deep fence — the same treatment the selected parent gets one
+                // line up, for the mergeset member whose claim THIS block's transition creates. Empty
+                // map below the fence → paid in full (ADR-0058 Decision 5), byte-identical.
+                value.saturating_sub(palw_merged_escrow_withheld.get(blue).copied().unwrap_or(0))
+            };
             if value > 0 {
                 outputs.push(TransactionOutput::new(value, reward_data.script_public_key.clone()));
             }
@@ -284,6 +305,11 @@ impl CoinbaseManager {
                     }
                     None => eff_subsidy + eff_fees,
                 };
+                // B-1: withhold this entitled red's carve past the deep fence — its claim, created by
+                // this block's transition, now escrows it (empty map below the fence → paid in full).
+                // The carve is `worker_carve(subsidy) ≤ worker_base_sompi ≤ value`, so this never
+                // underflows into fees; if it consumes the whole worker share the output is dropped.
+                let value = value.saturating_sub(palw_merged_escrow_withheld.get(red).copied().unwrap_or(0));
                 if value > 0 {
                     outputs.push(TransactionOutput::new(value, reward_data.script_public_key.clone()));
                 }

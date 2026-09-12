@@ -2572,6 +2572,87 @@ async fn palw_v2_the_escrow_is_carved_out_of_the_block_that_earned_it() {
     assert!(paid <= sp_subsidy, "a block may never mint more than the subsidy of what it merges");
 }
 
+/// **B-1 (mainnet audit 2026-09-11 deep fence): a MERGED block's carve is withheld from the
+/// coinbase and escrowed into its own claim — symmetric to own work — and build agrees with
+/// validate byte-for-byte.**
+///
+/// Below the fence ADR-0058 Decision 5 paid a merged block its worker share in full at acceptance
+/// and escrowed nothing, so a merged claim that later voided forfeited nothing (the escrow-until-
+/// Final invariant, bypassed for the merged lane). Past the fence the accepting block's coinbase
+/// withholds each merged block's worker carve (`palw_v2_merged_escrow_withheld`) and the transition
+/// escrows the same carve into that block's own claim — one value, one function
+/// (`PalwStateParamsV2::worker_carve`), on both the build and the validate path.
+///
+/// **That every block inserts is the proof of the coinbase-hash rule.** A template whose merged
+/// withhold disagreed with the validator's expected coinbase would be mined into a block its own
+/// node rejects; `validate_and_insert_row` with the fence ARMED exercises both paths against the
+/// same block. The final assertion closes the loop: the carve withheld from the coinbase is the
+/// carve the folded claim carries — a deferral of one number, never a second mint.
+#[tokio::test]
+async fn palw_v2_a_merged_blocks_carve_is_withheld_and_escrowed_past_the_deep_fence() {
+    use crate::model::stores::daa::DaaStoreReader;
+    use crate::model::stores::ghostdag::GhostdagStoreReader;
+    use crate::model::stores::headers::HeaderStoreReader;
+    use kaspa_consensus_core::config::params::ForkActivation;
+    use kaspa_consensus_core::palw_attempt_v2::{PalwAttemptEnvelopeV2, attempt_id_v2};
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 16);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
+            // B-1 rides the deep fence; arm it at genesis so this short chain runs entirely past it,
+            // and so `validate_and_insert_row` checks the coinbase-hash rule with the withhold live.
+            p.palw_audit_2026_09_11_deep = Some(ForkActivation::always());
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    // Rows of two parallel blocks merge a blue besides the selected parent. Every row inserting is
+    // the build==validate check for the merged withhold, block by block.
+    for _ in 0..4 {
+        ctx.build_block_template_row(0..2).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    let vp = ctx.consensus.virtual_processor().clone();
+    let sink = ctx.consensus.get_sink();
+    let ghostdag_data = vp.ghostdag_store.get_data(sink).unwrap();
+    assert!(ghostdag_data.mergeset_blues.len() > 1, "the fixture must merge a blue besides the selected parent");
+    let non_daa = vp.daa_excluded_store.get_mergeset_non_daa(sink).unwrap();
+
+    // The sink's folded state, and the selected-parent state its coinbase and withhold were against.
+    let (tip_block, tip_state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    assert_eq!(tip_block, sink, "the walk left the tip at the sink");
+    let parent_state = {
+        let store = vp.palw_state_v2_store.read();
+        let (_, delta) = store.delta_of(sink).expect("the sink has a delta");
+        kaspa_consensus_core::palw_state_v2::revert_delta_v2(&tip_state, &delta, &bundle.state).expect("the sink's delta reverts")
+    };
+    let sink_header = vp.headers_store.get_header(sink).expect("the sink's header");
+    let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: sink,
+        daa_score: sink_header.daa_score,
+        blue_score: sink_header.blue_score,
+        subsidy: vp.coinbase_manager.calc_block_subsidy(sink_header.daa_score),
+    };
+
+    // The withhold map the sink's coinbase used, recomputed from the same selected-parent state.
+    let withheld = vp.palw_v2_merged_escrow_withheld(&parent_state, &ghostdag_data, &non_daa, &point);
+    assert!(!withheld.is_empty(), "past the fence, a merged attempt's carve is withheld — otherwise this proves nothing");
+    for (blue, carve) in &withheld {
+        assert!(*carve > 0, "the withheld carve is the merged block's worker share, non-zero");
+        // The matched pair: the claim the transition created for that merged blue escrowed EXACTLY
+        // what the coinbase withheld — a deferral of one number, not a second mint.
+        let header = vp.headers_store.get_header(*blue).expect("the merged blue's header");
+        let envelope = PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment).expect("a V2 block carries an attempt");
+        let claim_id = attempt_id_v2(&envelope.attempt);
+        let claim = tip_state.claim(&claim_id).expect("the merged claim was folded into the sink's state");
+        assert_eq!(claim.escrowed_reward, *carve, "the carve withheld from the coinbase is the carve escrowed into the claim");
+    }
+}
+
 /// **Audit C-08's lock, resolved from a real chain's registry.**
 ///
 /// A `PalwBondKeyV2` is the outpoint holding the bond's collateral, and nothing kept the money
@@ -12881,8 +12962,18 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
     };
     let (spend_a, spend_b) = (unsigned(0xAAAA), unsigned(0xBBBB));
     let merged = vec![
-        PalwMergedWorkV1 { carrying_block: r1, work: PalwBlockWorkV3::ReceiptSpend(&spend_a) },
-        PalwMergedWorkV1 { carrying_block: r2, work: PalwBlockWorkV3::ReceiptSpend(&spend_b) },
+        PalwMergedWorkV1 {
+            carrying_block: r1,
+            work: PalwBlockWorkV3::ReceiptSpend(&spend_a),
+            execution_key: Default::default(),
+            subsidy: 0,
+        },
+        PalwMergedWorkV1 {
+            carrying_block: r2,
+            work: PalwBlockWorkV3::ReceiptSpend(&spend_b),
+            execution_key: Default::default(),
+            subsidy: 0,
+        },
     ];
     let fold_point = PalwBlockContextV2 { block: h64(0xF01D), daa_score: 7, blue_score: 6, subsidy: 0 };
     let (folded, _delta, merged_skips) = apply_palw_transition_v7(
@@ -12893,6 +12984,8 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
         &[],
         PalwBlockWorkV3::None,
         &merged,
+        // B-4 own-work key: no own attempt here (block_work None), so default.
+        Default::default(),
         false,
         false,
         false,

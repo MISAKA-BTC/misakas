@@ -536,9 +536,10 @@ mod tests {
                 crate::config::params::PALW_RC_MODEL_BENEFITS_FENCE_DAA,
                 crate::config::params::PALW_RC_MODEL_LEG_V2_FENCE_DAA,
                 crate::config::params::PALW_RC_AUDIT_FENCE_DAA,
-                crate::config::params::PALW_RC_HELD_FENCE_DAA.expect("the held regime's flag day is scheduled"),
+                // One entry for 7,000: the held regime and the deep-audit fence share it (ADR-0118).
+                crate::config::params::PALW_RC_AUDIT_DEEP_FENCE_DAA,
             ],
-            "testnet-11's gate set is its flag days (ADR-0083, ADR-0062, ADR-0084 U-08, ADR-0095, ADR-0114, the audit fence, the held regime), and deriving the list must not widen it"
+            "testnet-11's gate set is its flag days (ADR-0083, ADR-0062, ADR-0084 U-08, ADR-0095, ADR-0114, the audit's shallow fence, and the held regime with the audit's deep fence), and deriving the list must not widen it"
         );
     }
 
@@ -605,6 +606,7 @@ mod tests {
             "palw_held_context" => params.palw_held_context = Some(at),
             "palw_prefill_draw" => params.palw_prefill_draw = Some(at),
             "palw_audit_2026_09_11" => params.palw_audit_2026_09_11 = Some(at),
+            "palw_audit_2026_09_11_deep" => params.palw_audit_2026_09_11_deep = Some(at),
             "palw_difficulty_priced_rows" => params.palw_difficulty_priced_rows = Some(at),
             "palw_receipt_rows_unpriced" => params.palw_receipt_rows_unpriced = Some(at),
             "palw_attempt_header_pins" => params.palw_attempt_header_pins = Some(at),
@@ -711,9 +713,10 @@ mod tests {
                 // not move, and a build with only one of the two is invisible to the gate
                 // (`PALW_RC_AUDIT_FENCE_DAA`'s doc).
                 //
-                // **And 7000, the held regime's flag day** (ADR-0118, the operator's height of
-                // 2026-09-12): `palw_held_context`, `palw_shard_court` and `palw_fp_da_pins` fire
-                // together — shared with the deep-audit fence, so one release carries both.
+                // **And 7000, the held regime's flag day and the audit's deep one** (ADR-0118, the
+                // operator's height of 2026-09-12): `palw_held_context`, `palw_shard_court`,
+                // `palw_fp_da_pins` and `palw_audit_2026_09_11_deep` fire together, so one release
+                // carries all four.
                 ("testnet-11", vec![1150, 1900, 2150, 2400, 3500, 4000, 7000, 2_125_000]),
                 ("devnet", vec![]),
                 ("simnet", vec![]),
@@ -748,15 +751,16 @@ mod tests {
         /// The pre-mainnet audit's flag day — the audit's state-transition/acceptance fixes and the
         /// dense-court and share-census fences that carry audit corrections all arm here.
         const AUDIT_FENCE: u64 = 4000;
-        /// ADR-0118's height — the held regime, the one-move court and the retention pins.
-        const HELD_REGIME: u64 = 7000;
+        /// ADR-0118's height — the held regime, the one-move court and the retention pins — and the
+        /// audit's DEEP findings' flag day (B-1/C-01/B-4/court cluster): one height, one release.
+        const HELD_AND_AUDIT_DEEP: u64 = 7000;
         const CRESCENDO_T11: u64 = 2_125_000;
         for (name, params) in shipped() {
             if name == "testnet-11" {
                 assert_eq!(
                     fork_id_gate_fences_v1(&params),
-                    vec![ADR_0083, ADR_0062, ADR_0084_U08, ADR_0095, ADR_0114, AUDIT_FENCE, HELD_REGIME],
-                    "{name}: armed by ADR-0083's fence, ADR-0062's, ADR-0084 U-08's, ADR-0095's, ADR-0114's, the audit's and the held regime's, and nothing else"
+                    vec![ADR_0083, ADR_0062, ADR_0084_U08, ADR_0095, ADR_0114, AUDIT_FENCE, HELD_AND_AUDIT_DEEP],
+                    "{name}: armed by ADR-0083's fence, ADR-0062's, ADR-0084 U-08's, ADR-0095's, ADR-0114's, the audit's shallow one, and the held regime's with the audit's deep one, and nothing else"
                 );
                 assert!(fork_id_gate_armed_v1(&params));
                 continue;
@@ -775,7 +779,7 @@ mod tests {
         let t11 = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
         assert_eq!(
             t11.fence_schedule_v1(),
-            vec![ADR_0083, ADR_0062, ADR_0084_U08, ADR_0095, ADR_0114, AUDIT_FENCE, HELD_REGIME, CRESCENDO_T11]
+            vec![ADR_0083, ADR_0062, ADR_0084_U08, ADR_0095, ADR_0114, AUDIT_FENCE, HELD_AND_AUDIT_DEEP, CRESCENDO_T11]
         );
         let genesis = t11.genesis.hash;
         // The un-upgraded build: same genesis, schedule [2_125_000] — it has crossed nothing and names
@@ -789,7 +793,8 @@ mod tests {
             (stale_fired, ADR_0083),
             "same empty prefix as the stale build; the next fence is what tells them apart"
         );
-        // A node on this build past every PALW flag day (the held regime's 7,000 the last of them).
+        // A node on this build past every PALW flag day (the held regime's and the deep audit's
+        // 7,000 the last of them).
         let past = fork_id_v1(&t11, 8_000);
         assert_eq!(past.next, CRESCENDO_T11);
         let stranger = &[0u8; 32][..];
@@ -1101,6 +1106,7 @@ mod tests {
         upgraded.palw_model_leg_v2 = None;
         upgraded.palw_audit_2026_09_11 = None;
         upgraded.palw_prefill_draw = None;
+        upgraded.palw_audit_2026_09_11_deep = None;
         upgraded.palw_share_growth_final = None;
         upgraded.palw_fused_dissectable = None;
         upgraded.palw_attn_anchored_root = None;
@@ -1187,6 +1193,7 @@ mod tests {
         let mut upgraded = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
         upgraded.palw_audit_2026_09_11 = None;
         upgraded.palw_prefill_draw = None;
+        upgraded.palw_audit_2026_09_11_deep = None;
         upgraded.palw_share_growth_final = None;
         upgraded.palw_fused_dissectable = None;
         upgraded.palw_attn_anchored_root = None;

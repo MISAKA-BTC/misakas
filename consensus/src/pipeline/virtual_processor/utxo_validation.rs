@@ -158,6 +158,14 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// the transition, which runs only for chain blocks, and the selected parent is the one block
     /// of the mergeset that is one.
     pub palw_v2_escrow_withheld: u64,
+    /// **B-1 (mainnet audit 2026-09-11, deep fence): the escrow withheld from EVERY OTHER merged
+    /// block**, `{ merged block → worker_carve(its own subsidy) }`. `palw_v2_escrow_withheld` above
+    /// covers the one chain block (the selected parent); this covers the merged blues and entitled
+    /// reds whose claim THIS block's transition creates, whose carve is escrowed rather than paid
+    /// past the fence. Sized by `palw_v2_merged_escrow_withheld` from the merged blocks' own
+    /// subsidies. **Empty below `palw_audit_2026_09_11_deep`** and on every network without a V2
+    /// bundle, where merged carves are paid in full — byte-identical to before.
+    pub palw_v2_merged_escrow_withheld: BlockHashMap<u64>,
 
     /// ADR-0038 / launch blockers §8: the mergeset blues whose producer this chain cannot show is
     /// bonded, computed from the SAME selected-parent state the escrow above is. Empty on every
@@ -215,6 +223,7 @@ impl<'a> UtxoProcessingContext<'a> {
             palw_v2_payout_outputs: Vec::new(),
             palw_v2_locked_bonds: Default::default(),
             palw_v2_escrow_withheld: 0,
+            palw_v2_merged_escrow_withheld: BlockHashMap::default(),
             palw_v2_unentitled_blues: BlockHashSet::default(),
             palw_v2_bond_burns: Default::default(),
             palw_v2_accepted_tx_fees: Default::default(),
@@ -1037,6 +1046,7 @@ impl VirtualStateProcessor {
             (newly_included_stake, expected_stake),
             ctx.palw_v2_escrow_withheld,
             &ctx.palw_v2_unentitled_blues,
+            &ctx.palw_v2_merged_escrow_withheld,
         )?;
 
         // Verify the header pruning point
@@ -1096,6 +1106,9 @@ impl VirtualStateProcessor {
         // ADR-0038 / launch blockers §8: the merged blues this chain will not pay, threaded to
         // `expected_coinbase_transaction`. Empty on every current network.
         palw_unentitled_blues: &BlockHashSet,
+        // B-1 (deep fence): the carve withheld from each OTHER merged block, threaded to
+        // `expected_coinbase_transaction`. Empty below the fence and on every current network.
+        palw_merged_escrow_withheld: &BlockHashMap<u64>,
     ) -> BlockProcessResult<()> {
         // Extract only miner data from the provided coinbase
         let miner_data = self.coinbase_manager.deserialize_coinbase_payload(&coinbase.payload).unwrap().miner_data;
@@ -1114,6 +1127,7 @@ impl VirtualStateProcessor {
                 palw_escrow_withheld,
                 palw_unentitled_blues,
                 self.palw_state_params_v2.is_some(),
+                palw_merged_escrow_withheld,
             )
             .unwrap()
             .tx;
