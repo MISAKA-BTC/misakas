@@ -28,7 +28,7 @@ borsh.workspace = true
 # the whole graph — alloy-eip7702 0.4.2 (via alloy-consensus/eips) needs it, and
 # without it the secp-free node's `--features evm` build fails to compile that
 # transitive crate (the kaspa-evm dev-deps were masking it).
-derive_more = { version = "1", features = ["display"] }
+derive_more = { version = "2", features = ["display"] }
 
 # EVM execution. Shanghai baseline (no c-kzg/blob precompile); ecrecover uses the
 # pure-Rust k256 path (secp256k1 C feature left off).
