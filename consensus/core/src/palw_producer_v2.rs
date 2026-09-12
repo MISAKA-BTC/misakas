@@ -856,6 +856,139 @@ pub fn palw_da_duties_v2(state: &PalwChainStateV2, state_params: &PalwStateParam
     out
 }
 
+/// Which claims an operator asks about: the ones its bond made, or the ones its bond judges.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwClaimRoleV1 {
+    Executor,
+    Seat,
+}
+
+/// **One claim as its operator reads it** (ADR-0122 §6.5, `getPalwClaims`): its phase and the next
+/// date it moves by itself, what it reserves and what it will pay, and who judges it. Read off the
+/// state at the tip; nothing here is node-local.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwClaimRowV1 {
+    pub claim_id: Hash64,
+    pub free_prompt: bool,
+    pub quanta: u32,
+    pub quanta_spent: u32,
+    pub class_id: Hash64,
+    pub executor_bond: PalwBondKeyV2,
+    pub phase: crate::palw_state_v2::PalwClaimPhaseV2,
+    pub accepted_daa: u64,
+    pub accepted_block: BlockHash,
+    /// Set when a receipt timeout sent the claim back for its one redraw.
+    pub rebound_daa: Option<u64>,
+    /// The bound panel's seats, in seat order, and when it bound.
+    pub seats: Vec<PalwBondKeyV2>,
+    pub bound_daa: Option<u64>,
+    /// When the current phase ends by itself: a window closes, a court's backstop, or — for a
+    /// final or voided claim — when its record retires from the state.
+    pub deadline_daa: Option<u64>,
+    /// The collateral this claim reserves on its bond until it ends.
+    pub reserved: u128,
+    /// The block lane's escrow (0 for a prompt-lane claim, and for a merged-blue attempt).
+    pub escrowed_reward: u64,
+    /// The payout queued for the next coinbase, once the claim is final.
+    pub payout_pending: Option<u64>,
+    pub work_leaves: u64,
+    pub open_courts: usize,
+}
+
+/// **When a claim's phase ends by itself**, from the network's windows — the dates the sweep acts
+/// on (`window_bind` from acceptance or the redraw, `window_receipt` from binding,
+/// `window_challenge` from licensing, the disclose window from an accusation), a court's backstop
+/// while one is open, and the retirement of a record that has ended.
+pub fn palw_claim_phase_deadline_v1(
+    claim: &crate::palw_state_v2::PalwClaimStateV2,
+    state_params: &PalwStateParamsV2,
+    court_backstop: Option<u64>,
+) -> Option<u64> {
+    use crate::palw_state_v2::PalwClaimPhaseV2 as P;
+    match &claim.phase {
+        P::Provisional => Some(claim.rebound_daa.unwrap_or(claim.accepted_daa).saturating_add(state_params.window_bind())),
+        P::PanelBound { bound_daa } => Some(bound_daa.saturating_add(state_params.window_receipt())),
+        P::ReceiptLicensed { licensed_daa } => court_backstop.or(Some(licensed_daa.saturating_add(state_params.window_challenge()))),
+        P::DefaultDisputed { accused_daa, .. } => {
+            Some(accused_daa.saturating_add(crate::palw_state_v2::palw_da_disclose_window_daa_v1(state_params)))
+        }
+        P::Final { final_daa } => {
+            let retire = state_params.claim_retirement_daa();
+            (retire > 0).then(|| final_daa.saturating_add(retire))
+        }
+        P::Voided { voided_daa, .. } => {
+            let retire = state_params.claim_retirement_daa();
+            (retire > 0).then(|| voided_daa.saturating_add(retire))
+        }
+    }
+}
+
+/// **A bond's claims, newest first** — as executor, or as a seat on their panels. `limit` bounds
+/// the rows (0 = no bound); the bool says whether any were left out.
+pub fn palw_claim_rows_v1(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    bond: &PalwBondKeyV2,
+    role: PalwClaimRoleV1,
+    include_terminal: bool,
+    limit: usize,
+) -> (Vec<PalwClaimRowV1>, bool) {
+    use crate::palw_state_v2::{PalwClaimPhaseV2 as P, PalwClaimSourceV2 as S};
+    let payouts: std::collections::BTreeMap<&Hash64, u64> = state.pending_payouts_iter().map(|(id, p)| (id, p.amount)).collect();
+    let mut courts: std::collections::BTreeMap<Hash64, (usize, u64)> = std::collections::BTreeMap::new();
+    for (_, session) in state.court_sessions_iter() {
+        let entry = courts.entry(session.claim).or_insert((0, u64::MAX));
+        entry.0 += 1;
+        entry.1 = entry.1.min(session.deadline_daa);
+    }
+    let mut rows: Vec<PalwClaimRowV1> = state
+        .claims_iter()
+        .filter(|(_, claim)| include_terminal || !matches!(claim.phase, P::Final { .. } | P::Voided { .. }))
+        .filter_map(|(id, claim)| {
+            let panel = state.panel(id);
+            let seated = panel.is_some_and(|p| p.seats.iter().any(|s| s.bond == *bond));
+            let ours = match role {
+                PalwClaimRoleV1::Executor => claim.bond == *bond,
+                PalwClaimRoleV1::Seat => seated,
+            };
+            if !ours {
+                return None;
+            }
+            let (quanta, quanta_spent, free_prompt) = match &claim.source {
+                S::FreePrompt { quanta, spent } => (*quanta, spent.len() as u32, true),
+                S::Attempt => (0, 0, false),
+            };
+            let court = courts.get(id).copied();
+            Some(PalwClaimRowV1 {
+                claim_id: *id,
+                free_prompt,
+                quanta,
+                quanta_spent,
+                class_id: claim.class_id,
+                executor_bond: claim.bond,
+                phase: claim.phase.clone(),
+                accepted_daa: claim.accepted_daa,
+                accepted_block: claim.accepted_block,
+                rebound_daa: claim.rebound_daa,
+                seats: panel.map(|p| p.seats.iter().map(|s| s.bond).collect()).unwrap_or_default(),
+                bound_daa: panel.map(|p| p.bound_daa),
+                deadline_daa: palw_claim_phase_deadline_v1(claim, state_params, court.map(|c| c.1)),
+                reserved: claim.reserved,
+                escrowed_reward: claim.escrowed_reward,
+                payout_pending: payouts.get(id).copied(),
+                work_leaves: claim.work_leaves,
+                open_courts: court.map(|c| c.0).unwrap_or(0),
+            })
+        })
+        .collect();
+    rows.sort_by(|a, b| b.accepted_daa.cmp(&a.accepted_daa).then_with(|| a.claim_id.cmp(&b.claim_id)));
+    let truncated = limit > 0 && rows.len() > limit;
+    if truncated {
+        rows.truncate(limit);
+    }
+    (rows, truncated)
+}
+
 pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStateParamsV2, mine: &[PalwBondKeyV2]) -> Vec<PalwSeatDutyV2> {
     let mut out = Vec::new();
     for (claim_id, claim) in state.claims_iter() {

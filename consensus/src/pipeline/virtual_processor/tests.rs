@@ -3566,6 +3566,29 @@ async fn palw_v2_a_signed_quorum_licenses_a_claim() {
     assert_ne!(duty.executor_bond, duty.seat_bond, "a seat never judges its own claim");
     assert!(!duty.free_prompt, "an attempt claim's duty names the anchor-derived lane — the seat re-hashes, never replays");
 
+    // **ADR-0122 §6.5: the operator's read of the same claim** (`getPalwClaims`). The executor's
+    // list holds it with its panel, the date its receipt window closes and its escrow; each seat's
+    // list holds it as a claim the seat judges; the rows come newest first, and a limit says what
+    // it left out.
+    {
+        use kaspa_consensus_core::palw_producer_v2::{PalwClaimRoleV1, palw_claim_rows_v1};
+        let (rows, truncated) = palw_claim_rows_v1(&state, &bundle.state, &claim.bond, PalwClaimRoleV1::Executor, false, 0);
+        assert!(!truncated);
+        let row = rows.iter().find(|r| r.claim_id == claim_id).expect("the executor's list holds its claim");
+        assert_eq!(row.seats, mine, "the panel's seats, in seat order");
+        let PalwClaimPhaseV2::PanelBound { bound_daa } = claim.phase else { unreachable!("found as panel-bound") };
+        assert_eq!(row.bound_daa, Some(bound_daa));
+        assert_eq!(row.deadline_daa, Some(bound_daa + bundle.state.window_receipt()), "the receipt window's close");
+        assert_eq!((row.escrowed_reward, row.reserved), (claim.escrowed_reward, claim.reserved));
+        assert!(rows.windows(2).all(|w| w[0].accepted_daa >= w[1].accepted_daa), "newest first");
+        let (seated, _) = palw_claim_rows_v1(&state, &bundle.state, &mine[0], PalwClaimRoleV1::Seat, false, 0);
+        assert!(seated.iter().any(|r| r.claim_id == claim_id && r.executor_bond == claim.bond), "a seat lists what it judges");
+        let (all, _) = palw_claim_rows_v1(&state, &bundle.state, &claim.bond, PalwClaimRoleV1::Executor, true, 0);
+        let (one, cut) = palw_claim_rows_v1(&state, &bundle.state, &claim.bond, PalwClaimRoleV1::Executor, true, 1);
+        assert_eq!(one.len(), 1);
+        assert_eq!(cut, all.len() > 1, "a limit says whether it left rows out");
+    }
+
     // Real signatures, from the harness identity every genesis bond registers.
     // Each seat signs under ITS OWN registered key — the quorum check resolves the seat bond to its
     // registry pubkey, so one shared key would (correctly) fail to verify for the others.

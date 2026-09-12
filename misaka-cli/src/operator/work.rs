@@ -386,6 +386,46 @@ fn from_chain(lane: Lane, r: &GetPalwFreePromptClaimResponse, w: Option<&Windows
     }
 }
 
+/// What `getPalwClaims` (ADR-0122 §6.5) adds to a claim read: the date the chain itself computes
+/// for the current phase, and where the escrow is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ClaimExtra {
+    pub(crate) deadline_daa: Option<u64>,
+    pub(crate) escrow_sompi: u64,
+    pub(crate) payout_pending_sompi: Option<u64>,
+}
+
+/// **A reading, sharpened by what the node's claim row knows** and the plain claim read does not:
+/// the phase's own deadline (the chain's arithmetic, not this CLI's), and for a block-lane claim at
+/// `final`, whether its escrow is still queued, already paid, or was never there.
+pub(crate) fn refine(lane: Lane, mut reading: Reading, extra: &ClaimExtra) -> Reading {
+    use WorkState::*;
+    if matches!(reading.state, OnChain | WaitingReceipts | QuorumReached | Disputed) && extra.deadline_daa.is_some() {
+        reading.deadline_daa = extra.deadline_daa;
+    }
+    if lane == Lane::Block && matches!(reading.state, RewardPending | Rewarded) {
+        let msk = crate::operator::catalog::msk;
+        if let Some(amount) = extra.payout_pending_sompi {
+            return Reading {
+                state: RewardPending,
+                detail: format!("escrow {} queued for the next coinbase", msk(amount as u128)),
+                deadline_daa: None,
+                estimated: false,
+            };
+        }
+        if extra.escrow_sompi == 0 {
+            return Reading {
+                state: Rewarded,
+                detail: "no escrow — a merged-blue attempt is paid by its block share alone".to_string(),
+                deadline_daa: None,
+                estimated: false,
+            };
+        }
+        reading.detail = format!("escrow {} paid; {}", msk(extra.escrow_sompi as u128), reading.detail);
+    }
+    reading
+}
+
 /// The two timeouts slash nobody; the two convictions take the collateral the claim reserved.
 pub(crate) fn who_paid(void_reason: &str) -> &'static str {
     match void_reason {
@@ -703,6 +743,30 @@ mod tests {
         assert_eq!((r.state, r.deadline_daa), (WorkState::RewardPending, Some(NOW - 10 + 1 + 600)));
         assert!(r.estimated, "the claim read carries no payout block");
         assert_eq!(at(Lane::Block, &claim("final", NOW - 700)).state, WorkState::Rewarded);
+    }
+
+    /// The node's claim row sharpens a reading: its deadline is the chain's, and a final block
+    /// claim's escrow is queued, paid, or was never there — no longer an estimate.
+    #[test]
+    fn the_claim_row_turns_estimates_into_reads() {
+        let bound = at(Lane::Block, &claim("panel_bound", 9_800));
+        let r = refine(Lane::Block, bound, &ClaimExtra { deadline_daa: Some(10_444), ..Default::default() });
+        assert_eq!(r.deadline_daa, Some(10_444), "the chain's date wins over this CLI's arithmetic");
+        let fin = at(Lane::Block, &claim("final", NOW - 10));
+        assert!(fin.estimated);
+        let queued = refine(
+            Lane::Block,
+            fin.clone(),
+            &ClaimExtra { escrow_sompi: 170_800_000_000, payout_pending_sompi: Some(170_800_000_000), ..Default::default() },
+        );
+        assert_eq!((queued.state, queued.estimated), (WorkState::RewardPending, false));
+        assert!(queued.detail.contains("1,708.00 MSK queued"), "{}", queued.detail);
+        let merged = refine(Lane::Block, fin.clone(), &ClaimExtra::default());
+        assert_eq!((merged.state, merged.estimated), (WorkState::Rewarded, false), "no escrow: nothing is pending");
+        let paid = refine(Lane::Block, fin, &ClaimExtra { escrow_sompi: 170_800_000_000, ..Default::default() });
+        assert!(paid.detail.starts_with("escrow 1,708.00 MSK paid"), "{}", paid.detail);
+        let prompt = at(Lane::Prompt, &prompt_final(8, 0, NOW - 100));
+        assert_eq!(refine(Lane::Prompt, prompt.clone(), &ClaimExtra::default()), prompt, "the prompt lane has no escrow to read");
     }
 
     /// The outbox's states, before the chain has a claim.

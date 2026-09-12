@@ -661,6 +661,51 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwModelProposalsResponse::default())
     }
 
+    /// ADR-0122 §6.5: a bond's claims — `role` is `executor` or `seat`.
+    async fn get_palw_claims(
+        &self,
+        bond: String,
+        role: String,
+        include_terminal: bool,
+        limit: u32,
+    ) -> RpcResult<GetPalwClaimsResponse> {
+        self.get_palw_claims_call(None, GetPalwClaimsRequest { bond, role, include_terminal, limit }).await
+    }
+    async fn get_palw_claims_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwClaimsRequest,
+    ) -> RpcResult<GetPalwClaimsResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwClaimsResponse::default())
+    }
+
+    /// ADR-0122 §6.5: the class table.
+    async fn get_palw_classes(&self) -> RpcResult<GetPalwClassesResponse> {
+        self.get_palw_classes_call(None, GetPalwClassesRequest {}).await
+    }
+    async fn get_palw_classes_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwClassesRequest,
+    ) -> RpcResult<GetPalwClassesResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwClassesResponse::default())
+    }
+
+    /// ADR-0122 §6.5: this node's runtime.
+    async fn get_palw_node_status(&self) -> RpcResult<GetPalwNodeStatusResponse> {
+        self.get_palw_node_status_call(None, GetPalwNodeStatusRequest {}).await
+    }
+    async fn get_palw_node_status_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwNodeStatusRequest,
+    ) -> RpcResult<GetPalwNodeStatusResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwNodeStatusResponse::default())
+    }
+
     /// MISAKA Compute Token Program (design §9.3): an asset's supply counters.
     async fn get_token_supply(&self, asset_id: u64) -> RpcResult<GetTokenSupplyResponse> {
         self.get_token_supply_call(None, GetTokenSupplyRequest { asset_id }).await

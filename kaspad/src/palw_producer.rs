@@ -266,10 +266,14 @@ impl PalwProducerService {
         flow_context: Arc<FlowContext>,
         consensus_config: Arc<Config>,
     ) -> Self {
+        // The first startup refusal, kept for `getPalwNodeStatus` (ADR-0122 §6.5) beside the line
+        // that logs it.
+        let mut refusal: Option<String> = None;
         let (keypair, key_seed) = match kaspa_pq_validator_core::load_validator_seed(&config.key_path) {
             Ok(seed) => (Some(Box::new(libcrux_ml_dsa::ml_dsa_87::generate_key_pair(seed))), Some(seed)),
             Err(err) => {
                 warn!("[{PALW_PRODUCER}] {err} — production disabled");
+                refusal.get_or_insert_with(|| err.to_string());
                 (None, None)
             }
         };
@@ -277,6 +281,7 @@ impl PalwProducerService {
             Ok(o) => Some(o),
             Err(err) => {
                 warn!("[{PALW_PRODUCER}] {err} — production disabled");
+                refusal.get_or_insert_with(|| err.to_string());
                 None
             }
         };
@@ -286,6 +291,7 @@ impl PalwProducerService {
         let miner_data = match kaspa_addresses::Address::try_from(config.pay_address.as_str()) {
             Ok(addr) if addr.version != kaspa_addresses::Version::PubKeyHashMlDsa87 => {
                 warn!("[{PALW_PRODUCER}] pay address is not ML-DSA-87 P2PKH — production disabled");
+                refusal.get_or_insert_with(|| "pay address is not ML-DSA-87 P2PKH".to_string());
                 None
             }
             Ok(addr) if addr.prefix != config.address_prefix => {
@@ -293,14 +299,25 @@ impl PalwProducerService {
                     "[{PALW_PRODUCER}] pay address is for {} and this node is {} — production disabled",
                     addr.prefix, config.address_prefix
                 );
+                refusal
+                    .get_or_insert_with(|| format!("pay address is for {} and this node is {}", addr.prefix, config.address_prefix));
                 None
             }
             Ok(addr) => Some(MinerData::new(kaspa_txscript::pay_to_address_script(&addr), Vec::new())),
             Err(err) => {
                 warn!("[{PALW_PRODUCER}] pay address is unusable: {err} — production disabled");
+                refusal.get_or_insert_with(|| format!("pay address is unusable: {err}"));
                 None
             }
         };
+        flow_context.update_palw_runtime(|r| {
+            r.producer_bond = config.bond.clone();
+            r.producer_class = config.class_id.to_string();
+            match &refusal {
+                Some(why) => r.set_producer("disabled", why),
+                None => r.set_producer("syncing", "starting"),
+            }
+        });
         // Loaded once — through the SDK, each file by its own container's magic, and once PER
         // PROCESS: the panel names the same list and takes this constructor's holdings rather than
         // mapping and hashing the same file again (`palw_backends::load_class_holdings_v1`). Each
@@ -425,6 +442,7 @@ impl PalwProducerService {
         };
         if self.keypair.is_none() {
             info!("[{PALW_PRODUCER}] not producing (no signing key)");
+            self.flow_context.update_palw_runtime(|r| r.set_producer("disabled", "no signing key"));
             return;
         }
         let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
@@ -460,6 +478,7 @@ impl PalwProducerService {
             // did not produce never pruned, and where it ran every 300 draws rather than every minute).
             let session = self.consensus_manager.consensus().unguarded_session();
             if session.async_is_consensus_in_transitional_ibd_state().await {
+                self.flow_context.update_palw_runtime(|r| r.set_producer("syncing", "the node is in IBD"));
                 continue;
             }
             // **The gate every participation path consults** — its own doc's words. This loop
@@ -484,6 +503,7 @@ impl PalwProducerService {
                         "the mining rule engine says this node should not mine [enable_unsynced_mining={} peers={} participation_allowed={}]",
                         self.config.enable_unsynced_mining, has_peers, participation_allowed
                     );
+                    self.flow_context.update_palw_runtime(|r| r.set_producer("holding", &detail));
                     let stale = last_hold_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
                     if last_hold.as_deref() != Some(detail.as_str()) || stale {
                         info!("[{PALW_PRODUCER}] holding: {detail}");
@@ -503,6 +523,7 @@ impl PalwProducerService {
             }
             let Some(facts) = session.palw_producer_facts_v2(self.config.class_id, Some(bond)) else {
                 let detail = format!("this network has no ConsensusV2 facts for class {} — nothing to produce", self.config.class_id);
+                self.flow_context.update_palw_runtime(|r| r.set_producer("holding", &detail));
                 let stale = last_hold_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
                 if last_hold.as_deref() != Some(detail.as_str()) || stale {
                     info!("[{PALW_PRODUCER}] holding: {detail}");
@@ -532,6 +553,11 @@ impl PalwProducerService {
                     Ok(Some(hash)) => {
                         produced += 1;
                         info!("[{PALW_PRODUCER}] produced RECEIPT block #{produced} {hash} (a certified free-prompt claim, mined)");
+                        self.flow_context.update_palw_runtime(|r| {
+                            r.receipt_blocks += 1;
+                            r.last_block = hash.to_string();
+                            r.last_block_unix = kaspa_p2p_flows::flow_context::unix_now_secs();
+                        });
                         last_receipt_err = None;
                         continue;
                     }
@@ -567,6 +593,7 @@ impl PalwProducerService {
                 );
                 // Once per change, then no more than once every 5 minutes while it persists: a
                 // hold that never changes is still worth seeing in a log an operator scrolls.
+                self.flow_context.update_palw_runtime(|r| r.set_producer("holding", &detail));
                 let stale = last_hold_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
                 if last_hold.as_deref() != Some(detail.as_str()) || stale {
                     warn!("[{PALW_PRODUCER}] holding: {detail}");
@@ -582,11 +609,31 @@ impl PalwProducerService {
             // suppressed as a repeat of one the node has since recovered from.
             last_hold = None;
             last_hold_at = None;
-            match self.produce_one(&session, &facts, network_domain, bond, miner_data.clone(), &mut cursor).await {
-                Ok(Some(hash)) => {
+            self.flow_context.update_palw_runtime(|r| r.set_producer("drawing", ""));
+            let outcome = self.produce_one(&session, &facts, network_domain, bond, miner_data.clone(), &mut cursor).await;
+            let network_lost = self.network_draw_lost.load(std::sync::atomic::Ordering::Relaxed);
+            self.flow_context.update_palw_runtime(|r| {
+                r.draws = draws + u64::from(outcome.is_ok());
+                r.network_lost = network_lost;
+                r.last_draw_unix = kaspa_p2p_flows::flow_context::unix_now_secs();
+            });
+            match outcome {
+                Ok(Some((hash, claim))) => {
                     draws += 1;
                     produced += 1;
                     info!("[{PALW_PRODUCER}] produced block #{produced} {hash} (class ticket + Layer-0 both under target)");
+                    // ADR-0122 Decision 8: the work's own line, by the id every later stage of it
+                    // carries — the claim id is the attempt id — beside the prose line above.
+                    let id = claim.to_string();
+                    info!(
+                        "[{PALW_PRODUCER}] event work={} lane=block stage=SUBMITTED block={hash} claim={id}",
+                        &id[..16.min(id.len())]
+                    );
+                    self.flow_context.update_palw_runtime(|r| {
+                        r.produced_blocks = produced;
+                        r.last_block = hash.to_string();
+                        r.last_block_unix = kaspa_p2p_flows::flow_context::unix_now_secs();
+                    });
                     // **The two numbers that say whether this is a PALW network or a hash chain
                     // wearing its clothes.** `safe_weight` leaves zero only when a claim reaches
                     // `Final`, which needs the whole lattice — panel, receipts, quorum, a submitted
@@ -618,6 +665,7 @@ impl PalwProducerService {
                 Err(err) => warn!("[{PALW_PRODUCER}] {err}"),
             }
         }
+        self.flow_context.update_palw_runtime(|r| r.set_producer("stopped", ""));
         info!("[{PALW_PRODUCER}] stopping ({produced} blocks this run)");
     }
 
@@ -700,7 +748,7 @@ impl PalwProducerService {
         bond: TransactionOutpoint,
         miner_data: MinerData,
         cursor: &mut Option<(Hash64, u64)>,
-    ) -> Result<Option<kaspa_consensus_core::BlockHash>, String> {
+    ) -> Result<Option<(kaspa_consensus_core::BlockHash, Hash64)>, String> {
         let mut template = self
             .mining_manager
             .clone()
@@ -959,7 +1007,7 @@ impl PalwProducerService {
                 .await
                 .map_err(|e| format!("the chain refused a block this node produced: {e}"))?;
             self.flow_context.broadcast_palw_material(message, material).await;
-            return Ok(Some(hash));
+            return Ok(Some((hash, message)));
         }
         Ok(None)
     }

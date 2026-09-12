@@ -925,6 +925,16 @@ mod watch {
         println!("{} [misaka-palw-fp-rail] {}", now_utc(), line.as_ref());
     }
 
+    /// **ADR-0122 Decision 8: one job's stage, as a line a program reads** — beside the prose
+    /// `log` line, never instead of it. `work` is the claim id's first 16 hex (the id every later
+    /// stage carries), `job` the outbox stem's; `key=value`, no spaces inside a value.
+    fn event(stem: &str, claim: &str, stage: &str, extra: &str) {
+        let job = stem.rsplit('/').next().unwrap_or(stem).trim_start_matches("fp-job-");
+        let work = claim.get(..16).unwrap_or(claim);
+        let extra = if extra.is_empty() { String::new() } else { format!(" {extra}") };
+        log(format!("event work={work} job={job} lane=prompt stage={stage}{extra}"));
+    }
+
     /// Say a waiting reason once, and again only when it changes — a queue that waits an hour on
     /// one cause must not bury the line that says what the cause is.
     #[derive(Default)]
@@ -1119,6 +1129,7 @@ mod watch {
                     "{}: claim {} is on the chain — phase {}, accepted at DAA {}. Follow it with `misaka palw claim {}`",
                     awaiting.stem, awaiting.claim, claim.phase, claim.accepted_daa, awaiting.claim
                 ));
+                event(&awaiting.stem, &awaiting.claim, "ON_CHAIN", &format!("accepted_daa={}", claim.accepted_daa));
                 state.settled.insert(awaiting.stem.clone(), "on-chain".into());
                 state.awaiting = None;
                 save_state(&config.outbox, &state)?;
@@ -1145,6 +1156,7 @@ mod watch {
                      lane)\". Its fee is spent; the job is not retried.",
                     awaiting.stem, awaiting.txid, awaiting.submitted_daa, awaiting.claim
                 ));
+                event(&awaiting.stem, &awaiting.claim, "DROPPED", &format!("txid={}", awaiting.txid));
                 state.settled.insert(awaiting.stem.clone(), "dropped".into());
                 state.awaiting = None;
                 // The chained change is KEPT. A carrier whose commitment the chain refused is still
@@ -1278,6 +1290,7 @@ mod watch {
                         ""
                     }
                 ));
+                event(&job.name, &job.claim, "SUBMITTED", &format!("txid={txid} submitted_daa={daa}"));
                 Ok(())
             }
             Err(message) => {
@@ -1322,6 +1335,7 @@ mod watch {
         } else {
             log(format!("{}: given up; renamed to {}", job.name, renamed.display()));
         }
+        event(&job.name, &job.claim, "GAVE_UP", &format!("outcome={}", outcome.replace(' ', "_")));
         state.settled.insert(job.name.clone(), outcome.into());
         save_state(outbox, state)
     }

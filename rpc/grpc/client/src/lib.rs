@@ -302,6 +302,9 @@ impl RpcApi for GrpcClient {
     route!(get_palw_model_version_call, GetPalwModelVersion);
     route!(get_palw_model_lines_call, GetPalwModelLines);
     route!(get_palw_model_proposals_call, GetPalwModelProposals);
+    route!(get_palw_claims_call, GetPalwClaims);
+    route!(get_palw_classes_call, GetPalwClasses);
+    route!(get_palw_node_status_call, GetPalwNodeStatus);
     route!(get_token_supply_call, GetTokenSupply);
     route!(get_token_emission_info_call, GetTokenEmissionInfo);
     route!(submit_evm_transaction_call, SubmitEvmTransaction);

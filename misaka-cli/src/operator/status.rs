@@ -95,6 +95,9 @@ pub(crate) struct MinerInputs<'a> {
     pub(crate) node: NodeFacts,
     pub(crate) log: Option<&'a NodeLog>,
     pub(crate) facts: Option<&'a GetPalwProducerFactsResponse>,
+    /// `getPalwNodeStatus` from a node that serves it: the producer's own state, which outranks
+    /// the log and works from another host.
+    pub(crate) runtime: Option<&'a kaspa_rpc_core::GetPalwNodeStatusResponse>,
     /// `(this key, the bond's key)` when they differ.
     pub(crate) key_mismatch: Option<(String, String)>,
     pub(crate) bond: Option<&'a str>,
@@ -143,6 +146,10 @@ pub(crate) fn miner_state(i: &MinerInputs<'_>) -> MinerView {
         let f = catalog::not_producing();
         return view(MinerState::NotProducing, "this node verifies and relays; it does not produce".to_string(), Some(f), "process");
     }
+    if let Some(rt) = i.runtime.filter(|rt| rt.producer_state == "disabled") {
+        let f = catalog::producer_disabled(&rt.producer_reason);
+        return view(MinerState::Disabled, f.title.clone(), Some(f), "rpc");
+    }
     if let Some((_, text)) = i.log.and_then(|l| l.producer_disabled.as_ref()) {
         let f = catalog::producer_disabled(text);
         return view(MinerState::Disabled, f.title.clone(), Some(f), "log");
@@ -175,10 +182,12 @@ fn from_node(i: &MinerInputs<'_>, remote: bool) -> MinerView {
     // The producer's own gate is not `is_synced`: with --enable-unsynced-mining, peers and open
     // participation it draws on a chain whose tip is older than the window (a fresh chain's first
     // blocks). A log showing it drawing outranks the RPC's word for the chain.
-    let drawing_now = i.log.is_some_and(|l| {
-        l.last_draws.as_ref().is_some_and(|(ts, _)| i.now_unix - ts < DRAWING_WITHIN_SECS)
-            || l.produced.last().is_some_and(|(ts, _, _)| i.now_unix - ts < DRAWING_WITHIN_SECS)
-    });
+    let drawing_now =
+        i.runtime.is_some_and(|rt| rt.producer_state == "drawing" && i.now_unix - (rt.last_draw_unix as i64) < DRAWING_WITHIN_SECS)
+            || i.log.is_some_and(|l| {
+                l.last_draws.as_ref().is_some_and(|(ts, _)| i.now_unix - ts < DRAWING_WITHIN_SECS)
+                    || l.produced.last().is_some_and(|(ts, _, _)| i.now_unix - ts < DRAWING_WITHIN_SECS)
+            });
     let waived = drawing_now || (i.unsynced_mining && peers.is_some_and(|p| p > 0));
     if !(*synced || waived) {
         let f = catalog::not_synced(*daa);
@@ -205,6 +214,24 @@ fn from_node(i: &MinerInputs<'_>, remote: bool) -> MinerView {
         };
         let f = catalog::not_ready(&facts.not_ready_reason, &n, i.bond);
         return view(MinerState::Holding, f.title.clone(), Some(f), "rpc");
+    }
+    // The node's own account of its producer (ADR-0122 §6.5): the same sentences its log prints,
+    // read over RPC, from this host or another.
+    if let Some(rt) = i.runtime {
+        return match rt.producer_state.as_str() {
+            "holding" => {
+                let f = catalog::hold_from_log(&rt.producer_reason, i.bond);
+                view(MinerState::Holding, f.title.clone(), Some(f), "rpc")
+            }
+            "drawing" => view(MinerState::Drawing, runtime_headline(rt, i.facts, i.now_unix), None, "rpc"),
+            "stopped" => view(MinerState::Stopping, "stopping — the producer loop has exited".to_string(), None, "rpc"),
+            "off" => {
+                let f = catalog::not_producing();
+                view(MinerState::NotProducing, "this node verifies and relays; it does not produce".to_string(), Some(f), "rpc")
+            }
+            // `syncing` with the loop not yet round once, or a state this build cannot name.
+            other => view(MinerState::Starting, format!("the producer is starting ({other}: {})", rt.producer_reason), None, "rpc"),
+        };
     }
     let Some(log) = i.log else {
         let why = if remote { "this node runs on another host" } else { "this host cannot read the node's log" };
@@ -236,6 +263,22 @@ fn from_node(i: &MinerInputs<'_>, remote: bool) -> MinerView {
         _ => "ready to produce, but no draw report in the last few minutes".to_string(),
     };
     view(MinerState::Ready, headline, None, "rpc")
+}
+
+/// The drawing headline from the node's runtime, with the class ticket's odds from the facts.
+fn runtime_headline(rt: &kaspa_rpc_core::GetPalwNodeStatusResponse, facts: Option<&GetPalwProducerFactsResponse>, now: i64) -> String {
+    let mut parts = vec!["drawing".to_string()];
+    if let Some(p) = facts.and_then(|f| f.class_target.parse::<u128>().ok()).map(|t| t as f64 / u128::MAX as f64).filter(|p| *p > 0.0)
+    {
+        parts.push(format!("1 in {} per draw", compact(1.0 / p)));
+    }
+    parts.push(format!("{} draw{} this run", group(rt.draws), if rt.draws == 1 { "" } else { "s" }));
+    if rt.last_block_unix > 0 {
+        parts.push(format!("last block {} ago", ago(now - rt.last_block_unix as i64)));
+    } else {
+        parts.push("no block yet this run".to_string());
+    }
+    parts.join(" · ")
 }
 
 fn drawing_headline(log: &NodeLog, now: i64) -> String {
@@ -342,6 +385,7 @@ pub(crate) fn inputs<'a>(snap: &'a Snapshot, now_unix: i64) -> MinerInputs<'a> {
         // run's, and a log that is not there is not a silent one.
         log: snap.live_log(),
         facts,
+        runtime: snap.node_status.as_ref(),
         key_mismatch,
         bond: p.bond.as_deref(),
         unsynced_mining: p.kaspad.as_ref().is_some_and(|(_, a)| a.enable_unsynced_mining),
@@ -365,6 +409,15 @@ fn fork_marks(snap: &Snapshot) -> (String, String) {
         return (format!("{node} (its own ruleset: {flag})"), "—".to_string());
     }
     let Some((fp, heights)) = expected(&snap.profile.network) else { return ("?".into(), "?".into()) };
+    if let Some(rt) = &snap.node_status {
+        let f = if rt.consensus_params_id == fp {
+            format!("{} {}", work::short_id(&rt.consensus_params_id), paint::green("✓"))
+        } else {
+            format!("{} {} (this CLI {})", work::short_id(&rt.consensus_params_id), paint::red("✗"), work::short_id(&fp))
+        };
+        let s = if rt.fence_schedule == heights { paint::green("✓") } else { paint::red("✗") };
+        return (f, s);
+    }
     let log = snap.boot_log();
     let f = match log.and_then(|l| l.fingerprint.as_deref()) {
         Some(node) if node == fp => format!("{} {}", work::short_id(node), paint::green("✓")),
@@ -502,7 +555,7 @@ pub(crate) fn render(snap: &Snapshot, view: &MinerView, now_unix: i64) -> String
     let c = counts(&snap.works);
     out.push_str(&format!(
         "  {}   computed {} · submitted {} · accepted {} · failed {}\n",
-        paint::bold(&format!("WORK · {} followed", snap.works.len())),
+        paint::bold(&format!("WORK · {} (from the {})", snap.works.len(), snap.works_source)),
         c.computed,
         c.submitted,
         c.accepted,
@@ -578,6 +631,10 @@ fn next_step(view: &MinerView) -> String {
     match (&view.state, &view.finding) {
         (MinerState::Drawing, _) => "nothing to do — the miner is drawing.".to_string(),
         (MinerState::Starting, _) => "wait: the node is starting (run this again in a minute).".to_string(),
+        (MinerState::Stopping, _) if view.basis == "supervisor" => {
+            "nothing to do: the supervisor exits by itself when the last claim ends (misaka mining stop --force to stop now)"
+                .to_string()
+        }
         (MinerState::Syncing, _) => "wait: the node mines by itself once it is synced.".to_string(),
         (_, Some(f)) if f.severity == Severity::Error || f.severity == Severity::Warning => {
             f.fix.first().cloned().unwrap_or_else(|| "misaka doctor".to_string())
@@ -632,8 +689,8 @@ pub(crate) fn document(snap: &Snapshot, view: &MinerView) -> serde_json::Value {
         },
         "node": node,
         "fork": {
-            "node_fingerprint": log.and_then(|l| l.fingerprint.clone()),
-            "node_schedule": log.and_then(|l| l.schedule.clone()),
+            "node_fingerprint": snap.node_status.as_ref().map(|r| r.consensus_params_id.clone()).or_else(|| log.and_then(|l| l.fingerprint.clone())),
+            "node_schedule": snap.node_status.as_ref().map(|r| r.fence_schedule.clone()).or_else(|| log.and_then(|l| l.schedule.clone())),
             "cli_fingerprint": expected(&p.network).map(|e| e.0),
             "cli_schedule": expected(&p.network).map(|e| e.1),
         },
@@ -654,7 +711,20 @@ pub(crate) fn document(snap: &Snapshot, view: &MinerView) -> serde_json::Value {
         "pay_address": p.pay_address.clone().or_else(|| snap.key.as_ref().and_then(|k| k.as_ref().ok()).map(|k| k.address.clone())),
         "wallet": snap.wallet.as_ref().and_then(|w| w.as_ref().ok()),
         "counts": counts(&snap.works),
+        "works_source": snap.works_source,
         "works": works,
+        "runtime": snap.node_status.as_ref().map(|r| json!({
+            "producer_state": r.producer_state,
+            "producer_reason": r.producer_reason,
+            "producer_since_unix": r.producer_since_unix,
+            "draws": r.draws,
+            "produced_blocks": r.produced_blocks,
+            "receipt_blocks": r.receipt_blocks,
+            "last_block": r.last_block,
+            "last_block_unix": r.last_block_unix,
+            "panel_running": r.panel_running,
+            "panel_submitter": r.panel_submitter,
+        })),
         "next": next_step(view),
         "sources": {
             "network": p.network_source,
@@ -673,7 +743,19 @@ pub(crate) async fn run(ctx: &crate::node::Ctx, profile: crate::operator::profil
     loop {
         let snap = Snapshot::gather(profile.clone(), timeout, true).await;
         let now = procs::now_unix() as i64;
-        let view = miner_state(&inputs(&snap, now));
+        let mut view = miner_state(&inputs(&snap, now));
+        // A supervisor that is draining says so: the node runs as a panel only on purpose, and
+        // "not producing" would read as a fault.
+        if let Some(sup) = crate::operator::supervisor::running_supervisor(&snap.profile.network)
+            && sup.phase == "draining"
+        {
+            view = MinerView {
+                state: MinerState::Stopping,
+                headline: format!("draining (supervisor pid {}) — {}", sup.supervisor_pid, sup.message),
+                finding: None,
+                basis: "supervisor",
+            };
+        }
         if ctx.output == OutputFormat::Json {
             println!("{}", serde_json::to_string_pretty(&document(&snap, &view)).expect("serializable"));
         } else {
@@ -725,6 +807,7 @@ mod tests {
             node: reached(),
             log,
             facts,
+            runtime: None,
             key_mismatch: None,
             bond: Some("aa:0"),
             unsynced_mining: false,

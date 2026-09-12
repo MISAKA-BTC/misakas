@@ -344,6 +344,21 @@ pub(crate) struct Owed {
     pub(crate) ends_daa: Option<u64>,
 }
 
+/// **The claims a stop would abandon — or `None` when they cannot be read.**
+///
+/// "None in flight" and "could not ask" are opposite answers to "may I stop?", and a drain that
+/// read an empty list off a node still restarting stopped at once with a claim in flight (found on
+/// the devnet run). So the list is only an answer when the node answered and the log the block
+/// lane's works are read from is the running node's.
+pub(crate) fn owed_known(snap: &Snapshot) -> Option<Vec<Owed>> {
+    if snap.node.is_err() {
+        return None;
+    }
+    let block_lane_readable = snap.live_log().is_some();
+    let prompt_lane_readable = snap.profile.prompt.as_ref().and_then(|p| p.outbox.as_ref()).is_none_or(|o| o.is_dir());
+    (block_lane_readable && prompt_lane_readable).then(|| owed(snap))
+}
+
 /// **The claims a stop would abandon**: this node's works on the chain and not yet final or
 /// voided. What stopping costs each one is said from the lane and the network's rules: a prompt
 /// claim's seats need openings only the executor holds, and — where the data-availability court is
@@ -770,7 +785,7 @@ pub(crate) async fn run_supervisor(plan: Plan, interactive: bool, reprofile: &dy
     let mut mode = Mode::Mining;
     let mut crashes: Vec<Instant> = Vec::new();
     let mut last_interrupt: Option<Instant> = None;
-    let mut last_drain_check = Instant::now() - Duration::from_secs(3600);
+    let mut last_drain_check = Instant::now();
     loop {
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(15)) => {}
@@ -791,13 +806,16 @@ pub(crate) async fn run_supervisor(plan: Plan, interactive: bool, reprofile: &dy
                 last_interrupt = Some(Instant::now());
                 println!();
                 let owed = match reprofile() {
-                    Ok(p) => owed(&Snapshot::gather(p, Duration::from_secs(5), true).await),
-                    Err(_) => Vec::new(),
+                    Ok(p) => owed_known(&Snapshot::gather(p, Duration::from_secs(5), true).await),
+                    Err(_) => None,
                 };
-                if owed.is_empty() {
-                    return shutdown(&plan, &mut state, kaspad, helpers, interactive, "stopped on Ctrl-C; no claim was left to defend").await;
+                match &owed {
+                    Some(owed) if owed.is_empty() => {
+                        return shutdown(&plan, &mut state, kaspad, helpers, interactive, "stopped on Ctrl-C; no claim was left to defend").await;
+                    }
+                    Some(owed) => println!("{}", stop_refusal(owed).render()),
+                    None => println!("{}", paint::yellow("! this node's claims cannot be read right now, so none is assumed safe to abandon")),
                 }
-                println!("{}", stop_refusal(&owed).render());
                 println!("{}", paint::yellow("Draining instead: drawing stops now, the node keeps serving, and it exits when the last claim ends. Ctrl-C again within 10 s to stop at once."));
                 if mode == Mode::Mining {
                     mode = Mode::Draining;
@@ -855,11 +873,14 @@ pub(crate) async fn run_supervisor(plan: Plan, interactive: bool, reprofile: &dy
         if mode == Mode::Draining && last_drain_check.elapsed() > Duration::from_secs(60) {
             last_drain_check = Instant::now();
             if let Ok(p) = reprofile() {
-                let owed = owed(&Snapshot::gather(p, Duration::from_secs(5), true).await);
-                if owed.is_empty() {
-                    return shutdown(&plan, &mut state, kaspad, helpers, interactive, "drained: no claim is left to defend").await;
+                match owed_known(&Snapshot::gather(p, Duration::from_secs(5), true).await) {
+                    Some(owed) if owed.is_empty() => {
+                        return shutdown(&plan, &mut state, kaspad, helpers, interactive, "drained: no claim is left to defend").await;
+                    }
+                    Some(owed) => say(&mut state, "draining", format!("{} claim(s) still to defend", owed.len())),
+                    // The node is restarting, or its log is not readable yet: keep draining.
+                    None => say(&mut state, "draining", "the claims cannot be read yet; still draining".into()),
                 }
-                say(&mut state, "draining", format!("{} claim(s) still to defend", owed.len()));
             }
         }
         if interactive && mode == Mode::Mining {
@@ -1098,7 +1119,25 @@ pub(crate) async fn stop(ctx: &crate::node::Ctx, profile: Profile, drain_: bool,
     }
     if !force {
         let snap = Snapshot::gather(profile.clone(), Duration::from_secs(5), true).await;
-        let owed = owed(&snap);
+        let Some(owed) = owed_known(&snap) else {
+            let why = match &snap.node {
+                Err((url, why)) => format!("the node at {url} is not answering ({why})"),
+                Ok(_) => "the running node's log cannot be read here, and the block lane's claims are listed from it".to_string(),
+            };
+            return fail(
+                ctx,
+                Finding::error(
+                    "E-STOP-UNKNOWN",
+                    exit::STOP_INFLIGHT,
+                    "This node's claims cannot be read, so none is assumed safe to abandon",
+                )
+                .reason("a stop is refused until it is known that no claim still needs this node")
+                .current(why)
+                .fix("misaka mining stop --force   (stop anyway)")
+                .fix("or run this as the node's user, on the node's host, once its RPC answers")
+                .docs("docs/testnet11-join-mining.md#6b-do-not-stop-your-node-with-claims-in-flight"),
+            );
+        };
         if !owed.is_empty() && !drain_ {
             return fail(ctx, stop_refusal(&owed));
         }

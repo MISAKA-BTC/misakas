@@ -1109,6 +1109,143 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         Ok(GetPalwModelPositionsResponse { holder: holder.to_string(), positions })
     }
 
+    // ------------------------------------------------------------------------------------------
+    // ADR-0122 §6.5 — the operator's reads
+    // ------------------------------------------------------------------------------------------
+
+    async fn get_palw_claims_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwClaimsRequest,
+    ) -> RpcResult<GetPalwClaimsResponse> {
+        // Everything the caller sent is parsed before a byte of chain state is read (mainnet audit
+        // M-5): a malformed request must be free, and it is an ERROR, not an empty list — "this bond
+        // has no claims" and "you named no bond" must not share a reply.
+        let (txid, index) =
+            request.bond.split_once(':').ok_or_else(|| RpcError::General(format!("bond '{}' is not <txid>:<index>", request.bond)))?;
+        let transaction_id = txid
+            .parse::<kaspa_consensus_core::tx::TransactionId>()
+            .map_err(|_| RpcError::General(format!("bond transaction id '{txid}' is not a transaction id")))?;
+        let index: u32 = index.parse().map_err(|_| RpcError::General(format!("bond index '{index}' is not an output index")))?;
+        let bond = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint {
+            transaction_id,
+            index,
+        });
+        let role = match request.role.trim() {
+            "" | "executor" => kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Executor,
+            "seat" => kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Seat,
+            other => return Err(RpcError::General(format!("role '{other}' is neither `executor` nor `seat`"))),
+        };
+        // A bound on what one call may cost the node: the state's claims are retired after
+        // `claim_retirement`, so a bond's list is short in practice; the cap keeps it so.
+        const CAP: usize = 500;
+        let limit = match request.limit as usize {
+            0 => CAP,
+            n => n.min(CAP),
+        };
+        let include_terminal = request.include_terminal;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let read = session.spawn_blocking(move |c| c.palw_claim_rows_v1(bond, role, include_terminal, limit)).await;
+        let role_name = match role {
+            kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Executor => "executor",
+            kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Seat => "seat",
+        };
+        let Some((tip_daa, rows, truncated)) = read else {
+            return Ok(GetPalwClaimsResponse { bond: request.bond, role: role_name.to_string(), ..Default::default() });
+        };
+        let outpoint = |b: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2| format!("{}:{}", b.0.transaction_id, b.0.index);
+        let claims = rows
+            .iter()
+            .map(|row| {
+                let (phase, void_reason, phase_daa) = palw_claim_phase_named(&row.phase);
+                RpcPalwClaimRow {
+                    claim_id: row.claim_id.to_string(),
+                    is_free_prompt: row.free_prompt,
+                    class_id: row.class_id.to_string(),
+                    executor_bond: outpoint(&row.executor_bond),
+                    phase,
+                    void_reason,
+                    phase_daa,
+                    accepted_daa: row.accepted_daa,
+                    accepted_block: row.accepted_block.to_string(),
+                    rebound_daa: row.rebound_daa,
+                    bound_daa: row.bound_daa,
+                    seats: row.seats.iter().map(outpoint).collect(),
+                    deadline_daa: row.deadline_daa,
+                    reserved_sompi: row.reserved.to_string(),
+                    escrow_sompi: row.escrowed_reward,
+                    payout_pending_sompi: row.payout_pending,
+                    quanta: row.quanta,
+                    quanta_spent: row.quanta_spent,
+                    work_leaves: row.work_leaves,
+                    open_courts: row.open_courts as u32,
+                }
+            })
+            .collect();
+        Ok(GetPalwClaimsResponse { available: true, tip_daa, bond: request.bond, role: role_name.to_string(), claims, truncated })
+    }
+
+    async fn get_palw_classes_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        _request: GetPalwClassesRequest,
+    ) -> RpcResult<GetPalwClassesResponse> {
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let tip_daa = session.get_virtual_daa_score();
+        let rows = session.spawn_blocking(|c| c.palw_v2_class_table()).await;
+        Ok(GetPalwClassesResponse {
+            available: !rows.is_empty(),
+            tip_daa,
+            classes: rows
+                .into_iter()
+                .map(|row| RpcPalwClassRow {
+                    class_id: row.class_id.to_string(),
+                    is_base_class: row.is_base_class,
+                    status: row.status,
+                    share_permille: row.share_permille,
+                    budget_blocks: row.budget_blocks,
+                    canonical_leaves: row.canonical_leaves,
+                    artifact_root: row.artifact_root.to_string(),
+                    fp_certified: row.fp_certified,
+                    held: row.held,
+                    registered_daa: row.registered_daa,
+                })
+                .collect(),
+        })
+    }
+
+    async fn get_palw_node_status_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        _request: GetPalwNodeStatusRequest,
+    ) -> RpcResult<GetPalwNodeStatusResponse> {
+        // The boot identity is read off the config this node runs — the same two values its
+        // `Consensus params fingerprint:` / `Consensus fence schedule:` lines print — so "is this
+        // node the release?" is a read, not a grep of a log that may have rolled (ADR-0122 §6.1).
+        let params = &self.config.params;
+        let rt = self.flow_context.palw_runtime();
+        Ok(GetPalwNodeStatusResponse {
+            consensus_params_id: params.consensus_params_id().to_string(),
+            fence_schedule: params.fence_schedule_v1(),
+            consensus_schedule_id: params.consensus_schedule_id().to_string(),
+            producer_state: if rt.producer_state.is_empty() { "off".to_string() } else { rt.producer_state.to_string() },
+            producer_reason: rt.producer_reason,
+            producer_since_unix: rt.producer_since_unix,
+            producer_bond: rt.producer_bond,
+            producer_class: rt.producer_class,
+            draws: rt.draws,
+            produced_blocks: rt.produced_blocks,
+            receipt_blocks: rt.receipt_blocks,
+            network_lost: rt.network_lost,
+            last_block: rt.last_block,
+            last_block_unix: rt.last_block_unix,
+            last_draw_unix: rt.last_draw_unix,
+            panel_running: rt.panel_running,
+            panel_submitter: rt.panel_submitter,
+            retention_dir: self.flow_context.palw_retention_dir().map(|d| d.display().to_string()).unwrap_or_default(),
+        })
+    }
+
     async fn get_palw_producer_facts_call(
         &self,
         _connection: Option<&DynRpcConnection>,

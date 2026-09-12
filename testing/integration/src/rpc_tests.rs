@@ -1057,6 +1057,54 @@ async fn sanity_test() {
                     assert!(!response.exists && response.proposals.is_empty(), "a line that does not exist holds no proposal");
                 })
             }
+            KaspadPayloadOps::GetPalwClaims => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // A malformed bond is an error, not an empty list.
+                    assert!(
+                        rpc_client
+                            .get_palw_claims_call(
+                                None,
+                                GetPalwClaimsRequest {
+                                    bond: "not-a-bond".into(),
+                                    role: "executor".into(),
+                                    include_terminal: false,
+                                    limit: 0
+                                }
+                            )
+                            .await
+                            .is_err()
+                    );
+                    let response = rpc_client
+                        .get_palw_claims_call(
+                            None,
+                            GetPalwClaimsRequest {
+                                bond: format!("{}:0", "00".repeat(64)),
+                                role: "executor".into(),
+                                include_terminal: true,
+                                limit: 0,
+                            },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(response.claims.is_empty(), "a bond that does not exist made no claim");
+                })
+            }
+            KaspadPayloadOps::GetPalwClasses => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client.get_palw_classes_call(None, GetPalwClassesRequest {}).await.unwrap();
+                    assert!(response.classes.iter().filter(|c| c.is_base_class).count() <= 1, "at most one base class");
+                })
+            }
+            KaspadPayloadOps::GetPalwNodeStatus => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client.get_palw_node_status_call(None, GetPalwNodeStatusRequest {}).await.unwrap();
+                    assert!(!response.consensus_params_id.is_empty(), "a node always knows the fingerprint it booted");
+                    assert_eq!(response.producer_state, "off", "the sanity daemon runs no producer");
+                })
+            }
             KaspadPayloadOps::GetTokenSupply => {
                 tst!(op, "TOK supply read — inert preset answers available:false by design")
             }

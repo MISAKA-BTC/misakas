@@ -1656,6 +1656,15 @@ pub struct PalwClassRowV2 {
     /// can disagree with it and with each other.
     pub canonical_leaves: u64,
     pub is_base_class: bool,
+    /// What artifact openings of this class prove against (ADR-0122 §6.5: `getPalwClasses`, so a
+    /// setup can check an artifact file against the class before running it).
+    pub artifact_root: Hash64,
+    /// Whether the free-prompt lane is certified for this class, by the same derivation the
+    /// producer facts use (`palw_producer_facts_v2`'s `fp_certified`).
+    pub fp_certified: bool,
+    /// Whether the class registered under the held regime (ADR-0119).
+    pub held: bool,
+    pub registered_daa: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]

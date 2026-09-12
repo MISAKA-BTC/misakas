@@ -129,10 +129,14 @@ fn node_checks(snap: &Snapshot, out: &mut Vec<Check>) {
     // for the network is not the one it should print, and comparing the two would cry fork.
     let own_ruleset = p.kaspad.as_ref().and_then(|(_, a)| a.ruleset_flags.first().cloned());
     let expected = if own_ruleset.is_some() { None } else { crate::operator::status::expected(&p.network) };
-    // Only the running node's own boot lines say what it runs: a log left by an earlier run, or by
-    // another node at the default path, says nothing about the process that is up now.
+    // The node's own word over RPC first (ADR-0122 §6.5: no log needed, from any host); then only
+    // the running node's own boot lines — a log left by an earlier run, or by another node at the
+    // default path, says nothing about the process that is up now.
     let log = snap.boot_log();
-    match (log.and_then(|l| l.fingerprint.as_deref()), &expected) {
+    let rt = snap.node_status.as_ref();
+    let node_fp = rt.map(|r| r.consensus_params_id.as_str()).or_else(|| log.and_then(|l| l.fingerprint.as_deref()));
+    let node_heights = rt.map(|r| &r.fence_schedule).or_else(|| log.and_then(|l| l.schedule.as_ref()));
+    match (node_fp, &expected) {
         (Some(node), Some((cli, _))) if node == cli => {
             out.push(Check::ok(a, "fork", format!("fingerprint {} = this CLI's {}", short(node), p.network)))
         }
@@ -163,7 +167,7 @@ fn node_checks(snap: &Snapshot, out: &mut Vec<Check>) {
             },
         )),
     }
-    match (log.and_then(|l| l.schedule.as_ref()), &expected) {
+    match (node_heights, &expected) {
         (Some(node), Some((_, cli))) if node == cli => out.push(Check::ok(a, "schedule", heights(node))),
         (Some(node), Some((_, cli))) => {
             out.push(Check::found(a, "schedule", format!("node {}", heights(node)), catalog::schedule_mismatch(node, cli)))

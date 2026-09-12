@@ -120,6 +120,12 @@ pub(crate) struct Snapshot {
     pub(crate) log_live: bool,
     /// The log's boot lines are this process's boot, not an earlier one's.
     pub(crate) boot_current: bool,
+    /// `getPalwNodeStatus` (ADR-0122 §6.5), from a node that serves it; `None` from an older one,
+    /// whose log is then the only account of its runtime.
+    pub(crate) node_status: Option<kaspa_rpc_core::GetPalwNodeStatusResponse>,
+    /// Where the works came from: `node` (`getPalwClaims`) or `log` (the produced blocks the node's
+    /// log names, followed one by one).
+    pub(crate) works_source: &'static str,
 }
 
 impl Snapshot {
@@ -211,9 +217,13 @@ impl Snapshot {
             work_errors: Vec::new(),
             log_live: false,
             boot_current: false,
+            node_status: None,
+            works_source: "log",
         };
         (snap.log_live, snap.boot_current) = log_liveness(&snap.log, &snap.profile, snap.node.is_ok());
         let Ok(node) = snap.node.as_ref() else { return snap };
+        // A node that predates the read answers "method not found": the log stays the account.
+        snap.node_status = node.client().get_palw_node_status().await.ok();
 
         if let (Some(class), Some(bond)) = (snap.class_id.clone(), snap.profile.bond.clone()) {
             snap.facts = Some(match crate::bond::parse_outpoint(&bond) {
@@ -234,9 +244,10 @@ impl Snapshot {
         }
 
         if follow_works {
-            let (works, errors) = gather_works(&snap, node).await;
+            let (works, errors, source) = gather_works(&snap, node).await;
             snap.works = works;
             snap.work_errors = errors;
+            snap.works_source = source;
         }
         snap
     }
@@ -288,18 +299,76 @@ pub(crate) fn rail_state(outbox: &Path) -> std::collections::BTreeMap<String, Ra
     out
 }
 
-/// **This bond's works**: the block lane's from the blocks the node's log says it produced (each
-/// followed to its claim by the attempt id in the block's header), the prompt lane's from the
-/// outbox. Until the node serves `getPalwClaims` (ADR-0122 §6.5), this is the whole list a host
-/// can build, and it is only as long as the log it read.
-async fn gather_works(snap: &Snapshot, node: &NodeRead) -> (Vec<WorkRow>, Vec<String>) {
+/// A claim row, as the claim read `work::classify` takes.
+fn row_as_claim(r: &kaspa_rpc_core::RpcPalwClaimRow) -> GetPalwFreePromptClaimResponse {
+    GetPalwFreePromptClaimResponse {
+        found: true,
+        claim_id: r.claim_id.clone(),
+        is_free_prompt: r.is_free_prompt,
+        class_id: r.class_id.clone(),
+        executor_bond: r.executor_bond.clone(),
+        work_leaves: r.work_leaves,
+        quanta: r.quanta,
+        quanta_spent: r.quanta_spent,
+        phase: r.phase.clone(),
+        void_reason: r.void_reason.clone(),
+        phase_daa: r.phase_daa,
+        accepted_block: r.accepted_block.clone(),
+        accepted_daa: r.accepted_daa,
+        ..Default::default()
+    }
+}
+
+/// **This bond's works.** From a node that serves `getPalwClaims` (ADR-0122 §6.5): every claim the
+/// state holds for the bond, both lanes, with the chain's own deadlines and escrows. From an older
+/// node: the block lane's from the blocks the node's log says it produced, each followed to its
+/// claim by the attempt id in the block's header — only as long as the log it read. Either way the
+/// prompt lane's jobs that never reached the chain come from the outbox.
+async fn gather_works(snap: &Snapshot, node: &NodeRead) -> (Vec<WorkRow>, Vec<String>, &'static str) {
     let mut works = Vec::new();
     let mut errors = Vec::new();
     let now = node.daa();
     let maturity = node.nv.coinbase_spendable_after();
     let windows = node.windows;
+    let produced_at = |hash: &str| -> Option<i64> {
+        snap.log
+            .as_ref()
+            .ok()
+            .and_then(|l| l.produced.iter().chain(l.receipts.iter()).find(|(_, _, h)| h == hash).map(|(ts, _, _)| *ts))
+    };
 
-    if let Ok(log) = &snap.log {
+    let node_rows = match &snap.profile.bond {
+        Some(bond) => node.client().get_palw_claims(bond.clone(), "executor".into(), true, 200).await.ok().filter(|r| r.available),
+        None => None,
+    };
+    let source = if node_rows.is_some() { "node" } else { "log" };
+    if let Some(resp) = &node_rows {
+        for row in &resp.claims {
+            let lane = if row.is_free_prompt { Lane::Prompt } else { Lane::Block };
+            let chain = row_as_claim(row);
+            let reading = work::classify(lane, None, None, Some(&chain), false, windows.as_ref(), maturity, now);
+            let extra = work::ClaimExtra {
+                deadline_daa: row.deadline_daa,
+                escrow_sompi: row.escrow_sompi,
+                payout_pending_sompi: row.payout_pending_sompi,
+            };
+            works.push(WorkRow {
+                lane,
+                claim_id: Some(row.claim_id.clone()),
+                job: None,
+                block: (lane == Lane::Block).then(|| row.accepted_block.clone()),
+                seen_ts: produced_at(&row.accepted_block),
+                chain: Some(chain),
+                outbox: None,
+                reading: work::refine(lane, reading, &extra),
+            });
+        }
+        if resp.truncated {
+            errors.push(format!("the node listed the newest {} claims; older ones were left out", resp.claims.len()));
+        }
+    }
+
+    if let (None, Ok(log)) = (&node_rows, &snap.log) {
         for (ts, _, hash) in log.produced.iter().rev().take(BLOCKS_FOLLOWED) {
             match claim_of_block(node, hash).await {
                 Ok(Some(claim)) => {
@@ -327,6 +396,18 @@ async fn gather_works(snap: &Snapshot, node: &NodeRead) -> (Vec<WorkRow>, Vec<St
             Ok(rows) => {
                 let rail = rail_state(&outbox);
                 for row in rows.into_iter().rev() {
+                    // A job whose claim the node already listed is that claim: the files add its job
+                    // name and when it was made, and the chain's reading stands.
+                    if let Some(w) =
+                        row.claim_id.as_deref().and_then(|id| works.iter_mut().find(|w| w.claim_id.as_deref() == Some(id)))
+                    {
+                        w.job = Some(row.stem.clone());
+                        w.seen_ts = w
+                            .seen_ts
+                            .or(row.modified.and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs() as i64));
+                        w.outbox = Some(row);
+                        continue;
+                    }
                     let verdict = rail.get(&row.stem).cloned();
                     let (chain, in_mempool) = if matches!(row.state, OutboxState::Submitted) {
                         match row.claim_id.as_deref() {
@@ -369,8 +450,12 @@ async fn gather_works(snap: &Snapshot, node: &NodeRead) -> (Vec<WorkRow>, Vec<St
             Err(e) => errors.push(e.msg),
         }
     }
-    works.sort_by(|a, b| b.seen_ts.cmp(&a.seen_ts));
-    (works, errors)
+    // Newest first: by when this host saw it, else by where the chain accepted it.
+    works.sort_by(|a, b| {
+        let key = |w: &WorkRow| (w.seen_ts, w.chain.as_ref().map(|c| c.accepted_daa));
+        key(b).cmp(&key(a))
+    });
+    (works, errors, source)
 }
 
 /// The attempt id — the claim id — a block of this node's carries, from its header's envelope.

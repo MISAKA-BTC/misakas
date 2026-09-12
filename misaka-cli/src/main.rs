@@ -190,6 +190,8 @@ enum Command {
     /// One work from the request (or the won draw) to the reward, by one id (ADR-0122).
     #[command(subcommand)]
     Work(WorkCmd),
+    /// The node's, the gateway's and the rail's lines — all of them, or the ones about one work.
+    Logs(LogsArgs),
     /// Node operations.
     #[command(subcommand)]
     Node(NodeCmd),
@@ -376,6 +378,27 @@ struct DoctorArgs {
     /// Exit non-zero on a warning, too.
     #[arg(long)]
     strict: bool,
+    #[command(flatten)]
+    profile: ProfileArgs,
+}
+
+#[derive(Args, Debug)]
+struct LogsArgs {
+    /// Only these components (default: all of node, gateway, rail).
+    #[arg(value_enum)]
+    components: Vec<operator::logs::Component>,
+    /// Only the lines about this work: 8+ hex of its claim id, or `job:<hex>`.
+    #[arg(long, value_name = "ID")]
+    work: Option<String>,
+    /// Only the `event` lines (one per stage).
+    #[arg(long)]
+    events: bool,
+    /// Keep printing new lines as they are written.
+    #[arg(short = 'f', long)]
+    follow: bool,
+    /// How many of the last lines to show without --work (default 60).
+    #[arg(short = 'n', long, default_value_t = 60)]
+    lines: usize,
     #[command(flatten)]
     profile: ProfileArgs,
 }
@@ -1865,6 +1888,10 @@ async fn main() -> std::process::ExitCode {
         },
         Command::Work(WorkCmd::Why { id, profile: args }) => match profile(&args) {
             Ok(p) => operator::work_cmd::why(&ctx, p, &id).await,
+            Err(e) => Err(e),
+        },
+        Command::Logs(args) => match profile(&args.profile) {
+            Ok(p) => operator::logs::run(p, &args.components, args.work.as_deref(), args.events, args.follow, args.lines).await,
             Err(e) => Err(e),
         },
         Command::Node(NodeCmd::Doctor) => node::doctor(&ctx).await,
