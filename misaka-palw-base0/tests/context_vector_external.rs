@@ -35,11 +35,16 @@ fn check_pinned(name: &str, pinned_document_id: &str) {
 /// **The 131,072-position vector.** First reproduced 2026-09-11 on a 12-core M-series host: 44.7
 /// minutes, 7.5 GB peak resident (ADR-0110 §9.5). Every stage passed; the court's tampered half
 /// ran (13.1 M leaves, inside the 2^24 dense re-execution cap).
+///
+/// Re-pinned 2026-09-12 for ADR-0119, from a second reproduction on the same host (47.6 minutes,
+/// beside a workspace build): a held class is walked at the regime's `2^40` ladder, so the fit's
+/// ladder row has 40 levels and the widest close needs 39,664 bytes instead of 38,768. Every
+/// other fact of the document is the first run's (`7bc3f88b…`), field by field (ADR-0110 §9.6).
 #[test]
 #[ignore = "an external run: about 45 minutes in release on a 12-core host"]
 fn the_128k_vector_passes_every_stage_and_is_pinned() {
     check_pinned(
         "0110-dense-v7-128k",
-        "7bc3f88b60bd2857cf733ac316d16109723d161a5cd4a5bb924edd7bbbdf688a9a42e99bd1fc91d1e8e5f6f95ab2009827e685a025caafae50b336a14e7cabe0",
+        "d646452413195e2befce33c19b0be825a3fd8a687894fc66a74278c08ee60b62f5c3460440c04afa202ddebd14dbe455c5bcc962abe1c4e9e53834fa5780f4b0",
     );
 }

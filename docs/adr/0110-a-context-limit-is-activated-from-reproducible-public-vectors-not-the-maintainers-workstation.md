@@ -354,3 +354,20 @@ chain-side term still reads a constant number of bytes a doubling: the evidence 
 over the two doublings from 32,768, the answers likewise, and the roots, counts and verdicts are
 the table's. The 262,144-position vector is the next external run; the 2M one waits on §10.7 of
 ADR-0103.
+
+### 9.6 Re-pinned for ADR-0119 (2026-09-12)
+
+ADR-0119 walks a held class at the regime's `2^40` ladder instead of the held devnet's `2^26`, and
+every vector runs a held class. So each document's fit reports 40 levels on its ladder row, and
+its widest close, priced at that depth, grows. The 512 vector's close grows by 5,376 bytes, and
+the three wider ones' by 896 (one path, fourteen levels deeper). Diffed field by field against
+the documents the previous pins were taken from, nothing else moved: every root, count, route,
+answer and verdict is the previous run's. With the class ladder held at the network's, the same
+tree prints the previous 512 id. All four ids were reproduced by `misaka palw verify-context` in
+release on the §9.5 host. The 128K run took 47.6 minutes beside a workspace build, peaking at
+6.2 GB.
+
+| | 512 | 4,096 | 32,768 | 131,072 |
+|---|---|---|---|---|
+| widest close (bytes) | 15,231 → 20,607 | 38,448 → 39,344 | 38,640 → 39,536 | 38,768 → 39,664 |
+| `document_id` | `02818c10…` (was `d2364615…`) | `a54a5ee6…` (was `9c5a772c…`) | `0b8b191d…` (was `848d9352…`) | `d6464524…` (was `7bc3f88b…`) |
