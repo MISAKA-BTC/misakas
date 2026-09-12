@@ -23,6 +23,8 @@ struct StatusArgs {
     node_rpc: Option<String>,
     network: Option<String>,
     stake_bond: Option<String>,
+    /// The validator file (default ~/.misaka/validator.toml).
+    config: Option<String>,
 }
 
 fn take_value(args: &[String], i: &mut usize, flag: &str) -> Result<String, CliError> {
@@ -59,6 +61,10 @@ fn parse_status_args(args: &[String]) -> Result<Option<StatusArgs>, CliError> {
             out.stake_bond = Some(v.to_string());
         } else if arg == "--stake-bond" {
             out.stake_bond = Some(take_value(args, &mut i, arg)?);
+        } else if let Some(v) = arg.strip_prefix("--config=") {
+            out.config = Some(v.to_string());
+        } else if arg == "--config" {
+            out.config = Some(take_value(args, &mut i, arg)?);
         } else {
             return Err(CliError::new(2, format!("unknown `misaka validator status` argument: {arg}")));
         }
@@ -74,7 +80,8 @@ Usage: misaka validator status [OPTIONS]\n\n\
 Options:\n  \
     --node-rpc <HOST:PORT>         Node wRPC Borsh endpoint (alias: --node-wrpc-borsh, --rpc)\n  \
     --network <NETWORK_ID>         Network id for default endpoint resolution (alias: --network-id)\n  \
-    --stake-bond <TXID:INDEX>      Stake-bond outpoint to report\n  \
+    --stake-bond <TXID:INDEX>      Stake-bond outpoint to report (default: ~/.misaka/validator.toml's)\n  \
+    --config <FILE>                The validator file `misaka validator setup` wrote\n  \
     -h, --help                     Print help\n\n\
 Global options such as --output json may be passed before `validator`."
     );
@@ -110,20 +117,130 @@ fn dns_health_name(health: u32) -> &'static str {
     }
 }
 
-async fn status(ctx: &Ctx, args: StatusArgs) -> CliResult {
-    let network = args.network.as_deref().unwrap_or(&ctx.network);
-    let node_rpc = args.node_rpc.or_else(|| ctx.rpc.clone());
+/// Who is attesting for `bond` on this host: a node running the validator in-process, or the
+/// sidecar's `run` — their pid and what they are.
+fn attesting_here(bond: &str) -> Option<(u32, &'static str)> {
+    use crate::operator::procs::{self, Component};
+    let node = procs::find(Component::Kaspad).into_iter().find(|p| {
+        let a = procs::parse_kaspad_args(&p.args);
+        a.enable_validator && a.stake_bond.as_deref() == Some(bond)
+    });
+    if let Some(p) = node {
+        return Some((p.pid, "kaspad --enable-validator"));
+    }
+    procs::find(Component::Validator)
+        .into_iter()
+        .find(|p| {
+            p.args.iter().any(|a| a == "run") && p.args.windows(2).any(|w| w[0] == "--stake-bond" && w[1] == bond)
+                || p.args.iter().any(|a| a.strip_prefix("--stake-bond=") == Some(bond))
+        })
+        .map(|p| (p.pid, "kaspa-pq-validator run"))
+}
+
+/// ADR-0122 §8.2: the existing reader, with the operator's line on top — what this validator is
+/// doing, and why not when it is not — and the next command under it. The `key: value` lines
+/// between are unchanged: scripts read them.
+async fn status(ctx: &Ctx, args: StatusArgs, named_network: Option<&str>) -> CliResult {
+    use crate::operator::finding::paint;
+    use crate::operator::profile::ValidatorToml;
+    // What `misaka validator setup` wrote fills what the flags do not say.
+    let file = args
+        .config
+        .as_ref()
+        .map(|c| std::path::PathBuf::from(crate::operator::procs::expand_home(c)))
+        .or_else(ValidatorToml::default_path)
+        .and_then(|p| ValidatorToml::load(&p).ok().flatten())
+        .unwrap_or_default();
+    let network = args
+        .network
+        .clone()
+        .or_else(|| named_network.map(str::to_string))
+        .or_else(|| file.validator.network.clone())
+        .unwrap_or_else(|| ctx.network.clone());
+    let network = network.as_str();
+    let from_file = file.validator.network.as_deref() == Some(network);
+    let node_rpc = args.node_rpc.clone().or_else(|| ctx.rpc.clone()).or_else(|| {
+        from_file
+            .then(|| file.advanced.rpc_borsh.clone().filter(|v| v != "default").map(|v| v.replace("0.0.0.0", "127.0.0.1")))
+            .flatten()
+    });
+    let args = StatusArgs {
+        stake_bond: args.stake_bond.clone().or_else(|| from_file.then(|| file.validator.bond.clone()).flatten()),
+        ..args
+    };
     let client = connect(network, &node_rpc, ctx.timeout_secs).await?;
     let server = client.get_server_info().await.map_err(|e| CliError::new(exit::CONNECTION, format!("getServerInfo failed: {e}")))?;
 
+    // The operator's line: read what it needs first, then print it above the reader's lines.
+    let bond_read = match &args.stake_bond {
+        Some(bond) => Some(client.get_stake_bond(GetStakeBondRequest { bond_outpoint: bond.clone() }).await),
+        None => None,
+    };
+    let dns_read = client.get_dns_confirmation().await;
+    let attesting = args.stake_bond.as_deref().and_then(attesting_here);
+    // The chain's own liveness gauge: the ready epochs still waiting for this bond's attestation.
+    let owed = match &args.stake_bond {
+        Some(bond) => client
+            .get_validator_attestation_targets(kaspa_rpc_core::GetValidatorAttestationTargetsRequest {
+                bond_outpoint: bond.clone(),
+                from_epoch: 0,
+                limit: 64,
+            })
+            .await
+            .ok()
+            .map(|r| r.targets.len()),
+        None => None,
+    };
+    let group = crate::operator::status::group;
+    let (headline, next): (String, Option<String>) = match (&args.stake_bond, &bond_read) {
+        (None, _) => (
+            paint::dim("○ NOT A VALIDATOR — no stake bond named here (--stake-bond, or ~/.misaka/validator.toml)"),
+            Some("misaka validator setup".into()),
+        ),
+        (Some(bond), Some(Ok(b))) if !b.available => {
+            (paint::red(&format!("✗ BOND NOT FOUND — {bond} is not in the stake registry")), Some("misaka validator setup".into()))
+        }
+        (Some(_), Some(Ok(b))) if b.effective_status == "active" => {
+            let dns = match &dns_read {
+                Ok(d) if d.available && d.dns_confirmed => {
+                    format!("DNS finality confirmed at anchor DAA {}", group(d.last_dns_confirmed_anchor_daa_score))
+                }
+                Ok(d) if d.available => format!(
+                    "finality not confirmed yet (work {}/{}, stake {}/{})",
+                    d.work_depth, d.required_work_depth, d.stake_depth, d.required_stake_depth
+                ),
+                _ => "the overlay's state could not be read".into(),
+            };
+            let amount = crate::operator::catalog::msk(b.amount as u128);
+            let behind = owed.filter(|n| *n > 2).map(|n| format!(" · {n} ready epochs not yet attested")).unwrap_or_default();
+            match attesting {
+                Some((pid, what)) => {
+                    (paint::green(&format!("● VALIDATING — bond active · {amount} · {what} pid {pid} · {dns}{behind}")), None)
+                }
+                None => (
+                    paint::yellow(&format!(
+                        "◐ BONDED, NOT ATTESTING — the bond is active ({amount}) and nothing on this host signs for it"
+                    )),
+                    Some(crate::operator::wizard::validator_command(network, &file)),
+                ),
+            }
+        }
+        (Some(_), Some(Ok(b))) => (
+            paint::yellow(&format!("◐ BOND {} — it attests once active", b.effective_status.to_uppercase())),
+            Some("misaka validator status   (again, after activation)".into()),
+        ),
+        (Some(_), _) => (paint::yellow("? the stake registry could not be read — see bond: below"), None),
+    };
+
     if ctx.output == OutputFormat::Human {
+        println!("{headline}");
         println!("node_network: {}", server.network_id);
         println!("node_synced:  {}", server.is_synced);
         println!("node_version: {}", server.server_version);
     }
 
-    let bond_json = if let Some(bond) = &args.stake_bond {
-        match client.get_stake_bond(GetStakeBondRequest { bond_outpoint: bond.clone() }).await {
+    let bond_json = if let (Some(bond), Some(read)) = (&args.stake_bond, bond_read) {
+        match read {
             Ok(b) if b.available => {
                 if ctx.output == OutputFormat::Human {
                     println!("bond:         {bond}");
@@ -157,8 +274,7 @@ async fn status(ctx: &Ctx, args: StatusArgs) -> CliResult {
         json!(null)
     };
 
-    let dns_resp = client.get_dns_confirmation().await;
-    let dns_json = match dns_resp {
+    let dns_json = match dns_read {
         Ok(d) if d.available => {
             let health = dns_health_name(d.health);
             if ctx.output == OutputFormat::Human {
@@ -233,8 +349,13 @@ async fn status(ctx: &Ctx, args: StatusArgs) -> CliResult {
                 },
                 "bond": bond_json,
                 "dns": dns_json,
+                "attesting": attesting.map(|(pid, what)| json!({ "pid": pid, "process": what })),
+                "epochsNotYetAttested": owed,
+                "next": next,
             })
         );
+    } else if let Some(next) = &next {
+        println!("next:          {next}");
     }
 
     let _ = client.disconnect().await;
@@ -430,10 +551,10 @@ async fn bonds(ctx: &Ctx, args: BondsArgs) -> CliResult {
     Ok(())
 }
 
-pub async fn maybe_handle(ctx: &Ctx, args: &[String]) -> Option<CliResult> {
+pub async fn maybe_handle(ctx: &Ctx, args: &[String], named_network: Option<&str>) -> Option<CliResult> {
     match args.first().map(String::as_str) {
         Some("status") => match parse_status_args(args) {
-            Ok(Some(a)) => Some(status(ctx, a).await),
+            Ok(Some(a)) => Some(status(ctx, a, named_network).await),
             Ok(None) => None,
             Err(e) if e.code == exit::SUCCESS && e.msg.is_empty() => Some(Ok(())),
             Err(e) => Some(Err(e)),
@@ -473,8 +594,11 @@ mod tests {
                 node_rpc: Some("127.0.0.1:27610".to_string()),
                 network: Some("testnet-10".to_string()),
                 stake_bond: Some("abc:0".to_string()),
+                config: None,
             }
         );
+        let with_file = parse_status_args(&s(&["status", "--config", "~/v.toml"])).unwrap().unwrap();
+        assert_eq!(with_file.config.as_deref(), Some("~/v.toml"), "the file setup wrote, named");
     }
 
     #[test]

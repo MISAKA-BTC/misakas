@@ -161,9 +161,9 @@ impl PalwProducerFactsV2 {
     /// it — and the bond most likely to hold on exposure is precisely the one committing
     /// free-prompt claims, since those fill the same ceiling.
     pub fn ready_to_spend_receipts(&self, local_pubkey: &[u8]) -> Result<(), &'static str> {
-        let bond = self.bond.as_ref().ok_or("the named bond is not registered on this chain")?;
+        let bond = self.bond.as_ref().ok_or(PALW_NOT_READY_BOND_UNKNOWN_V2)?;
         if bond.registered_pubkey != local_pubkey {
-            return Err("the local signing key is not the one this bond registered");
+            return Err(PALW_NOT_READY_KEY_MISMATCH_V2);
         }
         Ok(())
     }
@@ -173,16 +173,35 @@ impl PalwProducerFactsV2 {
     /// but each `Err` is a reason it certainly would not have.
     pub fn ready_to_produce(&self, local_pubkey: &[u8]) -> Result<(), &'static str> {
         self.ready_to_spend_receipts(local_pubkey)?;
-        let bond = self.bond.as_ref().ok_or("the named bond is not registered on this chain")?;
+        let bond = self.bond.as_ref().ok_or(PALW_NOT_READY_BOND_UNKNOWN_V2)?;
         if !self.has_epoch_room() {
-            return Err("this class's epoch budget is already spent");
+            return Err(PALW_NOT_READY_EPOCH_BUDGET_V2);
         }
         if !bond.has_exposure_room() {
-            return Err("the bond's exposure ceiling leaves no room for another claim");
+            return Err(PALW_NOT_READY_EXPOSURE_FULL_V2);
         }
         Ok(())
     }
 }
+
+// **The four verdicts, by name** (ADR-0122 Decision 3). The sentences are the ones this function
+// has always returned — the producer logs them after `holding:` and `getPalwProducerFacts` serves
+// them as `not_ready_reason` — and the operator CLI turns each into a code and a fix. It matches on
+// these constants rather than on a copy of the words, so rewording one breaks the CLI's build
+// instead of quietly turning a known hold into an unrecognised one.
+
+/// `ready_to_produce` / `ready_to_spend_receipts`: the chain has no bond at the named outpoint.
+pub const PALW_NOT_READY_BOND_UNKNOWN_V2: &str = "the named bond is not registered on this chain";
+/// `ready_to_produce` / `ready_to_spend_receipts`: the bond exists and registered another key.
+pub const PALW_NOT_READY_KEY_MISMATCH_V2: &str = "the local signing key is not the one this bond registered";
+/// `ready_to_produce`: this class's blocks for the epoch are spent (the floor class is exempt).
+pub const PALW_NOT_READY_EPOCH_BUDGET_V2: &str = "this class's epoch budget is already spent";
+/// `ready_to_produce`: every sompi of the bond's exposure ceiling is reserved by live claims.
+pub const PALW_NOT_READY_EXPOSURE_FULL_V2: &str = "the bond's exposure ceiling leaves no room for another claim";
+
+/// Every sentence `ready_to_produce` can return, in the order it checks them.
+pub const PALW_NOT_READY_REASONS_V2: [&str; 4] =
+    [PALW_NOT_READY_BOND_UNKNOWN_V2, PALW_NOT_READY_KEY_MISMATCH_V2, PALW_NOT_READY_EPOCH_BUDGET_V2, PALW_NOT_READY_EXPOSURE_FULL_V2];
 
 /// Read the facts for `class_id` (and optionally a bond) out of a state snapshot.
 ///
@@ -856,6 +875,183 @@ pub fn palw_da_duties_v2(state: &PalwChainStateV2, state_params: &PalwStateParam
         });
     }
     out
+}
+
+/// Which claims an operator asks about: the ones its bond made, or the ones its bond judges.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwClaimRoleV1 {
+    Executor,
+    Seat,
+}
+
+/// **One claim as its operator reads it** (ADR-0122 §6.5, `getPalwClaims`): its phase and the next
+/// date it moves by itself, what it reserves and what it will pay, and who judges it. Read off the
+/// state at the tip; nothing here is node-local.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwClaimRowV1 {
+    pub claim_id: Hash64,
+    pub free_prompt: bool,
+    pub quanta: u32,
+    pub quanta_spent: u32,
+    pub class_id: Hash64,
+    pub executor_bond: PalwBondKeyV2,
+    pub phase: crate::palw_state_v2::PalwClaimPhaseV2,
+    pub accepted_daa: u64,
+    pub accepted_block: BlockHash,
+    /// Set when a receipt timeout sent the claim back for its one redraw.
+    pub rebound_daa: Option<u64>,
+    /// The bound panel's seats, in seat order, and when it bound.
+    pub seats: Vec<PalwBondKeyV2>,
+    pub bound_daa: Option<u64>,
+    /// When the current phase ends by itself: a window closes, a court's backstop, or — for a
+    /// final or voided claim — when its record retires from the state.
+    pub deadline_daa: Option<u64>,
+    /// The collateral this claim reserves on its bond until it ends.
+    pub reserved: u128,
+    /// The block lane's escrow (0 for a prompt-lane claim, and for a merged-blue attempt).
+    pub escrowed_reward: u64,
+    /// The payout queued for the next coinbase, once the claim is final.
+    pub payout_pending: Option<u64>,
+    pub work_leaves: u64,
+    pub open_courts: usize,
+}
+
+/// **When a claim's phase ends by itself**, from the network's windows — the dates the sweep acts
+/// on (`window_bind` from acceptance or the redraw, `window_receipt` from binding,
+/// `window_challenge` from licensing, the disclose window from an accusation), a court's backstop
+/// while one is open, and the retirement of a record that has ended.
+pub fn palw_claim_phase_deadline_v1(
+    claim: &crate::palw_state_v2::PalwClaimStateV2,
+    state_params: &PalwStateParamsV2,
+    court_backstop: Option<u64>,
+) -> Option<u64> {
+    use crate::palw_state_v2::PalwClaimPhaseV2 as P;
+    match &claim.phase {
+        P::Provisional => Some(claim.rebound_daa.unwrap_or(claim.accepted_daa).saturating_add(state_params.window_bind())),
+        P::PanelBound { bound_daa } => Some(bound_daa.saturating_add(state_params.window_receipt())),
+        P::ReceiptLicensed { licensed_daa } => court_backstop.or(Some(licensed_daa.saturating_add(state_params.window_challenge()))),
+        P::DefaultDisputed { accused_daa, .. } => {
+            Some(accused_daa.saturating_add(crate::palw_state_v2::palw_da_disclose_window_daa_v1(state_params)))
+        }
+        P::Final { final_daa } => {
+            let retire = state_params.claim_retirement_daa();
+            (retire > 0).then(|| final_daa.saturating_add(retire))
+        }
+        P::Voided { voided_daa, .. } => {
+            let retire = state_params.claim_retirement_daa();
+            (retire > 0).then(|| voided_daa.saturating_add(retire))
+        }
+    }
+}
+
+/// **A bond's claims, newest first** — as executor, or as a seat on their panels. `limit` bounds
+/// the rows (0 = no bound); the bool says whether any were left out.
+pub fn palw_claim_rows_v1(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    bond: &PalwBondKeyV2,
+    role: PalwClaimRoleV1,
+    include_terminal: bool,
+    limit: usize,
+) -> (Vec<PalwClaimRowV1>, bool) {
+    use crate::palw_state_v2::{PalwClaimPhaseV2 as P, PalwClaimSourceV2 as S};
+    let payouts: std::collections::BTreeMap<&Hash64, u64> = state.pending_payouts_iter().map(|(id, p)| (id, p.amount)).collect();
+    let mut courts: std::collections::BTreeMap<Hash64, (usize, u64)> = std::collections::BTreeMap::new();
+    for (_, session) in state.court_sessions_iter() {
+        let entry = courts.entry(session.claim).or_insert((0, u64::MAX));
+        entry.0 += 1;
+        entry.1 = entry.1.min(session.deadline_daa);
+    }
+    let mut rows: Vec<PalwClaimRowV1> = state
+        .claims_iter()
+        .filter(|(_, claim)| include_terminal || !matches!(claim.phase, P::Final { .. } | P::Voided { .. }))
+        .filter_map(|(id, claim)| {
+            let panel = state.panel(id);
+            let seated = panel.is_some_and(|p| p.seats.iter().any(|s| s.bond == *bond));
+            let ours = match role {
+                PalwClaimRoleV1::Executor => claim.bond == *bond,
+                PalwClaimRoleV1::Seat => seated,
+            };
+            if !ours {
+                return None;
+            }
+            let (quanta, quanta_spent, free_prompt) = match &claim.source {
+                S::FreePrompt { quanta, spent } => (*quanta, spent.len() as u32, true),
+                S::Attempt => (0, 0, false),
+            };
+            let court = courts.get(id).copied();
+            Some(PalwClaimRowV1 {
+                claim_id: *id,
+                free_prompt,
+                quanta,
+                quanta_spent,
+                class_id: claim.class_id,
+                executor_bond: claim.bond,
+                phase: claim.phase.clone(),
+                accepted_daa: claim.accepted_daa,
+                accepted_block: claim.accepted_block,
+                rebound_daa: claim.rebound_daa,
+                seats: panel.map(|p| p.seats.iter().map(|s| s.bond).collect()).unwrap_or_default(),
+                bound_daa: panel.map(|p| p.bound_daa),
+                deadline_daa: palw_claim_phase_deadline_v1(claim, state_params, court.map(|c| c.1)),
+                reserved: claim.reserved,
+                escrowed_reward: claim.escrowed_reward,
+                payout_pending: payouts.get(id).copied(),
+                work_leaves: claim.work_leaves,
+                open_courts: court.map(|c| c.0).unwrap_or(0),
+            })
+        })
+        .collect();
+    rows.sort_by(|a, b| b.accepted_daa.cmp(&a.accepted_daa).then_with(|| a.claim_id.cmp(&b.claim_id)));
+    let truncated = limit > 0 && rows.len() > limit;
+    if truncated {
+        rows.truncate(limit);
+    }
+    (rows, truncated)
+}
+
+/// **The bond itself, read beside its claims** (ADR-0122 §6.5, `getPalwClaims`): what the registry
+/// holds about it.
+///
+/// It is here for the one question no other read answered: which classes this bond is seated for.
+/// A bond judges only the classes it declared (`palw_bond_may_judge_class_v2`), a registration
+/// declares none, and nothing reported the set — so a setup could not tell a declared bond from an
+/// undeclared one, and could only declare again and pay again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwBondSummaryV1 {
+    /// The key the bond was registered under: who may sign for it.
+    pub pubkey: Vec<u8>,
+    /// `None` while Active; the DAA its retirement was requested at otherwise.
+    pub retiring_since_daa: Option<u64>,
+    pub collateral: u64,
+    pub slashed: u64,
+    pub registered_daa: u64,
+    pub capable_classes: Vec<Hash64>,
+}
+
+pub fn palw_bond_summary_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2) -> Option<PalwBondSummaryV1> {
+    let b = state.bond(bond)?;
+    Some(PalwBondSummaryV1 {
+        pubkey: b.pubkey.clone(),
+        retiring_since_daa: match b.status {
+            crate::palw_state_v2::PalwBondStatusV2::Active => None,
+            crate::palw_state_v2::PalwBondStatusV2::Retiring { since_daa } => Some(since_daa),
+        },
+        collateral: b.collateral,
+        slashed: b.slashed,
+        registered_daa: b.registered_daa,
+        capable_classes: b.capable_classes.iter().copied().collect(),
+    })
+}
+
+/// A bond's claims and the bond, at one tip — what `getPalwClaims` answers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwBondClaimsV1 {
+    pub tip_daa: u64,
+    pub rows: Vec<PalwClaimRowV1>,
+    pub truncated: bool,
+    /// `None`: the registry holds no bond at that outpoint.
+    pub bond: Option<PalwBondSummaryV1>,
 }
 
 pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStateParamsV2, mine: &[PalwBondKeyV2]) -> Vec<PalwSeatDutyV2> {

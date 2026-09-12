@@ -15,6 +15,7 @@ use crate::keys::KeySource;
 use crate::node::Ctx;
 use crate::wallet::{NodeView, connect, estimate_fee, page_all, sompi_to_msk};
 use crate::{CliError, CliResult, OutputFormat, exit};
+use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 use kaspa_consensus_core::palw_state_v2::{
     PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT, PalwBondKeyV2, PalwConsensusObjectV2, palw_bond_retirement_message_v2,
 };
@@ -52,6 +53,21 @@ pub(crate) fn network_domain(nv: &NodeView) -> kaspa_consensus_core::Hash64 {
 /// consensus registration and an ordinary or node-local reserved output.
 pub async fn status(ctx: &Ctx, ks: Option<&KeySource>, class_id: Option<&str>, bond_arg: Option<&str>) -> CliResult {
     let nv = connect(ctx).await?;
+    // The producer-facts wire shape asks for a class even though registry membership is not
+    // class-specific. The node parameters already name a guaranteed registered class, so the
+    // ordinary status path must not make an operator discover and paste 128 hex first.
+    let lookup_class = match class_id {
+        Some(class) => class.to_string(),
+        None => match &nv.params.palw_consensus_mode {
+            PalwConsensusMode::ConsensusV2(bundle) => bundle.base_class_id.to_string(),
+            _ => {
+                return Err(CliError::new(
+                    exit::GENERIC,
+                    format!("{} has no PALW Bond registry; check --network and --rpc", ctx.network),
+                ));
+            }
+        },
+    };
 
     // The support question operators actually have starts with an outpoint, not necessarily the
     // key that registered it: "this UTXO is locked; is it a bond or only reserved funding?" A UTXO
@@ -59,22 +75,16 @@ pub async fn status(ctx: &Ctx, ks: Option<&KeySource>, class_id: Option<&str>, b
     // Ask the registry directly and require no secret for this read-only path.
     if let Some(spec) = bond_arg {
         let bond = parse_outpoint(spec)?;
-        let Some(class_id) = class_id else {
-            return Err(CliError::new(
-                exit::GENERIC,
-                "--bond needs --class-id <128-hex registered class id>. The RPC reads a bond alongside a class the chain knows; this does not make the answer class-specific.".to_string(),
-            ));
-        };
         let facts = nv
             .client
-            .get_palw_producer_facts(class_id.to_string(), bond.transaction_id.to_string(), bond.index, true)
+            .get_palw_producer_facts(lookup_class.clone(), bond.transaction_id.to_string(), bond.index, true)
             .await
             .map_err(|e| CliError::new(exit::GENERIC, format!("getPalwProducerFacts: {e}")))?;
         if !facts.available {
             return Err(CliError::new(
                 exit::GENERIC,
                 format!(
-                    "this node did not answer for class {class_id}. Confirm --network/--rpc and use a class id registered on this chain; no conclusion was drawn about bond {}:{}.",
+                    "this node did not answer for class {lookup_class}. Confirm --network/--rpc and use a class id registered on this chain; no conclusion was drawn about bond {}:{}.",
                     bond.transaction_id, bond.index
                 ),
             ));
@@ -127,7 +137,7 @@ pub async fn status(ctx: &Ctx, ks: Option<&KeySource>, class_id: Option<&str>, b
                     "ok": true,
                     "outpoint": outpoint,
                     "registered": facts.bond_known,
-                    "class_id_used_for_lookup": class_id,
+                    "class_id_used_for_lookup": lookup_class,
                     "collateral_sompi": facts.bond_known.then_some(facts.bond_collateral),
                     "registered_pubkey": facts.bond_known.then_some(facts.bond_registered_pubkey),
                     "operator_id": facts.bond_known.then_some(facts.bond_operator_id),
@@ -163,9 +173,8 @@ pub async fn status(ctx: &Ctx, ks: Option<&KeySource>, class_id: Option<&str>, b
     // UTXOs could never find them.
     //
     // Ownership is a property of the REGISTRY, so ask the registry: walk the network's locked set
-    // and keep the outpoints whose registered pubkey is this key's. Needs a class id for the same
-    // reason `retire` does — the facts RPC will not read a bond without one — so it is offered
-    // rather than required, and its absence is stated instead of being silently a "none".
+    // and keep the outpoints whose registered pubkey is this key's. The RPC requires a class for
+    // this read; `lookup_class` is the explicit one or the network's guaranteed base class.
     let mut owned: Vec<(TransactionOutpoint, String)> = Vec::new();
     // **How many outpoints this scan could not ASK about** — kept because an empty `owned` has two
     // very different causes and one line of output was reporting both as the first: "the registry
@@ -175,21 +184,19 @@ pub async fn status(ctx: &Ctx, ks: Option<&KeySource>, class_id: Option<&str>, b
     // retire path already refuses to commit; status swallowed it because it has something else to
     // print and no reason to stop.
     let mut unanswered = 0usize;
-    if let Some(class_id) = class_id {
-        let ours = faster_hex::hex_string(key.public_key());
-        for spec in &facts.locked_bond_outpoints {
-            let Ok(op) = parse_outpoint(spec) else {
-                unanswered += 1;
-                continue;
-            };
-            let Ok(f) = nv.client.get_palw_producer_facts(class_id.to_string(), op.transaction_id.to_string(), op.index, true).await
-            else {
-                unanswered += 1;
-                continue;
-            };
-            if f.bond_known && f.bond_registered_pubkey.eq_ignore_ascii_case(&ours) {
-                owned.push((op, f.bond_collateral.to_string()));
-            }
+    let ours = faster_hex::hex_string(key.public_key());
+    for spec in &facts.locked_bond_outpoints {
+        let Ok(op) = parse_outpoint(spec) else {
+            unanswered += 1;
+            continue;
+        };
+        let Ok(f) = nv.client.get_palw_producer_facts(lookup_class.clone(), op.transaction_id.to_string(), op.index, true).await
+        else {
+            unanswered += 1;
+            continue;
+        };
+        if f.bond_known && f.bond_registered_pubkey.eq_ignore_ascii_case(&ours) {
+            owned.push((op, f.bond_collateral.to_string()));
         }
     }
 
@@ -202,23 +209,18 @@ pub async fn status(ctx: &Ctx, ks: Option<&KeySource>, class_id: Option<&str>, b
     match ctx.output {
         OutputFormat::Human => {
             println!("address: {addr}");
-            match class_id {
-                None => {
-                    println!("bonds:   not checked — pass --class-id to ask the registry which bonds this KEY owns");
-                    println!("         (a bond's collateral often sits at another address, so the scan below can say");
-                    println!("          \"none\" for a key that holds a live bond)");
-                }
+            match (owned.is_empty(), unanswered) {
                 // An absence the scan could not establish is not an absence.
-                Some(_) if owned.is_empty() && unanswered > 0 => {
+                (true, n) if n > 0 => {
                     println!("bonds:   UNKNOWN — the node could not answer for {unanswered} of the");
                     println!("         {} locked outpoint(s), so this is not a \"none\".", facts.locked_bond_outpoints.len());
                     println!("         The usual cause is a --class-id this chain has not registered:");
                     println!("         the facts RPC refuses the whole lookup and every outpoint fails.");
                 }
-                Some(_) if owned.is_empty() => {
+                (true, _) => {
                     println!("bonds:   the registry has none registered to this key");
                 }
-                Some(_) => {
+                (false, _) => {
                     println!("bonds:   {} registered to THIS key — pass one to --palw-producer-bond", owned.len());
                     for (op, collateral) in &owned {
                         println!("  {}:{}  collateral {} sompi", op.transaction_id, op.index, collateral);
@@ -250,9 +252,8 @@ pub async fn status(ctx: &Ctx, ks: Option<&KeySource>, class_id: Option<&str>, b
                 }
                 println!();
                 println!("These are consensus-locked collateral AND this node's reserved PALW funding");
-                println!("outpoints — the node reports them as one set. To learn which is a registry bond,");
-                println!("run `misaka bond retire --bond <outpoint> --class-id <id> --dry-run`: it names the");
-                println!("ones the registry does not know, and never submits anything.");
+                println!("outpoints — the node reports them as one set. To classify any one exactly, run");
+                println!("`misaka bond status --bond <outpoint>`; it reads the registry and needs no key.");
             }
             println!("spendable (mature, unbonded): {} MSK", sompi_to_msk(spendable));
         }
@@ -280,7 +281,8 @@ pub async fn status(ctx: &Ctx, ks: Option<&KeySource>, class_id: Option<&str>, b
                             "collateral_sompi": c,
                         }))
                         .collect::<Vec<_>>(),
-                    "bonds_checked": class_id.is_some(),
+                    "bonds_checked": true,
+                    "class_id_used_for_lookup": lookup_class,
                     // A consumer must be able to tell "none" from "could not ask" — the human
                     // branch says so in words, and JSON is the reading that gets automated.
                     "bonds_unanswered": unanswered,
@@ -388,28 +390,7 @@ pub async fn capability(
         ));
     }
 
-    let mut spendable: Vec<&crate::wallet::Funding> = all.iter().filter(|u| u.mature && !u.bonded).collect();
-    spendable.sort_by(|a, b| b.amount.cmp(&a.amount));
-    let fee = estimate_fee(&key, &nv.params, 1, false);
-    let funding = spendable.first().ok_or_else(|| {
-        CliError::new(exit::GENERIC, format!("no mature, unbonded UTXO at {addr} to pay the carrier's {fee} sompi fee"))
-    })?;
-    if funding.amount <= fee {
-        return Err(CliError::new(
-            exit::GENERIC,
-            format!("largest spendable UTXO at {addr} holds {} sompi, under the {fee} sompi fee", funding.amount),
-        ));
-    }
-
-    let bond = PalwBondKeyV2(bond_outpoint);
-    let message = kaspa_consensus_core::palw_state_v2::palw_bond_capability_message_v2(network_domain(&nv), &bond, &classes);
-    let signature = key
-        .sign_with_context(message.as_byte_slice(), kaspa_consensus_core::palw_state_v2::PALW_BOND_CAPABILITY_V2_MLDSA87_CONTEXT)
-        .to_vec();
-    let object = PalwConsensusObjectV2::BondCapabilityDeclared { bond, capable_classes: classes.clone(), signature };
-    let tx = key
-        .build_palw_lifecycle_tx(&object, funding.outpoint, &funding.entry, fee)
-        .map_err(|e| CliError::new(exit::GENERIC, format!("build the declaration carrier: {e}")))?;
+    let (tx, fee, funding) = capability_carrier(&nv, &key, &all, bond_outpoint, &classes)?;
     let txid = tx.id();
 
     let listed: Vec<String> = classes.iter().map(|c| c.to_string()).collect();
@@ -417,7 +398,7 @@ pub async fn capability(
         match ctx.output {
             OutputFormat::Human => {
                 println!("bond:    {}:{}", bond_outpoint.transaction_id, bond_outpoint.index);
-                println!("carrier: {txid} (fee {fee} sompi from {}:{})", funding.outpoint.transaction_id, funding.outpoint.index);
+                println!("carrier: {txid} (fee {fee} sompi from {}:{})", funding.transaction_id, funding.index);
                 println!();
                 if listed.is_empty() {
                     println!("This stands the bond DOWN: it declares no classes, so the panel draw will");
@@ -457,6 +438,43 @@ pub async fn capability(
         }
     }
     Ok(())
+}
+
+/// **The signed `BondCapabilityDeclared` carrier**, funded from the largest mature, unbonded output
+/// at the key's address — built and not submitted, so `bond capability` can preview it and
+/// `misaka mining setup` can submit it without either printing the other's lines.
+///
+/// Returns the carrier, its fee and the outpoint it spends.
+pub(crate) fn capability_carrier(
+    nv: &NodeView,
+    key: &kaspa_pq_validator_core::ValidatorKey,
+    all: &[crate::wallet::Funding],
+    bond_outpoint: TransactionOutpoint,
+    classes: &std::collections::BTreeSet<kaspa_consensus_core::Hash64>,
+) -> Result<(kaspa_consensus_core::tx::Transaction, u64, TransactionOutpoint), CliError> {
+    let addr = key.funding_address(nv.params.prefix());
+    let mut spendable: Vec<&crate::wallet::Funding> = all.iter().filter(|u| u.mature && !u.bonded).collect();
+    spendable.sort_by(|a, b| b.amount.cmp(&a.amount));
+    let fee = estimate_fee(key, &nv.params, 1, false);
+    let funding = spendable.first().ok_or_else(|| {
+        CliError::new(exit::GENERIC, format!("no mature, unbonded UTXO at {addr} to pay the carrier's {fee} sompi fee"))
+    })?;
+    if funding.amount <= fee {
+        return Err(CliError::new(
+            exit::GENERIC,
+            format!("largest spendable UTXO at {addr} holds {} sompi, under the {fee} sompi fee", funding.amount),
+        ));
+    }
+    let bond = PalwBondKeyV2(bond_outpoint);
+    let message = kaspa_consensus_core::palw_state_v2::palw_bond_capability_message_v2(network_domain(nv), &bond, classes);
+    let signature = key
+        .sign_with_context(message.as_byte_slice(), kaspa_consensus_core::palw_state_v2::PALW_BOND_CAPABILITY_V2_MLDSA87_CONTEXT)
+        .to_vec();
+    let object = PalwConsensusObjectV2::BondCapabilityDeclared { bond, capable_classes: classes.clone(), signature };
+    let tx = key
+        .build_palw_lifecycle_tx(&object, funding.outpoint, &funding.entry, fee)
+        .map_err(|e| CliError::new(exit::GENERIC, format!("build the declaration carrier: {e}")))?;
+    Ok((tx, fee, funding.outpoint))
 }
 
 /// Which bond a command acts on: named explicitly, or inferred when this key holds exactly one —

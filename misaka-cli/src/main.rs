@@ -29,6 +29,8 @@ mod forward;
 mod key_roles;
 mod keys;
 mod node;
+/// ADR-0122: `mining`, `doctor`, `work` — the operator surface over the components.
+mod operator;
 /// `palw claim` — what became of a free-prompt claim: its phase on the chain, and the next step.
 mod palw_claim;
 mod palw_court;
@@ -90,6 +92,24 @@ pub mod exit {
     /// `palw extension`: expressible, but the depth asked for was not reached because this
     /// machine lacks the bytes (an artifact, a vector file). Not a verdict on the manifest.
     pub const EXTENSION_DEPTH_NOT_REACHED: i32 = 23;
+    // ADR-0122 Decision 4: the operator surface's range (`mining`, `doctor`, `work`). Each names
+    // the area a failure is in, so a supervisor or a monitor can branch without reading prose.
+    /// The miner, a seat or a lane is holding: running, and not doing its work, for a named reason.
+    pub const NOT_READY: i32 = 30;
+    /// The configuration: `mining.toml`, a path, a flag.
+    pub const CONFIG: i32 = 31;
+    /// The identity: the key, the bond, the pay address.
+    pub const IDENTITY: i32 = 32;
+    /// Funds: collateral, the fee outpoint, a funding output.
+    pub const FUNDS: i32 = 33;
+    /// The model: the class, the artifact, the tokenizer, the certification.
+    pub const MODEL: i32 = 34;
+    /// The host: disk, memory, ports, clock, background upgrades.
+    pub const HOST: i32 = 35;
+    /// A component is not running, or keeps crashing.
+    pub const COMPONENT_DOWN: i32 = 36;
+    /// `mining stop` refused: this node still has claims to defend.
+    pub const STOP_INFLIGHT: i32 = 37;
 }
 
 /// A CLI error that carries the process exit code to surface.
@@ -162,6 +182,45 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// What should this machine do? Mine, verify, validate, add a model, hold positions — then
+    /// the setup for it.
+    Init(SetupCliArgs),
+    /// Mining, as one purpose: is this host mining, and if not, why and what to do (ADR-0122).
+    #[command(subcommand)]
+    Mining(MiningCmd),
+    /// Check everything a miner needs — node, identity, model, host, prompt lane — and name the fix.
+    Doctor(DoctorArgs),
+    /// One work from the request (or the won draw) to the reward, by one id (ADR-0122).
+    #[command(subcommand)]
+    Work(WorkCmd),
+    /// The node's, the gateway's and the rail's lines — all of them, or the ones about one work.
+    Logs(LogsArgs),
+    /// What mining has paid, and what is still coming: the wallet, the escrow by claim, the prompt lane.
+    Rewards {
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// A PALW panel seat that judges other bonds' claims and draws nothing (検証席). Not paid.
+    #[command(subcommand)]
+    Verifier(VerifierCmd),
+    /// The models this network runs: classes, shares, budgets, prompt lanes, markets.
+    #[command(subcommand)]
+    Model(ModelCmd),
+    /// Model positions: what this key holds, a quote, and a buy or a sell with a computed floor.
+    #[command(subcommand)]
+    Position(PositionCmd),
+    /// A read-only page with the miner's state, its works, their logs and the doctor, at
+    /// http://127.0.0.1:8791 (8790 is the gateway's).
+    Dashboard {
+        /// Where to listen: loopback only unless --public.
+        #[arg(long, default_value = operator::dashboard::DEFAULT_LISTEN)]
+        listen: String,
+        /// Listen on every interface; every request then needs the token it prints.
+        #[arg(long)]
+        public: bool,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
     /// Node operations.
     #[command(subcommand)]
     Node(NodeCmd),
@@ -189,9 +248,10 @@ enum Command {
     /// Guided VPS setup: preflight, node service, status, and Discord registration helpers.
     #[command(subcommand)]
     Setup(setup::SetupCmd),
-    /// Validator operations — forwarded to the `kaspa-pq-validator` binary with the
-    /// global --network-id and --rpc (node wRPC Borsh) injected. Run
-    /// `misaka validator --help` for its keygen/bond/run/status/... subcommands.
+    /// The DNS-finality validator: `setup` and `status` here, and the `kaspa-pq-validator` sidecar's
+    /// own subcommands (keygen, bond, unbond, run, …) forwarded with --network and --rpc injected.
+    /// `misaka validator --help` lists both.
+    #[command(disable_help_flag = true)]
     Validator(PassThrough),
     /// Join the network for --network-id: start a local node that discovers peers via the DNS
     /// seeds (port-free). A newcomer-friendly front-end over `node start` that names the seeds.
@@ -231,6 +291,392 @@ struct NodeStartArgs {
     /// Extra args forwarded verbatim to kaspad, e.g. `-- --utxoindex --nodnsseed`.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     args: Vec<String>,
+}
+
+/// ADR-0122 Decision 6: what a `mining` / `doctor` / `work` command reads the miner from. Every
+/// flag is optional: each falls back to `~/.misaka/mining.toml`, then to the running node's own
+/// command line, then to what `kaspad` itself would default to.
+#[derive(Args, Debug, Clone, Default)]
+struct ProfileArgs {
+    /// The mining configuration (default ~/.misaka/mining.toml).
+    #[arg(long, value_name = "FILE")]
+    config: Option<std::path::PathBuf>,
+    /// The node's --appdir: which node, when several run here or it is not mining.toml's.
+    #[arg(long, value_name = "DIR")]
+    appdir: Option<String>,
+    /// The producer key file (default: mining.toml, else the running node's --palw-producer-key).
+    #[arg(long, value_name = "FILE")]
+    key_file: Option<String>,
+    /// The bond, <txid>:<index> (default: mining.toml, else the running node's --palw-producer-bond).
+    #[arg(long, value_name = "OUTPOINT")]
+    bond: Option<String>,
+    /// The class id, 128 hex (default: mining.toml, else the node's, else the network's base class).
+    #[arg(long, value_name = "CLASS_ID")]
+    class: Option<String>,
+    /// The prompt lane's outbox (the gateway's --outbox); naming it includes the prompt lane.
+    #[arg(long, value_name = "DIR")]
+    outbox: Option<String>,
+}
+
+impl ProfileArgs {
+    fn overrides(&self) -> operator::profile::Overrides {
+        operator::profile::Overrides {
+            config: self.config.clone(),
+            appdir: self.appdir.clone(),
+            key_file: self.key_file.clone(),
+            bond: self.bond.clone(),
+            class: self.class.clone(),
+            outbox: self.outbox.clone(),
+        }
+    }
+}
+
+/// ADR-0122 Decision 7: what `mining setup`, `verifier setup` and `init` take. Every flag is
+/// optional — what is not said is discovered on the chain, or asked.
+#[derive(Args, Debug, Clone, Default)]
+struct SetupCliArgs {
+    /// The configuration to write (default ~/.misaka/mining.toml).
+    #[arg(long, value_name = "FILE")]
+    config: Option<std::path::PathBuf>,
+    /// The key to mine with (default: mining.toml's, else ~/.misaka/miner.seed — made if missing).
+    #[arg(long, value_name = "FILE")]
+    key_file: Option<String>,
+    /// base, a model's name, or a class id (default: asked; without a terminal, the floor).
+    #[arg(long, value_name = "MODEL")]
+    model: Option<String>,
+    /// The node's --appdir (default: a running node's, else ~/.misaka/<network>/node).
+    #[arg(long, value_name = "DIR")]
+    appdir: Option<String>,
+    /// A bond to use, <txid>:<index> (default: this key's, found on the chain — else registered).
+    #[arg(long, value_name = "OUTPOINT")]
+    bond: Option<String>,
+    /// A peer for the node, host:port; repeatable (testnet-11: its public entry point).
+    #[arg(long = "peer", value_name = "HOST:PORT")]
+    peers: Vec<String>,
+    /// The class's artifact file; repeatable.
+    #[arg(long = "artifact", value_name = "FILE")]
+    artifacts: Vec<String>,
+    /// The panel's fee output: `auto` (default), or <txid>:<index>.
+    #[arg(long, value_name = "auto|OUTPOINT")]
+    fee_outpoint: Option<String>,
+    /// Read the artifact through and check its root against the class's (minutes for a large model).
+    #[arg(long)]
+    verify_artifact: bool,
+    /// The validator's stake in MSK (validator setup; default: the network's minimum bond).
+    #[arg(long, value_name = "MSK")]
+    amount: Option<String>,
+    /// Answer yes to every question: make the key, register the bond, declare, write the file.
+    #[arg(long)]
+    yes: bool,
+    /// Do not wait for the node to sync or for funds: say what is missing and exit.
+    #[arg(long)]
+    no_wait: bool,
+}
+
+/// `misaka validator setup` — parsed from the passthrough's own arguments, so the sidecar's
+/// subcommands keep working as they are.
+#[derive(clap::Parser, Debug)]
+#[command(
+    about = "Set this host up as a DNS-finality validator: key, node, funds, stake bond, then ~/.misaka/validator.toml. Running it again resumes."
+)]
+struct ValidatorSetupCli {
+    #[command(flatten)]
+    setup: SetupCliArgs,
+}
+
+impl SetupCliArgs {
+    fn into_setup(self, network: Option<String>, rpc: Option<String>) -> Result<operator::wizard::SetupArgs, CliError> {
+        let amount = self.amount.as_deref().map(parse_msk_to_sompi).transpose()?;
+        Ok(operator::wizard::SetupArgs {
+            network,
+            rpc,
+            config: self.config,
+            key_file: self.key_file,
+            model: self.model,
+            appdir: self.appdir,
+            bond: self.bond,
+            peers: self.peers,
+            artifacts: self.artifacts,
+            fee_outpoint: self.fee_outpoint,
+            verify_artifact: self.verify_artifact,
+            amount,
+            yes: self.yes,
+            no_wait: self.no_wait,
+        })
+    }
+}
+
+#[derive(Subcommand, Debug)]
+enum MiningCmd {
+    /// Set this host up to mine, step by step: node, model, key, funds, bond, artifact, seats, fee
+    /// output, then ~/.misaka/mining.toml. Running it again resumes where it stopped.
+    Setup(SetupCliArgs),
+    /// Is this host mining? The miner's state and the one line that says why, the bond, the
+    /// works and what they paid. Needs no setup on a node that is already running.
+    Status {
+        #[command(flatten)]
+        profile: ProfileArgs,
+        /// Redraw every N seconds.
+        #[arg(long, value_name = "SECS")]
+        watch: Option<u64>,
+    },
+    /// Start what ~/.misaka/mining.toml describes: preflight, kaspad, the readiness gates, and the
+    /// prompt lane's gateway and rail when it is on. Stays in the foreground unless --detach.
+    Start {
+        #[command(flatten)]
+        profile: ProfileArgs,
+        /// Run the supervisor in the background and return once it is mining.
+        #[arg(long)]
+        detach: bool,
+        /// Print the exact command lines it would run, and run nothing.
+        #[arg(long, conflicts_with_all = ["detach", "service"])]
+        print_command: bool,
+        /// Print a systemd unit (Linux) or launchd agent (macOS) that runs `misaka mining run`.
+        #[arg(long, conflicts_with = "detach")]
+        service: bool,
+    },
+    /// Stop mining — refused while this node still has claims to defend, unless --drain or --force.
+    Stop {
+        #[command(flatten)]
+        profile: ProfileArgs,
+        /// Stop drawing now, keep serving, and exit when the last claim is final or voided.
+        #[arg(long, conflicts_with = "force")]
+        drain: bool,
+        /// Stop now, whatever the claims in flight cost.
+        #[arg(long)]
+        force: bool,
+        /// Seconds kaspad gets to stop before it is killed (default: mining.toml's, else 240).
+        #[arg(long, value_name = "SECS")]
+        grace: Option<u64>,
+    },
+    /// The supervisor itself, in the foreground and without a terminal: what a service manager
+    /// runs (`misaka mining start --service` prints the unit).
+    Run {
+        #[command(flatten)]
+        profile: ProfileArgs,
+        /// Run the node as a panel only (what `misaka verifier start --detach` relaunches).
+        #[arg(long, hide = true)]
+        verifier: bool,
+    },
+}
+
+impl ProfileArgs {
+    /// The flags that name this profile again, for a supervisor started in the background or by a
+    /// service manager.
+    fn relaunch_args(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut push = |flag: &str, v: &Option<String>| {
+            if let Some(v) = v {
+                out.push(flag.to_string());
+                out.push(v.clone());
+            }
+        };
+        push("--config", &self.config.as_ref().map(|c| c.display().to_string()));
+        push("--appdir", &self.appdir);
+        push("--key-file", &self.key_file);
+        push("--bond", &self.bond);
+        push("--class", &self.class);
+        push("--outbox", &self.outbox);
+        out
+    }
+}
+
+#[derive(Args, Debug)]
+struct DoctorArgs {
+    /// Only these areas (default: all).
+    #[arg(value_enum)]
+    areas: Vec<operator::doctor::Area>,
+    /// Exit non-zero on a warning, too.
+    #[arg(long)]
+    strict: bool,
+    #[command(flatten)]
+    profile: ProfileArgs,
+}
+
+#[derive(Subcommand, Debug)]
+enum VerifierCmd {
+    /// Set this host up as a panel seat: the mining setup's key, bond and artifact steps, and the
+    /// classes the bond declares it can judge.
+    Setup(SetupCliArgs),
+    /// The claims this bond is seated on, and what it owes them.
+    Status {
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// Start mining.toml's node as a panel only: it judges, and draws nothing.
+    Start {
+        #[command(flatten)]
+        profile: ProfileArgs,
+        /// Run the supervisor in the background.
+        #[arg(long)]
+        detach: bool,
+        /// Print the exact command line, and run nothing.
+        #[arg(long, conflicts_with = "detach")]
+        print_command: bool,
+    },
+    /// Stop it (the same stop as `mining stop`: refused while this bond's own claims need it).
+    Stop {
+        #[command(flatten)]
+        profile: ProfileArgs,
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ModelCmd {
+    /// Every class: name, status, share, budget, prompt lane, market.
+    List {
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// One model's life: registered, active, its lanes certified, live — with its artifact, the bond
+    /// it takes, its market, and the next command.
+    Status {
+        /// base, a model's name, or a class id (or 8+ hex of one).
+        model: String,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// Add a model from this build's catalog: register its class with the chain's live terms, then
+    /// certify its lanes — drilling and filing a family only when no chain family covers it, every
+    /// chunk in order. Running it again resumes from the chain. No model: lists the catalog.
+    Add {
+        /// A catalog model id, or a unique part of one (e.g. graph-v5).
+        model: Option<String>,
+        /// The model's artifact file (a model that is not derived needs it to register).
+        #[arg(long, value_name = "FILE")]
+        artifact: Option<String>,
+        /// Also certify the free-prompt lane.
+        #[arg(long)]
+        prompt_lane: bool,
+        /// The slowest fleet seat's measured replay cost, for the seat-window bound.
+        #[arg(long, value_name = "MS")]
+        seat_ms_per_position: Option<u64>,
+        /// Answer yes to every question (registration, filings).
+        #[arg(long)]
+        yes: bool,
+        /// Do not wait for blocks: say what is pending and exit.
+        #[arg(long)]
+        no_wait: bool,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// A model's market: open it (seed its line up to the least seed).
+    #[command(subcommand)]
+    Market(MarketCmd),
+}
+
+#[derive(Subcommand, Debug)]
+enum MarketCmd {
+    /// Open a model's market: seed its line — the class's founding line unless --line — up to the
+    /// least seed, in one payment or instalments, each checked before it is signed.
+    Open {
+        /// base, a model's name, or a class id (or 8+ hex of one).
+        model: String,
+        /// Another line of the class (128 hex) instead of its founding line.
+        #[arg(long)]
+        line: Option<String>,
+        /// How much to pay now, in MSK (default: what is still owed).
+        #[arg(long, value_name = "MSK")]
+        seed: Option<String>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        no_wait: bool,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum PositionCmd {
+    /// What this key holds, and what a sell would pay now.
+    List {
+        /// Another holder (its 128-hex payout payload) instead of the key's own.
+        #[arg(long)]
+        holder: Option<String>,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// What a buy (--msk) or a sell (--positions) would do now.
+    Quote {
+        /// The line (a class id names its founding line).
+        line: String,
+        #[arg(long, conflicts_with = "positions")]
+        msk: Option<String>,
+        #[arg(long)]
+        positions: Option<u64>,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// Buy positions: the floor is the quote less --slippage (default 1 %). Dry run unless --yes.
+    Buy {
+        line: String,
+        #[arg(long)]
+        msk: String,
+        #[arg(long, default_value = "1%")]
+        slippage: String,
+        #[arg(long)]
+        yes: bool,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// Sell positions: the floor is the quote less --slippage (default 1 %). Dry run unless --yes.
+    Sell {
+        line: String,
+        #[arg(long)]
+        positions: u64,
+        #[arg(long, default_value = "1%")]
+        slippage: String,
+        #[arg(long)]
+        yes: bool,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+}
+
+#[derive(Args, Debug)]
+struct LogsArgs {
+    /// Only these components (default: all of node, gateway, rail).
+    #[arg(value_enum)]
+    components: Vec<operator::logs::Component>,
+    /// Only the lines about this work: 8+ hex of its claim id, or `job:<hex>`.
+    #[arg(long, value_name = "ID")]
+    work: Option<String>,
+    /// Only the `event` lines (one per stage).
+    #[arg(long)]
+    events: bool,
+    /// Keep printing new lines as they are written.
+    #[arg(short = 'f', long)]
+    follow: bool,
+    /// How many of the last lines to show without --work (default 60).
+    #[arg(short = 'n', long, default_value_t = 60)]
+    lines: usize,
+    #[command(flatten)]
+    profile: ProfileArgs,
+}
+
+#[derive(Subcommand, Debug)]
+enum WorkCmd {
+    /// Every work this host made: block-lane claims from the node's log, prompt-lane jobs from the outbox.
+    List {
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// One work's path from the request (or the won draw) to the reward. ID: a claim-id prefix
+    /// (4+ hex), `job:<hex>`, or any full 128-hex claim id.
+    Show {
+        id: String,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// Why a work stands where it stands, and the next step.
+    Why {
+        id: String,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
 }
 
 /// Captures all remaining args verbatim to forward to an underlying binary.
@@ -1239,9 +1685,8 @@ enum BondCmd {
         /// read-only and does not require a key. `--outpoint` and `--carrier` are aliases.
         #[arg(long, visible_alias = "outpoint", visible_alias = "carrier")]
         bond: Option<String>,
-        /// A class id (128-hex) the chain knows. With it, the chain is asked which bonds THIS KEY
-        /// registered, or whether `--bond` is registered. Required with `--bond`, because the
-        /// producer-facts RPC resolves a bond alongside a class the chain knows.
+        /// A class id (128-hex) the chain knows. The registry read needs one internally; when
+        /// omitted, this network's BASE-0/Floor class is used automatically.
         #[arg(long)]
         class_id: Option<String>,
     },
@@ -1648,7 +2093,146 @@ async fn main() -> std::process::ExitCode {
         quiet: cli.quiet,
     };
 
+    // ADR-0122: a mining command takes the network the operator NAMED (the flag, the env, the
+    // config file) and otherwise reads it from mining.toml or the running node — never the CLI's
+    // testnet-10 default, which is not a network anyone mines.
+    let named_network = cli.network.clone().or_else(|| cfg.network_id.clone());
+    let profile =
+        |args: &ProfileArgs| operator::profile::Profile::resolve(&args.overrides(), named_network.as_deref(), ctx.rpc.as_deref());
+
     let result = match cli.command {
+        Command::Init(args) => match args.into_setup(named_network.clone(), ctx.rpc.clone()) {
+            Ok(a) => operator::wizard::init(&ctx, a).await,
+            Err(e) => Err(e),
+        },
+        Command::Mining(MiningCmd::Setup(args)) => match args.into_setup(named_network.clone(), ctx.rpc.clone()) {
+            Ok(a) => operator::wizard::run(&ctx, operator::wizard::Purpose::Mine, a).await,
+            Err(e) => Err(e),
+        },
+        Command::Verifier(VerifierCmd::Setup(args)) => match args.into_setup(named_network.clone(), ctx.rpc.clone()) {
+            Ok(a) => operator::wizard::run(&ctx, operator::wizard::Purpose::Verify, a).await,
+            Err(e) => Err(e),
+        },
+        Command::Mining(MiningCmd::Status { profile: args, watch }) => match profile(&args) {
+            Ok(p) => operator::status::run(&ctx, p, watch).await,
+            Err(e) => Err(e),
+        },
+        Command::Mining(MiningCmd::Start { profile: args, detach, print_command, service }) => match profile(&args) {
+            Ok(p) => {
+                // The supervisor a detach or a unit starts is this same profile, named the same way.
+                let mut relaunch = vec!["--network".to_string(), p.network.clone()];
+                if let Some(rpc) = &ctx.rpc {
+                    relaunch.extend(["--rpc".to_string(), rpc.clone()]);
+                }
+                relaunch.extend(["mining".to_string(), "run".to_string()]);
+                relaunch.extend(args.relaunch_args());
+                let mode = operator::supervisor::StartMode { detach, print_command, service, role: operator::supervisor::Role::Miner };
+                operator::supervisor::start(&ctx, p, mode, &|| profile(&args), &relaunch).await
+            }
+            Err(e) => Err(e),
+        },
+        Command::Mining(MiningCmd::Stop { profile: args, drain, force, grace }) => match profile(&args) {
+            Ok(p) => operator::supervisor::stop(&ctx, p, drain, force, grace).await,
+            Err(e) => Err(e),
+        },
+        Command::Mining(MiningCmd::Run { profile: args, verifier }) => match profile(&args) {
+            Ok(p) => match operator::supervisor::plan(
+                &p,
+                if verifier { operator::supervisor::Role::Verifier } else { operator::supervisor::Role::Miner },
+            ) {
+                Ok(plan) => operator::supervisor::run_supervisor(plan, false, &|| profile(&args)).await,
+                Err(f) => Err(CliError::new(f.exit, f.render())),
+            },
+            Err(e) => Err(e),
+        },
+        Command::Doctor(args) => match profile(&args.profile) {
+            Ok(p) => operator::doctor::run(&ctx, p, &args.areas, args.strict).await,
+            Err(e) => Err(e),
+        },
+        Command::Work(WorkCmd::List { profile: args }) => match profile(&args) {
+            Ok(p) => operator::work_cmd::list(&ctx, p).await,
+            Err(e) => Err(e),
+        },
+        Command::Work(WorkCmd::Show { id, profile: args }) => match profile(&args) {
+            Ok(p) => operator::work_cmd::show(&ctx, p, &id).await,
+            Err(e) => Err(e),
+        },
+        Command::Work(WorkCmd::Why { id, profile: args }) => match profile(&args) {
+            Ok(p) => operator::work_cmd::why(&ctx, p, &id).await,
+            Err(e) => Err(e),
+        },
+        Command::Dashboard { listen, public, profile: args } => operator::dashboard::run(&listen, public, &|| profile(&args)).await,
+        Command::Rewards { profile: args } => match profile(&args) {
+            Ok(p) => operator::roles::rewards(&ctx, p).await,
+            Err(e) => Err(e),
+        },
+        Command::Verifier(VerifierCmd::Status { profile: args }) => match profile(&args) {
+            Ok(p) => operator::roles::verifier_status(&ctx, p).await,
+            Err(e) => Err(e),
+        },
+        Command::Verifier(VerifierCmd::Start { profile: args, detach, print_command }) => match profile(&args) {
+            Ok(p) => {
+                let mut relaunch = vec!["--network".to_string(), p.network.clone()];
+                if let Some(rpc) = &ctx.rpc {
+                    relaunch.extend(["--rpc".to_string(), rpc.clone()]);
+                }
+                relaunch.extend(["mining".to_string(), "run".to_string(), "--verifier".to_string()]);
+                relaunch.extend(args.relaunch_args());
+                let mode = operator::supervisor::StartMode {
+                    detach,
+                    print_command,
+                    service: false,
+                    role: operator::supervisor::Role::Verifier,
+                };
+                operator::supervisor::start(&ctx, p, mode, &|| profile(&args), &relaunch).await
+            }
+            Err(e) => Err(e),
+        },
+        Command::Verifier(VerifierCmd::Stop { profile: args, force }) => match profile(&args) {
+            Ok(p) => operator::supervisor::stop(&ctx, p, false, force, None).await,
+            Err(e) => Err(e),
+        },
+        Command::Model(ModelCmd::List { profile: args }) => match profile(&args) {
+            Ok(p) => operator::market::model_list(&ctx, p).await,
+            Err(e) => Err(e),
+        },
+        Command::Model(ModelCmd::Status { model, profile: args }) => match profile(&args) {
+            Ok(p) => operator::market::model_status(&ctx, p, &model).await,
+            Err(e) => Err(e),
+        },
+        Command::Model(ModelCmd::Add { model, artifact, prompt_lane, seat_ms_per_position, yes, no_wait, profile: args }) => {
+            match profile(&args) {
+                Ok(p) => {
+                    let a = operator::model_add::ModelAddArgs { model, artifact, prompt_lane, seat_ms_per_position, yes, no_wait };
+                    operator::model_add::run(&ctx, p, a).await
+                }
+                Err(e) => Err(e),
+            }
+        }
+        Command::Model(ModelCmd::Market(MarketCmd::Open { model, line, seed, yes, no_wait, profile: args })) => match profile(&args) {
+            Ok(p) => operator::market::market_open(&ctx, p, &model, line, seed, yes, no_wait).await,
+            Err(e) => Err(e),
+        },
+        Command::Position(PositionCmd::List { holder, profile: args }) => match profile(&args) {
+            Ok(p) => operator::market::position_list(&ctx, p, holder).await,
+            Err(e) => Err(e),
+        },
+        Command::Position(PositionCmd::Quote { line, msk, positions, profile: args }) => match profile(&args) {
+            Ok(p) => operator::market::position_quote(&ctx, p, &line, msk.as_deref(), positions).await,
+            Err(e) => Err(e),
+        },
+        Command::Position(PositionCmd::Buy { line, msk, slippage, yes, profile: args }) => match profile(&args) {
+            Ok(p) => operator::market::position_buy(&ctx, p, &line, &msk, &slippage, yes).await,
+            Err(e) => Err(e),
+        },
+        Command::Position(PositionCmd::Sell { line, positions, slippage, yes, profile: args }) => match profile(&args) {
+            Ok(p) => operator::market::position_sell(&ctx, p, &line, positions, &slippage, yes).await,
+            Err(e) => Err(e),
+        },
+        Command::Logs(args) => match profile(&args.profile) {
+            Ok(p) => operator::logs::run(p, &args.components, args.work.as_deref(), args.events, args.follow, args.lines).await,
+            Err(e) => Err(e),
+        },
         Command::Node(NodeCmd::Doctor) => node::doctor(&ctx).await,
         Command::Node(NodeCmd::Liveness { state, stall_secs }) => node::liveness(&ctx, &state, stall_secs).await,
         Command::Node(NodeCmd::SecurityReport { worker, verify_artifacts }) => {
@@ -1869,7 +2453,37 @@ async fn main() -> std::process::ExitCode {
         Command::Config(ConfigCmd::Show) => {
             config::show(ctx.output, &ctx.network, &ctx.rpc, &cli.node_grpc, &cfg.node.grpc, &ctx.evm_rpc)
         }
-        Command::Validator(p) => match validator_reader::maybe_handle(&ctx, &p.args).await {
+        Command::Validator(p)
+            if p.args.first().is_none_or(|a| matches!(a.as_str(), "--help" | "-h" | "help")) && p.args.len() <= 1 =>
+        {
+            // Help lists what is served here and what the sidecar serves — clap's own stub named
+            // only itself and pointed back at itself (ADR-0122 §8.2).
+            println!("The DNS-finality validator.\n");
+            println!("Served by misaka:");
+            println!("  setup     key → node → funds → stake bond → ~/.misaka/validator.toml, then the command that runs it");
+            println!("  status    what this validator is doing (and why not), from ~/.misaka/validator.toml or --stake-bond");
+            println!("  bonds     the stake-bond registry (--owner, --status, --all)\n");
+            println!("Forwarded to kaspa-pq-validator (beside misaka, or MISAKA_VALIDATOR_BIN):");
+            println!("  keygen · bond · unbond · run · balance     misaka validator <subcommand> --help for each\n");
+            println!("Start here: misaka validator setup   (misaka --network testnet-10 validator setup for another network)");
+            Ok(())
+        }
+        Command::Validator(p) if p.args.first().is_some_and(|a| a == "setup") => {
+            // ADR-0122 §8.2: the guided setup, in front of the sidecar's own subcommands.
+            match ValidatorSetupCli::try_parse_from(
+                std::iter::once("misaka validator setup".to_string()).chain(p.args[1..].iter().cloned()),
+            ) {
+                Ok(cli) => match cli.setup.into_setup(named_network.clone(), ctx.rpc.clone()) {
+                    Ok(a) => operator::wizard::run(&ctx, operator::wizard::Purpose::Validate, a).await,
+                    Err(e) => Err(e),
+                },
+                Err(e) => {
+                    let _ = e.print();
+                    Err(CliError::new(if e.use_stderr() { exit::CONFIG } else { exit::SUCCESS }, String::new()))
+                }
+            }
+        }
+        Command::Validator(p) => match validator_reader::maybe_handle(&ctx, &p.args, named_network.as_deref()).await {
             Some(result) => result,
             None => forward::validator(&ctx, &p.args),
         },
@@ -1942,6 +2556,9 @@ async fn main() -> std::process::ExitCode {
 
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
+        // ADR-0122: an operator screen that already printed its verdict (the five fields, or a
+        // JSON document carrying `exit`) returns an empty message, so it is not said twice.
+        Err(e) if e.msg.is_empty() => std::process::ExitCode::from(e.code as u8),
         Err(e) => {
             // Errors always go to stderr (never swallowed by --quiet); in JSON
             // mode emit a machine-readable error object too.
@@ -2024,10 +2641,14 @@ mod cli_surface_tests {
         let class = "42".repeat(64);
         for flag in ["--bond", "--outpoint", "--carrier"] {
             assert!(
-                Cli::try_parse_from(["misaka", "bond", "status", flag, &outpoint, "--class-id", &class]).is_ok(),
+                Cli::try_parse_from(["misaka", "bond", "status", flag, &outpoint]).is_ok(),
                 "bond status did not accept its keyless {flag} lookup"
             );
         }
+        assert!(
+            Cli::try_parse_from(["misaka", "bond", "status", "--bond", &outpoint, "--class-id", &class]).is_ok(),
+            "an explicit diagnostic class remains accepted"
+        );
     }
 
     /// **SA-4: `misaka miner` does not exist.**

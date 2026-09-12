@@ -168,9 +168,12 @@ or a node-local reserved funding output, ask the registry directly. This read ne
 
 ```bash
 misaka --network testnet-11 --rpc 127.0.0.1:26313 bond status \
-  --bond <txid>:<index> \
-  --class-id 4277d84f7d91528cc04aa366d51ee1c2e4f7902c4f6b16a213dead1c7e227977db732f18ed6183db3d944d44726ebd3feff7b15c48f9dba11cd526684f35f1b7
+  --bond <txid>:<index>
 ```
+
+The CLI uses this network's BASE-0/Floor class for the RPC's internal lookup. `--class-id` remains
+available when diagnosing another class, but it is not needed to decide whether an outpoint is in
+the Bond registry.
 
 `registry: REGISTERED` means use that outpoint with `--palw-producer-bond` and do not register it
 again. `registry: NOT REGISTERED` means the UTXO amount or lock status was not a bond registration;
@@ -426,6 +429,40 @@ Omitting `--palw-producer-class` mines `bundle.base_class_id`, which on testnet-
 floor** — `f1c5635c…f623c8` on this chain (5f re-seated the classes at genesis; `c185df95…` was 5e's), a deterministic-integer class whose artifact is derived from a seed on
 every node. **No GGUF, no download, no worker binary.** The floor is also exempt from the per-class epoch
 budget, so it is the one class that can always produce.
+
+The supported setup path discovers the bond and fee output and writes the exact node configuration:
+
+```bash
+misaka --network testnet-11 mining setup \
+  --model floor \
+  --key-file ~/.misaka/miner.seed \
+  --bond <registered-bond-txid>:<index>
+
+misaka --network testnet-11 mining start --print-command
+misaka --network testnet-11 mining start
+```
+
+The manual equivalent is below. The deliberate omissions are as important as the flags: Floor has
+no `--palw-producer-class` and no `--palw-class-artifact`. The fee outpoint is a separate mature,
+ordinary UTXO at the key's address; never use the bond collateral outpoint as the fee outpoint.
+
+```bash
+kaspad --testnet --netsuffix=11 --appdir=~/.t11 \
+  --listen=0.0.0.0:26311 --rpclisten-borsh=default --utxoindex \
+  --addpeer=169.58.39.220:26311 \
+  --palw-produce --palw-panel \
+  --palw-producer-key=~/.misaka/miner.seed \
+  --palw-producer-bond=<registered-bond-txid>:<index> \
+  --palw-fee-outpoint=<mature-non-bond-txid>:<index>
+```
+
+`REGISTERED` does not mean `sized for sustained mining`. Floor's whole-claim-lifetime sizing on
+Relaunch 5f is **1,110,106,160 sompi (11.10106160 MSK)**. A relay-minimum-sized bond around
+8.33 million sompi may begin while it has exposure room, but will then HOLD at its exposure ceiling
+until older claims become final. Its collateral cannot be topped up, and the same producer key can
+never register a second bond. Sustained mining therefore needs a new key and a new correctly sized
+bond; the setup command now prints this distinction and the exact shortfall before it writes the
+configuration.
 
 To mine a registered model class instead, pass its id with `--palw-producer-class` and give the node
 that class's converted artifact (`--palw-class-artifact`). A class registered while an epoch is

@@ -63,6 +63,51 @@ use kaspa_utils::triggers::SingleTrigger;
 
 const PALW_PANEL: &str = "palw-panel";
 
+/// **The `event` lines for this bond's own claims** (ADR-0122 Decision 8): one per claim whose
+/// phase differs from the one `seen` last recorded, in the operator's stage names. A claim seen for
+/// the first time prints its current stage; a claim that retired from the state leaves `seen`
+/// quietly. Pure over the rows, so the node's log and a test agree on what a transition is.
+pub(crate) fn own_claim_events_v1(
+    seen: &mut std::collections::HashMap<kaspa_hashes::Hash64, String>,
+    rows: &[kaspa_consensus_core::palw_producer_v2::PalwClaimRowV1],
+) -> Vec<String> {
+    use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2 as P, PalwVoidReasonV2 as R};
+    let mut out = Vec::new();
+    let mut present = std::collections::HashSet::new();
+    for row in rows {
+        present.insert(row.claim_id);
+        let (stage, phase_daa, extra) = match &row.phase {
+            P::Provisional => ("ON_CHAIN", row.accepted_daa, String::new()),
+            P::PanelBound { bound_daa } => ("WAITING_RECEIPTS", *bound_daa, format!(" seats={}", row.seats.len())),
+            P::ReceiptLicensed { licensed_daa } => ("QUORUM_REACHED", *licensed_daa, String::new()),
+            P::Final { final_daa } => ("ACCEPTED", *final_daa, String::new()),
+            P::DefaultDisputed { accused_daa, .. } => ("DISPUTED", *accused_daa, String::new()),
+            P::Voided { voided_daa, reason } => {
+                let why = match reason {
+                    R::BindTimeout => "bind_timeout",
+                    R::ReceiptTimeout => "receipt_timeout",
+                    R::CourtFraud => "court_fraud",
+                    R::ProducerWithholding => "producer_withholding",
+                };
+                ("VOIDED", *voided_daa, format!(" reason={why}"))
+            }
+        };
+        let key = format!("{stage}{extra}");
+        if seen.get(&row.claim_id) != Some(&key) {
+            let id = row.claim_id.to_string();
+            let lane = if row.free_prompt { "prompt" } else { "block" };
+            let deadline = row.deadline_daa.map(|d| format!(" deadline_daa={d}")).unwrap_or_default();
+            out.push(format!(
+                "event work={} lane={lane} stage={stage} phase_daa={phase_daa}{extra}{deadline}",
+                &id[..16.min(id.len())]
+            ));
+            seen.insert(row.claim_id, key);
+        }
+    }
+    seen.retain(|id, _| present.contains(id));
+    out
+}
+
 /// **How long an attempt claim's material may still arrive before the seat replays the job**
 /// (ADR-0084 Decision 7), in DAA score past the claim's binding. A material inside the transport
 /// cap reaches every seat by push within seconds of the block; one over it never will (Decision
@@ -2288,6 +2333,12 @@ impl PalwPanelService {
             self.consensus_config.params.net.to_string().as_bytes(),
             Some(self.consensus_config.genesis.hash),
         );
+        // ADR-0122 §6.5: the operator's `getPalwNodeStatus` reads this, not the line below.
+        let funded = self.config.fee_outpoint.is_some();
+        self.flow_context.update_palw_runtime(|r| {
+            r.panel_running = true;
+            r.panel_submitter = funded;
+        });
         info!(
             "[{PALW_PANEL}] starting (bond={bond}, submitter={}, register={})",
             if self.config.fee_outpoint.is_some() { "funded" } else { "off — receipts only" },
@@ -2434,6 +2485,11 @@ impl PalwPanelService {
         let mut held_before = false;
         // ADR-0074 Decision 1: the DAA the last canonical claim was committed at (0: never).
         let mut canonical_last_daa: u64 = 0;
+        // ADR-0122 Decision 8: this bond's own claims' phases as last seen, so each change prints
+        // one `event` line; and when they were last read (every 30 s is enough for phases that
+        // move in hundreds of DAA).
+        let mut own_phases: std::collections::HashMap<kaspa_hashes::Hash64, String> = std::collections::HashMap::new();
+        let mut own_phases_read: Option<std::time::Instant> = None;
 
         loop {
             if !self.tick(std::time::Duration::from_secs(2)).await {
@@ -2519,6 +2575,23 @@ impl PalwPanelService {
                 continue;
             }
             let current_daa = session.get_virtual_daa_score();
+            if own_phases_read.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(30)) {
+                own_phases_read = Some(std::time::Instant::now());
+                // Its own session: `spawn_blocking` takes the handle, and this tick still needs one.
+                let rows = self
+                    .consensus_manager
+                    .consensus()
+                    .unguarded_session()
+                    .spawn_blocking(move |c| {
+                        c.palw_claim_rows_v1(bond_key, kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Executor, true, 500)
+                    })
+                    .await;
+                if let Some(read) = rows {
+                    for line in own_claim_events_v1(&mut own_phases, &read.rows) {
+                        info!("[{PALW_PANEL}] {line}");
+                    }
+                }
+            }
             // Every claim now in the pool has an arrival stamp, whether or not this seat holds a
             // duty on it — that is what makes the retention bound below apply to foreign claims
             // (audit M2-2).
@@ -7596,5 +7669,55 @@ mod attn_opening_cap_pin {
         let root = &source[source.find("AttnMove::Root => {").expect("the root arm")..];
         let asked = root.find("attn_root_claim_is_openable_v1(params, current_daa, evidence.binding.step_leaf_count)").expect("asked");
         assert!(asked < root.find("self.sign(&message").expect("signed"), "asked before the root claim is signed");
+    }
+}
+
+#[cfg(test)]
+mod own_claim_event_tests {
+    use super::own_claim_events_v1;
+    use kaspa_consensus_core::palw_producer_v2::PalwClaimRowV1;
+    use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwClaimPhaseV2 as P, PalwVoidReasonV2 as R};
+    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+    use kaspa_hashes::Hash64;
+
+    fn row(id: u8, phase: P) -> PalwClaimRowV1 {
+        PalwClaimRowV1 {
+            claim_id: Hash64::from_bytes([id; 64]),
+            free_prompt: false,
+            quanta: 0,
+            quanta_spent: 0,
+            class_id: Hash64::from_bytes([7; 64]),
+            executor_bond: PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_u64_word(1), 0)),
+            phase,
+            accepted_daa: 100,
+            accepted_block: Default::default(),
+            rebound_daa: None,
+            seats: Vec::new(),
+            bound_daa: None,
+            deadline_daa: Some(700),
+            reserved: 0,
+            escrowed_reward: 0,
+            payout_pending: None,
+            work_leaves: 0,
+            open_courts: 0,
+        }
+    }
+
+    /// **One line per change, in the operator's stage names** — ADR-0122 Decision 8's chain half:
+    /// a claim seen first prints its stage, an unchanged one prints nothing, a change prints once,
+    /// and a void carries its reason as a value a program reads.
+    #[test]
+    fn each_phase_change_of_an_own_claim_prints_one_event() {
+        let mut seen = Default::default();
+        let first = own_claim_events_v1(&mut seen, &[row(1, P::Provisional)]);
+        assert_eq!(first.len(), 1);
+        assert!(first[0].starts_with("event work=0101010101010101 lane=block stage=ON_CHAIN phase_daa=100"), "{}", first[0]);
+        assert!(own_claim_events_v1(&mut seen, &[row(1, P::Provisional)]).is_empty(), "unchanged prints nothing");
+        let bound = own_claim_events_v1(&mut seen, &[row(1, P::PanelBound { bound_daa: 120 })]);
+        assert!(bound[0].contains("stage=WAITING_RECEIPTS phase_daa=120"), "{}", bound[0]);
+        let void = own_claim_events_v1(&mut seen, &[row(1, P::Voided { voided_daa: 800, reason: R::ReceiptTimeout })]);
+        assert!(void[0].contains("stage=VOIDED phase_daa=800 reason=receipt_timeout"), "{}", void[0]);
+        assert!(own_claim_events_v1(&mut seen, &[]).is_empty(), "a retired claim leaves quietly");
+        assert!(seen.is_empty(), "and is forgotten");
     }
 }

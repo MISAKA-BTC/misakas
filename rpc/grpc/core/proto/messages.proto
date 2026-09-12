@@ -92,6 +92,10 @@ message KaspadRequest {
     GetPalwModelVersionRequestMessage getPalwModelVersionRequest = 1150;
     GetPalwModelLinesRequestMessage getPalwModelLinesRequest = 1152;
     GetPalwModelProposalsRequestMessage getPalwModelProposalsRequest = 1154;
+    GetPalwClaimsRequestMessage getPalwClaimsRequest = 1156;
+    GetPalwClassesRequestMessage getPalwClassesRequest = 1158;
+    GetPalwNodeStatusRequestMessage getPalwNodeStatusRequest = 1160;
+    GetPalwRegistrationTermsRequestMessage getPalwRegistrationTermsRequest = 1162;
   }
 }
 
@@ -179,6 +183,10 @@ message KaspadResponse {
     GetPalwModelVersionResponseMessage getPalwModelVersionResponse = 1151;
     GetPalwModelLinesResponseMessage getPalwModelLinesResponse = 1153;
     GetPalwModelProposalsResponseMessage getPalwModelProposalsResponse = 1155;
+    GetPalwClaimsResponseMessage getPalwClaimsResponse = 1157;
+    GetPalwClassesResponseMessage getPalwClassesResponse = 1159;
+    GetPalwNodeStatusResponseMessage getPalwNodeStatusResponse = 1161;
+    GetPalwRegistrationTermsResponseMessage getPalwRegistrationTermsResponse = 1163;
   }
 }
 

@@ -21,12 +21,12 @@ use kaspa_consensus_core::palw_model_market_v1::{
 /// ADR-0114: the schedule the node says a move is settled under at its tip (a node from before
 /// ADR-0114 serves 50/10, which is what its fold does). Quotes are made with it, never with a
 /// schedule this build assumes, so a preview agrees with the fold on either side of the fence.
-fn served_schedule(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> PalwModelFeesV1 {
+pub(crate) fn served_schedule(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> PalwModelFeesV1 {
     PalwModelFeesV1 { burn_permille: r.burn_permille, leg_permille: r.leg_permille }
 }
 
 /// "5 %", "1 %": a permille as the percentage the CLI prints.
-fn pct(permille: u64) -> String {
+pub(crate) fn pct(permille: u64) -> String {
     if permille.is_multiple_of(10) { format!("{} %", permille / 10) } else { format!("{}.{} %", permille / 10, permille % 10) }
 }
 use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
@@ -72,11 +72,11 @@ pub(crate) fn parse_msk_amount(text: &str) -> Result<u64, CliError> {
         .ok_or_else(|| CliError::new(exit::GENERIC, format!("'{text}' is out of range")))
 }
 
-fn msk(sompi: u64) -> String {
+pub(crate) fn msk(sompi: u64) -> String {
     format!("{}.{:08} MSK", sompi / SOMPI_PER_MSK, sompi % SOMPI_PER_MSK)
 }
 
-fn market_from_response(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> PalwModelMarketV1 {
+pub(crate) fn market_from_response(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> PalwModelMarketV1 {
     PalwModelMarketV1 {
         opened_daa: r.opened_daa,
         msk_reserve: r.msk_reserve,
@@ -99,7 +99,9 @@ fn market_json(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> serde_json::Va
         "schema": "misaka.palw.model-market.v1",
         "found": r.found,
         "line_id": r.line_id,
+        // `opened` is the wire's "a market row exists" (a pledge makes one); `open` is a market.
         "opened": r.opened,
+        "open": market_from_response(r).is_open(),
         "opened_daa": r.opened_daa,
         "msk_reserve_sompi": r.msk_reserve,
         "position_units": r.position_units,
@@ -160,10 +162,16 @@ pub async fn show(ctx: &Ctx, line_id: &str, quote_msk: Option<String>, json: boo
         println!("  class status   {}{}", r.class_status, if r.closed_to_buys { " (closed to buys)" } else { "" });
         println!(
             "  market         {}",
-            if r.opened { format!("opened at DAA {}", r.opened_daa) } else { "not yet opened (the first buy opens it)".to_string() }
+            if market_from_response(&r).is_open() {
+                format!("open since DAA {}", r.opened_daa)
+            } else {
+                "not open yet (the seed payment that reaches the floor opens it)".to_string()
+            }
         );
         println!("  reserve        {}", msk(r.msk_reserve));
-        if r.opened {
+        // `opened` on the wire is "a market row exists", which a pledge alone creates (ADR-0094):
+        // the pair is a market once it holds a seed.
+        if market_from_response(&r).is_open() {
             println!("  seed (locked)  {} by {}", msk(r.seed_sompi), r.seeded_by);
         } else if r.seed_pledged_sompi > 0 {
             // ADR-0094: paid into, not yet a market. What is locked and what is still owed.
@@ -367,7 +375,10 @@ pub async fn seed(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_tex
     if !r.found {
         return Err(CliError::new(exit::GENERIC, format!("this chain holds no line {line}")));
     }
-    if r.opened {
+    // **Open is `seed_sompi > 0`, not the wire's `opened`** — that flag is "a market row exists",
+    // and the first instalment creates one: the second instalment this command's own hint asks
+    // for was refused here as "already seeded (0 MSK locked)".
+    if market_from_response(&r).is_open() {
         return Err(CliError::new(
             exit::GENERIC,
             format!("line {line} is already seeded ({} locked by {})", msk(r.seed_sompi), r.seeded_by),
@@ -525,7 +536,7 @@ pub async fn sell(
         .get_palw_model_market(line.to_string())
         .await
         .map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwModelMarket: {e}")))?;
-    if !r.found || !r.opened {
+    if !r.found || !market_from_response(&r).is_open() {
         return Err(CliError::new(exit::GENERIC, format!("line {line} has no market to sell into")));
     }
     let held = nv

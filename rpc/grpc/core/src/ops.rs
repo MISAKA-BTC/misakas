@@ -117,6 +117,10 @@ pub enum KaspadPayloadOps {
     GetPalwModelVersion,
     GetPalwModelLines,
     GetPalwModelProposals,
+    GetPalwClaims,
+    GetPalwClasses,
+    GetPalwNodeStatus,
+    GetPalwRegistrationTerms,
     GetTokenSupply,
     GetTokenEmissionInfo,
 

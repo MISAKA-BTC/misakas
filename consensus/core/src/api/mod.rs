@@ -721,6 +721,20 @@ pub trait ConsensusApi: Send + Sync {
         Vec::new()
     }
 
+    /// **A bond's claims, as its operator reads them** (ADR-0122 §6.5, `getPalwClaims`): the ones
+    /// it made (`Executor`) or the ones whose panels seat it (`Seat`), newest first, with the tip
+    /// DAA they were read at, whether `limit` left rows out, and the bond's own registry record.
+    /// `None` off `ConsensusV2`.
+    fn palw_claim_rows_v1(
+        &self,
+        _bond: crate::palw_state_v2::PalwBondKeyV2,
+        _role: crate::palw_producer_v2::PalwClaimRoleV1,
+        _include_terminal: bool,
+        _limit: usize,
+    ) -> Option<crate::palw_producer_v2::PalwBondClaimsV1> {
+        None
+    }
+
     /// The court's half: open sessions this node holds a bond in.
     fn palw_court_duties_v2(&self, _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>) -> Vec<crate::palw_producer_v2::PalwCourtDutyV2> {
         Vec::new()
@@ -794,6 +808,14 @@ pub trait ConsensusApi: Send + Sync {
     /// `None` on every network without a V2 bundle, and on one whose base class this chain does not
     /// hold yet — both honest answers rather than errors, and both mean the same thing to a caller:
     /// this is not a chain you can register a class on right now.
+    /// **The families the chain certified, both lanes** (ADR-0075 Decision 3, served by ADR-0122's
+    /// `getPalwRegistrationTerms`): lane, digest and record. Empty off `ConsensusV2`.
+    fn palw_certified_families_v1(
+        &self,
+    ) -> Vec<(crate::palw_state_v2::PalwCertifiedLaneV1, crate::Hash64, crate::palw_state_v2::PalwCertifiedFamilyStateV2)> {
+        Vec::new()
+    }
+
     fn palw_v2_registration_terms(&self) -> Option<crate::palw_state_v2::PalwRegistrationTermsV2> {
         None
     }

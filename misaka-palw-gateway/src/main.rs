@@ -1205,6 +1205,21 @@ fn handle_chat(
         ),
         Some(why) => eprintln!("[misaka-palw-gateway] {artifact_stem}: answered, not committed — {why}"),
     }
+    // ADR-0122 Decision 8: the job's own lines, beside the prose above — by its job id from the run,
+    // and by the claim id too from the commitment on, the id every later stage of it carries.
+    // `key=value`, no spaces in a value; the prose line says why a job was not committed.
+    let job16 = &hex(job_id)[..16];
+    eprintln!("[misaka-palw-gateway] event job={job16} lane=prompt stage=EXECUTED leaves={work_leaves}");
+    match &commit_refusal {
+        None => {
+            let claim = hex(claim_id);
+            eprintln!(
+                "[misaka-palw-gateway] event work={} job={job16} lane=prompt stage=COMMITTED quanta={quanta} claim={claim}",
+                &claim[..16]
+            );
+        }
+        Some(_) => eprintln!("[misaka-palw-gateway] event job={job16} lane=prompt stage=NOT_COMMITTED"),
+    }
 
     let finish_reason = if !parsed.calls.is_empty() {
         "tool_calls" // ADR-0096 Decision 2: OpenAI's word for an answer that made calls

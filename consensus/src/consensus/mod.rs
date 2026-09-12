@@ -2399,8 +2399,28 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_bond_of_pubkey_v2_impl(pubkey)
     }
 
+    fn palw_claim_rows_v1(
+        &self,
+        bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        role: kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1,
+        include_terminal: bool,
+        limit: usize,
+    ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwBondClaimsV1> {
+        self.virtual_processor.palw_claim_rows_v1_impl(bond, role, include_terminal, limit)
+    }
+
     fn palw_v2_class_table(&self) -> Vec<kaspa_consensus_core::palw_state_v2::PalwClassRowV2> {
         self.virtual_processor.palw_v2_class_table_impl()
+    }
+
+    fn palw_certified_families_v1(
+        &self,
+    ) -> Vec<(
+        kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1,
+        kaspa_hashes::Hash64,
+        kaspa_consensus_core::palw_state_v2::PalwCertifiedFamilyStateV2,
+    )> {
+        self.virtual_processor.palw_certified_families_v1_impl()
     }
 
     fn palw_v2_registration_terms(&self) -> Option<kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2> {

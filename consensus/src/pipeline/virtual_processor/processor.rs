@@ -5014,6 +5014,12 @@ impl VirtualStateProcessor {
                 budget_blocks: budgets.and_then(|b| b.budget_blocks.get(id).copied()).unwrap_or(0),
                 canonical_leaves: record.pwu_rule.canonical_leaves_v1(),
                 is_base_class: *id == state_params.base_class_id(),
+                artifact_root: record.artifact_root,
+                // The producer facts' own derivation, so the two reads cannot disagree.
+                fp_certified: state_params.fp_certified_classes().is_none_or(|set| set.contains(id))
+                    || state.fp_lane_certification(id).is_some(),
+                held: state.class_is_held_v1(id),
+                registered_daa: record.registered_daa,
             })
             .collect()
     }
@@ -5036,6 +5042,24 @@ impl VirtualStateProcessor {
     /// read off the chain rather than restated: an entrant priced by its own registrant would be
     /// an entrant whose slash value and starting difficulty are whatever it liked, and "the same
     /// work costs the same everywhere" is the property the share table conserves.
+    pub fn palw_certified_families_v1_impl(
+        &self,
+    ) -> Vec<(
+        kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1,
+        kaspa_hashes::Hash64,
+        kaspa_consensus_core::palw_state_v2::PalwCertifiedFamilyStateV2,
+    )> {
+        use kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1 as Lane;
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
+        let Some((_, state)) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten() else {
+            return Vec::new();
+        };
+        [Lane::Attempt, Lane::FreePrompt]
+            .into_iter()
+            .flat_map(|lane| state.certified_family_entries(lane).into_iter().map(move |(digest, record)| (lane, digest, record)))
+            .collect()
+    }
+
     pub fn palw_v2_registration_terms_impl(&self) -> Option<kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2> {
         let state_params = self.palw_state_params_v2.as_ref()?;
         let bundle = self.palw_v2_bundle.as_ref()?;
@@ -5161,6 +5185,23 @@ impl VirtualStateProcessor {
             carriage: carriage_bytes.to_vec(),
         };
         self.palw_class_carriage_store.write().insert(class_id, record).map_err(|e| format!("cannot store the declaration: {e}"))
+    }
+
+    /// A bond's claims at the tip (ADR-0122 §6.5). See the trait doc.
+    pub fn palw_claim_rows_v1_impl(
+        &self,
+        bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        role: kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1,
+        include_terminal: bool,
+        limit: usize,
+    ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwBondClaimsV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let tip_daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
+        let (rows, truncated) =
+            kaspa_consensus_core::palw_producer_v2::palw_claim_rows_v1(&state, state_params, &bond, role, include_terminal, limit);
+        let bond = kaspa_consensus_core::palw_producer_v2::palw_bond_summary_v1(&state, &bond);
+        Some(kaspa_consensus_core::palw_producer_v2::PalwBondClaimsV1 { tip_daa, rows, truncated, bond })
     }
 
     pub fn palw_seat_duties_v2_impl(

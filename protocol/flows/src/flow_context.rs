@@ -501,6 +501,10 @@ pub struct FlowContextInner {
     /// must stage a claim's material and answer envelope where THIS panel reads, and the
     /// directory is derived from the app dir rather than named by any flag.
     palw_retention_dir: RwLock<Option<std::path::PathBuf>>,
+    /// **What this node's producer and panel are doing** (ADR-0122 §6.5), for `getPalwNodeStatus`
+    /// — the facts that until now only the node's log said: why the producer holds, how many draws
+    /// it has made, its last block, whether a panel runs. Node-local, like the two above.
+    palw_runtime: RwLock<PalwNodeRuntimeV1>,
     pub address_manager: Arc<Mutex<AddressManager>>,
     connection_manager: RwLock<Option<Arc<ConnectionManager>>>,
     mining_manager: MiningManagerProxy,
@@ -523,6 +527,48 @@ pub struct FlowContextInner {
     /// Present on every node (the state is a few KB); active only where the flow feeds it, and the
     /// flow refuses everything on a network with no ConsensusV2 ruleset.
     palw_gossip: crate::palw_gossip::PalwGossipCenter,
+}
+
+/// **This node's PALW runtime** (ADR-0122 §6.5): the producer's state and why, its counts and its
+/// last block, and whether a panel runs. Written by the producer and the panel, read by
+/// `getPalwNodeStatus`. Every field is what the node's own log already prints; this is the same
+/// fact where a program can read it without a log on the same host.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PalwNodeRuntimeV1 {
+    /// `off` (no producer), `disabled`, `syncing`, `holding`, `drawing`, `stopped`.
+    pub producer_state: &'static str,
+    /// The hold's or the refusal's sentence, as the producer logs it; empty while drawing.
+    pub producer_reason: String,
+    /// Unix seconds at which the state or its reason last changed.
+    pub producer_since_unix: u64,
+    pub producer_bond: String,
+    pub producer_class: String,
+    pub draws: u64,
+    pub produced_blocks: u64,
+    pub receipt_blocks: u64,
+    pub network_lost: u64,
+    pub last_block: String,
+    pub last_block_unix: u64,
+    pub last_draw_unix: u64,
+    pub panel_running: bool,
+    pub panel_submitter: bool,
+}
+
+impl PalwNodeRuntimeV1 {
+    /// Move the producer to `state` for `reason`, stamping the time only when either changes, so
+    /// `producer_since_unix` says how long it has been in the state it is in.
+    pub fn set_producer(&mut self, state: &'static str, reason: &str) {
+        if self.producer_state != state || self.producer_reason != reason {
+            self.producer_state = state;
+            self.producer_reason = reason.to_string();
+            self.producer_since_unix = unix_now_secs();
+        }
+    }
+}
+
+/// Unix seconds (`kaspa_core::time::unix_now` is milliseconds).
+pub fn unix_now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 #[derive(Clone)]
@@ -702,6 +748,7 @@ impl FlowContext {
                 sidecar_shortfalls: Default::default(),
                 palw_reserved_outpoints: Default::default(),
                 palw_retention_dir: RwLock::new(None),
+                palw_runtime: RwLock::new(PalwNodeRuntimeV1::default()),
                 hub,
                 address_manager,
                 connection_manager: Default::default(),
@@ -1427,6 +1474,16 @@ impl FlowContext {
     /// The panel's retention directory, for the wallet-facing RPC; `None` on a node with no panel.
     pub fn palw_retention_dir(&self) -> Option<std::path::PathBuf> {
         self.palw_retention_dir.read().clone()
+    }
+
+    /// This node's PALW runtime, as `getPalwNodeStatus` serves it (ADR-0122 §6.5).
+    pub fn palw_runtime(&self) -> PalwNodeRuntimeV1 {
+        self.palw_runtime.read().clone()
+    }
+
+    /// Change the runtime record. The producer and the panel are its only writers.
+    pub fn update_palw_runtime(&self, f: impl FnOnce(&mut PalwNodeRuntimeV1)) {
+        f(&mut self.palw_runtime.write());
     }
 
     /// An IBD got past the sidecars, so the run of shortfalls is over.

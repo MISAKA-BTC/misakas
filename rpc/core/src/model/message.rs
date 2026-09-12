@@ -3881,6 +3881,522 @@ impl Deserializer for GetPalwModelProposalsResponse {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// ADR-0122 §6.5: the operator's reads — a bond's claims, the class table, this node's runtime
+// ---------------------------------------------------------------------------------------------
+
+/// ADR-0122: `getPalwClaims` — a bond's claims, as executor or as a seat on their panels.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwClaimsRequest {
+    /// The bond, `<txid>:<index>`.
+    pub bond: String,
+    /// `executor` (the claims this bond made) or `seat` (the claims whose panels seat it).
+    pub role: String,
+    /// Also the final and voided claims still in the state (they retire `claim_retirement` after
+    /// they end).
+    pub include_terminal: bool,
+    /// At most this many rows, newest first; 0 asks for the node's cap.
+    pub limit: u32,
+}
+
+impl Serializer for GetPalwClaimsRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.bond, writer)?;
+        store!(String, &self.role, writer)?;
+        store!(bool, &self.include_terminal, writer)?;
+        store!(u32, &self.limit, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwClaimsRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let bond = load!(String, reader)?;
+        let role = load!(String, reader)?;
+        let include_terminal = load!(bool, reader)?;
+        let limit = load!(u32, reader)?;
+        Ok(Self { bond, role, include_terminal, limit })
+    }
+}
+
+/// One claim as its operator reads it (`palw_producer_v2::PalwClaimRowV1`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwClaimRow {
+    pub claim_id: String,
+    pub is_free_prompt: bool,
+    pub class_id: String,
+    pub executor_bond: String,
+    /// `provisional`, `panel_bound`, `receipt_licensed`, `final`, `default_disputed`, `voided` —
+    /// the spelling `getPalwFreePromptClaim` uses.
+    pub phase: String,
+    pub void_reason: String,
+    pub phase_daa: u64,
+    pub accepted_daa: u64,
+    pub accepted_block: String,
+    pub rebound_daa: Option<u64>,
+    pub bound_daa: Option<u64>,
+    /// The panel's seats, `<txid>:<index>`, in seat order.
+    pub seats: Vec<String>,
+    /// When the current phase ends by itself (a window, a court's backstop, a retirement).
+    pub deadline_daa: Option<u64>,
+    /// The collateral this claim reserves, in sompi, as a decimal string (a u128).
+    pub reserved_sompi: String,
+    pub escrow_sompi: u64,
+    pub payout_pending_sompi: Option<u64>,
+    pub quanta: u32,
+    pub quanta_spent: u32,
+    pub work_leaves: u64,
+    pub open_courts: u32,
+}
+
+impl Serializer for RpcPalwClaimRow {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.claim_id, writer)?;
+        store!(bool, &self.is_free_prompt, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(String, &self.executor_bond, writer)?;
+        store!(String, &self.phase, writer)?;
+        store!(String, &self.void_reason, writer)?;
+        store!(u64, &self.phase_daa, writer)?;
+        store!(u64, &self.accepted_daa, writer)?;
+        store!(String, &self.accepted_block, writer)?;
+        store!(Option<u64>, &self.rebound_daa, writer)?;
+        store!(Option<u64>, &self.bound_daa, writer)?;
+        store!(Vec<String>, &self.seats, writer)?;
+        store!(Option<u64>, &self.deadline_daa, writer)?;
+        store!(String, &self.reserved_sompi, writer)?;
+        store!(u64, &self.escrow_sompi, writer)?;
+        store!(Option<u64>, &self.payout_pending_sompi, writer)?;
+        store!(u32, &self.quanta, writer)?;
+        store!(u32, &self.quanta_spent, writer)?;
+        store!(u64, &self.work_leaves, writer)?;
+        store!(u32, &self.open_courts, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwClaimRow {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            claim_id: load!(String, reader)?,
+            is_free_prompt: load!(bool, reader)?,
+            class_id: load!(String, reader)?,
+            executor_bond: load!(String, reader)?,
+            phase: load!(String, reader)?,
+            void_reason: load!(String, reader)?,
+            phase_daa: load!(u64, reader)?,
+            accepted_daa: load!(u64, reader)?,
+            accepted_block: load!(String, reader)?,
+            rebound_daa: load!(Option<u64>, reader)?,
+            bound_daa: load!(Option<u64>, reader)?,
+            seats: load!(Vec<String>, reader)?,
+            deadline_daa: load!(Option<u64>, reader)?,
+            reserved_sompi: load!(String, reader)?,
+            escrow_sompi: load!(u64, reader)?,
+            payout_pending_sompi: load!(Option<u64>, reader)?,
+            quanta: load!(u32, reader)?,
+            quanta_spent: load!(u32, reader)?,
+            work_leaves: load!(u64, reader)?,
+            open_courts: load!(u32, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwClaimsResponse {
+    /// False off `ConsensusV2`.
+    pub available: bool,
+    /// The DAA the state was read at.
+    pub tip_daa: u64,
+    pub bond: String,
+    pub role: String,
+    pub claims: Vec<RpcPalwClaimRow>,
+    /// `limit` left rows out.
+    pub truncated: bool,
+    /// The bond's own registry record. `bond_known` false: no bond at that outpoint.
+    pub bond_known: bool,
+    /// The key it was registered under, hex (who may sign for it).
+    pub bond_pubkey: String,
+    /// `None` while the bond is Active.
+    pub bond_retiring_since_daa: Option<u64>,
+    pub bond_collateral: u64,
+    pub bond_slashed: u64,
+    pub bond_registered_daa: u64,
+    /// The classes this bond is seated for: a bond judges only the classes it declared, and a
+    /// registration declares none.
+    pub bond_capable_classes: Vec<String>,
+}
+
+impl Serializer for GetPalwClaimsResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        store!(String, &self.bond, writer)?;
+        store!(String, &self.role, writer)?;
+        serialize!(Vec<RpcPalwClaimRow>, &self.claims, writer)?;
+        store!(bool, &self.truncated, writer)?;
+        store!(bool, &self.bond_known, writer)?;
+        store!(String, &self.bond_pubkey, writer)?;
+        store!(Option<u64>, &self.bond_retiring_since_daa, writer)?;
+        store!(u64, &self.bond_collateral, writer)?;
+        store!(u64, &self.bond_slashed, writer)?;
+        store!(u64, &self.bond_registered_daa, writer)?;
+        store!(Vec<String>, &self.bond_capable_classes, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwClaimsResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let available = load!(bool, reader)?;
+        let tip_daa = load!(u64, reader)?;
+        let bond = load!(String, reader)?;
+        let role = load!(String, reader)?;
+        let claims = deserialize!(Vec<RpcPalwClaimRow>, reader)?;
+        let truncated = load!(bool, reader)?;
+        let bond_known = load!(bool, reader)?;
+        let bond_pubkey = load!(String, reader)?;
+        let bond_retiring_since_daa = load!(Option<u64>, reader)?;
+        let bond_collateral = load!(u64, reader)?;
+        let bond_slashed = load!(u64, reader)?;
+        let bond_registered_daa = load!(u64, reader)?;
+        let bond_capable_classes = load!(Vec<String>, reader)?;
+        Ok(Self {
+            available,
+            tip_daa,
+            bond,
+            role,
+            claims,
+            truncated,
+            bond_known,
+            bond_pubkey,
+            bond_retiring_since_daa,
+            bond_collateral,
+            bond_slashed,
+            bond_registered_daa,
+            bond_capable_classes,
+        })
+    }
+}
+
+/// ADR-0122: `getPalwClasses` — the class table `--palw-dump-classes` prints, over RPC.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwClassesRequest {}
+
+impl Serializer for GetPalwClassesRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwClassesRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {})
+    }
+}
+
+/// One class (`palw_state_v2::PalwClassRowV2`).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwClassRow {
+    pub class_id: String,
+    pub is_base_class: bool,
+    pub status: String,
+    /// `None`: the class holds no share at all — not the same as a share with no budget.
+    pub share_permille: Option<u16>,
+    pub budget_blocks: u64,
+    pub canonical_leaves: u64,
+    pub artifact_root: String,
+    pub fp_certified: bool,
+    pub held: bool,
+    pub registered_daa: u64,
+}
+
+impl Serializer for RpcPalwClassRow {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(bool, &self.is_base_class, writer)?;
+        store!(String, &self.status, writer)?;
+        store!(Option<u16>, &self.share_permille, writer)?;
+        store!(u64, &self.budget_blocks, writer)?;
+        store!(u64, &self.canonical_leaves, writer)?;
+        store!(String, &self.artifact_root, writer)?;
+        store!(bool, &self.fp_certified, writer)?;
+        store!(bool, &self.held, writer)?;
+        store!(u64, &self.registered_daa, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwClassRow {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            class_id: load!(String, reader)?,
+            is_base_class: load!(bool, reader)?,
+            status: load!(String, reader)?,
+            share_permille: load!(Option<u16>, reader)?,
+            budget_blocks: load!(u64, reader)?,
+            canonical_leaves: load!(u64, reader)?,
+            artifact_root: load!(String, reader)?,
+            fp_certified: load!(bool, reader)?,
+            held: load!(bool, reader)?,
+            registered_daa: load!(u64, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwClassesResponse {
+    pub available: bool,
+    pub tip_daa: u64,
+    pub classes: Vec<RpcPalwClassRow>,
+}
+
+impl Serializer for GetPalwClassesResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        serialize!(Vec<RpcPalwClassRow>, &self.classes, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwClassesResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let available = load!(bool, reader)?;
+        let tip_daa = load!(u64, reader)?;
+        let classes = deserialize!(Vec<RpcPalwClassRow>, reader)?;
+        Ok(Self { available, tip_daa, classes })
+    }
+}
+
+/// ADR-0122 §8.2: `getPalwRegistrationTerms` — ADR-0108 §8's read, built. What a class
+/// registration must take from the chain rather than choose (`PalwRegistrationTermsV2`, one state
+/// read), and every family the chain certified on both lanes. A registrant built from genesis terms
+/// is refused as soon as the base class retargets; a lane binding no chain family covers is dropped
+/// with its fee; a family filed twice is refused `FamilyAlreadyCertified` — all three were decidable
+/// only from the node's log.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwRegistrationTermsRequest {}
+
+impl Serializer for GetPalwRegistrationTermsRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwRegistrationTermsRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {})
+    }
+}
+
+/// One family the chain certified.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwCertifiedFamily {
+    /// `attempt` or `free_prompt`.
+    pub lane: String,
+    pub digest: String,
+    pub certified_daa: u64,
+    /// The `PalwE2eFamilyV1`, borsh, hex — its kernel set is what a class's reachable kernels are
+    /// checked against, and a client decodes it into the type the SDK's builder takes.
+    pub family_hex: String,
+}
+
+impl Serializer for RpcPalwCertifiedFamily {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.lane, writer)?;
+        store!(String, &self.digest, writer)?;
+        store!(u64, &self.certified_daa, writer)?;
+        store!(String, &self.family_hex, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwCertifiedFamily {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            lane: load!(String, reader)?,
+            digest: load!(String, reader)?,
+            certified_daa: load!(u64, reader)?,
+            family_hex: load!(String, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwRegistrationTermsResponse {
+    /// False off `ConsensusV2`, or before the state has a tip.
+    pub available: bool,
+    pub tip_daa: u64,
+    pub base_class_id: String,
+    pub min_grantable_share_permille: u16,
+    pub slash_value_per_pwu: u64,
+    /// The base class's current target, decimal (`u128`).
+    pub initial_target: String,
+    pub registered_class_ids: Vec<String>,
+    pub registered_artifact_roots: Vec<String>,
+    pub families: Vec<RpcPalwCertifiedFamily>,
+}
+
+impl Serializer for GetPalwRegistrationTermsResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        store!(String, &self.base_class_id, writer)?;
+        store!(u16, &self.min_grantable_share_permille, writer)?;
+        store!(u64, &self.slash_value_per_pwu, writer)?;
+        store!(String, &self.initial_target, writer)?;
+        store!(Vec<String>, &self.registered_class_ids, writer)?;
+        store!(Vec<String>, &self.registered_artifact_roots, writer)?;
+        serialize!(Vec<RpcPalwCertifiedFamily>, &self.families, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwRegistrationTermsResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            tip_daa: load!(u64, reader)?,
+            base_class_id: load!(String, reader)?,
+            min_grantable_share_permille: load!(u16, reader)?,
+            slash_value_per_pwu: load!(u64, reader)?,
+            initial_target: load!(String, reader)?,
+            registered_class_ids: load!(Vec<String>, reader)?,
+            registered_artifact_roots: load!(Vec<String>, reader)?,
+            families: deserialize!(Vec<RpcPalwCertifiedFamily>, reader)?,
+        })
+    }
+}
+
+/// ADR-0122: `getPalwNodeStatus` — what this node is doing, which until now only its log said.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwNodeStatusRequest {}
+
+impl Serializer for GetPalwNodeStatusRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwNodeStatusRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {})
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwNodeStatusResponse {
+    /// The fingerprint this node booted with and announces (`Consensus params fingerprint:`).
+    pub consensus_params_id: String,
+    /// The heights of its scheduled fences (`Consensus fence schedule:`).
+    pub fence_schedule: Vec<u64>,
+    pub consensus_schedule_id: String,
+    /// The producer: `off` (not started), `disabled` (a startup refusal), `syncing`, `holding`,
+    /// `drawing`, `stopped`.
+    pub producer_state: String,
+    /// The hold's or the refusal's sentence, as the producer logs it; empty while drawing.
+    pub producer_reason: String,
+    /// Unix seconds at which `producer_state` last changed.
+    pub producer_since_unix: u64,
+    pub producer_bond: String,
+    pub producer_class: String,
+    pub draws: u64,
+    pub produced_blocks: u64,
+    pub receipt_blocks: u64,
+    /// Draws that won the class ticket and lost the network draw against bits.
+    pub network_lost: u64,
+    pub last_block: String,
+    pub last_block_unix: u64,
+    pub last_draw_unix: u64,
+    pub panel_running: bool,
+    /// The panel can carry receipts and answers (a fee outpoint resolves).
+    pub panel_submitter: bool,
+    pub retention_dir: String,
+}
+
+impl Serializer for GetPalwNodeStatusResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.consensus_params_id, writer)?;
+        store!(Vec<u64>, &self.fence_schedule, writer)?;
+        store!(String, &self.consensus_schedule_id, writer)?;
+        store!(String, &self.producer_state, writer)?;
+        store!(String, &self.producer_reason, writer)?;
+        store!(u64, &self.producer_since_unix, writer)?;
+        store!(String, &self.producer_bond, writer)?;
+        store!(String, &self.producer_class, writer)?;
+        store!(u64, &self.draws, writer)?;
+        store!(u64, &self.produced_blocks, writer)?;
+        store!(u64, &self.receipt_blocks, writer)?;
+        store!(u64, &self.network_lost, writer)?;
+        store!(String, &self.last_block, writer)?;
+        store!(u64, &self.last_block_unix, writer)?;
+        store!(u64, &self.last_draw_unix, writer)?;
+        store!(bool, &self.panel_running, writer)?;
+        store!(bool, &self.panel_submitter, writer)?;
+        store!(String, &self.retention_dir, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwNodeStatusResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            consensus_params_id: load!(String, reader)?,
+            fence_schedule: load!(Vec<u64>, reader)?,
+            consensus_schedule_id: load!(String, reader)?,
+            producer_state: load!(String, reader)?,
+            producer_reason: load!(String, reader)?,
+            producer_since_unix: load!(u64, reader)?,
+            producer_bond: load!(String, reader)?,
+            producer_class: load!(String, reader)?,
+            draws: load!(u64, reader)?,
+            produced_blocks: load!(u64, reader)?,
+            receipt_blocks: load!(u64, reader)?,
+            network_lost: load!(u64, reader)?,
+            last_block: load!(String, reader)?,
+            last_block_unix: load!(u64, reader)?,
+            last_draw_unix: load!(u64, reader)?,
+            panel_running: load!(bool, reader)?,
+            panel_submitter: load!(bool, reader)?,
+            retention_dir: load!(String, reader)?,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetTokenSupplyRequest {

@@ -197,6 +197,17 @@ pub enum RpcApiOps {
     GetPalwModelLines = 175,
     /// ADR-0088 Decision 12: the proposals attached to a line.
     GetPalwModelProposals = 176,
+    /// ADR-0122 §6.5: a bond's claims, as executor or as a seat, with their phases and dates.
+    GetPalwClaims = 177,
+    /// ADR-0122 §6.5: the class table (share, budget, artifact root, certification, held).
+    GetPalwClasses = 178,
+    /// ADR-0122 §6.5: this node's runtime — its boot fingerprint and fences, the producer's state
+    /// and counts, the panel — which until now only its log said.
+    GetPalwNodeStatus = 179,
+    /// ADR-0122 §8.2 (ADR-0108 §8's `getPalwRegistrationTerms`): what a class registration must take
+    /// from the chain — the base target, the slash value, the registered ids and roots — and the
+    /// families the chain certified on both lanes, read from one state.
+    GetPalwRegistrationTerms = 180,
 }
 
 impl RpcApiOps {
