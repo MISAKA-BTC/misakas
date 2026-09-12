@@ -165,11 +165,13 @@ binds a held class. That is §7's first question, not a decision taken here.
 
 ## 5. Invariants the tests hold
 
-1. **I-1, testnet-11 takes the regime at a height of its own**: the preset is the helper at
-   7,000; it validates with the network's ids still flat, gains its schedule entry and moves the
-   identity from the build before it; armed from genesis over the same bundle it is refused
-   (`testnet_11_takes_the_held_regime_at_a_height_of_its_own`), and armed at a scheduled height it
-   is invisible to the fork-id gate (`a_held_fence_at_a_scheduled_height_is_invisible_to_the_fork_id_gate`).
+1. **I-1, testnet-11 takes the regime at its 7,000 flag day** — a height no released build schedules,
+   shared only with the audit's deep fence, which ships in the same release: the preset is the
+   helper at 7,000 beside that fence; it validates with the network's ids still flat, gains its
+   schedule entry and moves the identity from the build before it; armed from genesis over the same
+   bundle it is refused (`testnet_11_takes_the_held_regime_at_its_7000_flag_day`), and armed at a
+   scheduled height it is invisible to the fork-id gate
+   (`a_held_fence_at_a_scheduled_height_is_invisible_to_the_fork_id_gate`).
    The fork-id gate, the schedule and the fingerprint pins name 7,000 (`fork_id_v1`'s measured
    schedules, `shipped_presets_have_pinned_fingerprints`).
 2. **I-2, the form is the class's**: the held row is priced Merkle and admitted under a court

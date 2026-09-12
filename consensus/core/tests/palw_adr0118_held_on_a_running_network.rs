@@ -35,13 +35,15 @@ fn bundle(params: &Params) -> &PalwConsensusParamsV2 {
     }
 }
 
-/// testnet-11 as it was before its held flag day was scheduled: the shipped preset with the
-/// regime's three fences cleared.
+/// testnet-11 as it was before its 7,000 flag day was scheduled: the shipped preset with the
+/// regime's three fences cleared, and the audit's deep fence the same release carries at the same
+/// height (`palw_audit_2026_09_11_deep`) — the two ship together or not at all.
 fn t11_without_the_regime() -> Params {
     let mut params = palw_rc_shipped_params();
     params.palw_held_context = None;
     params.palw_shard_court = None;
     params.palw_fp_da_pins = None;
+    params.palw_audit_2026_09_11_deep = None;
     params
 }
 
@@ -112,22 +114,25 @@ fn gate_at(params: &Params, profile: &PalwShapeProfileV3, daa: u64) -> Result<()
     .map(|_| ())
 }
 
-/// **Decision 6: testnet-11 takes the regime at a height of its own — 7,000, the operator's.** The
-/// shipped preset IS the helper at that height (one spelling), the ruleset validates with the
-/// network's prompt ids still flat, the schedule gains the height the fork-id gate refuses a stale
-/// node at, and the identity moves from the build before it. From genesis on the same bundle it is
-/// still refused: a mint that takes the regime states V4 and Merkle itself.
+/// **Decision 6: testnet-11 takes the regime at its 7,000 flag day — a height no released build
+/// schedules, shared only with the audit's deep fence, which ships in the same release.** The
+/// shipped preset IS the helper at that height (one spelling) beside that fence, the ruleset
+/// validates with the network's prompt ids still flat, the schedule gains the height the fork-id
+/// gate refuses a stale node at, and the identity moves from the build before it. From genesis on
+/// the same bundle it is still refused: a mint that takes the regime states V4 and Merkle itself.
 #[test]
-fn testnet_11_takes_the_held_regime_at_a_height_of_its_own() {
+fn testnet_11_takes_the_held_regime_at_its_7000_flag_day() {
     assert_eq!(PALW_RC_HELD_FENCE_DAA, Some(HELD_AT), "the operator's height (2026-09-12), shared with the deep-audit fence");
     let shipped = palw_rc_shipped_params();
-    let armed = t11_held_at(HELD_AT);
+    assert_eq!(shipped.palw_audit_2026_09_11_deep, Some(ForkActivation::new(HELD_AT)), "the deep fence is the height's other");
+    let mut armed = t11_held_at(HELD_AT);
     assert_eq!(
         (shipped.palw_held_context, shipped.palw_shard_court, shipped.palw_fp_da_pins),
         (armed.palw_held_context, armed.palw_shard_court, armed.palw_fp_da_pins),
         "the preset arms exactly what the helper does"
     );
-    assert_eq!(shipped.consensus_params_id(), armed.consensus_params_id());
+    armed.palw_audit_2026_09_11_deep = shipped.palw_audit_2026_09_11_deep;
+    assert_eq!(shipped.consensus_params_id(), armed.consensus_params_id(), "the helper and the deep fence are the whole release");
     let before = t11_without_the_regime();
     shipped.validate_palw_v2().unwrap_or_else(|e| panic!("testnet-11 takes the held regime at {HELD_AT}: {e:?}"));
     assert_eq!(shipped.palw_prompt_ids_form_at(u64::MAX - 1), PalwPromptIdsFormV1::Flat, "the network's genesis form is kept");
@@ -142,8 +147,8 @@ fn testnet_11_takes_the_held_regime_at_a_height_of_its_own() {
 /// **Why the height must be fresh, or its other fences released together.** `fork_id_v1` digests
 /// the FIRED HEIGHTS: arming the regime at the audit's 4,000 adds no schedule entry, so a node
 /// carrying 4,000's other fences and not this one would advertise the same fork id and diverge
-/// silently past it. The same regime at its own height adds the entry the gate refuses a stale
-/// node at.
+/// silently past it. The same regime at 7,000 adds the entry the gate refuses a stale node at —
+/// against the 4,000 release, which carries neither of 7,000's fences.
 #[test]
 fn a_held_fence_at_a_scheduled_height_is_invisible_to_the_fork_id_gate() {
     let before = t11_without_the_regime().fence_schedule_v1();
