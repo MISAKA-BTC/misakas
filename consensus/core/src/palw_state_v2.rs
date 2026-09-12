@@ -4467,6 +4467,13 @@ pub enum PalwStateV2Error {
          allowed to delete what this asks it to open (ADR-0062 SA-1/SA-6)"
     )]
     DaOutsideRetention { claim: Hash64, at: u64, window: u64, retention_daa: u64 },
+    #[error(
+        "a court opened for claim {claim} at {at} would run its window ({window}) past the retention \
+         obligation that ends at {retention_daa} — the producer's material may already be deleted there, \
+         so the court could convict it for a lapse the chain itself allowed (mainnet audit 2026-09-11, \
+         the DA path's SA-1/SA-6 mirrored onto the interactive court)"
+    )]
+    CourtOutsideRetention { claim: Hash64, at: u64, window: u64, retention_daa: u64 },
     #[error("claim {0} already carries an open data-availability accusation; one at a time (ADR-0062 SA-1)")]
     DaAccusationAlreadyOpen(Hash64),
     #[error(
@@ -11426,6 +11433,26 @@ fn apply_object(
             }
             let deadline_daa =
                 ctx.daa_score.checked_add(builder.params.window_court).ok_or(PalwStateV2Error::Overflow("court deadline"))?;
+            // **Court-window bound (mainnet audit 2026-09-11 deep fence): a court's whole window must
+            // fit inside the producer's retention obligation** — the rule the DA-accusation path
+            // already enforces (`DaOutsideRetention`, SA-1/SA-6), mirrored onto the interactive court.
+            // Below the fence `CourtOpened` bounded only its own deadline by `window_court`, so a
+            // court opened near the end of retention ran past `claim.trace_retention_daa` and could
+            // demand material the obligation already let the producer delete — convicting an honest
+            // producer who pruned, and leaving no safe finite retention cap (the disk-growth root of
+            // the C-05 revert). Past the fence such a court is refused, so the court can never demand
+            // what the obligation released and a producer may prune at `trace_retention_daa`.
+            // `validate_palw_v2` requires `min_trace_retention_daa >= window_court` whenever this
+            // fence is armed, so a court can still open on every fresh claim (the obligation always
+            // covers at least one full window from acceptance).
+            if builder.extras.audit_2026_09_11_deep_active && deadline_daa > claim.trace_retention_daa {
+                return Err(PalwStateV2Error::CourtOutsideRetention {
+                    claim: *claim_id,
+                    at: ctx.daa_score,
+                    window: builder.params.window_court,
+                    retention_daa: claim.trace_retention_daa,
+                });
+            }
             // **The opening rung is clocked like every other rung — because a responder now ships.**
             //
             // A rung clock convicts on silence: `declare_no_show` reads whose turn it was and ends
@@ -15984,6 +16011,43 @@ pub(crate) mod tests {
         };
         assert_eq!(drop_for(false), 100, "below the deep fence a dissenting seat loses only min_collateral (100)");
         assert_eq!(drop_for(true), 200, "past the deep fence it loses the claim's whole reserved stake (200 = 40 × 5)");
+    }
+
+    /// **Court-window bound (mainnet audit 2026-09-11 deep fence): a court whose window would run
+    /// past the claim's retention obligation is refused past the fence, and opens below it.** The
+    /// DA-accusation path already refuses this (`DaOutsideRetention`, SA-1/SA-6 — "the producer was
+    /// already allowed to delete what this asks it to open"); the interactive court did not, so a
+    /// court opened near the end of retention could demand material the obligation released and
+    /// convict an honest producer who pruned. Past the deep fence the court is bound the same way,
+    /// which is what lets a producer safely cap its retention (the C-05 disk root). Same object both
+    /// sides; only the extras flag differs.
+    #[test]
+    fn court_outside_retention_is_refused_past_the_deep_fence() {
+        let p = params(); // window_court = 500
+        let genesis = PalwChainStateV2::genesis();
+        // An attempt whose retention obligation ends at DAA 200 — a court's 500-DAA window cannot fit
+        // inside it. (A fold test sets it directly; admission pins it to accepted + min_trace_retention
+        // in production, and `validate_palw_v2` keeps min_trace_retention ≥ window_court there.)
+        let mut env = attempt(40, 1);
+        env.attempt.trace_retention_daa = 200;
+        let claim_id = attempt_id_v2(&env.attempt);
+        let open = |deep: bool| {
+            let extras = PalwTransitionExtrasV1 { audit_2026_09_11_deep_active: deep, ..Default::default() };
+            let step = |parent: &PalwChainStateV2, c: &PalwBlockContextV2, objs: &[PalwConsensusObjectV2], work: PalwBlockWorkV3<'_>| {
+                apply_palw_transition_v7(parent, &p, None, c, objs, work, &[], Hash64::default(), false, false, false, false, &extras)
+                    .map(|(s, _, _)| s)
+            };
+            let s1 = step(&genesis, &ctx(1, 100, 1), &register_class_and_bond(), PalwBlockWorkV3::None).expect("register");
+            let s2 = step(&s1, &ctx(2, 101, 2), &[], PalwBlockWorkV3::Attempt(&env)).expect("attempt");
+            // Court opened at DAA 102: its backstop is 102 + 500 = 602 > 200 = trace_retention_daa.
+            let court = court_open(claim_id, env.attempt.trace_root, bond_key(1), bond_key(1));
+            step(&s2, &ctx(3, 102, 3), &[court], PalwBlockWorkV3::None)
+        };
+        match open(true) {
+            Err(PalwStateV2Error::CourtOutsideRetention { retention_daa: 200, window: 500, .. }) => {}
+            other => panic!("expected CourtOutsideRetention past the deep fence, got {other:?}"),
+        }
+        assert!(open(false).is_ok(), "below the deep fence a court opens regardless of the obligation (unchanged)");
     }
 
     #[test]

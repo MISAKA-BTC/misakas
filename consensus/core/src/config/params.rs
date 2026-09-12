@@ -2898,6 +2898,22 @@ impl Params {
                 ));
             }
         }
+        // **Court-window bound invariant (mainnet audit 2026-09-11 deep fence).** Past
+        // `palw_audit_2026_09_11_deep`, `CourtOpened` refuses a court whose `window_court` would run
+        // past `claim.trace_retention_daa` (= accepted_daa + `min_trace_retention_daa`, pinned at
+        // admission) — the DA path's SA-1/SA-6 mirrored onto the interactive court. If
+        // `min_trace_retention_daa` were shorter than `window_court`, NO court could ever open — even
+        // one filed at acceptance would exceed the obligation — so fraud adjudication would be dead.
+        // Refuse such a bundle at construction, and only when the fence is scheduled: below it the
+        // court is unbounded by retention exactly as before, so any obligation fits.
+        if self.palw_audit_2026_09_11_deep.is_some() {
+            let min_retention = crate::palw_producer_v2::palw_min_trace_retention_daa_v1(&bundle.state);
+            if min_retention < bundle.state.window_court() {
+                return Err(PalwModeV2Error::Invalid(
+                    "the retention obligation is shorter than a court window — past palw_audit_2026_09_11_deep no court could open",
+                ));
+            }
+        }
         Ok(())
     }
 
