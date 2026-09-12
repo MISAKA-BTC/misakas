@@ -921,6 +921,22 @@ impl Base0FpFoldRangeOpeningV1 {
         let end_block = if end >= step_leaf_count { end.div_ceil(block) } else { end / block };
         (first_block, end_block.max(first_block))
     }
+
+    /// **The range's two edges** (ADR-0121 §7): `[first, end)` of the leaves before its first whole
+    /// block and after its last — the shape `base0_fold_range_root_v1` walks, either possibly empty.
+    /// Blocks are aligned to the step space and intervals are not, so these are the leaves of the
+    /// blocks that straddle the interval's ends: whole in no interval, digested by no opening. A
+    /// range with no whole block is all edge, split at its block boundary.
+    pub fn edges_v1(&self, step_leaf_count: u64) -> ((u64, u64), (u64, u64)) {
+        let block = 1u64 << self.retain_level.min(63);
+        let first = self.first_leaf_index;
+        let end = first.saturating_add(self.leaf_count);
+        let (first_block, end_block) = self.whole_blocks_v1(step_leaf_count);
+        let left_end = first_block.saturating_mul(block).clamp(first, end);
+        let right_first =
+            if end_block > first_block { end_block.saturating_mul(block).min(step_leaf_count).clamp(left_end, end) } else { left_end };
+        ((first, left_end), (right_first, end))
+    }
     /// From the leaf-level range opening and the tree it was cut from: the same frontier, the
     /// fold's digests instead of the leaves.
     pub fn from_range_v1(
@@ -1248,13 +1264,19 @@ impl Base0FpBlockLeavesV1 {
         block_index: u64,
         leaves: &dyn Fn(u64) -> Option<Hash64>,
     ) -> Option<Self> {
-        let (first_block, end_block) = fold.whole_blocks_v1(step_leaf_count);
-        if block_index < first_block || block_index >= end_block {
+        // The block's leaves inside the range: the whole block where the range holds it whole, and
+        // an edge's leaves where the block straddles the range's end (ADR-0121 §7) — which the seat
+        // checks by the range's root walk, not by a digest no opening carries.
+        let block = 1u64 << fold.retain_level.min(63);
+        let first = block_index.checked_mul(block)?.max(fold.first_leaf_index);
+        let end = block_index
+            .checked_add(1)?
+            .checked_mul(block)?
+            .min(fold.first_leaf_index.checked_add(fold.leaf_count)?)
+            .min(step_leaf_count);
+        if first >= end {
             return None;
         }
-        let block = 1u64 << fold.retain_level.min(63);
-        let first = block_index * block;
-        let end = ((block_index + 1) * block).min(fold.first_leaf_index + fold.leaf_count);
         let leaf_hashes = (first..end).map(leaves).collect::<Option<Vec<_>>>()?;
         Some(Self { version: PALW_BASE0_FP_BLOCK_LEAVES_VERSION_V1, interval_index, first_leaf_index: first, leaf_hashes })
     }
@@ -2690,10 +2712,10 @@ pub fn base0_fp_challenger_replay_tiles_capped_v1<K: Base0FpIntervalKernelsV1>(
 /// **What a served interval's replay asks of this party's own leaves** under the served frontier.
 pub enum Base0FpServedLeavesV1<'a> {
     /// A seat naming a leaf (ADR-0086 Decision 6): its leaves are the question, not the
-    /// commitment's, and nothing walks. Only the tiles of `block` (`[first, end)`, the served
-    /// block's leaves) are kept (ADR-0121): the name is the first leaf of that block where the two
-    /// disagree, and the rest of the interval is replayed and dropped.
-    Own { block: (u64, u64) },
+    /// commitment's, and nothing walks. Only the tiles inside `spans` (each `[first, end)`: the
+    /// served block's leaves, or an interval's two edges) are kept (ADR-0121): the name is the
+    /// first leaf there where the two disagree, and the rest of the interval is replayed and dropped.
+    Own { spans: &'a [(u64, u64)] },
     /// A close (ADR-0085 Decision 3): the range must walk to the committed root — with this
     /// party's leaves where they are the executor's, and the executor's served leaves for the one
     /// block they are not ([`base0_fp_committed_range_with_served_block_v1`]).
@@ -2857,10 +2879,10 @@ fn base0_fp_replay_served_interval_v1<K: Base0FpIntervalKernelsV1>(
     };
     // **Naming keeps one block** (ADR-0121): the served block's own tiles, streamed out of the
     // replay; the interval's other leaves are hashed and dropped, and no range is rebuilt.
-    if let Base0FpServedLeavesV1::Own { block: (block_first, block_end) } = leaves {
+    if let Base0FpServedLeavesV1::Own { spans } = leaves {
         let mut kept = Vec::new();
         kernels.replay_interval_into(profile, ctx, &start, window, step_leaf_count, &mut |index, leaf| {
-            if index >= block_first && index < block_end {
+            if spans.iter().any(|(first, end)| index >= *first && index < *end) {
                 kept.push((index, leaf));
             }
             Ok(())
@@ -4222,37 +4244,50 @@ pub fn base0_fp_block_leaves_from_fold_capped_v1<K: Base0FpIntervalKernelsV1>(
     let block_index = base0_fp_block_of_request_number_v1(&v4, block_index)
         .ok_or_else(|| Base0FpIntervalError::StepSpace(format!("block number {block_index} names no block")))?;
     let geometry = Base0FpIntervalGeometryV1::from_binding_capped_v1(binding, family_checkpoint_interval, max_step_leaf_count)?;
-    let (first_block, end_block) = v4.range.whole_blocks_v1(binding.step_leaf_count);
-    if block_index < first_block || block_index >= end_block {
-        return Err(Base0FpIntervalError::StepSpace(format!(
-            "block {block_index} is not wholly inside interval {}",
-            v4.interval_index
-        )));
-    }
     // **The block alone, streamed** (ADR-0121): the replay runs from the interval's anchor to the
     // block's end and only the block's own leaves are kept — 4,096 hashes, where the span this
-    // replaced held every leaf of the interval.
+    // replaced held every leaf of the interval. A block that straddles the range's end is served as
+    // its leaves inside the range (ADR-0121 §7); where that edge reaches back into the seed row
+    // (the anchor call's logits, the previous interval's), those leaves are the opening's own.
     let size = 1u64 << v4.range.retain_level.min(63);
-    let (block_first, block_end) = (block_index * size, ((block_index + 1) * size).min(binding.step_leaf_count));
-    let mut kept: Vec<Hash64> = Vec::with_capacity((block_end - block_first) as usize);
-    base0_replay_span_into_v1(
-        kernels,
-        binding,
-        &material.checkpoint_chunks,
-        &material.generated_token_ids,
-        prompt_token_ids,
-        &geometry,
-        block_first,
-        block_end,
-        anchor_state_for,
-        &mut |_, hash, _| {
-            kept.push(hash);
-            Ok(())
-        },
-    )?;
-    let leaf = |i: u64| -> Option<Hash64> { i.checked_sub(block_first).and_then(|o| kept.get(o as usize).copied()) };
+    let range_end = v4.range.first_leaf_index.saturating_add(v4.range.leaf_count);
+    let portion_first = block_index.saturating_mul(size).max(v4.range.first_leaf_index);
+    let portion_end = block_index.saturating_add(1).saturating_mul(size).min(range_end).min(binding.step_leaf_count);
+    if portion_first >= portion_end {
+        return Err(Base0FpIntervalError::StepSpace(format!("block {block_index} is not inside interval {}", v4.interval_index)));
+    }
+    let interval_first = v4.range.first_leaf_index.saturating_add(u64::from(v4.seed_row_leaf_count));
+    let ctx_hash = binding.job_context.context_hash();
+    let profile_hash = binding.shape_profile.shape_profile_id();
+    let mut kept: Vec<Hash64> = Vec::with_capacity((portion_end - portion_first) as usize);
+    for index in portion_first..portion_end.min(interval_first) {
+        let tile = v4
+            .seed_row_tiles
+            .get((index - v4.range.first_leaf_index) as usize)
+            .ok_or(Base0FpIntervalError::CaptureHasNoTile { index })?;
+        kept.push(step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, tile));
+    }
+    let replay_first = portion_first.max(interval_first);
+    if replay_first < portion_end {
+        base0_replay_span_into_v1(
+            kernels,
+            binding,
+            &material.checkpoint_chunks,
+            &material.generated_token_ids,
+            prompt_token_ids,
+            &geometry,
+            replay_first,
+            portion_end,
+            anchor_state_for,
+            &mut |_, hash, _| {
+                kept.push(hash);
+                Ok(())
+            },
+        )?;
+    }
+    let leaf = |i: u64| -> Option<Hash64> { i.checked_sub(portion_first).and_then(|o| kept.get(o as usize).copied()) };
     let cut = Base0FpBlockLeavesV1::cut_v1(v4.interval_index, &v4.range, binding.step_leaf_count, block_index, &leaf)
-        .ok_or(Base0FpIntervalError::StepSpace(format!("block {block_index} is not wholly inside interval {}", v4.interval_index)))?;
+        .ok_or(Base0FpIntervalError::StepSpace(format!("block {block_index} is not inside interval {}", v4.interval_index)))?;
     cut.encode_v1()
 }
 
@@ -4270,7 +4305,7 @@ pub fn base0_fp_block_leaves_from_tiles_v1(
     let by_index: std::collections::HashMap<u64, &PalwStepTileLeafV1> = tiles.iter().map(|(i, t)| (*i, t)).collect();
     let leaf = |i: u64| -> Option<Hash64> { by_index.get(&i).map(|t| step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, t)) };
     let cut = Base0FpBlockLeavesV1::cut_v1(v4.interval_index, &v4.range, v4.binding.step_leaf_count, block_index, &leaf)
-        .ok_or(Base0FpIntervalError::StepSpace(format!("block {block_index} is not wholly inside interval {}", v4.interval_index)))?;
+        .ok_or(Base0FpIntervalError::StepSpace(format!("block {block_index} is not inside interval {}", v4.interval_index)))?;
     cut.encode_v1()
 }
 
@@ -4471,7 +4506,7 @@ pub fn base0_fp_name_the_leaf_capped_v1<K: Base0FpIntervalKernelsV1>(
         state.as_ref(),
         kernels,
         prompt_ids_form,
-        Base0FpServedLeavesV1::Own { block: (served.first_leaf_index, block_end) },
+        Base0FpServedLeavesV1::Own { spans: &[(served.first_leaf_index, block_end)] },
     )?;
     let ctx_hash = v4.binding.job_context.context_hash();
     let profile_hash = v4.binding.shape_profile.shape_profile_id();
@@ -4481,6 +4516,111 @@ pub fn base0_fp_name_the_leaf_capped_v1<K: Base0FpIntervalKernelsV1>(
         own.entry(v4.range.first_leaf_index + k as u64).or_insert_with(|| step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, tile));
     }
     Ok(served.name_the_leaf_v1(&|i| own.get(&i).copied()))
+}
+
+/// **Name the leaf a served EDGE disagrees on** (ADR-0121 §7, the seat's half). A block that
+/// straddles an interval's end is whole in neither interval, so no opening digests it and a block
+/// answer for it cannot be checked against a digest: it is checked by the range's own root walk
+/// instead. `served_edges` are the executor's answers for the interval's edge blocks
+/// (`Base0FpBlockLeavesV1` whose leaves are exactly one edge, `Base0FpFoldRangeOpeningV1::edges_v1`);
+/// an edge not served is this seat's own. The served edges, the opening's digests and its siblings
+/// must walk to the committed step root (`base0_fold_range_root_v1`, the rule a V4 verdict walks) —
+/// or the edge this seat still holds is the one the lie is in, and the answer is to ask for it —
+/// and the leaf named is the first served one that differs from this seat's replay.
+///
+/// A seat's `FaultInRange` at an edge cannot say which edge: when the digests all agree and the
+/// root does not walk, `fold_edge_v1` addresses the left one whenever the range does not start on a
+/// block boundary. So the question is put to both edges.
+#[allow(clippy::too_many_arguments)]
+pub fn base0_fp_name_the_edge_leaf_capped_v1<K: Base0FpIntervalKernelsV1>(
+    opening_bytes: &[u8],
+    served_edges: &[Vec<u8>],
+    claim: PalwClaimRootsV1,
+    index: u32,
+    prompt_token_ids: &[u32],
+    work_leaves: u64,
+    family_checkpoint_interval: u32,
+    max_step_leaf_count: u64,
+    state_for: &dyn Fn(&[u8]) -> Option<crate::fp_recompute::Base0FpSeatStateV1>,
+    kernels: &K,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<Option<u64>, String> {
+    let v4 = Base0FpIntervalOpeningV4::decode_v1(opening_bytes).map_err(|e| format!("the opening is not V4: {e:?}"))?;
+    if v4.interval_index != index {
+        return Err("the opening is not this interval's".to_string());
+    }
+    let leaf_count = v4.binding.step_leaf_count;
+    let (left, right) = v4.range.edges_v1(leaf_count);
+    let (mut served_left, mut served_right): (Option<Vec<Hash64>>, Option<Vec<Hash64>>) = (None, None);
+    for bytes in served_edges {
+        let served = Base0FpBlockLeavesV1::decode_v1(bytes).map_err(|e| format!("the served edge does not decode: {e:?}"))?;
+        if served.interval_index != index {
+            return Err("the served edge is not this interval's".to_string());
+        }
+        let span = (served.first_leaf_index, served.first_leaf_index.saturating_add(served.leaf_hashes.len() as u64));
+        if span == left && left.0 < left.1 {
+            served_left = Some(served.leaf_hashes);
+        } else if span == right && right.0 < right.1 {
+            served_right = Some(served.leaf_hashes);
+        } else {
+            return Err(format!("the served leaves [{}, {}) are not an edge of interval {index}", span.0, span.1));
+        }
+    }
+    if served_left.is_none() && served_right.is_none() {
+        return Err("no edge of the interval was served".to_string());
+    }
+    // This seat's own leaves for both edges: the seed row's as the opening carries them (the anchor
+    // call's logits, which the interval's replay starts after), the rest replayed and kept.
+    let state = state_for(opening_bytes);
+    let interval_first = v4.range.first_leaf_index.saturating_add(u64::from(v4.seed_row_leaf_count));
+    let spans = [(left.0.max(interval_first), left.1), (right.0.max(interval_first), right.1)];
+    let (_, tiles) = base0_fp_replay_served_interval_v1(
+        opening_bytes,
+        claim,
+        index,
+        prompt_token_ids,
+        work_leaves,
+        family_checkpoint_interval,
+        max_step_leaf_count,
+        state.as_ref(),
+        kernels,
+        prompt_ids_form,
+        Base0FpServedLeavesV1::Own { spans: &spans },
+    )?;
+    let ctx_hash = v4.binding.job_context.context_hash();
+    let profile_hash = v4.binding.shape_profile.shape_profile_id();
+    let mut own: std::collections::HashMap<u64, Hash64> =
+        tiles.tiles.iter().map(|(i, t)| (*i, step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, t))).collect();
+    for (k, tile) in v4.seed_row_tiles.iter().enumerate() {
+        own.entry(v4.range.first_leaf_index + k as u64).or_insert_with(|| step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, tile));
+    }
+    let own_of = |span: (u64, u64)| -> Result<Vec<Hash64>, String> {
+        (span.0..span.1).map(|i| own.get(&i).copied().ok_or_else(|| format!("this seat's replay has no leaf {i}"))).collect()
+    };
+    let (own_left, own_right) = (own_of(left)?, own_of(right)?);
+    let root = crate::fp_capture::base0_fold_range_root_v1(
+        leaf_count,
+        v4.range.first_leaf_index,
+        v4.range.leaf_count,
+        v4.range.retain_level,
+        served_left.as_deref().unwrap_or(&own_left),
+        &v4.range.block_roots,
+        served_right.as_deref().unwrap_or(&own_right),
+        &v4.range.siblings,
+        max_step_leaf_count,
+    )?;
+    if root != v4.binding.step_merkle_root {
+        return Err("the edges held do not walk to the committed step root — the edge still this seat's own is the one the lie is in"
+            .to_string());
+    }
+    for (served, own, first) in [(&served_left, &own_left, left.0), (&served_right, &own_right, right.0)] {
+        if let Some(served) = served
+            && let Some(k) = served.iter().zip(own.iter()).position(|(s, o)| s != o)
+        {
+            return Ok(Some(first + k as u64));
+        }
+    }
+    Ok(None)
 }
 
 /// **The close, assembled from served intervals and this node's own replay** (ADR-0085 Decision
@@ -4998,10 +5138,15 @@ mod tests {
         assert_eq!(served.leaf_hashes.len() as u64, block);
         assert!(served.folds_to_v1(&fold.block_roots[1]), "the served block is the second whole block's digest");
         assert_eq!(Base0FpBlockLeavesV1::decode_v1(&served.encode_v1().unwrap()).unwrap(), served);
-        assert!(
-            Base0FpBlockLeavesV1::cut_v1(0, &fold, leaf_count, 3, &|i| producer.get(i as usize).copied()).is_none(),
-            "block 3 is not whole"
-        );
+        // Block 3 straddles the range's start: served as the range's left edge, its leaves inside
+        // the range (ADR-0121 §7) — which no digest checks, so the block naming never takes it —
+        // and a block outside the range is nothing.
+        let edge = Base0FpBlockLeavesV1::cut_v1(0, &fold, leaf_count, 3, &|i| producer.get(i as usize).copied())
+            .expect("block 3 is the range's left edge");
+        let (left, _) = fold.edges_v1(leaf_count);
+        assert_eq!((edge.first_leaf_index, edge.first_leaf_index + edge.leaf_hashes.len() as u64), left);
+        assert_eq!(left, (first, 4 * block));
+        assert!(Base0FpBlockLeavesV1::cut_v1(0, &fold, leaf_count, 2, &|i| producer.get(i as usize).copied()).is_none());
         // The leaf, and the court's path from the range with the served block substituted.
         assert_eq!(served.name_the_leaf_v1(&|i| honest.get(i as usize).copied()), Some(bad));
         assert_eq!(served.name_the_leaf_v1(&|i| producer.get(i as usize).copied()), None, "a block that agrees names nothing");
@@ -6658,6 +6803,55 @@ mod tests {
             "ids that are not the job's answer nothing"
         );
         straddles
+    }
+
+    /// **The dense tier's drill liar lies at exactly one leaf, in the stream of the fold** (ADR-0121's
+    /// measured run needs a held liar past the materialization cap, where the attempt lane's dense
+    /// fault is refused). On the held row: the liar's execution is the honest one — the same answer,
+    /// the same checkpoints — and its fold differs only in the block that holds the lie, so its step
+    /// root and execution root are its own; a leaf outside the job is refused by name.
+    #[test]
+    fn the_drill_liar_moves_one_committed_tile_and_nothing_else() {
+        let form = kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1;
+        let (artifact, profile, ctx, prompt, honest) = dense_v7_run_with_form(8, 14, form);
+        let engine = crate::engine_a16::A16Engine::new(&artifact).expect("an A16 artifact");
+        let plan = engine.plan_from_profile(&profile).expect("the plan");
+        let leaves = honest.binding.step_leaf_count;
+        let leaf = leaves / 2;
+        let lying = crate::qwen25_a16_backend::a16_execute_free_prompt_streaming_with_drill_fault_v1(
+            &artifact,
+            &profile,
+            Some(&plan),
+            &ctx,
+            &prompt,
+            kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES,
+            &mut |_| {},
+            leaf,
+        )
+        .expect("the drill's liar runs");
+        assert_eq!(lying.generated_token_ids, honest.generated_token_ids, "the execution is the honest one");
+        assert_eq!(lying.checkpoints.leaves, honest.checkpoints.leaves, "and so is every checkpoint");
+        assert_ne!(lying.binding.step_merkle_root, honest.binding.step_merkle_root, "the lie is committed");
+        assert_ne!(lying.execution_root, honest.execution_root);
+        let (liar, truth) = (lying.step_tree.expect("a fold"), honest.step_tree.expect("a fold"));
+        let block = leaf >> truth.retain_level();
+        let (liar, truth) = (liar.retained_nodes(), truth.retained_nodes());
+        let differing: Vec<usize> = (0..truth.len()).filter(|i| liar[*i] != truth[*i]).collect();
+        assert_eq!(differing, vec![block as usize], "only the block that holds the lie differs");
+        assert!(
+            crate::qwen25_a16_backend::a16_execute_free_prompt_streaming_with_drill_fault_v1(
+                &artifact,
+                &profile,
+                Some(&plan),
+                &ctx,
+                &prompt,
+                kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES,
+                &mut |_| {},
+                leaves,
+            )
+            .is_err(),
+            "a leaf outside the job is refused"
+        );
     }
 
     /// **ADR-0121 on the held row: what the executor streams, and how a block is named.** At the

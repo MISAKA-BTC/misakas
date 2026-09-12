@@ -702,6 +702,26 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Err("this execution family names no leaf from a served block".to_string())
     }
 
+    /// **ADR-0121 §7: name the leaf a served EDGE disagrees on** — the interval's blocks that
+    /// straddle its ends, whole in no interval and digested by no opening, checked by the range's
+    /// own root walk instead: the served edges (this node's own where one is not served), the
+    /// opening's digests and siblings must walk to the committed root, and the leaf named is the
+    /// first served one that differs from this node's replay. `Err` when the walk fails with the
+    /// edges held: the edge still this node's own is the one to ask for.
+    #[allow(clippy::too_many_arguments)]
+    fn fp_name_the_edge_leaf_v1(
+        &self,
+        _opening: &[u8],
+        _served_edges: &[Vec<u8>],
+        _claim: PalwClaimRootsV1,
+        _index: u32,
+        _prompt_token_ids: &[u32],
+        _generated_token_ids: &[u32],
+        _work_leaves: u64,
+    ) -> Result<Option<u64>, String> {
+        Err("this execution family names no leaf from a served edge".to_string())
+    }
+
     /// **ADR-0085 Decision 3: which interval owns step leaf `leaf`** of this context's job — the
     /// challenger's first question when a court narrows to a step and it holds no capture.
     fn fp_interval_of_leaf_v1(&self, _context: &PalwJobContextV2, _leaf: u64) -> Option<u32> {
