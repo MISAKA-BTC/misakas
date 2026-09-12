@@ -2552,7 +2552,6 @@ pub fn base0_fp_replay_interval_with_v1(
             step += 1;
         }
     }
-    drop(emit);
     if cursor != end {
         return Err(format!("the replay emitted {} leaves and the window holds {}", cursor - first, end - first));
     }
