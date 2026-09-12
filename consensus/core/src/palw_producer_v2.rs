@@ -150,9 +150,9 @@ impl PalwProducerFactsV2 {
     /// it — and the bond most likely to hold on exposure is precisely the one committing
     /// free-prompt claims, since those fill the same ceiling.
     pub fn ready_to_spend_receipts(&self, local_pubkey: &[u8]) -> Result<(), &'static str> {
-        let bond = self.bond.as_ref().ok_or("the named bond is not registered on this chain")?;
+        let bond = self.bond.as_ref().ok_or(PALW_NOT_READY_BOND_UNKNOWN_V2)?;
         if bond.registered_pubkey != local_pubkey {
-            return Err("the local signing key is not the one this bond registered");
+            return Err(PALW_NOT_READY_KEY_MISMATCH_V2);
         }
         Ok(())
     }
@@ -162,16 +162,35 @@ impl PalwProducerFactsV2 {
     /// but each `Err` is a reason it certainly would not have.
     pub fn ready_to_produce(&self, local_pubkey: &[u8]) -> Result<(), &'static str> {
         self.ready_to_spend_receipts(local_pubkey)?;
-        let bond = self.bond.as_ref().ok_or("the named bond is not registered on this chain")?;
+        let bond = self.bond.as_ref().ok_or(PALW_NOT_READY_BOND_UNKNOWN_V2)?;
         if !self.has_epoch_room() {
-            return Err("this class's epoch budget is already spent");
+            return Err(PALW_NOT_READY_EPOCH_BUDGET_V2);
         }
         if !bond.has_exposure_room() {
-            return Err("the bond's exposure ceiling leaves no room for another claim");
+            return Err(PALW_NOT_READY_EXPOSURE_FULL_V2);
         }
         Ok(())
     }
 }
+
+// **The four verdicts, by name** (ADR-0122 Decision 3). The sentences are the ones this function
+// has always returned — the producer logs them after `holding:` and `getPalwProducerFacts` serves
+// them as `not_ready_reason` — and the operator CLI turns each into a code and a fix. It matches on
+// these constants rather than on a copy of the words, so rewording one breaks the CLI's build
+// instead of quietly turning a known hold into an unrecognised one.
+
+/// `ready_to_produce` / `ready_to_spend_receipts`: the chain has no bond at the named outpoint.
+pub const PALW_NOT_READY_BOND_UNKNOWN_V2: &str = "the named bond is not registered on this chain";
+/// `ready_to_produce` / `ready_to_spend_receipts`: the bond exists and registered another key.
+pub const PALW_NOT_READY_KEY_MISMATCH_V2: &str = "the local signing key is not the one this bond registered";
+/// `ready_to_produce`: this class's blocks for the epoch are spent (the floor class is exempt).
+pub const PALW_NOT_READY_EPOCH_BUDGET_V2: &str = "this class's epoch budget is already spent";
+/// `ready_to_produce`: every sompi of the bond's exposure ceiling is reserved by live claims.
+pub const PALW_NOT_READY_EXPOSURE_FULL_V2: &str = "the bond's exposure ceiling leaves no room for another claim";
+
+/// Every sentence `ready_to_produce` can return, in the order it checks them.
+pub const PALW_NOT_READY_REASONS_V2: [&str; 4] =
+    [PALW_NOT_READY_BOND_UNKNOWN_V2, PALW_NOT_READY_KEY_MISMATCH_V2, PALW_NOT_READY_EPOCH_BUDGET_V2, PALW_NOT_READY_EXPOSURE_FULL_V2];
 
 /// Read the facts for `class_id` (and optionally a bond) out of a state snapshot.
 ///

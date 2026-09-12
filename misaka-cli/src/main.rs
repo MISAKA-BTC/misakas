@@ -29,6 +29,8 @@ mod forward;
 mod key_roles;
 mod keys;
 mod node;
+/// ADR-0122: `mining`, `doctor`, `work` — the operator surface over the components.
+mod operator;
 /// `palw claim` — what became of a free-prompt claim: its phase on the chain, and the next step.
 mod palw_claim;
 mod palw_court;
@@ -90,6 +92,24 @@ pub mod exit {
     /// `palw extension`: expressible, but the depth asked for was not reached because this
     /// machine lacks the bytes (an artifact, a vector file). Not a verdict on the manifest.
     pub const EXTENSION_DEPTH_NOT_REACHED: i32 = 23;
+    // ADR-0122 Decision 4: the operator surface's range (`mining`, `doctor`, `work`). Each names
+    // the area a failure is in, so a supervisor or a monitor can branch without reading prose.
+    /// The miner, a seat or a lane is holding: running, and not doing its work, for a named reason.
+    pub const NOT_READY: i32 = 30;
+    /// The configuration: `mining.toml`, a path, a flag.
+    pub const CONFIG: i32 = 31;
+    /// The identity: the key, the bond, the pay address.
+    pub const IDENTITY: i32 = 32;
+    /// Funds: collateral, the fee outpoint, a funding output.
+    pub const FUNDS: i32 = 33;
+    /// The model: the class, the artifact, the tokenizer, the certification.
+    pub const MODEL: i32 = 34;
+    /// The host: disk, memory, ports, clock, background upgrades.
+    pub const HOST: i32 = 35;
+    /// A component is not running, or keeps crashing.
+    pub const COMPONENT_DOWN: i32 = 36;
+    /// `mining stop` refused: this node still has claims to defend.
+    pub const STOP_INFLIGHT: i32 = 37;
 }
 
 /// A CLI error that carries the process exit code to surface.
@@ -162,6 +182,14 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Mining, as one purpose: is this host mining, and if not, why and what to do (ADR-0122).
+    #[command(subcommand)]
+    Mining(MiningCmd),
+    /// Check everything a miner needs — node, identity, model, host, prompt lane — and name the fix.
+    Doctor(DoctorArgs),
+    /// One work from the request (or the won draw) to the reward, by one id (ADR-0122).
+    #[command(subcommand)]
+    Work(WorkCmd),
     /// Node operations.
     #[command(subcommand)]
     Node(NodeCmd),
@@ -231,6 +259,147 @@ struct NodeStartArgs {
     /// Extra args forwarded verbatim to kaspad, e.g. `-- --utxoindex --nodnsseed`.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     args: Vec<String>,
+}
+
+/// ADR-0122 Decision 6: what a `mining` / `doctor` / `work` command reads the miner from. Every
+/// flag is optional: each falls back to `~/.misaka/mining.toml`, then to the running node's own
+/// command line, then to what `kaspad` itself would default to.
+#[derive(Args, Debug, Clone, Default)]
+struct ProfileArgs {
+    /// The mining configuration (default ~/.misaka/mining.toml).
+    #[arg(long, value_name = "FILE")]
+    config: Option<std::path::PathBuf>,
+    /// The node's --appdir: which node, when several run here or it is not mining.toml's.
+    #[arg(long, value_name = "DIR")]
+    appdir: Option<String>,
+    /// The producer key file (default: mining.toml, else the running node's --palw-producer-key).
+    #[arg(long, value_name = "FILE")]
+    key_file: Option<String>,
+    /// The bond, <txid>:<index> (default: mining.toml, else the running node's --palw-producer-bond).
+    #[arg(long, value_name = "OUTPOINT")]
+    bond: Option<String>,
+    /// The class id, 128 hex (default: mining.toml, else the node's, else the network's base class).
+    #[arg(long, value_name = "CLASS_ID")]
+    class: Option<String>,
+    /// The prompt lane's outbox (the gateway's --outbox); naming it includes the prompt lane.
+    #[arg(long, value_name = "DIR")]
+    outbox: Option<String>,
+}
+
+impl ProfileArgs {
+    fn overrides(&self) -> operator::profile::Overrides {
+        operator::profile::Overrides {
+            config: self.config.clone(),
+            appdir: self.appdir.clone(),
+            key_file: self.key_file.clone(),
+            bond: self.bond.clone(),
+            class: self.class.clone(),
+            outbox: self.outbox.clone(),
+        }
+    }
+}
+
+#[derive(Subcommand, Debug)]
+enum MiningCmd {
+    /// Is this host mining? The miner's state and the one line that says why, the bond, the
+    /// works and what they paid. Needs no setup on a node that is already running.
+    Status {
+        #[command(flatten)]
+        profile: ProfileArgs,
+        /// Redraw every N seconds.
+        #[arg(long, value_name = "SECS")]
+        watch: Option<u64>,
+    },
+    /// Start what ~/.misaka/mining.toml describes: preflight, kaspad, the readiness gates, and the
+    /// prompt lane's gateway and rail when it is on. Stays in the foreground unless --detach.
+    Start {
+        #[command(flatten)]
+        profile: ProfileArgs,
+        /// Run the supervisor in the background and return once it is mining.
+        #[arg(long)]
+        detach: bool,
+        /// Print the exact command lines it would run, and run nothing.
+        #[arg(long, conflicts_with_all = ["detach", "service"])]
+        print_command: bool,
+        /// Print a systemd unit (Linux) or launchd agent (macOS) that runs `misaka mining run`.
+        #[arg(long, conflicts_with = "detach")]
+        service: bool,
+    },
+    /// Stop mining — refused while this node still has claims to defend, unless --drain or --force.
+    Stop {
+        #[command(flatten)]
+        profile: ProfileArgs,
+        /// Stop drawing now, keep serving, and exit when the last claim is final or voided.
+        #[arg(long, conflicts_with = "force")]
+        drain: bool,
+        /// Stop now, whatever the claims in flight cost.
+        #[arg(long)]
+        force: bool,
+        /// Seconds kaspad gets to stop before it is killed (default: mining.toml's, else 240).
+        #[arg(long, value_name = "SECS")]
+        grace: Option<u64>,
+    },
+    /// The supervisor itself, in the foreground and without a terminal: what a service manager
+    /// runs (`misaka mining start --service` prints the unit).
+    Run {
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+}
+
+impl ProfileArgs {
+    /// The flags that name this profile again, for a supervisor started in the background or by a
+    /// service manager.
+    fn relaunch_args(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut push = |flag: &str, v: &Option<String>| {
+            if let Some(v) = v {
+                out.push(flag.to_string());
+                out.push(v.clone());
+            }
+        };
+        push("--config", &self.config.as_ref().map(|c| c.display().to_string()));
+        push("--appdir", &self.appdir);
+        push("--key-file", &self.key_file);
+        push("--bond", &self.bond);
+        push("--class", &self.class);
+        push("--outbox", &self.outbox);
+        out
+    }
+}
+
+#[derive(Args, Debug)]
+struct DoctorArgs {
+    /// Only these areas (default: all).
+    #[arg(value_enum)]
+    areas: Vec<operator::doctor::Area>,
+    /// Exit non-zero on a warning, too.
+    #[arg(long)]
+    strict: bool,
+    #[command(flatten)]
+    profile: ProfileArgs,
+}
+
+#[derive(Subcommand, Debug)]
+enum WorkCmd {
+    /// Every work this host made: block-lane claims from the node's log, prompt-lane jobs from the outbox.
+    List {
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// One work's path from the request (or the won draw) to the reward. ID: a claim-id prefix
+    /// (4+ hex), `job:<hex>`, or any full 128-hex claim id.
+    Show {
+        id: String,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// Why a work stands where it stands, and the next step.
+    Why {
+        id: String,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
 }
 
 /// Captures all remaining args verbatim to forward to an underlying binary.
@@ -1645,7 +1814,59 @@ async fn main() -> std::process::ExitCode {
         quiet: cli.quiet,
     };
 
+    // ADR-0122: a mining command takes the network the operator NAMED (the flag, the env, the
+    // config file) and otherwise reads it from mining.toml or the running node — never the CLI's
+    // testnet-10 default, which is not a network anyone mines.
+    let named_network = cli.network.clone().or_else(|| cfg.network_id.clone());
+    let profile =
+        |args: &ProfileArgs| operator::profile::Profile::resolve(&args.overrides(), named_network.as_deref(), ctx.rpc.as_deref());
+
     let result = match cli.command {
+        Command::Mining(MiningCmd::Status { profile: args, watch }) => match profile(&args) {
+            Ok(p) => operator::status::run(&ctx, p, watch).await,
+            Err(e) => Err(e),
+        },
+        Command::Mining(MiningCmd::Start { profile: args, detach, print_command, service }) => match profile(&args) {
+            Ok(p) => {
+                // The supervisor a detach or a unit starts is this same profile, named the same way.
+                let mut relaunch = vec!["--network".to_string(), p.network.clone()];
+                if let Some(rpc) = &ctx.rpc {
+                    relaunch.extend(["--rpc".to_string(), rpc.clone()]);
+                }
+                relaunch.extend(["mining".to_string(), "run".to_string()]);
+                relaunch.extend(args.relaunch_args());
+                let mode = operator::supervisor::StartMode { detach, print_command, service };
+                operator::supervisor::start(&ctx, p, mode, &|| profile(&args), &relaunch).await
+            }
+            Err(e) => Err(e),
+        },
+        Command::Mining(MiningCmd::Stop { profile: args, drain, force, grace }) => match profile(&args) {
+            Ok(p) => operator::supervisor::stop(&ctx, p, drain, force, grace).await,
+            Err(e) => Err(e),
+        },
+        Command::Mining(MiningCmd::Run { profile: args }) => match profile(&args) {
+            Ok(p) => match operator::supervisor::plan(&p) {
+                Ok(plan) => operator::supervisor::run_supervisor(plan, false, &|| profile(&args)).await,
+                Err(f) => Err(CliError::new(f.exit, f.render())),
+            },
+            Err(e) => Err(e),
+        },
+        Command::Doctor(args) => match profile(&args.profile) {
+            Ok(p) => operator::doctor::run(&ctx, p, &args.areas, args.strict).await,
+            Err(e) => Err(e),
+        },
+        Command::Work(WorkCmd::List { profile: args }) => match profile(&args) {
+            Ok(p) => operator::work_cmd::list(&ctx, p).await,
+            Err(e) => Err(e),
+        },
+        Command::Work(WorkCmd::Show { id, profile: args }) => match profile(&args) {
+            Ok(p) => operator::work_cmd::show(&ctx, p, &id).await,
+            Err(e) => Err(e),
+        },
+        Command::Work(WorkCmd::Why { id, profile: args }) => match profile(&args) {
+            Ok(p) => operator::work_cmd::why(&ctx, p, &id).await,
+            Err(e) => Err(e),
+        },
         Command::Node(NodeCmd::Doctor) => node::doctor(&ctx).await,
         Command::Node(NodeCmd::Liveness { state, stall_secs }) => node::liveness(&ctx, &state, stall_secs).await,
         Command::Node(NodeCmd::SecurityReport { worker, verify_artifacts }) => {
@@ -1936,6 +2157,9 @@ async fn main() -> std::process::ExitCode {
 
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
+        // ADR-0122: an operator screen that already printed its verdict (the five fields, or a
+        // JSON document carrying `exit`) returns an empty message, so it is not said twice.
+        Err(e) if e.msg.is_empty() => std::process::ExitCode::from(e.code as u8),
         Err(e) => {
             // Errors always go to stderr (never swallowed by --quiet); in JSON
             // mode emit a machine-readable error object too.

@@ -93,10 +93,25 @@ pub(crate) async fn connect(ctx: &Ctx) -> Result<NodeView, CliError> {
     if !server.has_utxo_index {
         return Err(CliError::new(exit::GENERIC, "node has no UTXO index (start it with --utxoindex)".to_string()));
     }
-    let params = Params::from(server.network_id);
-    let coinbase_maturity = params.coinbase_maturity();
-    let settlement_long_maturity_daa = params.dns_params.as_ref().map_or(0, |d| d.coinbase_settlement_long_maturity_daa);
-    Ok(NodeView { client, params, virtual_daa: server.virtual_daa_score, coinbase_maturity, settlement_long_maturity_daa })
+    Ok(NodeView::from_parts(client, &server))
+}
+
+impl NodeView {
+    /// A view over a connection someone else opened and checked — the operator surface
+    /// (ADR-0122), which reads a node whether or not it has `--utxoindex` and says which facts that
+    /// costs it, rather than refusing the whole screen the way a spender must.
+    pub(crate) fn from_parts(client: KaspaRpcClient, server: &kaspa_rpc_core::GetServerInfoResponse) -> NodeView {
+        let params = Params::from(server.network_id);
+        let coinbase_maturity = params.coinbase_maturity();
+        let settlement_long_maturity_daa = params.dns_params.as_ref().map_or(0, |d| d.coinbase_settlement_long_maturity_daa);
+        NodeView { client, params, virtual_daa: server.virtual_daa_score, coinbase_maturity, settlement_long_maturity_daa }
+    }
+
+    /// The DAA a coinbase output needs before this node lets it be spent: the maturity floor or
+    /// the settlement maturity, whichever is longer (the two gates `page_all` applies).
+    pub(crate) fn coinbase_spendable_after(&self) -> u64 {
+        self.coinbase_maturity.max(self.settlement_long_maturity_daa)
+    }
 }
 
 /// Page the ENTIRE UTXO set of `address` (op 160, ≤1000/page) — never the

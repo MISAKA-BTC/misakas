@@ -54,9 +54,16 @@ serde_json.workspace = true
 serde = { workspace = true, features = ["derive"] }
 toml.workspace = true
 dirs.workspace = true
+# ADR-0122: the operator surface reads the node's log (its timestamps, and the newest rolled
+# archive when the boot lines rolled out of the current file) and the process table (the running
+# node's own command line, found by its --appdir) and the host's disks and memory.
+chrono.workspace = true
+flate2.workspace = true
+sysinfo.workspace = true
 
 clap = { workspace = true, features = ["env"] }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+# `signal`: the mining supervisor stops its children in order on SIGINT/SIGTERM and drains on SIGUSR1 (ADR-0122).
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "signal"] }
 
 # EVM-send track (Tier B). Gated behind a feature so the DEFAULT `misaka` build
 # stays secp-free (observability + PQ wallet only); `--features evm-send` pulls
