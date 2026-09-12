@@ -45,6 +45,17 @@ use crate::palw_state_v2::{
 use blake2b_simd::Params;
 
 pub const PALW_PANEL_V2_DOMAIN_SEAT_TICKET: &[u8] = b"misaka-palw/panel-v2/seat-ticket/v1";
+/// **C-02 (mainnet audit 2026-09-11 deep fence): the ceiling on a bond's stake-weighted
+/// sub-tickets.** Past the fence a bond draws `floor(collateral / min_collateral)` sub-tickets, but
+/// a premine-scale bond would otherwise mint hundreds of thousands (t11's `min_collateral` is
+/// 400,000 sompi, so a 1,000-MSK bond is ~250,000 sub-tickets) and every node recomputes the draw
+/// at each `PanelBound` — an unbounded per-draw cost a malicious high-collateral registrant could
+/// weaponize. The count is capped here, so a bond at or above `cap × min_collateral` draws the
+/// maximum weight and no more: it bounds the recompute at `cap` hashes per eligible bond while
+/// still giving stake a wide (4096×) advantage. A pure code constant — it enters no fingerprint —
+/// and it only bites past the fence, where the whole weighted draw is fenced. Tunable if the
+/// weighting granularity ceiling proves too low for a network's collateral distribution.
+pub const PALW_V2_MAX_SEAT_TICKETS_PER_BOND: u64 = 4096;
 pub const PALW_RECEIPT_V2_DOMAIN_MESSAGE: &[u8] = b"misaka-palw/receipt-v2/message/v1";
 /// ML-DSA-87 signing context for a V2 seat receipt — its own family domain (audit P0-6).
 pub const PALW_RECEIPT_V2_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/receipt-v2/mldsa87/v1";
@@ -380,7 +391,9 @@ pub fn derive_panel_v2_with_maturity(
     min_collateral_sompi: u64,
     registered_by_daa: Option<u64>,
 ) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
-    derive_panel_v2_with_capability_proof(state, params, claim_id, anchor_block, min_collateral_sompi, registered_by_daa, false)
+    // `weighted: false` — the pre-C-02 unweighted draw. The fence-aware callers reach
+    // `derive_panel_v2_with_capability_proof` directly with the resolved flag.
+    derive_panel_v2_with_capability_proof(state, params, claim_id, anchor_block, min_collateral_sompi, registered_by_daa, false, false)
 }
 
 /// [`derive_panel_v2_with_maturity`] with **ADR-0071 SA-3's production proof**.
@@ -465,16 +478,39 @@ pub fn derive_panel_v2_with_capability_proof(
     min_collateral_sompi: u64,
     registered_by_daa: Option<u64>,
     capability_proof: bool,
+    weighted: bool,
 ) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
     // Ticket every eligible bond (`palw_panel_eligible_bonds_v2`: the exclusions per Decision 7
     // and every seat predicate, spelled once for this draw and the stratified one).
     let mut tickets: Vec<(Hash64, PalwBondKeyV2, Hash64)> = Vec::new();
     for (bond_key, bond) in palw_panel_eligible_bonds_v2(state, claim_id, min_collateral_sompi, registered_by_daa, capability_proof)? {
-        let mut ticket = keyed(PALW_PANEL_V2_DOMAIN_SEAT_TICKET);
-        ticket.update(anchor_block.as_byte_slice());
-        ticket.update(claim_id.as_byte_slice());
-        ticket.update(&borsh::to_vec(bond_key).expect("bond keys are borsh-serializable"));
-        tickets.push((finish(ticket), *bond_key, bond.operator_id));
+        // **C-02 (deep fence): stake-weighted sortition by bucketed sub-tickets.** Below the fence
+        // (`weighted == false`) each eligible bond draws ONE ticket, so the draw ignores how much
+        // collateral is at stake and a min-collateral bond has the same seat odds as a whale. Past
+        // the fence a bond draws `floor(collateral / min_collateral)` sub-tickets — one per
+        // min_collateral unit of stake, capped at `PALW_V2_MAX_SEAT_TICKETS_PER_BOND` — so its chance
+        // of landing a low (winning) ticket scales with its stake. Every eligible bond has
+        // `collateral >= min_collateral` (the eligibility predicate), so the count is >= 1 and the
+        // eligible set never shrinks: the shipped genesis's zero-slack registry (`PANEL_SEATS + 1`
+        // bonds) keeps every bond a candidate, so the liveness cliff is untouched. The per-operator
+        // dedup below still grants a bond AT MOST one seat, so weighting cannot let one staker own a
+        // quorum — it only makes a higher-stake operator likelier to win its single seat, and the
+        // stake a seat then risks is `claim.reserved` (BC-SYBIL), so the two findings compose.
+        let sub_tickets: u64 = if weighted { (bond.collateral / min_collateral_sompi.max(1)).clamp(1, PALW_V2_MAX_SEAT_TICKETS_PER_BOND) } else { 1 };
+        for j in 0..sub_tickets {
+            let mut ticket = keyed(PALW_PANEL_V2_DOMAIN_SEAT_TICKET);
+            ticket.update(anchor_block.as_byte_slice());
+            ticket.update(claim_id.as_byte_slice());
+            ticket.update(&borsh::to_vec(bond_key).expect("bond keys are borsh-serializable"));
+            // The sub-ticket index is mixed in ONLY past the fence: below it the loop runs once and
+            // this line does not execute, so the digest is `H(domain ‖ anchor ‖ claim ‖ bond)` byte
+            // for byte as before — a fenced build above the height and an unfenced one below it
+            // never hash the same bond to a different ticket.
+            if weighted {
+                ticket.update(&j.to_le_bytes());
+            }
+            tickets.push((finish(ticket), *bond_key, bond.operator_id));
+        }
     }
     tickets.sort();
 
@@ -541,6 +577,7 @@ pub fn validate_panel_bound_v2_with_maturity(
         proposed_seats,
         bond_maturity_daa,
         false,
+        false,
     )
 }
 
@@ -563,6 +600,7 @@ pub fn validate_panel_bound_v2_with_capability_proof(
     proposed_seats: &[PalwPanelSeatV2],
     bond_maturity_daa: Option<u64>,
     capability_proof: bool,
+    weighted: bool,
 ) -> Result<(), PalwPanelV2Error> {
     validate_panel_bound_v2_with_shards(
         state,
@@ -575,6 +613,7 @@ pub fn validate_panel_bound_v2_with_capability_proof(
         proposed_seats,
         bond_maturity_daa,
         capability_proof,
+        weighted,
         None,
     )
 }
@@ -595,6 +634,12 @@ pub fn validate_panel_bound_v2_with_shards(
     proposed_seats: &[PalwPanelSeatV2],
     bond_maturity_daa: Option<u64>,
     capability_proof: bool,
+    // **C-02 (deep fence): `Params::palw_audit_2026_09_11_deep` resolved at the anchor**, so the
+    // acceptance layer recomputes the stake-weighted draw the assembler built and demands exact
+    // equality. Resolved at the anchor for the same reason as `capability_proof`: the panel is a pure
+    // function of the claim, so a flag read at the binding block would make the derived panel change
+    // block to block and refuse a `PanelBound` that missed its block. `false` below the fence.
+    weighted: bool,
     stratified: Option<u32>,
 ) -> Result<(), PalwPanelV2Error> {
     let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
@@ -639,6 +684,11 @@ pub fn validate_panel_bound_v2_with_shards(
 
     let registered_by_daa = palw_seat_maturity_floor_v1(anchor.anchor_daa, bond_maturity_daa);
     let derived = match stratified {
+        // **The stratified (shard) draw is not stake-weighted yet.** It is dormant on every network
+        // (`palw_shard_court` / `palw_kary_court` are `None` everywhere, so `stratified` is always
+        // `None` here), so C-02's weighting rides the flat draw below. When the shard court is armed,
+        // `derive_shard_panel_v1`'s ticketing needs the same bucketing — a follow-up gated behind the
+        // shard fence, not this one. `weighted` is deliberately not forwarded here.
         Some(shard_count) => derive_stratified_panel_v2(
             state,
             params,
@@ -657,6 +707,7 @@ pub fn validate_panel_bound_v2_with_shards(
             state_params.min_collateral_sompi(),
             registered_by_daa,
             capability_proof,
+            weighted,
         )?,
     };
     if derived != proposed_seats {
@@ -1168,6 +1219,100 @@ mod tests {
         (s2, claim_id)
     }
 
+    /// **C-02 (deep fence): the weighted draw seats a full panel, is deterministic, and below the
+    /// fence is byte-identical to the pre-C-02 one-ticket sortition.** `populated_state` has exactly
+    /// three eligible operators for three seats, so both draws seat all three — which is what pins
+    /// the liveness property: bucketing gives every eligible bond `>= 1` sub-ticket, so the eligible
+    /// set (and thus a full panel) is untouched.
+    #[test]
+    fn c02_weighted_draw_is_a_full_deterministic_panel_and_weighted_false_is_the_legacy_draw() {
+        let (state, claim_id) = populated_state();
+        let params = panel_params();
+        let mc = state_params().min_collateral_sompi();
+        let anchor = BlockHash::from_u64_word(0x5EA7);
+        let unweighted =
+            derive_panel_v2_with_capability_proof(&state, &params, &claim_id, anchor, mc, None, false, false).expect("unweighted seats");
+        let weighted =
+            derive_panel_v2_with_capability_proof(&state, &params, &claim_id, anchor, mc, None, false, true).expect("weighted seats");
+        assert_eq!(unweighted.len(), params.seat_count as usize, "unweighted seats a full panel");
+        assert_eq!(weighted.len(), params.seat_count as usize, "weighted seats a full panel too — the eligible set is untouched (liveness)");
+        // Below the fence `weighted == false` is exactly the legacy one-ticket sortition.
+        assert_eq!(
+            unweighted,
+            derive_panel_v2(&state, &params, &claim_id, anchor, mc).expect("legacy draw"),
+            "weighted=false is byte-identical to the pre-C-02 draw"
+        );
+        // Deterministic both sides — a pure function of (claim, anchor, registry).
+        assert_eq!(
+            weighted,
+            derive_panel_v2_with_capability_proof(&state, &params, &claim_id, anchor, mc, None, false, true).expect("again"),
+            "the weighted draw is deterministic"
+        );
+    }
+
+    /// **C-02 (deep fence): the weighted draw favours higher-collateral operators.** Four eligible
+    /// operators compete for three seats — one is always left out. One holds `min_collateral`, three
+    /// hold `4096 × min_collateral`. Below the fence every operator has ONE ticket, so the low one is
+    /// left out no more often than any other (seated ~3/4 of draws); past the fence the three whales
+    /// draw 4096 sub-tickets each and crowd it out, so it is seated far less often. That is the whole
+    /// point of the finding: seat probability tracks stake, so the panel that decides a claim is
+    /// composed of the operators with the most to lose (whose seat then risks `claim.reserved`,
+    /// BC-SYBIL). Liveness holds throughout — a full three-seat panel every draw.
+    #[test]
+    fn c02_stake_weighting_favours_higher_collateral_seats_past_the_deep_fence() {
+        let mc = 100u64; // state_params()'s min_collateral
+        let bond = |b: u64, pk: u8, op: u64, collateral: u64| PalwConsensusObjectV2::BondRegistered {
+            bond: PalwBondKeyV2(bond_outpoint(b)),
+            pubkey: vec![pk; 4],
+            operator_pubkey: op_key(op),
+            collateral,
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+            capable_classes: std::collections::BTreeSet::from([h64(1)]),
+            signature: Vec::new(),
+        };
+        let objects = vec![
+            PalwConsensusObjectV2::ClassRegistered {
+                class_id: h64(1),
+                artifact_root: h64(11),
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+                initial_target: u128::MAX / 2,
+                share_permille: 1000,
+                activation_daa: 0,
+                admission: None,
+            },
+            bond(1, 7, 0x21, 1_000_000), // executor — excluded from its own panel
+            bond(2, 8, 0x22, mc),        // the low-collateral operator
+            bond(3, 9, 0x23, mc * 4096), // whale
+            bond(4, 10, 0x24, mc * 4096), // whale
+            bond(5, 11, 0x25, mc * 4096), // whale
+        ];
+        let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &state_params(), &ctx(1, 100, 1), &objects, None).unwrap();
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (state, _) = apply_palw_transition_v2(&s1, &state_params(), &ctx(2, 101, 2), &[], Some(&env)).unwrap();
+        let params = panel_params(); // seat_count 3
+        let low_op = state.bond(&PalwBondKeyV2(bond_outpoint(2))).expect("the low bond").operator_id;
+
+        let low_seated = |weighted: bool| {
+            (0u64..40)
+                .filter(|i| {
+                    let anchor = BlockHash::from_u64_word(0xA000 + i);
+                    let seats = derive_panel_v2_with_capability_proof(&state, &params, &claim_id, anchor, mc, None, false, weighted)
+                        .expect("a full panel");
+                    assert_eq!(seats.len(), 3, "liveness: a full three-seat panel under weighting too");
+                    seats.iter().any(|s| s.operator_id == low_op)
+                })
+                .count()
+        };
+        let unweighted = low_seated(false);
+        let weighted = low_seated(true);
+        assert!(
+            weighted * 3 < unweighted,
+            "past the fence the min-collateral operator is crowded out by the whales: seated {weighted}/40 weighted vs {unweighted}/40 unweighted"
+        );
+    }
+
     /// **D2's fast path must never skip a panel that could be majority-new.**
     ///
     /// The gate scans deltas only when this says so, so a `false` that should have been `true` is a
@@ -1428,7 +1573,7 @@ mod tests {
             derive_panel_v2(&state, &panel_params(), &claim_id, anchor, 0).expect("without the fence the registry seats a panel");
         assert_eq!(before.len(), 3, "three eligible seats, as in every other fixture");
 
-        let err = derive_panel_v2_with_capability_proof(&state, &panel_params(), &claim_id, anchor, 0, None, true)
+        let err = derive_panel_v2_with_capability_proof(&state, &panel_params(), &claim_id, anchor, 0, None, true, false)
             .expect_err("past the fence only a bond that produced on this class may judge it");
         assert!(
             matches!(err, PalwPanelV2Error::InsufficientEligibleBonds { available: 0, .. }),
@@ -2436,6 +2581,7 @@ mod tests {
             &seats,
             None,
             false,
+            false,
             Some(2),
         )
         .expect("the stratified binding validates as stratified");
@@ -2450,6 +2596,7 @@ mod tests {
                 anchor_block,
                 &seats,
                 None,
+                false,
                 false,
                 None
             ),

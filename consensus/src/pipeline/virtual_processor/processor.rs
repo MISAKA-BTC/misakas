@@ -6564,6 +6564,10 @@ impl VirtualStateProcessor {
                         // a pure function of the claim, so the rule that narrows it must be one
                         // too — and the assembler below resolves it at the same point.
                         self.palw_capability_bound_at(anchor_fact.anchor_daa),
+                        // C-02 (deep fence): the stake-weighted draw, resolved at the ANCHOR for the
+                        // same purity reason — the assembler resolves it at the same point, so build
+                        // and validate recompute one identical weighted panel.
+                        self.palw_audit_2026_09_11_deep_at(anchor_fact.anchor_daa),
                         // ADR-0100 Decision 4: the same one-place decision the binding made.
                         self.palw_stratified_shard_count(state, &claim_record.class_id, anchor_fact.anchor_daa),
                     )
@@ -8943,6 +8947,9 @@ impl VirtualStateProcessor {
             );
             // ADR-0071 SA-3, from the same anchor as the acceptance layer's sibling call.
             let capability_bound = self.palw_capability_bound_at(anchor.anchor_daa);
+            // C-02 (deep fence): the stake-weighted draw, from the same anchor as the acceptance
+            // layer's sibling call — so this assembler builds the exact panel that layer recomputes.
+            let weighted = self.palw_audit_2026_09_11_deep_at(anchor.anchor_daa);
             // ADR-0100 Decision 4: a class with a plan draws per shard, or not at all — a flat
             // panel of a sharded class would ask shard seats to judge a whole model.
             let drawn = match self.palw_stratified_shard_count(state, &claim.class_id, anchor.anchor_daa) {
@@ -8964,6 +8971,7 @@ impl VirtualStateProcessor {
                     min_collateral,
                     maturity_floor,
                     capability_bound,
+                    weighted,
                 ),
             };
             let Ok(seats) = drawn else {
