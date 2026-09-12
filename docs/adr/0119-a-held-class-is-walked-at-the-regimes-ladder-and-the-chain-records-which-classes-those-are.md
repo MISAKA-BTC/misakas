@@ -184,7 +184,7 @@ from the worker's result.
 
 * **The node's held route past the network's ladder** — mapped on 2026-09-12 (every read of a
   backend's ladder, every job-sized allocation, the producer's and the seat's retention), and a design
-  of its own (the next ADR), because what it found is not a number to raise:
+  of its own (ADR-0121), because what it found is not a number to raise:
   * **The backend's ladder is two things.** It prices and refuses a job, and it is the only guard in
     front of the whole-capture paths that allocate a vector of `step_leaf_count` hashes from a decoded
     or gossiped count (`leaves_by_position`, the dense re-executions, `verify_material`'s dense arm).
@@ -218,4 +218,5 @@ from the worker's result.
 
 Written as 0119 on `feat/adr-0103-held-context` on 2026-09-12; `origin/main` and every local branch
 hold nothing past 0118. The state tail `0xA5` and delta variant 41 were agreed with the deep-audit
-session, whose fixes add none. **The next free number is 0120.**
+session, whose fixes add none. 0120 was claimed the same day by the model-seed session (the seed lock at
+`palw_model_seed_v2`), so this ADR's node half — §7 — is **0121**, and **the next free number is 0122.**

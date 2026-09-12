@@ -999,6 +999,175 @@ impl Base0FpFoldRangeOpeningV1 {
     }
 }
 
+/// **A fold range checked as its leaves stream past** (ADR-0121): what a seat keeps of an interval's
+/// replay instead of the interval — one digest per whole block, the leaves of the partial block at
+/// each edge, and the leaves of the first block whose digest is not the served one.
+///
+/// The seat's leaves are pushed in leaf order, each exactly once, from the range's first leaf; a
+/// whole block is folded ([`crate::fp_capture::base0_fold_block_digest_v1`]) and compared with the
+/// served digest the moment its last leaf arrives. What it holds is `O(blocks + 3·2^r)` hashes, where
+/// the vector it replaced held every leaf of the range — 845 MB for one interval of the 1.5B dense
+/// row's 512-position class, 13.5 GB at `2^21` positions.
+pub struct Base0FoldRangeCheckV1<'a> {
+    fold: &'a Base0FpFoldRangeOpeningV1,
+    step_leaf_count: u64,
+    block: u64,
+    whole: (u64, u64),
+    next: u64,
+    end: u64,
+    current: Vec<Hash64>,
+    left: Vec<Hash64>,
+    right: Vec<Hash64>,
+    digests: Vec<Hash64>,
+    differing: Vec<u64>,
+    first_differing_leaves: Option<Vec<Hash64>>,
+    keep_block: Option<u64>,
+    kept: Option<Vec<Hash64>>,
+}
+
+/// What a streamed fold range leaves behind (ADR-0121) — enough to walk its root, name the blocks
+/// that differ, and name the leaf a served block disagrees on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Base0FoldRangeStreamedV1 {
+    pub first_leaf_index: u64,
+    pub leaf_count: u64,
+    pub retain_level: u32,
+    /// The partial block's leaves at the range's left edge (empty when it starts on a boundary).
+    pub left: Vec<Hash64>,
+    /// This party's digest of every whole block, in order.
+    pub digests: Vec<Hash64>,
+    /// The partial block's leaves at the right edge.
+    pub right: Vec<Hash64>,
+    /// Every whole block whose digest is not the served one, by block index.
+    pub differing: Vec<u64>,
+    /// This party's leaves of the first of them.
+    pub first_differing_leaves: Option<Vec<Hash64>>,
+    /// This party's leaves of the block the caller asked to keep ([`Base0FoldRangeCheckV1::keeping_block`]).
+    pub kept: Option<Vec<Hash64>>,
+}
+
+impl<'a> Base0FoldRangeCheckV1<'a> {
+    /// `None` when the served digests are not the range's whole-block count — the shape check a
+    /// seat makes before it reads a digest.
+    pub fn new(fold: &'a Base0FpFoldRangeOpeningV1, step_leaf_count: u64) -> Option<Self> {
+        if !fold.digests_are_the_blocks_v1(step_leaf_count) || fold.leaf_count == 0 {
+            return None;
+        }
+        let end = fold.first_leaf_index.checked_add(fold.leaf_count).filter(|end| *end <= step_leaf_count)?;
+        Some(Self {
+            fold,
+            step_leaf_count,
+            block: 1u64 << fold.retain_level.min(63),
+            whole: fold.whole_blocks_v1(step_leaf_count),
+            next: fold.first_leaf_index,
+            end,
+            current: Vec::new(),
+            left: Vec::new(),
+            right: Vec::new(),
+            digests: Vec::new(),
+            differing: Vec::new(),
+            first_differing_leaves: None,
+            keep_block: None,
+            kept: None,
+        })
+    }
+
+    /// Also keep this party's leaves of whole block `block_index` — the block a served block is
+    /// compared against when a seat names the leaf.
+    pub fn keeping_block(mut self, block_index: u64) -> Self {
+        self.keep_block = Some(block_index);
+        self
+    }
+
+    /// The next leaf of the range. Out of order, or past the range, is refused: a replay that emits
+    /// either is not the range's.
+    pub fn push(&mut self, index: u64, leaf_hash: Hash64) -> Result<(), String> {
+        if index != self.next || index >= self.end {
+            return Err(format!(
+                "leaf {index} arrived where leaf {} of [{}, {}) was due",
+                self.next, self.fold.first_leaf_index, self.end
+            ));
+        }
+        self.next += 1;
+        let (first_block, end_block) = self.whole;
+        let block_of = index / self.block;
+        if block_of < first_block || block_of >= end_block {
+            if index < first_block * self.block {
+                self.left.push(leaf_hash)
+            } else {
+                self.right.push(leaf_hash)
+            }
+            return Ok(());
+        }
+        self.current.push(leaf_hash);
+        let block_first = block_of * self.block;
+        let block_end = ((block_of + 1) * self.block).min(self.step_leaf_count);
+        if index + 1 == block_end {
+            let leaves = std::mem::take(&mut self.current);
+            let digest = crate::fp_capture::base0_fold_block_digest_v1(block_first, &leaves).ok_or("an empty block")?;
+            let served = self.fold.block_roots.get((block_of - first_block) as usize).ok_or("a digest past the served ones")?;
+            if digest != *served {
+                self.differing.push(block_of);
+                if self.first_differing_leaves.is_none() {
+                    self.first_differing_leaves = Some(leaves.clone());
+                }
+            }
+            if self.keep_block == Some(block_of) {
+                self.kept = Some(leaves);
+            }
+            self.digests.push(digest);
+        }
+        Ok(())
+    }
+
+    /// Seal it: every leaf of the range must have arrived.
+    pub fn finish(self) -> Result<Base0FoldRangeStreamedV1, String> {
+        if self.next != self.end || !self.current.is_empty() {
+            return Err(format!("the range [{}, {}) streamed only to leaf {}", self.fold.first_leaf_index, self.end, self.next));
+        }
+        Ok(Base0FoldRangeStreamedV1 {
+            first_leaf_index: self.fold.first_leaf_index,
+            leaf_count: self.fold.leaf_count,
+            retain_level: self.fold.retain_level,
+            left: self.left,
+            digests: self.digests,
+            right: self.right,
+            differing: self.differing,
+            first_differing_leaves: self.first_differing_leaves,
+            kept: self.kept,
+        })
+    }
+}
+
+impl Base0FoldRangeStreamedV1 {
+    /// The first whole block whose digest differs, clipped to the range as `(first_leaf, count)` —
+    /// [`Base0FpFoldRangeOpeningV1::first_block_that_differs_v1`]'s answer, from the stream.
+    pub fn first_block_that_differs_v1(&self, step_leaf_count: u64) -> Option<(u64, u64)> {
+        let block = 1u64 << self.retain_level.min(63);
+        let k = *self.differing.first()?;
+        let first = k * block;
+        let end = ((k + 1) * block).min(self.first_leaf_index + self.leaf_count).min(step_leaf_count);
+        Some((first, end - first))
+    }
+
+    /// **The range's root, walked with this party's leaves and the served siblings** — what
+    /// `step_range_opening_root_capped_v1` computes over the whole range
+    /// ([`crate::fp_capture::base0_fold_range_root_v1`]).
+    pub fn root_v1(&self, siblings: &[Hash64], step_leaf_count: u64, max_step_leaf_count: u64) -> Result<Hash64, String> {
+        crate::fp_capture::base0_fold_range_root_v1(
+            step_leaf_count,
+            self.first_leaf_index,
+            self.leaf_count,
+            self.retain_level,
+            &self.left,
+            &self.digests,
+            &self.right,
+            siblings,
+            max_step_leaf_count,
+        )
+    }
+}
+
 /// **The V4 interval opening** (ADR-0086): the fold range, the seed row, the NAMED anchor for
 /// every class (Decision 2), and the close annex ADR-0085 defined.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -2853,36 +3022,33 @@ pub fn base0_verify_fp_interval_opening_v4_capped_v1<K: Base0FpIntervalKernelsV1
     if own.len() as u64 != leaves_geometry.seed_row_leaves {
         return V::Mismatch;
     }
-    let Ok(recomputed) = kernels.replay_interval(profile, ctx, &start, window, step_leaf_count) else {
-        return V::Unverifiable;
+    // **The range streamed, not held** (ADR-0121): the served seed row's leaves first, then the
+    // replay's, each folded into its block and compared the moment the block is whole. The replay
+    // must hand over the interval's leaves in order, each once — the check refuses anything else,
+    // and a replay that could not is this seat's failure, not the producer's.
+    let Some(mut check) = Base0FoldRangeCheckV1::new(fold, step_leaf_count) else {
+        return V::Mismatch;
     };
-    // The interval's own leaves, in order, each exactly once.
-    let interval_leaves = (leaves_geometry.range_end - leaves_geometry.interval_first) as usize;
-    let mut filled: Vec<Option<Hash64>> = vec![None; interval_leaves];
-    for (leaf_index, hash) in &recomputed {
-        let Some(offset) = leaf_index.checked_sub(leaves_geometry.interval_first) else {
-            return V::Unverifiable;
-        };
-        let Some(slot) = filled.get_mut(offset as usize) else {
-            return V::Unverifiable;
-        };
-        if slot.replace(*hash).is_some() {
-            return V::Unverifiable;
+    for (k, hash) in own.iter().enumerate() {
+        if check.push(leaves_geometry.range_first + k as u64, *hash).is_err() {
+            return V::Mismatch;
         }
     }
-    for slot in filled {
-        let Some(hash) = slot else {
-            return V::Unverifiable;
-        };
-        own.push(hash);
+    let ctx_hash = ctx.context_hash();
+    let profile_hash = profile.shape_profile_id();
+    let replayed = kernels.replay_interval_into(profile, ctx, &start, window, step_leaf_count, &mut |index, leaf| {
+        check.push(index, step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &leaf))
+    });
+    if replayed.is_err() {
+        return V::Unverifiable;
     }
-    if let Some((first_leaf_index, leaf_count)) = fold.first_block_that_differs_v1(&own, step_leaf_count) {
-        return V::FaultInRange { first_leaf_index, leaf_count };
-    }
-    let Some(range) = fold.with_leaves_v1(own) else {
+    let Ok(streamed) = check.finish() else {
         return V::Unverifiable;
     };
-    match step_range_opening_root_capped_v1(binding.step_leaf_count, &range, max_step_leaf_count) {
+    if let Some((first_leaf_index, leaf_count)) = streamed.first_block_that_differs_v1(step_leaf_count) {
+        return V::FaultInRange { first_leaf_index, leaf_count };
+    }
+    match streamed.root_v1(&fold.siblings, binding.step_leaf_count, max_step_leaf_count) {
         Ok(root) if root == binding.step_merkle_root => V::Valid,
         _ => {
             let (first_leaf_index, leaf_count) = fold_edge_v1(fold, step_leaf_count);

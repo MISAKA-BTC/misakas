@@ -626,6 +626,145 @@ fn level_width(leaf_count: u64, level: u32) -> u64 {
     width.max(1)
 }
 
+/// **A range opening's root from its edges and its whole blocks' digests** (ADR-0121) — the value
+/// `step_range_opening_root_capped_v1` computes from the range's every leaf, computed from what a
+/// streamed replay keeps: the leaves of the partial block at each edge, and one digest per block the
+/// range covers whole ([`base0_fold_block_digest_v1`], the tree's own node at `retain_level`).
+///
+/// `left` is `[first, ⌈first / 2^r⌉·2^r)` when the range does not start on a block boundary, `digests`
+/// the blocks `whole_blocks_v1` names (the tree's tail block counts when the range reaches the tree's
+/// end), `right` the rest of the range after them. It walks the consensus rule unchanged — the same
+/// sibling order, the same promote-odd tail — because below the retained level the three parts never
+/// pair across one another: an edge block's nodes pair inside the block (its outer edge is the only
+/// place a sibling is consumed, and its inner edge is even at every level below `r`), and a whole
+/// block is already its own node. From level `r` up the level vector is `[left] ‖ digests ‖ [right]`
+/// and the consensus loop runs as written. `the_fold_range_root_is_the_consensus_root` holds the
+/// equality over many trees, ranges and levels.
+#[allow(clippy::too_many_arguments)]
+pub fn base0_fold_range_root_v1(
+    leaf_count: u64,
+    first: u64,
+    count: u64,
+    retain_level: u32,
+    left: &[Hash64],
+    digests: &[Hash64],
+    right: &[Hash64],
+    siblings: &[Hash64],
+    max_step_leaf_count: u64,
+) -> Result<Hash64, String> {
+    use kaspa_consensus_core::palw_step_leg::{step_leg_max_opening_siblings_v1, step_range_opening_root_capped_v1};
+    if leaf_count == 0 || leaf_count > max_step_leaf_count {
+        return Err(format!("a step tree of {leaf_count} leaves is outside the ladder of {max_step_leaf_count}"));
+    }
+    let end = first.checked_add(count).filter(|end| count > 0 && *end <= leaf_count).ok_or("the range is not inside the tree")?;
+    // A range with no whole block is its own leaves: the consensus walk, verbatim.
+    if digests.is_empty() {
+        if left.len() as u64 + right.len() as u64 != count {
+            return Err("a range with no whole block must be carried whole".to_string());
+        }
+        let leaf_hashes: Vec<Hash64> = left.iter().chain(right).copied().collect();
+        let opening = PalwStepRangeOpeningV1 { first_leaf_index: first, leaf_hashes, siblings: siblings.to_vec() };
+        return step_range_opening_root_capped_v1(leaf_count, &opening, max_step_leaf_count).map_err(|e| format!("{e:?}"));
+    }
+    let sibling_cap = 2 * step_leg_max_opening_siblings_v1(max_step_leaf_count);
+    if siblings.len() > sibling_cap {
+        return Err(format!("{} siblings, past the cap of {sibling_cap}", siblings.len()));
+    }
+    let r = retain_level.min(63);
+    let block = 1u64 << r;
+    let first_block = first.div_ceil(block);
+    let middle_end = first_block
+        .checked_add(digests.len() as u64)
+        .and_then(|b| b.checked_mul(block))
+        .ok_or("the digests run past the tree")?
+        .min(leaf_count);
+    // The shape: the left edge ends where the first whole block begins, the right edge begins where
+    // the last one ends, and together with the blocks they are the range.
+    if first + left.len() as u64 != (first_block * block).min(end)
+        || middle_end + right.len() as u64 != end
+        || (!right.is_empty() && end >= leaf_count)
+    {
+        return Err("the edges and the digests are not the range's".to_string());
+    }
+    let mut siblings = siblings.iter();
+    let mut next = || siblings.next().copied().ok_or_else(|| "the opening's path is too short".to_string());
+    let mut lnodes: Vec<Hash64> = left.iter().enumerate().map(|(i, h)| step_merkle_leaf_v1(first + i as u64, h)).collect();
+    let mut rnodes: Vec<Hash64> = right.iter().enumerate().map(|(i, h)| step_merkle_leaf_v1(middle_end + i as u64, h)).collect();
+    let (mut a, mut b, mut width) = (first, end, leaf_count);
+    for _ in 0..r {
+        // The left edge block: an odd start takes its carried sibling; the rest pair inside it.
+        if !lnodes.is_empty() {
+            let mut level = Vec::with_capacity(lnodes.len() / 2 + 1);
+            let mut i = 0usize;
+            if !a.is_multiple_of(2) {
+                level.push(step_merkle_node_v1(&next()?, &lnodes[0]));
+                i = 1;
+            }
+            while i + 1 < lnodes.len() {
+                level.push(step_merkle_node_v1(&lnodes[i], &lnodes[i + 1]));
+                i += 2;
+            }
+            if i < lnodes.len() {
+                return Err("the left edge left a node unpaired below the retained level".to_string());
+            }
+            lnodes = level;
+        }
+        // The right edge block: pairs from its even start; a lone last node takes its sibling, or
+        // promotes where it is the level's odd tail.
+        if !rnodes.is_empty() {
+            let mut level = Vec::with_capacity(rnodes.len() / 2 + 1);
+            let mut i = 0usize;
+            while i + 1 < rnodes.len() {
+                level.push(step_merkle_node_v1(&rnodes[i], &rnodes[i + 1]));
+                i += 2;
+            }
+            if i < rnodes.len() {
+                if !width.is_multiple_of(2) && b == width {
+                    level.push(rnodes[i]);
+                } else {
+                    level.push(step_merkle_node_v1(&rnodes[i], &next()?));
+                }
+            }
+            rnodes = level;
+        }
+        a /= 2;
+        b = b.div_ceil(2);
+        width = width.div_ceil(2);
+    }
+    if lnodes.len() > 1 || rnodes.len() > 1 {
+        return Err("an edge did not reduce to one node at the retained level".to_string());
+    }
+    // From the retained level up: the consensus loop over `[left] ‖ digests ‖ [right]`.
+    let mut nodes: Vec<Hash64> = lnodes.into_iter().chain(digests.iter().copied()).chain(rnodes).collect();
+    while width > 1 {
+        let mut level = Vec::with_capacity(nodes.len() / 2 + 2);
+        let mut i = 0usize;
+        if !a.is_multiple_of(2) {
+            level.push(step_merkle_node_v1(&next()?, &nodes[0]));
+            i = 1;
+        }
+        while i + 1 < nodes.len() {
+            level.push(step_merkle_node_v1(&nodes[i], &nodes[i + 1]));
+            i += 2;
+        }
+        if i < nodes.len() {
+            if !width.is_multiple_of(2) && b == width {
+                level.push(nodes[i]);
+            } else {
+                level.push(step_merkle_node_v1(&nodes[i], &next()?));
+            }
+        }
+        nodes = level;
+        a /= 2;
+        b = b.div_ceil(2);
+        width = width.div_ceil(2);
+    }
+    if next().is_ok() {
+        return Err("the opening's path is too long".to_string());
+    }
+    nodes.first().copied().ok_or_else(|| "the range folded to nothing".to_string())
+}
+
 // =============================================================================================
 // The retained level, derived from the ruleset's ladder
 // =============================================================================================
@@ -692,7 +831,7 @@ fn node_leaf_count_v1(node: &kaspa_consensus_core::palw_step::PalwStepNodeV1, kv
 /// **One position's committed tiles, in the canonical order** — the slot walk the fold
 /// ([`Base0SparseStepCaptureV1::push_call`]) and the streaming replay
 /// (`fp_interval::base0_fp_replay_interval_into_v1`) share, so a leaf a replay emits at a cursor is
-/// the leaf the fold committed there (ADR-0120).
+/// the leaf the fold committed there (ADR-0121).
 ///
 /// The canonical order is call-major, position-major, slot-major, tile-major, so the tiles of one
 /// `(call, position)` are consecutive leaves and this emits them in that order. `rows` may arrive in
@@ -1618,6 +1757,106 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// **The fold range's root is the consensus root** (ADR-0121): over odd and even trees, every
+    /// retained level a small tree exercises, and ranges that start and end on and off block
+    /// boundaries, reach the tree's tail, or sit inside one block — the root computed from the
+    /// edges' leaves and the whole blocks' digests is `step_range_opening_root_v1`'s from every leaf,
+    /// with the same siblings; and a sibling too few or too many is refused, as the consensus walk
+    /// refuses it.
+    #[test]
+    fn the_fold_range_root_is_the_consensus_root() {
+        use kaspa_consensus_core::palw_step_leg::{step_merkle_range_siblings_v1, step_range_opening_root_v1};
+        let mut checked = 0usize;
+        for n in [1u64, 2, 3, 5, 8, 9, 16, 17, 33, 65, 100, 257] {
+            let ls = leaves(n as usize);
+            for retain_level in [0u32, 1, 2, 3, 5] {
+                let block = 1u64 << retain_level;
+                for first in 0..n {
+                    for count in 1..=(n - first) {
+                        if count > 24 && count % 11 != 0 {
+                            continue; // keep the sweep quick; the long ranges are sampled
+                        }
+                        let end = first + count;
+                        let siblings = step_merkle_range_siblings_v1(&ls, first as usize, count as usize).expect("siblings");
+                        let opening = PalwStepRangeOpeningV1 {
+                            first_leaf_index: first,
+                            leaf_hashes: ls[first as usize..end as usize].to_vec(),
+                            siblings: siblings.clone(),
+                        };
+                        let consensus = step_range_opening_root_v1(n, &opening).expect("the consensus walk");
+                        // The whole blocks, as `whole_blocks_v1` names them.
+                        let first_block = first.div_ceil(block);
+                        let end_block = if end >= n { end.div_ceil(block) } else { end / block }.max(first_block);
+                        let digests: Vec<Hash64> = (first_block..end_block)
+                            .map(|k| {
+                                let a = k * block;
+                                let b = ((k + 1) * block).min(n);
+                                base0_fold_block_digest_v1(a, &ls[a as usize..b as usize]).expect("a block")
+                            })
+                            .collect();
+                        let left_end = (first_block * block).min(end);
+                        let right_first = (end_block * block).max(first).min(end);
+                        let (left, right) = if digests.is_empty() {
+                            (&ls[first as usize..end as usize], &ls[end as usize..end as usize])
+                        } else {
+                            (&ls[first as usize..left_end as usize], &ls[right_first as usize..end as usize])
+                        };
+                        let folded = base0_fold_range_root_v1(
+                            n,
+                            first,
+                            count,
+                            retain_level,
+                            left,
+                            &digests,
+                            right,
+                            &siblings,
+                            PALW_STEP_LEG_MAX_LEAVES,
+                        )
+                        .unwrap_or_else(|e| panic!("n={n} r={retain_level} [{first}, {end}): {e}"));
+                        assert_eq!(folded, consensus, "n={n} r={retain_level} [{first}, {end})");
+                        if !siblings.is_empty() {
+                            let short = &siblings[..siblings.len() - 1];
+                            assert!(
+                                base0_fold_range_root_v1(
+                                    n,
+                                    first,
+                                    count,
+                                    retain_level,
+                                    left,
+                                    &digests,
+                                    right,
+                                    short,
+                                    PALW_STEP_LEG_MAX_LEAVES
+                                )
+                                .is_err(),
+                                "a short path is refused"
+                            );
+                        }
+                        let mut long = siblings.clone();
+                        long.push(Hash64::from_u64_word(9));
+                        assert!(
+                            base0_fold_range_root_v1(
+                                n,
+                                first,
+                                count,
+                                retain_level,
+                                left,
+                                &digests,
+                                right,
+                                &long,
+                                PALW_STEP_LEG_MAX_LEAVES
+                            )
+                            .is_err(),
+                            "a long path is refused"
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert!(checked > 5_000, "the sweep ran: {checked}");
     }
 
     /// **A tree deeper than `2^22` serves its honest openings** (ADR-0119 §7's sibling cap). The
