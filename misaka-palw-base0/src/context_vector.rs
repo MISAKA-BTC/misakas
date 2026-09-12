@@ -1273,11 +1273,17 @@ mod tests {
     }
 
     /// **The 512-position vector, in the default suite.**
+    ///
+    /// Re-pinned 2026-09-12 for ADR-0119: a held class is walked at the regime's ladder, `2^40`,
+    /// not the held devnet's `2^26`, so the fit's ladder row has 40 levels and the widest close,
+    /// priced at that depth, needs 20,607 bytes instead of 15,231 (still one carrier, under the
+    /// court's 83,333). Nothing else moved: with the class ladder held at the network's, the same
+    /// tree prints the previous id, `d2364615…`.
     #[test]
     fn the_512_vector_passes_every_stage_and_is_pinned() {
         check_pinned(
             "0110-dense-v7-512",
-            "d236461504f657edcdd1fb94b79b829f3bf011364154b2bd829b7f67edbf02dca0ac63c1407a08d5721ca96f7a120bdba9c5e7c9e97cc99fc0a4ec8076d92995",
+            "02818c104b734965a46c0a0d39f0886fbc35533b5d160280d368e793dc8e1da4c0292010e54f5eda06260016d176a924196b2b22e96bb22b2eabb7c189b95a6b",
         );
     }
 
@@ -1289,24 +1295,29 @@ mod tests {
     /// the Resume route. The document's `seat.route` and each interval's `resume_bytes` moved.
     /// Nothing else did: the roots are produced before the seat runs and never read the route,
     /// and every count, size and verdict still reads as ADR-0110 §9.2's table.
+    ///
+    /// Re-pinned 2026-09-12 for ADR-0119, with the 512 one and for its reason: the fit's ladder
+    /// row has 40 levels and the widest close needs 39,344 bytes instead of 38,448 — one path,
+    /// fourteen levels deeper. Every other fact of the document is the previous one's (`9c5a772c…`).
     #[test]
     #[ignore = "the release-mode vector job: about 20 s in release, minutes in debug"]
     fn the_4k_vector_passes_every_stage_and_is_pinned() {
         check_pinned(
             "0110-dense-v7-4k",
-            "9c5a772cddbcba9eef861cdca1074dc8447cbecf1e295bbd2e9242d341105fc250c742a7806f2bd118a41733b4bc5ae5d3bd5714a939fc39775798120aa1c49e",
+            "a54a5ee6b22cf298be468ddc865d48d8394d3d180f60463845b366fe7ba6a35db33f87586ff52f423a961c7fd9f218c8ecee8323ac20162d33143505e5f305a5",
         );
     }
 
     /// **The 32,768-position vector** — the release-mode vector job, about seven minutes on an
     /// M-series host (ADR-0110 §9 has the measured stages). Re-pinned with the 4,096 one, for the
-    /// same reason.
+    /// same reason. Re-pinned again on 2026-09-12 for ADR-0119, likewise: 40 levels, and 39,536
+    /// bytes of widest close instead of 38,640 (`848d9352…` before).
     #[test]
     #[ignore = "the release-mode vector job: about seven minutes in release"]
     fn the_32k_vector_passes_every_stage_and_is_pinned() {
         check_pinned(
             "0110-dense-v7-32k",
-            "848d9352a21e0a57ac575f4365056fccdd65095494119cc535e1f2d061a6f3df4241c23adb31bd4931a0a86d54280ba4f67d06bc09f2556dd2ba7c4b46cb3998",
+            "0b8b191de944cad815cc53a1504a92b0a9052ae4dd08433014ffc2b9749ec18611f66c3c0fbcc32a1763d926c94c47cb1804801befbeae000a817ee6bfcd6e55",
         );
     }
 }
