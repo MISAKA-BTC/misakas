@@ -16,6 +16,9 @@
 * Amends: ADR-0103's assembly rules ("V4 and the tiled prompt ids at the fence") to "from genesis";
   ADR-0081 Decision 3's "the form is the network's" to "the form is the class's, and the network's
   for every class but a held one".
+* Amended by: [0119](0119-a-held-class-is-walked-at-the-regimes-ladder-and-the-chain-records-which-classes-those-are.md)
+  (the same day), which lifts §4's limitation at the chain — a held class is walked at the regime's
+  `2^40` ladder — and gives §4's PanelDa jobs their executor path.
 
 ## 0. The sentence this ADR is
 

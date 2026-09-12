@@ -559,11 +559,16 @@ pub fn precheck_request_v1(request: &PalwFpWorkerRequestV3) -> Result<(), String
     if request.version != PALW_FP_V3_VERSION {
         return Err(format!("request version {} is not {}", request.version, PALW_FP_V3_VERSION));
     }
-    if request.privacy_mode != PALW_FP_PRIVACY_PUBLIC_DA {
-        return Err(format!(
-            "privacy mode {} is not PublicDa — a mode the panel cannot replay must not execute",
-            request.privacy_mode
-        ));
+    // **Both modes the chain carries** (ADR-0077 Decision 16; ADR-0119 Decision 7). This refused
+    // every mode but PublicDa on the reasoning that the panel could not replay the other — written
+    // four days before private prompts landed (f7363db9), after which the drawn seats pull a
+    // PanelDa job's ids over the authenticated route and replay it like any other. So a gateway
+    // started `--privacy panel-da` could file nothing, and a held class on a network minted flat,
+    // which commits under PanelDa only (ADR-0118 Decision 5), had no executor path at all.
+    if request.privacy_mode != PALW_FP_PRIVACY_PUBLIC_DA
+        && request.privacy_mode != kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA
+    {
+        return Err(format!("privacy mode {} is not one the chain carries (PublicDa or PanelDa)", request.privacy_mode));
     }
     if request.decode_token_limit == 0 {
         return Err("a zero decode ceiling is not a job".to_string());
@@ -1295,6 +1300,32 @@ mod tests {
         assert!(err.contains("decodes greedily"), "got: {err}");
     }
 
+    /// **A PanelDa job runs, and its result is the PublicDa job's but for the mode** (ADR-0077
+    /// Decision 16; ADR-0119 Decision 7). The precheck refused every mode but PublicDa, so a
+    /// gateway started `--privacy panel-da` could file nothing and a held class on a network minted
+    /// flat had no executor path. The mode rides the job (so the claim id and the roots differ, as
+    /// two jobs must), the ids come back for the staged material, and a mode the chain does not
+    /// carry is still refused before the artifact is touched.
+    #[test]
+    fn a_panel_da_job_runs_and_returns_its_ids_for_the_staged_material() {
+        use kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA;
+        let temp = std::env::temp_dir().join(format!("palw-fp-worker-panelda-{}", std::process::id()));
+        let rt = fixture_runtime_v1();
+        let manifest = rt.manifest().clone();
+        let public = fixture_request_v1(&manifest, PalwFpWorkerInputV3::TokenIds(vec![3, 5, 8, 13]));
+        let mut private = public.clone();
+        private.privacy_mode = PALW_FP_PRIVACY_PANEL_DA;
+        precheck_request_v1(&private).expect("the chain carries PanelDa, so the worker runs it");
+        let result = run_one_job_v1(&rt, &private, Hash64::from_u64_word(2), &temp, &mut |_, _| {}).expect("a PanelDa job runs");
+        assert_eq!(result.job.privacy_mode, PALW_FP_PRIVACY_PANEL_DA, "the mode rides the job");
+        assert_eq!(result.prompt_token_ids, vec![3, 5, 8, 13], "…and the ids come back for the seats' material");
+        let mut unknown = public.clone();
+        unknown.privacy_mode = 7;
+        let why = precheck_request_v1(&unknown).expect_err("a mode the chain does not carry");
+        assert!(why.contains("PublicDa or PanelDa"), "{why}");
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
     /// **W6: a job's roots through `v3-serve` are byte-identical to the same job's roots through
     /// `v3-job`.**
     ///
@@ -1433,9 +1464,9 @@ mod tests {
         let manifest = rt.manifest().clone();
 
         let good = framed(&fixture_request_v1(&manifest, PalwFpWorkerInputV3::TokenIds(vec![3, 5, 8, 13, 21])));
-        // A privacy mode the panel cannot replay: refused by name, before anything executes.
+        // A privacy mode the chain does not carry: refused by name, before anything executes.
         let mut bad_request = fixture_request_v1(&manifest, PalwFpWorkerInputV3::TokenIds(vec![3, 5]));
-        bad_request.privacy_mode = 2;
+        bad_request.privacy_mode = 7;
         let bad = framed(&bad_request);
         // A class this worker is not.
         let mut wrong_class = fixture_request_v1(&manifest, PalwFpWorkerInputV3::TokenIds(vec![3, 5]));

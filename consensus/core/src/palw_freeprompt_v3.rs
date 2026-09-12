@@ -82,9 +82,9 @@ pub const PALW_FP_PRIVACY_PUBLIC_DA: u8 = 1;
 /// ids as it does now, so a disputed prompt becomes public. *Private unless disputed* — five seats
 /// see the prompt, a dispute publishes it, and nothing here is confidentiality.
 ///
-/// Admission refuses this mode until the network arms it — `Params::palw_panel_da`, `None` on
-/// every shipped preset — exactly as the worker refuses every non-PublicDA mode today: a mode the
-/// panel cannot replay must not execute. See [`crate::palw_panel_da_v1`] for the disclosure the
+/// Admission refuses this mode until the network arms it (`Params::palw_panel_da`). The worker
+/// executes it (ADR-0119 Decision 7): the drawn seats replay a PanelDa job from the ids they pull
+/// with its material, as they replay a PublicDa one. See [`crate::palw_panel_da_v1`] for the disclosure the
 /// gateway owes a first-time user, the predicate a seat runs before it reads anything, and what
 /// arming does NOT buy (ADR-0077 SA-5).
 pub const PALW_FP_PRIVACY_PANEL_DA: u8 = 2;
