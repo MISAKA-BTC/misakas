@@ -213,7 +213,7 @@ pub(crate) fn palw_retained_answer_path(dir: &std::path::Path, claim: &Hash64) -
 /// claim that can still be licensed.
 const PALW_RETENTION_HORIZON: std::time::Duration = std::time::Duration::from_secs(48 * 3600);
 
-/// **Is a retained capture due for pruning?** The one decision `rebroadcast_retained` acts on,
+/// **Is a retained capture due for pruning?** The time rule `palw_retention::PalwRetentionJanitor` acts on,
 /// pure so it can be pinned without a consensus instance. `age` is the file's (`None` = unreadable,
 /// treated as old, as before); `claim` is the chain's view of the claim at the tip (`None` = never
 /// mined, or dropped).
@@ -414,72 +414,6 @@ impl PalwProducerService {
         Ok(bytes)
     }
 
-    /// **Discharge the data-availability obligation in the open** (launch blockers: "what is
-    /// still missing", piece 1). Re-broadcast every retained material younger than the lattice's
-    /// own horizon, so seats that connected after the original broadcast — or missed it — still
-    /// hear it. Peers deduplicate by digest, so a re-broadcast they have seen costs one message
-    /// and no relay.
-    async fn rebroadcast_retained(&self) {
-        let Ok(entries) = std::fs::read_dir(&self.config.retention_dir) else { return };
-        let now = std::time::SystemTime::now();
-        let session = self.consensus_manager.consensus().unguarded_session();
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
-            // The answer envelope (ADR-0084) is pruned on the material's horizon; nothing is
-            // announced for either — a seat that needs the bytes asks for them.
-            let Some(stem) =
-                name.strip_suffix(PALW_RETAINED_MATERIAL_SUFFIX).or_else(|| name.strip_suffix(PALW_RETAINED_ANSWER_SUFFIX))
-            else {
-                continue;
-            };
-            let Ok(claim) = stem.parse::<Hash64>() else { continue };
-            let age = entry.metadata().and_then(|m| m.modified()).ok().and_then(|t| now.duration_since(t).ok());
-            // Nothing is due before the shorter of the two horizons, so a young file costs no state read.
-            if age.is_some_and(|age| age < self.config.attempt_retention.min(PALW_RETENTION_HORIZON)) {
-                continue;
-            }
-            let chain = session.palw_derived_artifacts_v1(claim);
-            // **A free-prompt claim the chain still holds live is kept, whatever its age.** The 48 h
-            // horizon is a wall-clock reading of windows that are DAA counts: bind + receipt is
-            // 1,200 DAA, ~40 h only at the frozen 120 s cadence, and testnet-11 has run at a
-            // fraction of that cadence — so the horizon deleted captures of claims still in their
-            // receipt window, or licensed and inside their challenge window. For a free-prompt claim
-            // that is the one copy anywhere: graph-v5 captures are over the transport cap, so only
-            // the executor can open an interval, and a seat or a court that asks after the delete
-            // gets "not held" — a void at best, and an unanswerable challenge at worst. So the chain
-            // decides, not the clock: kept while the claim is provisional, bound, licensed or under a
-            // data-availability accusation; pruned once it is final or void, or unknown to the
-            // chain (never mined, or dropped).
-            //
-            // Attempt claims keep a clock of their own, and a short one: their seats license by
-            // replaying the anchor's job (ADR-0084 Decision 7) rather than from these bytes, a court
-            // that asks later gets a capture re-made by the same replay, and a graph-v5 attempt
-            // capture is ~0.8 GB per block (`retained_capture_prune_due_v1`).
-            if retained_capture_prune_due_v1(
-                age,
-                chain.as_ref().map(|(state, _, _)| (&state.source, &state.phase)),
-                self.config.attempt_retention,
-            ) {
-                // **Past the horizon it is not just un-broadcast, it is deleted** (audit M2-22).
-                // Retention grew monotonically on the consensus volume — the same volume RocksDB is
-                // on — because nothing ever removed a file. A free-prompt claim this old can no
-                // longer be licensed or disputed, so its bytes serve nobody; an attempt claim that is
-                // still disputed is answered from a replay, not from these bytes.
-                if let Err(e) = std::fs::remove_file(&path) {
-                    trace!("[{PALW_PRODUCER}] cannot prune retained material {}: {e}", path.display());
-                }
-                continue;
-            }
-            // **Announced, not pushed** (audit M2-22). This re-broadcast every retained material to
-            // every peer once a minute — 291 MB per peer per minute for a QWEN25-A16 producer, of
-            // bytes those peers have already deduplicated and dropped. Since protocol 104 a seat
-            // that needs a claim's material ASKS for it, and the serve answers that asker directly;
-            // the producer's job here is to keep the bytes, and to be reachable.
-            let _ = claim;
-        }
-    }
-
     fn verification_key(&self) -> Vec<u8> {
         self.keypair.as_ref().map(|kp| kp.verification_key.as_ref().to_vec()).unwrap_or_default()
     }
@@ -500,8 +434,6 @@ impl PalwProducerService {
         info!("[{PALW_PRODUCER}] starting (bond={bond}, key={})", self.config.key_path);
 
         let mut produced = 0u64;
-        // When the retention pass last ran — see the loop's first lines.
-        let mut retention_pass_at: Option<std::time::Instant> = None;
         // The last hold reason actually printed, and when. A producer can hold for hours on one
         // unchanging cause, and repeating it every 5 s buries the line that would explain it: this
         // loop wrote 5,281 identical warnings on a live testnet node while it produced nothing.
@@ -523,16 +455,9 @@ impl PalwProducerService {
             if !self.tick(std::time::Duration::from_millis(200)).await {
                 break;
             }
-            // **The retention pass runs every ~60 s of wall clock, not every 300 passes of this
-            // loop.** A pass that draws is one pass however long the draw takes, so "300 ticks" was
-            // 300 draws: ~90 h between prunes at an 18-minute Qwen3.6 draw (a 48 h horizon that
-            // kept files for 60), ~4 h at a 45-second one — and at that pace the attempt captures
-            // the pass exists to prune filled C's 387 GB twice in one night (2026-09-12). It also
-            // runs on the first pass, so a restart clears what accumulated while the node was down.
-            if retention_pass_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(60)) {
-                self.rebroadcast_retained().await;
-                retention_pass_at = Some(std::time::Instant::now());
-            }
+            // The retention prune is not this loop's any more: `palw_retention::PalwRetentionJanitor`
+            // runs it on every node, producing or not, once a minute (it ran here, where a node that
+            // did not produce never pruned, and where it ran every 300 draws rather than every minute).
             let session = self.consensus_manager.consensus().unguarded_session();
             if session.async_is_consensus_in_transitional_ibd_state().await {
                 continue;

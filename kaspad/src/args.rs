@@ -1183,7 +1183,9 @@ pub fn cli() -> Command {
                      job, and a court or a data-availability accusation that later asks this node for a pruned capture is \
                      answered from one re-made by the same replay and checked against the claim's committed roots. \
                      Free-prompt captures keep their own rule (48 h, and while the chain can still ask about them). \
-                     Default: 60.",
+                     Every PALW node prunes on its own, once a minute, whatever it was started as; and while the \
+                     retention volume has under max(8 GiB, 5 %) free it gives up its oldest attempt captures first, \
+                     whatever their age. Default: 60.",
                 ),
         )
         .arg(

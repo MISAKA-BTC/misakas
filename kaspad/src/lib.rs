@@ -13,6 +13,7 @@ pub mod palw_fp_seat;
 pub mod palw_heartbeat_miner;
 pub mod palw_panel;
 pub mod palw_producer;
+pub mod palw_retention;
 pub mod validator_service;
 
 #[cfg(test)]

@@ -1316,6 +1316,9 @@ Do you confirm? (y/n)";
         },
         (None, None) => None,
     };
+    // Read before `config` moves: whether this is a PALW (ConsensusV2) network, for the janitor below.
+    let palw_consensus_v2 =
+        matches!(config.params.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_));
     let palw_producer_service = if args.palw_produce {
         // **A producer with no way to carry a lifecycle object must not start** (audit M2-10).
         //
@@ -1740,6 +1743,17 @@ Do you confirm? (y/n)";
 
     if args.palw_dump_classes {
         async_runtime.register(Arc::new(crate::palw_dump::PalwDumpService::new(consensus_manager.clone())));
+    }
+    // **The retention janitor runs on every PALW node, whatever it was started as** — producer,
+    // panel seat, pool slot, a node restarted without either, a node still syncing. A producer's
+    // captures outlive the process that wrote them, and a node an operator joins with has a small SSD
+    // (see `palw_retention`).
+    if palw_consensus_v2 {
+        async_runtime.register(Arc::new(crate::palw_retention::PalwRetentionJanitor::new(
+            consensus_manager.clone(),
+            app_dir.join(network.to_prefixed()).join("palw-retention"),
+            std::time::Duration::from_secs(args.palw_attempt_retention_minutes.saturating_mul(60)),
+        )));
     }
     // **ADR-0067 Decision 6: declarations this node did not watch arrive.** A pruned sync brings
     // the class table and no carriage rows, so an operator on such a node supplies them. The
