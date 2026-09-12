@@ -69,6 +69,22 @@ fn read_matching(path: &PathBuf, tail_bytes: u64, keep: &dyn Fn(&str) -> bool) -
     Ok(body.lines().filter(|l| keep(l)).map(str::to_string).collect())
 }
 
+/// The lines about `needle` (8+ hex, lower case; empty = every line) in each component's files,
+/// the last `max` of each — the dashboard's read.
+pub(crate) fn collect(profile: &Profile, needle: &str, events_only: bool, max: usize) -> Vec<(&'static str, String)> {
+    let keep = |line: &str| names_work(line, needle) && (!events_only || is_event(line));
+    let mut out = Vec::new();
+    for component in [Component::Node, Component::Gateway, Component::Rail] {
+        for path in sources(profile, component) {
+            if let Ok(found) = read_matching(&path, 64 << 20, &keep) {
+                let skip = found.len().saturating_sub(max);
+                out.extend(found.into_iter().skip(skip).map(|l| (component.label(), l)));
+            }
+        }
+    }
+    out
+}
+
 /// `misaka logs`.
 pub(crate) async fn run(
     profile: Profile,

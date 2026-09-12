@@ -154,6 +154,33 @@ async fn find(snap: &Snapshot, id: &str) -> Result<WorkRow, CliError> {
     }
 }
 
+/// One work as JSON (`misaka.work.show.v1`): its row, its marked path, and the reading's meaning
+/// and next step — what `work show --output json` prints and the dashboard serves.
+pub(crate) async fn show_json(
+    profile: crate::operator::profile::Profile,
+    id: &str,
+    timeout: Duration,
+) -> Result<serde_json::Value, CliError> {
+    let snap = Snapshot::gather(profile, timeout, true).await;
+    let w = find(&snap, id).await?;
+    let node = snap.node.as_ref().ok();
+    let now = node.map(|n| n.daa()).unwrap_or(0);
+    let windows = node.and_then(|n| n.windows);
+    let why = explain(&w, windows.as_ref(), now);
+    let path: Vec<serde_json::Value> =
+        work::timeline(w.lane, w.reading.state, w.chain.as_ref().map(|c| c.void_reason.as_str()).filter(|r| !r.is_empty()))
+            .into_iter()
+            .map(|(s, m)| json!({ "stage": s, "mark": m }))
+            .collect();
+    let mut doc = row_json(&w);
+    doc["schema"] = json!("misaka.work.show.v1");
+    doc["path"] = json!(path);
+    doc["meaning"] = json!(why.as_ref().map(|r| r.meaning.clone()));
+    doc["next"] = json!(why.as_ref().map(|r| r.next.clone()));
+    doc["tip_daa"] = json!(now);
+    Ok(doc)
+}
+
 /// `misaka work show <id>`: the path, marked.
 pub(crate) async fn show(ctx: &crate::node::Ctx, profile: crate::operator::profile::Profile, id: &str) -> CliResult {
     let snap = Snapshot::gather(profile, timeout(ctx), true).await;

@@ -691,7 +691,9 @@ pub(crate) fn document(snap: &Snapshot, view: &MinerView) -> serde_json::Value {
         "fork": {
             "node_fingerprint": snap.node_status.as_ref().map(|r| r.consensus_params_id.clone()).or_else(|| log.and_then(|l| l.fingerprint.clone())),
             "node_schedule": snap.node_status.as_ref().map(|r| r.fence_schedule.clone()).or_else(|| log.and_then(|l| l.schedule.clone())),
-            "cli_fingerprint": expected(&p.network).map(|e| e.0),
+            // A node on a ruleset of its own (a devnet drill's flags) is compared with nothing.
+            "own_ruleset": p.kaspad.as_ref().and_then(|(_, a)| a.ruleset_flags.first().cloned()),
+            "cli_fingerprint": expected(&p.network).map(|e| e.0).filter(|_| p.kaspad.as_ref().is_none_or(|(_, a)| a.ruleset_flags.is_empty())),
             "cli_schedule": expected(&p.network).map(|e| e.1),
         },
         "bond": p.bond,
@@ -737,25 +739,32 @@ pub(crate) fn document(snap: &Snapshot, view: &MinerView) -> serde_json::Value {
     })
 }
 
+/// Read everything and decide the miner's state — what `status`, the dashboard and the
+/// supervisor's live line all show.
+pub(crate) async fn read(profile: crate::operator::profile::Profile, timeout: std::time::Duration) -> (Snapshot, MinerView, i64) {
+    let snap = Snapshot::gather(profile, timeout, true).await;
+    let now = procs::now_unix() as i64;
+    let mut view = miner_state(&inputs(&snap, now));
+    // A supervisor that is draining says so: the node runs as a panel only on purpose, and
+    // "not producing" would read as a fault.
+    if let Some(sup) = crate::operator::supervisor::running_supervisor(&snap.profile.network)
+        && sup.phase == "draining"
+    {
+        view = MinerView {
+            state: MinerState::Stopping,
+            headline: format!("draining (supervisor pid {}) — {}", sup.supervisor_pid, sup.message),
+            finding: None,
+            basis: "supervisor",
+        };
+    }
+    (snap, view, now)
+}
+
 /// `misaka mining status [--watch <secs>]`.
 pub(crate) async fn run(ctx: &crate::node::Ctx, profile: crate::operator::profile::Profile, watch: Option<u64>) -> CliResult {
     let timeout = std::time::Duration::from_secs(ctx.timeout_secs.clamp(2, 10));
     loop {
-        let snap = Snapshot::gather(profile.clone(), timeout, true).await;
-        let now = procs::now_unix() as i64;
-        let mut view = miner_state(&inputs(&snap, now));
-        // A supervisor that is draining says so: the node runs as a panel only on purpose, and
-        // "not producing" would read as a fault.
-        if let Some(sup) = crate::operator::supervisor::running_supervisor(&snap.profile.network)
-            && sup.phase == "draining"
-        {
-            view = MinerView {
-                state: MinerState::Stopping,
-                headline: format!("draining (supervisor pid {}) — {}", sup.supervisor_pid, sup.message),
-                finding: None,
-                basis: "supervisor",
-            };
-        }
+        let (snap, view, now) = read(profile.clone(), timeout).await;
         if ctx.output == OutputFormat::Json {
             println!("{}", serde_json::to_string_pretty(&document(&snap, &view)).expect("serializable"));
         } else {

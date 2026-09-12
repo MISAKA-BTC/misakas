@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MISAKA mining</title>
+<style>
+:root {
+  --ground: #f2f4f7; --surface: #ffffff; --surface-2: #e8ecf1; --ink: #152029; --ink-2: #53606b; --line: #d6dde4;
+  --accent: #2457c5; --good: #1f7a45; --good-bg: #e0f1e7; --warn: #8f5600; --warn-bg: #fbeed6; --bad: #b3261e; --bad-bg: #fbe3e1;
+  --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground: #0f151c; --surface: #16202a; --surface-2: #1d2833; --ink: #e2e8ee; --ink-2: #9aa7b3; --line: #2a3643;
+    --accent: #86a9ff; --good: #5ccb8a; --good-bg: #16301f; --warn: #eaaa3c; --warn-bg: #35280f; --bad: #ff7b72; --bad-bg: #3a1918;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--ground); color: var(--ink); font: 14px/1.55 var(--sans); }
+main { max-width: 1180px; margin: 0 auto; padding: 24px 20px 64px; display: grid; gap: 18px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px 16px; }
+h1 { font-size: 20px; margin: 0; }
+.meta { color: var(--ink-2); font-size: 12px; margin-left: auto; font-family: var(--mono); }
+.state { display: grid; gap: 8px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+.state-line { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.pill { font: 600 12px var(--mono); letter-spacing: .04em; padding: 3px 10px; border-radius: 999px; white-space: nowrap; }
+.pill.good { background: var(--good-bg); color: var(--good); }
+.pill.warn { background: var(--warn-bg); color: var(--warn); }
+.pill.bad { background: var(--bad-bg); color: var(--bad); }
+.pill.dim { background: var(--surface-2); color: var(--ink-2); }
+.headline { font-size: 15px; }
+.finding { display: grid; grid-template-columns: 88px 1fr; gap: 4px 12px; font-size: 13px; margin-top: 4px; }
+.finding .k { color: var(--ink-2); font-weight: 600; }
+.finding code, td code { font-family: var(--mono); font-size: 12px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: grid; gap: 4px; align-content: start; }
+.card h2 { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-2); margin: 0 0 4px; font-weight: 600; }
+.row { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; }
+.row span:first-child { color: var(--ink-2); }
+.row span:last-child { font-family: var(--mono); font-size: 12px; text-align: right; overflow-wrap: anywhere; }
+section.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+section.panel > .bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+section.panel > .bar h2 { font-size: 13px; margin: 0; }
+section.panel > .bar .counts { color: var(--ink-2); font-size: 12px; font-family: var(--mono); }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 7px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 11px; color: var(--ink-2); letter-spacing: .05em; text-transform: uppercase; font-weight: 600; background: var(--surface-2); }
+tbody tr { cursor: pointer; }
+tbody tr:hover td { background: var(--surface-2); }
+tbody tr[aria-selected="true"] td { background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
+td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.empty { color: var(--ink-2); padding: 14px; font-size: 13px; }
+button { font: 600 12px var(--sans); padding: 6px 12px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface-2); color: var(--ink); cursor: pointer; }
+button:focus-visible, tbody tr:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.detail { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 0; }
+@media (max-width: 860px) { .detail { grid-template-columns: 1fr; } }
+.timeline { padding: 12px 14px; display: grid; gap: 3px; font-family: var(--mono); font-size: 12px; }
+.timeline .done { color: var(--good); } .timeline .current { color: var(--warn); } .timeline .end { color: var(--bad); } .timeline .ahead, .timeline .notreached { color: var(--ink-2); }
+.next { padding: 10px 14px; border-top: 1px solid var(--line); font-size: 13px; }
+pre.logs { margin: 0; padding: 12px 14px; font: 11.5px/1.5 var(--mono); max-height: 360px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border-left: 1px solid var(--line); background: var(--ground); }
+.sev-ok { color: var(--good); } .sev-warning { color: var(--warn); } .sev-error { color: var(--bad); } .sev-skip, .sev-info { color: var(--ink-2); }
+footer { color: var(--ink-2); font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1 id="title">MISAKA mining</h1>
+    <span class="meta" id="meta">loading…</span>
+  </header>
+
+  <div class="state" aria-live="polite">
+    <div class="state-line"><span class="pill dim" id="pill">…</span><span class="headline" id="headline">reading the node</span></div>
+    <div class="finding" id="finding" hidden></div>
+  </div>
+
+  <div class="cards">
+    <div class="card"><h2>Node</h2><div id="node"></div></div>
+    <div class="card"><h2>Bond</h2><div id="bond"></div></div>
+    <div class="card"><h2>Rewards</h2><div id="wallet"></div></div>
+    <div class="card"><h2>Next</h2><div id="next" style="font-size:13px"></div></div>
+  </div>
+
+  <section class="panel">
+    <div class="bar"><h2>Work</h2><span class="counts" id="counts"></span></div>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>ID</th><th>Lane</th><th>Stage</th><th>Detail</th><th class="num">Next date</th></tr></thead>
+        <tbody id="works"></tbody>
+      </table>
+    </div>
+    <div class="empty" id="works-empty" hidden>No work yet.</div>
+  </section>
+
+  <section class="panel" id="work-panel" hidden>
+    <div class="bar"><h2 id="work-title">Work</h2></div>
+    <div class="detail">
+      <div>
+        <div class="timeline" id="timeline"></div>
+        <div class="next" id="work-next"></div>
+      </div>
+      <pre class="logs" id="work-logs"></pre>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="bar"><h2>Doctor</h2><button id="run-doctor" type="button">Run the checks</button><span class="counts" id="doctor-counts"></span></div>
+    <div class="scroll"><table><tbody id="doctor"></tbody></table></div>
+  </section>
+
+  <footer>Read-only. This page holds no key and changes nothing; it shows what <code>misaka mining status</code>, <code>work show</code>, <code>logs</code> and <code>doctor</code> print.</footer>
+</main>
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
+  const token = new URLSearchParams(location.search).get("token");
+  const api = (path) => fetch(path + (token ? (path.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(token) : ""), { cache: "no-store" })
+    .then((r) => r.ok ? r.json() : r.text().then((t) => { throw new Error(t || r.status); }));
+  const msk = (sompi) => (Number(sompi) / 1e8).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " MSK";
+  const short = (s, n) => (s || "").slice(0, n || 8);
+  const tone = (state) => ({ DRAWING: "good", READY: "good", NOT_PRODUCING: "dim", NOT_SET_UP: "dim" })[state]
+    || (["HOLDING", "SYNCING", "STARTING", "STOPPING"].includes(state) ? "warn" : "bad");
+  const stageTone = (s) => (["ACCEPTED", "REWARD_PENDING", "REWARDED", "NO_REWARD"].includes(s) ? "good"
+    : ["NOT_COMMITTED", "EXPIRED", "GAVE_UP", "DROPPED", "VOIDED"].includes(s) ? "bad" : s === "UNKNOWN" ? "dim" : "warn");
+  let selected = null;
+
+  function rows(container, pairs) {
+    container.replaceChildren(...pairs.filter((p) => p[1] !== undefined && p[1] !== null && p[1] !== "").map(([k, v]) => {
+      const r = el("div", "row"); r.append(el("span", "", k), el("span", "", String(v))); return r;
+    }));
+  }
+
+  function renderFinding(f) {
+    const box = $("finding");
+    if (!f) { box.hidden = true; return; }
+    box.hidden = false;
+    const items = [["Code", f.code], ["Reason", f.reason]].concat((f.current || []).map((c, i) => [i ? "" : "Current", c]),
+      [["Required", f.required]], (f.fix || []).map((c, i) => [i ? "" : "Fix", c]), [["Docs", f.docs]]);
+    box.replaceChildren(...items.filter((p) => p[1]).flatMap(([k, v]) => [el("span", "k", k), el("span", "", v)]));
+  }
+
+  function renderStatus(d) {
+    $("title").textContent = "MISAKA mining · " + d.network;
+    document.title = "MISAKA mining · " + d.network;
+    $("meta").textContent = "updated " + new Date().toLocaleTimeString() + (d.node && d.node.version ? " · kaspad " + d.node.version : "");
+    const pill = $("pill");
+    pill.className = "pill " + tone(d.miner.state);
+    pill.textContent = d.miner.state.replace(/_/g, " ");
+    $("headline").textContent = d.miner.headline;
+    renderFinding(d.miner.finding);
+    const n = d.node || {};
+    rows($("node"), n.reached ? [["network", n.network], ["synced", n.synced ? "yes" : "no"], ["DAA", n.daa], ["peers", n.peers + " (" + n.outbound_peers + " out)"],
+      ["fingerprint", short(d.fork && d.fork.node_fingerprint) + (d.fork && d.fork.own_ruleset ? " (own ruleset)" : d.fork && d.fork.node_fingerprint && d.fork.cli_fingerprint ? (d.fork.node_fingerprint === d.fork.cli_fingerprint ? " ✓" : " ≠ this CLI " + short(d.fork.cli_fingerprint)) : "")]]
+      : [["node", "not answering"], ["at", n.url], ["why", n.error]]);
+    const f = d.facts || {};
+    rows($("bond"), [["bond", d.bond ? short(d.bond.split(":")[0], 10) + "…:" + d.bond.split(":")[1] : "none named"],
+      ["collateral", f.bond_known ? msk(f.collateral_sompi) : undefined],
+      ["exposure", f.bond_known ? msk(f.reserved_exposure_sompi) + " / " + msk(f.exposure_ceiling_sompi) : undefined],
+      ["class", short(d.class_id, 12) + "…"]]);
+    const w = d.wallet;
+    rows($("wallet"), w ? [["spendable", msk(w.spendable_sompi)], ["maturing", msk(w.maturing_sompi)], ["next spendable", w.next_mature_daa ? "DAA " + w.next_mature_daa : "—"], ["pays to", short(w.address, 22) + "…"]] : [["wallet", "not read"]]);
+    $("next").textContent = d.next;
+    const c = d.counts;
+    $("counts").textContent = "computed " + c.computed + " · submitted " + c.submitted + " · accepted " + c.accepted + " · failed " + c.failed + " · from the " + d.works_source;
+    const body = $("works");
+    body.replaceChildren(...d.works.map((w) => {
+      const tr = el("tr"); tr.tabIndex = 0;
+      const id = w.id || (w.job ? "job:" + short(w.job.replace("fp-job-", "")) : "?");
+      tr.setAttribute("aria-selected", String(selected === (w.id || w.job)));
+      const stage = el("td"); stage.append(el("span", "pill " + stageTone(w.state), w.state.replace(/_/g, " ")));
+      tr.append(el("td", "", short(id.startsWith("job:") ? id : w.id, id.startsWith("job:") ? 12 : 8)), el("td", "", w.lane), stage, el("td", "", w.detail),
+        el("td", "num", w.deadline_daa ? (w.estimated ? "≈ " : "") + "DAA " + w.deadline_daa : ""));
+      const open = () => { selected = w.id || w.job; showWork(w.id ? w.id : "job:" + (w.job || "").replace("fp-job-", "")); renderStatus(d); };
+      tr.addEventListener("click", open);
+      tr.addEventListener("keydown", (e) => { if (e.key === "Enter") open(); });
+      return tr;
+    }));
+    $("works-empty").hidden = d.works.length > 0;
+  }
+
+  function showWork(id) {
+    $("work-panel").hidden = false;
+    $("work-title").textContent = "Work " + short(id.replace("job:", ""), 16);
+    $("timeline").replaceChildren(el("span", "", "reading…"));
+    api("/api/work/" + encodeURIComponent(id)).then((w) => {
+      const marks = { done: "✓", current: "◐", ahead: "·", end: "✗", notreached: " " };
+      $("timeline").replaceChildren(...w.path.map((p) => el("div", p.mark, marks[p.mark] + " " + p.stage + (p.stage === w.state ? "   " + w.detail : ""))));
+      $("work-next").textContent = w.next ? "Next: " + w.next : "";
+    }).catch((e) => $("timeline").replaceChildren(el("span", "sev-error", String(e.message || e))));
+    const needle = id.replace("job:", "").slice(0, 16);
+    api("/api/logs?work=" + encodeURIComponent(needle)).then((lines) => {
+      $("work-logs").textContent = lines.length ? lines.map((l) => l[0].padEnd(8) + l[1]).join("\n") : "No log lines name this work (older nodes print none).";
+    }).catch((e) => { $("work-logs").textContent = String(e.message || e); });
+  }
+
+  function runDoctor() {
+    $("doctor-counts").textContent = "running…";
+    api("/api/doctor").then((d) => {
+      let last = null;
+      $("doctor").replaceChildren(...d.checks.map((c) => {
+        const tr = el("tr"); tr.style.cursor = "default";
+        const mark = { ok: "✓", skip: "·", info: "i", warning: "!", error: "✗" }[c.severity] || "?";
+        tr.append(el("td", "", c.area === last ? "" : c.area.toUpperCase()), el("td", "sev-" + c.severity, mark + " " + c.name),
+          el("td", "", c.value + (c.finding && c.finding.fix && c.finding.fix.length && c.severity !== "ok" ? "  →  " + c.finding.fix[0] : "")));
+        last = c.area; return tr;
+      }));
+      const n = (s) => d.checks.filter((c) => c.severity === s).length;
+      $("doctor-counts").textContent = n("ok") + " ok · " + n("warning") + " warning(s) · " + n("error") + " failure(s) · " + n("skip") + " skipped";
+    }).catch((e) => { $("doctor-counts").textContent = String(e.message || e); });
+  }
+  $("run-doctor").addEventListener("click", runDoctor);
+
+  function tick() { api("/api/status").then(renderStatus).catch((e) => { $("headline").textContent = "the dashboard could not read the status: " + (e.message || e); $("pill").className = "pill bad"; $("pill").textContent = "ERROR"; }); }
+  tick();
+  setInterval(tick, 10000);
+})();
+</script>
+</body>
+</html>

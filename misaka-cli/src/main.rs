@@ -192,6 +192,18 @@ enum Command {
     Work(WorkCmd),
     /// The node's, the gateway's and the rail's lines — all of them, or the ones about one work.
     Logs(LogsArgs),
+    /// A read-only page with the miner's state, its works, their logs and the doctor, at
+    /// http://127.0.0.1:8791 (8790 is the gateway's).
+    Dashboard {
+        /// Where to listen: loopback only unless --public.
+        #[arg(long, default_value = operator::dashboard::DEFAULT_LISTEN)]
+        listen: String,
+        /// Listen on every interface; every request then needs the token it prints.
+        #[arg(long)]
+        public: bool,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
     /// Node operations.
     #[command(subcommand)]
     Node(NodeCmd),
@@ -1890,6 +1902,7 @@ async fn main() -> std::process::ExitCode {
             Ok(p) => operator::work_cmd::why(&ctx, p, &id).await,
             Err(e) => Err(e),
         },
+        Command::Dashboard { listen, public, profile: args } => operator::dashboard::run(&listen, public, &|| profile(&args)).await,
         Command::Logs(args) => match profile(&args.profile) {
             Ok(p) => operator::logs::run(p, &args.components, args.work.as_deref(), args.events, args.follow, args.lines).await,
             Err(e) => Err(e),

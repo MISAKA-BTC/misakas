@@ -558,6 +558,30 @@ pub(crate) fn render(snap: &Snapshot, checks: &[Check]) -> String {
     out
 }
 
+/// The doctor's JSON document and the exit it maps to — what `doctor --output json` prints and the
+/// dashboard serves.
+pub(crate) async fn json(
+    profile: crate::operator::profile::Profile,
+    areas: &[Area],
+    strict: bool,
+    timeout: Duration,
+) -> (serde_json::Value, i32) {
+    let snap = Snapshot::gather(profile, timeout, false).await;
+    let rows = checks(&snap, areas).await;
+    let findings: Vec<Finding> = rows.iter().filter_map(|c| c.finding.clone()).collect();
+    let code = finding::exit_of(&findings, strict);
+    (
+        json!({
+            "schema": "misaka.doctor.v1",
+            "network": snap.profile.network,
+            "ok": code == crate::exit::SUCCESS,
+            "exit": code,
+            "checks": rows,
+        }),
+        code,
+    )
+}
+
 /// `misaka doctor [area…] [--strict]`.
 pub(crate) async fn run(
     ctx: &crate::node::Ctx,

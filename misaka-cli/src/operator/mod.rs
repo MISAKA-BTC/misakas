@@ -9,6 +9,7 @@
 //!   claims (Decision 5).
 //! * [`profile`] — `~/.misaka/mining.toml`, the flags, and the running node's own command line
 //!   (Decision 6).
+//! * [`dashboard`] — the same answers on one read-only page at 127.0.0.1:8791 (Decision 9).
 //! * [`logs`] — every component's lines about one work, by the id they share (Decision 8).
 //! * [`snapshot`], [`nodelog`], [`procs`], [`host`] — what those read: the node's RPC, its log,
 //!   the process table and the host.
@@ -17,6 +18,7 @@
 //! mining processes; nothing here signs, spends, or changes the host's configuration.
 
 pub(crate) mod catalog;
+pub(crate) mod dashboard;
 pub(crate) mod doctor;
 pub(crate) mod finding;
 pub(crate) mod host;

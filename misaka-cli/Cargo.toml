@@ -62,8 +62,9 @@ flate2.workspace = true
 sysinfo.workspace = true
 
 clap = { workspace = true, features = ["env"] }
-# `signal`: the mining supervisor stops its children in order on SIGINT/SIGTERM and drains on SIGUSR1 (ADR-0122).
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "signal"] }
+# `signal`: the mining supervisor stops its children in order on SIGINT/SIGTERM and drains on SIGUSR1;
+# `net` + `io-util`: `misaka dashboard` serves its read-only page on 127.0.0.1:8791 (ADR-0122).
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "signal", "net", "io-util"] }
 
 # EVM-send track (Tier B). Gated behind a feature so the DEFAULT `misaka` build
 # stays secp-free (observability + PQ wallet only); `--features evm-send` pulls
