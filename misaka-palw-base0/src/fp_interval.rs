@@ -2399,12 +2399,65 @@ pub fn base0_fp_replay_interval_into_v1<F>(
     start: &Base0FpIntervalStartV1<'_>,
     window: Base0FpWindowV1,
     step_leaf_count: u64,
-    mut forward: F,
+    forward: F,
     sink: &mut dyn FnMut(u64, PalwStepTileLeafV1) -> Result<(), String>,
 ) -> Result<(), String>
 where
     F: FnMut(usize, usize) -> Result<(Vec<i32>, Vec<Base0CapturedRowV1>), String>,
 {
+    base0_fp_replay_interval_with_v1(profile, ctx, start, window, step_leaf_count, &mut Base0FpStepsV1(forward), sink)
+}
+
+/// **What a replay asks of a family's engine** (ADR-0121; ADR-0117 Decision 2): one step — a token
+/// at an absolute cache position, its logits and the rows the step space commits — and, where the
+/// engine walks a prompt a layer at a time, a RUN of prefill positions at once.
+pub trait Base0FpReplayForwardV1 {
+    fn step(&mut self, token: usize, position: usize) -> Result<(Vec<i32>, Vec<Base0CapturedRowV1>), String>;
+
+    /// Prefill positions a run takes; 1 is an engine that steps, and [`Self::run`] is never asked.
+    fn run_positions(&self) -> usize {
+        1
+    }
+
+    /// `tokens` at positions `first_position..`, every position's rows in order — each exactly the
+    /// rows [`Self::step`] would have committed there — and, with `with_post`, the last position's
+    /// logits and post rows (without it the logits are empty and no position has post rows).
+    fn run(
+        &mut self,
+        _tokens: &[usize],
+        _first_position: usize,
+        _with_post: bool,
+    ) -> Result<(Vec<i32>, Vec<Vec<Base0CapturedRowV1>>), String> {
+        Err("this engine steps".to_string())
+    }
+}
+
+/// A step closure as a [`Base0FpReplayForwardV1`] that never runs.
+pub struct Base0FpStepsV1<F>(pub F);
+
+impl<F> Base0FpReplayForwardV1 for Base0FpStepsV1<F>
+where
+    F: FnMut(usize, usize) -> Result<(Vec<i32>, Vec<Base0CapturedRowV1>), String>,
+{
+    fn step(&mut self, token: usize, position: usize) -> Result<(Vec<i32>, Vec<Base0CapturedRowV1>), String> {
+        (self.0)(token, position)
+    }
+}
+
+/// [`base0_fp_replay_interval_into_v1`] over an engine that may take the window's prefill a run of
+/// positions at a time (ADR-0117 Decision 2): the same leaves, in the same order, at the same
+/// indices — a run's rows are the steps' — so a seat and an executor replaying a held interval of
+/// prompt positions, or a shipped class's interval 0, read each layer's weights once a run.
+#[allow(clippy::too_many_arguments)]
+pub fn base0_fp_replay_interval_with_v1(
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    start: &Base0FpIntervalStartV1<'_>,
+    window: Base0FpWindowV1,
+    step_leaf_count: u64,
+    engine: &mut dyn Base0FpReplayForwardV1,
+    sink: &mut dyn FnMut(u64, PalwStepTileLeafV1) -> Result<(), String>,
+) -> Result<(), String> {
     use kaspa_consensus_core::palw_step::PalwStepTableV1;
     let prefill = ctx.declared_prefill_tokens as u64;
     let steps = prefill + u64::from(ctx.exact_decode_tokens.saturating_sub(1));
@@ -2454,21 +2507,37 @@ where
         cursor += 1;
         Ok(())
     };
-    for step in window.first_step..=window.last_step {
+    let run_positions = engine.run_positions().max(1) as u64;
+    let mut step = window.first_step;
+    while step <= window.last_step {
         if step <= prefill {
-            // A prefill position. Logits leaves exist only at the LAST one; the earlier rows
-            // predict tokens the prompt already contains, and the step space has no coordinate for
-            // them. The same drop the capture loops make, for the same reason.
-            let position = (step - 1) as usize;
-            let (logits, mut rows) = forward(prompt_tokens[position], position)?;
-            if step != prefill {
-                rows.retain(|r| r.table != PalwStepTableV1::Post);
+            // Prefill positions. Logits leaves exist only at the LAST one; the earlier rows predict
+            // tokens the prompt already contains, and the step space has no coordinate for them.
+            // The same drop the capture loops make, for the same reason. A run takes as many as the
+            // engine walks at once and the window holds, never past the prefill.
+            let run_last = (step + run_positions - 1).min(prefill_end);
+            let first_position = (step - 1) as usize;
+            let (logits, runs) = if run_last > step {
+                engine.run(&prompt_tokens[first_position..run_last as usize], first_position, run_last == prefill)?
+            } else {
+                let (logits, rows) = engine.step(prompt_tokens[first_position], first_position)?;
+                (logits, vec![rows])
+            };
+            if runs.len() as u64 != run_last - step + 1 {
+                return Err(format!("the engine ran {} positions of a run of {}", runs.len(), run_last - step + 1));
             }
-            crate::fp_capture::base0_position_tiles_v1(profile, prefill as u32, 0, position as u32, &rows, &mut emit)
-                .map_err(|e| format!("{e}"))?;
-            if step == prefill {
+            for (k, mut rows) in runs.into_iter().enumerate() {
+                let at = step + k as u64;
+                if at != prefill {
+                    rows.retain(|r| r.table != PalwStepTableV1::Post);
+                }
+                crate::fp_capture::base0_position_tiles_v1(profile, prefill as u32, 0, (at - 1) as u32, &rows, &mut emit)
+                    .map_err(|e| format!("{e}"))?;
+            }
+            if run_last == prefill {
                 next = Some(kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&logits));
             }
+            step = run_last + 1;
         } else {
             // A decode call. The COORDINATE's position is 0 in every decode call (each call has
             // one position); the cache position is absolute. Conflating them lands every decode row
@@ -2476,10 +2545,11 @@ where
             let call = (step - prefill) as u32;
             let cache_position = (prefill + u64::from(call) - 1) as usize;
             let token = next.ok_or_else(|| format!("decode call {call} has no id to consume"))?;
-            let (logits, rows) = forward(token, cache_position)?;
+            let (logits, rows) = engine.step(token, cache_position)?;
             crate::fp_capture::base0_position_tiles_v1(profile, prefill as u32, call, 0, &rows, &mut emit)
                 .map_err(|e| format!("{e}"))?;
             next = Some(kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&logits));
+            step += 1;
         }
     }
     drop(emit);

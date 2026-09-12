@@ -24,6 +24,7 @@ use crate::kernels::{a16_matmul_requant_batch, a16_matmul_rescale_batch};
 use kaspa_consensus_core::palw_base0_a16::{
     A16QuantParams, a16_add_elem, a16_mul_elem, a16_requant, a16_rms_norm, a16_rope, a16_softmax_rows,
 };
+use rayon::prelude::*;
 
 /// Op W9 through whichever implementation this engine was built with.
 #[inline]
@@ -1322,6 +1323,256 @@ impl<'a> A16Engine<'a> {
         trace.post = rows;
         Ok((logits, trace))
     }
+}
+
+impl A16ProfilePlanV1 {
+    /// **Whether this plan's layer can be walked a prompt at a time** (ADR-0117 Decision 2 on the
+    /// dense tier): every cache read after the cache write it reads. A position's walk writes its
+    /// own key and value before it reads the series, so a layer-major walk appends the whole run's
+    /// rows at the write and hands each position the prefix that ends at its own. A declaration
+    /// that read a series before writing to it would have each position see the positions before
+    /// it WITHOUT their writes in a layer-major order; it keeps the stepped walk.
+    pub fn one_pass_prefill_supported(&self) -> bool {
+        use kaspa_consensus_core::palw_step::PalwStepNodeRoleV1 as Role;
+        let write_of = |role: Role| self.layer.iter().position(|n| n.role == role);
+        let (k_write, v_write) = (write_of(Role::KCacheWrite), write_of(Role::VCacheWrite));
+        let writes = |role: Role| self.layer.iter().filter(|n| n.role == role).count();
+        if writes(Role::KCacheWrite) > 1 || writes(Role::VCacheWrite) > 1 {
+            return false;
+        }
+        self.layer.iter().enumerate().all(|(at, node)| {
+            node.inputs.iter().all(|input| match input {
+                PlanInput::CachedK => k_write.is_some_and(|w| w < at),
+                PlanInput::CachedV => v_write.is_some_and(|w| w < at),
+                _ => true,
+            })
+        })
+    }
+}
+
+impl<'a> A16Engine<'a> {
+    /// **The prefill in one pass over the weights** (ADR-0117 Decision 2, the dense tier's half):
+    /// every position of `tokens` through a layer before the next layer is read, each of the
+    /// layer's projections run over the whole run at once (`kernels::a16_matmul_requant_batch`:
+    /// the weight row read once and used for every position).
+    ///
+    /// The rows are the ones [`Self::forward_token_planned`] commits position by position, bit for
+    /// bit: every node is evaluated by the same [`Self::eval_node`] on the same inputs — a
+    /// position's walk through layer `li` reads only its own rows, layer `li − 1`'s output for
+    /// itself, and the cache prefix that ends at its own write — and a batched projection is the
+    /// single-row one on each row (`the_batched_projections_are_the_single_row_ones` in `kernels`).
+    /// The sink position (0) runs its projections alone, on its own parameters (ADR-0050). So the
+    /// traces, the cache left behind and the last position's logits are the stepped walk's
+    /// (`the_one_pass_prefill_is_the_position_by_position_one`).
+    ///
+    /// `with_post` runs the post table at the LAST position only — the one whose rows the step
+    /// space commits when it is the prefill's last; an earlier position's logits predict a token
+    /// the prompt already holds, and its trace's `post` is empty. The logits returned are empty
+    /// without it. Refused before anything is read: a plan whose layer reads the cache before
+    /// writing it ([`A16ProfilePlanV1::one_pass_prefill_supported`]), a token outside the
+    /// vocabulary, a position past the rotation table.
+    pub fn forward_prefill_planned(
+        &self,
+        plan: &A16ProfilePlanV1,
+        cache: &mut A16Cache,
+        tokens: &[usize],
+        first_position: usize,
+        with_post: bool,
+    ) -> Result<(Vec<i32>, Vec<A16TraceV1>), A16EngineError> {
+        if plan.layer_count != self.artifact.shape.n_layers {
+            return Err(A16EngineError::MalformedParams("plan/artifact layer count"));
+        }
+        if tokens.is_empty() {
+            return Err(A16EngineError::OpRefused("an empty prefill"));
+        }
+        if !plan.one_pass_prefill_supported() {
+            return Err(A16EngineError::OpRefused("the plan reads the cache before this position writes it"));
+        }
+        if tokens.iter().any(|t| *t >= self.artifact.shape.vocab) {
+            return Err(A16EngineError::OpRefused("a token outside the vocabulary"));
+        }
+        let rope: Vec<(&[i32], &[i32])> = (0..tokens.len())
+            .map(|i| self.artifact.rope.row(first_position + i).ok_or(A16EngineError::PositionOutOfRange))
+            .collect::<Result<_, _>>()?;
+        let sink = |i: usize| first_position + i == 0;
+        let mut traces = vec![A16TraceV1::default(); tokens.len()];
+        let mut hs: Vec<Vec<i32>> = Vec::with_capacity(tokens.len());
+        for (i, token) in tokens.iter().enumerate() {
+            let rows = self.walk_table(&plan.pre, None, *token, sink(i), rope[i].0, rope[i].1, None, plan.attn_history)?;
+            hs.push(rows.last().cloned().unwrap_or_default());
+            traces[i].pre = rows;
+        }
+        for li in 0..plan.layer_count {
+            let per_position = self.walk_layer_batched(plan, &hs, tokens, first_position, &rope, li, cache)?;
+            for (i, rows) in per_position.into_iter().enumerate() {
+                hs[i] = rows.last().cloned().ok_or(A16EngineError::MalformedParams("an empty layer table"))?;
+                traces[i].attn.push(rows);
+            }
+        }
+        if !with_post {
+            return Ok((Vec::new(), traces));
+        }
+        let last = tokens.len() - 1;
+        let rows = self.walk_table(
+            &plan.post,
+            Some(&hs[last]),
+            tokens[last],
+            sink(last),
+            rope[last].0,
+            rope[last].1,
+            None,
+            plan.attn_history,
+        )?;
+        let logits = rows.last().cloned().ok_or(A16EngineError::MalformedParams("an empty post table"))?;
+        traces[last].post = rows;
+        Ok((logits, traces))
+    }
+
+    /// One layer of the plan over a run of positions: node by node, every position's row. A
+    /// projection runs once over the run (the sink position alone, on its own parameters); every
+    /// other node is [`Self::eval_node`] per position; a cache write appends the run's rows in
+    /// position order, and a read hands position `i` the series that ends at its own row.
+    #[allow(clippy::too_many_arguments)]
+    fn walk_layer_batched(
+        &self,
+        plan: &A16ProfilePlanV1,
+        layer_in: &[Vec<i32>],
+        tokens: &[usize],
+        first_position: usize,
+        rope: &[(&[i32], &[i32])],
+        li: usize,
+        cache: &mut A16Cache,
+    ) -> Result<Vec<Vec<Vec<i32>>>, A16EngineError> {
+        use kaspa_consensus_core::palw_step::PalwStepNodeRoleV1 as Role;
+        let kv_dim = self.artifact.shape.kv_dim();
+        let n = tokens.len();
+        let refuse =
+            |what: &'static str| move |_e: kaspa_consensus_core::palw_base0_a16::PalwA16OpError| A16EngineError::OpRefused(what);
+        // The rows the cache held before this run: position `i` sees them and the run's first `i + 1`.
+        let (keys_before, values_before) = (cache.keys[li].len(), cache.values[li].len());
+        let mut rows: Vec<Vec<Vec<i32>>> = vec![Vec::with_capacity(plan.layer.len()); n];
+        for node in &plan.layer {
+            let resolve = |i: usize, input: &PlanInput, rows: &[Vec<Vec<i32>>]| -> Result<Vec<i32>, A16EngineError> {
+                match input {
+                    PlanInput::Row(k) => rows[i].get(*k).cloned().ok_or(A16EngineError::MalformedParams("a forward input ref")),
+                    PlanInput::LayerIn => Ok(layer_in[i].clone()),
+                    PlanInput::CachedK | PlanInput::CachedV => {
+                        let (series, before) = match input {
+                            PlanInput::CachedK => (&cache.keys[li], keys_before),
+                            _ => (&cache.values[li], values_before),
+                        };
+                        let visible = before + i + 1;
+                        let rows = series.get(..visible).ok_or(A16EngineError::MalformedParams("a cache read before its write"))?;
+                        let mut out = Vec::with_capacity(visible * kv_dim);
+                        for row in rows {
+                            out.extend_from_slice(row);
+                        }
+                        Ok(out)
+                    }
+                }
+            };
+            let outs: Vec<Vec<i32>> = match node.op {
+                PlanOp::MatMulRequant(slot) | PlanOp::MatMulRescale(slot) if self.fast => {
+                    let xs: Vec<Vec<i32>> = (0..n).map(|i| resolve(i, &node.inputs[0], &rows)).collect::<Result<_, _>>()?;
+                    // The sink position rides its own parameters, so it is run alone.
+                    let peel = usize::from(first_position == 0);
+                    let mut outs = Vec::with_capacity(n);
+                    if peel == 1 {
+                        let (w, params) = self.projection_operands(node.op, slot, li, true)?;
+                        outs.push(
+                            match node.op {
+                                PlanOp::MatMulRequant(_) => a16_matmul_requant(true, w, &xs[0], &params),
+                                _ => a16_matmul_rescale(true, w, &xs[0], &params),
+                            }
+                            .map_err(refuse("matmul"))?,
+                        );
+                    }
+                    if n > peel {
+                        let (w, params) = self.projection_operands(node.op, slot, li, false)?;
+                        let batch = match node.op {
+                            PlanOp::MatMulRequant(_) => crate::kernels::a16_matmul_requant_batch(w, &xs[peel..], &params),
+                            _ => crate::kernels::a16_matmul_rescale_batch(w, &xs[peel..], &params),
+                        }
+                        .map_err(refuse("matmul_batch"))?;
+                        outs.extend(batch);
+                    }
+                    outs
+                }
+                // **The fused site over the run: the series built once, each position handed its
+                // prefix.** A position's stepped walk concatenates the whole history for its own
+                // read — a copy that grows with the position, quadratic over a prompt — and the
+                // prefix of one concatenation is the same bytes. The positions are independent once
+                // the run's rows are written, so they run on the pool; each is the same kernel on the
+                // same inputs, whatever the schedule.
+                PlanOp::AttnFused
+                    if self.fast
+                        && matches!(node.inputs.get(1), Some(PlanInput::CachedK))
+                        && matches!(node.inputs.get(2), Some(PlanInput::CachedV)) =>
+                {
+                    let flat = |series: &[Vec<i32>]| -> Vec<i32> {
+                        let mut out = Vec::with_capacity(series.len() * kv_dim);
+                        for row in series {
+                            out.extend_from_slice(row);
+                        }
+                        out
+                    };
+                    let (k_full, v_full) = (flat(&cache.keys[li]), flat(&cache.values[li]));
+                    let p = &self.layers[li];
+                    (0..n)
+                        .into_par_iter()
+                        .map(|i| {
+                            let q = resolve(i, &node.inputs[0], &rows)?;
+                            let (k_end, v_end) = ((keys_before + i + 1) * kv_dim, (values_before + i + 1) * kv_dim);
+                            let (k, v) = (
+                                k_full.get(..k_end).ok_or(A16EngineError::MalformedParams("a cache read before its write"))?,
+                                v_full.get(..v_end).ok_or(A16EngineError::MalformedParams("a cache read before its write"))?,
+                            );
+                            crate::kernels::a16_attn_fused_uniform_fast_within(
+                                &q,
+                                k,
+                                v,
+                                self.artifact.shape.n_heads,
+                                self.artifact.shape.n_kv_heads,
+                                self.artifact.shape.d_head,
+                                p.logits,
+                                p.softmax_up,
+                                p.probs,
+                                p.values,
+                                plan.attn_history,
+                            )
+                            .map_err(refuse("attn_fused"))
+                        })
+                        .collect::<Result<_, _>>()?
+                }
+                // Every other node, each position on its own — independent of one another, so on
+                // the pool.
+                _ => (0..n)
+                    .into_par_iter()
+                    .map(|i| {
+                        self.eval_node(
+                            node,
+                            &|k| resolve(i, &node.inputs[k], &rows),
+                            tokens[i],
+                            first_position + i == 0,
+                            rope[i].0,
+                            rope[i].1,
+                            li,
+                            plan.attn_history,
+                        )
+                    })
+                    .collect::<Result<_, _>>()?,
+            };
+            match node.role {
+                Role::KCacheWrite => cache.keys[li].extend(outs.iter().cloned()),
+                Role::VCacheWrite => cache.values[li].extend(outs.iter().cloned()),
+                Role::Plain => {}
+            }
+            for (i, out) in outs.into_iter().enumerate() {
+                rows[i].push(out);
+            }
+        }
+        Ok(rows)
+    }
 
     /// Walk one table of the plan. `layer` is `Some((index, cache))` for the layer table — the
     /// only table with cache reads and writes — and `layer_in` is the table's input stream.
@@ -1337,13 +1588,7 @@ impl<'a> A16Engine<'a> {
         mut layer: Option<(usize, &mut A16Cache)>,
         attn_history: usize,
     ) -> Result<Vec<Vec<i32>>, A16EngineError> {
-        let shape = &self.artifact.shape;
-        let d = shape.d_model();
-        let kv_dim = shape.kv_dim();
-        let refuse =
-            |what: &'static str| move |_e: kaspa_consensus_core::palw_base0_a16::PalwA16OpError| A16EngineError::OpRefused(what);
-        let tile = |p: A16QuantParams, n: usize| -> Vec<A16QuantParams> { vec![p; n] };
-
+        let kv_dim = self.artifact.shape.kv_dim();
         let mut rows: Vec<Vec<i32>> = Vec::with_capacity(table.len());
         for node in table {
             // Resolve the declared inputs against what this walk holds.
@@ -1370,200 +1615,9 @@ impl<'a> A16Engine<'a> {
                 }
             };
 
-            let lp = |li: usize| -> &LayerParams { &self.layers[li] };
-            let out: Vec<i32> = match node.op {
-                PlanOp::EmbedGather => {
-                    if token_id >= self.artifact.shape.vocab {
-                        return Err(A16EngineError::OpRefused("a token outside the vocabulary"));
-                    }
-                    self.artifact.embed[token_id * d..(token_id + 1) * d].iter().map(|c| *c as i32).collect()
-                }
-                PlanOp::RmsNorm => {
-                    let x = resolve(&node.inputs[0], &rows)?;
-                    a16_rms_norm(&x, shape.eps_q).map_err(refuse("rms_norm"))?
-                }
-                PlanOp::Requant(slot) => {
-                    let x = resolve(&node.inputs[0], &rows)?;
-                    let li = layer.as_ref().map(|(li, _)| *li).unwrap_or(0);
-                    let params: Vec<A16QuantParams> = match slot {
-                        ReqSlot::EmbedLift => tile(self.embed_lift, d),
-                        ReqSlot::AttnNorm => lp(li).attn_norm.clone(),
-                        ReqSlot::Probs => {
-                            let history = x.len() / shape.n_heads.max(1);
-                            tile(lp(li).probs, shape.n_heads * history)
-                        }
-                        ReqSlot::AttnAlign => tile(if sink { lp(li).attn_align_sink } else { lp(li).attn_align }, d),
-                        ReqSlot::AttnResidual => tile(lp(li).attn_residual, d),
-                        ReqSlot::FfnNorm => lp(li).ffn_norm.clone(),
-                        ReqSlot::SiluQ => tile(if sink { lp(li).silu_sink } else { lp(li).silu_q }, shape.d_ff),
-                        ReqSlot::Gated => tile(if sink { lp(li).gated_sink } else { lp(li).gated }, shape.d_ff),
-                        ReqSlot::FfnAlign => tile(if sink { lp(li).ffn_align_sink } else { lp(li).ffn_align }, d),
-                        ReqSlot::FfnResidual => tile(lp(li).ffn_residual, d),
-                        ReqSlot::FinalNorm => self.final_norm.clone(),
-                    };
-                    a16_requant(&x, &params).map_err(refuse("requant"))?
-                }
-                PlanOp::MatMulRequant(slot) => {
-                    let x = resolve(&node.inputs[0], &rows)?;
-                    let li = layer.as_ref().map(|(li, _)| *li).unwrap_or(0);
-                    let (w, params): (&[i8], Vec<A16QuantParams>) = match slot {
-                        MatSlot::Q => (&self.artifact.layers[li].wq, lp(li).q.clone()),
-                        MatSlot::K => (&self.artifact.layers[li].wk, lp(li).k.clone()),
-                        MatSlot::V => (&self.artifact.layers[li].wv, lp(li).v.clone()),
-                        MatSlot::Wo => (&self.artifact.layers[li].wo, if sink { lp(li).wo_sink.clone() } else { lp(li).wo.clone() }),
-                        MatSlot::Up => (&self.artifact.layers[li].w_up, if sink { lp(li).up_sink.clone() } else { lp(li).up.clone() }),
-                        MatSlot::Down => {
-                            (&self.artifact.layers[li].w_down, if sink { lp(li).down_sink.clone() } else { lp(li).down.clone() })
-                        }
-                        MatSlot::Head => (&self.artifact.unembed, tile(self.logits_out, shape.vocab)),
-                        MatSlot::Gate => return Err(A16EngineError::MalformedParams("gate is a rescale site")),
-                    };
-                    a16_matmul_requant(self.fast, w, &x, &params).map_err(refuse("matmul_requant"))?
-                }
-                PlanOp::MatMulRescale(slot) => {
-                    let x = resolve(&node.inputs[0], &rows)?;
-                    let li = layer.as_ref().map(|(li, _)| *li).unwrap_or(0);
-                    let (w, params) = match slot {
-                        MatSlot::Gate => (&self.artifact.layers[li].w_gate, lp(li).gate.clone()),
-                        _ => return Err(A16EngineError::MalformedParams("a rescale site that is not the gate")),
-                    };
-                    a16_matmul_rescale(self.fast, w, &x, &params).map_err(refuse("matmul_rescale"))?
-                }
-                PlanOp::Rope { kv } => {
-                    let x = resolve(&node.inputs[0], &rows)?;
-                    let heads = if kv { shape.n_kv_heads } else { shape.n_heads };
-                    if x.len() != heads * shape.d_head {
-                        return Err(A16EngineError::OpRefused("a rotation whose input is not its declared width"));
-                    }
-                    let mut out = Vec::with_capacity(x.len());
-                    for hd in 0..heads {
-                        let slice = &x[hd * shape.d_head..(hd + 1) * shape.d_head];
-                        out.extend(a16_rope(slice, cos_row, sin_row).map_err(|_| A16EngineError::OpRefused("rope"))?);
-                    }
-                    out
-                }
-                PlanOp::AttnScores => {
-                    let q = resolve(&node.inputs[0], &rows)?;
-                    let k_series = resolve(&node.inputs[1], &rows)?;
-                    let li = layer.as_ref().map(|(li, _)| *li).unwrap_or(0);
-                    let history = k_series.len() / kv_dim.max(1);
-                    a16_attn_scores(
-                        self.fast,
-                        &q,
-                        &k_series,
-                        shape.n_heads,
-                        shape.n_kv_heads,
-                        shape.d_head,
-                        &tile(lp(li).logits, shape.n_heads * history),
-                    )
-                    .map_err(refuse("attn_scores"))?
-                }
-                PlanOp::Softmax => {
-                    let x = resolve(&node.inputs[0], &rows)?;
-                    let li = layer.as_ref().map(|(li, _)| *li).unwrap_or(0);
-                    let history = x.len() / shape.n_heads.max(1);
-                    a16_softmax_rows(&x, history, lp(li).softmax_up).map_err(refuse("softmax"))?
-                }
-                PlanOp::AttnValues => {
-                    let p = resolve(&node.inputs[0], &rows)?;
-                    let v_series = resolve(&node.inputs[1], &rows)?;
-                    let li = layer.as_ref().map(|(li, _)| *li).unwrap_or(0);
-                    a16_attn_values(
-                        self.fast,
-                        attn_history,
-                        &p,
-                        &v_series,
-                        shape.n_heads,
-                        shape.n_kv_heads,
-                        shape.d_head,
-                        &tile(lp(li).values, shape.n_heads * shape.d_head),
-                    )
-                    .map_err(refuse("attn_values"))?
-                }
-                // **The fused attention site** (ADR-0082 Decision 1). The four shipped kernels
-                // composed — W9, W11, the probability requantization, W10 — with the three
-                // intermediates living only in this frame. The row pushed below is the OUTPUT
-                // row, so the site commits `heads x d_head` codes at every context instead of
-                // three rows that grow with the position.
-                //
-                // Composed from the engine's OWN kernels rather than from
-                // `a16_attn_fused_via_tiles_v1`: the two are proven equal at every history
-                // length and tile width (`palw_base0_a16::fused::the_tile_route_is_the
-                // _composition`), and the composition is what the fast projections are asserted
-                // bit-identical against, so this keeps the executor at the runtime's speed while
-                // computing exactly what `a16_attn_fused_reference_v1` defines. The equality is
-                // held by `the_fused_arm_is_the_reference_composition` below.
-                // On the fast engine the four ops run as one kernel with each narrowing's
-                // parameters read once (`kernels::a16_attn_fused_uniform_fast`, bit-identical to the
-                // composition below and held to it by `the_fast_engine_and_the_catalog_agree_token_for
-                // _token`): the composition tiles a triple over `heads × history` twice a call and
-                // materialises four history-long rows, which is quadratic allocation over a job.
-                PlanOp::AttnFused if self.fast => {
-                    let q = resolve(&node.inputs[0], &rows)?;
-                    let k_series = resolve(&node.inputs[1], &rows)?;
-                    let v_series = resolve(&node.inputs[2], &rows)?;
-                    let li = layer.as_ref().map(|(li, _)| *li).unwrap_or(0);
-                    let p = lp(li);
-                    crate::kernels::a16_attn_fused_uniform_fast_within(
-                        &q,
-                        &k_series,
-                        &v_series,
-                        shape.n_heads,
-                        shape.n_kv_heads,
-                        shape.d_head,
-                        p.logits,
-                        p.softmax_up,
-                        p.probs,
-                        p.values,
-                        attn_history,
-                    )
-                    .map_err(refuse("attn_fused"))?
-                }
-                PlanOp::AttnFused => {
-                    let q = resolve(&node.inputs[0], &rows)?;
-                    let k_series = resolve(&node.inputs[1], &rows)?;
-                    let v_series = resolve(&node.inputs[2], &rows)?;
-                    let li = layer.as_ref().map(|(li, _)| *li).unwrap_or(0);
-                    let history = k_series.len() / kv_dim.max(1);
-                    let scores = a16_attn_scores(
-                        self.fast,
-                        &q,
-                        &k_series,
-                        shape.n_heads,
-                        shape.n_kv_heads,
-                        shape.d_head,
-                        &tile(lp(li).logits, shape.n_heads * history),
-                    )
-                    .map_err(refuse("attn_scores"))?;
-                    let probs = a16_softmax_rows(&scores, history, lp(li).softmax_up).map_err(refuse("softmax"))?;
-                    let codes = a16_requant(&probs, &tile(lp(li).probs, probs.len())).map_err(refuse("requant"))?;
-                    a16_attn_values(
-                        self.fast,
-                        attn_history,
-                        &codes,
-                        &v_series,
-                        shape.n_heads,
-                        shape.n_kv_heads,
-                        shape.d_head,
-                        &tile(lp(li).values, shape.n_heads * shape.d_head),
-                    )
-                    .map_err(refuse("attn_values"))?
-                }
-                PlanOp::AddElem => {
-                    let a = resolve(&node.inputs[0], &rows)?;
-                    let b = resolve(&node.inputs[1], &rows)?;
-                    a16_add_elem(&a, &b).map_err(refuse("add_elem"))?
-                }
-                PlanOp::MulElem => {
-                    let a = resolve(&node.inputs[0], &rows)?;
-                    let b = resolve(&node.inputs[1], &rows)?;
-                    a16_mul_elem(&a, &b).map_err(refuse("mul_elem"))?
-                }
-                PlanOp::Silu => {
-                    let x = resolve(&node.inputs[0], &rows)?;
-                    silu(&x)
-                }
-            };
+            let li = layer.as_ref().map(|(li, _)| *li).unwrap_or(0);
+            let out =
+                self.eval_node(node, &|k| resolve(&node.inputs[k], &rows), token_id, sink, cos_row, sin_row, li, attn_history)?;
 
             // The declared cache write, honored where declared — the ROTATED key and the raw V
             // are conventions of the DECLARATION (the IR carries the role on those nodes), so a
@@ -1583,6 +1637,231 @@ impl<'a> A16Engine<'a> {
             rows.push(out);
         }
         Ok(rows)
+    }
+
+    /// **A projection's weights and output parameters** — the ONE selection a stepped walk and the
+    /// one-pass prefill both read, so a batched projection is the stepped one's operands exactly. The
+    /// sink position's own rows (ADR-0050) ride here: `sink` is the position being 0.
+    fn projection_operands(
+        &self,
+        op: PlanOp,
+        slot: MatSlot,
+        li: usize,
+        sink: bool,
+    ) -> Result<(&[i8], Vec<A16QuantParams>), A16EngineError> {
+        let lp = &self.layers[li];
+        let w = &self.artifact.layers[li];
+        Ok(match (op, slot) {
+            (PlanOp::MatMulRequant(_), MatSlot::Q) => (&w.wq, lp.q.clone()),
+            (PlanOp::MatMulRequant(_), MatSlot::K) => (&w.wk, lp.k.clone()),
+            (PlanOp::MatMulRequant(_), MatSlot::V) => (&w.wv, lp.v.clone()),
+            (PlanOp::MatMulRequant(_), MatSlot::Wo) => (&w.wo, if sink { lp.wo_sink.clone() } else { lp.wo.clone() }),
+            (PlanOp::MatMulRequant(_), MatSlot::Up) => (&w.w_up, if sink { lp.up_sink.clone() } else { lp.up.clone() }),
+            (PlanOp::MatMulRequant(_), MatSlot::Down) => (&w.w_down, if sink { lp.down_sink.clone() } else { lp.down.clone() }),
+            (PlanOp::MatMulRequant(_), MatSlot::Head) => (&self.artifact.unembed, vec![self.logits_out; self.artifact.shape.vocab]),
+            (PlanOp::MatMulRequant(_), MatSlot::Gate) => return Err(A16EngineError::MalformedParams("gate is a rescale site")),
+            (PlanOp::MatMulRescale(_), MatSlot::Gate) => (&w.w_gate, lp.gate.clone()),
+            (PlanOp::MatMulRescale(_), _) => return Err(A16EngineError::MalformedParams("a rescale site that is not the gate")),
+            _ => return Err(A16EngineError::MalformedParams("a projection site that is not a projection")),
+        })
+    }
+
+    /// **One declared node's row, from its resolved inputs** — the evaluation [`Self::walk_table`]
+    /// (a position at a time) and [`Self::forward_prefill_planned`] (a prompt a layer at a time)
+    /// share, so a node the two walks evaluate is one computation and the one-pass prefill cannot
+    /// commit a row the stepped one would not. `input(k)` is the node's `k`-th declared input,
+    /// resolved by the walk that holds it; `li` is the layer the node runs in (0 outside one).
+    #[allow(clippy::too_many_arguments)]
+    fn eval_node(
+        &self,
+        node: &PlanNode,
+        input: &dyn Fn(usize) -> Result<Vec<i32>, A16EngineError>,
+        token_id: usize,
+        sink: bool,
+        cos_row: &[i32],
+        sin_row: &[i32],
+        li: usize,
+        attn_history: usize,
+    ) -> Result<Vec<i32>, A16EngineError> {
+        let shape = &self.artifact.shape;
+        let d = shape.d_model();
+        let kv_dim = shape.kv_dim();
+        let refuse =
+            |what: &'static str| move |_e: kaspa_consensus_core::palw_base0_a16::PalwA16OpError| A16EngineError::OpRefused(what);
+        let tile = |p: A16QuantParams, n: usize| -> Vec<A16QuantParams> { vec![p; n] };
+        let lp = |li: usize| -> &LayerParams { &self.layers[li] };
+        let out: Vec<i32> = match node.op {
+            PlanOp::EmbedGather => {
+                if token_id >= self.artifact.shape.vocab {
+                    return Err(A16EngineError::OpRefused("a token outside the vocabulary"));
+                }
+                self.artifact.embed[token_id * d..(token_id + 1) * d].iter().map(|c| *c as i32).collect()
+            }
+            PlanOp::RmsNorm => {
+                let x = input(0)?;
+                a16_rms_norm(&x, shape.eps_q).map_err(refuse("rms_norm"))?
+            }
+            PlanOp::Requant(slot) => {
+                let x = input(0)?;
+                let params: Vec<A16QuantParams> = match slot {
+                    ReqSlot::EmbedLift => tile(self.embed_lift, d),
+                    ReqSlot::AttnNorm => lp(li).attn_norm.clone(),
+                    ReqSlot::Probs => {
+                        let history = x.len() / shape.n_heads.max(1);
+                        tile(lp(li).probs, shape.n_heads * history)
+                    }
+                    ReqSlot::AttnAlign => tile(if sink { lp(li).attn_align_sink } else { lp(li).attn_align }, d),
+                    ReqSlot::AttnResidual => tile(lp(li).attn_residual, d),
+                    ReqSlot::FfnNorm => lp(li).ffn_norm.clone(),
+                    ReqSlot::SiluQ => tile(if sink { lp(li).silu_sink } else { lp(li).silu_q }, shape.d_ff),
+                    ReqSlot::Gated => tile(if sink { lp(li).gated_sink } else { lp(li).gated }, shape.d_ff),
+                    ReqSlot::FfnAlign => tile(if sink { lp(li).ffn_align_sink } else { lp(li).ffn_align }, d),
+                    ReqSlot::FfnResidual => tile(lp(li).ffn_residual, d),
+                    ReqSlot::FinalNorm => self.final_norm.clone(),
+                };
+                a16_requant(&x, &params).map_err(refuse("requant"))?
+            }
+            PlanOp::MatMulRequant(slot) => {
+                let x = input(0)?;
+                let (w, params) = self.projection_operands(node.op, slot, li, sink)?;
+                a16_matmul_requant(self.fast, w, &x, &params).map_err(refuse("matmul_requant"))?
+            }
+            PlanOp::MatMulRescale(slot) => {
+                let x = input(0)?;
+                let (w, params) = self.projection_operands(node.op, slot, li, sink)?;
+                a16_matmul_rescale(self.fast, w, &x, &params).map_err(refuse("matmul_rescale"))?
+            }
+            PlanOp::Rope { kv } => {
+                let x = input(0)?;
+                let heads = if kv { shape.n_kv_heads } else { shape.n_heads };
+                if x.len() != heads * shape.d_head {
+                    return Err(A16EngineError::OpRefused("a rotation whose input is not its declared width"));
+                }
+                let mut out = Vec::with_capacity(x.len());
+                for hd in 0..heads {
+                    let slice = &x[hd * shape.d_head..(hd + 1) * shape.d_head];
+                    out.extend(a16_rope(slice, cos_row, sin_row).map_err(|_| A16EngineError::OpRefused("rope"))?);
+                }
+                out
+            }
+            PlanOp::AttnScores => {
+                let q = input(0)?;
+                let k_series = input(1)?;
+                let history = k_series.len() / kv_dim.max(1);
+                a16_attn_scores(
+                    self.fast,
+                    &q,
+                    &k_series,
+                    shape.n_heads,
+                    shape.n_kv_heads,
+                    shape.d_head,
+                    &tile(lp(li).logits, shape.n_heads * history),
+                )
+                .map_err(refuse("attn_scores"))?
+            }
+            PlanOp::Softmax => {
+                let x = input(0)?;
+                let history = x.len() / shape.n_heads.max(1);
+                a16_softmax_rows(&x, history, lp(li).softmax_up).map_err(refuse("softmax"))?
+            }
+            PlanOp::AttnValues => {
+                let p = input(0)?;
+                let v_series = input(1)?;
+                a16_attn_values(
+                    self.fast,
+                    attn_history,
+                    &p,
+                    &v_series,
+                    shape.n_heads,
+                    shape.n_kv_heads,
+                    shape.d_head,
+                    &tile(lp(li).values, shape.n_heads * shape.d_head),
+                )
+                .map_err(refuse("attn_values"))?
+            }
+            // **The fused attention site** (ADR-0082 Decision 1). The four shipped kernels
+            // composed — W9, W11, the probability requantization, W10 — with the three
+            // intermediates living only in this frame. The row pushed below is the OUTPUT
+            // row, so the site commits `heads x d_head` codes at every context instead of
+            // three rows that grow with the position.
+            //
+            // Composed from the engine's OWN kernels rather than from
+            // `a16_attn_fused_via_tiles_v1`: the two are proven equal at every history
+            // length and tile width (`palw_base0_a16::fused::the_tile_route_is_the
+            // _composition`), and the composition is what the fast projections are asserted
+            // bit-identical against, so this keeps the executor at the runtime's speed while
+            // computing exactly what `a16_attn_fused_reference_v1` defines. The equality is
+            // held by `the_fused_arm_is_the_reference_composition` below.
+            // On the fast engine the four ops run as one kernel with each narrowing's
+            // parameters read once (`kernels::a16_attn_fused_uniform_fast`, bit-identical to the
+            // composition below and held to it by `the_fast_engine_and_the_catalog_agree_token_for
+            // _token`): the composition tiles a triple over `heads × history` twice a call and
+            // materialises four history-long rows, which is quadratic allocation over a job.
+            PlanOp::AttnFused if self.fast => {
+                let q = input(0)?;
+                let k_series = input(1)?;
+                let v_series = input(2)?;
+                let p = lp(li);
+                crate::kernels::a16_attn_fused_uniform_fast_within(
+                    &q,
+                    &k_series,
+                    &v_series,
+                    shape.n_heads,
+                    shape.n_kv_heads,
+                    shape.d_head,
+                    p.logits,
+                    p.softmax_up,
+                    p.probs,
+                    p.values,
+                    attn_history,
+                )
+                .map_err(refuse("attn_fused"))?
+            }
+            PlanOp::AttnFused => {
+                let q = input(0)?;
+                let k_series = input(1)?;
+                let v_series = input(2)?;
+                let history = k_series.len() / kv_dim.max(1);
+                let scores = a16_attn_scores(
+                    self.fast,
+                    &q,
+                    &k_series,
+                    shape.n_heads,
+                    shape.n_kv_heads,
+                    shape.d_head,
+                    &tile(lp(li).logits, shape.n_heads * history),
+                )
+                .map_err(refuse("attn_scores"))?;
+                let probs = a16_softmax_rows(&scores, history, lp(li).softmax_up).map_err(refuse("softmax"))?;
+                let codes = a16_requant(&probs, &tile(lp(li).probs, probs.len())).map_err(refuse("requant"))?;
+                a16_attn_values(
+                    self.fast,
+                    attn_history,
+                    &codes,
+                    &v_series,
+                    shape.n_heads,
+                    shape.n_kv_heads,
+                    shape.d_head,
+                    &tile(lp(li).values, shape.n_heads * shape.d_head),
+                )
+                .map_err(refuse("attn_values"))?
+            }
+            PlanOp::AddElem => {
+                let a = input(0)?;
+                let b = input(1)?;
+                a16_add_elem(&a, &b).map_err(refuse("add_elem"))?
+            }
+            PlanOp::MulElem => {
+                let a = input(0)?;
+                let b = input(1)?;
+                a16_mul_elem(&a, &b).map_err(refuse("mul_elem"))?
+            }
+            PlanOp::Silu => {
+                let x = input(0)?;
+                silu(&x)
+            }
+        };
+        Ok(out)
     }
 }
 
@@ -2025,6 +2304,168 @@ mod profile_plan_tests {
             assert_eq!(cache_v2.keys, cache_v5.keys, "the two graphs must leave the same cache");
             assert_eq!(cache_v2.values, cache_v5.values);
         }
+    }
+
+    /// **The dense tier's one-pass prefill is the position-by-position one** (ADR-0117 Decision 2):
+    /// over the v2, v5 (fused site) and v7 (held map) plans, on the fast engine and the catalog one,
+    /// a prompt run a layer at a time in runs of every width — from the sink, and from a cache a
+    /// stepped walk already filled — leaves every committed row, the last position's logits and the
+    /// cache exactly as the stepped walk leaves them. The post rows are the last position's only.
+    #[test]
+    fn the_one_pass_prefill_is_the_position_by_position_one() {
+        use kaspa_consensus_core::palw_qwen25_profile::{qwen25_a16_profile_v5, qwen25_a16_profile_v7};
+        let mut checked = 0usize;
+        for (layers, d_head, d_ff) in [(1usize, 4usize, 12usize), (2, 8, 16)] {
+            let artifact = artifact(layers, d_head, d_ff);
+            let g = geometry(&artifact);
+            let profiles = [
+                ("v2", qwen25_a16_profile_v2(g).expect("v2")),
+                ("v5", qwen25_a16_profile_v5(g).expect("v5")),
+                ("v7", qwen25_a16_profile_v7(g).expect("v7")),
+            ];
+            for engine in [A16Engine::new(&artifact).expect("fast"), A16Engine::new_reference(&artifact).expect("reference")] {
+                for (name, profile) in &profiles {
+                    let plan = engine.plan_from_profile(profile).expect("servable");
+                    assert!(plan.one_pass_prefill_supported(), "{name}: every read after its write");
+                    let tokens: Vec<usize> = (0..9).map(|i| (i * 11 + 5) % artifact.shape.vocab).collect();
+                    for start in [0usize, 1, 4] {
+                        // The stepped walk: a prefix to stand on, then the run.
+                        let mut stepped = A16Cache::new(layers);
+                        for p in 0..start {
+                            engine.forward_token_planned(&plan, &mut stepped, (p * 3 + 1) % artifact.shape.vocab, p).expect("prefix");
+                        }
+                        let mut want = Vec::new();
+                        let mut last_logits = Vec::new();
+                        for (i, token) in tokens.iter().enumerate() {
+                            let (logits, trace) = engine.forward_token_planned(&plan, &mut stepped, *token, start + i).expect("steps");
+                            want.push(trace);
+                            last_logits = logits;
+                        }
+                        for run in [1usize, 2, 3, 5, tokens.len()] {
+                            let mut passed = A16Cache::new(layers);
+                            for p in 0..start {
+                                engine
+                                    .forward_token_planned(&plan, &mut passed, (p * 3 + 1) % artifact.shape.vocab, p)
+                                    .expect("prefix");
+                            }
+                            let mut got = Vec::new();
+                            let mut logits = Vec::new();
+                            for (at, chunk) in tokens.chunks(run).enumerate() {
+                                let first = start + at * run;
+                                let last = first + chunk.len() == start + tokens.len();
+                                let (l, traces) =
+                                    engine.forward_prefill_planned(&plan, &mut passed, chunk, first, last).expect("one pass");
+                                if last {
+                                    logits = l;
+                                } else {
+                                    assert!(l.is_empty(), "no logits without the post table");
+                                }
+                                got.extend(traces);
+                            }
+                            let at = format!("{name} layers={layers} start={start} run={run}");
+                            assert_eq!(logits, last_logits, "{at}: the last position's logits");
+                            for (i, (g, w)) in got.iter().zip(&want).enumerate() {
+                                assert_eq!(g.pre, w.pre, "{at}: pre rows at {i}");
+                                assert_eq!(g.attn, w.attn, "{at}: layer rows at {i}");
+                                if i + 1 == tokens.len() {
+                                    assert_eq!(g.post, w.post, "{at}: the last position's post rows");
+                                } else {
+                                    assert!(g.post.is_empty(), "{at}: no post rows before the last position");
+                                }
+                            }
+                            assert_eq!(passed.keys, stepped.keys, "{at}: keys");
+                            assert_eq!(passed.values, stepped.values, "{at}: values");
+                            checked += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(checked, 2 * 2 * 3 * 3 * 5, "every plan, engine, start and run width");
+    }
+
+    /// **The one-pass prefill on the real dense row, measured** (ADR-0117 Decision 2). Off unless
+    /// `MISAKA_PALW_ONE_PASS_ARTIFACT` names the converted 1.5B artifact — 1.7 GiB of weights are not a
+    /// unit test's input. The testnet-11 graph-v5 row's plan runs the same prompt position by position
+    /// and a run of positions at a time; every committed row (hashed as it is produced, so the
+    /// comparison holds no trace), the cache left behind and the last logits must be the same bits,
+    /// and the two times are printed:
+    ///
+    /// ```text
+    /// MISAKA_PALW_ONE_PASS_ARTIFACT=/path/qwen25-1.5b-a16.palwart MISAKA_PALW_ONE_PASS_PREFILL=256 \
+    ///   cargo test --release -p misaka-palw-base0 --lib -- one_pass_prefill_on_the_real --nocapture
+    /// ```
+    #[test]
+    fn one_pass_prefill_on_the_real_dense_row() {
+        use std::hash::{Hash, Hasher};
+        let Ok(path) = std::env::var("MISAKA_PALW_ONE_PASS_ARTIFACT") else {
+            eprintln!("one-pass: skipped — set MISAKA_PALW_ONE_PASS_ARTIFACT to the dense .palwart to measure");
+            return;
+        };
+        let prefill: usize = std::env::var("MISAKA_PALW_ONE_PASS_PREFILL").ok().and_then(|v| v.parse().ok()).unwrap_or(256);
+        let run: usize = std::env::var("MISAKA_PALW_ONE_PASS_RUN").ok().and_then(|v| v.parse().ok()).unwrap_or(32);
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+        let artifact = crate::artifact::decode_artifact_file_v1(&bytes).unwrap_or_else(|e| panic!("{path}: {e}"));
+        drop(bytes);
+        let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_graph_v5_profile_v1().expect("the shipped dense row");
+        let engine = A16Engine::new(&artifact).expect("an A16 artifact");
+        let plan = engine.plan_from_profile(&profile).expect("the shipped row is servable");
+        assert!(plan.one_pass_prefill_supported());
+        let vocab = artifact.shape.vocab;
+        let prompt: Vec<usize> = (0..prefill).map(|i| (i * 7919 + 1013) % vocab).collect();
+        let fold = |state: &mut std::collections::hash_map::DefaultHasher, trace: &A16TraceV1| {
+            trace.pre.hash(state);
+            trace.attn.hash(state);
+        };
+
+        let started = std::time::Instant::now();
+        let mut stepped = A16Cache::new(artifact.shape.n_layers);
+        let mut stepped_rows = std::collections::hash_map::DefaultHasher::new();
+        let mut stepped_logits = Vec::new();
+        for (position, token) in prompt.iter().enumerate() {
+            let (logits, trace) = engine.forward_token_planned(&plan, &mut stepped, *token, position).expect("a step");
+            fold(&mut stepped_rows, &trace);
+            if position + 1 == prefill {
+                trace.post.hash(&mut stepped_rows);
+            }
+            stepped_logits = logits;
+        }
+        let stepped_took = started.elapsed();
+
+        let started = std::time::Instant::now();
+        let mut passed = A16Cache::new(artifact.shape.n_layers);
+        let mut passed_rows = std::collections::hash_map::DefaultHasher::new();
+        let mut passed_logits = Vec::new();
+        let mut position = 0usize;
+        while position < prefill {
+            let end = (position + run).min(prefill);
+            let last = end == prefill;
+            let (logits, traces) =
+                engine.forward_prefill_planned(&plan, &mut passed, &prompt[position..end], position, last).expect("a run");
+            for trace in &traces {
+                fold(&mut passed_rows, trace);
+            }
+            if last {
+                traces.last().expect("a run has positions").post.hash(&mut passed_rows);
+                passed_logits = logits;
+            }
+            position = end;
+        }
+        let passed_took = started.elapsed();
+
+        assert_eq!(passed_rows.finish(), stepped_rows.finish(), "every committed row");
+        assert_eq!(passed_logits, stepped_logits, "the last position's logits");
+        assert_eq!(passed.keys, stepped.keys, "the keys the prefill leaves");
+        assert_eq!(passed.values, stepped.values, "the values the prefill leaves");
+        eprintln!(
+            "one-pass on the real dense row: {prefill} positions — stepped {:.3} s ({:.1} ms/position), runs of {run} {:.3} s \
+             ({:.1} ms/position), {:.2}x",
+            stepped_took.as_secs_f64(),
+            stepped_took.as_secs_f64() * 1000.0 / prefill as f64,
+            passed_took.as_secs_f64(),
+            passed_took.as_secs_f64() * 1000.0 / prefill as f64,
+            stepped_took.as_secs_f64() / passed_took.as_secs_f64()
+        );
     }
 
     /// **ADR-0067's differential gate, in miniature: the compiled rows are the interpreter's

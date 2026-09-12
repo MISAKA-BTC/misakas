@@ -125,6 +125,20 @@ pub fn qwen25_a16_roots_v1(
 
 /// **The A16 tier's captured attempt: run, capture every declared step, commit the binding.**
 ///
+/// **Positions a dense prefill runs through each layer together** (ADR-0117 Decision 2). Each of a
+/// layer's projections reads its weights once for the run instead of once a position, so the
+/// weights are read `⌈prefill / run⌉` times rather than `prefill`; the rows a run commits (a
+/// position's whole trace, a few megabytes on the 1.5B row) are held until the run is pushed, which
+/// is what bounds it. A node-local choice: the rows, their order and every root are the stepped
+/// walk's whatever the run.
+///
+/// Measured on the real 1.5B artifact and testnet-11's graph-v5 row (a 12-core M-series host, the
+/// prompt the `one_pass_prefill_on_the_real_dense_row` probe builds): 508 positions — the 512 row's
+/// canonical prefill — step at 36.3 ms a position, and run at 16.3 ms in runs of 32 and 14.7 ms in
+/// runs of 64 (2.45×); 256 positions, 33.8 against 15.4 ms. Every row, the cache and the logits the
+/// same bits.
+pub const A16_PREFILL_RUN_POSITIONS: usize = 64;
+
 /// The same object the floor's [`crate::produce::base0_execute_for_attempt_v1`] returns, because
 /// it answers the same three verbs: `execution_root` is the step binding's own commitment (what a
 /// court pins a refutation against), the retained material is the family codec's tuple, and the
@@ -318,25 +332,56 @@ fn a16_execute_streaming_v1(
     // Call 0 — prefill. Logits leaves exist only at its LAST position; the earlier rows predict
     // tokens the prompt already contains, so the capture drops their Post rows (steps this class's
     // step space does not have) and the retention keeps only the selecting row.
+    //
+    // **A run of positions at a time through each layer** (ADR-0117 Decision 2, the dense tier's
+    // half): `forward_prefill_planned` walks the registered plan a layer at a time over
+    // `A16_PREFILL_RUN_POSITIONS` positions, each projection's weights read once for the run
+    // instead of once a position, and hands back the rows the stepped walk commits in the order it
+    // commits them. The runs are pushed in position order, so the capture — dense or fold — sees
+    // what it always saw. A checkpoint after a prefill position (the held map's, after every one)
+    // is taken after its run: the cache only appends, and a checkpoint after position `p` reads rows
+    // `0..=p` by index, which the run left exactly as the stepped walk would have.
     let mut last_logits = Vec::new();
-    for (position, token) in prompt.iter().take(prefill).enumerate() {
-        let (logits, trace) = forward(&engine, &mut cache, *token, position).map_err(|e| format!("prefill at {position}: {e}"))?;
-        let mut rows = crate::legs::a16_captured_rows_v1(&trace);
-        if position + 1 != prefill {
-            rows.retain(|r| r.table != kaspa_consensus_core::palw_step::PalwStepTableV1::Post);
+    let run_plan = plan.filter(|plan| plan.one_pass_prefill_supported());
+    let mut position = 0usize;
+    while position < prefill {
+        let end = match run_plan {
+            Some(_) => (position + A16_PREFILL_RUN_POSITIONS).min(prefill),
+            None => position + 1,
+        };
+        let last = end == prefill;
+        let (logits, traces) = match run_plan {
+            Some(plan) => engine
+                .forward_prefill_planned(plan, &mut cache, &prompt[position..end], position, last)
+                .map_err(|e| format!("the prefill run at {position}: {e:?}"))?,
+            None => {
+                let (logits, trace) =
+                    forward(&engine, &mut cache, prompt[position], position).map_err(|e| format!("prefill at {position}: {e}"))?;
+                (logits, vec![trace])
+            }
+        };
+        for (k, trace) in traces.iter().enumerate() {
+            let at = position + k;
+            let mut rows = crate::legs::a16_captured_rows_v1(trace);
+            if at + 1 != prefill {
+                rows.retain(|r| r.table != kaspa_consensus_core::palw_step::PalwStepTableV1::Post);
+            }
+            capture.push_call(profile, ctx, 0, at as u32, &rows).map_err(|e| format!("{e:?}"))?;
+            // **A checkpoint after a PREFILL position, when the class's cadence says so** (ADR-0082
+            // Decision 4, amended). A per-call class wants none of these and this is `false` at every
+            // prefill position; a class whose map addresses history tiles wants one after every
+            // position, because a dispute at a prefill position with no anchor opens `p + 1` cache
+            // rows per kind and its bottom is three chunks no carrier can file.
+            if checkpoints.wants_checkpoint_after_v1(0, at as u32) {
+                checkpoints
+                    .push_with_v1(|entry| cache.state_chunk_bytes_v1(entry))
+                    .map_err(|e| format!("the prefill checkpoint at position {at}: {e:?}"))?;
+            }
         }
-        capture.push_call(profile, ctx, 0, position as u32, &rows).map_err(|e| format!("{e:?}"))?;
-        // **A checkpoint after a PREFILL position, when the class's cadence says so** (ADR-0082
-        // Decision 4, amended). A per-call class wants none of these and this is `false` at every
-        // prefill position; a class whose map addresses history tiles wants one after every
-        // position, because a dispute at a prefill position with no anchor opens `p + 1` cache
-        // rows per kind and its bottom is three chunks no carrier can file.
-        if checkpoints.wants_checkpoint_after_v1(0, position as u32) {
-            checkpoints
-                .push_with_v1(|entry| cache.state_chunk_bytes_v1(entry))
-                .map_err(|e| format!("the prefill checkpoint at position {position}: {e:?}"))?;
+        if last {
+            last_logits = logits;
         }
-        last_logits = logits;
+        position = end;
     }
     let mut next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&last_logits) as u32;
     generated.push(next);
@@ -1101,7 +1146,7 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for A16IntervalKernels<'_> {
         let engine = A16Engine::new(self.artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
         let layers = self.artifact.shape.n_layers;
         let row_elements = profile.attn_kv_heads as usize * profile.attn_head_dim as usize;
-        let mut cache = match start {
+        let cache = match start {
             crate::fp_interval::Base0FpIntervalStartV1::Genesis { .. } => A16Cache::new(layers),
             crate::fp_interval::Base0FpIntervalStartV1::Checkpoint { covered_decode_call, chunks, .. } => {
                 let geometry =
@@ -1109,27 +1154,60 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for A16IntervalKernels<'_> {
                 A16Cache::from_state_chunks_v1(layers, row_elements, &geometry, chunks).map_err(|e| format!("{e:?}"))?
             }
         };
-        let vocab = self.artifact.shape.vocab;
-        crate::fp_interval::base0_fp_replay_interval_into_v1(
-            profile,
-            ctx,
-            start,
-            window,
-            step_leaf_count,
-            |token, position| {
-                if token >= vocab {
-                    return Err(format!("token {token} is outside this class's vocabulary of {vocab}"));
-                }
-                let (logits, trace) = match self.plan {
-                    Some(plan) => engine
-                        .forward_token_planned(plan, &mut cache, token, position)
-                        .map_err(|e| format!("planned forward: {e:?}"))?,
-                    None => engine.forward_token_traced(&mut cache, token, position).map_err(|e| format!("forward: {e:?}"))?,
-                };
-                Ok((logits, crate::legs::a16_captured_rows_v1(&trace)))
-            },
-            sink,
-        )
+        let mut replay = A16ReplayEngineV1 { engine, cache, plan: self.plan, vocab: self.artifact.shape.vocab };
+        crate::fp_interval::base0_fp_replay_interval_with_v1(profile, ctx, start, window, step_leaf_count, &mut replay, sink)
+    }
+}
+
+/// **The dense tier's engine as a replay drives it** — a step through the plan (or the v2 reference
+/// program), and, where the plan allows it, a run of prefill positions a layer at a time
+/// (`A16Engine::forward_prefill_planned`, ADR-0117 Decision 2): a seat replaying a held interval of
+/// prompt positions, or a shipped class's interval 0 (the whole prefill), reads each layer's
+/// weights once a run of [`A16_PREFILL_RUN_POSITIONS`], and commits the same rows.
+struct A16ReplayEngineV1<'a> {
+    engine: A16Engine<'a>,
+    cache: A16Cache,
+    plan: Option<&'a crate::engine_a16::A16ProfilePlanV1>,
+    vocab: usize,
+}
+
+impl crate::fp_interval::Base0FpReplayForwardV1 for A16ReplayEngineV1<'_> {
+    fn step(&mut self, token: usize, position: usize) -> Result<(Vec<i32>, Vec<crate::legs::Base0CapturedRowV1>), String> {
+        if token >= self.vocab {
+            return Err(format!("token {token} is outside this class's vocabulary of {}", self.vocab));
+        }
+        let (logits, trace) = match self.plan {
+            Some(plan) => self
+                .engine
+                .forward_token_planned(plan, &mut self.cache, token, position)
+                .map_err(|e| format!("planned forward: {e:?}"))?,
+            None => self.engine.forward_token_traced(&mut self.cache, token, position).map_err(|e| format!("forward: {e:?}"))?,
+        };
+        Ok((logits, crate::legs::a16_captured_rows_v1(&trace)))
+    }
+
+    fn run_positions(&self) -> usize {
+        match self.plan {
+            Some(plan) if plan.one_pass_prefill_supported() => A16_PREFILL_RUN_POSITIONS,
+            _ => 1,
+        }
+    }
+
+    fn run(
+        &mut self,
+        tokens: &[usize],
+        first_position: usize,
+        with_post: bool,
+    ) -> Result<(Vec<i32>, Vec<Vec<crate::legs::Base0CapturedRowV1>>), String> {
+        let plan = self.plan.ok_or_else(|| "a run needs the registered plan".to_string())?;
+        if let Some(bad) = tokens.iter().find(|t| **t >= self.vocab) {
+            return Err(format!("token {bad} is outside this class's vocabulary of {}", self.vocab));
+        }
+        let (logits, traces) = self
+            .engine
+            .forward_prefill_planned(plan, &mut self.cache, tokens, first_position, with_post)
+            .map_err(|e| format!("the prefill run at {first_position}: {e:?}"))?;
+        Ok((logits, traces.iter().map(crate::legs::a16_captured_rows_v1).collect()))
     }
 }
 
