@@ -855,6 +855,29 @@ pub fn palw_base0_sparse_retain_level_v1(max_step_leaf_count: u64) -> u32 {
     palw_base0_sparse_retain_level_for_ladder_v1(max_step_leaf_count).max(PALW_BASE0_SPARSE_RETAIN_LEVEL_V1)
 }
 
+/// **The level THIS class's capture folds at** (ADR-0121 Decision 3): a class under the held
+/// regime folds at [`PALW_BASE0_SPARSE_RETAIN_LEVEL_V1`] whatever its ladder; every other class at
+/// its ladder's level ([`palw_base0_sparse_retain_level_v1`]), exactly as before.
+///
+/// The held class's ladder is the regime's `2^40` (ADR-0119 Decision 1), and the ladder's own
+/// derivation would give 20 there: a block of `2^20` leaf hashes is 64 MiB, sixteen times the
+/// interval lane, so no block could be served. The class's interval width is also derived from one
+/// digest per `2^12` leaves (`palw_held_interval_positions_v1`), so an interval's digests fit the
+/// lane only at 12. What the pin costs is the retained set, `leaf_count / 64` bytes: 6 MiB for a
+/// 4,096-position job of the dense row and about 3 GiB at its `2^21` positions, beside the hundred
+/// gigabytes of cache that job holds anyway. A seat never derives the level: it reads it off the
+/// opening it was served (`Base0FpFoldRangeOpeningV1::retain_level`).
+pub fn palw_base0_sparse_retain_level_for_class_v1(
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    max_step_leaf_count: u64,
+) -> u32 {
+    if kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(profile) {
+        PALW_BASE0_SPARSE_RETAIN_LEVEL_V1
+    } else {
+        palw_base0_sparse_retain_level_v1(max_step_leaf_count)
+    }
+}
+
 // =============================================================================================
 // The capture: a job's rows folded as they are produced
 // =============================================================================================
@@ -2332,6 +2355,49 @@ mod tests {
         // re-derives a whole CALL and every level under 2^12 is already inside one.
         assert_eq!(palw_base0_sparse_retain_level_v1(PALW_STEP_LEG_MAX_LEAVES), PALW_BASE0_SPARSE_RETAIN_LEVEL_V1);
         assert_eq!(palw_base0_sparse_retain_level_v1(1 << 40), palw_base0_sparse_retain_level_for_ladder_v1(1 << 40));
+    }
+
+    /// **ADR-0121 Decision 3: a held class folds at 12 at every ladder; every other class at its
+    /// ladder's level.** At the regime's `2^40` the ladder's own rule says 20 — a 64 MiB block, past
+    /// the 4 MiB lane — and the held interval width is derived from one digest a `2^12` leaves.
+    #[test]
+    fn a_held_class_folds_at_twelve_and_every_other_class_at_its_ladders_level() {
+        use kaspa_consensus_core::palw_state_chunk_map::{
+            PALW_HELD_STEP_LADDER_V1, palw_profile_is_held_v4, tiled_kv_state_chunk_map_id_v4,
+        };
+        let shipped = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v5(
+            kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1 {
+                layer_count: 2,
+                hidden_dim: 32,
+                ffn_dim: 64,
+                attn_heads: 4,
+                attn_kv_heads: 2,
+                attn_head_dim: 8,
+                vocab_size: 128,
+                n_ctx: 64,
+                n_threads: 1,
+                rms_eps_q: 1,
+                tile_len: 4,
+            },
+        )
+        .expect("a graph-v5 profile");
+        let mut held = shipped.clone();
+        held.state_chunk_map_id = tiled_kv_state_chunk_map_id_v4();
+        assert!(palw_profile_is_held_v4(&held) && !palw_profile_is_held_v4(&shipped));
+        assert_eq!(palw_base0_sparse_retain_level_v1(PALW_HELD_STEP_LADDER_V1), 20, "what the ladder's own rule would give");
+        for ladder_log2 in [22u32, 26, 32, 36, 40] {
+            let ladder = 1u64 << ladder_log2;
+            assert_eq!(
+                palw_base0_sparse_retain_level_for_class_v1(&held, ladder),
+                PALW_BASE0_SPARSE_RETAIN_LEVEL_V1,
+                "2^{ladder_log2}"
+            );
+            assert_eq!(
+                palw_base0_sparse_retain_level_for_class_v1(&shipped, ladder),
+                palw_base0_sparse_retain_level_v1(ladder),
+                "2^{ladder_log2}: the shipped rule, unchanged"
+            );
+        }
     }
 
     // =========================================================================================

@@ -70,8 +70,11 @@ pub fn check_lineage_v1(lineage: &dyn PalwModelLineageV1, court: &PalwCourtParam
         // counters have an uncapped spelling that stops at `PALW_STEP_MAX_LEAVES` (2^22); this
         // battery is handed the court the lineage is being asked about, and a class whose step
         // space enumerates fine under the ruleset it will run on is not "unenumerable" because a
-        // constant somewhere else is smaller. The graph-v5 512 row is exactly that class.
-        let ladder = court.max_step_leaf_count();
+        // constant somewhere else is smaller. The graph-v5 512 row is exactly that class. And the
+        // CLASS's ladder under that court — the regime's `2^40` for a held class — which is the one
+        // the gate counts it at (ADR-0119 Decision 1).
+        let ladder =
+            kaspa_consensus_core::palw_state_chunk_map::palw_class_step_ladder_v1(court.max_step_leaf_count(), &entry.profile);
         let worst = worst_case_step_leaf_count_capped_v1(&entry.profile, ladder)
             .map_err(|e| format!("{who}: the step space does not enumerate: {e:?}"))?;
         let canonical = entry.canonical_context();

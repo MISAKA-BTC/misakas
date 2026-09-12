@@ -316,15 +316,15 @@ impl Base0CaptureSinkV1 {
         Ok(Self::Dense(Base0StepCaptureV1::new(leaf_count)?))
     }
 
-    /// **The fold**, at the level the ruleset's ladder derives
-    /// (`crate::fp_capture::palw_base0_sparse_retain_level_v1`).
+    /// **The fold**, at the level the class's ladder derives — a held class's pinned at 12
+    /// (`crate::fp_capture::palw_base0_sparse_retain_level_for_class_v1`, ADR-0121 Decision 3).
     pub fn sparse(
         profile: &PalwShapeProfileV3,
         ctx: &PalwJobContextV2,
         leaf_count: u64,
         max_step_leaf_count: u64,
     ) -> Result<Self, LegError> {
-        let level = crate::fp_capture::palw_base0_sparse_retain_level_v1(max_step_leaf_count);
+        let level = crate::fp_capture::palw_base0_sparse_retain_level_for_class_v1(profile, max_step_leaf_count);
         Ok(Self::Sparse(
             crate::fp_capture::Base0SparseStepCaptureV1::new_capped_v1(profile, ctx, leaf_count, level, max_step_leaf_count)
                 .map_err(LegError::Fold)?,

@@ -645,7 +645,9 @@ pub trait PalwExecutionBackendV1: Send + Sync {
 
     /// **ADR-0086 Decision 6, the executor's half: one block's leaf hashes** of an interval this
     /// executor serves, `Base0FpBlockLeavesV1` bytes. A seat that found a `FaultInRange` names the
-    /// leaf from these against its own replay.
+    /// leaf from these against its own replay. `block_index` is the request's number: the block's
+    /// own index, or — for a class under the held regime — its distance from the block holding the
+    /// interval's first leaf (ADR-0121 Decision 3), which the family resolves against the opening.
     fn open_fp_block_leaves(
         &self,
         _capture: &[u8],

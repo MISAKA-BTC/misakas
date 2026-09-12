@@ -1669,12 +1669,13 @@ pub fn base0_open_fp_interval_capped_v1(
     let leaves_geometry = base0_fp_interval_leaves_v1(profile, ctx, &geometry, index, step_leaf_count)?;
 
     let leaves = leaves_from_tiles_v1(binding, tiles, max_step_leaf_count)?;
-    // The RULESET's level, not the constant: the fold retention keeps its tree at
-    // `palw_base0_sparse_retain_level_v1(cap)`, and a V4 opening's digests are that level's nodes,
-    // so the dense route and the fold route serve one form byte for byte (ADR-0086 Decision 4).
+    // The CLASS's level, not the constant: the fold retention keeps its tree at
+    // `palw_base0_sparse_retain_level_for_class_v1(profile, cap)`, and a V4 opening's digests are
+    // that level's nodes, so the dense route and the fold route serve one form byte for byte
+    // (ADR-0086 Decision 4; ADR-0121 Decision 3 pins a held class's at 12).
     let tree = crate::fp_capture::Base0SparseStepTreeV1::from_leaves_capped_v1(
         &leaves,
-        crate::fp_capture::palw_base0_sparse_retain_level_v1(max_step_leaf_count),
+        crate::fp_capture::palw_base0_sparse_retain_level_for_class_v1(profile, max_step_leaf_count),
         max_step_leaf_count,
     )?;
     // The capture must be the one the binding committed, checked before anything is served: an
@@ -3630,6 +3631,37 @@ pub fn base0_fp_block_leaves_request_decode_v1(index: u32) -> Option<(u32, u64)>
     Some(((index >> 16) & 0x7FFF, (index & 0xFFFF) as u64))
 }
 
+/// **Whether a request's block number counts from the interval** (ADR-0121 Decision 3): for a
+/// class under the held regime, yes. Sixteen bits of a GLOBAL block index at the pinned level 12
+/// reach leaf `2^28` — a held job of the dense row passes that before its 3,000th position — while
+/// an interval of a held class holds at most `2^16` blocks by the construction of its width
+/// (`palw_held_interval_positions_v1` sizes it so the interval's digests fit the lane). Every other
+/// class keeps ADR-0086 Decision 6's global index, so no request a shipped node sends changes
+/// meaning.
+fn base0_fp_block_number_is_relative_v1(opening: &Base0FpIntervalOpeningV4) -> bool {
+    kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&opening.binding.shape_profile)
+}
+
+/// **The number a block-leaves request carries for `block`** (the block's index at the opening's
+/// retain level), the seat's half: the block itself, or — for a held class — its distance from the
+/// block holding the interval's first leaf. `None` for a block before that one.
+pub fn base0_fp_block_request_number_v1(opening: &Base0FpIntervalOpeningV4, block: u64) -> Option<u64> {
+    if !base0_fp_block_number_is_relative_v1(opening) {
+        return Some(block);
+    }
+    block.checked_sub(opening.range.first_leaf_index >> opening.range.retain_level.min(63))
+}
+
+/// **The block a request's number names**, the executor's half of
+/// [`base0_fp_block_request_number_v1`], read against the opening the executor serves for the same
+/// interval. `None` when the sum overflows.
+pub fn base0_fp_block_of_request_number_v1(opening: &Base0FpIntervalOpeningV4, number: u64) -> Option<u64> {
+    if !base0_fp_block_number_is_relative_v1(opening) {
+        return Some(number);
+    }
+    (opening.range.first_leaf_index >> opening.range.retain_level.min(63)).checked_add(number)
+}
+
 // =================================================================================================
 // ADR-0103 Decision 2 — the Resume route: the state at an interval's start, fetched and verified
 // =================================================================================================
@@ -3997,6 +4029,81 @@ pub fn base0_fp_interval_tiles_from_fold_capped_v1<K: Base0FpIntervalKernelsV1>(
         .map_err(Base0FpIntervalError::Replay)
 }
 
+/// **ADR-0121 Decision 1's refusal, spelled once for the three families' whole-capture provers.**
+/// `None` when a capture of `step_leaf_count` leaves may be re-executed or laid out whole here; else
+/// why not — past the materialization cap but inside the class's ladder is a held capture the
+/// streamed routes answer (its interval openings and its fold's leaf evidence), and past the
+/// class's ladder is no claim this node walks at all.
+pub fn base0_whole_capture_refusal_v1(step_leaf_count: u64, materialize_cap: u64, class_ladder: u64) -> Option<String> {
+    if step_leaf_count == 0 || step_leaf_count > class_ladder {
+        return Some("the binding's leaf count is outside the ruleset's ladder".to_string());
+    }
+    (step_leaf_count > materialize_cap).then(|| {
+        format!(
+            "a capture of {step_leaf_count} leaves is past this node's materialization cap of {materialize_cap}: it is judged \
+             by the streamed routes (its interval openings, its fold's leaf evidence) and never laid out whole (ADR-0121 \
+             Decision 1)"
+        )
+    })
+}
+
+/// **The disputed leaves' own tiles, replayed from a fold** (ADR-0121) — the only thing the close
+/// annex reads out of an interval ([`base0_fp_close_annex_v1`] asks for each disputed leaf's tile
+/// and nothing else). One streamed replay from the interval's anchor to the last disputed leaf,
+/// keeping those leaves' tiles and dropping every other: what is held is the dispute's size, where
+/// [`base0_fp_interval_tiles_from_fold_capped_v1`] held every tile of the interval — at a held
+/// class's width, the interval's `2^27` leaves of rows to serve one of them. A disputed leaf
+/// outside the interval's own steps is skipped: the seed row's tiles ride the opening itself, and
+/// any other leaf is another interval's to serve.
+#[allow(clippy::too_many_arguments)]
+pub fn base0_fp_disputed_tiles_from_fold_v1<K: Base0FpIntervalKernelsV1>(
+    material: &crate::produce::Base0FpMaterialV2,
+    index: u32,
+    prompt_token_ids: &[u32],
+    family_checkpoint_interval: u32,
+    max_step_leaf_count: u64,
+    kernels: &K,
+    anchor_state_for: Base0FpAnchorStateForV1<'_>,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    disputed: &[u64],
+) -> Result<std::collections::BTreeMap<u64, PalwStepTileLeafV1>, Base0FpIntervalError> {
+    let binding = &material.binding;
+    if !kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(
+        prompt_ids_form,
+        prompt_token_ids,
+        &binding.job_context.prompt_token_ids_hash,
+    ) {
+        return Err(Base0FpIntervalError::PromptIdsAreNotTheJobs);
+    }
+    let step_leaf_count = base0_fp_binding_step_space_v1(binding, max_step_leaf_count)?;
+    let geometry = Base0FpIntervalGeometryV1::from_binding_capped_v1(binding, family_checkpoint_interval, max_step_leaf_count)?;
+    let leaves = base0_fp_interval_leaves_v1(&binding.shape_profile, &binding.job_context, &geometry, index, step_leaf_count)?;
+    let wanted: std::collections::BTreeSet<u64> =
+        disputed.iter().copied().filter(|l| *l >= leaves.interval_first && *l < leaves.range_end).collect();
+    let mut kept = std::collections::BTreeMap::new();
+    let (Some(&first), Some(&last)) = (wanted.first(), wanted.last()) else {
+        return Ok(kept);
+    };
+    base0_replay_span_into_v1(
+        kernels,
+        binding,
+        &material.checkpoint_chunks,
+        &material.generated_token_ids,
+        prompt_token_ids,
+        &geometry,
+        first,
+        last + 1,
+        anchor_state_for,
+        &mut |at, _, tile| {
+            if wanted.contains(&at) {
+                kept.insert(at, tile.clone());
+            }
+            Ok(())
+        },
+    )?;
+    Ok(kept)
+}
+
 /// **The close annex, built from the accused's own tiles** (ADR-0085 §6 item 4, the executor
 /// half). `rows_root` is the retained rows' tree root — what the tiled pin binds the generated
 /// ids through — and each disputed leaf inside `range` carries its committed tile and, when the
@@ -4111,6 +4218,9 @@ pub fn base0_fp_block_leaves_from_fold_capped_v1<K: Base0FpIntervalKernelsV1>(
     if v4.binding != *binding {
         return Err(Base0FpIntervalError::CaptureIsNotTheBindings);
     }
+    // The request's number, read as the block it names (ADR-0121 Decision 3).
+    let block_index = base0_fp_block_of_request_number_v1(&v4, block_index)
+        .ok_or_else(|| Base0FpIntervalError::StepSpace(format!("block number {block_index} names no block")))?;
     let geometry = Base0FpIntervalGeometryV1::from_binding_capped_v1(binding, family_checkpoint_interval, max_step_leaf_count)?;
     let (first_block, end_block) = v4.range.whole_blocks_v1(binding.step_leaf_count);
     if block_index < first_block || block_index >= end_block {
@@ -4153,6 +4263,8 @@ pub fn base0_fp_block_leaves_from_tiles_v1(
     block_index: u64,
 ) -> Result<Vec<u8>, Base0FpIntervalError> {
     let v4 = Base0FpIntervalOpeningV4::decode_v1(opening_bytes)?;
+    let block_index = base0_fp_block_of_request_number_v1(&v4, block_index)
+        .ok_or_else(|| Base0FpIntervalError::StepSpace(format!("block number {block_index} names no block")))?;
     let ctx_hash = v4.binding.job_context.context_hash();
     let profile_hash = v4.binding.shape_profile.shape_profile_id();
     let by_index: std::collections::HashMap<u64, &PalwStepTileLeafV1> = tiles.iter().map(|(i, t)| (*i, t)).collect();
@@ -6546,6 +6658,130 @@ mod tests {
             "ids that are not the job's answer nothing"
         );
         straddles
+    }
+
+    /// **ADR-0121 on the held row: what the executor streams, and how a block is named.** At the
+    /// regime's ladder a held class still folds at 12; a block-leaves request's number counts from
+    /// the block holding the interval's first leaf, and the executor serves the block that number
+    /// names (its own first leaf, folding to the served digest); and the close annex's tiles,
+    /// replayed for the disputed leaves alone, are the interval's own tiles for those leaves and
+    /// nothing for a leaf outside it. On the shipped row a request's number is the block itself.
+    #[test]
+    fn a_held_executor_serves_blocks_by_their_interval_number_and_the_disputed_tiles_alone() {
+        use kaspa_consensus_core::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1;
+        let form = kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1;
+        let geometry = kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1 {
+            layer_count: 2,
+            hidden_dim: 32,
+            ffn_dim: 64,
+            attn_heads: 4,
+            attn_kv_heads: 2,
+            attn_head_dim: 8,
+            vocab_size: 128,
+            n_ctx: 128,
+            n_threads: 1,
+            rms_eps_q: 1,
+            tile_len: 4,
+        };
+        let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v7(geometry).expect("a valid graph-v7 profile");
+        let (artifact, profile, ctx, prompt, run) = dense_run_for_form(geometry, profile, 3, 72, form);
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let bytes = crate::produce::base0_fp_material_encode_v2(&run, &ids).expect("the fold retains");
+        let material = crate::produce::base0_fp_material_decode_v2(&bytes).expect("decodes");
+        assert_eq!(
+            material.step_tree.retain_level(),
+            crate::fp_capture::PALW_BASE0_SPARSE_RETAIN_LEVEL_V1,
+            "a held class folds at 12 whatever its ladder (ADR-0121 Decision 3)"
+        );
+        let engine = crate::engine_a16::A16Engine::new(&artifact).expect("an A16 artifact");
+        let plan = engine.plan_from_profile(&profile).expect("the plan");
+        let interval = kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1;
+        let ladder = PALW_HELD_STEP_LADDER_V1;
+        let recompute = |covered: u32| {
+            let mut kernels = crate::fp_recompute::A16RecomputeKernelsV1::new(&artifact, Some(&plan)).ok()?;
+            crate::fp_recompute::base0_fp_recompute_state_at_covered_v1(
+                &profile,
+                &ctx,
+                &ids,
+                &run.generated_token_ids,
+                covered,
+                &mut kernels,
+                form,
+            )
+            .ok()
+        };
+        let kernels = crate::qwen25_a16_backend::a16_interval_kernels_for_tests_v1(&artifact, Some(&plan));
+        let leaf_count = run.binding.step_leaf_count;
+        let geometry = Base0FpIntervalGeometryV1::from_binding_capped_v1(&run.binding, interval, ladder).expect("a geometry");
+        let (mut served, mut compared) = (0usize, 0usize);
+        for index in 0..geometry.interval_count {
+            let opening =
+                base0_open_fp_interval_sparse_anchored_capped_v1(&material, index, &ids, interval, ladder, &kernels, &recompute, form)
+                    .unwrap_or_else(|e| panic!("interval {index} opens: {e}"));
+            let v4 = Base0FpIntervalOpeningV4::decode_v1(&opening).expect("V4");
+            let base = v4.range.first_leaf_index >> v4.range.retain_level;
+            let (first_block, end_block) = v4.range.whole_blocks_v1(leaf_count);
+            for block in first_block..end_block {
+                let number = base0_fp_block_request_number_v1(&v4, block).expect("a block at or past the interval's first");
+                assert_eq!(number, block - base, "interval {index}: the number counts from the interval");
+                assert_eq!(base0_fp_block_of_request_number_v1(&v4, number), Some(block));
+                let bytes = base0_fp_block_leaves_from_fold_capped_v1(
+                    &material, &opening, number, &ids, interval, ladder, &kernels, &recompute,
+                )
+                .unwrap_or_else(|e| panic!("interval {index} block {block}: serves: {e}"));
+                let leaves = Base0FpBlockLeavesV1::decode_v1(&bytes).expect("decodes");
+                assert_eq!(
+                    leaves.first_leaf_index,
+                    block << v4.range.retain_level,
+                    "interval {index}: number {number} is block {block}"
+                );
+                assert!(leaves.folds_to_v1(&v4.range.block_roots[(block - first_block) as usize]), "and folds to its digest");
+                served += usize::from(base > 0);
+            }
+            let whole =
+                base0_fp_interval_tiles_from_fold_capped_v1(&material, index, &ids, interval, ladder, &kernels, &recompute, form)
+                    .expect("the interval replays");
+            let whole: std::collections::HashMap<u64, PalwStepTileLeafV1> = whole.tiles.into_iter().collect();
+            let own = base0_fp_interval_leaves_v1(&profile, &ctx, &geometry, index, leaf_count).expect("the interval's leaves");
+            let disputed = [
+                own.interval_first,
+                (own.interval_first + own.range_end) / 2,
+                own.range_end - 1,
+                own.range_end,
+                own.range_first.wrapping_sub(1),
+            ];
+            let kept =
+                base0_fp_disputed_tiles_from_fold_v1(&material, index, &ids, interval, ladder, &kernels, &recompute, form, &disputed)
+                    .unwrap_or_else(|e| panic!("interval {index}: the disputed tiles replay: {e}"));
+            let inside: std::collections::BTreeSet<u64> =
+                disputed.iter().copied().filter(|l| *l >= own.interval_first && *l < own.range_end).collect();
+            assert_eq!(
+                kept.keys().copied().collect::<std::collections::BTreeSet<u64>>(),
+                inside,
+                "interval {index}: those and no others"
+            );
+            for (leaf, tile) in &kept {
+                assert_eq!(Some(tile), whole.get(leaf), "interval {index} leaf {leaf}: the interval's own tile");
+                compared += 1;
+            }
+        }
+        assert!(compared >= 3, "the disputed tiles were compared: {compared}");
+        assert!(served > 0, "an interval past the first block holds a whole block, served by its number: {served}");
+        // The number's arithmetic, on an opening moved past the first block, where it and the
+        // block differ — and on the shipped row, where they never do.
+        let opening =
+            base0_open_fp_interval_sparse_anchored_capped_v1(&material, 0, &ids, interval, ladder, &kernels, &recompute, form)
+                .expect("interval 0 opens");
+        let mut moved = Base0FpIntervalOpeningV4::decode_v1(&opening).expect("V4");
+        moved.range.first_leaf_index = (5 << 12) + 17;
+        assert_eq!(base0_fp_block_request_number_v1(&moved, 7), Some(2));
+        assert_eq!(base0_fp_block_of_request_number_v1(&moved, 2), Some(7));
+        assert_eq!(base0_fp_block_request_number_v1(&moved, 4), None, "a block before the interval's first has no number");
+        let (_, v5_profile, _, _, v5_run) = dense_v5_run();
+        assert!(!kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&v5_profile));
+        moved.binding = v5_run.binding;
+        assert_eq!(base0_fp_block_request_number_v1(&moved, 7), Some(7), "the shipped row's number is the block (ADR-0086 D6)");
+        assert_eq!(base0_fp_block_of_request_number_v1(&moved, 7), Some(7));
     }
 
     /// **ADR-0111 Decision 3: the chain's geometry is the seat's.** The bound a leaf demand is

@@ -48,7 +48,11 @@ pub struct Base0Backend {
     /// `handle_alloc_error` and a process ABORT, not a catchable panic) and the A16 backend guards
     /// both of its own entry points. This backend's two — `bisect_prefix_state` and
     /// `refutation_with_prompt` — did not, and they are reached from the same relayed blob.
-    step_ladder_cap: u64,
+    ///
+    /// It is the NETWORK's ladder — the materialization cap (ADR-0121 Decision 1). The class's own,
+    /// the regime's `2^40` for a held class, is [`Self::step_ladder_cap`], derived from the profile;
+    /// this family retains every capture dense, so every site that reads a capture reads this.
+    network_ladder: u64,
     /// **The network's prompt-commitment form** (ADR-0081 Decision 3) — `Params::palw_prompt_ids_form_v1()`,
     /// set by the caller that holds `Params` through [`Base0Backend::with_prompt_ids_form`]. Every
     /// `prompt_token_ids_hash` this backend writes into a job context and every carried-prompt
@@ -66,7 +70,7 @@ impl Base0Backend {
             artifact: resolved.artifact,
             canonical_job: resolved.canonical_job,
             inventory_geometry: resolved.inventory_geometry,
-            step_ladder_cap: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+            network_ladder: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         }
     }
@@ -75,7 +79,7 @@ impl Base0Backend {
     /// `max_step_leaf_count` is the only correct argument; [`Base0Backend::new`] passes the leg's
     /// default, which is what every shipped preset froze.
     pub fn with_step_ladder_cap(mut self, max_step_leaf_count: u64) -> Self {
-        self.step_ladder_cap = max_step_leaf_count;
+        self.network_ladder = max_step_leaf_count;
         self
     }
 
@@ -90,9 +94,17 @@ impl Base0Backend {
         self.prompt_ids_form
     }
 
-    /// The ladder top this instance refuses a served capture above.
+    /// **The class's ladder** (ADR-0119 Decision 1; ADR-0121 Decision 1): the network's for every
+    /// class but one under the held regime, whose ladder is the regime's `2^40` — what a seat of
+    /// this family prices a claim at and walks a served opening against.
     pub fn step_ladder_cap(&self) -> u64 {
-        self.step_ladder_cap
+        kaspa_consensus_core::palw_state_chunk_map::palw_class_step_ladder_v1(self.network_ladder, &self.profile)
+    }
+
+    /// **The materialization cap** (ADR-0121 Decision 1): the network's ladder — the most leaves a
+    /// capture this family reads or writes may hold, since every one it keeps is dense.
+    pub fn materialize_cap(&self) -> u64 {
+        self.network_ladder
     }
 
     /// The graph, for the callers that still need it directly (the retention writer names the
@@ -116,9 +128,11 @@ impl Base0Backend {
         let (binding, tiles, logits_rows, generated, _) =
             base0_material_decode_v1(material).map_err(|_| "the capture does not decode".to_string())?;
         // **Bound the count BEFORE `leaves_by_position` allocates from it** — see
-        // `step_ladder_cap`. The cap is the ruleset's ladder top, not a module literal.
-        if binding.step_leaf_count == 0 || binding.step_leaf_count > self.step_ladder_cap {
-            return Err("the binding's leaf count is outside the ruleset's ladder".to_string());
+        // `network_ladder`. The cap is the ruleset's ladder top, not a module literal.
+        if let Some(why) =
+            crate::fp_interval::base0_whole_capture_refusal_v1(binding.step_leaf_count, self.network_ladder, self.step_ladder_cap())
+        {
+            return Err(why);
         }
         // The ladder narrows to an INDEX; the prover addresses a COORDINATE. `canonical_step_
         // coordinates` is the inverse of the index the ladder counts in, and it answers `None` for
@@ -163,7 +177,7 @@ impl Base0Backend {
             }
         };
         // **The prover opens at the RULESET's ladder, not the module constant** (ADR-0080 W1b,
-        // ADR-0084 U-08). The count was already bounded by `self.step_ladder_cap` forty lines
+        // ADR-0084 U-08). The count was already bounded by `self.network_ladder` forty lines
         // above; assembling the openings at `PALW_STEP_LEG_MAX_LEAVES` after passing that guard
         // made an honest prover unable to answer for every class the chain admits above 2^22.
         // The A16 backend has always passed the cap here; this backend and the Qwen3.6 one did
@@ -177,7 +191,7 @@ impl Base0Backend {
             prompt_token_ids,
             Some(pin),
             None,
-            self.step_ladder_cap,
+            self.network_ladder,
         )
         .map_err(|e| format!("{e:?}"))
     }
@@ -314,7 +328,7 @@ impl Base0Backend {
             ),
             run.trace_root,
             crate::produce::base0_activation_leg_root_v1(job),
-            self.step_ladder_cap,
+            self.network_ladder,
         )
         .map_err(|e| format!("{e:?}"))?;
         run.execution_root = binding.committed_execution_root;
@@ -382,7 +396,7 @@ impl Base0Backend {
             &self.profile,
             &ctx,
             prompt_tokens,
-            self.step_ladder_cap,
+            self.network_ladder,
             on_token,
         )
         .map_err(|e| e.to_string())?;
@@ -448,7 +462,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
 
     fn execute(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String> {
         // **The ruleset's ladder, through the same field the served-capture guards read.**
-        let run = base0_execute_for_attempt_capped_v1(&self.artifact, &self.profile, job, prompt, self.step_ladder_cap)
+        let run = base0_execute_for_attempt_capped_v1(&self.artifact, &self.profile, job, prompt, self.network_ladder)
             .map_err(|e| e.to_string())?;
         // Encoded HERE, while the run is in hand. The producer used to reach into `run.tiles` to
         // write its retention file, which meant the retention format and the broadcast format were
@@ -522,7 +536,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
                 return PalwMaterialVerdictV1::Mismatch;
             }
         }
-        match base0_material_matches_claim_capped_v1(&decoded, claim.execution_root, claim.trace_root, self.step_ladder_cap) {
+        match base0_material_matches_claim_capped_v1(&decoded, claim.execution_root, claim.trace_root, self.network_ladder) {
             Ok(true) => PalwMaterialVerdictV1::Matches,
             Ok(false) => PalwMaterialVerdictV1::Mismatch,
             Err(_) => PalwMaterialVerdictV1::Unverifiable,
@@ -535,7 +549,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
         prompt: &[usize],
         leaf_index: u64,
     ) -> Result<PalwExecutionOutcomeV1, String> {
-        let mut run = base0_execute_for_attempt_capped_v1(&self.artifact, &self.profile, job, prompt, self.step_ladder_cap)
+        let mut run = base0_execute_for_attempt_capped_v1(&self.artifact, &self.profile, job, prompt, self.network_ladder)
             .map_err(|e| e.to_string())?;
         self.corrupt_capture_v1(&mut run, job, leaf_index)?;
         let material = base0_material_encode_v1(&run).map_err(|e| e.to_string())?;
@@ -583,8 +597,8 @@ impl PalwExecutionBackendV1 for Base0Backend {
     fn bisect_prefix_state(&self, material: &[u8], index: u64) -> Option<kaspa_hashes::Hash64> {
         let (binding, tiles, _, _, _) = base0_material_decode_v1(material).ok()?;
         // **Bound the count BEFORE `leaves_by_position` allocates from it** — see
-        // `step_ladder_cap`. Without this the relayed blob decides the allocation.
-        if binding.step_leaf_count == 0 || binding.step_leaf_count > self.step_ladder_cap {
+        // `network_ladder`. Without this the relayed blob decides the allocation.
+        if binding.step_leaf_count == 0 || binding.step_leaf_count > self.network_ladder {
             return None;
         }
         let leaves = leaves_by_position(&binding, &tiles);
@@ -620,7 +634,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
         crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_capped_v1(
             &binding,
             self.checkpoint_interval(),
-            self.step_ladder_cap,
+            self.step_ladder_cap(),
         )
         .ok()
         .map(|g| g.interval_count)
@@ -663,7 +677,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
             index,
             prompt_token_ids,
             self.checkpoint_interval(),
-            self.step_ladder_cap,
+            self.network_ladder,
             self.prompt_ids_form,
         )
         .map_err(|e| e.to_string())
@@ -683,7 +697,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
             opening,
             prompt_token_ids,
             self.checkpoint_interval(),
-            self.step_ladder_cap,
+            self.step_ladder_cap(),
         );
         crate::fp_interval::base0_verify_fp_interval_opening_with_state_capped_v1(
             opening,
@@ -692,7 +706,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
             prompt_token_ids,
             work_leaves,
             self.checkpoint_interval(),
-            self.step_ladder_cap,
+            self.step_ladder_cap(),
             state.as_ref(),
             &Base0IntervalKernels { artifact: &self.artifact },
             self.prompt_ids_form,
@@ -722,22 +736,23 @@ impl PalwExecutionBackendV1 for Base0Backend {
         }
         let retention =
             crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())?;
-        // The interval's own tiles (replayed from a fold, held by a dense retention), plus the seed
-        // row — the anchor call's logits tiles — which the opening itself carries.
+        // The disputed leaves' tiles (a fold replays the interval and keeps only those, ADR-0121; a
+        // dense retention holds them), plus the seed row — the anchor call's logits tiles — which the
+        // opening itself carries.
         let mut by_index: std::collections::HashMap<u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1> = match &retention {
             crate::produce::Base0RetentionV1::Dense((_, tiles, ..)) => tiles.iter().cloned().collect(),
-            crate::produce::Base0RetentionV1::Folded(material) => crate::fp_interval::base0_fp_interval_tiles_from_fold_capped_v1(
+            crate::produce::Base0RetentionV1::Folded(material) => crate::fp_interval::base0_fp_disputed_tiles_from_fold_v1(
                 material,
                 index,
                 prompt_token_ids,
                 self.checkpoint_interval(),
-                self.step_ladder_cap,
+                self.step_ladder_cap(),
                 &Base0IntervalKernels { artifact: &self.artifact },
                 &|covered| self.fold_anchor_state_v1(material, prompt_token_ids, covered),
                 self.prompt_ids_form,
+                disputed,
             )
             .map_err(|e| format!("{e:?}"))?
-            .tiles
             .into_iter()
             .collect(),
         };
@@ -770,7 +785,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
                 block_index,
                 prompt_token_ids,
                 self.checkpoint_interval(),
-                self.step_ladder_cap,
+                self.step_ladder_cap(),
                 &Base0IntervalKernels { artifact: &self.artifact },
                 &|covered| self.fold_anchor_state_v1(&material, prompt_token_ids, covered),
             ),
@@ -812,13 +827,19 @@ impl PalwExecutionBackendV1 for Base0Backend {
     ) -> Result<kaspa_consensus_core::palw_step_leg::PalwStepRangeOpeningV1, String> {
         let retention =
             crate::produce::base0_material_decode_any_v1(capture).map_err(|_| "the capture does not decode".to_string())?;
+        // A fold replays the range's blocks (the class's ladder); a dense retention hashes every
+        // tile it kept into one vector (the materialization cap, ADR-0121 Decision 1).
+        let cap = match &retention {
+            crate::produce::Base0RetentionV1::Folded(_) => self.step_ladder_cap(),
+            crate::produce::Base0RetentionV1::Dense(_) => self.network_ladder,
+        };
         crate::fp_interval::base0_fp_held_step_range_answer_v1(
             &retention,
             first,
             count,
             prompt_token_ids,
             self.checkpoint_interval(),
-            self.step_ladder_cap,
+            cap,
             &Base0IntervalKernels { artifact: &self.artifact },
             &|covered| match &retention {
                 crate::produce::Base0RetentionV1::Folded(material) => self.fold_anchor_state_v1(material, prompt_token_ids, covered),
@@ -857,13 +878,13 @@ impl PalwExecutionBackendV1 for Base0Backend {
             prompt_token_ids,
             work_leaves,
             self.checkpoint_interval(),
-            self.step_ladder_cap,
+            self.step_ladder_cap(),
             &|bytes| {
                 crate::fp_interval::base0_fp_interval_opening_seat_state_capped_v1(
                     bytes,
                     prompt_token_ids,
                     self.checkpoint_interval(),
-                    self.step_ladder_cap,
+                    self.step_ladder_cap(),
                 )
             },
             &Base0IntervalKernels { artifact: &self.artifact },
@@ -917,13 +938,13 @@ impl PalwExecutionBackendV1 for Base0Backend {
             work_leaves,
             leaf,
             self.checkpoint_interval(),
-            self.step_ladder_cap,
+            self.step_ladder_cap(),
             &|bytes| {
                 crate::fp_interval::base0_fp_interval_opening_seat_state_capped_v1(
                     bytes,
                     prompt_token_ids,
                     self.checkpoint_interval(),
-                    self.step_ladder_cap,
+                    self.step_ladder_cap(),
                 )
             },
             &Base0IntervalKernels { artifact: &self.artifact },
@@ -979,7 +1000,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
     /// `base0_fp_binding_step_space_v1` re-derives from an opening's binding, so the seat's
     /// context and the evidence's binding are priced by one function.
     fn fp_context_work_leaves_v1(&self, context: &PalwJobContextV2) -> Option<u64> {
-        kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&self.profile, context, self.step_ladder_cap).ok()
+        kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&self.profile, context, self.step_ladder_cap()).ok()
     }
 
     /// The context an opening's binding carries (ADR-0084 Decision 4), read through this family's
@@ -1015,7 +1036,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
             refutation,
             &recorder,
             self.prompt_ids_form,
-            self.step_ladder_cap,
+            self.step_ladder_cap(),
         );
         recorder.openings().ok_or_else(|| "the inventory cannot open a row its own oracle resolved".to_string())
     }

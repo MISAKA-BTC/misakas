@@ -442,6 +442,9 @@ pub struct PalwPanelService {
     /// decode) is read once per class rather than once per payload. A class no profile was found
     /// for is not remembered: its answer is the network's until one is.
     class_forms: std::sync::Mutex<HashMap<Hash64, kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1>>,
+    /// The step ladder of every class `class_step_ladder` has READ a profile for — a function of
+    /// its id for the same reason its form is (the held map is inside `shape_profile_id`).
+    class_ladders: std::sync::Mutex<HashMap<Hash64, u64>>,
     /// Fired by `signal_exit` so this service's `start` future can finish. Both panel loops are
     /// `loop { sleep; work }` with nothing else that a shutdown could cancel, so without it the
     /// AsyncRuntime's shutdown join waits on a future that never completes. Measured on
@@ -541,6 +544,27 @@ impl PalwPanelService {
         form
     }
 
+    /// **The step ladder a class's claims are walked at** (ADR-0119 Decision 1; ADR-0121 Decision
+    /// 1): the network's for every class but one under the held regime, whose ladder is the
+    /// regime's `2^40` — the number the chain recorded when the class registered, derived here the
+    /// way the backends derive it, from the profile (`palw_class_step_ladder_v1`), read through the
+    /// same two sources as the class's form. A class neither names is walked at the network's
+    /// ladder, which refuses a held claim's depth rather than guessing it.
+    fn class_step_ladder(&self, class_id: Hash64) -> u64 {
+        let network = self.config.court.max_step_leaf_count();
+        if let Some(ladder) = self.class_ladders.lock().expect("the class-ladder memo is never poisoned").get(&class_id) {
+            return *ladder;
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let profile = session.palw_registered_class_carriage_v1(class_id).map(|(profile, _)| profile).or_else(|| {
+            self.backends().sdk().ledger().into_iter().find(|entry| entry.class_id() == class_id).map(|entry| entry.profile)
+        });
+        let Some(profile) = profile else { return network };
+        let ladder = kaspa_consensus_core::palw_state_chunk_map::palw_class_step_ladder_v1(network, &profile);
+        self.class_ladders.lock().expect("the class-ladder memo is never poisoned").insert(class_id, ladder);
+        ladder
+    }
+
     /// The form of the class a free-prompt payload's job names (`palw_fp_class_id_peek_v1`), for
     /// the readers that decode a payload before anything else has said which class it is.
     fn payload_prompt_ids_form(&self, bytes: &[u8]) -> kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1 {
@@ -617,6 +641,7 @@ impl PalwPanelService {
             served_openings: std::sync::Mutex::new(Vec::new()),
             opening_gate: std::sync::Mutex::new(()),
             class_forms: std::sync::Mutex::new(HashMap::new()),
+            class_ladders: std::sync::Mutex::new(HashMap::new()),
             seat_faults: std::sync::Mutex::new(Default::default()),
             sample_refusals_logged: std::sync::Mutex::new(HashSet::new()),
             leaf_pursuits: std::sync::Mutex::new(HashMap::new()),
@@ -1684,7 +1709,11 @@ impl PalwPanelService {
         // nothing. The capped and uncapped names differ by a suffix and sit ten lines apart in
         // `palw_step_refute`; `consensus/core/tests/palw_step_ladder_tree_guard.rs` is what keeps
         // them from being confused again. The number arrives as an argument because the caller is
-        // the one holding `self.config.court`.
+        // the one holding `self.config.court` — and it is the CLASS's ladder (`class_step_ladder`),
+        // the regime's `2^40` for a held class, whose claims the chain walks that deep (ADR-0119
+        // Decision 4). A held capture past the network's ladder is not sampled here at all: the
+        // family refuses its whole-capture prover above the materialization cap (ADR-0121 Decision
+        // 1), and such a claim is judged on the interval lane.
         if step_leaf_count == 0 {
             return CaptureSamplesV1::NotCleared { refusal: None };
         }
@@ -3084,7 +3113,12 @@ impl PalwPanelService {
                                         && kaspa_consensus_core::palw_step_leg::step_opening_root_capped_v1(
                                             filing.binding.step_leaf_count,
                                             &filing.out_tile.opening,
-                                            cap,
+                                            // The claim's ladder, off the class its binding names
+                                            // (ADR-0119 Decision 4): a held filing's path is deeper.
+                                            kaspa_consensus_core::palw_state_chunk_map::palw_class_step_ladder_v1(
+                                                cap,
+                                                &filing.binding.shape_profile,
+                                            ),
                                         )
                                         .is_ok_and(|root| root == filing.binding.step_merkle_root)
                                 });
@@ -3981,7 +4015,7 @@ impl PalwPanelService {
                                 let (capture_owned, prompt_owned, claim_owned) =
                                     (payload.capture.clone(), prompt_ids.clone(), duty.claim_id);
                                 let (leaves, artifact_root, ladder) =
-                                    (shape.step_leaf_count, duty.artifact_root, self.config.court.max_step_leaf_count());
+                                    (shape.step_leaf_count, duty.artifact_root, self.class_step_ladder(duty.class_id));
                                 let prompt_ids_form = self.class_prompt_ids_form(duty.class_id);
                                 let Ok((_backend, samples)) = offload(backend, move |b| {
                                     Self::fp_capture_samples_clear(
@@ -5562,10 +5596,12 @@ impl PalwPanelService {
         // block the opening does not cover whole has no block to ask for, and the close says so.
         let block = leaf >> primary_v4.range.retain_level.min(63);
         let (first_block, end_block) = primary_v4.range.whole_blocks_v1(work_leaves);
+        // The request names the block by the number its class counts in (ADR-0121 Decision 3).
         let block_request = (first_block..end_block)
             .contains(&block)
-            .then(|| misaka_palw_base0::fp_interval::base0_fp_block_leaves_request_index_v1(wanted, block))
-            .flatten();
+            .then(|| misaka_palw_base0::fp_interval::base0_fp_block_request_number_v1(&primary_v4, block))
+            .flatten()
+            .and_then(|number| misaka_palw_base0::fp_interval::base0_fp_block_leaves_request_index_v1(wanted, number));
         let served_block =
             block_request.and_then(|index| openings.get(&(*claim, index)).and_then(|v| v.first()).map(|b| (index, b.clone())));
         if let (Some(index), None) = (block_request, served_block.as_ref()) {
@@ -6143,11 +6179,22 @@ impl PalwPanelService {
                         self.note_seat_fault_v1(duty.claim_id, first_leaf_index, leaf_count);
                         // ADR-0086 Decision 6: ask for the block's leaves on the same lane, and name
                         // the leaf from them once they are held — the fault at leaf granularity is
-                        // what a court narrows to.
-                        let retain_level =
-                            misaka_palw_base0::fp_capture::palw_base0_sparse_retain_level_v1(self.config.court.max_step_leaf_count());
-                        let block = first_leaf_index >> retain_level;
-                        if let Some(packed) = misaka_palw_base0::fp_interval::base0_fp_block_leaves_request_index_v1(interval, block) {
+                        // what a court narrows to. The level is the one the opening this seat just
+                        // verified folds at, read off it, never derived here: a held class's is
+                        // pinned at 12 whatever its ladder (ADR-0121 Decision 3), and the request
+                        // names the block by the number that class counts in.
+                        let served = misaka_palw_base0::fp_interval::Base0FpIntervalOpeningV4::decode_v1(&bytes).ok();
+                        let retain_level = served.as_ref().map(|v4| v4.range.retain_level).unwrap_or_else(|| {
+                            misaka_palw_base0::fp_capture::palw_base0_sparse_retain_level_v1(self.config.court.max_step_leaf_count())
+                        });
+                        let block = first_leaf_index >> retain_level.min(63);
+                        let number = match served.as_ref() {
+                            Some(v4) => misaka_palw_base0::fp_interval::base0_fp_block_request_number_v1(v4, block),
+                            None => Some(block),
+                        };
+                        if let Some(packed) = number.and_then(|number| {
+                            misaka_palw_base0::fp_interval::base0_fp_block_leaves_request_index_v1(interval, number)
+                        }) {
                             let served_block = openings.get(&(duty.claim_id, packed)).and_then(|v| v.first().cloned());
                             match served_block {
                                 Some(block_bytes) => {
@@ -7297,7 +7344,11 @@ mod court_responder_coverage_pin {
         let source = &whole[..whole.find(MARKER).expect("this module is in this file")];
         let gather = &source[source.find("fn close_source_from_served_intervals_v1(").expect("the close's gathering")..];
         let gather = &gather[..gather.find("\n    }\n").expect("its end")];
-        assert!(gather.contains("base0_fp_block_leaves_request_index_v1(wanted, block)"), "the disputed leaf's block is named");
+        assert!(
+            gather.contains("base0_fp_block_request_number_v1(&primary_v4, block)")
+                && gather.contains("base0_fp_block_leaves_request_index_v1(wanted, number)"),
+            "the disputed leaf's block is named, by the number its class counts in (ADR-0121 Decision 3)"
+        );
         assert!(gather.contains("return Err(CloseFromServedV1::Missing(vec![index]));"), "and asked for when it is not held");
         assert!(gather.contains("held.extend(served_block);"), "and handed to the close when it is");
     }

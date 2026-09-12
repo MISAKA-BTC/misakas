@@ -1138,7 +1138,10 @@ fn tamper_stage_v1(
         PalwFpIntervalVerdictV1::FaultInRange { first_leaf_index, .. } => {
             let v4 = crate::fp_interval::Base0FpIntervalOpeningV4::decode_v1(&opening).map_err(|e| format!("{e:?}"))?;
             let block = first_leaf_index >> v4.range.retain_level;
-            let served = backend.open_fp_block_leaves(capture, 0, block, ids)?;
+            // Asked by the number the class counts in, as a seat asks (ADR-0121 Decision 3).
+            let number = crate::fp_interval::base0_fp_block_request_number_v1(&v4, block)
+                .ok_or_else(|| format!("block {block} is before interval 0's first"))?;
+            let served = backend.open_fp_block_leaves(capture, 0, number, ids)?;
             backend.fp_name_the_leaf_v1(&opening, &served, roots, 0, ids, output_ids, work_leaves)?
         }
         _ => None,
