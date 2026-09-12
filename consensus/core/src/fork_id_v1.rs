@@ -536,6 +536,7 @@ mod tests {
                 crate::config::params::PALW_RC_MODEL_BENEFITS_FENCE_DAA,
                 crate::config::params::PALW_RC_MODEL_LEG_V2_FENCE_DAA,
                 crate::config::params::PALW_RC_AUDIT_FENCE_DAA,
+                crate::config::params::PALW_RC_MODEL_SEED_V2_FENCE_DAA,
             ],
             "testnet-11's gate set is its flag days (ADR-0083, ADR-0062, ADR-0084 U-08, ADR-0095, ADR-0114, the audit fence), and deriving the list must not widen it"
         );
@@ -589,6 +590,7 @@ mod tests {
             "palw_model_lines" => params.palw_model_lines = Some(at),
             "palw_model_benefits" => params.palw_model_benefits = Some(at),
             "palw_model_leg_v2" => params.palw_model_leg_v2 = Some(at),
+            "palw_model_seed_v2" => params.palw_model_seed_v2 = Some(at),
             "palw_model_evm" => params.palw_model_evm = Some(at),
             "palw_chunk_cap_charge" => params.palw_chunk_cap_charge = Some(at),
             "palw_prompt_ids_merkle" => params.palw_prompt_ids_merkle = Some(at),
@@ -709,7 +711,9 @@ mod tests {
                 // ADR-0117's `palw_prefill_draw` fires at 4000 too — one height, so this list does
                 // not move, and a build with only one of the two is invisible to the gate
                 // (`PALW_RC_AUDIT_FENCE_DAA`'s doc).
-                ("testnet-11", vec![1150, 1900, 2150, 2400, 3500, 4000, 2_125_000]),
+                // **And 6900, ADR-0120's one-million-MSK least seed** (scheduled 2026-09-12 to ship with
+                // the 7,000 release at a height of its own, so the gate can see a build without it).
+                ("testnet-11", vec![1150, 1900, 2150, 2400, 3500, 4000, 6900, 2_125_000]),
                 ("devnet", vec![]),
                 ("simnet", vec![]),
             ],
@@ -743,13 +747,15 @@ mod tests {
         /// The pre-mainnet audit's flag day — the audit's state-transition/acceptance fixes and the
         /// dense-court and share-census fences that carry audit corrections all arm here.
         const AUDIT_FENCE: u64 = 4000;
+        /// ADR-0120's own height — the least seed becomes 1,000,000 MSK.
+        const ADR_0120: u64 = 6900;
         const CRESCENDO_T11: u64 = 2_125_000;
         for (name, params) in shipped() {
             if name == "testnet-11" {
                 assert_eq!(
                     fork_id_gate_fences_v1(&params),
-                    vec![ADR_0083, ADR_0062, ADR_0084_U08, ADR_0095, ADR_0114, AUDIT_FENCE],
-                    "{name}: armed by ADR-0083's fence, ADR-0062's, ADR-0084 U-08's, ADR-0095's, ADR-0114's and the audit's, and nothing else"
+                    vec![ADR_0083, ADR_0062, ADR_0084_U08, ADR_0095, ADR_0114, AUDIT_FENCE, ADR_0120],
+                    "{name}: armed by ADR-0083's fence, ADR-0062's, ADR-0084 U-08's, ADR-0095's, ADR-0114's, the audit's and ADR-0120's, and nothing else"
                 );
                 assert!(fork_id_gate_armed_v1(&params));
                 continue;
@@ -766,7 +772,10 @@ mod tests {
         }
 
         let t11 = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
-        assert_eq!(t11.fence_schedule_v1(), vec![ADR_0083, ADR_0062, ADR_0084_U08, ADR_0095, ADR_0114, AUDIT_FENCE, CRESCENDO_T11]);
+        assert_eq!(
+            t11.fence_schedule_v1(),
+            vec![ADR_0083, ADR_0062, ADR_0084_U08, ADR_0095, ADR_0114, AUDIT_FENCE, ADR_0120, CRESCENDO_T11]
+        );
         let genesis = t11.genesis.hash;
         // The un-upgraded build: same genesis, schedule [2_125_000] — it has crossed nothing and names
         // crescendo as its next fence, which is exactly what its digest and next look like on the wire.
@@ -779,8 +788,8 @@ mod tests {
             (stale_fired, ADR_0083),
             "same empty prefix as the stale build; the next fence is what tells them apart"
         );
-        // A node on this build past the height.
-        let past = fork_id_v1(&t11, 5_000);
+        // A node on this build past every height it schedules.
+        let past = fork_id_v1(&t11, 7_000);
         assert_eq!(past.next, CRESCENDO_T11);
         let stranger = &[0u8; 32][..];
 
@@ -1091,6 +1100,7 @@ mod tests {
         upgraded.palw_model_leg_v2 = None;
         upgraded.palw_audit_2026_09_11 = None;
         upgraded.palw_prefill_draw = None;
+        upgraded.palw_model_seed_v2 = None;
         upgraded.palw_share_growth_final = None;
         upgraded.palw_fused_dissectable = None;
         upgraded.palw_attn_anchored_root = None;
@@ -1172,6 +1182,7 @@ mod tests {
         let mut upgraded = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
         upgraded.palw_audit_2026_09_11 = None;
         upgraded.palw_prefill_draw = None;
+        upgraded.palw_model_seed_v2 = None;
         upgraded.palw_share_growth_final = None;
         upgraded.palw_fused_dissectable = None;
         upgraded.palw_attn_anchored_root = None;
