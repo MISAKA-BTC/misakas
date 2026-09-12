@@ -131,7 +131,11 @@ pub async fn status(ctx: &Ctx, ks: Option<&KeySource>, class_id: Option<&str>, b
                 match (lifetime_collateral, collateral_shortfall) {
                     (Some(need), Some(short)) => {
                         println!("sizing:     UNDERSIZED for sustained mining in the inspected class");
-                        println!("            {} required / {} short", need, short);
+                        println!(
+                            "            {need} sompi ({} MSK) required / {short} sompi ({} MSK) short",
+                            sompi_to_msk(need),
+                            sompi_to_msk(short)
+                        );
                     }
                     (Some(need), None) => {
                         println!("sizing:     sufficient for the inspected class's whole claim lifetime ({need} required)")
