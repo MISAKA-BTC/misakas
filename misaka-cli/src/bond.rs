@@ -8,8 +8,8 @@
 //!
 //! was true about the consensus rule and false about the software. PALW collateral went in and did
 //! not come out. This module is the caller that rule has been waiting for, plus the one read
-//! (`bond status`) an operator needs to name the bond at all: the outpoint is printed once, in a
-//! log line at registration, and stored nowhere else.
+//! (`bond status`) an operator needs to name the bond at all. Registration prints the outpoint;
+//! status can recover bonds owned by a key or inspect a known outpoint without loading a key.
 
 use crate::keys::KeySource;
 use crate::node::Ctx;
@@ -42,15 +42,111 @@ pub(crate) fn network_domain(nv: &NodeView) -> kaspa_consensus_core::Hash64 {
     )
 }
 
-/// **`misaka bond status`** (D3) — what the chain says about this key's collateral.
+/// **`misaka bond status`** (D3) — what the chain says about a key's collateral or one
+/// exact outpoint.
 ///
-/// The bond outpoint appears exactly once in an operator's life: a log line at registration, which
-/// the runbook tells them to keep because the node stores it nowhere else. An operator who lost
-/// that line has a funded, working bond they cannot name — and `--palw-producer-bond` takes the
-/// outpoint. `getPalwProducerFacts` already returns the locked set (the wallet calls it to avoid
-/// spending collateral), so this is a read the node has been able to answer all along.
-pub async fn status(ctx: &Ctx, ks: &KeySource, class_id: Option<&str>) -> CliResult {
+/// Registration prints the bond outpoint, and `--palw-producer-bond` takes that outpoint. An
+/// operator may instead arrive with only a suspicious locked UTXO, so this command supports both
+/// ownership discovery by key and an exact, keyless registry lookup. `getPalwProducerFacts`
+/// already returns the locked set and exact bond facts; this is the readable distinction between
+/// consensus registration and an ordinary or node-local reserved output.
+pub async fn status(ctx: &Ctx, ks: Option<&KeySource>, class_id: Option<&str>, bond_arg: Option<&str>) -> CliResult {
     let nv = connect(ctx).await?;
+
+    // The support question operators actually have starts with an outpoint, not necessarily the
+    // key that registered it: "this UTXO is locked; is it a bond or only reserved funding?" A UTXO
+    // lookup cannot answer that because the registry, not the script or amount, makes it a bond.
+    // Ask the registry directly and require no secret for this read-only path.
+    if let Some(spec) = bond_arg {
+        let bond = parse_outpoint(spec)?;
+        let Some(class_id) = class_id else {
+            return Err(CliError::new(
+                exit::GENERIC,
+                "--bond needs --class-id <128-hex registered class id>. The RPC reads a bond alongside a class the chain knows; this does not make the answer class-specific.".to_string(),
+            ));
+        };
+        let facts = nv
+            .client
+            .get_palw_producer_facts(class_id.to_string(), bond.transaction_id.to_string(), bond.index, true)
+            .await
+            .map_err(|e| CliError::new(exit::GENERIC, format!("getPalwProducerFacts: {e}")))?;
+        if !facts.available {
+            return Err(CliError::new(
+                exit::GENERIC,
+                format!(
+                    "this node did not answer for class {class_id}. Confirm --network/--rpc and use a class id registered on this chain; no conclusion was drawn about bond {}:{}.",
+                    bond.transaction_id, bond.index
+                ),
+            ));
+        }
+
+        let supplied_key = match ks {
+            Some(source) => Some(source.load_key()?),
+            None => None,
+        };
+        let owned_by_supplied_key = supplied_key.as_ref().map(|key| {
+            facts.bond_known && facts.bond_registered_pubkey.eq_ignore_ascii_case(&faster_hex::hex_string(key.public_key()))
+        });
+        let outpoint = format!("{}:{}", bond.transaction_id, bond.index);
+        match ctx.output {
+            OutputFormat::Human if facts.bond_known => {
+                println!("bond:       {outpoint}");
+                println!("registry:   REGISTERED");
+                println!("collateral: {} sompi ({} MSK)", facts.bond_collateral, sompi_to_msk(facts.bond_collateral));
+                println!("operator:   {}", facts.bond_operator_id);
+                println!("pubkey:     {}", facts.bond_registered_pubkey);
+                println!("exposure:   {} reserved / {} ceiling", facts.bond_reserved_exposure, facts.bond_exposure_ceiling);
+                if let Some(owned) = owned_by_supplied_key {
+                    println!(
+                        "key:        {}",
+                        if owned { "MATCHES the registered owner" } else { "DOES NOT match the registered owner" }
+                    );
+                }
+                if !facts.not_ready_reason.is_empty() {
+                    println!("readiness:  {}", facts.not_ready_reason);
+                }
+                println!();
+                println!("Use `--palw-producer-bond={outpoint}` with the key that registered it.");
+                println!("Do not run `--palw-register-bond` again for this bond; registration is already complete.");
+            }
+            OutputFormat::Human => {
+                println!("bond:     {outpoint}");
+                println!("registry: NOT REGISTERED");
+                println!();
+                println!("An unspent or locally reserved UTXO is not a PALW bond by itself. Do not pass");
+                println!("this outpoint to `--palw-producer-bond`; consensus has no registry entry for it.");
+                println!();
+                println!("To create a bond, run the synced node once with `--palw-register-bond`,");
+                println!("`--palw-producer-key`, `--palw-producer-pay-address`, and the intended");
+                println!("`--palw-producer-class`. The node spends confirmed funding, prints the NEW");
+                println!("registered bond outpoint, and stops. Use that printed outpoint afterward.");
+            }
+            OutputFormat::Json => println!(
+                "{}",
+                serde_json::json!({
+                    "ok": true,
+                    "outpoint": outpoint,
+                    "registered": facts.bond_known,
+                    "class_id_used_for_lookup": class_id,
+                    "collateral_sompi": facts.bond_known.then_some(facts.bond_collateral),
+                    "registered_pubkey": facts.bond_known.then_some(facts.bond_registered_pubkey),
+                    "operator_id": facts.bond_known.then_some(facts.bond_operator_id),
+                    "reserved_exposure": facts.bond_known.then_some(facts.bond_reserved_exposure),
+                    "exposure_ceiling": facts.bond_known.then_some(facts.bond_exposure_ceiling),
+                    "not_ready_reason": facts.bond_known.then_some(facts.not_ready_reason),
+                    "owned_by_supplied_key": owned_by_supplied_key,
+                })
+            ),
+        }
+        return Ok(());
+    }
+
+    let ks = ks.ok_or_else(|| {
+        CliError::new(
+            exit::WALLET_LOCKED,
+            "name what to inspect: pass --bond <txid>:<index> for a keyless registry lookup, or pass --key-file/--key-stdin to find this key's bonds".to_string(),
+        )
+    })?;
     let key = ks.load_key()?;
     let addr = key.funding_address(nv.params.prefix());
 

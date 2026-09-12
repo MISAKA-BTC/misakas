@@ -1035,7 +1035,7 @@ pub fn cli() -> Command {
                 .env("KASPAD_PALW_PRODUCER_BOND")
                 .require_equals(true)
                 .value_parser(clap::value_parser!(String))
-                .help("PALW: <txid>:<index> of the bond output this node signs attempts under. A genesis bond names it on the card; a bond made with --palw-register-bond prints it when the carrier is submitted, and that line is the only place it appears — the outpoint is the carrier's own id."),
+                .help("PALW: <txid>:<index> of the REGISTERED bond this node signs attempts under. A genesis bond names it on the card; --palw-register-bond prints a newly registered outpoint. Verify any candidate with `misaka bond status --bond <txid>:<index> --class-id <id>` — an ordinary or reserved UTXO is not a bond."),
         )
         .arg(
             Arg::new("palw-drill-challenge-all")

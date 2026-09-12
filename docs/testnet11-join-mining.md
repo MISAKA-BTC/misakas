@@ -163,6 +163,19 @@ chain before telling you it did:
 Restart with --palw-producer-bond=<txid>:0 (and --palw-produce) to mine with it
 ```
 
+If you already have an outpoint and need to distinguish a registered bond from an ordinary UTXO
+or a node-local reserved funding output, ask the registry directly. This read needs no key:
+
+```bash
+misaka --network testnet-11 --rpc 127.0.0.1:26313 bond status \
+  --bond <txid>:<index> \
+  --class-id 4277d84f7d91528cc04aa366d51ee1c2e4f7902c4f6b16a213dead1c7e227977db732f18ed6183db3d944d44726ebd3feff7b15c48f9dba11cd526684f35f1b7
+```
+
+`registry: REGISTERED` means use that outpoint with `--palw-producer-bond` and do not register it
+again. `registry: NOT REGISTERED` means the UTXO amount or lock status was not a bond registration;
+run the one-shot `--palw-register-bond` flow below and use the new outpoint it prints.
+
 **That line is the only place the bond's outpoint appears.** It is this transaction's own id, which
 did not exist until the transaction was built — nobody can tell it to you in advance, and the node
 does not store it anywhere else. Keep it.

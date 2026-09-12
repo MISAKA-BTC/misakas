@@ -1231,14 +1231,17 @@ enum KeyCmd {
 /// ADR-0063 D2/D3: the operator's half of the PALW bond lifecycle.
 #[derive(Subcommand, Debug)]
 enum BondCmd {
-    /// Show the bond outpoint(s) this key holds, from the chain — the outpoint
-    /// `--palw-producer-bond` needs, which the node prints once at registration and stores nowhere.
+    /// Inspect an exact outpoint in the Bond registry, or show the bonds registered to a key.
     Status {
         #[command(flatten)]
         key: KeyArgs,
+        /// Inspect this exact `<txid>:<index>` in the chain's Bond registry. This mode is
+        /// read-only and does not require a key. `--outpoint` and `--carrier` are aliases.
+        #[arg(long, visible_alias = "outpoint", visible_alias = "carrier")]
+        bond: Option<String>,
         /// A class id (128-hex) the chain knows. With it, the chain is asked which bonds THIS KEY
-        /// registered — the only reliable answer, because a bond's collateral often sits at another
-        /// address (a genesis or sponsored registration) where no address scan will find it.
+        /// registered, or whether `--bond` is registered. Required with `--bond`, because the
+        /// producer-facts RPC resolves a bond alongside a class the chain knows.
         #[arg(long)]
         class_id: Option<String>,
     },
@@ -1852,7 +1855,10 @@ async fn main() -> std::process::ExitCode {
         Command::Key(KeyCmd::Gen { out }) => key_gen(&ctx, &out),
         Command::Key(KeyCmd::Address { key }) => key_address(&ctx, &key.source()),
         Command::Key(KeyCmd::Import { out, hex_stdin, hex_file }) => key_import(&ctx, &out, hex_stdin, hex_file.as_deref()),
-        Command::Bond(BondCmd::Status { key, class_id }) => bond::status(&ctx, &key.source(), class_id.as_deref()).await,
+        Command::Bond(BondCmd::Status { key, bond, class_id }) => {
+            let source = key.source_opt();
+            bond::status(&ctx, source.as_ref(), class_id.as_deref(), bond.as_deref()).await
+        }
         Command::Bond(BondCmd::Capability { key, bond, class_id, declare, dry_run, yes }) => {
             bond::capability(&ctx, &key.source(), bond.as_deref(), class_id.as_deref(), &declare, dry_run, yes).await
         }
@@ -2007,6 +2013,21 @@ mod cli_surface_tests {
             Cli::try_parse_from(["misaka", "key", "import", "--out", "/tmp/o", "--hex-stdin", "--hex-file", "/tmp/s"]).is_err(),
             "two sources at once must be refused at the parser, not silently ranked"
         );
+    }
+
+    /// A support request commonly starts with only a carrier outpoint. Inspecting whether the
+    /// chain registered it is a public read, so the command must parse without making the operator
+    /// locate or expose a seed first. Keep the three documented spellings equivalent.
+    #[test]
+    fn bond_status_can_inspect_an_exact_outpoint_without_a_key() {
+        let outpoint = format!("{}:0", "09".repeat(64));
+        let class = "42".repeat(64);
+        for flag in ["--bond", "--outpoint", "--carrier"] {
+            assert!(
+                Cli::try_parse_from(["misaka", "bond", "status", flag, &outpoint, "--class-id", &class]).is_ok(),
+                "bond status did not accept its keyless {flag} lookup"
+            );
+        }
     }
 
     /// **SA-4: `misaka miner` does not exist.**
