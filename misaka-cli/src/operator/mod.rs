@@ -10,6 +10,7 @@
 //! * [`profile`] — `~/.misaka/mining.toml`, the flags, and the running node's own command line
 //!   (Decision 6).
 //! * [`dashboard`] — the same answers on one read-only page at 127.0.0.1:8791 (Decision 9).
+//! * [`roles`] — `rewards` and `verifier status`; [`market`] — `model list` and `position …` (§8.2).
 //! * [`logs`] — every component's lines about one work, by the id they share (Decision 8).
 //! * [`snapshot`], [`nodelog`], [`procs`], [`host`] — what those read: the node's RPC, its log,
 //!   the process table and the host.
@@ -23,9 +24,11 @@ pub(crate) mod doctor;
 pub(crate) mod finding;
 pub(crate) mod host;
 pub(crate) mod logs;
+pub(crate) mod market;
 pub(crate) mod nodelog;
 pub(crate) mod procs;
 pub(crate) mod profile;
+pub(crate) mod roles;
 pub(crate) mod snapshot;
 pub(crate) mod status;
 pub(crate) mod supervisor;

@@ -98,7 +98,16 @@ fn missing(what: &str, fix: &str) -> Finding {
 /// node needs (ADR-0122 §7). Never `--enable-unsynced-mining` (a fresh chain's first block only),
 /// `--unsaferpc`, `--yes` (kaspad's prompts delete databases; unanswered, they refuse and exit), or
 /// any drill or devnet ruleset flag; `[advanced] extra_kaspad_args` is where an operator adds one.
-pub(crate) fn kaspad_args(p: &Profile) -> Result<Vec<String>, Finding> {
+/// What the node is started as: a miner (the producer and the panel), or a verifier (the panel
+/// alone — a PALW seat that judges other bonds' claims and draws nothing).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Role {
+    #[default]
+    Miner,
+    Verifier,
+}
+
+pub(crate) fn kaspad_args(p: &Profile, role: Role) -> Result<Vec<String>, Finding> {
     let file = p.config.clone().unwrap_or_default();
     let mut args = network_flags(&p.network)?;
     args.push(format!("--appdir={}", p.appdir.display()));
@@ -116,7 +125,9 @@ pub(crate) fn kaspad_args(p: &Profile) -> Result<Vec<String>, Finding> {
     let bond = p.bond.as_ref().ok_or_else(|| {
         missing("which bond the node mines under", "set [advanced] bond = \"<txid>:<index>\", or register one: misaka mining setup")
     })?;
-    args.push("--palw-produce".to_string());
+    if role == Role::Miner {
+        args.push("--palw-produce".to_string());
+    }
     args.push("--palw-panel".to_string());
     args.push(format!("--palw-producer-key={}", key.display()));
     args.push(format!("--palw-producer-bond={bond}"));
@@ -125,7 +136,7 @@ pub(crate) fn kaspad_args(p: &Profile) -> Result<Vec<String>, Finding> {
     }
     if let Some(fee) = &p.fee_outpoint {
         args.push(format!("--palw-fee-outpoint={fee}"));
-    } else if !p.persisted_fee_outpoint().exists() {
+    } else if role == Role::Miner && !p.persisted_fee_outpoint().exists() {
         // kaspad panics without one on a ConsensusV2 network: say it here, as a fix.
         return Err(missing(
             "which UTXO funds the panel's carriers",
@@ -172,16 +183,18 @@ fn binary(name: &str, configured: Option<&Path>) -> Result<PathBuf, Finding> {
 }
 
 /// **Everything `start` would run**, resolved and checked, without running anything.
-pub(crate) fn plan(p: &Profile) -> Result<Plan, Finding> {
+pub(crate) fn plan(p: &Profile, role: Role) -> Result<Plan, Finding> {
     let file = p.config.clone().unwrap_or_default();
     let kaspad = Cmd {
         name: "kaspad",
         program: binary("kaspad", file.advanced.kaspad.as_deref().map(|k| PathBuf::from(procs::expand_home(k))).as_deref())?,
-        args: kaspad_args(p)?,
+        args: kaspad_args(p, role)?,
         env: Vec::new(),
     };
     let run_dir = run_dir(&p.network);
-    let (identity, gateway, rail) = match &p.prompt {
+    // A verifier runs no prompt lane: the lane is a way of mining.
+    let lane = if role == Role::Miner { p.prompt.as_ref() } else { None };
+    let (identity, gateway, rail) = match lane {
         None => (None, None, None),
         Some(lane) => {
             let key = p.key_path.as_ref().expect("kaspad_args required the key");
@@ -419,6 +432,7 @@ pub(crate) struct StartMode {
     pub(crate) detach: bool,
     pub(crate) print_command: bool,
     pub(crate) service: bool,
+    pub(crate) role: Role,
 }
 
 pub(crate) async fn start(
@@ -436,7 +450,7 @@ pub(crate) async fn start(
             .docs("docs/adr/0122-mining-is-a-purpose-an-operator-runs-one-command-and-reads-one-work-id.md");
         return fail(ctx, f);
     }
-    let plan = match plan(&profile) {
+    let plan = match plan(&profile, mode.role) {
         Ok(plan) => plan,
         Err(f) => return fail(ctx, f),
     };
@@ -1256,7 +1270,7 @@ mod tests {
         let mut file = MiningToml::default();
         file.advanced.peers = vec!["169.58.39.220:26311".into()];
         file.advanced.challenge = Some(true);
-        let args = kaspad_args(&profile(file)).expect("complete");
+        let args = kaspad_args(&profile(file), Role::Miner).expect("complete");
         for want in [
             "--testnet",
             "--netsuffix=11",
@@ -1286,20 +1300,26 @@ mod tests {
     fn an_incomplete_file_names_what_it_lacks() {
         let mut p = profile(MiningToml::default());
         p.bond = None;
-        assert!(kaspad_args(&p).unwrap_err().title.contains("which bond"));
+        assert!(kaspad_args(&p, Role::Miner).unwrap_err().title.contains("which bond"));
         let mut p = profile(MiningToml::default());
         p.fee_outpoint = None;
-        assert!(kaspad_args(&p).unwrap_err().title.contains("funds the panel"), "kaspad would panic: said here instead");
+        assert!(kaspad_args(&p, Role::Miner).unwrap_err().title.contains("funds the panel"), "kaspad would panic: said here instead");
+        let verifier = kaspad_args(&p, Role::Verifier).expect("a verifier without a fee outpoint files receipts only");
+        assert!(!verifier.contains(&"--palw-produce".to_string()) && verifier.contains(&"--palw-panel".to_string()));
         let mut p = profile(MiningToml::default());
         p.network = "testnet-x".into();
-        assert_eq!(kaspad_args(&p).unwrap_err().code, "E-CONFIG-NETWORK");
+        assert_eq!(kaspad_args(&p, Role::Miner).unwrap_err().code, "E-CONFIG-NETWORK");
     }
 
     /// Draining keeps everything but the producer.
     #[test]
     fn a_drain_keeps_the_panel_and_drops_only_the_producer() {
-        let cmd =
-            Cmd { name: "kaspad", program: "/k".into(), args: kaspad_args(&profile(MiningToml::default())).unwrap(), env: Vec::new() };
+        let cmd = Cmd {
+            name: "kaspad",
+            program: "/k".into(),
+            args: kaspad_args(&profile(MiningToml::default()), Role::Miner).unwrap(),
+            env: Vec::new(),
+        };
         let drained = without_produce(&cmd);
         assert!(!drained.args.contains(&"--palw-produce".to_string()));
         assert!(drained.args.contains(&"--palw-panel".to_string()));

@@ -21,12 +21,12 @@ use kaspa_consensus_core::palw_model_market_v1::{
 /// ADR-0114: the schedule the node says a move is settled under at its tip (a node from before
 /// ADR-0114 serves 50/10, which is what its fold does). Quotes are made with it, never with a
 /// schedule this build assumes, so a preview agrees with the fold on either side of the fence.
-fn served_schedule(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> PalwModelFeesV1 {
+pub(crate) fn served_schedule(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> PalwModelFeesV1 {
     PalwModelFeesV1 { burn_permille: r.burn_permille, leg_permille: r.leg_permille }
 }
 
 /// "5 %", "1 %": a permille as the percentage the CLI prints.
-fn pct(permille: u64) -> String {
+pub(crate) fn pct(permille: u64) -> String {
     if permille.is_multiple_of(10) { format!("{} %", permille / 10) } else { format!("{}.{} %", permille / 10, permille % 10) }
 }
 use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
@@ -72,11 +72,11 @@ pub(crate) fn parse_msk_amount(text: &str) -> Result<u64, CliError> {
         .ok_or_else(|| CliError::new(exit::GENERIC, format!("'{text}' is out of range")))
 }
 
-fn msk(sompi: u64) -> String {
+pub(crate) fn msk(sompi: u64) -> String {
     format!("{}.{:08} MSK", sompi / SOMPI_PER_MSK, sompi % SOMPI_PER_MSK)
 }
 
-fn market_from_response(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> PalwModelMarketV1 {
+pub(crate) fn market_from_response(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> PalwModelMarketV1 {
     PalwModelMarketV1 {
         opened_daa: r.opened_daa,
         msk_reserve: r.msk_reserve,

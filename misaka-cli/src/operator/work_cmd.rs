@@ -149,6 +149,7 @@ async fn find(snap: &Snapshot, id: &str) -> Result<WorkRow, CliError> {
                 chain: Some(chain),
                 outbox: None,
                 reading,
+                extra: None,
             })
         }
     }

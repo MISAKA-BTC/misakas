@@ -192,6 +192,20 @@ enum Command {
     Work(WorkCmd),
     /// The node's, the gateway's and the rail's lines — all of them, or the ones about one work.
     Logs(LogsArgs),
+    /// What mining has paid, and what is still coming: the wallet, the escrow by claim, the prompt lane.
+    Rewards {
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// A PALW panel seat that judges other bonds' claims and draws nothing (検証席). Not paid.
+    #[command(subcommand)]
+    Verifier(VerifierCmd),
+    /// The models this network runs: classes, shares, budgets, prompt lanes, markets.
+    #[command(subcommand)]
+    Model(ModelCmd),
+    /// Model positions: what this key holds, a quote, and a buy or a sell with a computed floor.
+    #[command(subcommand)]
+    Position(PositionCmd),
     /// A read-only page with the miner's state, its works, their logs and the doctor, at
     /// http://127.0.0.1:8791 (8790 is the gateway's).
     Dashboard {
@@ -358,6 +372,9 @@ enum MiningCmd {
     Run {
         #[command(flatten)]
         profile: ProfileArgs,
+        /// Run the node as a panel only (what `misaka verifier start --detach` relaunches).
+        #[arg(long, hide = true)]
+        verifier: bool,
     },
 }
 
@@ -392,6 +409,89 @@ struct DoctorArgs {
     strict: bool,
     #[command(flatten)]
     profile: ProfileArgs,
+}
+
+#[derive(Subcommand, Debug)]
+enum VerifierCmd {
+    /// The claims this bond is seated on, and what it owes them.
+    Status {
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// Start mining.toml's node as a panel only: it judges, and draws nothing.
+    Start {
+        #[command(flatten)]
+        profile: ProfileArgs,
+        /// Run the supervisor in the background.
+        #[arg(long)]
+        detach: bool,
+        /// Print the exact command line, and run nothing.
+        #[arg(long, conflicts_with = "detach")]
+        print_command: bool,
+    },
+    /// Stop it (the same stop as `mining stop`: refused while this bond's own claims need it).
+    Stop {
+        #[command(flatten)]
+        profile: ProfileArgs,
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ModelCmd {
+    /// Every class: name, status, share, budget, prompt lane, market.
+    List {
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum PositionCmd {
+    /// What this key holds, and what a sell would pay now.
+    List {
+        /// Another holder (its 128-hex payout payload) instead of the key's own.
+        #[arg(long)]
+        holder: Option<String>,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// What a buy (--msk) or a sell (--positions) would do now.
+    Quote {
+        /// The line (a class id names its founding line).
+        line: String,
+        #[arg(long, conflicts_with = "positions")]
+        msk: Option<String>,
+        #[arg(long)]
+        positions: Option<u64>,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// Buy positions: the floor is the quote less --slippage (default 1 %). Dry run unless --yes.
+    Buy {
+        line: String,
+        #[arg(long)]
+        msk: String,
+        #[arg(long, default_value = "1%")]
+        slippage: String,
+        #[arg(long)]
+        yes: bool,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// Sell positions: the floor is the quote less --slippage (default 1 %). Dry run unless --yes.
+    Sell {
+        line: String,
+        #[arg(long)]
+        positions: u64,
+        #[arg(long, default_value = "1%")]
+        slippage: String,
+        #[arg(long)]
+        yes: bool,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -1870,7 +1970,7 @@ async fn main() -> std::process::ExitCode {
                 }
                 relaunch.extend(["mining".to_string(), "run".to_string()]);
                 relaunch.extend(args.relaunch_args());
-                let mode = operator::supervisor::StartMode { detach, print_command, service };
+                let mode = operator::supervisor::StartMode { detach, print_command, service, role: operator::supervisor::Role::Miner };
                 operator::supervisor::start(&ctx, p, mode, &|| profile(&args), &relaunch).await
             }
             Err(e) => Err(e),
@@ -1879,8 +1979,11 @@ async fn main() -> std::process::ExitCode {
             Ok(p) => operator::supervisor::stop(&ctx, p, drain, force, grace).await,
             Err(e) => Err(e),
         },
-        Command::Mining(MiningCmd::Run { profile: args }) => match profile(&args) {
-            Ok(p) => match operator::supervisor::plan(&p) {
+        Command::Mining(MiningCmd::Run { profile: args, verifier }) => match profile(&args) {
+            Ok(p) => match operator::supervisor::plan(
+                &p,
+                if verifier { operator::supervisor::Role::Verifier } else { operator::supervisor::Role::Miner },
+            ) {
                 Ok(plan) => operator::supervisor::run_supervisor(plan, false, &|| profile(&args)).await,
                 Err(f) => Err(CliError::new(f.exit, f.render())),
             },
@@ -1903,6 +2006,56 @@ async fn main() -> std::process::ExitCode {
             Err(e) => Err(e),
         },
         Command::Dashboard { listen, public, profile: args } => operator::dashboard::run(&listen, public, &|| profile(&args)).await,
+        Command::Rewards { profile: args } => match profile(&args) {
+            Ok(p) => operator::roles::rewards(&ctx, p).await,
+            Err(e) => Err(e),
+        },
+        Command::Verifier(VerifierCmd::Status { profile: args }) => match profile(&args) {
+            Ok(p) => operator::roles::verifier_status(&ctx, p).await,
+            Err(e) => Err(e),
+        },
+        Command::Verifier(VerifierCmd::Start { profile: args, detach, print_command }) => match profile(&args) {
+            Ok(p) => {
+                let mut relaunch = vec!["--network".to_string(), p.network.clone()];
+                if let Some(rpc) = &ctx.rpc {
+                    relaunch.extend(["--rpc".to_string(), rpc.clone()]);
+                }
+                relaunch.extend(["mining".to_string(), "run".to_string(), "--verifier".to_string()]);
+                relaunch.extend(args.relaunch_args());
+                let mode = operator::supervisor::StartMode {
+                    detach,
+                    print_command,
+                    service: false,
+                    role: operator::supervisor::Role::Verifier,
+                };
+                operator::supervisor::start(&ctx, p, mode, &|| profile(&args), &relaunch).await
+            }
+            Err(e) => Err(e),
+        },
+        Command::Verifier(VerifierCmd::Stop { profile: args, force }) => match profile(&args) {
+            Ok(p) => operator::supervisor::stop(&ctx, p, false, force, None).await,
+            Err(e) => Err(e),
+        },
+        Command::Model(ModelCmd::List { profile: args }) => match profile(&args) {
+            Ok(p) => operator::market::model_list(&ctx, p).await,
+            Err(e) => Err(e),
+        },
+        Command::Position(PositionCmd::List { holder, profile: args }) => match profile(&args) {
+            Ok(p) => operator::market::position_list(&ctx, p, holder).await,
+            Err(e) => Err(e),
+        },
+        Command::Position(PositionCmd::Quote { line, msk, positions, profile: args }) => match profile(&args) {
+            Ok(p) => operator::market::position_quote(&ctx, p, &line, msk.as_deref(), positions).await,
+            Err(e) => Err(e),
+        },
+        Command::Position(PositionCmd::Buy { line, msk, slippage, yes, profile: args }) => match profile(&args) {
+            Ok(p) => operator::market::position_buy(&ctx, p, &line, &msk, &slippage, yes).await,
+            Err(e) => Err(e),
+        },
+        Command::Position(PositionCmd::Sell { line, positions, slippage, yes, profile: args }) => match profile(&args) {
+            Ok(p) => operator::market::position_sell(&ctx, p, &line, positions, &slippage, yes).await,
+            Err(e) => Err(e),
+        },
         Command::Logs(args) => match profile(&args.profile) {
             Ok(p) => operator::logs::run(p, &args.components, args.work.as_deref(), args.events, args.follow, args.lines).await,
             Err(e) => Err(e),

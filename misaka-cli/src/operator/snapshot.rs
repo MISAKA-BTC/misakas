@@ -85,6 +85,8 @@ pub(crate) struct WorkRow {
     pub(crate) chain: Option<GetPalwFreePromptClaimResponse>,
     pub(crate) outbox: Option<OutboxRow>,
     pub(crate) reading: work::Reading,
+    /// What the node's claim row adds (deadline, escrow, a queued payout), when the node served one.
+    pub(crate) extra: Option<work::ClaimExtra>,
 }
 
 impl WorkRow {
@@ -361,6 +363,7 @@ async fn gather_works(snap: &Snapshot, node: &NodeRead) -> (Vec<WorkRow>, Vec<St
                 chain: Some(chain),
                 outbox: None,
                 reading: work::refine(lane, reading, &extra),
+                extra: Some(extra),
             });
         }
         if resp.truncated {
@@ -383,6 +386,7 @@ async fn gather_works(snap: &Snapshot, node: &NodeRead) -> (Vec<WorkRow>, Vec<St
                         chain,
                         outbox: None,
                         reading,
+                        extra: None,
                     });
                 }
                 Ok(None) => errors.push(format!("block {} carries no attempt", work::short_id(hash))),
@@ -444,6 +448,7 @@ async fn gather_works(snap: &Snapshot, node: &NodeRead) -> (Vec<WorkRow>, Vec<St
                         chain,
                         outbox: Some(row),
                         reading,
+                        extra: None,
                     });
                 }
             }
