@@ -92,6 +92,7 @@ impl Router {
                 GetPalwClaims,
                 GetPalwClasses,
                 GetPalwNodeStatus,
+                GetPalwRegistrationTerms,
                 GetTokenSupply,
                 GetTokenEmissionInfo,
                 GetValidatorAttestationTarget,

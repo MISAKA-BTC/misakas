@@ -808,6 +808,14 @@ pub trait ConsensusApi: Send + Sync {
     /// `None` on every network without a V2 bundle, and on one whose base class this chain does not
     /// hold yet — both honest answers rather than errors, and both mean the same thing to a caller:
     /// this is not a chain you can register a class on right now.
+    /// **The families the chain certified, both lanes** (ADR-0075 Decision 3, served by ADR-0122's
+    /// `getPalwRegistrationTerms`): lane, digest and record. Empty off `ConsensusV2`.
+    fn palw_certified_families_v1(
+        &self,
+    ) -> Vec<(crate::palw_state_v2::PalwCertifiedLaneV1, crate::Hash64, crate::palw_state_v2::PalwCertifiedFamilyStateV2)> {
+        Vec::new()
+    }
+
     fn palw_v2_registration_terms(&self) -> Option<crate::palw_state_v2::PalwRegistrationTermsV2> {
         None
     }

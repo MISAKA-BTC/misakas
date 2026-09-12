@@ -4998,6 +4998,13 @@ impl PalwChainStateV2 {
         self.certified_family_records(lane).get(digest)
     }
 
+    /// Every family the chain certified for `lane`, by digest — what `getPalwRegistrationTerms`
+    /// serves (ADR-0122 §8.2), so a registrant and a lane binding can be priced and checked the way
+    /// the transition will check them.
+    pub fn certified_family_entries(&self, lane: PalwCertifiedLaneV1) -> Vec<(Hash64, PalwCertifiedFamilyStateV2)> {
+        self.certified_family_records(lane).iter().map(|(digest, record)| (*digest, record.clone())).collect()
+    }
+
     fn certified_family_records(&self, lane: PalwCertifiedLaneV1) -> &BTreeMap<Hash64, PalwCertifiedFamilyStateV2> {
         match lane {
             PalwCertifiedLaneV1::Attempt => &self.certified_families,

@@ -1105,6 +1105,18 @@ async fn sanity_test() {
                     assert_eq!(response.producer_state, "off", "the sanity daemon runs no producer");
                 })
             }
+            KaspadPayloadOps::GetPalwRegistrationTerms => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response =
+                        rpc_client.get_palw_registration_terms_call(None, GetPalwRegistrationTermsRequest {}).await.unwrap();
+                    // The sanity daemon's network may or may not carry a ConsensusV2 bundle; either
+                    // way the answer is well formed, and an unavailable one says nothing else.
+                    if !response.available {
+                        assert!(response.families.is_empty() && response.registered_class_ids.is_empty());
+                    }
+                })
+            }
             KaspadPayloadOps::GetTokenSupply => {
                 tst!(op, "TOK supply read — inert preset answers available:false by design")
             }

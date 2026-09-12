@@ -96,46 +96,10 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).map(String::as_str)
 }
 
-/// **ADR-0082 Decision 9: the seat's window is what bounds a row's width, and it is checked HERE.**
-///
-/// A row nobody can seat certifies nothing (ADR-0075), so the bound belongs where seats are
-/// measured — not in `verify_class_admission`, which cannot read a fleet measurement and must not
-/// pretend to. `n_max = window_receipt × rate_seat_prefill`, with:
-///
-/// * `window_receipt` the ruleset's own receipt window (`PalwLatticeWindowsV1`), read, never typed;
-/// * `rate_seat_prefill` the SLOWER of two measurements — the class row's SA-4 figure
-///   (`PALW_COURT_ROW_COSTS`, whose source is written down beside it) and whatever this fleet
-///   measured, passed in with `--seat-ms-per-position`. Taking the slower is what "the slowest
-///   fleet host" means, and it can only ever admit FEWER positions.
-///
-/// Nothing is chosen: the two quantities are the ruleset's and the measurement's, and the
-/// derivation is printed so a reader can check the arithmetic rather than the intention.
+/// ADR-0082 Decision 9's bound, which `misaka model add` applies too: one definition, in the library.
 fn seat_width_bound(profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3, measured_ms: Option<u64>) -> (u64, u64, u64) {
-    use kaspa_consensus_core::palw_context_ladder::{PALW_COURT_COST_A16, PALW_COURT_COST_BASE0, PALW_COURT_COST_QWEN36};
-    let class_id = profile.shape_profile_id();
-    // The class's own row where the build ships one; otherwise the shape decides which family's
-    // measurement covers it, the way `palw_shipped_court_rows_v1` pairs them.
-    let row_ms = kaspa_consensus_core::palw_court_deadline::palw_shipped_court_rows_v1()
-        .ok()
-        .and_then(|rows| rows.into_iter().find(|r| r.class_id == class_id).map(|r| r.cost.replay_ms_per_position()))
-        .unwrap_or_else(|| {
-            if profile.full_attention_interval == 0 || profile.gdn_heads > 0 {
-                PALW_COURT_COST_QWEN36.replay_ms_per_position()
-            } else if profile.vocab_size > PALW_BASE0_VOCAB_CEILING {
-                PALW_COURT_COST_A16.replay_ms_per_position()
-            } else {
-                PALW_COURT_COST_BASE0.replay_ms_per_position()
-            }
-        });
-    let ms = row_ms.max(measured_ms.unwrap_or(0));
-    let rate = misaka_palw_base0::fp_recompute::base0_fp_seat_milli_positions_per_daa_v1(ms);
-    let window = kaspa_consensus_core::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1.window_receipt;
-    (misaka_palw_base0::fp_recompute::base0_fp_seat_width_bound_v1(window, rate), ms, rate)
+    misaka_palw_base0::e2e_drill::seat_width_bound_v1(profile, measured_ms)
 }
-
-/// The floor's vocabulary — above it a class is not the integer floor, which is the only thing
-/// this needs to tell apart when a build ships no row for the class.
-const PALW_BASE0_VOCAB_CEILING: u32 = 1_024;
 
 fn lane_of(s: &str) -> PalwCertifiedLaneV1 {
     match s.trim().to_ascii_lowercase().as_str() {

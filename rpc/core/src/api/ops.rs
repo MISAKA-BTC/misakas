@@ -204,6 +204,10 @@ pub enum RpcApiOps {
     /// ADR-0122 §6.5: this node's runtime — its boot fingerprint and fences, the producer's state
     /// and counts, the panel — which until now only its log said.
     GetPalwNodeStatus = 179,
+    /// ADR-0122 §8.2 (ADR-0108 §8's `getPalwRegistrationTerms`): what a class registration must take
+    /// from the chain — the base target, the slash value, the registered ids and roots — and the
+    /// families the chain certified on both lanes, read from one state.
+    GetPalwRegistrationTerms = 180,
 }
 
 impl RpcApiOps {

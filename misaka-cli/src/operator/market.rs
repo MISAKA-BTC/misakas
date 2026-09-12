@@ -15,6 +15,7 @@
 
 use crate::operator::finding::paint;
 use crate::operator::profile::Profile;
+use crate::operator::{catalog, status};
 use crate::palw_model::{market_from_response, msk, pct, served_schedule};
 use crate::{CliError, CliResult, OutputFormat, exit};
 use kaspa_consensus_core::palw_model_market_v1::{
@@ -89,7 +90,7 @@ pub(crate) async fn model_list(ctx: &crate::node::Ctx, profile: Profile) -> CliR
                     "class_id": c.class_id, "name": name, "lines": n_lines, "base": c.is_base_class, "status": c.status,
                     "share_permille": c.share_permille, "budget_blocks": c.budget_blocks, "fp_certified": c.fp_certified,
                     "held": c.held, "artifact_root": c.artifact_root, "canonical_leaves": c.canonical_leaves,
-                    "market_open": m.as_ref().map(|m| m.opened), "price_sompi_per_position": m.as_ref().map(|m| m.price_sompi_per_position),
+                    "market_open": m.as_ref().map(|m| market_from_response(m).is_open()), "seed_pledged_sompi": m.as_ref().map(|m| m.seed_pledged_sompi), "price_sompi_per_position": m.as_ref().map(|m| m.price_sompi_per_position),
                     "reserve_sompi": m.as_ref().map(|m| m.msk_reserve),
                 })
             })
@@ -113,7 +114,7 @@ pub(crate) async fn model_list(ctx: &crate::node::Ctx, profile: Profile) -> CliR
         let share = c.share_permille.map(|s| format!("{s} ‰")).unwrap_or_else(|| "none".into());
         let budget = if c.is_base_class { "no cap".to_string() } else { c.budget_blocks.to_string() };
         let market = match m {
-            Some(m) if m.opened => format!("{} / position", msk(m.price_sompi_per_position)),
+            Some(m) if market_from_response(m).is_open() => format!("{} / position", msk(m.price_sompi_per_position)),
             Some(m) if m.seed_pledged_sompi > 0 => format!("seed {} of {}", msk(m.seed_pledged_sompi), msk(m.seed_min_sompi)),
             _ => "not open".to_string(),
         };
@@ -245,7 +246,7 @@ pub(crate) async fn model_status(ctx: &crate::node::Ctx, profile: Profile, selec
             "artifacts_here": here.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
             "bond_collateral_sompi": class.collateral,
             "epoch": facts.as_ref().map(|f| json!({ "index": f.epoch_index, "produced": f.epoch_produced_blocks, "budget": f.epoch_budget_blocks })),
-            "market": market.as_ref().map(|m| json!({ "opened": m.opened, "price_sompi_per_position": m.price_sompi_per_position, "reserve_sompi": m.msk_reserve, "seed_pledged_sompi": m.seed_pledged_sompi, "seed_min_sompi": m.seed_min_sompi })),
+            "market": market.as_ref().map(|m| json!({ "open": market_from_response(m).is_open(), "price_sompi_per_position": m.price_sompi_per_position, "reserve_sompi": m.msk_reserve, "seed_pledged_sompi": m.seed_pledged_sompi, "seed_min_sompi": m.seed_min_sompi })),
             "tip_daa": tip,
         });
         println!("{}", serde_json::to_string_pretty(&doc).expect("serializable"));
@@ -327,7 +328,9 @@ pub(crate) async fn model_status(ctx: &crate::node::Ctx, profile: Profile, selec
         println!("  {:<11}a bond for it locks {}", "Bond", crate::operator::catalog::msk(c as u128));
     }
     let market_line = match &market {
-        Some(m) if m.opened => format!("open · {} per position · reserve {}", msk(m.price_sompi_per_position), msk(m.msk_reserve)),
+        Some(m) if market_from_response(m).is_open() => {
+            format!("open · {} per position · reserve {}", msk(m.price_sompi_per_position), msk(m.msk_reserve))
+        }
         Some(m) if m.seed_pledged_sompi > 0 => format!("not open · seed {} of {}", msk(m.seed_pledged_sompi), msk(m.seed_min_sompi)),
         _ => "not open".to_string(),
     };
@@ -336,7 +339,7 @@ pub(crate) async fn model_status(ctx: &crate::node::Ctx, profile: Profile, selec
     let next: Vec<(String, &str)> = match &stage {
         ClassStage::Live { .. } => {
             let mut v = vec![(format!("misaka mining setup --model {quoted}"), "mine it")];
-            if market.as_ref().is_some_and(|m| m.opened) {
+            if market.as_ref().is_some_and(|m| market_from_response(m).is_open()) {
                 v.push((format!("misaka position quote {} --msk 100", class.id), "hold its positions"));
             }
             if !row.fp_certified && !class.is_base {
@@ -374,6 +377,291 @@ pub(crate) async fn model_status(ctx: &crate::node::Ctx, profile: Profile, selec
         println!("  {:<11}{}", "", paint::dim("docs/palw-certify-a-new-model.md"));
     }
     Ok(())
+}
+
+/// What a seed payment would do to a line's market, decided before anything is signed — because a
+/// refused `ModelSeed` still lands its carrier, and the carrier's sink output is the payment: on the
+/// PQ lane the MSK is gone and no pledge is recorded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SeedPlan {
+    /// The market is open: nothing to pay.
+    AlreadyOpen,
+    /// Pay `amount`; `opens` when it carries the total across the floor.
+    Pay { amount: u64, opens: bool },
+    /// The payment would be refused (and burned); the reason.
+    Refused(String),
+}
+
+/// `amount` of `None` pays what is still owed. `instalments` is the rule that lets payments under
+/// the floor accumulate (ADR-0094); without it a seed is one payment of at least the floor.
+pub(crate) fn seed_plan(open: bool, pledged: u64, floor: u64, instalments: bool, amount: Option<u64>) -> SeedPlan {
+    if open {
+        return SeedPlan::AlreadyOpen;
+    }
+    if pledged > 0 && !instalments {
+        return SeedPlan::Refused("this line has a pledge and this chain does not accumulate instalments".into());
+    }
+    let owed = floor.saturating_sub(pledged).max(1);
+    let amount = amount.unwrap_or(if instalments { owed } else { floor });
+    match amount {
+        0 => SeedPlan::Refused("a seed of nothing pays nothing".into()),
+        a if !instalments && a < floor => SeedPlan::Refused(format!(
+            "{} is under the least seed of {} and this chain takes no instalments: the chain would refuse it and the MSK would be burned",
+            catalog::msk(a as u128),
+            catalog::msk(floor as u128)
+        )),
+        a => SeedPlan::Pay { amount: a, opens: pledged.saturating_add(a) >= floor },
+    }
+}
+
+/// `misaka model market open <model> [--line <id>] [--seed <MSK>]`: make a model's positions
+/// buyable — the class's founding line (which every class has, with no object), or a line named,
+/// seeded up to the least seed in one payment or in instalments, each checked before it is signed.
+pub(crate) async fn market_open(
+    ctx: &crate::node::Ctx,
+    profile: Profile,
+    selector: &str,
+    line_arg: Option<String>,
+    seed: Option<String>,
+    yes: bool,
+    no_wait: bool,
+) -> CliResult {
+    use crate::operator::finding::{Finding, Severity};
+    use crate::operator::tty::{Flow, Halt};
+    let mut flow = Flow::new(ctx.output, yes);
+    let mut doc = serde_json::Map::new();
+    let result: Result<(), Halt> = async {
+        let blocked = |code: &'static str, exit_code: i32, title: String| Halt::Blocked(Finding::error(code, exit_code, title));
+        let node = crate::operator::snapshot::connect_to(
+            &profile.network,
+            profile.rpc.as_deref().or(ctx.rpc.as_deref()),
+            std::time::Duration::from_secs(ctx.timeout_secs.clamp(2, 15)),
+        )
+        .await
+        .map_err(|(url, e)| blocked("E-NODE-RPC-UNREACHABLE", exit::COMPONENT_DOWN, format!("{url}: {e}")))?;
+        if !node.ops_0122 {
+            return Err(blocked("E-NODE-TOO-OLD", exit::COMPONENT_DOWN, "the node predates the class table read".into()));
+        }
+        flow.ui.say(&paint::bold(&format!("MISAKA model market open · {}", profile.network)));
+        flow.ui.say(&paint::dim("  Each step reads the chain, and nothing is paid that the chain would refuse."));
+        flow.ui.say("");
+        let tip = node.daa();
+        let p = &node.nv.params;
+        // The rules, from this build's parameters for the network — the node answers the rest.
+        let Some(market_fence) = p.palw_model_market_fence() else {
+            return Err(Halt::Blocked(
+                Finding::error("E-MARKET-NOT-ARMED", exit::CONFIG, format!("{} has no model market", profile.network))
+                    .reason("the model market is a scheduled rule, and this network's parameters schedule none"),
+            ));
+        };
+        if !market_fence.is_active(tip) {
+            return Err(Halt::Waiting(
+                format!("the model market to arm at DAA {}", status::group(market_fence.daa_score())),
+                exit::NOT_READY,
+            ));
+        }
+        let instalments = p.palw_model_benefits_active_at(tip);
+        let floor_now = p.palw_model_seed_min_sompi_at(tip);
+        let floor_soon = p.palw_model_seed_min_sompi_at(tip + 30);
+        flow.row(
+            Severity::Ok,
+            "rules",
+            format!(
+                "market armed · least seed {} · {}",
+                catalog::msk(floor_now as u128),
+                if instalments { "paid in instalments allowed" } else { "one payment, no instalments" }
+            ),
+        );
+        // The model, its class, its line.
+        let table =
+            node.client().get_palw_classes().await.map_err(|e| blocked("E-NODE-CLASSES", exit::COMPONENT_DOWN, e.to_string()))?;
+        let classes = crate::operator::wizard::class_choices(&node, &table.classes).await;
+        let class = crate::operator::wizard::resolve_model(&classes, selector)
+            .map_err(|why| Halt::Blocked(Finding::error("E-MODEL-UNKNOWN", exit::MODEL, why).fix("misaka model list")))?
+            .clone();
+        let row = table.classes.iter().find(|c| c.class_id == class.id).expect("resolved from this table");
+        if let ClassStage::Frozen { since_daa } = class_stage(&row.status, row.share_permille) {
+            return Err(blocked(
+                "E-MODEL-FROZEN",
+                exit::MODEL,
+                format!("the class is frozen since DAA {} — its market takes no seed", status::group(since_daa)),
+            ));
+        }
+        let line_id = line_arg.clone().unwrap_or_else(|| class.id.clone());
+        let line = node
+            .client()
+            .get_palw_model_line(line_id.clone())
+            .await
+            .map_err(|e| blocked("E-NODE-LINE", exit::COMPONENT_DOWN, e.to_string()))?;
+        if !line.exists {
+            return Err(Halt::Blocked(
+                Finding::error("E-MARKET-NO-LINE", exit::MODEL, "The chain holds no such line")
+                    .current(line_id.clone())
+                    .reason("a seed into a line the chain does not hold is refused, and on this lane the MSK is burned")
+                    .fix("omit --line to open the class's founding line, or wait for a founding to be mined"),
+            ));
+        }
+        let line_status = line.line.as_ref().map(|l| l.status.clone()).unwrap_or_default();
+        if !line_status.is_empty() && !line_status.eq_ignore_ascii_case("active") {
+            return Err(blocked("E-MARKET-LINE-INACTIVE", exit::MODEL, format!("line {}… is {line_status}", &line_id[..16])));
+        }
+        let founding = line_id == class.id;
+        flow.row(
+            Severity::Ok,
+            "line",
+            format!("{} · {}…{}", class.label(), &line_id[..16], if founding { " (the class's founding line)" } else { "" }),
+        );
+        doc.insert("line_id".into(), line_id.clone().into());
+        // The market as it stands.
+        let read = || async {
+            node.client().get_palw_model_market(line_id.clone()).await.map_err(|e| {
+                Halt::Blocked(
+                    Finding::error("E-NODE-MARKET", exit::COMPONENT_DOWN, "The market could not be read").current(e.to_string()),
+                )
+            })
+        };
+        let m = read().await?;
+        let open = market_from_response(&m).is_open();
+        let amount = seed
+            .as_deref()
+            .map(crate::palw_model::parse_msk_amount)
+            .transpose()
+            .map_err(|e| blocked("E-ARG-SEED", exit::CONFIG, e.msg))?;
+        let plan = seed_plan(open, m.seed_pledged_sompi, floor_now, instalments, amount);
+        let (amount, opens) = match plan {
+            SeedPlan::AlreadyOpen => {
+                flow.row(
+                    Severity::Ok,
+                    "market",
+                    format!("open · {} per position · reserve {}", msk(m.price_sompi_per_position), msk(m.msk_reserve)),
+                );
+                doc.insert("open".into(), true.into());
+                return Ok(());
+            }
+            SeedPlan::Refused(why) => {
+                return Err(Halt::Blocked(
+                    Finding::error("E-MARKET-SEED-REFUSED", exit::FUNDS, "This seed would be refused").current(why),
+                ));
+            }
+            SeedPlan::Pay { amount, opens } => (amount, opens),
+        };
+        flow.row(
+            Severity::Info,
+            "market",
+            if m.seed_pledged_sompi > 0 {
+                format!("not open · {} pledged of {}", msk(m.seed_pledged_sompi), catalog::msk(floor_now as u128))
+            } else {
+                format!("not open · nothing pledged; the least seed is {}", catalog::msk(floor_now as u128))
+            },
+        );
+        if floor_soon > floor_now && !instalments {
+            return Err(Halt::Blocked(
+                Finding::error("E-MARKET-FLOOR-MOVING", exit::FUNDS, "The least seed rises within the next blocks")
+                    .current(format!(
+                        "{} now, {} from DAA {}",
+                        catalog::msk(floor_now as u128),
+                        catalog::msk(floor_soon as u128),
+                        status::group(tip + 30)
+                    ))
+                    .reason("without instalments a payment that lands after the rise is refused, and burned"),
+            ));
+        }
+        // The money: the key's spendable outputs, as the seed carrier selects them.
+        let key = key_source(&profile)
+            .map_err(|e| blocked("E-IDENT-NO-KEY", exit::IDENTITY, e.msg))?
+            .load_key()
+            .map_err(|e| blocked("E-IDENT-KEY", exit::IDENTITY, e.msg))?;
+        let addr = key.funding_address(p.prefix());
+        let candidates = crate::palw_fp::spendable_candidates_v1(&node.nv, &addr)
+            .await
+            .map_err(|e| blocked("E-SETUP-FUNDS-UNREAD", exit::COMPONENT_DOWN, e.msg))?;
+        let mut sizes: Vec<u64> = candidates.iter().map(|(_, e)| e.amount).collect();
+        sizes.sort_unstable_by(|a, b| b.cmp(a));
+        let reach: u64 = sizes.iter().take(crate::palw_model::PALW_CARRIER_MAX_INPUTS).sum();
+        let need = amount.saturating_add(kaspa_pq_validator_core::ATTESTATION_TX_FEE_FLOOR_SOMPI);
+        if reach <= need {
+            return Err(Halt::Blocked(
+                Finding::error("E-FUNDS-SEED", exit::FUNDS, "The key's outputs cannot carry this seed")
+                    .current(format!(
+                        "the largest {} spendable output(s) at {addr} hold {}",
+                        crate::palw_model::PALW_CARRIER_MAX_INPUTS,
+                        catalog::msk(reach as u128)
+                    ))
+                    .required(format!("{} plus the carrier's fee", catalog::msk(amount as u128)))
+                    .fix(if instalments {
+                        format!("pay what they hold now: misaka model market open {selector} --seed <MSK>, and again later")
+                    } else {
+                        "fund the key's address, or consolidate: misaka wallet utxo consolidate --max-inputs 15 --yes".to_string()
+                    }),
+            ));
+        }
+        flow.ui.say("");
+        flow.ui.say(&paint::bold(&format!(
+            "  Seed this line{}:",
+            if opens { " — this payment opens its market" } else { " — an instalment" }
+        )));
+        flow.ui.sub(&format!("pay       {} into line {}…", catalog::msk(amount as u128), &line_id[..16]));
+        flow.ui.sub(&format!(
+            "then      {} of {}{}",
+            catalog::msk(m.seed_pledged_sompi.saturating_add(amount) as u128),
+            catalog::msk(floor_now as u128),
+            if opens {
+                " — 500,000 positions enter the curve"
+            } else {
+                " — locked in the sink; it opens when the total reaches the floor"
+            }
+        ));
+        flow.ui.sub(&paint::dim("LOCKED FOR GOOD: no object pays a seed out, and the seeder holds no position"));
+        flow.ask("Pay it?", false, "nothing was paid").await?;
+        if flow.ui.json {
+            return Err(Halt::Declined(format!(
+                "paying: misaka palw model-seed --line {line_id} --msk {} --yes",
+                amount / 100_000_000
+            )));
+        }
+        let ks = key_source(&profile).map_err(|e| blocked("E-IDENT-NO-KEY", exit::IDENTITY, e.msg))?;
+        let submit_ctx = ctx_for(ctx, &profile);
+        crate::palw_model::seed(&submit_ctx, &ks, &line_id, &format!("{amount}sompi"), true)
+            .await
+            .map_err(|e| Halt::Blocked(Finding::error("E-MARKET-SEED", exit::FUNDS, "The seed was refused").current(e.msg)))?;
+        if no_wait {
+            return Err(Halt::Waiting("the seed to be mined".into(), exit::NOT_READY));
+        }
+        let before = m.seed_pledged_sompi;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(900);
+        while std::time::Instant::now() < deadline {
+            flow.pause(5).await?;
+            let now = read().await?;
+            if market_from_response(&now).is_open() {
+                flow.row(
+                    Severity::Ok,
+                    "market",
+                    format!("open · {} per position · reserve {}", msk(now.price_sompi_per_position), msk(now.msk_reserve)),
+                );
+                doc.insert("open".into(), true.into());
+                flow.ui.sub(&paint::dim(&format!("next: misaka position quote {line_id} --msk 100")));
+                return Ok(());
+            }
+            if now.seed_pledged_sompi > before {
+                flow.row(
+                    Severity::Info,
+                    "market",
+                    format!(
+                        "{} pledged of {} — pay the rest the same way",
+                        msk(now.seed_pledged_sompi),
+                        catalog::msk(floor_now as u128)
+                    ),
+                );
+                return Err(Halt::Waiting(
+                    format!("{} more to open it", catalog::msk(floor_now.saturating_sub(now.seed_pledged_sompi) as u128)),
+                    exit::NOT_READY,
+                ));
+            }
+        }
+        Err(Halt::Waiting("the seed to be mined".into(), exit::NOT_READY))
+    }
+    .await;
+    flow.finish(result, "misaka.model.market-open.v1", "the market is open", &format!("misaka model market open {selector}"), doc)
 }
 
 /// The key the position commands sign or read with: `--key-file`, else the mining profile's.
@@ -582,6 +870,22 @@ pub(crate) async fn position_sell(
 
 #[cfg(test)]
 mod tests {
+    /// A refused seed burns its MSK on this lane, so the plan refuses what the chain would: under
+    /// the floor without instalments, onto a pledge the chain will not add to, or nothing at all.
+    #[test]
+    fn a_seed_is_planned_so_nothing_the_chain_refuses_is_paid() {
+        use super::{SeedPlan as P, seed_plan};
+        let floor = 1_000_000 * 100_000_000u64;
+        assert_eq!(seed_plan(true, 0, floor, true, None), P::AlreadyOpen);
+        assert_eq!(seed_plan(false, 0, floor, true, None), P::Pay { amount: floor, opens: true }, "the default pays what is owed");
+        assert_eq!(seed_plan(false, floor / 4, floor, true, None), P::Pay { amount: floor - floor / 4, opens: true });
+        assert_eq!(seed_plan(false, 0, floor, true, Some(10)), P::Pay { amount: 10, opens: false }, "an instalment");
+        assert!(matches!(seed_plan(false, 0, floor, false, Some(floor - 1)), P::Refused(w) if w.contains("burned")));
+        assert_eq!(seed_plan(false, 0, floor, false, None), P::Pay { amount: floor, opens: true }, "one payment of the floor");
+        assert!(matches!(seed_plan(false, 5, floor, false, Some(floor)), P::Refused(_)), "a pledge the chain will not add to");
+        assert!(matches!(seed_plan(false, 0, floor, true, Some(0)), P::Refused(_)));
+    }
+
     /// The class table spells a status with `Debug`; the stage is read back from that spelling and
     /// the share, and an Active class with no share is weightless, not live.
     #[test]

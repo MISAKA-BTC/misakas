@@ -431,8 +431,34 @@ pub async fn submit(ctx: &Ctx, manifest: &Path, ks: &KeySource, bond: Option<&st
             let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
                 return Err(CliError::generic(format!("{net} has no PALW V2 bundle")));
             };
-            let terms = genesis_registration_terms_v1(bundle)
-                .ok_or_else(|| CliError::generic("the network's genesis registers no base class"))?;
+            // **The chain's LIVE terms, not genesis's.** A registration must carry the base class's
+            // CURRENT target (and price its share from the chain's certified families), and the
+            // base class retargets every epoch: a registration built from genesis terms is refused
+            // once it has. Genesis terms remain only for a node that cannot serve the live ones.
+            let live = match crate::operator::snapshot::connect_to(
+                &ctx.network,
+                ctx.rpc.as_deref(),
+                std::time::Duration::from_secs(10),
+            )
+            .await
+            {
+                Ok(node) if node.ops_0122 => match node.client().get_palw_registration_terms().await {
+                    Ok(r) if r.available => crate::operator::model_add::decode_terms(&r).ok().map(|(t, _)| t),
+                    _ => None,
+                },
+                _ => None,
+            };
+            let terms = match live {
+                Some(t) => t,
+                None => {
+                    eprintln!(
+                        "warning: the node does not serve getPalwRegistrationTerms — building from GENESIS terms, which the chain \
+                         refuses once the base class has retargeted (run a node built from this tree)"
+                    );
+                    genesis_registration_terms_v1(bundle)
+                        .ok_or_else(|| CliError::generic("the network's genesis registers no base class"))?
+                }
+            };
             let sdk = misaka_palw_sdk::PalwClassSdk::builtin_v1(
                 bundle.court,
                 params.palw_prompt_ids_form_v1(),
@@ -450,49 +476,22 @@ pub async fn submit(ctx: &Ctx, manifest: &Path, ks: &KeySource, bond: Option<&st
             };
             let candidate = misaka_palw_sdk::PalwRegistrationCandidateV1 { entry, artifact_root: inputs.artifact_root };
             let bond_key = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(bond);
-            // Built twice, as the panel builds it: once to learn the object, once with the
-            // signature over it. Both runs pass the SDK's gate.
-            let build = |signature: Vec<u8>| {
-                sdk.build_post_genesis_registration(bundle, &candidate, &terms, 0, bond_key, signature, &shape)
-                    .map_err(CliError::generic)
-            };
-            let unsigned = build(Vec::new())?;
+            // Built twice, as the panel builds it (one definition, shared with `model add`).
+            let key = ks.load_key()?;
+            let signed = crate::operator::model_add::signed_class_registration(
+                &params, bundle, &sdk, &candidate, &terms, &shape, bond_key, &key,
+            )
+            .map_err(CliError::generic)?;
             let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
                 class_id,
                 activation_daa,
                 artifact_root,
-                slash_value_per_pwu,
-                initial_target,
-                pwu_rule,
                 share_permille,
                 ..
-            } = &unsigned
+            } = &signed
             else {
                 return Err(CliError::generic("the SDK did not build a registration"));
             };
-            let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
-                params.net.to_string().as_bytes(),
-                Some(params.genesis.hash),
-            );
-            let canonical = candidate.entry.canonical_context();
-            let message = kaspa_consensus_core::palw_state_v2::palw_class_registration_message_v2(
-                network_domain,
-                *class_id,
-                *share_permille,
-                *activation_daa,
-                &bond_key,
-                *artifact_root,
-                *slash_value_per_pwu,
-                *initial_target,
-                pwu_rule,
-                &canonical,
-            );
-            let key = ks.load_key()?;
-            let signature = key.sign_with_context(
-                message.as_byte_slice(),
-                kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT,
-            );
-            let signed = build(signature.to_vec())?;
             let out = mf.path.with_extension("class-registered.borsh");
             std::fs::write(
                 &out,

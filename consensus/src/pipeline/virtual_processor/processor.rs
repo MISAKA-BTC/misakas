@@ -5035,6 +5035,24 @@ impl VirtualStateProcessor {
     /// read off the chain rather than restated: an entrant priced by its own registrant would be
     /// an entrant whose slash value and starting difficulty are whatever it liked, and "the same
     /// work costs the same everywhere" is the property the share table conserves.
+    pub fn palw_certified_families_v1_impl(
+        &self,
+    ) -> Vec<(
+        kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1,
+        kaspa_hashes::Hash64,
+        kaspa_consensus_core::palw_state_v2::PalwCertifiedFamilyStateV2,
+    )> {
+        use kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1 as Lane;
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
+        let Some((_, state)) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten() else {
+            return Vec::new();
+        };
+        [Lane::Attempt, Lane::FreePrompt]
+            .into_iter()
+            .flat_map(|lane| state.certified_family_entries(lane).into_iter().map(move |(digest, record)| (lane, digest, record)))
+            .collect()
+    }
+
     pub fn palw_v2_registration_terms_impl(&self) -> Option<kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2> {
         let state_params = self.palw_state_params_v2.as_ref()?;
         let bundle = self.palw_v2_bundle.as_ref()?;

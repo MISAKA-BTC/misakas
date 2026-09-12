@@ -706,6 +706,19 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwNodeStatusResponse::default())
     }
 
+    /// ADR-0122 §8.2: the live registration terms and the chain's certified families.
+    async fn get_palw_registration_terms(&self) -> RpcResult<GetPalwRegistrationTermsResponse> {
+        self.get_palw_registration_terms_call(None, GetPalwRegistrationTermsRequest {}).await
+    }
+    async fn get_palw_registration_terms_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwRegistrationTermsRequest,
+    ) -> RpcResult<GetPalwRegistrationTermsResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwRegistrationTermsResponse::default())
+    }
+
     /// MISAKA Compute Token Program (design §9.3): an asset's supply counters.
     async fn get_token_supply(&self, asset_id: u64) -> RpcResult<GetTokenSupplyResponse> {
         self.get_token_supply_call(None, GetTokenSupplyRequest { asset_id }).await

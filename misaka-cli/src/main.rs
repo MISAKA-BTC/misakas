@@ -248,9 +248,10 @@ enum Command {
     /// Guided VPS setup: preflight, node service, status, and Discord registration helpers.
     #[command(subcommand)]
     Setup(setup::SetupCmd),
-    /// Validator operations — forwarded to the `kaspa-pq-validator` binary with the
-    /// global --network-id and --rpc (node wRPC Borsh) injected. Run
-    /// `misaka validator --help` for its keygen/bond/run/status/... subcommands.
+    /// The DNS-finality validator: `setup` and `status` here, and the `kaspa-pq-validator` sidecar's
+    /// own subcommands (keygen, bond, unbond, run, …) forwarded with --network and --rpc injected.
+    /// `misaka validator --help` lists both.
+    #[command(disable_help_flag = true)]
     Validator(PassThrough),
     /// Join the network for --network-id: start a local node that discovers peers via the DNS
     /// seeds (port-free). A newcomer-friendly front-end over `node start` that names the seeds.
@@ -361,6 +362,9 @@ struct SetupCliArgs {
     /// Read the artifact through and check its root against the class's (minutes for a large model).
     #[arg(long)]
     verify_artifact: bool,
+    /// The validator's stake in MSK (validator setup; default: the network's minimum bond).
+    #[arg(long, value_name = "MSK")]
+    amount: Option<String>,
     /// Answer yes to every question: make the key, register the bond, declare, write the file.
     #[arg(long)]
     yes: bool,
@@ -369,9 +373,21 @@ struct SetupCliArgs {
     no_wait: bool,
 }
 
+/// `misaka validator setup` — parsed from the passthrough's own arguments, so the sidecar's
+/// subcommands keep working as they are.
+#[derive(clap::Parser, Debug)]
+#[command(
+    about = "Set this host up as a DNS-finality validator: key, node, funds, stake bond, then ~/.misaka/validator.toml. Running it again resumes."
+)]
+struct ValidatorSetupCli {
+    #[command(flatten)]
+    setup: SetupCliArgs,
+}
+
 impl SetupCliArgs {
-    fn into_setup(self, network: Option<String>, rpc: Option<String>) -> operator::wizard::SetupArgs {
-        operator::wizard::SetupArgs {
+    fn into_setup(self, network: Option<String>, rpc: Option<String>) -> Result<operator::wizard::SetupArgs, CliError> {
+        let amount = self.amount.as_deref().map(parse_msk_to_sompi).transpose()?;
+        Ok(operator::wizard::SetupArgs {
             network,
             rpc,
             config: self.config,
@@ -383,9 +399,10 @@ impl SetupCliArgs {
             artifacts: self.artifacts,
             fee_outpoint: self.fee_outpoint,
             verify_artifact: self.verify_artifact,
+            amount,
             yes: self.yes,
             no_wait: self.no_wait,
-        }
+        })
     }
 }
 
@@ -518,6 +535,55 @@ enum ModelCmd {
     Status {
         /// base, a model's name, or a class id (or 8+ hex of one).
         model: String,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// Add a model from this build's catalog: register its class with the chain's live terms, then
+    /// certify its lanes — drilling and filing a family only when no chain family covers it, every
+    /// chunk in order. Running it again resumes from the chain. No model: lists the catalog.
+    Add {
+        /// A catalog model id, or a unique part of one (e.g. graph-v5).
+        model: Option<String>,
+        /// The model's artifact file (a model that is not derived needs it to register).
+        #[arg(long, value_name = "FILE")]
+        artifact: Option<String>,
+        /// Also certify the free-prompt lane.
+        #[arg(long)]
+        prompt_lane: bool,
+        /// The slowest fleet seat's measured replay cost, for the seat-window bound.
+        #[arg(long, value_name = "MS")]
+        seat_ms_per_position: Option<u64>,
+        /// Answer yes to every question (registration, filings).
+        #[arg(long)]
+        yes: bool,
+        /// Do not wait for blocks: say what is pending and exit.
+        #[arg(long)]
+        no_wait: bool,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// A model's market: open it (seed its line up to the least seed).
+    #[command(subcommand)]
+    Market(MarketCmd),
+}
+
+#[derive(Subcommand, Debug)]
+enum MarketCmd {
+    /// Open a model's market: seed its line — the class's founding line unless --line — up to the
+    /// least seed, in one payment or instalments, each checked before it is signed.
+    Open {
+        /// base, a model's name, or a class id (or 8+ hex of one).
+        model: String,
+        /// Another line of the class (128 hex) instead of its founding line.
+        #[arg(long)]
+        line: Option<String>,
+        /// How much to pay now, in MSK (default: what is still owed).
+        #[arg(long, value_name = "MSK")]
+        seed: Option<String>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        no_wait: bool,
         #[command(flatten)]
         profile: ProfileArgs,
     },
@@ -2033,14 +2099,18 @@ async fn main() -> std::process::ExitCode {
         |args: &ProfileArgs| operator::profile::Profile::resolve(&args.overrides(), named_network.as_deref(), ctx.rpc.as_deref());
 
     let result = match cli.command {
-        Command::Init(args) => operator::wizard::init(&ctx, args.into_setup(named_network.clone(), ctx.rpc.clone())).await,
-        Command::Mining(MiningCmd::Setup(args)) => {
-            operator::wizard::run(&ctx, operator::wizard::Purpose::Mine, args.into_setup(named_network.clone(), ctx.rpc.clone())).await
-        }
-        Command::Verifier(VerifierCmd::Setup(args)) => {
-            operator::wizard::run(&ctx, operator::wizard::Purpose::Verify, args.into_setup(named_network.clone(), ctx.rpc.clone()))
-                .await
-        }
+        Command::Init(args) => match args.into_setup(named_network.clone(), ctx.rpc.clone()) {
+            Ok(a) => operator::wizard::init(&ctx, a).await,
+            Err(e) => Err(e),
+        },
+        Command::Mining(MiningCmd::Setup(args)) => match args.into_setup(named_network.clone(), ctx.rpc.clone()) {
+            Ok(a) => operator::wizard::run(&ctx, operator::wizard::Purpose::Mine, a).await,
+            Err(e) => Err(e),
+        },
+        Command::Verifier(VerifierCmd::Setup(args)) => match args.into_setup(named_network.clone(), ctx.rpc.clone()) {
+            Ok(a) => operator::wizard::run(&ctx, operator::wizard::Purpose::Verify, a).await,
+            Err(e) => Err(e),
+        },
         Command::Mining(MiningCmd::Status { profile: args, watch }) => match profile(&args) {
             Ok(p) => operator::status::run(&ctx, p, watch).await,
             Err(e) => Err(e),
@@ -2126,6 +2196,19 @@ async fn main() -> std::process::ExitCode {
         },
         Command::Model(ModelCmd::Status { model, profile: args }) => match profile(&args) {
             Ok(p) => operator::market::model_status(&ctx, p, &model).await,
+            Err(e) => Err(e),
+        },
+        Command::Model(ModelCmd::Add { model, artifact, prompt_lane, seat_ms_per_position, yes, no_wait, profile: args }) => {
+            match profile(&args) {
+                Ok(p) => {
+                    let a = operator::model_add::ModelAddArgs { model, artifact, prompt_lane, seat_ms_per_position, yes, no_wait };
+                    operator::model_add::run(&ctx, p, a).await
+                }
+                Err(e) => Err(e),
+            }
+        }
+        Command::Model(ModelCmd::Market(MarketCmd::Open { model, line, seed, yes, no_wait, profile: args })) => match profile(&args) {
+            Ok(p) => operator::market::market_open(&ctx, p, &model, line, seed, yes, no_wait).await,
             Err(e) => Err(e),
         },
         Command::Position(PositionCmd::List { holder, profile: args }) => match profile(&args) {
@@ -2365,7 +2448,37 @@ async fn main() -> std::process::ExitCode {
         Command::Config(ConfigCmd::Show) => {
             config::show(ctx.output, &ctx.network, &ctx.rpc, &cli.node_grpc, &cfg.node.grpc, &ctx.evm_rpc)
         }
-        Command::Validator(p) => match validator_reader::maybe_handle(&ctx, &p.args).await {
+        Command::Validator(p)
+            if p.args.first().is_none_or(|a| matches!(a.as_str(), "--help" | "-h" | "help")) && p.args.len() <= 1 =>
+        {
+            // Help lists what is served here and what the sidecar serves — clap's own stub named
+            // only itself and pointed back at itself (ADR-0122 §8.2).
+            println!("The DNS-finality validator.\n");
+            println!("Served by misaka:");
+            println!("  setup     key → node → funds → stake bond → ~/.misaka/validator.toml, then the command that runs it");
+            println!("  status    what this validator is doing (and why not), from ~/.misaka/validator.toml or --stake-bond");
+            println!("  bonds     the stake-bond registry (--owner, --status, --all)\n");
+            println!("Forwarded to kaspa-pq-validator (beside misaka, or MISAKA_VALIDATOR_BIN):");
+            println!("  keygen · bond · unbond · run · balance     misaka validator <subcommand> --help for each\n");
+            println!("Start here: misaka validator setup   (misaka --network testnet-10 validator setup for another network)");
+            Ok(())
+        }
+        Command::Validator(p) if p.args.first().is_some_and(|a| a == "setup") => {
+            // ADR-0122 §8.2: the guided setup, in front of the sidecar's own subcommands.
+            match ValidatorSetupCli::try_parse_from(
+                std::iter::once("misaka validator setup".to_string()).chain(p.args[1..].iter().cloned()),
+            ) {
+                Ok(cli) => match cli.setup.into_setup(named_network.clone(), ctx.rpc.clone()) {
+                    Ok(a) => operator::wizard::run(&ctx, operator::wizard::Purpose::Validate, a).await,
+                    Err(e) => Err(e),
+                },
+                Err(e) => {
+                    let _ = e.print();
+                    Err(CliError::new(if e.use_stderr() { exit::CONFIG } else { exit::SUCCESS }, String::new()))
+                }
+            }
+        }
+        Command::Validator(p) => match validator_reader::maybe_handle(&ctx, &p.args, named_network.as_deref()).await {
             Some(result) => result,
             None => forward::validator(&ctx, &p.args),
         },

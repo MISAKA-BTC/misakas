@@ -104,6 +104,7 @@ impl Factory {
                 GetPalwClaims,
                 GetPalwClasses,
                 GetPalwNodeStatus,
+                GetPalwRegistrationTerms,
                 GetTokenSupply,
                 GetTokenEmissionInfo,
                 NotifyBlockAdded,

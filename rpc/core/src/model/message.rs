@@ -4187,6 +4187,115 @@ impl Deserializer for GetPalwClassesResponse {
     }
 }
 
+/// ADR-0122 §8.2: `getPalwRegistrationTerms` — ADR-0108 §8's read, built. What a class
+/// registration must take from the chain rather than choose (`PalwRegistrationTermsV2`, one state
+/// read), and every family the chain certified on both lanes. A registrant built from genesis terms
+/// is refused as soon as the base class retargets; a lane binding no chain family covers is dropped
+/// with its fee; a family filed twice is refused `FamilyAlreadyCertified` — all three were decidable
+/// only from the node's log.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwRegistrationTermsRequest {}
+
+impl Serializer for GetPalwRegistrationTermsRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwRegistrationTermsRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {})
+    }
+}
+
+/// One family the chain certified.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwCertifiedFamily {
+    /// `attempt` or `free_prompt`.
+    pub lane: String,
+    pub digest: String,
+    pub certified_daa: u64,
+    /// The `PalwE2eFamilyV1`, borsh, hex — its kernel set is what a class's reachable kernels are
+    /// checked against, and a client decodes it into the type the SDK's builder takes.
+    pub family_hex: String,
+}
+
+impl Serializer for RpcPalwCertifiedFamily {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.lane, writer)?;
+        store!(String, &self.digest, writer)?;
+        store!(u64, &self.certified_daa, writer)?;
+        store!(String, &self.family_hex, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwCertifiedFamily {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            lane: load!(String, reader)?,
+            digest: load!(String, reader)?,
+            certified_daa: load!(u64, reader)?,
+            family_hex: load!(String, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwRegistrationTermsResponse {
+    /// False off `ConsensusV2`, or before the state has a tip.
+    pub available: bool,
+    pub tip_daa: u64,
+    pub base_class_id: String,
+    pub min_grantable_share_permille: u16,
+    pub slash_value_per_pwu: u64,
+    /// The base class's current target, decimal (`u128`).
+    pub initial_target: String,
+    pub registered_class_ids: Vec<String>,
+    pub registered_artifact_roots: Vec<String>,
+    pub families: Vec<RpcPalwCertifiedFamily>,
+}
+
+impl Serializer for GetPalwRegistrationTermsResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        store!(String, &self.base_class_id, writer)?;
+        store!(u16, &self.min_grantable_share_permille, writer)?;
+        store!(u64, &self.slash_value_per_pwu, writer)?;
+        store!(String, &self.initial_target, writer)?;
+        store!(Vec<String>, &self.registered_class_ids, writer)?;
+        store!(Vec<String>, &self.registered_artifact_roots, writer)?;
+        serialize!(Vec<RpcPalwCertifiedFamily>, &self.families, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwRegistrationTermsResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            tip_daa: load!(u64, reader)?,
+            base_class_id: load!(String, reader)?,
+            min_grantable_share_permille: load!(u16, reader)?,
+            slash_value_per_pwu: load!(u64, reader)?,
+            initial_target: load!(String, reader)?,
+            registered_class_ids: load!(Vec<String>, reader)?,
+            registered_artifact_roots: load!(Vec<String>, reader)?,
+            families: deserialize!(Vec<RpcPalwCertifiedFamily>, reader)?,
+        })
+    }
+}
+
 /// ADR-0122: `getPalwNodeStatus` — what this node is doing, which until now only its log said.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

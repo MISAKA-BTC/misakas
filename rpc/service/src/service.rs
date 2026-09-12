@@ -1262,6 +1262,46 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         })
     }
 
+    async fn get_palw_registration_terms_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        _request: GetPalwRegistrationTermsRequest,
+    ) -> RpcResult<GetPalwRegistrationTermsResponse> {
+        let base_class_id = match &self.config.params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => bundle.base_class_id.to_string(),
+            _ => return Ok(GetPalwRegistrationTermsResponse::default()),
+        };
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let tip_daa = session.get_virtual_daa_score();
+        let (terms, families) = session.spawn_blocking(|c| (c.palw_v2_registration_terms(), c.palw_certified_families_v1())).await;
+        let Some(terms) = terms else {
+            return Ok(GetPalwRegistrationTermsResponse { base_class_id, tip_daa, ..Default::default() });
+        };
+        let lane_name = |lane: kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1| match lane {
+            kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::Attempt => "attempt",
+            kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::FreePrompt => "free_prompt",
+        };
+        Ok(GetPalwRegistrationTermsResponse {
+            available: true,
+            tip_daa,
+            base_class_id,
+            min_grantable_share_permille: terms.min_grantable_share_permille,
+            slash_value_per_pwu: terms.slash_value_per_pwu,
+            initial_target: terms.initial_target.to_string(),
+            registered_class_ids: terms.registered_class_ids.iter().map(|c| c.to_string()).collect(),
+            registered_artifact_roots: terms.registered_artifact_roots.iter().map(|r| r.to_string()).collect(),
+            families: families
+                .into_iter()
+                .map(|(lane, digest, record)| RpcPalwCertifiedFamily {
+                    lane: lane_name(lane).to_string(),
+                    digest: digest.to_string(),
+                    certified_daa: record.certified_daa,
+                    family_hex: faster_hex::hex_string(&borsh::to_vec(&record.family).unwrap_or_default()),
+                })
+                .collect(),
+        })
+    }
+
     async fn get_palw_producer_facts_call(
         &self,
         _connection: Option<&DynRpcConnection>,

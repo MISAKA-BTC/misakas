@@ -883,8 +883,83 @@ What the implementation settled that the decisions above left open, and where it
   a weightless class that is the certify/bind sequence from `docs/palw-certify-a-new-model.md`; for
   a registered one, "nothing: the flip is a clock". A guided `model add` that runs `palw-certify`
   and the chunked submissions itself is still open.
+* **`misaka validator setup`** is the setup wizard's third purpose, on the same key, node, sync
+  and file machinery. It differs from mining setup in four places:
+  * **The network must carry the DNS-finality overlay.** That is decided from the network's own
+    `dns_params` at run time, and the minimum bond is read from them too.
+  * **The key is the validator's own, `~/.misaka/validator.seed`.** It is never the miner's seed or
+    the running node's `--palw-producer-key`: roles do not share a seed.
+  * **Setup builds the stake bond itself.** It uses the core builder the sidecar's `bond` wraps
+    (`build_funded_stake_bond_tx_multi`, mass-based fee, at most 20 inputs, largest first). Unlike
+    the sidecar's scan, it never selects bonded collateral as an input. An existing bond is found
+    by the key's validator id across the registry.
+  * **The result is `~/.misaka/validator.toml`**, a file of its own with the same `[advanced]` node
+    settings. Setup then prints the one command that runs the validator:
+    `kaspad … --enable-validator --validator-key=… --stake-bond=… --validator-mode=active`. The node
+    runs the overlay's validator in-process and keeps its own equivocation guard in the appdir, so
+    there is no second process to keep alive.
+* **`misaka validator status`** keeps every `key: value` line it printed before, because scripts
+  read them. It adds three things:
+  * a headline above them: VALIDATING, BONDED BUT NOT ATTESTING, a pending bond, a bond that is not
+    found, or not a validator;
+  * a `next:` line below them, which is the run command when nothing on this host signs for the
+    bond;
+  * defaults for its flags, taken from `validator.toml` (`--config` names another file).
+  "Attesting" means a process on this host signs for this bond: a node with `--enable-validator
+  --stake-bond=<it>`, or the sidecar's `run`. The chain's own gauge sits beside it:
+  `GetValidatorAttestationTargets` lists the ready epochs still waiting for this bond. More than
+  two of them are shown, whatever the process table says.
+* **Two facts the setup had to get right, from the code rather than the docs:**
+  * **A bond below the network's minimum is skipped silently by consensus.** It never becomes
+    available and never attests, so setup refuses such an amount before anything is signed. The
+    runbook's minimum for mainnet (20,000,000) disagrees with the code's (10,000 MSK); the code is
+    what setup reads.
+  * **Consensus clamps the unbonding period up to the network's floor** (10,083 blocks on testnet
+    and devnet). Setup signs the enforced period and shows it, where the sidecar's default of 700
+    only looked shorter.
+* **`misaka validator --help` works again.** clap answered it with misaka's own stub, which named
+  only itself and pointed back at itself. It now lists what misaka serves (`setup`, `status`,
+  `bonds`) and what it forwards to the sidecar (`keygen`, `bond`, `unbond`, `run`, `balance`).
+* **`misaka model add <model>`** runs the whole lifecycle of a class, resuming from the class table
+  and the chain's certified families. With no model named, it lists this build's catalog and which
+  rows the chain holds. `palw-certify` and `palw submit-object` become library calls:
+  * **Registration** is built and signed with the chain's **live** terms. `getPalwRegistrationTerms`
+    (op 180, consensus-inert) is ADR-0108 §8's read, now built.
+    * It serves the node's `PalwRegistrationTermsV2`, read from one state: the base class's current
+      target, the slash value, the registered class ids and roots.
+    * It also serves every certified family on both lanes, as Borsh.
+    * A registration signed from **genesis** terms (what `palw extension submit` did) is refused as
+      soon as the base class retargets, which happens every epoch. `extension submit` now signs
+      with live terms too, and falls back to genesis terms only with a warning.
+    * The artifact's root is computed from its file through the SDK's pairing. Weights already
+      registered under another class are refused before anything is signed.
+  * **Certification looks before it files.**
+    * A lane whose kernels a chain-certified family already covers is bound directly. The check is
+      the transition's own test: reachable kernels ⊆ one family's kernels, on the same lane.
+    * Otherwise the family is drilled in-process, graded, and chunked. The chunks are submitted as
+      one chained run in index order, and the flow waits for the group to apply before binding.
+    * Filing a family already on chain (`FamilyAlreadyCertified`) and binding with no covering
+      family (`NoCertifiedFamilyCovers`) both lose their fee and were visible only in the node's
+      log.
+    * The seat-window bound (ADR-0082 D9) moved out of `palw-certify` into
+      `misaka_palw_base0::e2e_drill::seat_width_bound_v1`, so the tool and `model add` apply the
+      same bound.
+* **`misaka model market open <model>`** seeds a class's founding line, or `--line`, up to the least
+  seed, paying all at once or in instalments. Every class has a founding line, with no founding
+  object needed. Two things the survey found shape it:
+  * **The RPC's `opened` means "a market row exists", and one pledge creates a row.** The real test
+    is `seed_sompi > 0`. Reading `opened` made `palw model-seed` refuse the second instalment that
+    its own hint asks for, and made `model list` and `model status` show a pledged market as open.
+    Every CLI consumer now uses the real test.
+  * **A refused seed still lands its carrier, and on the PQ lane the sink output is the payment.**
+    The MSK is gone and no pledge is recorded. So `market open` checks everything the chain would
+    check before it signs: the rule is armed, the class is not frozen, the line exists and is
+    active, and the amount is at least the floor when instalments are not armed. It also refuses a
+    single payment when the floor rises within the next blocks.
+  * Not exercised end to end: the local devnet schedules no market, and its drill flag leaves
+    instalments off with a 100,000 MSK floor. The decision is unit-tested; the payment reuses
+    `palw model-seed`.
 * **`misaka init` asks for the purpose.**
-  * Mine runs `mining setup`; Verify runs `verifier setup`.
-  * Validate, Add a model and Hold positions print the commands that make up that purpose.
-  * Guided flows for those three are still open, as are `validator setup/status` and `model add`
-    (§8.2).
+  * Mine runs `mining setup`, Verify runs `verifier setup`, and Validate runs `validator setup`.
+  * Add a model and Hold positions print the commands that make up those purposes: `model add`,
+    `model market open`, and the `position` commands.

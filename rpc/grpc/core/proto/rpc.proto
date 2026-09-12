@@ -1824,3 +1824,26 @@ message GetPalwNodeStatusResponseMessage {
   string retentionDir = 18;
   RPCError error = 1000;
 }
+
+// ADR-0122 §8.2: the live registration terms and the chain's certified families.
+message GetPalwRegistrationTermsRequestMessage {}
+
+message RpcPalwCertifiedFamily {
+  string lane = 1;
+  string digest = 2;
+  uint64 certifiedDaa = 3;
+  string familyHex = 4;
+}
+
+message GetPalwRegistrationTermsResponseMessage {
+  bool available = 1;
+  uint64 tipDaa = 2;
+  string baseClassId = 3;
+  uint32 minGrantableSharePermille = 4;
+  uint64 slashValuePerPwu = 5;
+  string initialTarget = 6;
+  repeated string registeredClassIds = 7;
+  repeated string registeredArtifactRoots = 8;
+  repeated RpcPalwCertifiedFamily families = 9;
+  RPCError error = 1000;
+}

@@ -786,6 +786,24 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwNodeStatusResponse>, protowire::Ge
         error: None,
     }
 });
+from!(&kaspa_rpc_core::GetPalwRegistrationTermsRequest, protowire::GetPalwRegistrationTermsRequestMessage);
+from!(item: &kaspa_rpc_core::RpcPalwCertifiedFamily, protowire::RpcPalwCertifiedFamily, {
+    Self { lane: item.lane.clone(), digest: item.digest.clone(), certified_daa: item.certified_daa, family_hex: item.family_hex.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwRegistrationTermsResponse>, protowire::GetPalwRegistrationTermsResponseMessage, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        base_class_id: item.base_class_id.clone(),
+        min_grantable_share_permille: item.min_grantable_share_permille.into(),
+        slash_value_per_pwu: item.slash_value_per_pwu,
+        initial_target: item.initial_target.clone(),
+        registered_class_ids: item.registered_class_ids.clone(),
+        registered_artifact_roots: item.registered_artifact_roots.clone(),
+        families: item.families.iter().map(protowire::RpcPalwCertifiedFamily::from).collect(),
+        error: None,
+    }
+});
 from!(item: &kaspa_rpc_core::GetTokenSupplyRequest, protowire::GetTokenSupplyRequestMessage, { Self { asset_id: item.asset_id } });
 from!(item: RpcResult<&kaspa_rpc_core::GetTokenSupplyResponse>, protowire::GetTokenSupplyResponseMessage, {
     Self {
@@ -1867,6 +1885,24 @@ try_from!(item: &protowire::GetPalwNodeStatusResponseMessage, RpcResult<kaspa_rp
         panel_running: item.panel_running,
         panel_submitter: item.panel_submitter,
         retention_dir: item.retention_dir.clone(),
+    }
+});
+try_from!(&protowire::GetPalwRegistrationTermsRequestMessage, kaspa_rpc_core::GetPalwRegistrationTermsRequest);
+try_from!(item: &protowire::RpcPalwCertifiedFamily, kaspa_rpc_core::RpcPalwCertifiedFamily, {
+    Self { lane: item.lane.clone(), digest: item.digest.clone(), certified_daa: item.certified_daa, family_hex: item.family_hex.clone() }
+});
+try_from!(item: &protowire::GetPalwRegistrationTermsResponseMessage, RpcResult<kaspa_rpc_core::GetPalwRegistrationTermsResponse>, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        base_class_id: item.base_class_id.clone(),
+        min_grantable_share_permille: u16::try_from(item.min_grantable_share_permille)
+            .map_err(|_| RpcError::General(format!("min_grantable_share_permille {} is not a permille", item.min_grantable_share_permille)))?,
+        slash_value_per_pwu: item.slash_value_per_pwu,
+        initial_target: item.initial_target.clone(),
+        registered_class_ids: item.registered_class_ids.clone(),
+        registered_artifact_roots: item.registered_artifact_roots.clone(),
+        families: item.families.iter().map(kaspa_rpc_core::RpcPalwCertifiedFamily::try_from).collect::<RpcResult<Vec<_>>>()?,
     }
 });
 try_from!(item: &protowire::GetTokenSupplyRequestMessage, kaspa_rpc_core::GetTokenSupplyRequest, { Self { asset_id: item.asset_id } });
