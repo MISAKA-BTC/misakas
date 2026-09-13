@@ -368,4 +368,24 @@ mod tests {
         let priced = s.preflight_admission(bundle, &row, root, &with_rules).expect("the same row, the rules stated");
         assert_eq!(format!("{priced:?}"), format!("{admitted:?}"), "one price for the fused row under one court");
     }
+
+    #[test]
+    fn the_2m_dense_row_preflights_when_t11s_held_regime_is_armed() {
+        use kaspa_consensus_core::palw_class_admission_v2::palw_admission_shape_at_v1;
+
+        let params = kaspa_consensus_core::config::params::palw_rc_shipped_params();
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            panic!("testnet-11 ships a ConsensusV2 bundle");
+        };
+        let sdk = PalwClassSdk::builtin_v1(bundle.court, params.palw_prompt_ids_form_v1(), params.net.to_string().into_bytes());
+        let row = sdk
+            .ledger()
+            .into_iter()
+            .find(|entry| entry.model_id == misaka_palw_base0::classes::A16_GRAPH_V7_2M_MODEL_ID)
+            .expect("the SDK exposes the fixed 2M held row");
+        let shape = palw_admission_shape_at_v1(&params, bundle, &row.profile, 7_000).expect("the armed t11 shape derives");
+        assert!(shape.held.armed, "the 2M row is only admitted after the held fence");
+        sdk.preflight_admission(bundle, &row, Hash64::from_u64_word(0x2A16_2A16), &shape)
+            .expect("the 2M row is admissible through the exact held t11 registration gate");
+    }
 }

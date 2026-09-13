@@ -3,6 +3,7 @@
 //! ```text
 //! qwen25-convert <dir>          # dir holds model.safetensors, config.json, tokenizer.json
 //! qwen25-convert <dir> --layers N   # convert only the first N layers (a depth sweep)
+//! qwen25-convert <dir> --a16 --n-ctx N --out <path> # write an artifact at an explicit width
 //! ```
 //!
 //! Prints the class id, the artifact's size, the bias coverage and a forward pass's depth
@@ -29,6 +30,15 @@ fn main() {
         .position(|a| a == "--layers")
         .and_then(|i| args.get(i + 1))
         .map(|v| v.parse().unwrap_or_else(|_| die(format!("--layers wants a number, got {v}"))));
+    let max_position: usize = args
+        .iter()
+        .position(|a| a == "--n-ctx")
+        .and_then(|i| args.get(i + 1))
+        .map(|v| v.parse().unwrap_or_else(|_| die(format!("--n-ctx wants a number, got {v}"))))
+        .unwrap_or(512);
+    if max_position == 0 {
+        die("--n-ctx must be greater than zero".into());
+    }
 
     let cfg_bytes = std::fs::read(format!("{dir}/config.json")).unwrap_or_else(|e| die(format!("config.json: {e}")));
     let cfg: serde_json::Value = serde_json::from_slice(&cfg_bytes).unwrap_or_else(|e| die(format!("config.json: {e}")));
@@ -47,7 +57,9 @@ fn main() {
         // The rotary table is generated for this many positions, and generating 32k of them for a
         // conversion smoke test costs more than it proves. The class a network registers picks its
         // own; this is the tool's default, printed below so it is never a silent choice.
-        max_position: 512,
+        // The default preserves the shipped 512 class. Wider artifacts must be requested
+        // explicitly and independently certified; width is part of the artifact digest.
+        max_position,
         // Qwen2.5's base, NOT the conventional 10,000 — the config says rope_theta 1e6, and the
         // wrong base is a silently-wrong model (measured: layer-0 attention delta at cosine 0.73
         // against the reference, from the rotation alone).
