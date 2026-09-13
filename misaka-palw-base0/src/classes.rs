@@ -27,7 +27,7 @@ use kaspa_consensus_core::palw_base0_profile::{
     PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, PalwBase0GeometryV1, base0_profile_v1,
 };
 use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
-use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, QWEN25_A16_CANONICAL, qwen25_a16_profile_v1};
+use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, QWEN25_A16_CANONICAL, qwen25_a16_profile_v1, qwen25_a16_artifact_row_profile_v7};
 use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
 use kaspa_hashes::Hash64;
 
@@ -148,6 +148,10 @@ pub const A16_CONVERTER_ROTARY_SPAN_V1: u32 = 512;
 /// a name that does not identify. See [`a16_graph_v5_row_v1`] for why this row exists at all when
 /// [`a16_artifact_row_v1`]'s doc says a fourth fixed-width row must not be added.
 pub const A16_GRAPH_V5_MODEL_ID: &str = "Qwen/Qwen2.5-1.5B/graph-v5@512";
+
+/// The explicit 2M held-context identity.  The width is part of the name and the profile uses
+/// graph-v7, so a 2M artifact cannot be accidentally paired with the dormant graph-v5 row.
+pub const A16_GRAPH_V7_2M_MODEL_ID: &str = "Qwen/Qwen2.5-1.5B/graph-v7@2097152";
 
 /// Every class this build can supply.
 ///
@@ -305,7 +309,39 @@ pub fn canonical_classes_v1(court: &PalwCourtParamsV2) -> Vec<CanonicalClassV1> 
     if let Some(row) = a16_graph_v5_row_v1() {
         out.push(row);
     }
+    if let Some(row) = a16_graph_v7_2m_row_v1() {
+        out.push(row);
+    }
     out
+}
+
+/// The Qwen2.5 A16 artifact at the 2M held-context width (ADR-0103).
+/// This is deliberately a catalog row, not a projection performed by certification: the class
+/// id is the canonical graph-v7 profile and the artifact header must state the same 2M span.
+pub fn a16_graph_v7_2m_row_v1() -> Option<CanonicalClassV1> {
+    use kaspa_consensus_core::palw_context_ladder::palw_canonical_footprint_floor_v1;
+    let n_ctx = 2_097_152u32;
+    let g = kaspa_consensus_core::palw_qwen25_profile::qwen25_geometry_artifact_eps(PalwQwen25GeometryV1 { n_ctx, ..QWEN25_1_5B });
+    let profile = qwen25_a16_artifact_row_profile_v7(g).ok()?;
+    let decode = QWEN25_A16_CANONICAL.1.max(1);
+    let floor = u32::try_from(palw_canonical_footprint_floor_v1(n_ctx)).ok()?;
+    let prefill = floor.checked_add(1)?.checked_sub(decode)?;
+    Some(CanonicalClassV1 {
+        model_id: A16_GRAPH_V7_2M_MODEL_ID,
+        profile,
+        artifact_shape: Base0ShapeV1 {
+            n_layers: g.layer_count as usize, n_heads: g.attn_heads as usize,
+            n_kv_heads: g.attn_kv_heads as usize, d_head: g.attn_head_dim as usize,
+            d_ff: g.ffn_dim as usize, vocab: g.vocab_size as usize,
+            max_position: n_ctx as usize, ln_theta_gen_q: crate::artifact::LN_THETA_1000000_GEN_Q,
+            eps_q: kaspa_consensus_core::palw_qwen25_profile::QWEN25_A16_ARTIFACT_EPS_Q,
+        },
+        canonical_job: (prefill, decode), source: ArtifactSourceV1::ConvertedA16,
+        inventory_geometry: PalwBase0GeometryV1 { layer_count: g.layer_count, hidden_dim: g.hidden_dim,
+            ffn_dim: g.ffn_dim, attn_heads: g.attn_heads, attn_head_dim: g.attn_head_dim,
+            vocab_size: g.vocab_size, n_ctx: g.n_ctx, n_threads: g.n_threads,
+            rms_eps_q: g.rms_eps_q, tile_len: g.tile_len },
+    })
 }
 
 /// **The graph-v5 dense row at the artifact's own width** (ADR-0082 Decisions 1 and 4;
@@ -1484,6 +1520,16 @@ mod tests {
             assert_ne!(other.class_id(), row.class_id(), "{} collides with the graph-v5 row", other.model_id);
         }
         println!("graph-v5 dense row: {} n_ctx {} class {}", row.model_id, row.profile.n_ctx, row.class_id());
+    }
+
+    #[test]
+    fn the_2m_held_row_is_catalogued_and_uses_graph_v7() {
+        let row = a16_graph_v7_2m_row_v1().expect("the held 2M projection is canonical");
+        assert_eq!(row.model_id, A16_GRAPH_V7_2M_MODEL_ID);
+        assert_eq!(row.profile.n_ctx, 2_097_152);
+        assert_eq!(row.artifact_shape.max_position, 2_097_152);
+        assert_eq!(row.profile.state_chunk_map_id, kaspa_consensus_core::palw_state_chunk_map::tiled_kv_state_chunk_map_id_v4());
+        assert!(canonical_classes_v1(&court()).iter().any(|c| c.model_id == A16_GRAPH_V7_2M_MODEL_ID));
     }
 
     /// **The genesis row's graph is the graph-v3 row with the attention site fused — one class,
