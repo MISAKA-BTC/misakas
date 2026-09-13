@@ -180,6 +180,7 @@ If DNS is blocked where you run, add the public entry nodes by hand:
 | I want to… | read |
 |---|---|
 | run a node / verify the chain | [docs/testnet11-node-operator.md](docs/testnet11-node-operator.md) |
+| join as a PALW verifier / panel seat | [docs/testnet11-verification-participation-ja.md](docs/testnet11-verification-participation-ja.md) |
 | produce blocks (floor class, no model needed) | [docs/testnet11-join-mining.md](docs/testnet11-join-mining.md) |
 | produce or verify with the LLM classes | [docs/palw-public-testnet-classes-runbook.md](docs/palw-public-testnet-classes-runbook.md) |
 
