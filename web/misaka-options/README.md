@@ -1,5 +1,21 @@
 # MISAKA Options
 
+## Using the membership desk
+
+The 2026-09-13 interface puts model selection, three key metrics and the membership cost preview
+first. Choose a model from **Selected model**, or open **Explore all models**. Model selection
+supports the keyboard: arrow keys move between entries, Enter selects and Escape closes.
+
+Enter a whole membership quantity to preview its cost before connecting a wallet. The connection
+button is available both in the header and in the desk. Review the model's declared benefits and
+the quote before sending. Detailed network statistics, price comparisons and settlement rules
+expand on demand. On phones, the desk appears directly after the selected model; the navigation
+is available through **Menu**.
+
+For UI checks, serve this directory locally and open `?mock=1&selftest=1` for the existing
+calculation tests and simulated wallet. Public operation uses the original RPC configuration;
+never deploy a mock-mode redirect as the homepage.
+
 A static web front-end for the MISAKA chain's **model store** (ADR-0087, ADR-0088, ADR-0089,
 **ADR-0090**, **ADR-0095**), served at https://misakaoptions.com. What a model sells is a
 **membership**: access its owner declares on chain, and that the fold enforces where it can.

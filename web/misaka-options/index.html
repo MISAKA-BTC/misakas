@@ -7,7 +7,7 @@
 <meta name="description" content="MISAKA Options: the model store on the MISAKA chain. Join a model line's membership, read what the line promises its members, and see every figure come from a node.">
 <title>MISAKA Options</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b1417'/%3E%3Cpath d='M7 23V9l9 9 9-9v14' fill='none' stroke='%2350d2c1' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=20260913-ui4">
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
@@ -18,9 +18,9 @@
   </a>
   <button class="nav-toggle" id="navToggle" aria-label="Toggle menu" aria-expanded="false">Menu</button>
   <nav class="nav-links" id="navLinks" aria-label="Primary">
-    <a href="#/store" data-page="store">Store</a>
+    <a href="#/store" data-page="store">Memberships</a>
     <a href="#/portfolio" data-page="portfolio">My memberships</a>
-    <a href="#/lines" data-page="lines">Models</a>
+    <a href="#/lines" data-page="lines">Explore models</a>
     <a href="#/leaderboard" data-page="leaderboard">Rankings</a>
     <a href="#/add" data-page="add">List a model</a>
     <a href="#/docs" data-page="docs">How it works</a>
@@ -43,13 +43,13 @@
   </div>
 </header>
 <div id="banner" class="banner" role="status" hidden></div>
-<main id="main" class="main" tabindex="-1"></main>
+<main id="main" class="main" tabindex="-1"><div class="empty" role="status">Loading models and live network data…</div></main>
 <footer class="foot">
   <span id="footStatus">wRPC: idle. EVM RPC: idle.</span>
   <span class="foot-right">A membership is access to a model's service, never an income: no holder is ever paid. Every figure here is read from a node or computed with the chain's own arithmetic; a dash means the value is not available.</span>
 </footer>
 <div id="toasts" class="toasts" aria-live="polite" aria-atomic="false"></div>
 <script src="config.js"></script>
-<script src="app.js"></script>
+<script src="app.js?v=20260913-ui4"></script>
 </body>
 </html>

@@ -1638,7 +1638,7 @@ function renderNav() {
       btn.setAttribute('aria-haspopup', 'true');
       const am = $('#acctMenu'); if (am && !am.hidden) renderAcctMenu();
     } else {
-      btn.append('Connect'); btn.className = 'btn btn-accent'; btn.title = 'Connect a wallet';
+      btn.append('Connect wallet'); btn.className = 'btn btn-accent'; btn.title = 'Connect a wallet';
       closeAcctMenu();
       btn.removeAttribute('aria-haspopup'); btn.removeAttribute('aria-expanded');
     }
@@ -1684,7 +1684,7 @@ function bindNav() {
   });
   $('#lnkExplorer').href = CFG.EXPLORER_URL || '#';
   $('#lnkAdr').href = CFG.ADR_URL || '#';
-  $$('#navLinks a').forEach((a) => a.addEventListener('click', () => $('#navLinks').classList.remove('open')));
+  $$('#navLinks a').forEach((a) => a.addEventListener('click', () => { $('#navLinks').classList.remove('open'); $('#navToggle').setAttribute('aria-expanded', 'false'); }));
 }
 
 // ---- the wallet chooser and the account menu ---------------------------------------------------
@@ -2101,18 +2101,24 @@ async function pageStore(arg) {
   const orderCtx = { changing: null, rerender: () => { if (view.bottomTab === 'orders') renderBottom(); renderOrderCount(); } };
 
   main.innerHTML = h`
+  <header class="store-intro">
+    <div><div class="eyebrow">MISAKA MODEL MEMBERSHIPS</div><h1>Your next model starts here.</h1>
+    <p>Choose a model, check its membership benefits, then preview the cost. You can explore without connecting a wallet.</p></div>
+    <a class="btn" href="#/lines">Explore all models ↗</a>
+  </header>
   <section class="store" aria-label="Model store">
     <div class="panel a-bar mkt-bar" id="mktBar"></div>
     <div class="panel a-chart">
-      <div class="tabs" id="chartTabs"><button data-t="usage" class="on">Use</button><button data-t="versions">Versions</button><button data-t="chart">Price history</button></div>
+      <div class="tabs" id="chartTabs"><button data-t="usage" class="on">Model activity</button><button data-t="versions">Versions</button><button data-t="chart">Price history</button></div>
       <div class="chart-tools" id="chartTools" hidden></div>
       <div class="chart-box" id="chartBox" hidden></div>
       <div class="tab-body" id="chartAlt"></div>
     </div>
-    <div class="panel a-depth depth" id="depth"></div>
+    <details class="panel a-depth disclosure"><summary>Price comparison &amp; recent transactions</summary><div class="depth" id="depth"></div></details>
     <aside class="a-entry" aria-label="Membership desk">
-      <div id="benefits"></div>
+      <div class="desk-heading"><span class="eyebrow">YOUR MEMBERSHIP</span><h2>Preview your cost</h2><p>Check the benefits below before joining. Memberships do not pay income.</p></div>
       <div class="panel entry" id="entry"></div>
+      <div id="benefits"></div>
     </aside>
     <div class="panel a-bottom">
       <div class="tabs" id="bottomTabs"><button data-t="orders" id="ordersTab">Open orders</button><button data-t="positions">My memberships</button><button data-t="history">My activity</button><button data-t="settlements">Recent joins and leaves</button><button data-t="info">Model details</button></div>
@@ -2147,6 +2153,8 @@ async function pageStore(arg) {
   function renderBar() {
     if (!alive()) return;
     const bar = $('#mktBar'); if (!bar) return;
+    // A background price refresh must not close the selector while someone is choosing a model.
+    if (bar.querySelector('#mktMenu')) return;
     const m = rec && rec.market, row = rec && rec.row, info = rec && rec.info;
     const price = m && m.price != null ? fmtPrice(m.price) : '—';
     const owner = ownerLabel(row);
@@ -2167,26 +2175,39 @@ async function pageStore(arg) {
       ['Owner', owner ? owner.text : '—', owner ? owner.title : null],
       ['Roots in force', info && info.rootsInForce ? String(info.rootsInForce.length) : '—', 'Roots an attempt claim may name for this class (ADR-0088 D3)'],
     ];
+    const statsOpen = !!bar.querySelector('details[open]');
     bar.innerHTML = h`
       <button class="mkt-select" id="mktSelect" aria-haspopup="listbox" aria-expanded="false">
-        <span><span class="mkt-name">${rec ? db.label(rec) : 'No line selected'}${rec && db.named(rec).source === 'catalogue' ? raw('<span class="dim tiny" title="' + esc(CATALOGUE_NOTE) + '"> \u24d8</span>') : ''}</span><br><span class="mkt-sym">${rec && modelSub(rec) ? modelSub(rec) + ' · ' : ''}${rec ? rec.symbol : ''} ${rec ? raw('<span class="dim">· ' + esc(shortId(rec.lineId)) + '</span>') : ''}</span></span>
-        <span class="caret">▾</span>
+        <span><span class="eyebrow">SELECTED MODEL · CHANGE MODEL</span><span class="mkt-name">${rec ? db.label(rec) : 'No line selected'}${rec && db.named(rec).source === 'catalogue' ? raw('<span class="dim tiny" title="' + esc(CATALOGUE_NOTE) + '"> \u24d8</span>') : ''}</span><br><span class="mkt-sym">${rec && modelSub(rec) ? modelSub(rec) + ' · ' : ''}${rec ? rec.symbol : ''}</span></span>
+        <span class="caret" aria-hidden="true">⌄</span>
       </button>
-      <div class="mkt-stats">${stats.map(([k, v, t]) => h`<div class="stat" title="${t || ''}"><div class="k">${k}</div><div class="v">${v}</div></div>`)}</div>`.s;
+      <div class="mkt-stats">${[stats[0], stats[1], stats[3]].map(([k, v, t]) => h`<div class="stat" title="${t || ''}"><div class="k">${k}</div><div class="v">${v}</div></div>`)}</div>
+      <details class="market-details disclosure" ${statsOpen ? 'open' : ''}><summary>Network &amp; market details</summary><div class="mkt-stats">${stats.filter((_, i) => ![0, 1, 3].includes(i)).map(([k, v, t]) => h`<div class="stat" title="${t || ''}"><div class="k">${k}</div><div class="v">${v}</div></div>`)}</div></details>`.s;
     $('#mktSelect').addEventListener('click', toggleMenu);
     renderBenefits();
   }
   function toggleMenu(ev) {
     ev.stopPropagation();
     let menu = $('#mktMenu');
-    if (menu) { menu.remove(); return; }
+    if (menu) { menu.remove(); $('#mktSelect').setAttribute('aria-expanded', 'false'); return; }
     const lines = sortedLines();
     menu = document.createElement('div'); menu.className = 'mkt-menu'; menu.id = 'mktMenu'; menu.setAttribute('role', 'listbox');
     menu.innerHTML = lines.length ? lines.map((r) => h`<div class="item ${r.lineId === lineId ? 'on' : ''}" role="option" data-id="${r.lineId}"><span class="n">${db.label(r)}</span><span class="p">${r.market && r.market.price != null ? fmtPrice(r.market.price) : r.market && !r.market.seeded ? raw('<span class="tag warn">not seeded</span>') : '—'}</span><span class="s">${r.symbol} · ${shortId(r.lineId)}</span><span class="c">class ${shortId(r.classId || '', 8)}${r.market && r.market.seeded ? ' · reserve ' + fmtMsk(r.market.mskReserve, 2) + ' MSK' : ''}</span></div>`).join('') : '<div class="item"><span class="n dim">No lines known. Configure CLASS_IDS in config.js or reach a node.</span></div>';
-    $('#mktSelect').appendChild(menu);
+    $('#mktBar').appendChild(menu);
     $('#mktSelect').setAttribute('aria-expanded', 'true');
-    menu.addEventListener('click', (e) => { const it = e.target.closest('[data-id]'); if (it) navigate('#/store/' + it.dataset.id); });
-    const close = () => { if (menu.parentNode) menu.remove(); document.removeEventListener('click', close); };
+    menu.addEventListener('click', (e) => { e.stopPropagation(); const it = e.target.closest('[data-id]'); if (it) { navigate('#/store/' + it.dataset.id); close(); } });
+    const close = () => { if (menu.parentNode) menu.remove(); const trigger = $('#mktSelect'); if (trigger) trigger.setAttribute('aria-expanded', 'false'); document.removeEventListener('click', close); };
+    const options = Array.from(menu.querySelectorAll('[role="option"]'));
+    options.forEach((option, index) => {
+      option.tabIndex = 0;
+      option.setAttribute('aria-selected', String(option.dataset.id === lineId));
+      option.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); navigate('#/store/' + option.dataset.id); close(); }
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); options[(index + (event.key === 'ArrowDown' ? 1 : options.length - 1)) % options.length].focus(); }
+        if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); $('#mktSelect').focus(); }
+      });
+    });
+    if (options.length) options.find((option) => option.dataset.id === lineId)?.focus();
     setTimeout(() => document.addEventListener('click', close), 0);
   }
 
@@ -2227,7 +2248,7 @@ async function pageStore(arg) {
         <div class="tile"><div class="k">Work leaves</div><div class="v">${u ? fmtInt(u.workLeaves) : '—'}</div></div>
         <div class="tile"><div class="k">Last used (DAA)</div><div class="v">${u && u.lastUsedDaa ? fmtInt(u.lastUsedDaa) : '—'}</div></div>
       </div>
-      <div class="section">${rec.versions ? raw(versionRows(rec.versions)) : ''}</div>`.s;
+      <p class="note">For version roots and verification records, open the Versions tab.</p>`.s;
   }
   $('#chartTabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; view.chartTab = b.dataset.t; $$('#chartTabs button').forEach((x) => x.classList.toggle('on', x === b)); renderChartAlt(); });
 
@@ -2428,6 +2449,7 @@ async function pageStore(arg) {
     }
     $('#entry').innerHTML = h`
       <div class="panel-b">
+        ${!acct ? h`<div class="wallet-prompt"><b>Start with a free preview</b><p>Enter a quantity to see the full cost. Connect your wallet when you are ready.</p><button class="btn btn-accent" id="deskConnect">Connect wallet</button></div>` : ''}
         <div class="seg wide" role="tablist"><button class="${entry.side === 'buy' ? 'on buy' : ''}" data-side="buy" role="tab" title="Buy a membership from the protocol's curve">Join</button><button class="${entry.side === 'sell' ? 'on sell' : ''}" data-side="sell" role="tab" title="Sell the membership back to the curve; nobody else can buy it from you">Leave</button></div>
         <div class="note tiny" style="margin-top:6px">${entry.side === 'buy' ? 'A membership is bought from the protocol, not from another person, and joining raises the price for the next member.' : 'A membership is sold back to the protocol, not to another person. It cannot be transferred, lent or given away.'}</div>
         <div class="avail" style="margin-top:10px"><span class="muted">MSK available</span><span class="v" id="availV">${availNow()}</span></div>
@@ -2441,8 +2463,10 @@ async function pageStore(arg) {
         </div>
         <div class="quote" id="quoteBox"></div>
         <div class="field"><button id="sendBtn" class="btn btn-lg btn-accent" disabled>Join</button><div class="reason" id="sendWhy"></div><div class="note tiny" id="sendTopUp"></div></div>
-        <div class="note tiny">Your request is applied by the fold after the block that carries it and settles one block later, at the price the row then quotes; a join that would release no membership, or a leave that would pay nothing, is refused and refunded. A membership is a whole number, and it never pays you anything: what it gets you is the card above. A membership taken here lives in the EVM namespace and can only be given up from it.</div>
+        <details class="disclosure settlement-help"><summary>How settlement works</summary><p class="note">Your request settles one block after the block that includes it, using the price at settlement. A request that returns no membership or no MSK is refused and refunded. Memberships are whole units held by this EVM account; they cannot be transferred and do not pay income.</p></details>
       </div>`.s;
+    const deskConnect = $('#deskConnect');
+    if (deskConnect) deskConnect.addEventListener('click', startConnect);
     $$('#entry .seg button').forEach((b) => b.addEventListener('click', () => { entry.side = b.dataset.side; entry.amount = ''; entry.nodeQuote = null; renderEntry(); }));
     const amt = $('#amt');
     amt.addEventListener('input', () => { entry.amount = amt.value; entry.nodeQuote = null; entry.quote = localQuote(); renderQuote(); nodeQuote(entry.quote); });

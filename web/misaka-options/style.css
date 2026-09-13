@@ -1,4 +1,4 @@
-/* MISAKA Options - dark, dense, teal. */
+/* MISAKA Options — model discovery and a readable membership desk. */
 :root {
   --bg: #0b1417;
   --bg2: #0e1a1e;
@@ -9,7 +9,7 @@
   --border2: #2c4753;
   --text: #e9f4f2;
   --muted: #a3b6b2;
-  --dim: #7a908c;
+  --dim: #9aafab;
   --accent: #50d2c1;
   --accent2: #7fe1d3;
   --accent-ink: #052e29;
@@ -22,15 +22,15 @@
   --down: #f26c87;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --radius: 6px;
-  --nav-h: 48px;
+  --radius: 12px;
+  --nav-h: 68px;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body {
   background: var(--bg);
   color: var(--text);
-  font: 13px/1.45 var(--sans);
+  font: 15px/1.6 var(--sans);
   min-height: 100vh;
   display: flex;
   flex-direction: column;
@@ -397,3 +397,91 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
 #devBody .row input, #devBody .row select { width: auto; }
 textarea.manifest { font-size: 12px; }
 .note.warn { color: var(--warn); }
+
+/* Operator UI refresh: a clear primary task, with detail on demand. */
+.main { max-width: 1360px; padding: 30px 28px 56px; }
+.nav { padding: 0 28px; gap: 20px; }
+.brand { font-size: 17px; }
+.nav-links a, .more-btn { padding: 10px 12px; white-space: nowrap; }
+.nav-links a.active { background: #17332f; }
+.btn { min-height: 42px; padding: 9px 16px; }
+.btn-sm { min-height: 34px; }
+.small, .note, .kv, table.tbl { font-size: 14px; }
+.tiny { font-size: 12px; }
+.panel-b, .tab-body { padding: 20px; }
+.panel-h { padding: 16px 20px; font-size: 12px; }
+.tabs { padding: 0 12px; }
+.tabs button { min-height: 48px; padding: 12px; }
+.tbl th, .tbl td { padding: 12px; }
+.store-intro { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 28px; }
+.store-intro h1 { font-size: clamp(25px, 3vw, 38px); line-height: 1.2; letter-spacing: -1px; margin: 8px 0 12px; }
+.store-intro p { max-width: 680px; margin: 0; color: var(--muted); }
+.eyebrow { display: block; font-size: 11px; font-weight: 650; letter-spacing: 1.7px; color: var(--accent); margin-bottom: 8px; }
+.store { gap: 20px; grid-template-columns: minmax(0, 1fr) 400px; grid-template-rows: min-content min-content 1fr auto; grid-template-areas: "bar entry" "chart entry" "depth entry" "bottom bottom"; align-items: start; }
+.store > .a-chart { min-height: 0; }
+.store > .a-entry { gap: 18px; }
+.desk-heading h2 { margin: 0 0 4px; font-size: 23px; }
+.desk-heading p { margin: 0; color: var(--muted); font-size: 13px; }
+.mkt-bar { position: relative; display: block; background: linear-gradient(130deg, #16302e, var(--panel) 75%); }
+.mkt-select { width: 100%; border: 0; padding: 24px; border-radius: 12px 12px 0 0; min-width: 0; }
+.mkt-select > span:first-child { min-width: 0; }
+.mkt-select .mkt-name { display: inline; white-space: normal; overflow-wrap: anywhere; font-size: 22px; line-height: 1.4; }
+.mkt-select .mkt-sym { display: inline-block; margin-top: 8px; font-size: 12px; }
+.mkt-select .caret { font-size: 24px; }
+.mkt-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 0 12px 20px; align-items: start; }
+.stat { min-width: 0; padding: 8px 12px; }
+.stat .k { white-space: normal; font-size: 12px; }
+.stat .v { white-space: normal; overflow-wrap: anywhere; font-size: 19px; margin-top: 5px; }
+.market-details { border-top: 1px solid var(--border2); }
+.market-details .stat .v { font-size: 14px; }
+.disclosure > summary { padding: 16px 20px; cursor: pointer; font-size: 13px; color: var(--muted); }
+.disclosure > summary:hover { color: var(--accent); }
+.disclosure[open] > summary { border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.mkt-menu { text-align: left; width: 100%; min-width: 0; }
+.mkt-menu .item { padding: 16px; }
+.wallet-prompt { padding: 16px; margin-bottom: 20px; background: #18332f; border: 1px solid #2d554d; border-radius: 8px; }
+.wallet-prompt p { font-size: 13px; color: var(--muted); margin: 5px 0 12px; }
+.entry .seg button { padding: 12px; min-height: 46px; }
+.entry .field { margin-top: 20px; }
+.entry .inp { min-height: 54px; }
+.entry .inp input { min-width: 0; font-size: 22px; }
+.entry .pcts button { min-height: 36px; }
+.settlement-help > summary { padding-left: 0; }
+.entry .quote .r { gap: 14px; padding: 7px 0; }
+.foot { padding: 18px 28px; font-size: 12px; gap: 12px; }
+.foot-right { max-width: 750px; }
+.page-h { margin-bottom: 24px; }
+.page-h h1 { font-size: 30px; }
+@media (max-width: 1400px) {
+  .nav { flex-wrap: wrap; height: auto; min-height: 68px; padding: 12px 20px; }
+  .nav-toggle { display: block; order: 3; min-height: 42px; }
+  .nav-links { display: none; order: 4; width: 100%; flex-basis: 100%; }
+  .nav-links.open { display: flex; flex-wrap: wrap; }
+  .store { grid-template-columns: minmax(0, 1fr) 370px; }
+}
+@media (max-width: 800px) {
+  .main { padding: 22px 16px 40px; }
+  .store-intro { display: block; margin-bottom: 22px; }
+  .store-intro > .btn { display: inline-block; margin-top: 16px; }
+  .store { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto; grid-template-areas: "bar" "entry" "chart" "depth" "bottom"; }
+  .store > .a-chart { min-height: 0; }
+  .mkt-select { padding: 20px; }
+  .mkt-select .mkt-name { font-size: 20px; }
+  .mkt-stats { padding: 0 8px 16px; }
+  .stat { padding: 8px; }
+  .stat .v { font-size: 16px; }
+  .nav-right .pill { display: none; }
+  .nav { gap: 8px; padding: 10px 16px; }
+  .nav-right { gap: 6px; }
+  .brand { font-size: 15px; }
+  .brand span { display: inline; }
+  .nav-toggle { font-size: 12px; padding: 8px; }
+  .nav-right .btn { font-size: 12px; padding: 8px 10px; }
+  .grid3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .foot-right { text-align: left; }
+  .kv { grid-template-columns: minmax(0, 1fr); }
+  .mkt-menu .item { grid-template-columns: minmax(0, 1fr) auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; }
+}
