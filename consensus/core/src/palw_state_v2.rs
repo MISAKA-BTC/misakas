@@ -822,6 +822,13 @@ pub struct PalwStateParamsV2 {
 }
 
 impl PalwStateParamsV2 {
+    /// DAA-fenced rollout kept outside the serialized ruleset so the existing fingerprint remains
+    /// unchanged. Claims licensed before DAA 7,000 retain the 1,200-DAA window; later claims use
+    /// 120 DAA.
+    pub fn window_challenge_at(&self, daa_score: u64) -> u64 {
+        if daa_score >= 7_000 { 120 } else { self.window_challenge }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         beta_permille: u16,
@@ -6261,7 +6268,7 @@ impl PalwChainStateV2 {
                     // after the window had already passed (the re-arm rule). Membership by claim,
                     // with the stored daa at least the licensed floor, is the checkable fact.
                     let floor =
-                        licensed_daa.checked_add(params.window_challenge).ok_or(PalwStateV2Error::Overflow("challenge deadline"))?;
+                        licensed_daa.checked_add(params.window_challenge_at(licensed_daa)).ok_or(PalwStateV2Error::Overflow("challenge deadline"))?;
                     let stored = self
                         .deadlines
                         .iter()
@@ -7650,7 +7657,7 @@ impl<'a> TransitionBuilder<'a> {
         self.disarm_deadline(claim_id);
         if !self.state.open_courts_by_claim.contains_key(&claim_id) {
             let deadline =
-                daa_score.checked_add(self.params.window_challenge).ok_or(PalwStateV2Error::Overflow("challenge deadline"))?;
+                daa_score.checked_add(self.params.window_challenge_at(daa_score)).ok_or(PalwStateV2Error::Overflow("challenge deadline"))?;
             self.arm_deadline(deadline, claim_id);
         }
         Ok(())
@@ -8691,7 +8698,7 @@ fn rearm_claim_after_court_close(
         && let PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = claim.phase
     {
         let floor =
-            licensed_daa.checked_add(builder.params.window_challenge).ok_or(PalwStateV2Error::Overflow("challenge deadline"))?;
+            licensed_daa.checked_add(builder.params.window_challenge_at(licensed_daa)).ok_or(PalwStateV2Error::Overflow("challenge deadline"))?;
         builder.arm_deadline(floor.max(ctx.daa_score), claim_id);
     }
     Ok(())
@@ -9033,7 +9040,7 @@ fn rearm_claim_after_da_session(
         PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } => {
             if !builder.state.open_courts_by_claim.contains_key(&claim_id) {
                 let floor = licensed_daa
-                    .checked_add(builder.params.window_challenge)
+                    .checked_add(builder.params.window_challenge_at(licensed_daa))
                     .ok_or(PalwStateV2Error::Overflow("challenge deadline"))?;
                 builder.arm_deadline(floor.max(ctx.daa_score), claim_id);
             }
@@ -13967,7 +13974,7 @@ fn rebuild_deadline_index_v2(state: &mut PalwChainStateV2, params: &PalwStatePar
             PalwClaimPhaseV2::ReceiptLicensed { .. } if open_courts > 0 => {}
             PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } => {
                 let floor =
-                    licensed_daa.checked_add(params.window_challenge).ok_or(PalwStateV2Error::Overflow("challenge deadline"))?;
+                    licensed_daa.checked_add(params.window_challenge_at(licensed_daa)).ok_or(PalwStateV2Error::Overflow("challenge deadline"))?;
                 // A court-cleared claim's re-armed deadline is `max(floor, clearing daa)`, and the
                 // clearing daa itself is not primary data — but `max(floor, last_point.daa)`
                 // reproduces the stored value EXACTLY for every state at rest:
