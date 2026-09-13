@@ -15,9 +15,9 @@
 //!
 //! The data structure is feature-free; only raw-bytes admission needs the
 //! `evm` cargo feature (kaspa-evm's decoder), mirroring the consensus seam.
-//! Admission applies EXACTLY the body-validation class-1 rule, so a
-//! mempool-admitted tx can never make the node's own template
-//! payload-block-invalid.
+//! Admission applies the body-validation class-1 rule plus a local exact
+//! intrinsic-gas executability check, so a mempool-admitted tx can never make
+//! the node's own template carry a transaction revm cannot execute.
 
 use kaspa_consensus_core::evm::{
     DepositClaim, EvmAddress, EvmExecutionPayload, MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK,
@@ -104,6 +104,12 @@ impl PendingEvmTx {
 pub enum EvmMempoolError {
     /// Failed the class-1 admission rule (decode / signer / chain-id / gas band).
     Inadmissible(String),
+    /// The transaction is syntactically admissible under the payload's fixed
+    /// consensus floor but revm can never execute it because its declared gas
+    /// is below exact intrinsic gas. This is a local, hash-bearing rejection:
+    /// it must not be treated as peer misbehavior because historical payloads
+    /// may still contain such a transaction under the unchanged consensus rule.
+    Unexecutable { gas_limit: u64, intrinsic_gas: u64, hash: EvmH256 },
     /// Identical tx hash already pending.
     Duplicate(EvmH256),
     /// Same (sender, nonce) pending and the fee bump is below the threshold.
@@ -147,6 +153,9 @@ impl std::fmt::Display for EvmMempoolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             EvmMempoolError::Inadmissible(e) => write!(f, "inadmissible evm tx: {e}"),
+            EvmMempoolError::Unexecutable { gas_limit, intrinsic_gas, .. } => {
+                write!(f, "evm tx gas_limit {gas_limit} below exact Shanghai intrinsic gas {intrinsic_gas}")
+            }
             EvmMempoolError::Duplicate(h) => write!(f, "evm tx {h} already pending"),
             EvmMempoolError::ReplacementUnderpriced { pending_fee, required_fee, .. } => {
                 write!(f, "replacement underpriced: pending max_fee {pending_fee}, required ≥ {required_fee}")

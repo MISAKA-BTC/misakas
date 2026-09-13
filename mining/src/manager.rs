@@ -156,9 +156,9 @@ impl MiningManager {
     }
 
     /// kaspa-pq EVM Lane v0.4 (§16): admit a raw EIP-2718 EVM transaction into
-    /// the EVM mempool. Admission applies EXACTLY the body-validation class-1
-    /// rule (kaspa-evm `admit_tx_info`), so a pooled tx can never make the
-    /// node's own template payload-block-invalid. Returns the Ethereum tx hash
+    /// the EVM mempool. Admission applies the body-validation class-1 rule plus
+    /// a local exact-intrinsic-gas executability check, so a transaction that
+    /// revm can never execute cannot occupy the pool. Returns the Ethereum tx hash
     /// (keccak256 of the raw bytes).
     #[cfg(feature = "evm")]
     pub fn submit_evm_transaction(&self, raw: Vec<u8>) -> Result<kaspa_hashes::EvmH256, crate::evm_mempool::EvmMempoolError> {
@@ -204,6 +204,16 @@ impl MiningManager {
         sender_state: Option<(u64, u128)>,
     ) -> Result<kaspa_hashes::EvmH256, crate::evm_mempool::EvmMempoolError> {
         let info = kaspa_evm::tx::admit_tx_info(&raw).map_err(crate::evm_mempool::EvmMempoolError::Inadmissible)?;
+        // Local policy only: payload consensus keeps its existing fixed-floor
+        // rule, while new RPC and peer-relayed txs cannot enter the pool only
+        // to hit CallGasCostMoreThanGasLimit and retry forever as class-2 skips.
+        if info.gas_limit < info.intrinsic_gas {
+            return Err(crate::evm_mempool::EvmMempoolError::Unexecutable {
+                gas_limit: info.gas_limit,
+                intrinsic_gas: info.intrinsic_gas,
+                hash: info.hash,
+            });
+        }
         let now_secs = unix_now() / 1000;
         let result = {
             let mut pool = self.evm_mempool.write();

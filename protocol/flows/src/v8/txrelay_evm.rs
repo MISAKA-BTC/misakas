@@ -200,6 +200,11 @@ impl RelayEvmTransactionsFlow {
                         "unexpected state-unavailable verdict on the stateless relay path: {e}"
                     )));
                 }
+                // Local exact-intrinsic-gas policy rejects a tx that revm can
+                // never execute. It is hash-bearing and benign for relay
+                // accounting: the consensus payload rule intentionally remains
+                // the existing fixed-floor rule, so this is not peer misbehavior.
+                Err(EvmMempoolError::Unexecutable { hash: tx_hash, .. }) => (tx_hash, false),
                 // Benign: the tx is valid, our pool just will not take it now (already
                 // pending, replacement pricing, or capacity). Each carries the
                 // recomputed hash for the verification below.

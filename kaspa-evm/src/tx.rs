@@ -129,6 +129,9 @@ pub struct AdmittedEvmTx {
     pub sender: kaspa_consensus_core::evm::EvmAddress,
     pub nonce: u64,
     pub gas_limit: u64,
+    /// Exact Shanghai initial/intrinsic gas, including calldata and access-list
+    /// costs. Used by local mempool admission, not by payload consensus.
+    pub intrinsic_gas: u64,
     /// EIP-1559 `max_fee_per_gas` (legacy/2930: the gas price) — the mempool's
     /// fee-ordering key.
     pub max_fee_per_gas: u128,
@@ -149,14 +152,11 @@ pub struct AdmittedEvmTx {
 /// producer chose its own payload (design v0.4 §6.2). Deterministic and
 /// context-free (no state, no basefee: those are class-2 acceptance skips).
 ///
-/// Audit L6 — the floor is deliberately the FIXED intrinsic (21k/53k), NOT the
-/// calldata-inclusive EIP-2028/3860 intrinsic: re-implementing revm's exact
-/// intrinsic-gas formula here would risk a consensus split if the two ever
-/// diverged. A tx with `fixed_floor <= gas_limit < true_intrinsic` therefore
-/// passes admission and is rejected by revm at acceptance
-/// (`CallGasCostMoreThanGasLimit`) — a DETERMINISTIC class-2 skip, erring on
-/// the safe side (a marginal tx skips instead of invalidating the payload
-/// block). Design §6.1's class-1 row states this boundary.
+/// The fixed floor remains the payload-consensus admission rule. The exact
+/// Shanghai intrinsic gas is also calculated and returned as metadata so local
+/// mempool ingress can reject a transaction that revm can never execute. Keeping
+/// that stricter check out of this consensus-facing result preserves validity of
+/// historical payloads that already passed the fixed-floor rule.
 pub fn admit_tx(raw: &[u8]) -> Result<(), String> {
     admit_tx_info(raw).map(|_| ())
 }
@@ -208,11 +208,22 @@ pub fn admit_tx_info(raw: &[u8]) -> Result<AdmittedEvmTx, String> {
             envelope.gas_limit()
         ));
     }
+    // Metadata for the local mempool executability check. Deliberately not a
+    // consensus rejection: historical payloads admitted under the fixed floor
+    // remain valid and continue to follow the class-2 skip rule.
+    let intrinsic_gas = revm::interpreter::gas::validate_initial_tx_gas(
+        revm::primitives::SpecId::SHANGHAI,
+        envelope.input().as_ref(),
+        envelope.kind().is_create(),
+        envelope.access_list().map(|list| list.0.as_slice()).unwrap_or(&[]),
+        0,
+    );
     Ok(AdmittedEvmTx {
         hash,
         sender: EvmAddress::from_bytes(sender.into_array()),
         nonce: envelope.nonce(),
         gas_limit: envelope.gas_limit(),
+        intrinsic_gas,
         max_fee_per_gas: envelope.max_fee_per_gas(),
         // Legacy / EIP-2930 carry no priority field → tip is `gas_price − basefee`.
         // The geth representation sets tipCap = feeCap = gas_price so the effective-tip
@@ -257,6 +268,10 @@ mod tests {
     }
 
     fn fixture_raw(nonce: u64) -> Vec<u8> {
+        fixture_raw_with(nonce, 21_000, Default::default())
+    }
+
+    fn fixture_raw_with(nonce: u64, gas_limit: u64, input: revm::primitives::Bytes) -> Vec<u8> {
         use alloy_consensus::{SignableTransaction, TxEip1559};
         use alloy_eips::eip2718::Encodable2718;
         use alloy_signer::SignerSync;
@@ -267,13 +282,13 @@ mod tests {
         let tx = TxEip1559 {
             chain_id: EVM_CHAIN_ID,
             nonce,
-            gas_limit: 21_000,
+            gas_limit,
             max_fee_per_gas: EVM_INITIAL_BASE_FEE as u128,
             max_priority_fee_per_gas: 0,
             to: TxKind::Call(Address::with_last_byte(0x22)),
             value: U256::from(500u64),
             access_list: Default::default(),
-            input: Default::default(),
+            input,
         };
         let sig = signer.sign_hash_sync(&tx.signature_hash()).unwrap();
         TxEnvelope::from(tx.into_signed(sig)).encoded_2718()
@@ -364,12 +379,25 @@ mod tests {
         let info = admit_tx_info(&raw).unwrap();
         assert_eq!(info.nonce, 7);
         assert_eq!(info.gas_limit, 21_000);
+        assert_eq!(info.intrinsic_gas, 21_000);
         assert_eq!(info.max_fee_per_gas, kaspa_consensus_core::evm::EVM_INITIAL_BASE_FEE as u128);
         assert_eq!(info.hash.as_bytes(), revm::primitives::keccak256(&raw).0, "Ethereum tx hash = keccak256(raw 2718 bytes)");
         // admit_tx and admit_tx_info enforce the identical rule.
         assert!(admit_tx(&raw).is_ok());
         // A truncated tx is inadmissible, not a panic.
         assert!(admit_tx_info(&raw[..raw.len() - 5]).is_err());
+    }
+
+    #[test]
+    fn calculates_exact_intrinsic_gas_for_calldata_without_changing_consensus_admission() {
+        // buy(uint256) with a zero ABI word: 4 non-zero selector bytes cost
+        // 64 gas and 32 zero bytes cost 128 gas under Shanghai.
+        let mut input = vec![0xd9, 0x6a, 0x09, 0x4a];
+        input.extend_from_slice(&[0u8; 32]);
+        let raw = fixture_raw_with(0, 21_000, input.into());
+        let info = admit_tx_info(&raw).expect("fixed-floor consensus admission still succeeds");
+        assert_eq!(info.intrinsic_gas, 21_192);
+        assert!(info.gas_limit < info.intrinsic_gas);
     }
 
     /// audit EVM-02: a canonical signed tx admits and decodes; the same envelope
