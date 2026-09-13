@@ -40,8 +40,8 @@ Type=oneshot
 Environment=NETWORK=testnet-11
 Environment=UNIT=%i
 Environment=STATE_DIR=/var/lib/misaka/%i
-# Environment=RESTART_ON_STALL=0   # first hours of a fresh chain: warn on STALLED, restart on WEDGED
-# RPC=127.0.0.1:27311   # set when the unit's wRPC port is not the network default
+# Environment=RESTART_ON_STALL=0   # planned pause/recovery: warn on STALLED, restart on WEDGED
+# RPC=127.0.0.1:27210   # set when the unit's wRPC Borsh port is not the network default
 ExecStart=/usr/local/bin/misaka-node-liveness-probe
 ```
 
@@ -66,9 +66,9 @@ systemctl enable --now misaka-liveness@misaka-t11-node.timer
 journalctl -t misaka-liveness -f
 ```
 
-`RESTART_ON_STALL=0` keeps `STALLED` a warning (still logged) while `WEDGED` restarts — use it
-for the first hours of a fresh chain, where silence is designed (nobody produces during the
-first artifact map; a floor at genesis bits is hours per block), then remove it.
+`RESTART_ON_STALL=0` keeps `STALLED` a warning (still logged) while `WEDGED` restarts. Use it
+during planned production pauses or initial recovery, then remove it once normal chain progress
+has resumed.
 
 Tune `STALL_SECS` to several block intervals of the network (testnet-11 at 120 s: 900 s), and
 `TIMEOUT` above the node's normal RPC latency under load (15 s). A node that is syncing (IBD)

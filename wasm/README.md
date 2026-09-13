@@ -104,6 +104,9 @@ NOTES:
 - `node init` creates a local `examples/data/config.json` that contains a private key (mnemonic) use across NodeJS examples. You can override address used in some examples by specifying the address as a command line argument.
 - Majority of examples will accept following arguments: `node <script> [address] [mainnet|testnet-10|testnet-11] [--address <address>] [--network <mainnet|testnet-10|testnet-11>] [--encoding <borsh|json>]`.
 
+  The current public network is `testnet-11`; `testnet-10` remains a parseable historical preset
+  but has no supported public entry point.
+
     By default all wRPC connections use Borsh binary encoding.
 
 Example:
@@ -174,7 +177,7 @@ let {
 const rpc = new RpcClient({
     url: "127.0.0.1", 
     encoding: Encoding.Borsh, 
-    network : "testnet-10"
+    network : "testnet-11"
 });
 
 (async () => {
@@ -203,4 +206,3 @@ npm install -g typedoc
 ```
 
 The resulting documentation will be located in `docs/typedoc/`
-

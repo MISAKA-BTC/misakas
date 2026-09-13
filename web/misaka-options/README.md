@@ -163,9 +163,9 @@ Hash routes: `#/store/<lineId>`, `#/portfolio`, `#/lines`, `#/line/<lineId>`, `#
   `value = deposit sompi × 10^10 wei`. The price list, the chart and the quote say "this store is
   not open yet" rather than quoting a curve that does not exist.
 - **List a model** (`#/add`). The path from a registered class to a store people can join, as a
-  checklist with live status where the chain can answer: (1) register the class (the exact `kaspad
-  --palw-register-class` / `palw-class preflight` / `--palw-register-bond` commands from the
-  runbooks, with links; this step cannot be done from a browser), (2) open the store (the same
+  checklist with live status where the chain can answer: (1) register the class outside the browser;
+  operators should use `misaka --network testnet-11 model add <catalog-model> --artifact <file>`,
+  while the page also records the lower-level developer primitives, (2) open the store (the same
   panel, with a line-id input defaulting to the class id, which is the founding line's id), (3)
   approval (the class's status as the chain names it, `Registered { activation_daa }` /
   `Active` / `Frozen` / `Dormant`, the chain's DAA now, and the attempt / free-prompt lane

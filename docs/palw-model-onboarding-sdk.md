@@ -1,5 +1,11 @@
 # The PALW model-onboarding SDK (`misaka-palw-sdk`)
 
+> **Current operator entry point (Testnet-11 Relaunch 5f):** use
+> `misaka --network testnet-11 model add` to inspect the catalog, then
+> `misaka --network testnet-11 model add <catalog-model> --artifact <file>` to run the resumable
+> registration and lane-certification flow. The lower-level SDK and `kaspad` flags documented
+> below remain the developer interfaces, but are not the recommended first-time operator path.
+
 **One interface every model class passes through.** Adding an LLM to a MISAKA network is four
 agreements that must hold at once — a graph the court can walk (whose id IS the class id), an
 artifact whose root the chain pins, a canonical job the class is paid per, and an engine that
@@ -53,10 +59,18 @@ No SDK code changes. The class is data:
    `preflight` runs the real admission gate (`verify_class_admission_v2`) against that network's
    bundle. Its genesis view is static — a live chain may hold more classes — but a REFUSED here
    is a refusal the chain would also give, before any fee is spent.
-6. **Register from the node that holds the artifact**: `--palw-class-artifact <file>
-   --palw-register-class <model-id>` with a bonded key. The node's registration loop goes through
-   the same SDK path, reads LIVE terms, applies the known-weights rule and the sibling filters,
-   and runs the admission preflight again before anything is signed or funded.
+6. **Register from the host that holds the artifact**, using the current operator flow:
+
+   ```bash
+   misaka --network testnet-11 model add
+   misaka --network testnet-11 model add <catalog-model> --artifact /absolute/path/to/artifact
+   ```
+
+   It resumes from live chain and local state, uses the bonded key selected by the wizard, reads
+   live terms, applies the known-weights rule and sibling filters, and reruns admission preflight
+   before anything is signed or funded. Developers automating the primitive directly may still
+   use `kaspad --palw-class-artifact <file> --palw-register-class <model-id>` with that Bond key;
+   the primitive is not the recommended first-time workflow.
 
 ## Adding a new model family (a new lineage)
 

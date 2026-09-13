@@ -10,8 +10,9 @@ from, and serves. A misconfiguration degrades availability of one node (at worst
 §6), never the chain. All flags are off by default, so a node that sets none of them behaves
 exactly as before.
 
-Applies to an `--features evm` build on an EVM-active network. On a default (non-evm) build or an
-EVM-inert network the flags are accepted but inert (no EVM state exists).
+Applies to an EVM-enabled `kaspad` on an EVM-active network. The current `kaspad` default feature
+set includes `evm`; a build made with `--no-default-features` may not. On an EVM-inert network the
+flags are accepted but inert because no EVM state exists.
 
 ---
 
@@ -44,7 +45,8 @@ phase soak before the next. Because every phase is consensus-neutral, a mixed fl
 some not) is fine indefinitely.
 
 ### Phase 0 — baseline
-- Confirm the build: `kaspad --version` and that it was built `--features evm`.
+- Confirm the build: `kaspad --version` and that EVM support was not removed with a custom
+  `--no-default-features` build.
 - Confirm history mode is `recent` or `archive` (not `head`) if this node will retire/prune.
 - Note the data-directory size (for the eventual storage-win measurement).
 

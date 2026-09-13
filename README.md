@@ -4,7 +4,19 @@
 
 The node binary is still named `kaspad` and the crates keep their upstream `kaspa-*` names (this is a fork, not a rename); the **network**, addresses (`misaka…` mainnet / `misakatest…` testnet / `misakadev…` devnet), and project branding are misakas.
 
-> **Status (2026-09-12).** The live public network is **`testnet-11`** — the PALW release candidate,
+> [!IMPORTANT]
+> **Current status (2026-09-13).** The live public network is **`testnet-11`**, Relaunch 5f.
+> Build current `main`, select it explicitly with `--testnet --netsuffix=11` or
+> `misaka --network testnet-11`, and verify fingerprint
+> **`ae1d61628da50c7becea62f0a8f08c8654d190c60b2e104df0010b121ba4d3d8`**.
+> The network produces PALW blocks at a frozen 120-second cadence. Testnet-10 and older relaunches
+> are not supported entry points. ADR-0123's epoch-budget release is implemented but remains
+> dormant on every shipped preset (`palw_epoch_budget_release: None`).
+
+<details>
+<summary>Historical Relaunch 5f rollout log and crossed fences</summary>
+
+> **Status (recorded 2026-09-12).** The live public network is **`testnet-11`** — the PALW release candidate,
 > Relaunch 5f. Explorer at **[misakascan.com](https://misakascan.com)**, web wallet at
 > **[wallet.misakascan.com](https://wallet.misakascan.com)**. Current network identity: consensus
 > fingerprint **`ae1d6162…`** (the release that schedules ADR-0120's fence at DAA 6,900 and held
@@ -65,6 +77,8 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 > set is **defined but NOT launched or endorsed for production** — do not run `--mainnet` expecting a
 > live or supported network.
 
+</details>
+
 ## What testnet-11 is
 
 testnet-11 runs **PALW ConsensusV2** (ADR-0042): blocks are won by a lottery over *verified LLM
@@ -88,9 +102,9 @@ Three execution classes ship in the genesis:
 
 | class | model | share | needs a model file? |
 |---|---|---|---|
-| **PALW-BASE-0** (the floor) | deterministic integer model, pure Rust in this tree | 600‰ | **no** — no GPU, no download |
-| **QWEN25-A16** | Qwen2.5-1.5B-Instruct, A16 static-PTQ conversion | 200‰ | yes (convert locally) |
-| **QWEN36** | Qwen3.6-abliterated-35B-A3B (Q4_K_M), hybrid runtime | 200‰ | yes (~34 GiB, download or convert) |
+| **PALW-BASE-0** (the floor) | deterministic integer model, pure Rust in this tree | 22‰ | **no** — no GPU, no download |
+| **QWEN25-A16** | Qwen2.5-1.5B-Instruct, A16 static-PTQ conversion | 489‰ | yes (use the class-bound artifact) |
+| **QWEN36** | Qwen3.6-abliterated-35B-A3B (Q4_K_M), hybrid runtime | 489‰ | yes (~34 GiB, download or convert) |
 
 Running or verifying a node needs none of them for the floor; producing in a model class needs that
 class's artifact. Both model artifacts derive deterministically from public weights on
@@ -104,6 +118,26 @@ class slower than the floor — creates claims, is verified, is paid, and moves 
 difficulty and share. A slow class starves no more.
 
 ## Joining testnet-11
+
+The recommended operator path is the ADR-0122 CLI. It verifies the node, identity, model, key,
+funds, Bond registry, artifact, panel capability and fee output before writing
+`~/.misaka/mining.toml`:
+
+```bash
+misaka --network testnet-11 mining setup
+misaka --network testnet-11 mining start --print-command
+misaka --network testnet-11 mining start
+```
+
+For an existing Bond, inspect the exact outpoint without a key or class id:
+
+```bash
+misaka --network testnet-11 bond status --bond <txid>:<index>
+```
+
+`REGISTERED` and sufficient sustained collateral are separate results. Never re-run
+`--palw-register-bond` for an already registered key; collateral cannot be topped up and the
+append-only registry refuses a second Bond from the same key.
 
 The network is permissionless. DNS seeding is live (`seeder1.misakascan.com`), so a fresh node
 needs **no flags beyond the network selection**:
@@ -403,12 +437,9 @@ explorer backend) needs to connect locally.
   sompi. The node must run `--utxoindex`.
 - Add `--enable-unsynced-mining` **only** when bootstrapping a brand-new isolated network with no peers (mining before you have synced to the public testnet would fork from genesis).
 
-Mine to a **64-byte** ML-DSA-87 (`misakatest:`) address — legacy 32-byte addresses are rejected:
-
-```bash
-cargo run --release --bin kaspa-pq-miner -- --node-grpc 127.0.0.1:26210 --network-id testnet-11 \
-  --blocks 0 --min-block-interval-ms 250 --pay-address <misakatest:...>
-```
+Testnet-11 cannot be mined with `kaspa-pq-miner` or `misaminer`: they do not create the required
+PALW attempt envelope. Block production runs inside `kaspad --palw-produce`; use
+`misaka mining setup/start` rather than an external hash miner.
 
 ## Running a validator (testnet)
 
@@ -418,10 +449,10 @@ The `kaspa-pq-validator` sidecar connects to a local node over wRPC and attests 
 # 1. generate a validator key + print its funding address
 kaspa-pq-validator keygen --out val.seed --network testnet
 # 2. send funds to the printed funding address (mine to it, or transfer from another wallet)
-# 3. stake a bond. testnet enforces the PRODUCTION minimum: 20,000,000 MSK = 2e15 sompi.
+# 3. stake a DNS-finality bond. Testnet-11's minimum is 10 MSK = 1,000,000,000 sompi.
 #    Omit --fee to auto-size it (mass-based; the flat floor is too low for the 2592-byte pubkey).
 kaspa-pq-validator bond --node-rpc 127.0.0.1:27210 --validator-key val.seed \
-  --amount 2000000000000000 --network testnet-11
+  --amount 1000000000 --network testnet-11
 # 4. run the validator daemon (attests every epoch while the bond is active)
 kaspa-pq-validator run --node-rpc 127.0.0.1:27210 --validator-key val.seed \
   --stake-bond <txid:index> --signed-epoch-db val.state --network testnet-11 --attest-poll-secs 3
@@ -429,9 +460,20 @@ kaspa-pq-validator run --node-rpc 127.0.0.1:27210 --validator-key val.seed \
 
 > Note: the funding/`run`/`bond` subcommands want the **full** network id (`testnet-11`); `keygen`'s `--network` takes the short form (`testnet`). Use a **fresh** `--signed-epoch-db` per network — reusing one across networks trips the anti-equivocation guard on overlapping epoch numbers.
 
-The validator attests the one current canonical-ready epoch per round; the round cadence is `--attest-poll-secs` (default **3 s**). Every misakas network runs at **10 BPS**, so an attestation epoch (`attestation_epoch_length_blue_score = 100`) is only ~10 s of wall-clock — the 3 s default keeps a single validator caught up on every network.
+The validator attests the one current canonical-ready epoch per round; the poll cadence defaults to
+**3 s**. Testnet-11 is not a 10-BPS network: PALW cadence is 120 seconds per block and its DNS
+attestation epoch is rescaled to 2 blue-score. Keep the generated/default poll interval unless the
+current validator runbook and `--help` say otherwise.
 
-Once enough stake has attested across the recent epochs, `getDnsConfirmation` reports `dnsConfirmed: true` plus a `lastDnsConfirmedAnchor` (the stake-confirmed finality point — treat THIS as DNS-final, not the pov-dependent `blockHash` sink). On the `testnet`/`mainnet` parameter sets confirmation is **two-dimensional** — it requires `WorkDepth ≥ required_work_depth` (anchor-relative accumulated blue work) **and** `StakeDepth ≥ required_stake_depth` (so a single 20M-MSK validator confirms after ~10 attested epochs); the retired devnet/simnet sets confirm on stake alone (`required_work_depth = 0`). Per-block finality is queryable: `getDnsConfirmation` accepts an optional `blockHash` and answers whether THAT block is DNS-final (`blockIsDnsFinal` / `blockIsConfirmedAnchor`); the explorer's **DNS Finality** page lists the confirmed chain in order.
+Once enough active stake has attested across the recent epochs, `getDnsConfirmation` reports
+`dnsConfirmed: true` plus a `lastDnsConfirmedAnchor` (the stake-confirmed finality point — treat
+this as DNS-final, not the pov-dependent `blockHash` sink). Confirmation is two-dimensional on
+Testnet-11: it requires both anchor-relative `WorkDepth` and `StakeDepth` under the live network
+parameters. The current experimental mesh permits one active validator, but the 10 MSK minimum
+does not bypass the work-depth, anchor-attester or freshness checks. Per-block finality is queryable:
+`getDnsConfirmation` accepts an optional `blockHash` and answers whether that block is DNS-final
+(`blockIsDnsFinal` / `blockIsConfirmedAnchor`); the explorer's **DNS Finality** page lists the
+confirmed chain in order.
 
 ### Remote signer / HSM (optional, ADR-0015)
 

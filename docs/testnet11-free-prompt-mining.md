@@ -42,7 +42,7 @@ DAA, about two days) after the draw**: a winning quantum not spent inside it is 
 
 | | |
 |---|---|
-| a `kaspad` from `main` | on the network's current ruleset — its first log lines print the fingerprint and `Consensus fence schedule: 1150, 1900, 2150, 2400, 2125000`; see [testnet11-join-mining.md](testnet11-join-mining.md) §1 |
+| a `kaspad` from `main` | on the network's current ruleset — its first log lines print fingerprint `ae1d61628da50c7becea62f0a8f08c8654d190c60b2e104df0010b121ba4d3d8` and fence schedule `1150, 1900, 2150, 2400, 3500, 4000, 6900, 7000, 2125000`; see [testnet11-join-mining.md](testnet11-join-mining.md) §1 |
 | a registered bond | [testnet11-join-mining.md](testnet11-join-mining.md) §2–§3; the floor-sized default holds two or three 256-token claims at once (§3 below) |
 | the tokenizer-**bound** A16 artifact | the same file for the gateway's worker AND for `kaspad --palw-class-artifact` (§2) |
 | a second output at the bond key's address | ≥ 0.1 MSK, for the carriers' fees — the registration carrier's change is reserved by the node's panel and cannot be used (§4) |
@@ -106,7 +106,7 @@ room for ONE default-length claim, the gateway had checked the room against a ca
 
 ```bash
 kaspad --testnet --netsuffix=11 --appdir=$HOME/.t11 --utxoindex \
-  --listen=0.0.0.0:26311 --rpclisten=127.0.0.1:26312 --rpclisten-borsh=default \
+  --listen=0.0.0.0:26311 --rpclisten=127.0.0.1:26210 --rpclisten-borsh=default \
   --addpeer=169.58.39.220:26311 \
   --palw-produce --palw-panel \
   --palw-producer-key=$HOME/.misaka/miner.seed \
@@ -115,8 +115,9 @@ kaspad --testnet --netsuffix=11 --appdir=$HOME/.t11 --utxoindex \
   --palw-class-artifact=/abs/qwen25-1.5b-a16.bound.palwart
 ```
 
-(No `--palw-producer-class`: the producer mines the floor, which needs no bond beyond the default
-and is never out of epoch budget. The receipt lane is the same producer loop either way.)
+(No `--palw-producer-class`: the ordinary attempt lane is Floor and uses the Floor-sized Bond.
+Its class budget can pause attempts until an epoch boundary; the receipt lane is handled by the
+same producer loop and has its own consensus admission rules.)
 
 **Fund the carriers.** The node reserves the registration carrier's change (`<bond txid>:1`) for
 its panel, so give the bond key's address a second output and leave it to the watcher. (If your

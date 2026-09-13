@@ -1,450 +1,110 @@
-# Joining testnet-11 as a miner
+# Joining Testnet-11 as a PALW producer
 
-This is the path a node that is on **no genesis registry** takes to produce blocks. Every step
-below was run or read against the live network on 2026-08-24; where a number is a chain fact it
-says where it comes from.
+Verified against current `main` on 2026-09-13. Testnet-11 Relaunch 5f produces blocks with PALW ConsensusV2 at a frozen 120-second cadence. `kaspa-pq-miner` and `misaminer` cannot create the required attempt envelope; production runs inside `kaspad --palw-produce`.
 
-Read [§0](#0-what-you-cannot-do) first. Two of the three things people try do not work on this
-network, and both fail in ways that look like something else.
+## 1. Build
 
----
-
-## 0. What you cannot do
-
-**A hash miner cannot mine this network, and neither can `misaminer`.** Every block declares PoW
-algo **6** (`POW_ALGO_ID_PALW_COMMITTED_V2`), and an algo-6 header must carry a signed
-`PalwAttemptEnvelopeV2` in `palw_commitment` or it fails verification with `PalwV2AttemptMissing`.
-Building one means running the class's model, committing to the trace, and signing with a bonded
-key — none of which a `getBlockTemplate` → search → `submitBlock` client can do. `misaminer` knows
-this and stops with a message saying so; it does **not** search a target it cannot win. (It used to,
-which cost one operator four hours at 400 % CPU and zero blocks.)
-
-**Blocks are produced by `kaspad --palw-produce`.** There is no external miner client for this
-network. That is not a gap in the tooling — the nonce is won by inference, so the thing that runs
-the model is the thing that makes the block.
-
-**You cannot mine without a bond.** `ready_to_produce` refuses with *"the named bond is not
-registered on this chain"*. Until 2026-08-24 the only bonds any chain had were the ones its genesis
-registry named — six, on testnet-11 — so this document could not have been written. §3 is the step
-that changed.
-
----
-
-## 1. What you need
-
-| | |
-|---|---|
-| the node | `kaspad` from this repo, built with `--release` |
-| a key | a 32-byte ML-DSA-87 seed — `misaka key gen` (§2) |
-| MSK | the collateral **plus 0.1 MSK**, in ONE **non-coinbase** output (§2). ~11.2 MSK for the floor, 2,290 MSK for `QWEN25-A16`, 3,868 MSK for `QWEN36` — §3's *Collateral* has the derivation |
-| a model | **no.** The default class is the integer floor; see §5 |
-
-`--netsuffix=11`, P2P **26311**, gRPC **26312**, **wRPC-borsh 27210**. DNS seeding is live, so no
-`--addpeer` is needed
-
-**Two RPC ports, and the tools on this page use the second one.** `--rpclisten` sets the gRPC
-port; `misaka`, `misaka-palw-gateway` and `misaka-palw-fp-rail` all speak **wRPC-borsh** and their
-`--rpc` flag wants that port. A node booted with `--rpclisten` alone logs
-`node-wrpc-borsh: disabled`, and every tool below then fails with
-`invalid HTTP version (node up with --rpclisten-borsh?)`. Pass `--rpclisten-borsh=default` as well
-— it resolves to 27210 on testnet-11 — or omit `--rpc` entirely and let `--network testnet-11`
-supply the default
-(fallback entry nodes: `169.58.232.113:26311`, `169.58.39.220:26311` — the two the seeders
-verify and advertise. `5.104.81.23` does not accept inbound connections and `169.58.232.114`
-was withdrawn on 2026-08-29.)
-
-> **The seeders, measured 2026-09-06 from both 1.1.1.1 and 8.8.8.8.** testnet-11 ships four
-> (`seeder1`–`seeder4`.misakascan.com). `seeder1` and `seeder3` resolve, and both return the two
-> entry nodes above. **`seeder2` and `seeder4` return SERVFAIL** — not NXDOMAIN, so the names are
-> delegated and their nameserver is failing, and a joiner sees two of four lookups fail. That is a
-> DNS-side fault and not something a node can be configured around; it costs you nothing if you use
-> `--addpeer` with the addresses above, which is the reliable path either way. `dns_seeders` sits
-> deliberately outside `consensus_params_id` — where to find peers is not a rule about blocks — so
-> the list can be corrected without a flag day.
-A node on the right chain logs
-
+```bash
+git switch main
+git pull --ff-only
+cargo build --release -p kaspad -p misaka-cli
 ```
+
+The binary from `misaka-cli` is `target/release/misaka`.
+
+## 2. Start or reach a node
+
+```bash
+kaspad --testnet --netsuffix=11 --utxoindex \
+  --rpclisten-borsh=default \
+  --addpeer=169.58.39.220:26311
+```
+
+Default ports:
+
+| purpose | port |
+|---|---:|
+| P2P | 26311 |
+| node gRPC | 26210 |
+| wRPC Borsh | 27210 |
+| wRPC JSON | 28210 |
+
+`misaka`, the wallet and the validator use wRPC Borsh. If the node uses a custom listener, pass its actual address with `--rpc`.
+
+The startup log must report:
+
+```text
 Consensus params fingerprint: ae1d61628da50c7becea62f0a8f08c8654d190c60b2e104df0010b121ba4d3d8 (network testnet-11)
-Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 4000, 6900, 7000, 2125000 (schedule id …)
 ```
 
-(A build from `891a1a14` up to `a5f1bdf7` prints `060e3597…` on the first line for the same ruleset —
-until 2026-09-11 the fingerprint left ADR-0095's fence out — and the same second line. It is on the
-network and peers with newer builds.)
-
-**Third flag day, 2026-09-09 — build `main` at `891a1a14` or later.** The chain crossed ADR-0095's
-fence at **DAA 2400**, and a node from an earlier `main` has been mining its own arm since DAA
-≈2,241; nothing it produced there reaches the network. The fingerprint was the same on both sides —
-the second line is what tells them apart, and an older build does not print it. `7f4dded4` carries
-the fence but cannot sync from an empty datadir; do not run it. To rejoin: rebuild, move
-`<appdir>/misaka-testnet-11/datadir` aside (keys and `palw-*` stay), start, and resync — details in
-[testnet11-node-operator.md](testnet11-node-operator.md).
-
-(Identity as of the **second flag day, 2026-09-06** — genesis **`ad30b5cb…edb7`**
-(`PALW_RC_GENESIS`; 5f re-minted the genesis on 2026-09-03, so 5e's `08e9c8a4…` is gone), fingerprint
-**`060e3597…`** from the build that schedules ADR-0062's DA court, ADR-0077 D16's private prompt and
-ADR-0090's three model fences at **DAA 1900**, and ADR-0084 U-08's refutation ladder at **DAA 2150**
-— `main` at `06bf5118` or later. **Rebuild now, not at 1900.**
-
-**If you rebuilt earlier today, rebuild again.** `4fcce4b0` (`b511dd1e…`) and `6dea4f5f`
-(`ebd3b321…`) schedule the 1900 fences but not the ladder's own height, and the gate compares
-HEIGHTS rather than rules — so from **1900**, not from 2150, a node on either refuses a node
-carrying the ladder, and the reject comes from the older side. The genesis and the peering identity did not move, so
-this is not a re-mint and your appdir is fine — but the fork-id gate refuses an un-upgraded peer
-**immediately**, because that build's gate is already armed by ADR-0083's fence at 1150 and it has no
-1900 on its schedule. It is the OLD side that sends the reject, so the fleet cannot fix it for you:
-a node still on `71b35c25…` (or the 5f tag `16a2f277`, or the cut `2222e054…`) sees peers drop after
-minutes and its own blocks never reach the explorer. That is the partition, not a connectivity fault. **Do not read either value as a property of the chain.**
-Both are dated facts about a relaunch: take the live ones from your own node's first log lines rather than
-from this page. Earlier values — `a7baab79…` (5e), `e2b91c16…` (5d), `d38abe44…` (5c), `f0e50f83…` and
-`accaadce…` (2026-09-02), `5ccdd684…` (2026-08-31), `f3bf86b4…` (2026-08-30), `95265934…` (2026-08-29) —
-name archived rulesets; a node still announcing any of them is refused at the handshake. **Wipe the appdir
-whatever you joined before 5f**: the fleet archived its datadirs at the re-mint and started an empty chain.)
-
-A different fingerprint means a different ruleset, and the two will refuse each other at handshake.
-Do not treat that as a connectivity problem.
-
----
-
-## 2. Key, address, funds
+## 3. Recommended setup
 
 ```bash
-cargo build --release -p misaka-cli --bin misaka
-./target/release/misaka key gen --out ~/.misaka/miner.seed
-./target/release/misaka key address --key-file ~/.misaka/miner.seed
+misaka --network testnet-11 mining setup
 ```
 
-(The crate is `misaka-cli`; the binary it installs is `misaka`. `key gen` prints the address too, so
-the second command is only for looking it up again later.)
+The ADR-0122 wizard checks the node, network identity, model, key, funds, Bond registry, artifact, panel capability and fee output, then writes `~/.misaka/mining.toml`. Re-running the command resumes from chain and local state.
 
-The address is ML-DSA-87 P2PKH (`misakatest:…`). It is where rewards are paid, and where the
-collateral returns if the bond is ever retired — the registration names one payee for both.
-
-The easiest way to get that first transfer is the public faucet on the explorer:
-<https://misakascan.com/#/faucet> pays **12 tMSK** per address (once, ever) as a regular
-transaction — exactly the non-coinbase output the bond path needs, and enough for the floor bond
-§3 sizes (11.2 MSK with its change and fee). (The service's configured grant as of 2026-09-11; this
-page said 0.5 until then, which covered no bond the node now sizes.)
-
-**If you will also mine with a model through the free-prompt lane, split the grant BEFORE you
-register.** After registration the carrier's change is the node's own fee float (`--palw-fee-outpoint`)
-and nothing else may spend it, so the free-prompt submitter needs a second output at the same
-address. Send part of the grant to yourself first — `misaka wallet send --to <your address> --amount
-0.5 --key-file <seed> --yes` — and the registration takes the larger output while the 0.5 MSK stays
-free (see [testnet11-free-prompt-mining.md](testnet11-free-prompt-mining.md)).
-
-**Fund it with a normal transfer, not with mining rewards.** Two separate rules bite a coinbase
-output: `coinbase_maturity`, and the ADR-0018 DNS settlement floor
-(`coinbase_settlement_long_maturity_daa` = 600 on testnet-11). On top of that the node's funding
-scan skips coinbase entries outright, so a coinbase UTXO will not be found at all and the only
-symptom is "no confirmed UTXO to spend".
-
----
-
-## 3. Register a bond
-
-```bash
-kaspad --testnet --netsuffix=11 --appdir=~/.t11 \
-  --listen=0.0.0.0:26311 --rpclisten=127.0.0.1:26312 --rpclisten-borsh=default \
-  --addpeer=169.58.39.220:26311 \
-  --palw-register-bond \
-  --palw-producer-key=~/.misaka/miner.seed
-```
-
-(`--palw-producer-pay-address` is optional since the flag-day build: it defaults to the key's own
-address — the one `misaka key address` printed. Pass it only to be paid elsewhere.)
-
-The node waits until it is synced, builds one `BondRegistered`, submits it in a transaction that
-**locks the collateral in its own output**, and then waits for the bond to actually appear on the
-chain before telling you it did:
-
-```
-[palw-panel] registered bond <txid>:0 with <n> sompi of collateral, in tx <txid>.
-Restart with --palw-producer-bond=<txid>:0 (and --palw-produce) to mine with it
-```
-
-If you already have an outpoint and need to distinguish a registered bond from an ordinary UTXO
-or a node-local reserved funding output, ask the registry directly. This read needs no key:
-
-```bash
-misaka --network testnet-11 --rpc 127.0.0.1:26313 bond status \
-  --bond <txid>:<index>
-```
-
-The CLI uses this network's BASE-0/Floor class for the RPC's internal lookup. `--class-id` remains
-available when diagnosing another class, but it is not needed to decide whether an outpoint is in
-the Bond registry.
-
-`registry: REGISTERED` means use that outpoint with `--palw-producer-bond` and do not register it
-again. `registry: NOT REGISTERED` means the UTXO amount or lock status was not a bond registration;
-run the one-shot `--palw-register-bond` flow below and use the new outpoint it prints.
-
-**That line is the only place the bond's outpoint appears.** It is this transaction's own id, which
-did not exist until the transaction was built — nobody can tell it to you in advance, and the node
-does not store it anywhere else. Keep it.
-
-**One key, one bond, for the life of the chain.** `BondRegistered` refuses any public key that
-already appears in the bond registry (`DuplicateBondKey`), and the registry is append-only:
-retiring a bond rewrites its status, it does not remove the row. So a key that has ever registered
-can never register again — retiring the bond does **not** free it. To bond a second time, generate a
-new seed (`misaka key gen --out <a new file>`), fund that address, and pass the new file as
-`--palw-producer-key`. Running `--palw-register-bond` on a spent key is harmless — the node asks the
-chain first and refuses before it spends anything — and it now says which of the two situations you
-are in:
-
-```
-[palw-panel] this key already holds bond <txid>:<i> on this chain — not registering another.
-Drop --palw-register-bond and run with --palw-producer-bond=<txid>:<i>
-
-[palw-panel] this key's bond <txid>:<i> is RETIRING (since DAA <n>), so it can take no new work —
-and it cannot be replaced from this key. ... generate a NEW seed ...
-```
-
-Choose the collateral before you register, not after: it is fixed at registration and there is no
-top-up object. Sizing it is the next section.
-
-If instead you see
-
-```
-[palw-panel] carrier <txid> was accepted but no bond appeared within 10 minutes.
-```
-
-then the transaction landed and no bond was created. **Your collateral is not lost** — the output
-is yours and spendable; only the fee is gone. Mempool admission for a lifecycle carrier sees just
-the payload (decode, wire version, may-ride table), so it cannot check the carrier binding, which
-means a network whose nodes predate the index-and-zero-id naming accepts the transaction and then
-drops the registration on extraction. Check that the network runs a build that accepts this form.
-
-If it cannot proceed it says why, once per reason rather than every five seconds. The usual reason
-is that no confirmed non-coinbase UTXO is visible yet; fund the address and it picks it up without a
-restart.
-
-**There is no `--palw-fee-outpoint` in that command, and there should not be.** The node finds its
-own money by reading the UTXO set for outputs under the address it is about to name as payee — a
-newcomer has no outpoint to be told, since the only one it will ever have is the change of the
-carrier it has not built yet. The flag is for a seat that already has an outpoint to spend — a
-genesis fee float, or its own carrier's change — and §4 is where it matters.
-
-That is worth stating because it used to be false in a way nothing revealed: the funding resolver
-returned early when the flag was absent, skipping the scan entirely, and reported
-
-```
-[palw-panel] cannot register a bond yet: no confirmed UTXO to spend — send at least 400000 sompi
-plus a fee to this node's pay address
-```
-
-against an address that `misaka wallet utxo list` showed holding 10 MSK, mature, on the same node's
-RPC. If you are running a build from before 2026-08-26 and see that line while the address is
-funded, pass `--palw-fee-outpoint=<funding txid>:<index>` to work around it.
-
-### Collateral
-
-`--palw-bond-collateral` is optional and **the default is not the chain's minimum**. A bond may hold
-a claim only while
-
-```
-reserved_exposure + claim_exposure  ≤  collateral × max_exposure_ratio_permille / 1000
-```
-
-and one claim costs `pwu_per_inference × slash_value_per_pwu`, a number that belongs to the **class**
-you produce for. The chain's floor (400,000 sompi, `min_collateral_sompi`) therefore buys a bond
-that may not fit a **single** claim — and that producer holds forever, having locked real money to
-get there.
-
-**A bond must hold every claim that can be in flight at once, not one claim.** This is the part that
-is easy to get wrong, because the exposure a claim reserves is released at `Final` — not when a
-panel binds it. The road to `Final` runs through every window in the lattice (`2 × (bind + receipt)
-+ challenge + court + abandon_hold` = **7,200 DAA** on testnet-11), so a bond sized for one claim
-admits the first block and then refuses the second for hours:
-
-```
-[palw-producer] holding: the bond's exposure ceiling leaves no room for another claim
-[... exposure=0/4166658 per_claim=13426800]
-```
-
-`exposure=0/4166658` is an EMPTY bond against a ceiling of 4.17 M sompi, and one Qwen3.6 claim wants
-13.43 M. Nothing is stuck; the bond was simply never large enough for one job of that size, and no
-amount of waiting changes it. The node now sizes for the whole claim lifetime — the same derivation
-(`palw_v2_collateral_for_claim_lifetime_v1`) every genesis bond on this chain is sized by.
-
-**It sizes for the class you told it to produce for.** `--palw-producer-class` is read by the
-registration path as well as by the producer, so registering a bond and mining a model tier are one
-decision:
-
-| class | `pwu_per_inference` | collateral the node picks | fund the pay address with at least |
-|---|---|---|---|
-| the integer floor (no `--palw-producer-class`) | 7,708 | **1,110,106,160 sompi** (11.101 MSK) | **11.2 MSK** |
-| `PALW-QWEN25-A16` `71bbb755…` | 1,589,424 | **228,908,844,480 sompi** (2,289.089 MSK) | **2,290 MSK** |
-| `PALW-QWEN36` `5bd9ae3d…` | 2,685,360 | **386,745,547,200 sompi** (3,867.455 MSK) | **3,868 MSK** |
-
-(Derived, not transcribed: `consensus/core/tests/palw_newcomer_bond_sizing.rs` recomputes every one
-of these from the shipped class profiles and fails if a profile moves them. Sizing is
-`144,020 × pwu_per_inference` on this chain's windows.)
-
-**The funding UTXO has to cover the change output too, and that is a second refusal.** A bond
-carrier is one input and two outputs — the collateral, and your change — and KIP-0009 storage mass
-is `C · p² / value`, so it grows as an output SHRINKS. Naming a large collateral therefore does not
-end the relay problem, it moves it onto the change: fund with exactly the collateral plus a fee and
-the change output is the thing that is too small to relay. The smallest change a carrier can leave
-on this chain is **8,333,316 sompi** (0.0833 MSK), and the carrier fee is a few hundred thousand
-sompi on top, which is where the **+0.1 MSK** in the table above comes from.
-
-That second refusal is much harder to read than the first, because `--palw-bond-collateral` is
-**not** raised when you named it — it is your money and your exposure ceiling, so the node refuses
-instead:
-
-```
-a collateral of <n> sompi leaves this <m> sompi funding UTXO a change output too small to relay
-(<mass> storage mass against a limit of 480000). Fund this node's pay address with more, or lower
-the collateral.
-```
-
-Read that as *fund more*, not as *lower the collateral*: past the even split the mass curve turns
-around, and lowering the collateral there makes the change smaller still.
-
-#### The literal commands
-
-Floor (the zero-download path — everything in §3 unchanged):
-
-```bash
-kaspad --testnet --netsuffix=11 --appdir=~/.t11 \
-  --listen=0.0.0.0:26311 --rpclisten=127.0.0.1:26312 \
-  --addpeer=169.58.39.220:26311 \
-  --palw-register-bond \
-  --palw-producer-key=~/.misaka/miner.seed \
-  --palw-producer-pay-address=<your misakatest: address>
-# needs ~11.2 MSK at that address, in one non-coinbase output
-```
-
-Qwen3.6 — the class flag belongs on the REGISTRATION, not only on the producer:
-
-```bash
-kaspad --testnet --netsuffix=11 --appdir=~/.t11 \
-  --listen=0.0.0.0:26311 --rpclisten=127.0.0.1:26312 \
-  --addpeer=169.58.39.220:26311 \
-  --palw-register-bond \
-  --palw-producer-class=<the full 128 hex for 5bd9ae3d…, from --palw-dump-classes> \
-  --palw-bond-collateral=386745547200 \
-  --palw-producer-key=~/.misaka/miner.seed \
-  --palw-producer-pay-address=<your misakatest: address>
-# needs 3,868 MSK at that address, in ONE non-coinbase output
-```
-
-(Do not put a `#` comment on a continued line — everything after it, including the backslash, is
-comment, and the rest of the command becomes a second one.)
-
-Qwen2.5-A16 is the same command with `--palw-producer-class=71bbb755…`,
-`--palw-bond-collateral=228908844480`, and 2,290 MSK of funding.
-
-`--palw-bond-collateral` is redundant in those commands — with `--palw-producer-class` present the
-node computes the same number itself — and it is written out anyway because it makes the amount you
-have to fund visible in the command that needs it. **The faucet's 12 tMSK covers the floor and neither
-model tier** (this sentence said 0.5 tMSK and "no longer covers the floor" until the grant was
-raised; see §2).
-
-Passing a value below what the class needs is allowed and warned about, by name:
-
-```
-[palw-panel] --palw-bond-collateral <n> is below the <m> sompi that a claim of class <id> needs on
-this chain for its whole life (exposure is released at Final, not at bind, so the ceiling has to
-hold every claim in flight at once); this bond will register and its producer may then hold forever
-```
-
-A smaller bond is a legitimate choice — it produces until its ceiling fills and then holds until
-claims finalize — but it is a choice, and until this warning named the configured class an operator
-mining Qwen3.6 saw no warning at any value above 400,000 sompi.
-
-**The relay limit also sets a floor UNDER the collateral, for anyone who names a small one.** The
-same `C · p² / value` curve that bites the change output bites the collateral output from the other
-side: a 400,000 sompi output costs 10,000,000 mass against the 480,000 limit, and a carrier holding
-it is refused as non-standard no matter how it is funded —
-
-```
-the carrier was refused: transaction ... is not standard: transaction storage mass of 10000003
-is larger than max allowed size of 480000
-```
-
-On testnet-11 the smallest carryable collateral is about **8,333,316 sompi**, twenty times the
-chain's own floor. This no longer bites the default, which is now three orders of magnitude past it
-(the table above), but it still bites a `--palw-bond-collateral` you chose yourself. The node raises
-a DEFAULT to fit and says so; a value you named is **not** raised — it is your money and your
-exposure ceiling, so it is refused with the number that would work instead. If the funding UTXO is
-small enough that no split of it clears the limit, the message says that too: send more, rather than
-reaching for the collateral knob.
-
----
-
-## 4. Produce
-
-```bash
-kaspad --testnet --netsuffix=11 --appdir=~/.t11 \
-  --listen=0.0.0.0:26311 --rpclisten=127.0.0.1:26312 --rpclisten-borsh=default \
-  --addpeer=169.58.39.220:26311 \
-  --palw-produce --palw-panel \
-  --palw-producer-key=~/.misaka/miner.seed \
-  --palw-producer-bond=<txid>:0 \
-  --palw-producer-pay-address=<your misakatest: address>
-```
-
-All **five** of key, bond, pay address, a class and a fee outpoint are required or the producer does
-not start at all.
-
-**`--palw-fee-outpoint` is mandatory here, and this paragraph used to say it was a choice.** The
-command above PANICS at startup without it:
-
-```
-panicked at kaspad/src/daemon.rs: --palw-produce on a ConsensusV2 network needs a way to carry
-lifecycle objects: pass --palw-fee-outpoint <txid>:<index>
-```
-
-The receipts-only mode described below is the **panel seat's** rule, not the producer's: the gate
-that panics keys on `--palw-produce`, and a seat that does not produce never reaches it. The only
-node that starts without the flag is one whose previous run persisted
-`<appdir>/misaka-testnet-11/palw-panel/palw-fee-outpoint` — which a first run does not have. So for
-a panel seat, and only for a panel seat, this is still true:
-
-```
-[palw-panel] starting (bond=…, submitter=off — receipts only)
-```
-
-It will answer and file, but it will not carry anything to the chain. Pass
-`--palw-fee-outpoint=<txid>:1` — the change output of your own bond carrier — to turn the submitter
-on. (Registration is the exception: that job has no outpoint to be given and finds its own funding.)
-
-When it holds instead of producing, the reason carries its numbers:
-
-```
-[palw-producer] holding: <reason> [class=… epoch=… produced=… budget=… exposure=…/… per_claim=…]
-```
-
-Those are worth reading rather than skimming — `this class's epoch budget is already spent` is what
-an exhausted cap says **and** what a class that was never granted one says, and the numbers are how
-you tell them apart (`budget=0` is the second).
-
----
-
-## 5. Which class you are mining
-
-Omitting `--palw-producer-class` mines `bundle.base_class_id`, which on testnet-11 is the **BASE-0
-floor** — `f1c5635c…f623c8` on this chain (5f re-seated the classes at genesis; `c185df95…` was 5e's), a deterministic-integer class whose artifact is derived from a seed on
-every node. **No GGUF, no download, no worker binary.** The floor is also exempt from the per-class epoch
-budget, so it is the one class that can always produce.
-
-The supported setup path discovers the bond and fee output and writes the exact node configuration:
+For an existing Floor Bond:
 
 ```bash
 misaka --network testnet-11 mining setup \
   --model floor \
   --key-file ~/.misaka/miner.seed \
-  --bond <registered-bond-txid>:<index>
+  --bond <registered-bond-txid>:<index> \
+  --peer 169.58.39.220:26311
+```
 
+## 4. Inspect an existing Bond
+
+```bash
+misaka --network testnet-11 bond status --bond <txid>:<index>
+```
+
+This exact-outpoint mode is read-only and needs no key. `--outpoint` and `--carrier` are aliases. When `--class-id` is omitted the network's BASE-0/Floor class is used for the internal lookup and sizing output.
+
+- `registry: REGISTERED`: formally registered PALW Bond.
+- `registry: NOT REGISTERED`: an ordinary/reserved/locked UTXO, not a registry record.
+- `UNDERSIZED`: registered, but insufficient for sustained production in the inspected class.
+
+Registration is append-only: one key can register one Bond for the life of the chain. Retirement does not make the key reusable. Collateral cannot be topped up. For more sustained capacity, create a new key, fund it, and register a new correctly sized Bond.
+
+## 5. Register only when no Bond exists
+
+The wizard performs registration after showing the spend and asking for confirmation. The manual one-shot form is:
+
+```bash
+kaspad --testnet --netsuffix=11 --utxoindex \
+  --rpclisten-borsh=default \
+  --addpeer=169.58.39.220:26311 \
+  --palw-register-bond \
+  --palw-producer-key=~/.misaka/miner.seed
+```
+
+Do not add `--palw-register-bond` when `bond status` says `REGISTERED`.
+
+Funding must be a mature, non-coinbase output. Registration spends one input, locks the collateral and leaves change/fee capacity. Keep the printed Bond outpoint.
+
+### Collateral
+
+The node derives whole-claim-lifetime collateral from the selected class's current PWU and windows. Do not copy an amount from an old relaunch.
+
+For the current Floor profile the derived amount is:
+
+```text
+1,110,106,160 sompi = 11.10106160 MSK
+```
+
+The funding output needs additional room for fee/change. Model classes are materially larger; use `misaka mining setup` or `misaka bond status --class-id ...` for the current amount.
+
+## 6. Start Floor production
+
+```bash
 misaka --network testnet-11 mining start --print-command
 misaka --network testnet-11 mining start
 ```
 
-The manual equivalent is below. The deliberate omissions are as important as the flags: Floor has
-no `--palw-producer-class` and no `--palw-class-artifact`. The fee outpoint is a separate mature,
-ordinary UTXO at the key's address; never use the bond collateral outpoint as the fee outpoint.
+Equivalent manual shape:
 
 ```bash
 kaspad --testnet --netsuffix=11 --appdir=~/.t11 \
@@ -456,485 +116,31 @@ kaspad --testnet --netsuffix=11 --appdir=~/.t11 \
   --palw-fee-outpoint=<mature-non-bond-txid>:<index>
 ```
 
-`REGISTERED` does not mean `sized for sustained mining`. Floor's whole-claim-lifetime sizing on
-Relaunch 5f is **1,110,106,160 sompi (11.10106160 MSK)**. A relay-minimum-sized bond around
-8.33 million sompi may begin while it has exposure room, but will then HOLD at its exposure ceiling
-until older claims become final. Its collateral cannot be topped up, and the same producer key can
-never register a second bond. Sustained mining therefore needs a new key and a new correctly sized
-bond; the setup command now prints this distinction and the exact shortfall before it writes the
-configuration.
+For Floor, omit `--palw-producer-class` and `--palw-class-artifact`. The fee outpoint must be different from the Bond collateral outpoint.
 
-To mine a registered model class instead, pass its id with `--palw-producer-class` and give the node
-that class's converted artifact (`--palw-class-artifact`). A class registered while an epoch is
-already running has share from the moment it activates. Since ADR-0053 there is one execution
-family, so any class you can be pointed at is one this build can execute and the court can
-adjudicate — there is no second verification scheme to be on the wrong side of.
-
----
-
-## 6. What a bond costs you
-
-The collateral is locked in the output the registration names and is reclaimable at your pay
-address once the bond is retired (an owner ML-DSA-87 signature over the bond key releases it). It is
-also what a court can slash if this node commits a provably wrong execution — that is the whole
-point of it, and it is why the exposure ceiling exists.
-
----
-
-## 6b. Do not stop your node with claims in flight
-
-Every block you produce opens a **claim** that lives on chain for hours (bind → receipts →
-challenge → court; the whole lattice is several thousand DAA). Until it resolves, **your node is
-the party responsible for serving that claim's execution material** — the panel seats verify what
-you produced from the bytes you broadcast, and a claim whose material nobody can obtain is
-**voided**, and its reward with it. That is the data-availability half of the protocol, not a
-bug: work you cannot show is work nobody can check.
-
-(Corrected 2026-09-11: this said "voided and slashed". On testnet-11 a seat's `Unavailable`
-abstains rather than accuses (ADR-0065 D4 is armed), so a claim nobody could verify ends
-`voided (receipt_timeout)` and the bond is not charged. What does take the stake is a court
-conviction, or a data-availability accusation (`misaka palw da-accuse`) that your node leaves
-unanswered — both of which need your node, and your retained material, to answer.)
-
-Practical rules:
-
-* mine only while you can leave the node up for the day — if you must stop, expect the claims
-  from your last few hours to default and cost `pwu × slash_value_per_pwu` each off your bond;
-* the fleet also remembers: since protocol 104 every panel seat persists any material it has
-  heard and **re-serves it on request** (`PalwMaterialRequest`), so a brief restart is survivable
-  as long as your material reached at least one live seat while you were up. A node that was
-  never well-connected has no such safety net — check your peer count before relying on it;
-* your retention directory (`palw-retention/` under the app dir) is the durable copy the node
-  itself re-serves after a restart. Do not delete it while claims are unresolved. The producer
-  prunes it itself after 48 hours — except a free-prompt claim's capture, which it keeps while
-  the chain still holds that claim live (the windows are DAA counts, and at testnet-11's measured
-  cadence 48 hours is well inside them).
-
-On 2026-08-28 five outside floor producers mined for a few hours, stopped their nodes, and every
-in-flight claim of theirs defaulted with the stake slashed — this section and the pull transport
-exist so the next operator does not repeat that.
-
----
-
-## 6c. Slow classes count too (ADR-0058), and how to mine the LLM classes
-
-The floor produces a block roughly every two minutes; an LLM-class inference takes minutes on its
-own. Before ADR-0058 that meant an LLM block almost never won tip selection, and only chain blocks
-created claims — so the work went uncounted and unpaid. Since the 2026-08-27 re-mint **the whole
-mergeset carries claims**: a red block (which, at `ghostdag_k = 1`, is every block slower than the
-floor's cadence) is admitted against the accepting chain state, creates a claim, is
-panel-verified, **is paid its worker share to its own miner script**, and moves its class's
-per-class difficulty and ADR-0054 share growth. You do not need to win the tip race; you need the
-work to be real, because the panel re-derives it and a false claim is slashed against your bond.
-
-To produce in an LLM class instead of the floor, everything in §1–§4 stays the same (same key, same
-node) plus the class artifact and two flags:
-
-> **Not the same bond.** A bond's exposure ceiling is `collateral × 500 / 1000` and one claim
-> reserves `pwu_per_inference × 5`, so a floor-sized bond (1,110,106,160 sompi, ceiling 555,053,080)
-> holds about **41** concurrent Qwen3.6 claims where it has to hold **7,201** — and claims release
-> their exposure at `Final`, up to 7,200 DAA after they are created. A floor bond therefore produces
-> in a model tier for a while and then holds forever. Register the bond with `--palw-producer-class`
-> already set and it is sized correctly the first time; §3's *Collateral* section has the number for
-> each class and the funding that carries it. If the bond already exists at the floor's size, it
-> cannot be topped up — collateral is fixed at registration — so it is a new key and a new bond.
-
-| class | artifact | obtain |
-|---|---|---|
-| `QWEN36` (hybrid 35B, 200‰ share) | `qwen36.palwq36`, 34 GiB, SHA-256 `7a944595a4256ab0…` | [download](https://huggingface.co/Misakachain/Qwen3.6-35B-A3B-PALW-runtime/resolve/main/qwen36.palwq36) or convert from the [source GGUF](https://huggingface.co/Misakachain/Qwen3.6-35B-A3B-PALW-runtime/resolve/main/Qwen3.6-abliterated-35b-Claude-4.7-Q4_K_M.gguf) |
-| `QWEN25-A16` (dense 1.5B, 200‰ share) | `.palwart`, 1.7 GiB | convert locally from Qwen2.5-1.5B-Instruct |
-
-Model repository: **<https://huggingface.co/Misakachain/Qwen3.6-35B-A3B-PALW-runtime>**. Verify
-before use — the chain pins the artifact **root**, not a filename:
+## 7. Observe
 
 ```bash
-./target/release/qwen36-run --artifact qwen36.palwq36 --root-only
-# must print f4aad4fd543928eb… — anything else is not the registered class
+misaka --network testnet-11 mining status --watch 5
+misaka --network testnet-11 doctor
+misaka --network testnet-11 work list
+misaka --network testnet-11 rewards
 ```
 
-Then produce with:
+The read-only dashboard:
 
 ```bash
-kaspad --testnet --netsuffix=11 \
-  --palw-produce --palw-panel \
-  --palw-class-artifact=/path/to/qwen36.palwq36 \
-  --palw-producer-class=5bd9ae3d…   # the graph-v3 Qwen3.6 id — take the full value from --palw-dump-classes \
-  ... (bond, key, pay-address and fee-outpoint flags exactly as in §4)
+misaka --network testnet-11 dashboard --listen 127.0.0.1:8791
 ```
 
-> **The class ids are the LIVE chain's as of Relaunch 5c (2026-09-02).** `5bd9ae3d…` is the
-> corrected `graph-v3` Qwen3.6 registration and `71bbb755…` the dense Qwen2.5-A16 tier; both
-> produced accepted blocks on this chain on 2026-09-02. The ids earlier revisions of this page
-> named (`ec7bbcbf…`, `f942e268…`) described graphs this build's backend refuses to serve and do
-> not exist on this chain. A producer started with an old id points at a class the chain does
-> not have.
->
-> **Do not copy an id out of any document — including this one.** Ask the binary you are about to
-> run, which is the only source that cannot go stale:
->
-> ```bash
-> kaspad --testnet --netsuffix=11 --appdir=~/.t11 --palw-dump-classes
-> ```
->
-> **It needs an appdir that has already synced, and on a fresh one it prints nothing at all —
-> silently, indefinitely.** The dump waits for a non-zero virtual DAA rather than answering from
-> genesis (which would be a confident wrong answer about the tip), and it logs that wait at `trace`
-> level. Measured: 45 seconds, zero output, exit only on Ctrl-C. Run it against the appdir your node
-> already uses, after it has caught up.
-
-Conversion recipes, per-class hardware requirements, and how a panel seat serves an LLM class are
-in [palw-public-testnet-classes-runbook.md](palw-public-testnet-classes-runbook.md). The floor
-remains the zero-download path and the liveness guarantee; the LLM classes are where the share
-economy (ADR-0054/0056) grows.
-
-**A panel seat needs the artifact of every class it may be seated on.** This paragraph used to say
-the opposite, and the measurement it quoted ("a validating seat handed a 33 GiB artifact kept 0.00
-GiB of it resident") was real — of a seat that only re-hashed a capture. That is not what a seat
-does with a free-prompt claim: it **re-executes the claimed job with the class's own kernels**
-(`execute_free_prompt`, `kaspad/src/palw_panel.rs`) and compares roots, and ADR-0077 Decision 8
-narrows that to `k` checkpoint intervals rather than removing the replay. A replay needs the
-weights. A seat with no backend for a class abstains on it — the panel counts that as
-`no backend for the class` — so pass one `--palw-class-artifact` per class you are willing to
-verify:
+## 8. Stop safely
 
 ```bash
-kaspad --testnet --netsuffix=11 ... --palw-panel \
-  --palw-class-artifact=/srv/misaka/qwen36.palwq36 \
-  --palw-class-artifact=/srv/misaka/qwen25-1.5b-a16.palwart
+misaka --network testnet-11 mining stop --drain
 ```
 
-The floor needs none: its weights derive from a seed on every node.
+Drain stops new work and keeps the process available for open claim/panel/court duties. `--force` is an emergency option and can abandon responsibilities.
 
----
+## 9. Epoch budgets
 
-## 7. Mining with your own model — a prompt someone types, mined (ADR-0077)
-
-> **Running the gateway and seeing `v3 executed`, and wondering whether that is mining?** It is
-> not yet: the gateway never submits, and the pay comes from receipt blocks your own producer
-> mines days later. [testnet11-free-prompt-mining.md](testnet11-free-prompt-mining.md) is the
-> end-to-end page — the node flags, the bond size per answer length, the watcher that submits
-> every job (`misaka-palw-fp-rail --watch`), `misaka palw claim` to follow a claim, the log
-> sequence of a healthy run, and a worked example from the live chain.
-
-Everything above mines the **attempt lane**: the node picks the job, runs it, and the block is the
-product. This section is the other lane. A person types a prompt, your model answers it, and *that
-inference* — the one the person actually received — is the claim. One inference, one commitment:
-there is no second, mining-only run, and nothing in the pipeline can create one.
-
-**A block does not follow a prompt.** What follows a prompt is a claim, and a claim walks four
-stages before any of its work can be spent. Any interface on this lane says which stage a job is
-in, by these names:
-
-| stage | what happened | chain phase |
-|---|---|---|
-| `submitted` | the `0x4a` commitment transaction was accepted; the claim exists | `Provisional` |
-| `bound` | a panel of five seats was drawn for it | `PanelBound` |
-| `certified` | the seats replayed it and filed `Valid`; a receipt is licensed | `ReceiptLicensed` |
-| `spent` | the claim is final, its quanta were drawn, and each winning quantum was mined as a receipt block by the executor's OWN producer (same bond) — each one paid a block reward to that producer's pay address | `Final`, then `quanta_spent` |
-
-(Corrected 2026-09-11: the last row said a quantum "paid for a block". A free-prompt claim carries
-no escrow and writes no payout row; a winning quantum licenses a block, and the block's own
-coinbase is the pay. It can only be spent by the claim's bond, only inside its use window, and
-only by a running `kaspad --palw-produce` holding that bond's key.)
-
-On testnet-11's windows that is **about 80 hours to `Final`, and about 93 hours from commitment to
-spendability** — bind, receipt, challenge and then maturity. Fraud-proof safety, not a progress bar
-someone forgot to speed up. Show the stage; do not promise a block.
-
-(Those hours assume the frozen 120 s cadence, 30 DAA an hour. The live chain has run far slower —
-about 13 DAA an hour on 2026-09-10/11 — so the same DAA counts are days: the worked example in
-[testnet11-free-prompt-mining.md](testnet11-free-prompt-mining.md) went from commitment on
-2026-09-05 to its receipt blocks on 2026-09-10.)
-
-The four windows are DAA-score counts in the shipped bundle — bind 600, receipt 600, challenge
-1,200, receipt maturity 400 — and the cadence is the frozen 120 s
-(`PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS`). So `Final` is bind + receipt + challenge = 2,400 DAA
-= 80 h, and the receipt is spendable at `final_daa + receipt_maturity` = 2,800 DAA = 93.3 h.
-**Corrected 2026-09-03:** this paragraph said "roughly 54 hours", which is
-bind + receipt + maturity with the 1,200-DAA challenge window left out — the one window the
-lifecycle cannot skip, since `palw_producer_v2` states a claim cannot finalize before it has
-passed. Read the shipped numbers rather than this sentence:
-
-```bash
-cargo test -p kaspa-consensus-core --lib dump_rc_windows -- --ignored --nocapture
-# RC windows: bind=600 receipt=600 challenge=1200 court=3000 epoch=1000
-#   a claim reaches Final at bind+receipt+challenge = 2400 DAA after acceptance
-```
-
-**How many of these the lane can finish in a day is a number, and it is published** (ADR-0082
-Decision 12). It is `min(PALW_V2_MAX_PAYOUTS_PER_BLOCK × blocks_per_day, the panel's measured
-replay capacity)` — `palw_fp_lane_ceiling_v1` in `palw_economic_locus_v1.rs` computes it and says
-which of the two terms is binding. At testnet-11's frozen 120 s cadence the first term is **720
-blocks a day × 8 payout rows = 5,760 finalized claims a day**, and that is the ceiling until
-somebody measures the fleet's replay rate and finds it lower. Neither half is a knob: the payout
-constant is a consensus value whose own doc states the premise it was sized against ("at most one
-new claim per block"), and raising it is a ruleset move that owes its own argument. A claim past
-the ceiling is not refused — it waits in the payout queue, one more block per eight claims ahead
-of it.
-
-(Corrected 2026-09-11: a free-prompt claim writes no payout row — it is paid through the receipt
-blocks its executor mines, one per winning quantum — so the payout-row term above does not bound
-this lane; `palw_fp_lane_ceiling_v1` carries the same premise. What bounds it in practice is the
-panel's replay capacity and each bond's exposure ceiling.)
-
-**What a claim earns, and what it does not.** Past `Params::palw_fp_decode_rules` (ADR-0082
-Decision 10, dormant on every network today) a free-prompt claim's quanta are earned by the leaves
-of its **decode calls** — the answer — and the prefill of the prompt is priced at **zero**. The
-reason is arithmetic and not policy: the model is deterministic and causal, so every leaf of a
-prompt is a pure function of that prompt, and the same bond re-sending a 32,000-token prefix with
-one new token recomputes nothing. Paying for prefill would be paying for replay. Who pays the
-executor for a long prompt — the requester, in what unit, through what market — is a product
-decision outside consensus and this rule does not make it. While the fence is dormant the lane
-prices the whole capture, as it does today.
-
-**The fence cannot be armed by this build, and a node refuses to start if you set it.** Neither
-half of it exists on the path that would apply it: the state transition has no decode-leaf
-enumeration (it answers `FreePromptDecodeLeavesUnavailable`, so an armed chain would refuse *every*
-free-prompt claim rather than crediting the answer), and no engine implements
-`decode_token_select_v2`, so every temperature job would be refused `SamplingNotArmed` after a full
-inference. `Params::validate_palw_v2` therefore refuses a ruleset that arms
-`palw_fp_decode_rules` at any height — the fence is a record of a decision, not a switch, until a
-build carries both. The same is true of `palw_prompt_ids_merkle` (ADR-0081 Decision 3 / ADR-0082
-Decision 5): every writer and every checker in the tree still commits the flat prompt-ids digest,
-so arming it would move the network's identity and nothing else.
-
-**And the answer is chosen, not just taken** (ADR-0082 Decision 11, the same fence). Under it the
-committed token at each position is a *seeded* argmax — `argmax_j (logit_j × 2²⁴ + T_q × G_j)`
-with `G` a Gumbel variate from a pinned table — so `/v1/chat/completions` may carry `temperature`
-and `seed` and the answer is a real sample rather than the one repetition greedy decoding produces.
-Temperature `0` is the shipped rule byte for byte. **The gateway refuses a temperature or a seed
-while its node reports the fence dormant**, by name, before the model is loaded: a job carrying
-them would be refused by the transition as `SamplingNotArmed` after you had already paid for the
-inference. Since the fence cannot be armed on this build (above), that refusal is the only
-behaviour there is today.
-
-### 7.1 The three processes
-
-```
-  a browser ──POST /v1/chat/completions──▶ misaka-palw-gateway ──▶ your kaspad (--rpc)
-                    SSE tokens ◀──────────         │  spawns ONCE, --mode v3-serve
-                                                   ▼
-                                        palw-a16-fp-worker  (or palw-qwen36-fp-worker)
-                                                   │  the answer, the capture, the four roots
-                                                   ▼
-                                        <outbox>/fp-job-<id>.*
-                                                   │
-                        misaka-palw-fp-rail --watch <outbox> --rpc  ──▶ the chain
-                        (every committed job; `--artifact <stem> --submit` does one)
-```
-
-* **the gateway** parses the stranger's HTTP, builds the prompt segment-wise, streams the answer,
-  and writes the commitment — and **holds no key** (ADR-0079 Decision 4).
-* **the worker** is resident: the artifact is mapped once, not once per request. It is the same
-  family worker a producer runs, and every job it answers is captured. There is no un-captured
-  chat binary left in this tree.
-* **the rail** holds the bond key (or asks the signer sidecar for one digest), signs, submits, and
-  stages the capture into the node's retention directory — one step, not three. **Nothing reaches
-  the chain until it runs**: the gateway never submits. `--watch <outbox>` runs it for every
-  committed job, one at a time, funding each carrier from the previous one's change.
-
-### 7.2 Run it
-
-You need what §1–§4 already gave you (a registered, Active bond and its key) plus the class's
-artifact and tokenizer.
-
-```bash
-# 1. the identity the gateway commits under — every field from the node, except the key's
-./target/release/misaka-palw-fp-rail --print-identity --bond-key-seed ~/.misaka/miner.seed \
-  --rpc 127.0.0.1:27210 --class-id <128 hex — kaspad --palw-dump-classes> > ~/.misaka/fp-identity/identity.json
-
-# 2. the gateway, on loopback, with the worker under it. The artifact must be the
-#    tokenizer-BOUND one (testnet11-free-prompt-mining.md §2), and your node must load the same
-#    file with --palw-class-artifact: its panel serves your claims' openings to their seats.
-MISAKA_PALW_ARTIFACT=/srv/misaka/qwen25-1.5b-a16.bound.palwart \
-MISAKA_PALW_TOKENIZER=/srv/misaka/qwen2.5-1.5b/tokenizer.json \
-MISAKA_PALW_NETWORK_ID=testnet-11 \
-MISAKA_PALW_CONFINEMENT=linux-seccomp-landlock \
-./target/release/misaka-palw-gateway \
-  --listen 127.0.0.1:8790 \
-  --worker $PWD/target/release/palw-a16-fp-worker \
-  --outbox ~/.misaka/fp-outbox \
-  --identity ~/.misaka/fp-identity/identity.json \
-  --rpc 127.0.0.1:27210
-# (--worker must be ABSOLUTE, not ./ — see below)
-
-# 3. ask it something (the class is 512 tokens wide, prompt and answer together — §7.2a)
-curl -s localhost:8790/v1/chat/completions -H 'content-type: application/json' \
-  -d '{"messages":[{"role":"user","content":"the capital of France is"}],
-       "max_tokens":32,"stream":true}'
-
-# 4. carry every committed job to the chain: sign, fund, submit, stage the capture and its answer
-./target/release/misaka-palw-fp-rail --watch ~/.misaka/fp-outbox \
-  --bond-key-seed ~/.misaka/miner.seed --rpc 127.0.0.1:27210
-#    (one job by hand instead: --artifact ~/.misaka/fp-outbox/fp-job-<id> --capture
-#     ~/.misaka/fp-outbox/traces/<id>/material.bin --funding-outpoint <txid>:<i> --funding-amount
-#     <sompi> --submit — its JSON names `next_funding`, the change the next job can spend)
-```
-
-Keep the seed out of `identity.json`'s directory and out of the outbox: the gateway refuses to
-start if it can reach a signing secret in either.
-
-**Where the files go (ADR-0084 Decision 5).** Without `--retention-dir` the rail asks the node
-for the directory its panel serves from (`getPalwProducerFacts` → `palwRetentionDir`, which is
-`<appdir>/<network>/palw-retention` — no kaspad flag names it) and stages `<claim>.material` and
-`<claim>.answer` there; it refuses to stage into a directory that is not on this host, and warns
-when the node names none (no `--palw-panel`, or a build before ADR-0084). Pass `--retention-dir`
-only to override that, and only with a directory the node's panel reads: the first two public
-free-prompt claims were staged into the gateway's own `traces` directory, where the node never
-looked, and no seat could obtain anything for them. `--capture` is what lets the node open the
-claim's checkpoint intervals for the seats; the answer envelope (the job, the prompt ids and the
-answer's ids — a few kilobytes) is written beside it from the result frame and is what a seat is
-served when the capture itself is over the 16 MiB transport cap, which every graph-v5 capture is.
-
-**`--worker` must be an absolute path.** The gateway confines the worker and pins its working
-directory to a scratch directory of its own (ADR-0079), so a relative path is resolved THERE, not
-where you typed it. `./target/release/palw-a16-fp-worker` fails with
-
-```
-fatal: cannot spawn ./target/release/palw-a16-fp-worker: No such file or directory
-```
-
-with the file sitting in the directory you ran from. `$PWD/...` is the fix.
-
-`GET /health` answers the question every operator asks next — *why did my answer not become a
-claim* — by name, from the chain rather than from config:
-
-```
-"chain": { "registered": true, "fp_certified": true, "bond_known": true, "exposure_room": …, "bond_active": … }
-```
-
-`registered` false means this network does not know your class. `fp_certified` false means the
-class is not seated on the free-prompt lane (ADR-0075 `ClassLaneCertified`) and a commitment would
-be refused as `FreePromptLaneUncertified`.
-
-`bond_known` false means the chain has no bond at the outpoint `identity.json` names.
-**`bond_active` is the attempt lane's readiness, not a condition of committing.** It is "the bond
-is known AND the producer may produce", so it reads false whenever the class is out of ATTEMPT
-epoch budget — every class registered mid-epoch, for the rest of that epoch — or the ceiling cannot
-fit one more canonical attempt claim; `bond_not_ready_reason` beside it names which. The
-transition that admits a free-prompt commitment reads neither, and until 2026-09-11 the gateway
-did: a devnet drill's class registered at DAA 31 answered every request and wrote no commitment for
-the rest of its 1,000-DAA epoch — reported here then as "nothing was broken", while the chain would
-have taken every one of those claims. The gateway now commits on `bond_known`, and prices each
-answer at its own exposure once it has run (a 256-token answer on the A16 class is five canonical
-claims' worth, not one). Either way **the user still gets their answer** — the answer is the
-product — and a commitment that is withheld waits in the outbox with the reason attached. A
-gateway that silently answered without committing would be lying about what you staked on it.
-
-### 7.2a How wide the answer can be, today
-
-**A class's `n_ctx` is the whole job — prompt and answer together — and it is small.** The worker
-serves the width the CLASS registers, read from the catalog row and never from the artifact's own
-rotary span, because a runtime answering wider than the court admits would be exactly the
-two-products split ADR-0077 R0 closes.
-
-**The A16 class on the free-prompt lane today, `4277d84f…` (`Qwen/Qwen2.5-1.5B/graph-v5@512`,
-re-seated at genesis by Relaunch 5f), is 512 tokens wide.** The ChatML wrapper the gateway sends —
-`<|im_start|>user\n … <|im_end|>\n<|im_start|>assistant\n` — is 8 of them before your first
-word, and the gateway's default answer is 256 tokens, so a prompt of up to ~240 tokens takes the
-default. Over the width, the worker refuses the job and names the numbers rather than trimming:
-
-```
-prompt 300 + decode ceiling 256 exceeds max_context_tokens 512
-```
-
-Every class's width is inside its class id, so a wider row is a new class registered beside this
-one rather than a setting on your node (the ladder in ADR-0077 Decision 13: 512, 2,048, 8,192).
-`--palw-dump-classes` prints each row's width and is the source that cannot go stale; the table
-this section used to carry (A16 16, floor 12, QWEN36 8) was Relaunch 5e's genesis rows.
-
-**The answer length is also the claim's size** — its quanta, its share of the draw, and the
-exposure it reserves on your bond — so it is worth choosing rather than defaulting:
-[testnet11-free-prompt-mining.md](testnet11-free-prompt-mining.md) §3 has the table.
-
-### 7.3 What a stranger's prompt costs you, and the knobs that bound it
-
-A public prompt becomes **your** claim: it reserves `claim_exposure` on your bond and forfeits it
-if your pipeline is faulty. The bound is stated in `/health` under `exposure`, and these are the
-flags that set it:
-
-| flag | what it bounds |
-|---|---|
-| `--claim-exposure-sompi <n>` | what one claim reserves. **`0` (the default) reads it from the chain** — with `--rpc` that is the honest source. |
-| `--bond-exposure-room-sompi <n>` | how much room the bond has. `0` reads it from the chain. Without either, the gateway answers and does not commit: a gateway that cannot price the spend does not spend. |
-| `--public-job-budget-permille <n>` | the fraction of that room strangers may spend per 24 h, so your own claims are never starved by theirs. |
-| `--answer-never-commit` | answer every request, commit none. |
-| `--per-source-jobs-per-window <n>` | a courtesy rate limit per source address. Secondary — sources share addresses behind proxies. |
-
-Two bounds are not flags and cannot be raised: one job runs at a time with at most 8 queued, and a
-queued commitment **expires with its anchor** (3,000 DAA) and is never submitted stale. The lane's
-own ceiling — at most 500‰ of your collateral in flight — is the chain's, printed as
-`free_prompt_exposure_ceiling_permille`.
-
-### 7.4 Before you put it on the internet
-
-The default listen address is loopback. Binding a public address is a deliberate act and the
-gateway refuses to do it quietly:
-
-* set **`MISAKA_PALW_ALLOW_PUBLIC_GATEWAY=1`** — the acknowledgement that a stranger's text now
-  reaches your model host. Without it a non-loopback `--listen` is refused at boot.
-* set **`MISAKA_PALW_CONFINEMENT=linux-seccomp-landlock`** so the worker child runs under a real
-  platform backend. `/health` prints `confinement_backend`, and it prints **`none`** honestly when
-  no backend was installed — a public entrance on a `none` host is the posture ADR-0079 Decision 10
-  refuses.
-* `--derive-seed` (ADR-0078 signing) must point at a file **outside** `--identity`'s directory and
-  outside `--outbox`. The boot check scans exactly those two directories for reachable signing
-  secrets and refuses to start if it finds one.
-* then ask the host what it actually is, from live state rather than from your config:
-
-```bash
-misaka node security-report --worker $PWD/target/release/palw-a16-fp-worker
-# exit 0 = OK, 14 = DEGRADED (no backend, nothing public), 13 = EXPOSED (a public
-# entrance on a none-backend host, or a public parser holding a key)
-```
-
-Worker stderr is **withheld by default** and counted instead: a model runtime line can quote its
-input, and "private unless disputed" would be false if the default log were a disclosure. Set
-`MISAKA_PALW_GATEWAY_LOG_WORKER_STDERR=1` only when you are debugging your own prompts.
-
-### 7.5 Asking for a thing, not only text (ADR-0078)
-
-The same request can ask for a **derivation**: the model's answer is a DSL, a registered
-transformer turns it into an artifact, and what the chain carries is one small record naming both
-— never the artifact. (Measured on this build, that record is 3,056 bytes unsigned and about
-7.7 KB signed; almost all of it is the ML-DSA-87 key and signature, and none of it grows with the
-artifact.)
-
-```bash
-curl -s localhost:8790/v1/chat/completions -H 'content-type: application/json' \
-  -d '{"messages":[{"role":"user","content":"one quiet note"}],
-       "max_tokens":5, "derive":"music/smf/v1"}'
-```
-
-> **The width, before you size a request.** `max_tokens` plus the prompt must fit the CLASS's
-> registered `n_ctx`, which is the whole budget — prompt and answer together. The A16 class on the
-> free-prompt lane today (`4277d84f…`, graph-v5@512) is **512** wide, and the ChatML wrapper is 8
-> of those before your first word. Over the width the worker refuses the whole job — `prompt N +
-> decode ceiling M exceeds max_context_tokens 512` — instead of trimming it.
->
-> **A derivation fits at this width, with one condition.** Measured on 2026-09-04 against the
-> bound A16 artifact: a CAD box derived at `max_tokens` 56 and a two-note MIDI at 97, both verified
-> by `palw-derive verify` with `binding_checked: true`. The condition is ADR-0077's exact budget:
-> the model keeps generating after its end-of-turn token until `max_tokens`, and the grammar reads
-> the whole committed rendering, so a derivation succeeds only when `max_tokens` equals the
-> answer's own length (measure it once on an exemplar; the output is deterministic).
-> [testnet11-ask-for-a-file.md](testnet11-ask-for-a-file.md) has the transformer side. (Until
-> 2026-09-11 this block said the widest class was 16 tokens and that no derivation fit — true of
-> Relaunch 5e's rows, not of this chain's.) `--palw-dump-classes` is the source that cannot go
-> stale.
-
-The response carries the DSL as the answer, the artifact (inline under
-`--artifact-inline-max`, else by a handle at `GET /v1/artifacts/<derived-id>`), and a signed
-`DerivedArtifactV1`. `misaka-palw-fp-rail --derive-artifact <stem>` signs it and
-`misaka palw submit-object` carries it. Anyone you hand the DSL to can check the whole chain of
-claims themselves, with no trust in you:
-
-```bash
-palw-derive verify --object <derived-object.borsh> --answer scene.json --artifact scene.glb \
-  --output-token-ids ids.json --job-context-hash <hex> --family qwen25-a16
-```
-
-A false derivation is therefore publicly demonstrable. Stated plainly rather than hidden: on this
-lane it costs the executor nothing on chain — no bond hangs on a derivation, because the chain
-cannot run an arbitrary transformer and this network refuses to pretend it can. What it costs is
-your name on a provenance anyone can show is wrong.
+Class budgets remain isolated under the shipped Testnet-11 preset. ADR-0123's progressive release implementation exists in the codebase, but `palw_epoch_budget_release` is `None` on every shipped preset. Documentation must not describe it as active before a deliberate network activation.
