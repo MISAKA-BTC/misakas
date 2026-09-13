@@ -172,8 +172,9 @@ enum Store {
     Mapped { map: crate::mmap::ReadOnlyMap, directory: BTreeMap<String, (usize, usize)> },
 }
 
-/// A tensor's codes, wherever they are held: borrowed from an owned store or the mapping, or a
-/// handle on bytes the residency holds. Derefs to the codes, so every kernel reads it as `&[i8]`.
+/// A tensor's codes, wherever they are held: borrowed from an owned store, streamed from the
+/// artifact, or a handle on bytes the residency holds. Derefs to the codes, so every kernel reads
+/// it as `&[i8]`.
 /// The handle keeps its bytes alive for as long as a projection holds it, which is what lets the
 /// residency evict an expert the moment its budget says so without any reader observing it.
 pub enum TensorBytes<'a> {
@@ -598,8 +599,16 @@ impl Qwen36ArtifactV1 {
     }
 
     /// A tensor's codes: from the owned store, from the residency (a pinned tensor's handle, or
-    /// a routed expert's — admitted on the way if it is not held), or, with no residency or for
-    /// the embedding table, a slice of the mapping.
+    /// a routed expert's — admitted on the way if it is not held), or from a tensor-sized read
+    /// when a mapped class has no residency budget.
+    ///
+    /// The old no-budget path returned a slice of the mapping. That made every cold tensor access
+    /// a synchronous 4 KiB page fault. On the 24 GiB fleet hosts this was the difference between
+    /// a draw taking seconds and taking 8–11 minutes, which turned the nominal 120 s cadence into
+    /// a several-hour producer stall. A mapped class still does not fit in memory, but its tensor
+    /// reads do fit: the file descriptor lets the kernel service each contiguous extent with a
+    /// large read. The returned `Arc` is scoped to the projection, so this fallback does not trade
+    /// the stall for an unbounded allocation or alter any committed bytes.
     pub fn tensor(&self, name: &str) -> Result<TensorBytes<'_>, Qwen36Error> {
         match &self.store {
             Store::Owned(t) => {
@@ -615,11 +624,18 @@ impl Qwen36ArtifactV1 {
                     }
                     // The embedding table is neither pinned nor an expert: a token reads one row
                     // of it (`embedding_row`), and a caller asking for the whole table — a test,
-                    // the inventory — reads it through the mapping.
+                    // the inventory — reads it through the mapping. Keep that special case lazy;
+                    // materialising a several-hundred-MiB vocabulary table would defeat the fallback.
                 }
                 let (offset, len) = *directory.get(name).ok_or_else(|| Qwen36Error::MissingTensor(name.to_string()))?;
                 // A directory entry that leaves the mapping is a truncated file, which is a
                 // refusal rather than a fault — the bytes are data a producer was handed.
+                if self.residency.is_none() && name != "token_embd.weight" {
+                    return map
+                        .read_i8_at(offset, len)
+                        .map(|bytes| TensorBytes::Held(std::sync::Arc::new(bytes)))
+                        .map_err(|e| Qwen36Error::Unreadable(format!("{name}: {e}")));
+                }
                 map.i8_slice(offset, len).map(TensorBytes::Borrowed).ok_or_else(|| Qwen36Error::BadTensor {
                     name: name.to_string(),
                     want: len,
@@ -2682,6 +2698,9 @@ mod tests {
         assert_eq!(short.artifact_root(), owned.artifact_root(), "the declined mapping is the same artifact");
         let row = "blk.1.ffn_expert.5_silu.a16";
         assert_eq!(short.param_rows(row).unwrap(), owned.param_rows(row).unwrap(), "every parameter row owned, the expert rows too");
+        let streamed = short.tensor("blk.1.ffn_expert.5_gate.weight").expect("the low-memory path reads a tensor");
+        assert!(matches!(streamed, TensorBytes::Held(_)), "a declined mapping must stream tensor extents, not fault pages");
+        assert_eq!(streamed, owned.tensor("blk.1.ffn_expert.5_gate.weight").unwrap());
         std::fs::remove_file(&path).ok();
     }
 

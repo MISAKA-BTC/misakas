@@ -1094,8 +1094,13 @@ impl Qwen36Backend {
     fn artifact_read_probe_v1(&self) -> Result<(), String> {
         let names: Vec<String> = self.artifact.tensor_names().into_iter().map(str::to_string).collect();
         for name in names {
+            // This probe validates the directory extent, not the weight bytes. In the low-memory
+            // mapped fallback `tensor` is intentionally a contiguous streaming read; calling it
+            // here would turn a cheap job-boundary check into a full artifact scan before every
+            // draw. `tensor_len` performs the same truncation/name validation without touching a
+            // page or allocating a tensor-sized buffer.
             self.artifact
-                .tensor(&name)
+                .tensor_len(&name)
                 .map_err(|e| format!("this host can no longer read the mapped artifact: tensor {name}: {e}"))?;
         }
         Ok(())
