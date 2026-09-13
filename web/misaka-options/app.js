@@ -810,6 +810,22 @@ const wallet = {
   async sendTx(tx) { return this.provider.request({ method: 'eth_sendTransaction', params: [tx] }); },
 };
 
+// Contract calls need more than the 21,000 transfer intrinsic gas. Some wallets
+// use 21,000 as their fallback when the dapp omits `gas`, which makes a valid
+// join/leave enter the EVM pool and then fail forever at acceptance with
+// CallGasCostMoreThanGasLimit. Estimate against the same node the wallet will
+// send through, then add a small headroom for the live market state.
+async function addEstimatedGas(tx) {
+  if (tx.gas != null) return tx;
+  if (!wallet.provider || typeof wallet.provider.request !== 'function') throw new Error('The wallet cannot estimate transaction gas.');
+  const estimate = bi(await wallet.provider.request({ method: 'eth_estimateGas', params: [tx] }));
+  if (estimate <= 0n) throw new Error('The node returned an invalid gas estimate.');
+  // 25% headroom covers a small state change between estimation and signing;
+  // the estimator still supplies the transaction-specific intrinsic cost.
+  tx.gas = toHex(estimate + (estimate / 4n) + 1000n);
+  return tx;
+}
+
 // ============================================================================================
 // 6. local records: price history (sampled), sent transactions
 // ============================================================================================
@@ -901,11 +917,12 @@ const TX_STATUS = {
   settled: ['Settled', 'tag ok'], refused: ['Refused', 'tag bad'], reverted: ['Reverted', 'tag bad'], replaced: ['Replaced', 'tag'], cancelled: ['Cancelled', 'tag'],
   done: ['Done', 'tag ok'], late: ['Too late', 'tag'], lost: ['Not found', 'tag bad'], expired: ['Expired', 'tag'],
 };
+const EVM_SKIP_REASON = { 2: 'nonce / funds / gas', 3: 'duplicate nonce', 5: 'gas-pool capacity' };
 function txStatusCell(t) {
   const [txt, cls] = TX_STATUS[t.status] || [t.status, 'tag'];
   let label = txt, sub = '';
   if (t.kind === 'cancel') label = t.status === 'done' ? 'Cancelled the order' : t.status === 'late' ? 'Too late' : OPEN.has(t.status) ? 'Cancel pending' : txt;
-  if (t.status === 'pending' || t.status === 'sent') sub = (t.carriedBy ? 'in a block the chain has not taken yet' : 'waiting for a block') + ' · ' + fmtDur(Date.now() - t.sentAt) + (t.resends ? ' · re-broadcast ' + t.resends + '×' : '');
+  if (t.status === 'pending' || t.status === 'sent') sub = (t.carriedBy ? 'in a block the chain has not taken yet' : 'waiting for a block') + (t.lastSkipClass ? ' · acceptance skip class ' + t.lastSkipClass + ' (' + (EVM_SKIP_REASON[t.lastSkipClass] || 'deterministic skip') + ')' : '') + ' · ' + fmtDur(Date.now() - t.sentAt) + (t.resends ? ' · re-broadcast ' + t.resends + '×' : '');
   if (t.status === 'dropped') sub = t.raw ? 'no node holds it — re-broadcasting the signed transaction' + (t.dropErr ? ' (' + t.dropErr + ')' : '') : 'no node holds it and its signed bytes were never seen — send it again';
   if (t.status === 'queued') sub = 'the fold settles it one block later';
   if (t.status === 'expired') sub = 'no node holds it any more and nothing was paid — place it again if you still want it';
@@ -959,6 +976,7 @@ async function replaceOrder(order, tx, extra) {
   const head = await evm.rpc('eth_getBlockByNumber', ['latest', false]).catch(() => null);
   const fees = replacementFees(order, head && head.baseFeePerGas);
   const full = Object.assign({ from: order.from, nonce: toHex(order.nonce), maxFeePerGas: toHex(fees.maxFeePerGas), maxPriorityFeePerGas: toHex(fees.maxPriorityFeePerGas) }, tx);
+  await addEstimatedGas(full);
   let hash;
   try { hash = String(await wallet.sendTx(full)).toLowerCase(); }
   catch (e) {
@@ -1561,11 +1579,20 @@ async function followTx(hash, latestNonce) {
       const held = st !== undefined
         ? !!(st && (st.inMempool || (st.includedIn && st.includedIn.length)))
         : !!(await evm.rpc('eth_getTransactionByHash', [t.hash]).catch(() => null));
-      if (held) { txlog.update(t.hash, { status: 'pending', carriedBy: st && st.includedIn ? st.includedIn.length : 0, dropErr: null }); return; }
+      if (held) {
+        txlog.update(t.hash, {
+          status: 'pending',
+          carriedBy: st && st.includedIn ? st.includedIn.length : 0,
+          lastSkipClass: st && st.lastSkipClass ? st.lastSkipClass : null,
+          evmState: st && st.state ? st.state : null,
+          dropErr: null,
+        });
+        return;
+      }
       // No node holds it: broadcast the signed bytes again (not more often than every two minutes).
       if (!t.raw) { const next = Date.now() - t.sentAt > EXPIRE_MS ? 'expired' : 'dropped'; if (t.status !== next) txlog.update(t.hash, { status: next }); return; }
       if (t.resentAt && Date.now() - t.resentAt < RESEND_MS) return;
-      try { await evm.rpc('eth_sendRawTransaction', [t.raw]); txlog.update(t.hash, { status: 'pending', resentAt: Date.now(), resends: (t.resends || 0) + 1, dropErr: null }); }
+      try { await evm.rpc('eth_sendRawTransaction', [t.raw]); txlog.update(t.hash, { status: 'pending', resentAt: Date.now(), resends: (t.resends || 0) + 1, lastSkipClass: null, evmState: 'pending', dropErr: null }); }
       catch (e) { txlog.update(t.hash, { status: 'dropped', resentAt: Date.now(), dropErr: (e && e.message) || String(e) }); }
       return;
     }
@@ -2035,7 +2062,9 @@ function renderSeedPanel(box, st, getRec, onSent) {
     const why = seedReasonNotToSend(r, s, st.balance); if (why) { toast(why, 'warn'); return; }
     st.busy = true; renderSeedPanel(box, st, getRec, onSent);
     try {
-      const hash = await wallet.sendTx({ from: wallet.account, to: r.facade, value: toHex(sompiToWei(s)), data: ABI.call(SIG.seed) });
+      const tx = { from: wallet.account, to: r.facade, value: toHex(sompiToWei(s)), data: ABI.call(SIG.seed) };
+      await addEstimatedGas(tx);
+      const hash = await wallet.sendTx(tx);
       txlog.add({ hash, from: wallet.account, lineId: r.lineId, label: r.symbol, kind: 'seed', amount: s.toString(), min: '0', sentAt: Date.now(), status: 'sent' });
       toast('Opening deposit sent: ' + shortId(hash, 10) + '. Queued at the next block; the store opens one block after that.', 'ok', 'Open ' + r.symbol);
       if (onSent) onSent(hash);
@@ -2491,6 +2520,7 @@ async function pageStore(arg) {
     else { tx.value = '0x0'; tx.data = ABI.call(SIG.sell, ABI.word(q.units), ABI.word(mn.minMsk)); }
     entry.busy = true; renderQuote();
     try {
+      await addEstimatedGas(tx);
       const hash = String(await wallet.sendTx(tx)).toLowerCase();
       txlog.add({ hash, from: wallet.account, to: rec.facade, lineId: rec.lineId, label: rec.symbol, kind: q.kind, amount: (q.kind === 'buy' ? q.sompi : q.units).toString(), want: q.kind === 'buy' && q.want != null ? q.want.toString() : null, px: px != null ? px.toString() : null, min: (q.kind === 'buy' ? mn.minUnits : mn.minMsk).toString(), sentAt: Date.now(), status: 'sent' });
       toast('Order sent (' + shortId(hash, 10) + '). It waits for a block — usually 20–60 minutes on testnet-11 — and you can cancel or change it until then under Open orders.', 'ok', (q.kind === 'buy' ? 'Join ' : 'Leave ') + rec.symbol);
@@ -3756,7 +3786,7 @@ async function boot() {
   db.listeners.add(() => { renderNav(); renderBanner(); });
   wallet.listeners.add(renderNav);
   window.addEventListener('hashchange', route);
-  window.MO = { encodeRawTx, rawTxFromRpc, replacementFees, orders, pollTransactions, curve, ABI, SIG, EVT, blake2b, keccak256, utf8, hexToBytes, bytesToHex, facadeDerived, holderIdDerived, CURVE_DEFAULTS, bi, toHex, SOMPI_PER_MSK, NATIVE_SCALE_WEI, normMarket, db, history, store, txlog, seedActionData, ACTION_SEED, sompiToWei, parseClassStatus, REFUSAL, wallet, walletDiscovery, walletChoices, initialChoice, MISAKA_RDNS };
+  window.MO = { encodeRawTx, rawTxFromRpc, replacementFees, addEstimatedGas, orders, pollTransactions, curve, ABI, SIG, EVT, blake2b, keccak256, utf8, hexToBytes, bytesToHex, facadeDerived, holderIdDerived, CURVE_DEFAULTS, bi, toHex, SOMPI_PER_MSK, NATIVE_SCALE_WEI, normMarket, db, history, store, txlog, seedActionData, ACTION_SEED, sompiToWei, parseClassStatus, REFUSAL, wallet, walletDiscovery, walletChoices, initialChoice, MISAKA_RDNS };
   if (MOCK) await new Promise((resolve) => { const s = document.createElement('script'); s.src = 'mock.js'; s.onload = resolve; s.onerror = () => { toast('mock.js failed to load', 'bad'); resolve(); }; document.head.appendChild(s); });
   if (MOCK && window.MISAKA_MOCK && window.MISAKA_MOCK.init) window.MISAKA_MOCK.init(window.MO);
   await wallet.init();
