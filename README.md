@@ -65,27 +65,6 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 > set is **defined but NOT launched or endorsed for production** — do not run `--mainnet` expecting a
 > live or supported network.
 
-## Operator quickstart (current main)
-
-The supported operator workflow is the ADR-0122 CLI wizard. It removes the need to guess the Floor class, artifact, fee output, or Bond-registration flags.
-
-```bash
-misaka --network testnet-11 bond status --bond <txid>:<index>
-misaka --network testnet-11 mining setup \
-  --model floor --key-file ~/.misaka/miner.seed \
-  --bond <registered-bond-txid>:<index> --peer <peer-ip>:26311
-misaka --network testnet-11 mining start --print-command
-misaka --network testnet-11 mining start
-```
-
-`bond status` reports whether the carrier is formally registered and whether its collateral is large enough for sustained production. A registered but undersized Bond may have temporary exposure room, but it is not a long-term capacity guarantee. Do not repeat `--palw-register-bond` for an already registered producer key; use a new key and a new Bond when additional sustained capacity is required. The browser dashboard is read-only and listens on `127.0.0.1:8791`:
-
-```bash
-misaka --network testnet-11 dashboard --listen 127.0.0.1:8791
-```
-
-See [`docs/testnet11-join-mining.md`](docs/testnet11-join-mining.md) for the complete current procedure.
-
 ## What testnet-11 is
 
 testnet-11 runs **PALW ConsensusV2** (ADR-0042): blocks are won by a lottery over *verified LLM
