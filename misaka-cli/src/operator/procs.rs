@@ -66,6 +66,13 @@ pub(crate) fn find(component: Component) -> Vec<Proc> {
     );
     let mut out = Vec::new();
     for (pid, p) in sys.processes() {
+        // On Linux sysinfo exposes task entries as well as process leaders. Every kaspad worker
+        // thread inherits the executable path and command line, so counting them here makes a
+        // two-node host look like dozens of nodes and causes the operator doctor to refuse an
+        // otherwise unambiguous profile. Keep only the thread-group leader (the real process).
+        if !is_process_leader(pid.as_u32()) {
+            continue;
+        }
         let args: Vec<String> = p.cmd().iter().map(|a| a.to_string_lossy().into_owned()).collect();
         let exe = p.exe().map(PathBuf::from);
         let basename = exe
@@ -88,6 +95,25 @@ pub(crate) fn find(component: Component) -> Vec<Proc> {
     }
     out.sort_by_key(|p| p.pid);
     out
+}
+
+#[cfg(target_os = "linux")]
+fn is_process_leader(pid: u32) -> bool {
+    let Ok(status) = std::fs::read_to_string(format!("/proc/{pid}/status")) else {
+        // A short-lived process may disappear between sysinfo's snapshot and this read. It is
+        // safer to retain it than to make process discovery silently miss a live component.
+        return true;
+    };
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("Tgid:\t"))
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .is_none_or(|tgid| tgid == pid)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn is_process_leader(_pid: u32) -> bool {
+    true
 }
 
 /// Is the running image still the file at its path? `None` when this host cannot say.
@@ -275,6 +301,11 @@ pub(crate) fn expand_home(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_current_process_is_a_process_leader() {
+        assert!(is_process_leader(std::process::id()));
+    }
 
     fn argv(s: &str) -> Vec<String> {
         s.split_whitespace().map(str::to_string).collect()
