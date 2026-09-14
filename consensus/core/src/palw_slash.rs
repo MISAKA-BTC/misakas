@@ -36,7 +36,7 @@
 //! 1. [`PalwClassContradictionCertificateV1`] — ADR-0027 §5. Two signed attestations over the
 //!    same `job_context_hash` with differing trace roots. Same signer ⇒ **executor equivocation**
 //!    (an objective offense: two signatures that cannot both be true — the same rule
-//!    [`crate::vlt::ComputeFraudKind::ContradictoryVerification`] already enforces one layer
+//!    [`crate::palw_compute::ComputeFraudKind::ContradictoryVerification`] already enforces one layer
 //!    down). Different signers ⇒ **class divergence**: the determinism-class claim itself is
 //!    refuted, which under P1 proves *the class* wrong but not *who* — so it may only freeze
 //!    (fail-safe), never slash.
@@ -254,7 +254,7 @@ pub struct PalwExecutionAttestationV1 {
     /// convicts.
     ///
     /// Added in generation 3 to close a mint that the seat-based panel draw opened. A bond outpoint
-    /// is the only unique validator identity (`validator_pubkey_hash` is not, and `dns_finality`
+    /// is the only unique validator identity (`validator_pubkey_hash` is not, and `palw_consensus`
     /// says so), so once the draw seats two bonds of one key separately, a signer holding both can
     /// file the SAME generation-2 signature under each and collect two attester shares for one
     /// replay: the signed message named the key and the execution but never the bond, so nothing
@@ -345,7 +345,7 @@ pub struct PalwClassContradictionCertificateV1 {
 pub enum PalwClassContradictionKindV1 {
     /// One signer, two roots, one job — two signatures that cannot both be true. The offender is
     /// `executor_id`; this is the PALW-S analogue of
-    /// [`crate::vlt::ComputeFraudKind::ContradictoryVerification`].
+    /// [`crate::palw_compute::ComputeFraudKind::ContradictoryVerification`].
     ExecutorEquivocation { executor_id: Hash64 },
     /// Two signers honestly (as far as this evidence goes) produced different roots for one job
     /// in one class: the class's determinism claim is refuted. Freeze target identities are read

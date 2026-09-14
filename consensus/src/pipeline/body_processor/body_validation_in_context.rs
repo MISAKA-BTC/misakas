@@ -125,7 +125,7 @@ mod tests {
         api::ConsensusApi,
         coinbase::MinerData,
         config::params::MAINNET_PARAMS,
-        dns_finality::p2pkh_mldsa87_spk,
+        palw_consensus::p2pkh_mldsa87_spk,
         merkle::calc_hash_merkle_root,
         subnets::SUBNETWORK_ID_NATIVE,
         tx::{ScriptPublicKey, ScriptVec, Transaction, TransactionInput, TransactionOutpoint},

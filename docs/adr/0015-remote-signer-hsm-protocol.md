@@ -437,7 +437,7 @@ or "network-distributable".
 | PR | Title | Status |
 |---|---|---|
 | 13.9 | This ADR | landed |
-| 13.10 | `dns_finality.rs` `SignerProtocolVersion` + `SignerCapabilities` + `SignerHello{,Ack}` + `SignerRequest` / `SignerResponse` + `SigningPurpose` + `SignerMetadata` + `SignerError` + `SignerPolicy` + `SignerAuditRecord` + `compute_signer_audit_chain_entry` helper + tests | next |
+| 13.10 | `palw_consensus.rs` `SignerProtocolVersion` + `SignerCapabilities` + `SignerHello{,Ack}` + `SignerRequest` / `SignerResponse` + `SigningPurpose` + `SignerMetadata` + `SignerError` + `SignerPolicy` + `SignerAuditRecord` + `compute_signer_audit_chain_entry` helper + tests | next |
 | 13.11 | Spec update (ADR-0014 + ADR-0015 + Phase 13 row 4/4 + v0.8 — closes Phase 13) | after PR-13.10 |
 
 Implementation slots, gated on Phase 1–9 baseline + PR-10.6

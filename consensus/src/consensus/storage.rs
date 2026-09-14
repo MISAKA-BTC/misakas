@@ -8,7 +8,7 @@ use crate::{
         compute_capabilities::DbComputeCapabilityStore,
         daa::DbDaaStore,
         depth::DbDepthStore,
-        dns_finality_certificate::DbDnsFinalityCertificateStore,
+        palw_consensus_certificate::DbDnsFinalityCertificateStore,
         dns_state::{DbDnsStateStore, DbVltActivationStore},
         epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
         evm::{
@@ -159,7 +159,7 @@ pub struct ConsensusStorage {
     /// commitment binds. Write-once per wall epoch, frozen at the boundary recompute.
     pub vlt_voting_snapshot_store: Arc<DbVltVotingSnapshotStore>,
     /// MISAKA VLT PR 4: per-epoch §7.2 finality certificates — the persistent quorum proof.
-    pub dns_finality_certificate_store: Arc<DbDnsFinalityCertificateStore>,
+    pub palw_consensus_certificate_store: Arc<DbDnsFinalityCertificateStore>,
     /// MISAKA Compute Token Program (design v0.1 §9.1): the TOK ledger/supply/settlement
     /// family. Inert (never written) while every preset's token fence is `u64::MAX`.
     pub token_store: Arc<DbTokenStore>,
@@ -432,7 +432,7 @@ impl ConsensusStorage {
             }
             Arc::new(store)
         };
-        let dns_finality_certificate_store =
+        let palw_consensus_certificate_store =
             Arc::new(DbDnsFinalityCertificateStore::new(db.clone(), PolicyBuilder::new().max_items(64).untracked().build()));
         // MISAKA Compute Token Program: hot set = active accounts + the settlement tail. Untracked
         // (`Count`) for the same estimator reason as the credit store. Reindex before anything can
@@ -579,7 +579,7 @@ impl ConsensusStorage {
             epoch_accumulator_store,
             vlt_credit_store,
             vlt_voting_snapshot_store,
-            dns_finality_certificate_store,
+            palw_consensus_certificate_store,
             token_store,
             block_quality_pool_store,
             reserve_balance_store,

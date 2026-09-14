@@ -140,7 +140,7 @@ impl PalwVerificationReceiptV1 {
         if !self.sample_coordinates.windows(2).all(|w| w[0] < w[1]) {
             return Err(PalwReceiptError::SampleCoordinatesNotSorted);
         }
-        let expected = crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
+        let expected = crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN;
         if self.signature.len() != expected {
             return Err(PalwReceiptError::SignatureLength { got: self.signature.len(), expected });
         }
@@ -225,7 +225,7 @@ pub fn count_distinct_receipt_verifiers_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
+    use crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN;
 
     const NET: &[u8] = b"misaka-testnet-11";
 

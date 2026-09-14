@@ -31,7 +31,7 @@ use kaspa_consensus_core::{
     acceptance_data::{AcceptedTxEntry, MergesetBlockAcceptanceData},
     api::args::TransactionValidationArgs,
     coinbase::*,
-    dns_finality::{
+    palw_consensus::{
         ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BlockEpochContribution, BondMutation, BondStatus, DnsParams, EpochTally,
         FeeSplitParams, OverlaySnapshot, PRECOMMIT_MLDSA87_CONTEXT, RewardedEpochSet, SlashingSideEffect, StakeAttestation,
         UNBOND_REQUEST_CONTEXT, attestations_from_accepted_txs, bond_mutations_from_accepted_txs, bond_release_daa_score,
@@ -2485,7 +2485,7 @@ pub(super) fn proved_slash_targets(
         for (_, c) in compute_challenges_with_ids(one) {
             // A compute challenge names no target DAA of its own; it is judged against the
             // including block, and only `ContradictoryVerification` slashes at acceptance at all.
-            if c.kind == kaspa_consensus_core::vlt::ComputeFraudKind::ContradictoryVerification
+            if c.kind == kaspa_consensus_core::palw_compute::ComputeFraudKind::ContradictoryVerification
                 && compute_challenge_genuine(one, bond_view, net_id, including_daa, true).is_ok()
             {
                 proved.insert(c.target_bond_outpoint);
@@ -2960,7 +2960,7 @@ mod tests {
         }
         use kaspa_consensus_core::{
             BlockHash,
-            dns_finality::{
+            palw_consensus::{
                 ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN,
                 StakeAttestation, StakeBondRecord, single_attestation_shard, stake_attestation_shard_tx,
             },
@@ -3055,7 +3055,7 @@ mod tests {
         use kaspa_consensus_core::{
             BlockHash,
             constants::TX_VERSION,
-            dns_finality::{
+            palw_consensus::{
                 ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN,
                 STAKE_VALIDATOR_PUBKEY_LEN, StakeAttestation, StakeBondRecord, single_attestation_shard, stake_attestation_message,
                 stake_attestation_shard_tx, validator_id_from_pubkey,
@@ -3281,7 +3281,7 @@ mod tests {
         use super::super::unbond_request_authorized as authz;
         use kaspa_consensus_core::{
             constants::TX_VERSION,
-            dns_finality::{
+            palw_consensus::{
                 ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN,
                 StakeBondRecord, StakeUnbondRequestPayload, UNBOND_REQUEST_CONTEXT, unbond_request_message, validator_id_from_pubkey,
             },
@@ -3402,7 +3402,7 @@ mod tests {
         use kaspa_consensus_core::{
             BlockHash,
             constants::TX_VERSION,
-            dns_finality::{
+            palw_consensus::{
                 ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN,
                 SlashingEvidencePayload, StakeAttestation, StakeBondRecord,
             },
@@ -3526,7 +3526,7 @@ mod tests {
         use kaspa_consensus_core::{
             BlockHash,
             constants::TX_VERSION,
-            dns_finality::{
+            palw_consensus::{
                 ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, PrecommitEvidencePayload, STAKE_ATTESTATION_SIG_LEN,
                 STAKE_VALIDATOR_PUBKEY_LEN, StakeBondRecord, StakePrecommitPayload,
             },
@@ -3657,7 +3657,7 @@ mod tests {
         use kaspa_consensus_core::{
             BlockHash,
             constants::TX_VERSION,
-            dns_finality::{
+            palw_consensus::{
                 ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN,
                 StakeBondRecord,
             },
@@ -3811,7 +3811,7 @@ mod tests {
         use super::super::bond_spend_gate as gate;
         use kaspa_consensus_core::{
             constants::TX_VERSION,
-            dns_finality::{ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_VALIDATOR_PUBKEY_LEN, StakeBondRecord},
+            palw_consensus::{ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_VALIDATOR_PUBKEY_LEN, StakeBondRecord},
             subnets::SUBNETWORK_ID_NATIVE,
             tx::{Transaction, TransactionInput, TransactionOutpoint},
         };
@@ -3926,7 +3926,7 @@ mod tests {
     mod bond_spend_filter {
         use super::super::BondSpendFilter;
         use kaspa_consensus_core::{
-            dns_finality::{ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_VALIDATOR_PUBKEY_LEN, StakeBondRecord},
+            palw_consensus::{ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_VALIDATOR_PUBKEY_LEN, StakeBondRecord},
             tx::TransactionOutpoint,
         };
         use kaspa_hashes::Hash64;
@@ -4069,7 +4069,7 @@ mod tests {
     mod slashing_side_effect_application {
         use super::super::apply_slashing_effects_to_state as apply;
         use kaspa_consensus_core::{
-            dns_finality::SlashingSideEffect,
+            palw_consensus::SlashingSideEffect,
             muhash::MuHashExtensions,
             tx::{ScriptPublicKey, TransactionId, TransactionOutpoint, TransactionOutput, UtxoEntry},
             utxo::{utxo_collection::UtxoCollection, utxo_diff::UtxoDiff},

@@ -44,7 +44,7 @@ use crate::{
         window::{WindowManager, WindowType},
     },
 };
-use kaspa_consensus_core::vlt::VltActivationState;
+use kaspa_consensus_core::palw_compute::VltActivationState;
 use kaspa_consensus_core::{
     BlockHashSet, BlueWorkType, ChainPath, HashMapCustomHasher,
     acceptance_data::{AcceptanceData, MergesetBlockAcceptanceData},
@@ -60,7 +60,7 @@ use kaspa_consensus_core::{
     blockstatus::BlockStatus,
     coinbase::MinerData,
     daa_score_timestamp::DaaScoreTimestamp,
-    dns_finality::{
+    palw_consensus::{
         ActiveValidatorSet, AttestationQualityDeficit, CanonicalLaggedEpochAnchor, ComputeStatusView, DnsConfirmation,
         MandatoryAttestationContributionKey, MandatoryAttestationDeficit, MandatoryAttestationValidator, PendingComputeVerdict,
         PrecommitDuty, StakeBondPage, StakeBondQuery, StakeBondRecord, ValidatorAttestationTarget, ValidatorRecord, VltStatusView,
@@ -1056,7 +1056,7 @@ impl Consensus {
     ///
     /// Below the VLT weight fence the VSC is the audit-#4 fixed zero (P-1D: ADR-0017 retired
     /// the committee; kept for domain separation). At and above it, PR 2 gives the slot its
-    /// §5.1 meaning: the [`kaspa_consensus_core::vlt::vote_snapshot_commitment`] of the frozen
+    /// §5.1 meaning: the [`kaspa_consensus_core::palw_compute::vote_snapshot_commitment`] of the frozen
     /// voting snapshot in force at the sink, binding this vote to the denominator it will be
     /// weighed against.
     fn build_attestation_target(
@@ -2349,7 +2349,7 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.import_pruning_point_evm_state(pruning_point, evm_header, snapshot)
     }
 
-    fn pruning_point_overlay_snapshot(&self) -> Option<kaspa_consensus_core::dns_finality::PruningPointOverlaySnapshot> {
+    fn pruning_point_overlay_snapshot(&self) -> Option<kaspa_consensus_core::palw_consensus::PruningPointOverlaySnapshot> {
         self.virtual_processor.pruning_point_overlay_snapshot()
     }
 
@@ -2480,7 +2480,7 @@ impl ConsensusApi for Consensus {
     fn import_pruning_point_overlay_snapshot(
         &self,
         pruning_point: BlockHash,
-        snapshot: kaspa_consensus_core::dns_finality::OverlaySnapshot,
+        snapshot: kaspa_consensus_core::palw_consensus::OverlaySnapshot,
     ) -> PruningImportResult<()> {
         self.virtual_processor.import_pruning_point_overlay_snapshot(pruning_point, snapshot)
     }

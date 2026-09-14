@@ -105,7 +105,7 @@ pub struct PalwPanelCandidateV1 {
 ///
 /// # A duplicated `validator_id` removes that id from the draw, fail-closed
 ///
-/// `validator_id` is a `validator_pubkey_hash`, which `dns_finality` states is NOT unique: two
+/// `validator_id` is a `validator_pubkey_hash`, which `palw_consensus` states is NOT unique: two
 /// bonds may share one key. Two such candidates produce IDENTICAL ticket tuples here — same
 /// preimage, same tie-break — so both survived `truncate(q)` and the panel came back as
 /// `[X, X]`. That was mintable, not cosmetic: the credit walk matched one attestation against
@@ -898,7 +898,7 @@ mod tests {
     use crate::palw_reference::PALW_REFERENCE_ALL_DOMAINS;
     use crate::palw_slash::PALW_S_ALL_DOMAINS;
     use crate::palw_v2::PALW_V2_ALL_DOMAINS;
-    use crate::vlt::VERIFIER_SORTITION_KEY;
+    use crate::palw_compute::VERIFIER_SORTITION_KEY;
 
     fn h64(seed: u8) -> Hash64 {
         Hash64::from_bytes([seed; 64])
@@ -944,7 +944,7 @@ mod tests {
 
     /// A `validator_pubkey_hash` shared by two bonds used to seat BOTH — identical tickets,
     /// identical tie-break, so `truncate(q)` kept them both — and the credit walk then paid one
-    /// signature twice. `dns_finality` permits that key sharing, so this was reachable without
+    /// signature twice. `palw_consensus` permits that key sharing, so this was reachable without
     /// any protocol violation.
     #[test]
     fn two_bonds_under_one_validator_key_cannot_seat_the_same_id_twice() {
@@ -1003,7 +1003,7 @@ mod tests {
         // PALW assignment must still order differently, or one lottery would predict the other.
         let cands = candidates();
         let vlt_pairs: Vec<(Hash64, Hash64)> = cands.iter().map(|c| (c.validator_id, c.runtime_class_id)).collect();
-        let vlt_panel = crate::vlt::select_verifiers(h64(0x01), h64(0x02), h64(0x03), h64(0xC1), &vlt_pairs, 8);
+        let vlt_panel = crate::palw_compute::select_verifiers(h64(0x01), h64(0x02), h64(0x03), h64(0xC1), &vlt_pairs, 8);
         let palw_panel = select_replay_panel_v1(&h64(0x01), &h64(0x02), &h64(0x03), &h64(0xC1), &cands, 8);
         assert_eq!(vlt_panel.len(), palw_panel.len());
         assert_ne!(vlt_panel, palw_panel, "domain separation failed: the two lotteries drew identically");

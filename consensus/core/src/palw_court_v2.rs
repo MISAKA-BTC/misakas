@@ -1878,7 +1878,7 @@ mod tests {
                 trace_retention_daa: 999_999,
                 execution_root: h64(41),
             },
-            signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN],
         }
     }
 

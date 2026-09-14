@@ -22,7 +22,7 @@
 //! | the signer sidecar (`kaspa-pq-signer`, production) | `SigningPurpose::PalwFpCommitmentV3` over a 64-byte digest under a reserved context | `misaka-palw-fp-rail --print-claim` emits ONLY a gated id |
 //!
 //! **The residual, stated rather than hidden.** The sidecar's wire request
-//! (`kaspa_consensus_core::dns_finality::SignerRequest`) carries a typed *digest* and a
+//! (`kaspa_consensus_core::palw_consensus::SignerRequest`) carries a typed *digest* and a
 //! `SignerMetadata` with no arm for a free-prompt commitment, so the sidecar cannot re-derive from
 //! the object: it has never been handed one. It therefore enforces the *shape* (a typed 64-byte
 //! digest under a context reserved to the purpose — never arbitrary bytes) while the *derivation*

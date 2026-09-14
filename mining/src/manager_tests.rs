@@ -22,7 +22,7 @@ mod tests {
         block::{AttestationTemplateDrop, AttestationTemplateDropKind, TemplateBuildMode},
         coinbase::MinerData,
         constants::{MAX_TX_IN_SEQUENCE_NUM, SOMPI_PER_KASPA, TX_VERSION},
-        dns_finality::{StakeAttestation, StakeAttestationShardPayload},
+        palw_consensus::{StakeAttestation, StakeAttestationShardPayload},
         errors::tx::TxRuleError,
         mass::{NonContextualMasses, transaction_estimated_serialized_size},
         subnets::{SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD},

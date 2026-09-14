@@ -126,7 +126,7 @@ impl NodeView {
 ///
 /// **It is the LOCK that is mirrored here, not the existence of a bond** (re-audit R-4). Excluding
 /// every bond at every status was too strong in the one direction that costs an honest operator
-/// everything: `BondStatus` has no terminal "withdrawn" state (`dns_finality.rs:344-358`), so a
+/// everything: `BondStatus` has no terminal "withdrawn" state (`palw_consensus.rs:344-358`), so a
 /// bond that has completed its unbonding period keeps its record and keeps being returned here —
 /// while consensus positively ALLOWS the spend (`PalwSpendLocks::locks`,
 /// `utxo_validation.rs:238-250`, is false exactly when the bond is `Unbonding` and past its release

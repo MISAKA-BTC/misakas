@@ -49,7 +49,7 @@ Nakamoto confirmation". To make `WorkDepth` a real confirmation input, set `cW >
 AND change the pipeline's `work_depth` from `blue_work(sink)` (cumulative) to
 `blue_work(tip) − blue_work(confirmable_anchor)` (anchor-relative depth).
 
-A previous design draft proposed a hard `dns_finality_point` cutoff
+A previous design draft proposed a hard `palw_consensus_point` cutoff
 ("anything before this block is consensus-final"). That is BFT-flavoured
 hard finality, not DNS, and it conflicts with the DNS paper's explicit
 probabilistic framing. The right shape is a `WorkScore × StakeScore`
@@ -343,7 +343,7 @@ The overlay lands as a separate PR series **after** Phases 1–9 stabilise:
 |---|---|---|
 | 10.1 | This ADR | landed |
 | 10.2 | Spec update — Phase 10 row + DNS public-claim discipline | next |
-| 10.3 | `consensus/core/src/dns_finality.rs` type stubs + `DnsParams` | next |
+| 10.3 | `consensus/core/src/palw_consensus.rs` type stubs + `DnsParams` | next |
 | 10.4 | `subnetwork_id`-based StakeBond / StakeAttestationShard / SlashingEvidence tx kinds (or `TxKind` migration) | deferred |
 | 10.5 | `StakeScore` deterministic aggregation from on-chain shards | deferred |
 | 10.6 | PoC hard-checkpoint reorg gate behind a feature flag | deferred |
@@ -642,7 +642,7 @@ TransactionOutput {
 ```
 
 bounded by the whole-output per-block cap
-(`dns_finality::validator_reward_outputs`, PR-10.5′-a). Construction
+(`palw_consensus::validator_reward_outputs`, PR-10.5′-a). Construction
 (template) and validation (`verify_coinbase_transaction`) run the
 **same** `bond_view`-based resolver over the **same** ordered
 attestation list, so the coinbase is byte-for-byte reproducible on

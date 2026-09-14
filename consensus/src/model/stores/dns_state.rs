@@ -17,8 +17,8 @@
 //! appending to `DnsState`'s borsh layout would invalidate every deployed
 //! row for a field that changes a handful of times per network lifetime.
 
-use kaspa_consensus_core::dns_finality::DnsState;
-use kaspa_consensus_core::vlt::VltActivationRecord;
+use kaspa_consensus_core::palw_consensus::DnsState;
+use kaspa_consensus_core::palw_compute::VltActivationRecord;
 use kaspa_database::prelude::DB;
 use kaspa_database::prelude::StoreResult;
 use kaspa_database::prelude::{BatchDbWriter, CachedDbItem, DirectDbWriter};
@@ -116,7 +116,7 @@ impl VltActivationStore for DbVltActivationStore {
 mod tests {
     use super::*;
     use kaspa_consensus_core::BlueWorkType;
-    use kaspa_consensus_core::dns_finality::{DnsHealth, DnsRolloutStage, StakeScore};
+    use kaspa_consensus_core::palw_consensus::{DnsHealth, DnsRolloutStage, StakeScore};
     use kaspa_database::create_temp_db;
     use kaspa_database::prelude::ConnBuilder;
     use kaspa_hashes::Hash64;
@@ -166,7 +166,7 @@ mod tests {
     /// cache over the same DB (the restart shape) must read the same record back.
     #[test]
     fn vlt_activation_store_roundtrip_and_reopen() {
-        use kaspa_consensus_core::vlt::{PersistedVltActivationState, VltActivationRecord};
+        use kaspa_consensus_core::palw_compute::{PersistedVltActivationState, VltActivationRecord};
 
         let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
         let mut store = DbVltActivationStore::new(db.clone());

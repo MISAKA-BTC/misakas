@@ -11,7 +11,7 @@
   validators while the overlay is active"), [0105](0105-a-heartbeat-never-turns-a-bonded-block-red.md)
   (the 09-10 heartbeat trap, during which the bridge stood paused), [0072](0072-the-ticket-is-the-execution.md)
   (a draw is the execution; a template is fixed for the whole draw), the 2026-09-10 bridge-freshness
-  fix (`dns_finality_fresh_for_bridge` measured in blue score beyond the anchor's structural
+  fix (`palw_consensus_fresh_for_bridge` measured in blue score beyond the anchor's structural
   distance), and ADR-0108's rule that a node extension is policy a build carries, never a rule the
   chain enforces.
 * Amends: the producer policy and the RPC policy of kaspa-pq EVM Lane v0.4 §9.2 (deposit claims)
@@ -258,7 +258,7 @@ template → I-1 and I-3 fail; `Label` ignored (the old pause) → I-1, I-3 and 
 left at the sink → I-4 fails; the diff not staged into the index → I-2 fails. **4 of 4 caught.**
 
 Two fixtures had to change, and both changes are the point of the ADR, not accommodations:
-`set_fresh_dns_finality` named an anchor hash no header exists for — since the 2026-09-10 blue-score
+`set_fresh_palw_consensus` named an anchor hash no header exists for — since the 2026-09-10 blue-score
 freshness fix such an anchor reads as stale, so the one test that depended on "fresh" was passing only
 because nothing else had asked; it now names genesis. The pre-existing queue-path test asserts
 "a stale anchor keeps the payload empty", which is `Pause`'s behaviour; it now says `Pause` explicitly.

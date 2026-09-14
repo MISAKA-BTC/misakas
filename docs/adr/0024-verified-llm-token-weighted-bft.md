@@ -169,10 +169,10 @@ model. Populating `model_cost_table` is a governance action and part of any acti
 | Concern | Where |
 |---|---|
 | Types, normalization, decay, weight, quorum, sortition, `VltEpochSnapshot` | `consensus/core/src/vlt.rs` |
-| `W_i(E)` per bond, `W(E)` denominator, credit rule, credit folding | `consensus/core/src/dns_finality.rs` |
+| `W_i(E)` per bond, `W(E)` denominator, credit rule, credit folding | `consensus/core/src/palw_consensus.rs` |
 | Per-network params + fence | `consensus/core/src/config/params.rs` |
 | Snapshot walk + its pin, weight-source switch, per-branch scoring | `consensus/src/pipeline/virtual_processor/processor.rs` |
-| Prevote/precommit rounds, the lock chain, `PrecommitDuty` | `consensus/core/src/dns_finality.rs` + `processor.rs` |
+| Prevote/precommit rounds, the lock chain, `PrecommitDuty` | `consensus/core/src/palw_consensus.rs` + `processor.rs` |
 | Stateless payload validation | `consensus/src/processes/transaction_validator/tx_validation_in_isolation.rs` |
 | Subnetwork ids `0x14`–`0x1a` | `consensus/core/src/subnets.rs` |
 

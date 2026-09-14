@@ -3,7 +3,7 @@
 //! [`DbVltVotingSnapshotStore`] holds one sealed [`VltVotingSnapshot`] per wall epoch (key =
 //! `u64` epoch) — the complete denominator a vote for that epoch is weighed against, with the
 //! two roots ([`VltVotingSnapshot::snapshot_root`], [`VltVotingSnapshot::validator_set_root`])
-//! the vote's signed [`kaspa_consensus_core::vlt::vote_snapshot_commitment`] binds.
+//! the vote's signed [`kaspa_consensus_core::palw_compute::vote_snapshot_commitment`] binds.
 //!
 //! **Write-once per epoch, frozen at the boundary.** The virtual processor derives the row at
 //! the first recompute of each wall epoch, pinned at a canonical lag-buried anchor, and never
@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use kaspa_consensus_core::vlt::VltVotingSnapshot;
+use kaspa_consensus_core::palw_compute::VltVotingSnapshot;
 use kaspa_core::info;
 use kaspa_database::prelude::CachePolicy;
 use kaspa_database::prelude::DB;
@@ -105,7 +105,7 @@ impl DbVltVotingSnapshotStore {
 mod tests {
     use super::*;
     use kaspa_consensus_core::tx::TransactionOutpoint;
-    use kaspa_consensus_core::vlt::{VLT_VOTING_SNAPSHOT_VERSION_V1, VltValidatorWeight, VltVotingSnapshot};
+    use kaspa_consensus_core::palw_compute::{VLT_VOTING_SNAPSHOT_VERSION_V1, VltValidatorWeight, VltVotingSnapshot};
     use kaspa_database::create_temp_db;
     use kaspa_database::prelude::ConnBuilder;
     use kaspa_hashes::Hash64;

@@ -129,7 +129,7 @@ pub const fn is_legacy_signature_opcode(tag: u8) -> bool {
 /// ([`TxScriptEngine::check_mldsa87_signature`]) hard-codes
 /// [`MLDSA87_TX_CONTEXT`]; this free function lets consensus DNS-overlay
 /// validation verify *attestation* signatures under
-/// `dns_finality::ATTESTATION_MLDSA87_CONTEXT` (and takeover tokens under
+/// `palw_consensus::ATTESTATION_MLDSA87_CONTEXT` (and takeover tokens under
 /// their own context) without going through a `TxScriptEngine`.
 ///
 /// Performs the same pre-libcrux length rejection as the opcode path

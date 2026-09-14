@@ -62,7 +62,7 @@ fn main() {
     // backend this build cannot name is exactly what the agent would refuse anyway.
     let class_tag = PALW_REGISTERED_CLASS_TAGS
         .iter()
-        .find(|tag| kaspa_consensus_core::vlt::derive_runtime_class_id(tag) == runtime_class_id)
+        .find(|tag| kaspa_consensus_core::palw_compute::derive_runtime_class_id(tag) == runtime_class_id)
         .unwrap_or_else(|| die("the manifest's runtime_class_id matches no registered class tag".into()));
 
     // Artifact identity from the real file.

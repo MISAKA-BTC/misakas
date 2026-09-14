@@ -108,7 +108,7 @@ impl KaspaPqMlDsa87KeyPair {
     /// kaspa-pq Phase 11 (ADR-0010): sign `message` under an explicit ML-DSA-87
     /// `context` (domain separator). [`sign`](Self::sign) uses the transaction
     /// context (`MLDSA87_TX_CONTEXT`); the in-process validator service signs
-    /// stake attestations with `dns_finality::ATTESTATION_MLDSA87_CONTEXT` so the
+    /// stake attestations with `palw_consensus::ATTESTATION_MLDSA87_CONTEXT` so the
     /// produced signature verifies via
     /// `kaspa_txscript::verify_mldsa87_with_context` and can never be replayed
     /// as a transaction signature (distinct context ⇒ distinct domain).
@@ -345,7 +345,7 @@ mod tests {
         // be replayed as a transaction signature.
         let kp = derive_keypair("simnet", 0, 0, 9, &TEST_MASTER_SEED);
         let msg = b"phase 11 attestation digest";
-        let att_ctx = b"kaspa-pq-v1/att/mldsa87"; // == dns_finality::ATTESTATION_MLDSA87_CONTEXT
+        let att_ctx = b"kaspa-pq-v1/att/mldsa87"; // == palw_consensus::ATTESTATION_MLDSA87_CONTEXT
         let sig_bytes = kp.sign_with_context(msg, att_ctx, [0x44u8; 32]);
         assert_eq!(sig_bytes.len(), MLDSA87_SIG_LEN);
 

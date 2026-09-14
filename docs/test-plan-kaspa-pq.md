@@ -29,7 +29,7 @@ testnet / staging-mainnet**. This plan is the gate before any network promotion.
 
 **Pass bar baseline (must stay green every PR):**
 `cargo check --workspace --exclude muhash-fuzz --all-targets` clean +
-`kaspa-consensus-core` (dns_finality) + `kaspa-consensus` + `kaspa-pow` +
+`kaspa-consensus-core` (palw_consensus) + `kaspa-consensus` + `kaspa-pow` +
 `kaspa-txscript` + `rpc-core` suites pass. (Note: `kaspa-wallet-core --lib` is
 pre-existing-red from Phase-2 prefix debt — NOT a regression; see memory.)
 

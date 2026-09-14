@@ -24,11 +24,11 @@
 //! which would call `estimate_mem_bytes` and panic (the validator-attestation
 //! `virtual-processor` crash; see [`super::rewarded_epochs`]).
 //!
-//! [`split_validator_pool`]: kaspa_consensus_core::dns_finality::split_validator_pool
+//! [`split_validator_pool`]: kaspa_consensus_core::palw_consensus::split_validator_pool
 
 use std::sync::Arc;
 
-use kaspa_consensus_core::dns_finality::EpochTally;
+use kaspa_consensus_core::palw_consensus::EpochTally;
 use kaspa_consensus_core::{BlockHash, BlockHasher};
 use kaspa_database::prelude::CachePolicy;
 use kaspa_database::prelude::DB;

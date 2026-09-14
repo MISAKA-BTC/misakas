@@ -16,7 +16,7 @@ use clap::{Parser, Subcommand};
 use kaspa_addresses::{Address, Prefix};
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::Params;
-use kaspa_consensus_core::dns_finality::{
+use kaspa_consensus_core::palw_consensus::{
     DNS_PAYLOAD_VERSION_V1, PrecommitEvidencePayload, PrecommitLock, SignedEpochCheckOutcome, SignedEpochRecord,
     SlashingEvidencePayload, StakeAttestation, signature_fingerprint, single_attestation_shard, stake_attestation_message,
 };

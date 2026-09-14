@@ -28,7 +28,7 @@
 //! is the pre-ADR one (a PALW header's commitment must be empty) and this returns
 //! [`PalwAdmission::NotBound`]. Nothing here is live on any network today.
 
-use kaspa_consensus_core::dns_finality::{ActiveBondView, StakeBondRecord};
+use kaspa_consensus_core::palw_consensus::{ActiveBondView, StakeBondRecord};
 use kaspa_consensus_core::header::Header;
 use kaspa_consensus_core::palw_block_commitment::{PalwBlockCommitmentError, PalwBlockCommitmentV1};
 use kaspa_consensus_core::palw_pwu::{palw_ticket_admits_v1, palw_ticket_v1};
@@ -225,7 +225,7 @@ pub fn palw_header_commitment_root_v1(
 mod tests {
     use super::*;
     use kaspa_consensus_core::BlueWorkType;
-    use kaspa_consensus_core::dns_finality::{BondStatus, STAKE_ATTESTATION_SIG_LEN};
+    use kaspa_consensus_core::palw_consensus::{BondStatus, STAKE_ATTESTATION_SIG_LEN};
     use kaspa_consensus_core::palw_block_commitment::PALW_BLOCK_COMMITMENT_VERSION_V1;
     use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_PALW_LLM};
     use kaspa_consensus_core::tx::TransactionOutpoint;
@@ -252,8 +252,8 @@ mod tests {
         TransactionOutpoint::new(Hash64::from_u64_word(seed), 0)
     }
 
-    fn bond_record(op: TransactionOutpoint) -> kaspa_consensus_core::dns_finality::StakeBondRecord {
-        kaspa_consensus_core::dns_finality::StakeBondRecord {
+    fn bond_record(op: TransactionOutpoint) -> kaspa_consensus_core::palw_consensus::StakeBondRecord {
+        kaspa_consensus_core::palw_consensus::StakeBondRecord {
             version: 1,
             bond_outpoint: op,
             owner_pubkey_hash: Hash64::from_u64_word(8),
@@ -495,7 +495,7 @@ mod tests {
     /// half alone: past the fence algo-6 is CLOSED, and below it algo-9 is.
     #[test]
     fn the_armed_lane_reaches_the_admission_call() {
-        use kaspa_consensus_core::dns_finality::STAKE_VALIDATOR_PUBKEY_LEN;
+        use kaspa_consensus_core::palw_consensus::STAKE_VALIDATOR_PUBKEY_LEN;
         use kaspa_consensus_core::palw_attempt_v2::{
             PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, challenge_v2,
         };

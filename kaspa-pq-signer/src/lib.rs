@@ -9,7 +9,7 @@
 //!
 //! Reused, audited building blocks (no new crypto/protocol invented here):
 //! * the protocol types + [`compute_signer_audit_chain_entry`] + [`signature_fingerprint`] from
-//!   `kaspa_consensus_core::dns_finality`;
+//!   `kaspa_consensus_core::palw_consensus`;
 //! * [`ValidatorKey`] (signing) + [`SignedEpochStore`] (crash-consistent, fsync'd equivocation log)
 //!   from `kaspa_pq_validator_core`;
 //! * the pure equivocation decision [`check_signed_epoch_record`].
@@ -22,7 +22,7 @@ use std::{
 };
 
 use kaspa_consensus_core::{
-    dns_finality::{
+    palw_consensus::{
         ATTESTATION_MLDSA87_CONTEXT, AUDIT_CHECKPOINT_MLDSA87_CONTEXT, HostId, PalwAttemptSignRecordV1, SignedEpochCheckOutcome,
         SignedEpochRecord, SignerAuditCheckpoint, SignerAuditRecord, SignerError, SignerMessageDigest, SignerMetadata, SignerOutcome,
         SignerPolicy, SignerRequest, SignerResponse, SigningPurpose, TAKEOVER_TOKEN_CONTEXT, UNBOND_REQUEST_CONTEXT,
@@ -631,7 +631,7 @@ impl SignerState {
 #[cfg(unix)]
 pub mod transport {
     use super::SignerState;
-    use kaspa_consensus_core::dns_finality::{
+    use kaspa_consensus_core::palw_consensus::{
         HostId, SIGNER_PROTOCOL_VERSION, SignerError, SignerHello, SignerHelloAck, SignerRequest, SignerResponse,
     };
     use std::{
@@ -838,7 +838,7 @@ pub mod transport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kaspa_consensus_core::dns_finality::{ATTESTATION_MLDSA87_CONTEXT, stake_attestation_message};
+    use kaspa_consensus_core::palw_consensus::{ATTESTATION_MLDSA87_CONTEXT, stake_attestation_message};
     use kaspa_hashes::Hash;
     use kaspa_pq_validator_core::VALIDATOR_SEED_LEN;
     // **The value, not a copy of it** (mainnet audit L-5, 2026-09-06). This used to re-type the
@@ -958,7 +958,7 @@ mod tests {
     /// attestation equivocation guard. Even a STRICT signer must refuse it.
     #[test]
     fn rejects_cross_purpose_context_borrowing_c02() {
-        use kaspa_consensus_core::dns_finality::UNBOND_REQUEST_CONTEXT;
+        use kaspa_consensus_core::palw_consensus::UNBOND_REQUEST_CONTEXT;
         let k = key(0x42);
         let vid = k.validator_id;
         let mut s = SignerState::new(vec![k], SignerPolicy::Strict, tmp_dir("c02"), Hash::default()).unwrap();

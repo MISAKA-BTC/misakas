@@ -9,7 +9,7 @@ Relates to: ADR-0028 (the scheduling fabric this carries; its Consequences named
 ADR-0027 (evidence objects and DA rules), ADR-0026 §12 (the gate artifacts Stage 0 fills),
 ADR-0009/0016/0017 (the DNS overlay carriage discipline this reuses),
 `consensus/src/processes/transaction_validator/tx_validation_in_isolation.rs`
-(`check_transaction_subnetwork` — the admission gate), `consensus/core/src/dns_finality.rs`
+(`check_transaction_subnetwork` — the admission gate), `consensus/core/src/palw_consensus.rs`
 (`dns_tx_kind`, the stateless validators), `consensus/src/pipeline/virtual_processor/processor.rs`
 (the capability store's accept/revert/backfill walk — the Stage-1 template),
 `consensus/core/src/palw_legs.rs` / `palw_slash.rs` / `palw_v2.rs` (the wire bodies, all frozen).

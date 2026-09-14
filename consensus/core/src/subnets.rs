@@ -167,7 +167,7 @@ pub const SUBNETWORK_ID_REGISTRY: SubnetworkId = SubnetworkId::from_byte(2);
 // kaspa-pq Phase 10 (ADR-0009) DNS finality overlay subnetwork ids. Byte
 // values 0x10/0x11/0x12 avoid the upstream built-ins (0/1/2) and the
 // test-only 3. Routed + payload-validated by full nodes (see
-// `dns_finality::dns_tx_kind` + `validate_*_payload`).
+// `palw_consensus::dns_tx_kind` + `validate_*_payload`).
 pub const SUBNETWORK_ID_STAKE_BOND: SubnetworkId = SubnetworkId::from_byte(0x10);
 pub const SUBNETWORK_ID_STAKE_ATTESTATION_SHARD: SubnetworkId = SubnetworkId::from_byte(0x11);
 pub const SUBNETWORK_ID_SLASHING_EVIDENCE: SubnetworkId = SubnetworkId::from_byte(0x12);
@@ -177,25 +177,25 @@ pub const SUBNETWORK_ID_STAKE_UNBOND: SubnetworkId = SubnetworkId::from_byte(0x1
 // MISAKA Verified LLM Token-Weighted BFT (`vlt`) subnetwork ids. They extend the DNS overlay band
 // (0x10-0x13 → 0x10-0x15) because they feed the same finality overlay: these are what mint the
 // voting weight the attestation shards then spend.
-/// A verified LLM job's compute certificate — [`crate::vlt::ComputeCertificatePayload`]. Surviving
+/// A verified LLM job's compute certificate — [`crate::palw_compute::ComputeCertificatePayload`]. Surviving
 /// the challenge window credits `X_i(e)`, which becomes voting weight from epoch `e + 1`.
 pub const SUBNETWORK_ID_COMPUTE_CERTIFICATE: SubnetworkId = SubnetworkId::from_byte(0x14);
 /// A fraud proof against an accepted compute certificate —
-/// [`crate::vlt::ComputeChallengePayload`].
+/// [`crate::palw_compute::ComputeChallengePayload`].
 pub const SUBNETWORK_ID_COMPUTE_CHALLENGE: SubnetworkId = SubnetworkId::from_byte(0x15);
 /// A validator's declaration that it runs a given `(model, runtime, determinism class)` profile
-/// — [`crate::vlt::ComputeCapabilityPayload`]. This is what gives verifier sortition a
+/// — [`crate::palw_compute::ComputeCapabilityPayload`]. This is what gives verifier sortition a
 /// class-matched candidate pool to draw from.
 pub const SUBNETWORK_ID_COMPUTE_CAPABILITY: SubnetworkId = SubnetworkId::from_byte(0x16);
 /// Phase 1 of the two-phase sortition: an executor's commitment to a job, published before the
-/// beacon that picks its auditors exists — [`crate::vlt::ComputeCommitmentPayload`].
+/// beacon that picks its auditors exists — [`crate::palw_compute::ComputeCommitmentPayload`].
 pub const SUBNETWORK_ID_COMPUTE_COMMITMENT: SubnetworkId = SubnetworkId::from_byte(0x17);
 /// A sortitioned verifier's standalone verdict on a compute certificate —
-/// [`crate::vlt::ComputeVerdictPayload`]. Standalone rather than embedded in the certificate so
+/// [`crate::palw_compute::ComputeVerdictPayload`]. Standalone rather than embedded in the certificate so
 /// no off-chain executor↔verifier round trip is needed and every verdict is publicly auditable.
 pub const SUBNETWORK_ID_COMPUTE_VERDICT: SubnetworkId = SubnetworkId::from_byte(0x18);
 
-/// Round 2 of DNS finality — [`crate::dns_finality::StakePrecommitPayload`]. A validator that has
+/// Round 2 of DNS finality — [`crate::palw_consensus::StakePrecommitPayload`]. A validator that has
 /// seen the prevote quorum for an epoch's anchor **locks** on it and says so on chain. An anchor
 /// is DNS-confirmed only once the precommit round reaches quorum too, so finality is a two-round
 /// commit rather than a single tally, and a validator that moves its lock has published the
@@ -204,7 +204,7 @@ pub const SUBNETWORK_ID_COMPUTE_VERDICT: SubnetworkId = SubnetworkId::from_byte(
 pub const SUBNETWORK_ID_STAKE_PRECOMMIT: SubnetworkId = SubnetworkId::from_byte(0x19);
 
 /// Two precommits from one validator that cannot both be honest —
-/// [`crate::dns_finality::PrecommitEvidencePayload`]. The round-2 sibling of
+/// [`crate::palw_consensus::PrecommitEvidencePayload`]. The round-2 sibling of
 /// `SUBNETWORK_ID_SLASHING_EVIDENCE`: a lock is only worth carrying if breaking it costs the
 /// bond, and the two signed payloads are the whole proof, so no reachability and no access to the
 /// losing branch's blocks is needed to check it.

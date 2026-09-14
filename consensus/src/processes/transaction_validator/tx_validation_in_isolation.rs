@@ -1,6 +1,6 @@
 use crate::constants::{MAX_SOMPI, TX_VERSION};
 use kaspa_consensus_core::config::params::PqEnforcementMode;
-use kaspa_consensus_core::dns_finality::{
+use kaspa_consensus_core::palw_consensus::{
     DnsTxKind, dns_tx_kind, validate_compute_capability_payload, validate_compute_certificate_payload, validate_compute_challenge_tx,
     validate_compute_commitment_payload, validate_compute_verdict_payload, validate_precommit_evidence_tx,
     validate_slashing_evidence_tx, validate_stake_attestation_shard_payload, validate_stake_bond_tx, validate_stake_precommit_payload,
@@ -586,7 +586,7 @@ mod tests {
     /// coverage lives in `kaspa_consensus_core::token`; this confirms the wiring.
     #[test]
     fn validate_token_subnetwork_tx() {
-        use kaspa_consensus_core::dns_finality::{STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN};
+        use kaspa_consensus_core::palw_consensus::{STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN};
         use kaspa_consensus_core::subnets::{SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER};
         use kaspa_consensus_core::token::{TOK_ASSET_ID, TOKEN_PAYLOAD_VERSION_V1, TokenTransferPayload, TokenTxError};
         use kaspa_hashes::Hash64;
@@ -658,7 +658,7 @@ mod tests {
     /// carriage stays untouched.
     #[test]
     fn validate_palw_carriage_subnetwork_tx() {
-        use kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN;
+        use kaspa_consensus_core::palw_consensus::STAKE_ATTESTATION_SIG_LEN;
         use kaspa_consensus_core::palw_carriage::{
             PALW_CARRIAGE_VERSION_V1, PalwAttestationCarriageV1, PalwCarriageError, PalwEvidenceChunkCarriageV1,
         };
@@ -821,11 +821,11 @@ mod tests {
     /// overlay subnetwork is accepted when its payload passes stateless
     /// validation, and rejected with `InvalidDnsOverlayPayload` (not the
     /// upstream blanket `SubnetworksDisabled`) when it does not. Exhaustive
-    /// per-field payload coverage lives in `kaspa_consensus_core::dns_finality`;
+    /// per-field payload coverage lives in `kaspa_consensus_core::palw_consensus`;
     /// this test only confirms the consensus-layer wiring.
     #[test]
     fn validate_dns_overlay_subnetwork_tx() {
-        use kaspa_consensus_core::dns_finality::{
+        use kaspa_consensus_core::palw_consensus::{
             DNS_PAYLOAD_VERSION_V1, DnsTxError, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN, SlashingEvidencePayload,
             StakeAttestation, StakeBondPayload, p2pkh_mldsa87_spk, validator_id_from_pubkey,
         };

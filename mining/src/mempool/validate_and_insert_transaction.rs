@@ -418,7 +418,7 @@ impl Mempool {
         };
         // Latest ready epoch from the current tip; `None` means no epoch is ready yet, in which case
         // we cannot meaningfully bound "future" — accept (TTL/priority still govern selection).
-        let Some(latest_ready_epoch) = kaspa_consensus_core::dns_finality::ready_epoch_from_tip_blue_score(
+        let Some(latest_ready_epoch) = kaspa_consensus_core::palw_consensus::ready_epoch_from_tip_blue_score(
             consensus.get_sink_blue_score(),
             policy.epoch_len_blue_score,
             policy.attestation_lag_blue_score,

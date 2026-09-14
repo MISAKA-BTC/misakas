@@ -35,7 +35,7 @@ ADR-0060 was written to free.
   fleet ran four heartbeat miners, all `--palw-heartbeat-miner-address`.
 * **`getDnsConfirmation`**: `pow_confirmed = false`, `workDepth` ≈ 10 against `requiredWorkDepth`
   100, health `DegradedCertificateCensored`, the last DNS-confirmed anchor stuck. Attestations were
-  being included — the stall was work, not stake. `dns_finality_fresh_for_bridge` requires
+  being included — the stall was work, not stake. `palw_consensus_fresh_for_bridge` requires
   `dns_confirmed`, so the bridge stayed paused.
 * **Bonded blocks kept landing and kept losing.** Qwen3.6 draws on the fleet (8 cores, 23 GB,
   two 34 GiB mappings per host) take ~17 minutes, and a bonded block's timestamp is its TEMPLATE's.

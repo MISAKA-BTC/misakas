@@ -227,7 +227,7 @@ accounting is per-transaction rather than per-block.
 ### Reward params type surface
 
 Carried as a new `RewardParams` struct alongside
-[`DnsParams`](../../consensus/core/src/dns_finality.rs)
+[`DnsParams`](../../consensus/core/src/palw_consensus.rs)
 (PR-13.5):
 
 ```rust
@@ -252,7 +252,7 @@ pub struct RewardParams {
 ```
 
 `unreveal_reporter_reward_sompi` stays in
-[`DnsParams`](../../consensus/core/src/dns_finality.rs) where
+[`DnsParams`](../../consensus/core/src/palw_consensus.rs) where
 ADR-0012 placed it; the slashing distribution rule above
 references it explicitly as a `min` cap on the bps-derived
 reward.
@@ -383,7 +383,7 @@ breaks the claim and requires an explicit re-derivation.
 | PR | Title | Status |
 |---|---|---|
 | 13.4 | This ADR | landed |
-| 13.5 | `dns_finality.rs` `RewardParams` + `compute_attestation_reward_payouts` + `compute_slashing_distribution` helpers + tests | next |
+| 13.5 | `palw_consensus.rs` `RewardParams` + `compute_attestation_reward_payouts` + `compute_slashing_distribution` helpers + tests | next |
 | 13.6 | Spec update (ADR-0013 + Phase 13 row 2/4 + Phase 13 acceptance criteria 2/4 + v0.7) | next |
 
 Implementation slots (gated on Phase 1–9 baseline + PR-10.5 +
@@ -454,7 +454,7 @@ time.
 Add one field to the bond wire format and its derived record:
 
 ```rust
-// StakeBondPayload  (consensus/core/src/dns_finality.rs)
+// StakeBondPayload  (consensus/core/src/palw_consensus.rs)
 // StakeBondRecord   (same module)
 //
 // The owner's *declared* ML-DSA-65 P2PKH spend payload:
@@ -471,7 +471,7 @@ pub owner_reward_spk_payload: [u8; 32],
 - `owner_reward_spk_payload` (32-byte) is the **only** field
   rewards are paid to. It is supplied by the bond creator and
   copied verbatim by
-  [`stake_bond_record_from_payload`](../../consensus/core/src/dns_finality.rs).
+  [`stake_bond_record_from_payload`](../../consensus/core/src/palw_consensus.rs).
 - Both derive from the same owner public key
   (`BLAKE2b-512` → identity, `BLAKE2b-256` → spend payload), so
   an honest bond creator computes both from one cold key. The
@@ -542,7 +542,7 @@ independently.
   spend payload changes nothing here.
 - The per-block inflation cap
   (`max_validator_inflation_per_block_sompi`) and
-  [`compute_attestation_reward_payouts`](../../consensus/core/src/dns_finality.rs)
+  [`compute_attestation_reward_payouts`](../../consensus/core/src/palw_consensus.rs)
   are arithmetic-only and unaffected; they bound the *total*
   validator outflow, and the new field only decides *where* each
   already-bounded output is sent.
@@ -563,7 +563,7 @@ change to this field would require a versioned payload bump
 
 | Sub-PR | Title | Gated? |
 |---|---|---|
-| 10.5′-a | Add `owner_reward_spk_payload` to `StakeBondPayload` + `StakeBondRecord` + `stake_bond_record_from_payload`; add the pure `p2pkh_mldsa65_spk` + reward-outputs helper in `dns_finality.rs`; parity test vs `pay_to_address_script`. Inert — no caller on any path. | n/a (dormant type + pure helper) |
+| 10.5′-a | Add `owner_reward_spk_payload` to `StakeBondPayload` + `StakeBondRecord` + `stake_bond_record_from_payload`; add the pure `p2pkh_mldsa65_spk` + reward-outputs helper in `palw_consensus.rs`; parity test vs `pay_to_address_script`. Inert — no caller on any path. | n/a (dormant type + pure helper) |
 | 10.5′-b1 | Plumb `RewardParams` into `DnsParams` (gated). Done. | n/a (dormant param) |
 | 10.5′-b2/b3 | Wire the reward outputs into `CoinbaseManager::expected_coinbase_transaction` (construction **and** validation, byte-for-byte). **Depends on the per-block active-bond view** specified in [ADR-0009 Addendum B](0009-dns-probabilistic-finality.md#addendum-b--per-block-active-bond-view--reward-eligibility-binding) — the coinbase is validated per-block, so bond resolution must be a deterministic function of the block's own view, not the virtual-commit-time global `StakeBonds` store. Behind the overlay activation gate; no behaviour change on any current network. | yes (activation height) |
 
@@ -649,7 +649,7 @@ to `Active` (or `Unbonding`) in the block's selected-parent
    validates its presence, value, and spk (construction == validation,
    byte-for-byte, like the coinbase fan-out). For the **unreveal**
    case the reward is first passed through
-   [`apply_unreveal_reporter_min_cap`](../../consensus/core/src/dns_finality.rs)
+   [`apply_unreveal_reporter_min_cap`](../../consensus/core/src/palw_consensus.rs)
    with the `DnsParams::unreveal_reporter_reward_sompi` floor (ADR-0012).
 4. **The remainder burns implicitly**: `S` left the supply in step 2
    and only `reporter_reward_sompi` was re-minted in step 3, so
@@ -757,7 +757,7 @@ validation byte-for-byte (Addendum C's determinism).
 
 | Sub-PR | Title | Gated? |
 |---|---|---|
-| 16.4-a / -b1 | Pure aggregator + per-block resolver in `dns_finality.rs` (`slashing_side_effects_from_evidence`, `resolve_slashing_side_effects`). Done, inert. | n/a (pure) |
+| 16.4-a / -b1 | Pure aggregator + per-block resolver in `palw_consensus.rs` (`slashing_side_effects_from_evidence`, `resolve_slashing_side_effects`). Done, inert. | n/a (pure) |
 | 16.4-b2-i | Thread the selected-parent `ActiveBondView` into `calculate_utxo_state`. Done, inert plumbing. | n/a (no consumer) |
 | 16.4-b2-ii | The §C.1.2 per-transaction mint exemption (output-0, only when minting, overlay-active). | yes (activation) |
 | 16.4-b2-iii | The §C.1.3 block-validity reporter-output rule. | yes (activation) |
@@ -816,7 +816,7 @@ so honest templates always yield valid blocks.
 | Sub-PR | Title | Gated? |
 |---|---|---|
 | 10.12-a | Stateful slashing-evidence **genuineness** rule (forged evidence cannot slash). Done. | yes (activation) |
-| 10.12-b1 | Add `reporter_reward_spk_payload` to both evidence payloads + a pure `slashing_distribution_output(S, bps, payload, unreveal_floor) -> (reporter TxOutput, burned)` helper in `dns_finality.rs`. Inert. | n/a (dormant field + pure helper) |
+| 10.12-b1 | Add `reporter_reward_spk_payload` to both evidence payloads + a pure `slashing_distribution_output(S, bps, payload, unreveal_floor) -> (reporter TxOutput, burned)` helper in `palw_consensus.rs`. Inert. | n/a (dormant field + pure helper) |
 | 10.12-b2 | Wire the consensus side-effect: bond-UTXO removal + required reporter-reward output validation in the virtual processor (construction **and** validation, byte-for-byte), behind the activation gate. | yes (activation) |
 
 ## Addendum C.2 — Reporter reward as an atomic side-effect (binding)

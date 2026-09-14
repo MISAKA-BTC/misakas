@@ -2488,7 +2488,7 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         if msg.overlay_snapshot.len() > MAX_OVERLAY_SNAPSHOT_BYTES {
             return Err(ProtocolError::Other("PruningPointOverlaySnapshot exceeds the accepted size cap"));
         }
-        let snapshot: kaspa_consensus_core::dns_finality::OverlaySnapshot = borsh::from_slice(&msg.overlay_snapshot)
+        let snapshot: kaspa_consensus_core::palw_consensus::OverlaySnapshot = borsh::from_slice(&msg.overlay_snapshot)
             .map_err(|_| ProtocolError::Other("invalid overlay snapshot in PruningPointOverlaySnapshot"))?;
         consensus.clone().spawn_blocking(move |c| c.import_pruning_point_overlay_snapshot(pruning_point, snapshot)).await?;
         info!("imported the overlay snapshot of the pruning point {}", pruning_point);

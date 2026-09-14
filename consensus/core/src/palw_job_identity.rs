@@ -287,7 +287,7 @@ pub fn verify_commitment_entry_v3<F>(
 where
     F: FnOnce(&Hash, &[u8]) -> bool,
 {
-    let expected = crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
+    let expected = crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN;
     if claim.signature.len() != expected {
         return Err(PalwJobIdentityError::SignatureLength { got: claim.signature.len(), expected });
     }
@@ -333,7 +333,7 @@ where
     if !claim.sample_indices.windows(2).all(|w| w[0] < w[1]) {
         return Err(PalwJobIdentityError::SampleIndicesNotSorted);
     }
-    let expected = crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
+    let expected = crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN;
     if claim.signature.len() != expected {
         return Err(PalwJobIdentityError::SignatureLength { got: claim.signature.len(), expected });
     }
@@ -356,7 +356,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
+    use crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN;
 
     const NET: &[u8] = b"misaka-testnet-11";
 

@@ -658,7 +658,7 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
                          pinned worker runtime.\nSet PALW_WORKER=<path to palw-worker> and \
                          MISAKA_PALW_GGUF=<path to {}>{}",
                         network,
-                        kaspa_consensus_core::vlt::qwen35_pins::GGUF_FILENAME,
+                        kaspa_consensus_core::palw_compute::qwen35_pins::GGUF_FILENAME,
                         if network.network_type == kaspa_consensus_core::network::NetworkType::Devnet {
                             ", or export MISAKA_PALW_POW_FIXTURE=1 for the model-free devnet fixture."
                         } else {
@@ -676,7 +676,7 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
                         println!(
                             "PALW_WORKER is set but MISAKA_PALW_GGUF is not — the worker refuses to run \
                              without the pinned {} (size+sha checked).",
-                            kaspa_consensus_core::vlt::qwen35_pins::GGUF_FILENAME
+                            kaspa_consensus_core::palw_compute::qwen35_pins::GGUF_FILENAME
                         );
                         exit(1);
                     }

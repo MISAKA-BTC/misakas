@@ -150,7 +150,7 @@ impl PalwCreditParamsV1 {
 ///
 /// `q` and the executor's `validator_id` exclusion remain the lottery's job.
 pub fn panel_candidates_at_anchor_v1(
-    bonds: &[crate::dns_finality::StakeBondRecord],
+    bonds: &[crate::palw_consensus::StakeBondRecord],
     runtime_class_id: Hash64,
     anchor_daa: u64,
     executor_owner: Hash64,
@@ -160,7 +160,7 @@ pub fn panel_candidates_at_anchor_v1(
         .map(|b| PalwPanelCandidateV1 {
             validator_id: b.validator_pubkey_hash,
             runtime_class_id,
-            bonded: crate::dns_finality::is_bond_active_at(b, anchor_daa) && b.owner_pubkey_hash != executor_owner,
+            bonded: crate::palw_consensus::is_bond_active_at(b, anchor_daa) && b.owner_pubkey_hash != executor_owner,
             frozen: false,
         })
         .collect()
@@ -207,7 +207,7 @@ pub fn panel_candidates_at_anchor_v1(
 /// encodes_eligibility_not_status` pins the encoding so a future edit that "fixes" the status
 /// breaks loudly instead of silently widening the panel to the executor's own operator.
 pub fn panel_seats_at_anchor_v3(
-    bonds: &[crate::dns_finality::StakeBondRecord],
+    bonds: &[crate::palw_consensus::StakeBondRecord],
     runtime_class_id: Hash64,
     anchor_daa: u64,
     executor_owner: Hash64,
@@ -215,12 +215,12 @@ pub fn panel_seats_at_anchor_v3(
     bonds
         .iter()
         .map(|b| {
-            let eligible = crate::dns_finality::is_bond_active_at(b, anchor_daa) && b.owner_pubkey_hash != executor_owner;
+            let eligible = crate::palw_consensus::is_bond_active_at(b, anchor_daa) && b.owner_pubkey_hash != executor_owner;
             PalwPanelCandidateV3 {
                 validator_id: b.validator_pubkey_hash,
                 bond_outpoint: b.bond_outpoint,
                 runtime_class_id,
-                bond_status: if eligible { crate::dns_finality::BondStatus::Active } else { crate::dns_finality::BondStatus::Slashed },
+                bond_status: if eligible { crate::palw_consensus::BondStatus::Active } else { crate::palw_consensus::BondStatus::Slashed },
                 class_frozen: false,
                 operator_root: Some(b.owner_pubkey_hash),
             }
@@ -255,7 +255,7 @@ pub struct PalwObservedAttestationV1 {
     pub attester_id: Hash64,
     /// The bond that FILED this attestation — the payee, and the only unique identity here.
     ///
-    /// `attester_id` is a `validator_pubkey_hash`, which `dns_finality` states is not unique, so it
+    /// `attester_id` is a `validator_pubkey_hash`, which `palw_consensus` states is not unique, so it
     /// cannot resolve a payout: with two bonds under one key the reward went to whichever the
     /// walk reached first (audit B5). The carriage has carried this outpoint all along; the
     /// consumer dropped it.
@@ -403,8 +403,8 @@ mod tests {
     /// work and collecting the attester share for it.
     #[test]
     fn the_credit_panel_encodes_eligibility_not_status() {
-        fn rec(seed: u8) -> crate::dns_finality::StakeBondRecord {
-            crate::dns_finality::StakeBondRecord {
+        fn rec(seed: u8) -> crate::palw_consensus::StakeBondRecord {
+            crate::palw_consensus::StakeBondRecord {
                 version: 1,
                 bond_outpoint: crate::tx::TransactionOutpoint::new(Hash64::from_bytes([seed; 64]), 0),
                 owner_pubkey_hash: Hash64::from_u64_word(seed as u64),
@@ -417,7 +417,7 @@ mod tests {
                 owner_reward_spk_payload: [0u8; 64],
                 unbond_request_daa_score: None,
                 slashed_at_daa_score: None,
-                status: crate::dns_finality::BondStatus::Active,
+                status: crate::palw_consensus::BondStatus::Active,
             }
         }
         let owner = Hash64::from_u64_word(0xE0);
@@ -439,13 +439,13 @@ mod tests {
 
         assert_eq!(
             status_of(executor_second_bond.bond_outpoint),
-            crate::dns_finality::BondStatus::Slashed,
+            crate::palw_consensus::BondStatus::Slashed,
             "the executor's own operator must be barred — this seat is the self-attestation hole"
         );
-        assert_eq!(status_of(outsider.bond_outpoint), crate::dns_finality::BondStatus::Active);
+        assert_eq!(status_of(outsider.bond_outpoint), crate::palw_consensus::BondStatus::Active);
         assert_eq!(
             status_of(unbonding.bond_outpoint),
-            crate::dns_finality::BondStatus::Slashed,
+            crate::palw_consensus::BondStatus::Slashed,
             "an ineligible bond reads Slashed whatever it actually is — nothing may take a slash decision from this field"
         );
     }
@@ -492,7 +492,7 @@ mod tests {
             validator_id: id,
             bond_outpoint: bond_of(id),
             runtime_class_id: class,
-            bond_status: crate::dns_finality::BondStatus::Active,
+            bond_status: crate::palw_consensus::BondStatus::Active,
             class_frozen: false,
             operator_root: None,
         }
@@ -569,7 +569,7 @@ mod tests {
     /// attesting to the work of the executor that had just been slashed alongside it.
     #[test]
     fn only_bonds_active_at_the_anchor_become_candidates() {
-        use crate::dns_finality::{BondStatus, StakeBondRecord, effective_bond_status};
+        use crate::palw_consensus::{BondStatus, StakeBondRecord, effective_bond_status};
         let class = h64(0xC1);
         let rec = |seed: u8, activation: u64, unbond: Option<u64>, slashed: Option<u64>| StakeBondRecord {
             version: 1,

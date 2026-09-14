@@ -15,14 +15,14 @@
 use crate::compute::{ComputeConfig, ComputeInflight, ComputeRole, capability_expiry_to_declare, new_job_input};
 use async_trait::async_trait;
 use kaspa_addresses::Prefix;
-use kaspa_consensus_core::dns_finality::{
+use kaspa_consensus_core::palw_consensus::{
     BondStatus, DNS_PAYLOAD_VERSION_V1, OpenComputeCommitment, PendingComputeVerdict, PrecommitLock, SignedEpochCheckOutcome,
     SignedEpochRecord, StakeAttestation, ValidatorAttestationTarget, ValidatorStatus, effective_bond_status, is_bond_active_at,
     signature_fingerprint, single_attestation_shard,
 };
 use kaspa_consensus_core::mass::MassCalculator;
 use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionId, TransactionOutpoint, UtxoEntry};
-use kaspa_consensus_core::vlt::{
+use kaspa_consensus_core::palw_compute::{
     ComputeFraudKind, LlmJobSpec, ReplayProof, VerificationVerdict, VltParams, compute_receipt_hash, job_spec_id,
 };
 use kaspa_consensusmanager::ConsensusManager;
@@ -1507,7 +1507,7 @@ impl ValidatorService {
             // path is how the next edit goes wrong.
             //
             // It is safe because equivocation is decided on `(target_hash, target_daa_score)` and
-            // NOTHING else: `dns_finality.rs:2127-2129` and `:2437-2444` state that the signature
+            // NOTHING else: `palw_consensus.rs:2127-2129` and `:2437-2444` state that the signature
             // fingerprint is deliberately outside the predicate, for exactly this reason ("two valid
             // signatures over the same message differ on the `rnd` parameter, so bit-equality would
             // be too strict"). `AllowRebroadcast` means the SAME target was signed, so re-signing it

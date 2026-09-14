@@ -22,7 +22,7 @@
 //!
 //! # What stateless means here
 //!
-//! Exactly what it means one module over in `dns_finality`: everything decidable from the
+//! Exactly what it means one module over in `palw_consensus`: everything decidable from the
 //! payload bytes alone. Signature *lengths*, structural caps, internal coherence (a composite
 //! commitment's binding must recompute the root it claims, and must describe the envelope it
 //! rides with) — but no bond lookups, no registry membership, no signature verification, no
@@ -47,8 +47,8 @@
 //! recommended registered form.
 
 use crate::BlockHash;
-use crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
-use crate::dns_finality::StakeBondRecord;
+use crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN;
+use crate::palw_consensus::StakeBondRecord;
 use crate::palw_legs::{
     PALW_LEGS_OBJECT_VERSION_V1, PalwLegsBindingV1, PalwLegsOpeningAnswerV1, PalwLegsOpeningCallV1, PalwLegsRefutationV1,
     activation_leg_root_v1, canonical_decode_calls, checkpoint_leg_root_v1, execution_commitment_root_v1,
@@ -95,7 +95,7 @@ pub const PALW_CARRIAGE_KIND_EVIDENCE_CHUNK: u8 = 0x06;
 /// An executor-equivocation certificate — the ONE PALW offence that may slash at acceptance.
 ///
 /// The rule is inherited verbatim from the VLT layer below
-/// ([`crate::vlt::ComputeFraudKind::ContradictoryVerification`]): only an objectively provable
+/// ([`crate::palw_compute::ComputeFraudKind::ContradictoryVerification`]): only an objectively provable
 /// offence may slash, because slashing on an unprovable claim is worse than not slashing at all —
 /// it lets any bonded party burn any other party's stake. Two signatures from one bonded key over
 /// one job with different roots cannot both be true, and proving it requires no re-execution and
@@ -400,7 +400,7 @@ impl PalwWithheldAuthorshipV1 {
         if self.commitment.trace_root != *refuted_trace_root {
             return false;
         }
-        if !crate::dns_finality::is_bond_active_at(accused_bond, pov_daa_score) {
+        if !crate::palw_consensus::is_bond_active_at(accused_bond, pov_daa_score) {
             return false;
         }
         let digest = self.commitment.message(chain_network_id, self.pre_pow_hash, self.timestamp, self.nonce);
@@ -447,7 +447,7 @@ pub enum PalwBisectMoveBodyV1 {
         /// **The responder's BOND**, and the reason it sits beside `responder_id` rather than
         /// replacing it (external audit P0-9).
         ///
-        /// `responder_id` is a validator key hash, which `dns_finality` states is not unique to a
+        /// `responder_id` is a validator key hash, which `palw_consensus` states is not unique to a
         /// bond. So no ladder outcome could name an executor bond to slash: a conviction reached
         /// through the ladder had no unambiguous target, and the whole dispute could only ever end
         /// in nobody being charged. The outpoint is unique by construction and is the key the
@@ -952,7 +952,7 @@ where
     if signer != accused_bond.validator_pubkey_hash || carriage.certificate.attestation_b.executor_id != signer {
         return Err(PalwCarriageError::EquivocationBondNotTheSigner);
     }
-    if !crate::dns_finality::is_bond_active_at(accused_bond, pov_daa_score) {
+    if !crate::palw_consensus::is_bond_active_at(accused_bond, pov_daa_score) {
         return Err(PalwCarriageError::EquivocationBondInactive);
     }
     let verdict = adjudicate_class_contradiction_v1(
@@ -1027,7 +1027,7 @@ where
     if carriage.attestation.bond_outpoint != accused_bond.bond_outpoint {
         return Err(PalwCarriageError::EquivocationBondNotTheSigner);
     }
-    if !crate::dns_finality::is_bond_active_at(accused_bond, pov_daa_score) {
+    if !crate::palw_consensus::is_bond_active_at(accused_bond, pov_daa_score) {
         return Err(PalwCarriageError::EquivocationBondInactive);
     }
     // Same rule as the equivocation adjudicator: the network identity comes from the CHAIN. Taking
@@ -1329,7 +1329,7 @@ pub fn palw_carriages_from_accepted_txs(txs: &[Transaction]) -> Vec<(Transaction
 // IS the release artifact; nothing activates until the whole fleet admits the band.
 
 /// Maps a PALW carriage subnetwork id to its kind byte — the Stage-1 mirror of
-/// `dns_finality::dns_tx_kind`, except the kind is this module's own byte code
+/// `palw_consensus::dns_tx_kind`, except the kind is this module's own byte code
 /// (`PALW_CARRIAGE_KIND_*`), so no second enum exists to drift from the Stage-0 envelope's.
 /// `None` = not a PALW carriage id (native / coinbase / another band / unknown).
 pub fn palw_carriage_tx_kind(subnetwork_id: &SubnetworkId) -> Option<u8> {
@@ -1471,7 +1471,7 @@ mod tests {
         PALW_JOB_WIRE_VERSION_V2, PALW_V2_ALL_DOMAINS, PalwLogitsDtypeV2, PalwStopReasonV2, PalwTracePhaseV2, PalwTraceSummaryV2,
     };
     use crate::subnets::SUBNETWORK_ID_COINBASE;
-    use crate::vlt::VERIFIER_SORTITION_KEY;
+    use crate::palw_compute::VERIFIER_SORTITION_KEY;
 
     fn h64(seed: u8) -> Hash64 {
         Hash64::from_bytes([seed; 64])
@@ -2105,7 +2105,7 @@ mod tests {
             full_logits_trace_root: root,
             committed_root: root,
             bond_outpoint: outpoint(0xB1, 0),
-            signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN],
         };
         PalwEquivocationCarriageV1 {
             version: PALW_CARRIAGE_VERSION_V1,
@@ -2133,7 +2133,7 @@ mod tests {
                 full_logits_trace_root: refutation.binding.full_logits_trace_root,
                 committed_root: refutation.binding.committed_execution_root,
                 bond_outpoint: outpoint(0xB1, 0),
-                signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+                signature: vec![0x5A; crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN],
             },
             refutation,
         }
@@ -2176,7 +2176,7 @@ mod tests {
                 observed_roots: vec![h64(0x74)],
                 verdict: crate::palw_receipt::PalwReceiptVerdictV1::Match,
                 verifier_bond_outpoint: outpoint(0xC2, 0),
-                signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+                signature: vec![0x5A; crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN],
             },
         }
     }
@@ -2363,7 +2363,7 @@ mod tests {
 #[cfg(test)]
 mod equivocation_tests {
     use super::*;
-    use crate::dns_finality::{BondStatus, StakeBondRecord};
+    use crate::palw_consensus::{BondStatus, StakeBondRecord};
     use crate::palw_slash::{PALW_S_MLDSA87_ATTESTATION_CONTEXT, PALW_S_OBJECT_VERSION_V3};
     use crate::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, trace_scheme_id_v2};
     use crate::tx::TransactionId;
@@ -2594,7 +2594,7 @@ mod step_conviction_tests {
     const NET: &[u8] = b"step-refute-test";
 
     use super::*;
-    use crate::dns_finality::{BondStatus, StakeBondRecord};
+    use crate::palw_consensus::{BondStatus, StakeBondRecord};
     use crate::palw_slash::PALW_S_OBJECT_VERSION_V3;
     use crate::palw_step_refute::PalwWeightOracleV1;
     use crate::tx::TransactionId;
@@ -2982,7 +2982,7 @@ mod bisect_move_tests {
             owner_reward_spk_payload: [0u8; 64],
             unbond_request_daa_score: None,
             slashed_at_daa_score: None,
-            status: crate::dns_finality::BondStatus::Active,
+            status: crate::palw_consensus::BondStatus::Active,
         }
     }
 
@@ -3009,14 +3009,14 @@ mod bisect_move_tests {
                 trace_root: root,
                 output_root: Hash64::from_u64_word(0),
                 pwu_claim: 42,
-                signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+                signature: vec![0x5A; crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN],
             },
             pre_pow_hash: Hash64::from_u64_word(0xB0),
             timestamp: 1_700_000_000,
             nonce: 7,
         };
         let ok = |_k: &[u8], _d: &Hash, s: &[u8], c: &[u8]| {
-            s == vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN].as_slice() && c == PALW_BLOCK_COMMITMENT_MLDSA87_CONTEXT
+            s == vec![0x5A; crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN].as_slice() && c == PALW_BLOCK_COMMITMENT_MLDSA87_CONTEXT
         };
         assert!(authorship.establishes_authorship_v1(&bond, &root, b"net", 1_000, ok), "the honest case must hold");
 

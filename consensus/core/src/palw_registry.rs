@@ -287,7 +287,7 @@ impl PalwClassRegistrationV1 {
         if self.class_tag.is_empty() || self.class_tag.len() > PALW_REGISTRY_MAX_LABEL_BYTES {
             return Err(PalwRegistryError::NotCanonical("class tag is empty or exceeds the cap"));
         }
-        if crate::vlt::derive_runtime_class_id(&self.class_tag) != self.runtime_class_id {
+        if crate::palw_compute::derive_runtime_class_id(&self.class_tag) != self.runtime_class_id {
             return Err(PalwRegistryError::ClassIdNotDerivedFromTag);
         }
         match routing_keys_for_class_tag_v1(&self.class_tag) {
@@ -568,7 +568,7 @@ pub(crate) mod tests {
             pwu_per_inference: 512_000_000,
             label: class_tag.into(),
             class_tag: class_tag.into(),
-            runtime_class_id: crate::vlt::derive_runtime_class_id(class_tag),
+            runtime_class_id: crate::palw_compute::derive_runtime_class_id(class_tag),
             runtime_manifest_hash: h64(0x02),
             model_profile_id: h64(0x03),
             tokenizer_id: h64(0x04),
@@ -654,7 +654,7 @@ pub(crate) mod tests {
             vec![node(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL), node(PalwStepOpKindV1::Scale, KDESC_BASE0_RESCALE)];
         reg.label = class_tag.into();
         reg.class_tag = class_tag.into();
-        reg.runtime_class_id = crate::vlt::derive_runtime_class_id(class_tag);
+        reg.runtime_class_id = crate::palw_compute::derive_runtime_class_id(class_tag);
         reg.adjudication_depth = PalwAdjudicationDepthV1::ArithmeticCatalogued;
         reg
     }
@@ -974,7 +974,7 @@ pub(crate) mod tests {
         let metal_tag = "misaka-palw-lite-fp/apple-metal-arm64/v1";
         let mut cross_family = fleet_registration();
         cross_family.class_tag = metal_tag.into();
-        cross_family.runtime_class_id = crate::vlt::derive_runtime_class_id(metal_tag);
+        cross_family.runtime_class_id = crate::palw_compute::derive_runtime_class_id(metal_tag);
         assert_eq!(cross_family.validate(&two_minute_blockrate(), 120_000), Err(PalwRegistryError::RoutingKeysNotDerivedFromTag));
         cross_family.execution_family = PalwExecutionFamilyV1::Metal;
         cross_family.validate(&two_minute_blockrate(), 120_000).unwrap();
@@ -985,7 +985,7 @@ pub(crate) mod tests {
         assert_eq!(wrong_generation.validate(&two_minute_blockrate(), 120_000), Err(PalwRegistryError::RoutingKeysNotDerivedFromTag));
         let mut alien_tag = fleet_registration();
         alien_tag.class_tag = "misaka-palw-lite-npu/exotic/v1".into();
-        alien_tag.runtime_class_id = crate::vlt::derive_runtime_class_id("misaka-palw-lite-npu/exotic/v1");
+        alien_tag.runtime_class_id = crate::palw_compute::derive_runtime_class_id("misaka-palw-lite-npu/exotic/v1");
         assert_eq!(alien_tag.validate(&two_minute_blockrate(), 120_000), Err(PalwRegistryError::RoutingKeysNotDerivedFromTag));
     }
 }

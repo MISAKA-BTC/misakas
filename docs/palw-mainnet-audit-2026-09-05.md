@@ -223,7 +223,7 @@ the handshake rather than at consensus.
 | O-12 | **`capable_classes` has two writers and every ADR-0071 amendment guards one** — a `BondRegistered` writes an unbounded, unchecked class set straight into `state_root`. | `palw_state_v2.rs:8151` |
 | O-13 | **An attempt block's fork-choice blue work is a constant while its PoW is still priced by `header.bits`**, so the difficulty retarget bounds no header-DAG weight at all. | `ghostdag/protocol.rs:436` |
 | O-14 | **The genesis free-prompt certified set names a dense-tier class the card does not register and omits the one it does**, killing the 489‰ tier's free-prompt lane from genesis. | `palw_e2e_adjudicability.rs:1048` |
-| O-15 | **The deferred quality-bonus and reserve-drip fan-outs emit one coinbase output per included validator with no bound.** Same allowance as O-4's cap; every epoch-crossing block on a mainnet with a real validator set is invalid. (The cap itself is widened by this audit; the *unbounded* fan-out is not.) | `dns_finality.rs:3496` |
+| O-15 | **The deferred quality-bonus and reserve-drip fan-outs emit one coinbase output per included validator with no bound.** Same allowance as O-4's cap; every epoch-crossing block on a mainnet with a real validator set is invalid. (The cap itself is widened by this audit; the *unbounded* fan-out is not.) | `palw_consensus.rs:3496` |
 | O-16 | **`PruningPointPalwState.classCarriages` is uncapped**, each entry costing a full uncached state materialization, so one IBD peer can pin the single IBD latch forever. | `ibd/flow.rs:2554` |
 | O-17 | **PALW material and receipt broadcasts are flood-relayed to every peer before any binding to a live claim**, at peer-count amplification, with no rate limit. | `v8/palw_gossip_flow.rs:52` |
 | O-18 | **ADR-0084 D4's attempt-lane interval arm can never file `Valid`**: it compares the opening's real leaf count against `duty.work_leaves`, which every attempt claim sets to 0. | `palw_panel.rs:3979` |
@@ -255,7 +255,7 @@ The session limit killed these dimensions' verifiers. Listed so they are not mis
   reclamation folds idle streaks on gap epochs the sibling growth rule refuses to measure
   (`palw_state_v2.rs:7698`).
 * **reward/mint**: PoS-v2 epoch tallies index blue-score attestation epochs with the DAA-denominated
-  `epoch_length_blocks`, so `expected_stake` is evaluated at the wrong chain point (`dns_finality.rs:6886`).
+  `epoch_length_blocks`, so `expected_stake` is evaluated at the wrong chain point (`palw_consensus.rs:6886`).
 * **gates**: the certificate that licenses a class to carry weight is granted by kernel-set
   containment alone, drilled on an n_ctx-32 toy geometry, so no drill vector can exercise a
   width-dependent court defect (`palw_e2e_adjudicability.rs:847`); ADR-0077 W10's interval-opening

@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use kaspa_consensus_core::dns_finality::DnsFinalityCertificate;
+use kaspa_consensus_core::palw_consensus::DnsFinalityCertificate;
 use kaspa_database::prelude::CachePolicy;
 use kaspa_database::prelude::DB;
 use kaspa_database::prelude::StoreError;
@@ -66,7 +66,7 @@ impl DbDnsFinalityCertificateStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kaspa_consensus_core::dns_finality::{DnsFinalityCertificate, WeightedSignature};
+    use kaspa_consensus_core::palw_consensus::{DnsFinalityCertificate, WeightedSignature};
     use kaspa_consensus_core::tx::TransactionOutpoint;
     use kaspa_database::create_temp_db;
     use kaspa_database::prelude::ConnBuilder;

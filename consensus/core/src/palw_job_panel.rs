@@ -18,7 +18,7 @@
 //!
 //! Consensus-inert until the ADR-0038 change set wires and activates together.
 
-use crate::dns_finality::BondStatus;
+use crate::palw_consensus::BondStatus;
 use crate::palw_job_identity::palw_panel_seed_v3;
 use crate::palw_schedule::{PalwPanelCandidateV1, select_replay_panel_v1};
 use crate::tx::TransactionOutpoint;
@@ -91,7 +91,7 @@ pub struct PalwPanelSeatV3 {
 /// dropping those candidates here would silently shrink the eligible set for a reason the lottery
 /// is supposed to see.
 pub fn palw_panel_candidates_v1<C, F>(
-    bonds: &crate::dns_finality::ActiveBondView,
+    bonds: &crate::palw_consensus::ActiveBondView,
     anchor_daa: u64,
     runtime_class_of_bond: C,
     class_is_frozen: F,
@@ -103,14 +103,14 @@ where
     let mut out: Vec<PalwPanelCandidateV3> = bonds
         .records()
         .into_iter()
-        .filter(|record| crate::dns_finality::is_bond_active_at(record, anchor_daa))
+        .filter(|record| crate::palw_consensus::is_bond_active_at(record, anchor_daa))
         .filter_map(|record| {
             let runtime_class_id = runtime_class_of_bond(&record.bond_outpoint)?;
             Some(PalwPanelCandidateV3 {
                 validator_id: record.validator_pubkey_hash,
                 bond_outpoint: record.bond_outpoint,
                 runtime_class_id,
-                bond_status: crate::dns_finality::effective_bond_status(&record, anchor_daa),
+                bond_status: crate::palw_consensus::effective_bond_status(&record, anchor_daa),
                 class_frozen: class_is_frozen(&runtime_class_id),
                 // Audit P0-7: the bond's OWNER, not `None`.
                 //
@@ -205,7 +205,7 @@ fn select_from_eligible_v3(
     //
     // **The ticket key is the SEAT, not the validator key.** `select_replay_panel_v1` treats the id
     // it is handed as opaque: it hashes it into the ticket and uses it as the collision tie-break.
-    // A validator key hash is not unique (`dns_finality` says so), so two bonds sharing one key
+    // A validator key hash is not unique (`palw_consensus` says so), so two bonds sharing one key
     // produced the SAME ticket and the SAME tie-break — they sorted adjacently, both could be
     // truncated into the panel, and the resolution below then bound both to whichever bond came
     // first. The result was a panel with fewer distinct verifiers than `q` and a bonded validator
@@ -333,8 +333,8 @@ mod tests {
         Hash64::from_u64_word(7)
     }
 
-    fn bond_record(seed: u8, unbond_at: Option<u64>) -> crate::dns_finality::StakeBondRecord {
-        crate::dns_finality::StakeBondRecord {
+    fn bond_record(seed: u8, unbond_at: Option<u64>) -> crate::palw_consensus::StakeBondRecord {
+        crate::palw_consensus::StakeBondRecord {
             version: 1,
             bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([seed; 64]), 0),
             owner_pubkey_hash: Hash64::from_u64_word(seed as u64),
@@ -368,7 +368,7 @@ mod tests {
         a.owner_pubkey_hash = owner;
         b.owner_pubkey_hash = owner;
         let outsider = bond_record(3, None);
-        let bonds = crate::dns_finality::ActiveBondView::from_records([
+        let bonds = crate::palw_consensus::ActiveBondView::from_records([
             (a.bond_outpoint, a.clone()),
             (b.bond_outpoint, b.clone()),
             (outsider.bond_outpoint, outsider.clone()),
@@ -406,7 +406,7 @@ mod tests {
     /// no-show against an honest operator, since the duty accounting charges exactly these seats.
     #[test]
     fn a_candidate_must_be_bonded_at_the_anchor_and_have_declared_a_class() {
-        let bonds = crate::dns_finality::ActiveBondView::from_records([
+        let bonds = crate::palw_consensus::ActiveBondView::from_records([
             (bond_record(1, None).bond_outpoint, bond_record(1, None)),
             (bond_record(2, None).bond_outpoint, bond_record(2, None)),
             (bond_record(3, Some(500)).bond_outpoint, bond_record(3, Some(500))),
@@ -433,7 +433,7 @@ mod tests {
     #[test]
     fn the_candidate_set_is_returned_in_canonical_order() {
         let records: Vec<_> = [9u8, 1, 5, 3].into_iter().map(|s| (bond_record(s, None).bond_outpoint, bond_record(s, None))).collect();
-        let bonds = crate::dns_finality::ActiveBondView::from_records(records);
+        let bonds = crate::palw_consensus::ActiveBondView::from_records(records);
         let got = palw_panel_candidates_v1(&bonds, 1_000, |_| Some(class()), |_| false);
         let ids: Vec<_> = got.iter().map(|c| c.validator_id).collect();
         let mut sorted = ids.clone();
@@ -692,7 +692,7 @@ mod tests {
     fn two_bonds_under_one_validator_key_are_two_seats() {
         let a = candidate(10);
         let mut b = candidate(20);
-        // Same key, different bonds — the case `dns_finality` says is representable.
+        // Same key, different bonds — the case `palw_consensus` says is representable.
         b.validator_id = a.validator_id;
         assert_ne!(a.bond_outpoint, b.bond_outpoint);
 

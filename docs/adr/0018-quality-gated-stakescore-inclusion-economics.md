@@ -32,7 +32,7 @@ economics and the StakeScore quality gate.
 ### Why this ADR (the gap in the current code)
 
 The implemented StakeScore credit is **linear and ungated**
-(`dns_finality::stake_score_increment`):
+(`palw_consensus::stake_score_increment`):
 
 ```text
 epoch_credit_e = included_stake_e / expected_stake_e × STAKE_SCORE_SCALE

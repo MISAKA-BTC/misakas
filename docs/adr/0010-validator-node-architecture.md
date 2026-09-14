@@ -107,7 +107,7 @@ without creating new top-level crates. Concrete target paths
 (implementation deferred to PR-10.4 — PR-10.9):
 
 ```text
-consensus/core/src/dns_finality.rs              # type stubs (landed PR-10.3, extended PR-11.2)
+consensus/core/src/palw_consensus.rs              # type stubs (landed PR-10.3, extended PR-11.2)
 
 consensus/src/processes/stake_registry.rs       # active / unbonding / slashed
 consensus/src/processes/stake_score.rs          # deterministic aggregation from shards
@@ -302,9 +302,9 @@ refined slot plan is:
 |---|---|---|
 | 10.1 | ADR-0009 (DNS overlay) | landed |
 | 10.2 | Spec update (DNS scope + Phase 10) | landed |
-| 10.3 | `consensus/core/src/dns_finality.rs` type stubs | landed |
+| 10.3 | `consensus/core/src/palw_consensus.rs` type stubs | landed |
 | 11.1 | This ADR (validator node architecture) | landed |
-| 11.2 | `dns_finality.rs` Hash64 identifiers + registry / snapshot / state types + helpers | next |
+| 11.2 | `palw_consensus.rs` Hash64 identifiers + registry / snapshot / state types + helpers | next |
 | 11.3 | Spec update (ADR-0010 + Phase 11 row) | next |
 | 10.4 | Stake transaction kinds (subnetwork_id route) + tx validation | deferred |
 | 10.5 | `stake_registry` / `stake_score` consensus processes + stores | deferred |

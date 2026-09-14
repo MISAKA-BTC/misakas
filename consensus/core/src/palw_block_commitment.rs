@@ -258,7 +258,7 @@ impl PalwBlockCommitmentV1 {
         if self.pwu_claim == 0 {
             return Err(PalwBlockCommitmentError::ZeroPwuClaim);
         }
-        let expected = crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
+        let expected = crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN;
         if self.signature.len() != expected {
             return Err(PalwBlockCommitmentError::SignatureLength { got: self.signature.len(), expected });
         }
@@ -298,9 +298,9 @@ impl PalwBlockCommitmentV1 {
     /// resolve differently — the B5 defect, in miniature.
     pub fn validate_executor_bond_v1<'a>(
         &self,
-        bonds: &'a crate::dns_finality::ActiveBondView,
+        bonds: &'a crate::palw_consensus::ActiveBondView,
         pov_daa_score: u64,
-    ) -> Result<&'a crate::dns_finality::StakeBondRecord, PalwBlockCommitmentError> {
+    ) -> Result<&'a crate::palw_consensus::StakeBondRecord, PalwBlockCommitmentError> {
         bonds
             .active_bond_at(&self.executor_bond_outpoint, pov_daa_score)
             .ok_or(PalwBlockCommitmentError::ExecutorBondNotActive { outpoint: self.executor_bond_outpoint, pov_daa_score })
@@ -444,7 +444,7 @@ impl PalwBlockCommitmentV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
+    use crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN;
 
     const NET: &[u8] = b"misaka-testnet-11";
 
@@ -647,7 +647,7 @@ mod tests {
 #[cfg(test)]
 mod w8_executor_bond_tests {
     use super::*;
-    use crate::dns_finality::{ActiveBondView, StakeBondRecord};
+    use crate::palw_consensus::{ActiveBondView, StakeBondRecord};
     use crate::tx::TransactionOutpoint;
 
     fn bond(outpoint: TransactionOutpoint, activation: u64, unbond_request: Option<u64>) -> StakeBondRecord {
@@ -664,7 +664,7 @@ mod w8_executor_bond_tests {
             owner_reward_spk_payload: [0u8; 64],
             unbond_request_daa_score: unbond_request,
             slashed_at_daa_score: None,
-            status: crate::dns_finality::BondStatus::Active,
+            status: crate::palw_consensus::BondStatus::Active,
         }
     }
 
@@ -680,7 +680,7 @@ mod w8_executor_bond_tests {
             trace_root: Hash64::from_u64_word(4),
             output_root: Hash64::from_u64_word(5),
             pwu_claim: 100,
-            signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN],
         }
     }
 
@@ -740,7 +740,7 @@ mod w8_executor_bond_tests {
 #[cfg(test)]
 mod decision_a_gate_tests {
     use super::*;
-    use crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
+    use crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN;
     use crate::pow_layer0::{POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_PALW_LLM, PowLayer0Error, check_palw_commitment_shape};
 
     fn a_commitment() -> PalwBlockCommitmentV1 {

@@ -254,7 +254,7 @@ impl DbTokenStore {
     ///
     /// Write-once per epoch: the caller must only settle an epoch
     /// [`has_settlement`] denies, and only from **finalized** credit rows
-    /// ([`kaspa_consensus_core::vlt::vlt_epoch_finalized`]) — a settlement from
+    /// ([`kaspa_consensus_core::palw_compute::vlt_epoch_finalized`]) — a settlement from
     /// a live epoch would mint on a branch, which is exactly what the design's
     /// §5.3 pin exists to make impossible.
     ///

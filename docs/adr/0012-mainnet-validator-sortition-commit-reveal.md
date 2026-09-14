@@ -162,7 +162,7 @@ At `epoch_start(E)`, every full node:
 
 Both payloads round-trip through Borsh and follow the same
 versioning convention as the existing
-[`StakeBondPayload`](../../consensus/core/src/dns_finality.rs):
+[`StakeBondPayload`](../../consensus/core/src/palw_consensus.rs):
 
 ```rust
 /// Submitted on-chain during epoch E−2.
@@ -361,7 +361,7 @@ epoch_length_blocks` satisfies cleanly.
 
 ### Parameters
 
-Added to [`DnsParams`](../../consensus/core/src/dns_finality.rs)
+Added to [`DnsParams`](../../consensus/core/src/palw_consensus.rs)
 in PR-13.2 alongside the existing DNS overlay parameters:
 
 | Parameter | Type | Mainnet recommendation | Description |
@@ -486,7 +486,7 @@ not** over-claim cryptographic guarantees beyond commit-reveal.
 | PR | Title | Status |
 |---|---|---|
 | 13.1 | This ADR | landed |
-| 13.2 | `dns_finality.rs` SortitionMode + CommitRevealParams + SortitionCommitPayload + SortitionRevealPayload + UnrevealSlashingEvidencePayload + derive_epoch_seed + compute_validator_priority + select_committee helpers + tests | next |
+| 13.2 | `palw_consensus.rs` SortitionMode + CommitRevealParams + SortitionCommitPayload + SortitionRevealPayload + UnrevealSlashingEvidencePayload + derive_epoch_seed + compute_validator_priority + select_committee helpers + tests | next |
 | 13.3 | Spec update (ADR-0012 + Phase 13 row + Phase 13 acceptance criteria 1/4 + v0.6) | next |
 
 Implementation slot (gated on Phase 1–9 baseline + PR-10.5 +

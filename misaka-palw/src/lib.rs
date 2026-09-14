@@ -48,12 +48,12 @@ use std::process::Command;
 use std::time::Duration;
 
 use blake2b_simd::Params as Blake2bParams;
-use kaspa_consensus_core::vlt::{
+use kaspa_consensus_core::palw_compute::{
     ComputeReceipt, LlmJobSpec, ReplayResiduals, VLT_PAYLOAD_VERSION_V1, derive_runtime_class_id, derive_runtime_hash, palw_pins,
     qwen35_pins, residual_commitment,
 };
 #[cfg(feature = "devnet-vlt-fixture")]
-use kaspa_consensus_core::vlt::{devnet_fixture, devnet_fixture_id};
+use kaspa_consensus_core::palw_compute::{devnet_fixture, devnet_fixture_id};
 use kaspa_hashes::Hash64;
 use serde::{Deserialize, Serialize};
 
@@ -63,7 +63,7 @@ use serde::{Deserialize, Serialize};
 /// `trace_commitment` and what a verdict's replay proof is checked against, so a second definition
 /// here would be a second thing to keep in sync — and the failure mode of them drifting is that
 /// every honest proof is rejected.
-pub use kaspa_consensus_core::vlt::REPLAY_RESIDUAL_COMMITMENT_KEY as PALW_RESIDUAL_COMMITMENT_KEY;
+pub use kaspa_consensus_core::palw_compute::REPLAY_RESIDUAL_COMMITMENT_KEY as PALW_RESIDUAL_COMMITMENT_KEY;
 
 /// Client for the v2 `palw-agent` UDS protocol (`misaka-palw-agent-borsh/v1`). Separate from the
 /// v1 subprocess bridge below: the v1 `PalwWorkerRuntime` drives `palw-worker --mode self-job`
@@ -674,7 +674,7 @@ impl ComputeRuntime for DevnetFixtureRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kaspa_consensus_core::vlt::{QuantizationProfile, VerificationScheme, compute_receipt_hash};
+    use kaspa_consensus_core::palw_compute::{QuantizationProfile, VerificationScheme, compute_receipt_hash};
 
     fn spec() -> LlmJobSpec {
         LlmJobSpec {

@@ -17,7 +17,7 @@ use crate::{
 };
 use kaspa_consensus_core::{
     block::TemplateTransactionSelector,
-    dns_finality::MandatoryAttestationDeficit,
+    palw_consensus::MandatoryAttestationDeficit,
     tx::{MutableTransaction, Transaction, TransactionId, TransactionOutpoint},
 };
 use kaspa_core::{debug, time::unix_now, trace};
@@ -1031,7 +1031,7 @@ mod attestation_priority_tests {
     use crate::mempool::{attestation::AttestationMempoolPolicy, config::Config};
     use kaspa_consensus_core::{
         constants::TX_VERSION,
-        dns_finality::{
+        palw_consensus::{
             MandatoryAttestationContributionKey, MandatoryAttestationDeficit, MandatoryAttestationValidator, StakeAttestation,
             StakeAttestationShardPayload,
         },

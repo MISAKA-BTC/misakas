@@ -5,7 +5,7 @@
 //! math (design §5). The flagship asset — **Token (TOK)**, `asset_id = 0` — has
 //! **no mint authority**: nothing in this module (or anywhere else) lets a key
 //! mint it. Its only issuance path is [`emission_rewards`] over an epoch's
-//! *finalized* verified-compute credits [`crate::vlt::VltEpochCredits`], which is
+//! *finalized* verified-compute credits [`crate::palw_compute::VltEpochCredits`], which is
 //! the design's "PoW coinbase" analogy made literal: hash-work → block reward
 //! becomes verified-LLM-work → TOK.
 //!
@@ -34,7 +34,7 @@
 //! [`emission_rewards`] is meant to be fed from the finalized credit store
 //! (`DbVltCreditStore`), whose rows are written only once an epoch is buried
 //! past both the challenge window and the reorg horizon
-//! ([`crate::vlt::vlt_epoch_finalized`]). Below that depth every branch shares
+//! ([`crate::palw_compute::vlt_epoch_finalized`]). Below that depth every branch shares
 //! the same history, so the reward vector is the same on every branch by
 //! construction — no coinbase-style maturity and no clawback path exist, and
 //! none are needed. [`TokenParams::is_coherent_with_vlt`] pins the settlement
@@ -45,8 +45,8 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::{Hash, Hash64};
 use std::collections::BTreeMap;
 
-use crate::dns_finality::{STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN, validator_id_from_pubkey};
-use crate::vlt::VltEpochCredits;
+use crate::palw_consensus::{STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN, validator_id_from_pubkey};
+use crate::palw_compute::VltEpochCredits;
 
 // ---------------------------------------------------------------------
 // Constants.
@@ -171,7 +171,7 @@ pub fn token_burn_message(network_id: &[u8], asset_id: u64, owner: Hash64, amoun
 // ---------------------------------------------------------------------
 
 /// Stateless validation failure for a token-op payload. The consensus
-/// tx-validation layer will wrap this the way [`crate::dns_finality::DnsTxError`]
+/// tx-validation layer will wrap this the way [`crate::palw_consensus::DnsTxError`]
 /// is wrapped (wiring PR); defined separately so this module does not grow the
 /// DNS error surface.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -615,7 +615,7 @@ pub struct TokenEmissionInfo {
 /// budget) is the shipped default on every network — adopting this module is
 /// not by itself a consensus change; moving a fence is the hard fork.
 ///
-/// Borsh-derived because [`crate::dns_finality::DnsParams`] (which embeds this,
+/// Borsh-derived because [`crate::palw_consensus::DnsParams`] (which embeds this,
 /// appended last like `vlt` before it) rides the ADR-0022 overlay snapshot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct TokenParams {
@@ -676,7 +676,7 @@ impl TokenParams {
     }
 
     /// Internal-consistency check for a preset — a startup/test assertion in
-    /// the [`crate::vlt::VltParams::is_coherent`] mold, not a consensus rule.
+    /// the [`crate::palw_compute::VltParams::is_coherent`] mold, not a consensus rule.
     pub fn is_coherent(&self) -> Result<(), &'static str> {
         if self.tkn_shadow_activation_daa_score > self.tkn_activation_daa_score {
             return Err("tkn_shadow_activation_daa_score must be <= tkn_activation_daa_score");
@@ -703,7 +703,7 @@ impl TokenParams {
     }
 
     /// The `D_settle` floor against the credit-finalization depth (design §5.3):
-    /// settlement may only read epochs [`crate::vlt::vlt_epoch_finalized`]
+    /// settlement may only read epochs [`crate::palw_compute::vlt_epoch_finalized`]
     /// accepts, so the delay must cover the challenge window plus the reorg
     /// horizon (rounded up to whole epochs, plus one for the partial epoch in
     /// flight), and never sit below the vote-side `credit_delay_epochs`.

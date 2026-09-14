@@ -29,7 +29,7 @@
 
 use std::sync::Arc;
 
-use kaspa_consensus_core::dns_finality::ComputeCapabilityRecord;
+use kaspa_consensus_core::palw_consensus::ComputeCapabilityRecord;
 use kaspa_consensus_core::tx::TransactionId;
 use kaspa_database::prelude::CachePolicy;
 use kaspa_database::prelude::DB;

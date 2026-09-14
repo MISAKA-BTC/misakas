@@ -453,7 +453,7 @@ or "slashing-proof".
 | PR | Title | Status |
 |---|---|---|
 | 13.7 | This ADR | landed |
-| 13.8 | `dns_finality.rs` `HostId` alias + `TakeoverToken` + `takeover_token_message` helper + `verify_takeover_token` helper + `ValidatorStatus::AwaitingTakeoverToken` variant + tests | next |
+| 13.8 | `palw_consensus.rs` `HostId` alias + `TakeoverToken` + `takeover_token_message` helper + `verify_takeover_token` helper + `ValidatorStatus::AwaitingTakeoverToken` variant + tests | next |
 | 13.11 | Spec update (ADR-0014 + ADR-0015 + Phase 13 row 4/4 + v0.8 — closes Phase 13) | after PR-13.9 / PR-13.10 |
 
 Implementation slots, gated on Phase 1–9 baseline + PR-10.6′

@@ -421,7 +421,7 @@ Design-freeze series (this ADR + type stubs + spec):
 | PR | Title | Status |
 |---|---|---|
 | 12.1 | This ADR | landed |
-| 12.2 | `dns_finality.rs` ValidatorStatus + SignedEpochRecord + check_signed_epoch_record helper + tests | next |
+| 12.2 | `palw_consensus.rs` ValidatorStatus + SignedEpochRecord + check_signed_epoch_record helper + tests | next |
 | 12.3 | Spec update (ADR-0011 + Phase 12 row + v0.5) | next |
 
 Implementation slots, all gated on the Phases 1–9 baseline being

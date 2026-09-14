@@ -6,13 +6,13 @@ pub use super::{
 use crate::{
     BlockLevel, BlueWorkType, KType,
     constants::{SOMPI_PER_KASPA, STORAGE_MASS_PARAMETER},
-    dns_finality::{
+    palw_consensus::{
         DEFAULT_BRIDGE_FINALITY_MAX_STALENESS_DAA_SCORE, DnsParams, DnsReorgMode, FeeSplitParams, MAX_ATTESTATIONS_PER_SHARD,
         RewardParams, STAKE_SCORE_SCALE, StakeScore,
     },
     network::{NetworkId, NetworkType},
     token::TokenParams,
-    vlt::VltParams,
+    palw_compute::VltParams,
 };
 /// Domain separator for [`Params::consensus_params_id`]. Versioned so a future encoding change is
 /// a deliberate, visible break rather than a silent one.
@@ -3433,7 +3433,7 @@ impl Params {
         // exactly the condition under which the table is a consequence of a schedule rather than a
         // rule in force.
         if dns.vlt.vlt_shadow_activation_daa_score == u64::MAX && dns.vlt.vlt_activation_daa_score == u64::MAX {
-            dns.vlt.model_cost_table = crate::vlt::ModelCostTable::EMPTY;
+            dns.vlt.model_cost_table = crate::palw_compute::ModelCostTable::EMPTY;
         }
         if dns.tkn.tkn_shadow_activation_daa_score == u64::MAX
             && dns.tkn.tkn_activation_daa_score == u64::MAX
@@ -4903,7 +4903,7 @@ impl Params {
             visit(&mut absent);
             return;
         };
-        let crate::dns_finality::DnsParams {
+        let crate::palw_consensus::DnsParams {
             dns_activation_daa_score,
             min_active_stake_sompi: _,
             min_active_validators: _,
@@ -4967,7 +4967,7 @@ impl Params {
         visit(coinbase_settlement_consensus_activation_daa_score);
         visit(unbond_authz_mergeset_activation_daa_score);
 
-        let crate::vlt::VltParams {
+        let crate::palw_compute::VltParams {
             vlt_shadow_activation_daa_score,
             vlt_activation_daa_score,
             credit_window_epochs: _,
@@ -5943,7 +5943,7 @@ fn with_registered_models(mut params: Params) -> Params {
         && dns.vlt.vlt_shadow_activation_daa_score != u64::MAX
         && dns.vlt.model_cost_table.len == 0
     {
-        dns.vlt.model_cost_table = crate::vlt::ModelCostTable::palw_metal_registered();
+        dns.vlt.model_cost_table = crate::palw_compute::ModelCostTable::palw_metal_registered();
     }
     params
 }
@@ -6168,7 +6168,7 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
     // denominator move under it.
     inactivity_leak_daa: u64::MAX,
     // MISAKA Verified LLM Token-Weighted BFT: dormant. Devnet/simnet keep bonded-stake weight, so
-    // the existing fast-finality test fixtures are unaffected. See `vlt::VltParams::INERT`.
+    // the existing fast-finality test fixtures are unaffected. See `palw_compute::VltParams::INERT`.
     vlt: VltParams::INERT,
     // MISAKA Compute Token Program (design v0.1 §10): inert everywhere — the TOK ledger and
     // emission do not exist until a per-network hard fork moves these fences (and freezes the
@@ -6452,7 +6452,7 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // and that is a design change rather than a constant. Until it exists the honest value is
     // the one that runs the pre-leak protocol byte-for-byte.
     inactivity_leak_daa: u64::MAX,
-    // MISAKA Verified LLM Token-Weighted BFT (`vlt::VltParams`): the replacement of bonded capital
+    // MISAKA Verified LLM Token-Weighted BFT (`palw_compute::VltParams`): the replacement of bonded capital
     // by verified useful compute as the source of voting power. Shipped DORMANT
     // (`vlt_activation_daa_score: u64::MAX`) on mainnet + testnet: activating it is a coordinated
     // hard fork and must not be scheduled until the active set can actually produce verified
@@ -11924,7 +11924,7 @@ mod consensus_params_id_tests {
         assert_eq!(t.stake_score_window_blue_score, 15 * t.attestation_epoch_length_blue_score);
         // Bridge staleness keeps at least PRODUCTION's 150 s — as tolerance PAST the confirmed
         // anchor's healthy distance below the tip, which is how the bridge reads it since
-        // 2026-09-10 (`dns_finality_fresh_for_bridge`). Read as a DAA distance that had to contain
+        // 2026-09-10 (`palw_consensus_fresh_for_bridge`). Read as a DAA distance that had to contain
         // that distance, 2 could never be met: the anchor is at least lag + backoff = 3 blue down.
         assert!(t.bridge_finality_max_staleness_daa_score * secs >= 150);
     }
@@ -15088,7 +15088,7 @@ mod consensus_params_id_tests {
     #[test]
     fn turning_off_any_genesis_active_fence_moves_the_identity() {
         let today = MAINNET_PARAMS;
-        let off = |mutate: fn(&mut crate::dns_finality::DnsParams)| {
+        let off = |mutate: fn(&mut crate::palw_consensus::DnsParams)| {
             let mut p = MAINNET_PARAMS;
             mutate(p.dns_params.as_mut().unwrap());
             p.consensus_identity_id()

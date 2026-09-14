@@ -45,8 +45,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[cfg(feature = "devnet-vlt-fixture")]
-use kaspa_consensus_core::vlt::devnet_fixture;
-use kaspa_consensus_core::vlt::{
+use kaspa_consensus_core::palw_compute::devnet_fixture;
+use kaspa_consensus_core::palw_compute::{
     LlmJobSpec, MAX_JOB_INPUT_BYTES, ModelCostEntry, QuantizationProfile, VLT_PAYLOAD_VERSION_V1, VerificationScheme, VltParams,
     job_input_commitment,
 };
@@ -318,7 +318,7 @@ impl ComputeRole {
         // read "quota met". The profile decides, not a flag: this is keyed on the registered entry
         // being the fixture's, so a real worker on the same binary is untouched.
         #[cfg(feature = "devnet-vlt-fixture")]
-        let max_tokens = if entry == kaspa_consensus_core::vlt::devnet_fixture_entry(genesis_hash) {
+        let max_tokens = if entry == kaspa_consensus_core::palw_compute::devnet_fixture_entry(genesis_hash) {
             if cfg.max_tokens != devnet_fixture::JOB_MAX_TOKENS {
                 info!(
                     "[{COMPUTE}] devnet fixture: max_tokens pinned to the fixed job shape ({} = {} prefill + {} decode, 50 VLT/job); --compute-max-tokens={} ignored",
@@ -700,7 +700,7 @@ pub fn capability_expiry_to_declare(current_expiry: Option<u64>, now_daa: u64, v
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kaspa_consensus_core::vlt::{job_spec_id, palw_qwen36_metal_entry};
+    use kaspa_consensus_core::palw_compute::{job_spec_id, palw_qwen36_metal_entry};
 
     fn entry() -> ModelCostEntry {
         palw_qwen36_metal_entry()
@@ -882,7 +882,7 @@ mod tests {
     #[test]
     fn an_unregistered_runtime_leaves_the_role_disabled() {
         let mut vlt = VltParams::INERT;
-        vlt.model_cost_table = kaspa_consensus_core::vlt::ModelCostTable::palw_qwen36_metal();
+        vlt.model_cost_table = kaspa_consensus_core::palw_compute::ModelCostTable::palw_qwen36_metal();
         // No worker binary ⇒ the mock, which never claims the registered identity.
         let cfg = ComputeConfig { enabled: true, ..Default::default() };
         assert!(ComputeRole::new(&cfg, Some(&vlt), Hash64::from_u64_word(7)).is_none());

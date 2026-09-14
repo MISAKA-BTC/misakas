@@ -1048,7 +1048,7 @@ mod tests_pq {
     /// A V2 attempt whose challenge matches `(header position, nonce, class, bond)`, carried the
     /// way a real block carries it: in `Header::palw_commitment`, PAV2 wire form.
     fn v2_envelope_for(header: &Header, nonce: u64) -> PalwAttemptEnvelopeV2 {
-        use kaspa_consensus_core::dns_finality::{STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN};
+        use kaspa_consensus_core::palw_consensus::{STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN};
         let net = Hash64::from_u64_word(0x7E57_00D0);
         let bond = kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_bytes([3u8; 64]), 1);
         let class = Hash64::from_u64_word(0xC1A55);

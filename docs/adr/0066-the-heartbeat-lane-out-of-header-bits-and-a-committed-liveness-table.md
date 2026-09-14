@@ -265,7 +265,7 @@ deleted from the heartbeat lane. Fail closed: no verified table ⇒ full denomin
 `VirtualStateProcessor::palw_leak_table_provenance`, and it asks the WALK: it iterates the same
 backward chain the table is built from and answers `SelfComputed` only if every header from the tip
 to past the far edge of `stake_score_window_blue_score` is one this node holds. The decision itself
-is the pure `dns_finality::leak_table_provenance_from_walk_v1`, unit-tested.
+is the pure `palw_consensus::leak_table_provenance_from_walk_v1`, unit-tested.
 
 Two corrections to what an earlier draft of this amendment said, because both were wrong in the
 dangerous direction. First, the check must not be "is the consensus pruning point a window below the

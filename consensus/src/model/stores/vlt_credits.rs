@@ -25,7 +25,7 @@
 
 use std::sync::Arc;
 
-use kaspa_consensus_core::vlt::VltEpochCredits;
+use kaspa_consensus_core::palw_compute::VltEpochCredits;
 use kaspa_core::info;
 use kaspa_database::prelude::CachePolicy;
 use kaspa_database::prelude::DB;
@@ -132,7 +132,7 @@ impl DbVltCreditStore {
     /// live epoch would cache a value that a later challenge or reorg could still change, and
     /// every subsequent read would silently prefer the stale row over the truth.
     ///
-    /// [`vlt_epoch_finalized`]: kaspa_consensus_core::vlt::vlt_epoch_finalized
+    /// [`vlt_epoch_finalized`]: kaspa_consensus_core::palw_compute::vlt_epoch_finalized
     pub fn set_batch(&self, batch: &mut WriteBatch, epoch: u64, credits: VltEpochCredits) -> Result<(), StoreError> {
         self.access.write(BatchDbWriter::new(batch), epoch.into(), credits)
     }

@@ -31,7 +31,7 @@ use kaspa_consensus_core::{
         TemplateTransactionSelector, TemplateTransactionSelectorFactory,
     },
     coinbase::MinerData,
-    dns_finality::MandatoryAttestationDeficit,
+    palw_consensus::MandatoryAttestationDeficit,
     errors::{block::RuleError as BlockRuleError, tx::TxRuleError},
     subnets::SUBNETWORK_ID_STAKE_ATTESTATION_SHARD,
     tx::{MutableTransaction, Transaction, TransactionId, TransactionOutput},
@@ -444,7 +444,7 @@ impl MiningManager {
         // clears the cache, but this also protects against stale cache reuse while backlog is
         // present.
         let latest_ready_epoch = if self.config.attestation_policy.enabled {
-            kaspa_consensus_core::dns_finality::ready_epoch_from_tip_blue_score(
+            kaspa_consensus_core::palw_consensus::ready_epoch_from_tip_blue_score(
                 consensus.get_sink_blue_score(),
                 self.config.attestation_policy.epoch_len_blue_score,
                 self.config.attestation_policy.attestation_lag_blue_score,
@@ -1211,7 +1211,7 @@ impl MiningManager {
         // attestation shards accumulating forever and starving fresh attestations out of templates.
         let attestation_policy = self.config.attestation_policy.clone();
         if attestation_policy.enabled {
-            let latest_ready_epoch = kaspa_consensus_core::dns_finality::ready_epoch_from_tip_blue_score(
+            let latest_ready_epoch = kaspa_consensus_core::palw_consensus::ready_epoch_from_tip_blue_score(
                 consensus.get_sink_blue_score(),
                 attestation_policy.epoch_len_blue_score,
                 attestation_policy.attestation_lag_blue_score,

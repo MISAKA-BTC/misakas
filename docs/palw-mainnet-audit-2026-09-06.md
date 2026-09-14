@@ -536,7 +536,7 @@ construction, rather than converting call sites one audit at a time.
 *(lane: money-mint · finder + refuter (SPLIT) + second lens (SPLIT) — mechanism confirmed, reach and
 duration corrected twice)*
 
-**Location.** `consensus/core/src/dns_finality.rs:6871` (`block_epoch = c.block_daa_score / epoch_len`),
+**Location.** `consensus/core/src/palw_consensus.rs:6871` (`block_epoch = c.block_daa_score / epoch_len`),
 `:6876` (`included_by_epoch` filled from `att.epoch`), `:6886` (`anchor_daa = epoch × epoch_len`),
 `:3487-3503` (`validator_quality_bonus_outputs` — no pool cap, no count cap), `:3139`
 (`proportional_share`), `:6650-6656` (`EpochTally`'s own doc stating the two clocks in plain text) ·
@@ -591,14 +591,14 @@ bonded, attesting validators (or ~90 once the reserve funds the drip's second ou
 make every crossing block's coinbase fail its own isolation check. With a 2-DAA epoch and monotonic
 DAA, the rejected block is re-attempted at the same crossing forever: **a permanent halt in which
 the unbond transactions that would shrink the set can no longer be mined.** Cost to trigger
-deliberately: ~1.9M KAS. That is the exact 112-block halt the comment at dns_finality.rs:3551 says
+deliberately: ~1.9M KAS. That is the exact 112-block halt the comment at palw_consensus.rs:3551 says
 the count cap was added to prevent — added to the participation function only.
 
 **Refutation history.** Refuter: mechanism confirmed line by line, reach inverted (the ghostdag-k=1
 drift the finder invokes to make it "guaranteed" is what *closes* the mint), and
 `max_validator_inflation_per_block_sompi` identified as dead. Second lens: mechanism confirmed
 independently, price corrected downward (zero on a static set), the fixture tests confirmed
-tautological (dns_finality.rs:11589 has included 100+300 against expected_stake 400, so the `<= 1000`
+tautological (palw_consensus.rs:11589 has included 100+300 against expected_stake 400, so the `<= 1000`
 assertion cannot fail), and the count-cap halt raised as larger than the mint.
 
 **Relation to prior work.** The 09-05 **unjudged** reward/mint bullet names the numbering mismatch
@@ -617,7 +617,7 @@ scenario))*
 author's own pinned worst case) · `consensus/core/src/palw_state_v2.rs:254, 266, 271` ·
 `consensus/src/pipeline/virtual_processor/utxo_validation.rs:1317, 976, 559, 1101` ·
 `consensus/src/processes/coinbase.rs:275-291, 334-346` ·
-`consensus/core/src/dns_finality.rs:6906-6924` (`epochs_finalized_at`), `:1504-1511`
+`consensus/core/src/palw_consensus.rs:6906-6924` (`epochs_finalized_at`), `:1504-1511`
 (`at_two_minute_cadence`), `:3561` (the count cap the sibling has).
 
 **Mechanism.** The cap is 206. ADR-0058 per-red outputs are on for a card
@@ -786,7 +786,7 @@ on a live chain.
 
 **M-1. The security-reserve drip's per-epoch cap is applied to a 2-DAA epoch.**
 `utxo_validation.rs:663-706` (`budget = remaining.min(cap)` **inside** `for (epoch, tally) in &tallies`)
-· `dns_finality.rs:1505` (`at_two_minute_cadence` rewrites `epoch_length_blocks` 100 → 2) ·
+· `palw_consensus.rs:1505` (`at_two_minute_cadence` rewrites `epoch_length_blocks` 100 → 2) ·
 `params.rs:4234` region (`reserve_drip_per_epoch_cap_sompi: 1000 × SOMPI_PER_KASPA`). The cap is
 documented as a rate limiter and the rate it delivers is `cap / epoch_duration`; the epoch was
 silently redefined by a rescale that names only `reward_uniqueness_window_blocks` as its deliberate
@@ -1112,7 +1112,7 @@ updating the sentence, so the same sentence is now wrong in the opposite directi
 
 **L-5. The remote signer's `RESERVED_CONTEXTS` names 6 contexts while `SigningPurpose::Transaction`
 accepts a caller-chosen 64-byte digest under any other.** `kaspa-pq-signer/src/lib.rs:463-504,
-489, 577-586` · request shape at `dns_finality.rs:2947-2962, 2812-2814`. The comment at `:487-488`
+489, 577-586` · request shape at `palw_consensus.rs:2947-2962, 2812-2814`. The comment at `:487-488`
 claims the derived-artifact context is reserved; the array above it does not contain it. Bond
 retirement, capability, registration, class registration, DA accusation, DA disclosure and receipt
 are all verified over a `Hash64` message with their own context, so a `Transaction` request mints
@@ -1206,7 +1206,7 @@ UTXO set.
 O-3 (and **worse on a card**: squatting the global court-session cap now also blocks the k-ary court
 whose silence convicts), O-5, O-6, O-9, O-10, O-11, O-13, O-15. No follow-through commit touches
 `palw_attempt_v2.rs`, the `processor.rs` sortition, `palw_fp_devnet_v3.rs`,
-`ghostdag/protocol.rs` or `dns_finality.rs` at the named sites.
+`ghostdag/protocol.rs` or `palw_consensus.rs` at the named sites.
 
 ### The shape this pass wants recorded
 
@@ -1382,7 +1382,7 @@ to a finding.
 
 ### What was read end to end
 
-**money-mint** — `coinbase.rs` whole; `utxo_validation.rs:290-1440, 2770-2880`; `dns_finality.rs`'s
+**money-mint** — `coinbase.rs` whole; `utxo_validation.rs:290-1440, 2770-2880`; `palw_consensus.rs`'s
 reward/mint region and its tests; `premine.rs` whole; the card assembly and `PRODUCTION_DNS_PARAMS`;
 `tx_validation_in_isolation.rs`'s coinbase and DNS-tx rules; the `palw_state_v2` escrow/payout
 mechanics; `processor.rs`'s escrow/entitlement wiring; `palw_fp_admission_v3.rs` whole.
@@ -1467,7 +1467,7 @@ callers; the O-18 predicate and all five call sites; the retarget arithmetic.
   all (C-2).
 * **The five other 09-05 unjudged items' sites** (`fp_interval.rs:1849`,
   `qwen25_a16_backend.rs:1483`, `palw_state_v2.rs:9395`, `palw_admission_v2.rs:357`,
-  `palw_state_v2.rs:7698`, `dns_finality.rs:6886`, `palw_e2e_adjudicability.rs:847`,
+  `palw_state_v2.rs:7698`, `palw_consensus.rs:6886`, `palw_e2e_adjudicability.rs:847`,
   `palw_gossip.rs:716`) were each picked up by the lane that owns the dimension — four of them are
   now findings (M-2, M-3, M-4, H-2) and one was **refuted** (`palw_state_v2.rs:7698`: a gap epoch
   would need a chain step whose DAA advance exceeds `epoch_length`, and the advance is bounded by

@@ -24,7 +24,7 @@ use kaspa_consensus_core::palw_v2::{
     PalwJobEnvelopeV2, PalwJobResultV2, PalwStopReasonV2, canonical_compute_units_v2, decode_framed_borsh, job_request_hash_v2,
     read_framed, tokenizer_id_v2_for_gguf, write_framed,
 };
-use kaspa_consensus_core::vlt::qwen35_pins;
+use kaspa_consensus_core::palw_compute::qwen35_pins;
 use thiserror::Error;
 
 #[derive(Error, Debug, Clone, PartialEq, Eq)]

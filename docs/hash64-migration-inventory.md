@@ -191,7 +191,7 @@ identity for the WorkScore side of its two-resource dominance rule
 overlay's stake-side data (`validator_set_commitment`,
 `SortitionCommitPayload`, etc.) is **already Hash64-native** per
 ADR-0010 §"Validator-set commitment derivation" / ADR-0012
-§"Payload types" — those types ship in `consensus/core/src/dns_finality.rs`
+§"Payload types" — those types ship in `consensus/core/src/palw_consensus.rs`
 already and do not need any of the PR-9.5 cascade.
 
 The cascade's effect on the DNS overlay is one-way: once `BlockHash`

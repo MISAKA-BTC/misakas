@@ -391,23 +391,23 @@ Phase 12 sub-slot refinements from ADR-0011 §"Phase 12 PR plan"):
 |---|---|---|
 | 10.1 | ADR-0009 (DNS overlay) | ✅ landed |
 | 10.2 | Spec update (DNS scope + Phase 10) | ✅ landed |
-| 10.3 | `consensus/core/src/dns_finality.rs` type stubs | ✅ landed |
+| 10.3 | `consensus/core/src/palw_consensus.rs` type stubs | ✅ landed |
 | 11.1 | ADR-0010 (validator node architecture) | ✅ landed |
-| 11.2 | `dns_finality.rs` Hash64 IDs + registry / snapshot / state types + helpers | ✅ landed |
+| 11.2 | `palw_consensus.rs` Hash64 IDs + registry / snapshot / state types + helpers | ✅ landed |
 | 11.3 | Spec update (ADR-0010 + Phase 11 row + this 14-slot table) | ✅ landed |
 | 12.1 | ADR-0011 (validator single-host deployment + equivocation-safety) | ✅ landed |
-| 12.2 | `dns_finality.rs` `ValidatorStatus` + `SignedEpochRecord` + `check_signed_epoch_record` helper + tests | ✅ landed |
+| 12.2 | `palw_consensus.rs` `ValidatorStatus` + `SignedEpochRecord` + `check_signed_epoch_record` helper + tests | ✅ landed |
 | 12.3 | Spec update (ADR-0011 + Phase 12 row + Phase 12 acceptance criteria + v0.5) | ✅ landed |
 | 13.1 | ADR-0012 (mainnet validator sortition via on-chain commit-reveal) | ✅ landed |
-| 13.2 | `dns_finality.rs` `SortitionMode` + commit/reveal/unreveal payloads + `DnsParams` sortition fields + helpers (`compute_commit`, `derive_epoch_seed_*`, `compute_validator_priority`, `select_committee`) | ✅ landed |
+| 13.2 | `palw_consensus.rs` `SortitionMode` + commit/reveal/unreveal payloads + `DnsParams` sortition fields + helpers (`compute_commit`, `derive_epoch_seed_*`, `compute_validator_priority`, `select_committee`) | ✅ landed |
 | 13.3 | Spec update (ADR-0012 + Phase 13 row 1/4 + Phase 13 acceptance criteria 1/4 + v0.6) | ✅ landed |
 | 13.4 | ADR-0013 (validator reward distribution) | ✅ landed |
-| 13.5 | `dns_finality.rs` `RewardParams` + `compute_attestation_reward_payouts` + `compute_slashing_distribution` + `apply_unreveal_reporter_min_cap` helpers + tests | ✅ landed |
+| 13.5 | `palw_consensus.rs` `RewardParams` + `compute_attestation_reward_payouts` + `compute_slashing_distribution` + `apply_unreveal_reporter_min_cap` helpers + tests | ✅ landed |
 | 13.6 | Spec update (ADR-0013 + Phase 13 row 2/4 + Phase 13 acceptance criteria 2/4 + v0.7) | ✅ landed |
 | 13.7 | ADR-0014 (coordinated-failover protocol) | ✅ landed |
-| 13.8 | `dns_finality.rs` `HostId` alias + `TakeoverToken` + `takeover_token_message` helper + `ValidatorStatus::AwaitingTakeoverToken` extension + tests | ✅ landed |
+| 13.8 | `palw_consensus.rs` `HostId` alias + `TakeoverToken` + `takeover_token_message` helper + `ValidatorStatus::AwaitingTakeoverToken` extension + tests | ✅ landed |
 | 13.9 | ADR-0015 (remote-signer / HSM protocol) | ✅ landed |
-| 13.10 | `dns_finality.rs` `SIGNER_PROTOCOL_VERSION` + capability bitflags + `SigningPurpose` / `SignerPolicy` / `SignerError` / `SignerMetadata` enums + `SignerHello{,Ack}` / `SignerRequest` / `SignerResponse` / `SignerAuditRecord` / `SignerOutcome` + `compute_signer_audit_chain_entry` helper + tests | ✅ landed |
+| 13.10 | `palw_consensus.rs` `SIGNER_PROTOCOL_VERSION` + capability bitflags + `SigningPurpose` / `SignerPolicy` / `SignerError` / `SignerMetadata` enums + `SignerHello{,Ack}` / `SignerRequest` / `SignerResponse` / `SignerAuditRecord` / `SignerOutcome` + `compute_signer_audit_chain_entry` helper + tests | ✅ landed |
 | 13.11 | Spec update (ADR-0014 + ADR-0015 + Phase 13 row 4/4 + Phase 13 acceptance criteria 3/4 + 4/4 + v0.8 — closes Phase 13 design-freeze) | ✅ landed (this PR) |
 | 10.4 | Stake transaction kinds (`subnetwork_id` route) + tx validation | ⏳ deferred |
 | 10.5 | `stake_registry` / `stake_score` consensus processes + stores | ⏳ deferred |
@@ -500,7 +500,7 @@ mandatory acceptance criteria for each phase:
   `work_depth`, `stake_depth`, the three risk-bound strings).
   `validator_set_commitment` is byte-identical across two
   independently-recomputing nodes on the same block (this property
-  is unit-tested in `consensus/core/src/dns_finality.rs` today; the
+  is unit-tested in `consensus/core/src/palw_consensus.rs` today; the
   Phase 11 acceptance is the end-to-end CI run, which is the gate
   on PR-10.14 landing).
 - **Phase 12** (operational acceptance, sidecar variant) the
@@ -515,7 +515,7 @@ mandatory acceptance criteria for each phase:
   `check_signed_epoch_record` correctly handles all three outcomes
   (Allow, AllowRebroadcast, Block) across a simulated
   node-restart-during-gossip — the existing six-test decision
-  matrix in `consensus/core/src/dns_finality.rs` covers the unit
+  matrix in `consensus/core/src/palw_consensus.rs` covers the unit
   level; the Phase 12 acceptance is the end-to-end CI run on
   simnet (gate on PR-10.14′ landing). The `--dry-run` mode signs
   *zero* attestations on a 100-epoch simnet sweep while still
@@ -529,7 +529,7 @@ mandatory acceptance criteria for each phase:
   derivation (off-by-one drift trips this); a 1024-seed sweep
   with a 10×-stake validator wins the single-slot committee
   > 50% of the time (the unit-tested statistical surface is
-  already in `consensus/core/src/dns_finality.rs`); a validator
+  already in `consensus/core/src/palw_consensus.rs`); a validator
   that committed but did not reveal within the reveal window
   is slashed by `commit_without_reveal_slash_sompi` upon
   submission of a valid `UnrevealSlashingEvidencePayload`; the
@@ -566,7 +566,7 @@ mandatory acceptance criteria for each phase:
   takeover-token signing context
   (`b"kaspa-pq-v1/takeover/mldsa65"`) is pairwise distinct
   from the transaction and attestation contexts (unit-tested
-  in `consensus/core/src/dns_finality.rs`); the
+  in `consensus/core/src/palw_consensus.rs`); the
   `compute_host_id` helper is anti-spoofing — a rebuilt
   host with a fresh `host_boot_nonce` gets a new `host_id`;
   the `--acknowledge-slashing-risk` emergency-takeover path

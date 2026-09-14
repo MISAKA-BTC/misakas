@@ -434,7 +434,7 @@ if let Some(dns) = params.dns_params.as_mut()
     && dns.vlt.vlt_shadow_activation_daa_score != u64::MAX
     && dns.vlt.model_cost_table.len == 0
 {
-    dns.vlt.model_cost_table = crate::vlt::ModelCostTable::palw_metal_registered();
+    dns.vlt.model_cost_table = crate::palw_compute::ModelCostTable::palw_metal_registered();
 }
 ```
 
@@ -444,9 +444,9 @@ entries — vlt.rs:1542, 1867). The file itself says so: "a node's params — an
 `consensus_params_id` — carry the model cost table" (params.rs:2703-2704), and "The model table
 rides along automatically" (params.rs:2139-2140). The documented fork edit spells the table out as
 part of the same release (params.rs:2013-2018), and
-`shipped_presets_are_either_dormant_or_fully_forkable` (dns_finality.rs:9360-9398) fails the build
+`shipped_presets_are_either_dormant_or_fully_forkable` (palw_consensus.rs:9360-9398) fails the build
 on the MATERIALIZED presets if a fence is moved over an empty table: `"{name}: fences moved with
-an empty model table"` (dns_finality.rs:9385-9388).
+an empty model table"` (palw_consensus.rs:9385-9388).
 
 So the normalised params of the two builds differ by `len` plus four `ModelCostEntry` values, the
 borsh blobs differ, and `consensus_identity_id` differs. At

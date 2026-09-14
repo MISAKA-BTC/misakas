@@ -11,7 +11,7 @@
 //! an `RwLock` (matching `utxo_set`'s cache-consistency convention).
 
 use kaspa_consensus_core::{
-    dns_finality::StakeBondRecord,
+    palw_consensus::StakeBondRecord,
     tx::{TransactionIndexType, TransactionOutpoint},
 };
 use kaspa_database::prelude::DB;
@@ -151,7 +151,7 @@ impl StakeBondsStore for DbStakeBondsStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kaspa_consensus_core::dns_finality::BondStatus;
+    use kaspa_consensus_core::palw_consensus::BondStatus;
     use kaspa_database::create_temp_db;
     use kaspa_database::prelude::ConnBuilder;
 

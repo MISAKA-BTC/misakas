@@ -4,7 +4,7 @@
 
 use crate::imports::*;
 pub use kaspa_consensus_client::{TryIntoUtxoEntryReferences, UtxoEntryReference};
-use kaspa_consensus_core::dns_finality::{DnsCoinbaseSettlement, coinbase_spend_settled};
+use kaspa_consensus_core::palw_consensus::{DnsCoinbaseSettlement, coinbase_spend_settled};
 
 pub enum Maturity {
     /// Coinbase UTXO that has not reached stasis period.
@@ -32,7 +32,7 @@ pub trait UtxoEntryReferenceExtension {
     fn balance(&self, params: &NetworkParams, current_daa_score: u64) -> Balance;
 
     /// DNS-accelerated coinbase settlement, evaluated by the SAME
-    /// [`kaspa_consensus_core::dns_finality::coinbase_spend_settled`] rule the node's mempool
+    /// [`kaspa_consensus_core::palw_consensus::coinbase_spend_settled`] rule the node's mempool
     /// enforces — one function, two callers, no drift. `true` for networks without settlement
     /// (`coinbase_settlement_long_maturity_daa == 0`) and for non-coinbase entries.
     ///

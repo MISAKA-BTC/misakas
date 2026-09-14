@@ -27,7 +27,7 @@ mod unix_daemon {
     };
 
     use clap::Parser;
-    use kaspa_consensus_core::dns_finality::{HostId, SignerPolicy, SigningPurpose};
+    use kaspa_consensus_core::palw_consensus::{HostId, SignerPolicy, SigningPurpose};
     use kaspa_pq_signer::{SignerState, transport::serve_connection};
     use kaspa_pq_validator_core::{ValidatorKey, load_validator_seed};
 

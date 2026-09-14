@@ -15,7 +15,7 @@
 use crate::mempool::tx::Priority;
 use kaspa_consensus_core::{
     Hash64,
-    dns_finality::StakeAttestationShardPayload,
+    palw_consensus::StakeAttestationShardPayload,
     subnets::SUBNETWORK_ID_STAKE_ATTESTATION_SHARD,
     tx::{MutableTransaction, TransactionId, TransactionOutpoint},
 };
@@ -384,8 +384,8 @@ impl AttestationMempoolPolicy {
     /// `(bond, validator, epoch)` key (audit v24 H-4 rejects same-key/different-anchor shards and
     /// replaces same-key duplicates), so this is a hard per-key cap, not merely advisory.
     /// `max_attestation_mempool_txs` is an advisory ceiling left at a generous default.
-    pub fn from_dns_params(params: &kaspa_consensus_core::dns_finality::DnsParams) -> Self {
-        use kaspa_consensus_core::dns_finality::STAKE_SCORE_SCALE;
+    pub fn from_dns_params(params: &kaspa_consensus_core::palw_consensus::DnsParams) -> Self {
+        use kaspa_consensus_core::palw_consensus::STAKE_SCORE_SCALE;
         let required_stake_depth_epochs = (params.required_stake_depth.0.div_ceil(STAKE_SCORE_SCALE)) as u64;
         Self {
             enabled: true,
@@ -428,7 +428,7 @@ mod tests {
     use kaspa_consensus_core::{
         config::params::TESTNET_DNS_PARAMS,
         constants::TX_VERSION,
-        dns_finality::{StakeAttestation, StakeAttestationShardPayload},
+        palw_consensus::{StakeAttestation, StakeAttestationShardPayload},
         mass::NonContextualMasses,
         subnets::{SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD},
         tx::{MutableTransaction, Transaction, TransactionOutpoint},

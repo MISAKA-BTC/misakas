@@ -2088,7 +2088,7 @@ pub struct GetValidatorStatusResponse {
     pub is_active_validator: bool,
     pub has_signed_epoch: bool,
     pub last_signed_epoch: u64,
-    /// `dns_finality::ValidatorStatus` discriminant.
+    /// `palw_consensus::ValidatorStatus` discriminant.
     pub status: u32,
     /// Human-readable status label.
     pub status_label: String,

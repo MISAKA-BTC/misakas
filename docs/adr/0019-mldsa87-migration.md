@@ -106,10 +106,10 @@ Change every `libcrux_ml_dsa::ml_dsa_65` import/call site to `ml_dsa_87`: `crypt
 
 ### 2. Update size constants (three independent copies)
 - `crypto/txscript/src/lib.rs`: `MLDSA65_PK_LEN` 1952→**2592**, `MLDSA65_SIG_LEN` 3309→**4627**
-- `consensus/core/src/dns_finality.rs`: `STAKE_VALIDATOR_PUBKEY_LEN` 1952→**2592**, `STAKE_ATTESTATION_SIG_LEN` 3309→**4627**
+- `consensus/core/src/palw_consensus.rs`: `STAKE_VALIDATOR_PUBKEY_LEN` 1952→**2592**, `STAKE_ATTESTATION_SIG_LEN` 3309→**4627**
 - `rpc/core/src/model/kaspa_pq.rs`: `RPC_MLDSA65_PK_LEN` 1952→**2592**, `RPC_MLDSA65_SIG_LEN` 3309→**4627**
 
-Existing parity asserts (rpc↔txscript, dns_finality↔txscript) cross-check these and will catch drift at test time. Bare literals (test fixtures, WASM length-check error strings, derivation comments) are updated to match.
+Existing parity asserts (rpc↔txscript, palw_consensus↔txscript) cross-check these and will catch drift at test time. Bare literals (test fixtures, WASM length-check error strings, derivation comments) are updated to match.
 
 ### 3. Raise size-derived caps and recalibrate mass
 - Raise `MAX_SCRIPT_ELEMENT_SIZE` / `MAX_SCRIPTS_SIZE` (txscript) and `MAXIMUM_STANDARD_SIGNATURE_SCRIPT_SIZE` (mining) to admit the larger 87 pushes. A 2-of-3 ML-DSA-87 multisig redeem script (~7.8 KB) and its unlock script (~16.5 KB) exceed the current 16 384-byte caps.

@@ -15,7 +15,7 @@ use kaspa_consensus_core::{
         ConfigBuilder,
         params::{DEVNET_PARAMS, MAINNET_PARAMS},
     },
-    dns_finality::p2pkh_mldsa87_spk,
+    palw_consensus::p2pkh_mldsa87_spk,
     tx::{Transaction, TransactionOutpoint},
 };
 use std::{collections::VecDeque, thread::JoinHandle};
@@ -2233,7 +2233,7 @@ async fn palw_v2_tip_heap_has_no_weight_key_but_the_gate_does() {
     // The V2 branch answers before it reads either of these, which is the property being pinned:
     // no finality window and no bond view can make the heap prefer the incumbent.
     let finality_point = config.params.genesis.hash;
-    let bond_view = kaspa_consensus_core::dns_finality::ActiveBondView::new();
+    let bond_view = kaspa_consensus_core::palw_consensus::ActiveBondView::new();
 
     // Half one: the incumbent gets no rank the heap can prefer it by. If this ever answers `Some`
     // again, every challenger — which is every block not yet on this node's chain — loses to the
@@ -2519,7 +2519,7 @@ async fn palw_v2_an_attempt_block_creates_its_claim() {
 #[tokio::test]
 async fn palw_v2_the_escrow_is_carved_out_of_the_block_that_earned_it() {
     use crate::model::stores::headers::HeaderStoreReader;
-    use kaspa_consensus_core::dns_finality::split_block_subsidy;
+    use kaspa_consensus_core::palw_consensus::split_block_subsidy;
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 
     let catalog = palw_v2_test_catalog();
@@ -3346,7 +3346,7 @@ async fn palw_v2_a_stranger_can_register_their_own_bond() {
             // The collateral, in an output of this very transaction, paying the declared payee.
             vec![TransactionOutput::new(
                 collateral,
-                kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(payout_payload.as_byte_slice()),
+                kaspa_consensus_core::palw_consensus::p2pkh_mldsa87_spk(payout_payload.as_byte_slice()),
             )],
             0,
             SUBNETWORK_ID_PALW_LIFECYCLE.clone(),
@@ -5057,7 +5057,7 @@ async fn finality_fee_bridge_scenario(finality_fence: u64, evm_active: bool) -> 
 #[tokio::test]
 #[cfg(feature = "evm")]
 async fn finality_fee_bridge_tx_pays_validator_primary_split() {
-    use kaspa_consensus_core::dns_finality::{split_block_subsidy, split_finality_fees, split_normal_tx_fees};
+    use kaspa_consensus_core::palw_consensus::{split_block_subsidy, split_finality_fees, split_normal_tx_fees};
     kaspa_core::log::try_init_logger("info");
 
     // Active fence (0, the PRODUCTION preset value): the 100_000 bridge fee splits at
@@ -5098,7 +5098,7 @@ async fn finality_fee_bridge_tx_pays_validator_primary_split() {
 /// inert nets produce ordinary v1 blocks.
 #[tokio::test]
 async fn finality_fee_inert_on_evm_inert_net() {
-    use kaspa_consensus_core::dns_finality::{split_block_subsidy, split_normal_tx_fees};
+    use kaspa_consensus_core::palw_consensus::{split_block_subsidy, split_normal_tx_fees};
     kaspa_core::log::try_init_logger("info");
 
     // §F fence ACTIVE (0, the production value) but the EVM lane INERT.
@@ -5122,7 +5122,7 @@ async fn finality_fee_inert_on_evm_inert_net() {
 #[tokio::test]
 async fn pos_v2_reward_bearing_attestation_validates() {
     use crate::model::stores::headers::HeaderStoreReader;
-    use kaspa_consensus_core::{Hash64, dns_finality::ready_epoch_from_tip_blue_score};
+    use kaspa_consensus_core::{Hash64, palw_consensus::ready_epoch_from_tip_blue_score};
     kaspa_core::log::try_init_logger("info");
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
@@ -5236,7 +5236,7 @@ async fn pos_v2_reward_bearing_attestation_validates() {
 async fn pos_v2_slashing_evidence_removes_bond_and_pays_reporter() {
     use kaspa_consensus_core::{
         Hash64,
-        dns_finality::{DNS_PAYLOAD_VERSION_V1, SlashingEvidencePayload},
+        palw_consensus::{DNS_PAYLOAD_VERSION_V1, SlashingEvidencePayload},
     };
     kaspa_core::log::try_init_logger("info");
     let config = ConfigBuilder::new(MAINNET_PARAMS)
@@ -5330,7 +5330,7 @@ async fn pos_v2_slashing_evidence_removes_bond_and_pays_reporter() {
     // attestations must verify under the net_id (genesis hash) the consensus slashing
     // verifier reconstructs the digest with.
     for att in [&att_a, &att_b] {
-        let msg = kaspa_consensus_core::dns_finality::stake_attestation_message(
+        let msg = kaspa_consensus_core::palw_consensus::stake_attestation_message(
             net_id.as_byte_slice(),
             att.epoch,
             att.target_hash,
@@ -5343,7 +5343,7 @@ async fn pos_v2_slashing_evidence_removes_bond_and_pays_reporter() {
                 &v.pubkey,
                 &msg.as_bytes()[..],
                 &att.signature,
-                kaspa_consensus_core::dns_finality::ATTESTATION_MLDSA87_CONTEXT
+                kaspa_consensus_core::palw_consensus::ATTESTATION_MLDSA87_CONTEXT
             )
             .unwrap(),
             "attestation must self-verify under the consensus net_id"
@@ -5385,7 +5385,7 @@ async fn pos_v2_slashing_evidence_removes_bond_and_pays_reporter() {
     // (not a UTXO) and the victim/burn shares leave the supply with the removed locked stake. Hence
     // minted (reporter) ≤ slashed ⇒ slashing cannot inflate supply.
     let rp = ctx.consensus.params().dns_params.clone().unwrap().reward_params;
-    let dist = kaspa_consensus_core::dns_finality::compute_slashing_distribution(
+    let dist = kaspa_consensus_core::palw_consensus::compute_slashing_distribution(
         bond_amount,
         rp.slashing_reporter_reward_bps,
         rp.security_reserve_bps,
@@ -5416,7 +5416,7 @@ async fn pos_v2_slashing_victim_compensates_honest_peer() {
     use crate::model::stores::headers::HeaderStoreReader;
     use kaspa_consensus_core::{
         Hash64,
-        dns_finality::{
+        palw_consensus::{
             DNS_PAYLOAD_VERSION_V1, SlashingEvidencePayload, compute_slashing_distribution, ready_epoch_from_tip_blue_score,
         },
     };
@@ -5597,7 +5597,7 @@ async fn pos_v2_slashing_victim_compensates_honest_peer() {
 async fn pos_v2_multi_slashing_in_one_block() {
     use kaspa_consensus_core::{
         Hash64,
-        dns_finality::{DNS_PAYLOAD_VERSION_V1, SlashingEvidencePayload, compute_slashing_distribution},
+        palw_consensus::{DNS_PAYLOAD_VERSION_V1, SlashingEvidencePayload, compute_slashing_distribution},
     };
     kaspa_core::log::try_init_logger("info");
     let config = ConfigBuilder::new(MAINNET_PARAMS)
@@ -5814,19 +5814,19 @@ async fn pos_v2_multi_slashing_in_one_block() {
 /// The two numberings coincide (on a linear chain blue_score ≈ daa_score) only when those two lengths
 /// are equal — which is exactly the production reality (both = 100 in GENESIS_ACTIVE/PRODUCTION_DNS_PARAMS).
 /// That equality is a configuration this fixture AVOIDS the two-clock gap with, not a fact about the
-/// chain: the gap itself is pinned by `dns_finality::tests::the_accumulator_keys_one_map_from_two_epoch_numberings`
+/// chain: the gap itself is pinned by `palw_consensus::tests::the_accumulator_keys_one_map_from_two_epoch_numberings`
 /// (mainnet audit, 2026-09-06, H-2), which goes red both if it widens and if it closes.
 ///
 /// It also cannot see M-1: `reserve_drip_per_epoch_cap_sompi` is `u64::MAX` here and this chain
 /// crosses one threshold a block, so the per-crossing spend has nothing to multiply. The rate limit
 /// is stated over a multi-epoch crossing by
-/// `dns_finality::tests::the_reserve_drip_rate_limit_is_spent_per_block_not_per_crossing`.
+/// `palw_consensus::tests::the_reserve_drip_rate_limit_is_spent_per_block_not_per_crossing`.
 #[tokio::test]
 async fn pos_v2_reserve_drip_pays_finalized_epoch() {
     use crate::model::stores::headers::HeaderStoreReader;
     use kaspa_consensus_core::{
         Hash64,
-        dns_finality::{
+        palw_consensus::{
             DNS_PAYLOAD_VERSION_V1, SlashingEvidencePayload, compute_slashing_distribution, ready_epoch_from_tip_blue_score,
         },
     };
@@ -6028,7 +6028,7 @@ async fn pos_v2_reserve_drip_pays_finalized_epoch() {
 async fn pos_v2_spend_gate_rejects_locked_bond_racing_slash() {
     use kaspa_consensus_core::{
         Hash64,
-        dns_finality::{DNS_PAYLOAD_VERSION_V1, SlashingEvidencePayload},
+        palw_consensus::{DNS_PAYLOAD_VERSION_V1, SlashingEvidencePayload},
     };
     kaspa_core::log::try_init_logger("info");
     let config = ConfigBuilder::new(MAINNET_PARAMS)
@@ -6170,7 +6170,7 @@ async fn pos_v2_spend_gate_rejects_locked_bond_racing_slash() {
 async fn pos_v2_slashing_survives_reorg_via_evidence_merge() {
     use kaspa_consensus_core::{
         Hash64,
-        dns_finality::{DNS_PAYLOAD_VERSION_V1, SlashingEvidencePayload},
+        palw_consensus::{DNS_PAYLOAD_VERSION_V1, SlashingEvidencePayload},
     };
     kaspa_core::log::try_init_logger("info");
     let config = ConfigBuilder::new(MAINNET_PARAMS)
@@ -6282,7 +6282,7 @@ async fn pos_v2_slashing_survives_reorg_via_evidence_merge() {
 
     // Slash applied on branch A: X's locked stake is gone and the reporter reward is minted.
     let dns = ctx.consensus.params().dns_params.clone().unwrap();
-    let expected_reporter = kaspa_consensus_core::dns_finality::compute_slashing_distribution(
+    let expected_reporter = kaspa_consensus_core::palw_consensus::compute_slashing_distribution(
         bond_amount,
         dns.reward_params.slashing_reporter_reward_bps,
         dns.reward_params.security_reserve_bps,
@@ -6811,7 +6811,7 @@ async fn dns_v3_canonical_anchor_walk_matches_chain() {
 #[tokio::test]
 async fn dns_v3_canonical_attestation_credited() {
     use crate::model::stores::{headers::HeaderStoreReader, stake_bonds::StakeBondsStoreReader};
-    use kaspa_consensus_core::{Hash64, dns_finality::ready_epoch_from_tip_blue_score};
+    use kaspa_consensus_core::{Hash64, palw_consensus::ready_epoch_from_tip_blue_score};
     kaspa_core::log::try_init_logger("info");
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
@@ -6942,7 +6942,7 @@ async fn dns_v3_canonical_attestation_credited() {
 #[tokio::test]
 async fn dns_v3_noncanonical_attestation_rejected() {
     use crate::model::stores::{headers::HeaderStoreReader, stake_bonds::StakeBondsStoreReader};
-    use kaspa_consensus_core::{Hash64, dns_finality::ready_epoch_from_tip_blue_score};
+    use kaspa_consensus_core::{Hash64, palw_consensus::ready_epoch_from_tip_blue_score};
     kaspa_core::log::try_init_logger("info");
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
@@ -7057,7 +7057,7 @@ async fn dns_v3_noncanonical_attestation_rejected() {
 #[tokio::test]
 async fn dns_v3_signer_produces_canonical_ready_targets() {
     use crate::model::stores::headers::HeaderStoreReader;
-    use kaspa_consensus_core::{Hash64, dns_finality::ready_epoch_from_tip_blue_score};
+    use kaspa_consensus_core::{Hash64, palw_consensus::ready_epoch_from_tip_blue_score};
     kaspa_core::log::try_init_logger("info");
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
@@ -7148,7 +7148,7 @@ async fn dns_v3_signer_produces_canonical_ready_targets() {
 #[tokio::test]
 async fn dns_v3_high_parallel_blue_score_jump_no_hole() {
     use crate::model::stores::headers::HeaderStoreReader;
-    use kaspa_consensus_core::dns_finality::ready_epoch_from_tip_blue_score;
+    use kaspa_consensus_core::palw_consensus::ready_epoch_from_tip_blue_score;
     kaspa_core::log::try_init_logger("info");
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
@@ -7221,7 +7221,7 @@ async fn dns_v3_validator_drives_confirmed_anchor() {
     use crate::model::stores::{dns_state::DnsStateStoreReader, headers::HeaderStoreReader};
     use kaspa_consensus_core::{
         Hash64,
-        dns_finality::{DnsRolloutStage, STAKE_SCORE_SCALE, StakeScore, ready_epoch_from_tip_blue_score},
+        palw_consensus::{DnsRolloutStage, STAKE_SCORE_SCALE, StakeScore, ready_epoch_from_tip_blue_score},
     };
     kaspa_core::log::try_init_logger("info");
     let config = ConfigBuilder::new(MAINNET_PARAMS)
@@ -7364,15 +7364,15 @@ async fn template_adoption_setup() -> (
     TestContext,
     dns_harness::HarnessValidator,
     TransactionOutpoint,                                            // bond outpoint
-    kaspa_consensus_core::dns_finality::CanonicalLaggedEpochAnchor, // canonical anchor for latest ready epoch
+    kaspa_consensus_core::palw_consensus::CanonicalLaggedEpochAnchor, // canonical anchor for latest ready epoch
     (TransactionOutpoint, u64, u64),                                // shard-funding coinbase #1 (outpoint, value, daa)
     (TransactionOutpoint, u64, u64),                                // shard-funding coinbase #2 (outpoint, value, daa)
-    kaspa_consensus_core::dns_finality::DnsParams,
+    kaspa_consensus_core::palw_consensus::DnsParams,
     BlockHash, // genesis hash (net id)
     u64,       // storage_mass_parameter
 ) {
     use crate::model::stores::headers::HeaderStoreReader;
-    use kaspa_consensus_core::dns_finality::ready_epoch_from_tip_blue_score;
+    use kaspa_consensus_core::palw_consensus::ready_epoch_from_tip_blue_score;
     kaspa_core::log::try_init_logger("info");
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
@@ -7544,7 +7544,7 @@ async fn duplicate_epoch_attestation_credited_once() {
     use crate::model::stores::stake_bonds::StakeBondsStoreReader;
     use kaspa_consensus_core::{
         Hash64,
-        dns_finality::{aggregate_epoch_tallies, total_active_stake_by_epoch},
+        palw_consensus::{aggregate_epoch_tallies, total_active_stake_by_epoch},
     };
     let (mut ctx, v, bond_outpoint, anchor, cb_b, cb_c, dns, genesis_hash, smp) = template_adoption_setup().await;
 
@@ -7584,7 +7584,7 @@ async fn duplicate_epoch_attestation_credited_once() {
     assert!(credited_for_epoch >= 1, "the canonical attestation is credited at least once");
     // After the per-(bond,epoch) aggregation, the signed stake for this epoch equals the bond's
     // stake exactly ONCE (no double-count from the duplicate shard).
-    let totals = total_active_stake_by_epoch(&bonds, &denom, kaspa_consensus_core::dns_finality::InactivityLeakViewV1::none());
+    let totals = total_active_stake_by_epoch(&bonds, &denom, kaspa_consensus_core::palw_consensus::InactivityLeakViewV1::none());
     let per_epoch = aggregate_epoch_tallies(&contributions, &totals);
     let bond_amount = bonds.iter().find(|b| b.bond_outpoint == bond_outpoint).expect("bond persisted").amount;
     let tally = per_epoch.iter().find(|t| t.epoch == anchor.epoch).expect("the epoch is tallied");
@@ -7610,7 +7610,7 @@ async fn dns_v3_pow_majority_cannot_rewrite_confirmed_anchor() {
     use crate::model::stores::{dns_state::DnsStateStoreReader, ghostdag::GhostdagStoreReader, headers::HeaderStoreReader};
     use kaspa_consensus_core::{
         Hash64,
-        dns_finality::{DnsRolloutStage, STAKE_SCORE_SCALE, StakeScore, ready_epoch_from_tip_blue_score},
+        palw_consensus::{DnsRolloutStage, STAKE_SCORE_SCALE, StakeScore, ready_epoch_from_tip_blue_score},
     };
     kaspa_core::log::try_init_logger("info");
     let config = ConfigBuilder::new(MAINNET_PARAMS)
@@ -7745,7 +7745,7 @@ async fn dns_v3_pow_majority_cannot_rewrite_confirmed_anchor() {
 #[tokio::test]
 async fn dns_v3_many_validators_agree_on_anchor_under_fast_wide_dag() {
     use crate::model::stores::headers::HeaderStoreReader;
-    use kaspa_consensus_core::dns_finality::ready_epoch_from_tip_blue_score;
+    use kaspa_consensus_core::palw_consensus::ready_epoch_from_tip_blue_score;
     use std::collections::HashSet;
     kaspa_core::log::try_init_logger("info");
     let config = ConfigBuilder::new(MAINNET_PARAMS)
@@ -7890,7 +7890,7 @@ async fn header_with_unknown_pow_algo_id_is_rejected() {
 mod dns_harness {
     use kaspa_consensus_core::{
         Hash64,
-        dns_finality::{
+        palw_consensus::{
             ATTESTATION_MLDSA87_CONTEXT, DNS_PAYLOAD_VERSION_V1, SlashingEvidencePayload, StakeAttestation, StakeBondPayload,
             StakeUnbondRequestPayload, UNBOND_REQUEST_CONTEXT, attestations_from_accepted_txs, p2pkh_mldsa87_spk,
             single_attestation_shard, stake_attestation_message, stake_attestation_shard_tx, unbond_request_message,
@@ -8495,13 +8495,13 @@ fn new_miner_data() -> MinerData {
 }
 
 #[cfg(feature = "evm")]
-fn set_fresh_dns_finality(consensus: &TestConsensus) {
+fn set_fresh_palw_consensus(consensus: &TestConsensus) {
     use crate::model::stores::dns_state::DnsStateStore;
     use kaspa_consensus_core::BlueWorkType;
-    use kaspa_consensus_core::dns_finality::{DnsHealth, DnsRolloutStage, DnsState, STAKE_SCORE_SCALE, StakeScore};
+    use kaspa_consensus_core::palw_consensus::{DnsHealth, DnsRolloutStage, DnsState, STAKE_SCORE_SCALE, StakeScore};
 
     // The anchor must be a block with a header: since 2026-09-10 the bridge's freshness is measured
-    // in blue score from the anchor's header (`dns_finality_fresh_for_bridge`), and an anchor the
+    // in blue score from the anchor's header (`palw_consensus_fresh_for_bridge`), and an anchor the
     // headers store cannot resolve reads as stale. Genesis sits 0 blue below a genesis sink.
     let anchor = consensus.params().genesis.hash;
     consensus
@@ -8545,7 +8545,7 @@ async fn evm_active_chain_executes_persists_and_moves_heads() {
     let consensus = TestConsensus::new(&config);
     let wait_handles = consensus.init();
     let storage = consensus.consensus_clone().storage.clone();
-    set_fresh_dns_finality(&consensus);
+    set_fresh_palw_consensus(&consensus);
 
     let genesis = consensus.params().genesis.hash;
     let miner_data = MinerData::new(p2pkh_mldsa87_spk(&[0u8; 64]), vec![]);
@@ -9053,7 +9053,7 @@ async fn evm_producer_deposit_claim_fills_and_filters_template_system_ops() {
         "without a fresh DNS-confirmed anchor, bridge deposit claims stay out of the template"
     );
 
-    set_fresh_dns_finality(&consensus);
+    set_fresh_palw_consensus(&consensus);
 
     let template = consensus
         .build_block_template_with_evm(
@@ -9105,7 +9105,7 @@ async fn evm_y9_full_cap_payload_block_validates_and_executes() {
     let consensus = TestConsensus::new(&config);
     let wait_handles = consensus.init();
     let storage = consensus.consensus_clone().storage.clone();
-    set_fresh_dns_finality(&consensus);
+    set_fresh_palw_consensus(&consensus);
 
     // The class-1-valid §16 fixture, oversupplied: duplication is legal at the
     // body (admission is per-tx) and a deterministic skip at acceptance.
@@ -9313,7 +9313,7 @@ async fn dns_gate_long_secret_branch_cannot_buy_an_abstain() {
 #[tokio::test]
 async fn verdict_divergent_branch_does_not_converge_even_with_the_dns_gate_dormant() {
     use crate::model::stores::{dns_state::DnsStateStoreReader, ghostdag::GhostdagStoreReader};
-    use kaspa_consensus_core::dns_finality::DnsRolloutStage;
+    use kaspa_consensus_core::palw_consensus::DnsRolloutStage;
 
     kaspa_core::log::try_init_logger("info");
     let config = ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build();
@@ -9379,7 +9379,7 @@ async fn dns_stale_anchor_ttl_releases_a_dead_branch_wedge() {
     use crate::model::stores::{dns_state::DnsStateStoreReader, ghostdag::GhostdagStoreReader, headers::HeaderStoreReader};
     use kaspa_consensus_core::{
         Hash64,
-        dns_finality::{DnsRolloutStage, STAKE_SCORE_SCALE, StakeScore, ready_epoch_from_tip_blue_score},
+        palw_consensus::{DnsRolloutStage, STAKE_SCORE_SCALE, StakeScore, ready_epoch_from_tip_blue_score},
     };
     kaspa_core::log::try_init_logger("info");
 
@@ -11642,7 +11642,7 @@ async fn palw_v2_a_consensus_with_no_virtual_sink_is_weighed_at_its_imported_tip
 async fn palw_v2_an_unreadable_tip_refuses_a_deep_reorg_rather_than_abstaining() {
     use crate::model::stores::palw_state_v2::PalwStateTipRecordV2;
     use kaspa_consensus_core::config::params::ForkActivation;
-    use kaspa_consensus_core::dns_finality::DnsReorgOutcome;
+    use kaspa_consensus_core::palw_consensus::DnsReorgOutcome;
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
     use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
 
@@ -11736,7 +11736,7 @@ async fn palw_v2_an_undecodable_delta_refuses_a_deep_reorg_rather_than_abstainin
     use crate::model::stores::palw_state_v2::PalwStateDeltaRecordV2;
     use crate::pipeline::virtual_processor::processor::PalwWeighFaultV2;
     use kaspa_consensus_core::config::params::ForkActivation;
-    use kaspa_consensus_core::dns_finality::DnsReorgOutcome;
+    use kaspa_consensus_core::palw_consensus::DnsReorgOutcome;
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 
     let catalog = palw_v2_test_catalog();

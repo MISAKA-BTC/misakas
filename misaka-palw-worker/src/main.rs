@@ -93,7 +93,7 @@ use kaspa_consensus_core::palw_v2::{
     job_request_hash_v2, logits_event_hash_v2, output_commitment_v2, output_token_ids_hash_v2, read_framed, rendered_output_hash_v2,
     shape_profile_id_v2, tokenizer_id_v2_for_gguf, trace_event_merkle_root_v2, trace_scheme_id_v2, write_framed,
 };
-use kaspa_consensus_core::vlt::{derive_model_weights_hash, derive_runtime_class_id, derive_runtime_hash, qwen35_pins};
+use kaspa_consensus_core::palw_compute::{derive_model_weights_hash, derive_runtime_class_id, derive_runtime_hash, qwen35_pins};
 use kaspa_hashes::Hash64;
 use sha2::Digest;
 

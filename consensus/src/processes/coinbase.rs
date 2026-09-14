@@ -2,7 +2,7 @@ use kaspa_consensus_core::{
     BlockHashMap, BlockHashSet,
     coinbase::*,
     config::params::ForkedParam,
-    dns_finality::{
+    palw_consensus::{
         FeeSplitParams, STAKE_SCORE_SCALE, split_block_reward, split_block_subsidy, split_finality_fees, split_normal_tx_fees,
         worker_inclusion_bounty,
     },
@@ -792,7 +792,7 @@ mod tests {
     #[test]
     fn validator_reward_spk_matches_pay_to_address_script() {
         use kaspa_addresses::{Address, Prefix, Version};
-        use kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk;
+        use kaspa_consensus_core::palw_consensus::p2pkh_mldsa87_spk;
         use kaspa_txscript::pay_to_address_script;
 
         let mut counting = [0u8; 64];

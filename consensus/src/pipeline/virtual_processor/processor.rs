@@ -21,7 +21,7 @@ use crate::{
             compute_capabilities::DbComputeCapabilityStore,
             daa::DbDaaStore,
             depth::{DbDepthStore, DepthStoreReader},
-            dns_finality_certificate::DbDnsFinalityCertificateStore,
+            palw_consensus_certificate::DbDnsFinalityCertificateStore,
             dns_state::{DbDnsStateStore, DbVltActivationStore, DnsStateStoreReader, VltActivationStoreReader},
             epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
             evm::{
@@ -76,7 +76,7 @@ use kaspa_consensus_core::{
     blockstatus::BlockStatus::{StatusDisqualifiedFromChain, StatusUTXOValid},
     coinbase::MinerData,
     config::genesis::GenesisBlock,
-    dns_finality::{
+    palw_consensus::{
         ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, AttestationContribution, BlockEpochContribution, BlockOverlayContribution,
         BondMutation, CanonicalLaggedEpochAnchor, ComputeCapabilityRecord, ComputeCommitmentRecord, ComputeCreditContribution,
         ComputeStatusView, ComputeVerdictRecord, DnsCoinbaseSettlement, DnsParams, DnsReorgMode, DnsReorgOutcome, DnsRolloutStage,
@@ -88,7 +88,7 @@ use kaspa_consensus_core::{
         canonical_lagged_epoch_anchor, capability_candidate_pool, capability_set_root, check_dns_reorg_rule, commitment_beacon_epoch,
         compute_capabilities_from_accepted_txs, compute_capabilities_with_ids_from_accepted_txs,
         compute_certificates_from_accepted_txs, compute_challenges_from_accepted_txs, compute_commitments_from_accepted_txs,
-        compute_stake_score, compute_verdicts_from_accepted_txs, derive_dns_health, dns_finality_fresh_for_bridge,
+        compute_stake_score, compute_verdicts_from_accepted_txs, derive_dns_health, palw_consensus_fresh_for_bridge,
         effective_bond_status, epoch_meets_quality_floor, epoch_start_blue_score, held_precommit_lock, is_bond_active_at,
         is_dns_confirmed, lock_consistent_precommits, mandatory_attestation_mass_capacity, p2pkh_mldsa87_spk,
         precommits_from_accepted_txs, quorum_epochs, ready_epoch_from_tip_blue_score, recompute_epoch_tallies,
@@ -218,7 +218,7 @@ pub(crate) enum ContributionWeight<'a> {
     BondedStake,
     /// `W_i(E) = min{C_i(E), λ·B_i(E)}` in µRTE, read from a [`VltEpochSnapshot`] pinned at a
     /// block every branch in the comparison contains — never from a per-branch walk.
-    Vlt { snapshot: &'a VltEpochSnapshot, vlt: &'a kaspa_consensus_core::vlt::VltParams },
+    Vlt { snapshot: &'a VltEpochSnapshot, vlt: &'a kaspa_consensus_core::palw_compute::VltParams },
 }
 
 impl ContributionWeight<'_> {
@@ -737,7 +737,7 @@ pub struct VirtualStateProcessor {
     pub(super) vlt_voting_snapshot_store: Arc<DbVltVotingSnapshotStore>,
     /// MISAKA VLT PR 4: per-epoch §7.2 finality certificates, written once when an epoch's
     /// precommit quorum first counts on the selected chain.
-    pub(super) dns_finality_certificate_store: Arc<DbDnsFinalityCertificateStore>,
+    pub(super) palw_consensus_certificate_store: Arc<DbDnsFinalityCertificateStore>,
     /// MISAKA VLT PR 3: whether this process has logged the frozen snapshot it RESUMED with.
     /// One line per process start, so a restart leaves grep-able proof that the persisted roots
     /// equal the ones the previous run froze.
@@ -1075,7 +1075,7 @@ impl VirtualStateProcessor {
             token_store: storage.token_store.clone(),
             audit_fee_retired_logged: std::sync::atomic::AtomicBool::new(false),
             vlt_voting_snapshot_store: storage.vlt_voting_snapshot_store.clone(),
-            dns_finality_certificate_store: storage.dns_finality_certificate_store.clone(),
+            palw_consensus_certificate_store: storage.palw_consensus_certificate_store.clone(),
             vlt_snapshot_resume_logged: std::sync::atomic::AtomicBool::new(false),
             vlt_state: Arc::new(Mutex::new(None)),
             vlt_metrics: Arc::new(VltMetrics::default()),
@@ -1110,7 +1110,7 @@ impl VirtualStateProcessor {
 
     /// The EVM template's producer policy (never block validity): is DNS finality confirmed and
     /// keeping up with `sink`? Measured in blue score beyond the anchor's healthy distance — see
-    /// [`dns_finality_fresh_for_bridge`] — and read the same way the deposit-claim RPC reads it,
+    /// [`palw_consensus_fresh_for_bridge`] — and read the same way the deposit-claim RPC reads it,
     /// so the RPC never accepts a claim the template would then leave out, or the reverse.
     fn bridge_finality_is_fresh(&self, sink: BlockHash) -> bool {
         let Some(dns_params) = self.dns_params.as_ref() else {
@@ -1125,7 +1125,7 @@ impl VirtualStateProcessor {
         let dns_confirmed =
             is_dns_confirmed(state.work_depth, state.stake_depth, dns_params.required_work_depth, dns_params.required_stake_depth);
         let anchor_blue_score = self.headers_store.get_blue_score(state.last_dns_confirmed_anchor).ok();
-        dns_finality_fresh_for_bridge(dns_confirmed, state.last_dns_confirmed_anchor, anchor_blue_score, sink_blue_score, dns_params)
+        palw_consensus_fresh_for_bridge(dns_confirmed, state.last_dns_confirmed_anchor, anchor_blue_score, sink_blue_score, dns_params)
     }
 
     /// **ADR-0109 Decision 1: the deposit-lock index follows the virtual UTXO set, in its batch.**
@@ -4170,7 +4170,7 @@ impl VirtualStateProcessor {
     ///
     /// A compute fraud proof is a claim about a computation, and consensus cannot re-run the job to
     /// test it. What it can do is wait for the certificate's own sortitioned committee, whose
-    /// confirmations each carry a [`ReplayResiduals`](kaspa_consensus_core::vlt::ReplayResiduals)
+    /// confirmations each carry a [`ReplayResiduals`](kaspa_consensus_core::palw_compute::ReplayResiduals)
     /// proof of independent execution, and read the answer off that:
     ///
     /// * a drawn verifier refuted ⇒ the challenge stands ⇒ the **executor** loses its bond (§7(b));
@@ -4541,8 +4541,8 @@ impl VirtualStateProcessor {
         tip: BlockHash,
         daa_score: u64,
         dns_params: &DnsParams,
-    ) -> kaspa_consensus_core::dns_finality::LeakTableProvenanceV1 {
-        use kaspa_consensus_core::dns_finality::LeakTableProvenanceV1 as Provenance;
+    ) -> kaspa_consensus_core::palw_consensus::LeakTableProvenanceV1 {
+        use kaspa_consensus_core::palw_consensus::LeakTableProvenanceV1 as Provenance;
         // **A dormant fence reads no stores.** `Unverified` is what the view means by "leak
         // nothing", so below the fence this is not merely the same answer — it is the same answer
         // at the same cost, which is what lets the amendment ship on a live network.
@@ -4555,7 +4555,7 @@ impl VirtualStateProcessor {
         // walk does not already reach, and the two break conditions live once, in the pure
         // `leak_table_provenance_from_walk_v1`, where they are unit-tested. Lazy: the map runs one
         // `get_blue_score` per step and the fold abandons it at the first decisive one.
-        kaspa_consensus_core::dns_finality::leak_table_provenance_from_walk_v1(
+        kaspa_consensus_core::palw_consensus::leak_table_provenance_from_walk_v1(
             tip_blue,
             dns_params.stake_score_window_blue_score,
             self.reachability_service.default_backward_chain_iterator(tip).map(|b| self.headers_store.get_blue_score(b).ok()),
@@ -5725,7 +5725,7 @@ impl VirtualStateProcessor {
             .map(|(_, payout)| {
                 TransactionOutput::new(
                     payout.amount,
-                    kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&payout.payload.as_bytes()),
+                    kaspa_consensus_core::palw_consensus::p2pkh_mldsa87_spk(&payout.payload.as_bytes()),
                 )
             })
             .collect()
@@ -9506,12 +9506,12 @@ impl VirtualStateProcessor {
         // the numerator is aggregated from, so "counted as present" and "counted as voting" are
         // one fact. A validator with no contribution in the walked window and no fresh bond is
         // past the leak's grace exactly when the window itself says so.
-        let last_attestation = kaspa_consensus_core::dns_finality::last_attestation_daa_by_validator(
+        let last_attestation = kaspa_consensus_core::palw_consensus::last_attestation_daa_by_validator(
             &contributions,
             &epoch_anchor_daa,
             self.palw_leak_final_through_daa(sink_daa),
         );
-        let leak = kaspa_consensus_core::dns_finality::InactivityLeakViewV1 {
+        let leak = kaspa_consensus_core::palw_consensus::InactivityLeakViewV1 {
             last_attestation_daa: &last_attestation,
             leak_after_daa: self.palw_inactivity_leak_after(sink_daa),
             // ADR-0066 SA-3: the floor the leak may not take the denominator below.
@@ -9558,12 +9558,12 @@ impl VirtualStateProcessor {
                 let shadow_weight = ContributionWeight::Vlt { snapshot: &snapshot, vlt: &dns_params.vlt };
                 let (shadow_contribs, shadow_anchor_daa) =
                     self.collect_stake_contributions_v2(sink, None, &bonds, net_id.as_byte_slice(), dns_params, shadow_weight);
-                let shadow_last = kaspa_consensus_core::dns_finality::last_attestation_daa_by_validator(
+                let shadow_last = kaspa_consensus_core::palw_consensus::last_attestation_daa_by_validator(
                     &shadow_contribs,
                     &shadow_anchor_daa,
                     self.palw_leak_final_through_daa(sink_daa),
                 );
-                let shadow_leak = kaspa_consensus_core::dns_finality::InactivityLeakViewV1 {
+                let shadow_leak = kaspa_consensus_core::palw_consensus::InactivityLeakViewV1 {
                     last_attestation_daa: &shadow_last,
                     leak_after_daa: self.palw_inactivity_leak_after(sink_daa),
                     min_retained_validators: dns_params.min_active_validators,
@@ -9614,12 +9614,12 @@ impl VirtualStateProcessor {
             // trails the chain by however coarsely this node's recomputes happened to land.
             let canonical_scheduled_epoch = {
                 let wall_epoch = sink_blue / epoch_len_blue;
-                let floor = wall_epoch.saturating_sub(kaspa_consensus_core::vlt::CANONICAL_RESERVATION_SCAN_CAP);
+                let floor = wall_epoch.saturating_sub(kaspa_consensus_core::palw_compute::CANONICAL_RESERVATION_SCAN_CAP);
                 let row_eligible = |e: u64| {
                     self.vlt_voting_snapshot_store
                         .get(e)
                         .map(|row| {
-                            kaspa_consensus_core::vlt::snapshot_row_magnitude_eligible(
+                            kaspa_consensus_core::palw_compute::snapshot_row_magnitude_eligible(
                                 row.total_weight,
                                 row.validators.len(),
                                 &dns_params.vlt,
@@ -9852,7 +9852,7 @@ impl VirtualStateProcessor {
             // newly counted — the durable proof, with signatures, that outlives the vote window.
             // Ascending order + write-once makes the certified sequence monotone by construction.
             for &epoch in precommitted.iter() {
-                if self.dns_finality_certificate_store.has(epoch).unwrap_or(false) {
+                if self.palw_consensus_certificate_store.has(epoch).unwrap_or(false) {
                     continue;
                 }
                 let Some(anchor) = self.canonical_anchor_by_blue_score(epoch, sink, dns_params) else {
@@ -9883,7 +9883,7 @@ impl VirtualStateProcessor {
                         cert.precommit_signatures.len(),
                         cert.snapshot_root,
                     );
-                    self.dns_finality_certificate_store.set_batch(batch, epoch, cert).unwrap();
+                    self.palw_consensus_certificate_store.set_batch(batch, epoch, cert).unwrap();
                 }
             }
             confirmable.is_some_and(|a| precommitted.contains(&a.epoch))
@@ -10334,12 +10334,12 @@ impl VirtualStateProcessor {
             self.vlt_epoch_snapshot(tip, sink_daa, bonds, net_id, dns_params, dns_params.vlt_shadow_active_at(sink_daa), false);
         let weight = ContributionWeight::Vlt { snapshot: &snapshot, vlt: &dns_params.vlt };
         let (contributions, epoch_anchor_daa) = self.collect_stake_contributions_v2(tip, None, bonds, net_id, dns_params, weight);
-        let last_attestation = kaspa_consensus_core::dns_finality::last_attestation_daa_by_validator(
+        let last_attestation = kaspa_consensus_core::palw_consensus::last_attestation_daa_by_validator(
             &contributions,
             &epoch_anchor_daa,
             self.palw_leak_final_through_daa(sink_daa),
         );
-        let leak = kaspa_consensus_core::dns_finality::InactivityLeakViewV1 {
+        let leak = kaspa_consensus_core::palw_consensus::InactivityLeakViewV1 {
             last_attestation_daa: &last_attestation,
             leak_after_daa: self.palw_inactivity_leak_after(sink_daa),
             min_retained_validators: dns_params.min_active_validators,
@@ -10428,7 +10428,7 @@ impl VirtualStateProcessor {
             dns_params,
             &epoch_anchor_daa,
             weight,
-            kaspa_consensus_core::dns_finality::InactivityLeakViewV1::none(),
+            kaspa_consensus_core::palw_consensus::InactivityLeakViewV1::none(),
         );
         let per_epoch = aggregate_epoch_tallies(&contributions, &totals);
         compute_stake_score(&per_epoch, dns_params.epoch_credit_rule(pov_daa_score))
@@ -10453,7 +10453,7 @@ impl VirtualStateProcessor {
         weight: ContributionWeight<'_>,
         // ADR-0060 Decision 4: the inactivity leak's evidence — built by the caller from the
         // SAME contribution set the numerator aggregates, so presence and voting cannot drift.
-        leak: kaspa_consensus_core::dns_finality::InactivityLeakViewV1<'_>,
+        leak: kaspa_consensus_core::palw_consensus::InactivityLeakViewV1<'_>,
     ) -> BTreeMap<u64, u128> {
         let base = match weight {
             ContributionWeight::BondedStake => total_active_stake_by_epoch(bonds, epoch_anchor_daa, leak),
@@ -10793,7 +10793,7 @@ impl VirtualStateProcessor {
         let mut contributions: Vec<ComputeCreditContribution> = Vec::new();
         // Audit-emission v0.2: one roster per certificate that reached a decided, non-zero
         // normalization — the counted verdicts' authors and the job's µRTE they each earn.
-        let mut audit_contributions: Vec<kaspa_consensus_core::dns_finality::AuditCreditContribution> = Vec::new();
+        let mut audit_contributions: Vec<kaspa_consensus_core::palw_consensus::AuditCreditContribution> = Vec::new();
         // Certificates whose challenge was ADJUDICATED as standing. §6 zeroes the credit of a
         // receipt whose fraud proof 成立した — not of every receipt somebody pointed at.
         let mut refuted: HashSet<TransactionId> = HashSet::new();
@@ -10907,7 +10907,7 @@ impl VirtualStateProcessor {
                 accepted_daa_score: block_daa,
             });
             if !attestations.is_empty() {
-                audit_contributions.push(kaspa_consensus_core::dns_finality::AuditCreditContribution {
+                audit_contributions.push(kaspa_consensus_core::palw_consensus::AuditCreditContribution {
                     certificate_tx_id: cert_tx_id,
                     executor_id: cert.executor_id,
                     job_id: resolved.job_id,
@@ -10951,7 +10951,7 @@ impl VirtualStateProcessor {
         }
         // Audit-emission v0.2: same pin, same survivorship machinery, same cached-row merge —
         // refuted certificates keep paying their committees (the one deliberate divergence).
-        let walked_audit = kaspa_consensus_core::dns_finality::aggregate_audit_credits(
+        let walked_audit = kaspa_consensus_core::palw_consensus::aggregate_audit_credits(
             &audit_contributions,
             &refuted,
             pin_daa_score,
@@ -11687,7 +11687,7 @@ impl VirtualStateProcessor {
             // the executor from its own panel.
             let Some(executor_bond) = bonds.iter().find(|b| b.bond_outpoint == commitment.bond_outpoint) else { continue };
             if executor_bond.validator_pubkey_hash != commitment.validator_id
-                || !kaspa_consensus_core::dns_finality::is_bond_active_at(executor_bond, *accepted)
+                || !kaspa_consensus_core::palw_consensus::is_bond_active_at(executor_bond, *accepted)
             {
                 continue;
             }
@@ -11745,7 +11745,7 @@ impl VirtualStateProcessor {
                 .filter(|(a, daa)| {
                     let Some(bond) = bonds.iter().find(|b| b.bond_outpoint == a.bond_outpoint) else { return false };
                     bond.validator_pubkey_hash == a.attester_id
-                        && kaspa_consensus_core::dns_finality::is_bond_active_at(bond, *daa)
+                        && kaspa_consensus_core::palw_consensus::is_bond_active_at(bond, *daa)
                         && Self::verify_palw_attestation_signature(
                             &bond.validator_pubkey,
                             // ADR-0009 Addendum A.3: the network discriminator IS the genesis hash,
@@ -11822,7 +11822,7 @@ impl VirtualStateProcessor {
             // because their liability (signature ∧ refutation) is their own.
             //
             // Resolved by BOND OUTPOINT, which the carriage carries, not by
-            // `validator_pubkey_hash`. That hash is explicitly NOT unique (`dns_finality` says so),
+            // `validator_pubkey_hash`. That hash is explicitly NOT unique (`palw_consensus` says so),
             // and this used to `.find()` the first bond matching it — so with two bonds under one
             // validator key the reward went to whichever the walk happened to reach first, i.e. a
             // payee decided by iteration order rather than by the claim (audit B5). The outpoint is
@@ -13003,7 +13003,7 @@ impl VirtualStateProcessor {
     /// (own anchor dead past the FULL TTL vs candidate at FULL confirmation depth), not in state.
     ///
     /// The DNS coinbase-settlement context for MEMPOOL ADMISSION (see
-    /// [`kaspa_consensus_core::dns_finality::coinbase_spend_settled`]): the current confirmed
+    /// [`kaspa_consensus_core::palw_consensus::coinbase_spend_settled`]): the current confirmed
     /// anchor from the node's DnsState singleton, plus the network's long-maturity fallback.
     ///
     /// Policy layer only. The singleton is "state as of this node's last virtual commit", which
@@ -15483,12 +15483,12 @@ const MAX_REPORTED_CREDIT_SKIPS: usize = 16;
 /// past the accepting block, so a stale declaration cannot name a far-future expiry and squat in
 /// committees.
 fn verified_capability(
-    cap: kaspa_consensus_core::vlt::ComputeCapabilityPayload,
+    cap: kaspa_consensus_core::palw_compute::ComputeCapabilityPayload,
     bonds: &[StakeBondRecord],
     net_id: &[u8],
     declaration_block: BlockHash,
     accepted_daa_score: u64,
-    vlt: &kaspa_consensus_core::vlt::VltParams,
+    vlt: &kaspa_consensus_core::palw_compute::VltParams,
 ) -> Option<ComputeCapabilityRecord> {
     let bond = bonds.iter().find(|b| b.bond_outpoint == cap.bond_outpoint)?;
     if cap.validator_id != bond.validator_pubkey_hash {
@@ -15534,7 +15534,7 @@ fn verified_capability(
 /// dependency pass but rejected by the primary pass would let a certificate resolve against
 /// evidence the main walk does not accept.
 fn verified_commitment(
-    commit: kaspa_consensus_core::vlt::ComputeCommitmentPayload,
+    commit: kaspa_consensus_core::palw_compute::ComputeCommitmentPayload,
     bonds: &[StakeBondRecord],
     net_id: &[u8],
     accepted_blue_score: u64,
@@ -15812,7 +15812,7 @@ mod palw_equivocation_wiring_tests {
     const SLASH_NET: &[u8] = b"misaka-devnet";
 
     use super::*;
-    use kaspa_consensus_core::dns_finality::{BondStatus, StakeBondRecord};
+    use kaspa_consensus_core::palw_consensus::{BondStatus, StakeBondRecord};
     use kaspa_consensus_core::palw_carriage::{
         PALW_CARRIAGE_VERSION_V1, PalwCarriageV1, PalwEquivocationCarriageV1, encode_palw_carriage_v1,
     };

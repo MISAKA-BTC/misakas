@@ -1618,7 +1618,7 @@ impl<'a> Wizard<'a> {
     async fn step_stake_bond(
         &mut self,
         params: &kaspa_consensus_core::config::params::Params,
-        dns: &kaspa_consensus_core::dns_finality::DnsParams,
+        dns: &kaspa_consensus_core::palw_consensus::DnsParams,
     ) -> Step {
         let key = self
             .key_source()

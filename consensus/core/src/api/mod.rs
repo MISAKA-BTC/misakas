@@ -12,7 +12,7 @@ use crate::{
     blockstatus::BlockStatus,
     coinbase::MinerData,
     daa_score_timestamp::DaaScoreTimestamp,
-    dns_finality::{
+    palw_consensus::{
         ActiveValidatorSet, AttestationQualityDeficit, ComputeStatusView, DnsConfirmation, MandatoryAttestationDeficit,
         PendingComputeVerdict, PrecommitDuty, StakeBondPage, StakeBondQuery, StakeBondRecord, ValidatorAttestationTarget,
         VltStatusView,
@@ -698,7 +698,7 @@ pub trait ConsensusApi: Send + Sync {
     }
 
     /// Serve: the persisted overlay snapshot as-of the current pruning point, or `None`.
-    fn pruning_point_overlay_snapshot(&self) -> Option<crate::dns_finality::PruningPointOverlaySnapshot> {
+    fn pruning_point_overlay_snapshot(&self) -> Option<crate::palw_consensus::PruningPointOverlaySnapshot> {
         unimplemented!()
     }
 
@@ -884,7 +884,7 @@ pub trait ConsensusApi: Send + Sync {
     fn import_pruning_point_overlay_snapshot(
         &self,
         pruning_point: BlockHash,
-        snapshot: crate::dns_finality::OverlaySnapshot,
+        snapshot: crate::palw_consensus::OverlaySnapshot,
     ) -> PruningImportResult<()> {
         let _ = (pruning_point, snapshot);
         unimplemented!()

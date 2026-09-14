@@ -1,7 +1,7 @@
 use crate::{
     BlockHash, BlueWorkType,
     coinbase::MinerData,
-    dns_finality::MandatoryAttestationDeficit,
+    palw_consensus::MandatoryAttestationDeficit,
     evm::EvmExecutionPayload,
     header::Header,
     tx::{Transaction, TransactionId, TransactionOutpoint},

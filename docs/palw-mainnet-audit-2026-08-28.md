@@ -171,8 +171,8 @@ and at `:352-359` `bond_filter` is
 `(bond_gate_view.is_some() || !ctx.palw_v2_locked_bonds.is_empty() || !ctx.palw_v2_bond_burns.is_empty()).then_some(...)`
 — on a hash-only mainnet all three are `None`/empty, so **no bond check runs against accepted
 mergeset transactions at all**. The field's own doc states the gap verbatim
-(`consensus/core/src/dns_finality.rs:1061-1066`). Spending a bond's output-0 emits no
-`BondMutation`: the enum has only `Insert`/`Slash`/`Unbond` (`dns_finality.rs:5012-5035`), all
+(`consensus/core/src/palw_consensus.rs:1061-1066`). Spending a bond's output-0 emits no
+`BondMutation`: the enum has only `Insert`/`Slash`/`Unbond` (`palw_consensus.rs:5012-5035`), all
 derived from DNS-subnetwork transactions, so the record survives the withdrawal untouched.
 
 **Failure path.** A validator signs an ordinary P2PKH spend of its own bond output-0. Nothing in
@@ -1009,7 +1009,7 @@ exactly as `share_permille` is checked one line above, and bind it into
 `if entry.script_public_key != script || entry.is_coinbase { continue; }` (`:353`), where `script`
 comes from `fee_script`: `let payload = session.palw_bond_payout_payload_v2(PalwBondKeyV2(bond))?; Some(p2pkh_mldsa87_spk(&payload.as_bytes()))`
 (`:408-409`). But the bond's collateral output-0 is required to be at exactly that script:
-`if output.script_public_key != crate::dns_finality::p2pkh_mldsa87_spk(&owner) { return Err("a bond's collateral output must pay to the payload the registration names as its payee"); }`
+`if output.script_public_key != crate::palw_consensus::p2pkh_mldsa87_spk(&owner) { return Err("a bond's collateral output must pay to the payload the registration names as its payee"); }`
 (`consensus/core/src/palw_lifecycle_objects_v2.rs:222-226`). It is non-coinbase, unspent, and not in
 the node's own mempool, so it passes `is_free` and the scan returns it. There is no bond exclusion
 anywhere in `resolve_fee_funding` (`:296-392`) — unlike `validator_service.rs:811-830`, which

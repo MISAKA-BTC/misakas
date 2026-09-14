@@ -14,7 +14,7 @@ pub mod palw_fp_sign_gate;
 
 use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_consensus_core::constants::{MAX_TX_IN_SEQUENCE_NUM, TX_VERSION};
-use kaspa_consensus_core::dns_finality::{
+use kaspa_consensus_core::palw_consensus::{
     ATTESTATION_MLDSA87_CONTEXT, DNS_PAYLOAD_VERSION_V1, PRECOMMIT_MLDSA87_CONTEXT, PalwAttemptSignRecordV1, PrecommitEvidencePayload,
     PrecommitLock, SignedEpochCheckOutcome, SignedEpochRecord, SlashingEvidencePayload, StakeAttestation,
     StakeAttestationShardPayload, StakeBondPayload, StakePrecommitPayload, StakeUnbondRequestPayload, UNBOND_REQUEST_CONTEXT,
@@ -43,7 +43,7 @@ use kaspa_consensus_core::tx::{
     MutableTransaction, PopulatedTransaction, ScriptPublicKey, Transaction, TransactionId, TransactionInput, TransactionOutpoint,
     TransactionOutput, UtxoEntry,
 };
-use kaspa_consensus_core::vlt::{
+use kaspa_consensus_core::palw_compute::{
     COMPUTE_CAPABILITY_MLDSA87_CONTEXT, COMPUTE_CERT_MLDSA87_CONTEXT, COMPUTE_CHALLENGE_MLDSA87_CONTEXT,
     COMPUTE_COMMITMENT_MLDSA87_CONTEXT, ComputeCapabilityPayload, ComputeCertificatePayload, ComputeChallengePayload,
     ComputeCommitmentPayload, ComputeFraudKind, ComputeReceipt, ComputeVerdictPayload, LlmJobSpec, MAX_JOB_INPUT_BYTES, ReplayProof,
@@ -299,7 +299,7 @@ impl ValidatorKey {
         nonce: u64,
     ) -> Result<Vec<u8>, String> {
         let mut shaped = unsigned.clone();
-        shaped.signature = vec![0u8; kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN];
+        shaped.signature = vec![0u8; kaspa_consensus_core::palw_consensus::STAKE_ATTESTATION_SIG_LEN];
         shaped.validate_shape().map_err(|e| format!("refusing to sign a commitment consensus would reject: {e}"))?;
         let message = shaped.message(network_id, pre_pow_hash, timestamp, nonce);
         Ok(self
@@ -2340,14 +2340,14 @@ mod tests {
             output_commitment: Hash64::from_bytes([tag; 64]),
             prefill_tokens: 100,
             decode_tokens: 20,
-            trace_commitment: kaspa_consensus_core::vlt::residual_commitment(&residuals),
+            trace_commitment: kaspa_consensus_core::palw_compute::residual_commitment(&residuals),
         };
         ReplayProof { receipt, residuals }
     }
 
-    fn residuals(tag: u8) -> kaspa_consensus_core::vlt::ReplayResiduals {
+    fn residuals(tag: u8) -> kaspa_consensus_core::palw_compute::ReplayResiduals {
         let h = |b: u8| Hash64::from_bytes([b; 64]);
-        kaspa_consensus_core::vlt::ReplayResiduals {
+        kaspa_consensus_core::palw_compute::ReplayResiduals {
             job_nullifier: h(tag),
             request_commitment: h(tag.wrapping_add(1)),
             model_profile_id: h(tag.wrapping_add(2)),
@@ -2365,16 +2365,16 @@ mod tests {
     }
 
     fn compute_spec() -> LlmJobSpec {
-        let entry = kaspa_consensus_core::vlt::palw_qwen36_metal_entry();
+        let entry = kaspa_consensus_core::palw_compute::palw_qwen36_metal_entry();
         LlmJobSpec {
             version: DNS_PAYLOAD_VERSION_V1,
             model_weights_hash: entry.model_weights_hash,
             runtime_hash: entry.runtime_hash,
-            quantization: kaspa_consensus_core::vlt::QuantizationProfile::Int4,
+            quantization: kaspa_consensus_core::palw_compute::QuantizationProfile::Int4,
             input_commitment: job_input_commitment(COMPUTE_INPUT),
             sampling_seed: [0x42; 32],
             max_tokens: 512,
-            verification_scheme: kaspa_consensus_core::vlt::VerificationScheme::CanonicalFullReplay,
+            verification_scheme: kaspa_consensus_core::palw_compute::VerificationScheme::CanonicalFullReplay,
         }
     }
 
@@ -2392,7 +2392,7 @@ mod tests {
     /// consensus stateless validator accepts, and be spendable (input-0 signed, change to self).
     #[test]
     fn compute_overlay_txs_are_wellformed_and_stateless_valid() {
-        use kaspa_consensus_core::dns_finality::{
+        use kaspa_consensus_core::palw_consensus::{
             DnsTxKind, dns_tx_kind, validate_compute_capability_payload, validate_compute_certificate_payload,
             validate_compute_challenge_tx, validate_compute_commitment_payload, validate_compute_verdict_payload,
         };
@@ -2400,7 +2400,7 @@ mod tests {
         let (fop, fentry) = compute_funding();
         let net = b"misaka-test";
         let bond = fop_bond();
-        let entry = kaspa_consensus_core::vlt::palw_qwen36_metal_entry();
+        let entry = kaspa_consensus_core::palw_compute::palw_qwen36_metal_entry();
         let fee = 250_000;
 
         let cap = key
@@ -2515,7 +2515,7 @@ mod tests {
         // signatures alone.
         assert_eq!(agreed.verifier_id, key.validator_id);
         assert_ne!(agreed.signature, diverged.signature);
-        assert_eq!(agreed.signature.len(), kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN);
+        assert_eq!(agreed.signature.len(), kaspa_consensus_core::palw_consensus::STAKE_ATTESTATION_SIG_LEN);
     }
 
     /// Underfunded builders must fail loudly rather than emit an unminable transaction.
@@ -2688,7 +2688,7 @@ mod tests {
     #[test]
     fn validator_id_matches_blake2b_512_of_public_key() {
         // The advertised validator_id must equal the canonical
-        // dns_finality::validator_id_from_pubkey over this key's public key.
+        // palw_consensus::validator_id_from_pubkey over this key's public key.
         let key = ValidatorKey::from_seed([0x33u8; VALIDATOR_SEED_LEN]);
         let expected = validator_id_from_pubkey(key.keypair.verification_key.as_ref());
         assert_eq!(key.validator_id, expected);
@@ -2734,7 +2734,7 @@ mod tests {
 
     #[test]
     fn build_funded_shard_tx_structure_and_funding() {
-        use kaspa_consensus_core::dns_finality::validate_stake_attestation_shard_payload;
+        use kaspa_consensus_core::palw_consensus::validate_stake_attestation_shard_payload;
         use kaspa_consensus_core::tx::ScriptPublicKey;
 
         let key = ValidatorKey::from_seed([0x77u8; VALIDATOR_SEED_LEN]);
@@ -2812,7 +2812,7 @@ mod tests {
 
     #[test]
     fn build_funded_unbond_tx_structure_and_auth() {
-        use kaspa_consensus_core::dns_finality::validate_stake_unbond_payload;
+        use kaspa_consensus_core::palw_consensus::validate_stake_unbond_payload;
         use kaspa_consensus_core::tx::ScriptPublicKey;
 
         let key = ValidatorKey::from_seed([0x33u8; VALIDATOR_SEED_LEN]);
@@ -2887,7 +2887,7 @@ mod tests {
 
     #[test]
     fn build_funded_stake_bond_tx_structure_and_lock() {
-        use kaspa_consensus_core::dns_finality::{StakeBondPayload, validate_stake_bond_payload};
+        use kaspa_consensus_core::palw_consensus::{StakeBondPayload, validate_stake_bond_payload};
         use kaspa_consensus_core::subnets::SUBNETWORK_ID_STAKE_BOND;
         use kaspa_consensus_core::tx::ScriptPublicKey;
 

@@ -330,7 +330,7 @@ let releasable = effective_bond_status(bond, self.daa_score) == BondStatus::Unbo
 !releasable
 ```
 
-`BondStatus` has no terminal "withdrawn" state (`dns_finality.rs:344-358`), so a released bond
+`BondStatus` has no terminal "withdrawn" state (`palw_consensus.rs:344-358`), so a released bond
 keeps its record and keeps being returned by the RPC. The sidecar's `unbond` command files the
 unbond *request* only — it explicitly refuses to touch output-0 (`kaspa-pq-validator/src/main.rs:977`)
 — and no other shipped command spends it.
@@ -384,7 +384,7 @@ Signing is hedged, so the rebuild yields a **different** signature; the funding 
 re-selected, so the transaction is not identical either.
 
 **The conclusion still holds**, for a reason the comment does not give: equivocation is decided on
-`(target_hash, target_daa_score)` alone, and `dns_finality.rs:2127-2129` and `:2440-2444` state
+`(target_hash, target_daa_score)` alone, and `palw_consensus.rs:2127-2129` and `:2440-2444` state
 explicitly that the signature fingerprint is *not* part of the predicate, precisely because ML-DSA
 is hedged. So the rebuild is safe. One loose end: on a rebuild the record is not rewritten
 (`if !already_recorded`), so the durable `signature_fingerprint` names a signature that was never

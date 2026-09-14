@@ -39,7 +39,7 @@
 //! | free-prompt exposure | `quanta × quantum × slash_value_per_pwu` | `apply_free_prompt`'s `reserved` (`palw_state_v2.rs:6831`) | per-leaf **until the cap**, then flat — so above `cap · quantum` leaves, N segments reserve N × the ceiling |
 //! | **challenger** exposure to open a court | the claim's own `reserved`, again | `apply_court_opened` (`palw_state_v2.rs:6674`) | N reservations to PROSECUTE one answer. *"the ceiling it already lives under does the counting"* — so a bond that could challenge M claims can challenge only M/N segmented answers, and segmentation raises the price of policing as fast as it raises the price of producing |
 //! | panel seats | [`crate::palw_fp_devnet_v3::PALW_V2_PANEL_SEATS`] = 5 | `palw_fp_devnet_v3.rs:459` | N panels drawn, N × 5 seats put on duty |
-//! | receipts to quorum | [`crate::palw_fp_devnet_v3::PALW_V2_PANEL_QUORUM`] = 3 | `palw_fp_devnet_v3.rs:460`, enforced by [`crate::palw_panel_v2::validate_receipt_quorum_v2`] | N × 3 ML-DSA-87 signatures on chain, at [`crate::dns_finality::STAKE_ATTESTATION_SIG_LEN`] = 4,627 bytes each |
+//! | receipts to quorum | [`crate::palw_fp_devnet_v3::PALW_V2_PANEL_QUORUM`] = 3 | `palw_fp_devnet_v3.rs:460`, enforced by [`crate::palw_panel_v2::validate_receipt_quorum_v2`] | N × 3 ML-DSA-87 signatures on chain, at [`crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN`] = 4,627 bytes each |
 //! | seat replay work | [`crate::palw_fp_interval_v1::PALW_FP_SEAT_INTERVAL_SAMPLES_V1`] = 4 intervals **per seat per claim** | `palw_fp_interval_v1.rs:28` | N × 5 × 4 interval replays for one answer. The draw is short-circuited only when `interval_count <= k`, so a short segment is checked WHOLE — segmentation buys denser sampling and pays the panel's CPU for it |
 //! | derivations | [`crate::palw_derived_v1::PALW_DERIVED_MAX_PER_CLAIM`] = 4 | `palw_derived_v1.rs:36` | the ceiling is per claim, but a `PalwDerivedArtifactV1` names a SINGULAR `claim_id`/`output_root` — N × 4 slots that no derivation can span |
 //! | abandon hold | `fp_abandon_hold` = 600 DAA (RC) | `palw_fp_devnet_v3.rs:100`, read by [`crate::palw_state_v2::palw_claim_is_on_abandon_hold_v2`] (`:1070`) | N reservations held past the void, not one |
@@ -101,7 +101,7 @@
 //! No `ForkActivation`, no state field, no wire type. `palw_segmentation_cost_v1` is arithmetic
 //! over constants that already exist; a consensus path that called it would be a bug.
 
-use crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
+use crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN;
 use crate::palw_derived_v1::PALW_DERIVED_MAX_PER_CLAIM;
 use crate::palw_fp_devnet_v3::{PALW_V2_PANEL_QUORUM, PALW_V2_PANEL_SEATS};
 use crate::palw_fp_interval_v1::PALW_FP_SEAT_INTERVAL_SAMPLES_V1;

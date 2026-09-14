@@ -57,7 +57,7 @@ use serde::{Deserialize, Serialize};
 /// (fail-closed) rather than guessing a family.
 pub fn resolve_class_tag_v1(runtime_class_id: &Hash64, validated_rows: &[PalwClassRegistrationV1]) -> Option<String> {
     if let Some(tag) =
-        PALW_REGISTERED_CLASS_TAGS.iter().find(|tag| kaspa_consensus_core::vlt::derive_runtime_class_id(tag) == *runtime_class_id)
+        PALW_REGISTERED_CLASS_TAGS.iter().find(|tag| kaspa_consensus_core::palw_compute::derive_runtime_class_id(tag) == *runtime_class_id)
     {
         return Some((*tag).to_owned());
     }
@@ -808,7 +808,7 @@ pub mod fixtures {
             pwu_per_inference: 512_000_000,
             label: class_tag.into(),
             class_tag: class_tag.into(),
-            runtime_class_id: kaspa_consensus_core::vlt::derive_runtime_class_id(class_tag),
+            runtime_class_id: kaspa_consensus_core::palw_compute::derive_runtime_class_id(class_tag),
             runtime_manifest_hash: h64(0x02),
             model_profile_id: h64(0x03),
             tokenizer_id: h64(0x04),
@@ -948,7 +948,7 @@ mod tests {
     #[test]
     fn the_tag_reverse_index_round_trips_and_a_validated_row_is_a_second_witness() {
         for tag in PALW_REGISTERED_CLASS_TAGS {
-            let id = kaspa_consensus_core::vlt::derive_runtime_class_id(tag);
+            let id = kaspa_consensus_core::palw_compute::derive_runtime_class_id(tag);
             assert_eq!(resolve_class_tag_v1(&id, &[]).as_deref(), Some(*tag), "ledger tag {tag} does not round-trip");
         }
         assert_eq!(resolve_class_tag_v1(&h64(0x77), &[]), None, "an unknown class id resolves to nothing");
@@ -1098,7 +1098,7 @@ mod tests {
 
         let tag = PALW_REGISTERED_CLASS_TAGS[0];
         let probe = HostProbeV1 {
-            runtime_class_id: kaspa_consensus_core::vlt::derive_runtime_class_id(tag),
+            runtime_class_id: kaspa_consensus_core::palw_compute::derive_runtime_class_id(tag),
             runtime_manifest_hash: h64(0x02),
             model_profile_id: h64(0x03),
             class_tag: tag.into(),
@@ -1122,7 +1122,7 @@ mod tests {
     fn capability_assembly_is_canonical_verifiable_and_refuses_an_empty_ready_set() {
         let tag = PALW_REGISTERED_CLASS_TAGS[0];
         let probe = HostProbeV1 {
-            runtime_class_id: kaspa_consensus_core::vlt::derive_runtime_class_id(tag),
+            runtime_class_id: kaspa_consensus_core::palw_compute::derive_runtime_class_id(tag),
             runtime_manifest_hash: h64(0x02),
             model_profile_id: h64(0x03),
             class_tag: tag.into(),

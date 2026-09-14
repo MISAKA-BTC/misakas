@@ -57,7 +57,7 @@ fn main() {
              default; you are seeing this because something asked for it explicitly.\n\
              \n\
              To build it anyway: check out ggml-org/llama.cpp at the pinned commit\n\
-             (`kaspa_consensus_core::vlt::qwen35_pins::LLAMA_COMMIT`), build it with the pinned\n\
+             (`kaspa_consensus_core::palw_compute::qwen35_pins::LLAMA_COMMIT`), build it with the pinned\n\
              CMake profile, and point this at the checkout:\n\
              \n\
                  MISAKA_LLAMA_SRC=/path/to/llama.cpp cargo build --release -p misaka-palw-worker\n\

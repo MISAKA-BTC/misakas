@@ -8,7 +8,7 @@
 //!
 //! # What this replaces
 //!
-//! The pre-existing DNS finality overlay ([`crate::dns_finality`]) is a
+//! The pre-existing DNS finality overlay ([`crate::palw_consensus`]) is a
 //! stake-weighted attestation scheme: a validator's voting weight *is* its
 //! bonded amount, and an epoch earns graded StakeScore credit through the φS
 //! quality floor. That is the "Money → Power" mapping of ordinary PoS.
@@ -30,7 +30,7 @@
 //!   only as the `λ·B_i` *cap*. Adding bond with `C_i(E) = 0` yields `W_i(E) = 0` —
 //!   capital alone buys nothing. The 20M-KAS `min_bond_amount_sompi` floor is
 //!   **unchanged** by this module: it stays the participation/slashable-collateral
-//!   requirement it always was (see [`crate::dns_finality::DnsParams::min_bond_amount_sompi`]).
+//!   requirement it always was (see [`crate::palw_consensus::DnsParams::min_bond_amount_sompi`]).
 //! * **Compute credit cannot bootstrap its own fork.** `C_i(E)` reads only epochs
 //!   `≤ E − credit_delay_epochs` (≥ 1 by construction, §4/§8.3), so VLT minted on the
 //!   current fork cannot inflate that fork's own voting power — the eq. (5) epoch delay.
@@ -121,7 +121,7 @@ pub const MAX_MODEL_COST_ENTRIES: usize = 16;
 /// sortition beacon exists, so the whole job is public before anyone knows who audits it, and
 /// re-stating the input on the certificate would only create a second place for it to disagree.
 ///
-/// A stateless cap rather than a [`VltParams`] field so [`crate::dns_finality::validate_compute_commitment_payload`]
+/// A stateless cap rather than a [`VltParams`] field so [`crate::palw_consensus::validate_compute_commitment_payload`]
 /// can enforce it without threading per-network params into isolation validation — the same
 /// reason [`MAX_VERIFIER_ATTESTATIONS`] is a constant. 8 KiB is far above the token budget
 /// [`ModelCostEntry::max_tokens`] allows a job to consume and far below the 4627-byte ML-DSA-87
@@ -529,7 +529,7 @@ pub fn adjudicate_compute_challenge(
 /// A fraud proof against an accepted certificate, on
 /// `SUBNETWORK_ID_COMPUTE_CHALLENGE`.
 ///
-/// Like [`crate::dns_finality::SlashingEvidencePayload`] this is a pure evidence
+/// Like [`crate::palw_consensus::SlashingEvidencePayload`] this is a pure evidence
 /// carrier: it declares no outputs, and the reporter reward is minted by consensus
 /// as a side-effect at `(challenge_tx_id, 0)`.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -585,7 +585,7 @@ pub struct ComputeChallengePayload {
 /// Digest an executor signs to claim a receipt.
 ///
 /// `network_id` and `bond_outpoint` are bound in for the same reason
-/// [`crate::dns_finality::stake_attestation_message`] binds them: without them a
+/// [`crate::palw_consensus::stake_attestation_message`] binds them: without them a
 /// signature could be replayed onto another network or re-associated with a
 /// different bond.
 pub fn compute_certificate_message(
@@ -890,7 +890,7 @@ impl ComputeVerdictPayload {
 /// ([`select_verifiers`]), and consensus has to learn each validator's class from somewhere.
 /// Deriving it from a validator's past certificates cannot bootstrap: the very first
 /// certificate on a network would have no in-class candidates to audit it. A signed
-/// declaration breaks that circularity without touching [`crate::dns_finality::StakeBondPayload`],
+/// declaration breaks that circularity without touching [`crate::palw_consensus::StakeBondPayload`],
 /// so existing bonds stay valid.
 ///
 /// Declarations **expire**. A validator that stops running the runtime stops being drawn into
@@ -1622,7 +1622,7 @@ impl ModelCostTable {
 
 /// Per-network VLT / weighted-BFT parameters.
 ///
-/// Carried inside [`crate::dns_finality::DnsParams`] so it inherits the same
+/// Carried inside [`crate::palw_consensus::DnsParams`] so it inherits the same
 /// `Option` gating the rest of the overlay has, and fenced independently by
 /// [`Self::vlt_shadow_activation_daa_score`] and [`Self::vlt_activation_daa_score`].
 ///
@@ -1638,7 +1638,7 @@ impl ModelCostTable {
 /// The gap between them is not slack, it is the soak: `C_i(E)` sums a `credit_window_epochs`
 /// window, so a network that flipped both fences at once would switch its voting power to a
 /// table that is still empty — `W(E) = 0`, no epoch reaches quorum, DNS finality stops on the
-/// spot. [`crate::dns_finality::DnsParams::vlt_params_consistent`] requires the weight fence
+/// spot. [`crate::palw_consensus::DnsParams::vlt_params_consistent`] requires the weight fence
 /// to sit at least one full credit window above the shadow fence, so that failure is a preset
 /// error caught before launch rather than a stall discovered afterwards.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -1880,7 +1880,7 @@ impl VltParams {
     /// Whether verified compute is the **voting weight** at `daa_score`.
     ///
     /// Implies [`Self::shadow_active_at`] on any preset that passes
-    /// [`crate::dns_finality::DnsParams::vlt_params_consistent`], which requires the weight fence
+    /// [`crate::palw_consensus::DnsParams::vlt_params_consistent`], which requires the weight fence
     /// to sit above the shadow fence. It is not enforced here, because a param-shape predicate
     /// that silently rewrote a misordered preset would hide exactly the error worth catching.
     pub fn weight_active_at(&self, daa_score: u64) -> bool {
@@ -2502,7 +2502,7 @@ impl VltVotingSnapshot {
         // One row per validator, enforced at the sealing boundary rather than trusted from the
         // builder. `C_i(E)` is per-validator, so two rows for one identity would freeze that
         // credit into the denominator twice and let the same compute vote twice — the bond-split
-        // inflation `dns_finality::active_bond_total_sompi` exists to prevent. The rows are
+        // inflation `palw_consensus::active_bond_total_sompi` exists to prevent. The rows are
         // already sorted, so keeping the first is deterministic on every node; a builder that
         // produced duplicates would otherwise ship a denominator no honest node can reproduce.
         self.validators.dedup_by(|a, b| a.validator_id == b.validator_id);
@@ -4398,7 +4398,7 @@ mod tests {
     #[test]
     fn only_an_adjudicated_challenge_zeroes_the_credit() {
         let cert_tx = TransactionId::from_bytes([7u8; 64]);
-        let contribution = crate::dns_finality::ComputeCreditContribution {
+        let contribution = crate::palw_consensus::ComputeCreditContribution {
             validator_id: h64(1),
             bond_outpoint: outpoint(1),
             epoch: 4,
@@ -4408,7 +4408,7 @@ mod tests {
             accepted_daa_score: 100,
         };
         let credited = |refuted: std::collections::HashSet<TransactionId>| {
-            crate::dns_finality::aggregate_compute_credits(std::slice::from_ref(&contribution), &refuted, 1_000, 300)
+            crate::palw_consensus::aggregate_compute_credits(std::slice::from_ref(&contribution), &refuted, 1_000, 300)
         };
         assert_eq!(credited(std::collections::HashSet::new()).get(&h64(1)).and_then(|e| e.get(&4)).copied(), Some(1_000));
         assert!(credited([cert_tx].into_iter().collect()).is_empty(), "a challenge that STOOD zeroes the credit");
@@ -4621,7 +4621,7 @@ mod tests {
         assert!(!meets_bft_quorum(1, w_min * 10, w_min));
 
         // The rule carries the floor, so a call site cannot apply the quorum without it.
-        use crate::dns_finality::{EpochCreditRule, STAKE_SCORE_SCALE, epoch_credit};
+        use crate::palw_consensus::{EpochCreditRule, STAKE_SCORE_SCALE, epoch_credit};
         let epoch = |signed, total, min| epoch_credit(signed, total, EpochCreditRule::BftQuorum { min_network_compute: min });
         assert_eq!(epoch(3, 3, 0), STAKE_SCORE_SCALE, "no floor configured ⇒ pure quorum");
         assert_eq!(epoch(3, 3, w_min), 0, "below W_min the epoch earns nothing");

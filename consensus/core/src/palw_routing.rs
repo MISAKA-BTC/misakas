@@ -1088,7 +1088,7 @@ mod tests {
     use crate::palw_step::PALW_STEP_ALL_DOMAINS;
     use crate::palw_step_leg::PALW_STEP_LEG_ALL_DOMAINS;
     use crate::palw_v2::PALW_V2_ALL_DOMAINS;
-    use crate::vlt::VERIFIER_SORTITION_KEY;
+    use crate::palw_compute::VERIFIER_SORTITION_KEY;
 
     fn h64(fill: u8) -> Hash64 {
         Hash64::from_bytes([fill; 64])
@@ -1568,7 +1568,7 @@ mod tests {
         let class_panel =
             select_replay_panel_v1(&h64(0x01), &h64(EXECUTOR), &h64(0x03), &binding.runtime_class_id, &class_candidates, 8);
         let vlt_pairs: Vec<(Hash64, Hash64)> = (1u8..=8).map(|i| (h64(i), binding.runtime_class_id)).collect();
-        let vlt_panel = crate::vlt::select_verifiers(h64(0x01), h64(EXECUTOR), h64(0x03), binding.runtime_class_id, &vlt_pairs, 8);
+        let vlt_panel = crate::palw_compute::select_verifiers(h64(0x01), h64(EXECUTOR), h64(0x03), binding.runtime_class_id, &vlt_pairs, 8);
         assert_eq!(routed_full.len(), 8);
         assert_ne!(routed_full, class_panel, "the routed draw predicts the class draw");
         assert_ne!(routed_full, vlt_panel, "the routed draw predicts the VLT draw");
@@ -1815,11 +1815,11 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for tag in PALW_REGISTERED_CLASS_TAGS {
             assert!(routing_keys_for_class_tag_v1(tag).is_some(), "registered tag {tag} must parse into routing keys");
-            assert!(seen.insert(crate::vlt::derive_runtime_class_id(tag)), "two ledger tags derive one class id");
+            assert!(seen.insert(crate::palw_compute::derive_runtime_class_id(tag)), "two ledger tags derive one class id");
         }
         // The build's own CPU class tag is in the ledger — except the decline-to-participate
         // placeholder, which is deliberately unroutable.
-        let build_tag = crate::vlt::qwen35_pins::CPU_RUNTIME_CLASS;
+        let build_tag = crate::palw_compute::qwen35_pins::CPU_RUNTIME_CLASS;
         if build_tag != "misaka-palw-lite-cpu/other-arch/v1" {
             assert!(PALW_REGISTERED_CLASS_TAGS.contains(&build_tag), "this build's CPU tag {build_tag} is missing from the ledger");
         }
