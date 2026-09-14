@@ -841,7 +841,7 @@ mod tests {
                 trace_retention_daa: 999_999,
                 execution_root: h64(41),
             },
-            signature: vec![0x5A; crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; crate::palw::types::MLDSA87_SIG_LEN],
         }
     }
 
@@ -2083,7 +2083,7 @@ mod tests {
                 trace_retention_daa: 999_999,
                 execution_root: h64(41),
             },
-            signature: vec![0x5A; crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; crate::palw::types::MLDSA87_SIG_LEN],
         };
         check_palw_attempt_admission_v2(&booted, &sp, &bundle.admission, &context, &floor, PalwEpochBudgetFencesV1::default())
             .expect("the liveness floor produces with the backing fully armed, or the network has no clock");

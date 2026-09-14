@@ -47,8 +47,8 @@
 //! recommended registered form.
 
 use crate::BlockHash;
-use crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN;
-use crate::palw_consensus::StakeBondRecord;
+use crate::palw::types::MLDSA87_SIG_LEN;
+use crate::palw::types::StakeBondRecord;
 use crate::palw_legs::{
     PALW_LEGS_OBJECT_VERSION_V1, PalwLegsBindingV1, PalwLegsOpeningAnswerV1, PalwLegsOpeningCallV1, PalwLegsRefutationV1,
     activation_leg_root_v1, canonical_decode_calls, checkpoint_leg_root_v1, execution_commitment_root_v1,
@@ -400,7 +400,7 @@ impl PalwWithheldAuthorshipV1 {
         if self.commitment.trace_root != *refuted_trace_root {
             return false;
         }
-        if !crate::palw_consensus::is_bond_active_at(accused_bond, pov_daa_score) {
+        if !crate::palw::types::is_bond_active_at(accused_bond, pov_daa_score) {
             return false;
         }
         let digest = self.commitment.message(chain_network_id, self.pre_pow_hash, self.timestamp, self.nonce);
@@ -952,7 +952,7 @@ where
     if signer != accused_bond.validator_pubkey_hash || carriage.certificate.attestation_b.executor_id != signer {
         return Err(PalwCarriageError::EquivocationBondNotTheSigner);
     }
-    if !crate::palw_consensus::is_bond_active_at(accused_bond, pov_daa_score) {
+    if !crate::palw::types::is_bond_active_at(accused_bond, pov_daa_score) {
         return Err(PalwCarriageError::EquivocationBondInactive);
     }
     let verdict = adjudicate_class_contradiction_v1(
@@ -1027,7 +1027,7 @@ where
     if carriage.attestation.bond_outpoint != accused_bond.bond_outpoint {
         return Err(PalwCarriageError::EquivocationBondNotTheSigner);
     }
-    if !crate::palw_consensus::is_bond_active_at(accused_bond, pov_daa_score) {
+    if !crate::palw::types::is_bond_active_at(accused_bond, pov_daa_score) {
         return Err(PalwCarriageError::EquivocationBondInactive);
     }
     // Same rule as the equivocation adjudicator: the network identity comes from the CHAIN. Taking
@@ -1233,8 +1233,8 @@ fn validate_commitment_carriage(c: &PalwCommitmentCarriageV1) -> Result<(), Palw
     // The envelope's context-free shape (version, network id, prompt and budget bounds); the
     // profile bound is the envelope's own declaration at this layer.
     c.envelope.validate_shape(c.envelope.max_context_tokens).map_err(|e| PalwCarriageError::Inner(e.to_string()))?;
-    if c.signature.len() != STAKE_ATTESTATION_SIG_LEN {
-        return Err(PalwCarriageError::SignatureLength { got: c.signature.len(), expected: STAKE_ATTESTATION_SIG_LEN });
+    if c.signature.len() != MLDSA87_SIG_LEN {
+        return Err(PalwCarriageError::SignatureLength { got: c.signature.len(), expected: MLDSA87_SIG_LEN });
     }
     match (c.committed_form, &c.binding) {
         (0, None) => Ok(()),
@@ -1543,7 +1543,7 @@ mod tests {
             binding: Some(binding),
             validator_id: h64(0xA1),
             bond_outpoint: outpoint(0xB1, 0),
-            signature: vec![0x5A; STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; MLDSA87_SIG_LEN],
         }
     }
 
@@ -1556,7 +1556,7 @@ mod tests {
             binding: None,
             validator_id: h64(0xA1),
             bond_outpoint: outpoint(0xB1, 0),
-            signature: vec![0x5A; STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; MLDSA87_SIG_LEN],
         }
     }
 
@@ -1572,7 +1572,7 @@ mod tests {
                 committed_root: test_binding().committed_execution_root,
                 // The SAME value the carriage names below: since generation 3 admission requires it.
                 bond_outpoint: outpoint(0xB2, 1),
-                signature: vec![0x33; STAKE_ATTESTATION_SIG_LEN],
+                signature: vec![0x33; MLDSA87_SIG_LEN],
             },
             attester_id: h64(0xA2),
             bond_outpoint: outpoint(0xB2, 1),
@@ -1904,7 +1904,7 @@ mod tests {
         short.signature = vec![0x5A; 64];
         assert_eq!(
             validate_palw_carriage_v1(&PalwCarriageV1::Commitment(short)),
-            Err(PalwCarriageError::SignatureLength { got: 64, expected: STAKE_ATTESTATION_SIG_LEN })
+            Err(PalwCarriageError::SignatureLength { got: 64, expected: MLDSA87_SIG_LEN })
         );
     }
 
@@ -2105,7 +2105,7 @@ mod tests {
             full_logits_trace_root: root,
             committed_root: root,
             bond_outpoint: outpoint(0xB1, 0),
-            signature: vec![0x5A; crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; crate::palw::types::MLDSA87_SIG_LEN],
         };
         PalwEquivocationCarriageV1 {
             version: PALW_CARRIAGE_VERSION_V1,
@@ -2133,7 +2133,7 @@ mod tests {
                 full_logits_trace_root: refutation.binding.full_logits_trace_root,
                 committed_root: refutation.binding.committed_execution_root,
                 bond_outpoint: outpoint(0xB1, 0),
-                signature: vec![0x5A; crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN],
+                signature: vec![0x5A; crate::palw::types::MLDSA87_SIG_LEN],
             },
             refutation,
         }
@@ -2176,7 +2176,7 @@ mod tests {
                 observed_roots: vec![h64(0x74)],
                 verdict: crate::palw_receipt::PalwReceiptVerdictV1::Match,
                 verifier_bond_outpoint: outpoint(0xC2, 0),
-                signature: vec![0x5A; crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN],
+                signature: vec![0x5A; crate::palw::types::MLDSA87_SIG_LEN],
             },
         }
     }
@@ -2982,7 +2982,7 @@ mod bisect_move_tests {
             owner_reward_spk_payload: [0u8; 64],
             unbond_request_daa_score: None,
             slashed_at_daa_score: None,
-            status: crate::palw_consensus::BondStatus::Active,
+            status: crate::palw::types::BondStatus::Active,
         }
     }
 
@@ -3009,14 +3009,14 @@ mod bisect_move_tests {
                 trace_root: root,
                 output_root: Hash64::from_u64_word(0),
                 pwu_claim: 42,
-                signature: vec![0x5A; crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN],
+                signature: vec![0x5A; crate::palw::types::MLDSA87_SIG_LEN],
             },
             pre_pow_hash: Hash64::from_u64_word(0xB0),
             timestamp: 1_700_000_000,
             nonce: 7,
         };
         let ok = |_k: &[u8], _d: &Hash, s: &[u8], c: &[u8]| {
-            s == vec![0x5A; crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN].as_slice() && c == PALW_BLOCK_COMMITMENT_MLDSA87_CONTEXT
+            s == vec![0x5A; crate::palw::types::MLDSA87_SIG_LEN].as_slice() && c == PALW_BLOCK_COMMITMENT_MLDSA87_CONTEXT
         };
         assert!(authorship.establishes_authorship_v1(&bond, &root, b"net", 1_000, ok), "the honest case must hold");
 

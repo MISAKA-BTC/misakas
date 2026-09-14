@@ -318,7 +318,7 @@ mod tests {
                 producer_bond: bond_op(1),
                 producer_pubkey: vec![7; 4],
             },
-            signature: vec![0x5A; crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; crate::palw::types::MLDSA87_SIG_LEN],
         }
     }
 

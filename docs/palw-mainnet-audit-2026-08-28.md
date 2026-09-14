@@ -1009,7 +1009,7 @@ exactly as `share_permille` is checked one line above, and bind it into
 `if entry.script_public_key != script || entry.is_coinbase { continue; }` (`:353`), where `script`
 comes from `fee_script`: `let payload = session.palw_bond_payout_payload_v2(PalwBondKeyV2(bond))?; Some(p2pkh_mldsa87_spk(&payload.as_bytes()))`
 (`:408-409`). But the bond's collateral output-0 is required to be at exactly that script:
-`if output.script_public_key != crate::palw_consensus::p2pkh_mldsa87_spk(&owner) { return Err("a bond's collateral output must pay to the payload the registration names as its payee"); }`
+`if output.script_public_key != crate::palw::bond::p2pkh_mldsa87_spk(&owner) { return Err("a bond's collateral output must pay to the payload the registration names as its payee"); }`
 (`consensus/core/src/palw_lifecycle_objects_v2.rs:222-226`). It is non-coinbase, unspent, and not in
 the node's own mempool, so it passes `is_free` and the scan returns it. There is no bond exclusion
 anywhere in `resolve_fee_funding` (`:296-392`) — unlike `validator_service.rs:811-830`, which

@@ -119,8 +119,8 @@ fn parse_bond_outpoint(s: &str) -> RpcResult<kaspa_consensus_core::tx::Transacti
 }
 
 /// kaspa-pq: the lowercase wire string for a stake-bond status, shared by the stake-bond RPCs.
-fn bond_status_str(status: kaspa_consensus_core::palw_consensus::BondStatus) -> &'static str {
-    use kaspa_consensus_core::palw_consensus::BondStatus;
+fn bond_status_str(status: kaspa_consensus_core::palw::types::BondStatus) -> &'static str {
+    use kaspa_consensus_core::palw::types::BondStatus;
     match status {
         BondStatus::Pending => "pending",
         BondStatus::Active => "active",
@@ -130,8 +130,8 @@ fn bond_status_str(status: kaspa_consensus_core::palw_consensus::BondStatus) -> 
 }
 
 /// kaspa-pq: parse a `GetStakeBonds` status filter token (case-insensitive). A malformed value is a client error.
-fn parse_bond_status(s: &str) -> RpcResult<kaspa_consensus_core::palw_consensus::BondStatus> {
-    use kaspa_consensus_core::palw_consensus::BondStatus;
+fn parse_bond_status(s: &str) -> RpcResult<kaspa_consensus_core::palw::types::BondStatus> {
+    use kaspa_consensus_core::palw::types::BondStatus;
     match s.trim().to_ascii_lowercase().as_str() {
         "pending" => Ok(BondStatus::Pending),
         "active" => Ok(BondStatus::Active),
@@ -1912,17 +1912,17 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         Ok(match session.async_get_stake_bond(bond_outpoint).await {
             Some(r) => {
                 let sink_daa = session.async_get_sink_daa_score_timestamp().await.daa_score;
-                let effective = kaspa_consensus_core::palw_consensus::effective_bond_status(&r, sink_daa);
+                let effective = kaspa_consensus_core::palw::types::effective_bond_status(&r, sink_daa);
                 GetStakeBondResponse {
                     available: true,
                     validator_id: r.validator_pubkey_hash.to_string(),
                     amount: r.amount,
                     activation_daa_score: r.activation_daa_score,
                     effective_status: match effective {
-                        kaspa_consensus_core::palw_consensus::BondStatus::Pending => "pending",
-                        kaspa_consensus_core::palw_consensus::BondStatus::Active => "active",
-                        kaspa_consensus_core::palw_consensus::BondStatus::Unbonding => "unbonding",
-                        kaspa_consensus_core::palw_consensus::BondStatus::Slashed => "slashed",
+                        kaspa_consensus_core::palw::types::BondStatus::Pending => "pending",
+                        kaspa_consensus_core::palw::types::BondStatus::Active => "active",
+                        kaspa_consensus_core::palw::types::BondStatus::Unbonding => "unbonding",
+                        kaspa_consensus_core::palw::types::BondStatus::Slashed => "slashed",
                     }
                     .to_string(),
                 }
@@ -1962,7 +1962,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             Some(c) => Some(parse_bond_outpoint(c)?),
             None => None,
         };
-        let query = kaspa_consensus_core::palw_consensus::StakeBondQuery {
+        let query = kaspa_consensus_core::palw::types::StakeBondQuery {
             owner_pubkey_hash,
             status_in,
             cursor,
@@ -1976,7 +1976,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             .bonds
             .into_iter()
             .map(|r| {
-                let effective = kaspa_consensus_core::palw_consensus::effective_bond_status(&r, page.pov_daa_score);
+                let effective = kaspa_consensus_core::palw::types::effective_bond_status(&r, page.pov_daa_score);
                 RpcStakeBondEntry {
                     bond_outpoint: format!("{}:{}", r.bond_outpoint.transaction_id, r.bond_outpoint.index),
                     owner_pubkey_hash: r.owner_pubkey_hash.to_string(),

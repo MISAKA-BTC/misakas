@@ -390,7 +390,7 @@ mod tests {
                 trace_chunk_count: 1,
                 trace_retention_daa: 999_999,
             },
-            signature: vec![0x5A; crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; crate::palw::types::MLDSA87_SIG_LEN],
         };
         // The class lottery, run the way a producer runs it — over its own execution, under the
         // anchor the header derives (ADR-0072).
@@ -444,7 +444,7 @@ mod tests {
                     trace_chunk_count: 1,
                     trace_retention_daa: 999_999,
                 },
-                signature: vec![0x5A; crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN],
+                signature: vec![0x5A; crate::palw::types::MLDSA87_SIG_LEN],
             };
             let anchor = execution_anchor_v3(h64(NET), h64(0x5050_4800), facts.class_id, &bond_outpoint(), 1);
             for n in 0u64..100_000 {

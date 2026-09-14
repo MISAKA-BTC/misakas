@@ -2961,7 +2961,7 @@ mod tests {
         use kaspa_consensus_core::{
             BlockHash,
             palw_consensus::{
-                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN,
+                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, MLDSA87_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN,
                 StakeAttestation, StakeBondRecord, single_attestation_shard, stake_attestation_shard_tx,
             },
             tx::TransactionOutpoint,
@@ -2983,7 +2983,7 @@ mod tests {
                 validator_set_commitment: Hash64::default(),
                 // Garbage signature — never verifies. The accept path is tested
                 // end-to-end in b3 (a real validator-signed attestation).
-                signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN],
+                signature: vec![0u8; MLDSA87_SIG_LEN],
             }
         }
 
@@ -3056,7 +3056,7 @@ mod tests {
             BlockHash,
             constants::TX_VERSION,
             palw_consensus::{
-                ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN,
+                ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, MLDSA87_SIG_LEN,
                 STAKE_VALIDATOR_PUBKEY_LEN, StakeAttestation, StakeBondRecord, single_attestation_shard, stake_attestation_message,
                 stake_attestation_shard_tx, validator_id_from_pubkey,
             },
@@ -3220,7 +3220,7 @@ mod tests {
             let bond = active_bond_with_key(op, &kp);
             let view = ActiveBondView::from_records([(op, bond.clone())]);
             let mut att = signed_attestation(&kp, bond.validator_pubkey_hash, op, 1, 10_000);
-            att.signature = vec![0u8; STAKE_ATTESTATION_SIG_LEN]; // garbage — never verifies
+            att.signature = vec![0u8; MLDSA87_SIG_LEN]; // garbage — never verifies
             let tx = stake_attestation_shard_tx(&single_attestation_shard(att));
             assert_eq!(
                 classify(&tx, &view, NET(), true),
@@ -3282,7 +3282,7 @@ mod tests {
         use kaspa_consensus_core::{
             constants::TX_VERSION,
             palw_consensus::{
-                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN,
+                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, MLDSA87_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN,
                 StakeBondRecord, StakeUnbondRequestPayload, UNBOND_REQUEST_CONTEXT, unbond_request_message, validator_id_from_pubkey,
             },
             subnets::SUBNETWORK_ID_STAKE_UNBOND,
@@ -3342,7 +3342,7 @@ mod tests {
         #[test]
         fn noop_when_not_activated() {
             let op = outpoint(1);
-            let tx = unbond_tx(op, vec![0u8; STAKE_VALIDATOR_PUBKEY_LEN], vec![0u8; STAKE_ATTESTATION_SIG_LEN]);
+            let tx = unbond_tx(op, vec![0u8; STAKE_VALIDATOR_PUBKEY_LEN], vec![0u8; MLDSA87_SIG_LEN]);
             assert_eq!(authz(&[tx], &ActiveBondView::new(), NET_ID, 10_000, false), Ok(()));
         }
 
@@ -3376,7 +3376,7 @@ mod tests {
             let op = outpoint(5);
             let kp = owner_kp(5);
             let view = ActiveBondView::from_records([(op, bond_owned_by(op, &kp))]);
-            let tx = unbond_tx(op, kp.verification_key.as_ref().to_vec(), vec![0u8; STAKE_ATTESTATION_SIG_LEN]);
+            let tx = unbond_tx(op, kp.verification_key.as_ref().to_vec(), vec![0u8; MLDSA87_SIG_LEN]);
             assert!(authz(&[tx], &view, NET_ID, 10_000, true).is_err());
         }
 
@@ -3403,7 +3403,7 @@ mod tests {
             BlockHash,
             constants::TX_VERSION,
             palw_consensus::{
-                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN,
+                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, MLDSA87_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN,
                 SlashingEvidencePayload, StakeAttestation, StakeBondRecord,
             },
             subnets::SUBNETWORK_ID_SLASHING_EVIDENCE,
@@ -3424,7 +3424,7 @@ mod tests {
                 target_hash: Hash64::from_bytes([target; 64]),
                 target_daa_score: 10_000,
                 validator_set_commitment: Hash64::default(),
-                signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN], // garbage — never verifies
+                signature: vec![0u8; MLDSA87_SIG_LEN], // garbage — never verifies
             }
         }
 
@@ -3527,7 +3527,7 @@ mod tests {
             BlockHash,
             constants::TX_VERSION,
             palw_consensus::{
-                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, PrecommitEvidencePayload, STAKE_ATTESTATION_SIG_LEN,
+                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, PrecommitEvidencePayload, MLDSA87_SIG_LEN,
                 STAKE_VALIDATOR_PUBKEY_LEN, StakeBondRecord, StakePrecommitPayload,
             },
             subnets::SUBNETWORK_ID_PRECOMMIT_EVIDENCE,
@@ -3550,7 +3550,7 @@ mod tests {
                 locked_epoch: 1,
                 locked_hash: Hash64::from_bytes([lock_anchor; 64]),
                 snapshot_commitment: Hash64::default(),
-                signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN], // garbage — never verifies
+                signature: vec![0u8; MLDSA87_SIG_LEN], // garbage — never verifies
             }
         }
 
@@ -3658,7 +3658,7 @@ mod tests {
             BlockHash,
             constants::TX_VERSION,
             palw_consensus::{
-                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN,
+                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, MLDSA87_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN,
                 StakeBondRecord,
             },
             subnets::SUBNETWORK_ID_COMPUTE_CHALLENGE,
@@ -3699,7 +3699,7 @@ mod tests {
                 bond_outpoint: outpoint(0x21),
                 verdict: v,
                 replay_receipt_hash: Hash64::from_bytes([replay; 64]),
-                signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN], // garbage — never verifies
+                signature: vec![0u8; MLDSA87_SIG_LEN], // garbage — never verifies
             }
         }
 
@@ -3722,7 +3722,7 @@ mod tests {
                 target_bond_outpoint: target,
                 replay_receipt_hash: Hash64::from_bytes([0x42; 64]),
                 contradictory_verdicts: verdicts,
-                signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN], // garbage — never verifies
+                signature: vec![0u8; MLDSA87_SIG_LEN], // garbage — never verifies
                 reporter_reward_spk_payload: [0xee; 64],
             };
             Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_COMPUTE_CHALLENGE, 0, borsh::to_vec(&c).unwrap())

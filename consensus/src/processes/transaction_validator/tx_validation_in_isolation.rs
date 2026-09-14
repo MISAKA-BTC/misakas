@@ -586,7 +586,7 @@ mod tests {
     /// coverage lives in `kaspa_consensus_core::token`; this confirms the wiring.
     #[test]
     fn validate_token_subnetwork_tx() {
-        use kaspa_consensus_core::palw_consensus::{STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN};
+        use kaspa_consensus_core::palw_consensus::{MLDSA87_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN};
         use kaspa_consensus_core::subnets::{SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER};
         use kaspa_consensus_core::token::{TOK_ASSET_ID, TOKEN_PAYLOAD_VERSION_V1, TokenTransferPayload, TokenTxError};
         use kaspa_hashes::Hash64;
@@ -626,7 +626,7 @@ mod tests {
             to: Hash64::from_bytes([0x22u8; 64]),
             amount: 1_000,
             nonce: 1,
-            signature: vec![0x33u8; STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x33u8; MLDSA87_SIG_LEN],
         };
         let mut tx = base.clone();
         tx.subnetwork_id = SUBNETWORK_ID_TOKEN_TRANSFER;
@@ -658,7 +658,7 @@ mod tests {
     /// carriage stays untouched.
     #[test]
     fn validate_palw_carriage_subnetwork_tx() {
-        use kaspa_consensus_core::palw_consensus::STAKE_ATTESTATION_SIG_LEN;
+        use kaspa_consensus_core::palw::types::MLDSA87_SIG_LEN;
         use kaspa_consensus_core::palw_carriage::{
             PALW_CARRIAGE_VERSION_V1, PalwAttestationCarriageV1, PalwCarriageError, PalwEvidenceChunkCarriageV1,
         };
@@ -706,7 +706,7 @@ mod tests {
                 full_logits_trace_root: Hash64::from_bytes([0x71u8; 64]),
                 committed_root: Hash64::from_bytes([0x71u8; 64]),
                 bond_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x77u8; 64]), index: 1 },
-                signature: vec![0x33u8; STAKE_ATTESTATION_SIG_LEN],
+                signature: vec![0x33u8; MLDSA87_SIG_LEN],
             },
             attester_id: Hash64::from_bytes([0xA2u8; 64]),
             bond_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x77u8; 64]), index: 1 },
@@ -826,7 +826,7 @@ mod tests {
     #[test]
     fn validate_dns_overlay_subnetwork_tx() {
         use kaspa_consensus_core::palw_consensus::{
-            DNS_PAYLOAD_VERSION_V1, DnsTxError, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN, SlashingEvidencePayload,
+            DNS_PAYLOAD_VERSION_V1, DnsTxError, MLDSA87_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN, SlashingEvidencePayload,
             StakeAttestation, StakeBondPayload, p2pkh_mldsa87_spk, validator_id_from_pubkey,
         };
         use kaspa_consensus_core::subnets::{SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_BOND};
@@ -919,7 +919,7 @@ mod tests {
             target_hash: Hash64::from_bytes([target; 64]),
             target_daa_score: 1_234_567,
             validator_set_commitment: Hash64::default(), // audit #4: VSC is a fixed-zero invariant
-            signature: vec![0x33u8; STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x33u8; MLDSA87_SIG_LEN],
         };
         let evidence = SlashingEvidencePayload {
             version: DNS_PAYLOAD_VERSION_V1,

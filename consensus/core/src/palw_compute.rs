@@ -890,7 +890,7 @@ impl ComputeVerdictPayload {
 /// ([`select_verifiers`]), and consensus has to learn each validator's class from somewhere.
 /// Deriving it from a validator's past certificates cannot bootstrap: the very first
 /// certificate on a network would have no in-class candidates to audit it. A signed
-/// declaration breaks that circularity without touching [`crate::palw_consensus::StakeBondPayload`],
+/// declaration breaks that circularity without touching [`crate::palw::types::StakeBondPayload`],
 /// so existing bonds stay valid.
 ///
 /// Declarations **expire**. A validator that stops running the runtime stops being drawn into

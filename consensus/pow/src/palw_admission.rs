@@ -225,7 +225,7 @@ pub fn palw_header_commitment_root_v1(
 mod tests {
     use super::*;
     use kaspa_consensus_core::BlueWorkType;
-    use kaspa_consensus_core::palw_consensus::{BondStatus, STAKE_ATTESTATION_SIG_LEN};
+    use kaspa_consensus_core::palw_consensus::{BondStatus, MLDSA87_SIG_LEN};
     use kaspa_consensus_core::palw_block_commitment::PALW_BLOCK_COMMITMENT_VERSION_V1;
     use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_PALW_LLM};
     use kaspa_consensus_core::tx::TransactionOutpoint;
@@ -244,7 +244,7 @@ mod tests {
     /// permissive stub would let the P0-2 regression back in without a single assertion changing.
     fn accept_fixture_signature(key: &[u8], _message: &[u8], signature: &[u8], context: &[u8]) -> bool {
         !key.is_empty()
-            && signature == vec![0x5A; STAKE_ATTESTATION_SIG_LEN].as_slice()
+            && signature == vec![0x5A; MLDSA87_SIG_LEN].as_slice()
             && context == kaspa_consensus_core::palw_block_commitment::PALW_BLOCK_COMMITMENT_MLDSA87_CONTEXT
     }
 
@@ -252,8 +252,8 @@ mod tests {
         TransactionOutpoint::new(Hash64::from_u64_word(seed), 0)
     }
 
-    fn bond_record(op: TransactionOutpoint) -> kaspa_consensus_core::palw_consensus::StakeBondRecord {
-        kaspa_consensus_core::palw_consensus::StakeBondRecord {
+    fn bond_record(op: TransactionOutpoint) -> kaspa_consensus_core::palw::types::StakeBondRecord {
+        kaspa_consensus_core::palw::types::StakeBondRecord {
             version: 1,
             bond_outpoint: op,
             owner_pubkey_hash: Hash64::from_u64_word(8),
@@ -285,7 +285,7 @@ mod tests {
             trace_root: Hash64::from_u64_word(4),
             output_root: Hash64::from_u64_word(5),
             pwu_claim: attempts.saturating_mul(facts.pwu_per_inference),
-            signature: vec![0x5A; STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; MLDSA87_SIG_LEN],
         }
     }
 
@@ -311,7 +311,7 @@ mod tests {
         let op = outpoint(1);
         let bonds = ActiveBondView::from_records([(op, bond_record(op))]);
         let mut c = commitment(op, EASY);
-        c.signature = vec![0xAA; STAKE_ATTESTATION_SIG_LEN]; // right length, wrong bytes
+        c.signature = vec![0xAA; MLDSA87_SIG_LEN]; // right length, wrong bytes
 
         assert!(
             matches!(
@@ -495,7 +495,7 @@ mod tests {
     /// half alone: past the fence algo-6 is CLOSED, and below it algo-9 is.
     #[test]
     fn the_armed_lane_reaches_the_admission_call() {
-        use kaspa_consensus_core::palw_consensus::STAKE_VALIDATOR_PUBKEY_LEN;
+        use kaspa_consensus_core::palw::types::STAKE_VALIDATOR_PUBKEY_LEN;
         use kaspa_consensus_core::palw_attempt_v2::{
             PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, challenge_v2,
         };
@@ -527,7 +527,7 @@ mod tests {
                 trace_retention_daa: 1_000_000,
                 execution_root: Hash64::from_u64_word(0x41),
             };
-            header.palw_commitment = PalwAttemptEnvelopeV2 { attempt, signature: vec![0x5A; STAKE_ATTESTATION_SIG_LEN] }.encode_wire();
+            header.palw_commitment = PalwAttemptEnvelopeV2 { attempt, signature: vec![0x5A; MLDSA87_SIG_LEN] }.encode_wire();
             header
         }
 

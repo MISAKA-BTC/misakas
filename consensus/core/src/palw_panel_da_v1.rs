@@ -167,7 +167,7 @@ mod tests {
             version: PALW_FP_V3_VERSION,
             commitment,
             prompt_token_ids: carried,
-            signature: vec![0x5A; crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; crate::palw::types::MLDSA87_SIG_LEN],
         }
     }
 

@@ -2349,7 +2349,7 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.import_pruning_point_evm_state(pruning_point, evm_header, snapshot)
     }
 
-    fn pruning_point_overlay_snapshot(&self) -> Option<kaspa_consensus_core::palw_consensus::PruningPointOverlaySnapshot> {
+    fn pruning_point_overlay_snapshot(&self) -> Option<kaspa_consensus_core::palw::types::PruningPointOverlaySnapshot> {
         self.virtual_processor.pruning_point_overlay_snapshot()
     }
 
@@ -2480,7 +2480,7 @@ impl ConsensusApi for Consensus {
     fn import_pruning_point_overlay_snapshot(
         &self,
         pruning_point: BlockHash,
-        snapshot: kaspa_consensus_core::palw_consensus::OverlaySnapshot,
+        snapshot: kaspa_consensus_core::palw::types::OverlaySnapshot,
     ) -> PruningImportResult<()> {
         self.virtual_processor.import_pruning_point_overlay_snapshot(pruning_point, snapshot)
     }

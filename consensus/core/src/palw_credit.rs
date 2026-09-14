@@ -150,7 +150,7 @@ impl PalwCreditParamsV1 {
 ///
 /// `q` and the executor's `validator_id` exclusion remain the lottery's job.
 pub fn panel_candidates_at_anchor_v1(
-    bonds: &[crate::palw_consensus::StakeBondRecord],
+    bonds: &[crate::palw::types::StakeBondRecord],
     runtime_class_id: Hash64,
     anchor_daa: u64,
     executor_owner: Hash64,
@@ -160,7 +160,7 @@ pub fn panel_candidates_at_anchor_v1(
         .map(|b| PalwPanelCandidateV1 {
             validator_id: b.validator_pubkey_hash,
             runtime_class_id,
-            bonded: crate::palw_consensus::is_bond_active_at(b, anchor_daa) && b.owner_pubkey_hash != executor_owner,
+            bonded: crate::palw::types::is_bond_active_at(b, anchor_daa) && b.owner_pubkey_hash != executor_owner,
             frozen: false,
         })
         .collect()
@@ -207,7 +207,7 @@ pub fn panel_candidates_at_anchor_v1(
 /// encodes_eligibility_not_status` pins the encoding so a future edit that "fixes" the status
 /// breaks loudly instead of silently widening the panel to the executor's own operator.
 pub fn panel_seats_at_anchor_v3(
-    bonds: &[crate::palw_consensus::StakeBondRecord],
+    bonds: &[crate::palw::types::StakeBondRecord],
     runtime_class_id: Hash64,
     anchor_daa: u64,
     executor_owner: Hash64,
@@ -215,12 +215,12 @@ pub fn panel_seats_at_anchor_v3(
     bonds
         .iter()
         .map(|b| {
-            let eligible = crate::palw_consensus::is_bond_active_at(b, anchor_daa) && b.owner_pubkey_hash != executor_owner;
+            let eligible = crate::palw::types::is_bond_active_at(b, anchor_daa) && b.owner_pubkey_hash != executor_owner;
             PalwPanelCandidateV3 {
                 validator_id: b.validator_pubkey_hash,
                 bond_outpoint: b.bond_outpoint,
                 runtime_class_id,
-                bond_status: if eligible { crate::palw_consensus::BondStatus::Active } else { crate::palw_consensus::BondStatus::Slashed },
+                bond_status: if eligible { crate::palw::types::BondStatus::Active } else { crate::palw::types::BondStatus::Slashed },
                 class_frozen: false,
                 operator_root: Some(b.owner_pubkey_hash),
             }
@@ -403,8 +403,8 @@ mod tests {
     /// work and collecting the attester share for it.
     #[test]
     fn the_credit_panel_encodes_eligibility_not_status() {
-        fn rec(seed: u8) -> crate::palw_consensus::StakeBondRecord {
-            crate::palw_consensus::StakeBondRecord {
+        fn rec(seed: u8) -> crate::palw::types::StakeBondRecord {
+            crate::palw::types::StakeBondRecord {
                 version: 1,
                 bond_outpoint: crate::tx::TransactionOutpoint::new(Hash64::from_bytes([seed; 64]), 0),
                 owner_pubkey_hash: Hash64::from_u64_word(seed as u64),
@@ -417,7 +417,7 @@ mod tests {
                 owner_reward_spk_payload: [0u8; 64],
                 unbond_request_daa_score: None,
                 slashed_at_daa_score: None,
-                status: crate::palw_consensus::BondStatus::Active,
+                status: crate::palw::types::BondStatus::Active,
             }
         }
         let owner = Hash64::from_u64_word(0xE0);
@@ -439,13 +439,13 @@ mod tests {
 
         assert_eq!(
             status_of(executor_second_bond.bond_outpoint),
-            crate::palw_consensus::BondStatus::Slashed,
+            crate::palw::types::BondStatus::Slashed,
             "the executor's own operator must be barred — this seat is the self-attestation hole"
         );
-        assert_eq!(status_of(outsider.bond_outpoint), crate::palw_consensus::BondStatus::Active);
+        assert_eq!(status_of(outsider.bond_outpoint), crate::palw::types::BondStatus::Active);
         assert_eq!(
             status_of(unbonding.bond_outpoint),
-            crate::palw_consensus::BondStatus::Slashed,
+            crate::palw::types::BondStatus::Slashed,
             "an ineligible bond reads Slashed whatever it actually is — nothing may take a slash decision from this field"
         );
     }
@@ -492,7 +492,7 @@ mod tests {
             validator_id: id,
             bond_outpoint: bond_of(id),
             runtime_class_id: class,
-            bond_status: crate::palw_consensus::BondStatus::Active,
+            bond_status: crate::palw::types::BondStatus::Active,
             class_frozen: false,
             operator_root: None,
         }

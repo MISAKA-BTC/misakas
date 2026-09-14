@@ -698,7 +698,7 @@ pub trait ConsensusApi: Send + Sync {
     }
 
     /// Serve: the persisted overlay snapshot as-of the current pruning point, or `None`.
-    fn pruning_point_overlay_snapshot(&self) -> Option<crate::palw_consensus::PruningPointOverlaySnapshot> {
+    fn pruning_point_overlay_snapshot(&self) -> Option<crate::palw::types::PruningPointOverlaySnapshot> {
         unimplemented!()
     }
 
@@ -884,7 +884,7 @@ pub trait ConsensusApi: Send + Sync {
     fn import_pruning_point_overlay_snapshot(
         &self,
         pruning_point: BlockHash,
-        snapshot: crate::palw_consensus::OverlaySnapshot,
+        snapshot: crate::palw::types::OverlaySnapshot,
     ) -> PruningImportResult<()> {
         let _ = (pruning_point, snapshot);
         unimplemented!()

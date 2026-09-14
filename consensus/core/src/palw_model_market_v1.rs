@@ -794,7 +794,7 @@ mod tests {
         let spk = palw_model_sink_spk_v1(&class);
         assert_eq!(spk.script()[0], OP_RETURN);
         assert_eq!(palw_model_sink_class_v1(&spk), Some(class));
-        let other = crate::palw_consensus::p2pkh_mldsa87_spk(&[9u8; 64]);
+        let other = crate::palw::bond::p2pkh_mldsa87_spk(&[9u8; 64]);
         assert_eq!(palw_model_sink_class_v1(&other), None);
         let mut forged = spk.script().to_vec();
         forged[3] ^= 1;

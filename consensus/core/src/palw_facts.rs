@@ -179,7 +179,7 @@ mod tests {
             observed_roots: vec![h(0x74)],
             verdict,
             verifier_bond_outpoint: op(bond),
-            signature: vec![0x5A; crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; crate::palw::types::MLDSA87_SIG_LEN],
         }
     }
 
@@ -415,7 +415,7 @@ pub struct PalwResolverInputV1<'a> {
     /// tip, and a weight fact that depends on where the tip happens to point is not a fact about
     /// the chain being weighed. This is what turns a receipt's `verifier_bond_outpoint` into a
     /// public key and an activity window.
-    pub bonds: &'a crate::palw_consensus::ActiveBondView,
+    pub bonds: &'a crate::palw::types::ActiveBondView,
     /// The oracle a step conviction is re-executed against.
     ///
     /// A node that holds no weights answers `None` and every step conviction lands
@@ -1162,7 +1162,7 @@ mod resolver_tests {
                 observed_roots: vec![h(0x74)],
                 verdict,
                 verifier_bond_outpoint: op(bond),
-                signature: vec![0x5A; crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN],
+                signature: vec![0x5A; crate::palw::types::MLDSA87_SIG_LEN],
             },
         };
         (PALW_CARRIAGE_KIND_RECEIPT, daa, body(&PalwCarriageV1::Receipt(r)))
@@ -1206,7 +1206,7 @@ mod resolver_tests {
                 full_logits_trace_root: logits_root,
                 committed_root: composite_root,
                 bond_outpoint: op(0xB1),
-                signature: vec![0x5A; crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN],
+                signature: vec![0x5A; crate::palw::types::MLDSA87_SIG_LEN],
             },
             refutation,
         };
@@ -1232,7 +1232,7 @@ mod resolver_tests {
                 full_logits_trace_root: refutation.binding.full_logits_trace_root,
                 committed_root: refutation.binding.committed_execution_root,
                 bond_outpoint: op(0xB1),
-                signature: vec![0x5A; crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN],
+                signature: vec![0x5A; crate::palw::types::MLDSA87_SIG_LEN],
             },
             refutation,
         };
@@ -1252,7 +1252,7 @@ mod resolver_tests {
             full_logits_trace_root: root,
             committed_root: root,
             bond_outpoint: op(0xB1),
-            signature: vec![0x5A; crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; crate::palw::types::MLDSA87_SIG_LEN],
         };
         let e = PalwEquivocationCarriageV1 {
             version: PALW_CARRIAGE_VERSION_V1,
@@ -1284,8 +1284,8 @@ mod resolver_tests {
     }
 
     /// A bond whose public key is `[seed; 32]`, active from DAA 0.
-    fn bond(seed: u8) -> crate::palw_consensus::StakeBondRecord {
-        crate::palw_consensus::StakeBondRecord {
+    fn bond(seed: u8) -> crate::palw::types::StakeBondRecord {
+        crate::palw::types::StakeBondRecord {
             version: 1,
             bond_outpoint: op(seed),
             owner_pubkey_hash: h(seed as u64),
@@ -1298,7 +1298,7 @@ mod resolver_tests {
             owner_reward_spk_payload: [0u8; 64],
             unbond_request_daa_score: None,
             slashed_at_daa_score: None,
-            status: crate::palw_consensus::BondStatus::Active,
+            status: crate::palw::types::BondStatus::Active,
         }
     }
 
@@ -1308,25 +1308,25 @@ mod resolver_tests {
     /// The accused one needs a matching `validator_pubkey_hash`: the adjudicator refuses a
     /// certificate whose signer is not the bond it accuses, which is what stops a certificate from
     /// naming an innocent bond as the slash target.
-    fn bonds() -> crate::palw_consensus::ActiveBondView {
+    fn bonds() -> crate::palw::types::ActiveBondView {
         let mut accused = bond(0xB1);
         accused.validator_pubkey_hash = h(0xE1);
-        crate::palw_consensus::ActiveBondView::from_records(
+        crate::palw::types::ActiveBondView::from_records(
             [1u8, 2, 3, 0xC9].into_iter().map(|s| (op(s), bond(s))).chain([(op(0xB1), accused)]),
         )
     }
 
     /// The same bonds, minus the accused one — a node that cannot resolve the bond a conviction
     /// accuses.
-    fn bonds_without_the_accused() -> crate::palw_consensus::ActiveBondView {
-        crate::palw_consensus::ActiveBondView::from_records([1u8, 2, 3, 0xC9].into_iter().map(|s| (op(s), bond(s))))
+    fn bonds_without_the_accused() -> crate::palw::types::ActiveBondView {
+        crate::palw::types::ActiveBondView::from_records([1u8, 2, 3, 0xC9].into_iter().map(|s| (op(s), bond(s))))
     }
 
     /// Accepts a signature iff it is the fixture's own: `[0x5A; SIG_LEN]` under a known key. Stands
     /// in for ML-DSA-87, which lives outside consensus-core — the point under test is that the
     /// resolver ASKS, not what the curve answers.
     fn accept_fixture_signature(key: &[u8], _digest: &kaspa_hashes::Hash, signature: &[u8], _context: &[u8]) -> bool {
-        !key.is_empty() && signature == vec![0x5A; crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN].as_slice()
+        !key.is_empty() && signature == vec![0x5A; crate::palw::types::MLDSA87_SIG_LEN].as_slice()
     }
 
     /// Rejects everything — a node that cannot verify must count nothing.
@@ -1338,7 +1338,7 @@ mod resolver_tests {
         carriage: &'a [(u8, u64, Vec<u8>)],
         panel: &'a [PalwPanelSeatV3],
         pov: u64,
-        bonds: &'a crate::palw_consensus::ActiveBondView,
+        bonds: &'a crate::palw::types::ActiveBondView,
         weights: &'a dyn crate::palw_step_refute::PalwWeightOracleV1,
     ) -> PalwResolverInputV1<'a> {
         PalwResolverInputV1 {
@@ -1407,7 +1407,7 @@ mod resolver_tests {
         let carriage = vec![receipt_row(1, 1_100), receipt_row(2, 1_110)];
 
         // Seat 1 requests unbonding at 1 800 — after it filed, after the window closed.
-        let leaving = crate::palw_consensus::ActiveBondView::from_records([1u8, 2, 3, 0xC9].into_iter().map(|s| {
+        let leaving = crate::palw::types::ActiveBondView::from_records([1u8, 2, 3, 0xC9].into_iter().map(|s| {
             let mut b = bond(s);
             if s == 1 {
                 b.unbond_request_daa_score = Some(1_800);
@@ -1428,7 +1428,7 @@ mod resolver_tests {
 
         // The rule it must NOT become: a filer that was already gone when it filed still counts for
         // nothing. Seat 1 unbonds at 1 050, before its own receipt at 1 100.
-        let gone_first = crate::palw_consensus::ActiveBondView::from_records([1u8, 2, 3, 0xC9].into_iter().map(|s| {
+        let gone_first = crate::palw::types::ActiveBondView::from_records([1u8, 2, 3, 0xC9].into_iter().map(|s| {
             let mut b = bond(s);
             if s == 1 {
                 b.unbond_request_daa_score = Some(1_050);
@@ -1956,7 +1956,7 @@ mod resolver_tests {
         fn at<'a>(
             carriage: &'a [(u8, u64, Vec<u8>)],
             panel: &'a [PalwPanelSeatV3],
-            bonds: &'a crate::palw_consensus::ActiveBondView,
+            bonds: &'a crate::palw::types::ActiveBondView,
         ) -> PalwResolverInputV1<'a> {
             let mut i = input(carriage, panel, 9_000, bonds, &NoStepWeights);
             i.execution_class_id = gap_class();
@@ -2315,15 +2315,15 @@ mod resolver_tests {
         assert_eq!(weight.stage, PalwWorkRampStageV1::Provisional);
 
         // (3) bond — a verifier whose bond this chain point does not hold is not accountable.
-        let no_bonds = crate::palw_consensus::ActiveBondView::default();
+        let no_bonds = crate::palw::types::ActiveBondView::default();
         let unbonded = resolve_block_facts_v1(&input(&carriage, &panel, 1_100, &no_bonds, &NoStepWeights), accept_fixture_signature);
         assert_eq!(unbonded.assigned_receipts, Some(0), "an unbonded filer is not a licence");
 
         // (3b) bond ACTIVITY — a slashed bond resolves but is not active, so it cannot license.
-        let slashed = crate::palw_consensus::ActiveBondView::from_records([1u8, 2, 3].into_iter().map(|s| {
+        let slashed = crate::palw::types::ActiveBondView::from_records([1u8, 2, 3].into_iter().map(|s| {
             let mut b = bond(s);
             b.slashed_at_daa_score = Some(500);
-            b.status = crate::palw_consensus::BondStatus::Slashed;
+            b.status = crate::palw::types::BondStatus::Slashed;
             (op(s), b)
         }));
         let after_slash = resolve_block_facts_v1(&input(&carriage, &panel, 1_100, &slashed, &NoStepWeights), accept_fixture_signature);
@@ -2375,7 +2375,7 @@ mod resolver_tests {
             full_logits_trace_root: root,
             committed_root: root,
             bond_outpoint: op(0xB1),
-            signature: vec![0x5A; crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; crate::palw::types::MLDSA87_SIG_LEN],
         };
         let e = PalwEquivocationCarriageV1 {
             version: PALW_CARRIAGE_VERSION_V1,
@@ -2448,7 +2448,7 @@ mod resolver_tests {
         );
 
         // The same record with that bond absent from this chain point: nothing is opened.
-        let without_challenger = crate::palw_consensus::ActiveBondView::from_records([1u8, 2, 3].into_iter().map(|s| (op(s), bond(s))));
+        let without_challenger = crate::palw::types::ActiveBondView::from_records([1u8, 2, 3].into_iter().map(|s| (op(s), bond(s))));
         assert_eq!(
             resolve_block_facts_v1(&input(&rows, &panel, 1_100, &without_challenger, &NoStepWeights), accept_fixture_signature)
                 .dispute_open_or_unadjudicable,
@@ -2480,7 +2480,7 @@ mod resolver_tests {
             full_logits_trace_root: root,
             committed_root: root,
             bond_outpoint: op(0xB1),
-            signature: vec![0x5A; crate::palw_consensus::STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; crate::palw::types::MLDSA87_SIG_LEN],
         };
         let equivocation = |root: Hash64| {
             let e = crate::palw_carriage::PalwEquivocationCarriageV1 {
@@ -2615,7 +2615,7 @@ mod resolver_tests {
             let mut accused = bond(0xB1);
             accused.validator_pubkey_hash = h(0xE1);
             accused.unbond_request_daa_score = Some(2_000);
-            crate::palw_consensus::ActiveBondView::from_records(
+            crate::palw::types::ActiveBondView::from_records(
                 [1u8, 2, 3, 0xC9].into_iter().map(|s| (op(s), bond(s))).chain([(op(0xB1), accused)]),
             )
         };
@@ -2641,7 +2641,7 @@ mod resolver_tests {
             let mut accused = bond(0xB1);
             accused.validator_pubkey_hash = h(0xE1);
             accused.unbond_request_daa_score = Some(1_200);
-            crate::palw_consensus::ActiveBondView::from_records(
+            crate::palw::types::ActiveBondView::from_records(
                 [1u8, 2, 3, 0xC9].into_iter().map(|s| (op(s), bond(s))).chain([(op(0xB1), accused)]),
             )
         };
@@ -2689,7 +2689,7 @@ mod resolver_tests {
         let leaving_at = |seed: u8, daa: u64| {
             let mut accused = bond(0xB1);
             accused.validator_pubkey_hash = h(0xE1);
-            crate::palw_consensus::ActiveBondView::from_records(
+            crate::palw::types::ActiveBondView::from_records(
                 [1u8, 2, 3, 0xC9]
                     .into_iter()
                     .map(|s| {
@@ -2730,7 +2730,7 @@ mod resolver_tests {
         };
 
         // Window closes at 1 000 + 500 = 1 500.
-        let scenarios: Vec<(&str, Vec<(u8, u64, Vec<u8>)>, crate::palw_consensus::ActiveBondView, Hash64)> = vec![
+        let scenarios: Vec<(&str, Vec<(u8, u64, Vec<u8>)>, crate::palw::types::ActiveBondView, Hash64)> = vec![
             ("quorum and nothing against it", quorum(), bonds(), h(0xC1)),
             ("one receipt short of quorum", vec![receipt_row(1, 1_100)], bonds(), h(0xC1)),
             ("no carriage at all", vec![], bonds(), h(0xC1)),

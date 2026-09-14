@@ -1490,7 +1490,7 @@ mod tests {
     /// A well-formed attempt envelope at a chosen version. Shape only — the fenced gates under
     /// test read the version and the algo id and nothing else about it.
     fn attempt_envelope_at_version(version: u16) -> Vec<u8> {
-        use crate::palw_consensus::{STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN};
+        use crate::palw_consensus::{MLDSA87_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN};
         let h = |w: u64| kaspa_hashes::Hash64::from_u64_word(w);
         let attempt = crate::palw_attempt_v2::PalwAttemptUnsignedV2 {
             version,
@@ -1509,7 +1509,7 @@ mod tests {
             trace_retention_daa: 1_000_000,
             execution_root: h(0x41),
         };
-        crate::palw_attempt_v2::PalwAttemptEnvelopeV2 { attempt, signature: vec![0x5A; STAKE_ATTESTATION_SIG_LEN] }.encode_wire()
+        crate::palw_attempt_v2::PalwAttemptEnvelopeV2 { attempt, signature: vec![0x5A; MLDSA87_SIG_LEN] }.encode_wire()
     }
 
     /// **ADR-0072 SA-3 — the version check is fenced, and one binary holds both arms.**

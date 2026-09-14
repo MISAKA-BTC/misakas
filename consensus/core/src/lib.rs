@@ -351,6 +351,9 @@ pub mod trusted;
 pub mod tx;
 pub mod utxo;
 pub mod palw_compute;
+/// Current PALW consensus boundary: producer bonds, future-anchor panel
+/// selection, verified-compute records, and neutral payload types.
+pub mod palw;
 
 /// Integer type for accumulated PoW of blue blocks.
 ///

@@ -142,7 +142,7 @@ pub const STAKE_VALIDATOR_PUBKEY_LEN: usize = 2592;
 
 /// 4627 bytes — matches `kaspa_txscript::MLDSA87_SIG_LEN`. Same
 /// re-export rationale as [`STAKE_VALIDATOR_PUBKEY_LEN`].
-pub const STAKE_ATTESTATION_SIG_LEN: usize = 4627;
+pub const MLDSA87_SIG_LEN: usize = 4627;
 
 /// Per-block upper bound on the number of attestations a single
 /// [`StakeAttestationShardPayload`] may carry. See ADR-0009 §"Why
@@ -2413,7 +2413,7 @@ pub fn validate_stake_unbond_payload(payload: &[u8]) -> Result<(), DnsTxError> {
     if req.owner_pubkey.len() != STAKE_VALIDATOR_PUBKEY_LEN {
         return Err(DnsTxError::InvalidPubKeyLen(req.owner_pubkey.len()));
     }
-    if req.signature.len() != STAKE_ATTESTATION_SIG_LEN {
+    if req.signature.len() != MLDSA87_SIG_LEN {
         return Err(DnsTxError::InvalidSignatureLen(req.signature.len()));
     }
     Ok(())
@@ -4814,7 +4814,7 @@ pub enum DnsTxError {
     /// `validator_id_from_pubkey(validator_pubkey)` (audit H-04): the overlay
     /// identity must be the unkeyed BLAKE2b-512 of the bond's own key.
     ValidatorPubkeyHashMismatch,
-    /// An attestation signature is not exactly `STAKE_ATTESTATION_SIG_LEN`.
+    /// An attestation signature is not exactly `MLDSA87_SIG_LEN`.
     InvalidSignatureLen(usize),
     /// An attestation shard carries no attestations.
     EmptyShard,
@@ -4960,7 +4960,7 @@ fn check_attestation_wellformed(att: &StakeAttestation) -> Result<(), DnsTxError
     if att.version != DNS_PAYLOAD_VERSION_V1 {
         return Err(DnsTxError::UnsupportedVersion(att.version));
     }
-    if att.signature.len() != STAKE_ATTESTATION_SIG_LEN {
+    if att.signature.len() != MLDSA87_SIG_LEN {
         return Err(DnsTxError::InvalidSignatureLen(att.signature.len()));
     }
     // MISAKA VLT PR 2: the audit-#4 "VSC is fixed zero" rule is no longer stateless, because the
@@ -7327,7 +7327,7 @@ pub fn validate_compute_certificate_payload(payload: &[u8]) -> Result<(), DnsTxE
     if !cert.spec.quantization.is_known() {
         return Err(DnsTxError::UnknownQuantizationProfile);
     }
-    if cert.executor_signature.len() != STAKE_ATTESTATION_SIG_LEN {
+    if cert.executor_signature.len() != MLDSA87_SIG_LEN {
         return Err(DnsTxError::InvalidSignatureLen(cert.executor_signature.len()));
     }
     Ok(())
@@ -7346,7 +7346,7 @@ pub fn validate_compute_verdict_payload(payload: &[u8]) -> Result<(), DnsTxError
     if v.version != DNS_PAYLOAD_VERSION_V1 {
         return Err(DnsTxError::UnsupportedVersion(v.version));
     }
-    if v.signature.len() != STAKE_ATTESTATION_SIG_LEN {
+    if v.signature.len() != MLDSA87_SIG_LEN {
         return Err(DnsTxError::InvalidSignatureLen(v.signature.len()));
     }
     if !v.is_self_consistent() {
@@ -7366,7 +7366,7 @@ pub fn validate_stake_precommit_payload(payload: &[u8]) -> Result<(), DnsTxError
     if p.version != DNS_PAYLOAD_VERSION_V1 {
         return Err(DnsTxError::UnsupportedVersion(p.version));
     }
-    if p.signature.len() != STAKE_ATTESTATION_SIG_LEN {
+    if p.signature.len() != MLDSA87_SIG_LEN {
         return Err(DnsTxError::InvalidSignatureLen(p.signature.len()));
     }
     if !p.lock_is_self_consistent() {
@@ -7413,7 +7413,7 @@ pub fn validate_precommit_evidence_payload(payload: &[u8]) -> Result<(), DnsTxEr
         return Err(DnsTxError::UnsupportedVersion(ev.version));
     }
     for p in [&ev.precommit_a, &ev.precommit_b] {
-        if p.signature.len() != STAKE_ATTESTATION_SIG_LEN {
+        if p.signature.len() != MLDSA87_SIG_LEN {
             return Err(DnsTxError::InvalidSignatureLen(p.signature.len()));
         }
         if !p.lock_is_self_consistent() {
@@ -7556,7 +7556,7 @@ pub fn validate_compute_challenge_payload(payload: &[u8]) -> Result<(), DnsTxErr
     if c.version != DNS_PAYLOAD_VERSION_V1 {
         return Err(DnsTxError::UnsupportedVersion(c.version));
     }
-    if c.signature.len() != STAKE_ATTESTATION_SIG_LEN {
+    if c.signature.len() != MLDSA87_SIG_LEN {
         return Err(DnsTxError::InvalidSignatureLen(c.signature.len()));
     }
     match c.kind {
@@ -7579,7 +7579,7 @@ pub fn validate_compute_challenge_payload(payload: &[u8]) -> Result<(), DnsTxErr
                 return Err(DnsTxError::MalformedContradictionProof);
             }
             for v in &c.contradictory_verdicts {
-                if v.signature.len() != STAKE_ATTESTATION_SIG_LEN {
+                if v.signature.len() != MLDSA87_SIG_LEN {
                     return Err(DnsTxError::InvalidSignatureLen(v.signature.len()));
                 }
             }
@@ -7606,7 +7606,7 @@ pub fn validate_compute_commitment_payload(payload: &[u8]) -> Result<(), DnsTxEr
     if c.input.is_empty() || c.input.len() > MAX_JOB_INPUT_BYTES {
         return Err(DnsTxError::JobInputSize(c.input.len()));
     }
-    if c.signature.len() != STAKE_ATTESTATION_SIG_LEN {
+    if c.signature.len() != MLDSA87_SIG_LEN {
         return Err(DnsTxError::InvalidSignatureLen(c.signature.len()));
     }
     Ok(())
@@ -7674,7 +7674,7 @@ pub fn validate_compute_capability_payload(payload: &[u8]) -> Result<(), DnsTxEr
     if c.version != DNS_PAYLOAD_VERSION_V1 {
         return Err(DnsTxError::UnsupportedVersion(c.version));
     }
-    if c.signature.len() != STAKE_ATTESTATION_SIG_LEN {
+    if c.signature.len() != MLDSA87_SIG_LEN {
         return Err(DnsTxError::InvalidSignatureLen(c.signature.len()));
     }
     Ok(())
@@ -8906,7 +8906,7 @@ mod tests {
         // dependency cycle; the values are duplicated here and the
         // assertion is the contract).
         assert_eq!(STAKE_VALIDATOR_PUBKEY_LEN, 2592);
-        assert_eq!(STAKE_ATTESTATION_SIG_LEN, 4627);
+        assert_eq!(MLDSA87_SIG_LEN, 4627);
 
         // ADR-0009 / ADR-0010 / ADR-0012 / ADR-0014 domain-
         // separator strings. All consensus-fixed (or consensus-
@@ -9011,7 +9011,7 @@ mod tests {
             target_hash: Hash64::from_bytes([0x11u8; 64]),
             target_daa_score: 1_234_567,
             validator_set_commitment: Hash64::default(), // audit #4: VSC is a fixed-zero invariant
-            signature: vec![0x33u8; STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x33u8; MLDSA87_SIG_LEN],
         }
     }
 
@@ -9051,7 +9051,7 @@ mod tests {
         // 4-byte length prefix + N data bytes, so a 4627-byte sig
         // contributes 4 + 4627 = 4631 bytes plus the other fixed
         // fields.
-        assert!(bytes.len() >= STAKE_ATTESTATION_SIG_LEN);
+        assert!(bytes.len() >= MLDSA87_SIG_LEN);
     }
 
     #[test]
@@ -9896,7 +9896,7 @@ mod tests {
     /// check could neither confirm nor contradict it.
     #[test]
     fn precommit_lock_must_be_whole_and_in_the_past() {
-        let sig = vec![0u8; STAKE_ATTESTATION_SIG_LEN];
+        let sig = vec![0u8; MLDSA87_SIG_LEN];
         let mk = |locked_epoch: u64, locked_hash: Hash64| StakePrecommitPayload {
             version: DNS_PAYLOAD_VERSION_V1,
             validator_id: Hash64::from_bytes([1; 64]),
@@ -10092,7 +10092,7 @@ mod tests {
             locked_epoch: lock.0,
             locked_hash: if lock.1 == 0 { Hash64::default() } else { Hash64::from_bytes([lock.1; 64]) },
             snapshot_commitment: Hash64::default(),
-            signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0u8; MLDSA87_SIG_LEN],
         }
     }
 
@@ -10512,7 +10512,7 @@ mod tests {
             bond_outpoint: TransactionOutpoint::new(Hash64::from_u64_word(id + 100), 0),
             verdict,
             replay_receipt_hash: replay,
-            signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0u8; MLDSA87_SIG_LEN],
         }
     }
 
@@ -10540,7 +10540,7 @@ mod tests {
                 decode_tokens: 20,
                 trace_commitment: Hash64::from_u64_word(14),
             },
-            executor_signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN],
+            executor_signature: vec![0u8; MLDSA87_SIG_LEN],
         }
     }
 
@@ -10599,7 +10599,7 @@ mod tests {
             verdict,
             replay_receipt_hash: fixture_hash(seed),
             replay_proof: fixture_proof(seed),
-            signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0u8; MLDSA87_SIG_LEN],
         }
     }
 
@@ -10709,7 +10709,7 @@ mod tests {
             executor_id: Hash64::from_u64_word(11),
             executor_bond_outpoint: TransactionOutpoint::new(Hash64::from_u64_word(111), 0),
             input,
-            signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0u8; MLDSA87_SIG_LEN],
         };
 
         let ok = fixture(b"the capital of France is".to_vec());
@@ -10857,7 +10857,7 @@ mod tests {
             target_bond_outpoint: bond,
             replay_receipt_hash: Hash64::from_u64_word(99),
             contradictory_verdicts: vec![a.clone(), b.clone()],
-            signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0u8; MLDSA87_SIG_LEN],
             reporter_reward_spk_payload: [0u8; 64],
         };
         assert_eq!(validate_compute_challenge_payload(&borsh::to_vec(&base).unwrap()), Ok(()));
@@ -10918,7 +10918,7 @@ mod tests {
             target_bond_outpoint: target,
             replay_receipt_hash: Hash64::from_u64_word(42),
             contradictory_verdicts: vec![],
-            signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0u8; MLDSA87_SIG_LEN],
             reporter_reward_spk_payload: [0u8; 64],
         };
         let tx = |kind| {
@@ -10994,7 +10994,7 @@ mod tests {
             version: DNS_PAYLOAD_VERSION_V1,
             bond_outpoint,
             owner_pubkey: vec![0xccu8; STAKE_VALIDATOR_PUBKEY_LEN],
-            signature: vec![0u8; STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0u8; MLDSA87_SIG_LEN],
         }
     }
 
@@ -11160,10 +11160,10 @@ mod tests {
         assert_eq!(validate_stake_attestation_shard_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::UnsupportedVersion(9)));
         // Member attestation with wrong signature length.
         let mut bad = fixture_shard(2);
-        bad.attestations[1].signature = vec![0u8; STAKE_ATTESTATION_SIG_LEN + 1];
+        bad.attestations[1].signature = vec![0u8; MLDSA87_SIG_LEN + 1];
         assert_eq!(
             validate_stake_attestation_shard_payload(&borsh::to_vec(&bad).unwrap()),
-            Err(DnsTxError::InvalidSignatureLen(STAKE_ATTESTATION_SIG_LEN + 1))
+            Err(DnsTxError::InvalidSignatureLen(MLDSA87_SIG_LEN + 1))
         );
         // Member attestation that disagrees with the shard's anchor hash.
         let mut bad = fixture_shard(2);
@@ -12804,7 +12804,7 @@ mod tests {
         let bond = dns_overlay_tx(SUBNETWORK_ID_STAKE_BOND, borsh::to_vec(&fixture_bond()).unwrap());
         let atts = attestations_from_accepted_txs(&[shard_a, native, shard_b, bond]);
         assert_eq!(atts.len(), 5);
-        assert!(atts.iter().all(|a| a.signature.len() == STAKE_ATTESTATION_SIG_LEN));
+        assert!(atts.iter().all(|a| a.signature.len() == MLDSA87_SIG_LEN));
 
         // Undecodable shard payload is skipped.
         let bad = dns_overlay_tx(SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, vec![0xff]);
@@ -14260,7 +14260,7 @@ mod tests {
             valid_from_epoch: 12345,
             grace_epochs: 1,
             issued_at_unix_secs: 1_700_000_000,
-            signature: vec![0xccu8; STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0xccu8; MLDSA87_SIG_LEN],
         }
     }
 
@@ -14315,7 +14315,7 @@ mod tests {
         assert_eq!(back, t);
         // Sanity: the dominant size component is the 4627-byte
         // ML-DSA-87 signature.
-        assert!(bytes.len() >= STAKE_ATTESTATION_SIG_LEN);
+        assert!(bytes.len() >= MLDSA87_SIG_LEN);
     }
 
     #[test]
@@ -14529,7 +14529,7 @@ mod tests {
 
     #[test]
     fn signer_response_borsh_roundtrip_ok() {
-        let r = SignerResponse { request_id: 7, result: Ok(vec![0xccu8; STAKE_ATTESTATION_SIG_LEN]) };
+        let r = SignerResponse { request_id: 7, result: Ok(vec![0xccu8; MLDSA87_SIG_LEN]) };
         let bytes = borsh::to_vec(&r).unwrap();
         let back: SignerResponse = borsh::from_slice(&bytes).unwrap();
         assert_eq!(back, r);

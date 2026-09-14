@@ -5725,7 +5725,7 @@ impl VirtualStateProcessor {
             .map(|(_, payout)| {
                 TransactionOutput::new(
                     payout.amount,
-                    kaspa_consensus_core::palw_consensus::p2pkh_mldsa87_spk(&payout.payload.as_bytes()),
+                    kaspa_consensus_core::palw::bond::p2pkh_mldsa87_spk(&payout.payload.as_bytes()),
                 )
             })
             .collect()
@@ -11687,7 +11687,7 @@ impl VirtualStateProcessor {
             // the executor from its own panel.
             let Some(executor_bond) = bonds.iter().find(|b| b.bond_outpoint == commitment.bond_outpoint) else { continue };
             if executor_bond.validator_pubkey_hash != commitment.validator_id
-                || !kaspa_consensus_core::palw_consensus::is_bond_active_at(executor_bond, *accepted)
+                || !kaspa_consensus_core::palw::types::is_bond_active_at(executor_bond, *accepted)
             {
                 continue;
             }
@@ -11745,7 +11745,7 @@ impl VirtualStateProcessor {
                 .filter(|(a, daa)| {
                     let Some(bond) = bonds.iter().find(|b| b.bond_outpoint == a.bond_outpoint) else { return false };
                     bond.validator_pubkey_hash == a.attester_id
-                        && kaspa_consensus_core::palw_consensus::is_bond_active_at(bond, *daa)
+                        && kaspa_consensus_core::palw::types::is_bond_active_at(bond, *daa)
                         && Self::verify_palw_attestation_signature(
                             &bond.validator_pubkey,
                             // ADR-0009 Addendum A.3: the network discriminator IS the genesis hash,

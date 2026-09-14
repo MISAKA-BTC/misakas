@@ -15,7 +15,7 @@ use kaspa_consensus_core::{
         ConfigBuilder,
         params::{DEVNET_PARAMS, MAINNET_PARAMS},
     },
-    palw_consensus::p2pkh_mldsa87_spk,
+    palw::bond::p2pkh_mldsa87_spk,
     tx::{Transaction, TransactionOutpoint},
 };
 use std::{collections::VecDeque, thread::JoinHandle};
@@ -2233,7 +2233,7 @@ async fn palw_v2_tip_heap_has_no_weight_key_but_the_gate_does() {
     // The V2 branch answers before it reads either of these, which is the property being pinned:
     // no finality window and no bond view can make the heap prefer the incumbent.
     let finality_point = config.params.genesis.hash;
-    let bond_view = kaspa_consensus_core::palw_consensus::ActiveBondView::new();
+    let bond_view = kaspa_consensus_core::palw::types::ActiveBondView::new();
 
     // Half one: the incumbent gets no rank the heap can prefer it by. If this ever answers `Some`
     // again, every challenger — which is every block not yet on this node's chain — loses to the
@@ -3346,7 +3346,7 @@ async fn palw_v2_a_stranger_can_register_their_own_bond() {
             // The collateral, in an output of this very transaction, paying the declared payee.
             vec![TransactionOutput::new(
                 collateral,
-                kaspa_consensus_core::palw_consensus::p2pkh_mldsa87_spk(payout_payload.as_byte_slice()),
+                kaspa_consensus_core::palw::bond::p2pkh_mldsa87_spk(payout_payload.as_byte_slice()),
             )],
             0,
             SUBNETWORK_ID_PALW_LIFECYCLE.clone(),

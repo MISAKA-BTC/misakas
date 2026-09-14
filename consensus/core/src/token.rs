@@ -45,7 +45,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::{Hash, Hash64};
 use std::collections::BTreeMap;
 
-use crate::palw_consensus::{STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN, validator_id_from_pubkey};
+use crate::palw_consensus::{MLDSA87_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN, validator_id_from_pubkey};
 use crate::palw_compute::VltEpochCredits;
 
 // ---------------------------------------------------------------------
@@ -185,7 +185,7 @@ pub enum TokenTxError {
     UnknownAsset(u64),
     /// Sender/owner public key is not exactly `STAKE_VALIDATOR_PUBKEY_LEN`.
     InvalidPubKeyLen(usize),
-    /// Signature is not exactly `STAKE_ATTESTATION_SIG_LEN`.
+    /// Signature is not exactly `MLDSA87_SIG_LEN`.
     InvalidSignatureLen(usize),
     /// `amount == 0` — a no-op that would still bump a nonce and bloat the
     /// ledger walk; rejected at the door.
@@ -203,7 +203,7 @@ impl std::fmt::Display for TokenTxError {
             Self::UnsupportedVersion(v) => write!(f, "unsupported token payload version {v}"),
             Self::UnknownAsset(id) => write!(f, "unknown asset id {id} (Phase A knows only TOK = {TOK_ASSET_ID})"),
             Self::InvalidPubKeyLen(l) => write!(f, "invalid pubkey length {l} (expected {STAKE_VALIDATOR_PUBKEY_LEN})"),
-            Self::InvalidSignatureLen(l) => write!(f, "invalid signature length {l} (expected {STAKE_ATTESTATION_SIG_LEN})"),
+            Self::InvalidSignatureLen(l) => write!(f, "invalid signature length {l} (expected {MLDSA87_SIG_LEN})"),
             Self::ZeroAmount => write!(f, "token op amount must be non-zero"),
             Self::SelfTransfer => write!(f, "token transfer to self is rejected"),
         }
@@ -238,7 +238,7 @@ pub fn validate_token_transfer_payload(payload: &[u8]) -> Result<(), TokenTxErro
     if p.from_pubkey.len() != STAKE_VALIDATOR_PUBKEY_LEN {
         return Err(TokenTxError::InvalidPubKeyLen(p.from_pubkey.len()));
     }
-    if p.signature.len() != STAKE_ATTESTATION_SIG_LEN {
+    if p.signature.len() != MLDSA87_SIG_LEN {
         return Err(TokenTxError::InvalidSignatureLen(p.signature.len()));
     }
     if p.amount == 0 {
@@ -262,7 +262,7 @@ pub fn validate_token_burn_payload(payload: &[u8]) -> Result<(), TokenTxError> {
     if p.owner_pubkey.len() != STAKE_VALIDATOR_PUBKEY_LEN {
         return Err(TokenTxError::InvalidPubKeyLen(p.owner_pubkey.len()));
     }
-    if p.signature.len() != STAKE_ATTESTATION_SIG_LEN {
+    if p.signature.len() != MLDSA87_SIG_LEN {
         return Err(TokenTxError::InvalidSignatureLen(p.signature.len()));
     }
     if p.amount == 0 {
@@ -782,7 +782,7 @@ mod tests {
             to: id(0x22),
             amount: 1_000,
             nonce: 1,
-            signature: vec![0x33; STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x33; MLDSA87_SIG_LEN],
         }
     }
 
@@ -793,7 +793,7 @@ mod tests {
             owner_pubkey: vec![0x11; STAKE_VALIDATOR_PUBKEY_LEN],
             amount: 500,
             nonce: 1,
-            signature: vec![0x33; STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x33; MLDSA87_SIG_LEN],
         }
     }
 

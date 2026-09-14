@@ -902,7 +902,7 @@ impl PalwPanelService {
             return self.pay_script();
         };
         let payload = session.palw_bond_payout_payload_v2(PalwBondKeyV2(bond))?;
-        Some(kaspa_consensus_core::palw_consensus::p2pkh_mldsa87_spk(&payload.as_bytes()))
+        Some(kaspa_consensus_core::palw::bond::p2pkh_mldsa87_spk(&payload.as_bytes()))
     }
 
     /// The 64-byte payee behind `--palw-producer-pay-address`, and the script that pays it.
@@ -923,7 +923,7 @@ impl PalwPanelService {
         }
         let payload: [u8; 64] =
             address.payload.as_ref().try_into().map_err(|_| "an ML-DSA-87 address must carry 64 payload bytes".to_string())?;
-        Ok((payload, kaspa_consensus_core::palw_consensus::p2pkh_mldsa87_spk(&payload)))
+        Ok((payload, kaspa_consensus_core::palw::bond::p2pkh_mldsa87_spk(&payload)))
     }
 
     fn pay_script(&self) -> Option<kaspa_consensus_core::tx::ScriptPublicKey> {
@@ -5032,7 +5032,7 @@ fn min_carryable_collateral(
 /// pre-sign guard in `build_lifecycle_tx_with_outputs` — and a rule spelled twice is a rule that
 /// drifts in one of its copies.
 fn signable_script(verification_key: &[u8]) -> kaspa_consensus_core::tx::ScriptPublicKey {
-    kaspa_consensus_core::palw_consensus::p2pkh_mldsa87_spk(&kaspa_hashes::blake2b_512_address_payload(verification_key).as_bytes())
+    kaspa_consensus_core::palw::bond::p2pkh_mldsa87_spk(&kaspa_hashes::blake2b_512_address_payload(verification_key).as_bytes())
 }
 
 /// Whether a REMEMBERED funding outpoint — the persisted one or `--palw-fee-outpoint` — belongs
@@ -6851,7 +6851,7 @@ mod tests {
     }
 
     fn mldsa_script(byte: u8) -> kaspa_consensus_core::tx::ScriptPublicKey {
-        kaspa_consensus_core::palw_consensus::p2pkh_mldsa87_spk(&[byte; 64])
+        kaspa_consensus_core::palw::bond::p2pkh_mldsa87_spk(&[byte; 64])
     }
 
     /// **The pool's byte counter must survive the sweep, or the ceiling becomes a slashing
@@ -7140,7 +7140,7 @@ mod tests {
         // `pay_payee` builds the script from exactly these payload bytes; the guard builds it from
         // the key. The two must be one script.
         assert_eq!(
-            kaspa_consensus_core::palw_consensus::p2pkh_mldsa87_spk(&payload),
+            kaspa_consensus_core::palw::bond::p2pkh_mldsa87_spk(&payload),
             signable_script(key.public_key()),
             "a seat funded at its own documented pay address must not be refused before signing"
         );

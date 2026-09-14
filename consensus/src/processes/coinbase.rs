@@ -792,7 +792,7 @@ mod tests {
     #[test]
     fn validator_reward_spk_matches_pay_to_address_script() {
         use kaspa_addresses::{Address, Prefix, Version};
-        use kaspa_consensus_core::palw_consensus::p2pkh_mldsa87_spk;
+        use kaspa_consensus_core::palw::bond::p2pkh_mldsa87_spk;
         use kaspa_txscript::pay_to_address_script;
 
         let mut counting = [0u8; 64];

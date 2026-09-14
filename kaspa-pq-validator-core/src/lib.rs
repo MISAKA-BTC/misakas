@@ -299,7 +299,7 @@ impl ValidatorKey {
         nonce: u64,
     ) -> Result<Vec<u8>, String> {
         let mut shaped = unsigned.clone();
-        shaped.signature = vec![0u8; kaspa_consensus_core::palw_consensus::STAKE_ATTESTATION_SIG_LEN];
+        shaped.signature = vec![0u8; kaspa_consensus_core::palw::types::MLDSA87_SIG_LEN];
         shaped.validate_shape().map_err(|e| format!("refusing to sign a commitment consensus would reject: {e}"))?;
         let message = shaped.message(network_id, pre_pow_hash, timestamp, nonce);
         Ok(self
@@ -2515,7 +2515,7 @@ mod tests {
         // signatures alone.
         assert_eq!(agreed.verifier_id, key.validator_id);
         assert_ne!(agreed.signature, diverged.signature);
-        assert_eq!(agreed.signature.len(), kaspa_consensus_core::palw_consensus::STAKE_ATTESTATION_SIG_LEN);
+        assert_eq!(agreed.signature.len(), kaspa_consensus_core::palw::types::MLDSA87_SIG_LEN);
     }
 
     /// Underfunded builders must fail loudly rather than emit an unminable transaction.

@@ -14,7 +14,7 @@
 //! Mirrors the [`super::dns_state`] singleton pattern. Before the first write
 //! [`PruningPointOverlaySnapshotStoreReader::get`] returns `KeyNotFound`.
 
-use kaspa_consensus_core::palw_consensus::PruningPointOverlaySnapshot;
+use kaspa_consensus_core::palw::types::PruningPointOverlaySnapshot;
 use kaspa_database::prelude::DB;
 use kaspa_database::prelude::StoreResult;
 use kaspa_database::prelude::{BatchDbWriter, CachedDbItem, DirectDbWriter};

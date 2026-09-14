@@ -11,7 +11,7 @@
 //! Its own binary because it sets a process-global environment variable.
 
 use kaspa_consensus_core::BlueWorkType;
-use kaspa_consensus_core::palw_consensus::{ActiveBondView, BondStatus, STAKE_ATTESTATION_SIG_LEN, StakeBondRecord};
+use kaspa_consensus_core::palw_consensus::{ActiveBondView, BondStatus, MLDSA87_SIG_LEN, StakeBondRecord};
 use kaspa_consensus_core::header::Header;
 use kaspa_consensus_core::palw_block_commitment::{PALW_BLOCK_COMMITMENT_VERSION_V1, PalwBlockCommitmentV1};
 use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_PALW_LLM, PalwAttemptLaneV1};
@@ -27,7 +27,7 @@ const NETWORK: &[u8] = b"devnet";
 /// admission must ASK, and a permissive stub would hide the P0-2 regression.
 fn accept_fixture_signature(key: &[u8], _message: &[u8], signature: &[u8], context: &[u8]) -> bool {
     !key.is_empty()
-        && signature == vec![0x5A; kaspa_consensus_core::palw_consensus::STAKE_ATTESTATION_SIG_LEN].as_slice()
+        && signature == vec![0x5A; kaspa_consensus_core::palw::types::MLDSA87_SIG_LEN].as_slice()
         && context == kaspa_consensus_core::palw_block_commitment::PALW_BLOCK_COMMITMENT_MLDSA87_CONTEXT
 }
 
@@ -66,7 +66,7 @@ fn commitment(op: TransactionOutpoint, facts: PalwAdmissionClassFacts) -> PalwBl
         // Decision 2 repriced pwu in EXECUTIONS: the local copy still claimed the try count, so
         // `check_pwu_claim_v1` refused first and the ticket was never drawn.
         pwu_claim: kaspa_consensus_core::palw_pwu::palw_pwu_v1(facts.class_target, facts.pwu_per_inference),
-        signature: vec![0x5A; STAKE_ATTESTATION_SIG_LEN],
+        signature: vec![0x5A; MLDSA87_SIG_LEN],
     }
 }
 
