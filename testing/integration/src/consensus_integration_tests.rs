@@ -567,10 +567,11 @@ async fn missing_parents_test() {
 
     let BlockValidationFutures { block_task, virtual_state_task } = consensus.validate_and_insert_block(block.to_immutable());
     match virtual_state_task.await {
-        Err(RuleError::MissingParents(missing)) => {
+        Err(RuleError::MissingParents(missing, known_invalid)) => {
             assert_eq!(missing, vec![0.into()]);
+            assert!(known_invalid.is_empty());
             // Assert that block task returns the same error as well
-            assert_match!(block_task.await, Err(RuleError::MissingParents(_)));
+            assert_match!(block_task.await, Err(RuleError::MissingParents(..)));
         }
         res => {
             panic!("Unexpected result: {res:?}")
@@ -2097,12 +2098,12 @@ async fn pruning_test() {
     // Since pruning happens topologically from older to later blocks, we expect both blocks to be pruned at this point
     assert_match!(
         consensus.validate_and_insert_block(genesis_child_block).virtual_state_task.await,
-        Err(RuleError::MissingParents(_))
+        Err(RuleError::MissingParents(..))
     );
 
     assert_match!(
         consensus.validate_and_insert_block(genesis_child_child_block).virtual_state_task.await,
-        Err(RuleError::MissingParents(_))
+        Err(RuleError::MissingParents(..))
     );
 
     consensus.shutdown(wait_handles);

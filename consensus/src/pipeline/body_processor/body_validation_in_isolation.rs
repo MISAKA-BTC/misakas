@@ -586,13 +586,13 @@ mod tests {
 
         assert_match!(
             consensus.validate_and_insert_block(block.clone().to_immutable()).virtual_state_task.await,
-            Err(RuleError::MissingParents(_))
+            Err(RuleError::MissingParents(..))
         );
 
         // MissingParents shouldn't mark the block as known invalid
         assert_match!(
             consensus.validate_and_insert_block(block.to_immutable()).virtual_state_task.await,
-            Err(RuleError::MissingParents(_))
+            Err(RuleError::MissingParents(..))
         );
 
         consensus.shutdown(wait_handles);

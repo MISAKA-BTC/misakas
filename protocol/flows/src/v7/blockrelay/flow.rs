@@ -278,7 +278,7 @@ impl HandleRelayInvsFlow {
 
             let ancestor_batch = match block_task.await {
                 Ok(_) => Default::default(),
-                Err(RuleError::MissingParents(missing_parents)) => {
+                Err(RuleError::MissingParents(missing_parents, _)) => {
                     debug!("Block {} is orphan and has missing parents: {:?}", block.hash(), missing_parents);
                     if let Some(mut ancestor_batch) = self.process_orphan(&session, block.clone(), inv.known_within_range).await? {
                         // Block is not an orphan, retrying

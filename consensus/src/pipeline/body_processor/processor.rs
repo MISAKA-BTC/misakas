@@ -209,13 +209,15 @@ impl BlockBodyProcessor {
                 // case of the following errors:
                 // MissingParents - If we got MissingParents the block shouldn't be
                 // considered as invalid because it could be added later on when its
-                // parents are present.
+                // parents are present. That includes a parent this node already marked
+                // invalid: the child stays header-only as before; the error only names
+                // that parent (issue #103).
                 // BadMerkleRoot - if we get BadMerkleRoot we shouldn't mark the
                 // block as invalid because later on we can get the block with
                 // transactions that fits the merkle root.
                 // PrunedBlock - PrunedBlock is an error that rejects a block body and
                 // not the block as a whole, so we shouldn't mark it as invalid.
-                if !matches!(e, RuleError::BadMerkleRoot(_, _) | RuleError::MissingParents(_) | RuleError::PrunedBlock) {
+                if !matches!(e, RuleError::BadMerkleRoot(_, _) | RuleError::MissingParents(..) | RuleError::PrunedBlock) {
                     self.statuses_store.write().set(block.hash(), BlockStatus::StatusInvalid).unwrap();
                 }
                 return Err(e);
