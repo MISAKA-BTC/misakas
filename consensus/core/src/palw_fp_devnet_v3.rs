@@ -733,10 +733,52 @@ pub fn palw_fp_bundle_with_windows_v3(
     genesis_bonds: Vec<PalwGenesisBondSpecV1>,
     windows: &PalwLatticeWindowsV1,
 ) -> Result<PalwConsensusParamsV2, PalwModeV2Error> {
+    palw_fp_bundle_with_windows_and_floor_v3(
+        base_class_id,
+        class_catalog_root,
+        court_catalog_root,
+        genesis_pwu_per_inference,
+        genesis_artifact_root,
+        genesis_bonds,
+        windows,
+        MIN_COLLATERAL_SOMPI,
+    )
+}
+
+/// **The producer floor a mainnet card states: 10,000 MSK** (ADR-0124 §9, the operator's
+/// "mainnet では Miner 10000 MSK"). With ADR-0124 Decision 4's seat floor at ten producer floors,
+/// a card draws its panel from bonds holding 100,000 MSK. A card's genesis bonds already declare
+/// `max(derived, GENESIS_BOND_COLLATERAL_SOMPI)` — the 10,000 MSK outputs ADR-0061 carves — so
+/// the floor is met by every bond the card seats. Every other network keeps
+/// [`MIN_COLLATERAL_SOMPI`]: testnet-11's and devnet's bundles, and their fingerprints, are
+/// byte-identical.
+pub const PALW_MAINNET_MIN_COLLATERAL_SOMPI: u64 = 10_000 * crate::constants::SOMPI_PER_KASPA;
+
+/// The policy floor every non-mainnet bundle states — [`MIN_COLLATERAL_SOMPI`], named for the one
+/// caller that chooses a floor by network.
+pub const PALW_POLICY_MIN_COLLATERAL_SOMPI: u64 = MIN_COLLATERAL_SOMPI;
+
+/// [`palw_fp_bundle_with_windows_v3`] with the bundle's producer floor chosen by the caller
+/// (`min_collateral_sompi` reaches both the state params and the bond params, which `validate`
+/// requires to agree). The RC and devnet pass [`PALW_POLICY_MIN_COLLATERAL_SOMPI`]; a mainnet card
+/// passes [`PALW_MAINNET_MIN_COLLATERAL_SOMPI`].
+#[allow(clippy::too_many_arguments)]
+pub fn palw_fp_bundle_with_windows_and_floor_v3(
+    base_class_id: Hash64,
+    class_catalog_root: Hash64,
+    court_catalog_root: Hash64,
+    genesis_pwu_per_inference: u64,
+    genesis_artifact_root: Hash64,
+    genesis_bonds: Vec<PalwGenesisBondSpecV1>,
+    windows: &PalwLatticeWindowsV1,
+    min_collateral_sompi: u64,
+) -> Result<PalwConsensusParamsV2, PalwModeV2Error> {
     // Derived, not declared: see `palw_v2_collateral_for_claim_lifetime_v1`. Applied to the policy
     // minimum as well as to every registration, so "the minimum collateral" means "the smallest
     // stake that can carry a claim through the bind window" rather than a number chosen earlier.
-    let genesis_collateral = palw_v2_collateral_for_claim_lifetime_v1(genesis_pwu_per_inference);
+    // A floor above the derivation (a mainnet card's) is met by the genesis bonds the card
+    // re-declares at their outputs' own amount.
+    let genesis_collateral = palw_v2_collateral_for_claim_lifetime_v1(genesis_pwu_per_inference).max(min_collateral_sompi);
     // ADR-0045 Decision 3: no share table here. The chain grants shares at registration — the
     // first registration on the chain must be `base_class_id` at the whole 1000‰, which is the
     // single-class devnet shape this bundle used to spell out as a params constant.
@@ -750,7 +792,7 @@ pub fn palw_fp_bundle_with_windows_v3(
         base_class_id,
         CLASS_DAA_MAX_FACTOR,
         BUDGET_TOLERANCE_PERMILLE,
-        MIN_COLLATERAL_SOMPI,
+        min_collateral_sompi,
         ATTEMPT_SHARE_PERMILLE,
         windows.fp_abandon_hold,
     )?
@@ -821,7 +863,7 @@ pub fn palw_fp_bundle_with_windows_v3(
         // it on the registrations themselves; this is the smaller "a bond is not nothing" bar, and
         // keeping the two apart is what lets a fixture build a deliberately thin network to watch
         // the exposure ceiling bite.
-        bond: PalwBondParamsV2::new(MIN_COLLATERAL_SOMPI, windows.withdrawal_delay)?,
+        bond: PalwBondParamsV2::new(min_collateral_sompi, windows.withdrawal_delay)?,
         freeprompt,
         reorg_margin_daa: windows.reorg_margin,
         court: PalwCourtParamsV2::with_cost_ceilings(

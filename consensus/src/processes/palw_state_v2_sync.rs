@@ -143,6 +143,7 @@ pub struct PalwStateSyncV2 {
 impl PalwStateSyncV2 {
     /// Resume from the store: the tip snapshot loads root-verified, or the sync starts empty on
     /// a fresh database.
+    #[allow(clippy::too_many_arguments)]
     pub fn load(
         store: &DbPalwStateV2Store,
         params: PalwStateParamsV2,

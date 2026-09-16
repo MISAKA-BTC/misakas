@@ -343,12 +343,16 @@ past it are under Decisions 2–5.
 * **A spender for the reserve.** `panel_reserve_sompi` is auditable and unspendable. A later ADR
   may name a source for it (a top-up when seats are scarce is the obvious candidate); until then it
   is supply that was never minted, recorded.
-* **The mainnet card's producer floor.** The card's `min_collateral_sompi` is the bundle's policy
-  floor (0.004 MSK) while its genesis bonds declare `max(derived, 10,000 MSK)` (ADR-0061). Raising
-  the card's floor itself to 10,000 MSK — so Decision 4 yields the operator's 100,000 MSK — is a
-  bundle change on an unlaunched network and is the next commit on this branch, not this ADR's
-  consensus rule.
 * **Equivocation by name** (SA-3) and **the stratified draw** (SA-6).
+
+The mainnet card's producer floor IS decided, as a bundle value rather than a consensus rule: a
+card's bundle states `PALW_MAINNET_MIN_COLLATERAL_SOMPI` (10,000 MSK) as its `min_collateral_sompi`
+(`palw_fp_bundle_with_windows_and_floor_v3`, chosen by network type where the windows are), so
+Decision 4 yields the operator's 100,000 MSK seat floor; its genesis bonds already declare
+`max(derived, 10,000 MSK)` (ADR-0061's carve), so every bond the card seats meets it. testnet-11
+and devnet keep the 0.004 MSK policy floor, and their bundles and fingerprints are byte-identical
+(`adr0124_the_panel_economy_and_the_work_price_are_dormant_everywhere_and_stated_on_a_card` pins
+both floors). Mainnet has not launched, so its ruleset id may move.
 
 ## 10. Implementation record (2026-09-17, `feat/adr-0124-panel-reward-and-compute-weight`)
 
@@ -370,7 +374,9 @@ past it are under Decisions 2–5.
 * `config/params.rs`: the two fences at every site a fence is spelled (the list, the identity
   visitor, the schedule id, the Some-only fingerprint write, `override_params`, the four presets),
   `palw_panel_economy_fence` / `palw_work_priced_reward_fence` / `palw_seat_economy_at`; the card
-  arms both; `fork_id_v1.rs` and the extension's fence map name both.
+  arms both and states the 10,000 MSK producer floor (`palw_fp_devnet_v3.rs`:
+  `PALW_MAINNET_MIN_COLLATERAL_SOMPI`, `palw_fp_bundle_with_windows_and_floor_v3`); `fork_id_v1.rs`
+  and the extension's fence map name both fences.
 * `consensus/src`: the processor resolves both at the block's DAA into the extras and the draw
   policy at the anchor; the receipt validator runs with the door; the assembler's match names
   `Supplementary`; `palw_v2_supplementary_receipt_assemble_impl`; the sync walk carries both.

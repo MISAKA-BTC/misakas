@@ -5251,17 +5251,17 @@ impl VirtualStateProcessor {
         // because the class's own share is part of the release formula.
         if budget_fences.boundary_budget_active && facts.epoch_budget_blocks == 0 && !facts.is_base_class {
             let epoch_index = candidate_daa / state_params.epoch_length();
-            if let Some(budgets) = kaspa_consensus_core::palw_state_v2::palw_epoch_budgets_for_v2(&state, state_params, epoch_index) {
-                if let Some(budget) = budgets.budget_blocks.get(&class_id).copied() {
-                    facts.epoch_budget_blocks = budget;
-                    facts.epoch_budget_released = kaspa_consensus_core::palw_state_v2::palw_epoch_budget_release_v1(
-                        &state,
-                        state_params.epoch_length(),
-                        candidate_daa,
-                        &class_id,
-                        budget,
-                    );
-                }
+            if let Some(budgets) = kaspa_consensus_core::palw_state_v2::palw_epoch_budgets_for_v2(&state, state_params, epoch_index)
+                && let Some(budget) = budgets.budget_blocks.get(&class_id).copied()
+            {
+                facts.epoch_budget_blocks = budget;
+                facts.epoch_budget_released = kaspa_consensus_core::palw_state_v2::palw_epoch_budget_release_v1(
+                    &state,
+                    state_params.epoch_length(),
+                    candidate_daa,
+                    &class_id,
+                    budget,
+                );
             }
         }
         // ADR-0123: the builder computes the release but cannot know whether it counts — it holds

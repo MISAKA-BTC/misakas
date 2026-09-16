@@ -11440,7 +11440,15 @@ pub fn palw_v2_params_on_base(
     } else {
         &crate::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1
     };
-    let mut bundle = crate::palw_fp_devnet_v3::palw_fp_bundle_with_windows_v3(
+    // **ADR-0124 §9 / the operator's mainnet numbers: a card's producer floor is 10,000 MSK**, so
+    // Decision 4's seat floor is 100,000 MSK. Chosen by network like the windows above: testnet-11
+    // and devnet keep the policy floor, and their bundles and fingerprints do not move.
+    let min_collateral = if base.net.network_type == crate::network::NetworkType::Mainnet {
+        crate::palw_fp_devnet_v3::PALW_MAINNET_MIN_COLLATERAL_SOMPI
+    } else {
+        crate::palw_fp_devnet_v3::PALW_POLICY_MIN_COLLATERAL_SOMPI
+    };
+    let mut bundle = crate::palw_fp_devnet_v3::palw_fp_bundle_with_windows_and_floor_v3(
         base_class_id,
         class_catalog_root,
         court_catalog_root,
@@ -11448,6 +11456,7 @@ pub fn palw_v2_params_on_base(
         genesis_artifact_root,
         genesis_bonds,
         windows,
+        min_collateral,
     )?;
     // **A base that arms the Merkle prompt commitment names it in its ruleset id** (ADR-0081
     // Decision 3): `validate_palw_v2` at the bottom of this function refuses the fence without the
@@ -17426,6 +17435,19 @@ mod consensus_params_id_tests {
         let card = mainnet_card_base_v1(MAINNET_PARAMS, false);
         assert_eq!(card.palw_panel_economy, Some(ForkActivation::always()));
         assert_eq!(card.palw_work_priced_reward, Some(ForkActivation::always()));
+
+        // And a card's producer floor is 10,000 MSK, so its seat floor is 100,000 MSK — the
+        // operator's mainnet numbers — while the RC's bundle keeps its policy floor (0.004 MSK).
+        let carded = mainnet_card_fixture_v1(false);
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(card_bundle) = &carded.palw_consensus_mode else { unreachable!() };
+        assert_eq!(card_bundle.state.min_collateral_sompi(), crate::palw_fp_devnet_v3::PALW_MAINNET_MIN_COLLATERAL_SOMPI);
+        assert_eq!(card_bundle.state.min_collateral_sompi(), 10_000 * crate::constants::SOMPI_PER_KASPA);
+        assert_eq!(
+            carded.palw_seat_economy_at(0).expect("a card states the economy").panel_floor_sompi,
+            100_000 * crate::constants::SOMPI_PER_KASPA
+        );
+        assert_eq!(bundle.state.min_collateral_sompi(), crate::palw_fp_devnet_v3::PALW_POLICY_MIN_COLLATERAL_SOMPI);
+        assert_eq!(bundle.state.min_collateral_sompi(), 400_000, "testnet-11's floor and fingerprint do not move");
     }
 
     /// **ADR-0107's share-growth fence is dormant on every shipped preset, visible the moment it is
