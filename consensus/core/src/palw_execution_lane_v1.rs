@@ -56,6 +56,22 @@ pub const PALW_EXEC_MAX_BONDS_PER_DOMAIN_V1: usize = 64;
 /// — the permit ledger keeps one entry per round inside the grace, so this bounds its bytes.
 pub const PALW_EXEC_MAX_LATE_ROUNDS_V1: u64 = 64;
 
+/// **What the fold needs of the lane where it is open**: the span a schedule covers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwExecLaneFoldV1 {
+    pub schedule_span_daa: u64,
+}
+
+/// One round permit a chain block accepted: the span whose schedule granted it, its round and its
+/// index. The ledger key is the span and the round, so a round's permit under one span's schedule
+/// is a different permit from the same round's under the next.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PalwExecPermitUseV1 {
+    pub span: u64,
+    pub round: u64,
+    pub permit_index: u16,
+}
+
 /// The most round blocks any network may let one mergeset hold
 /// (`PalwExecutionLaneV1::max_per_mergeset`): ten rounds a second for four hundred seconds.
 pub const PALW_EXEC_MAX_PER_MERGESET_BOUND_V1: u64 = 4_096;
@@ -226,7 +242,7 @@ pub fn palw_execution_parities_v1(quotas: &[(Hash64, u16)]) -> Vec<(Hash64, u8)>
 }
 
 /// One attempt claim that reached `Final` inside a closed scheduler span, as the schedule reads it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwExecFinalV1 {
     pub domain: Hash64,
     pub bond: PalwBondKeyV2,

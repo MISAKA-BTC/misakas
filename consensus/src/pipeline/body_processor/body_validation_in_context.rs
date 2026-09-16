@@ -75,9 +75,14 @@ impl BlockBodyProcessor {
                 // declared subsidy is zero — descendant coinbases read this declaration into the
                 // reward fan-out, so zero here is what makes the lane mint nothing (the 25B supply
                 // of ADR-0059 is untouched by however many heartbeats a crisis runs).
-                let expected_subsidy = if block.header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
-                    && self.palw_heartbeat_lane.is_some_and(|fence| fence.is_active(block.header.daa_score))
-                {
+                let heartbeat = block.header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
+                    && self.palw_heartbeat_lane.is_some_and(|fence| fence.is_active(block.header.daa_score));
+                // ADR-0125: the round lane is fee-only for the same reason, and more simply — a round
+                // block is never a DAA block, so no subsidy could be paid for it anyway; declaring
+                // zero keeps every reader of the payload from having to know that.
+                let round = block.header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1
+                    && self.palw_round_lane.is_some_and(|fence| fence.is_active(block.header.daa_score));
+                let expected_subsidy = if heartbeat || round {
                     0
                 } else {
                     self.coinbase_manager.calc_block_subsidy(block.header.daa_score)

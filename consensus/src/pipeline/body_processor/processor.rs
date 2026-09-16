@@ -63,6 +63,8 @@ pub struct BlockBodyProcessor {
     /// block's coinbase payload must then declare a subsidy of ZERO (the lane is fee-only).
     /// ADR-0066: the heartbeat lane's fence, mode folded in.
     pub(super) palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0125: the round lane's fence — a round block declares zero subsidy past it.
+    pub(super) palw_round_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
     // Stores
     pub(super) statuses_store: Arc<RwLock<DbStatusesStore>>,
@@ -126,6 +128,7 @@ impl BlockBodyProcessor {
             genesis: params.genesis.clone(),
             _ghostdag_k: params.ghostdag_k(),
             palw_heartbeat_lane: params.palw_heartbeat_lane_fence(),
+            palw_round_lane: params.palw_execution_lane_fence().map(|lane| lane.activation),
 
             statuses_store: storage.statuses_store.clone(),
             _ghostdag_store: storage.ghostdag_store.clone(),

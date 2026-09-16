@@ -4692,6 +4692,11 @@ pub enum PalwStateV2Error {
     HeldDaSessionMismatch(Hash64),
     #[error("claim {claim}: the dissection cannot open at leaf {leaf}: {why}")]
     HeldDissectionRefused { claim: Hash64, leaf: u64, why: String },
+    /// ADR-0125: the fold was handed a round permit it cannot record — an index above the widest
+    /// round, or a permit the chain already accepted. The processor decides permits against the same
+    /// parent state, so this is a divergence surfaced, never a permit accepted twice.
+    #[error("round permit refused: {0}")]
+    RoundPermitRefused(String),
     // There is deliberately NO size error here. A disclosure's ceiling is a wire bound, and it is
     // already applied on the only path into this fold: `palw_lifecycle_objects_from_accepted_txs_v2`
     // runs `palw_lifecycle_object_may_ride_v2` on every extracted object and SKIPS the ones that
@@ -4821,6 +4826,19 @@ pub struct PalwChainStateV2 {
     /// reason to omit it. Recorded so the number is auditable from the state alone and a later
     /// ADR can name a source for it. Enters the root and the carriage only once non-zero.
     panel_reserve_sompi: u64,
+    /// **ADR-0125: the execution lane's scheduler.** The attempt claims finalized in the open span,
+    /// keyed by claim id; `round_span` names that span and is meaningful only while the map is
+    /// non-empty. At the first block of a later span they become the next span's schedule and leave.
+    /// Empty on every network that has not armed `Params::palw_execution_lane`, and entering the root
+    /// and the carriage only once written.
+    round_span: u64,
+    round_finals: BTreeMap<Hash64, crate::palw_execution_lane_v1::PalwExecFinalV1>,
+    /// ADR-0125: the schedules a merging block may still judge a round block by — the current span's
+    /// and the one before it, and only those that list a domain.
+    round_schedules: BTreeMap<u64, crate::palw_execution_lane_v1::PalwExecScheduleV1>,
+    /// ADR-0125: the permits already accepted, as `(span, round) → one bit per permit index`, for the
+    /// two spans a schedule is kept for. A permit is accepted once.
+    round_permits_used: BTreeMap<(u64, u64), u16>,
     /// **ADR-0056 Decision 3: the registry's own exposure ledger, kept SEPARATE from the claims'.**
     ///
     /// `reserved_exposure` is an accumulator over live claims, and
@@ -4949,6 +4967,10 @@ impl PalwChainStateV2 {
             class_step_ladders: BTreeMap::new(),
             panel_duties: BTreeMap::new(),
             panel_reserve_sompi: 0,
+            round_span: 0,
+            round_finals: BTreeMap::new(),
+            round_schedules: BTreeMap::new(),
+            round_permits_used: BTreeMap::new(),
             registration_exposure: BTreeMap::new(),
             class_walks: BTreeMap::new(),
             certified_families: BTreeMap::new(),
@@ -5469,6 +5491,31 @@ impl PalwChainStateV2 {
         self.panel_reserve_sompi
     }
 
+    /// ADR-0125: the schedule a round block anchored in `span` is judged by, if this state keeps one.
+    pub fn round_schedule(&self, span: u64) -> Option<&crate::palw_execution_lane_v1::PalwExecScheduleV1> {
+        self.round_schedules.get(&span)
+    }
+
+    /// ADR-0125: every schedule this state keeps, by span.
+    pub fn round_schedules(&self) -> &BTreeMap<u64, crate::palw_execution_lane_v1::PalwExecScheduleV1> {
+        &self.round_schedules
+    }
+
+    /// ADR-0125: has the permit `(span, round, index)` already been accepted on this chain?
+    pub fn round_permit_used(&self, span: u64, round: u64, index: u16) -> bool {
+        index < 16 && self.round_permits_used.get(&(span, round)).is_some_and(|bits| bits & (1u16 << index) != 0)
+    }
+
+    /// ADR-0125: the attempts finalized so far in the open span, and that span.
+    pub fn round_finals(&self) -> (u64, &BTreeMap<Hash64, crate::palw_execution_lane_v1::PalwExecFinalV1>) {
+        (self.round_span, &self.round_finals)
+    }
+
+    /// Whether the execution lane has written anything: the gate the root and the carriage share.
+    fn round_lane_is_written(&self) -> bool {
+        self.round_span != 0 || !self.round_finals.is_empty() || !self.round_schedules.is_empty() || !self.round_permits_used.is_empty()
+    }
+
     /// **ADR-0119 Decision 2: the step ladder of a class, given the network's** — the ladder this
     /// state recorded when the class registered (a held class's, the regime's `2^40`), or the
     /// network's for every class it recorded none for. The one question every consensus reader of
@@ -5881,6 +5928,15 @@ impl PalwChainStateV2 {
         if !self.panel_duties.is_empty() || self.panel_reserve_sompi != 0 {
             state.update(collection_root(b"panel_duties", &self.panel_duties).as_byte_slice());
             state.update(&self.panel_reserve_sompi.to_le_bytes());
+        }
+        // **ADR-0125.** Its own block, for the same reason: empty until an attempt is finalized past
+        // `Params::palw_execution_lane`, which nothing below the fence can do.
+        if self.round_lane_is_written() {
+            state.update(b"round_lane/v1");
+            state.update(&self.round_span.to_le_bytes());
+            state.update(collection_root(b"round_finals", &self.round_finals).as_byte_slice());
+            state.update(collection_root(b"round_schedules", &self.round_schedules).as_byte_slice());
+            state.update(collection_root(b"round_permits_used", &self.round_permits_used).as_byte_slice());
         }
         state.update(&self.safe_weight.to_le_bytes());
         state.update(&self.retired_safe_weight.to_le_bytes());
@@ -6751,10 +6807,33 @@ pub enum PalwDeltaEntryV2 {
         old: Option<BTreeMap<PalwBondKeyV2, u64>>,
         new: Option<BTreeMap<PalwBondKeyV2, u64>>,
     },
-    /// ADR-0124 Decision 2: the panel reserve moved (43). Appended last.
+    /// ADR-0124 Decision 2: the panel reserve moved (43).
     PanelReserve {
         old: u64,
         new: u64,
+    },
+    /// ADR-0125: the open span of the execution lane's finals moved (44).
+    RoundSpan {
+        old: u64,
+        new: u64,
+    },
+    /// ADR-0125: a finalized attempt joined, or left, the open span's finals (45).
+    RoundFinal {
+        key: Hash64,
+        old: Option<crate::palw_execution_lane_v1::PalwExecFinalV1>,
+        new: Option<crate::palw_execution_lane_v1::PalwExecFinalV1>,
+    },
+    /// ADR-0125: a span's schedule was written or dropped (46).
+    RoundSchedule {
+        key: u64,
+        old: Option<crate::palw_execution_lane_v1::PalwExecScheduleV1>,
+        new: Option<crate::palw_execution_lane_v1::PalwExecScheduleV1>,
+    },
+    /// ADR-0125: a round's accepted-permit bits moved (47). Appended last.
+    RoundPermitsUsed {
+        key: (u64, u64),
+        old: Option<u16>,
+        new: Option<u16>,
     },
 }
 
@@ -7367,6 +7446,127 @@ impl<'a> TransitionBuilder<'a> {
             self.state.panel_reserve_sompi = new;
             self.entries.push(PalwDeltaEntryV2::PanelReserve { old, new });
         }
+    }
+
+    fn write_round_span(&mut self, new: u64) {
+        let old = self.state.round_span;
+        if old != new {
+            self.state.round_span = new;
+            self.entries.push(PalwDeltaEntryV2::RoundSpan { old, new });
+        }
+    }
+
+    fn write_round_final(&mut self, key: Hash64, new: Option<crate::palw_execution_lane_v1::PalwExecFinalV1>) {
+        let old = match new {
+            Some(row) => self.state.round_finals.insert(key, row),
+            None => self.state.round_finals.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::RoundFinal { key, old, new });
+        }
+    }
+
+    fn write_round_schedule(&mut self, key: u64, new: Option<crate::palw_execution_lane_v1::PalwExecScheduleV1>) {
+        let old = match new.clone() {
+            Some(row) => self.state.round_schedules.insert(key, row),
+            None => self.state.round_schedules.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::RoundSchedule { key, old, new });
+        }
+    }
+
+    fn write_round_permits_used(&mut self, key: (u64, u64), new: Option<u16>) {
+        let old = match new {
+            Some(bits) => self.state.round_permits_used.insert(key, bits),
+            None => self.state.round_permits_used.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::RoundPermitsUsed { key, old, new });
+        }
+    }
+
+    // ---- ADR-0125: the execution lane ----
+
+    /// **ADR-0125: the span boundary.** At the first block of a span later than the one the finals
+    /// were gathered in, the finals become the NEXT span's schedule (written only when it lists a
+    /// domain) and leave; then every schedule and permit row older than the span before this block's
+    /// is dropped. A round block anchored two spans back can no longer be accepted, so nothing it
+    /// could collide with needs keeping.
+    fn rotate_round_lane(&mut self, ctx: &PalwBlockContextV2, span_daa: u64) {
+        let span_now = crate::palw_execution_lane_v1::palw_execution_span_v1(ctx.daa_score, span_daa);
+        if !self.state.round_finals.is_empty() && self.state.round_span < span_now {
+            let next = self.state.round_span + 1;
+            let finals: Vec<crate::palw_execution_lane_v1::PalwExecFinalV1> = self.state.round_finals.values().copied().collect();
+            let schedule = crate::palw_execution_lane_v1::palw_execution_schedule_v1(next, &finals);
+            if !schedule.domains.is_empty() {
+                self.write_round_schedule(next, Some(schedule));
+            }
+            for key in self.state.round_finals.keys().copied().collect::<Vec<_>>() {
+                self.write_round_final(key, None);
+            }
+        }
+        let keep_from = span_now.saturating_sub(1);
+        for key in self.state.round_schedules.range(..keep_from).map(|(k, _)| *k).collect::<Vec<_>>() {
+            self.write_round_schedule(key, None);
+        }
+        for key in self.state.round_permits_used.range(..(keep_from, 0)).map(|(k, _)| *k).collect::<Vec<_>>() {
+            self.write_round_permits_used(key, None);
+        }
+    }
+
+    /// **ADR-0125: an attempt that reaches `Final` earns its security domain a credit** in the span
+    /// the finalizing block belongs to. Only the attempt lane: a free-prompt claim's `Final` licenses
+    /// quanta rather than certifying a block's work, and the lane's quota is the attempt census.
+    fn record_round_final(
+        &mut self,
+        id: Hash64,
+        claim: &PalwClaimStateV2,
+        final_daa: u64,
+        span_daa: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        if !matches!(claim.source, PalwClaimSourceV2::Attempt) {
+            return Ok(());
+        }
+        let operator_id = self.state.bonds.get(&claim.bond).ok_or(PalwStateV2Error::MissingBond(claim.bond))?.operator_id;
+        let family = self.state.fp_certified_classes.get(&claim.class_id).map(|row| row.family_digest);
+        let span = crate::palw_execution_lane_v1::palw_execution_span_v1(final_daa, span_daa);
+        if self.state.round_finals.is_empty() {
+            self.write_round_span(span);
+        }
+        self.write_round_final(
+            id,
+            Some(crate::palw_execution_lane_v1::PalwExecFinalV1 {
+                domain: crate::palw_execution_lane_v1::palw_execution_domain_of_class_v1(family, claim.class_id),
+                bond: claim.bond,
+                operator_id,
+                claim_id: id,
+                execution_root: claim.execution_root,
+            }),
+        );
+        Ok(())
+    }
+
+    /// **ADR-0125: the permits this block accepted.** The processor decided them against the parent
+    /// state; the fold records them, and refuses a permit already recorded — the two answering
+    /// differently is a divergence to surface, never a permit to accept twice.
+    fn record_round_permits(&mut self, uses: &[crate::palw_execution_lane_v1::PalwExecPermitUseV1]) -> Result<(), PalwStateV2Error> {
+        for used in uses {
+            if used.permit_index >= crate::palw_execution_lane_v1::PALW_EXEC_MAX_PERMITS_PER_ROUND_V1 {
+                return Err(PalwStateV2Error::RoundPermitRefused(format!("permit index {} above the widest round", used.permit_index)));
+            }
+            let key = (used.span, used.round);
+            let bits = self.state.round_permits_used.get(&key).copied().unwrap_or(0);
+            let bit = 1u16 << used.permit_index;
+            if bits & bit != 0 {
+                return Err(PalwStateV2Error::RoundPermitRefused(format!(
+                    "permit (span {}, round {}, index {}) accepted twice",
+                    used.span, used.round, used.permit_index
+                )));
+            }
+            self.write_round_permits_used(key, Some(bits | bit));
+        }
+        Ok(())
     }
 
     // ---- ADR-0124: the panel economy ----
@@ -8147,6 +8347,10 @@ impl<'a> TransitionBuilder<'a> {
         // ADR-0124 Decision 3: the seats leave duty with their exposure — before the phase write
         // below drops the row this reads.
         self.release_seat_duties(&id, claim)?;
+        // ADR-0125: past the lane's fence a finalized attempt is a credit in its span's schedule.
+        if let Some(lane) = self.extras.round_lane {
+            self.record_round_final(id, claim, final_daa, lane.schedule_span_daa)?;
+        }
         let mut finalized = claim.clone();
         finalized.phase = PalwClaimPhaseV2::Final { final_daa };
         self.write_claim(id, Some(finalized.clone()));
@@ -8636,6 +8840,10 @@ pub fn palw_v2_pre_object_base_v1(
     for seq in builder.state.evm_settlements.keys().copied().collect::<Vec<_>>() {
         builder.write_evm_settlement(seq, None);
     }
+    // ADR-0125: the span boundary runs where the fold runs it — before any claim is finalized here.
+    if let Some(lane) = extras.round_lane {
+        builder.rotate_round_lane(ctx, lane.schedule_span_daa);
+    }
     sweep_deadlines(&mut builder, ctx)?;
     sweep_court_close_deadlines(&mut builder, ctx)?;
     sweep_court_deadlines(&mut builder, ctx)?;
@@ -8733,6 +8941,12 @@ pub fn apply_palw_transition_v7(
     //      by THIS block's EVM step; it leaves the state here, before this block's own is written.
     for seq in builder.state.evm_settlements.keys().copied().collect::<Vec<_>>() {
         builder.write_evm_settlement(seq, None);
+    }
+
+    // 1d. ADR-0125: the execution lane's span boundary — before the sweeps, so an attempt finalized
+    //     by this block is a credit in THIS block's span, never in the one its finals just closed.
+    if let Some(lane) = extras.round_lane {
+        builder.rotate_round_lane(ctx, lane.schedule_span_daa);
     }
 
     // 2. Deadline sweeps — everything strictly past is resolved before this block says anything.
@@ -8942,6 +9156,12 @@ pub fn apply_palw_transition_v7(
     }
     let new_frontier = (builder.state.safe_frontier_blue_score, builder.state.safe_frontier);
     debug_assert!(new_frontier.0 >= old_frontier.0, "the frontier never retreats");
+
+    // 7. ADR-0125: the round permits this block accepted. After everything else, because nothing
+    //    else in the fold reads them, and at a fixed place because fixed IS the requirement.
+    if extras.round_lane.is_some() {
+        builder.record_round_permits(&extras.round_permit_uses)?;
+    }
 
     // Weight / frontier / position entries, exactly once, at the end.
     if (parent.safe_weight, parent.bounded_immature) != (builder.state.safe_weight, builder.state.bounded_immature) {
@@ -13103,6 +13323,13 @@ pub struct PalwTransitionExtrasV1 {
     /// canonical inference is of the heaviest weight-bearing model class's, and the rest is never
     /// named. `false` by `Default`, for the reason every field above gives.
     pub work_priced_reward_active: bool,
+    /// **ADR-0125: the execution lane, where it is open at this block** — the span a schedule covers.
+    /// `None` below the fence and on every network that has not armed it, which leaves the fold, the
+    /// root and the carriage byte-identical.
+    pub round_lane: Option<crate::palw_execution_lane_v1::PalwExecLaneFoldV1>,
+    /// ADR-0125: the round permits this block accepted, as the processor decided them against the
+    /// parent state. Empty unless `round_lane` is `Some`.
+    pub round_permit_uses: Vec<crate::palw_execution_lane_v1::PalwExecPermitUseV1>,
 }
 
 impl PalwTransitionExtrasV1 {
@@ -14281,6 +14508,16 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
             }
             state.panel_reserve_sompi = *install;
         }
+        PalwDeltaEntryV2::RoundSpan { old, new } => {
+            let (expected, install) = if revert { (new, old) } else { (old, new) };
+            if state.round_span != *expected {
+                return Err(PalwStateV2Error::DeltaMismatch("the round lane's span does not match the delta's expectation"));
+            }
+            state.round_span = *install;
+        }
+        PalwDeltaEntryV2::RoundFinal { key, old, new } => swap_write!(state.round_finals, key, old, new),
+        PalwDeltaEntryV2::RoundSchedule { key, old, new } => swap_write!(state.round_schedules, key, old, new),
+        PalwDeltaEntryV2::RoundPermitsUsed { key, old, new } => swap_write!(state.round_permits_used, key, old, new),
     }
     Ok(())
 }
@@ -14481,6 +14718,12 @@ pub struct PalwStateCarriageV2 {
     /// the duties are non-empty or the reserve is non-zero.
     pub panel_duties: BTreeMap<Hash64, BTreeMap<PalwBondKeyV2, u64>>,
     pub panel_reserve_sompi: u64,
+    /// ADR-0125. A tenth tagged tail (`0xA7`) carrying all four, encoded only when the lane has
+    /// written anything.
+    pub round_span: u64,
+    pub round_finals: BTreeMap<Hash64, crate::palw_execution_lane_v1::PalwExecFinalV1>,
+    pub round_schedules: BTreeMap<u64, crate::palw_execution_lane_v1::PalwExecScheduleV1>,
+    pub round_permits_used: BTreeMap<(u64, u64), u16>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -14543,6 +14786,8 @@ const PALW_CARRIAGE_HELD_DEMANDS_TAIL_V1: u8 = 0xA4;
 const PALW_CARRIAGE_CLASS_LADDERS_TAIL_V1: u8 = 0xA5;
 /// ADR-0124 Decisions 2 and 3: the seats-on-duty rows and the panel reserve, one tail.
 const PALW_CARRIAGE_PANEL_ECONOMY_TAIL_V1: u8 = 0xA6;
+/// ADR-0125: the execution lane's scheduler and permit ledger, one tail.
+const PALW_CARRIAGE_ROUND_LANE_TAIL_V1: u8 = 0xA7;
 
 impl borsh::BorshSerialize for PalwStateCarriageV2 {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
@@ -14624,6 +14869,14 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             self.panel_duties.serialize(writer)?;
             self.panel_reserve_sompi.serialize(writer)?;
         }
+        if self.round_span != 0 || !self.round_finals.is_empty() || !self.round_schedules.is_empty() || !self.round_permits_used.is_empty()
+        {
+            PALW_CARRIAGE_ROUND_LANE_TAIL_V1.serialize(writer)?;
+            self.round_span.serialize(writer)?;
+            self.round_finals.serialize(writer)?;
+            self.round_schedules.serialize(writer)?;
+            self.round_permits_used.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -14670,6 +14923,11 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut panel_duties = BTreeMap::new();
         let mut panel_reserve_sompi = 0u64;
         let mut seen_panel_economy = false;
+        let mut round_span = 0u64;
+        let mut round_finals = BTreeMap::new();
+        let mut round_schedules = BTreeMap::new();
+        let mut round_permits_used = BTreeMap::new();
+        let mut seen_round_lane = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -14710,10 +14968,17 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_class_ladders = true;
                     class_step_ladders = BTreeMap::deserialize_reader(reader)?;
                 }
-                PALW_CARRIAGE_PANEL_ECONOMY_TAIL_V1 if !seen_panel_economy => {
+                PALW_CARRIAGE_PANEL_ECONOMY_TAIL_V1 if !seen_panel_economy && !seen_round_lane => {
                     seen_panel_economy = true;
                     panel_duties = BTreeMap::deserialize_reader(reader)?;
                     panel_reserve_sompi = u64::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_ROUND_LANE_TAIL_V1 if !seen_round_lane => {
+                    seen_round_lane = true;
+                    round_span = u64::deserialize_reader(reader)?;
+                    round_finals = BTreeMap::deserialize_reader(reader)?;
+                    round_schedules = BTreeMap::deserialize_reader(reader)?;
+                    round_permits_used = BTreeMap::deserialize_reader(reader)?;
                 }
                 PALW_CARRIAGE_SHARDS_TAIL_V1 if !seen_shards && !seen_held && !seen_demands && !seen_class_ladders => {
                     seen_shards = true;
@@ -14772,6 +15037,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             class_step_ladders,
             panel_duties,
             panel_reserve_sompi,
+            round_span,
+            round_finals,
+            round_schedules,
+            round_permits_used,
         })
     }
 }
@@ -14815,6 +15084,10 @@ impl PalwStateCarriageV2 {
             class_step_ladders: state.class_step_ladders.clone(),
             panel_duties: state.panel_duties.clone(),
             panel_reserve_sompi: state.panel_reserve_sompi,
+            round_span: state.round_span,
+            round_finals: state.round_finals.clone(),
+            round_schedules: state.round_schedules.clone(),
+            round_permits_used: state.round_permits_used.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -14906,6 +15179,10 @@ impl PalwStateCarriageV2 {
             class_step_ladders: self.class_step_ladders,
             panel_duties: self.panel_duties,
             panel_reserve_sompi: self.panel_reserve_sompi,
+            round_span: self.round_span,
+            round_finals: self.round_finals,
+            round_schedules: self.round_schedules,
+            round_permits_used: self.round_permits_used,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
