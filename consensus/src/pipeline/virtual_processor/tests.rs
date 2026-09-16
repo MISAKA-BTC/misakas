@@ -13572,3 +13572,173 @@ async fn adr0125_a_merging_block_grants_exactly_the_permits_its_parent_state_sch
     ctx.validate_and_insert_block(p1.block.clone().to_immutable()).await.assert_valid_utxo_tip();
     assert_eq!(ctx.consensus.get_sink(), p1.block.header.hash);
 }
+
+// ---- ADR-0126: the validator overlay retires at a height --------------------------------------
+
+/// **ADR-0126 through the pipeline.** On a network whose overlay is live from genesis (mainnet's
+/// production overlay: Stage-3 carve, v2 economics) with the retirement at DAA 12:
+///
+/// * below the fence a merged block's miner is paid the overlay's worker share of its subsidy, the
+///   header commits the overlay, and the mempool admits a funded stake bond;
+/// * at and past it the miner is paid the whole subsidy (a hash network has no PALW carve to fall
+///   to), the overlay root is zero, the mempool refuses the same bond as a disabled subnetwork, a
+///   block carrying it is refused in context, and a block committing a non-zero overlay root is
+///   disqualified — while the chain keeps validating.
+#[tokio::test]
+async fn adr0126_the_validator_overlay_retires_at_a_height() {
+    use kaspa_consensus_core::api::args::TransactionValidationArgs;
+    use kaspa_consensus_core::config::params::ForkActivation;
+    use kaspa_consensus_core::dns_finality::split_block_subsidy;
+    use kaspa_consensus_core::errors::{block::RuleError, tx::TxRuleError};
+    use kaspa_consensus_core::merkle::calc_hash_merkle_root;
+    use kaspa_consensus_core::tx::MutableTransaction;
+    const RETIRE: u64 = 12;
+    kaspa_core::log::try_init_logger("info");
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.max_block_parents = 4;
+            p.mergeset_size_limit = 10;
+            p.coinbase_maturity = 2;
+            p.palw_validator_overlay_retirement = Some(ForkActivation::new(RETIRE));
+        })
+        .build();
+    assert!(config.params.dns_params.as_ref().is_some_and(|d| d.dns_activation_daa_score == 0), "the overlay is live from genesis");
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    let seed = [0x42u8; 32];
+    let validator = dns_harness::harness_validator(seed);
+    let k_payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&validator.pubkey).as_bytes();
+    let k_spk = p2pkh_mldsa87_spk(&k_payload);
+    let k_miner = MinerData::new(k_spk.clone(), vec![]);
+    let paid_to_k = |block: &Block| block.transactions[0].outputs.iter().find(|o| o.script_public_key == k_spk).map(|o| o.value);
+
+    // Below the fence: the overlay's carve, and the overlay committed.
+    let funding = ctx.mine_block(k_miner.clone(), vec![]).await;
+    let harvest = ctx.mine_block(new_miner_data(), vec![]).await;
+    assert!(harvest.header.daa_score < RETIRE);
+    let subsidy = ctx.consensus.services.coinbase_manager.calc_block_subsidy(funding.header.daa_score);
+    let split = config.params.dns_params.as_ref().unwrap().reward_fee_split(harvest.header.daa_score).expect("Stage 3");
+    let paid_below = paid_to_k(&harvest).expect("the merging block pays the funding block's miner");
+    assert_eq!(paid_below, split_block_subsidy(subsidy, split).worker_base_sompi, "below the fence: the overlay's worker share");
+    assert!(paid_below < subsidy);
+    assert_ne!(harvest.header.overlay_commitment_root, kaspa_hashes::ZERO_HASH64, "and the header commits the overlay");
+
+    // A funded stake bond, admitted below the fence.
+    for _ in 0..3 {
+        ctx.mine_block(new_miner_data(), vec![]).await;
+    }
+    let (index, output) =
+        harvest.transactions[0].outputs.iter().enumerate().find(|(_, o)| o.script_public_key == k_spk).map(|(i, o)| (i, o.clone())).unwrap();
+    let outpoint = TransactionOutpoint::new(harvest.transactions[0].id(), index as u32);
+    let storage_mass_parameter = ctx.consensus.params().storage_mass_parameter;
+    let (bond_tx, _, _) = dns_harness::funded_signed_bond_tx(
+        seed,
+        outpoint,
+        output.value,
+        harvest.header.daa_score,
+        output.value - 100_000,
+        0,
+        storage_mass_parameter,
+    );
+    assert!(ctx.consensus.get_virtual_daa_score() < RETIRE);
+    let mut admitted = MutableTransaction::from_tx(bond_tx.clone());
+    ctx.consensus
+        .validate_mempool_transaction(&mut admitted, &TransactionValidationArgs::new(None))
+        .expect("below the fence a stake bond is an ordinary overlay transaction");
+
+    // Cross the fence with blocks mined to K, then one more to pay the last of them.
+    let mut last_k = funding.clone();
+    while ctx.consensus.get_virtual_daa_score() <= RETIRE {
+        last_k = ctx.mine_block(k_miner.clone(), vec![]).await;
+    }
+    let payer = ctx.mine_block(new_miner_data(), vec![]).await;
+    assert!(payer.header.daa_score >= RETIRE && last_k.header.daa_score >= RETIRE - 1);
+    let subsidy = ctx.consensus.services.coinbase_manager.calc_block_subsidy(last_k.header.daa_score);
+    assert_eq!(paid_to_k(&payer), Some(subsidy), "past the fence nothing is carved for validators");
+    assert_eq!(payer.header.overlay_commitment_root, kaspa_hashes::ZERO_HASH64, "and the overlay commits nothing");
+
+    // The same bond is refused past the fence, by the mempool and in a block.
+    let mut refused = MutableTransaction::from_tx(bond_tx.clone());
+    match ctx.consensus.validate_mempool_transaction(&mut refused, &TransactionValidationArgs::new(None)) {
+        Err(TxRuleError::SubnetworksDisabled(_)) => {}
+        other => panic!("past the fence an overlay transaction must be a disabled subnetwork, got {other:?}"),
+    }
+    let mut carrying = ctx
+        .consensus
+        .build_block_template(new_miner_data(), Box::new(OnetimeTxSelector::new(Default::default())), TemplateBuildMode::Standard)
+        .unwrap()
+        .block;
+    carrying.transactions.push(bond_tx);
+    carrying.header.hash_merkle_root = calc_hash_merkle_root(carrying.transactions.iter());
+    carrying.header.timestamp = ctx.simulated_time + 1_000;
+    carrying.header.finalize();
+    match ctx.consensus.validate_and_insert_block(carrying.to_immutable()).virtual_state_task.await {
+        Err(RuleError::TxInContextFailed(_, TxRuleError::SubnetworksDisabled(_))) => {}
+        other => panic!("a block past the fence carrying an overlay transaction must be refused in context, got {other:?}"),
+    }
+
+    // A block past the fence that commits an overlay is disqualified from the chain.
+    let mut committing = ctx
+        .consensus
+        .build_block_template(new_miner_data(), Box::new(OnetimeTxSelector::new(Default::default())), TemplateBuildMode::Standard)
+        .unwrap()
+        .block;
+    committing.header.overlay_commitment_root = kaspa_hashes::Hash64::from_u64_word(0x0E);
+    committing.header.timestamp = ctx.simulated_time + 2_000;
+    committing.header.finalize();
+    let committing_hash = committing.header.hash;
+    let _ = ctx.consensus.validate_and_insert_block(committing.to_immutable()).virtual_state_task.await;
+    assert_eq!(ctx.consensus.block_status(committing_hash), BlockStatus::StatusDisqualifiedFromChain);
+
+    // And the chain goes on.
+    for _ in 0..3 {
+        ctx.mine_block(new_miner_data(), vec![]).await;
+    }
+    ctx.assert_valid_utxo_tip();
+}
+
+/// **ADR-0126 on a PALW network: past the retirement the coinbase carves PALW's worker share.** The
+/// ConsensusV2 fixture runs mainnet's production overlay underneath, exactly as testnet-11 does; with
+/// the retirement at DAA 3 the chain keeps producing and validating attempt blocks across the fence —
+/// the escrow withheld from each is the carve the coinbase now pays, so construction and validation
+/// agree — every header past the fence commits a zero overlay root, and no coinbase past it carries
+/// anything but PALW's own outputs.
+#[tokio::test]
+async fn adr0126_a_palw_chain_crosses_the_retirement() {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    const RETIRE: u64 = 3;
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 16);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
+            p.palw_validator_overlay_retirement = Some(ForkActivation::new(RETIRE));
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..10 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let vp = ctx.consensus.virtual_processor().clone();
+    let mut crossed = 0;
+    let mut block = ctx.consensus.get_sink();
+    while block != config.params.genesis.hash {
+        let header = vp.headers_store.get_header(block).unwrap();
+        if header.daa_score >= RETIRE {
+            crossed += 1;
+            assert_eq!(header.overlay_commitment_root, kaspa_hashes::ZERO_HASH64, "block at DAA {} commits no overlay", header.daa_score);
+        } else {
+            assert_ne!(header.overlay_commitment_root, kaspa_hashes::ZERO_HASH64, "block at DAA {} commits the overlay", header.daa_score);
+        }
+        block = {
+            use crate::model::stores::ghostdag::GhostdagStoreReader;
+            vp.ghostdag_store.get_selected_parent(block).unwrap()
+        };
+    }
+    assert!(crossed >= 6, "the chain produced past the fence ({crossed} chain blocks)");
+    assert_eq!(ctx.consensus.block_status(ctx.consensus.get_sink()), BlockStatus::StatusUTXOValid);
+}

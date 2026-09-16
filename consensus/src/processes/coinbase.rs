@@ -72,6 +72,48 @@ impl<'a> PayloadParser<'a> {
     }
 }
 
+/// **How a merged block's reward is carved into what its miner is paid.**
+#[derive(Clone, Copy, Debug)]
+pub enum CoinbaseCarve<'a> {
+    /// No carve: the whole subsidy and every fee to the block's miner.
+    Full,
+    /// ADR-0018 §F: the validator overlay's Worker / Validator / Service split. The miner is paid the
+    /// Worker share; the §D inclusion sub-pool is accumulated for the includer's bounty.
+    Overlay(&'a FeeSplitParams),
+    /// **ADR-0126: the overlay retired.** The miner is paid the PALW worker carve of the subsidy —
+    /// `PalwStateParamsV2::worker_carve`, the one function a claim escrows with — and every fee.
+    /// The rest of the subsidy (the shares the overlay paid validators and includers) is not
+    /// minted.
+    Palw(&'a kaspa_consensus_core::palw_state_v2::PalwStateParamsV2),
+}
+
+impl<'a> CoinbaseCarve<'a> {
+    /// The overlay's split, where this carve is the overlay's — the only carve that funds a
+    /// validator pool or an inclusion bounty.
+    pub fn overlay_split(&self) -> Option<&'a FeeSplitParams> {
+        match self {
+            CoinbaseCarve::Overlay(fs) => Some(fs),
+            _ => None,
+        }
+    }
+
+    /// What the miner of a block with this `subsidy` and these fees is paid, before escrow.
+    fn worker_value(&self, subsidy: u64, total_fees: u64, finality_fees: u64, worker_inclusion_pool: &mut u64) -> u64 {
+        match self {
+            CoinbaseCarve::Full => subsidy.saturating_add(total_fees),
+            CoinbaseCarve::Overlay(fs) => {
+                let s = split_block_subsidy(subsidy, fs);
+                *worker_inclusion_pool = worker_inclusion_pool.saturating_add(s.worker_inclusion_sompi);
+                let finality = finality_fees.min(total_fees);
+                s.worker_base_sompi
+                    .saturating_add(split_normal_tx_fees(total_fees - finality, fs).worker_sompi)
+                    .saturating_add(split_finality_fees(finality, fs).worker_sompi)
+            }
+            CoinbaseCarve::Palw(state_params) => state_params.worker_carve(subsidy).saturating_add(total_fees),
+        }
+    }
+}
+
 impl CoinbaseManager {
     pub fn new(
         coinbase_payload_script_public_key_max_len: u8,
@@ -139,7 +181,7 @@ impl CoinbaseManager {
         // → the pre-carve behavior (full subsidy+fees to the miner). The carve
         // applies from genesis on every current network (the caller passes `Some`
         // past `dns_activation_daa_score`, = 0 everywhere today).
-        carve: Option<&FeeSplitParams>,
+        carve: CoinbaseCarve<'_>,
         // kaspa-pq Phase 13 (ADR-0018 §D base inclusion bounty): `(newly_included_stake,
         // expected_stake)` for this block — the stake of attestations it newly includes
         // (caller-computed, post-dedup) and the epoch's expected active stake. When
@@ -243,17 +285,7 @@ impl CoinbaseManager {
             // finality-class subset (bridge txs, ADR-0018 §F wiring) at the validator-primary
             // finality ratios — mirroring `split_block_reward` exactly so the Worker carve and
             // the §E validator pool never drift.
-            let value = match carve {
-                Some(fs) => {
-                    let s = split_block_subsidy(reward_data.subsidy, fs);
-                    worker_inclusion_pool = worker_inclusion_pool.saturating_add(s.worker_inclusion_sompi);
-                    let finality = reward_data.finality_fees.min(reward_data.total_fees);
-                    s.worker_base_sompi
-                        .saturating_add(split_normal_tx_fees(reward_data.total_fees - finality, fs).worker_sompi)
-                        .saturating_add(split_finality_fees(finality, fs).worker_sompi)
-                }
-                None => reward_data.subsidy + reward_data.total_fees,
-            };
+            let value = carve.worker_value(reward_data.subsidy, reward_data.total_fees, reward_data.finality_fees, &mut worker_inclusion_pool);
             // ADR-0042 Decision 10: an attempt-lane chain block's worker reward is ESCROWED, not
             // paid — it becomes spendable when its claim reaches `Final`, and is burned by
             // don't-mint if the claim voids. Withheld here, from the one block of the mergeset
@@ -315,17 +347,7 @@ impl CoinbaseManager {
             // own script, through the same carve arithmetic as the lump below, so moving a block
             // between the two pay paths never changes the amount, only the payee.
             if palw_pay_entitled_reds_to_their_miner && !mergeset_non_daa.contains(red) {
-                let value = match carve {
-                    Some(fs) => {
-                        let s = split_block_subsidy(eff_subsidy, fs);
-                        worker_inclusion_pool = worker_inclusion_pool.saturating_add(s.worker_inclusion_sompi);
-                        let finality = reward_data.finality_fees.min(eff_fees);
-                        s.worker_base_sompi
-                            .saturating_add(split_normal_tx_fees(eff_fees - finality, fs).worker_sompi)
-                            .saturating_add(split_finality_fees(finality, fs).worker_sompi)
-                    }
-                    None => eff_subsidy + eff_fees,
-                };
+                let value = carve.worker_value(eff_subsidy, eff_fees, reward_data.finality_fees, &mut worker_inclusion_pool);
                 // B-1: withhold this entitled red's carve past the deep fence — its claim, created by
                 // this block's transition, now escrows it (empty map below the fence → paid in full).
                 // The carve is `worker_carve(subsidy) ≤ worker_base_sompi ≤ value`, so this never
@@ -338,17 +360,7 @@ impl CoinbaseManager {
             }
             // §F carve: accumulate the Worker share EXCLUDING the §D inclusion sub-pool; else full.
             // Per-class fee split mirrors the blues loop above (and `split_block_reward`).
-            red_reward += match carve {
-                Some(fs) => {
-                    let s = split_block_subsidy(eff_subsidy, fs);
-                    worker_inclusion_pool = worker_inclusion_pool.saturating_add(s.worker_inclusion_sompi);
-                    let finality = reward_data.finality_fees.min(eff_fees);
-                    s.worker_base_sompi
-                        .saturating_add(split_normal_tx_fees(eff_fees - finality, fs).worker_sompi)
-                        .saturating_add(split_finality_fees(finality, fs).worker_sompi)
-                }
-                None => eff_subsidy + eff_fees,
-            };
+            red_reward += carve.worker_value(eff_subsidy, eff_fees, reward_data.finality_fees, &mut worker_inclusion_pool);
         }
 
         if red_reward > 0 {
@@ -376,7 +388,7 @@ impl CoinbaseManager {
         // urgency multiplier (1.0×) and no quality-gate bonus yet (those need the
         // epoch-cumulative accumulator). The unspent remainder is burned (don't-mint).
         // Inert when `carve` is `None` (the pool stays 0 and this is skipped).
-        if carve.is_some() {
+        if let CoinbaseCarve::Overlay(_) = carve {
             let (newly_included_stake, expected_stake) = inclusion;
             let bounty = worker_inclusion_bounty(
                 worker_inclusion_pool as u128,
@@ -917,7 +929,7 @@ mod tests {
                 &rewards,
                 &non_daa,
                 &[],
-                None,
+                CoinbaseCarve::Full,
                 (0, 0),
                 0,
                 &Default::default(),

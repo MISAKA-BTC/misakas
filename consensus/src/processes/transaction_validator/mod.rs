@@ -91,6 +91,10 @@ pub struct TransactionValidator {
     /// `PALW_EXEC_MAX_BONDS_PER_MERGESET_V1` of them, so the isolation cap widens by that where the
     /// lane exists — a size guard fails wide, and the exact-hash coinbase rule decides correctness.
     palw_round_lane_declared: bool,
+
+    /// **ADR-0126: the validator overlay's retirement** (`Params::palw_validator_overlay_retirement_fence`).
+    /// The header-context door refuses every overlay transaction at and past it.
+    palw_validator_overlay_retirement: Option<kaspa_consensus_core::config::params::ForkActivation>,
 }
 
 impl TransactionValidator {
@@ -144,7 +148,17 @@ impl TransactionValidator {
             palw_held_context_fence: palw_held_context_fence
                 .filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never()),
             palw_round_lane_declared: false,
+            palw_validator_overlay_retirement: None,
         }
+    }
+
+    /// ADR-0126: the validator overlay's retirement, for the header-context door.
+    pub fn with_validator_overlay_retirement(
+        mut self,
+        retirement: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    ) -> Self {
+        self.palw_validator_overlay_retirement = retirement;
+        self
     }
 
     /// ADR-0125: declare the execution lane (`Params::palw_execution_lane_fence().is_some()`), which
@@ -194,6 +208,8 @@ impl TransactionValidator {
             palw_held_context_fence: None,
             // Every shipped preset's door: no execution lane, no payee outputs.
             palw_round_lane_declared: false,
+            // Every shipped preset's door: the overlay has not retired.
+            palw_validator_overlay_retirement: None,
         }
     }
 

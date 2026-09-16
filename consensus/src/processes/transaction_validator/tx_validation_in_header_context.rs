@@ -50,7 +50,23 @@ impl TransactionValidator {
     ) -> TxResult<()> {
         self.check_tx_is_finalized(tx, lock_time_arg)?;
         self.check_model_sink_outputs_in_context(tx, ctx_daa_score)?;
-        self.check_palw_fp_work_leaves_in_context(tx, ctx_daa_score)
+        self.check_palw_fp_work_leaves_in_context(tx, ctx_daa_score)?;
+        self.check_retired_overlay_transaction_in_context(tx, ctx_daa_score)
+    }
+
+    /// **ADR-0126: past the validator overlay's retirement no block carries an overlay transaction** —
+    /// a stake bond, an attestation, an unbond, slashing evidence, a precommit or a compute object.
+    /// Nothing past the fence would read one, and a transaction that pays a fee to do nothing is a
+    /// transaction nobody should be able to buy. Below the fence, and on every network that has not
+    /// scheduled it, this returns on its first line.
+    fn check_retired_overlay_transaction_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+        if !self.palw_validator_overlay_retirement.is_some_and(|fence| fence.is_active(ctx_daa_score)) {
+            return Ok(());
+        }
+        if kaspa_consensus_core::dns_finality::dns_tx_kind(&tx.subnetwork_id).is_some() {
+            return Err(TxRuleError::SubnetworksDisabled(tx.subnetwork_id.clone()));
+        }
+        Ok(())
     }
 
     /// **ADR-0119 Decision 6, the height-indexed half of the free-prompt door.** Isolation admits a
