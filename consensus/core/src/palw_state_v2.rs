@@ -18076,6 +18076,66 @@ pub(crate) mod tests {
 
     /// **Below the fence the lane writes nothing**: the same claim finalizes without a credit, and the
     /// root is the one a build without the fields computes.
+    /// **ADR-0125 §7.1's reorg across a span boundary, at the state layer.** One branch finalizes an
+    /// attempt in span 1, opens span 2 (the finals become its schedule) and accepts a permit there;
+    /// its deltas, reverted newest first, return the state to the fork point exactly; a competing
+    /// branch that finalizes nothing then crosses the same boundary with no schedule, and its own
+    /// deltas revert just as exactly. A node that reorgs across the boundary holds the lane the
+    /// branch it lands on folded, never a mixture.
+    #[test]
+    fn adr0125_a_reorg_across_a_span_boundary_reverts_the_schedule_and_the_ledger() {
+        use crate::palw_execution_lane_v1::PalwExecPermitUseV1;
+        let p = params().with_worker_carve_permille(620).unwrap();
+        let (s3, claim_id) = economy_bound(&p);
+        let lane = round_extras(100, Vec::new());
+        let fold =
+            |parent: &PalwChainStateV2, c: PalwBlockContextV2, objects: &[PalwConsensusObjectV2], extras: &PalwTransitionExtrasV1| {
+                apply_palw_transition_v2_with_extras(parent, &p, &c, objects, None, false, false, false, false, extras)
+                    .expect("the branch folds")
+            };
+
+        // Branch A: licensed, finalized in span 1, span 2 scheduled, a permit accepted in span 2.
+        let receipts = vec![receipt_at(claim_id, bond_key(1), true, 103), receipt_at(claim_id, bond_key(2), true, 103)];
+        let (a4, d4) = fold(
+            &s3,
+            ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: receipts.clone() }],
+            &lane,
+        );
+        let (a5, d5) = fold(&a4, ctx(5, 124, 5), &[], &lane);
+        assert_eq!(a5.round_finals().1.len(), 1, "branch A finalized the attempt in span 1");
+        let (a6, d6) = fold(&a5, ctx(6, 200, 6), &[], &lane);
+        assert!(a6.round_schedule(2).is_some(), "and opened span 2 with it as the schedule");
+        let used = PalwExecPermitUseV1 { span: 2, round: 10, permit_index: 0 };
+        let (a7, d7) = fold(&a6, ctx(7, 201, 7), &[], &round_extras(100, vec![used]));
+        assert!(a7.round_permit_used(2, 10, 0));
+
+        // The reorg: revert A newest first, back to the fork point.
+        let back6 = revert_delta_v2(&a7, &d7, &p).expect("revert the permit");
+        assert_eq!(back6.state_root(), a6.state_root());
+        let back5 = revert_delta_v2(&back6, &d6, &p).expect("revert the boundary");
+        assert_eq!(back5.state_root(), a5.state_root());
+        assert!(
+            back5.round_schedule(2).is_none() && back5.round_finals().1.len() == 1,
+            "the schedule is gone and the finals are back"
+        );
+        let back4 = revert_delta_v2(&back5, &d5, &p).expect("revert the finalization");
+        let fork = revert_delta_v2(&back4, &d4, &p).expect("revert the licence");
+        assert_eq!(fork.state_root(), s3.state_root(), "the fork point, exactly");
+
+        // Branch B: nothing licensed, the same boundary crossed.
+        let (b5, e5) = fold(&fork, ctx(15, 124, 5), &[], &lane);
+        let (b6, e6) = fold(&b5, ctx(16, 200, 6), &[], &lane);
+        assert!(b6.round_finals().1.is_empty() && b6.round_schedule(2).is_none(), "branch B schedules nothing");
+        assert!(!b6.round_lane_is_written(), "and writes no lane at all");
+        assert_ne!(b6.state_root(), a6.state_root());
+        let b_back = revert_delta_v2(&revert_delta_v2(&b6, &e6, &p).unwrap(), &e5, &p).unwrap();
+        assert_eq!(b_back.state_root(), s3.state_root(), "branch B reverts to the same fork point");
+        // And back onto A by re-applying its deltas: the same state A folded.
+        let again = [&d4, &d5, &d6, &d7].into_iter().fold(b_back, |state, delta| apply_delta_v2(&state, delta, &p).unwrap());
+        assert_eq!(again.state_root(), a7.state_root(), "re-applying A lands on A");
+    }
+
     /// **ADR-0125 §7.3 in the fold: a permit signed twice burns once, and its bond pays the floor.**
     /// Refused where the lane is closed and for a span the chain no longer keeps; accepted, it
     /// slashes the registry's collateral floor and burns the permit; the same permit again — named
