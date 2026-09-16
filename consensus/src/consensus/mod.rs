@@ -1165,6 +1165,19 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.heartbeat_yield_hint()
     }
 
+    fn palw_round_view_v1(&self, round: u64) -> Option<kaspa_consensus_core::palw_execution_lane_v1::PalwExecRoundViewV1> {
+        self.virtual_processor.palw_round_view_v1(round)
+    }
+
+    fn round_adapt_block_template(
+        &self,
+        template: BlockTemplate,
+        round: u64,
+        payout: kaspa_consensus_core::tx::ScriptPublicKey,
+    ) -> Result<BlockTemplate, RuleError> {
+        self.virtual_processor.round_adapt_block_template(template, round, payout)
+    }
+
     fn build_block_template_with_selector_factory(
         &self,
         miner_data: MinerData,

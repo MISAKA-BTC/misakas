@@ -14340,6 +14340,219 @@ impl VirtualStateProcessor {
         Ok((template, earliest))
     }
 
+    /// **ADR-0125: the permits of one round, as the sink's state grants them to a round block built
+    /// now.** The anchor such a block hangs from is the sink's selected parent — the chain block the
+    /// next chain block can merge it beside — so the schedule is that anchor's span's.
+    pub fn palw_round_view_v1(&self, round: u64) -> Option<kaspa_consensus_core::palw_execution_lane_v1::PalwExecRoundViewV1> {
+        let lane = self.palw_execution_lane?;
+        let virtual_state = self.virtual_stores.read().state.get().unwrap();
+        if !lane.activation.is_active(virtual_state.daa_score) {
+            return None;
+        }
+        let sink = virtual_state.ghostdag_data.selected_parent;
+        let anchor = self.ghostdag_store.get_selected_parent(sink).ok().filter(|anchor| !kaspa_consensus_core::blockhash::BlockHashExtensions::is_origin(anchor))?;
+        let span = kaspa_consensus_core::palw_execution_lane_v1::palw_execution_span_v1(
+            self.headers_store.get_daa_score(anchor).ok()?,
+            lane.schedule_span_daa,
+        );
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (tip, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        if tip != sink {
+            return None;
+        }
+        let permits = state
+            .round_schedule(span)
+            .map(|schedule| kaspa_consensus_core::palw_execution_lane_v1::palw_execution_permits_v1(schedule, round, lane.permits_per_round))
+            .unwrap_or_default();
+        let used = (0..lane.permits_per_round).filter(|index| state.round_permit_used(span, round, *index)).collect();
+        Some(kaspa_consensus_core::palw_execution_lane_v1::PalwExecRoundViewV1 {
+            round,
+            span,
+            width: lane.permits_per_round,
+            genesis_timestamp_ms: self.genesis.timestamp,
+            permits,
+            used,
+        })
+    }
+
+    /// **ADR-0125: re-shape a standard template into a round block.**
+    ///
+    /// The mining manager's template carries transactions selected against the virtual UTXO state;
+    /// a round block keeps them and changes everything the lane decides:
+    ///
+    /// * **parents** — the round tips whose round is older than this one and whose anchor lies on
+    ///   the sink's selected chain up to the sink's selected parent, newest round first, while the
+    ///   mergeset stays inside the lane's rule and the parent limit; plus that anchor itself when no
+    ///   chosen tip already hangs from it (naming it beside such a tip would name an ancestor of a
+    ///   parent). With no tip to extend, the anchor alone;
+    /// * **GHOSTDAG, DAA score, bits, median time and pruning point** — recomputed for those
+    ///   parents, exactly as the header stage will;
+    /// * **timestamp** — the start of the round, or one past the median time if that is later; a
+    ///   round the median time has already passed is refused;
+    /// * **algo 10**, an empty `palw_commitment` (the caller signs after solving), zero state and
+    ///   overlay roots, an empty EVM payload, and a coinbase declaring zero subsidy to `payout` with
+    ///   no outputs — a round block is never a chain block, so nothing reads the roots or outputs.
+    pub fn round_adapt_block_template(
+        &self,
+        mut template: BlockTemplate,
+        round: u64,
+        payout: kaspa_consensus_core::tx::ScriptPublicKey,
+    ) -> Result<BlockTemplate, RuleError> {
+        use kaspa_consensus_core::palw_execution_lane_v1::{PALW_EXEC_ROUND_MS, PalwExecEnvelopeV1, palw_execution_mergeset_rule_v1};
+        use kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1;
+        let virtual_state = self.virtual_stores.read().state.get().unwrap();
+        let Some(lane) = self.palw_execution_lane.filter(|lane| lane.activation.is_active(virtual_state.daa_score)) else {
+            return Err(RuleError::UnknownPowAlgoId(POW_ALGO_ID_PALW_ROUND_V1));
+        };
+        let sink = virtual_state.ghostdag_data.selected_parent;
+        let anchor = self
+            .ghostdag_store
+            .get_selected_parent(sink)
+            .ok()
+            .filter(|anchor| !kaspa_consensus_core::blockhash::BlockHashExtensions::is_origin(anchor))
+            .ok_or_else(|| RuleError::BadRoundLaneParents("the sink has no chain block beneath it to anchor a round block".into()))?;
+        let _prune_guard = self.pruning_lock.blocking_read();
+        let pruning_point = self.pruning_point_store.read().pruning_point().unwrap();
+        let envelope_of =
+            |block: BlockHash| self.headers_store.get_header(block).ok().and_then(|h| PalwExecEnvelopeV1::decode(&h.palw_commitment).ok());
+        let mut round_tips: Vec<(u64, BlockHash)> = self
+            .body_tips_store
+            .read()
+            .get()
+            .unwrap()
+            .read()
+            .iter()
+            .copied()
+            .filter(|tip| self.ghostdag_manager.is_round_block(*tip))
+            .filter_map(|tip| envelope_of(tip).map(|envelope| (envelope.round, tip)))
+            .filter(|(tip_round, _)| *tip_round < round)
+            .filter(|(_, tip)| {
+                self.ghostdag_store
+                    .get_selected_parent(*tip)
+                    .ok()
+                    .is_some_and(|tip_anchor| self.reachability_service.try_is_chain_ancestor_of(tip_anchor, anchor).unwrap_or(false))
+            })
+            .collect();
+        round_tips.sort_by_key(|(tip_round, tip)| std::cmp::Reverse((*tip_round, *tip)));
+        let max_block_parents = self.max_block_parents as usize;
+        let mut parents: Vec<BlockHash> = Vec::new();
+        let parents_with_anchor = |chosen: &[BlockHash]| -> Vec<BlockHash> {
+            let anchor_is_behind_a_tip =
+                chosen.iter().any(|tip| self.reachability_service.try_is_dag_ancestor_of(anchor, *tip).unwrap_or(true));
+            let mut all = chosen.to_vec();
+            if !anchor_is_behind_a_tip {
+                all.push(anchor);
+            }
+            all
+        };
+        for (_, tip) in round_tips {
+            if parents_with_anchor(&parents).len() >= max_block_parents {
+                break;
+            }
+            if parents.iter().any(|chosen| {
+                self.reachability_service.try_is_dag_ancestor_of(tip, *chosen).unwrap_or(true)
+                    || self.reachability_service.try_is_dag_ancestor_of(*chosen, tip).unwrap_or(true)
+            }) {
+                continue;
+            }
+            let mut tentative = parents.clone();
+            tentative.push(tip);
+            let tentative = parents_with_anchor(&tentative);
+            let ghostdag = self.ghostdag_manager.ghostdag(&tentative);
+            if ghostdag.selected_parent != anchor {
+                continue;
+            }
+            let members: Option<Vec<_>> = ghostdag
+                .mergeset_reds
+                .iter()
+                .filter(|red| self.ghostdag_manager.is_round_block(**red))
+                .map(|red| envelope_of(*red).map(|envelope| (envelope.round, envelope.permit_index, envelope.bond)))
+                .collect();
+            let Some(members) = members else { continue };
+            if ghostdag.mergeset_size() as u64 - members.len() as u64 > self.mergeset_size_limit
+                || palw_execution_mergeset_rule_v1(Some(round), &members, lane.permits_per_round, lane.max_per_mergeset).is_err()
+            {
+                continue;
+            }
+            parents.push(tip);
+        }
+        let parents = parents_with_anchor(&parents);
+        let ghostdag = self.ghostdag_manager.ghostdag(&parents);
+        if ghostdag.selected_parent != anchor {
+            return Err(RuleError::BadRoundLaneParents(format!(
+                "the round block's selected parent resolved to {} rather than its anchor {anchor}",
+                ghostdag.selected_parent
+            )));
+        }
+        let daa_window = self.window_manager.block_daa_window(&ghostdag)?;
+        if !lane.activation.is_active(daa_window.daa_score) {
+            return Err(RuleError::UnknownPowAlgoId(POW_ALGO_ID_PALW_ROUND_V1));
+        }
+        let bits = self.window_manager.calculate_difficulty_bits(&ghostdag, &daa_window);
+        let (past_median_time, _) = self.window_manager.calc_past_median_time(&ghostdag)?;
+        let round_start = self.genesis.timestamp.saturating_add(round.saturating_mul(PALW_EXEC_ROUND_MS));
+        let timestamp = round_start.max(past_median_time + 1);
+        if timestamp >= round_start.saturating_add(PALW_EXEC_ROUND_MS) {
+            return Err(RuleError::TimeTooOld(round_start, past_median_time));
+        }
+        let header_pruning_point = self.pruning_point_manager.expected_header_pruning_point(ghostdag.to_compact()).pruning_point;
+        let parents_by_level = self.parents_manager.calc_block_parents(pruning_point, &parents);
+        let miner_data = MinerData::new(payout, template.miner_data.extra_data.clone());
+        let payload = self
+            .coinbase_manager
+            .serialize_coinbase_payload(&kaspa_consensus_core::coinbase::CoinbaseData {
+                blue_score: ghostdag.blue_score,
+                subsidy: 0,
+                miner_data: miner_data.clone(),
+            })
+            .map_err(RuleError::BadCoinbasePayload)?;
+        let mut transactions = std::mem::take(&mut template.block.transactions);
+        let mut coinbase = transactions.remove(0);
+        coinbase.outputs.clear();
+        coinbase.payload = payload;
+        coinbase.finalize();
+        transactions.insert(0, coinbase);
+        let version = if daa_window.daa_score >= self.evm_activation_daa_score {
+            kaspa_consensus_core::constants::EVM_HEADER_VERSION
+        } else {
+            BLOCK_VERSION
+        };
+        let evm_payload = kaspa_consensus_core::evm::EvmExecutionPayload::default();
+        let mut header = Header::new_finalized(
+            version,
+            parents_by_level,
+            calc_hash_merkle_root(transactions.iter()),
+            Default::default(),
+            Default::default(),
+            timestamp,
+            bits,
+            0,
+            POW_ALGO_ID_PALW_ROUND_V1,
+            daa_window.daa_score,
+            ghostdag.blue_work,
+            ghostdag.blue_score,
+            header_pruning_point,
+        );
+        if version >= kaspa_consensus_core::constants::EVM_HEADER_VERSION {
+            header = header.with_evm_payload_hash(evm_payload.payload_hash());
+        }
+        let calculated_fees = if template.calculated_fees.len() + 1 == transactions.len() { template.calculated_fees } else { Vec::new() };
+        let mut block = MutableBlock::new(header, transactions);
+        block.evm_payload = evm_payload;
+        Ok(BlockTemplate::new(
+            block,
+            miner_data,
+            false,
+            Vec::new(),
+            self.headers_store.get_timestamp(anchor).unwrap_or_default(),
+            self.headers_store.get_daa_score(anchor).unwrap_or_default(),
+            anchor,
+            calculated_fees,
+            Vec::new(),
+            Vec::new(),
+        ))
+    }
+
     /// **ADR-0105 Decision 2: whether a heartbeat miner should stand aside for a bonded block.**
     ///
     /// Node policy, not a rule — nothing validates against it, and the slot rule the template

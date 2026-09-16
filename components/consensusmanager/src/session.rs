@@ -482,6 +482,22 @@ impl ConsensusSessionOwned {
         self.consensus.heartbeat_yield_hint()
     }
 
+    /// ADR-0125: the permits of one round as the sink's state grants them — a state read, cheaper
+    /// than a template.
+    pub fn palw_round_view_v1(&self, round: u64) -> Option<kaspa_consensus_core::palw_execution_lane_v1::PalwExecRoundViewV1> {
+        self.consensus.palw_round_view_v1(round)
+    }
+
+    /// ADR-0125: re-shape a standard template into a round block — the template build's call profile.
+    pub fn round_adapt_block_template(
+        &self,
+        template: kaspa_consensus_core::block::BlockTemplate,
+        round: u64,
+        payout: kaspa_consensus_core::tx::ScriptPublicKey,
+    ) -> Result<kaspa_consensus_core::block::BlockTemplate, kaspa_consensus_core::errors::block::RuleError> {
+        self.consensus.round_adapt_block_template(template, round, payout)
+    }
+
     pub fn get_virtual_bits(&self) -> u32 {
         // Accessing cached virtual fields is lock-free and does not require spawn_blocking
         self.consensus.get_virtual_bits()

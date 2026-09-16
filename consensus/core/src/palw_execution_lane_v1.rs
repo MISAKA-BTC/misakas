@@ -432,6 +432,21 @@ pub fn palw_execution_permit_of_v1(
     palw_execution_permits_v1(schedule, round, width).into_iter().find(|p| p.index == permit_index && p.bond == *bond)
 }
 
+/// **What a node's round producer reads before it builds anything** — the permits of one round as
+/// the node's sink state grants them, and which of them its chain has already accepted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwExecRoundViewV1 {
+    pub round: u64,
+    /// The span of the anchor a round block built now hangs from — the schedule these permits come
+    /// from.
+    pub span: u64,
+    pub width: u16,
+    pub genesis_timestamp_ms: u64,
+    pub permits: Vec<PalwExecPermitV1>,
+    /// Permit indices of this round already accepted on the sink's chain.
+    pub used: Vec<u16>,
+}
+
 /// Why an execution envelope was refused.
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum PalwExecEnvelopeError {

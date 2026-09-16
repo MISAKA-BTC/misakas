@@ -46,15 +46,17 @@ impl HeaderProcessor {
 
     /// **ADR-0125: the round lane's parent shape, before GHOSTDAG runs.**
     ///
-    /// GHOSTDAG never selects a round block, so a block needs at least one parent that is not one —
-    /// refused here rather than discovered there, where there would be no selected parent to pick.
-    /// A round block needs EXACTLY one (its anchor, which is then its selected parent): a second
-    /// would be a chain block it merged, and every block that merged the round block would inherit
-    /// that merge through a block that is never a selected parent. With exactly one, a round block's
-    /// past adds no chain block to anybody's mergeset beyond what its anchor's past already holds,
-    /// which is what keeps the chain's GHOSTDAG, DAA score and depths blind to the lane.
+    /// GHOSTDAG never selects a round block, so a block that is not a round block needs at least one
+    /// parent that is not one either — refused here rather than discovered there. A round block names
+    /// AT MOST one: that one is its anchor (its selected parent) when it moves the lane onto a newer
+    /// chain block, and with none it hangs from the heaviest anchor of its round parents. A second
+    /// chain parent would be a chain block the round block merged, and every block merging the round
+    /// block would inherit that merge through a block that is never a selected parent. So a round
+    /// block's past brings no chain block into anybody's mergeset beyond what its anchor's past
+    /// already holds — which is what keeps the chain's GHOSTDAG, DAA score and depths blind to the
+    /// lane.
     ///
-    /// The anchor half of the rule — a round parent's anchor lies on the block's selected chain —
+    /// The anchor half of the rule — every round parent's anchor lies on the block's selected chain —
     /// needs the block's selected parent, so it runs after GHOSTDAG (`check_round_lane_mergeset`).
     /// No header is read on a network that has not configured the lane.
     fn check_round_lane_parents(&self, header: &Header) -> BlockProcessResult<()> {
@@ -77,13 +79,16 @@ impl HeaderProcessor {
                 non_round += 1;
             }
         }
-        if header.pow_algo_id == round_id && non_round != 1 {
-            return Err(RuleError::BadRoundLaneParents(format!(
-                "a round block names exactly one parent that is not a round block (its anchor); this one names {non_round}"
-            )));
-        }
-        if any_round && non_round == 0 {
-            return Err(RuleError::BadRoundLaneParents("every parent is a round block, and a round block is never a selected parent".into()));
+        if header.pow_algo_id == round_id {
+            if non_round > 1 {
+                return Err(RuleError::BadRoundLaneParents(format!(
+                    "a round block names at most one parent that is not a round block (its anchor); this one names {non_round}"
+                )));
+            }
+        } else if any_round && non_round == 0 {
+            return Err(RuleError::BadRoundLaneParents(
+                "every parent is a round block, and a block that is not one must name a chain parent".into(),
+            ));
         }
         Ok(())
     }

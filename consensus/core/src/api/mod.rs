@@ -173,6 +173,27 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// ADR-0125: the permits of `round`, as the sink's state grants them to a round block built now.
+    /// `None` where the lane is not open or the state cannot be read.
+    fn palw_round_view_v1(&self, round: u64) -> Option<crate::palw_execution_lane_v1::PalwExecRoundViewV1> {
+        let _ = round;
+        unimplemented!()
+    }
+
+    /// ADR-0125: re-shape a standard template into a round block of `round` whose fees pay `payout`
+    /// — the round lane's parents, algo 10, a zero-subsidy coinbase with no outputs, an empty EVM
+    /// payload and an empty `palw_commitment` for the caller to fill with its signed envelope once
+    /// it has solved the header.
+    fn round_adapt_block_template(
+        &self,
+        template: BlockTemplate,
+        round: u64,
+        payout: crate::tx::ScriptPublicKey,
+    ) -> Result<BlockTemplate, RuleError> {
+        let _ = (template, round, payout);
+        unimplemented!()
+    }
+
     fn validate_and_insert_block(&self, block: Block) -> BlockValidationFutures {
         unimplemented!()
     }

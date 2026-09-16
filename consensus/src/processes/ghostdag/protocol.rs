@@ -62,9 +62,12 @@ pub struct GhostdagManager<T: GhostdagStoreReader, S: RelationsStoreReader, U: R
 
     /// **ADR-0125: the execution lane's fence**, mode folded in (`Params::palw_execution_lane_fence`).
     /// Past it a round block (algo 10) is never a selected parent and is always red: it takes no part
-    /// in anybody's k-cluster, adds nothing to anybody's blue work or score, and a block's selected
-    /// parent is the heaviest of its OTHER parents. The header stage guarantees every block past the
-    /// fence has at least one such parent, and a round block exactly one — its anchor.
+    /// in anybody's k-cluster and adds nothing to anybody's blue work or score. A block's selected
+    /// parent is the heaviest of its parents that are not round blocks; a round block that names none
+    /// (it extends the lane rather than moving its anchor) takes the heaviest of its round parents'
+    /// anchors. The header stage guarantees a non-round block names at least one non-round parent and
+    /// a round block at most one, and — after GHOSTDAG — that every round parent's anchor lies on the
+    /// block's selected chain.
     round_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
 }
 
@@ -215,15 +218,22 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
         if self.round_lane.is_none() {
             return parents.into_iter().map(sortable).max().unwrap().hash;
         }
-        // ADR-0125: a round block is never a selected parent. The header stage refuses a block whose
-        // parents are all round blocks before GHOSTDAG runs, so the fallback to every parent is
-        // reached only by a trusted block whose anchor was pruned away — where the syncer supplies
-        // the GHOSTDAG data anyway — and is there so that path cannot panic.
+        // ADR-0125: a round block is never a selected parent. Where a block names chain parents, the
+        // heaviest of them is its selected parent. Where it names only round blocks — which the header
+        // stage admits for a round block alone — its selected parent is the heaviest of their anchors,
+        // which is not a direct parent: the lane extends itself without re-naming the chain block it
+        // hangs from. The last fallback (every parent) is reached only by a trusted block whose
+        // anchors were pruned away, where the syncer supplies the GHOSTDAG data anyway, and is there so
+        // that path cannot panic.
         let parents: Vec<BlockHash> = parents.into_iter().collect();
+        let non_round: Vec<BlockHash> = parents.iter().copied().filter(|parent| !self.is_round_block(*parent)).collect();
+        if !non_round.is_empty() {
+            return non_round.into_iter().map(sortable).max().unwrap().hash;
+        }
         parents
             .iter()
-            .copied()
-            .filter(|parent| !self.is_round_block(*parent))
+            .filter_map(|parent| self.ghostdag_store.get_selected_parent(*parent).ok())
+            .filter(|anchor| !anchor.is_origin() && self.ghostdag_store.get_blue_work(*anchor).is_ok())
             .map(sortable)
             .max()
             .or_else(|| parents.iter().copied().map(sortable).max())
