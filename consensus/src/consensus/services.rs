@@ -105,6 +105,8 @@ impl ConsensusServices {
             params.past_median_time_sample_rate,
             params.palw_difficulty_priced_rows.unwrap_or(ForkActivation::never()),
             params.palw_receipt_rows_unpriced.unwrap_or(ForkActivation::never()),
+            // ADR-0125: round blocks are outside every block's DAA set past the lane's fence.
+            params.palw_execution_lane_fence().map(|lane| lane.activation),
         );
         let depth_manager = BlockDepthManager::new(
             params.merge_depth(),
@@ -129,6 +131,8 @@ impl ConsensusServices {
             params.palw_attempt_work_fence(),
             // ADR-0105: a heartbeat never turns a bonded block red, past this fence.
             crate::processes::ghostdag::protocol::HeartbeatTransparency::from_params(params),
+            // ADR-0125: a round block is never a selected parent and always red, past this fence.
+            params.palw_execution_lane_fence().map(|lane| lane.activation),
         );
 
         let coinbase_manager = CoinbaseManager::new(
@@ -227,6 +231,8 @@ impl ConsensusServices {
             // ADR-0105: the coloring rule at every proof level, building and validating alike.
             crate::processes::ghostdag::protocol::HeartbeatTransparency::from_params(params),
             params.palw_attempt_activation,
+            // ADR-0125: the round lane's fence, for proof GHOSTDAG and the proof header gate alike.
+            params.palw_execution_lane_fence().map(|lane| lane.activation),
             is_consensus_exiting,
         ));
 

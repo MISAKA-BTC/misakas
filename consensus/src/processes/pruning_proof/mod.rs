@@ -150,6 +150,9 @@ pub struct PruningProofManager {
     /// the reason `palw_consensus_mode` is: a node that joined by a pruned sync must refuse and
     /// accept exactly what the chain it is joining does.
     palw_attempt_activation: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0125: the round lane's fence, mode folded in — admitted by the proof header gate where it
+    /// is open, and threaded to every proof-level GHOSTDAG so a proof never selects a round block.
+    palw_round_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
     is_consensus_exiting: Arc<AtomicBool>,
 }
@@ -181,6 +184,7 @@ impl PruningProofManager {
         palw_attempt_work_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
         palw_heartbeat_transparent: Option<crate::processes::ghostdag::protocol::HeartbeatTransparency>,
         palw_attempt_activation: Option<kaspa_consensus_core::config::params::ForkActivation>,
+        palw_round_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
         is_consensus_exiting: Arc<AtomicBool>,
     ) -> Self {
         Self {
@@ -226,6 +230,7 @@ impl PruningProofManager {
             palw_attempt_activation,
             palw_attempt_work_lane,
             palw_heartbeat_transparent,
+            palw_round_lane,
 
             is_consensus_exiting,
         }
@@ -276,6 +281,9 @@ impl PruningProofManager {
                         && self.palw_heartbeat_lane.is_some_and(|fence| fence.is_active(header.daa_score)))
                         || (header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_EXEC_V3
                             && attempt_lane == kaspa_consensus_core::pow_layer0::PalwAttemptLaneV1::ExecutionArm)
+                        // ADR-0125: a round block, where its lane is open at the header's own height.
+                        || (header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1
+                            && self.palw_round_lane.is_some_and(|fence| fence.is_active(header.daa_score)))
                 }),
                 palw_ollama_active,
                 palw_active,

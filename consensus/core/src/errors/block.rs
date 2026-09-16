@@ -156,6 +156,17 @@ pub enum RuleError {
     #[error("block merges {0} heartbeat blocks > {1}, the heartbeat width bound (ADR-0068 Phase 1 / finding F3a)")]
     MergeSetTooManyHeartbeats(u64, u64),
 
+    /// ADR-0125: a block's parents break the round lane's shape — every block needs a parent that is
+    /// not a round block, a round block has exactly one, and a round parent's anchor must be on the
+    /// block's selected chain.
+    #[error("round lane parents: {0}")]
+    BadRoundLaneParents(String),
+
+    /// ADR-0125: a block's mergeset breaks the round lane's header rule (count, width, a permit twice,
+    /// or a round block merging a round that is not older than its own).
+    #[error("round lane mergeset: {0}")]
+    BadRoundLaneMergeset(String),
+
     #[error("block is violating bounded merge depth")]
     ViolatingBoundedMergeDepth,
 

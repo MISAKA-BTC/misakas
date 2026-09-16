@@ -186,6 +186,11 @@ pub struct SampledDifficultyManager<T: HeaderStoreReader, U: GhostdagStoreReader
     /// receipt row — whose digest `check_pow_layer0` admits unconditionally — is not a priced row
     /// either. See [`kaspa_consensus_core::pow_layer0::algo_id_is_priced_by_bits_v2`].
     receipt_rows_activation: ForkActivation,
+    /// ADR-0125: the execution lane's fence, mode folded in. Past it a round block is outside the
+    /// DAA set of every block that merges it — not counted in the score, never sampled into a
+    /// window — so the chain's DAA score, difficulty and median time are what they would be
+    /// without the lane.
+    round_lane: Option<ForkActivation>,
 }
 
 impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U> {
@@ -202,6 +207,7 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
         target_time_per_block: u64,
         priced_rows_activation: ForkActivation,
         receipt_rows_activation: ForkActivation,
+        round_lane: Option<ForkActivation>,
     ) -> Self {
         Self::check_min_difficulty_window_size(difficulty_window_size, min_difficulty_window_size);
         Self {
@@ -216,7 +222,17 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
             target_time_per_block,
             priced_rows_activation,
             receipt_rows_activation,
+            round_lane,
         }
+    }
+
+    /// **ADR-0125: is `hash` a round block?** Its lane's id where the lane is open at its own DAA
+    /// score. No header is read on a network that has not configured the lane.
+    pub fn is_round_block(&self, hash: BlockHash) -> bool {
+        let Some(fence) = self.round_lane else { return false };
+        self.headers_store.get_header(hash).is_ok_and(|header| {
+            header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1 && fence.is_active(header.daa_score)
+        })
     }
 
     #[inline]
@@ -245,8 +261,11 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
         store: &(impl GhostdagStoreReader + ?Sized),
     ) -> (u64, BlockHashSet) {
         let lowest_daa_blue_score = self.lowest_daa_blue_score(ghostdag_data);
-        let mergeset_non_daa: BlockHashSet =
-            ghostdag_data.unordered_mergeset().filter(|hash| store.get_blue_score(*hash).unwrap() < lowest_daa_blue_score).collect();
+        // ADR-0125: a round block is outside the DAA set whatever its blue score.
+        let mergeset_non_daa: BlockHashSet = ghostdag_data
+            .unordered_mergeset()
+            .filter(|hash| store.get_blue_score(*hash).unwrap() < lowest_daa_blue_score || self.is_round_block(*hash))
+            .collect();
         (self.internal_calc_daa_score(ghostdag_data, &mergeset_non_daa), mergeset_non_daa)
     }
 

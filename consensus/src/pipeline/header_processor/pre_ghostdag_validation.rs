@@ -2,6 +2,7 @@ use super::*;
 use crate::constants;
 use crate::errors::{BlockProcessResult, RuleError};
 use crate::model::services::reachability::ReachabilityService;
+use crate::model::stores::headers::HeaderStoreReader;
 use crate::model::stores::statuses::StatusesStoreReader;
 use kaspa_consensus_core::BlockLevel;
 use kaspa_consensus_core::blockhash::BlockHashExtensions;
@@ -39,6 +40,51 @@ impl HeaderProcessor {
     pub(super) fn validate_parent_relations(&self, header: &Header) -> BlockProcessResult<()> {
         self.check_parents_exist(header)?;
         self.check_parents_incest(header)?;
+        self.check_round_lane_parents(header)?;
+        Ok(())
+    }
+
+    /// **ADR-0125: the round lane's parent shape, before GHOSTDAG runs.**
+    ///
+    /// GHOSTDAG never selects a round block, so a block needs at least one parent that is not one —
+    /// refused here rather than discovered there, where there would be no selected parent to pick.
+    /// A round block needs EXACTLY one (its anchor, which is then its selected parent): a second
+    /// would be a chain block it merged, and every block that merged the round block would inherit
+    /// that merge through a block that is never a selected parent. With exactly one, a round block's
+    /// past adds no chain block to anybody's mergeset beyond what its anchor's past already holds,
+    /// which is what keeps the chain's GHOSTDAG, DAA score and depths blind to the lane.
+    ///
+    /// The anchor half of the rule — a round parent's anchor lies on the block's selected chain —
+    /// needs the block's selected parent, so it runs after GHOSTDAG (`check_round_lane_mergeset`).
+    /// No header is read on a network that has not configured the lane.
+    fn check_round_lane_parents(&self, header: &Header) -> BlockProcessResult<()> {
+        if self.palw_execution_lane.is_none() {
+            return Ok(());
+        }
+        let round_id = kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1;
+        let parents = header.direct_parents();
+        let mut non_round = 0usize;
+        let mut any_round = false;
+        for parent in parents.iter() {
+            if parent.is_origin() {
+                non_round += 1;
+                continue;
+            }
+            let parent_header = self.headers_store.get_header(*parent).map_err(|_| RuleError::MissingParents(vec![*parent]))?;
+            if parent_header.pow_algo_id == round_id {
+                any_round = true;
+            } else {
+                non_round += 1;
+            }
+        }
+        if header.pow_algo_id == round_id && non_round != 1 {
+            return Err(RuleError::BadRoundLaneParents(format!(
+                "a round block names exactly one parent that is not a round block (its anchor); this one names {non_round}"
+            )));
+        }
+        if any_round && non_round == 0 {
+            return Err(RuleError::BadRoundLaneParents("every parent is a round block, and a round block is never a selected parent".into()));
+        }
         Ok(())
     }
 
@@ -115,6 +161,9 @@ impl HeaderProcessor {
         // header below it is not a lane.
         let exec_lane_open = header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_EXEC_V3
             && attempt_lane == kaspa_consensus_core::pow_layer0::PalwAttemptLaneV1::ExecutionArm;
+        // ADR-0125: the round lane is a top-level fence too, ORed in on the same terms — only past it.
+        let round_lane_open = header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1
+            && self.palw_execution_lane.is_some_and(|lane| lane.activation.is_active(header.daa_score));
         // Accepts, not demands: a V2 network admits its receipt lane as well as its attempt
         // lane, and asking only for the demanded id refused every block on the first one.
         kaspa_consensus_core::pow_layer0::check_algo_id_for_mode_accepting(
@@ -123,7 +172,7 @@ impl HeaderProcessor {
             // ADR-0066: the bundle answers for its own two lanes; the heartbeat is a TOP-LEVEL
             // fence, so it is ORed in here rather than inside a bundle that cannot see it.
             // ADR-0072 SA-4 adds the second attempt id on the same terms.
-            self.palw_consensus_mode.accepts_algo_id(header.pow_algo_id).map(|a| a || heartbeat_open || exec_lane_open),
+            self.palw_consensus_mode.accepts_algo_id(header.pow_algo_id).map(|a| a || heartbeat_open || exec_lane_open || round_lane_open),
             palw_ollama_active,
             palw_active,
             blake2b_sha3_active,
@@ -215,7 +264,7 @@ impl HeaderProcessor {
             .as_ref()
             .filter(|(fence, _)| fence.is_active(header.daa_score))
             .map(|(_, state_params)| state_params);
-        palw_carriage_stateless_v1(header, attempt_lane, network_domain, header_pins)
+        palw_carriage_stateless_v1(header, attempt_lane, network_domain, header_pins, self.genesis.timestamp)
             .map_err(|reason| RuleError::BadPalwCarriageAdmission { algo_id: header.pow_algo_id, reason })
     }
 }
@@ -239,6 +288,8 @@ pub(crate) fn palw_carriage_stateless_v1(
     attempt_lane: kaspa_consensus_core::pow_layer0::PalwAttemptLaneV1,
     network_domain: kaspa_hashes::Hash64,
     header_pins: Option<&kaspa_consensus_core::palw_state_v2::PalwStateParamsV2>,
+    // ADR-0125: a round block's round is whole seconds since the genesis timestamp.
+    genesis_timestamp_ms: u64,
 ) -> Result<(), String> {
     use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_PALW_RECEIPT_V3, is_palw_attempt_algo_id};
     let pre_pow_hash = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
@@ -345,6 +396,26 @@ pub(crate) fn palw_carriage_stateless_v1(
                         })
                         .map_err(|e| e.to_string())
                 })
+        }
+        // **ADR-0125: a round block's permit envelope, on the relay path.** The envelope is inside the
+        // block identity and outside the PoW pre-image, so an unverified signature would be free
+        // bytes: one solve, unbounded distinct blocks. Its round is recomputed from the header's own
+        // timestamp and its signature covers the pre-PoW hash, the timestamp and the nonce. Whether
+        // the carried key is the named bond's, and whether that bond holds the permit, are the
+        // merging block's questions.
+        kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1 => {
+            kaspa_consensus_core::palw_execution_lane_v1::PalwExecEnvelopeV1::decode(&header.palw_commitment)
+                .and_then(|envelope| {
+                    envelope.validate_stateless(
+                        network_domain,
+                        pre_pow_hash,
+                        header.timestamp,
+                        header.nonce,
+                        genesis_timestamp_ms,
+                        |key, message, sig, context| kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false),
+                    )
+                })
+                .map_err(|e| e.to_string())
         }
         _ => Ok(()),
     }
@@ -553,14 +624,14 @@ mod palw_carriage_lane_tests {
             // runs returns `Ok(())` here, which is the defect stated as an assertion.
             let bare = header_with(algo_id, Vec::new());
             assert!(
-                palw_carriage_stateless_v1(&bare, lane, domain(), None).is_err(),
+                palw_carriage_stateless_v1(&bare, lane, domain(), None, 0).is_err(),
                 "{lane:?} carries algo-{algo_id}; a header with no carriage must not pass the relay gate"
             );
         }
         // The negative side, so the test cannot pass by refusing everything: a non-PALW header has
         // no carriage to check and must still be admitted here.
         assert_eq!(
-            palw_carriage_stateless_v1(&header_with(POW_ALGO_ID_KHEAVYHASH, Vec::new()), PalwAttemptLaneV1::Unfenced, domain(), None),
+            palw_carriage_stateless_v1(&header_with(POW_ALGO_ID_KHEAVYHASH, Vec::new()), PalwAttemptLaneV1::Unfenced, domain(), None, 0),
             Ok(())
         );
     }
@@ -578,7 +649,7 @@ mod palw_carriage_lane_tests {
             let mut header = header_with(algo_id, Vec::new());
             header.palw_commitment = signed_carriage(&header, lane.attempt_version(), 1_000);
             header.finalize();
-            assert_eq!(palw_carriage_stateless_v1(&header, lane, domain(), None), Ok(()), "the honest carriage on algo-{algo_id}");
+            assert_eq!(palw_carriage_stateless_v1(&header, lane, domain(), None, 0), Ok(()), "the honest carriage on algo-{algo_id}");
 
             let mut envelope = PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment).unwrap();
             envelope.signature[0] ^= 0x01;
@@ -587,7 +658,7 @@ mod palw_carriage_lane_tests {
             tampered.finalize();
             assert_ne!(tampered.hash, header.hash, "a signature byte really is a different block identity");
             assert!(
-                palw_carriage_stateless_v1(&tampered, lane, domain(), None).is_err(),
+                palw_carriage_stateless_v1(&tampered, lane, domain(), None, 0).is_err(),
                 "algo-{algo_id}: a flipped signature byte must not mint a second block from one solve"
             );
         }
@@ -606,13 +677,13 @@ mod palw_carriage_lane_tests {
         header.palw_commitment = signed_carriage(&header, legacy.attempt_version(), 1_000);
         header.finalize();
         assert_eq!(
-            palw_carriage_stateless_v1(&header, legacy, domain(), None),
+            palw_carriage_stateless_v1(&header, legacy, domain(), None, 0),
             Ok(()),
             "below the fence the chain's own pre-ADR-0072 history must validate"
         );
         // And the same bytes at a position where the lane demands the current version are refused,
         // so the check is reading the lane rather than accepting anything.
-        assert!(palw_carriage_stateless_v1(&header, PalwAttemptLaneV1::Unfenced, domain(), None).is_err());
+        assert!(palw_carriage_stateless_v1(&header, PalwAttemptLaneV1::Unfenced, domain(), None, 0).is_err());
     }
 
     /// A `PalwStateParamsV2` whose load-bearing values are the four lattice windows — their sum is
@@ -691,11 +762,11 @@ mod palw_carriage_lane_tests {
             // Before the fence: every one of them passes the relay gate. This is the recorded
             // pre-fence rule, and testnet-11's history depends on it staying true.
             assert_eq!(
-                palw_carriage_stateless_v1(&header, PalwAttemptLaneV1::Unfenced, domain(), None),
+                palw_carriage_stateless_v1(&header, PalwAttemptLaneV1::Unfenced, domain(), None, 0),
                 Ok(()),
                 "un-fenced, the relay gate pins nothing: retention {retention}"
             );
-            match palw_carriage_stateless_v1(&header, PalwAttemptLaneV1::Unfenced, domain(), Some(&state_params)) {
+            match palw_carriage_stateless_v1(&header, PalwAttemptLaneV1::Unfenced, domain(), Some(&state_params), 0) {
                 Ok(()) => admitted_with_pins += 1,
                 Err(why) => assert!(why.contains("retention"), "a refusal must name the pin it rests on, got: {why}"),
             }
@@ -725,8 +796,8 @@ mod palw_carriage_lane_tests {
         {
             let header = header_at_nonce(nonce, &state_params);
             // Un-fenced: unchanged, whatever the bucket. This is the half testnet-11 keeps.
-            assert_eq!(palw_carriage_stateless_v1(&header, PalwAttemptLaneV1::Unfenced, domain(), None), Ok(()));
-            let verdict = palw_carriage_stateless_v1(&header, PalwAttemptLaneV1::Unfenced, domain(), Some(&state_params));
+            assert_eq!(palw_carriage_stateless_v1(&header, PalwAttemptLaneV1::Unfenced, domain(), None, 0), Ok(()));
+            let verdict = palw_carriage_stateless_v1(&header, PalwAttemptLaneV1::Unfenced, domain(), Some(&state_params), 0);
             assert_eq!(
                 verdict.is_ok(),
                 want_ok,

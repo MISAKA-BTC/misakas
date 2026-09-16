@@ -1,9 +1,11 @@
 use super::{HeaderProcessingContext, HeaderProcessor};
 use crate::errors::{BlockProcessResult, RuleError, TwoDimVecDisplay};
 use crate::model::services::reachability::ReachabilityService;
+use crate::model::stores::ghostdag::GhostdagStoreReader;
 use crate::model::stores::headers::HeaderStoreReader;
 use crate::processes::window::WindowManager;
 use kaspa_consensus_core::BlockHash;
+use kaspa_consensus_core::blockhash::BlockHashExtensions;
 use kaspa_consensus_core::header::Header;
 use std::collections::HashSet;
 
@@ -13,6 +15,7 @@ impl HeaderProcessor {
         self.check_blue_work(ctx, header)?;
         self.check_median_timestamp(ctx, header)?;
         self.check_mergeset_size_limit(ctx)?;
+        self.check_round_lane_mergeset(ctx, header)?;
         self.check_mergeset_heartbeat_width(ctx, header)?;
         self.check_bounded_merge_depth(ctx)?;
         self.check_indirect_parents(ctx, header)
@@ -30,12 +33,89 @@ impl HeaderProcessor {
     }
 
     pub fn check_mergeset_size_limit(&self, ctx: &mut HeaderProcessingContext) -> BlockProcessResult<()> {
-        let mergeset_size = ctx.ghostdag_data().mergeset_size() as u64;
+        // ADR-0125: round blocks are counted by the round lane's own bound
+        // (`check_round_lane_mergeset`), not by this one — which keeps bounding the chain's own
+        // blocks exactly as it did before the lane existed.
+        let round_members = self.round_lane_members(ctx.ghostdag_data())?.len() as u64;
+        let mergeset_size = ctx.ghostdag_data().mergeset_size() as u64 - round_members;
         let mergeset_size_limit = self.mergeset_size_limit;
         if mergeset_size > mergeset_size_limit {
             return Err(RuleError::MergeSetTooBig(mergeset_size, mergeset_size_limit));
         }
         Ok(())
+    }
+
+    /// ADR-0125: the round blocks of a mergeset as `(round, permit index)`, in mergeset order. Round
+    /// blocks are always red, so only the reds are read — and nothing at all on a network that has
+    /// not configured the lane.
+    fn round_lane_members(
+        &self,
+        ghostdag_data: &crate::model::stores::ghostdag::GhostdagData,
+    ) -> BlockProcessResult<Vec<(u64, u16)>> {
+        let mut members = Vec::new();
+        if self.palw_execution_lane.is_none() {
+            return Ok(members);
+        }
+        for red in ghostdag_data.mergeset_reds.iter().copied() {
+            let red_header = self.headers_store.get_header(red).map_err(|_| RuleError::MissingParents(vec![red]))?;
+            if red_header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1 {
+                continue;
+            }
+            let envelope = kaspa_consensus_core::palw_execution_lane_v1::PalwExecEnvelopeV1::decode(&red_header.palw_commitment)
+                .map_err(|e| RuleError::BadRoundLaneMergeset(e.to_string()))?;
+            members.push((envelope.round, envelope.permit_index));
+        }
+        Ok(members)
+    }
+
+    /// **ADR-0125: the round lane's header rule.**
+    ///
+    /// * **The anchor rule.** Every round parent's anchor (its selected parent) lies on this block's
+    ///   selected chain. So a round block's past brings no chain block into any mergeset that its
+    ///   anchor's past had not already brought — and the chain's GHOSTDAG, reachability, DAA score
+    ///   and depths are those of the DAG without the lane.
+    /// * **The mergeset rule** ([`kaspa_consensus_core::palw_execution_lane_v1::palw_execution_mergeset_rule_v1`]):
+    ///   at most `max_per_mergeset` round blocks, at most `permits_per_round` of one round, one per
+    ///   permit, and a round block merges only rounds older than its own.
+    ///
+    /// A property of this block's parents and mergeset headers alone — no walk, no state — like the
+    /// heartbeat width rule beside it.
+    pub fn check_round_lane_mergeset(&self, ctx: &mut HeaderProcessingContext, header: &Header) -> BlockProcessResult<()> {
+        let Some(lane) = self.palw_execution_lane else {
+            return Ok(());
+        };
+        let round_id = kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1;
+        let selected_parent = ctx.ghostdag_data().selected_parent;
+        for parent in header.direct_parents().iter().copied() {
+            if parent.is_origin() {
+                continue;
+            }
+            let parent_header = self.headers_store.get_header(parent).map_err(|_| RuleError::MissingParents(vec![parent]))?;
+            if parent_header.pow_algo_id != round_id {
+                continue;
+            }
+            let anchor = self.ghostdag_store.get_selected_parent(parent).map_err(|_| RuleError::MissingParents(vec![parent]))?;
+            if !self.reachability_service.is_chain_ancestor_of(anchor, selected_parent) {
+                return Err(RuleError::BadRoundLaneParents(format!(
+                    "round parent {parent} is anchored at {anchor}, which is not on this block's selected chain (selected parent {selected_parent})"
+                )));
+            }
+        }
+        let block_round = if header.pow_algo_id == round_id {
+            let envelope = kaspa_consensus_core::palw_execution_lane_v1::PalwExecEnvelopeV1::decode(&header.palw_commitment)
+                .map_err(|e| RuleError::BadRoundLaneMergeset(e.to_string()))?;
+            Some(envelope.round)
+        } else {
+            None
+        };
+        let members = self.round_lane_members(ctx.ghostdag_data())?;
+        kaspa_consensus_core::palw_execution_lane_v1::palw_execution_mergeset_rule_v1(
+            block_round,
+            &members,
+            lane.permits_per_round,
+            lane.max_per_mergeset,
+        )
+        .map_err(|e| RuleError::BadRoundLaneMergeset(e.to_string()))
     }
 
     /// **F3a's bound, as the drill amended it — a mergeset may hold at most

@@ -59,6 +59,13 @@ pub struct GhostdagManager<T: GhostdagStoreReader, S: RelationsStoreReader, U: R
     /// (see [`LaneColoring`]). Mode and lane folded in (`Params::palw_heartbeat_transparent_fence`),
     /// carried with the merge depth that bounds how far the exemption may reach.
     heartbeat_transparent: Option<HeartbeatTransparency>,
+
+    /// **ADR-0125: the execution lane's fence**, mode folded in (`Params::palw_execution_lane_fence`).
+    /// Past it a round block (algo 10) is never a selected parent and is always red: it takes no part
+    /// in anybody's k-cluster, adds nothing to anybody's blue work or score, and a block's selected
+    /// parent is the heaviest of its OTHER parents. The header stage guarantees every block past the
+    /// fence has at least one such parent, and a round block exactly one — its anchor.
+    round_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
 }
 
 /// **ADR-0105's fence, with the one number its coloring rule needs beside it.**
@@ -124,6 +131,9 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
         // a builder, so no site that computes GHOSTDAG — the pruning proof's two included — can
         // forget it and color differently from the chain.
         heartbeat_transparent: Option<HeartbeatTransparency>,
+        // ADR-0125: a round block is never a selected parent and always red — a constructor
+        // parameter for the same reason as the one above.
+        round_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
     ) -> Self {
         // For ordinary GD, always keep level_work=0 so the lower bound is ineffective
         Self {
@@ -137,6 +147,7 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
             heartbeat_lane,
             attempt_work_lane,
             heartbeat_transparent,
+            round_lane,
         }
     }
 
@@ -158,6 +169,9 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
         // blocks the way each other does. Heartbeats derive no level, so above level 0 there is no
         // heartbeat for it to be about and the rule is inert there by construction.
         heartbeat_transparent: Option<HeartbeatTransparency>,
+        // ADR-0125: and the round lane's rule. Round blocks derive no level, so above level 0 it is
+        // inert by construction as well.
+        round_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
     ) -> Self {
         Self {
             genesis_hash,
@@ -170,6 +184,7 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
             heartbeat_lane,
             attempt_work_lane,
             heartbeat_transparent,
+            round_lane,
         }
     }
 
@@ -196,12 +211,36 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
     }
 
     pub fn find_selected_parent(&self, parents: impl IntoIterator<Item = BlockHash>) -> BlockHash {
+        let sortable = |parent: BlockHash| SortableBlock { hash: parent, blue_work: self.ghostdag_store.get_blue_work(parent).unwrap() };
+        if self.round_lane.is_none() {
+            return parents.into_iter().map(sortable).max().unwrap().hash;
+        }
+        // ADR-0125: a round block is never a selected parent. The header stage refuses a block whose
+        // parents are all round blocks before GHOSTDAG runs, so the fallback to every parent is
+        // reached only by a trusted block whose anchor was pruned away — where the syncer supplies
+        // the GHOSTDAG data anyway — and is there so that path cannot panic.
+        let parents: Vec<BlockHash> = parents.into_iter().collect();
         parents
-            .into_iter()
-            .map(|parent| SortableBlock { hash: parent, blue_work: self.ghostdag_store.get_blue_work(parent).unwrap() })
+            .iter()
+            .copied()
+            .filter(|parent| !self.is_round_block(*parent))
+            .map(sortable)
             .max()
+            .or_else(|| parents.iter().copied().map(sortable).max())
             .unwrap()
             .hash
+    }
+
+    /// **ADR-0125: is `hash` a round block?** The lane's id where the lane is open at the block's own
+    /// DAA score. `ORIGIN` and a header this store does not hold are not.
+    pub fn is_round_block(&self, hash: BlockHash) -> bool {
+        let Some(fence) = self.round_lane else { return false };
+        if hash.is_origin() {
+            return false;
+        }
+        self.headers_store.get_header(hash).is_ok_and(|header| {
+            header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1 && fence.is_active(header.daa_score)
+        })
     }
 
     /// Runs the GHOSTDAG protocol and calculates the block GhostdagData by the given parents.
@@ -244,7 +283,20 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
             .heartbeat_transparent
             .map(|transparency| (self.ghostdag_store.get_blue_score(selected_parent).unwrap(), transparency.merge_depth));
 
+        // ADR-0125: which candidates are round blocks, read once. A round block is red, always, and
+        // is not counted against anybody — so it is added before any coloring walk and never reaches
+        // one, and it is not among the candidates that could still turn blue in the bound below.
+        let round_flags: Vec<bool> = match self.round_lane {
+            Some(_) => ordered_mergeset.iter().map(|candidate| self.is_round_block(*candidate)).collect(),
+            None => vec![false; ordered_mergeset.len()],
+        };
+        let mut uncolored_non_round = round_flags.iter().filter(|round| !**round).count() as u64;
+
         for (index, blue_candidate) in ordered_mergeset.iter().cloned().enumerate() {
+            if round_flags[index] {
+                new_block_data.add_red(blue_candidate);
+                continue;
+            }
             let lane = self.lane_coloring(blue_candidate);
             // ADR-0105: the lowest blue score a `Weighted` candidate's coloring walk may reach once it
             // has passed over a heartbeat. The new block's blue score is the selected parent's plus
@@ -252,14 +304,16 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
             // parent included) plus every candidate not yet colored (this one included). A candidate
             // whose selected-chain ancestor sits at or above `that - merge_depth` is in the future of
             // the new block's merge-depth root, which is where `check_bounded_merge_depth` requires
-            // every red to be.
+            // every red to be. (ADR-0125: round blocks can never be blue, so they are not counted —
+            // without them this is the count it always was.)
             let weighted_floor = match (lane, transparency_base) {
                 (LaneColoring::Weighted, Some((selected_parent_blue_score, merge_depth))) => {
-                    let most_blues = new_block_data.mergeset_blues.len() as u64 + (ordered_mergeset.len() - index) as u64;
+                    let most_blues = new_block_data.mergeset_blues.len() as u64 + uncolored_non_round;
                     (selected_parent_blue_score + most_blues).saturating_sub(merge_depth)
                 }
                 _ => 0,
             };
+            uncolored_non_round -= 1;
             let coloring = self.check_blue_candidate(&new_block_data, blue_candidate, k, lane, weighted_floor);
 
             if let ColoringOutput::Blue(blue_anticone_size, blues_anticone_sizes) = coloring {

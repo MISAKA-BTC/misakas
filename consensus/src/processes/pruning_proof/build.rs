@@ -598,6 +598,8 @@ impl PruningProofManager {
             self.palw_attempt_work_lane,
             // ADR-0105: and the coloring rule, for the same reason.
             self.palw_heartbeat_transparent,
+            // ADR-0125: and the round lane's rule.
+            self.palw_round_lane,
         );
 
         // No need to initialize origin since we have a single root

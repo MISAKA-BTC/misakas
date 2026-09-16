@@ -130,6 +130,9 @@ pub struct HeaderProcessor {
     pub(super) palw_block_commitment: Option<kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentParamsV1>,
     /// ADR-0066: the heartbeat lane's fence, mode folded in (`Params::palw_heartbeat_lane_fence`).
     pub(super) palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0125: the execution lane, mode folded in (`Params::palw_execution_lane_fence`) — its
+    /// activation admits round blocks; its shape bounds every mergeset that holds them.
+    pub(super) palw_execution_lane: Option<kaspa_consensus_core::config::params::PalwExecutionLaneV1>,
     /// ADR-0072 SA-3/SA-4: the attempt lane's activation fence. `None` on every shipped preset,
     /// which resolves to `PalwAttemptLaneV1::Unfenced` and leaves this gate exactly as it was.
     pub(super) palw_attempt_activation: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -245,6 +248,7 @@ impl HeaderProcessor {
             palw_consensus_mode: params.palw_consensus_mode.clone(),
             palw_block_commitment: params.palw_block_commitment,
             palw_heartbeat_lane: params.palw_heartbeat_lane_fence(),
+            palw_execution_lane: params.palw_execution_lane_fence(),
             palw_attempt_activation: params.palw_attempt_activation,
             palw_attempt_header_pins: params.palw_attempt_header_pins.and_then(|fence| match &params.palw_consensus_mode {
                 kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some((fence, bundle.state.clone())),
