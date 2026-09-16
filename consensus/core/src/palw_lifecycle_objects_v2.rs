@@ -355,6 +355,10 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
             }
             Ok(())
         }
+        // ADR-0125 §7.3: the evidence's own shape; the grant, the key and the lane are acceptance's.
+        PalwConsensusObjectV2::RoundPermitEquivocated { evidence } => {
+            evidence.validate_shape().map_err(|_| "round equivocation evidence is malformed: two different signed blocks for one permit")
+        }
         PalwConsensusObjectV2::MaterialDisclosedHeld { disclosure } if disclosure.signature.is_empty() => {
             Err("a held disclosure must carry the producer's signature — unsigned, a third party could bind the producer to material it never published")
         }
@@ -1432,6 +1436,27 @@ mod tests {
                 },
             ),
         ];
+        // ADR-0125 §7.3, appended after the held regime's answer.
+        let signed = |pre: u64| crate::palw_execution_lane_v1::PalwExecSignedRoundV1 {
+            pre_pow_hash: h64(pre),
+            timestamp_ms: 0,
+            nonce: 0,
+            signature: vec![1; crate::palw_execution_lane_v1::PALW_EXEC_MLDSA87_SIGNATURE_LEN],
+        };
+        let pinned = pinned.into_iter().chain([(
+            46,
+            PalwConsensusObjectV2::RoundPermitEquivocated {
+                evidence: Box::new(crate::palw_execution_lane_v1::PalwExecEquivocationV1 {
+                    version: 1,
+                    span: 0,
+                    round: 0,
+                    permit_index: 0,
+                    bond: bond(7),
+                    first: signed(15),
+                    second: signed(16),
+                }),
+            },
+        )]);
         for (discriminant, object) in pinned {
             assert_eq!(borsh::to_vec(&object).unwrap()[0], discriminant, "{object:?}");
         }

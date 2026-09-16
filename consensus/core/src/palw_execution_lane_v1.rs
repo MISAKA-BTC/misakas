@@ -528,6 +528,129 @@ pub fn palw_exec_signing_message_v1(
     finish(state)
 }
 
+/// **ADR-0125 §7.3: one signed round block, as equivocation evidence carries it** — the header
+/// facts the permit signature covers besides the permit itself, and the signature.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwExecSignedRoundV1 {
+    pub pre_pow_hash: Hash64,
+    pub timestamp_ms: u64,
+    pub nonce: u64,
+    pub signature: Vec<u8>,
+}
+
+/// The evidence format this build reads.
+pub const PALW_EXEC_EQUIVOCATION_VERSION_V1: u8 = 1;
+
+/// **ADR-0125 §7.3: two round blocks signed for one permit.** A permit is one block: the holder's
+/// key signs `(network, pre-PoW hash, timestamp, nonce, round, index, bond)`, and two signatures
+/// over two different such messages for one `(round, index, bond)` are two blocks for one permit —
+/// something only the holder can make, since nobody else holds the key. The chain burns the permit
+/// and slashes the bond once for it (`PalwConsensusObjectV2::RoundPermitEquivocated`).
+///
+/// `span` names the schedule that granted the permit: rounds are clock seconds and spans are DAA
+/// ranges, so a round near a span boundary could be granted by either span's draw, and the chain
+/// checks the grant against the span the evidence names.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwExecEquivocationV1 {
+    pub version: u8,
+    pub span: u64,
+    pub round: u64,
+    pub permit_index: u16,
+    pub bond: PalwBondKeyV2,
+    pub first: PalwExecSignedRoundV1,
+    pub second: PalwExecSignedRoundV1,
+}
+
+/// Why equivocation evidence was refused.
+#[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
+pub enum PalwExecEquivocationError {
+    #[error("equivocation evidence version {0}, expected {PALW_EXEC_EQUIVOCATION_VERSION_V1}")]
+    Version(u8),
+    #[error("permit index {0} is above the widest round")]
+    PermitIndex(u16),
+    #[error("both sides sign the same block — one block signed twice is not two blocks")]
+    SameBlock,
+    #[error("a side carries a signature of {got} bytes, not an ML-DSA-87 signature")]
+    SignatureLength { got: usize },
+    #[error("a side's timestamp falls in round {actual}, not the evidence's round {declared}")]
+    RoundMismatch { declared: u64, actual: u64 },
+    #[error("a side's signature does not verify under the bond's registered key")]
+    NotSigned,
+}
+
+impl PalwExecEquivocationV1 {
+    /// What the evidence says without the chain: its format, a permit index a round can hold, two
+    /// different signed blocks, and two signatures of the right length.
+    pub fn validate_shape(&self) -> Result<(), PalwExecEquivocationError> {
+        if self.version != PALW_EXEC_EQUIVOCATION_VERSION_V1 {
+            return Err(PalwExecEquivocationError::Version(self.version));
+        }
+        if self.permit_index >= PALW_EXEC_MAX_PERMITS_PER_ROUND_V1 {
+            return Err(PalwExecEquivocationError::PermitIndex(self.permit_index));
+        }
+        let facts = |side: &PalwExecSignedRoundV1| (side.pre_pow_hash, side.timestamp_ms, side.nonce);
+        if facts(&self.first) == facts(&self.second) {
+            return Err(PalwExecEquivocationError::SameBlock);
+        }
+        for side in [&self.first, &self.second] {
+            if side.signature.len() != PALW_EXEC_MLDSA87_SIGNATURE_LEN {
+                return Err(PalwExecEquivocationError::SignatureLength { got: side.signature.len() });
+            }
+        }
+        Ok(())
+    }
+
+    /// The message each side's signature covers.
+    pub fn messages(&self, network_domain: Hash64) -> [Hash64; 2] {
+        let message = |side: &PalwExecSignedRoundV1| {
+            palw_exec_signing_message_v1(
+                network_domain,
+                side.pre_pow_hash,
+                side.timestamp_ms,
+                side.nonce,
+                self.round,
+                self.permit_index,
+                &self.bond,
+            )
+        };
+        [message(&self.first), message(&self.second)]
+    }
+
+    /// **Everything the evidence proves by itself, against the bond's registered key**: the shape,
+    /// both timestamps in the evidence's round, and both signatures under the key. Whether the
+    /// named span granted that permit to that bond, and whether the chain already burned it, are
+    /// the chain's questions.
+    pub fn verify(
+        &self,
+        network_domain: Hash64,
+        genesis_timestamp_ms: u64,
+        pubkey: &[u8],
+        verify: impl Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+    ) -> Result<(), PalwExecEquivocationError> {
+        self.validate_shape()?;
+        for side in [&self.first, &self.second] {
+            let actual = palw_execution_round_v1(side.timestamp_ms, genesis_timestamp_ms);
+            if actual != self.round {
+                return Err(PalwExecEquivocationError::RoundMismatch { declared: self.round, actual });
+            }
+        }
+        let messages = self.messages(network_domain);
+        for (side, message) in [&self.first, &self.second].into_iter().zip(messages.iter()) {
+            if !verify(pubkey, message.as_byte_slice(), &side.signature, PALW_EXEC_MLDSA87_CONTEXT) {
+                return Err(PalwExecEquivocationError::NotSigned);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl PalwExecEnvelopeV1 {
+    /// The side of an equivocation this header and its envelope are.
+    pub fn signed_round_v1(&self, pre_pow_hash: Hash64, timestamp_ms: u64, nonce: u64) -> PalwExecSignedRoundV1 {
+        PalwExecSignedRoundV1 { pre_pow_hash, timestamp_ms, nonce, signature: self.signature.clone() }
+    }
+}
+
 impl PalwExecEnvelopeV1 {
     /// The header-carriage wire form: magic, then borsh.
     pub fn encode(&self) -> Vec<u8> {
@@ -679,6 +802,79 @@ mod tests {
             claim_id: h(claim),
             execution_root: h(claim + 1_000_000),
         }
+    }
+
+    /// **ADR-0125 §7.3: evidence proves two blocks under one permit, signed by the key it is checked
+    /// against, in the round it names, on the network it is checked on — and nothing less.**
+    #[test]
+    fn equivocation_evidence_proves_two_blocks_under_one_permit_and_nothing_else() {
+        const GENESIS_TS: u64 = 1_000_000;
+        let round = 42;
+        let ts = GENESIS_TS + round * 1_000 + 17;
+        let key = [5u8; 8];
+        let domain = h(77);
+        // A mock signature: the message itself in the first 64 bytes, checked under one key and the
+        // permit context.
+        let sign = |message: Hash64| {
+            let mut signature = vec![0u8; PALW_EXEC_MLDSA87_SIGNATURE_LEN];
+            signature[..64].copy_from_slice(message.as_byte_slice());
+            signature
+        };
+        let verify = |k: &[u8], m: &[u8], s: &[u8], c: &[u8]| k == key && c == PALW_EXEC_MLDSA87_CONTEXT && &s[..64] == m;
+        let side = |pre: u64, nonce: u64| PalwExecSignedRoundV1 {
+            pre_pow_hash: h(pre),
+            timestamp_ms: ts,
+            nonce,
+            signature: vec![0; PALW_EXEC_MLDSA87_SIGNATURE_LEN],
+        };
+        let signed = |mut evidence: PalwExecEquivocationV1| {
+            let [first, second] = evidence.messages(domain);
+            evidence.first.signature = sign(first);
+            evidence.second.signature = sign(second);
+            evidence
+        };
+        let evidence = signed(PalwExecEquivocationV1 {
+            version: PALW_EXEC_EQUIVOCATION_VERSION_V1,
+            span: 3,
+            round,
+            permit_index: 1,
+            bond: bond(9),
+            first: side(1, 1),
+            second: side(2, 1),
+        });
+        assert_eq!(evidence.verify(domain, GENESIS_TS, &key, verify), Ok(()), "two headers, one permit, one key");
+        let renonced = signed(PalwExecEquivocationV1 { second: side(1, 2), ..evidence.clone() });
+        assert_eq!(renonced.verify(domain, GENESIS_TS, &key, verify), Ok(()), "a re-solved nonce is a second block");
+
+        let mut same = evidence.clone();
+        same.second = same.first.clone();
+        assert_eq!(same.validate_shape(), Err(PalwExecEquivocationError::SameBlock), "one block signed twice is not two");
+        assert_eq!(
+            evidence.verify(domain, GENESIS_TS, &[6u8; 8], verify),
+            Err(PalwExecEquivocationError::NotSigned),
+            "a stranger's key"
+        );
+        assert_eq!(evidence.verify(h(78), GENESIS_TS, &key, verify), Err(PalwExecEquivocationError::NotSigned), "another network");
+        let other_bond = PalwExecEquivocationV1 { bond: bond(10), ..evidence.clone() };
+        assert_eq!(other_bond.verify(domain, GENESIS_TS, &key, verify), Err(PalwExecEquivocationError::NotSigned), "another bond");
+        let mut late = evidence.clone();
+        late.second.timestamp_ms = ts + 1_000;
+        assert_eq!(
+            late.verify(domain, GENESIS_TS, &key, verify),
+            Err(PalwExecEquivocationError::RoundMismatch { declared: round, actual: round + 1 }),
+            "a block of the next round is that round's"
+        );
+        assert_eq!(
+            PalwExecEquivocationV1 { version: 2, ..evidence.clone() }.validate_shape(),
+            Err(PalwExecEquivocationError::Version(2))
+        );
+        assert_eq!(
+            PalwExecEquivocationV1 { permit_index: PALW_EXEC_MAX_PERMITS_PER_ROUND_V1, ..evidence.clone() }.validate_shape(),
+            Err(PalwExecEquivocationError::PermitIndex(PALW_EXEC_MAX_PERMITS_PER_ROUND_V1))
+        );
+        let mut short = evidence.clone();
+        short.first.signature.pop();
+        assert!(matches!(short.validate_shape(), Err(PalwExecEquivocationError::SignatureLength { .. })));
     }
 
     #[test]

@@ -7223,6 +7223,54 @@ impl VirtualStateProcessor {
                     )
                     .map_err(|e| format!("claim {claim_id}: {e}"))?;
                 }
+                // **ADR-0125 §7.3: a permit signed twice.** The lane open at this block, the named span
+                // one the chain still keeps, its schedule granting the permit to the bond at the
+                // span's width, both signatures under the bond's REGISTERED key (not a key the
+                // evidence carries), and the permit not burned already.
+                Obj::RoundPermitEquivocated { evidence } => {
+                    use kaspa_consensus_core::palw_execution_lane_v1::{palw_execution_permit_of_v1, palw_execution_span_v1};
+                    let lane = self
+                        .palw_execution_lane_at(point.daa_score)
+                        .ok_or_else(|| "round equivocation evidence where the execution lane is not open (ADR-0125)".to_string())?;
+                    let span_now = palw_execution_span_v1(point.daa_score, lane.schedule_span_daa);
+                    if evidence.span > span_now || evidence.span + 1 < span_now {
+                        return Err(format!(
+                            "round equivocation names span {}, which the chain does not keep at span {span_now}",
+                            evidence.span
+                        ));
+                    }
+                    let schedule = state
+                        .round_schedule(evidence.span)
+                        .ok_or_else(|| format!("round equivocation names span {}, which has no schedule", evidence.span))?;
+                    palw_execution_permit_of_v1(
+                        schedule,
+                        evidence.round,
+                        lane.width_of_span(evidence.span),
+                        evidence.permit_index,
+                        &evidence.bond,
+                    )
+                    .ok_or_else(|| {
+                        format!(
+                            "span {}'s schedule does not grant round {} permit {} to the bond the evidence names",
+                            evidence.span, evidence.round, evidence.permit_index
+                        )
+                    })?;
+                    let record = state
+                        .bond(&evidence.bond)
+                        .ok_or_else(|| "round equivocation names a bond this chain does not have".to_string())?;
+                    let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                        self.network_id_bytes.as_slice(),
+                        Some(self.genesis.hash),
+                    );
+                    evidence
+                        .verify(domain, self.genesis.timestamp, &record.pubkey, Self::verify_mldsa87_with_context_bool)
+                        .map_err(|e| format!("round {} permit {}: {e}", evidence.round, evidence.permit_index))?;
+                    for span in [evidence.span.saturating_sub(1), evidence.span, evidence.span + 1] {
+                        if state.round_equivocated(span, evidence.round, evidence.permit_index) {
+                            return Err(format!("round {} permit {} was burned already", evidence.round, evidence.permit_index));
+                        }
+                    }
+                }
                 // **ADR-0100 Decision 4: per-shard licensing's three objects.** The fence first, the
                 // same doubled-fence doctrine as every court move; then each object's authority:
                 // the class's registrant over a plan, the bond over its shard list, and over a part
@@ -7657,6 +7705,10 @@ impl VirtualStateProcessor {
                 let anchor = self.ghostdag_store.get_selected_parent(block).ok()?;
                 let span = palw_execution_span_v1(self.headers_store.get_daa_score(anchor).ok()?, lane.schedule_span_daa);
                 if span > span_now || span + 1 < span_now {
+                    return None;
+                }
+                // §7.3: a permit proven signed twice is granted to no block.
+                if state.round_equivocated(span, envelope.round, envelope.permit_index) {
                     return None;
                 }
                 let schedule = state.round_schedule(span)?;
@@ -15062,6 +15114,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::CheckpointAccused { .. } => "CheckpointAccused",
         O::DefaultAccusedHeld { .. } => "DefaultAccusedHeld",
         O::MaterialDisclosedHeld { .. } => "MaterialDisclosedHeld",
+        O::RoundPermitEquivocated { .. } => "RoundPermitEquivocated",
         O::ModelSell { .. } => "ModelSell",
         O::ModelLineFounded { .. } => "ModelLineFounded",
         O::ModelVersionPublished { .. } => "ModelVersionPublished",

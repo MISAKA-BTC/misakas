@@ -13567,6 +13567,124 @@ async fn adr0125_a_merging_block_grants_exactly_the_permits_its_parent_state_sch
     assert_eq!(ctx.consensus.get_sink(), p1.block.header.hash);
 }
 
+/// **ADR-0125 §7.3 through the pipeline: a permit signed twice is evidence the chain accepts once.**
+/// Two round blocks for one permit, each valid at the header, become evidence. Against a state whose
+/// span-0 schedule grants that permit to the harness bond the acceptance layer admits it; a tampered
+/// signature, a span without the grant and a permit already burned are refused; and once burned, the
+/// merging block's verdict grants the permit to neither block.
+#[tokio::test]
+async fn adr0125_a_permit_signed_twice_is_evidence_the_chain_accepts_once() {
+    use crate::model::stores::virtual_state::VirtualStateStoreReader;
+    use kaspa_consensus_core::palw_execution_lane_v1::{
+        PALW_EXEC_EQUIVOCATION_VERSION_V1, PalwExecEnvelopeV1, PalwExecEquivocationV1, PalwExecFinalV1, palw_execution_schedule_v1,
+    };
+    use kaspa_consensus_core::palw_state_v2::{PalwBlockContextV2, PalwConsensusObjectV2, PalwStateCarriageV2};
+    let (config, bundle) = adr0125_config();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..4 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let vp = ctx.consensus.virtual_processor().clone();
+    let genesis_ts = config.params.genesis.timestamp;
+    let round = {
+        let r = (vp.headers_store.get_timestamp(ctx.consensus.get_sink()).unwrap() - genesis_ts) / 1_000 + 2;
+        r + r % 2
+    };
+    let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    let bond = state.bond(&adr0125_harness_bond()).expect("row 0").clone();
+    let payout = p2pkh_mldsa87_spk(bond.payout_payload.as_byte_slice());
+
+    // Two blocks for one permit: one header, re-solved under another nonce and signed again.
+    let first = adr0125_round_block(&ctx, &config, round, 0, payout.clone(), 1);
+    let mut second = first.clone();
+    adr0125_sign_round_block(&mut second, &config, round, 0, 2);
+    let (first_hash, second_hash) = (first.header.hash, second.header.hash);
+    ctx.consensus.validate_and_insert_block(first.clone().to_immutable()).virtual_state_task.await.expect("valid alone");
+    ctx.consensus.validate_and_insert_block(second.clone().to_immutable()).virtual_state_task.await.expect("valid alone");
+    let side = |block: &MutableBlock| {
+        let envelope = PalwExecEnvelopeV1::decode(&block.header.palw_commitment).expect("a signed envelope");
+        let mut bare = block.header.clone();
+        bare.palw_commitment = Vec::new();
+        envelope.signed_round_v1(kaspa_consensus_core::hashing::header::pre_pow_hash_64(&bare), bare.timestamp, bare.nonce)
+    };
+    let evidence = PalwExecEquivocationV1 {
+        version: PALW_EXEC_EQUIVOCATION_VERSION_V1,
+        span: 0,
+        round,
+        permit_index: 0,
+        bond: adr0125_harness_bond(),
+        first: side(&first),
+        second: side(&second),
+    };
+    let object = |evidence: PalwExecEquivocationV1| PalwConsensusObjectV2::RoundPermitEquivocated { evidence: Box::new(evidence) };
+
+    let virtual_state = vp.virtual_stores.read().state.get().unwrap();
+    let point = PalwBlockContextV2 {
+        block: kaspa_hashes::Hash64::from_u64_word(0xE0E0),
+        daa_score: virtual_state.daa_score,
+        blue_score: virtual_state.ghostdag_data.blue_score,
+        subsidy: 0,
+    };
+    let schedule = palw_execution_schedule_v1(
+        0,
+        &[PalwExecFinalV1 {
+            domain: bundle.base_class_id,
+            bond: adr0125_harness_bond(),
+            operator_id: bond.operator_id,
+            claim_id: kaspa_hashes::Hash64::from_u64_word(0xC1A1),
+            execution_root: kaspa_hashes::Hash64::from_u64_word(0xE0),
+        }],
+    );
+    let scheduled = {
+        let mut carriage = PalwStateCarriageV2::from_state(&state);
+        carriage.round_schedules.insert(0, schedule);
+        carriage.into_state(&bundle.state, None).expect("a carriage with a schedule rebuilds")
+    };
+
+    assert!(
+        vp.palw_v2_validate_objects(&state, &bundle.state, &point, &[object(evidence.clone())]).is_err(),
+        "without the schedule's grant it is two signed blocks for a permit that does not exist"
+    );
+    vp.palw_v2_validate_objects(&scheduled, &bundle.state, &point, &[object(evidence.clone())])
+        .expect("two signed blocks for a granted permit are evidence");
+    let mut tampered = evidence.clone();
+    tampered.second.signature[7] ^= 0xFF;
+    assert!(vp.palw_v2_validate_objects(&scheduled, &bundle.state, &point, &[object(tampered)]).is_err(), "a tampered signature");
+    let renamed = PalwExecEquivocationV1 { permit_index: 1, ..evidence.clone() };
+    assert!(vp.palw_v2_validate_objects(&scheduled, &bundle.state, &point, &[object(renamed)]).is_err(), "a permit it did not sign");
+
+    // Before the burn the merging block would grant the permit to one of the two; after it, to neither.
+    let verdicts = vp.palw_round_verdicts_v1(&scheduled, &virtual_state.ghostdag_data, virtual_state.daa_score).expect("open");
+    assert!(verdicts.permitted.contains(&first_hash) || verdicts.permitted.contains(&second_hash), "an unburned permit is granted");
+    let (burned, _) = kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_extras(
+        &scheduled,
+        &bundle.state,
+        &point,
+        &[object(evidence.clone())],
+        None,
+        false,
+        false,
+        false,
+        false,
+        &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+            round_lane: Some(kaspa_consensus_core::palw_execution_lane_v1::PalwExecLaneFoldV1 { schedule_span_daa: 1_000 }),
+            ..Default::default()
+        },
+    )
+    .expect("the fold burns the permit");
+    assert!(burned.round_equivocated(0, round, 0));
+    assert!(
+        burned.bond(&adr0125_harness_bond()).unwrap().slashed > bond.slashed,
+        "the bond paid for signing two blocks for one permit"
+    );
+    let verdicts = vp.palw_round_verdicts_v1(&burned, &virtual_state.ghostdag_data, virtual_state.daa_score).expect("open");
+    assert!(
+        !verdicts.permitted.contains(&first_hash) && !verdicts.permitted.contains(&second_hash),
+        "a burned permit is granted to neither"
+    );
+    assert!(vp.palw_v2_validate_objects(&burned, &bundle.state, &point, &[object(evidence)]).is_err(), "and it burns once");
+}
+
 /// **ADR-0125 §7.2 through the pipeline: a widening holds for whole spans.** The lane opens one
 /// permit a round and widens to two from the first span that opens at or past DAA 8 (spans of 4).
 /// Two round blocks of one round each validate alone; a chain block whose mergeset holds both is

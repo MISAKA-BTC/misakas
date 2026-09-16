@@ -3322,6 +3322,14 @@ pub enum PalwConsensusObjectV2 {
     MaterialDisclosedHeld {
         disclosure: Box<crate::palw_held_da_v1::PalwHeldDisclosureCarriageV1>,
     },
+    /// **ADR-0125 §7.3: two round blocks signed for one permit.** Carries both signed headers; the
+    /// acceptance layer checks the named span's schedule grants the permit to the bond and both
+    /// signatures verify under its registered key; the fold burns the permit and slashes the bond
+    /// the registry's collateral floor, once. Anyone may carry it — the evidence is its own proof.
+    /// Tag 46; refused wherever the execution lane is not open.
+    RoundPermitEquivocated {
+        evidence: Box<crate::palw_execution_lane_v1::PalwExecEquivocationV1>,
+    },
 }
 
 /// The block's own work slot, as the V3 transition consumes it (ADR-0044): a chain-challenge
@@ -4697,6 +4705,10 @@ pub enum PalwStateV2Error {
     /// parent state, so this is a divergence surfaced, never a permit accepted twice.
     #[error("round permit refused: {0}")]
     RoundPermitRefused(String),
+    /// ADR-0125 §7.3: equivocation evidence the fold cannot act on — the lane closed, a span the
+    /// chain no longer keeps, or a permit already burned.
+    #[error("round equivocation refused: {0}")]
+    RoundEquivocationRefused(String),
     // There is deliberately NO size error here. A disclosure's ceiling is a wire bound, and it is
     // already applied on the only path into this fold: `palw_lifecycle_objects_from_accepted_txs_v2`
     // runs `palw_lifecycle_object_may_ride_v2` on every extracted object and SKIPS the ones that
@@ -4839,6 +4851,9 @@ pub struct PalwChainStateV2 {
     /// ADR-0125: the permits already accepted, as `(span, round) → one bit per permit index`, for the
     /// two spans a schedule is kept for. A permit is accepted once.
     round_permits_used: BTreeMap<(u64, u64), u16>,
+    /// ADR-0125 §7.3: the permits proven signed twice, in the ledger's shape and kept for the same
+    /// two spans. A burned permit is granted to no block and slashes its bond once.
+    round_equivocations: BTreeMap<(u64, u64), u16>,
     /// **ADR-0056 Decision 3: the registry's own exposure ledger, kept SEPARATE from the claims'.**
     ///
     /// `reserved_exposure` is an accumulator over live claims, and
@@ -4971,6 +4986,7 @@ impl PalwChainStateV2 {
             round_finals: BTreeMap::new(),
             round_schedules: BTreeMap::new(),
             round_permits_used: BTreeMap::new(),
+            round_equivocations: BTreeMap::new(),
             registration_exposure: BTreeMap::new(),
             class_walks: BTreeMap::new(),
             certified_families: BTreeMap::new(),
@@ -5506,6 +5522,11 @@ impl PalwChainStateV2 {
         self.round_permits_used.range((span, 0)..=(span, u64::MAX)).map(|(_, bits)| u64::from(bits.count_ones())).sum()
     }
 
+    /// ADR-0125 §7.3: was the permit `(span, round, index)` proven signed twice on this chain?
+    pub fn round_equivocated(&self, span: u64, round: u64, index: u16) -> bool {
+        index < 16 && self.round_equivocations.get(&(span, round)).is_some_and(|bits| bits & (1u16 << index) != 0)
+    }
+
     /// ADR-0125: has the permit `(span, round, index)` already been accepted on this chain?
     pub fn round_permit_used(&self, span: u64, round: u64, index: u16) -> bool {
         index < 16 && self.round_permits_used.get(&(span, round)).is_some_and(|bits| bits & (1u16 << index) != 0)
@@ -5522,6 +5543,7 @@ impl PalwChainStateV2 {
             || !self.round_finals.is_empty()
             || !self.round_schedules.is_empty()
             || !self.round_permits_used.is_empty()
+            || !self.round_equivocations.is_empty()
     }
 
     /// **ADR-0119 Decision 2: the step ladder of a class, given the network's** — the ladder this
@@ -5945,6 +5967,10 @@ impl PalwChainStateV2 {
             state.update(collection_root(b"round_finals", &self.round_finals).as_byte_slice());
             state.update(collection_root(b"round_schedules", &self.round_schedules).as_byte_slice());
             state.update(collection_root(b"round_permits_used", &self.round_permits_used).as_byte_slice());
+            // §7.3: only once a permit was burned, so a lane without an equivocation roots as before.
+            if !self.round_equivocations.is_empty() {
+                state.update(collection_root(b"round_equivocations", &self.round_equivocations).as_byte_slice());
+            }
         }
         state.update(&self.safe_weight.to_le_bytes());
         state.update(&self.retired_safe_weight.to_le_bytes());
@@ -6837,8 +6863,14 @@ pub enum PalwDeltaEntryV2 {
         old: Option<crate::palw_execution_lane_v1::PalwExecScheduleV1>,
         new: Option<crate::palw_execution_lane_v1::PalwExecScheduleV1>,
     },
-    /// ADR-0125: a round's accepted-permit bits moved (47). Appended last.
+    /// ADR-0125: a round's accepted-permit bits moved (47).
     RoundPermitsUsed {
+        key: (u64, u64),
+        old: Option<u16>,
+        new: Option<u16>,
+    },
+    /// ADR-0125 §7.3: a round's burned-permit bits moved (48). Appended last.
+    RoundEquivocations {
         key: (u64, u64),
         old: Option<u16>,
         new: Option<u16>,
@@ -7494,6 +7526,16 @@ impl<'a> TransitionBuilder<'a> {
         }
     }
 
+    fn write_round_equivocations(&mut self, key: (u64, u64), new: Option<u16>) {
+        let old = match new {
+            Some(bits) => self.state.round_equivocations.insert(key, bits),
+            None => self.state.round_equivocations.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::RoundEquivocations { key, old, new });
+        }
+    }
+
     // ---- ADR-0125: the execution lane ----
 
     /// **ADR-0125: the span boundary.** At the first block of a span later than the one the finals
@@ -7523,6 +7565,43 @@ impl<'a> TransitionBuilder<'a> {
         for key in self.state.round_permits_used.range(..(keep_from, 0)).map(|(k, _)| *k).collect::<Vec<_>>() {
             self.write_round_permits_used(key, None);
         }
+        for key in self.state.round_equivocations.range(..(keep_from, 0)).map(|(k, _)| *k).collect::<Vec<_>>() {
+            self.write_round_equivocations(key, None);
+        }
+    }
+
+    /// **ADR-0125 §7.3: a permit proven signed twice.** The acceptance layer checked the evidence
+    /// against the parent state — the named span's schedule grants the permit to the bond, and both
+    /// signatures verify under its registered key. Here: the lane is open, the span is one the chain
+    /// still keeps, and the permit was not burned before; then the bond loses the registry's
+    /// collateral floor — what the network asks of anyone who produces — burned like every slash,
+    /// and the permit is burned so no merging block grants it from here on.
+    fn record_round_equivocation(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        evidence: &crate::palw_execution_lane_v1::PalwExecEquivocationV1,
+    ) -> Result<(), PalwStateV2Error> {
+        let refused = |why: String| PalwStateV2Error::RoundEquivocationRefused(why);
+        let Some(lane) = self.extras.round_lane else {
+            return Err(refused("the execution lane is not open".to_string()));
+        };
+        evidence.validate_shape().map_err(|e| refused(e.to_string()))?;
+        let span_now = crate::palw_execution_lane_v1::palw_execution_span_v1(ctx.daa_score, lane.schedule_span_daa);
+        if evidence.span > span_now || evidence.span + 1 < span_now {
+            return Err(refused(format!("span {} is not one the chain keeps at span {span_now}", evidence.span)));
+        }
+        // One burn per permit however the two spans a boundary round might be judged by name it.
+        for span in [evidence.span.saturating_sub(1), evidence.span, evidence.span + 1] {
+            if self.state.round_equivocated(span, evidence.round, evidence.permit_index) {
+                return Err(refused(format!("round {} permit {} was burned already", evidence.round, evidence.permit_index)));
+            }
+        }
+        let floor = self.params.min_collateral_sompi() as u128;
+        self.slash_bond(evidence.bond, floor)?;
+        let key = (evidence.span, evidence.round);
+        let bits = self.state.round_equivocations.get(&key).copied().unwrap_or(0);
+        self.write_round_equivocations(key, Some(bits | (1u16 << evidence.permit_index)));
+        Ok(())
     }
 
     /// **ADR-0125: an attempt that reaches `Final` earns its security domain a credit** in the span
@@ -11367,6 +11446,10 @@ fn apply_object(
             }
             close_da_session_refuted_v2(builder, ctx, claim_id, &claim, accused_daa, accuser, accuser_exposure, *resumed)?;
         }
+        // **ADR-0125 §7.3: a permit signed twice burns, and its bond pays the floor.**
+        PalwConsensusObjectV2::RoundPermitEquivocated { evidence } => {
+            builder.record_round_equivocation(ctx, evidence)?;
+        }
         // **ADR-0100 Decision 4: a class's shard plan.** The registrant's signature is the
         // acceptance layer's; here: the fence, a registered class with a registrant (a genesis
         // class has none and is not sharded), declared once, a count in range.
@@ -14531,6 +14614,7 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::RoundFinal { key, old, new } => swap_write!(state.round_finals, key, old, new),
         PalwDeltaEntryV2::RoundSchedule { key, old, new } => swap_write!(state.round_schedules, key, old, new),
         PalwDeltaEntryV2::RoundPermitsUsed { key, old, new } => swap_write!(state.round_permits_used, key, old, new),
+        PalwDeltaEntryV2::RoundEquivocations { key, old, new } => swap_write!(state.round_equivocations, key, old, new),
     }
     Ok(())
 }
@@ -14737,6 +14821,8 @@ pub struct PalwStateCarriageV2 {
     pub round_finals: BTreeMap<Hash64, crate::palw_execution_lane_v1::PalwExecFinalV1>,
     pub round_schedules: BTreeMap<u64, crate::palw_execution_lane_v1::PalwExecScheduleV1>,
     pub round_permits_used: BTreeMap<(u64, u64), u16>,
+    /// ADR-0125 §7.3. An eleventh tagged tail (`0xA8`), encoded only when a permit was burned.
+    pub round_equivocations: BTreeMap<(u64, u64), u16>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -14801,6 +14887,8 @@ const PALW_CARRIAGE_CLASS_LADDERS_TAIL_V1: u8 = 0xA5;
 const PALW_CARRIAGE_PANEL_ECONOMY_TAIL_V1: u8 = 0xA6;
 /// ADR-0125: the execution lane's scheduler and permit ledger, one tail.
 const PALW_CARRIAGE_ROUND_LANE_TAIL_V1: u8 = 0xA7;
+/// ADR-0125 §7.3: the burned permits, their own tail after the lane's.
+const PALW_CARRIAGE_ROUND_EQUIVOCATIONS_TAIL_V1: u8 = 0xA8;
 
 impl borsh::BorshSerialize for PalwStateCarriageV2 {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
@@ -14893,6 +14981,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             self.round_schedules.serialize(writer)?;
             self.round_permits_used.serialize(writer)?;
         }
+        if !self.round_equivocations.is_empty() {
+            PALW_CARRIAGE_ROUND_EQUIVOCATIONS_TAIL_V1.serialize(writer)?;
+            self.round_equivocations.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -14944,6 +15036,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut round_schedules = BTreeMap::new();
         let mut round_permits_used = BTreeMap::new();
         let mut seen_round_lane = false;
+        let mut round_equivocations = BTreeMap::new();
+        let mut seen_round_equivocations = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -14984,17 +15078,21 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_class_ladders = true;
                     class_step_ladders = BTreeMap::deserialize_reader(reader)?;
                 }
-                PALW_CARRIAGE_PANEL_ECONOMY_TAIL_V1 if !seen_panel_economy && !seen_round_lane => {
+                PALW_CARRIAGE_PANEL_ECONOMY_TAIL_V1 if !seen_panel_economy && !seen_round_lane && !seen_round_equivocations => {
                     seen_panel_economy = true;
                     panel_duties = BTreeMap::deserialize_reader(reader)?;
                     panel_reserve_sompi = u64::deserialize_reader(reader)?;
                 }
-                PALW_CARRIAGE_ROUND_LANE_TAIL_V1 if !seen_round_lane => {
+                PALW_CARRIAGE_ROUND_LANE_TAIL_V1 if !seen_round_lane && !seen_round_equivocations => {
                     seen_round_lane = true;
                     round_span = u64::deserialize_reader(reader)?;
                     round_finals = BTreeMap::deserialize_reader(reader)?;
                     round_schedules = BTreeMap::deserialize_reader(reader)?;
                     round_permits_used = BTreeMap::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_ROUND_EQUIVOCATIONS_TAIL_V1 if !seen_round_equivocations => {
+                    seen_round_equivocations = true;
+                    round_equivocations = BTreeMap::deserialize_reader(reader)?;
                 }
                 PALW_CARRIAGE_SHARDS_TAIL_V1 if !seen_shards && !seen_held && !seen_demands && !seen_class_ladders => {
                     seen_shards = true;
@@ -15057,6 +15155,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             round_finals,
             round_schedules,
             round_permits_used,
+            round_equivocations,
         })
     }
 }
@@ -15104,6 +15203,7 @@ impl PalwStateCarriageV2 {
             round_finals: state.round_finals.clone(),
             round_schedules: state.round_schedules.clone(),
             round_permits_used: state.round_permits_used.clone(),
+            round_equivocations: state.round_equivocations.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -15199,6 +15299,7 @@ impl PalwStateCarriageV2 {
             round_finals: self.round_finals,
             round_schedules: self.round_schedules,
             round_permits_used: self.round_permits_used,
+            round_equivocations: self.round_equivocations,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -17975,6 +18076,62 @@ pub(crate) mod tests {
 
     /// **Below the fence the lane writes nothing**: the same claim finalizes without a credit, and the
     /// root is the one a build without the fields computes.
+    /// **ADR-0125 §7.3 in the fold: a permit signed twice burns once, and its bond pays the floor.**
+    /// Refused where the lane is closed and for a span the chain no longer keeps; accepted, it
+    /// slashes the registry's collateral floor and burns the permit; the same permit again — named
+    /// under its own span or the adjacent one — is refused; two spans on, the row leaves with the
+    /// ledger. `apply_round` checks the delta and the carriage round trips after each block.
+    #[test]
+    fn adr0125_a_permit_signed_twice_burns_once_and_slashes_the_floor() {
+        use crate::palw_execution_lane_v1::{PALW_EXEC_MLDSA87_SIGNATURE_LEN, PalwExecEquivocationV1, PalwExecSignedRoundV1};
+        let p = params().with_worker_carve_permille(620).unwrap();
+        let (s3, _) = economy_bound(&p);
+        let lane = round_extras(100, Vec::new());
+        let side = |pre: u64| PalwExecSignedRoundV1 {
+            pre_pow_hash: h64(pre),
+            timestamp_ms: 0,
+            nonce: 0,
+            signature: vec![1; PALW_EXEC_MLDSA87_SIGNATURE_LEN],
+        };
+        let evidence = |span: u64, round: u64| PalwConsensusObjectV2::RoundPermitEquivocated {
+            evidence: Box::new(PalwExecEquivocationV1 {
+                version: 1,
+                span,
+                round,
+                permit_index: 0,
+                bond: bond_key(1),
+                first: side(1),
+                second: side(2),
+            }),
+        };
+        let refused = |result: Result<(PalwChainStateV2, PalwStateDeltaV2), PalwStateV2Error>, why: &str| {
+            assert!(matches!(result, Err(PalwStateV2Error::RoundEquivocationRefused(_))), "{why}: {result:?}");
+        };
+        let fold = |parent: &PalwChainStateV2, daa: u64, object: PalwConsensusObjectV2, extras: &PalwTransitionExtrasV1| {
+            apply_palw_transition_v2_with_extras(parent, &p, &ctx(9, daa, 9), &[object], None, false, false, false, false, extras)
+        };
+        refused(fold(&s3, 250, evidence(2, 10), &economy_extras()), "the lane is closed");
+        refused(fold(&s3, 250, evidence(0, 10), &lane), "span 0 is gone at span 2");
+        refused(fold(&s3, 250, evidence(3, 10), &lane), "span 3 has not begun at span 2");
+
+        let before = s3.bond(&bond_key(1)).unwrap().clone();
+        let s4 = apply_round(&s3, &p, &ctx(4, 250, 4), &[evidence(2, 10)], &lane).expect("the permit burns");
+        let after = s4.bond(&bond_key(1)).unwrap();
+        let floor = p.min_collateral_sompi().min(before.collateral);
+        assert!(floor > 0, "the fixture's floor takes something");
+        assert_eq!((after.collateral, after.slashed), (before.collateral - floor, before.slashed + floor), "the floor, burned");
+        assert!(s4.round_equivocated(2, 10, 0));
+        assert!(!s4.round_equivocated(2, 10, 1) && !s4.round_equivocated(2, 12, 0), "that permit and no other");
+        assert!(s4.round_lane_is_written());
+
+        refused(fold(&s4, 251, evidence(2, 10), &lane), "the same permit twice");
+        refused(fold(&s4, 251, evidence(1, 10), &lane), "the same round and index named under the span before");
+
+        let s5 = apply_round(&s4, &p, &ctx(5, 400, 5), &[], &lane).expect("span 4 opens");
+        assert!(!s5.round_equivocated(2, 10, 0), "two spans on, the burned row leaves with the ledger");
+        assert!(!s5.round_lane_is_written());
+    }
+
     #[test]
     fn adr0125_below_the_fence_a_finalized_attempt_is_no_credit() {
         let p = params().with_worker_carve_permille(620).unwrap();
@@ -23740,6 +23897,7 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::RoundFinal { .. } => "round_final",
                     PalwDeltaEntryV2::RoundSchedule { .. } => "round_schedule",
                     PalwDeltaEntryV2::RoundPermitsUsed { .. } => "round_permits_used",
+                    PalwDeltaEntryV2::RoundEquivocations { .. } => "round_equivocations",
                 });
             }
         }
@@ -24311,6 +24469,7 @@ pub(crate) mod tests {
             round_finals: _,
             round_schedules: _,
             round_permits_used: _,
+            round_equivocations: _,
             safe_weight: _,
             retired_safe_weight: _,
             bounded_immature: _,
