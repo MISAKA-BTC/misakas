@@ -20,8 +20,6 @@ use crate::{
         ghostdag::{CompactGhostdagData, DbGhostdagStore},
         headers::{CompactHeaderData, DbHeadersStore},
         headers_selected_tip::DbHeadersSelectedTipStore,
-        palw_carriage::DbPalwCarriageStore,
-        palw_class_state::DbPalwClassStateStore,
         palw_state_v2::DbPalwStateV2Store,
         past_pruning_points::DbPastPruningPointsStore,
         pruning::DbPruningStore,
@@ -78,17 +76,10 @@ pub struct ConsensusStorage {
     pub stake_bonds_store: Arc<RwLock<DbStakeBondsStore>>,
     /// MISAKA VLT: accepted capability declarations, the pool a verifier committee is drawn from.
     pub compute_capability_store: Arc<RwLock<DbComputeCapabilityStore>>,
-    /// MISAKA PALW chain carriage (ADR-0029 Stage 1): accepted carriage objects, keyed by
-    /// carrying tx. An index with no consensus reader yet — Stage 2 is the reader.
-    pub palw_carriage_store: Arc<RwLock<DbPalwCarriageStore>>,
     /// ADR-0044 Unit C: per-chain-block PALW state deltas and the materialized anchor. Empty on
     /// every shipped network — the writer is gated on a `ConsensusV2` bundle, which no preset
     /// carries.
     pub palw_state_v2_store: Arc<RwLock<DbPalwStateV2Store>>,
-    /// Per-class difficulty, ladder status and last-credit DAA (ADR-0028/0033). Read through a
-    /// chain-scoped `PalwClassStateView`, never directly — a class fact that depends on where this
-    /// node's virtual tip points is the shape of blocker 6(b).
-    pub palw_class_state_store: Arc<RwLock<DbPalwClassStateStore>>,
     /// ADR-0067: accepted class registrations' declarations (profile + canonical), by class id.
     pub palw_class_carriage_store: Arc<RwLock<crate::model::stores::palw_class_carriage::DbPalwClassCarriageStore>>,
 
@@ -339,19 +330,6 @@ impl ConsensusStorage {
             }
             Arc::new(RwLock::new(store))
         };
-        // MISAKA PALW chain carriage (ADR-0029 Stage 1): accepted carriage objects, keyed by
-        // carrying tx — an INDEX, no consensus reader yet (Stage 2 is the reader). Sized like the
-        // capability store beside it, whose accept/revert/backfill walk it mirrors.
-        let palw_carriage_store = {
-            let mut store = DbPalwCarriageStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build());
-            // Before any read (and before the walk decides whether to backfill): rows written
-            // under a superseded layout are dropped silently by the iterator, and an
-            // empty-looking index would then claim history carried nothing.
-            if let Err(err) = store.reindex_if_stale() {
-                kaspa_core::warn!("[palw-carriage-store] could not check the record layout version: {err}; leaving existing rows");
-            }
-            Arc::new(RwLock::new(store))
-        };
         // ADR-0044 Unit C. `untracked` like its neighbours: the row's own `estimate_mem_bytes`
         // exists for readers, but a tracked-bytes policy on a store whose rows vary by orders of
         // magnitude is how the validator-attestation crash happened.
@@ -363,13 +341,6 @@ impl ConsensusStorage {
                 .with_uncertified_weightless(params.palw_uncertified_weightless);
             if let Err(err) = store.reindex_if_stale() {
                 kaspa_core::warn!("[palw-state-v2-store] could not check the record layout version: {err}; leaving existing rows");
-            }
-            Arc::new(RwLock::new(store))
-        };
-        let palw_class_state_store = {
-            let mut store = DbPalwClassStateStore::new(db.clone(), PolicyBuilder::new().max_items(1024).untracked().build());
-            if let Err(err) = store.reindex_if_stale() {
-                kaspa_core::warn!("[palw-class-state] could not check the record layout version: {err}; leaving existing rows");
             }
             Arc::new(RwLock::new(store))
         };
@@ -546,10 +517,8 @@ impl ConsensusStorage {
             vlt_activation_store,
             pruning_overlay_snapshot_store,
             stake_bonds_store,
-            palw_class_state_store,
             palw_class_carriage_store,
             compute_capability_store,
-            palw_carriage_store,
             palw_state_v2_store,
             evm_header_store,
             evm_state_store,

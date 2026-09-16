@@ -143,10 +143,6 @@ pub struct HeaderProcessor {
     /// leaves `check_palw_carriage_stateless` byte-identical to what it was.
     pub(super) palw_attempt_header_pins:
         Option<(kaspa_consensus_core::config::params::ForkActivation, kaspa_consensus_core::palw_state_v2::PalwStateParamsV2)>,
-    /// ADR-0039 W4′: which rule this network orders candidate tips by. `BlueWorkOnly` on every
-    /// shipped preset, cloned from `Params` at construction so the seam reads one value rather
-    /// than re-deriving it per header.
-    pub(super) palw_tip_order: kaspa_consensus_core::palw_chain_weight::PalwTipOrderV1,
     /// MISAKA Phase 4b PoW: PALW-Ollama (`algo_id = 5`) activation — supersedes everything.
     pub(super) pow_palw_ollama_activation: kaspa_consensus_core::config::params::ForkActivation,
     /// kaspa-pq EVM Lane v0.4 (ADR-0020): drives the per-header version rule
@@ -254,7 +250,6 @@ impl HeaderProcessor {
                 kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some((fence, bundle.state.clone())),
                 _ => None,
             }),
-            palw_tip_order: params.palw_tip_order_v1(),
             pow_palw_ollama_activation: params.pow_palw_ollama_activation,
             evm_activation_daa_score: params.evm_activation_daa_score,
         }
@@ -467,12 +462,10 @@ impl HeaderProcessor {
         // Note we need to keep the lock write guards until the batch is written.
         let mut hst_write = self.headers_selected_tip_store.write();
         let prev_hst = hst_write.get().unwrap();
-        // ADR-0039 W4′: tip order goes through the ONE seam. With no fork-choice fence — every
-        // shipped preset — `BlueWorkOnly` compares `SortableBlock`s, so this is byte-identical to
-        // the `>` it replaces, hash tie-break included.
+        // The headers-selected tip is ordered by `SortableBlock` (blue work, then hash).
         //
-        // **The weights are `None` here permanently, and that is a design fact rather than
-        // unfinished wiring** (external audit P0-5). PALW weight is a function of ACCEPTED
+        // **PALW weight is never read here, and that is a design fact rather than unfinished
+        // wiring** (external audit P0-5). PALW weight is a function of ACCEPTED
         // TRANSACTIONS — receipts, convictions, bonds — and the header processor is upstream of
         // bodies by construction: header-first sync exists precisely so a node can order headers it
         // has no bodies for. There is no header-only approximation to reach for either; one would
@@ -482,8 +475,8 @@ impl HeaderProcessor {
         // What makes that safe is a boundary, not a value: **the headers-selected tip is a SYNC
         // HINT and never a chain authority.** Its consumers were audited at this commit — the IBD
         // flow (choosing what to request) and `estimate_block_count` (an RPC estimate). Pruning,
-        // finality and acceptance read the virtual sink, which is ordered by
-        // `order_tips_v1`. A node may therefore sync toward a header chain PALW would not select,
+        // finality and acceptance read the virtual sink, whose PALW authority is the deep-reorg
+        // gate. A node may therefore sync toward a header chain PALW would not select,
         // and then decline to accept it: the cost is wasted download, never a divergent chain.
         //
         // Anything that later reads this tip to decide chain state reopens P0-5, and it will not
@@ -491,11 +484,9 @@ impl HeaderProcessor {
         let candidate_tip = SortableBlock::new(ctx.hash, header.blue_work);
         // ADR-0125: a round block is never a selected parent, so it is never the headers' selected tip
         // either — it would hint reachability toward a chain that does not exist.
-        let round_block = self.palw_execution_lane.is_some()
-            && header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1;
-        let heavier = !round_block
-            && kaspa_consensus_core::palw_chain_weight::order_tips_v1(self.palw_tip_order, (None, &candidate_tip), (None, &prev_hst))
-                == std::cmp::Ordering::Greater;
+        let round_block =
+            self.palw_execution_lane.is_some() && header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1;
+        let heavier = !round_block && candidate_tip > prev_hst;
         if heavier && reachability::is_chain_ancestor_of(&staging, ctx.pruning_point, ctx.hash).unwrap() {
             // Hint reachability about the new tip.
             reachability::hint_virtual_selected_parent(&mut staging, ctx.hash).unwrap();

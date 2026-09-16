@@ -1688,7 +1688,6 @@ async fn the_palw_candidate_order_is_the_candidates_own() {
 async fn palw_v2_sink_is_the_blue_work_maximum_of_its_virtual_parents() {
     use crate::model::stores::ghostdag::GhostdagStoreReader;
     use crate::model::stores::virtual_state::VirtualStateStoreReader;
-    use kaspa_consensus_core::palw_chain_weight::PalwTipOrderV1;
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
     use kaspa_consensus_core::sortable_block::SortableBlock;
 
@@ -1702,9 +1701,7 @@ async fn palw_v2_sink_is_the_blue_work_maximum_of_its_virtual_parents() {
             *p = p.clone().with_palw_v2_cadence();
         })
         .build();
-    // A V2 network orders tips by PALW — not by the V1 fence, which it does not and may not set.
-    assert_eq!(config.params.palw_tip_order_v1(), PalwTipOrderV1::PalwWeighted, "a ConsensusV2 network is PALW-ordered");
-    assert!(config.params.palw_fork_choice.is_none(), "and it reaches that without any V1 fence");
+    assert!(config.params.palw_fork_choice.is_none(), "a V2 network sets no V1 fork-choice fence");
 
     // Wide rows, so virtual really has competing parents to choose among — a single-tip chain
     // would satisfy the invariant vacuously.
@@ -1742,11 +1739,6 @@ async fn palw_v2_sink_is_the_blue_work_maximum_of_its_virtual_parents() {
         sink,
         "GHOSTDAG selects the sink out of virtual's parent set"
     );
-
-    // The blue-work network keeps its own behaviour: the filter is scoped, so equal-work siblings
-    // are still merged there. Asserted as the rule rather than as a chain shape.
-    let plain = ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build();
-    assert_eq!(plain.params.palw_tip_order_v1(), PalwTipOrderV1::BlueWorkOnly);
 }
 
 /// **Two submitters racing the same claim must not kill the block that carries both** (testnet-12,
@@ -2230,21 +2222,8 @@ async fn palw_v2_tip_heap_has_no_weight_key_but_the_gate_does() {
 
     let vp = ctx.consensus.virtual_processor();
     let sink = ctx.consensus.get_sink();
-    // The V2 branch answers before it reads either of these, which is the property being pinned:
-    // no finality window and no bond view can make the heap prefer the incumbent.
-    let finality_point = config.params.genesis.hash;
-    let bond_view = kaspa_consensus_core::dns_finality::ActiveBondView::new();
-
-    // Half one: the incumbent gets no rank the heap can prefer it by. If this ever answers `Some`
-    // again, every challenger — which is every block not yet on this node's chain — loses to the
-    // sink whatever its weight.
-    assert!(
-        vp.palw_tip_weights_v1(sink, finality_point, sink, &bond_view).is_none(),
-        "the V2 sink-search heap must be blue-work ordered — a PALW key here is a permanent wedge"
-    );
-    for tip in ctx.consensus.body_tips().iter().copied() {
-        assert!(vp.palw_tip_weights_v1(tip, finality_point, sink, &bond_view).is_none(), "tip {tip} carries a heap weight key");
-    }
+    // Half one is structural: the sink search's heap holds `SortableBlock`s, GHOSTDAG's own key,
+    // so there is no PALW rank the incumbent could be preferred by.
 
     // Half two: the authority did not evaporate with it. The sink IS weighable — the gate runs
     // after UTXO validation, which is the first moment both sides of a reorg comparison are.
@@ -13522,7 +13501,11 @@ async fn adr0125_a_merging_block_grants_exactly_the_permits_its_parent_state_sch
     let stranger = new_miner_data().script_public_key;
     let e3 = adr0125_round_block(&ctx, &config, first_round + 4, 0, stranger, 0);
     let e3_hash = e3.header.hash;
-    ctx.consensus.validate_and_insert_block(e3.to_immutable()).virtual_state_task.await.expect("valid at the header: the payout is state");
+    ctx.consensus
+        .validate_and_insert_block(e3.to_immutable())
+        .virtual_state_task
+        .await
+        .expect("valid at the header: the payout is state");
 
     let virtual_state = vp.virtual_stores.read().state.get().unwrap();
     let merged: Vec<_> = virtual_state.ghostdag_data.mergeset_reds.iter().copied().collect();
@@ -13628,8 +13611,13 @@ async fn adr0126_the_validator_overlay_retires_at_a_height() {
     for _ in 0..3 {
         ctx.mine_block(new_miner_data(), vec![]).await;
     }
-    let (index, output) =
-        harvest.transactions[0].outputs.iter().enumerate().find(|(_, o)| o.script_public_key == k_spk).map(|(i, o)| (i, o.clone())).unwrap();
+    let (index, output) = harvest.transactions[0]
+        .outputs
+        .iter()
+        .enumerate()
+        .find(|(_, o)| o.script_public_key == k_spk)
+        .map(|(i, o)| (i, o.clone()))
+        .unwrap();
     let outpoint = TransactionOutpoint::new(harvest.transactions[0].id(), index as u32);
     let storage_mass_parameter = ctx.consensus.params().storage_mass_parameter;
     let (bond_tx, _, _) = dns_harness::funded_signed_bond_tx(
@@ -13730,9 +13718,19 @@ async fn adr0126_a_palw_chain_crosses_the_retirement() {
         let header = vp.headers_store.get_header(block).unwrap();
         if header.daa_score >= RETIRE {
             crossed += 1;
-            assert_eq!(header.overlay_commitment_root, kaspa_hashes::ZERO_HASH64, "block at DAA {} commits no overlay", header.daa_score);
+            assert_eq!(
+                header.overlay_commitment_root,
+                kaspa_hashes::ZERO_HASH64,
+                "block at DAA {} commits no overlay",
+                header.daa_score
+            );
         } else {
-            assert_ne!(header.overlay_commitment_root, kaspa_hashes::ZERO_HASH64, "block at DAA {} commits the overlay", header.daa_score);
+            assert_ne!(
+                header.overlay_commitment_root,
+                kaspa_hashes::ZERO_HASH64,
+                "block at DAA {} commits the overlay",
+                header.daa_score
+            );
         }
         block = {
             use crate::model::stores::ghostdag::GhostdagStoreReader;

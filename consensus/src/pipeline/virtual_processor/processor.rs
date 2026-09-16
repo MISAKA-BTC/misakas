@@ -32,7 +32,6 @@ use crate::{
             ghostdag::{DbGhostdagStore, GhostdagData, GhostdagStoreReader},
             headers::{DbHeadersStore, HeaderStoreReader},
             headers_selected_tip::{DbHeadersSelectedTipStore, HeadersSelectedTipStoreReader},
-            palw_carriage::DbPalwCarriageStore,
             past_pruning_points::DbPastPruningPointsStore,
             pruning::{DbPruningStore, PruningStoreReader},
             pruning_meta::PruningMetaStores,
@@ -100,7 +99,6 @@ use kaspa_consensus_core::{
     header::Header,
     merkle::calc_hash_merkle_root,
     mining_rules::MiningRules,
-    palw_carriage::palw_carriage_records_from_accepted_txs,
     pruning::PruningPointsList,
     subnets::{SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER},
     token::{
@@ -352,8 +350,6 @@ pub struct VirtualStateProcessor {
     /// MISAKA Phase 4 PoW: PALW deterministic-LLM (`algo_id = 4`) activation — supersedes the
     /// BLAKE2b-SHA3 rule for the template's `pow_algo_id` where active.
     pub(super) pow_palw_activation: kaspa_consensus_core::config::params::ForkActivation,
-    /// ADR-0039 W4′: the tip-ordering rule, cloned from `Params` at construction.
-    pub(super) palw_tip_order: kaspa_consensus_core::palw_chain_weight::PalwTipOrderV1,
     /// MISAKA Phase 4b PoW: PALW-Ollama (`algo_id = 5`) activation — supersedes everything.
     pub(super) pow_palw_ollama_activation: kaspa_consensus_core::config::params::ForkActivation,
     /// ADR-0042 Decision 1 (PR-08 seam): the algo id a `ConsensusV2` network demands, or `None`
@@ -386,11 +382,6 @@ pub struct VirtualStateProcessor {
     /// outlives the credit window by three orders of magnitude, so a walk-scoped copy vanishes
     /// while it is still in force and takes the certificate's whole committee with it.
     pub(super) compute_capability_store: Arc<RwLock<DbComputeCapabilityStore>>,
-    /// MISAKA PALW chain carriage (ADR-0029 Stage 1): accepted carriage objects, keyed by
-    /// carrying tx. Written/reverted by `stage_palw_carriages` beside the capability walk;
-    /// an index — NO consensus rule reads it yet (Stage 2 is the reader).
-    pub(super) palw_carriage_store: Arc<RwLock<DbPalwCarriageStore>>,
-    pub(super) palw_class_state_store: Arc<RwLock<crate::model::stores::palw_class_state::DbPalwClassStateStore>>,
     /// ADR-0067: accepted registrations' declarations, for the serve-from-chain arm.
     pub(super) palw_class_carriage_store: Arc<RwLock<crate::model::stores::palw_class_carriage::DbPalwClassCarriageStore>>,
     /// ADR-0042 Decision 5 / ADR-0044 Unit C: per-chain-block `PalwStateDeltaV2` rows and the
@@ -638,11 +629,6 @@ pub struct VirtualStateProcessor {
     /// the whole gate dormant; `Some` makes crossing commitments mintable in the coinbase
     /// and validated identically. Cloned from `Params::palw_credit` at construction.
     pub(super) palw_credit_params: Option<kaspa_consensus_core::palw_credit::PalwCreditParamsV1>,
-    /// ADR-0038 Decision B's three activation fences, carried so the tip preference can refuse
-    /// before touching a store. `None` on every shipped preset — see `palw_preferred_tip_v1`.
-    pub(super) palw_schedule: Option<kaspa_consensus_core::palw_schedule::PalwScheduleParamsV1>,
-    pub(super) palw_ramp: Option<kaspa_consensus_core::palw_weight::PalwWeightParamsV1>,
-    pub(super) palw_fork_choice: Option<kaspa_consensus_core::palw_chain_weight::PalwChainWeightParamsV1>,
 
     // kaspa-pq Selected-Parent EVM Lane (ADR-0020, design v0.4). The lazy
     // chain-context EVM step + canonical head pointers. Inert until
@@ -800,36 +786,6 @@ pub struct VirtualStateProcessor {
     _mining_rules: Arc<MiningRules>,
 }
 
-/// A [`PalwClassFactsViewV1`] over the single registered class, so the resolver looks its facts up
-/// BY the block's own class id rather than being handed values beside it.
-///
-/// The lookup is the point, not ceremony: the resolver used to take bare `Option`s that were never
-/// compared against the block's class, so the dominant term of block weight was whatever the caller
-/// passed. A view that answers `None` for any other class turns that into `Unresolved`.
-struct PalwOneClassView {
-    class_id: kaspa_hashes::Hash64,
-    class_target: u128,
-    pwu_per_inference: u64,
-    /// ADR-0069 Decision 7. Resolved with the two facts beside it, by the same fold, at the same
-    /// chain point — see `palw_class_facts_for_block`.
-    weight_bearing: bool,
-}
-
-impl kaspa_consensus_core::palw_facts::PalwClassFactsViewV1 for PalwOneClassView {
-    fn class_facts_for_block(
-        &self,
-        execution_class_id: &kaspa_hashes::Hash64,
-        _block_accepted_daa: u64,
-    ) -> Option<kaspa_consensus_core::palw_facts::PalwClassFactsV1> {
-        (*execution_class_id == self.class_id).then_some(kaspa_consensus_core::palw_facts::PalwClassFactsV1 {
-            execution_class_id: self.class_id,
-            class_target: self.class_target,
-            pwu_per_inference: self.pwu_per_inference,
-            weight_bearing: self.weight_bearing,
-        })
-    }
-}
-
 /// **A fee no rent rule may refuse** (ADR-0075 SA-1/SA-2).
 ///
 /// Stands for "this object was not priced", which is two different facts with one correct
@@ -934,7 +890,6 @@ impl VirtualStateProcessor {
             genesis: params.genesis.clone(),
             pow_blake2b_sha3_activation: params.pow_blake2b_sha3_activation,
             pow_palw_activation: params.pow_palw_activation,
-            palw_tip_order: params.palw_tip_order_v1(),
             pow_palw_ollama_activation: params.pow_palw_ollama_activation,
             palw_required_algo_id: params.palw_consensus_mode.required_algo_id(),
             palw_heartbeat_lane: params.palw_heartbeat_lane_fence(),
@@ -966,8 +921,6 @@ impl VirtualStateProcessor {
             headers_selected_tip_store: storage.headers_selected_tip_store.clone(),
             stake_bonds_store: storage.stake_bonds_store.clone(),
             compute_capability_store: storage.compute_capability_store.clone(),
-            palw_carriage_store: storage.palw_carriage_store.clone(),
-            palw_class_state_store: storage.palw_class_state_store.clone(),
             palw_class_carriage_store: storage.palw_class_carriage_store.clone(),
             palw_state_v2_store: storage.palw_state_v2_store.clone(),
             palw_state_params_v2: match &params.palw_consensus_mode {
@@ -1080,9 +1033,6 @@ impl VirtualStateProcessor {
             palw_validator_payout_bounds: params.palw_validator_payout_bounds_fence(),
             finality_depth: params.blockrate.finality_depth,
             palw_credit_params: params.palw_credit.clone(),
-            palw_schedule: params.palw_schedule,
-            palw_ramp: params.palw_ramp,
-            palw_fork_choice: params.palw_fork_choice,
             utxo_diffs_store: storage.utxo_diffs_store.clone(),
             rewarded_epochs_store: storage.rewarded_epochs_store.clone(),
             epoch_accumulator_store: storage.epoch_accumulator_store.clone(),
@@ -3227,14 +3177,7 @@ impl VirtualStateProcessor {
         if let Some(dns_params) = self.dns_params.as_ref() {
             let sink_daa = self.headers_store.get_header(dns_sink).map(|h| h.daa_score).unwrap_or_default();
             self.stage_compute_capabilities(&mut batch, chain_path, dns_params, sink_daa);
-            // PALW carriage objects (ADR-0029 Stage 1), same accept/revert/backfill discipline,
-            // same batch. An index only — nothing in consensus reads it yet.
-            self.stage_palw_carriages(&mut batch, chain_path, dns_params, sink_daa);
         }
-        // The class's last-credit DAA, in the SAME batch as everything else this chain move
-        // commits, so a class's memory of when it last minted cannot end up one block out of step
-        // with the chain that minted it.
-        self.stage_palw_class_credit_marks(&mut batch, chain_path);
 
         // kaspa-pq Phase 10 (ADR-0009 A.5): recompute the DNS StakeScore over
         // the bounded recent epoch window and stage the updated DnsState into
@@ -3377,40 +3320,6 @@ impl VirtualStateProcessor {
                 }
             }
         }
-    }
-
-    /// Seeds the per-block [`ActiveBondView`] walk (ADR-0009 Addendum B §B.1)
-    /// from the `StakeBonds` store snapshot — which, at the start of
-    /// `resolve_virtual`, reflects the bond set as-of the previous sink (the
-    /// same anchor `accumulated_diff` starts from). Returns an empty view on
-    /// networks without the overlay (`dns_params` is `None`), so the bond-view
-    /// walk is a no-op there.
-    /// The per-class state as this node's store holds it.
-    ///
-    /// **This is NOT chain-scoped, and the view type does not make it so.** It iterates the whole
-    /// store at whatever the virtual chain last wrote, so blocker 6(b) is open for every fact it
-    /// carries — an earlier version of this comment claimed the view answered that blocker, and it
-    /// does not: a view is only as chain-scoped as the records handed to it, and these come from the
-    /// node's own sink. (`initial_active_bond_view` has the same shape, and its consumers advance it
-    /// per chain point — see `stage_palw_class_credit_marks`, which had to be fixed for exactly this.)
-    ///
-    /// What it gates: `is_frozen` and `credit_interval_elapsed`, read on BOTH the template path and
-    /// the validation path, and both gate the credit outputs that go in a coinbase. Two nodes with
-    /// different sink histories can therefore disagree about a coinbase.
-    ///
-    /// Why that is currently harmless, and exactly how far the harmlessness extends: **no code creates
-    /// a first row.** The store's only insert site rewrites `last_credited_daa` on an already-existing
-    /// row, so the store is provably empty on every network, `is_frozen` answers `true` for every
-    /// class, and `compute_palw_credit_outputs` returns empty everywhere. The PALW credit gate is shut
-    /// by a missing row rather than by a rule. The exposure activates the moment a row exists, so a
-    /// seed writer must arrive together with per-chain-point scoping, never before it.
-    ///
-    /// The DAA target used to live here too and was removed for this reason — see the store's module
-    /// header. The remaining two fields cannot be removed; they have to be scoped.
-    pub(crate) fn initial_palw_class_state_view(&self) -> crate::model::stores::palw_class_state::PalwClassStateView {
-        crate::model::stores::palw_class_state::PalwClassStateView::from_records(
-            self.palw_class_state_store.read().iterator().filter_map(|r| r.ok()).map(|(id, rec)| (id, (*rec).clone())),
-        )
     }
 
     pub(crate) fn initial_active_bond_view(&self) -> ActiveBondView {
@@ -3570,619 +3479,6 @@ impl VirtualStateProcessor {
                 }
             }
         }
-    }
-
-    /// Persist the PALW carriage objects a selected-chain change adds, and drop those it removes
-    /// (ADR-0029 Stage 1 — the capability-store walk beside this one, verbatim).
-    ///
-    /// A pure index: NOTHING in consensus rules reads this store yet. Stage 2 (the credit gate,
-    /// duty classification, offense grounding) is explicitly out of scope, exactly as the
-    /// capability store landed before its committee-draw consumer. And unlike the capability walk
-    /// there is no bond set to thread: admission already refused any PALW-band transaction whose
-    /// payload fails `validate_palw_carriage_stage1_tx`, and the extractor re-applies the same
-    /// context-free rules — stateless in, stateless out, so apply and revert cannot disagree and
-    /// no strict-prefix ordering question exists here.
-    ///
-    /// Rows are keyed by carrying tx id (the revert-friendly capability key). Logical dedup —
-    /// first-accepted-wins per `committed_root`, `(commitment_root, attester_id)`, `call_tx_id` —
-    /// is the Stage-2 reader's business, exactly where ADR-0029 §2 assigns it: an index that
-    /// dropped "duplicate" rows would erase the very carriers a reorg could promote to first.
-    /// Verify a commitment carriage's ML-DSA-87 signature under ITS OWN context.
-    ///
-    /// The two PALW signature families use different contexts on purpose — a commitment signature
-    /// must not verify as an attestation or vice versa — so they get two helpers rather than one
-    /// with a parameter a caller can pass the wrong value for. A verification error (malformed key
-    /// or signature) is `false`: unverifiable is not verified.
-    fn verify_palw_commitment_signature(public_key: &[u8], digest: &kaspa_hashes::Hash, signature: &[u8]) -> bool {
-        kaspa_txscript::verify_mldsa87_with_context(
-            public_key,
-            digest.as_bytes().as_slice(),
-            signature,
-            kaspa_consensus_core::palw_carriage::PALW_CARRIAGE_MLDSA87_COMMITMENT_CONTEXT,
-        )
-        .unwrap_or(false)
-    }
-
-    /// Verify an execution attestation's ML-DSA-87 signature under the attestation context.
-    fn verify_palw_attestation_signature(public_key: &[u8], digest: &kaspa_hashes::Hash, signature: &[u8]) -> bool {
-        kaspa_txscript::verify_mldsa87_with_context(
-            public_key,
-            digest.as_bytes().as_slice(),
-            signature,
-            kaspa_consensus_core::palw_slash::PALW_S_MLDSA87_ATTESTATION_CONTEXT,
-        )
-        .unwrap_or(false)
-    }
-
-    /// Remember, per class, the DAA at which it last had a commitment credited.
-    ///
-    /// ADR-0033 §4e bounds an attacker's pre-unbonding gain as
-    /// `base(C) × (unbonding / min_credit_interval + 1)`, which ASSUMES one credited job per
-    /// interval. Nothing enforced it because nothing remembered the previous credit: the credit
-    /// walk spans `w_challenge` backward and a commitment crosses `w_challenge` AFTER acceptance,
-    /// so past credits are outside the walk by construction (audit B4). This is the memory.
-    ///
-    /// The mark is derived from the SAME function that mints — `compute_palw_credit_outputs` is
-    /// re-run for each added block — rather than from a second predicate that could drift from it.
-    /// Reverting a removed block clears the mark it set, so a reorg cannot leave a class believing
-    /// it minted on a chain that no longer exists; a class whose mark is cleared is *permissive*
-    /// again, which is the correct direction (the credits it was counting no longer exist either).
-    fn stage_palw_class_credit_marks(&self, batch: &mut WriteBatch, chain_path: &ChainPath) {
-        let Some(credit) = self.palw_credit_params.as_ref() else { return };
-        let class_id = credit.registration.runtime_class_id;
-        let mut store = self.palw_class_state_store.write();
-        let Some(existing) = store.get(class_id) else { return };
-
-        // Walk the removed side first, then the added side, so a block that appears in both nets
-        // out — the same order `stage_dns_bond_mutations` uses for the same reason.
-        let mut mark = existing.last_credited_daa;
-        for removed in chain_path.removed.iter() {
-            if let Ok(header) = self.headers_store.get_header(*removed)
-                && mark == Some(header.daa_score)
-            {
-                mark = None;
-            }
-        }
-        // The bond set must ADVANCE with the walk, at each added block's own chain point.
-        //
-        // `initial_active_bond_view()` is the node's pre-batch store snapshot — the set as of the
-        // OLD sink — while the mint paths score a block against the set as of its selected parent
-        // (`template_bond_view` when building, `selected_parent_bond_view` when validating). Using
-        // the pre-batch snapshot for every added block scored blocks 2..n against a set that
-        // excludes the bonds their own predecessors created, and scored every added block against
-        // bonds that the removed side had created and that this chain move deletes. The mark it
-        // writes is a consensus store row that `credit_interval_elapsed` reads back to gate the
-        // MINT, so the disagreement does not stay local: it decides whether a later block is
-        // allowed to credit at all.
-        //
-        // The construction mirrors `stage_dns_bond_mutations` deliberately, including its choice to
-        // derive the removed side's mutations against the STARTING view — those mutations were
-        // derived under that view when they were applied, so re-deriving under it is what makes the
-        // revert an exact inverse. Two different reconstructions of the same walk are two chances
-        // to disagree with the store, so this one copies rather than improves.
-        let mut bond_view = self.initial_active_bond_view();
-        let removed_muts: Vec<Vec<BondMutation>> =
-            chain_path.removed.iter().rev().copied().map(|h| self.dns_bond_mutations_for_chain_block(h, &bond_view)).collect();
-        for muts in removed_muts {
-            bond_view.revert(&muts);
-        }
-        for added in chain_path.added.iter() {
-            let Ok(header) = self.headers_store.get_header(*added) else { continue };
-            let Ok(parent) = self.ghostdag_store.get_selected_parent(*added) else { continue };
-            // Scored against the parent's set, then advanced past this block — the same order the
-            // mint paths see, and the reason `apply` happens after `compute_palw_credit_outputs`.
-            let bonds = bond_view.records();
-            let view = crate::model::stores::palw_class_state::PalwClassStateView::from_records([(
-                class_id,
-                crate::model::stores::palw_class_state::PalwClassStateRecord { last_credited_daa: mark, ..(*existing).clone() },
-            )]);
-            if !self.compute_palw_credit_outputs(credit, header.daa_score, parent, &bonds, &view).is_empty() {
-                mark = Some(header.daa_score);
-            }
-            bond_view.apply(&self.dns_bond_mutations_for_chain_block(*added, &bond_view));
-        }
-        if mark != existing.last_credited_daa {
-            let updated =
-                crate::model::stores::palw_class_state::PalwClassStateRecord { last_credited_daa: mark, ..(*existing).clone() };
-            if let Err(err) = store.insert_batch(batch, class_id, std::sync::Arc::new(updated)) {
-                kaspa_core::warn!("[palw-class-state] could not stage the last-credit mark: {err}");
-            }
-        }
-    }
-
-    fn stage_palw_carriages(&self, batch: &mut WriteBatch, chain_path: &ChainPath, dns_params: &DnsParams, sink_daa: u64) {
-        if !dns_params.vlt_shadow_active_at(sink_daa) {
-            // Same dormancy fence as the capability walk it mirrors: the carriage objects bind to
-            // the same bond registry, their Stage-2 consumer is fenced with the compute overlay,
-            // and below the fence the backfill's history walk would be pure cost. (The band's
-            // ADMISSION is deliberately unfenced, like every overlay band's — see
-            // `check_transaction_subnetwork` — so acceptance below the fence is possible but
-            // meaningless: the first post-fence commit backfills whatever it carried.)
-            return;
-        }
-        let mut store = self.palw_carriage_store.write();
-
-        // A database whose chain predates this store has carriers accepted and no rows for them,
-        // and an empty index reads exactly like "nothing was carried". Sweep history once, under
-        // the same horizon discipline as the capability sweep — the furthest back any overlay
-        // read this store will ever serve can reach.
-        if !store.is_backfilled() {
-            let sweep_tip = chain_path
-                .added
-                .first()
-                .and_then(|first| self.ghostdag_store.get_selected_parent(*first).ok())
-                .unwrap_or_else(|| chain_path.added.last().copied().unwrap_or(self.genesis.hash));
-            let horizon = dns_params.vlt.max_capability_validity_blocks.saturating_add(dns_params.vlt_credit_window_blue_score);
-            let mut swept = 0usize;
-            if let Ok(sink_blue) = self.headers_store.get_blue_score(sweep_tip) {
-                for block in std::iter::once(sweep_tip).chain(self.reachability_service.default_backward_chain_iterator(sweep_tip)) {
-                    let Ok(bs) = self.headers_store.get_blue_score(block) else { break };
-                    if sink_blue.saturating_sub(bs) > horizon {
-                        break;
-                    }
-                    let Ok(header) = self.headers_store.get_header(block) else { break };
-                    for (tx_id, record) in
-                        palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(block), header.daa_score, block)
-                    {
-                        store.insert_batch(batch, tx_id, Arc::new(record)).unwrap();
-                        swept += 1;
-                    }
-                }
-            }
-            info!("[palw-carriage] swept {swept} carriage object(s) out of history into the carriage store");
-            // The marker goes into the SAME batch as the inserts, so it becomes durable with them
-            // or not at all. A crash before the batch is written leaves the marker unset and the
-            // next start sweeps again — idempotently, since a row keyed by its own transaction id
-            // rewrites to the same value.
-            store.mark_backfilled(batch).unwrap();
-        }
-
-        let mut reverted = 0usize;
-        for removed in chain_path.removed.iter().rev() {
-            // Only the keys matter on revert; the stamp the extractor puts on the discarded
-            // records is irrelevant, so a header miss defaults it rather than skipping deletes.
-            let daa = self.headers_store.get_header(*removed).map(|h| h.daa_score).unwrap_or_default();
-            for (tx_id, _) in palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(*removed), daa, *removed) {
-                store.delete_batch(batch, tx_id).unwrap();
-                reverted += 1;
-            }
-        }
-        // The revert path of a new store never runs until it matters, and then runs during a
-        // reorg. Say so when it does: a carriage row silently surviving a branch it is not in is
-        // exactly the indexing divergence Stage 1 exists to rule out.
-        if reverted > 0 {
-            info!("[palw-carriage] reverted {reverted} carriage object(s) that left the selected chain");
-        }
-        for added in chain_path.added.iter() {
-            let Ok(header) = self.headers_store.get_header(*added) else { continue };
-            for (tx_id, record) in
-                palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(*added), header.daa_score, *added)
-            {
-                store.insert_batch(batch, tx_id, Arc::new(record)).unwrap();
-            }
-        }
-    }
-
-    /// The bond set as **the candidate chain** has it, not as this node's sink has it.
-    ///
-    /// Audit P0-4, the half the carriage fold does not cover. The sink search builds its heap from
-    /// one mutable `ActiveBondView` positioned at the PREVIOUS sink, and every candidate was weighed
-    /// against it — so a node that had applied branch A and a node that had applied branch B
-    /// resolved different bond status, receipts, panels and weights for the same candidate on the
-    /// same DAG. Two nodes then hold different tips forever. That is W3 broken, and a bond view is
-    /// the input it breaks through most directly: bonds decide who may produce, who may be seated
-    /// and who may be paid.
-    ///
-    /// Derived by replaying the chain path — revert the blocks the candidate does not have, apply
-    /// the ones it adds — from the same `dns_bond_mutations_for_chain_block` both the apply and the
-    /// revert side of staging already use, so this cannot disagree with what the chain would
-    /// actually do. No UTXO walk: bond mutations are re-derived from retained acceptance data, which
-    /// is why this is affordable per candidate at all.
-    ///
-    /// The reverts run in reverse chain order and the applies in forward order, because a bond's
-    /// state machine is not commutative — an unbond request and its slash on one bond compose one
-    /// way only.
-    fn palw_bond_view_at_v1(&self, from_sink: BlockHash, from_view: &ActiveBondView, candidate: BlockHash) -> ActiveBondView {
-        if from_sink == candidate {
-            return from_view.clone();
-        }
-        let path = self.dag_traversal_manager.calculate_chain_path(from_sink, candidate, None);
-        let mut view = from_view.clone();
-        for removed in path.removed.iter() {
-            let muts = self.dns_bond_mutations_for_chain_block(*removed, &view);
-            view.revert(&muts);
-        }
-        for added in path.added.iter().rev() {
-            let muts = self.dns_bond_mutations_for_chain_block(*added, &view);
-            view.apply(&muts);
-        }
-        view
-    }
-
-    /// The carriage `PalwResolverInputV1` asks for: rows accepted **on the chain that ends at
-    /// `chain_tip`**, no further back than `daa_floor`.
-    ///
-    /// `PalwCarriageStore::all()` alone cannot answer this, and the reason it looks like it can is
-    /// that `PalwCarriageRecord` used to be `{ kind, accepted_daa_score, body }` — exactly the
-    /// tuple the resolver takes. A DAA score is not a chain identifier; two competing branches both
-    /// have them. `accepted_block` is the field that makes the question askable, and the filter
-    /// below is the asking: reachability on the selected-parent chain, not a guess from a number.
-    /// Without it a reader mixes evidence from branches this node reorged away from into the weight
-    /// of a block on the branch it kept, with nothing in the call looking wrong.
-    ///
-    /// **Scope, and it is narrower than the name might suggest.** `stage_palw_carriages` inserts
-    /// for `chain_path.added` and deletes for `chain_path.removed`, so the store holds rows for the
-    /// APPLIED chain. `accepted_block` therefore lets this reader exclude a stale row; it cannot
-    /// conjure a row for a candidate chain that was never applied. A caller weighing an unapplied
-    /// candidate must walk that candidate's own accepted transactions instead — the filter here is
-    /// the cheap answer for the chain this node actually has, not a general one.
-    ///
-    /// Read-only, and it takes the store's read lock only for the iteration.
-    /// Dormant with the rest of the weight layer: nothing resolves block facts yet, and this is
-    /// the input that resolution takes. Landed with the schema-v2 field it depends on so the two
-    /// cannot drift.
-    #[allow(dead_code)]
-    fn palw_carriage_on_chain_v1(&self, chain_tip: BlockHash, daa_floor: u64) -> Vec<(u8, u64, Vec<u8>)> {
-        // Audit P0-4: FOLDED from the candidate chain's own accepted transactions, not read from
-        // the store — and the store read is what had to go, not merely what could be improved.
-        //
-        // `stage_palw_carriages` inserts for `chain_path.added` and deletes for `.removed`, so the
-        // store holds rows for the chain this node HAS APPLIED. `accepted_block` (schema v2) lets a
-        // reader exclude a row from an abandoned branch, and that is real, but it cannot conjure a
-        // row for a candidate branch that was never applied. Fork choice weighs exactly those. So a
-        // node that had applied branch A and a node that had applied branch B computed different
-        // carriage — hence different receipts, convictions, panels and weights — for the SAME
-        // candidate on the same DAG, and picked different tips. That is W3 ("equal DAGs ⇒ equal
-        // weights") broken, which is a permanent partition rather than a slow path.
-        //
-        // The fold has none of that: the accepted transactions of a chain are a property of the
-        // chain. It costs a walk per candidate, bounded by `daa_floor`, and that cost is the price
-        // of the property — there is no cheaper source that is still a function of the DAG alone.
-        let mut out = Vec::new();
-        for block in std::iter::once(chain_tip).chain(self.reachability_service.default_backward_chain_iterator(chain_tip)) {
-            // A header this node cannot read ends the walk rather than being skipped: skipping
-            // shortens the window silently, and downstream that reads as "nobody filed" — a
-            // negative fact where there was a missing one.
-            let Ok(header) = self.headers_store.get_header(block) else { break };
-            if header.daa_score < daa_floor {
-                break;
-            }
-            for (_, record) in
-                palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(block), header.daa_score, block)
-            {
-                out.push((record.kind, record.accepted_daa_score, record.body));
-            }
-        }
-        out
-    }
-
-    /// The two chain weights of the chain ending at `chain_tip`, over the blocks at or above
-    /// `daa_floor` — ADR-0039 W4′, assembled.
-    ///
-    /// `safe` counts `Final` only and governs IBD, deep-reorg bounds and finality; `live` adds
-    /// bounded immature work and governs tip selection alone. `chain_weights_v1` does the
-    /// arithmetic; this supplies the fact set, which is the half that can be wrong.
-    ///
-    /// **A window, and the floor is the caller's to justify.** The ADR writes these as sums over a
-    /// chain, which is unbounded; a node folds a window or it folds forever. The floor belongs to
-    /// the caller because the honest one differs by consumer — finality reads to the pruning
-    /// horizon, tip selection needs only enough depth to separate the candidates in front of it —
-    /// and a default here would silently make one of them wrong.
-    ///
-    /// **A block with no PALW commitment contributes nothing and is skipped, not refused.** That is
-    /// the difference from an unresolvable block below: a hash-lane block has no PALW weight to
-    /// resolve, so its absence from the fold is the correct answer rather than a gap in it. An
-    /// unresolvable PALW block is a gap, and `chain_weights_v1` refuses on it.
-    ///
-    /// `None` therefore means "some PALW block in this window could not be resolved", and a caller
-    /// must treat that as "cannot compare these chains" rather than as a zero — comparing a chain
-    /// whose weight is unknown against one whose weight is known is how a node picks the branch it
-    /// merely understands better.
-    #[allow(dead_code)]
-    fn palw_chain_weights_v1(
-        &self,
-        chain_tip: BlockHash,
-        daa_floor: u64,
-        bonds: &ActiveBondView,
-        schedule: &kaspa_consensus_core::palw_schedule::PalwScheduleParamsV1,
-        ramp: &kaspa_consensus_core::palw_weight::PalwWeightParamsV1,
-        params: &kaspa_consensus_core::palw_chain_weight::PalwChainWeightParamsV1,
-        exposure_params: &kaspa_consensus_core::palw_exposure::PalwExposureParamsV1,
-    ) -> Option<kaspa_consensus_core::palw_chain_weight::PalwChainWeightsV1> {
-        use kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentV1;
-        use kaspa_consensus_core::palw_chain_weight::chain_weights_v1;
-        use kaspa_consensus_core::palw_exposure::PalwImmatureWorkV1;
-        use kaspa_consensus_core::palw_weight::PalwWorkRampStageV1;
-
-        let mut facts = Vec::new();
-        let mut immature: Vec<Option<PalwImmatureWorkV1>> = Vec::new();
-        for block in std::iter::once(chain_tip).chain(self.reachability_service.default_backward_chain_iterator(chain_tip)) {
-            let Ok(header) = self.headers_store.get_header(block) else { break };
-            if header.daa_score < daa_floor {
-                break;
-            }
-            if header.palw_commitment.is_empty() {
-                continue; // no PALW claim on this block — nothing to weigh, not a hole
-            }
-            let weight = self.palw_block_weight_v1(chain_tip, block, bonds, schedule, ramp);
-            // Audit P0-10: what the block would expose its bond to, gathered beside the weight so
-            // the two cannot be assembled from different walks. `None` for a block whose bond or
-            // commitment this node could not resolve — the weight is `None` there too, and
-            // `chain_weights_v1` refuses on it, so no exposure decision is taken on a block nobody
-            // could weigh.
-            let exposure = weight.as_ref().filter(|w| !matches!(w.stage, PalwWorkRampStageV1::Final)).and_then(|w| {
-                let header = self.headers_store.get_header(block).ok()?;
-                let commitment = PalwBlockCommitmentV1::decode(&header.palw_commitment).ok()?;
-                let bond = bonds.active_bond_at(&commitment.executor_bond_outpoint, header.daa_score)?;
-                Some(PalwImmatureWorkV1 {
-                    bond_outpoint: commitment.executor_bond_outpoint,
-                    collateral_sompi: bond.amount,
-                    pwu: w.pwu,
-                })
-            });
-            facts.push(weight);
-            immature.push(exposure);
-        }
-
-        // The walk collected newest-first; exposure is prefix-mandatory in CHAIN order, so the
-        // prefix has to start where the chain does. Reversing here rather than walking forward
-        // keeps one traversal: the fold above must stop at the floor, which only a backward walk
-        // can do without knowing the floor's block in advance.
-        immature.reverse();
-        let admitted = kaspa_consensus_core::palw_exposure::admit_within_exposure_v1(
-            &immature.iter().flatten().copied().collect::<Vec<_>>(),
-            exposure_params,
-        )
-        .ok()?;
-        // Over-exposed work carries no live weight: the block keeps its spam-hash backbone and its
-        // place in the DAG, and loses the ramped pwu its bond could not stand behind. Refusing the
-        // BLOCK instead would let anyone grief a producer by racing cheap commitments onto its bond.
-        let mut admitted = admitted.into_iter();
-        let mut over_exposed = 0usize;
-        for (fact, exposure) in facts.iter_mut().rev().zip(immature.iter()) {
-            if exposure.is_some()
-                && !admitted.next().unwrap_or(false)
-                && let Some(w) = fact.as_mut()
-            {
-                w.stage = PalwWorkRampStageV1::Voided;
-                over_exposed += 1;
-            }
-        }
-        if over_exposed > 0 {
-            debug!(
-                "[palw-exposure] {over_exposed} immature block(s) on {chain_tip} exceed their bond's collateral and carry no live weight"
-            );
-        }
-        chain_weights_v1(&facts, params).ok()
-    }
-
-    /// One block's PALW weight fact: the ramp stage it has reached on this chain, and the pwu its
-    /// class prices it at. The input `chain_weights_v1` folds.
-    ///
-    /// This is where the five pieces that had to exist first meet — the chain-scoped carriage, the
-    /// panel, the announced root, the class facts, and a re-execution oracle. Each was landed
-    /// separately because each hid a way to be wrong that testing would not have caught: carriage
-    /// with no chain, a panel drawn at the reading node's tip, a root derived twice, class facts
-    /// unbound to the block's own class.
-    ///
-    /// **`None` is "this node cannot say", never "zero weight".** A missing header, an
-    /// undecodable commitment, a class this network does not hold, a panel whose anchor the chain
-    /// has not reached — each returns `None`, and `chain_weights_v1` refuses a `None` entry rather
-    /// than skipping it. That refusal is the point: silently treating an unresolvable block as
-    /// weightless is how a pruned node and an archival node come to disagree about a tip.
-    ///
-    /// The oracle is `PalwNoWeightsV1` because that is what a full node is under W1 — full nodes
-    /// never run the LLM. Every step conviction therefore adjudicates `Unadjudicable`, which does
-    /// NOT void the block: a node that cannot check a refutation has not established the step is
-    /// wrong. Under ADR-0038 I10 it freezes the class instead, and that is a separate walk.
-    #[allow(dead_code)]
-    fn palw_block_weight_v1(
-        &self,
-        chain_tip: BlockHash,
-        block: BlockHash,
-        bonds: &ActiveBondView,
-        schedule: &kaspa_consensus_core::palw_schedule::PalwScheduleParamsV1,
-        ramp: &kaspa_consensus_core::palw_weight::PalwWeightParamsV1,
-    ) -> Option<kaspa_consensus_core::palw_chain_weight::PalwBlockWeightV1> {
-        use kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentV1;
-        use kaspa_consensus_core::palw_facts::{PalwResolverInputV1, resolve_block_weight_v1};
-        use kaspa_consensus_core::palw_step_refute::PalwNoWeightsV1;
-
-        let network_id = self.genesis.hash.as_bytes();
-        let network_id = network_id.as_slice();
-        let header = self.headers_store.get_header(block).ok()?;
-        let commitment = PalwBlockCommitmentV1::decode(&header.palw_commitment).ok()?;
-        let commitment_root = kaspa_pow::palw_admission::palw_header_commitment_root_v1(&header, network_id)?;
-        let accepted_daa = header.daa_score;
-        let pov_daa = self.headers_store.get_header(chain_tip).ok()?.daa_score;
-
-        // Audit P0-7: the exclusion id must be the executor's VALIDATOR key hash, not its bond's
-        // transaction id. Those are different namespaces, so the comparison against a candidate's
-        // `validator_id` never matched and the producer sat on its own verification panel. Resolved
-        // from the bond record rather than restated by the commitment, for the reason the credit
-        // path already learned: a claimed id and a resolved one are two chances to disagree.
-        let executor_id = bonds.active_bond_at(&commitment.executor_bond_outpoint, accepted_daa)?.validator_pubkey_hash;
-
-        // Audit P0-3: a panel that is not drawable YET is not a block this node cannot weigh.
-        //
-        // The anchor sits at `accepted_daa + delta_bind`, so a block's own tip never has one — and
-        // propagating that `None` made every fresh tip unresolvable, every candidate chain
-        // unresolvable with it, and `order_tips_v1` fall back to blue work on every contest. PALW
-        // fork choice could not fire even once. An empty panel is the honest state instead: nobody
-        // has been assigned, so no assigned receipt exists, so the ramp holds the block at
-        // `Provisional` — which is exactly what a fresh commitment is. The panel is drawn on a
-        // later evaluation, once the chain has reached the anchor, and maturity follows then.
-        let panel = self
-            .palw_panel_for_block_v1(
-                chain_tip,
-                block,
-                commitment_root,
-                executor_id,
-                commitment.execution_class_id,
-                accepted_daa,
-                bonds,
-                schedule,
-            )
-            .unwrap_or_default();
-
-        let facts = self.palw_class_facts_for_block(&commitment.execution_class_id, &header)?;
-        let classes = PalwOneClassView {
-            class_id: commitment.execution_class_id,
-            class_target: facts.class_target,
-            pwu_per_inference: facts.pwu_per_inference,
-            // ADR-0069 Decision 7: the third class fact, from the same fold as the other two.
-            weight_bearing: facts.weight_bearing,
-        };
-
-        let carriage = self.palw_carriage_on_chain_v1(chain_tip, accepted_daa);
-        let oracle = PalwNoWeightsV1;
-        let input = PalwResolverInputV1 {
-            carriage: &carriage,
-            network_id,
-            bonds,
-            step_weights: &oracle,
-            panel: &panel,
-            block_hash: block,
-            commitment_root,
-            // Bare-v2 today: the announced root IS the logits leg. A composite class must pass its
-            // own logits leg here — the two are deliberately separate fields because conflating
-            // them made one of the resolver's two consumers silently never match.
-            logits_trace_root: commitment.trace_root,
-            execution_class_id: commitment.execution_class_id,
-            accepted_daa,
-            pov_daa,
-            classes: &classes,
-            schedule: *schedule,
-            // **ADR-0069 Decision 7's fence, at the BLOCK's acceptance point.** `false` on every
-            // shipped preset, where this whole line is inert and the pwu below is what it was.
-            uncertified_weightless: self.palw_uncertified_weightless_at(accepted_daa),
-        };
-
-        // Audit P0-6: the CURVE is supplied here, the DOMAIN is not.
-        //
-        // This closure used to bake in the receipt context and serve all three carriage families,
-        // so a valid execution attestation — the evidence behind a step conviction or an
-        // equivocation — failed signature verification in the weight path while the slash path
-        // (which uses the right domain) convicted on it. A bond was slashed and its block kept its
-        // weight: the court and the ledger in different universes. Each family now names its own
-        // domain where it builds its digest.
-        //
-        // **One call, because there must be ONE definition of a block's weight.** This used to
-        // re-spell `resolve_block_weight_v1`'s body — resolve, tally, price — and pull the pwu
-        // straight off `facts` rather than through the view. The two spellings were equal only by
-        // inspection, and ADR-0069 Decision 7 is exactly the kind of rule that would have landed in
-        // one of them: a fork-choice rule with two implementations is two fork-choice rules. Going
-        // through the resolver also buys the class stamp check (a view that answered for another
-        // class would otherwise price this block with that class's numbers) at this site.
-        resolve_block_weight_v1(&input, ramp, |key, digest, sig, context| {
-            kaspa_txscript::verify_mldsa87_with_context(key, digest.as_bytes().as_slice(), sig, context).unwrap_or(false)
-        })
-        .ok()
-    }
-
-    /// The panel drawn for one block's PALW commitment, from chain state alone.
-    ///
-    /// Ties together the pieces that had to exist first — the candidate set
-    /// (`palw_panel_candidates_v1`), the eligible-set snapshot root (derived inside
-    /// `select_job_panel_at_anchor_v3`), the future anchor (`palw_panel_anchor_v1`), and the
-    /// capability declarations that say which class a bond has staked on being able to run.
-    ///
-    /// Every lookup is scoped to `chain_tip`'s own chain, never to this node's sink. The capability
-    /// filter is the shape `capability_set_root_at` already uses — `declaration_block` is the pin,
-    /// chain membership is asked of reachability — because a declaration living on a branch this
-    /// chain does not contain is not a fact about this chain, and seating a validator from it would
-    /// put two nodes on different panels for one block.
-    ///
-    /// `None` means "not drawable yet", which is a different statement from an empty panel: the
-    /// anchor is in this chain's future. See `palw_panel_anchor_v1` for why an empty vector is the
-    /// wrong answer there.
-    ///
-    /// The block hash serves as the draw's `job_id`. A block's PALW work has no funding request, so
-    /// `palw_job_id_v3`'s inputs do not exist for it — the block IS the job. No namespace collision
-    /// follows: the panel seed is keyed under its own domain and binds `commitment_root`
-    /// separately, so the draw is a function of (network, block, root, anchor, snapshot) whatever a
-    /// job id means elsewhere.
-    #[allow(dead_code)]
-    fn palw_panel_for_block_v1(
-        &self,
-        chain_tip: BlockHash,
-        block_hash: BlockHash,
-        commitment_root: kaspa_hashes::Hash64,
-        executor_id: kaspa_hashes::Hash64,
-        execution_class_id: kaspa_hashes::Hash64,
-        commitment_accepted_daa: u64,
-        bonds: &ActiveBondView,
-        schedule: &kaspa_consensus_core::palw_schedule::PalwScheduleParamsV1,
-    ) -> Option<Vec<kaspa_consensus_core::palw_job_panel::PalwPanelSeatV3>> {
-        use kaspa_consensus_core::palw_job_panel::{palw_panel_candidates_v1, select_job_panel_at_anchor_v3};
-
-        let (anchor_block, anchor_daa) = self.palw_panel_anchor_v1(chain_tip, commitment_accepted_daa, schedule.delta_bind)?;
-
-        let declared = |bond: &TransactionOutpoint| {
-            self.compute_capability_store
-                .read()
-                .all()
-                .into_iter()
-                .find(|r| {
-                    r.bond_outpoint == *bond
-                        && r.is_live_at(anchor_daa)
-                        && (r.declaration_block == anchor_block
-                            || self.reachability_service.is_chain_ancestor_of(r.declaration_block, anchor_block))
-                })
-                .map(|r| r.runtime_class_id)
-        };
-
-        let candidates = palw_panel_candidates_v1(bonds, anchor_daa, declared, |_| false);
-        Some(select_job_panel_at_anchor_v3(
-            self.genesis.hash.as_bytes().as_slice(),
-            block_hash,
-            commitment_root,
-            anchor_block,
-            anchor_daa,
-            &executor_id,
-            &execution_class_id,
-            &candidates,
-            schedule.q as usize,
-        ))
-    }
-
-    /// The **future anchor** a block's panel is drawn against: the first chain block at or after
-    /// `commitment_accepted_daa + delta_bind`, on the chain that ends at `chain_tip`.
-    ///
-    /// This is the last input `select_job_panel_at_anchor_v3` needs that is not already derivable —
-    /// the candidate set comes from the bond view, the snapshot root from the candidates, and every
-    /// other field from the block's own commitment.
-    ///
-    /// The anchor is what makes the draw unpredictable to the executor: `delta_bind` puts it in the
-    /// commitment's future, so a miner cannot shop for a block hash that seats a friendly panel.
-    /// ADR-0028 §2 is explicit that it is "a settling offset, not a finality bound" — it buys
-    /// unpredictability, not irreversibility, and the reorg protection is the challenge window's
-    /// job rather than this offset's.
-    ///
-    /// **`None` when the chain has not reached the anchor yet, and that is a real answer.** A panel
-    /// that does not exist yet is not an empty panel: an empty one licenses nothing and reads as a
-    /// quorum failure, while "not yet drawn" is the ordinary state of a fresh commitment and the
-    /// ramp's `Provisional` already describes it. Returning `Some(vec![])` here would turn every
-    /// young block into a block whose panel defaulted.
-    ///
-    /// Walks backward from the tip and keeps the DEEPEST block still at or above the target, which
-    /// is the first one at or after it going forward. DAA scores skip, so "first at or after" is
-    /// the rule rather than equality — an anchor defined by an exact score would simply not exist
-    /// on most chains.
-    fn palw_panel_anchor_v1(&self, chain_tip: BlockHash, commitment_accepted_daa: u64, delta_bind: u64) -> Option<(BlockHash, u64)> {
-        let target = commitment_accepted_daa.saturating_add(delta_bind);
-        let mut anchor: Option<(BlockHash, u64)> = None;
-        for block in std::iter::once(chain_tip).chain(self.reachability_service.default_backward_chain_iterator(chain_tip)) {
-            // A header this node cannot read ends the walk rather than being skipped: skipping it
-            // would let the walk step over the very block that is the anchor and return a deeper
-            // one, which is a different panel for the same block on two nodes.
-            let daa = self.headers_store.get_header(block).ok()?.daa_score;
-            if daa < target {
-                break;
-            }
-            anchor = Some((block, daa));
-        }
-        anchor
     }
 
     /// Re-derives the [`BondMutation`]s a chain block contributed, from its
@@ -4374,64 +3670,7 @@ impl VirtualStateProcessor {
                 _ => true,
             });
         }
-        muts.extend(self.palw_equivocation_slashes(txs, bond_view, accepted_daa_score));
         muts
-    }
-
-    /// Slashes proved by PALW executor-equivocation certificates accepted in this block — the
-    /// first PALW offence that reaches a bond at all (re-audit blocker 8: nothing did, so every
-    /// `P(detection) × slash` in the design multiplied by zero).
-    ///
-    /// Unlike the VLT half above, this does not derive-then-filter. There, the mutations come
-    /// from payload decoding and a second pass drops the ones whose evidence was never proved —
-    /// necessary because evidence arriving by MERGE skips the own-body genuineness gates. Here
-    /// the adjudication IS the proof and it runs per certificate, so the only mutation that can
-    /// be emitted is one already proved against the accused bond's own key. There is nothing for
-    /// a filter to remove.
-    ///
-    /// Every rejection is a silent skip rather than an error: a certificate that fails to prove
-    /// an equivocation is simply not evidence, and a transaction carrying one is still a valid
-    /// transaction. Nothing here can reject a block.
-    ///
-    /// Fenced on `palw_credit`, so it is inert on every shipped preset. Enabling it means
-    /// enabling the PALW machinery as a whole, which `Params::validate_palw_v1` gates — and the
-    /// credit walk behind that same fence still carries the audit's blocker 11, so the fence is
-    /// not flippable for this path alone.
-    fn palw_equivocation_slashes(
-        &self,
-        txs: &[Transaction],
-        bond_view: &ActiveBondView,
-        accepted_daa_score: u64,
-    ) -> Vec<BondMutation> {
-        // The curve only — the domain comes from whichever family builds the digest (audit P0-6).
-        // This path used to pin the attestation context here, which was RIGHT for its own evidence
-        // and is why the weight path's receipt-context twin went unnoticed: the two disagreed about
-        // one signature and only one of them was wrong.
-        let verify = |key: &[u8], digest: &kaspa_hashes::Hash, signature: &[u8], context: &[u8]| {
-            matches!(verify_mldsa87_with_context(key, &digest.as_bytes(), signature, context), Ok(true))
-        };
-        let fence = self.palw_credit_params.is_some();
-        // ADR-0009 Addendum A.3: the network discriminator IS the genesis hash. Passed from the
-        // chain rather than read out of the evidence, so a certificate honestly signed on another
-        // network cannot slash a bond here.
-        let chain_network_id = self.genesis.hash;
-        let mut out =
-            palw_equivocation_slashes_v1(txs, bond_view, accepted_daa_score, chain_network_id.as_byte_slice(), fence, verify);
-        // Arithmetic convictions need the model's weight rows to recompute a step. Serving them
-        // is a node-local capability, not a consensus input, and a node that cannot serve them
-        // adjudicates `Unadjudicable` — which convicts nobody, so the derivation stays a pure
-        // function of the chain for every node that CAN. Wiring a real oracle is the Track-D
-        // step that turns this arm on; until then it is structurally present and derives nothing.
-        out.extend(palw_step_conviction_slashes_v1(
-            txs,
-            bond_view,
-            accepted_daa_score,
-            chain_network_id.as_byte_slice(),
-            fence,
-            &NoStepWeights,
-            verify,
-        ));
-        out
     }
 
     /// The per-bond acceptance floors (min stake amount, min unbonding window) from the network's
@@ -8405,7 +7644,10 @@ impl VirtualStateProcessor {
         };
         let lane = self.palw_execution_lane_at(daa_score)?;
         let span_now = palw_execution_span_v1(daa_score, lane.schedule_span_daa);
-        let mut verdicts = super::utxo_validation::PalwRoundVerdictsV1 { round_blocks: self.palw_round_blocks_of(ghostdag_data), ..Default::default() };
+        let mut verdicts = super::utxo_validation::PalwRoundVerdictsV1 {
+            round_blocks: self.palw_round_blocks_of(ghostdag_data),
+            ..Default::default()
+        };
         let mut ordered: Vec<BlockHash> = verdicts.round_blocks.iter().copied().collect();
         ordered.sort();
         for block in ordered {
@@ -8420,7 +7662,9 @@ impl VirtualStateProcessor {
                 let schedule = state.round_schedule(span)?;
                 palw_execution_permit_of_v1(schedule, envelope.round, lane.permits_per_round, envelope.permit_index, &envelope.bond)?;
                 let bond = state.bond(&envelope.bond)?;
-                if !matches!(bond.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) || bond.pubkey != envelope.pubkey {
+                if !matches!(bond.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active)
+                    || bond.pubkey != envelope.pubkey
+                {
                     return None;
                 }
                 let transactions = self.block_transactions_store.get(block).ok()?;
@@ -8512,9 +7756,9 @@ impl VirtualStateProcessor {
             work_priced_reward_active: self.palw_work_priced_reward_active_at(daa_score),
             // ADR-0125: the lane's span, where it is open. The permits a block accepted are the
             // chain walk's to add — it is the only caller holding the verdicts.
-            round_lane: self
-                .palw_execution_lane_at(daa_score)
-                .map(|lane| kaspa_consensus_core::palw_execution_lane_v1::PalwExecLaneFoldV1 { schedule_span_daa: lane.schedule_span_daa }),
+            round_lane: self.palw_execution_lane_at(daa_score).map(|lane| {
+                kaspa_consensus_core::palw_execution_lane_v1::PalwExecLaneFoldV1 { schedule_span_daa: lane.schedule_span_daa }
+            }),
             round_permit_uses: Vec::new(),
             evm_actions: Vec::new(),
             // ADR-0093 Decision 8: which form of move 1 opens a phase. Written explicitly for the
@@ -11838,299 +11082,6 @@ impl VirtualStateProcessor {
         (outputs, spent)
     }
 
-    /// ADR-0033 §4 (B14): the PALW credit outputs of the block being built or validated at
-    /// `daa_score` on top of `selected_parent` — `base(C)` to each creditable commitment's
-    /// executor and `ρ_v · base(C)` to each paid panel attester, resolved to bond reward
-    /// spks exactly like the audit fee.
-    ///
-    /// A commitment crosses its `challenge_close_daa` at this block iff the parent had not
-    /// yet passed it and this block has (the audit-fee crossing rule), so each commitment
-    /// is decided exactly once per chain with no cross-block dedup state. Every fact the
-    /// gate reads is assembled by walking THIS block's selected-parent chain backward
-    /// across the challenge horizon — never the virtual-maintained store — so construction
-    /// and validation of the same block compute identical outputs even while virtual
-    /// points elsewhere, and a reorg re-decides identically on every node (ADR-0033 §5).
-    ///
-    /// # Cost
-    ///
-    /// Nothing when the fence is `None` (every shipped network — the caller gates). Active,
-    /// it reads `w_challenge + Δ_bind + slack` chain blocks' acceptance data per block: the
-    /// same activation-gated posture as [`Self::compute_audit_fee_outputs`], and like it,
-    /// a settled index is the optimization ADR-0033's preconditions require before any
-    /// real network carries the fence.
-    pub(super) fn compute_palw_credit_outputs(
-        &self,
-        credit: &kaspa_consensus_core::palw_credit::PalwCreditParamsV1,
-        daa_score: u64,
-        selected_parent: BlockHash,
-        bonds: &[StakeBondRecord],
-        class_state: &crate::model::stores::palw_class_state::PalwClassStateView,
-    ) -> Vec<TransactionOutput> {
-        use kaspa_consensus_core::blockhash::BlockHashExtensions;
-        use kaspa_consensus_core::palw_carriage::{PalwCarriageV1, decode_palw_stage1_body};
-        use kaspa_consensus_core::palw_credit::{PalwObservedAttestationV1, PalwObservedCommitmentV1, decide_credit_v1};
-
-        let windows = &credit.registration.windows;
-        // Nothing can have crossed before activation plus one full window.
-        if daa_score <= credit.activation_daa.saturating_add(windows.w_challenge) {
-            return Vec::new();
-        }
-        let Ok(parent_daa) = self.headers_store.get_daa_score(selected_parent) else {
-            return Vec::new();
-        };
-        // Walk the selected-parent chain back across the whole challenge horizon.
-        let depth = windows.w_challenge.saturating_add(windows.delta_bind).saturating_add(windows.prosecution_slack);
-        let mut chain_rev: Vec<(BlockHash, u64)> = Vec::new(); // newest-first
-        let mut commitments = Vec::new();
-        let mut attestations = Vec::new();
-        let mut refutations = Vec::new();
-        let mut current = selected_parent;
-        loop {
-            let Ok(cur_daa) = self.headers_store.get_daa_score(current) else { break };
-            if parent_daa.saturating_sub(cur_daa) > depth {
-                break;
-            }
-            chain_rev.push((current, cur_daa));
-            for (tx_id, record) in
-                palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(current), cur_daa, current)
-            {
-                match decode_palw_stage1_body(record.kind, &record.body) {
-                    Ok(PalwCarriageV1::Commitment(c)) => commitments.push((tx_id, c, cur_daa)),
-                    Ok(PalwCarriageV1::Attestation(a)) => attestations.push((a, cur_daa)),
-                    Ok(PalwCarriageV1::Refutation(r)) => refutations.push((r.evidence, cur_daa)),
-                    _ => {}
-                }
-            }
-            let Ok(parent) = self.ghostdag_store.get_selected_parent(current) else { break };
-            if parent == current || parent.is_origin() {
-                break;
-            }
-            current = parent;
-        }
-        // Crossing commitments, in one pinned order (construction == validation).
-        let mut crossing: Vec<&(TransactionId, kaspa_consensus_core::palw_carriage::PalwCommitmentCarriageV1, u64)> = commitments
-            .iter()
-            .filter(|(_, _, accepted)| {
-                parent_daa.saturating_sub(*accepted) <= windows.w_challenge
-                    && daa_score.saturating_sub(*accepted) > windows.w_challenge
-            })
-            .collect();
-        crossing.sort_by_key(|(tx_id, _, accepted)| (*accepted, *tx_id));
-        // B2: one credit per COMMITTED ROOT. The same root carried by two transactions crossed
-        // twice and was paid twice — the carriage is relayable, so duplicating it costs a fee and
-        // mints a second base(C). Dedup happens after the pinned sort, so which copy survives is a
-        // function of `(accepted_daa, tx_id)` and not of walk order.
-        {
-            let mut seen: std::collections::BTreeSet<kaspa_consensus_core::Hash64> = std::collections::BTreeSet::new();
-            crossing.retain(|(_, c, _)| seen.insert(c.committed_root));
-        }
-        if crossing.is_empty() {
-            return Vec::new();
-        }
-        let subsidy = self.coinbase_manager.calc_block_subsidy(daa_score);
-        // B3/B4: the per-block mint ceiling that makes ADR-0033 §4e non-vacuous.
-        //
-        // `max_leverage_holds_v1` bounds an attacker's pre-unbonding gain as
-        // `g_max = base(C) × (unbonding / min_credit_interval + 1)` — i.e. the inequality ASSUMES
-        // one credited job per `min_credit_interval_daa`. Nothing enforced that, and a block credited
-        // every commitment that crossed in it, so the real ceiling was `base(C) × commitments` and
-        // the safety margin the registration was validated against was fiction.
-        //
-        // One job's full payout — `base(C)` plus its `q` attester shares — is therefore the budget
-        // for the whole block. Draining is PREFIX-MANDATORY, matching `palw_credit_batch`'s rule
-        // (ADR-0037 D7): stop at the first record that does not fit rather than skipping it, so the
-        // set credited is a prefix of the pinned order and cannot be cherry-picked.
-        // The emergency stop, finally reachable. `class_frozen` was hardcoded `false` at the panel
-        // site, so the ladder's Frozen state existed as a type and could never halt anything. It is
-        // now read from chain state through a view, and it fails CLOSED: a class this chain point
-        // cannot establish as Active mints nothing (audit §3.4).
-        let class_id = credit.registration.runtime_class_id;
-        if class_state.is_frozen(&class_id) {
-            return Vec::new();
-        }
-        let one_job_ceiling = credit.one_job_ceiling_sompi(subsidy);
-        let mut spent: u64 = 0;
-        let mut outputs = Vec::new();
-        for (_, commitment, accepted) in crossing {
-            let logits_root = match commitment.binding.as_ref() {
-                Some(binding) => binding.full_logits_trace_root,
-                None => commitment.committed_root, // bare v2: the committed root IS the logits root
-            };
-            // Anchor: the first chain block at or past accepted + Δ_bind (ADR-0028 §2).
-            let anchor_daa = accepted.saturating_add(windows.delta_bind);
-            let Some((anchor_hash, anchor_block_daa)) = chain_rev.iter().rev().find(|(_, daa)| *daa >= anchor_daa) else {
-                continue; // no anchor on this chain — the job is not decidable here
-            };
-            // AUTHENTICATE THE COMMITMENT before it is treated as a claim at all. Nothing in this
-            // walk verified a signature, so a single bonded attacker minted base(C) per crossing
-            // with zero inference: the carriage's ML-DSA-87 signature and the digest it covers both
-            // existed and neither was ever checked (audit, credit-path critical).
-            //
-            // Resolved by bond OUTPOINT and then required to match the claimed validator id — the
-            // outpoint is the unique identity, and without the cross-check a commitment could name
-            // one bond's outpoint while claiming another's id, which is also the id that excludes
-            // the executor from its own panel.
-            let Some(executor_bond) = bonds.iter().find(|b| b.bond_outpoint == commitment.bond_outpoint) else { continue };
-            if executor_bond.validator_pubkey_hash != commitment.validator_id
-                || !kaspa_consensus_core::dns_finality::is_bond_active_at(executor_bond, *accepted)
-            {
-                continue;
-            }
-            let commitment_digest = kaspa_consensus_core::palw_carriage::palw_commitment_carriage_message_v1(
-                commitment.validator_id,
-                commitment.bond_outpoint,
-                commitment.committed_form,
-                commitment.committed_root,
-                kaspa_consensus_core::palw_carriage::palw_carriage_envelope_hash_v1(&commitment.envelope),
-            );
-            if !Self::verify_palw_commitment_signature(&executor_bond.validator_pubkey, &commitment_digest, &commitment.signature) {
-                continue;
-            }
-            // The candidate set, built HERE rather than hoisted, because `bonded` is a question
-            // about a point of view and the point of view is this commitment's anchor.
-            //
-            // It used to be the constant `true` for every record in `bonds`, and `bonds` is the
-            // whole view (`ActiveBondView::records()` returns every record it holds, not the active
-            // ones). So a Slashed, Unbonding or not-yet-Active bond took a panel seat and could be
-            // PAID for attesting — the eligibility rule ADR-0028 §2 states, and that
-            // `select_replay_panel_v1`'s own doc says lives in the function, was being satisfied by
-            // a hardcoded answer from the caller. `effective_bond_status` at the anchor's DAA is
-            // that answer, and it is the same function the rest of the overlay judges bonds with.
-            //
-            // `frozen` stays `false` here on purpose: freezing is decided CLASS-wide, once, and
-            // fail-closed at the top of this function (`class_state.is_frozen`), so a per-candidate
-            // copy could only ever disagree with it.
-            let candidates = kaspa_consensus_core::palw_credit::panel_seats_at_anchor_v3(
-                bonds,
-                credit.registration.runtime_class_id,
-                *anchor_block_daa,
-                executor_bond.owner_pubkey_hash,
-            );
-            let observed = PalwObservedCommitmentV1 {
-                committed_root: commitment.committed_root,
-                logits_root,
-                executor_id: commitment.validator_id,
-                runtime_class_id: commitment.envelope.runtime_class_id,
-                accepted_daa: *accepted,
-            };
-            let observed_atts: Vec<PalwObservedAttestationV1> = attestations
-                .iter()
-                // Joined on the SIGNED root, not the carriage's copy. Admission requires the two to
-                // agree, so this is belt-and-braces — but it is the belt that matters: the carriage
-                // field is free filer input, and joining on it let an attacker repoint an honest
-                // validator's published attestation at its own fabricated commitment and mint
-                // `base(C)` for zero inference. A consumer that reads the signed value cannot be
-                // reintroduced to that bug by a future wire form that forgets the equality.
-                .filter(|(a, _): &&(kaspa_consensus_core::palw_carriage::PalwAttestationCarriageV1, u64)| {
-                    a.attestation.committed_root == commitment.committed_root
-                })
-                // AUTHENTICATE each attestation the same way. A forged attestation naming a drawn
-                // panel member paid an attacker-chosen bond, because the payee is the filing bond
-                // and nothing checked that the filer signed anything.
-                .filter(|(a, daa)| {
-                    let Some(bond) = bonds.iter().find(|b| b.bond_outpoint == a.bond_outpoint) else { return false };
-                    bond.validator_pubkey_hash == a.attester_id
-                        && kaspa_consensus_core::dns_finality::is_bond_active_at(bond, *daa)
-                        && Self::verify_palw_attestation_signature(
-                            &bond.validator_pubkey,
-                            // ADR-0009 Addendum A.3: the network discriminator IS the genesis hash,
-                            // the same one every other PALW signature path on this node uses. Binding
-                            // it means a devnet attestation cannot be replayed on mainnet.
-                            &a.attestation.message(self.genesis.hash.as_byte_slice()),
-                            &a.attestation.signature,
-                        )
-                })
-                .map(|(a, daa)| PalwObservedAttestationV1 {
-                    attester_id: a.attester_id,
-                    // Carried through, not dropped: this is the payee (audit B5).
-                    bond_outpoint: a.bond_outpoint,
-                    attested_logits_root: a.attestation.full_logits_trace_root,
-                    accepted_daa: *daa,
-                })
-                .collect();
-            let refutation_daas: Vec<u64> = refutations
-                .iter()
-                .filter(|(e, _): &&(kaspa_consensus_core::palw_carriage::PalwCarriedEvidenceV1, u64)| {
-                    e.refutes(&commitment.committed_root, &logits_root)
-                })
-                .map(|(_, daa)| *daa)
-                .collect();
-            // ADR-0033 §4e assumes ONE credited job per `min_credit_interval_daa`, and until now
-            // nothing remembered the last one — the walk spans `w_challenge` backward while a
-            // commitment crosses `w_challenge` AFTER acceptance, so previous credits are outside it
-            // by construction (audit B4). The view remembers; this is where the assumption becomes
-            // a rule. `continue`, not `break`: a commitment too close to the last credit is not a
-            // budget exhaustion, and a later one in the pinned order may still be far enough.
-            if !class_state.credit_interval_elapsed(&class_id, *accepted, credit.registration.leverage_remedy.min_credit_interval_daa)
-            {
-                continue;
-            }
-            // `job_id` comes from the envelope the commitment's verified signature covers (the
-            // digest includes `palw_carriage_envelope_hash_v1`), so it is authenticated even though
-            // the miner chose it. The network identity is the GENESIS HASH — ADR-0009 Addendum A.3
-            // makes that the network discriminator — so a panel drawn on one network is not the
-            // panel on another.
-            //
-            // It being miner-chosen is safe, but NOT for the reason it is tempting to write down:
-            // the seed also binds a block finalized after the commitment, and a miner-executor CAN
-            // create that block — `PalwScheduleParamsV1::validate` only requires `delta_bind != 0`,
-            // so with a small Δ_bind it mines the anchor itself and grinds the hash. The real
-            // argument is ADR-0028 §2's: nothing here relies on the panel being unpredictable,
-            // because replays are full and refutation is permissionless. A Δ_bind floor is the
-            // change to make if that ever stops being true.
-            let decision = decide_credit_v1(
-                credit,
-                &observed,
-                self.genesis.hash.as_bytes().as_slice(),
-                commitment.envelope.job_id,
-                anchor_hash,
-                *anchor_block_daa,
-                &candidates,
-                &observed_atts,
-                &refutation_daas,
-                subsidy,
-            );
-            if !decision.creditable {
-                continue;
-            }
-            // What this record would mint, counted BEFORE any output is pushed so a record either
-            // pays in full or not at all.
-            let this_job =
-                decision.base_sompi.saturating_add(decision.attester_share_sompi.saturating_mul(decision.paid_attesters.len() as u64));
-            let Some(remaining) = one_job_ceiling.checked_sub(spent) else { break };
-            if this_job > remaining {
-                break; // prefix-mandatory: stop, never skip past it to a smaller one
-            }
-            spent = spent.saturating_add(this_job);
-            // base(C) to the executor's bond owner — an unbonded executor has no payout
-            // target and no stake at risk, so it earns nothing; attester shares still pay,
-            // because their liability (signature ∧ refutation) is their own.
-            //
-            // Resolved by BOND OUTPOINT, which the carriage carries, not by
-            // `validator_pubkey_hash`. That hash is explicitly NOT unique (`dns_finality` says so),
-            // and this used to `.find()` the first bond matching it — so with two bonds under one
-            // validator key the reward went to whichever the walk happened to reach first, i.e. a
-            // payee decided by iteration order rather than by the claim (audit B5). The outpoint is
-            // unique by construction and is the same key the panel, the receipts and the slash
-            // paths use. `executor_bond` is the one resolved and AUTHENTICATED at the top of this
-            // iteration — resolving it a second time here would be a second chance to disagree with
-            // the bond whose signature was actually checked.
-            if decision.base_sompi > 0 {
-                outputs.push(TransactionOutput::new(decision.base_sompi, p2pkh_mldsa87_spk(&executor_bond.owner_reward_spk_payload)));
-            }
-            for paid in &decision.paid_attesters {
-                let Some(bond) = bonds.iter().find(|b| b.bond_outpoint == paid.bond_outpoint) else { continue };
-                if decision.attester_share_sompi > 0 {
-                    outputs.push(TransactionOutput::new(
-                        decision.attester_share_sompi,
-                        p2pkh_mldsa87_spk(&bond.owner_reward_spk_payload),
-                    ));
-                }
-            }
-        }
-        outputs
-    }
-
     /// This validator's own standing in the compute overlay. Backs
     /// [`ConsensusApi::get_compute_status`].
     ///
@@ -13319,75 +12270,6 @@ impl VirtualStateProcessor {
     /// direction for a rule whose false positive is "sink moved onto the wrong branch". The cost
     /// note on the reorg gate (§5-5) does not apply: this path is entered only in the dead-anchor
     /// state, which the cheap staleness check settles first on every healthy resolve.
-    /// The PALW weights a tip is RANKED by — the value both `RankedTip` sites passed `None` for.
-    ///
-    /// This fills the seam `order_tips_v1` was built for rather than adding a second preference
-    /// beside it. That matters for a reason the seam's own doc gives: its comparison is total
-    /// (PALW weight, then the existing `SortableBlock` order, hash tie-break included), and
-    /// totality is what keeps two nodes with different insertion orders from picking different
-    /// tips. A parallel "preferred tip" path would decide before that order ran and give up the
-    /// property.
-    ///
-    /// **`None` on every shipped network, and the first three lines are the whole of it.** All of
-    /// `palw_schedule`, `palw_ramp` and `palw_fork_choice` are `None` on every preset, so this
-    /// returns before touching a store, every `RankedTip` carries `palw: None`, and — since the
-    /// rule is also `BlueWorkOnly` there — the heap is byte-identical to the blue-work heap it
-    /// replaced. That is a fact about the presets, not a structural guarantee, exactly as
-    /// `Params::palw_fork_choice` says about itself.
-    ///
-    /// `None` also means "this node could not weigh that chain", and `order_tips_v1` ranks such a
-    /// candidate BELOW any resolved one rather than treating it as zero. That is the seam's choice
-    /// and it is the safe direction here: a node does not build on a chain it cannot weigh, and it
-    /// does not get to call it weightless either.
-    ///
-    /// The window floor is the finality point's DAA. Every candidate must have the finality point
-    /// on its chain to be a candidate at all, so below it they share every block — folding deeper
-    /// adds identical terms to both sides.
-    pub(super) fn palw_tip_weights_v1(
-        &self,
-        tip: BlockHash,
-        finality_point: BlockHash,
-        sink: BlockHash,
-        sink_view: &ActiveBondView,
-    ) -> Option<kaspa_consensus_core::palw_chain_weight::PalwChainWeightsV1> {
-        // **On a V2 network this heap is a SEARCH ORDER, not the authority** (launch blockers §7).
-        //
-        // A version of this fed `palw_candidate_order_v2` into the seam, on the reasoning that one
-        // authority means every site orders by the same key. The reasoning was right and the site
-        // was wrong: this ranking runs over candidates that have NOT been UTXO-validated yet, and
-        // a candidate's V2 order is derived by walking stored deltas — which `commit_utxo_state`
-        // writes only for blocks that have already been committed to the selected chain. So
-        // "resolvable" here does not mean "heavier"; it means "already mine". `order_tips_v1`
-        // ranks `Some` above `None`, so the incumbent chain outranked every challenger by
-        // construction, whatever its weight.
-        //
-        // That is a permanent wedge, not a preference. Once a node's sink is itself a tip — its
-        // branch stopped while the network moved on — every competing tip is unweighable, the sink
-        // wins every contest, and the node never reorgs again. An attacker forces exactly that
-        // state on a chosen victim with one privately-delivered block. It also cannot be repaired
-        // by ranking `None` higher, which would invert it into "prefer the chain I cannot weigh".
-        //
-        // The authority is `dns_reorg_outcome`'s `decide_deep_reorg_v2` (site 4), which runs AFTER
-        // `calculate_utxo_state_relatively` has validated the candidate and therefore written its
-        // deltas — the first moment both sides of the comparison are weighable. Every sink move
-        // still passes it, so there is still exactly one comparator; this is not a second one
-        // being dropped, it is the site where a comparator cannot yet be evaluated.
-        //
-        // `RankedTip::cmp` already said the virtual-tip site is deliberately not PALW-ordered.
-        // It was true for the V1 lineage and false for V2 while this branch stood.
-        if self.palw_state_params_v2.is_some() {
-            return None;
-        }
-        let schedule = self.palw_schedule.as_ref()?;
-        let ramp = self.palw_ramp.as_ref()?;
-        let fork_choice = self.palw_fork_choice.as_ref()?;
-        let floor = self.headers_store.get_daa_score(finality_point).unwrap_or_default();
-        // Audit P0-4: the bonds this candidate's own chain has, derived here rather than borrowed
-        // from wherever the sink search happens to have moved its view.
-        let bonds = self.palw_bond_view_at_v1(sink, sink_view, tip);
-        self.palw_chain_weights_v1(tip, floor, &bonds, schedule, ramp, fork_choice, &fork_choice.exposure_params_v1())
-    }
-
     fn dns_stake_preferred_tip(&self, prev_sink: BlockHash, tips: &[BlockHash], finality_point: BlockHash) -> Option<BlockHash> {
         // ADR-0126: past the retirement no stake prefers a tip.
         let dns_params = self.dns_params_at(self.headers_store.get_daa_score(prev_sink).unwrap_or_default())?;
@@ -13508,18 +12390,13 @@ impl VirtualStateProcessor {
             );
         }
 
-        // ADR-0039 W4′: sink selection goes through the ONE seam, same as the header-selected
-        // tip. `RankedTip`'s `Ord` calls `order_tips_v1`, which under `BlueWorkOnly` — every
-        // shipped preset — compares the inner `SortableBlock`s and is therefore byte-identical to
-        // the heap this replaces, hash tie-break included.
-        let tip_order = self.palw_tip_order;
+        // The heap is ordered by GHOSTDAG's own key, `SortableBlock` (blue work, then hash), on
+        // every network. A PALW V2 chain is weighed by the deep-reorg gate after UTXO validation
+        // (`dns_reorg_outcome`), the first point both sides of a comparison are weighable; the V1
+        // heap key that ranked candidates by the overlay's bond view is gone with the V1 lineage.
         let mut heap = tips
             .into_iter()
-            .map(|block| RankedTip {
-                block: SortableBlock { hash: block, blue_work: self.ghostdag_store.get_blue_work(block).unwrap() },
-                palw: self.palw_tip_weights_v1(block, finality_point, prev_sink, bond_view),
-                rule: tip_order,
-            })
+            .map(|block| SortableBlock { hash: block, blue_work: self.ghostdag_store.get_blue_work(block).unwrap() })
             .collect::<BinaryHeap<_>>();
 
         // Self-wedge diagnostics (incident 2026-07-19 §2-1): the heaviest candidate the DNS gate
@@ -13577,7 +12454,7 @@ impl VirtualStateProcessor {
                 );
                 return (prev_sink, VecDeque::new());
             };
-            let candidate = popped.block.hash;
+            let candidate = popped.hash;
             // QR reachability hardening: skip a candidate whose reachability is missing (half-pruned)
             // instead of panicking; it is below finality and recovery will complete the prune. Consensus-neutral.
             let candidate_at_or_above_finality = match self.reachability_service.try_is_chain_ancestor_of(finality_point, candidate) {
@@ -13624,53 +12501,11 @@ impl VirtualStateProcessor {
                         // Hence as an optimization we prefer removing such blocks in advance to allow valid tips to be considered.
                         let filtering_root = self.depth_store.merge_depth_root(candidate).unwrap();
                         let filtering_blue_work = self.ghostdag_store.get_blue_work(filtering_root).unwrap_or_default();
-                        // **Unit D, site 1's other half: keep `pick_virtual_parents`' documented
-                        // assumption true.**
-                        //
-                        // That function assumes "`selected_parent.blue work > max(candidates.blue
-                        // work)`" and ASSERTS the consequence — GHOSTDAG's `find_selected_parent`
-                        // is `max by blue_work`, so a virtual parent heavier than the sink would
-                        // become virtual's selected parent instead of the sink. Under blue-work
-                        // ordering the assumption holds for free, because the sink IS the maximum.
-                        // Under any PALW order it does not, and the node dies on the assert — which
-                        // is how this was found, twice.
-                        //
-                        // Filtering the heavier candidates out is the minimal repair and it costs
-                        // liveness, not safety: virtual merges fewer tips this round, and the
-                        // excluded ones stay in the DAG to be merged once the chain's own blue
-                        // work catches up. The alternative — letting the DAG pick a different
-                        // selected parent than the sink search did — is two canonical chains in
-                        // one node, which is the P0-5 this unit exists to close.
-                        //
-                        // Scoped to the PALW order, because it is only there that the assumption
-                        // can fail. Applying it unconditionally cost two blue-work tests
-                        // (`template_mining_sanity_test`, `double_search_disqualified_test`) —
-                        // under blue-work ordering the sink IS the maximum, so `< sink_blue_work`
-                        // additionally drops the EQUAL-work siblings virtual is supposed to merge,
-                        // and the parent set silently narrows on every network. Measured, not
-                        // reasoned about.
-                        //
-                        // Scoped further to the V1 fence: on a V2 network `palw_tip_weights_v1`
-                        // answers `None` for every candidate (see there), so this heap IS blue-work
-                        // ordered, the sink IS the maximum, and the assumption holds for free.
-                        // Leaving the filter on would then drop the EQUAL-work siblings — the exact
-                        // silent parent-set narrowing the paragraph above measured — on every block
-                        // of the only lineage that ships it.
-                        let sink_blue_work = match tip_order {
-                            kaspa_consensus_core::palw_chain_weight::PalwTipOrderV1::PalwWeighted
-                                if self.palw_state_params_v2.is_none() =>
-                            {
-                                Some(self.ghostdag_store.get_blue_work(candidate).unwrap_or_default())
-                            }
-                            _ => None,
-                        };
+                        // The heap is GHOSTDAG's own order, so the sink is the maximum of every
+                        // candidate left in it and `pick_virtual_parents`' assumption holds as is.
                         return (
                             candidate,
-                            heap.into_sorted_iter()
-                                .take_while(|s| s.block.blue_work >= filtering_blue_work)
-                                .filter(|s| sink_blue_work.is_none_or(|sink| s.block.blue_work < sink))
-                                .map(|s| s.block.hash)
-                                .collect(),
+                            heap.into_sorted_iter().take_while(|s| s.blue_work >= filtering_blue_work).map(|s| s.hash).collect(),
                         );
                     }
                     if gate_rejected.is_none() {
@@ -13702,13 +12537,9 @@ impl VirtualStateProcessor {
                 // ADR-0125: a round parent stands for its anchor, which is on the candidate's chain.
                 let parent = self.palw_project_round_block(parent);
                 if self.reachability_service.is_dag_ancestor_of(finality_point, parent)
-                    && !self.reachability_service.is_dag_ancestor_of_any(parent, &mut heap.iter().map(|sb| sb.block.hash))
+                    && !self.reachability_service.is_dag_ancestor_of_any(parent, &mut heap.iter().map(|sb| sb.hash))
                 {
-                    heap.push(RankedTip {
-                        block: SortableBlock { hash: parent, blue_work: self.ghostdag_store.get_blue_work(parent).unwrap() },
-                        palw: self.palw_tip_weights_v1(parent, finality_point, prev_sink, bond_view),
-                        rule: tip_order,
-                    });
+                    heap.push(SortableBlock { hash: parent, blue_work: self.ghostdag_store.get_blue_work(parent).unwrap() });
                 }
             }
             drop(prune_guard);
@@ -13855,9 +12686,8 @@ impl VirtualStateProcessor {
         }
         let all = projected.clone();
         projected.retain(|block| {
-            !all.iter().any(|other| {
-                other != block && self.reachability_service.try_is_dag_ancestor_of(*block, *other).unwrap_or(false)
-            })
+            !all.iter()
+                .any(|other| other != block && self.reachability_service.try_is_dag_ancestor_of(*block, *other).unwrap_or(false))
         });
         projected
     }
@@ -13879,8 +12709,9 @@ impl VirtualStateProcessor {
         let Some(lane) = self.palw_execution_lane else {
             return;
         };
-        let envelope_of =
-            |block: BlockHash| self.headers_store.get_header(block).ok().and_then(|h| PalwExecEnvelopeV1::decode(&h.palw_commitment).ok());
+        let envelope_of = |block: BlockHash| {
+            self.headers_store.get_header(block).ok().and_then(|h| PalwExecEnvelopeV1::decode(&h.palw_commitment).ok())
+        };
         round_tips.sort_by_key(|tip| std::cmp::Reverse((envelope_of(*tip).map(|e| e.round).unwrap_or(0), *tip)));
         for tip in round_tips {
             if virtual_parents.len() >= max_block_parents {
@@ -14405,7 +13236,11 @@ impl VirtualStateProcessor {
             return None;
         }
         let sink = virtual_state.ghostdag_data.selected_parent;
-        let anchor = self.ghostdag_store.get_selected_parent(sink).ok().filter(|anchor| !kaspa_consensus_core::blockhash::BlockHashExtensions::is_origin(anchor))?;
+        let anchor = self
+            .ghostdag_store
+            .get_selected_parent(sink)
+            .ok()
+            .filter(|anchor| !kaspa_consensus_core::blockhash::BlockHashExtensions::is_origin(anchor))?;
         let span = kaspa_consensus_core::palw_execution_lane_v1::palw_execution_span_v1(
             self.headers_store.get_daa_score(anchor).ok()?,
             lane.schedule_span_daa,
@@ -14417,7 +13252,9 @@ impl VirtualStateProcessor {
         }
         let permits = state
             .round_schedule(span)
-            .map(|schedule| kaspa_consensus_core::palw_execution_lane_v1::palw_execution_permits_v1(schedule, round, lane.permits_per_round))
+            .map(|schedule| {
+                kaspa_consensus_core::palw_execution_lane_v1::palw_execution_permits_v1(schedule, round, lane.permits_per_round)
+            })
             .unwrap_or_default();
         let used = (0..lane.permits_per_round).filter(|index| state.round_permit_used(span, round, *index)).collect();
         Some(kaspa_consensus_core::palw_execution_lane_v1::PalwExecRoundViewV1 {
@@ -14468,26 +13305,26 @@ impl VirtualStateProcessor {
             .ok_or_else(|| RuleError::BadRoundLaneParents("the sink has no chain block beneath it to anchor a round block".into()))?;
         let _prune_guard = self.pruning_lock.blocking_read();
         let pruning_point = self.pruning_point_store.read().pruning_point().unwrap();
-        let envelope_of =
-            |block: BlockHash| self.headers_store.get_header(block).ok().and_then(|h| PalwExecEnvelopeV1::decode(&h.palw_commitment).ok());
-        let mut round_tips: Vec<(u64, BlockHash)> = self
-            .body_tips_store
-            .read()
-            .get()
-            .unwrap()
-            .read()
-            .iter()
-            .copied()
-            .filter(|tip| self.ghostdag_manager.is_round_block(*tip))
-            .filter_map(|tip| envelope_of(tip).map(|envelope| (envelope.round, tip)))
-            .filter(|(tip_round, _)| *tip_round < round)
-            .filter(|(_, tip)| {
-                self.ghostdag_store
-                    .get_selected_parent(*tip)
-                    .ok()
-                    .is_some_and(|tip_anchor| self.reachability_service.try_is_chain_ancestor_of(tip_anchor, anchor).unwrap_or(false))
-            })
-            .collect();
+        let envelope_of = |block: BlockHash| {
+            self.headers_store.get_header(block).ok().and_then(|h| PalwExecEnvelopeV1::decode(&h.palw_commitment).ok())
+        };
+        let mut round_tips: Vec<(u64, BlockHash)> =
+            self.body_tips_store
+                .read()
+                .get()
+                .unwrap()
+                .read()
+                .iter()
+                .copied()
+                .filter(|tip| self.ghostdag_manager.is_round_block(*tip))
+                .filter_map(|tip| envelope_of(tip).map(|envelope| (envelope.round, tip)))
+                .filter(|(tip_round, _)| *tip_round < round)
+                .filter(|(_, tip)| {
+                    self.ghostdag_store.get_selected_parent(*tip).ok().is_some_and(|tip_anchor| {
+                        self.reachability_service.try_is_chain_ancestor_of(tip_anchor, anchor).unwrap_or(false)
+                    })
+                })
+                .collect();
         round_tips.sort_by_key(|(tip_round, tip)| std::cmp::Reverse((*tip_round, *tip)));
         let max_block_parents = self.max_block_parents as usize;
         let mut parents: Vec<BlockHash> = Vec::new();
@@ -14591,7 +13428,8 @@ impl VirtualStateProcessor {
         if version >= kaspa_consensus_core::constants::EVM_HEADER_VERSION {
             header = header.with_evm_payload_hash(evm_payload.payload_hash());
         }
-        let calculated_fees = if template.calculated_fees.len() + 1 == transactions.len() { template.calculated_fees } else { Vec::new() };
+        let calculated_fees =
+            if template.calculated_fees.len() + 1 == transactions.len() { template.calculated_fees } else { Vec::new() };
         let mut block = MutableBlock::new(header, transactions);
         block.evm_payload = evm_payload;
         Ok(BlockTemplate::new(
@@ -15048,18 +13886,6 @@ impl VirtualStateProcessor {
                 parent_balance,
             );
             validator_reward_outputs.extend(drip_outputs);
-        }
-        // ADR-0033 (B14): PALW credit outputs, appended after the drip in BOTH paths so the
-        // output order is pinned. Dormant (`None`) on every shipped network.
-        if let Some(credit) = self.palw_credit_params.as_ref() {
-            let credit_outputs = self.compute_palw_credit_outputs(
-                credit,
-                virtual_state.daa_score,
-                virtual_state.ghostdag_data.selected_parent,
-                &template_bond_view.records(),
-                &self.initial_palw_class_state_view(),
-            );
-            validator_reward_outputs.extend(credit_outputs);
         }
         // ADR-0042 Decision 10, construction side. The tip IS the block being built on, so its
         // queue is the same one the validating walk will read; appended last, matching
@@ -16194,168 +15020,6 @@ fn verified_commitment(
     })
 }
 
-/// The derivation loop behind [`VirtualStateProcessor::palw_equivocation_slashes`], as a free
-/// function so it can be exercised without standing up a processor.
-///
-/// Every rejection is a silent skip rather than an error: a certificate that fails to prove an
-/// equivocation is simply not evidence, and the transaction carrying it is still a valid
-/// transaction. Nothing here can reject a block.
-///
-/// Unlike the VLT half it runs beside, this does not derive-then-filter. There, mutations come
-/// from payload decoding and a second pass drops the ones whose evidence was never proved —
-/// necessary because evidence arriving by MERGE skips the own-body genuineness gates. Here the
-/// adjudication IS the proof and it runs per certificate, so the only mutation that can be
-/// emitted is one already proved against the accused bond's own key.
-pub(super) fn palw_equivocation_slashes_v1<F>(
-    txs: &[Transaction],
-    bond_view: &ActiveBondView,
-    accepted_daa_score: u64,
-    chain_network_id: &[u8],
-    fence_active: bool,
-    verify: F,
-) -> Vec<BondMutation>
-where
-    F: Fn(&[u8], &kaspa_hashes::Hash, &[u8], &[u8]) -> bool,
-{
-    use kaspa_consensus_core::palw_carriage::{
-        PALW_CARRIAGE_KIND_EQUIVOCATION, PalwCarriageV1, adjudicate_equivocation_carriage_v1, decode_palw_stage1_body,
-        palw_carriage_tx_kind,
-    };
-    if !fence_active {
-        return Vec::new();
-    }
-    let mut out = Vec::new();
-    for tx in txs {
-        if palw_carriage_tx_kind(&tx.subnetwork_id) != Some(PALW_CARRIAGE_KIND_EQUIVOCATION) {
-            continue;
-        }
-        let Ok(PalwCarriageV1::Equivocation(carriage)) = decode_palw_stage1_body(PALW_CARRIAGE_KIND_EQUIVOCATION, &tx.payload) else {
-            continue;
-        };
-        // The accused bond must exist in THIS view. An absent bond is not a bond this node may
-        // take, and it is never an error: the certificate may name a bond that was pruned, or one
-        // this chain never had.
-        let Some(bond) = bond_view.get(&carriage.accused_bond_outpoint) else {
-            continue;
-        };
-        if let Ok(slashed) = adjudicate_equivocation_carriage_v1(&carriage, bond, accepted_daa_score, chain_network_id, &verify) {
-            out.push(BondMutation::Slash(slashed, accepted_daa_score));
-        }
-    }
-    out
-}
-
-/// A candidate tip ranked by the ADR-0039 W4′ seam.
-///
-/// The rule rides every element so `Ord` stays a total order on the type rather than depending on
-/// ambient state — a `BinaryHeap` may compare any two elements at any time, and an `Ord` that
-/// consulted something outside the values would not be one. Every element in a given heap carries
-/// the same rule, because it comes from the same `Params`.
-///
-/// `palw` is `None` until a resolver assembles the weight facts from chain state. With
-/// `BlueWorkOnly` that field is not read at all, so the ordering is exactly `SortableBlock`'s.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct RankedTip {
-    block: SortableBlock,
-    palw: Option<kaspa_consensus_core::palw_chain_weight::PalwChainWeightsV1>,
-    rule: kaspa_consensus_core::palw_chain_weight::PalwTipOrderV1,
-}
-
-impl Ord for RankedTip {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // **Unit D's virtual-tip site is deliberately NOT here, and the reason is a measurement.**
-        //
-        // A version of this compared `PalwCandidateOrderV1` first, and the node died on
-        // `assert_eq!(virtual_ghostdag_data.selected_parent, new_sink)`. GHOSTDAG's
-        // `find_selected_parent` is `max by blue_work`, and `pick_virtual_parents` asserts that
-        // the sink the search chose IS that maximum. So a sink search ordered by PALW weight and a
-        // DAG whose selected parent is ordered by blue work are two different chains inside one
-        // node — the very thing Unit D exists to prevent, arriving through the floor rather than
-        // the basement.
-        //
-        // The fix is not in this comparator: ADR-0038 Decision B says fork choice "reads
-        // `weight(·)`", which means GHOSTDAG'S OWN selected-parent rule must, and that changes
-        // blue score, the mergeset and every structural fact derived from them. It is its own
-        // unit of work, not a line here. Until it lands, the three sites that can be wired without
-        // contradicting the DAG are wired (IBD commit, pruning ceiling, deep-reorg gate) and this
-        // one is documented rather than half-done.
-        kaspa_consensus_core::palw_chain_weight::order_tips_v1(
-            self.rule,
-            (self.palw.as_ref(), &self.block),
-            (other.palw.as_ref(), &other.block),
-        )
-    }
-}
-
-impl PartialOrd for RankedTip {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-/// The weight oracle a node without the model artifact can offer: none.
-///
-/// Every step conviction then adjudicates `Unadjudicable`, which convicts nobody — the safe
-/// direction, and the honest one: a node that cannot recompute the step has not established that
-/// the step is wrong. Replacing this with a real oracle is the Track-D step that turns arithmetic
-/// conviction on; leaving it here keeps the path structurally present and derives nothing.
-struct NoStepWeights;
-impl kaspa_consensus_core::palw_step_refute::PalwWeightOracleV1 for NoStepWeights {
-    fn operand_bytes(&self, _tensor: &str, _layer: Option<u16>, _row_start: u32, _elements: u32) -> Option<Vec<u8>> {
-        None
-    }
-}
-
-/// Slashes proved by PALW arithmetic convictions — ADR-0028 §6's Stage-2 prerequisite, and the
-/// second offence that can reach a bond.
-///
-/// Adjudicating one costs a single kernel step recomputed from opened tiles: a bounded CPU
-/// primitive, never a model run, which is what lets a full node convict without the LLM the whole
-/// design exists to keep off the validation path.
-///
-/// `Unadjudicable` — this build's catalog cannot decide the step — is not a conviction and
-/// derives nothing. It is a fact about the accused CLASS's coverage rather than about the
-/// accused, which is why ADR-0039 gates weight on coverage instead of treating gaps as noise.
-pub(super) fn palw_step_conviction_slashes_v1<F>(
-    txs: &[Transaction],
-    bond_view: &ActiveBondView,
-    accepted_daa_score: u64,
-    chain_network_id: &[u8],
-    fence_active: bool,
-    weights: &dyn kaspa_consensus_core::palw_step_refute::PalwWeightOracleV1,
-    verify: F,
-) -> Vec<BondMutation>
-where
-    F: Fn(&[u8], &kaspa_hashes::Hash, &[u8], &[u8]) -> bool,
-{
-    use kaspa_consensus_core::palw_carriage::{
-        PALW_CARRIAGE_KIND_STEP_CONVICTION, PalwCarriageV1, adjudicate_step_conviction_carriage_v1, decode_palw_stage1_body,
-        palw_carriage_tx_kind,
-    };
-    if !fence_active {
-        return Vec::new();
-    }
-    let mut out = Vec::new();
-    for tx in txs {
-        if palw_carriage_tx_kind(&tx.subnetwork_id) != Some(PALW_CARRIAGE_KIND_STEP_CONVICTION) {
-            continue;
-        }
-        let Ok(PalwCarriageV1::StepConviction(carriage)) = decode_palw_stage1_body(PALW_CARRIAGE_KIND_STEP_CONVICTION, &tx.payload)
-        else {
-            continue;
-        };
-        let Some(bond) = bond_view.get(&carriage.accused_bond_outpoint) else {
-            continue;
-        };
-        if let Ok(slashed) =
-            adjudicate_step_conviction_carriage_v1(&carriage, bond, accepted_daa_score, chain_network_id, weights, &verify)
-        {
-            out.push(BondMutation::Slash(slashed, accepted_daa_score));
-        }
-    }
-    out
-}
-
 /// The name of a lifecycle object's kind, for logging what a block carried.
 ///
 /// Total on purpose — no catch-all — so a new object kind has to decide what it is called here
@@ -16435,179 +15099,4 @@ pub(super) fn first_locked_input(
     locked: &std::collections::HashSet<TransactionOutpoint>,
 ) -> Option<TransactionOutpoint> {
     tx.inputs.iter().map(|input| input.previous_outpoint).find(|outpoint| locked.contains(outpoint))
-}
-
-#[cfg(test)]
-mod palw_equivocation_wiring_tests {
-    /// The chain identity these slash tests adjudicate under — it must equal the network the
-    /// fixtures' job context names, because a foreign-network certificate is refused now.
-    const SLASH_NET: &[u8] = b"misaka-devnet";
-
-    use super::*;
-    use kaspa_consensus_core::dns_finality::{BondStatus, StakeBondRecord};
-    use kaspa_consensus_core::palw_carriage::{
-        PALW_CARRIAGE_VERSION_V1, PalwCarriageV1, PalwEquivocationCarriageV1, encode_palw_carriage_v1,
-    };
-    use kaspa_consensus_core::palw_slash::{
-        PALW_S_OBJECT_VERSION_V3, PalwClassContradictionCertificateV1, PalwExecutionAttestationV1,
-    };
-    use kaspa_consensus_core::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, trace_scheme_id_v2};
-    use kaspa_consensus_core::subnets::{SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_PALW_EQUIVOCATION};
-    use kaspa_consensus_core::tx::{Transaction, TransactionId, TransactionOutpoint};
-    use kaspa_hashes::Hash64;
-
-    fn h(seed: u64) -> Hash64 {
-        Hash64::from_u64_word(seed)
-    }
-    fn op(seed: u8) -> TransactionOutpoint {
-        TransactionOutpoint { transaction_id: TransactionId::from_bytes([seed; 64]), index: 0 }
-    }
-    fn mock_key(signer: Hash64) -> Vec<u8> {
-        signer.as_byte_slice().to_vec()
-    }
-    fn mock_sign(key: &[u8], digest: &kaspa_hashes::Hash) -> Vec<u8> {
-        let mut s = key.to_vec();
-        s.extend_from_slice(digest.as_bytes().as_slice());
-        s
-    }
-    fn mock_verify(key: &[u8], digest: &kaspa_hashes::Hash, signature: &[u8], _context: &[u8]) -> bool {
-        signature == mock_sign(key, digest).as_slice()
-    }
-
-    fn context() -> PalwJobContextV2 {
-        PalwJobContextV2 {
-            version: PALW_TRACE_COMMITMENT_VERSION_V2,
-            network_id: SLASH_NET.to_vec(),
-            job_id: h(0x11),
-            job_nullifier: h(0x12),
-            assignment_id: h(0x13),
-            execution_seed: [0x22; 32],
-            model_profile_id: h(0x31),
-            runtime_manifest_hash: h(0x32),
-            runtime_class_id: h(0x33),
-            shape_profile_id: h(0x34),
-            trace_scheme_id: trace_scheme_id_v2(),
-            cu_ruleset_id: h(0x36),
-            tokenizer_id: h(0x37),
-            prompt_token_ids_hash: h(0x38),
-            exact_decode_tokens: 16,
-            declared_prefill_tokens: 8,
-            max_context_tokens: 4_096,
-        }
-    }
-
-    fn certificate(signer: Hash64, accused: TransactionOutpoint) -> PalwEquivocationCarriageV1 {
-        let ctx = context();
-        let att = |root: Hash64| {
-            let mut a = PalwExecutionAttestationV1 {
-                version: PALW_S_OBJECT_VERSION_V3,
-                executor_id: signer,
-                job_context_hash: ctx.context_hash(),
-                full_logits_trace_root: root,
-                // A bare-v2 shape: the committed object IS the logits root.
-                committed_root: root,
-                bond_outpoint: accused,
-                signature: vec![],
-            };
-            a.signature = mock_sign(&mock_key(signer), &a.message(&ctx.network_id));
-            a
-        };
-        PalwEquivocationCarriageV1 {
-            version: PALW_CARRIAGE_VERSION_V1,
-            accused_bond_outpoint: accused,
-            certificate: PalwClassContradictionCertificateV1 {
-                version: PALW_S_OBJECT_VERSION_V3,
-                attestation_a: att(h(0x01)),
-                attestation_b: att(h(0x02)),
-                job_context: ctx,
-            },
-        }
-    }
-
-    /// A Stage-1 carriage tx: the body rides its own subnetwork id, no magic+kind prefix.
-    fn carriage_tx(c: &PalwEquivocationCarriageV1) -> Transaction {
-        let stage0 = encode_palw_carriage_v1(&PalwCarriageV1::Equivocation(c.clone()));
-        let body = stage0[7..].to_vec();
-        Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_PALW_EQUIVOCATION, 0, body)
-    }
-
-    fn bond(signer: Hash64, outpoint: TransactionOutpoint) -> StakeBondRecord {
-        StakeBondRecord {
-            version: 1,
-            bond_outpoint: outpoint,
-            owner_pubkey_hash: h(0x0A0A),
-            validator_pubkey_hash: signer,
-            validator_pubkey: mock_key(signer),
-            amount: 20_000 * 100_000_000,
-            activation_daa_score: 0,
-            created_daa_score: 0,
-            unbonding_period_blocks: 1_000,
-            owner_reward_spk_payload: [0u8; 64],
-            unbond_request_daa_score: None,
-            slashed_at_daa_score: None,
-            status: BondStatus::Active,
-        }
-    }
-
-    fn view(signer: Hash64, outpoint: TransactionOutpoint) -> ActiveBondView {
-        ActiveBondView::from_records([(outpoint, bond(signer, outpoint))])
-    }
-
-    /// **Fence OFF is not "approximately nothing" — it is nothing.** Every shipped preset runs
-    /// this arm, so a proven certificate against a live bond must still produce no mutation.
-    #[test]
-    fn the_fence_off_path_derives_nothing_at_all() {
-        let (signer, accused) = (h(0xE1), op(0xB1));
-        let txs = vec![carriage_tx(&certificate(signer, accused))];
-        assert!(palw_equivocation_slashes_v1(&txs, &view(signer, accused), 100, SLASH_NET, false, mock_verify).is_empty());
-        // ...and the same input DOES produce a slash once the fence is on, so the test above is
-        // measuring the fence rather than a broken fixture.
-        assert_eq!(
-            palw_equivocation_slashes_v1(&txs, &view(signer, accused), 100, SLASH_NET, true, mock_verify),
-            vec![BondMutation::Slash(accused, 100)]
-        );
-    }
-
-    /// Only the equivocation subnetwork is read, and only a decodable body counts. A native tx, a
-    /// tx on another PALW band id, and a garbage body all pass through without a mutation and
-    /// without an error.
-    #[test]
-    fn foreign_and_undecodable_transactions_are_skipped_not_failed() {
-        let (signer, accused) = (h(0xE1), op(0xB1));
-        let native = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_NATIVE, 0, vec![0xAB; 32]);
-        let garbage = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_PALW_EQUIVOCATION, 0, vec![0xFF; 16]);
-        let txs = vec![native, garbage];
-        assert!(palw_equivocation_slashes_v1(&txs, &view(signer, accused), 100, SLASH_NET, true, mock_verify).is_empty());
-    }
-
-    /// A certificate naming a bond this view does not hold is skipped, not an error — it may name
-    /// a bond that was pruned, or one this chain never had.
-    #[test]
-    fn a_certificate_against_an_unknown_bond_is_skipped() {
-        let (signer, accused) = (h(0xE1), op(0xB1));
-        let txs = vec![carriage_tx(&certificate(signer, accused))];
-        let elsewhere = ActiveBondView::from_records([(op(0xB2), bond(signer, op(0xB2)))]);
-        assert!(palw_equivocation_slashes_v1(&txs, &elsewhere, 100, SLASH_NET, true, mock_verify).is_empty());
-    }
-
-    /// The innocent-bond attack, at the wiring layer: a genuine certificate pointed at somebody
-    /// else's bond derives no mutation, because the accused bond's own key is not the signer's.
-    #[test]
-    fn a_genuine_certificate_against_an_innocent_bond_derives_nothing() {
-        let (signer, victim_outpoint) = (h(0xE1), op(0xB9));
-        let txs = vec![carriage_tx(&certificate(signer, victim_outpoint))];
-        let victim_view = view(h(0x00CE), victim_outpoint); // a DIFFERENT validator's bond
-        assert!(palw_equivocation_slashes_v1(&txs, &victim_view, 100, SLASH_NET, true, mock_verify).is_empty());
-    }
-
-    /// A forged signature derives nothing: the real verifier is the only thing that decides, and
-    /// a certificate that does not verify is not evidence.
-    #[test]
-    fn a_forged_certificate_derives_nothing() {
-        let (signer, accused) = (h(0xE1), op(0xB1));
-        let mut forged = certificate(signer, accused);
-        forged.certificate.attestation_b.signature = vec![0xFF; 64];
-        let txs = vec![carriage_tx(&forged)];
-        assert!(palw_equivocation_slashes_v1(&txs, &view(signer, accused), 100, SLASH_NET, true, mock_verify).is_empty());
-    }
 }

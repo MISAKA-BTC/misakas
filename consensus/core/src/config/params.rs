@@ -2121,6 +2121,18 @@ impl Params {
     }
 
     pub fn validate_palw_v2(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        // The overlay's bond collateral has one gate left: the acceptance-time skip, in force from
+        // `bond_spend_gate_mergeset_activation_daa_score`. The own-body gate that covered the blocks
+        // below that fence could not run on any network (every overlay ships the fence at the
+        // overlay's own activation) and is gone, so an overlay whose fence sits above its
+        // activation would leave collateral spendable in between. Refused rather than shipped.
+        if let Some(dns) = self.dns_params.as_ref()
+            && dns.bond_spend_gate_mergeset_activation_daa_score > dns.dns_activation_daa_score
+        {
+            return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
+                "the overlay's bond spend gate must be in force from the overlay's activation (the own-body gate is gone)",
+            ));
+        }
         // ADR-0089 Decision 9's two preconditions: an EVM face of a market that does not exist,
         // or on a lane that is inert, is a design that has not been armed.
         if let Some(evm) = self.palw_model_evm {
@@ -3081,120 +3093,27 @@ impl Params {
     }
 
     pub fn validate_palw_v1(&self) -> Result<(), crate::palw_registry::PalwRegistryError> {
-        // ADR-0039 W4′: the fork-choice fence. It can now be set, and setting it does something.
-        //
-        // The refusal that stood here is gone because the thing it named exists: `palw_facts`
-        // resolves every weight fact from chain state — receipts against the drawn panel,
-        // convictions against the challenge window, disputes replayed from the ladder's own
-        // moves — and `palw_class_state` holds the class target that `palw_pwu` needs. What
-        // remains is the bound's own canonicality, which is checked here.
-        //
-        // A fence still cannot be set on a network whose PALW machinery is absent: `palw_credit`
-        // carries the registration this reads, and a fork-choice fence without one would order
-        // tips by a class nothing describes.
-        if let Some(fork_choice) = self.palw_fork_choice.as_ref() {
-            fork_choice
-                .validate()
-                .map_err(|_| crate::palw_registry::PalwRegistryError::NotCanonical("palw_fork_choice bound is out of range"))?;
-            if self.palw_credit.is_none() {
-                return Err(crate::palw_registry::PalwRegistryError::NotCanonical(
-                    "palw_fork_choice is set without palw_credit — there is no registered class to weigh blocks against",
-                ));
-            }
+        // The V1 lineage's fork choice (ADR-0039 W4′) and its credit gate (ADR-0033) weighed and
+        // paid blocks against the DNS overlay's bond view, and both are removed: PALW does not read
+        // validators. A network that still names either fence would run a rule no code enforces,
+        // so it is refused at startup. The schedule and the ramp only ever described the class that
+        // credit registered, and are refused with it.
+        use crate::palw_registry::PalwRegistryError::NotCanonical;
+        if self.palw_fork_choice.is_some() {
+            return Err(NotCanonical("palw_fork_choice is removed — the V1 fork choice read the validator overlay's bonds"));
         }
-        // ADR-0038 Decision H, enforced where a network is BUILT rather than where a node syncs.
-        // A schedule is a set of windows sitting on a cadence, and the cadence is frozen at 120 s:
-        // below it the sync headroom against the pinned class drops under 1x, so no node can ever
-        // finish a join, and the pruning horizon caps the bisection ladder too shallow to prosecute
-        // step fraud. Both are measurements rather than preferences — see
-        // `validate_for_value_network_v1`. Refusing here means the failure is a network that cannot
-        // be constructed, not a network that runs and quietly admits nobody.
-        if let Some(schedule) = self.palw_schedule.as_ref() {
-            schedule.validate_for_value_network_v1(&self.blockrate).map_err(|_| {
-                crate::palw_registry::PalwRegistryError::NotCanonical("palw_schedule is not admissible on this network's cadence")
-            })?;
-            if self.palw_credit.is_none() {
-                return Err(crate::palw_registry::PalwRegistryError::NotCanonical(
-                    "palw_schedule is set without palw_credit — there is no registered class for these windows to describe",
-                ));
-            }
-            // Audit P0-9 item 4, as an activation condition rather than a note: a class whose worst
-            // -case step space outruns what the ladder can walk inside `w_challenge` has a court
-            // that cannot convict beyond that depth. A4 ("the catalog covers every reachable
-            // kernel") then fails silently — the dispute opens, the rungs run, and the terminal
-            // opening lands past the window and is discarded. Refusing here makes it a network that
-            // cannot be built instead of one that runs with an unusable court.
-            if let Some(credit) = self.palw_credit.as_ref() {
-                // The ladder the schedule's windows walk is the ruleset's where one is frozen
-                // (a V2 bundle), and the executor's constant on a V1 network, which has no other.
-                let ladder = match &self.palw_consensus_mode {
-                    crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => bundle.court.max_step_leaf_count(),
-                    _ => crate::palw_step::PALW_STEP_MAX_LEAVES,
-                };
-                crate::palw_schedule::class_is_adjudicable_capped_v1(&credit.registration.shape_profile, schedule, ladder).map_err(
-                    |_| {
-                        crate::palw_registry::PalwRegistryError::NotCanonical(
-                            "the registered class's step space outruns the ladder these windows can walk",
-                        )
-                    },
-                )?;
-            }
+        if self.palw_credit.is_some() {
+            return Err(NotCanonical("palw_credit is removed — the V1 credit gate paid through the validator overlay's bonds"));
         }
-        if let Some(ramp) = self.palw_ramp.as_ref() {
-            ramp.validate().map_err(|_| crate::palw_registry::PalwRegistryError::NotCanonical("palw_ramp is out of range"))?;
-            if self.palw_credit.is_none() {
-                return Err(crate::palw_registry::PalwRegistryError::NotCanonical(
-                    "palw_ramp is set without palw_credit — there is no registered class whose work it would ramp",
-                ));
-            }
-        }
-        let Some(credit) = self.palw_credit.as_ref() else {
-            return Ok(());
-        };
-        // The registration's own coherence, checked against THIS network's real constants
-        // rather than a guess — that is what `validate` takes them for.
-        credit.registration.validate(&self.blockrate, self.blockrate.target_time_per_block)?;
-        // ADR-0038 Decision D: the class's own retarget constants, checked against THIS network's
-        // real pruning depth for the same reason the windows are checked against its real horizons —
-        // a fold whose memory outruns the horizon makes a target depend on how much history the
-        // reading node holds, which is a partition rather than a slow node.
-        credit.class_daa.validate(&self.blockrate).map_err(|_| {
-            crate::palw_registry::PalwRegistryError::NotCanonical("palw_credit's class DAA params are not canonical for this network")
-        })?;
-        // ADR-0039 1a, the LOUD half of the coverage rule: no class carries weight or credit
-        // before its catalog coverage is complete. `palw_fork_choice` cannot be set without
-        // `palw_credit` (just above) and `palw_credit` carries the one registration, so refusing
-        // a structural-only class here makes it impossible to install a fork-choice fence for a
-        // class the court cannot convict. The quiet half is
-        // `PalwCreditParamsV1::active_for`, which declines to credit per commitment; this one
-        // stops the node at startup instead of running a fence that mints nothing.
-        if credit.registration.adjudication_depth != crate::palw_registry::PalwAdjudicationDepthV1::ArithmeticCatalogued {
-            return Err(crate::palw_registry::PalwRegistryError::NotCanonical(
-                "palw_credit names a structural-only class — ADR-0039 1a: no class carries weight or credit before its catalog coverage is complete",
+        if self.palw_schedule.is_some() {
+            return Err(NotCanonical(
+                "palw_schedule is set without palw_credit — there is no registered class for these windows to describe",
             ));
         }
+        if self.palw_ramp.is_some() {
+            return Err(NotCanonical("palw_ramp is set without palw_credit — there is no registered class whose work it would ramp"));
+        }
         Ok(())
-    }
-
-    /// The tip-ordering rule this network runs — the single seam
-    /// ([`crate::palw_chain_weight::order_tips_v1`]) both selection sites will consult.
-    ///
-    /// On every shipped preset it answers `BlueWorkOnly`, because none of them set the fence — not
-    /// because the fence *cannot* be set (it can; see [`Params::palw_fork_choice`]). It exists now
-    /// so that turning the fence on is one edit in one place rather than a search for every
-    /// comparison that happens to order tips.
-    pub fn palw_tip_order_v1(&self) -> crate::palw_chain_weight::PalwTipOrderV1 {
-        // A `ConsensusV2` network orders by PALW too. Unit D's point is that a node cannot hold
-        // two answers to "which chain is canonical", and reading only the V1 fence here would
-        // leave the V2 lineage's tip selection on blue work while its IBD commit, pruning ceiling
-        // and deep-reorg gate ran on the PALW order — exactly the split (P0-5).
-        if matches!(self.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)) {
-            return crate::palw_chain_weight::PalwTipOrderV1::PalwWeighted;
-        }
-        match self.palw_fork_choice {
-            Some(_) => crate::palw_chain_weight::PalwTipOrderV1::PalwWeighted,
-            None => crate::palw_chain_weight::PalwTipOrderV1::BlueWorkOnly,
-        }
     }
 
     /// **The rules whose change invalidates history — everything the fingerprint covers EXCEPT the
@@ -18030,41 +17949,18 @@ mod consensus_params_id_tests {
             ("simnet", &SIMNET_PARAMS),
         ] {
             assert!(params.palw_fork_choice.is_none(), "{name}: no preset installs the fence");
-            // The rule this network orders tips by is today's rule, stated as a value.
-            assert_eq!(params.palw_tip_order_v1(), crate::palw_chain_weight::PalwTipOrderV1::BlueWorkOnly, "{name}");
         }
         // Setting the fence DOES move the fingerprint — otherwise two nodes disagreeing about
         // fork choice could peer.
-        // TESTNET, because the registration fixture's windows are sized for the 120 s blockrate:
-        // a class whose `w_challenge` exceeds the network's finality depth is refused by the
-        // registration's own rule, which is the audit's H13 constraint doing its job rather than
-        // a fixture problem.
         let mut fenced = TESTNET_PARAMS;
         fenced.palw_fork_choice =
             Some(crate::palw_chain_weight::PalwChainWeightParamsV1 { penalty_sompi_per_pwu: 10, immature_bound_permille: 100 });
         assert_ne!(fenced.consensus_params_id(), TESTNET_PARAMS.consensus_params_id());
-        assert_eq!(fenced.palw_tip_order_v1(), crate::palw_chain_weight::PalwTipOrderV1::PalwWeighted);
 
-        // The blanket refusal is GONE: the resolver exists, so a fence can now be set and mean
-        // something. What replaced it is the one precondition that is still real — a fork-choice
-        // fence without a registered class has nothing to weigh blocks against.
-        assert!(fenced.validate_palw_v1().is_err(), "a fork-choice fence without palw_credit has no registered class");
+        // And a node refuses to start on it: the V1 fork choice read the validator overlay's bonds
+        // and is removed, so the fence would name a rule nothing enforces.
+        assert!(fenced.validate_palw_v1().is_err(), "a fork-choice fence is refused");
         let mut with_class = fenced;
-        // ADR-0039 1a: a structural-only class is refused HERE, at startup. The float CPU class
-        // is structural-only (its catalog closes on 7 of 17 kernels), so installing it as the
-        // weighed class must fail loudly rather than run a fence that can never convict.
-        with_class.palw_credit = Some(crate::palw_credit::PalwCreditParamsV1 {
-            registration: crate::palw_registry::tests::fleet_registration(),
-            s_eff_sompi: 20_000 * 100_000_000,
-            unbonding_period_blocks: 1_209_600,
-            activation_daa: 0,
-            class_daa: crate::palw_class_daa::PalwClassDaaParamsV1::stage1_defaults(),
-        });
-        assert!(
-            with_class.validate_palw_v1().is_err(),
-            "a fork-choice fence over a class the court cannot convict must not be installable"
-        );
-        // The covered integer class is runnable.
         with_class.palw_credit = Some(crate::palw_credit::PalwCreditParamsV1 {
             registration: crate::palw_registry::tests::base0_registration(),
             s_eff_sompi: 20_000 * 100_000_000,
@@ -18072,28 +17968,9 @@ mod consensus_params_id_tests {
             activation_daa: 0,
             class_daa: crate::palw_class_daa::PalwClassDaaParamsV1::stage1_defaults(),
         });
-        assert!(with_class.validate_palw_v1().is_ok(), "a fence with a registration whose windows fit this network is now runnable");
-
-        // ADR-0038 Decision D: the class's retarget constants are checked against THIS network too.
-        // A fold whose memory outruns the pruning horizon makes a target depend on how much history
-        // the reading node holds, so a node synced from a pruning point would weigh the same block
-        // differently — permanently. Refused at startup rather than discovered at a fork.
-        let mut bad_daa = with_class.clone();
-        let credit = bad_daa.palw_credit.as_mut().expect("just installed");
-        credit.class_daa.retarget_interval_daa = bad_daa_interval(&bad_daa.blockrate);
-        assert!(bad_daa.validate_palw_v1().is_err(), "a retarget memory past the pruning horizon must not be installable");
-        // And it is the memory that binds, not the interval alone: the same interval with no history
-        // to remember is still refused, while a shorter interval over the same history is fine.
-        let mut long_history = with_class;
-        let credit = long_history.palw_credit.as_mut().expect("just installed");
-        credit.class_daa.retarget_interval_daa = long_history.blockrate.pruning_depth / 2;
-        credit.class_daa.history_retargets = 3;
-        assert!(long_history.validate_palw_v1().is_err(), "the PRODUCT is what must fit");
-    }
-
-    /// An interval whose single-boundary memory already reaches the horizon.
-    fn bad_daa_interval(blockrate: &crate::config::params::BlockrateParams) -> u64 {
-        blockrate.pruning_depth
+        assert!(with_class.validate_palw_v1().is_err(), "a covered class does not make the removed fork choice runnable");
+        with_class.palw_fork_choice = None;
+        assert!(with_class.validate_palw_v1().is_err(), "nor is the V1 credit gate runnable on its own");
     }
 
     /// **ADR-0061 Decision 1: a zero-seat genesis is still a ConsensusV2 network.**

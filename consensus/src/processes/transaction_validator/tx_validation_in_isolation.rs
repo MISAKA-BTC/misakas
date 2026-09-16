@@ -1308,7 +1308,6 @@ mod pq_output_class_enforcement_tests {
             ("VLT §6 audit fee", (dns.vlt.vlt_shadow_activation_daa_score == u64::MAX || dns.vlt.audit_fee_sompi == 0).then_some(0)),
             ("§E deferred quality bonus", Some(PALW_V2_MAX_DEFERRED_VALIDATOR_PAYOUTS)),
             ("§F reserve drip", Some(PALW_V2_MAX_RESERVE_DRIP_PAYOUTS)),
-            ("ADR-0033 credit", params.palw_credit.is_none().then_some(0)),
             ("§D inclusion bounty", Some(1)),
             ("ADR-0042 D10 escrow releases", Some(PALW_V2_MAX_PAYOUTS_PER_BLOCK as u64)),
         ];

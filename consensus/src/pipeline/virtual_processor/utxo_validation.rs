@@ -3,11 +3,10 @@ use crate::{
     errors::{
         BlockProcessResult,
         RuleError::{
-            AuditBondSpendAgainstDisposition, BadAcceptedIDMerkleRoot, BadCoinbaseTransaction, BadOverlayCommitment,
-            BadPalwCommitmentShape, BadUTXOCommitment, IneligibleAttestationInBlock, InvalidTransactionsInUtxoContext,
-            MissingMandatoryAttestationInBlock, NonReleasableBondSpendInBlock, UnauthorizedUnbondRequestInBlock,
-            UnverifiableComputeChallengeInBlock, UnverifiablePrecommitEvidenceInBlock, UnverifiableSlashingEvidenceInBlock,
-            WrongHeaderPruningPoint,
+            BadAcceptedIDMerkleRoot, BadCoinbaseTransaction, BadOverlayCommitment, BadPalwCommitmentShape, BadUTXOCommitment,
+            IneligibleAttestationInBlock, InvalidTransactionsInUtxoContext, MissingMandatoryAttestationInBlock,
+            UnauthorizedUnbondRequestInBlock, UnverifiableComputeChallengeInBlock, UnverifiablePrecommitEvidenceInBlock,
+            UnverifiableSlashingEvidenceInBlock, WrongHeaderPruningPoint,
         },
     },
     model::stores::{
@@ -33,14 +32,14 @@ use kaspa_consensus_core::{
     coinbase::*,
     dns_finality::{
         ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BlockEpochContribution, BondMutation, BondStatus, DnsParams, EpochTally,
-        OverlaySnapshot, PRECOMMIT_MLDSA87_CONTEXT, RewardedEpochSet, SlashingSideEffect, StakeAttestation,
-        UNBOND_REQUEST_CONTEXT, attestations_from_accepted_txs, bond_mutations_from_accepted_txs, bond_release_daa_score,
-        compute_challenges_with_ids, decode_attestation_shard, deferred_quality_bonus_outputs_for_block, effective_bond_status,
-        epoch_meets_quality_floor, epochs_finalized_at, is_bond_active_at, mandatory_attestation_mass_capacity,
-        precommit_evidence_from_accepted_txs, precommit_fault, recompute_epoch_tallies, reserve_drip_outputs_for_block,
-        resolve_slashing_side_effects, slashing_evidence_from_accepted_txs, split_validator_pool, stake_attestation_message,
-        stake_precommit_message, unbond_request_message, unbond_requests_from_accepted_txs, validator_id_from_pubkey,
-        validator_participation_reward_outputs, victim_compensation_outputs,
+        OverlaySnapshot, PRECOMMIT_MLDSA87_CONTEXT, RewardedEpochSet, SlashingSideEffect, StakeAttestation, UNBOND_REQUEST_CONTEXT,
+        attestations_from_accepted_txs, bond_mutations_from_accepted_txs, bond_release_daa_score, compute_challenges_with_ids,
+        decode_attestation_shard, deferred_quality_bonus_outputs_for_block, effective_bond_status, epoch_meets_quality_floor,
+        epochs_finalized_at, is_bond_active_at, mandatory_attestation_mass_capacity, precommit_evidence_from_accepted_txs,
+        precommit_fault, recompute_epoch_tallies, reserve_drip_outputs_for_block, resolve_slashing_side_effects,
+        slashing_evidence_from_accepted_txs, split_validator_pool, stake_attestation_message, stake_precommit_message,
+        unbond_request_message, unbond_requests_from_accepted_txs, validator_id_from_pubkey, validator_participation_reward_outputs,
+        victim_compensation_outputs,
     },
     hashing,
     header::Header,
@@ -876,27 +875,6 @@ impl VirtualStateProcessor {
         // can author — so without this a well-formed forgery would burn any validator's bond.
         self.check_precommit_evidence_genuine(&txs, selected_parent_bond_view, header.daa_score)?;
 
-        // kaspa-pq Phase 10/11 (ADR-0016 §D.2): the legacy bond-UTXO spend-gate. Rejects a block
-        // whose OWN BODY spends a known non-releasable bond outpoint, against the selected-parent bond
-        // view. Inert below `dns_activation_daa_score`.
-        //
-        // kaspa-pq bond spend-gate mergeset hardening: this own-body REJECT gate misses a spend that
-        // rides in a MERGE-BLUE block of this chain block's mergeset (those txs are accepted by
-        // `calculate_utxo_state`, never presented here). At/above the
-        // `bond_spend_gate_mergeset_activation_daa_score` fence, protection moves to the acceptance-
-        // time SKIP in `calculate_utxo_state` (which covers BOTH the mergeset and — when this block is
-        // later merged — its own body), so this legacy gate is disabled to avoid an honest miner
-        // self-rejecting an own-body bond-spend the skip would simply not accept. The fence is
-        // `u64::MAX` on every current preset, so this gate runs unchanged (byte-identical) today.
-        let mergeset_bond_gate_active =
-            self.dns_params_at(header.daa_score).is_some_and(|p| header.daa_score >= p.bond_spend_gate_mergeset_activation_daa_score);
-        if !mergeset_bond_gate_active {
-            self.check_bond_spend_gate(&txs, selected_parent_bond_view, header.daa_score)?;
-        }
-        // ADR-0032 Phase E2: the audit-call bond spend gate. Inert while the PALW credit
-        // fence is `None` (every shipped network).
-        self.check_palw_audit_bond_spend_gate(&txs, ctx.selected_parent(), header.daa_score)?;
-
         // ADR-0038 Decision A: the PALW block admission predicate, whole and in one call
         // (`check_palw_block_admission_v1`). Placed here because this is the first point that
         // holds both the header and a bond view scoped to the BLOCK's chain rather than this
@@ -1031,23 +1009,6 @@ impl VirtualStateProcessor {
             );
             validator_reward_outputs.extend(drip_outputs);
             ctx.reserve_balance_after = parent_balance.saturating_add(ctx.reserve_accrual).saturating_sub(drip_total);
-        }
-        // ADR-0033 (B14): PALW credit outputs, appended after the drip in BOTH paths so the
-        // output order is pinned — a validating node recomputes the gate from its own view
-        // and rejects a coinbase claiming credit the gate does not grant. Dormant (`None`)
-        // on every shipped network.
-        if let Some(credit) = self.palw_credit_params.as_ref() {
-            let credit_outputs = self.compute_palw_credit_outputs(
-                credit,
-                header.daa_score,
-                ctx.selected_parent(),
-                &selected_parent_bond_view.records(),
-                // The SAME class-state view the template path uses. Construction and validation
-                // must compute byte-identical credit or a validating node rejects an honest
-                // coinbase; the freeze and interval predicates are now part of that answer.
-                &self.initial_palw_class_state_view(),
-            );
-            validator_reward_outputs.extend(credit_outputs);
         }
         // ADR-0042 Decision 10: the V2 escrow releases, appended LAST so both paths build the
         // identical list. Computed by the walk from the selected parent's committed queue — not
@@ -1931,125 +1892,6 @@ impl VirtualStateProcessor {
         })
     }
 
-    fn check_bond_spend_gate(
-        &self,
-        txs: &[Transaction],
-        selected_parent_bond_view: &ActiveBondView,
-        daa_score: u64,
-    ) -> BlockProcessResult<()> {
-        let activated = self.dns_params_at(daa_score).is_some_and(|p| daa_score >= p.dns_activation_daa_score);
-        bond_spend_gate(txs, selected_parent_bond_view, daa_score, activated)
-            .map_err(|(spending_tx, bond_outpoint)| NonReleasableBondSpendInBlock(spending_tx, bond_outpoint))
-    }
-
-    /// ADR-0032 Phase E2: refuse a block whose transaction spends an audit-call bond UTXO
-    /// (an opening-call carriage transaction's output 0) against its disposition. The
-    /// Stage-1 carriage store is the oracle (the ADR's own words), injected as a closure:
-    /// the call's acceptance DAA comes from its store row, the answer — if any — from the
-    /// earliest accepted OPENING_ANSWER naming that call's tx id. Only `CallerReturn`
-    /// (no answer inside `W_answer`, settlement passed) admits a spend; an answered call's
-    /// bond stays locked until the Stage-2 slash-flow transaction shape exists
-    /// (fail-closed). Inert while the PALW credit fence is `None`.
-    fn check_palw_audit_bond_spend_gate(
-        &self,
-        txs: &[Transaction],
-        selected_parent: BlockHash,
-        daa_score: u64,
-    ) -> BlockProcessResult<()> {
-        use kaspa_consensus_core::palw_carriage::palw_audit_bond_spend_gate;
-        let Some(credit) = self.palw_credit_params.as_ref() else {
-            return Ok(());
-        };
-        let windows = &credit.registration.windows;
-        // Resolved from the BLOCK'S OWN CHAIN, never from a store.
-        //
-        // This used to read `self.palw_carriage_store`, a flat tx-id-keyed index maintained from the
-        // virtual SINK. That made a block-validity rule — this gate rejects blocks — a function of
-        // where THIS node's virtual tip happens to sit rather than of the block's selected-parent
-        // past. Two nodes whose sinks are on different branches then disagree about the same block:
-        // the one whose sink chain accepted the OPENING_ANSWER sees `SlashFlowOnly` and rejects,
-        // the other has no answer row, sees `CallerReturn` and accepts. That is a permanent
-        // partition, and it also makes a single node's verdicts self-inconsistent across a reorg
-        // (audit B6(b) — the same shape blocker 6(b) named for the credit walk).
-        //
-        // Three fail-open holes rode on the same read and go with it: the gate was fenced on
-        // `palw_credit_params.is_some()` while the store writer is fenced on
-        // `vlt_shadow_active_at`, so a network with credit on and the VLT shadow off resolved
-        // `None` for every outpoint and unlocked every audit bond; before the backfill sweep
-        // finished the store was empty, with the same effect; and the answer lookup was a
-        // whole-store scan with a Borsh decode per row, run once per spending input.
-        let dispositions = self.palw_audit_call_dispositions_v1(selected_parent, daa_score, windows);
-        palw_audit_bond_spend_gate(
-            txs,
-            |outpoint| {
-                if outpoint.index != 0 {
-                    return None;
-                }
-                dispositions.get(&outpoint.transaction_id).copied()
-            },
-            daa_score,
-            windows.w_answer,
-            windows.prosecution_slack,
-            true,
-        )
-        .map_err(|(spending_tx, bond_outpoint)| AuditBondSpendAgainstDisposition(spending_tx, bond_outpoint))
-    }
-
-    /// Every OPENING_CALL on this block's own chain within the gate's horizon, mapped to
-    /// `(call_accepted_daa, earliest_answer_accepted_daa)`.
-    ///
-    /// One backward walk over the selected-parent chain, the same shape
-    /// `compute_palw_credit_outputs` uses, so the answer is a pure function of the block's past and
-    /// identical on every node. Built once per block rather than per spending input, which also
-    /// removes the per-input full-store scan the store-based version performed.
-    ///
-    /// The horizon is `w_answer + prosecution_slack` — exactly the window the gate's own
-    /// disposition arithmetic reads. A call older than that has passed settlement on any chain that
-    /// contains it, so its absence from the map is not a missing fact: `palw_audit_bond_spend_gate`
-    /// treats an unresolved outpoint as "not an audit-call output", which is correct for one whose
-    /// lock has expired.
-    fn palw_audit_call_dispositions_v1(
-        &self,
-        selected_parent: BlockHash,
-        daa_score: u64,
-        windows: &kaspa_consensus_core::palw_schedule::PalwScheduleParamsV1,
-    ) -> std::collections::HashMap<TransactionId, (u64, Option<u64>)> {
-        use crate::model::stores::ghostdag::GhostdagStoreReader;
-        use kaspa_consensus_core::blockhash::BlockHashExtensions;
-        use kaspa_consensus_core::palw_carriage::{PalwCarriageV1, decode_palw_stage1_body, palw_carriage_records_from_accepted_txs};
-        let mut calls: std::collections::HashMap<TransactionId, u64> = std::collections::HashMap::new();
-        let mut earliest_answer: std::collections::HashMap<TransactionId, u64> = std::collections::HashMap::new();
-        let depth = windows.w_answer.saturating_add(windows.prosecution_slack);
-        let mut current = selected_parent;
-        loop {
-            let Ok(cur_daa) = self.headers_store.get_daa_score(current) else { break };
-            if daa_score.saturating_sub(cur_daa) > depth {
-                break;
-            }
-            for (tx_id, record) in
-                palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(current), cur_daa, current)
-            {
-                match decode_palw_stage1_body(record.kind, &record.body) {
-                    Ok(PalwCarriageV1::OpeningCall(_)) => {
-                        calls.insert(tx_id, cur_daa);
-                    }
-                    Ok(PalwCarriageV1::OpeningAnswer(a)) => {
-                        // EARLIEST answer per call: the walk runs newest-first, so a later
-                        // (shallower) block's answer must not displace an earlier one.
-                        earliest_answer.entry(a.call_tx_id).and_modify(|d| *d = (*d).min(cur_daa)).or_insert(cur_daa);
-                    }
-                    _ => {}
-                }
-            }
-            let Ok(parent) = self.ghostdag_store.get_selected_parent(current) else { break };
-            if parent == current || parent.is_origin() {
-                break;
-            }
-            current = parent;
-        }
-        calls.into_iter().map(|(tx_id, call_daa)| (tx_id, (call_daa, earliest_answer.get(&tx_id).copied()))).collect()
-    }
-
     /// kaspa-pq H-05 (audit / ADR-0010 "Unbonding"): the stake-unbond owner-
     /// authorization rule. Rejects a block carrying a `StakeUnbondRequest` that
     /// is not authorized by the bond owner (see [`unbond_request_authorized`]).
@@ -2770,41 +2612,6 @@ fn compute_challenge_genuine(
                 Ok(true)
             ) {
                 return Err(tx_id);
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Pure core of the ADR-0016 §D.2 bond-UTXO spend-gate (testable without a
-/// processor). `activated` folds the `dns_params.is_some() && daa_score >=
-/// dns_activation_daa_score` gate; when `false` the rule is a no-op (every
-/// current network). Scans every input of every transaction (the coinbase has
-/// no inputs, so it contributes nothing); if an input's `previous_outpoint` is
-/// a **known** bond outpoint in `bond_view` whose bond is **not releasable** at
-/// `daa_score`, returns `Err((spending tx id, bond outpoint))` for the caller
-/// to map to [`NonReleasableBondSpendInBlock`]. "Releasable" = the bond is
-/// `Unbonding` (per [`effective_bond_status`]) **and** `daa_score >=
-/// bond_release_daa_score` (`unbond_request_daa_score +
-/// unbonding_period_blocks`). Non-bond outpoints are ignored, so ordinary
-/// transactions are unaffected.
-fn bond_spend_gate(
-    txs: &[Transaction],
-    bond_view: &ActiveBondView,
-    daa_score: u64,
-    activated: bool,
-) -> Result<(), (TransactionId, TransactionOutpoint)> {
-    if !activated {
-        return Ok(());
-    }
-    for tx in txs {
-        for input in tx.inputs.iter() {
-            if let Some(bond) = bond_view.get(&input.previous_outpoint) {
-                let releasable = effective_bond_status(bond, daa_score) == BondStatus::Unbonding
-                    && bond_release_daa_score(bond).is_some_and(|release| daa_score >= release);
-                if !releasable {
-                    return Err((tx.id(), input.previous_outpoint));
-                }
             }
         }
     }
@@ -3839,126 +3646,9 @@ mod tests {
         }
     }
 
-    // kaspa-pq Phase 10/11 (ADR-0016 §D.2): the bond-UTXO spend-gate's pure
-    // core. Covers the gate plus each releasability branch: Active/Pending/
-    // mid-unbonding/Slashed bonds are locked (reject), a released bond and a
-    // non-bond input are spendable (accept).
-    mod bond_spend_gate {
-        use super::super::bond_spend_gate as gate;
-        use kaspa_consensus_core::{
-            constants::TX_VERSION,
-            dns_finality::{ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_VALIDATOR_PUBKEY_LEN, StakeBondRecord},
-            subnets::SUBNETWORK_ID_NATIVE,
-            tx::{Transaction, TransactionInput, TransactionOutpoint},
-        };
-        use kaspa_hashes::Hash64;
-
-        fn outpoint(b: u8) -> TransactionOutpoint {
-            TransactionOutpoint::new(Hash64::from_bytes([b; 64]), 0)
-        }
-
-        // A normal (non-overlay) tx with a single input spending `op`.
-        fn spending_tx(op: TransactionOutpoint) -> Transaction {
-            let input = TransactionInput::new(op, vec![], 0, 0);
-            Transaction::new(TX_VERSION, vec![input], vec![], 0, SUBNETWORK_ID_NATIVE, 0, vec![])
-        }
-
-        // A bond record with all DAA-stamped fields cleared (so its effective
-        // status is derived purely from `activation_daa_score`). The caller
-        // tweaks the fields to select Pending/Active/Unbonding/Slashed.
-        fn bond(op: TransactionOutpoint) -> StakeBondRecord {
-            StakeBondRecord {
-                version: DNS_PAYLOAD_VERSION_V1,
-                bond_outpoint: op,
-                owner_pubkey_hash: Hash64::from_bytes([0xaa; 64]),
-                validator_pubkey_hash: Hash64::from_bytes([0xbb; 64]),
-                validator_pubkey: vec![0xcc; STAKE_VALIDATOR_PUBKEY_LEN],
-                amount: 1_000,
-                activation_daa_score: 0,
-                created_daa_score: 0,
-                unbonding_period_blocks: 5_000,
-                owner_reward_spk_payload: [0xdd; 64],
-                unbond_request_daa_score: None,
-                slashed_at_daa_score: None,
-                status: BondStatus::Active,
-            }
-        }
-
-        const DAA: u64 = 10_000;
-
-        #[test]
-        fn noop_when_not_activated() {
-            // Spending an Active bond is fine while the gate is closed (the
-            // gate-closed path; current nets run with it open, dns_activation = 0).
-            let op = outpoint(1);
-            let view = ActiveBondView::from_records([(op, bond(op))]);
-            assert_eq!(gate(&[spending_tx(op)], &view, DAA, false), Ok(()));
-        }
-
-        #[test]
-        fn rejects_spend_of_active_bond() {
-            let op = outpoint(2);
-            let view = ActiveBondView::from_records([(op, bond(op))]); // activation 0 ⇒ Active at DAA.
-            let tx = spending_tx(op);
-            assert_eq!(gate(std::slice::from_ref(&tx), &view, DAA, true), Err((tx.id(), op)));
-        }
-
-        #[test]
-        fn rejects_spend_of_pending_bond() {
-            let op = outpoint(3);
-            let mut b = bond(op);
-            b.activation_daa_score = DAA + 1; // not yet active ⇒ Pending.
-            let view = ActiveBondView::from_records([(op, b)]);
-            let tx = spending_tx(op);
-            assert_eq!(gate(std::slice::from_ref(&tx), &view, DAA, true), Err((tx.id(), op)));
-        }
-
-        #[test]
-        fn rejects_spend_of_unbonding_before_release() {
-            let op = outpoint(4);
-            let mut b = bond(op);
-            b.unbond_request_daa_score = Some(DAA - 1); // Unbonding, but release = DAA-1+5000 > DAA.
-            let view = ActiveBondView::from_records([(op, b)]);
-            let tx = spending_tx(op);
-            assert_eq!(gate(std::slice::from_ref(&tx), &view, DAA, true), Err((tx.id(), op)));
-        }
-
-        #[test]
-        fn allows_spend_of_releasable_bond() {
-            let op = outpoint(5);
-            let mut b = bond(op);
-            b.unbond_request_daa_score = Some(1_000); // release = 1_000 + 5_000 = 6_000 ≤ DAA.
-            let view = ActiveBondView::from_records([(op, b)]);
-            assert_eq!(gate(&[spending_tx(op)], &view, DAA, true), Ok(()));
-        }
-
-        #[test]
-        fn rejects_spend_of_slashed_bond() {
-            let op = outpoint(6);
-            let mut b = bond(op);
-            b.slashed_at_daa_score = Some(5_000); // Slashed ⇒ terminal, never releasable.
-            let view = ActiveBondView::from_records([(op, b)]);
-            let tx = spending_tx(op);
-            assert_eq!(gate(std::slice::from_ref(&tx), &view, DAA, true), Err((tx.id(), op)));
-        }
-
-        #[test]
-        fn ignores_non_bond_inputs() {
-            // An input that is not a known bond outpoint is unaffected, even
-            // when the gate is active.
-            assert_eq!(gate(&[spending_tx(outpoint(7))], &ActiveBondView::new(), DAA, true), Ok(()));
-        }
-
-        #[test]
-        fn ok_when_no_inputs() {
-            let tx = Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_NATIVE, 0, vec![]);
-            assert_eq!(gate(&[tx], &ActiveBondView::new(), DAA, true), Ok(()));
-        }
-    }
-
     // kaspa-pq (ADR-0016 §D.2, bond spend-gate mergeset hardening): the `BondSpendFilter::locks`
-    // predicate that drives the acceptance-time SKIP (the merge-blue-aware complement to the legacy
-    // own-body `bond_spend_gate`). Same releasability semantics, exercised per-outpoint.
+    // predicate that drives the acceptance-time SKIP — the only bond spend gate since the own-body
+    // gate it complemented was removed (it could not run on any network). Exercised per-outpoint.
     mod bond_spend_filter {
         use super::super::BondSpendFilter;
         use kaspa_consensus_core::{
