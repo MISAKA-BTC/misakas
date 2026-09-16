@@ -406,17 +406,24 @@ pub struct PalwHeartbeatV1 {
 /// permit — drawn for its one-second round from the span's schedule of finalized attempts — is
 /// found in the chain block's parent state, and pays its fees to the permit holder's payout.
 ///
-/// The four values beside the activation are the lane's shape, and like every companion value
-/// they are hashed into `consensus_params_id` and invisible to the fence visitor: arming or
-/// widening the lane is a coordinated change. Widening (1 → 2 → 5 → 10 permits a round) is the
-/// same struct with a larger `permits_per_round` behind a new activation.
+/// The values beside the activation are the lane's shape, and like every companion value they are
+/// hashed into `consensus_params_id` and invisible to the fence visitor: arming the lane is a
+/// coordinated change. **Widening is a stage table** (§7.2): the lane opens at `permits_per_round`
+/// and each used slot of `widenings` names a later height and a wider round. Each widening's height
+/// is a fence of its own (visited, scheduled, named to the fork-id gate); its width is a companion
+/// value. A span's width is the stage in force at the DAA score the span opens with, so every rule
+/// that reads a width — the draw, the permit index, the per-round mergeset bound — reads one number
+/// for a whole span, and a block validates at the width its span was produced at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwExecutionLaneV1 {
     /// When the lane opens.
     pub activation: ForkActivation,
-    /// Permits per one-second round — the lane's blocks per second. At most
-    /// [`crate::palw_execution_lane_v1::PALW_EXEC_MAX_PERMITS_PER_ROUND_V1`].
+    /// Permits per one-second round when the lane opens — the lane's first blocks per second. At
+    /// most [`crate::palw_execution_lane_v1::PALW_EXEC_MAX_PERMITS_PER_ROUND_V1`].
     pub permits_per_round: u16,
+    /// The later stages, in height order; unused slots are [`PalwExecWideningV1::NONE`] and follow
+    /// every used one.
+    pub widenings: [PalwExecWideningV1; crate::palw_execution_lane_v1::PALW_EXEC_MAX_WIDENINGS_V1],
     /// The most round blocks one mergeset may hold. Counted apart from `mergeset_size_limit`,
     /// which keeps bounding the chain's own blocks exactly as before.
     pub max_per_mergeset: u64,
@@ -424,6 +431,59 @@ pub struct PalwExecutionLaneV1 {
     /// `s + 1`. A round block is judged by the schedule of its anchor's span, and a merging block
     /// accepts round blocks anchored in its own span or the one before.
     pub schedule_span_daa: u64,
+}
+
+/// **One widening of the execution lane** (ADR-0125 §7.2): from the first span that opens at or past
+/// `activation`, a round holds `permits_per_round` permits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwExecWideningV1 {
+    pub activation: ForkActivation,
+    pub permits_per_round: u16,
+}
+
+impl PalwExecWideningV1 {
+    /// An unused slot.
+    pub const NONE: Self = Self { activation: ForkActivation::never(), permits_per_round: 0 };
+
+    pub fn is_used(&self) -> bool {
+        self.activation != ForkActivation::never()
+    }
+}
+
+impl PalwExecutionLaneV1 {
+    /// No widening scheduled.
+    pub const NO_WIDENINGS: [PalwExecWideningV1; crate::palw_execution_lane_v1::PALW_EXEC_MAX_WIDENINGS_V1] =
+        [PalwExecWideningV1::NONE; crate::palw_execution_lane_v1::PALW_EXEC_MAX_WIDENINGS_V1];
+
+    /// The DAA score span `span` opens with.
+    pub fn span_opening_daa(&self, span: u64) -> u64 {
+        span.saturating_mul(self.schedule_span_daa.max(1))
+    }
+
+    /// **The width of span `span`**: the widest stage in force at the DAA score the span opens with.
+    /// Stages only widen and are in height order, so this is the last used stage at or below it.
+    pub fn width_of_span(&self, span: u64) -> u16 {
+        let opening = self.span_opening_daa(span);
+        self.widenings
+            .iter()
+            .filter(|stage| stage.is_used() && stage.activation.is_active(opening))
+            .map(|stage| stage.permits_per_round)
+            .fold(self.permits_per_round, u16::max)
+    }
+
+    /// The width of the span `daa_score` falls in.
+    pub fn width_at_daa(&self, daa_score: u64) -> u16 {
+        self.width_of_span(crate::palw_execution_lane_v1::palw_execution_span_v1(daa_score, self.schedule_span_daa))
+    }
+
+    /// The widest round any stage of this lane configures.
+    pub fn widest(&self) -> u16 {
+        self.widenings
+            .iter()
+            .filter(|stage| stage.is_used())
+            .map(|stage| stage.permits_per_round)
+            .fold(self.permits_per_round, u16::max)
+    }
 }
 
 /// **ADR-0066 Decision 3's parameter (finding F2), closed by ADR-0068 Phase 1: the attempt lane's
@@ -2764,7 +2824,35 @@ impl Params {
                      bounded by the widest round this binary implements",
                 ));
             }
-            if lane.max_per_mergeset < lane.permits_per_round as u64 || lane.max_per_mergeset > PALW_EXEC_MAX_PER_MERGESET_BOUND_V1 {
+            // §7.2: the stage table. Used slots first, heights strictly after the opening and after
+            // each other, each width in range and wider than the stage before it — a lane only
+            // widens, which is what lets one per-round bound (the widest stage in force) cover every
+            // span a mergeset can reach back to.
+            let mut previous = (lane.activation.daa_score(), lane.permits_per_round);
+            let mut seen_unused = false;
+            for stage in lane.widenings.iter() {
+                if !stage.is_used() {
+                    seen_unused = true;
+                    continue;
+                }
+                if seen_unused {
+                    return Err(PalwModeV2Error::Invalid(
+                        "palw_execution_lane lists a widening after an unused slot: the stage table is a prefix",
+                    ));
+                }
+                if stage.activation.daa_score() <= previous.0 {
+                    return Err(PalwModeV2Error::Invalid(
+                        "palw_execution_lane's widenings must be at heights after the lane opens and after each other",
+                    ));
+                }
+                if stage.permits_per_round <= previous.1 || stage.permits_per_round > PALW_EXEC_MAX_PERMITS_PER_ROUND_V1 {
+                    return Err(PalwModeV2Error::Invalid(
+                        "palw_execution_lane's widenings must each widen the round, and no wider than 10 permits",
+                    ));
+                }
+                previous = (stage.activation.daa_score(), stage.permits_per_round);
+            }
+            if lane.max_per_mergeset < lane.widest() as u64 || lane.max_per_mergeset > PALW_EXEC_MAX_PER_MERGESET_BOUND_V1 {
                 return Err(PalwModeV2Error::Invalid(
                     "palw_execution_lane declares a max_per_mergeset below one round or above the bound the coinbase \
                      carries: a merging block could never hold a full round, or could owe more outputs than it may carry",
@@ -3430,6 +3518,16 @@ impl Params {
         }
         if self.palw_execution_lane.is_some_and(|lane| lane.activation == ForkActivation::never()) {
             self.palw_execution_lane = None;
+        }
+        // §7.2: a scheduled widening leaves the identity with its width, as a scheduled lane leaves
+        // with its shape — the width is reported in the schedule id, and the fork-id gate separates
+        // peers once the height fires.
+        if let Some(lane) = self.palw_execution_lane.as_mut() {
+            for stage in lane.widenings.iter_mut() {
+                if stage.activation == ForkActivation::never() {
+                    *stage = PalwExecWideningV1::NONE;
+                }
+            }
         }
         if self.palw_validator_overlay_retirement == Some(ForkActivation::never()) {
             self.palw_validator_overlay_retirement = None;
@@ -4195,6 +4293,42 @@ impl Params {
             ("palw_panel_economy", *palw_panel_economy),
             ("palw_work_priced_reward", *palw_work_priced_reward),
             ("palw_execution_lane", palw_execution_lane.map(|lane| lane.activation)),
+            (
+                "palw_execution_lane_widening_1",
+                palw_execution_lane.and_then(|lane| lane.widenings[0].is_used().then_some(lane.widenings[0].activation)),
+            ),
+            (
+                "palw_execution_lane_widening_2",
+                palw_execution_lane.and_then(|lane| lane.widenings[1].is_used().then_some(lane.widenings[1].activation)),
+            ),
+            (
+                "palw_execution_lane_widening_3",
+                palw_execution_lane.and_then(|lane| lane.widenings[2].is_used().then_some(lane.widenings[2].activation)),
+            ),
+            (
+                "palw_execution_lane_widening_4",
+                palw_execution_lane.and_then(|lane| lane.widenings[3].is_used().then_some(lane.widenings[3].activation)),
+            ),
+            (
+                "palw_execution_lane_widening_5",
+                palw_execution_lane.and_then(|lane| lane.widenings[4].is_used().then_some(lane.widenings[4].activation)),
+            ),
+            (
+                "palw_execution_lane_widening_6",
+                palw_execution_lane.and_then(|lane| lane.widenings[5].is_used().then_some(lane.widenings[5].activation)),
+            ),
+            (
+                "palw_execution_lane_widening_7",
+                palw_execution_lane.and_then(|lane| lane.widenings[6].is_used().then_some(lane.widenings[6].activation)),
+            ),
+            (
+                "palw_execution_lane_widening_8",
+                palw_execution_lane.and_then(|lane| lane.widenings[7].is_used().then_some(lane.widenings[7].activation)),
+            ),
+            (
+                "palw_execution_lane_widening_9",
+                palw_execution_lane.and_then(|lane| lane.widenings[8].is_used().then_some(lane.widenings[8].activation)),
+            ),
             ("palw_validator_overlay_retirement", *palw_validator_overlay_retirement),
             ("palw_fp_ruleset_caps", *palw_fp_ruleset_caps),
             ("palw_model_market", *palw_model_market),
@@ -4329,6 +4463,11 @@ impl Params {
             h.write(lane.permits_per_round.to_le_bytes());
             h.write(lane.max_per_mergeset.to_le_bytes());
             h.write(lane.schedule_span_daa.to_le_bytes());
+            // §7.2: a widening's width is a companion value; its height is visited as a fence.
+            for stage in lane.widenings.iter().filter(|stage| stage.is_used()) {
+                h.write(b"widening");
+                h.write(stage.permits_per_round.to_le_bytes());
+            }
         }
         if let Some(attempt) = self.palw_attempt_work {
             h.write(b"palw_attempt_work_price");
@@ -4477,6 +4616,10 @@ impl Params {
         if let Some(lane) = self.palw_execution_lane {
             h.write(b"palw_execution_lane");
             h.write(lane.activation.daa_score().to_le_bytes());
+            for stage in lane.widenings.iter().filter(|stage| stage.is_used()) {
+                h.write(b"widening");
+                h.write(stage.activation.daa_score().to_le_bytes());
+            }
         }
         if let Some(activation) = self.palw_validator_overlay_retirement {
             h.write(b"palw_validator_overlay_retirement");
@@ -4996,9 +5139,14 @@ impl Params {
         if let Some(activation) = palw_work_priced_reward.as_mut() {
             fork(activation, visit);
         }
-        // ADR-0125: activation only — the lane's shape is a value beside the fence, not a fence.
+        // ADR-0125: the activation and each widening's height — the lane's shape and the widths are
+        // values beside the fences, not fences. An unused slot's `never()` is visited like any unset
+        // height and normalises to itself.
         if let Some(lane) = palw_execution_lane.as_mut() {
             fork(&mut lane.activation, visit);
+            for stage in lane.widenings.iter_mut() {
+                fork(&mut stage.activation, visit);
+            }
         }
         if let Some(activation) = palw_validator_overlay_retirement.as_mut() {
             fork(activation, visit);
@@ -5694,6 +5842,12 @@ impl Params {
             h.write(lane.permits_per_round.to_le_bytes());
             h.write(lane.max_per_mergeset.to_le_bytes());
             h.write(lane.schedule_span_daa.to_le_bytes());
+            // §7.2: Some-only per slot, so a lane with no widening fingerprints as it did.
+            for stage in lane.widenings.iter().filter(|stage| stage.is_used()) {
+                h.write(b"widening");
+                h.write(stage.activation.daa_score().to_le_bytes());
+                h.write(stage.permits_per_round.to_le_bytes());
+            }
         }
         if let Some(activation) = palw_fp_ruleset_caps {
             h.write(b"palw_fp_ruleset_caps");
@@ -18175,6 +18329,99 @@ mod fingerprint_probe {
             base.consensus_params_id(),
             bundled.consensus_params_id(),
             "an artifact-less node must be a DIFFERENT ruleset, visibly, at the handshake"
+        );
+    }
+}
+
+/// **ADR-0125 §7.2: the lane's stage table.** A span keeps the width in force at the DAA score it
+/// opens with; widenings are heights after the opening, in order, each wider than the last; and a
+/// widening's height is scheduled like any fence while its width is part of the rules.
+#[cfg(test)]
+mod palw_execution_lane_stage_tests {
+    use super::*;
+
+    fn lane(widenings: &[(u64, u16)]) -> PalwExecutionLaneV1 {
+        let mut table = PalwExecutionLaneV1::NO_WIDENINGS;
+        for (slot, (height, width)) in widenings.iter().enumerate() {
+            table[slot] = PalwExecWideningV1 { activation: ForkActivation::new(*height), permits_per_round: *width };
+        }
+        PalwExecutionLaneV1 {
+            activation: ForkActivation::new(500),
+            permits_per_round: 1,
+            widenings: table,
+            max_per_mergeset: 600,
+            schedule_span_daa: 100,
+        }
+    }
+
+    fn armed(lane: PalwExecutionLaneV1) -> Params {
+        let mut params = palw_rc_shipped_params();
+        params.palw_execution_lane = Some(lane);
+        params
+    }
+
+    #[test]
+    fn a_span_keeps_the_width_in_force_where_it_opens() {
+        let lane = lane(&[(1_000, 2), (2_050, 5), (3_000, 10)]);
+        assert_eq!(lane.width_of_span(0), 1);
+        assert_eq!(lane.width_of_span(9), 1, "span 9 opens at 900, before the first widening");
+        assert_eq!(lane.width_of_span(10), 2, "span 10 opens at 1,000, exactly the widening's height");
+        assert_eq!(lane.width_of_span(20), 2, "span 20 opens at 2,000 — the widening at 2,050 falls inside it");
+        assert_eq!(lane.width_of_span(21), 5, "and the span after it is the first to widen");
+        assert_eq!(lane.width_of_span(30), 10);
+        assert_eq!(lane.width_of_span(u64::MAX), 10, "no overflow at the far end");
+        assert_eq!(lane.width_at_daa(2_099), 2, "a DAA score reads its span's width, not the stage in force at it");
+        assert_eq!(lane.widest(), 10);
+        armed(lane).validate_palw_v2().expect("a widening table in order is runnable");
+        armed(self::lane(&[])).validate_palw_v2().expect("a lane with no widening is runnable");
+    }
+
+    #[test]
+    fn an_unrunnable_stage_table_refuses_to_start() {
+        let refused = |table: &[(u64, u16)], why: &str| {
+            assert!(armed(lane(table)).validate_palw_v2().is_err(), "{why}");
+        };
+        refused(&[(400, 2)], "a widening before the lane opens");
+        refused(&[(500, 2)], "a widening at the opening height");
+        refused(&[(1_000, 3), (900, 5)], "widenings out of height order");
+        refused(&[(1_000, 3), (1_000, 5)], "two widenings at one height");
+        refused(&[(1_000, 1)], "a widening that does not widen");
+        refused(&[(1_000, 3), (2_000, 2)], "a narrowing");
+        refused(&[(1_000, 11)], "a round wider than the binary implements");
+        let mut gap = lane(&[(1_000, 2), (2_000, 3)]);
+        gap.widenings[0] = PalwExecWideningV1::NONE;
+        assert!(armed(gap).validate_palw_v2().is_err(), "a used slot after an unused one");
+        let mut tight = lane(&[(1_000, 10)]);
+        tight.max_per_mergeset = 9;
+        assert!(armed(tight).validate_palw_v2().is_err(), "a mergeset bound below the widest round");
+    }
+
+    #[test]
+    fn a_widening_is_a_scheduled_fence_and_its_width_is_reported_with_it() {
+        let base = armed(lane(&[(1_000, 2)]));
+        let later = armed(lane(&[(1_100, 2)]));
+        let wider = armed(lane(&[(1_000, 3)]));
+        let none = armed(lane(&[]));
+        assert_ne!(base.consensus_params_id(), none.consensus_params_id(), "a widening reaches the fingerprint");
+        assert_ne!(base.consensus_params_id(), later.consensus_params_id(), "its height reaches the fingerprint");
+        assert_ne!(base.consensus_params_id(), wider.consensus_params_id(), "so does its width");
+        assert_ne!(base.consensus_schedule_id(), later.consensus_schedule_id(), "the schedule names the height");
+        assert_ne!(base.consensus_schedule_id(), wider.consensus_schedule_id(), "and reports the width");
+        // Scheduling a widening must not partition the fleet at deploy: a height that has not fired
+        // leaves the identity, and its width leaves with it.
+        assert_eq!(base.consensus_identity_id(), later.consensus_identity_id());
+        assert_eq!(base.consensus_identity_id(), wider.consensus_identity_id());
+        assert_eq!(base.consensus_identity_id(), none.consensus_identity_id());
+        assert!(base.fence_schedule_v1().contains(&1_000), "the fork-id schedule names the widening's height");
+        assert!(
+            base.palw_fences_v1()
+                .iter()
+                .any(|(name, fence)| *name == "palw_execution_lane_widening_1" && *fence == Some(ForkActivation::new(1_000))),
+            "and so does the named fence list the gate reads"
+        );
+        assert!(
+            none.palw_fences_v1().iter().any(|(name, fence)| *name == "palw_execution_lane_widening_1" && fence.is_none()),
+            "an unused slot names no height"
         );
     }
 }

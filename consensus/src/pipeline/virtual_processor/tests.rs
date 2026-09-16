@@ -13267,10 +13267,17 @@ fn every_held_court_acceptance_arm_reads_the_claims_class_ladder() {
 /// A network with the round lane open from genesis, two permits a round, and one schedule span far
 /// longer than the test, so every block is in span 0.
 fn adr0125_config() -> (kaspa_consensus_core::config::Config, kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2) {
+    adr0125_config_funded_for(8)
+}
+
+/// [`adr0125_config`] with the harness bond funded for `claims` concurrent claims — one a chain block.
+fn adr0125_config_funded_for(
+    claims: u64,
+) -> (kaspa_consensus_core::config::Config, kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2) {
     use kaspa_consensus_core::config::params::{ForkActivation, PalwExecutionLaneV1};
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
     let catalog = palw_v2_test_catalog();
-    let bundle = palw_v2_test_bundle_funded_for(&catalog, 8);
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, claims);
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
@@ -13279,6 +13286,7 @@ fn adr0125_config() -> (kaspa_consensus_core::config::Config, kaspa_consensus_co
             p.palw_execution_lane = Some(PalwExecutionLaneV1 {
                 activation: ForkActivation::always(),
                 permits_per_round: 2,
+                widenings: PalwExecutionLaneV1::NO_WIDENINGS,
                 max_per_mergeset: 600,
                 schedule_span_daa: 1_000,
             });
@@ -13554,6 +13562,82 @@ async fn adr0125_a_merging_block_grants_exactly_the_permits_its_parent_state_sch
     assert!(p1.block.transactions[0].outputs.iter().all(|o| o.script_public_key != payout), "no payout without a permit");
     ctx.validate_and_insert_block(p1.block.clone().to_immutable()).await.assert_valid_utxo_tip();
     assert_eq!(ctx.consensus.get_sink(), p1.block.header.hash);
+}
+
+/// **ADR-0125 §7.2 through the pipeline: a widening holds for whole spans.** The lane opens one
+/// permit a round and widens to two from the first span that opens at or past DAA 8 (spans of 4).
+/// Two round blocks of one round each validate alone; a chain block whose mergeset holds both is
+/// refused while its span is one permit wide, and a chain block merging two such blocks of a later
+/// round is valid once its span is two wide. The template follows the same width.
+#[tokio::test]
+async fn adr0125_a_widening_holds_for_whole_spans() {
+    use crate::model::stores::ghostdag::GhostdagStoreReader;
+    use kaspa_consensus_core::config::params::{ForkActivation, PalwExecWideningV1, PalwExecutionLaneV1};
+    use kaspa_consensus_core::errors::block::RuleError;
+    const SPAN: u64 = 4;
+    const WIDEN_AT: u64 = 8;
+    // Twelve chain blocks, so the harness bond is funded for more concurrent claims than the default.
+    let (mut config, bundle) = adr0125_config_funded_for(24);
+    {
+        let lane = config.params.palw_execution_lane.as_mut().expect("the fixture arms the lane");
+        let mut widenings = PalwExecutionLaneV1::NO_WIDENINGS;
+        widenings[0] = PalwExecWideningV1 { activation: ForkActivation::new(WIDEN_AT), permits_per_round: 2 };
+        *lane = PalwExecutionLaneV1 { permits_per_round: 1, widenings, schedule_span_daa: SPAN, ..*lane };
+    }
+    config.params.validate_palw_v2().expect("a lane that widens once is runnable");
+    let lane = config.params.palw_execution_lane.unwrap();
+    assert_eq!((lane.width_at_daa(WIDEN_AT - 1), lane.width_at_daa(WIDEN_AT)), (1, 2));
+
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..3 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let vp = ctx.consensus.virtual_processor().clone();
+    let genesis_ts = config.params.genesis.timestamp;
+    let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    let payout = p2pkh_mldsa87_spk(state.bond(&adr0125_harness_bond()).expect("row 0").payout_payload.as_byte_slice());
+    let next_round = |ctx: &TestContext| (vp.headers_store.get_timestamp(ctx.consensus.get_sink()).unwrap() - genesis_ts) / 1_000 + 2;
+
+    // Span 0/1: two blocks of one round, each valid alone, refused together.
+    let round = next_round(&ctx);
+    let narrow_a = adr0125_round_block(&ctx, &config, round, 0, payout.clone(), 1);
+    let narrow_b = adr0125_round_block(&ctx, &config, round, 1, payout.clone(), 2);
+    let (narrow_a_hash, narrow_b_hash) = (narrow_a.header.hash, narrow_b.header.hash);
+    ctx.consensus.validate_and_insert_block(narrow_a.to_immutable()).virtual_state_task.await.expect("valid alone");
+    ctx.consensus.validate_and_insert_block(narrow_b.to_immutable()).virtual_state_task.await.expect("valid alone");
+    ctx.simulated_time = ctx.simulated_time.max(genesis_ts + round * 1_000) + config.params.target_time_per_block();
+    let sink = ctx.consensus.get_sink();
+    let both = ctx.build_block_with_parents(vec![sink, narrow_a_hash, narrow_b_hash], 31, ctx.simulated_time);
+    assert!(both.header.daa_score < WIDEN_AT);
+    match ctx.consensus.validate_and_insert_block(both.to_immutable()).virtual_state_task.await {
+        Err(RuleError::BadRoundLaneMergeset(_)) => {}
+        other => panic!("two round blocks of one round in a one-permit span must be BadRoundLaneMergeset, got {other:?}"),
+    }
+    let template = ctx.build_block_template(32, ctx.simulated_time);
+    let parents = template.block.header.direct_parents();
+    assert!(!(parents.contains(&narrow_a_hash) && parents.contains(&narrow_b_hash)), "the template keeps the narrow width");
+    ctx.validate_and_insert_block(template.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+
+    // Into the wide span.
+    while vp.headers_store.get_daa_score(ctx.consensus.get_sink()).unwrap() < WIDEN_AT + 1 {
+        ctx.simulated_time += config.params.target_time_per_block();
+        let block = ctx.build_block_template(33, ctx.simulated_time);
+        ctx.validate_and_insert_block(block.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+    }
+    let anchor = vp.ghostdag_store.get_selected_parent(ctx.consensus.get_sink()).unwrap();
+    assert!(vp.headers_store.get_daa_score(anchor).unwrap() >= WIDEN_AT, "the next round blocks hang in the wide span");
+    let round = next_round(&ctx);
+    let wide_a = adr0125_round_block(&ctx, &config, round, 0, payout.clone(), 3);
+    let wide_b = adr0125_round_block(&ctx, &config, round, 1, payout.clone(), 4);
+    let (wide_a_hash, wide_b_hash) = (wide_a.header.hash, wide_b.header.hash);
+    ctx.consensus.validate_and_insert_block(wide_a.to_immutable()).virtual_state_task.await.expect("valid alone");
+    ctx.consensus.validate_and_insert_block(wide_b.to_immutable()).virtual_state_task.await.expect("valid alone");
+    ctx.simulated_time = ctx.simulated_time.max(genesis_ts + round * 1_000) + config.params.target_time_per_block();
+    let template = ctx.build_block_template(34, ctx.simulated_time);
+    let parents = template.block.header.direct_parents();
+    assert!(parents.contains(&wide_a_hash) && parents.contains(&wide_b_hash), "a two-permit span merges both");
+    ctx.validate_and_insert_block(template.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+    assert_eq!(ctx.consensus.get_sink(), template.block.header.hash);
 }
 
 // ---- ADR-0126: the validator overlay retires at a height --------------------------------------

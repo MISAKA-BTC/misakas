@@ -34,12 +34,17 @@ use std::collections::{BTreeMap, BTreeSet};
 /// One round is one second.
 pub const PALW_EXEC_ROUND_MS: u64 = 1_000;
 
-/// Stage 1: one permit a round — 1 BPS. Stages 2, 5 and 10 are the same rule with a larger value
-/// behind a fence of their own (ADR-0125 Decision 5).
+/// Stage 1: one permit a round — 1 BPS. Every later stage is a widening behind a height of its own
+/// (ADR-0125 Decision 7, §7.2's stage table).
 pub const PALW_EXEC_PERMITS_PER_ROUND_V1: u16 = 1;
 
 /// The widest round any stage may configure: the operator's 10 BPS target.
 pub const PALW_EXEC_MAX_PERMITS_PER_ROUND_V1: u16 = 10;
+
+/// **How many widenings one lane can schedule** — enough to go from one permit a round to ten one
+/// permit at a time. Each is a height and a width, and a span keeps the width of the stage in force
+/// at the DAA score it opens with, so history validates at the width it was produced at.
+pub const PALW_EXEC_MAX_WIDENINGS_V1: usize = 9;
 
 /// No security domain holds more than 45 % of a span's quota, whatever its compute (ADR-0125
 /// Decision 3).
@@ -577,15 +582,8 @@ impl PalwExecEnvelopeV1 {
         if self.round != actual {
             return Err(PalwExecEnvelopeError::RoundMismatch { declared: self.round, actual });
         }
-        let message = palw_exec_signing_message_v1(
-            network_domain,
-            pre_pow_hash,
-            timestamp_ms,
-            nonce,
-            self.round,
-            self.permit_index,
-            &self.bond,
-        );
+        let message =
+            palw_exec_signing_message_v1(network_domain, pre_pow_hash, timestamp_ms, nonce, self.round, self.permit_index, &self.bond);
         if !verify_mldsa87(&self.pubkey, message.as_byte_slice(), &self.signature, PALW_EXEC_MLDSA87_CONTEXT) {
             return Err(PalwExecEnvelopeError::SignatureInvalid);
         }

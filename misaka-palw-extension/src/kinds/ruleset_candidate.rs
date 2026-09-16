@@ -91,6 +91,25 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         "palw_work_priced_reward" => params.palw_work_priced_reward = Some(at),
         "palw_validator_overlay_retirement" => params.palw_validator_overlay_retirement = Some(at),
         "palw_execution_lane" => companion(&mut params.palw_execution_lane, name, "the lane's shape", at, |f, at| f.activation = at)?,
+        widening if widening.starts_with("palw_execution_lane_widening_") => {
+            let slot: usize = widening["palw_execution_lane_widening_".len()..]
+                .parse()
+                .map_err(|_| format!("`{name}` does not name a widening slot"))?;
+            let index = slot.checked_sub(1).filter(|i| *i < kaspa_consensus_core::palw_execution_lane_v1::PALW_EXEC_MAX_WIDENINGS_V1);
+            let Some(index) = index else {
+                return Err(format!("`{name}` does not name a widening slot this build has"));
+            };
+            companion(&mut params.palw_execution_lane, name, "the widened width", at, |f, at| {
+                if f.widenings[index].is_used() {
+                    f.widenings[index].activation = at
+                }
+            })?;
+            if !params.palw_execution_lane.is_some_and(|lane| lane.widenings[index].is_used()) {
+                return Err(format!(
+                    "`{name}` carries a companion value (the widened width) this preset does not set — the candidate needs a build before it needs a height"
+                ));
+            }
+        }
         other => return Err(format!("this build has no fence `{other}`: the candidate needs a build before it needs a height")),
     }
     Ok(())

@@ -623,9 +623,24 @@ mod tests {
                 params.palw_execution_lane = Some(crate::config::params::PalwExecutionLaneV1 {
                     activation: at,
                     permits_per_round: 1,
+                    widenings: crate::config::params::PalwExecutionLaneV1::NO_WIDENINGS,
                     max_per_mergeset: 600,
                     schedule_span_daa: 30,
                 })
+            }
+            widening if widening.starts_with("palw_execution_lane_widening_") => {
+                let slot: usize = widening["palw_execution_lane_widening_".len()..].parse().expect("a slot number");
+                // A widening rides a lane; the probe base gets one at a fixed height, so two probes that
+                // differ only in the widening's height differ only in that height.
+                let lane = params.palw_execution_lane.get_or_insert(crate::config::params::PalwExecutionLaneV1 {
+                    activation: ForkActivation::new(1_000),
+                    permits_per_round: 1,
+                    widenings: crate::config::params::PalwExecutionLaneV1::NO_WIDENINGS,
+                    max_per_mergeset: 600,
+                    schedule_span_daa: 30,
+                });
+                lane.widenings[slot - 1] =
+                    crate::config::params::PalwExecWideningV1 { activation: at, permits_per_round: 1 + slot as u16 };
             }
             other => panic!("{other} is a PALW fence `palw_fences_v1` returns and this probe cannot set — add it here"),
         }

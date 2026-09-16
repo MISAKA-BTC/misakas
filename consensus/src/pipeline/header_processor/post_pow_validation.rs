@@ -75,8 +75,10 @@ impl HeaderProcessor {
     ///   anchor's past had not already brought — and the chain's GHOSTDAG, reachability, DAA score
     ///   and depths are those of the DAG without the lane.
     /// * **The mergeset rule** ([`kaspa_consensus_core::palw_execution_lane_v1::palw_execution_mergeset_rule_v1`]):
-    ///   at most `max_per_mergeset` round blocks, at most `permits_per_round` of one round, one per
-    ///   permit, and a round block merges only rounds older than its own.
+    ///   at most `max_per_mergeset` round blocks, at most the width in force at this block's DAA score
+    ///   of one round, one per permit, and a round block merges only rounds older than its own. A
+    ///   mergeset reaches back only to spans at or before this block's, and a lane only widens
+    ///   (§7.2), so the width here bounds every round a member can belong to.
     ///
     /// A property of this block's parents and mergeset headers alone — no walk, no state — like the
     /// heartbeat width rule beside it.
@@ -112,7 +114,7 @@ impl HeaderProcessor {
         kaspa_consensus_core::palw_execution_lane_v1::palw_execution_mergeset_rule_v1(
             block_round,
             &members,
-            lane.permits_per_round,
+            lane.width_at_daa(header.daa_score),
             lane.max_per_mergeset,
         )
         .map_err(|e| RuleError::BadRoundLaneMergeset(e.to_string()))

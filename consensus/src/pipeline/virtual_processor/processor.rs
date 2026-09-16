@@ -7660,7 +7660,14 @@ impl VirtualStateProcessor {
                     return None;
                 }
                 let schedule = state.round_schedule(span)?;
-                palw_execution_permit_of_v1(schedule, envelope.round, lane.permits_per_round, envelope.permit_index, &envelope.bond)?;
+                // §7.2: the width of the anchor's span — the width the schedule was drawn at.
+                palw_execution_permit_of_v1(
+                    schedule,
+                    envelope.round,
+                    lane.width_of_span(span),
+                    envelope.permit_index,
+                    &envelope.bond,
+                )?;
                 let bond = state.bond(&envelope.bond)?;
                 if !matches!(bond.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active)
                     || bond.pubkey != envelope.pubkey
@@ -12713,6 +12720,9 @@ impl VirtualStateProcessor {
             self.headers_store.get_header(block).ok().and_then(|h| PalwExecEnvelopeV1::decode(&h.palw_commitment).ok())
         };
         round_tips.sort_by_key(|tip| std::cmp::Reverse((envelope_of(*tip).map(|e| e.round).unwrap_or(0), *tip)));
+        // §7.2: the width in force at the selected parent. Virtual's own DAA score is at least that
+        // and widths only grow, so this bound is never wider than the one virtual's block is judged by.
+        let width = lane.width_at_daa(self.headers_store.get_daa_score(selected_parent).unwrap_or_default());
         for tip in round_tips {
             if virtual_parents.len() >= max_block_parents {
                 break;
@@ -12746,7 +12756,7 @@ impl VirtualStateProcessor {
             if malformed || ghostdag.mergeset_size() as u64 - members.len() as u64 > self.mergeset_size_limit {
                 continue;
             }
-            if palw_execution_mergeset_rule_v1(None, &members, lane.permits_per_round, lane.max_per_mergeset).is_err() {
+            if palw_execution_mergeset_rule_v1(None, &members, width, lane.max_per_mergeset).is_err() {
                 continue;
             }
             virtual_parents.push(tip);
@@ -13250,17 +13260,16 @@ impl VirtualStateProcessor {
         if tip != sink {
             return None;
         }
+        let width = lane.width_of_span(span);
         let permits = state
             .round_schedule(span)
-            .map(|schedule| {
-                kaspa_consensus_core::palw_execution_lane_v1::palw_execution_permits_v1(schedule, round, lane.permits_per_round)
-            })
+            .map(|schedule| kaspa_consensus_core::palw_execution_lane_v1::palw_execution_permits_v1(schedule, round, width))
             .unwrap_or_default();
-        let used = (0..lane.permits_per_round).filter(|index| state.round_permit_used(span, round, *index)).collect();
+        let used = (0..width).filter(|index| state.round_permit_used(span, round, *index)).collect();
         Some(kaspa_consensus_core::palw_execution_lane_v1::PalwExecRoundViewV1 {
             round,
             span,
-            width: lane.permits_per_round,
+            width,
             genesis_timestamp_ms: self.genesis.timestamp,
             permits,
             used,
@@ -13303,6 +13312,9 @@ impl VirtualStateProcessor {
             .ok()
             .filter(|anchor| !kaspa_consensus_core::blockhash::BlockHashExtensions::is_origin(anchor))
             .ok_or_else(|| RuleError::BadRoundLaneParents("the sink has no chain block beneath it to anchor a round block".into()))?;
+        // §7.2: the width in force at the anchor. The round block's own DAA score is at least the
+        // anchor's and widths only grow, so a mergeset bounded by this passes the header's bound.
+        let round_width = lane.width_at_daa(self.headers_store.get_daa_score(anchor).unwrap_or_default());
         let _prune_guard = self.pruning_lock.blocking_read();
         let pruning_point = self.pruning_point_store.read().pruning_point().unwrap();
         let envelope_of = |block: BlockHash| {
@@ -13362,7 +13374,7 @@ impl VirtualStateProcessor {
                 .collect();
             let Some(members) = members else { continue };
             if ghostdag.mergeset_size() as u64 - members.len() as u64 > self.mergeset_size_limit
-                || palw_execution_mergeset_rule_v1(Some(round), &members, lane.permits_per_round, lane.max_per_mergeset).is_err()
+                || palw_execution_mergeset_rule_v1(Some(round), &members, round_width, lane.max_per_mergeset).is_err()
             {
                 continue;
             }
