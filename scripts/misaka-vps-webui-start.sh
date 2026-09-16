@@ -35,7 +35,7 @@ Options:
   --service-user <user>     Existing service user; auto-detected from systemd
   --appdir <path>           Existing kaspad appdir; auto-detected from the running process
   --skip-apt                Do not run apt-get update/install
-  --skip-build              Reuse already-installed Web UI support binaries
+  --skip-build              Reuse the already-installed misaka CLI
   --run-tests               Run misaka-cli tests before installation
   --check-only              Show service, appdir, UTXO index, disk, and exit
   --enable-utxoindex        Back up and update an existing node, then exit
@@ -56,8 +56,8 @@ Environment equivalents:
   MISAKA_ENABLE_UTXO_INDEX=1
 
 When an existing systemd node is found, this script preserves its service user
-and appdir. It installs only the Web UI support binaries; it does not replace or
-restart kaspad and does not delete node data, validator keys, bonds, or setup state.
+and appdir. It installs only the misaka CLI that serves the Web UI; it does not
+replace or restart kaspad and does not delete node data, key files, or setup state.
 The explicit --enable-utxoindex operation is the only exception: it backs up the
 existing unit, adds only --utxoindex, validates it, and restarts an active node once.
 EOF
@@ -203,7 +203,6 @@ enable_existing_utxo_index() {
   local unit_uid=""
   local unit_gid=""
   local node_was_active=""
-  local miner_was_active=""
   local after_pid=""
   local repaired=0
 
@@ -267,21 +266,10 @@ enable_existing_utxo_index() {
   fi
 
   node_was_active="$(systemctl is-active "$NODE_SERVICE" 2>/dev/null || true)"
-  miner_was_active="$(systemctl is-active misaka-miner.service 2>/dev/null || true)"
-  if [[ "$miner_was_active" == "active" ]]; then
-    if ! systemctl stop misaka-miner.service; then
-      cp -a "$backup_file" "$unit_file"
-      systemctl daemon-reload || true
-      die "could not stop the active miner; restored $backup_file"
-    fi
-  fi
 
   if ! systemctl daemon-reload; then
     cp -a "$backup_file" "$unit_file"
     systemctl daemon-reload || true
-    if [[ "$miner_was_active" == "active" ]]; then
-      systemctl restart misaka-miner.service || true
-    fi
     die "systemd daemon-reload failed; restored $backup_file"
   fi
   if [[ "$node_was_active" == "active" ]]; then
@@ -299,9 +287,6 @@ enable_existing_utxo_index() {
       cp -a "$backup_file" "$unit_file"
       systemctl daemon-reload || true
       systemctl restart "$NODE_SERVICE" || true
-      if [[ "$miner_was_active" == "active" ]]; then
-        systemctl restart misaka-miner.service || true
-      fi
       die "node verification failed; restored $backup_file and restarted the previous unit"
     fi
   else
@@ -319,9 +304,6 @@ UTXO index update completed safely.
   Node PID:      ${after_pid:-0}
   UTXO index:    enabled
 EOF
-  if [[ "$miner_was_active" == "active" ]]; then
-    printf '  Miner:         stopped; restart it after the node is synced\n'
-  fi
   if [[ "$node_was_active" != "active" ]]; then
     printf '  Note:          the node was not active, so the new flag applies on its next start\n'
   fi
@@ -495,15 +477,13 @@ if [[ "$SKIP_BUILD" != "1" ]]; then
   cargo --version
   rustc --version
 
-  log "Build Web UI support binaries without replacing kaspad"
+  log "Build the misaka CLI without replacing kaspad"
   cd "$REPO_DIR"
   if [[ "$RUN_TESTS" == "1" ]]; then
     cargo test -p misaka-cli
   fi
-  cargo build --release -p misaka-cli -p kaspa-pq-validator -p misaminer
-  for binary_name in misaka kaspa-pq-validator misaminer; do
-    [[ -x "$REPO_DIR/target/release/$binary_name" ]] || die "build completed without target/release/$binary_name"
-  done
+  cargo build --release -p misaka-cli
+  [[ -x "$REPO_DIR/target/release/misaka" ]] || die "build completed without target/release/misaka"
 fi
 
 log "Stop the previous setup Web UI when present"
@@ -514,19 +494,15 @@ tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
 rm -f "$SETUP_DIR/web-session.json" "$SETUP_DIR/web-url.txt"
 
 if [[ "$SKIP_BUILD" != "1" ]]; then
-  log "Back up and install Web UI support binaries"
+  log "Back up and install the misaka CLI"
   BACKUP_SUFFIX="before-webui-$(date -u +%Y%m%dT%H%M%SZ)"
-  for binary_name in misaka kaspa-pq-validator misaminer; do
-    if [[ -f "/usr/local/bin/$binary_name" ]]; then
-      cp -a "/usr/local/bin/$binary_name" "/usr/local/bin/$binary_name.$BACKUP_SUFFIX"
-    fi
-    install -o root -g root -m 0755 "$REPO_DIR/target/release/$binary_name" "/usr/local/bin/$binary_name"
-  done
+  if [[ -f "/usr/local/bin/misaka" ]]; then
+    cp -a "/usr/local/bin/misaka" "/usr/local/bin/misaka.$BACKUP_SUFFIX"
+  fi
+  install -o root -g root -m 0755 "$REPO_DIR/target/release/misaka" "/usr/local/bin/misaka"
 else
   /usr/local/bin/misaka --network "$NETWORK" setup --help >/dev/null 2>&1 || \
     die "--skip-build requires an installed misaka CLI with the setup subcommand"
-  command -v kaspa-pq-validator >/dev/null 2>&1 || die "--skip-build requires kaspa-pq-validator"
-  command -v misaminer >/dev/null 2>&1 || die "--skip-build requires misaminer"
 fi
 /usr/local/bin/misaka --version || true
 
