@@ -13,9 +13,9 @@
   [0045](0045-palw-class-economy-on-chain.md) Decision 1 (`pwu` has one legal value) and Decision 3
   (the share table is chain state), [0061](0061-zero-seat-genesis-and-right-sized-collateral.md)
   Decision 2 (10,000 MSK per genesis seat), [0065](0065-a-bond-must-be-earned-and-a-seat-must-be-someone-else.md)
-  Decision 4 (`Unavailable` abstains), [0069](0069-weight-is-the-price-of-end-to-end-adjudicability.md)
+  Decision 4 (`Unavailable` abstains), [0069](0069-e2e-adjudicability-is-the-price-of-weight.md)
   Decision 7 (an uncertified class bears no weight — the classes that set the unit are the ones that
-  bear weight), [0076](0076-a-classs-target-is-seeded-from-its-own-share-and-its-own-work.md)
+  bear weight), [0076](0076-the-attempt-lanes-seed-is-the-retargets-equilibrium.md)
   (the seed is share × pwu per inference), [0091](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md)
   (the buyback is a slice of the reward), [0098](0098-the-panels-coverage-is-a-number-and-a-seat-that-found-a-lie-files-nothing-else.md)
   Decision 2 (a seat that found a lie files nothing), [0111](0111-a-seat-may-demand-the-committed-leaf-it-needs-to-judge.md)

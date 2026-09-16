@@ -5,11 +5,15 @@
 //! arithmetic a fast lane must not get wrong once it exists:
 //!
 //! * a **round** is one second from the genesis timestamp ([`palw_execution_round_v1`]);
-//! * a round's **seed** is the chain's beacon and the round, nothing a producer chooses
-//!   ([`palw_execution_seed_v1`]);
+//! * a round's **seed** is the execution commitment of a recent attempt — the nonce-free value the
+//!   attempt lane's own lottery hashes (ADR-0072) — and the round, nothing a producer can re-roll
+//!   for free ([`palw_execution_seed_source_v1`], [`palw_execution_seed_v1`]). **There is no beacon
+//!   here**: main's attempt lottery does not read the ADR-0074 walk, and this lane does not bring it
+//!   back;
 //! * a domain's **quota** is its share of the previous scheduler epoch's `Final` credits, capped at
-//!   [`PALW_EXEC_DOMAIN_CAP_PERMILLE`] and renormalised ([`palw_execution_quotas_v1`]) — the reward
-//!   follows the compute, the chain's block production does not;
+//!   [`PALW_EXEC_DOMAIN_CAP_PERMILLE`] and renormalised, in integers
+//!   ([`palw_execution_quotas_v1`]) — the reward follows the compute, the chain's block production
+//!   does not;
 //! * the round's **permits** are the lowest tickets that pass two alternation rules
 //!   ([`palw_execution_permits_v1`]): at most one permit an operator a round, at most
 //!   `⌈width / 3⌉` permits a security domain a round, and a domain that filled its cap in the
@@ -17,7 +21,8 @@
 //!   blocks from one domain". A round nobody passes is empty.
 //!
 //! Widening the lane from 1 BPS to 10 BPS is [`PALW_EXEC_PERMITS_PER_ROUND_V1`] growing from 1 to
-//! 10 behind fences of its own; nothing in these functions changes between the two.
+//! 10 behind fences of its own; nothing in these functions changes between the two. Integer only:
+//! a quota two platforms round differently is a fork.
 
 use crate::Hash64;
 use crate::palw_state_v2::PalwBondKeyV2;
@@ -32,6 +37,16 @@ pub const PALW_EXEC_PERMITS_PER_ROUND_V1: u16 = 1;
 /// No security domain holds more than 45 % of an epoch's permits, whatever its compute
 /// (ADR-0125 Decision 3).
 pub const PALW_EXEC_DOMAIN_CAP_PERMILLE: u64 = 450;
+
+/// How far below a candidate's selected parent the attempt that seeds its round must have been
+/// accepted, in DAA (ADR-0125 Decision 2). Deep enough that no execution block can swap the seed by
+/// choosing which recent blocks its parents include; shallow enough that a round's winners are
+/// known only about this many rounds ahead.
+pub const PALW_EXEC_SEED_LAG_DAA: u64 = 20;
+
+/// How many recently accepted attempts the PALW state keeps for the seed (ADR-0125 §7): enough that
+/// several attempts landing inside one lag still leave a record deep enough to read.
+pub const PALW_EXEC_SEED_RING_V1: usize = 4;
 
 /// The domain of a round's seed.
 pub const PALW_EXEC_ROUND_SEED_DOMAIN: &[u8] = b"misaka-palw/exec-lane/round-seed/v1";
@@ -54,11 +69,36 @@ pub fn palw_execution_round_v1(timestamp_ms: u64, genesis_timestamp_ms: u64) -> 
     timestamp_ms.saturating_sub(genesis_timestamp_ms) / PALW_EXEC_ROUND_MS
 }
 
-/// `H(domain ‖ beacon ‖ round)`: the beacon is the ADR-0074 fact of the last attempt block at or
-/// below the round's anchor, so no producer's own block moves the round it would like.
-pub fn palw_execution_seed_v1(beacon: &Hash64, round: u64) -> Hash64 {
+/// One accepted attempt, as the seed needs it: the accepting block's DAA, and the attempt's
+/// `palw_attempt_v2::execution_commitment_v3` — the value its class ticket is a hash of.
+///
+/// That commitment is the right seed material because it is the one value on an attempt block a
+/// producer cannot re-roll for free: the header nonce changes the block hash and never the
+/// commitment (ADR-0072 made the nonce a uniqueness field), so moving the seed costs another
+/// inference and another lottery win.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwExecutionSeedRecordV1 {
+    pub accepted_daa: u64,
+    pub execution_commitment: Hash64,
+}
+
+/// **The seed source of a round: the newest recorded attempt at least
+/// [`PALW_EXEC_SEED_LAG_DAA`] below the candidate's selected parent.** `records` is the state's
+/// ring in the order the fold appended it (newest last). `None` when no record is deep enough —
+/// a fresh chain, or several attempts inside one lag — and a round without a seed has no permits,
+/// which is an empty round, not a stall: the attempt lane does not wait for it.
+pub fn palw_execution_seed_source_v1(records: &[PalwExecutionSeedRecordV1], parent_daa: u64) -> Option<Hash64> {
+    records
+        .iter()
+        .rev()
+        .find(|record| record.accepted_daa.checked_add(PALW_EXEC_SEED_LAG_DAA).is_some_and(|deep_at| deep_at <= parent_daa))
+        .map(|record| record.execution_commitment)
+}
+
+/// `H(domain ‖ source ‖ round)`, with `source` from [`palw_execution_seed_source_v1`].
+pub fn palw_execution_seed_v1(source: &Hash64, round: u64) -> Hash64 {
     let mut h = keyed(PALW_EXEC_ROUND_SEED_DOMAIN);
-    h.update(beacon.as_byte_slice());
+    h.update(source.as_byte_slice());
     h.update(&round.to_le_bytes());
     finish(h)
 }
@@ -79,67 +119,76 @@ pub struct PalwExecutionPermitV1 {
     pub candidate: PalwExecutionCandidateV1,
 }
 
-/// **Quotas from credits: proportional, capped at 45 %, renormalised.** `credits` is each domain's
-/// `Final` attempt count in the previous scheduler epoch (ADR-0107's count). A single domain holds
-/// the whole lane — there is nobody to cap it against — and an empty census yields no quota.
-/// Returns `(domain, permille)`, summing to 1000 over a non-empty census with more than one domain
-/// (largest remainder), and to 1000 for one.
+/// **Quotas from credits: proportional, capped at 45 %, renormalised — in integers.**
+///
+/// `credits` is each domain's `Final` attempt count in the previous scheduler epoch (ADR-0107's
+/// count). A domain with no credits has no quota and is not listed. Among the rest:
+///
+/// * one domain holds the whole lane (there is nobody to cap it against);
+/// * two domains split it evenly — no split of 1000‰ between two keeps both under 450‰, and the
+///   even split is the one that minimises the larger;
+/// * three or more are water-filled: a domain whose proportional share of what remains exceeds the
+///   cap is fixed at the cap, and the rest is re-divided among the others until nobody exceeds it
+///   (three domains at the cap already exceed 1000‰, so this always ends feasible).
+///
+/// Shares are exact rationals until the last step, then floored, and the missing permille go one
+/// each to the largest remainders, ties to the earlier domain in `credits` order. The result sums
+/// to exactly 1000 and is listed in `credits` order.
 pub fn palw_execution_quotas_v1(credits: &[(Hash64, u64)]) -> Vec<(Hash64, u16)> {
-    let total: u128 = credits.iter().map(|(_, c)| *c as u128).sum();
-    if total == 0 {
-        return Vec::new();
+    let live: Vec<(Hash64, u64)> = credits.iter().copied().filter(|(_, c)| *c > 0).collect();
+    match live.len() {
+        0 => return Vec::new(),
+        1 => return vec![(live[0].0, 1000)],
+        2 => return vec![(live[0].0, 500), (live[1].0, 500)],
+        _ => {}
     }
-    if credits.len() == 1 {
-        return vec![(credits[0].0, 1000)];
-    }
-    // Raw shares, then the cap, then the remainder redistributed among the uncapped in proportion
-    // until nobody is over the cap (at most `n` passes: each pass caps at least one more domain).
-    let mut shares: Vec<(Hash64, f64)> = credits.iter().map(|(d, c)| (*d, (*c as f64) / (total as f64))).collect();
-    let cap = PALW_EXEC_DOMAIN_CAP_PERMILLE as f64 / 1000.0;
+    let cap = PALW_EXEC_DOMAIN_CAP_PERMILLE as u128;
+    let mut capped = vec![false; live.len()];
     loop {
-        let over: f64 = shares.iter().filter(|(_, s)| *s > cap).map(|(_, s)| s - cap).sum();
-        if over <= f64::EPSILON {
-            break;
-        }
-        let under_total: f64 = shares.iter().filter(|(_, s)| *s < cap).map(|(_, s)| *s).sum();
-        if under_total <= f64::EPSILON {
-            // Everyone is at or over the cap: the cap cannot be honoured, share equally.
-            let equal = 1.0 / shares.len() as f64;
-            for (_, s) in shares.iter_mut() {
-                *s = equal;
+        let fixed = capped.iter().filter(|c| **c).count() as u128;
+        let remaining = 1000u128 - fixed * cap;
+        let total: u128 = live.iter().zip(&capped).filter(|(_, c)| !**c).map(|((_, credit), _)| *credit as u128).sum();
+        // `remaining × credit / total > cap`, compared without division.
+        let newly: Vec<usize> = live
+            .iter()
+            .enumerate()
+            .filter(|(i, (_, credit))| !capped[*i] && remaining * (*credit as u128) > cap * total)
+            .map(|(i, _)| i)
+            .collect();
+        if newly.is_empty() {
+            let mut rows: Vec<(usize, u128, u128)> = live
+                .iter()
+                .enumerate()
+                .map(|(i, (_, credit))| {
+                    if capped[i] {
+                        (i, cap, 0)
+                    } else {
+                        let scaled = remaining * (*credit as u128);
+                        (i, scaled / total, scaled % total)
+                    }
+                })
+                .collect();
+            let assigned: u128 = rows.iter().map(|(_, q, _)| *q).sum();
+            let mut missing = 1000u128 - assigned;
+            // Every uncapped remainder shares the denominator `total`, so remainders compare
+            // directly; capped rows carry remainder 0 and are never topped up above the cap.
+            let mut order: Vec<usize> = (0..rows.len()).collect();
+            order.sort_by(|a, b| rows[*b].2.cmp(&rows[*a].2).then(a.cmp(b)));
+            for i in order {
+                if missing == 0 {
+                    break;
+                }
+                if !capped[rows[i].0] {
+                    rows[i].1 += 1;
+                    missing -= 1;
+                }
             }
-            break;
+            return rows.into_iter().map(|(i, q, _)| (live[i].0, q as u16)).collect();
         }
-        for (_, s) in shares.iter_mut() {
-            if *s > cap {
-                *s = cap;
-            } else if *s < cap {
-                *s += over * (*s / under_total);
-            }
+        for i in newly {
+            capped[i] = true;
         }
     }
-    // Integer permille by largest remainder, so the quotas sum to exactly 1000.
-    let mut rows: Vec<(usize, u16, f64)> = shares
-        .iter()
-        .enumerate()
-        .map(|(i, (_, s))| {
-            let scaled = s * 1000.0;
-            let floor = scaled.floor();
-            (i, floor as u16, scaled - floor)
-        })
-        .collect();
-    let assigned: u32 = rows.iter().map(|(_, p, _)| *p as u32).sum();
-    let mut remainder = 1000u32.saturating_sub(assigned) as usize;
-    rows.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(&b.0)));
-    for row in rows.iter_mut() {
-        if remainder == 0 {
-            break;
-        }
-        row.1 += 1;
-        remainder -= 1;
-    }
-    rows.sort_by_key(|(i, _, _)| *i);
-    rows.into_iter().map(|(i, p, _)| (shares[i].0, p)).collect()
 }
 
 /// The most permits one domain may hold in a round of `width`: a third, rounded up — one at
@@ -221,42 +270,78 @@ mod tests {
         }
     }
 
+    fn record(accepted_daa: u64, commitment: u64) -> PalwExecutionSeedRecordV1 {
+        PalwExecutionSeedRecordV1 { accepted_daa, execution_commitment: h(commitment) }
+    }
+
+    /// **The seed is an attempt's execution commitment, read at a lag — never a beacon, never a
+    /// header hash.** The newest record deep enough is the source; a record inside the lag is not
+    /// read yet; nothing deep enough is no seed (an empty round); and the round separates seeds.
     #[test]
-    fn a_round_is_a_second_from_genesis_and_the_seed_is_the_beacon_and_the_round() {
+    fn the_seed_is_the_newest_attempt_commitment_at_least_a_lag_deep() {
+        let ring = [record(100, 1), record(220, 2), record(340, 3), record(350, 4)];
+        assert_eq!(palw_execution_seed_source_v1(&ring, 369), Some(h(3)), "350 + 20 > 369: the newest is not deep yet");
+        assert_eq!(palw_execution_seed_source_v1(&ring, 370), Some(h(4)), "350 + 20 == 370: now it is");
+        assert_eq!(palw_execution_seed_source_v1(&ring, 250), Some(h(2)));
+        assert_eq!(palw_execution_seed_source_v1(&ring, 119), None, "a fresh chain has no seed: an empty round");
+        assert_eq!(palw_execution_seed_source_v1(&[], 1_000), None);
+        assert_eq!(palw_execution_seed_source_v1(&[record(u64::MAX, 9)], u64::MAX), None, "an overflowing depth is never deep");
+        assert_eq!(PALW_EXEC_SEED_RING_V1, 4);
+
+        let source = h(7);
+        assert_ne!(palw_execution_seed_v1(&source, 1), palw_execution_seed_v1(&source, 2));
+        assert_ne!(palw_execution_seed_v1(&source, 1), palw_execution_seed_v1(&h(8), 1));
+        assert_eq!(palw_execution_seed_v1(&source, 1), palw_execution_seed_v1(&source, 1));
+    }
+
+    #[test]
+    fn a_round_is_a_second_from_genesis() {
         assert_eq!(palw_execution_round_v1(1_000_000, 1_000_000), 0);
         assert_eq!(palw_execution_round_v1(1_000_999, 1_000_000), 0);
         assert_eq!(palw_execution_round_v1(1_001_000, 1_000_000), 1);
         assert_eq!(palw_execution_round_v1(0, 1_000_000), 0, "before genesis is round 0, never a wrap");
-        assert_eq!(palw_execution_round_v1(1_000_000 + 120_000, 1_000_000), 120, "120 rounds an anchor");
-        let beacon = h(7);
-        assert_ne!(palw_execution_seed_v1(&beacon, 1), palw_execution_seed_v1(&beacon, 2));
-        assert_ne!(palw_execution_seed_v1(&beacon, 1), palw_execution_seed_v1(&h(8), 1));
-        assert_eq!(palw_execution_seed_v1(&beacon, 1), palw_execution_seed_v1(&beacon, 1));
+        assert_eq!(palw_execution_round_v1(1_000_000 + 120_000, 1_000_000), 120, "120 rounds a PALW cadence");
     }
 
     #[test]
-    fn quotas_follow_credits_up_to_the_cap_and_sum_to_a_thousand() {
+    fn quotas_follow_credits_up_to_the_cap_in_integers_and_sum_to_a_thousand() {
         assert!(palw_execution_quotas_v1(&[]).is_empty());
-        assert_eq!(palw_execution_quotas_v1(&[(h(1), 0)]), vec![], "no credits, no quota");
+        assert!(palw_execution_quotas_v1(&[(h(1), 0)]).is_empty(), "no credits, no quota");
         assert_eq!(palw_execution_quotas_v1(&[(h(1), 5)]), vec![(h(1), 1000)], "one domain holds the lane");
-        // 70 / 20 / 10: the 70 is capped at 450 and its excess flows to the others in proportion.
-        let q = palw_execution_quotas_v1(&[(h(1), 70), (h(2), 20), (h(3), 10)]);
-        let by: std::collections::BTreeMap<Hash64, u16> = q.iter().copied().collect();
-        assert_eq!(by[&h(1)], 450, "capped");
-        assert_eq!(by[&h(2)] + by[&h(3)], 550);
-        assert_eq!(by[&h(2)], 367, "2 : 1 of the rest, largest remainder");
-        assert_eq!(by[&h(3)], 183);
+        assert_eq!(palw_execution_quotas_v1(&[(h(1), 99), (h(2), 1)]), vec![(h(1), 500), (h(2), 500)], "two split evenly");
+        assert_eq!(
+            palw_execution_quotas_v1(&[(h(1), 5), (h(2), 0), (h(3), 0)]),
+            vec![(h(1), 1000)],
+            "zero-credit domains are not listed"
+        );
+        // 70 / 20 / 10: the 70 is capped at 450 and 550 is re-divided 2 : 1 — 366.67 and 183.33,
+        // floored to 366 and 183, and the one missing permille goes to the larger remainder.
+        assert_eq!(palw_execution_quotas_v1(&[(h(1), 70), (h(2), 20), (h(3), 10)]), vec![(h(1), 450), (h(2), 367), (h(3), 183)]);
         // Under the cap nothing moves.
-        let q = palw_execution_quotas_v1(&[(h(1), 40), (h(2), 35), (h(3), 25)]);
-        assert_eq!(q, vec![(h(1), 400), (h(2), 350), (h(3), 250)]);
-        // Two whales: both capped, the cap cannot hold — equal shares.
-        let q = palw_execution_quotas_v1(&[(h(1), 50), (h(2), 50)]);
-        assert_eq!(q, vec![(h(1), 500), (h(2), 500)]);
-        for census in
-            [vec![(h(1), 1), (h(2), 1), (h(3), 1)], vec![(h(1), 99), (h(2), 1)], vec![(h(1), 3), (h(2), 3), (h(3), 3), (h(4), 1)]]
-        {
-            let sum: u32 = palw_execution_quotas_v1(&census).iter().map(|(_, p)| *p as u32).sum();
+        assert_eq!(palw_execution_quotas_v1(&[(h(1), 40), (h(2), 35), (h(3), 25)]), vec![(h(1), 400), (h(2), 350), (h(3), 250)]);
+        // Equal remainders: the earlier domain takes the missing permille.
+        assert_eq!(palw_execution_quotas_v1(&[(h(1), 1), (h(2), 1), (h(3), 1)]), vec![(h(1), 334), (h(2), 333), (h(3), 333)]);
+        // Two whales and a minnow: both whales capped, the minnow takes the rest.
+        assert_eq!(palw_execution_quotas_v1(&[(h(1), 49), (h(2), 49), (h(3), 2)]), vec![(h(1), 450), (h(2), 450), (h(3), 100)]);
+        // A cascade: 60 / 39 / 1. Pass one caps the 60; the 39 is then 550 × 39 / 40 = 536 > 450,
+        // so pass two caps it too, and the 1 takes the last 100.
+        assert_eq!(palw_execution_quotas_v1(&[(h(1), 60), (h(2), 39), (h(3), 1)]), vec![(h(1), 450), (h(2), 450), (h(3), 100)]);
+        // Rounding after a cap: 60 / 30 / 5 / 5 → 450, then 550 split 30 : 5 : 5 = 412.5, 68.75,
+        // 68.75; floors sum to 998 and the two missing permille go to the two largest remainders.
+        assert_eq!(
+            palw_execution_quotas_v1(&[(h(1), 60), (h(2), 30), (h(3), 5), (h(4), 5)]),
+            vec![(h(1), 450), (h(2), 412), (h(3), 69), (h(4), 69)]
+        );
+        for census in [
+            vec![(h(1), 1), (h(2), 1), (h(3), 1)],
+            vec![(h(1), 3), (h(2), 3), (h(3), 3), (h(4), 1)],
+            vec![(h(1), 1_000_000), (h(2), 7), (h(3), 3), (h(4), 1)],
+            vec![(h(1), u64::MAX), (h(2), u64::MAX), (h(3), u64::MAX)],
+        ] {
+            let quotas = palw_execution_quotas_v1(&census);
+            let sum: u32 = quotas.iter().map(|(_, p)| *p as u32).sum();
             assert_eq!(sum, 1000, "{census:?}");
+            assert!(quotas.iter().all(|(_, p)| (*p as u64) <= PALW_EXEC_DOMAIN_CAP_PERMILLE), "{census:?} breaches the cap");
         }
     }
 
@@ -282,22 +367,17 @@ mod tests {
         let seed = palw_execution_seed_v1(&h(9), 42);
         let permits = palw_execution_permits_v1(&seed, &candidates, 10, &[]);
         // Six candidates, one operator duplicated: five permits at most, and domain 1 (three bonds,
-        // two operators) can hold at most two of them under an operator rule and the cap of four.
+        // two operators) can hold at most two of them under the operator rule.
         assert_eq!(permits.len(), 5);
         let operators: std::collections::BTreeSet<Hash64> = permits.iter().map(|p| p.candidate.operator_id).collect();
         assert_eq!(operators.len(), 5, "one permit an operator");
         assert_eq!(permits.iter().filter(|p| p.candidate.domain == h(1)).count(), 2);
-        // The order is the ticket order and the index says so.
         for (i, permit) in permits.iter().enumerate() {
-            assert_eq!(permit.index as usize, i);
+            assert_eq!(permit.index as usize, i, "the order is the ticket order and the index says so");
         }
-        // Deterministic and order-independent.
         let mut shuffled = candidates.clone();
         shuffled.reverse();
-        assert_eq!(palw_execution_permits_v1(&seed, &shuffled, 10, &[]), permits);
-        // A different seed is a different order.
-        let other = palw_execution_permits_v1(&palw_execution_seed_v1(&h(9), 43), &candidates, 10, &[]);
-        assert_eq!(other.len(), 5);
+        assert_eq!(palw_execution_permits_v1(&seed, &shuffled, 10, &[]), permits, "deterministic and order-independent");
 
         // Width 1: one permit, and the domain that held it rests next round.
         let first = palw_execution_permits_v1(&seed, &candidates, 1, &[]);
@@ -306,7 +386,7 @@ mod tests {
         let second = palw_execution_permits_v1(&palw_execution_seed_v1(&h(9), 43), &candidates, 1, &first);
         assert_eq!(second.len(), 1);
         assert_ne!(second[0].candidate.domain, held, "no two consecutive rounds from one domain");
-        // Width 3, cap 1: three domains, one each; a domain that filled its cap (one) rests.
+        // Width 3, cap 1: three domains, one each; every domain filled its cap, so all rest.
         let three = palw_execution_permits_v1(&seed, &candidates, 3, &[]);
         assert_eq!(three.len(), 3);
         let domains: std::collections::BTreeSet<Hash64> = three.iter().map(|p| p.candidate.domain).collect();
@@ -333,14 +413,14 @@ mod tests {
     }
 
     #[test]
-    fn a_ninety_percent_domain_holds_at_most_a_third_of_a_run_at_width_ten_and_the_count_is_all_that_widens() {
+    fn a_dominant_domain_holds_at_most_half_a_run_at_width_ten_and_the_count_is_all_that_widens() {
         // Nine operators in domain 1, one each in domains 2 and 3.
         let mut candidates: Vec<PalwExecutionCandidateV1> = (1..=9).map(|i| cand(i, 100 + i, 1)).collect();
         candidates.push(cand(10, 200, 2));
         candidates.push(cand(11, 300, 3));
         let mut previous = Vec::new();
         let mut by_domain: std::collections::BTreeMap<Hash64, usize> = std::collections::BTreeMap::new();
-        let mut total = 0;
+        let mut total = 0usize;
         for round in 0..200u64 {
             let permits = palw_execution_permits_v1(&palw_execution_seed_v1(&h(5), round), &candidates, 10, &previous);
             for permit in &permits {
@@ -350,8 +430,11 @@ mod tests {
             previous = permits;
         }
         assert!(total > 0);
-        let dominant = by_domain[&h(1)] as f64 / total as f64;
-        assert!(dominant <= 0.5, "domain 1 holds {dominant:.2} of the permits: capped at four a round and rested after");
+        assert!(
+            by_domain[&h(1)] * 2 <= total,
+            "domain 1 holds {} of {total}: capped at four a round and rested after",
+            by_domain[&h(1)]
+        );
         assert!(by_domain[&h(2)] > 0 && by_domain[&h(3)] > 0, "the small domains are never starved");
         // Widening changes the count and nothing else: width 1's permit is the head of width 10's.
         let seed = palw_execution_seed_v1(&h(5), 7);
@@ -359,5 +442,19 @@ mod tests {
         let ten = palw_execution_permits_v1(&seed, &candidates, 10, &[]);
         assert_eq!(one[0].candidate, ten[0].candidate);
         assert_eq!(PALW_EXEC_PERMITS_PER_ROUND_V1, 1, "stage 1 is one permit a round");
+    }
+
+    /// **Integer only.** A consensus quota two platforms round differently is a fork, so no
+    /// floating-point type may be spelled in this file's code.
+    #[test]
+    fn no_floating_point_type_is_spelled_in_this_file() {
+        let source = include_str!("palw_execution_lane_v1.rs");
+        let code: String = source.lines().filter(|line| !line.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+        for token in [concat!("f", "32"), concat!("f", "64")] {
+            assert!(
+                !code.split(|c: char| !c.is_alphanumeric() && c != '_').any(|word| word == token),
+                "{token} is spelled in this file"
+            );
+        }
     }
 }
