@@ -7505,6 +7505,8 @@ impl<'a> TransitionBuilder<'a> {
             for key in self.state.round_finals.keys().copied().collect::<Vec<_>>() {
                 self.write_round_final(key, None);
             }
+            // The span marker names the finals' span and means nothing without them.
+            self.write_round_span(0);
         }
         let keep_from = span_now.saturating_sub(1);
         for key in self.state.round_schedules.range(..keep_from).map(|(k, _)| *k).collect::<Vec<_>>() {
@@ -17856,6 +17858,109 @@ pub(crate) mod tests {
         (s3, claim_id)
     }
 
+    // ---- ADR-0125: the execution lane's scheduler and permit ledger ----
+
+    fn round_extras(span_daa: u64, uses: Vec<crate::palw_execution_lane_v1::PalwExecPermitUseV1>) -> PalwTransitionExtrasV1 {
+        PalwTransitionExtrasV1 {
+            round_lane: Some(crate::palw_execution_lane_v1::PalwExecLaneFoldV1 { schedule_span_daa: span_daa }),
+            round_permit_uses: uses,
+            ..economy_extras()
+        }
+    }
+
+    /// The fold with ADR-0124's economy and ADR-0125's lane armed, checked for internal consistency
+    /// and for the delta's round trip after every block, and for the carriage's.
+    fn apply_round(
+        parent: &PalwChainStateV2,
+        p: &PalwStateParamsV2,
+        c: &PalwBlockContextV2,
+        objects: &[PalwConsensusObjectV2],
+        extras: &PalwTransitionExtrasV1,
+    ) -> Result<PalwChainStateV2, PalwStateV2Error> {
+        let (state, delta) = apply_palw_transition_v2_with_extras(parent, p, c, objects, None, false, false, false, false, extras)?;
+        state.assert_internal_consistency(p).expect("internal consistency after apply");
+        assert_eq!(apply_delta_v2(parent, &delta, p).unwrap().state_root(), state.state_root(), "the delta reproduces the transition");
+        assert_eq!(revert_delta_v2(&state, &delta, p).unwrap().state_root(), parent.state_root(), "and reverts to the parent");
+        let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&state)).unwrap();
+        let back: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(back.into_state(p, Some(state.state_root())).unwrap().state_root(), state.state_root(), "the carriage round-trips");
+        Ok(state)
+    }
+
+    /// **ADR-0125 Decisions 2 and 3 on one claim.** An attempt that reaches `Final` in span 1 is a
+    /// credit of its class's domain; the first block of span 2 turns span 1's finals into span 2's
+    /// schedule and clears them; the schedule grants the domain's only bond the even rounds (one
+    /// domain, one parity group); a permit is recorded once and refused the second time; and the
+    /// first block two spans on drops both the schedule and the ledger rows it no longer needs.
+    #[test]
+    fn adr0125_a_finalized_attempt_schedules_the_next_span_and_a_permit_is_accepted_once() {
+        use crate::palw_execution_lane_v1::{PalwExecPermitUseV1, palw_execution_permits_v1};
+        let p = params().with_worker_carve_permille(620).unwrap();
+        let (s3, claim_id) = economy_bound(&p);
+        // Re-fold the bound claim's licensing and finalization with the lane armed at a span of 100.
+        let lane = round_extras(100, Vec::new());
+        let receipts = vec![receipt_at(claim_id, bond_key(1), true, 103), receipt_at(claim_id, bond_key(2), true, 103)];
+        let s4 =
+            apply_round(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts }], &lane)
+                .expect("licensed");
+        assert!(s4.round_finals().1.is_empty(), "nothing is a credit before Final");
+        let s5 = apply_round(&s4, &p, &ctx(5, 124, 5), &[], &lane).expect("finalized");
+        let claim = s5.claim(&claim_id).unwrap().clone();
+        assert!(matches!(claim.phase, PalwClaimPhaseV2::Final { final_daa: 124 }));
+        let (span, finals) = s5.round_finals();
+        assert_eq!(span, 1, "finalized at DAA 124: span 1 of a 100-DAA span");
+        let final_row = finals.get(&claim_id).expect("the finalized attempt is a credit");
+        assert_eq!(final_row.domain, h64(1), "a class with no certified family is its own domain");
+        assert_eq!(final_row.bond, bond_key(1));
+        assert_eq!(final_row.operator_id, s5.bond(&bond_key(1)).unwrap().operator_id);
+        assert_eq!(final_row.execution_root, claim.execution_root);
+        assert!(s5.round_schedules().is_empty(), "span 1's finals schedule span 2, not span 1");
+
+        // The first block of span 2.
+        let s6 = apply_round(&s5, &p, &ctx(6, 200, 6), &[], &lane).expect("span 2 opens");
+        assert!(s6.round_finals().1.is_empty(), "the finals left with the span that gathered them");
+        let schedule = s6.round_schedule(2).expect("span 2 is scheduled").clone();
+        assert_eq!(schedule.domains.len(), 1);
+        assert_eq!((schedule.domains[0].domain, schedule.domains[0].quota_permille, schedule.domains[0].parity), (h64(1), 1000, 0));
+        assert_eq!(schedule.domains[0].bonds.len(), 1);
+        assert_eq!(schedule.domains[0].bonds[0].bond, bond_key(1));
+        let even = palw_execution_permits_v1(&schedule, 10, 1);
+        assert_eq!(even.len(), 1, "an even round holds the one permit");
+        assert_eq!(even[0].bond, bond_key(1));
+        assert!(palw_execution_permits_v1(&schedule, 11, 1).is_empty(), "one domain alone leaves the odd rounds empty");
+
+        // A permit accepted, then the same permit again.
+        let used = PalwExecPermitUseV1 { span: 2, round: 10, permit_index: 0 };
+        let s7 = apply_round(&s6, &p, &ctx(7, 201, 7), &[], &round_extras(100, vec![used])).expect("the permit is recorded");
+        assert!(s7.round_permit_used(2, 10, 0));
+        assert!(!s7.round_permit_used(2, 12, 0), "another round's permit is not");
+        let twice = apply_palw_transition_v2_with_extras(&s7, &p, &ctx(8, 202, 8), &[], None, false, false, false, false, &round_extras(100, vec![used]));
+        assert!(matches!(twice, Err(PalwStateV2Error::RoundPermitRefused(_))), "a permit is accepted once: {twice:?}");
+
+        // Two spans on, nothing of span 2 is kept.
+        let s9 = apply_round(&s7, &p, &ctx(9, 400, 9), &[], &lane).expect("span 4 opens");
+        assert!(s9.round_schedule(2).is_none(), "span 2's schedule is older than the span before this block's");
+        assert!(!s9.round_permit_used(2, 10, 0), "and so is its ledger row");
+        assert!(!s9.round_lane_is_written(), "with nothing left, the lane's block leaves the root again");
+    }
+
+    /// **Below the fence the lane writes nothing**: the same claim finalizes without a credit, and the
+    /// root is the one a build without the fields computes.
+    #[test]
+    fn adr0125_below_the_fence_a_finalized_attempt_is_no_credit() {
+        let p = params().with_worker_carve_permille(620).unwrap();
+        let (s3, claim_id) = economy_bound(&p);
+        let receipts = vec![receipt_at(claim_id, bond_key(1), true, 103), receipt_at(claim_id, bond_key(2), true, 103)];
+        let (s4, _) =
+            apply_economy(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts }], None);
+        let (s5, _) = apply_economy(&s4, &p, &ctx(5, 124, 5), &[], None);
+        assert!(matches!(s5.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
+        assert!(s5.round_finals().1.is_empty() && s5.round_schedules().is_empty());
+        assert!(!s5.round_lane_is_written());
+        let plain = borsh::to_vec(&PalwStateCarriageV2::from_state(&s5)).unwrap();
+        assert!(!plain.contains(&0xA7) || borsh::from_slice::<PalwStateCarriageV2>(&plain).unwrap().round_finals.is_empty());
+    }
+
     /// **ADR-0124 Decisions 1–3 on one claim.** Binding puts three seats on duty, each reserving
     /// three times the claim's exposure; licensing credits the two whose `Valid` receipts it
     /// carries; `Final` pays the producer 80 % and each credited seat one fixed fifth of the pool
@@ -23602,6 +23707,10 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::ClassStepLadder { .. } => "class_step_ladder",
                     PalwDeltaEntryV2::PanelDuties { .. } => "panel_duties",
                     PalwDeltaEntryV2::PanelReserve { .. } => "panel_reserve",
+                    PalwDeltaEntryV2::RoundSpan { .. } => "round_span",
+                    PalwDeltaEntryV2::RoundFinal { .. } => "round_final",
+                    PalwDeltaEntryV2::RoundSchedule { .. } => "round_schedule",
+                    PalwDeltaEntryV2::RoundPermitsUsed { .. } => "round_permits_used",
                 });
             }
         }
@@ -24168,6 +24277,11 @@ pub(crate) mod tests {
             // ADR-0124 Decisions 2 and 3: rooted in their own guarded block after the ladders.
             panel_duties: _,
             panel_reserve_sompi: _,
+            // ADR-0125: rooted in their own guarded block after the panel economy.
+            round_span: _,
+            round_finals: _,
+            round_schedules: _,
+            round_permits_used: _,
             safe_weight: _,
             retired_safe_weight: _,
             bounded_immature: _,
@@ -29834,6 +29948,8 @@ pub(crate) mod tests {
                 panel_economy_active: false,
                 work_priced_reward_active: false,
                 prompt_ids_merkle: false,
+                round_lane: None,
+                round_permit_uses: Vec::new(),
             }
         }
 
@@ -30052,6 +30168,8 @@ pub(crate) mod tests {
                 panel_economy_active: false,
                 work_priced_reward_active: false,
                 prompt_ids_merkle: false,
+                round_lane: None,
+                round_permit_uses: Vec::new(),
             };
             let (s_off, _) =
                 apply_palw_transition_v2_with_extras(&s, &p, &ctx(3, 251, 3), &[], None, false, false, false, false, &dormant)
