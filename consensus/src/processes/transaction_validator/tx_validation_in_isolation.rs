@@ -182,6 +182,12 @@ impl TransactionValidator {
                 kaspa_consensus_core::palw_state_v2::PALW_V2_COINBASE_EXTRA_OUTPUTS_BOUNDED
             } else {
                 kaspa_consensus_core::palw_state_v2::PALW_V2_COINBASE_EXTRA_OUTPUTS
+            }
+            // ADR-0125: one aggregate fee output per permitted bond of the round lane.
+            + if self.palw_round_lane_declared {
+                kaspa_consensus_core::palw_execution_lane_v1::PALW_EXEC_MAX_BONDS_PER_MERGESET_V1 as u64
+            } else {
+                0
             };
         if tx.outputs.len() as u64 > outputs_limit {
             return Err(TxRuleError::CoinbaseTooManyOutputs(tx.outputs.len(), outputs_limit));

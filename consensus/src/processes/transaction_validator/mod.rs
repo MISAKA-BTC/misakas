@@ -85,6 +85,12 @@ pub struct TransactionValidator {
     /// the fence at the containing block's DAA and refuses a commitment past the structural `2^32`
     /// below it. `None` on every preset but testnet-11.
     palw_held_context_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+
+    /// **ADR-0125, height-free: whether this ruleset configures the execution lane.** A merging block
+    /// pays each permitted bond one aggregate fee output, at most
+    /// `PALW_EXEC_MAX_BONDS_PER_MERGESET_V1` of them, so the isolation cap widens by that where the
+    /// lane exists — a size guard fails wide, and the exact-hash coinbase rule decides correctness.
+    palw_round_lane_declared: bool,
 }
 
 impl TransactionValidator {
@@ -137,7 +143,15 @@ impl TransactionValidator {
             palw_lifecycle_undecodable_tolerated,
             palw_held_context_fence: palw_held_context_fence
                 .filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never()),
+            palw_round_lane_declared: false,
         }
+    }
+
+    /// ADR-0125: declare the execution lane (`Params::palw_execution_lane_fence().is_some()`), which
+    /// widens the coinbase output cap by the lane's payee bound.
+    pub fn with_round_lane_declared(mut self, declared: bool) -> Self {
+        self.palw_round_lane_declared = declared;
+        self
     }
 
     pub fn new_for_tests(
@@ -178,6 +192,8 @@ impl TransactionValidator {
             palw_lifecycle_undecodable_tolerated: false,
             // Every shipped preset's door but testnet-11's: no held regime, the structural cap.
             palw_held_context_fence: None,
+            // Every shipped preset's door: no execution lane, no payee outputs.
+            palw_round_lane_declared: false,
         }
     }
 

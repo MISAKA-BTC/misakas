@@ -76,6 +76,11 @@ pub struct PalwExecPermitUseV1 {
 /// (`PalwExecutionLaneV1::max_per_mergeset`): ten rounds a second for four hundred seconds.
 pub const PALW_EXEC_MAX_PER_MERGESET_BOUND_V1: u64 = 4_096;
 
+/// **The most distinct bonds whose round blocks one mergeset may hold.** A merging block pays each
+/// permitted bond one aggregate fee output, so this bounds the outputs the lane adds to a coinbase —
+/// and the coinbase's size, which counts against the block's mass.
+pub const PALW_EXEC_MAX_BONDS_PER_MERGESET_V1: usize = 64;
+
 /// The envelope's wire version.
 pub const PALW_EXEC_ENVELOPE_VERSION_V1: u8 = 1;
 
@@ -588,14 +593,16 @@ pub enum PalwExecMergesetError {
     DuplicatePermit { round: u64, index: u16 },
     #[error("an execution block of round {block_round} merges an execution block of round {member_round}, which is not older")]
     RoundNotOlder { block_round: u64, member_round: u64 },
+    #[error("the mergeset holds execution blocks of {count} bonds, above the payee bound of {bound}")]
+    TooManyBonds { count: usize, bound: usize },
 }
 
 /// **The header stage's mergeset rule.** `members` are the execution blocks in a block's mergeset
-/// as `(round, permit index)`; `block_round` is `Some` when the block is itself an execution block.
-/// No state and no walk: a property of the mergeset's headers, like the heartbeat width rule.
+/// as `(round, permit index, bond)`; `block_round` is `Some` when the block is itself an execution
+/// block. No state and no walk: a property of the mergeset's headers, like the heartbeat width rule.
 pub fn palw_execution_mergeset_rule_v1(
     block_round: Option<u64>,
-    members: &[(u64, u16)],
+    members: &[(u64, u16, PalwBondKeyV2)],
     width: u16,
     max_per_mergeset: u64,
 ) -> Result<(), PalwExecMergesetError> {
@@ -604,7 +611,8 @@ pub fn palw_execution_mergeset_rule_v1(
     }
     let mut per_round: BTreeMap<u64, u64> = BTreeMap::new();
     let mut permits: BTreeSet<(u64, u16)> = BTreeSet::new();
-    for (round, index) in members {
+    let mut bonds: BTreeSet<PalwBondKeyV2> = BTreeSet::new();
+    for (round, index, bond) in members {
         if let Some(block_round) = block_round
             && *round >= block_round
         {
@@ -617,6 +625,10 @@ pub fn palw_execution_mergeset_rule_v1(
         *count += 1;
         if *count > width as u64 {
             return Err(PalwExecMergesetError::RoundTooWide { round: *round, count: *count, width });
+        }
+        bonds.insert(*bond);
+        if bonds.len() > PALW_EXEC_MAX_BONDS_PER_MERGESET_V1 {
+            return Err(PalwExecMergesetError::TooManyBonds { count: bonds.len(), bound: PALW_EXEC_MAX_BONDS_PER_MERGESET_V1 });
         }
     }
     Ok(())
@@ -919,25 +931,33 @@ mod tests {
     #[test]
     fn the_mergeset_rule_bounds_width_duplicates_count_and_order() {
         assert_eq!(palw_execution_mergeset_rule_v1(None, &[], 1, 10), Ok(()));
-        assert_eq!(palw_execution_mergeset_rule_v1(Some(5), &[(1, 0), (2, 0), (4, 0)], 1, 10), Ok(()));
+        assert_eq!(palw_execution_mergeset_rule_v1(Some(5), &[(1, 0, bond(1)), (2, 0, bond(1)), (4, 0, bond(1))], 1, 10), Ok(()));
         assert_eq!(
-            palw_execution_mergeset_rule_v1(Some(5), &[(5, 0)], 1, 10),
+            palw_execution_mergeset_rule_v1(Some(5), &[(5, 0, bond(1))], 1, 10),
             Err(PalwExecMergesetError::RoundNotOlder { block_round: 5, member_round: 5 })
         );
-        assert_eq!(palw_execution_mergeset_rule_v1(None, &[(9, 0)], 1, 10), Ok(()), "a PALW block merges any round");
+        assert_eq!(palw_execution_mergeset_rule_v1(None, &[(9, 0, bond(1))], 1, 10), Ok(()), "a PALW block merges any round");
         assert_eq!(
-            palw_execution_mergeset_rule_v1(None, &[(3, 0), (3, 1)], 1, 10),
+            palw_execution_mergeset_rule_v1(None, &[(3, 0, bond(1)), (3, 1, bond(1))], 1, 10),
             Err(PalwExecMergesetError::RoundTooWide { round: 3, count: 2, width: 1 })
         );
-        assert_eq!(palw_execution_mergeset_rule_v1(None, &[(3, 0), (3, 1)], 2, 10), Ok(()));
+        assert_eq!(palw_execution_mergeset_rule_v1(None, &[(3, 0, bond(1)), (3, 1, bond(1))], 2, 10), Ok(()));
         assert_eq!(
-            palw_execution_mergeset_rule_v1(None, &[(3, 1), (3, 1)], 2, 10),
+            palw_execution_mergeset_rule_v1(None, &[(3, 1, bond(1)), (3, 1, bond(1))], 2, 10),
             Err(PalwExecMergesetError::DuplicatePermit { round: 3, index: 1 })
         );
         assert_eq!(
-            palw_execution_mergeset_rule_v1(None, &[(1, 0), (2, 0), (3, 0)], 1, 2),
+            palw_execution_mergeset_rule_v1(None, &[(1, 0, bond(1)), (2, 0, bond(1)), (3, 0, bond(1))], 1, 2),
             Err(PalwExecMergesetError::TooMany { count: 3, bound: 2 })
         );
+        // One aggregate fee output per bond: the 65th bond in one mergeset is refused.
+        let many: Vec<(u64, u16, PalwBondKeyV2)> =
+            (0..=PALW_EXEC_MAX_BONDS_PER_MERGESET_V1 as u64).map(|i| (i, 0u16, bond(i))).collect();
+        assert_eq!(
+            palw_execution_mergeset_rule_v1(None, &many, 1, 1_000),
+            Err(PalwExecMergesetError::TooManyBonds { count: 65, bound: PALW_EXEC_MAX_BONDS_PER_MERGESET_V1 })
+        );
+        assert_eq!(palw_execution_mergeset_rule_v1(None, &many[..64], 1, 1_000), Ok(()));
     }
 
     /// **Integer only.** A consensus quota or draw that two platforms round differently is a fork,

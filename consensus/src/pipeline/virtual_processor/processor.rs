@@ -522,6 +522,8 @@ pub struct VirtualStateProcessor {
     pub(super) palw_panel_economy: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0124 Decision 6: `Params::palw_work_priced_reward_fence` — the work price's height.
     pub(super) palw_work_priced_reward: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0125: `Params::palw_execution_lane_fence` — the execution lane's activation and shape.
+    pub(super) palw_execution_lane: Option<kaspa_consensus_core::config::params::PalwExecutionLaneV1>,
     /// **ADR-0089 Decision 9's fence, `None` on every shipped preset.** Past it the EVM's
     /// window and hand exist and the block's EVM actions reach its transition. Resolved at the
     /// BLOCK's DAA.
@@ -1054,6 +1056,7 @@ impl VirtualStateProcessor {
             palw_model_seed_v2: params.palw_model_seed_v2_fence(),
             palw_panel_economy: params.palw_panel_economy_fence(),
             palw_work_priced_reward: params.palw_work_priced_reward_fence(),
+            palw_execution_lane: params.palw_execution_lane_fence(),
             palw_model_evm: params.palw_model_evm_fence(),
             palw_context_ladder: params.palw_context_ladder,
             palw_epoch_boundary_budget: params.palw_epoch_boundary_budget,
@@ -1770,6 +1773,9 @@ impl VirtualStateProcessor {
                     // Audit C-08 part three: and what a released bond's spend must destroy.
                     ctx.palw_v2_bond_burns =
                         palw_state.as_ref().map(|s| self.palw_v2_bond_burn_obligations(s, pov_daa_score)).unwrap_or_default();
+                    // ADR-0125: which merged round blocks hold their permit, from the same parent state.
+                    ctx.palw_round_verdicts =
+                        palw_state.as_ref().and_then(|s| self.palw_round_verdicts_v1(s, &ctx.ghostdag_data, pov_daa_score));
                     self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, pov_daa_score);
 
                     // kaspa-pq EVM Lane v0.4 (§2.3/§9): the lazy chain-context
@@ -2031,6 +2037,10 @@ impl VirtualStateProcessor {
                                         let mut extras = self.palw_transition_extras_at(point.daa_score);
                                         if let Some(staged) = evm_staged.as_ref() {
                                             extras.evm_actions = staged.result.market_actions.clone();
+                                        }
+                                        // ADR-0125: the permits this block accepted, as decided above.
+                                        if let Some(verdicts) = ctx.palw_round_verdicts.as_ref() {
+                                            extras.round_permit_uses = verdicts.uses.clone();
                                         }
                                         extras
                                     },
@@ -3145,6 +3155,10 @@ impl VirtualStateProcessor {
             .as_ref()
             .map(|(_, state)| self.palw_v2_bond_burn_obligations(state, virtual_daa_window.daa_score))
             .unwrap_or_default();
+        // ADR-0125: virtual accepts exactly the round blocks the block built on it will accept.
+        ctx.palw_round_verdicts = virtual_palw_state
+            .as_ref()
+            .and_then(|(_, state)| self.palw_round_verdicts_v1(state, &virtual_ghostdag_data, virtual_daa_window.daa_score));
 
         // Calc virtual UTXO state relative to selected parent
         self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, selected_parent_bond_view, virtual_daa_window.daa_score);
@@ -8291,6 +8305,99 @@ impl VirtualStateProcessor {
         self.palw_work_priced_reward.is_some_and(|fence| fence.is_active(daa_score))
     }
 
+    /// ADR-0125: the execution lane's shape where it is open at `daa_score`.
+    pub(super) fn palw_execution_lane_at(&self, daa_score: u64) -> Option<kaspa_consensus_core::config::params::PalwExecutionLaneV1> {
+        self.palw_execution_lane.filter(|lane| lane.activation.is_active(daa_score))
+    }
+
+    /// **ADR-0125: the round blocks of a mergeset** — its reds carrying the round lane's id where the
+    /// lane is open at their own DAA score. Headers only, so the template (which holds no verdicts)
+    /// and the validating walk compute the same set; nothing is read where the lane is not configured.
+    pub(super) fn palw_round_blocks_of(&self, ghostdag_data: &GhostdagData) -> BlockHashSet {
+        let Some(lane) = self.palw_execution_lane else {
+            return BlockHashSet::default();
+        };
+        ghostdag_data
+            .mergeset_reds
+            .iter()
+            .copied()
+            .filter(|red| {
+                self.headers_store.get_header(*red).is_ok_and(|header| {
+                    header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1
+                        && lane.activation.is_active(header.daa_score)
+                })
+            })
+            .collect()
+    }
+
+    /// **ADR-0125: which round blocks of a merging block's mergeset hold their permit** — decided
+    /// against the merging block's PARENT state, so the template (building on the tip) and every
+    /// validating node (judging the block that template becomes) read one state and give one answer.
+    ///
+    /// A round block holds its permit when all of these hold, and otherwise it is merged and its
+    /// transactions are not accepted:
+    ///
+    /// * its envelope decodes (the header stage already refused one that does not);
+    /// * the span its ANCHOR (its selected parent) lies in is this block's span or the one before —
+    ///   the two spans the fold keeps a schedule and a permit ledger for;
+    /// * that span's schedule grants `(round, permit index)` to the envelope's bond at the lane's
+    ///   width ([`kaspa_consensus_core::palw_execution_lane_v1::palw_execution_permit_of_v1`]);
+    /// * the bond is registered, `Active`, and its key is the key the envelope was signed with;
+    /// * the round block's coinbase names the bond's registered payout — its fees are paid there,
+    ///   and nowhere a stranger's block could redirect them;
+    /// * the permit has not been accepted on this chain before.
+    ///
+    /// `None` where the lane is not open at `daa_score`.
+    pub(super) fn palw_round_verdicts_v1(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        ghostdag_data: &GhostdagData,
+        daa_score: u64,
+    ) -> Option<super::utxo_validation::PalwRoundVerdictsV1> {
+        use kaspa_consensus_core::palw_execution_lane_v1::{
+            PalwExecEnvelopeV1, PalwExecPermitUseV1, palw_execution_permit_of_v1, palw_execution_span_v1,
+        };
+        let lane = self.palw_execution_lane_at(daa_score)?;
+        let span_now = palw_execution_span_v1(daa_score, lane.schedule_span_daa);
+        let mut verdicts = super::utxo_validation::PalwRoundVerdictsV1 { round_blocks: self.palw_round_blocks_of(ghostdag_data), ..Default::default() };
+        let mut ordered: Vec<BlockHash> = verdicts.round_blocks.iter().copied().collect();
+        ordered.sort();
+        for block in ordered {
+            let permitted = (|| -> Option<PalwExecPermitUseV1> {
+                let header = self.headers_store.get_header(block).ok()?;
+                let envelope = PalwExecEnvelopeV1::decode(&header.palw_commitment).ok()?;
+                let anchor = self.ghostdag_store.get_selected_parent(block).ok()?;
+                let span = palw_execution_span_v1(self.headers_store.get_daa_score(anchor).ok()?, lane.schedule_span_daa);
+                if span > span_now || span + 1 < span_now {
+                    return None;
+                }
+                let schedule = state.round_schedule(span)?;
+                palw_execution_permit_of_v1(schedule, envelope.round, lane.permits_per_round, envelope.permit_index, &envelope.bond)?;
+                let bond = state.bond(&envelope.bond)?;
+                if !matches!(bond.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) || bond.pubkey != envelope.pubkey {
+                    return None;
+                }
+                let transactions = self.block_transactions_store.get(block).ok()?;
+                let coinbase = self.coinbase_manager.deserialize_coinbase_payload(&transactions.first()?.payload).ok()?;
+                if coinbase.miner_data.script_public_key
+                    != kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&bond.payout_payload.as_bytes())
+                {
+                    return None;
+                }
+                if state.round_permit_used(span, envelope.round, envelope.permit_index) {
+                    return None;
+                }
+                Some(PalwExecPermitUseV1 { span, round: envelope.round, permit_index: envelope.permit_index })
+            })();
+            if let Some(used) = permitted {
+                verdicts.permitted.insert(block);
+                verdicts.uses.push(used);
+            }
+        }
+        verdicts.uses.sort();
+        Some(verdicts)
+    }
+
     /// **ADR-0124's draw policy at a claim's anchor** — the deep fence's weighting and the panel
     /// economy's floor and ceiling, resolved at ONE point so the assembler and the acceptance layer
     /// recompute one identical panel. `economy` is `None` while the fence is dormant at the anchor.
@@ -8357,6 +8464,12 @@ impl VirtualStateProcessor {
             // lose. Explicit for the reason every line above gives.
             panel_economy_active: self.palw_panel_economy_active_at(daa_score),
             work_priced_reward_active: self.palw_work_priced_reward_active_at(daa_score),
+            // ADR-0125: the lane's span, where it is open. The permits a block accepted are the
+            // chain walk's to add — it is the only caller holding the verdicts.
+            round_lane: self
+                .palw_execution_lane_at(daa_score)
+                .map(|lane| kaspa_consensus_core::palw_execution_lane_v1::PalwExecLaneFoldV1 { schedule_span_daa: lane.schedule_span_daa }),
+            round_permit_uses: Vec::new(),
             evm_actions: Vec::new(),
             // ADR-0093 Decision 8: which form of move 1 opens a phase. Written explicitly for the
             // reason the lines above give — an unwritten default here would refuse, or admit, a
@@ -14513,6 +14626,7 @@ impl VirtualStateProcessor {
                 &virtual_state.mergeset_non_daa,
                 fs,
                 &unentitled,
+                &self.palw_round_blocks_of(&virtual_state.ghostdag_data),
             )
         });
         let (validator_reward_outputs, _rewarded_keys, newly_included_stake, expected_stake) = self
@@ -14640,6 +14754,8 @@ impl VirtualStateProcessor {
                 &palw_unentitled_blues,
                 self.palw_state_params_v2.is_some(),
                 &palw_merged_escrow_withheld,
+                // ADR-0125: the merged round blocks, whose fees go to their payouts.
+                &self.palw_round_blocks_of(&virtual_state.ghostdag_data),
             )
             .unwrap();
         txs.insert(0, coinbase.tx);

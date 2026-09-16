@@ -51,7 +51,7 @@ impl HeaderProcessor {
     fn round_lane_members(
         &self,
         ghostdag_data: &crate::model::stores::ghostdag::GhostdagData,
-    ) -> BlockProcessResult<Vec<(u64, u16)>> {
+    ) -> BlockProcessResult<Vec<(u64, u16, kaspa_consensus_core::palw_state_v2::PalwBondKeyV2)>> {
         let mut members = Vec::new();
         if self.palw_execution_lane.is_none() {
             return Ok(members);
@@ -63,7 +63,7 @@ impl HeaderProcessor {
             }
             let envelope = kaspa_consensus_core::palw_execution_lane_v1::PalwExecEnvelopeV1::decode(&red_header.palw_commitment)
                 .map_err(|e| RuleError::BadRoundLaneMergeset(e.to_string()))?;
-            members.push((envelope.round, envelope.permit_index));
+            members.push((envelope.round, envelope.permit_index, envelope.bond));
         }
         Ok(members)
     }

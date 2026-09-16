@@ -182,7 +182,9 @@ impl ConsensusServices {
             // **ADR-0119 Decision 6: the held regime's fence**, resolved — isolation's work-leaves cap
             // asks `.is_some()`, the header-context door asks the height.
             params.palw_held_context_fence(),
-        );
+        )
+        // ADR-0125: the lane's payee outputs widen the coinbase cap where the lane is configured.
+        .with_round_lane_declared(params.palw_execution_lane_fence().is_some());
 
         let pruning_point_manager = PruningPointManager::new(
             params.pruning_depth(),

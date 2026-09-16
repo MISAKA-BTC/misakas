@@ -203,6 +203,22 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// Filled only while a V2 bundle is installed AND the rent fence is armed, so on every shipped
     /// preset it is empty and costs one `is_some_and`.
     pub palw_v2_accepted_tx_fees: std::collections::HashMap<TransactionId, u64>,
+    /// **ADR-0125: the merged round blocks and which of them hold their permit**, decided against
+    /// the parent state before acceptance runs. `None` where the lane is not open at this block, so
+    /// every shipped preset walks the mergeset exactly as before.
+    pub palw_round_verdicts: Option<PalwRoundVerdictsV1>,
+}
+
+/// **ADR-0125: a merging block's verdicts on its round blocks.** A round block outside `permitted`
+/// is merged and colored like any other red, and none of its transactions is accepted.
+#[derive(Clone, Debug, Default)]
+pub(super) struct PalwRoundVerdictsV1 {
+    /// Every round block in the mergeset.
+    pub round_blocks: BlockHashSet,
+    /// Those whose permit the parent state grants.
+    pub permitted: BlockHashSet,
+    /// The permits they use, sorted — what the fold records.
+    pub uses: Vec<kaspa_consensus_core::palw_execution_lane_v1::PalwExecPermitUseV1>,
 }
 
 impl<'a> UtxoProcessingContext<'a> {
@@ -227,6 +243,7 @@ impl<'a> UtxoProcessingContext<'a> {
             palw_v2_unentitled_blues: BlockHashSet::default(),
             palw_v2_bond_burns: Default::default(),
             palw_v2_accepted_tx_fees: Default::default(),
+            palw_round_verdicts: None,
         }
     }
 
@@ -359,12 +376,19 @@ impl VirtualStateProcessor {
                 view
             });
 
+        // ADR-0125: a round block without its permit contributes its coinbase (which carries its
+        // payload, read below for the reward row) and nothing else — its transactions are never
+        // validated, never accepted and pay no fee.
+        let unpermitted_rounds: BlockHashSet = ctx
+            .palw_round_verdicts
+            .as_ref()
+            .map(|verdicts| verdicts.round_blocks.difference(&verdicts.permitted).copied().collect())
+            .unwrap_or_default();
         for (i, (merged_block, txs)) in once((ctx.selected_parent(), selected_parent_transactions))
-            .chain(
-                ctx.ghostdag_data
-                    .consensus_ordered_mergeset_without_selected_parent(self.ghostdag_store.deref())
-                    .map(|b| (b, self.block_transactions_store.get(b).unwrap())),
-            )
+            .chain(ctx.ghostdag_data.consensus_ordered_mergeset_without_selected_parent(self.ghostdag_store.deref()).map(|b| {
+                let txs = self.block_transactions_store.get(b).unwrap();
+                if unpermitted_rounds.contains(&b) { (b, std::sync::Arc::new(txs[..1].to_vec())) } else { (b, txs) }
+            }))
             .enumerate()
         {
             // Create a composed UTXO view from the selected parent UTXO view + the mergeset UTXO diff
@@ -945,6 +969,7 @@ impl VirtualStateProcessor {
                 &mergeset_non_daa,
                 fs,
                 &ctx.palw_v2_unentitled_blues,
+                &self.palw_round_blocks_of(&ctx.ghostdag_data),
             )
         });
         let (validator_reward_outputs, rewarded_keys, newly_included_stake, expected_stake) = self.validator_reward_outputs_for_block(
@@ -1047,6 +1072,7 @@ impl VirtualStateProcessor {
             ctx.palw_v2_escrow_withheld,
             &ctx.palw_v2_unentitled_blues,
             &ctx.palw_v2_merged_escrow_withheld,
+            &self.palw_round_blocks_of(&ctx.ghostdag_data),
         )?;
 
         // Verify the header pruning point
@@ -1109,6 +1135,9 @@ impl VirtualStateProcessor {
         // B-1 (deep fence): the carve withheld from each OTHER merged block, threaded to
         // `expected_coinbase_transaction`. Empty below the fence and on every current network.
         palw_merged_escrow_withheld: &BlockHashMap<u64>,
+        // ADR-0125: the merged round blocks, threaded to `expected_coinbase_transaction`. Empty
+        // where the lane is not open.
+        palw_round_blocks: &BlockHashSet,
     ) -> BlockProcessResult<()> {
         // Extract only miner data from the provided coinbase
         let miner_data = self.coinbase_manager.deserialize_coinbase_payload(&coinbase.payload).unwrap().miner_data;
@@ -1128,6 +1157,7 @@ impl VirtualStateProcessor {
                 palw_unentitled_blues,
                 self.palw_state_params_v2.is_some(),
                 palw_merged_escrow_withheld,
+                palw_round_blocks,
             )
             .unwrap()
             .tx;

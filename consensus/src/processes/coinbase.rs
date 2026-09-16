@@ -204,6 +204,14 @@ impl CoinbaseManager {
         // rules out. **Empty below the deep fence and on every network without a V2 bundle**, where
         // every merged carve is paid in full at acceptance (ADR-0058 Decision 5), byte-identical.
         palw_merged_escrow_withheld: &BlockHashMap<u64>,
+        // **ADR-0125: the merged round blocks.** A round block is a red outside the DAA set, so the
+        // legacy rule would lump its fees into THIS block's miner output. It is paid instead to its
+        // own payout — the script its coinbase names, which the merging block's verdict required to
+        // be its bond's registered payout — one aggregate output per payout, in the order each first
+        // appears among the reds, after the red lump. A round block whose permit was refused had no
+        // transaction accepted, so its fees are zero and it adds nothing. Empty where the lane is not
+        // open, which leaves this function byte-identical.
+        palw_round_blocks: &BlockHashSet,
     ) -> CoinbaseResult<CoinbaseTransactionTemplate> {
         // §D base inclusion bounty: the worker-inclusion sub-pool summed over the SAME
         // mergeset blue(∩DAA)+red iteration the Worker carve uses (paid to the includer below).
@@ -272,8 +280,21 @@ impl CoinbaseManager {
         // Collect all rewards from mergeset reds ∩ DAA window and create a
         // single output rewarding all to the current block (the "merging" block)
         let mut red_reward = 0u64;
+        let mut round_payees: Vec<(ScriptPublicKey, u64)> = Vec::new();
 
         for red in ghostdag_data.mergeset_reds.iter() {
+            // ADR-0125: a round block's fees are its payout's, aggregated — never the merger's lump,
+            // never a carve (the lane mints nothing, so there is no subsidy to carve).
+            if palw_round_blocks.contains(red) {
+                let reward_data = mergeset_rewards.get(red).unwrap();
+                if reward_data.total_fees > 0 {
+                    match round_payees.iter_mut().find(|(script, _)| *script == reward_data.script_public_key) {
+                        Some((_, value)) => *value = value.saturating_add(reward_data.total_fees),
+                        None => round_payees.push((reward_data.script_public_key.clone(), reward_data.total_fees)),
+                    }
+                }
+                continue;
+            }
             // **The same skip the blues loop has, for the same reason.** It was missing here
             // while the set was built from blues alone, so the two halves agreed only by never
             // meeting: an unentitled red was paid its full worker share to this block's miner.
@@ -333,6 +354,11 @@ impl CoinbaseManager {
         if red_reward > 0 {
             miner_script_output_indices.push(outputs.len());
             outputs.push(TransactionOutput::new(red_reward, miner_data.script_public_key.clone()));
+        }
+
+        // ADR-0125: the round lane's payouts, after the red lump.
+        for (script, value) in round_payees {
+            outputs.push(TransactionOutput::new(value, script));
         }
 
         // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.5): append the
@@ -402,6 +428,8 @@ impl CoinbaseManager {
         mergeset_non_daa: &BlockHashSet,
         fee_split: &FeeSplitParams,
         palw_unentitled: &BlockHashSet,
+        // ADR-0125: round blocks' fees are paid whole to their payouts, so none of them funds the pool.
+        palw_round_blocks: &BlockHashSet,
     ) -> u64 {
         let mut pool = 0u64;
         for blue in ghostdag_data.mergeset_blues.iter().filter(|h| !mergeset_non_daa.contains(h)) {
@@ -414,6 +442,9 @@ impl CoinbaseManager {
             );
         }
         for red in ghostdag_data.mergeset_reds.iter() {
+            if palw_round_blocks.contains(red) {
+                continue;
+            }
             if palw_unentitled.contains(red) {
                 continue;
             }
