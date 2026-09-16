@@ -2,7 +2,7 @@ use crate::{
     Policy,
     feerate::{FeerateEstimator, FeerateEstimatorArgs},
     mempool::{
-        attestation::{AttestationIndex, AttestationKey, AttestationQuarantine, QuarantineReason, extract_attestation_meta},
+        attestation::{AttestationIndex, AttestationQuarantine, QuarantineReason, extract_attestation_meta},
         config::Config,
         errors::{RuleError, RuleResult},
         model::{
@@ -17,13 +17,11 @@ use crate::{
 };
 use kaspa_consensus_core::{
     block::TemplateTransactionSelector,
-    dns_finality::MandatoryAttestationDeficit,
-    tx::{MutableTransaction, Transaction, TransactionId, TransactionOutpoint},
+    tx::{MutableTransaction, TransactionId, TransactionOutpoint},
 };
 use kaspa_core::{debug, time::unix_now, trace};
 use std::{
-    cmp::Ordering,
-    collections::{HashMap, HashSet, hash_map::Keys, hash_set::Iter},
+    collections::{HashSet, hash_map::Keys, hash_set::Iter},
     iter::once,
     sync::Arc,
 };
@@ -93,201 +91,6 @@ pub(crate) struct TransactionsPool {
     /// drop" template loop without hard-evicting a recoverable bond. Empty / inert when the
     /// attestation overlay is off.
     attestation_quarantine: AttestationQuarantine,
-}
-
-#[derive(Clone)]
-struct MandatoryAttestationCandidate {
-    tx: Arc<Transaction>,
-    mass: u64,
-    feerate: f64,
-    contribution_stake: u64,
-    keys: Vec<AttestationKey>,
-}
-
-impl MandatoryAttestationCandidate {
-    fn id(&self) -> TransactionId {
-        self.tx.id()
-    }
-}
-
-fn compare_mandatory_attestation_candidates(a: &MandatoryAttestationCandidate, b: &MandatoryAttestationCandidate) -> Ordering {
-    // Prefer stake per mass, using cross multiplication to avoid floating-point ordering. This
-    // avoids the old stake-desc greedy failure where one heavy shard could crowd out two lighter
-    // shards that together satisfy the mandatory floor.
-    let a_density = (a.contribution_stake as u128).saturating_mul(b.mass.max(1) as u128);
-    let b_density = (b.contribution_stake as u128).saturating_mul(a.mass.max(1) as u128);
-    b_density
-        .cmp(&a_density)
-        .then(a.mass.cmp(&b.mass))
-        .then(b.contribution_stake.cmp(&a.contribution_stake))
-        .then(b.feerate.partial_cmp(&a.feerate).unwrap_or(Ordering::Equal))
-        .then(a.id().cmp(&b.id()))
-}
-
-#[derive(Default)]
-struct MandatorySelection {
-    indices: Vec<usize>,
-    covered_stake: u64,
-    mass: u64,
-}
-
-impl MandatorySelection {
-    fn is_complete(&self, required_delta: u64) -> bool {
-        self.covered_stake >= required_delta
-    }
-}
-
-fn mandatory_selection_is_better(candidate: &MandatorySelection, best: &MandatorySelection, required_delta: u64) -> bool {
-    let candidate_complete = candidate.is_complete(required_delta);
-    let best_complete = best.is_complete(required_delta);
-    if candidate_complete != best_complete {
-        return candidate_complete;
-    }
-    if candidate_complete {
-        return candidate
-            .mass
-            .cmp(&best.mass)
-            .then(candidate.indices.len().cmp(&best.indices.len()))
-            .then(best.covered_stake.cmp(&candidate.covered_stake))
-            == Ordering::Less;
-    }
-    best.indices.is_empty()
-        || candidate
-            .covered_stake
-            .cmp(&best.covered_stake)
-            .then(best.mass.cmp(&candidate.mass))
-            .then(best.indices.len().cmp(&candidate.indices.len()))
-            == Ordering::Greater
-}
-
-fn greedy_mandatory_selection(
-    candidates: &[MandatoryAttestationCandidate],
-    credited_keys: &HashSet<AttestationKey>,
-    active_stake_by_key: &HashMap<AttestationKey, u64>,
-    required_delta: u64,
-    tx_slots_left: usize,
-    mass_left: u64,
-) -> MandatorySelection {
-    let mut selection = MandatorySelection::default();
-    let mut credited = credited_keys.clone();
-    for (idx, cand) in candidates.iter().enumerate() {
-        if selection.indices.len() >= tx_slots_left || selection.mass.saturating_add(cand.mass) > mass_left {
-            continue;
-        }
-        let mut fresh_stake = 0u64;
-        let mut fresh_keys = Vec::new();
-        for key in cand.keys.iter().copied() {
-            if credited.contains(&key) {
-                continue;
-            }
-            let Some(stake) = active_stake_by_key.get(&key) else {
-                continue;
-            };
-            fresh_stake = fresh_stake.saturating_add(*stake);
-            fresh_keys.push(key);
-        }
-        if fresh_stake == 0 {
-            continue;
-        }
-        selection.indices.push(idx);
-        selection.mass = selection.mass.saturating_add(cand.mass);
-        selection.covered_stake = selection.covered_stake.saturating_add(fresh_stake);
-        for key in fresh_keys {
-            credited.insert(key);
-        }
-        if selection.is_complete(required_delta) {
-            break;
-        }
-    }
-    selection
-}
-
-fn bounded_mandatory_selection(
-    candidates: &[MandatoryAttestationCandidate],
-    credited_keys: &HashSet<AttestationKey>,
-    active_stake_by_key: &HashMap<AttestationKey, u64>,
-    required_delta: u64,
-    tx_slots_left: usize,
-    mass_left: u64,
-) -> MandatorySelection {
-    const MAX_EXACT_MANDATORY_CANDIDATES: usize = 18;
-
-    if required_delta == 0 || tx_slots_left == 0 || mass_left == 0 || candidates.is_empty() {
-        return MandatorySelection::default();
-    }
-
-    let greedy = greedy_mandatory_selection(candidates, credited_keys, active_stake_by_key, required_delta, tx_slots_left, mass_left);
-    if candidates.len() > MAX_EXACT_MANDATORY_CANDIDATES {
-        return greedy;
-    }
-
-    struct Search<'a> {
-        candidates: &'a [MandatoryAttestationCandidate],
-        active_stake_by_key: &'a HashMap<AttestationKey, u64>,
-        required_delta: u64,
-        tx_slots_left: usize,
-        mass_left: u64,
-        best: MandatorySelection,
-    }
-
-    impl Search<'_> {
-        fn consider(&mut self, current: &MandatorySelection) {
-            if current.indices.is_empty() {
-                return;
-            }
-            if mandatory_selection_is_better(current, &self.best, self.required_delta) {
-                self.best =
-                    MandatorySelection { indices: current.indices.clone(), covered_stake: current.covered_stake, mass: current.mass };
-            }
-        }
-
-        fn walk(&mut self, idx: usize, credited: &mut HashSet<AttestationKey>, current: &mut MandatorySelection) {
-            self.consider(current);
-            if idx == self.candidates.len() {
-                return;
-            }
-            if self.best.is_complete(self.required_delta) && current.mass >= self.best.mass {
-                return;
-            }
-
-            let cand = &self.candidates[idx];
-            if current.indices.len() < self.tx_slots_left && current.mass.saturating_add(cand.mass) <= self.mass_left {
-                let mut fresh_stake = 0u64;
-                let mut added_keys = Vec::new();
-                for key in cand.keys.iter().copied() {
-                    if credited.contains(&key) {
-                        continue;
-                    }
-                    let Some(stake) = self.active_stake_by_key.get(&key) else {
-                        continue;
-                    };
-                    credited.insert(key);
-                    added_keys.push(key);
-                    fresh_stake = fresh_stake.saturating_add(*stake);
-                }
-                if fresh_stake > 0 {
-                    current.indices.push(idx);
-                    current.covered_stake = current.covered_stake.saturating_add(fresh_stake);
-                    current.mass = current.mass.saturating_add(cand.mass);
-                    self.walk(idx + 1, credited, current);
-                    current.mass = current.mass.saturating_sub(cand.mass);
-                    current.covered_stake = current.covered_stake.saturating_sub(fresh_stake);
-                    current.indices.pop();
-                }
-                for key in added_keys {
-                    credited.remove(&key);
-                }
-            }
-
-            self.walk(idx + 1, credited, current);
-        }
-    }
-
-    let mut search = Search { candidates, active_stake_by_key, required_delta, tx_slots_left, mass_left, best: greedy };
-    let mut credited = credited_keys.clone();
-    let mut current = MandatorySelection::default();
-    search.walk(0, &mut credited, &mut current);
-    search.best
 }
 
 impl TransactionsPool {
@@ -442,17 +245,12 @@ impl TransactionsPool {
 
     /// Dynamically builds a transaction selector based on the specific state of the ready transactions frontier.
     ///
-    /// When the attestation overlay is enabled and an epoch is ready, attestation shards that
-    /// contribute new active stake to consensus' mandatory deficient anchors are yielded before
-    /// normal txs. The legacy oldest-first horizon remains as a fallback once mandatory deficits
-    /// are covered. Optional shard tx/mass budgets are honored only when configured; the default
+    /// When the attestation overlay is enabled and an epoch is ready, the priority attestation
+    /// shards are yielded before normal txs, oldest ready epoch first. Optional shard tx/mass
+    /// budgets are honored only when configured; the default
     /// overlay policy leaves them unlimited at this selector layer and relies on block mass. When
     /// the overlay is off (or no epoch is ready) this is byte-identical to the upstream path.
-    pub(crate) fn build_selector(
-        &self,
-        latest_ready_epoch: Option<u64>,
-        mandatory_deficits: &[MandatoryAttestationDeficit],
-    ) -> Box<dyn TemplateTransactionSelector> {
+    pub(crate) fn build_selector(&self, latest_ready_epoch: Option<u64>) -> Box<dyn TemplateTransactionSelector> {
         let policy = &self.config.attestation_policy;
         let base_policy = Policy::new(self.config.maximum_mass_per_block)
             .with_max_attestation_shard_txs(policy.max_attestation_shard_txs_per_block)
@@ -466,8 +264,7 @@ impl TransactionsPool {
             return self.ready_transactions.build_selector(&base_policy);
         }
 
-        let (priority, mandatory_backlog_incomplete, mandatory_refill_ids) =
-            self.build_attestation_priority_set(latest_ready_epoch, mandatory_deficits);
+        let priority = self.build_attestation_priority_set(latest_ready_epoch);
 
         // kaspa-pq audit v26 (M-1 + H-4): compute the quarantine + future-epoch exclude set FIRST,
         // because it must apply to BOTH the empty-priority fallback below AND the compose path.
@@ -486,17 +283,7 @@ impl TransactionsPool {
                 exclude.insert(*tx_id);
             }
         }
-        if mandatory_backlog_incomplete {
-            // Consensus checks mandatory deficits oldest-first. If the priority lane could not
-            // cover the oldest still-deficient epoch, do not let later/non-contributing attestation
-            // shards slip back through the ordinary feerate lane. Same-deficit contributors that
-            // were skipped only because priority mass/caps were exhausted remain eligible for
-            // a dedicated refill wave if a selected priority shard is later dropped by the
-            // template classifier.
-            exclude.extend(self.attestation_index.by_txid.keys().filter(|tx_id| !mandatory_refill_ids.contains(tx_id)).copied());
-        }
-
-        if priority.is_empty() && !mandatory_backlog_incomplete {
+        if priority.is_empty() {
             // No priority shards, but any quarantined/future shards must STILL be kept out of the
             // fallback selector. When there is nothing to exclude this is byte-identical to the
             // prior fast path.
@@ -507,41 +294,18 @@ impl TransactionsPool {
             };
         }
 
-        // Compose: priority attestation shards first, then mandatory same-deficit refill candidates,
-        // then ordinary txs under one shared dynamic block-mass/shard budget. This is deliberately
-        // not a fixed "remaining mass" selector: if a priority shard is later dropped by the
-        // template classifier, its mass and shard-cap unit must become available to the mandatory
-        // refill lane immediately, before ordinary txs can consume that capacity.
+        // Compose: priority attestation shards first, then ordinary txs under one shared dynamic
+        // block-mass/shard budget. This is deliberately not a fixed "remaining mass" selector: if a
+        // priority shard is later dropped by the template classifier, its mass and shard-cap unit
+        // must become available to the ordinary lane immediately.
         exclude.extend(priority.iter().map(|t| t.tx.id()));
-        let mut mandatory_refill = crate::mempool::model::frontier::selectors::SequenceSelectorInput::default();
-        if mandatory_backlog_incomplete {
-            for key in self.ready_transactions.keys_ascending_iter() {
-                let tx_id = key.tx.id();
-                if mandatory_refill_ids.contains(&tx_id) && !exclude.contains(&tx_id) {
-                    mandatory_refill.push(key.tx.clone(), key.mass);
-                }
-            }
-        }
-        exclude.extend(mandatory_refill_ids.iter().copied());
-        let remainder = if mandatory_backlog_incomplete {
-            crate::mempool::model::frontier::selectors::SequenceSelectorInput::default()
-        } else {
-            self.ready_transactions.sequence_excluding(&exclude)
-        };
-        Box::new(crate::mempool::model::frontier::selectors::AttestationPrioritySelector::new_with_refill(
-            priority,
-            mandatory_refill,
-            remainder,
-            base_policy,
-        ))
+        let remainder = self.ready_transactions.sequence_excluding(&exclude);
+        Box::new(crate::mempool::model::frontier::selectors::AttestationPrioritySelector::new(priority, remainder, base_policy))
     }
 
     /// kaspa-pq DNS-finality (P1): pick the priority attestation-shard set from the ready frontier.
     ///
-    /// Deterministic order: consensus mandatory deficits first, oldest deficient epoch first, then
-    /// a bounded mandatory cover search ordered by stake-per-mass density within that deficit.
-    /// Once all mandatory deficits are covered, fallback candidates use stake-score-window shards
-    /// first, then by epoch ascending, then feerate descending, then txid. Bounded by
+    /// Deterministic order: stake-score-window shards first, then by epoch ascending, then feerate descending, then txid. Bounded by
     /// `max_attestation_shard_txs_per_block`, `max_attestation_shard_mass_per_block`, and the block
     /// mass. "Recent" means `epoch in [latest_ready_epoch - required_stake_depth_epochs + 1,
     /// latest_ready_epoch]`; reward-fresh means
@@ -561,8 +325,7 @@ impl TransactionsPool {
     fn build_attestation_priority_set(
         &self,
         latest_ready_epoch: u64,
-        mandatory_deficits: &[MandatoryAttestationDeficit],
-    ) -> (Vec<crate::mempool::model::frontier::selectors::SequenceSelectorTransaction>, bool, HashSet<TransactionId>) {
+    ) -> Vec<crate::mempool::model::frontier::selectors::SequenceSelectorTransaction> {
         use crate::mempool::model::frontier::selectors::SequenceSelectorTransaction;
 
         let policy = &self.config.attestation_policy;
@@ -572,7 +335,6 @@ impl TransactionsPool {
         let mut selected = Vec::new();
         let mut selected_mass: u64 = 0;
         let mut selected_ids: HashSet<TransactionId> = HashSet::new();
-        let mut mandatory_refill_ids: HashSet<TransactionId> = HashSet::new();
 
         let try_select = |tx: Arc<kaspa_consensus_core::tx::Transaction>,
                           mass: u64,
@@ -598,149 +360,6 @@ impl TransactionsPool {
             selected.push(SequenceSelectorTransaction::new(tx, mass));
             true
         };
-
-        // First lane: exact consensus mandatory deficits. For each deficient canonical epoch/anchor,
-        // take only shards that add new active stake toward that deficit, stopping once the required
-        // delta is covered. This avoids spending priority mass on old-but-non-contributing shards.
-        let mut mandatory_backlog_incomplete = false;
-        let mut ordered_deficits: Vec<_> = mandatory_deficits.iter().collect();
-        ordered_deficits.sort_by_key(|deficit| deficit.epoch);
-        for deficit in ordered_deficits {
-            if deficit.epoch > latest_ready_epoch || deficit.required_stake_delta == 0 {
-                continue;
-            }
-
-            let active_stake_by_key: HashMap<AttestationKey, u64> = deficit
-                .active_validators
-                .iter()
-                .map(|v| {
-                    (
-                        AttestationKey { bond_outpoint: v.bond_outpoint, validator_id: v.validator_id, epoch: deficit.epoch },
-                        v.stake_sompi,
-                    )
-                })
-                .collect();
-            if active_stake_by_key.is_empty() {
-                continue;
-            }
-
-            let mut credited_keys: HashSet<AttestationKey> = deficit
-                .already_contributed
-                .iter()
-                .map(|k| AttestationKey { bond_outpoint: k.bond_outpoint, validator_id: k.validator_id, epoch: k.epoch })
-                .collect();
-
-            let mut candidates = Vec::new();
-            for key in self.ready_transactions.keys_ascending_iter() {
-                let tx_id = key.tx.id();
-                if selected_ids.contains(&tx_id) || self.attestation_quarantine.is_active(&tx_id, latest_ready_epoch) {
-                    continue;
-                }
-                let Some(meta) = self.attestation_index.get(&tx_id) else {
-                    continue;
-                };
-                if meta.shard_epoch != deficit.epoch
-                    || meta.target_hash != deficit.target_hash
-                    || meta.target_daa_score != deficit.target_daa_score
-                    || meta.validator_set_commitment != deficit.validator_set_commitment
-                {
-                    continue;
-                }
-
-                let mut local_seen = HashSet::new();
-                let mut contribution_stake = 0u64;
-                let mut keys = Vec::new();
-                for att_key in meta.keys.iter().copied() {
-                    if !local_seen.insert(att_key) || credited_keys.contains(&att_key) {
-                        continue;
-                    }
-                    let Some(stake) = active_stake_by_key.get(&att_key) else {
-                        continue;
-                    };
-                    contribution_stake = contribution_stake.saturating_add(*stake);
-                    keys.push(att_key);
-                }
-                if contribution_stake > 0 {
-                    candidates.push(MandatoryAttestationCandidate {
-                        tx: key.tx.clone(),
-                        mass: key.mass,
-                        feerate: key.feerate(),
-                        contribution_stake,
-                        keys,
-                    });
-                }
-            }
-
-            candidates.sort_by(compare_mandatory_attestation_candidates);
-
-            let mut covered_delta = 0u64;
-            let tx_slots_left = if max_txs == 0 { candidates.len() } else { max_txs.saturating_sub(selected.len() as u64) as usize };
-            let mut mass_left = block_mass.saturating_sub(selected_mass);
-            if max_mass > 0 {
-                mass_left = mass_left.min(max_mass.saturating_sub(selected_mass));
-            }
-            let selected_candidate_indices = bounded_mandatory_selection(
-                &candidates,
-                &credited_keys,
-                &active_stake_by_key,
-                deficit.required_stake_delta,
-                tx_slots_left,
-                mass_left,
-            )
-            .indices
-            .into_iter()
-            .collect::<HashSet<_>>();
-            for (idx, cand) in candidates.iter().enumerate() {
-                if !selected_candidate_indices.contains(&idx) {
-                    continue;
-                }
-                let mut fresh_stake = 0u64;
-                let mut fresh_keys = Vec::new();
-                for key in cand.keys.iter().copied() {
-                    if credited_keys.contains(&key) {
-                        continue;
-                    }
-                    let Some(stake) = active_stake_by_key.get(&key) else {
-                        continue;
-                    };
-                    fresh_stake = fresh_stake.saturating_add(*stake);
-                    fresh_keys.push(key);
-                }
-                if fresh_stake == 0 {
-                    continue;
-                }
-                let tx_id = cand.tx.id();
-                if !try_select(cand.tx.clone(), cand.mass, &mut selected, &mut selected_mass, &mut selected_ids) {
-                    mandatory_refill_ids.insert(tx_id);
-                    continue;
-                }
-                for key in fresh_keys {
-                    credited_keys.insert(key);
-                }
-                covered_delta = covered_delta.saturating_add(fresh_stake);
-                if covered_delta >= deficit.required_stake_delta {
-                    break;
-                }
-            }
-            if covered_delta < deficit.required_stake_delta {
-                for cand in &candidates {
-                    let tx_id = cand.tx.id();
-                    if selected_ids.contains(&tx_id) {
-                        continue;
-                    }
-                    let contributes_fresh =
-                        cand.keys.iter().any(|key| !credited_keys.contains(key) && active_stake_by_key.contains_key(key));
-                    if contributes_fresh {
-                        mandatory_refill_ids.insert(tx_id);
-                    }
-                }
-                mandatory_backlog_incomplete = true;
-                break;
-            }
-        }
-        if mandatory_backlog_incomplete {
-            return (selected, true, mandatory_refill_ids);
-        }
 
         let epoch_len = policy.epoch_len_blue_score.max(1);
         let depth = policy.required_stake_depth_epochs;
@@ -797,7 +416,7 @@ impl TransactionsPool {
             }
         }
 
-        // Deterministic order: score-window (mandatory-capable) first, then oldest epoch first,
+        // Deterministic order: score-window first, then oldest epoch first,
         // then recent-window, feerate desc, txid asc.
         candidates.sort_by(|a, b| {
             b.in_score_window
@@ -811,7 +430,7 @@ impl TransactionsPool {
         for cand in candidates {
             let _ = try_select(cand.tx, cand.mass, &mut selected, &mut selected_mass, &mut selected_ids);
         }
-        (selected, false, HashSet::new())
+        selected
     }
 
     /// Builds a feerate estimator based on internal state of the ready transactions frontier
@@ -1031,13 +650,10 @@ mod attestation_priority_tests {
     use crate::mempool::{attestation::AttestationMempoolPolicy, config::Config};
     use kaspa_consensus_core::{
         constants::TX_VERSION,
-        dns_finality::{
-            MandatoryAttestationContributionKey, MandatoryAttestationDeficit, MandatoryAttestationValidator, StakeAttestation,
-            StakeAttestationShardPayload,
-        },
+        dns_finality::{StakeAttestation, StakeAttestationShardPayload},
         mass::NonContextualMasses,
-        subnets::{SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD},
-        tx::{ScriptPublicKey, Transaction, TransactionOutpoint, TransactionOutput},
+        subnets::SUBNETWORK_ID_STAKE_ATTESTATION_SHARD,
+        tx::{Transaction, TransactionOutpoint},
     };
     use kaspa_hashes::Hash64;
 
@@ -1077,16 +693,6 @@ mod attestation_priority_tests {
         mtx
     }
 
-    fn normal_mtx(value: u64, mass: u64, fee: u64) -> MutableTransaction {
-        let spk = ScriptPublicKey::from_vec(0, vec![0x51]);
-        let output = TransactionOutput::new(value, spk);
-        let tx = Transaction::new(TX_VERSION, vec![], vec![output], 0, SUBNETWORK_ID_NATIVE, 0, vec![]);
-        let mut mtx = MutableTransaction::from_tx(tx);
-        mtx.calculated_fee = Some(fee);
-        mtx.calculated_non_contextual_masses = Some(NonContextualMasses::new(mass, mass));
-        mtx
-    }
-
     fn enabled_policy() -> AttestationMempoolPolicy {
         AttestationMempoolPolicy {
             enabled: true,
@@ -1102,92 +708,6 @@ mod attestation_priority_tests {
             max_attestation_shard_txs_per_block: 16,
             max_attestation_shard_mass_per_block: 0,
             quarantine_epochs: 1,
-        }
-    }
-
-    fn mandatory_deficit(epoch: u64, validators: &[u8], already: &[u8]) -> MandatoryAttestationDeficit {
-        mandatory_deficit_with_floor(epoch, validators, already, 6000)
-    }
-
-    fn mandatory_deficit_with_floor(
-        epoch: u64,
-        validators: &[u8],
-        already: &[u8],
-        quality_floor_bps: u16,
-    ) -> MandatoryAttestationDeficit {
-        let stake_per_validator = 100u64;
-        let expected_stake = stake_per_validator.saturating_mul(validators.len() as u64);
-        let parent_included_stake = stake_per_validator.saturating_mul(already.len() as u64);
-        let required_stake =
-            ((expected_stake as u128).saturating_mul(quality_floor_bps as u128).saturating_add(9_999) / 10_000) as u64;
-        MandatoryAttestationDeficit {
-            epoch,
-            target_hash: hash64(0xbb),
-            target_daa_score: 1234,
-            validator_set_commitment: Hash64::default(),
-            pre_body_included_stake: parent_included_stake,
-            expected_stake,
-            required_stake,
-            required_stake_delta: required_stake.saturating_sub(parent_included_stake),
-            quality_floor_bps,
-            already_contributed: already
-                .iter()
-                .map(|validator| MandatoryAttestationContributionKey {
-                    bond_outpoint: TransactionOutpoint::new(hash64(0xaa), *validator as u32),
-                    validator_id: hash64(*validator),
-                    epoch,
-                })
-                .collect(),
-            active_validators: validators
-                .iter()
-                .map(|validator| MandatoryAttestationValidator {
-                    bond_outpoint: TransactionOutpoint::new(hash64(0xaa), *validator as u32),
-                    validator_id: hash64(*validator),
-                    stake_sompi: stake_per_validator,
-                })
-                .collect(),
-        }
-    }
-
-    fn mandatory_deficit_with_stakes(
-        epoch: u64,
-        stakes: &[(u8, u64)],
-        already: &[u8],
-        quality_floor_bps: u16,
-    ) -> MandatoryAttestationDeficit {
-        let expected_stake = stakes.iter().fold(0u64, |acc, (_, stake)| acc.saturating_add(*stake));
-        let parent_included_stake = stakes
-            .iter()
-            .filter_map(|(validator, stake)| already.contains(validator).then_some(*stake))
-            .fold(0u64, |acc, stake| acc.saturating_add(stake));
-        let required_stake =
-            ((expected_stake as u128).saturating_mul(quality_floor_bps as u128).saturating_add(9_999) / 10_000) as u64;
-        MandatoryAttestationDeficit {
-            epoch,
-            target_hash: hash64(0xbb),
-            target_daa_score: 1234,
-            validator_set_commitment: Hash64::default(),
-            pre_body_included_stake: parent_included_stake,
-            expected_stake,
-            required_stake,
-            required_stake_delta: required_stake.saturating_sub(parent_included_stake),
-            quality_floor_bps,
-            already_contributed: already
-                .iter()
-                .map(|validator| MandatoryAttestationContributionKey {
-                    bond_outpoint: TransactionOutpoint::new(hash64(0xaa), *validator as u32),
-                    validator_id: hash64(*validator),
-                    epoch,
-                })
-                .collect(),
-            active_validators: stakes
-                .iter()
-                .map(|(validator, stake)| MandatoryAttestationValidator {
-                    bond_outpoint: TransactionOutpoint::new(hash64(0xaa), *validator as u32),
-                    validator_id: hash64(*validator),
-                    stake_sompi: *stake,
-                })
-                .collect(),
         }
     }
 
@@ -1208,13 +728,6 @@ mod attestation_priority_tests {
         id
     }
 
-    fn add_normal(pool: &mut TransactionsPool, mtx: MutableTransaction) -> TransactionId {
-        let size = mtx.mempool_estimated_bytes();
-        let id = mtx.id();
-        pool.add_transaction(mtx, 0, Priority::High, size).unwrap();
-        id
-    }
-
     /// kaspa-pq audit v24 (H-1): a FUTURE-epoch shard (epoch > latest_ready_epoch) must NEVER
     /// enter the attestation priority lane. Before the fix the underflow-saturating freshness
     /// test mis-classified future shards as "reward-fresh".
@@ -1226,7 +739,7 @@ mod attestation_priority_tests {
         let current_id = add_shard(&mut pool, shard_mtx(latest_ready_epoch, 1)); // rewardable
         let future_id = add_shard(&mut pool, shard_mtx(latest_ready_epoch + 5, 2)); // far future
 
-        let priority = pool.build_attestation_priority_set(latest_ready_epoch, &[]).0;
+        let priority = pool.build_attestation_priority_set(latest_ready_epoch);
         let ids: Vec<_> = priority.iter().map(|t| t.tx.id()).collect();
         assert!(ids.contains(&current_id), "the current-epoch shard must be in the priority lane");
         assert!(!ids.contains(&future_id), "a future-epoch shard must NOT enter the priority lane (H-1)");
@@ -1243,148 +756,12 @@ mod attestation_priority_tests {
         let older = add_shard(&mut pool, shard_mtx(8, 1));
         let newer = add_shard(&mut pool, shard_mtx(10, 2));
 
-        let priority = pool.build_attestation_priority_set(latest_ready_epoch, &[]).0;
+        let priority = pool.build_attestation_priority_set(latest_ready_epoch);
         let ids: Vec<_> = priority.iter().map(|t| t.tx.id()).collect();
         assert!(ids.contains(&older) && ids.contains(&newer));
         let pos_older = ids.iter().position(|id| *id == older).unwrap();
         let pos_newer = ids.iter().position(|id| *id == newer).unwrap();
         assert!(pos_older < pos_newer, "oldest ready shard must precede newer shards in the priority lane");
-    }
-
-    /// True mandatory-aware selection: a shard matching consensus' deficient epoch/anchor must
-    /// outrank an older shard that is merely in the score window but cannot clear the current
-    /// mandatory floor.
-    #[test]
-    fn mandatory_deficit_shard_precedes_older_non_deficit_shard() {
-        let mut pool = pool_with_policy(enabled_policy());
-        let latest_ready_epoch = 10u64;
-
-        let older_non_deficit = add_shard(&mut pool, shard_mtx(8, 1));
-        let mandatory = add_shard(&mut pool, shard_mtx(10, 2));
-        let deficit = mandatory_deficit(10, &[2], &[]);
-
-        let priority = pool.build_attestation_priority_set(latest_ready_epoch, &[deficit]).0;
-        let ids: Vec<_> = priority.iter().map(|t| t.tx.id()).collect();
-        assert_eq!(ids.first().copied(), Some(mandatory), "deficit-matching shard must be selected first");
-        assert!(
-            ids.contains(&older_non_deficit),
-            "legacy fallback can still include older non-deficit shards after mandatory coverage"
-        );
-    }
-
-    /// A shard whose `(bond, validator, epoch)` was already credited by the selected-parent chain
-    /// must not consume the mandatory lane. The selector should use still-missing active stake first.
-    #[test]
-    fn mandatory_deficit_skips_already_contributed_key() {
-        let mut pool = pool_with_policy(enabled_policy());
-        let latest_ready_epoch = 10u64;
-
-        let already_credited = add_shard(&mut pool, shard_mtx(10, 1));
-        let missing = add_shard(&mut pool, shard_mtx(10, 2));
-        let deficit = mandatory_deficit(10, &[1, 2], &[1]);
-
-        let priority = pool.build_attestation_priority_set(latest_ready_epoch, &[deficit]).0;
-        let ids: Vec<_> = priority.iter().map(|t| t.tx.id()).collect();
-        assert_eq!(ids.first().copied(), Some(missing), "missing active stake must fill the mandatory lane first");
-        let pos_missing = ids.iter().position(|id| *id == missing).unwrap();
-        let pos_already = ids.iter().position(|id| *id == already_credited).unwrap();
-        assert!(pos_missing < pos_already, "already-credited shard may only appear after mandatory deficit coverage");
-    }
-
-    /// Mandatory cover must account for block mass, not only raw stake descending. A 60-stake /
-    /// 60-mass shard plus either 50-mass shard does not fit in a 100-mass block, but the two
-    /// 50-stake / 50-mass shards together do fit and clear the 100-stake required delta.
-    #[test]
-    fn mandatory_deficit_selector_finds_mass_feasible_cover() {
-        let mut pool = pool_with_policy_and_block_mass(enabled_policy(), 100);
-        let latest_ready_epoch = 10u64;
-
-        let heavy = add_shard(&mut pool, shard_mtx_with_mass_and_fee(10, 1, 60, 50_000));
-        let light_a = add_shard(&mut pool, shard_mtx_with_mass_and_fee(10, 2, 50, 10_000));
-        let light_b = add_shard(&mut pool, shard_mtx_with_mass_and_fee(10, 3, 50, 10_000));
-        let deficit = mandatory_deficit_with_stakes(10, &[(1, 60), (2, 50), (3, 50)], &[], 6250);
-        assert_eq!(deficit.required_stake_delta, 100);
-
-        let (priority, incomplete, _) = pool.build_attestation_priority_set(latest_ready_epoch, &[deficit]);
-        let ids: Vec<_> = priority.iter().map(|t| t.tx.id()).collect();
-        let mass: u64 = priority.iter().map(|t| t.mass).sum();
-
-        assert!(!incomplete, "bounded mandatory cover should find the feasible light+light combination");
-        assert_eq!(mass, 100);
-        assert!(ids.contains(&light_a) && ids.contains(&light_b), "the two light shards clear the required delta inside block mass");
-        assert!(!ids.contains(&heavy), "the heavy shard would crowd out a feasible mandatory cover");
-    }
-
-    /// If the oldest deficient epoch cannot be covered from the ready frontier, later
-    /// attestation shards must not be promoted through either the priority lane or the inner
-    /// selector. Optional hard-inclusion consensus clears the oldest mandatory backlog first.
-    #[test]
-    fn incomplete_oldest_mandatory_deficit_blocks_later_attestation_remainder() {
-        let mut pool = pool_with_policy(enabled_policy());
-        let latest_ready_epoch = 10u64;
-
-        let later = add_shard(&mut pool, shard_mtx(10, 2));
-        let oldest_missing = mandatory_deficit(8, &[1], &[]);
-        let later_deficit = mandatory_deficit(10, &[2], &[]);
-
-        let (priority, incomplete, _) =
-            pool.build_attestation_priority_set(latest_ready_epoch, &[oldest_missing.clone(), later_deficit.clone()]);
-        assert!(incomplete, "oldest mandatory deficit is still uncovered");
-        assert!(
-            priority.iter().all(|t| t.tx.id() != later),
-            "later-epoch shard must not enter the priority lane while the oldest deficit is uncovered"
-        );
-
-        let mut selector = pool.build_selector(Some(latest_ready_epoch), &[oldest_missing, later_deficit]);
-        let selected = selector.select_transactions();
-        assert!(
-            selected.iter().all(|tx| tx.id() != later),
-            "later-epoch shard must not leak through the inner selector while the oldest deficit is uncovered"
-        );
-    }
-
-    /// Hard mandatory priority-drop-refill: if a mandatory-priority shard is selected first but
-    /// later dropped by the template classifier, the dynamic selector must release its block mass
-    /// and refill with another shard from the same deficient epoch, even while later/non-contributing
-    /// attestation shards remain quarantined.
-    #[test]
-    fn mandatory_priority_drop_refills_same_deficit_after_mass_release() {
-        let pool_mass = 1_200u64;
-        let mut pool = pool_with_policy_and_block_mass(enabled_policy(), pool_mass);
-        let latest_ready_epoch = 10u64;
-
-        let dropped = add_shard(&mut pool, shard_mtx_with_mass_and_fee(10, 1, 700, 20_000));
-        let replacement = add_shard(&mut pool, shard_mtx_with_mass_and_fee(10, 2, 1_000, 10_000));
-        let unrelated = add_shard(&mut pool, shard_mtx_with_mass_and_fee(11, 3, 100, 50_000));
-        let normal = add_normal(&mut pool, normal_mtx(7, 600, 1));
-        let deficit = mandatory_deficit_with_floor(10, &[1, 2], &[], 10_000);
-
-        let (priority, incomplete, refill_ids) =
-            pool.build_attestation_priority_set(latest_ready_epoch, std::slice::from_ref(&deficit));
-        assert!(incomplete, "oldest mandatory deficit still needs the replacement shard");
-        assert_eq!(priority.len(), 1, "priority lane can initially fit only the first shard");
-        assert!(refill_ids.contains(&replacement), "same-deficit shard skipped by mass must remain refill-eligible");
-        assert!(!refill_ids.contains(&unrelated), "later/non-contributing shards must remain quarantined");
-
-        let mut selector = pool.build_selector(Some(latest_ready_epoch), &[deficit]);
-        let first = selector.select_transactions();
-        assert_eq!(first.len(), 1, "priority shard leaves no mass room for the replacement yet");
-        assert_eq!(first[0].id(), dropped, "denser same-deficit shard is selected first");
-
-        selector.reject_selection_for_refill(dropped);
-        let refill = selector.select_transactions();
-        assert!(
-            refill.iter().any(|tx| tx.id() == replacement),
-            "same-deficit replacement shard must be eligible after priority drop frees mass"
-        );
-        assert!(
-            refill.iter().all(|tx| tx.id() != normal),
-            "ordinary txs must not consume freed mass before mandatory refill while oldest mandatory is incomplete"
-        );
-        assert!(
-            refill.iter().all(|tx| tx.id() != unrelated),
-            "later attestation shards must not leak through the ordinary lane while oldest mandatory is incomplete"
-        );
     }
 
     /// kaspa-pq audit v24 (H-2): the priority lane consumes part of the per-block shard budget;
@@ -1402,7 +779,7 @@ mod attestation_priority_tests {
         add_shard(&mut pool, shard_mtx(10, 1));
         add_shard(&mut pool, shard_mtx(10, 2));
 
-        let mut selector = pool.build_selector(Some(latest_ready_epoch), &[]);
+        let mut selector = pool.build_selector(Some(latest_ready_epoch));
         let selected = selector.select_transactions();
         let shards = selected.iter().filter(|tx| tx.subnetwork_id == SUBNETWORK_ID_STAKE_ATTESTATION_SHARD).count();
         assert_eq!(shards, 1, "with a per-block cap of 1, priority+inner together must not exceed 1 shard (H-2)");
@@ -1424,7 +801,7 @@ mod attestation_priority_tests {
         let current_id = add_shard(&mut pool, shard_mtx(latest_ready_epoch, 1)); // current epoch
         let future_id = add_shard(&mut pool, shard_mtx(latest_ready_epoch + 1, 2)); // future within grace
 
-        let mut selector = pool.build_selector(Some(latest_ready_epoch), &[]);
+        let mut selector = pool.build_selector(Some(latest_ready_epoch));
         let selected = selector.select_transactions();
         let ids: Vec<_> = selected.iter().map(|tx| tx.id()).collect();
         assert!(ids.contains(&current_id), "the current-epoch shard must be selected");
@@ -1442,21 +819,21 @@ mod attestation_priority_tests {
         let shard_id = add_shard(&mut pool, shard_mtx(latest_ready_epoch, 1));
 
         // Without quarantine it is in the priority lane.
-        let before = pool.build_attestation_priority_set(latest_ready_epoch, &[]).0;
+        let before = pool.build_attestation_priority_set(latest_ready_epoch);
         assert!(before.iter().any(|t| t.tx.id() == shard_id), "shard is selectable before quarantine");
 
         // Quarantine until epoch 12.
         pool.quarantine_attestation_shard(shard_id, 12);
-        let held = pool.build_attestation_priority_set(latest_ready_epoch, &[]).0;
+        let held = pool.build_attestation_priority_set(latest_ready_epoch);
         assert!(!held.iter().any(|t| t.tx.id() == shard_id), "quarantined shard must be omitted from the priority lane (H-4)");
 
         // Still held at epoch 11.
-        let held2 = pool.build_attestation_priority_set(11, &[]).0;
+        let held2 = pool.build_attestation_priority_set(11);
         assert!(!held2.iter().any(|t| t.tx.id() == shard_id), "still held at epoch 11 (until 12 exclusive)");
 
         // Reap at epoch 12 -> hold lapsed -> re-selectable.
         pool.retain_active_attestation_quarantine(12);
-        let released = pool.build_attestation_priority_set(12, &[]).0;
+        let released = pool.build_attestation_priority_set(12);
         assert!(released.iter().any(|t| t.tx.id() == shard_id), "shard must be re-selectable after the hold lapses (H-4)");
         assert_eq!(pool.attestation_quarantine_len(), 0, "lapsed entry reaped by retain_active");
     }
@@ -1475,7 +852,7 @@ mod attestation_priority_tests {
         // priority+inner path.
         pool.quarantine_attestation_shard(quarantined_id, 12);
 
-        let mut selector = pool.build_selector(Some(latest_ready_epoch), &[]);
+        let mut selector = pool.build_selector(Some(latest_ready_epoch));
         let selected = selector.select_transactions();
         let ids: Vec<_> = selected.iter().map(|tx| tx.id()).collect();
         assert!(ids.contains(&free_id), "the un-quarantined shard must be selected");
@@ -1497,11 +874,11 @@ mod attestation_priority_tests {
 
         // Sole shard quarantined ⇒ empty priority set ⇒ fallback path.
         assert!(
-            pool.build_attestation_priority_set(latest_ready_epoch, &[]).0.is_empty(),
+            pool.build_attestation_priority_set(latest_ready_epoch).is_empty(),
             "precondition: priority set is empty (sole shard quarantined)"
         );
 
-        let mut selector = pool.build_selector(Some(latest_ready_epoch), &[]);
+        let mut selector = pool.build_selector(Some(latest_ready_epoch));
         let selected = selector.select_transactions();
         assert!(
             !selected.iter().any(|tx| tx.id() == shard_id),
@@ -1519,11 +896,11 @@ mod attestation_priority_tests {
         let future_id = add_shard(&mut pool, shard_mtx(latest_ready_epoch + 1, 1)); // future within grace
 
         assert!(
-            pool.build_attestation_priority_set(latest_ready_epoch, &[]).0.is_empty(),
+            pool.build_attestation_priority_set(latest_ready_epoch).is_empty(),
             "precondition: priority set is empty (sole shard is future)"
         );
 
-        let mut selector = pool.build_selector(Some(latest_ready_epoch), &[]);
+        let mut selector = pool.build_selector(Some(latest_ready_epoch));
         let selected = selector.select_transactions();
         assert!(
             !selected.iter().any(|tx| tx.id() == future_id),

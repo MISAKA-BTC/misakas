@@ -2071,48 +2071,8 @@ pub struct ActiveValidatorSet {
     pub members: Vec<Hash64>,
 }
 
-/// One active validator that can still contribute toward a mandatory attestation
-/// deficit for a specific canonical epoch/anchor.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MandatoryAttestationValidator {
-    pub bond_outpoint: TransactionOutpoint,
-    pub validator_id: Hash64,
-    pub stake_sompi: u64,
-}
-
-/// A `(bond, validator, epoch)` key already credited by the selected-parent
-/// chain for a mandatory attestation deficit.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct MandatoryAttestationContributionKey {
-    pub bond_outpoint: TransactionOutpoint,
-    pub validator_id: Hash64,
-    pub epoch: u64,
-}
-
-/// Consensus snapshot used by mining to prioritize attestation shards that can
-/// actually clear the hard mandatory floor for the current template snapshot.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MandatoryAttestationDeficit {
-    pub epoch: u64,
-    pub target_hash: Hash64,
-    pub target_daa_score: u64,
-    pub validator_set_commitment: Hash64,
-    /// Stake already credited before this template's body selection. In the legacy diagnostic API
-    /// this is selected-parent-chain stake only; in the template-exact selector snapshot it also
-    /// includes candidate accepted transactions from the virtual state.
-    pub pre_body_included_stake: u64,
-    pub expected_stake: u64,
-    pub required_stake: u64,
-    pub required_stake_delta: u64,
-    pub quality_floor_bps: u16,
-    pub already_contributed: Vec<MandatoryAttestationContributionKey>,
-    pub active_validators: Vec<MandatoryAttestationValidator>,
-}
-
-/// Read-only liveness/monitoring view for liveness-first networks where mandatory attestation
-/// inclusion is not a base-ledger validity rule. Unlike [`MandatoryAttestationDeficit`], this is
-/// returned even when the hard mandatory fence is inert, so operators can see which ready epochs
-/// are below the StakeScore quality floor.
+/// Read-only liveness/monitoring view: which ready epochs are below the StakeScore quality floor.
+/// Attestation inclusion is never a base-ledger validity rule (hard inclusion is removed).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AttestationQualityDeficit {
     pub epoch: u64,
@@ -2124,24 +2084,6 @@ pub struct AttestationQualityDeficit {
     pub required_stake_delta: u64,
     pub quality_floor_bps: u16,
     pub health: DnsHealth,
-}
-
-/// Mass-capacity liveness check for activating the hard mandatory attestation gate. It answers:
-/// "Given the active stake distribution and quality floor, can a single block
-/// carry enough attestation shards to reach the floor?" A `false` result keeps the gate dormant;
-/// block validation must not reject an otherwise valid block solely because this invariant is false.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MandatoryAttestationMassCapacity {
-    pub expected_stake: u64,
-    pub included_stake: u64,
-    pub required_stake: u64,
-    pub required_stake_delta: u64,
-    pub required_validator_count: usize,
-    pub required_shard_count: u64,
-    pub max_shard_count_by_mass: u64,
-    pub required_mass: u64,
-    pub max_block_mass: u64,
-    pub fits: bool,
 }
 
 /// Everything the in-process validator service needs to issue one stake
@@ -3504,66 +3446,6 @@ pub fn epoch_meets_quality_floor(included_stake: u128, expected_stake: u128, phi
 /// below the floor" remains below.
 pub fn required_stake_for_quality_floor(expected_stake: u64, quality_floor_bps: u16) -> u64 {
     ((expected_stake as u128).saturating_mul(quality_floor_bps as u128).saturating_add(9_999) / 10_000).min(u64::MAX as u128) as u64
-}
-
-/// Computes the one-block mass-capacity invariant for hard mandatory
-/// attestation inclusion.
-///
-/// `remaining_stakes` must contain only validators that have not already been
-/// credited by the selected-parent chain or candidate accepted transactions for
-/// this epoch. The stakes are sorted descending because the best-case packing
-/// for reaching the remaining floor delta uses the largest still-uncredited
-/// validators first. Current validator/miner production emits one attestation
-/// shard transaction per validator, so this check deliberately treats each
-/// remaining validator as one shard transaction. If aggregate shard production
-/// is added later, the production, relay, replacement, and template tests should
-/// land before relaxing this conservative invariant.
-pub fn mandatory_attestation_mass_capacity(
-    remaining_stakes: impl IntoIterator<Item = u64>,
-    expected_stake: u64,
-    included_stake: u64,
-    quality_floor_bps: u16,
-    max_block_mass: u64,
-    max_attestation_shard_mass: u64,
-) -> MandatoryAttestationMassCapacity {
-    let mut stakes: Vec<u64> = remaining_stakes.into_iter().filter(|stake| *stake > 0).collect();
-    stakes.sort_by(|a, b| b.cmp(a));
-
-    let required_stake = required_stake_for_quality_floor(expected_stake, quality_floor_bps);
-    let required_stake_delta = required_stake.saturating_sub(included_stake);
-
-    let mut accumulated = 0u64;
-    let mut required_validator_count = 0usize;
-    if required_stake_delta > 0 {
-        for stake in &stakes {
-            accumulated = accumulated.saturating_add(*stake);
-            required_validator_count += 1;
-            if accumulated >= required_stake_delta {
-                break;
-            }
-        }
-    }
-
-    let required_shard_count = required_validator_count as u64;
-    let required_mass = required_shard_count.saturating_mul(max_attestation_shard_mass);
-    let max_shard_count_by_mass = if max_attestation_shard_mass == 0 { 0 } else { max_block_mass / max_attestation_shard_mass };
-    let has_enough_stake = required_stake_delta == 0 || accumulated >= required_stake_delta;
-    let fits = has_enough_stake
-        && (required_shard_count == 0
-            || (max_attestation_shard_mass > 0 && required_shard_count <= max_shard_count_by_mass && required_mass <= max_block_mass));
-
-    MandatoryAttestationMassCapacity {
-        expected_stake,
-        included_stake,
-        required_stake,
-        required_stake_delta,
-        required_validator_count,
-        required_shard_count,
-        max_shard_count_by_mass,
-        required_mass,
-        max_block_mass,
-        fits,
-    }
 }
 
 /// ADR-0018 "本格版" (PoS-v2) §E — the **deferred quality-bonus** coinbase outputs for a finalized
@@ -11724,69 +11606,6 @@ mod tests {
         assert!(epoch_meets_quality_floor(0, 1000, 0));
         // expected = 0 → vacuously meets.
         assert!(epoch_meets_quality_floor(0, 0, 6000));
-    }
-
-    #[test]
-    fn mandatory_attestation_mass_capacity_detects_impossible_active_set() {
-        let fits = mandatory_attestation_mass_capacity(std::iter::repeat_n(100u64, 10), 1_000, 0, 6000, 500_000, 50_000);
-        assert_eq!(fits.expected_stake, 1_000);
-        assert_eq!(fits.required_stake, 600);
-        assert_eq!(fits.required_stake_delta, 600);
-        assert_eq!(fits.required_validator_count, 6);
-        assert_eq!(fits.required_shard_count, 6);
-        assert!(fits.fits, "six single-validator shards fit in a 500k block at 50k per shard");
-
-        let exact = mandatory_attestation_mass_capacity(std::iter::repeat_n(100u64, 17), 1_700, 700, 6000, 500_000, 50_000);
-        assert_eq!(exact.required_stake, 1_020);
-        assert_eq!(exact.required_stake_delta, 320);
-        assert_eq!(exact.required_validator_count, 4);
-        assert_eq!(exact.required_shard_count, 4);
-        assert_eq!(exact.max_shard_count_by_mass, 10);
-        assert!(exact.fits, "four remaining single-validator shards fit");
-
-        let over = mandatory_attestation_mass_capacity(std::iter::repeat_n(100u64, 30), 3_000, 0, 6000, 500_000, 50_000);
-        assert_eq!(over.required_validator_count, 18);
-        assert_eq!(over.required_shard_count, 18);
-        assert!(!over.fits, "eighteen single-validator shards cannot fit in one 500k block at 50k per shard");
-    }
-
-    #[test]
-    fn mandatory_attestation_mass_capacity_uses_best_case_stake_packing() {
-        // A single large validator can satisfy 60% even if many tiny validators are active.
-        let mut stakes = vec![10_000u64];
-        stakes.extend(std::iter::repeat_n(1u64, 200));
-        let expected_stake = stakes.iter().sum();
-        let cap = mandatory_attestation_mass_capacity(stakes, expected_stake, 0, 6000, 50_000, 50_000);
-        assert_eq!(cap.required_validator_count, 1);
-        assert_eq!(cap.required_shard_count, 1);
-        assert!(cap.fits);
-    }
-
-    #[test]
-    fn mandatory_attestation_mass_capacity_uses_remaining_delta() {
-        let cap = mandatory_attestation_mass_capacity(std::iter::repeat_n(1u64, 401), 1_000, 599, 6000, 100, 100);
-        assert_eq!(cap.required_stake, 600);
-        assert_eq!(cap.required_stake_delta, 1);
-        assert_eq!(cap.required_validator_count, 1);
-        assert_eq!(cap.required_shard_count, 1);
-        assert!(cap.fits, "one remaining sompi of stake needs only one single-validator shard");
-    }
-
-    #[test]
-    fn mandatory_attestation_mass_capacity_50200_threshold_is_nine_shards() {
-        let fits_nine = mandatory_attestation_mass_capacity(std::iter::repeat_n(100u64, 15), 1_500, 0, 6000, 500_000, 50_200);
-        assert_eq!(fits_nine.required_validator_count, 9);
-        assert_eq!(fits_nine.required_shard_count, 9);
-        assert_eq!(fits_nine.max_shard_count_by_mass, 9);
-        assert_eq!(fits_nine.required_mass, 451_800);
-        assert!(fits_nine.fits, "nine 50,200-mass shards fit in a 500k block");
-
-        let needs_ten = mandatory_attestation_mass_capacity(std::iter::repeat_n(100u64, 16), 1_600, 0, 6000, 500_000, 50_200);
-        assert_eq!(needs_ten.required_validator_count, 10);
-        assert_eq!(needs_ten.required_shard_count, 10);
-        assert_eq!(needs_ten.max_shard_count_by_mass, 9);
-        assert_eq!(needs_ten.required_mass, 502_000);
-        assert!(!needs_ten.fits, "ten 50,200-mass shards exceed a 500k block");
     }
 
     /// Met epoch: each included validator is paid a proportional share of the quality pool, in

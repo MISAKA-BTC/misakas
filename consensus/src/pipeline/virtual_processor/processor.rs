@@ -79,19 +79,17 @@ use kaspa_consensus_core::{
         ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, AttestationContribution, BlockEpochContribution, BlockOverlayContribution,
         BondMutation, CanonicalLaggedEpochAnchor, ComputeCapabilityRecord, ComputeCommitmentRecord, ComputeCreditContribution,
         ComputeStatusView, ComputeVerdictRecord, DnsCoinbaseSettlement, DnsParams, DnsReorgMode, DnsReorgOutcome, DnsRolloutStage,
-        MandatoryAttestationContributionKey, MandatoryAttestationDeficit, MandatoryAttestationValidator, OpenComputeCommitment,
-        OverlaySnapshot, PRECOMMIT_MLDSA87_CONTEXT, PendingComputeVerdict, PrecommitDuty, PrecommitLock, PrecommitRecord,
-        PruningPointOverlaySnapshot, StakeBondRecord, StakePreferenceInputs, StakeScore, UNBOND_REQUEST_CONTEXT,
+        OpenComputeCommitment, OverlaySnapshot, PRECOMMIT_MLDSA87_CONTEXT, PendingComputeVerdict, PrecommitDuty, PrecommitLock,
+        PrecommitRecord, PruningPointOverlaySnapshot, StakeBondRecord, StakePreferenceInputs, StakeScore, UNBOND_REQUEST_CONTEXT,
         advance_dns_confirmation, aggregate_compute_credits, aggregate_epoch_tallies, anchor_cutoff_blue_score, apply_bond_stamp,
         attestations_from_accepted_txs, bond_mutations_from_accepted_txs, build_finality_certificate, build_voting_snapshot,
         canonical_lagged_epoch_anchor, capability_candidate_pool, capability_set_root, check_dns_reorg_rule, commitment_beacon_epoch,
         compute_capabilities_from_accepted_txs, compute_capabilities_with_ids_from_accepted_txs,
         compute_certificates_from_accepted_txs, compute_challenges_from_accepted_txs, compute_commitments_from_accepted_txs,
         compute_stake_score, compute_verdicts_from_accepted_txs, derive_dns_health, dns_finality_fresh_for_bridge,
-        effective_bond_status, epoch_meets_quality_floor, epoch_start_blue_score, held_precommit_lock, is_bond_active_at,
-        is_dns_confirmed, lock_consistent_precommits, mandatory_attestation_mass_capacity, p2pkh_mldsa87_spk,
-        precommits_from_accepted_txs, quorum_epochs, ready_epoch_from_tip_blue_score, recompute_epoch_tallies,
-        reorg_inputs_since_common_ancestor, required_stake_for_quality_floor, revert_bond_stamp, stake_attestation_message,
+        effective_bond_status, epoch_start_blue_score, held_precommit_lock, is_bond_active_at, is_dns_confirmed,
+        lock_consistent_precommits, p2pkh_mldsa87_spk, precommits_from_accepted_txs, quorum_epochs, ready_epoch_from_tip_blue_score,
+        recompute_epoch_tallies, reorg_inputs_since_common_ancestor, revert_bond_stamp, stake_attestation_message,
         stake_precommit_message, stake_preference_verdict, total_active_stake_by_epoch, total_voting_weight_by_epoch,
         unbond_request_message, unbond_requests_from_accepted_txs, validator_id_from_pubkey, validator_voting_weight_of_bond,
         verdicts_for_certificate, voting_epoch_for_target,
@@ -152,7 +150,6 @@ use rocksdb::WriteBatch;
 use std::{
     cmp::min,
     collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, VecDeque},
-    iter::once,
     ops::Deref,
     sync::{Arc, Mutex, atomic::Ordering},
 };
@@ -343,7 +340,6 @@ pub struct VirtualStateProcessor {
     pub(super) palw_heartbeat_width_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// The deepest reorg the sink search will ever offer — ADR-0065 D2's ancestor horizon.
     pub(super) finality_depth: u64,
-    pub(super) max_block_mass: u64,
     /// kaspa-pq Phase 3 PoW (ADR-0007): BLAKE2b-512 ∥ SHA3-512 (`algo_id = 3`) activation — sets the
     /// block template's `pow_algo_id` so miners produce the network-correct Layer-1 algorithm.
     pub(super) pow_blake2b_sha3_activation: kaspa_consensus_core::config::params::ForkActivation,
@@ -904,7 +900,6 @@ impl VirtualStateProcessor {
             max_block_parents: params.max_block_parents(),
             mergeset_size_limit: params.mergeset_size_limit(),
             palw_heartbeat_width_fence: params.palw_heartbeat_width_fence(),
-            max_block_mass: params.max_block_mass,
 
             db,
             statuses_store: storage.statuses_store.clone(),
@@ -8853,24 +8848,6 @@ impl VirtualStateProcessor {
         txs
     }
 
-    /// Resolves the accepted transactions represented by the current virtual state. Unlike a
-    /// committed chain block, the virtual state has no persisted `AcceptanceData`; it keeps only the
-    /// accepted tx ids. Re-walk the virtual selected-parent + mergeset in consensus order and keep
-    /// the ids the virtual UTXO calculation accepted. This lets template-only consensus checks see
-    /// the same parent-body attestations that block validation later receives through
-    /// `ctx.mergeset_acceptance_data`.
-    pub(super) fn accepted_txs_from_virtual_state(&self, virtual_state: &VirtualState) -> Vec<Transaction> {
-        if virtual_state.accepted_tx_ids.is_empty() {
-            return Vec::new();
-        }
-        let accepted: HashSet<_> = virtual_state.accepted_tx_ids.iter().copied().collect();
-        once(virtual_state.ghostdag_data.selected_parent)
-            .chain(virtual_state.ghostdag_data.consensus_ordered_mergeset_without_selected_parent(self.ghostdag_store.deref()))
-            .flat_map(|block| (*self.block_transactions_store.get(block).unwrap()).clone())
-            .filter(|tx| accepted.contains(&tx.id()))
-            .collect()
-    }
-
     /// [`BondMutation`]s for a block whose acceptance data is held in-memory
     /// (the `KeyNotFound` chain block currently being UTXO-validated, before
     /// its `acceptance_data_store` entry is committed). Mirrors
@@ -9016,15 +8993,6 @@ impl VirtualStateProcessor {
             .map(|b| b.validator_pubkey_hash)
             .collect::<std::collections::BTreeSet<_>>()
             .len() as u32;
-        let hard_mandatory_active = sink_daa >= dns_params.mandatory_attestation_inclusion_daa_score;
-        let capacity = mandatory_attestation_mass_capacity(
-            active_stakes_at_sink.iter().copied(),
-            total_active,
-            0,
-            dns_params.stake_event_quality_floor_bps,
-            self.max_block_mass,
-            dns_params.max_attestation_shard_mass,
-        );
         let rollout_stage = if sink_daa >= dns_params.dns_activation_daa_score
             && total_active >= dns_params.min_active_stake_sompi
             && active_validators >= dns_params.min_active_validators
@@ -9039,11 +9007,6 @@ impl VirtualStateProcessor {
             // that means nothing. Staying in Bootstrap keeps the gate dormant instead. Trivially
             // true on every shipped (inert) preset, so this cannot demote a current network.
             && dns_params.vlt_params_consistent()
-            // kaspa-pq optional hard mandatory capacity: only hard-inclusion deployments require
-            // proving that the current stake distribution can physically reach φS in one block.
-            // Shipped liveness-first presets keep mandatory inclusion at u64::MAX, so capacity
-            // cannot demote DNS to Bootstrap or halt finality/reward accounting.
-            && (!hard_mandatory_active || capacity.fits)
         {
             DnsRolloutStage::Active
         } else {
@@ -13056,149 +13019,6 @@ impl VirtualStateProcessor {
         )
     }
 
-    pub(crate) fn mandatory_attestation_deficits_for_template_snapshot(
-        &self,
-        selected_parent: BlockHash,
-        daa_score: u64,
-        selected_parent_bond_view: &ActiveBondView,
-        candidate_accepted_txs: &[Transaction],
-    ) -> Vec<MandatoryAttestationDeficit> {
-        let Some(dns_params) = self.dns_params_at(daa_score) else {
-            return Vec::new();
-        };
-        if daa_score < dns_params.dns_activation_daa_score
-            || daa_score < dns_params.mandatory_attestation_inclusion_daa_score
-            || !dns_params.dns_v3_params_consistent()
-        {
-            return Vec::new();
-        }
-
-        let anchors = self.canonical_anchors_in_window(selected_parent, dns_params, dns_params.stake_score_window_blue_score);
-        if anchors.is_empty() {
-            return Vec::new();
-        }
-
-        let bonds = selected_parent_bond_view.records();
-        let (parent_contributions, _) = self.collect_stake_contributions_v2(
-            selected_parent,
-            None,
-            &bonds,
-            self.genesis.hash.as_byte_slice(),
-            dns_params,
-            ContributionWeight::BondedStake,
-        );
-        let mut seen_parent: HashSet<(kaspa_consensus_core::tx::TransactionOutpoint, kaspa_consensus_core::Hash64, u64)> =
-            HashSet::new();
-        let mut seen_candidate: HashSet<(kaspa_consensus_core::tx::TransactionOutpoint, kaspa_consensus_core::Hash64, u64)> =
-            HashSet::new();
-        let mut signed_by_epoch: HashMap<u64, u64> = HashMap::new();
-        let mut contributed_by_epoch: HashMap<u64, Vec<MandatoryAttestationContributionKey>> = HashMap::new();
-        for c in parent_contributions {
-            let key = (c.bond_outpoint, c.validator_id, c.epoch);
-            if !seen_parent.insert(key) {
-                continue;
-            }
-            let entry = signed_by_epoch.entry(c.epoch).or_insert(0);
-            *entry = entry.saturating_add(c.signed_weight as u64);
-            contributed_by_epoch.entry(c.epoch).or_default().push(MandatoryAttestationContributionKey {
-                bond_outpoint: c.bond_outpoint,
-                validator_id: c.validator_id,
-                epoch: c.epoch,
-            });
-        }
-
-        let bond_by_outpoint: HashMap<_, _> = bonds.iter().map(|b| (b.bond_outpoint, b)).collect();
-        for att in attestations_from_accepted_txs(candidate_accepted_txs) {
-            let Some(anchor) = anchors.get(&att.epoch) else {
-                continue;
-            };
-            if att.target_hash != anchor.anchor_hash || att.target_daa_score != anchor.anchor_daa_score {
-                continue;
-            }
-            let key = (att.bond_outpoint, att.validator_id, att.epoch);
-            if seen_parent.contains(&key) || !seen_candidate.insert(key) {
-                continue;
-            }
-            let Some(bond) = bond_by_outpoint.get(&att.bond_outpoint) else {
-                continue;
-            };
-            if att.validator_id != bond.validator_pubkey_hash || !is_bond_active_at(bond, anchor.anchor_daa_score) {
-                continue;
-            }
-            let digest = stake_attestation_message(
-                self.genesis.hash.as_byte_slice(),
-                att.epoch,
-                att.target_hash,
-                att.target_daa_score,
-                att.validator_set_commitment,
-                att.bond_outpoint,
-            )
-            .as_bytes();
-            if !matches!(
-                verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &att.signature, ATTESTATION_MLDSA87_CONTEXT),
-                Ok(true)
-            ) {
-                continue;
-            }
-            let entry = signed_by_epoch.entry(att.epoch).or_insert(0);
-            *entry = entry.saturating_add(bond.amount);
-            contributed_by_epoch.entry(att.epoch).or_default().push(MandatoryAttestationContributionKey {
-                bond_outpoint: att.bond_outpoint,
-                validator_id: att.validator_id,
-                epoch: att.epoch,
-            });
-        }
-
-        let mut deficits = Vec::new();
-        for (&epoch, anchor) in &anchors {
-            let mut active_validators: Vec<_> = bonds
-                .iter()
-                .filter(|bond| is_bond_active_at(bond, anchor.anchor_daa_score))
-                .map(|bond| MandatoryAttestationValidator {
-                    bond_outpoint: bond.bond_outpoint,
-                    validator_id: bond.validator_pubkey_hash,
-                    stake_sompi: bond.amount,
-                })
-                .collect();
-            active_validators.sort_by(|a, b| {
-                a.validator_id
-                    .cmp(&b.validator_id)
-                    .then(a.bond_outpoint.transaction_id.cmp(&b.bond_outpoint.transaction_id))
-                    .then(a.bond_outpoint.index.cmp(&b.bond_outpoint.index))
-            });
-
-            let expected_stake = active_validators.iter().fold(0u64, |acc, v| acc.saturating_add(v.stake_sompi));
-            if expected_stake == 0
-                || expected_stake < dns_params.min_active_stake_sompi
-                || (active_validators.len() as u32) < dns_params.min_active_validators
-            {
-                continue;
-            }
-
-            let included_stake = signed_by_epoch.get(&epoch).copied().unwrap_or(0);
-            if epoch_meets_quality_floor(included_stake as u128, expected_stake as u128, dns_params.stake_event_quality_floor_bps) {
-                continue;
-            }
-
-            let required_stake = required_stake_for_quality_floor(expected_stake, dns_params.stake_event_quality_floor_bps);
-            deficits.push(MandatoryAttestationDeficit {
-                epoch,
-                target_hash: anchor.anchor_hash,
-                target_daa_score: anchor.anchor_daa_score,
-                validator_set_commitment: kaspa_consensus_core::Hash64::default(),
-                pre_body_included_stake: included_stake,
-                expected_stake,
-                required_stake,
-                required_stake_delta: required_stake.saturating_sub(included_stake),
-                quality_floor_bps: dns_params.stake_event_quality_floor_bps,
-                already_contributed: contributed_by_epoch.remove(&epoch).unwrap_or_default(),
-                active_validators,
-            });
-        }
-
-        deficits
-    }
-
     pub fn build_block_template(
         &self,
         miner_data: MinerData,
@@ -13209,7 +13029,7 @@ impl VirtualStateProcessor {
         // payload by `evm_template_fields`; ignored pre-activation.
         evm_template_data: kaspa_consensus_core::evm::EvmTemplateData,
     ) -> Result<BlockTemplate, RuleError> {
-        self.build_block_template_with_selector_provider(miner_data, build_mode, evm_template_data, move |_, _| tx_selector)
+        self.build_block_template_with_selector_provider(miner_data, build_mode, evm_template_data, move |_| tx_selector)
     }
 
     pub fn build_block_template_with_selector_factory(
@@ -13219,8 +13039,8 @@ impl VirtualStateProcessor {
         build_mode: TemplateBuildMode,
         evm_template_data: kaspa_consensus_core::evm::EvmTemplateData,
     ) -> Result<BlockTemplate, RuleError> {
-        self.build_block_template_with_selector_provider(miner_data, build_mode, evm_template_data, |latest_ready_epoch, deficits| {
-            tx_selector_factory.build_selector(latest_ready_epoch, deficits)
+        self.build_block_template_with_selector_provider(miner_data, build_mode, evm_template_data, |latest_ready_epoch| {
+            tx_selector_factory.build_selector(latest_ready_epoch)
         })
     }
 
@@ -13557,7 +13377,7 @@ impl VirtualStateProcessor {
         tx_selector_provider: F,
     ) -> Result<BlockTemplate, RuleError>
     where
-        F: FnOnce(Option<u64>, &[MandatoryAttestationDeficit]) -> Box<dyn TemplateTransactionSelector>,
+        F: FnOnce(Option<u64>) -> Box<dyn TemplateTransactionSelector>,
     {
         //
         // TODO (relaxed): additional tests
@@ -13578,15 +13398,8 @@ impl VirtualStateProcessor {
         // Inert (every tx `KeepNonShard`) below the activation gate, so non-overlay nets
         // are byte-identical to before.
         let template_bond_view = self.initial_active_bond_view();
-        let candidate_accepted_txs = self.accepted_txs_from_virtual_state(&virtual_state);
         let latest_ready_epoch = self.latest_ready_epoch_for_template_snapshot(&virtual_state);
-        let mandatory_deficits = self.mandatory_attestation_deficits_for_template_snapshot(
-            virtual_state.ghostdag_data.selected_parent,
-            virtual_state.daa_score,
-            &template_bond_view,
-            &candidate_accepted_txs,
-        );
-        let mut tx_selector = tx_selector_provider(latest_ready_epoch, &mandatory_deficits);
+        let mut tx_selector = tx_selector_provider(latest_ready_epoch);
         let mut txs = tx_selector.select_transactions();
         let mut calculated_fees = Vec::with_capacity(txs.len());
         // kaspa-pq DNS-finality (§6.5): per-reason drop counters for diagnostics.
@@ -13874,19 +13687,6 @@ impl VirtualStateProcessor {
             calculated_fees.len(),
             txs.len()
         );
-        // kaspa-pq optional DNS-finality hard inclusion: in shipped liveness-first presets this is
-        // inert (`mandatory_attestation_inclusion_daa_score = u64::MAX`), so missing attestations
-        // never block template production. Private hard-inclusion forks still use the deterministic
-        // selected-parent + candidate-accepted + body view below.
-        let candidate_accepted_txs = self.accepted_txs_from_virtual_state(&virtual_state);
-        self.check_mandatory_attestation_inclusion(
-            &txs,
-            &candidate_accepted_txs,
-            &template_bond_view,
-            virtual_state.ghostdag_data.selected_parent,
-            virtual_state.daa_score,
-        )
-        .map_err(|err| err.with_attestation_template_drops(&dropped_attestation_shards))?;
         // kaspa-pq Phase 13 (ADR-0018 §F+§E): the §F carve + §E validator pool for
         // this template, computed identically to the validation path so a block
         // mined from this template reproduces the coinbase byte-for-byte. `None`/0

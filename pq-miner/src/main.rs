@@ -97,10 +97,6 @@ fn unsafe_cli_secrets_allowed() -> bool {
     cfg!(debug_assertions) && std::env::var("MISAKA_ALLOW_UNSAFE_CLI_SECRETS").as_deref() == Ok("1")
 }
 
-fn is_mandatory_attestation_wait_error(message: &str) -> bool {
-    message.contains("missing mandatory stake attestations") || message.contains("MissingMandatoryAttestationInBlock")
-}
-
 #[tokio::main]
 async fn main() {
     kaspa_core::log::try_init_logger("INFO");
@@ -278,7 +274,6 @@ async fn main() {
     }
     // Initialize so the first block is mined immediately (no startup wait).
     let mut last_block = Instant::now().checked_sub(min_interval).unwrap_or_else(Instant::now);
-    let mut last_attestation_wait_log = Instant::now().checked_sub(Duration::from_secs(30)).unwrap_or_else(Instant::now);
 
     let mut mined = 0u64;
     let mut last_unsynced_log = Instant::now().checked_sub(Duration::from_secs(30)).unwrap_or_else(Instant::now);
@@ -295,18 +290,6 @@ async fn main() {
             Ok(t) => t,
             Err(e) => {
                 let msg = e.to_string();
-
-                if is_mandatory_attestation_wait_error(&msg) {
-                    if last_attestation_wait_log.elapsed() >= Duration::from_secs(30) {
-                        log::info!(
-                            "waiting for mandatory stake attestations before mining; validator shards are not yet sufficient: {msg}"
-                        );
-                        last_attestation_wait_log = Instant::now();
-                    }
-
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-                    continue;
-                }
 
                 log::warn!("get_block_template failed: {msg}; retrying in 1s");
                 tokio::time::sleep(Duration::from_secs(1)).await;
@@ -392,20 +375,7 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_mandatory_attestation_wait_error, unsafe_cli_secrets_allowed};
-
-    #[test]
-    fn detects_mandatory_attestation_wait_errors() {
-        assert!(is_mandatory_attestation_wait_error(
-            "block is missing mandatory stake attestations for ready epoch 42: included stake 0/100 below floor 6000 bps"
-        ));
-
-        assert!(is_mandatory_attestation_wait_error("MissingMandatoryAttestationInBlock"));
-
-        assert!(!is_mandatory_attestation_wait_error("failed to connect to node gRPC"));
-
-        assert!(!is_mandatory_attestation_wait_error("ConsensusInTransitionalIbdState"));
-    }
+    use super::unsafe_cli_secrets_allowed;
 
     // Audit M-6: the raw-secret CLI override must be honored ONLY in dev builds.
     #[test]

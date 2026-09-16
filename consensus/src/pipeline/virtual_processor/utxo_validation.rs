@@ -1,12 +1,12 @@
-use super::{ContributionWeight, VirtualStateProcessor};
+use super::VirtualStateProcessor;
 use crate::{
     errors::{
         BlockProcessResult,
         RuleError::{
             BadAcceptedIDMerkleRoot, BadCoinbaseTransaction, BadOverlayCommitment, BadPalwCommitmentShape, BadUTXOCommitment,
-            IneligibleAttestationInBlock, InvalidTransactionsInUtxoContext, MissingMandatoryAttestationInBlock,
-            UnauthorizedUnbondRequestInBlock, UnverifiableComputeChallengeInBlock, UnverifiablePrecommitEvidenceInBlock,
-            UnverifiableSlashingEvidenceInBlock, WrongHeaderPruningPoint,
+            IneligibleAttestationInBlock, InvalidTransactionsInUtxoContext, UnauthorizedUnbondRequestInBlock,
+            UnverifiableComputeChallengeInBlock, UnverifiablePrecommitEvidenceInBlock, UnverifiableSlashingEvidenceInBlock,
+            WrongHeaderPruningPoint,
         },
     },
     model::stores::{
@@ -34,12 +34,11 @@ use kaspa_consensus_core::{
         ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BlockEpochContribution, BondMutation, BondStatus, DnsParams, EpochTally,
         OverlaySnapshot, PRECOMMIT_MLDSA87_CONTEXT, RewardedEpochSet, SlashingSideEffect, StakeAttestation, UNBOND_REQUEST_CONTEXT,
         attestations_from_accepted_txs, bond_mutations_from_accepted_txs, bond_release_daa_score, compute_challenges_with_ids,
-        decode_attestation_shard, deferred_quality_bonus_outputs_for_block, effective_bond_status, epoch_meets_quality_floor,
-        epochs_finalized_at, is_bond_active_at, mandatory_attestation_mass_capacity, precommit_evidence_from_accepted_txs,
-        precommit_fault, recompute_epoch_tallies, reserve_drip_outputs_for_block, resolve_slashing_side_effects,
-        slashing_evidence_from_accepted_txs, split_validator_pool, stake_attestation_message, stake_precommit_message,
-        unbond_request_message, unbond_requests_from_accepted_txs, validator_id_from_pubkey, validator_participation_reward_outputs,
-        victim_compensation_outputs,
+        decode_attestation_shard, deferred_quality_bonus_outputs_for_block, effective_bond_status, epochs_finalized_at,
+        precommit_evidence_from_accepted_txs, precommit_fault, recompute_epoch_tallies, reserve_drip_outputs_for_block,
+        resolve_slashing_side_effects, slashing_evidence_from_accepted_txs, split_validator_pool, stake_attestation_message,
+        stake_precommit_message, unbond_request_message, unbond_requests_from_accepted_txs, validator_id_from_pubkey,
+        validator_participation_reward_outputs, victim_compensation_outputs,
     },
     hashing,
     header::Header,
@@ -65,11 +64,7 @@ use kaspa_utils::refs::Refs;
 
 use rayon::prelude::*;
 use smallvec::{SmallVec, smallvec};
-use std::{
-    collections::{HashMap, HashSet},
-    iter::once,
-    ops::Deref,
-};
+use std::{iter::once, ops::Deref};
 
 pub(crate) mod crescendo {
     use kaspa_core::{info, log::CRESCENDO_KEYWORD};
@@ -852,19 +847,6 @@ impl VirtualStateProcessor {
         // Inert below activation.
         self.check_attestation_reward_eligibility(&txs, selected_parent_bond_view, header.daa_score)?;
 
-        // kaspa-pq optional DNS-finality hard inclusion: shipped presets keep this inert so missing
-        // attestations degrade finality instead of invalidating PoW/GHOSTDAG blocks. Private
-        // hard-inclusion forks still evaluate the deterministic selected-parent + accepted + body
-        // view here.
-        let candidate_accepted_txs = self.accepted_txs_from_acceptance_data(&ctx.mergeset_acceptance_data);
-        self.check_mandatory_attestation_inclusion(
-            &txs,
-            &candidate_accepted_txs,
-            selected_parent_bond_view,
-            ctx.selected_parent(),
-            header.daa_score,
-        )?;
-
         // kaspa-pq Phase 10/11 (ADR-0009 §"SlashingEvidencePayload"): reject a
         // block whose slashing evidence is not genuine, so a forged evidence
         // can never mutate a bond to `Slashed`. Inert below activation.
@@ -1534,183 +1516,6 @@ impl VirtualStateProcessor {
         // ADR-0009 Addendum A.3: the network_id discriminator is the genesis hash.
         attestation_reward_eligibility(txs, selected_parent_bond_view, self.genesis.hash, activated, require_zero_vsc)
             .map_err(|(bond_tx, epoch)| IneligibleAttestationInBlock(bond_tx, epoch))
-    }
-
-    /// kaspa-pq DNS-finality optional hard inclusion rule.
-    ///
-    /// This is the consensus-level anti-censorship gate. It deliberately does NOT ask whether an
-    /// attestation was visible in this node's mempool. Instead it uses only deterministic inputs:
-    /// the selected-parent chain, the selected-parent active-bond view, the candidate acceptance
-    /// data that this block deterministically commits, and this block's body.
-    ///
-    /// For the oldest ready, canonical, non-duplicate epoch whose selected-parent chain has not yet
-    /// reached the configured stake quality floor, this block must either accept or include enough
-    /// canonical, eligible attestations to bring the epoch to that floor. Counting candidate
-    /// acceptance data is essential on a Kaspa-style DAG: a block's body is credited by its child,
-    /// so the child must not demand the same signatures again. Once an epoch is certified, later
-    /// blocks do not need to include it again. Shipped liveness-first presets leave this optional
-    /// hard gate inert (`mandatory_attestation_inclusion_daa_score = u64::MAX`); private hard-gate
-    /// deployments additionally require the conservative one-block single-shard capacity invariant,
-    /// so a capacity-impossible validator set cannot halt the base ledger.
-    pub(crate) fn check_mandatory_attestation_inclusion(
-        &self,
-        txs: &[Transaction],
-        candidate_accepted_txs: &[Transaction],
-        selected_parent_bond_view: &ActiveBondView,
-        selected_parent: BlockHash,
-        daa_score: u64,
-    ) -> BlockProcessResult<()> {
-        let Some(dns_params) = self.dns_params_at(daa_score) else {
-            return Ok(());
-        };
-        if daa_score < dns_params.dns_activation_daa_score
-            || daa_score < dns_params.mandatory_attestation_inclusion_daa_score
-            || !dns_params.dns_v3_params_consistent()
-        {
-            return Ok(());
-        }
-
-        let anchors = self.canonical_anchors_in_window(selected_parent, dns_params, dns_params.stake_score_window_blue_score);
-        if anchors.is_empty() {
-            return Ok(());
-        }
-
-        let bonds = selected_parent_bond_view.records();
-        let (parent_contributions, _) = self.collect_stake_contributions_v2(
-            selected_parent,
-            None,
-            &bonds,
-            self.genesis.hash.as_byte_slice(),
-            dns_params,
-            ContributionWeight::BondedStake,
-        );
-        let mut seen_parent: HashSet<(TransactionOutpoint, TransactionId, u64)> = HashSet::new();
-        let mut parent_included_by_epoch: HashMap<u64, u64> = HashMap::new();
-        for c in parent_contributions {
-            if seen_parent.insert((c.bond_outpoint, c.validator_id, c.epoch)) {
-                let entry = parent_included_by_epoch.entry(c.epoch).or_insert(0);
-                *entry = entry.saturating_add(c.signed_weight as u64);
-            }
-        }
-
-        let bond_by_outpoint: HashMap<_, _> = bonds.iter().map(|b| (b.bond_outpoint, b)).collect();
-
-        for (&epoch, anchor) in &anchors {
-            let active_bonds: Vec<_> = bonds.iter().filter(|b| is_bond_active_at(b, anchor.anchor_daa_score)).collect();
-            let expected_stake = active_bonds.iter().fold(0u64, |acc, b| acc.saturating_add(b.amount));
-            if expected_stake == 0 || expected_stake < dns_params.min_active_stake_sompi {
-                continue;
-            }
-            let active_validator_count = active_bonds.len() as u32;
-            if active_validator_count < dns_params.min_active_validators {
-                continue;
-            }
-
-            let full_floor_capacity = mandatory_attestation_mass_capacity(
-                active_bonds.iter().map(|bond| bond.amount),
-                expected_stake,
-                0,
-                dns_params.stake_event_quality_floor_bps,
-                self.max_block_mass,
-                dns_params.max_attestation_shard_mass,
-            );
-            if !full_floor_capacity.fits {
-                // The rollout stage stays Bootstrap when the active set cannot satisfy the
-                // conservative single-shard capacity invariant. Keep hard mandatory dormant too:
-                // capacity must never become a consensus hard-stop for the base ledger, and
-                // aggregate shard bodies remain valid if they independently satisfy the floor.
-                return Ok(());
-            }
-
-            let parent_included = parent_included_by_epoch.get(&epoch).copied().unwrap_or(0);
-            if epoch_meets_quality_floor(parent_included as u128, expected_stake as u128, dns_params.stake_event_quality_floor_bps) {
-                continue;
-            }
-
-            let mut combined_included = parent_included;
-            let mut seen_candidate: HashSet<(TransactionOutpoint, TransactionId, u64)> = HashSet::new();
-            for att in attestations_from_accepted_txs(candidate_accepted_txs) {
-                if att.epoch != epoch || att.target_hash != anchor.anchor_hash || att.target_daa_score != anchor.anchor_daa_score {
-                    continue;
-                }
-                let key = (att.bond_outpoint, att.validator_id, att.epoch);
-                if seen_parent.contains(&key) || !seen_candidate.insert(key) {
-                    continue;
-                }
-                let Some(bond) = bond_by_outpoint.get(&att.bond_outpoint) else {
-                    continue;
-                };
-                if att.validator_id != bond.validator_pubkey_hash || !is_bond_active_at(bond, anchor.anchor_daa_score) {
-                    continue;
-                }
-                let digest = stake_attestation_message(
-                    self.genesis.hash.as_byte_slice(),
-                    att.epoch,
-                    att.target_hash,
-                    att.target_daa_score,
-                    att.validator_set_commitment,
-                    att.bond_outpoint,
-                )
-                .as_bytes();
-                if matches!(
-                    verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &att.signature, ATTESTATION_MLDSA87_CONTEXT),
-                    Ok(true)
-                ) {
-                    combined_included = combined_included.saturating_add(bond.amount);
-                }
-            }
-
-            if epoch_meets_quality_floor(combined_included as u128, expected_stake as u128, dns_params.stake_event_quality_floor_bps) {
-                continue;
-            }
-
-            for att in attestations_from_accepted_txs(txs) {
-                if att.epoch != epoch || att.target_hash != anchor.anchor_hash || att.target_daa_score != anchor.anchor_daa_score {
-                    continue;
-                }
-                let key = (att.bond_outpoint, att.validator_id, att.epoch);
-                if seen_parent.contains(&key) || !seen_candidate.insert(key) {
-                    continue;
-                }
-                let Some(bond) = bond_by_outpoint.get(&att.bond_outpoint) else {
-                    continue;
-                };
-                if att.validator_id != bond.validator_pubkey_hash || !is_bond_active_at(bond, anchor.anchor_daa_score) {
-                    continue;
-                }
-                let digest = stake_attestation_message(
-                    self.genesis.hash.as_byte_slice(),
-                    att.epoch,
-                    att.target_hash,
-                    att.target_daa_score,
-                    att.validator_set_commitment,
-                    att.bond_outpoint,
-                )
-                .as_bytes();
-                if matches!(
-                    verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &att.signature, ATTESTATION_MLDSA87_CONTEXT),
-                    Ok(true)
-                ) {
-                    combined_included = combined_included.saturating_add(bond.amount);
-                }
-            }
-
-            if !epoch_meets_quality_floor(combined_included as u128, expected_stake as u128, dns_params.stake_event_quality_floor_bps)
-            {
-                return Err(MissingMandatoryAttestationInBlock(
-                    epoch,
-                    combined_included,
-                    expected_stake,
-                    dns_params.stake_event_quality_floor_bps,
-                ));
-            }
-
-            // Only the oldest deficient epoch is mandatory for this block. If the block certifies
-            // it, the next block can advance to any remaining backlog.
-            return Ok(());
-        }
-
-        Ok(())
     }
 
     /// kaspa-pq Phase 10/11 (ADR-0009 §"SlashingEvidencePayload"): the stateful

@@ -31,7 +31,6 @@ use kaspa_consensus_core::{
         TemplateTransactionSelector, TemplateTransactionSelectorFactory,
     },
     coinbase::MinerData,
-    dns_finality::MandatoryAttestationDeficit,
     errors::{block::RuleError as BlockRuleError, tx::TxRuleError},
     subnets::SUBNETWORK_ID_STAKE_ATTESTATION_SHARD,
     tx::{MutableTransaction, Transaction, TransactionId, TransactionOutput},
@@ -80,12 +79,8 @@ struct MiningSelectorFactory<'a> {
 }
 
 impl TemplateTransactionSelectorFactory for MiningSelectorFactory<'_> {
-    fn build_selector(
-        &self,
-        latest_ready_epoch: Option<u64>,
-        mandatory_deficits: &[MandatoryAttestationDeficit],
-    ) -> Box<dyn TemplateTransactionSelector> {
-        self.manager.build_selector(latest_ready_epoch, mandatory_deficits)
+    fn build_selector(&self, latest_ready_epoch: Option<u64>) -> Box<dyn TemplateTransactionSelector> {
+        self.manager.build_selector(latest_ready_epoch)
     }
 }
 
@@ -576,17 +571,10 @@ impl MiningManager {
                     return Ok(block_template.as_ref().clone());
                 }
                 Err(BuilderError::ConsensusError(BlockRuleError::TemplateBuildFailedAfterAttestationDrops(source, dropped))) => {
-                    let had_drops = !dropped.is_empty();
                     self.reconcile_attestation_template_drops(&dropped, latest_ready_epoch);
                     match *source {
                         BlockRuleError::InvalidTransactionsInNewBlock(invalid_transactions) => {
                             self.remove_invalid_block_template_transactions(invalid_transactions);
-                        }
-                        BlockRuleError::MissingMandatoryAttestationInBlock(epoch, included, expected, floor) if had_drops => {
-                            debug!(
-                                "Retrying block template after attestation cleanup for mandatory epoch {}: included stake {}/{} below floor {} bps",
-                                epoch, included, expected, floor
-                            );
                         }
                         err => {
                             warn!("Building a new block template failed after attestation cleanup: {}", err);
@@ -596,20 +584,6 @@ impl MiningManager {
                 }
                 Err(BuilderError::ConsensusError(BlockRuleError::InvalidTransactionsInNewBlock(invalid_transactions))) => {
                     self.remove_invalid_block_template_transactions(invalid_transactions);
-                }
-                Err(BuilderError::ConsensusError(BlockRuleError::MissingMandatoryAttestationInBlock(
-                    epoch,
-                    included,
-                    expected,
-                    floor,
-                ))) => {
-                    debug!(
-                        "Block template waiting for mandatory stake attestations: ready epoch {epoch}, included stake {included}/{expected} below floor {floor} bps"
-                    );
-
-                    return Err(BuilderError::ConsensusError(BlockRuleError::MissingMandatoryAttestationInBlock(
-                        epoch, included, expected, floor,
-                    )))?;
                 }
                 Err(err) => {
                     warn!("Building a new block template failed: {}", err);
@@ -724,12 +698,8 @@ impl MiningManager {
     ///
     /// `latest_ready_epoch` (when the attestation overlay is enabled) lets the selector prefer
     /// current/recent-epoch attestation shards; `None` selects with the plain frontier selector.
-    pub(crate) fn build_selector(
-        &self,
-        latest_ready_epoch: Option<u64>,
-        mandatory_deficits: &[MandatoryAttestationDeficit],
-    ) -> Box<dyn TemplateTransactionSelector> {
-        self.mempool.read().build_selector(latest_ready_epoch, mandatory_deficits)
+    pub(crate) fn build_selector(&self, latest_ready_epoch: Option<u64>) -> Box<dyn TemplateTransactionSelector> {
+        self.mempool.read().build_selector(latest_ready_epoch)
     }
 
     /// kaspa-pq DNS-finality (E4/§6.2): clear the block-template cache iff at least

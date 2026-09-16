@@ -249,26 +249,18 @@ impl TemplateTransactionSelector for SequenceSelector {
 pub struct AttestationPrioritySelector {
     /// The pre-chosen priority attestation txs (with mass), yielded on the first call.
     priority: Vec<SequenceSelectorTransaction>,
-    /// Mandatory same-deficit refill candidates, always searched before ordinary txs.
-    mandatory_refill: SequenceSelectorInput,
     /// Non-priority candidates, searched in deterministic frontier order for refills.
     remainder: SequenceSelectorInput,
-    /// Mandatory refill txs selected on the previous call; drained on the next call.
-    mandatory_refill_selected_vec: Vec<SequenceSelectorSelection>,
     /// Remainder txs selected on the previous call; drained from `remainder` on the next call.
     remainder_selected_vec: Vec<SequenceSelectorSelection>,
     /// Whether the priority batch has already been emitted (it is emitted exactly once).
     priority_emitted: bool,
     /// Mass of selected priority txs that survived (were not rejected/dropped).
     selected_priority_mass: u64,
-    /// Mass of selected mandatory refill txs that survived (were not rejected/dropped).
-    selected_mandatory_refill_mass: u64,
     /// Mass of selected remainder txs that survived (were not rejected/dropped).
     selected_remainder_mass: u64,
     /// Map of currently-selected priority tx ids -> `(mass, is_shard)`.
     priority_selected_map: HashMap<TransactionId, (u64, bool)>,
-    /// Map of currently-selected mandatory refill tx ids -> `(mass, is_shard)`.
-    mandatory_refill_selected_map: Option<HashMap<TransactionId, (u64, bool)>>,
     /// Map of currently-selected remainder tx ids -> `(mass, is_shard)`. Built lazily for rejects.
     remainder_selected_map: Option<HashMap<TransactionId, (u64, bool)>>,
     /// Number of validation rejections (classifier drops via `reject_selection_for_refill` do not count).
@@ -280,30 +272,16 @@ pub struct AttestationPrioritySelector {
 }
 
 impl AttestationPrioritySelector {
-    #[cfg(test)]
     pub fn new(priority: Vec<SequenceSelectorTransaction>, remainder: SequenceSelectorInput, policy: Policy) -> Self {
-        Self::new_with_refill(priority, SequenceSelectorInput::default(), remainder, policy)
-    }
-
-    pub fn new_with_refill(
-        priority: Vec<SequenceSelectorTransaction>,
-        mandatory_refill: SequenceSelectorInput,
-        remainder: SequenceSelectorInput,
-        policy: Policy,
-    ) -> Self {
-        let overall_candidates = priority.len() + mandatory_refill.inner.len() + remainder.inner.len();
+        let overall_candidates = priority.len() + remainder.inner.len();
         Self {
             priority,
-            mandatory_refill,
             remainder,
-            mandatory_refill_selected_vec: Vec::with_capacity(overall_candidates),
             remainder_selected_vec: Vec::with_capacity(overall_candidates),
             priority_emitted: false,
             selected_priority_mass: 0,
-            selected_mandatory_refill_mass: 0,
             selected_remainder_mass: 0,
             priority_selected_map: Default::default(),
-            mandatory_refill_selected_map: Default::default(),
             remainder_selected_map: Default::default(),
             validation_rejections: 0,
             overall_candidates,
@@ -314,7 +292,7 @@ impl AttestationPrioritySelector {
 
     #[inline]
     fn selected_mass(&self) -> u64 {
-        self.selected_priority_mass.saturating_add(self.selected_mandatory_refill_mass).saturating_add(self.selected_remainder_mass)
+        self.selected_priority_mass.saturating_add(self.selected_remainder_mass)
     }
 
     #[inline]
@@ -373,21 +351,11 @@ impl AttestationPrioritySelector {
     fn select_remainder(&mut self, txs: &mut Vec<Transaction>) {
         let priority_mass = self.selected_priority_mass;
         Self::select_sequence_lane(
-            &mut self.mandatory_refill,
-            &mut self.mandatory_refill_selected_vec,
-            &mut self.mandatory_refill_selected_map,
-            &mut self.selected_mandatory_refill_mass,
-            priority_mass.saturating_add(self.selected_remainder_mass),
-            &mut self.shard_cap,
-            &self.policy,
-            txs,
-        );
-        Self::select_sequence_lane(
             &mut self.remainder,
             &mut self.remainder_selected_vec,
             &mut self.remainder_selected_map,
             &mut self.selected_remainder_mass,
-            priority_mass.saturating_add(self.selected_mandatory_refill_mass),
+            priority_mass,
             &mut self.shard_cap,
             &self.policy,
             txs,
@@ -400,17 +368,6 @@ impl AttestationPrioritySelector {
     fn remove_selection(&mut self, tx_id: TransactionId) {
         if let Some((mass, is_shard)) = self.priority_selected_map.remove(&tx_id) {
             self.selected_priority_mass = self.selected_priority_mass.saturating_sub(mass);
-            if is_shard {
-                self.shard_cap.release(mass);
-            }
-            return;
-        }
-
-        let selected_map = self
-            .mandatory_refill_selected_map
-            .get_or_insert_with(|| self.mandatory_refill_selected_vec.iter().map(|tx| (tx.tx_id, (tx.mass, tx.is_shard))).collect());
-        if let Some((mass, is_shard)) = selected_map.remove(&tx_id) {
-            self.selected_mandatory_refill_mass = self.selected_mandatory_refill_mass.saturating_sub(mass);
             if is_shard {
                 self.shard_cap.release(mass);
             }

@@ -2186,6 +2186,15 @@ impl Params {
         // below that fence could not run on any network (every overlay ships the fence at the
         // overlay's own activation) and is gone, so an overlay whose fence sits above its
         // activation would leave collateral spendable in between. Refused rather than shipped.
+        // Hard mandatory attestation inclusion is removed: no shipped overlay ever armed it, and a
+        // network that names a height would run a rule no code enforces.
+        if let Some(dns) = self.dns_params.as_ref()
+            && dns.mandatory_attestation_inclusion_daa_score != u64::MAX
+        {
+            return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
+                "mandatory attestation inclusion is removed — the overlay's inclusion fence must stay unset (u64::MAX)",
+            ));
+        }
         if let Some(dns) = self.dns_params.as_ref()
             && dns.bond_spend_gate_mergeset_activation_daa_score > dns.dns_activation_daa_score
         {

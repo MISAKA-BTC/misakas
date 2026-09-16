@@ -1119,7 +1119,7 @@ mod tests {
 
         // Collect all parent transactions for the next block template.
         // They are ready since they have no parents in the mempool.
-        let transactions = mining_manager.build_selector(None, &[]).select_transactions();
+        let transactions = mining_manager.build_selector(None).select_transactions();
         assert_eq!(
             TX_PAIRS_COUNT,
             transactions.len(),
@@ -1295,7 +1295,7 @@ mod tests {
         assert_eq!(counters.attestation_quarantined_counts.load(std::sync::atomic::Ordering::Relaxed), 1);
         assert_eq!(counters.attestation_quarantined_sample.load(std::sync::atomic::Ordering::Relaxed), 1);
 
-        let selected = mining_manager.build_selector(Some(0), &[]).select_transactions();
+        let selected = mining_manager.build_selector(Some(0)).select_transactions();
         assert!(selected.iter().all(|tx| tx.id() != shard_id), "quarantined shard must be held out of the next selector attempt");
     }
 

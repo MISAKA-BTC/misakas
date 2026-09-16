@@ -13,9 +13,8 @@ use crate::{
     coinbase::MinerData,
     daa_score_timestamp::DaaScoreTimestamp,
     dns_finality::{
-        ActiveValidatorSet, AttestationQualityDeficit, ComputeStatusView, DnsConfirmation, MandatoryAttestationDeficit,
-        PendingComputeVerdict, PrecommitDuty, StakeBondPage, StakeBondQuery, StakeBondRecord, ValidatorAttestationTarget,
-        VltStatusView,
+        ActiveValidatorSet, AttestationQualityDeficit, ComputeStatusView, DnsConfirmation, PendingComputeVerdict, PrecommitDuty,
+        StakeBondPage, StakeBondQuery, StakeBondRecord, ValidatorAttestationTarget, VltStatusView,
     },
     errors::{
         block::{BlockProcessResult, RuleError},
@@ -141,7 +140,7 @@ pub trait ConsensusApi: Send + Sync {
         tx_selector_factory: &dyn TemplateTransactionSelectorFactory,
         build_mode: TemplateBuildMode,
     ) -> Result<BlockTemplate, RuleError> {
-        let tx_selector = tx_selector_factory.build_selector(None, &[]);
+        let tx_selector = tx_selector_factory.build_selector(None);
         self.build_block_template(miner_data, tx_selector, build_mode)
     }
 
@@ -154,7 +153,7 @@ pub trait ConsensusApi: Send + Sync {
         build_mode: TemplateBuildMode,
         evm_template_data: crate::evm::EvmTemplateData,
     ) -> Result<BlockTemplate, RuleError> {
-        let tx_selector = tx_selector_factory.build_selector(None, &[]);
+        let tx_selector = tx_selector_factory.build_selector(None);
         self.build_block_template_with_evm(miner_data, tx_selector, build_mode, evm_template_data)
     }
 
@@ -486,21 +485,9 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
-    /// kaspa-pq DNS optional hard-inclusion diagnostic: deficient canonical epochs for the current
-    /// selected parent, including the anchor tuple, already-credited `(bond, validator, epoch)` keys,
-    /// active validators, and stake delta still needed to reach the quality floor. Shipped presets
-    /// keep the hard-inclusion fence inert, so this is empty there. This legacy API is not
-    /// template-exact because it cannot include candidate accepted txs from a future template
-    /// snapshot. Mining must use [`Self::build_block_template_with_selector_factory`] so consensus
-    /// can pass the selector deficits derived from the exact template snapshot.
-    fn get_mandatory_attestation_deficits(&self) -> Vec<MandatoryAttestationDeficit> {
-        Vec::new()
-    }
-
     /// kaspa-pq liveness-first attestation diagnostic: ready canonical epochs whose included
-    /// attestation stake is below the network quality floor. Unlike
-    /// [`Self::get_mandatory_attestation_deficits`], this remains populated on shipped presets
-    /// where missing attestations are not a base-chain validity failure.
+    /// attestation stake is below the network quality floor. Missing attestations are never a
+    /// base-chain validity failure (hard inclusion is removed), so this is a monitoring view only.
     fn get_attestation_quality_deficits(&self) -> Vec<AttestationQualityDeficit> {
         Vec::new()
     }

@@ -166,13 +166,9 @@ impl Mempool {
     }
 
     /// Dynamically builds a transaction selector based on the specific state of the ready transactions frontier
-    pub(crate) fn build_selector(
-        &self,
-        latest_ready_epoch: Option<u64>,
-        mandatory_deficits: &[kaspa_consensus_core::dns_finality::MandatoryAttestationDeficit],
-    ) -> Box<dyn TemplateTransactionSelector> {
+    pub(crate) fn build_selector(&self, latest_ready_epoch: Option<u64>) -> Box<dyn TemplateTransactionSelector> {
         let _sw = Stopwatch::<10>::with_threshold("build_selector op");
-        self.transaction_pool.build_selector(latest_ready_epoch, mandatory_deficits)
+        self.transaction_pool.build_selector(latest_ready_epoch)
     }
 
     /// Builds a feerate estimator based on internal state of the ready transactions frontier

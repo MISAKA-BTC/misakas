@@ -62,10 +62,9 @@ use kaspa_consensus_core::{
     daa_score_timestamp::DaaScoreTimestamp,
     dns_finality::{
         ActiveValidatorSet, AttestationQualityDeficit, CanonicalLaggedEpochAnchor, ComputeStatusView, DnsConfirmation,
-        MandatoryAttestationContributionKey, MandatoryAttestationDeficit, MandatoryAttestationValidator, PendingComputeVerdict,
-        PrecommitDuty, StakeBondPage, StakeBondQuery, StakeBondRecord, ValidatorAttestationTarget, ValidatorRecord, VltStatusView,
-        dns_confirmation_from_state, epoch_meets_quality_floor, is_bond_active_at, paginate_stake_bonds,
-        ready_epoch_from_tip_blue_score, required_stake_for_quality_floor, stake_attestation_message,
+        PendingComputeVerdict, PrecommitDuty, StakeBondPage, StakeBondQuery, StakeBondRecord, ValidatorAttestationTarget,
+        ValidatorRecord, VltStatusView, dns_confirmation_from_state, epoch_meets_quality_floor, is_bond_active_at,
+        paginate_stake_bonds, ready_epoch_from_tip_blue_score, required_stake_for_quality_floor, stake_attestation_message,
     },
     errors::{
         coinbase::CoinbaseResult,
@@ -1548,8 +1547,8 @@ impl ConsensusApi for Consensus {
         // index, so owner/status filtering is a full scan; `paginate_stake_bonds`
         // applies the filters, ordering, cursor, and limit (unit-tested there).
         //
-        // Cost/exposure note: like the sibling `get_mandatory_attestation_deficits`
-        // / `get_attestation_quality_deficits`, this clones the whole store per call
+        // Cost/exposure note: like the sibling `get_attestation_quality_deficits`, this clones the
+        // whole store per call
         // (the page cap bounds the wire response, not the scan). The bond set is
         // validator-order and economically bounded on mainnet; operators should not
         // expose unauthenticated wRPC on low-`min_bond` networks, same as those ops.
@@ -1579,109 +1578,6 @@ impl ConsensusApi for Consensus {
         let mut members: Vec<_> = active.into_iter().map(|r| r.validator_id).collect();
         members.sort();
         Some(ActiveValidatorSet { epoch, pov_daa_score, active_validator_count, members })
-    }
-
-    fn get_mandatory_attestation_deficits(&self) -> Vec<MandatoryAttestationDeficit> {
-        let Some(dns_params) = self.config.params.dns_params.as_ref() else {
-            return Vec::new();
-        };
-        let virtual_daa_score = self.get_virtual_daa_score();
-        if virtual_daa_score < dns_params.dns_activation_daa_score
-            || virtual_daa_score < dns_params.mandatory_attestation_inclusion_daa_score
-            || !dns_params.dns_v3_params_consistent()
-        {
-            return Vec::new();
-        }
-
-        let sink = self.get_sink();
-        let anchors = self.virtual_processor.canonical_anchors_in_window(sink, dns_params, dns_params.stake_score_window_blue_score);
-        if anchors.is_empty() {
-            return Vec::new();
-        }
-
-        let bonds: Vec<StakeBondRecord> =
-            self.storage.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
-        let (contributions, _) = self.virtual_processor.collect_stake_contributions_v2(
-            sink,
-            None,
-            &bonds,
-            self.config.params.genesis.hash.as_byte_slice(),
-            dns_params,
-            // Stake-denominated inclusion policy, not finality voting weight: these deficits are
-            // measured against `min_active_stake_sompi` / `required_stake_for_quality_floor`, so they
-            // stay on bonded stake regardless of the VLT fence.
-            ContributionWeight::BondedStake,
-        );
-
-        let mut seen = HashSet::new();
-        let mut signed_by_epoch: HashMap<u64, u64> = HashMap::new();
-        let mut contributed_by_epoch: HashMap<u64, Vec<MandatoryAttestationContributionKey>> = HashMap::new();
-        for c in contributions {
-            let key = (c.bond_outpoint, c.validator_id, c.epoch);
-            if !seen.insert(key) {
-                continue;
-            }
-            let entry = signed_by_epoch.entry(c.epoch).or_insert(0);
-            *entry = entry.saturating_add(c.signed_weight as u64);
-            contributed_by_epoch.entry(c.epoch).or_default().push(MandatoryAttestationContributionKey {
-                bond_outpoint: c.bond_outpoint,
-                validator_id: c.validator_id,
-                epoch: c.epoch,
-            });
-        }
-
-        let mut deficits = Vec::new();
-        for (&epoch, anchor) in &anchors {
-            let mut active_validators: Vec<_> = bonds
-                .iter()
-                .filter(|bond| is_bond_active_at(bond, anchor.anchor_daa_score))
-                .map(|bond| MandatoryAttestationValidator {
-                    bond_outpoint: bond.bond_outpoint,
-                    validator_id: bond.validator_pubkey_hash,
-                    stake_sompi: bond.amount,
-                })
-                .collect();
-            active_validators.sort_by(|a, b| {
-                a.validator_id
-                    .cmp(&b.validator_id)
-                    .then(a.bond_outpoint.transaction_id.cmp(&b.bond_outpoint.transaction_id))
-                    .then(a.bond_outpoint.index.cmp(&b.bond_outpoint.index))
-            });
-
-            let expected_stake = active_validators.iter().fold(0u64, |acc, v| acc.saturating_add(v.stake_sompi));
-            if expected_stake == 0
-                || expected_stake < dns_params.min_active_stake_sompi
-                || (active_validators.len() as u32) < dns_params.min_active_validators
-            {
-                continue;
-            }
-
-            let parent_included_stake = signed_by_epoch.get(&epoch).copied().unwrap_or(0);
-            if epoch_meets_quality_floor(
-                parent_included_stake as u128,
-                expected_stake as u128,
-                dns_params.stake_event_quality_floor_bps,
-            ) {
-                continue;
-            }
-
-            let required_stake = required_stake_for_quality_floor(expected_stake, dns_params.stake_event_quality_floor_bps);
-            deficits.push(MandatoryAttestationDeficit {
-                epoch,
-                target_hash: anchor.anchor_hash,
-                target_daa_score: anchor.anchor_daa_score,
-                validator_set_commitment: kaspa_consensus_core::Hash64::default(),
-                pre_body_included_stake: parent_included_stake,
-                expected_stake,
-                required_stake,
-                required_stake_delta: required_stake.saturating_sub(parent_included_stake),
-                quality_floor_bps: dns_params.stake_event_quality_floor_bps,
-                already_contributed: contributed_by_epoch.remove(&epoch).unwrap_or_default(),
-                active_validators,
-            });
-        }
-
-        deficits
     }
 
     fn get_attestation_quality_deficits(&self) -> Vec<AttestationQualityDeficit> {
