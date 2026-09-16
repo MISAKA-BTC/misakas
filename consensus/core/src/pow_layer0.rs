@@ -346,7 +346,9 @@ pub fn is_palw_attempt_algo_id(algo_id: u8) -> bool {
 /// [`algo_id_derives_no_block_level`].
 #[inline]
 pub fn algo_id_carries_no_chain_position(algo_id: u8) -> bool {
-    algo_id == POW_ALGO_ID_PALW_RECEIPT_V3
+    // ADR-0125: a round block buys neither — it is never blue and never a selected parent, so no
+    // block's blue work or level may be minted out of the lane's signatures either.
+    algo_id == POW_ALGO_ID_PALW_RECEIPT_V3 || algo_id == POW_ALGO_ID_PALW_ROUND_V1
 }
 
 /// **Block LEVEL only** — the pruning-proof hierarchy, without the fork-choice half.
@@ -399,7 +401,9 @@ pub fn algo_id_derives_no_block_level(algo_id: u8) -> bool {
 /// `Params::palw_receipt_rows_unpriced` was judged under.
 #[inline]
 pub fn algo_id_is_priced_by_bits(algo_id: u8) -> bool {
-    algo_id != POW_ALGO_ID_HEARTBEAT_V1
+    // ADR-0125: a round block never enters a window at all (it is outside the DAA set), and its
+    // target is a constant besides — no algo-10 header predates the id, so this moves no history.
+    algo_id != POW_ALGO_ID_HEARTBEAT_V1 && algo_id != POW_ALGO_ID_PALW_ROUND_V1
 }
 
 /// **ADR-0083 Decision 1's predicate, as the decision states it**: a row counts iff its lane
@@ -408,7 +412,7 @@ pub fn algo_id_is_priced_by_bits(algo_id: u8) -> bool {
 /// other lane is priced. In force past `Params::palw_receipt_rows_unpriced`.
 #[inline]
 pub fn algo_id_is_priced_by_bits_v2(algo_id: u8) -> bool {
-    algo_id != POW_ALGO_ID_HEARTBEAT_V1 && algo_id != POW_ALGO_ID_PALW_RECEIPT_V3
+    algo_id != POW_ALGO_ID_HEARTBEAT_V1 && algo_id != POW_ALGO_ID_PALW_RECEIPT_V3 && algo_id != POW_ALGO_ID_PALW_ROUND_V1
 }
 
 /// Output width of the `algo_id = 5` tag:
@@ -599,6 +603,31 @@ pub const PALW_HEARTBEAT_MAX_PER_MERGESET: u64 = 4;
 /// start — the fence declares the price it believes it is arming.
 pub const PALW_ATTEMPT_BLUE_WORK_LOG2: u32 = 20;
 
+/// **ADR-0125: the execution lane's algorithm id — a round block.**
+///
+/// A round block is a fee-only block of the execution lane: it carries transactions beside the
+/// PALW chain and is never part of it. It is never a selected parent, never blue, never counted in
+/// the DAA score and never priced by `bits`, so every window, retarget and depth the chain reads
+/// is what it would be without the lane. Its admission is a permit — a bond drawn for the round
+/// from the schedule the chain derives out of finalized attempts — carried in `palw_commitment` as
+/// a signed [`crate::palw_execution_lane_v1::PalwExecEnvelopeV1`], and its PoW is a fixed
+/// network-constant target ([`PALW_ROUND_WORK_LOG2`]) that only prices a header's existence.
+///
+/// **Its Layer-1 tag is algo-3's**, as the heartbeat's is: a self-verifying hash lane. The id is
+/// inside the Layer-0 digest, so a solution for one lane is never a solution for another.
+///
+/// Accepted only past `Params::palw_execution_lane`, which the header processor ORs in exactly as
+/// it does the heartbeat lane. No shipped preset arms it.
+pub const POW_ALGO_ID_PALW_ROUND_V1: u8 = 10;
+
+/// **The round lane's price, as a work exponent — a network CONSTANT, never `header.bits`.**
+///
+/// 2¹⁶ hash evaluations are a few milliseconds of one core, so a permit holder pays it inside its
+/// one-second round even at the lane's widest stage. It does not meter the lane — the permit does
+/// — it makes every round block cost something to exist, so a header that is not worth a few
+/// milliseconds is not worth relaying either.
+pub const PALW_ROUND_WORK_LOG2: u32 = 16;
+
 /// **The attempt lane's Layer-0 TARGET, as a network constant** (ADR-0071 Decision 1).
 ///
 /// [`PALW_ATTEMPT_BLUE_WORK_LOG2`] took the lane's fork-choice WEIGHT off `header.bits`. This takes
@@ -717,6 +746,9 @@ pub fn is_palw_algo_id(algo_id: u8) -> bool {
         || algo_id == POW_ALGO_ID_PALW_OLLAMA
         || is_palw_attempt_algo_id(algo_id)
         || algo_id == POW_ALGO_ID_PALW_RECEIPT_V3
+        // ADR-0125: a round block carries its permit envelope in `palw_commitment`, which must be
+        // identity-visible (and shape-checked) exactly as every other PALW carriage is.
+        || algo_id == POW_ALGO_ID_PALW_ROUND_V1
 }
 
 /// MISAKA ADR-0038: wire cap for `Header::palw_commitment` — the PBC1 envelope (4 magic +
@@ -856,6 +888,14 @@ pub fn check_palw_commitment_shape_at(
     if algo_id == POW_ALGO_ID_PALW_RECEIPT_V3 {
         return crate::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3::decode(palw_commitment)
             .map(|_| ())
+            .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() });
+    }
+    if algo_id == POW_ALGO_ID_PALW_ROUND_V1 {
+        // ADR-0125: the permit envelope is REQUIRED — a round block without one names no permit.
+        // Shape only here; the round, the signature and the network are the stateless carriage
+        // check's, and whether the bond holds the permit is the merging block's.
+        return crate::palw_execution_lane_v1::PalwExecEnvelopeV1::decode(palw_commitment)
+            .and_then(|envelope| envelope.validate_shape())
             .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() });
     }
     if !bound {
@@ -1074,6 +1114,9 @@ pub fn check_algo_id_known(algo_id: u8) -> Result<(), PowLayer0Error> {
         // Whether a header carrying it is VALID is `Params::palw_heartbeat`'s question, asked in
         // `check_pow_algo_id`; conflating the two is what the triple gate did.
         || algo_id == POW_ALGO_ID_HEARTBEAT_V1
+        // ADR-0125: the round lane shares the heartbeat's finalizer arm, so this binary derives its
+        // tag. Whether a network ACCEPTS it is `Params::palw_execution_lane`'s question.
+        || algo_id == POW_ALGO_ID_PALW_ROUND_V1
     {
         Ok(())
     } else {
@@ -1720,11 +1763,13 @@ mod tests {
             // `Params::palw_attempt_activation`'s question, one level up, and every shipped preset
             // answers no.
             POW_ALGO_ID_PALW_EXEC_V3,
+            // 10 joined with ADR-0125's round lane, in the commit that shares the heartbeat's arm.
+            POW_ALGO_ID_PALW_ROUND_V1,
         ] {
             assert!(check_algo_id_known(ok).is_ok(), "algo_id {ok} must be known");
         }
-        // 9 left this list when it was assigned; 11 stands in for the next unassigned id.
-        for bad in [0u8, 10, 11, 0xff] {
+        // 9 and 10 left this list when they were assigned; 11 and 12 stand in for the next unassigned ids.
+        for bad in [0u8, 11, 12, 0xff] {
             assert_eq!(check_algo_id_known(bad), Err(PowLayer0Error::UnknownAlgoId(bad)));
         }
 

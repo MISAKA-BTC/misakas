@@ -396,6 +396,39 @@ pub struct PalwHeartbeatV1 {
     pub max_per_mergeset: u64,
 }
 
+/// **ADR-0125: the execution lane — round blocks beside the chain, admitted by permit.**
+///
+/// Past `activation` a `ConsensusV2` network accepts algo-10 round blocks
+/// ([`crate::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1`]). A round block has exactly one non-round parent
+/// (its anchor, which is its selected parent), is always red, is never a selected parent and never
+/// counts in the DAA score, so every window, retarget and depth of the chain reads what it would
+/// read without the lane. A chain block that merges one accepts its transactions when the block's
+/// permit — drawn for its one-second round from the span's schedule of finalized attempts — is
+/// found in the chain block's parent state, and pays its fees to the permit holder's payout.
+///
+/// The four values beside the activation are the lane's shape, and like every companion value
+/// they are hashed into `consensus_params_id` and invisible to the fence visitor: arming or
+/// widening the lane is a coordinated change. Widening (1 → 2 → 5 → 10 permits a round) is the
+/// same struct with a larger `permits_per_round` behind a new activation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwExecutionLaneV1 {
+    /// When the lane opens.
+    pub activation: ForkActivation,
+    /// Permits per one-second round — the lane's blocks per second. At most
+    /// [`crate::palw_execution_lane_v1::PALW_EXEC_MAX_PERMITS_PER_ROUND_V1`].
+    pub permits_per_round: u16,
+    /// The most round blocks one mergeset may hold. Counted apart from `mergeset_size_limit`,
+    /// which keeps bounding the chain's own blocks exactly as before.
+    pub max_per_mergeset: u64,
+    /// The DAA span of one schedule: the attempts finalized in span `s` decide the permits of span
+    /// `s + 1`.
+    pub schedule_span_daa: u64,
+    /// How many rounds below the newest round a merging block has accepted a round block may still
+    /// be accepted — the grace for propagation. Older round blocks are stale: merged, never
+    /// accepted.
+    pub late_rounds: u64,
+}
+
 /// **ADR-0066 Decision 3's parameter (finding F2), closed by ADR-0068 Phase 1: the attempt lane's
 /// fork-choice work leaves `calc_work(header.bits)`.**
 ///
@@ -1200,6 +1233,11 @@ pub struct Params {
     /// is paid at the schedule. Resolved at the block's DAA. `None` on every shipped preset; a
     /// mainnet card states it from genesis.
     pub palw_work_priced_reward: Option<ForkActivation>,
+
+    /// **ADR-0125: the execution lane** — see [`PalwExecutionLaneV1`]. Resolved at a round block's
+    /// own DAA score for its admission, and at the merging block's for everything the chain does
+    /// with it. `None` on every shipped preset.
+    pub palw_execution_lane: Option<PalwExecutionLaneV1>,
 
     /// **ADR-0044 Decision 9's two advertised caps, enforced** (mainnet audit 2026-09-06, L-2).
     /// `None` on every shipped preset, so the behaviour is byte-identical to not having the field.
@@ -2695,6 +2733,37 @@ impl Params {
                  network constant and the fence must name the same one",
             ));
         }
+        // ADR-0125: the lane's shape must be one this binary can run. Every bound is a consensus
+        // number the header, the fold and the coinbase all read, so an unrunnable value refuses to
+        // start rather than splitting the first block that meets it.
+        if let Some(lane) = self.palw_execution_lane
+            && lane.activation != ForkActivation::never()
+        {
+            use crate::palw_execution_lane_v1::{
+                PALW_EXEC_MAX_LATE_ROUNDS_V1, PALW_EXEC_MAX_PER_MERGESET_BOUND_V1, PALW_EXEC_MAX_PERMITS_PER_ROUND_V1,
+            };
+            if lane.permits_per_round == 0 || lane.permits_per_round > PALW_EXEC_MAX_PERMITS_PER_ROUND_V1 {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_execution_lane declares a permits_per_round outside 1..=10: a round block's permit index is \
+                     bounded by the widest round this binary implements",
+                ));
+            }
+            if lane.max_per_mergeset < lane.permits_per_round as u64 || lane.max_per_mergeset > PALW_EXEC_MAX_PER_MERGESET_BOUND_V1 {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_execution_lane declares a max_per_mergeset below one round or above the bound the coinbase \
+                     carries: a merging block could never hold a full round, or could owe more outputs than it may carry",
+                ));
+            }
+            if lane.schedule_span_daa == 0 {
+                return Err(PalwModeV2Error::Invalid("palw_execution_lane declares a zero schedule span"));
+            }
+            if lane.late_rounds > PALW_EXEC_MAX_LATE_ROUNDS_V1 {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_execution_lane declares more late rounds than the permit ledger keeps: a duplicate permit \
+                     inside the grace would be accepted twice",
+                ));
+            }
+        }
         if let Some(attempt_work) = self.palw_attempt_work
             && attempt_work.activation != ForkActivation::never()
             && attempt_work.work_log2 != crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2
@@ -3442,6 +3511,9 @@ impl Params {
         if self.palw_work_priced_reward == Some(ForkActivation::never()) {
             self.palw_work_priced_reward = None;
         }
+        if self.palw_execution_lane.is_some_and(|lane| lane.activation == ForkActivation::never()) {
+            self.palw_execution_lane = None;
+        }
         if self.palw_fp_ruleset_caps == Some(ForkActivation::never()) {
             self.palw_fp_ruleset_caps = None;
         }
@@ -3906,6 +3978,20 @@ impl Params {
         self.palw_work_priced_reward_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
+    /// ADR-0125: the execution lane with the mode folded in — a round lane beside a chain that has no
+    /// finalized attempts to schedule it from is meaningless, so only `ConsensusV2` answers.
+    pub fn palw_execution_lane_fence(&self) -> Option<PalwExecutionLaneV1> {
+        match (&self.palw_consensus_mode, self.palw_execution_lane) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(lane)) => Some(lane),
+            _ => None,
+        }
+    }
+
+    /// The lane's shape where it is open at `daa_score`.
+    pub fn palw_execution_lane_at(&self, daa_score: u64) -> Option<PalwExecutionLaneV1> {
+        self.palw_execution_lane_fence().filter(|lane| lane.activation.is_active(daa_score))
+    }
+
     /// **ADR-0124's two numbers the draw needs past the panel-economy fence**, from the bundle's
     /// own state params: the panel floor (ten producer floors) and the exposure ceiling every
     /// reservation shares. `None` where the fence is dormant at `daa_score` or no bundle exists.
@@ -4117,6 +4203,7 @@ impl Params {
             palw_epoch_budget_release,
             palw_panel_economy,
             palw_work_priced_reward,
+            palw_execution_lane,
             palw_fp_ruleset_caps,
             palw_model_market,
             palw_model_lines,
@@ -4180,6 +4267,7 @@ impl Params {
             ("palw_epoch_budget_release", *palw_epoch_budget_release),
             ("palw_panel_economy", *palw_panel_economy),
             ("palw_work_priced_reward", *palw_work_priced_reward),
+            ("palw_execution_lane", palw_execution_lane.map(|lane| lane.activation)),
             ("palw_fp_ruleset_caps", *palw_fp_ruleset_caps),
             ("palw_model_market", *palw_model_market),
             ("palw_model_lines", *palw_model_lines),
@@ -4306,6 +4394,14 @@ impl Params {
             h.write(b"palw_heartbeat_price");
             h.write(beat.work_log2.to_le_bytes());
             h.write(beat.max_per_mergeset.to_le_bytes());
+        }
+        // ADR-0125: the lane's shape beside its height — Some-only, like the heartbeat's price.
+        if let Some(lane) = self.palw_execution_lane {
+            h.write(b"palw_execution_lane_shape");
+            h.write(lane.permits_per_round.to_le_bytes());
+            h.write(lane.max_per_mergeset.to_le_bytes());
+            h.write(lane.schedule_span_daa.to_le_bytes());
+            h.write(lane.late_rounds.to_le_bytes());
         }
         if let Some(attempt) = self.palw_attempt_work {
             h.write(b"palw_attempt_work_price");
@@ -4451,6 +4547,10 @@ impl Params {
             h.write(b"palw_work_priced_reward");
             h.write(activation.daa_score().to_le_bytes());
         }
+        if let Some(lane) = self.palw_execution_lane {
+            h.write(b"palw_execution_lane");
+            h.write(lane.activation.daa_score().to_le_bytes());
+        }
         if let Some(activation) = self.palw_fp_ruleset_caps {
             h.write(b"palw_fp_ruleset_caps");
             h.write(activation.daa_score().to_le_bytes());
@@ -4593,6 +4693,7 @@ impl Params {
             palw_epoch_budget_release,
             palw_panel_economy,
             palw_work_priced_reward,
+            palw_execution_lane,
             palw_fp_ruleset_caps,
             palw_heartbeat_transparent,
             palw_share_growth_final,
@@ -4963,6 +5064,10 @@ impl Params {
         if let Some(activation) = palw_work_priced_reward.as_mut() {
             fork(activation, visit);
         }
+        // ADR-0125: activation only — the lane's shape is a value beside the fence, not a fence.
+        if let Some(lane) = palw_execution_lane.as_mut() {
+            fork(&mut lane.activation, visit);
+        }
         if let Some(activation) = palw_fp_ruleset_caps.as_mut() {
             fork(activation, visit);
         }
@@ -5207,6 +5312,7 @@ impl Params {
             palw_epoch_budget_release,
             palw_panel_economy,
             palw_work_priced_reward,
+            palw_execution_lane,
             palw_fp_ruleset_caps,
             palw_heartbeat_transparent,
             palw_share_growth_final,
@@ -5639,6 +5745,16 @@ impl Params {
             h.write(b"palw_work_priced_reward");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ADR-0125: Some-only, so every preset that leaves the lane closed fingerprints exactly as a
+        // build without the field.
+        if let Some(lane) = palw_execution_lane {
+            h.write(b"palw_execution_lane/v1");
+            h.write(lane.activation.daa_score().to_le_bytes());
+            h.write(lane.permits_per_round.to_le_bytes());
+            h.write(lane.max_per_mergeset.to_le_bytes());
+            h.write(lane.schedule_span_daa.to_le_bytes());
+            h.write(lane.late_rounds.to_le_bytes());
+        }
         if let Some(activation) = palw_fp_ruleset_caps {
             h.write(b"palw_fp_ruleset_caps");
             h.write(activation.daa_score().to_le_bytes());
@@ -5987,6 +6103,7 @@ impl Params {
             palw_epoch_budget_release: self.palw_epoch_budget_release,
             palw_panel_economy: self.palw_panel_economy,
             palw_work_priced_reward: self.palw_work_priced_reward,
+            palw_execution_lane: self.palw_execution_lane,
             palw_fp_ruleset_caps: self.palw_fp_ruleset_caps,
             palw_heartbeat_transparent: self.palw_heartbeat_transparent,
             palw_share_growth_final: self.palw_share_growth_final,
@@ -6956,6 +7073,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_epoch_budget_release: None,
     palw_panel_economy: None,
     palw_work_priced_reward: None,
+    palw_execution_lane: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
@@ -7139,6 +7257,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_epoch_budget_release: None,
     palw_panel_economy: None,
     palw_work_priced_reward: None,
+    palw_execution_lane: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
@@ -7304,6 +7423,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_epoch_budget_release: None,
     palw_panel_economy: None,
     palw_work_priced_reward: None,
+    palw_execution_lane: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
@@ -11773,6 +11893,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_epoch_budget_release: None,
     palw_panel_economy: None,
     palw_work_priced_reward: None,
+    palw_execution_lane: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,

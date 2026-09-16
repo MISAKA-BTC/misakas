@@ -52,6 +52,14 @@ pub const PALW_EXEC_MAX_DOMAINS_V1: usize = 32;
 /// bond key. Bounds the schedule's bytes in the state root and a draw's work.
 pub const PALW_EXEC_MAX_BONDS_PER_DOMAIN_V1: usize = 64;
 
+/// The most rounds of grace a network may give a late round block (`PalwExecutionLaneV1::late_rounds`)
+/// — the permit ledger keeps one entry per round inside the grace, so this bounds its bytes.
+pub const PALW_EXEC_MAX_LATE_ROUNDS_V1: u64 = 64;
+
+/// The most round blocks any network may let one mergeset hold
+/// (`PalwExecutionLaneV1::max_per_mergeset`): ten rounds a second for four hundred seconds.
+pub const PALW_EXEC_MAX_PER_MERGESET_BOUND_V1: u64 = 4_096;
+
 /// The envelope's wire version.
 pub const PALW_EXEC_ENVELOPE_VERSION_V1: u8 = 1;
 
@@ -440,12 +448,19 @@ pub struct PalwExecEnvelopeV1 {
     pub signature: Vec<u8>,
 }
 
-/// `H(domain ‖ network ‖ pre-pow hash ‖ timestamp ‖ round ‖ permit index ‖ bond)` — what the
-/// permit holder signs.
+/// `H(domain ‖ network ‖ pre-pow hash ‖ timestamp ‖ nonce ‖ round ‖ permit index ‖ bond)` — what
+/// the permit holder signs, after it has solved the header.
+///
+/// **The nonce is signed.** The pre-PoW hash zeroes the nonce and the timestamp, and the envelope
+/// is outside the PoW pre-image while inside the block identity. A signature over the pre-PoW hash
+/// alone would let anyone re-solve the header under another nonce — a few milliseconds at the lane's
+/// constant target — and re-announce the signed envelope as a distinct valid block, as often as they
+/// liked. Signing the nonce leaves that to the permit holder alone.
 pub fn palw_exec_signing_message_v1(
     network_domain: Hash64,
     pre_pow_hash: Hash64,
     timestamp_ms: u64,
+    nonce: u64,
     round: u64,
     permit_index: u16,
     bond: &PalwBondKeyV2,
@@ -454,6 +469,7 @@ pub fn palw_exec_signing_message_v1(
     state.update(network_domain.as_byte_slice());
     state.update(pre_pow_hash.as_byte_slice());
     state.update(&timestamp_ms.to_le_bytes());
+    state.update(&nonce.to_le_bytes());
     state.update(&round.to_le_bytes());
     state.update(&permit_index.to_le_bytes());
     update_bond(&mut state, bond);
@@ -506,12 +522,15 @@ impl PalwExecEnvelopeV1 {
     }
 
     /// **The header stage's whole check**: shape, network, the round recomputed from the header's
-    /// own timestamp, and the signature over the header position under the carried key.
+    /// own timestamp, and the signature over the header position (nonce included) under the
+    /// carried key.
+    #[allow(clippy::too_many_arguments)]
     pub fn validate_stateless<V>(
         &self,
         network_domain: Hash64,
         pre_pow_hash: Hash64,
         timestamp_ms: u64,
+        nonce: u64,
         genesis_timestamp_ms: u64,
         verify_mldsa87: V,
     ) -> Result<(), PalwExecEnvelopeError>
@@ -526,8 +545,15 @@ impl PalwExecEnvelopeV1 {
         if self.round != actual {
             return Err(PalwExecEnvelopeError::RoundMismatch { declared: self.round, actual });
         }
-        let message =
-            palw_exec_signing_message_v1(network_domain, pre_pow_hash, timestamp_ms, self.round, self.permit_index, &self.bond);
+        let message = palw_exec_signing_message_v1(
+            network_domain,
+            pre_pow_hash,
+            timestamp_ms,
+            nonce,
+            self.round,
+            self.permit_index,
+            &self.bond,
+        );
         if !verify_mldsa87(&self.pubkey, message.as_byte_slice(), &self.signature, PALW_EXEC_MLDSA87_CONTEXT) {
             return Err(PalwExecEnvelopeError::SignatureInvalid);
         }
@@ -837,23 +863,32 @@ mod tests {
         let genesis = 1_000_000u64;
         let timestamp = genesis + 3_500;
         let pre_pow = h(123);
-        let signed = palw_exec_signing_message_v1(h(77), pre_pow, timestamp, 3, 0, &bond(5));
+        let nonce = 41u64;
+        let signed = palw_exec_signing_message_v1(h(77), pre_pow, timestamp, nonce, 3, 0, &bond(5));
         let verify = |pk: &[u8], msg: &[u8], sig: &[u8], ctx: &[u8]| {
             pk == [7u8; PALW_EXEC_MLDSA87_PUBKEY_LEN].as_slice()
                 && msg == signed.as_byte_slice()
                 && sig == [9u8; PALW_EXEC_MLDSA87_SIGNATURE_LEN].as_slice()
                 && ctx == PALW_EXEC_MLDSA87_CONTEXT
         };
-        assert_eq!(env.validate_stateless(h(77), pre_pow, timestamp, genesis, verify), Ok(()));
+        assert_eq!(env.validate_stateless(h(77), pre_pow, timestamp, nonce, genesis, verify), Ok(()));
         assert_eq!(
-            env.validate_stateless(h(78), pre_pow, timestamp, genesis, verify),
+            env.validate_stateless(h(78), pre_pow, timestamp, nonce, genesis, verify),
             Err(PalwExecEnvelopeError::NetworkDomainMismatch)
         );
         assert_eq!(
-            env.validate_stateless(h(77), pre_pow, timestamp + 1_000, genesis, verify),
+            env.validate_stateless(h(77), pre_pow, timestamp + 1_000, nonce, genesis, verify),
             Err(PalwExecEnvelopeError::RoundMismatch { declared: 3, actual: 4 })
         );
-        assert_eq!(env.validate_stateless(h(77), h(124), timestamp, genesis, verify), Err(PalwExecEnvelopeError::SignatureInvalid));
+        assert_eq!(
+            env.validate_stateless(h(77), h(124), timestamp, nonce, genesis, verify),
+            Err(PalwExecEnvelopeError::SignatureInvalid)
+        );
+        // Re-solving the same header under another nonce does not carry the signature with it.
+        assert_eq!(
+            env.validate_stateless(h(77), pre_pow, timestamp, nonce + 1, genesis, verify),
+            Err(PalwExecEnvelopeError::SignatureInvalid)
+        );
         let mut wide = env.clone();
         wide.permit_index = PALW_EXEC_MAX_PERMITS_PER_ROUND_V1;
         assert!(matches!(wide.validate_shape(), Err(PalwExecEnvelopeError::PermitIndexOutOfRange { .. })));

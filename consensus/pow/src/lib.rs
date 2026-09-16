@@ -280,6 +280,10 @@ impl StateLayer0 {
         // node could never complete a review floor because it was IBD-ing continuously.
         let target_512 = if header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1 {
             Uint512::MAX >> kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_WORK_LOG2
+        } else if header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1 {
+            // ADR-0125: a round block's price is a network constant too — the permit meters the
+            // lane, and a round block never enters a difficulty window for `bits` to describe.
+            Uint512::MAX >> kaspa_consensus_core::pow_layer0::PALW_ROUND_WORK_LOG2
         } else {
             Uint512::from_compact_target_bits_512(header.bits)
         };
@@ -462,7 +466,11 @@ impl StateLayer0 {
             // in `new()`) and the acceptance (`Params::palw_heartbeat`), neither of which belongs
             // in a tag. Sharing the arm rather than copying it means the hash lane and the
             // heartbeat lane cannot drift into computing different things under one name.
-            POW_ALGO_ID_BLAKE2B_SHA3 | kaspa_consensus_core::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1 => {
+            // ADR-0125 (algo_id = 10): the round lane is the third self-verifying hash lane on this
+            // arm — same tag, its own id inside the digest and its own constant target.
+            POW_ALGO_ID_BLAKE2B_SHA3
+            | kaspa_consensus_core::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1
+            | kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1 => {
                 buf[..POW_L1_BLAKE2B_SHA3_OUT_BYTES].copy_from_slice(&blake2b_sha3_l1_tag_v1(
                     self.pre_pow_hash_64,
                     nonce,

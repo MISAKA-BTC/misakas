@@ -618,6 +618,15 @@ mod tests {
             "palw_share_growth_final" => params.palw_share_growth_final = Some(at),
             "palw_panel_economy" => params.palw_panel_economy = Some(at),
             "palw_work_priced_reward" => params.palw_work_priced_reward = Some(at),
+            "palw_execution_lane" => {
+                params.palw_execution_lane = Some(crate::config::params::PalwExecutionLaneV1 {
+                    activation: at,
+                    permits_per_round: 1,
+                    max_per_mergeset: 600,
+                    schedule_span_daa: 30,
+                    late_rounds: 8,
+                })
+            }
             other => panic!("{other} is a PALW fence `palw_fences_v1` returns and this probe cannot set — add it here"),
         }
     }
