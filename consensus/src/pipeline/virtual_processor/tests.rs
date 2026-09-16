@@ -15,7 +15,7 @@ use kaspa_consensus_core::{
         ConfigBuilder,
         params::{DEVNET_PARAMS, MAINNET_PARAMS},
     },
-    dns_finality::p2pkh_mldsa87_spk,
+    mldsa87_primitives::p2pkh_mldsa87_spk,
     tx::{Transaction, TransactionOutpoint},
 };
 use std::{collections::VecDeque, thread::JoinHandle};
@@ -3346,7 +3346,7 @@ async fn palw_v2_a_stranger_can_register_their_own_bond() {
             // The collateral, in an output of this very transaction, paying the declared payee.
             vec![TransactionOutput::new(
                 collateral,
-                kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(payout_payload.as_byte_slice()),
+                kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(payout_payload.as_byte_slice()),
             )],
             0,
             SUBNETWORK_ID_PALW_LIFECYCLE.clone(),

@@ -1508,7 +1508,7 @@ pub struct PalwBondStateV2 {
     /// **Where this bond's matured rewards are paid — a 64-byte owner payload, not a script.**
     ///
     /// The chain DERIVES the output script from it
-    /// ([`crate::dns_finality::p2pkh_mldsa87_spk`]), exactly as the validator-reward path and
+    /// ([`crate::mldsa87_primitives::p2pkh_mldsa87_spk`]), exactly as the validator-reward path and
     /// [`crate::palw_credit_batch`] do. Carrying a payload instead of a `ScriptPublicKey` is the
     /// difference between "the registrant names an address" and "the registrant writes an
     /// arbitrary script into a coinbase output": the second is a way to mint UTXOs whose spend
@@ -16127,7 +16127,7 @@ pub(crate) mod tests {
             full_logits_trace_root: root,
             committed_root: root,
             bond_outpoint: bond_key(1).0,
-            signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
         };
         crate::palw_slash::PalwClassContradictionCertificateV1 {
             version: crate::palw_slash::PALW_S_OBJECT_VERSION_V3,

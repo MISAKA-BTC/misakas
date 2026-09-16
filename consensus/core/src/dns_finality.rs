@@ -127,7 +127,7 @@ use crate::subnets::{
 };
 use crate::{
     BlockHash, BlueWorkType, TransactionId,
-    tx::{ScriptPublicKey, ScriptVec, Transaction, TransactionOutpoint, TransactionOutput},
+    tx::{Transaction, TransactionOutpoint, TransactionOutput},
     vlt::{
         ComputeCapabilityPayload, ComputeCertificatePayload, ComputeChallengePayload, ComputeCommitmentPayload, ComputeFraudKind,
         ComputeVerdictPayload, MAX_JOB_INPUT_BYTES, MAX_VERIFIER_ATTESTATIONS, VerifierAttestation, VltEpochSnapshot, VltParams,
@@ -135,14 +135,12 @@ use crate::{
     },
 };
 
-/// 2592 bytes — matches `kaspa_txscript::MLDSA87_PK_LEN`. Repeated
-/// here so this module does not have to depend on `kaspa-txscript`;
-/// asserted-equal by [`tests::dns_constants_have_expected_values`].
-pub const STAKE_VALIDATOR_PUBKEY_LEN: usize = 2592;
-
-/// 4627 bytes — matches `kaspa_txscript::MLDSA87_SIG_LEN`. Same
-/// re-export rationale as [`STAKE_VALIDATOR_PUBKEY_LEN`].
-pub const STAKE_ATTESTATION_SIG_LEN: usize = 4627;
+/// The ML-DSA-87 primitives this overlay first defined, now shared from
+/// [`crate::mldsa87_primitives`] under their old names — byte-identical values.
+pub use crate::mldsa87_primitives::{
+    MLDSA87_PUBKEY_LEN as STAKE_VALIDATOR_PUBKEY_LEN, MLDSA87_SIGNATURE_LEN as STAKE_ATTESTATION_SIG_LEN,
+    mldsa87_key_id as validator_id_from_pubkey, p2pkh_mldsa87_spk,
+};
 
 /// Per-block upper bound on the number of attestations a single
 /// [`StakeAttestationShardPayload`] may carry. See ADR-0009 §"Why
@@ -2187,11 +2185,7 @@ pub struct ValidatorAttestationTarget {
 /// registry fields require. Unkeyed (no domain separator) to match the ADR
 /// text byte-for-byte; domain separation is unnecessary because the input is a
 /// fixed-length public key, not a multi-field structure.
-pub fn validator_id_from_pubkey(validator_pubkey: &[u8]) -> Hash64 {
-    let mut out = [0u8; 64];
-    out.copy_from_slice(Blake2bParams::new().hash_length(64).to_state().update(validator_pubkey).finalize().as_bytes());
-    Hash64::from_bytes(out)
-}
+// (`validator_id_from_pubkey` is re-exported above from `crate::mldsa87_primitives::mldsa87_key_id`.)
 
 /// Local-only fingerprint of an ML-DSA-87 signature: unkeyed `BLAKE2b-512` of the
 /// signature bytes, stored in [`SignedEpochRecord::signature_fingerprint`] so a
@@ -3739,26 +3733,7 @@ pub fn validator_participation_reward_outputs(
 /// (`processes::coinbase`) pins that equality. The `ScriptPublicKey`
 /// bytes are prefix-independent, so coinbase construction and
 /// validation need agree only on the 64-byte payload.
-pub fn p2pkh_mldsa87_spk(owner_reward_spk_payload: &[u8; 64]) -> ScriptPublicKey {
-    // ADR-0019 §8 "Script template" opcode bytes (see
-    // crypto/txscript/src/opcodes/mod.rs): OP_BLAKE2B_512 == 0xc4
-    // (repurposed reserved opcode `OpUnknown196`), OP_DATA64 == 0x40.
-    const OP_DUP: u8 = 0x76;
-    const OP_BLAKE2B_512: u8 = 0xc4;
-    const OP_DATA64: u8 = 0x40;
-    const OP_EQUAL_VERIFY: u8 = 0x88;
-    const OP_CHECKSIG_MLDSA87: u8 = 0xa6;
-
-    let mut script = Vec::with_capacity(69);
-    script.push(OP_DUP);
-    script.push(OP_BLAKE2B_512);
-    script.push(OP_DATA64);
-    script.extend_from_slice(owner_reward_spk_payload);
-    script.push(OP_EQUAL_VERIFY);
-    script.push(OP_CHECKSIG_MLDSA87);
-    // P2PKH-ML-DSA spk version is `MAX_SCRIPT_PUBLIC_KEY_VERSION` == 0.
-    ScriptPublicKey::new(0, ScriptVec::from_slice(&script))
-}
+// (`p2pkh_mldsa87_spk` is re-exported above from `crate::mldsa87_primitives`.)
 
 /// Build the validator-side coinbase outputs for a block (ADR-0013
 /// §"Coinbase fan-out", as amended by Addendum B): one
@@ -10893,7 +10868,7 @@ mod tests {
         // Pure evidence carrier: no outputs, so the reporter mint at (tx, 0) cannot collide.
         let bytes = borsh::to_vec(&forged).unwrap();
         assert_eq!(validate_compute_challenge_tx(&bytes, &[]), Ok(()));
-        let out = TransactionOutput::new(1, ScriptPublicKey::new(0, ScriptVec::from_slice(&[0x51])));
+        let out = TransactionOutput::new(1, crate::tx::ScriptPublicKey::new(0, crate::tx::ScriptVec::from_slice(&[0x51])));
         assert_eq!(validate_compute_challenge_tx(&bytes, &[out]), Err(DnsTxError::SlashingEvidenceHasOutputs(1)));
     }
 

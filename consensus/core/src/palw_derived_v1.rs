@@ -55,8 +55,8 @@ pub const PALW_DERIVED_V1_EXECUTOR_PUBKEY_LEN: usize = 2592;
 /// `u64`, a 2592-byte key and a 4627-byte signature — so a derivation's wire size is a CONSTANT
 /// and there is nowhere left to put a byte. That is the sentence a future ADR has to argue
 /// against. Same value and same reason as every other PALW signature length check
-/// ([`crate::dns_finality::STAKE_ATTESTATION_SIG_LEN`]).
-pub const PALW_DERIVED_V1_SIGNATURE_LEN: usize = crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
+/// ([`crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN`]).
+pub const PALW_DERIVED_V1_SIGNATURE_LEN: usize = crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
 
 pub const PALW_DERIVED_V1_DOMAIN_ID: &[u8] = b"misaka-palw/derived-v1/derived-id/v1";
 /// What the executor signs: the object's own id under its own domain, so a signature over a

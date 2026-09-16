@@ -287,7 +287,7 @@ pub fn verify_commitment_entry_v3<F>(
 where
     F: FnOnce(&Hash, &[u8]) -> bool,
 {
-    let expected = crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
+    let expected = crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
     if claim.signature.len() != expected {
         return Err(PalwJobIdentityError::SignatureLength { got: claim.signature.len(), expected });
     }
@@ -333,7 +333,7 @@ where
     if !claim.sample_indices.windows(2).all(|w| w[0] < w[1]) {
         return Err(PalwJobIdentityError::SampleIndicesNotSorted);
     }
-    let expected = crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
+    let expected = crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
     if claim.signature.len() != expected {
         return Err(PalwJobIdentityError::SignatureLength { got: claim.signature.len(), expected });
     }
@@ -356,7 +356,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
+    use crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
 
     const NET: &[u8] = b"misaka-testnet-11";
 
@@ -373,7 +373,7 @@ mod tests {
             commitment_root: Hash64::from_u64_word(5),
             trace_root: Hash64::from_u64_word(6),
             output_root: Hash64::from_u64_word(7),
-            signature: vec![0x5A; STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; MLDSA87_SIGNATURE_LEN],
         }
     }
 
@@ -386,7 +386,7 @@ mod tests {
             sample_indices: vec![4, 27, 51],
             observed_roots: vec![Hash64::from_u64_word(9), Hash64::from_u64_word(10), Hash64::from_u64_word(11)],
             verdict: PalwAttestationVerdictV3::Match,
-            signature: vec![0x33; STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x33; MLDSA87_SIGNATURE_LEN],
         }
     }
 
@@ -561,7 +561,7 @@ mod tests {
         short.signature = vec![0x5A; 64];
         assert_eq!(
             verify_commitment_entry_v3(short, NET, |_, _| unreachable!("verifier must not run on bad length")),
-            Err(PalwJobIdentityError::SignatureLength { got: 64, expected: STAKE_ATTESTATION_SIG_LEN })
+            Err(PalwJobIdentityError::SignatureLength { got: 64, expected: MLDSA87_SIGNATURE_LEN })
         );
         assert_eq!(
             verify_commitment_entry_v3(commitment_claim(), NET, |_, _| false),
@@ -580,7 +580,7 @@ mod tests {
                 c.trace_root,
                 c.output_root,
             );
-            *message == expected && signature.len() == STAKE_ATTESTATION_SIG_LEN
+            *message == expected && signature.len() == MLDSA87_SIGNATURE_LEN
         })
         .unwrap();
         assert_eq!(verified.claim(), &commitment_claim());

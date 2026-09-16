@@ -140,7 +140,7 @@ impl PalwVerificationReceiptV1 {
         if !self.sample_coordinates.windows(2).all(|w| w[0] < w[1]) {
             return Err(PalwReceiptError::SampleCoordinatesNotSorted);
         }
-        let expected = crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
+        let expected = crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
         if self.signature.len() != expected {
             return Err(PalwReceiptError::SignatureLength { got: self.signature.len(), expected });
         }
@@ -225,7 +225,7 @@ pub fn count_distinct_receipt_verifiers_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
+    use crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
 
     const NET: &[u8] = b"misaka-testnet-11";
 
@@ -247,7 +247,7 @@ mod tests {
             observed_roots: vec![Hash64::from_u64_word(5), Hash64::from_u64_word(6), Hash64::from_u64_word(7)],
             verdict: PalwReceiptVerdictV1::Match,
             verifier_bond_outpoint: outpoint(verifier_seed),
-            signature: vec![0x5A; STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; MLDSA87_SIGNATURE_LEN],
         }
     }
 
@@ -293,7 +293,7 @@ mod tests {
         assert_eq!(r.validate_shape(), Err(PalwReceiptError::SampleCoordinatesNotSorted));
         let mut r = receipt(9);
         r.signature = vec![0x5A; 64];
-        assert_eq!(r.validate_shape(), Err(PalwReceiptError::SignatureLength { got: 64, expected: STAKE_ATTESTATION_SIG_LEN }));
+        assert_eq!(r.validate_shape(), Err(PalwReceiptError::SignatureLength { got: 64, expected: MLDSA87_SIGNATURE_LEN }));
     }
 
     /// The signing digest binds target block, committed root, class, bond, every coordinate,
@@ -326,7 +326,7 @@ mod tests {
         assert_ne!(base, r.message(NET));
         // The signature is NOT part of its own message.
         let mut r = receipt(9);
-        r.signature = vec![0x77; STAKE_ATTESTATION_SIG_LEN];
+        r.signature = vec![0x77; MLDSA87_SIGNATURE_LEN];
         assert_eq!(base, r.message(NET));
     }
 

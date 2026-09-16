@@ -430,7 +430,7 @@ pub fn palw_bond_registration_binds_its_carrier_v2(tx: &Transaction, object: &Pa
     // choice: the collateral is reclaimable by whoever the rewards are reclaimable by, and the
     // registration cannot lock money behind a script it did not also name as its own payee.
     let owner: [u8; 64] = *payout_payload.as_byte_slice();
-    if output.script_public_key != crate::dns_finality::p2pkh_mldsa87_spk(&owner) {
+    if output.script_public_key != crate::mldsa87_primitives::p2pkh_mldsa87_spk(&owner) {
         return Err("a bond's collateral output must pay to the payload the registration names as its payee");
     }
     Ok(())
@@ -647,7 +647,7 @@ mod tests {
     fn naming_the_carrier_by_id_is_a_fixed_point_no_registrant_can_solve() {
         let payee = h64(0xBEEF);
         let owner: [u8; 64] = *payee.as_byte_slice();
-        let spk = crate::dns_finality::p2pkh_mldsa87_spk(&owner);
+        let spk = crate::mldsa87_primitives::p2pkh_mldsa87_spk(&owner);
         let outputs = vec![TransactionOutput::new(500_000, spk)];
 
         // The carrier, built the only way a registrant can build one: the object goes in the
@@ -702,7 +702,7 @@ mod tests {
     fn a_bond_registration_that_locks_its_collateral_rides() {
         let payee = h64(0xBEEF);
         let owner: [u8; 64] = *payee.as_byte_slice();
-        let spk = crate::dns_finality::p2pkh_mldsa87_spk(&owner);
+        let spk = crate::mldsa87_primitives::p2pkh_mldsa87_spk(&owner);
         let object = PalwConsensusObjectV2::BondRegistered {
             // Named by index with a zero id: "the output at index 0 of whatever carries me".
             bond: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(TransactionId::default(), 0)),
@@ -752,7 +752,7 @@ mod tests {
     fn a_bond_registration_cannot_declare_collateral_it_did_not_lock() {
         let payee = h64(0xBEEF);
         let owner: [u8; 64] = *payee.as_byte_slice();
-        let spk = crate::dns_finality::p2pkh_mldsa87_spk(&owner);
+        let spk = crate::mldsa87_primitives::p2pkh_mldsa87_spk(&owner);
         let tx = |value: u64, script: crate::tx::ScriptPublicKey| {
             Transaction::new(
                 0,
@@ -802,7 +802,7 @@ mod tests {
 
         // 4. Locking the money behind a script that is not the payee's, so the collateral and the
         //    rewards would be reclaimable by different people.
-        let t = tx(500_000, crate::dns_finality::p2pkh_mldsa87_spk(&[9u8; 64]));
+        let t = tx(500_000, crate::mldsa87_primitives::p2pkh_mldsa87_spk(&[9u8; 64]));
         let e = palw_bond_registration_binds_its_carrier_v2(&t, &reg(&t, 0, 500_000, payee)).unwrap_err();
         assert!(e.contains("names as its payee"), "{e}");
     }

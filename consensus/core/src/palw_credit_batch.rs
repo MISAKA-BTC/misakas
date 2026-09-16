@@ -22,7 +22,7 @@
 //!   double-observation mints twice.
 //! * **Exact payees (I4)** — a payee resolves ONLY through the caller's
 //!   `resolve_spk(bond_outpoint)` closure, and every minted script is
-//!   [`crate::dns_finality::p2pkh_mldsa87_spk`] of that payload — never a
+//!   [`crate::mldsa87_primitives::p2pkh_mldsa87_spk`] of that payload — never a
 //!   `validator_pubkey_hash` lookup.
 //! * **Missing is never empty (I7)** — a resolver miss on any payee of an
 //!   otherwise-includable record is an ERROR aborting the whole batch, not a silently
@@ -217,13 +217,13 @@ where
         if record.executor_amount > 0 {
             batch
                 .outputs
-                .push(TransactionOutput::new(record.executor_amount, crate::dns_finality::p2pkh_mldsa87_spk(&executor_payload)));
+                .push(TransactionOutput::new(record.executor_amount, crate::mldsa87_primitives::p2pkh_mldsa87_spk(&executor_payload)));
         }
         for (bond_outpoint, award) in &record.verifier_awards {
             let payload =
                 resolve_spk(bond_outpoint).ok_or(PalwCreditBatchError::PayeeUnresolvable { bond_outpoint: *bond_outpoint })?;
             if *award > 0 {
-                batch.outputs.push(TransactionOutput::new(*award, crate::dns_finality::p2pkh_mldsa87_spk(&payload)));
+                batch.outputs.push(TransactionOutput::new(*award, crate::mldsa87_primitives::p2pkh_mldsa87_spk(&payload)));
             }
         }
         batch.consumed_credit_ids.push(record.job_id);
@@ -235,7 +235,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dns_finality::p2pkh_mldsa87_spk;
+    use crate::mldsa87_primitives::p2pkh_mldsa87_spk;
 
     fn h64(byte: u8) -> Hash64 {
         Hash64::from_bytes([byte; 64])

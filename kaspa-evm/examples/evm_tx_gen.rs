@@ -168,7 +168,7 @@ async fn main() {
 
             let mut dest_payload = [0u8; 64];
             faster_hex::hex_decode(dest_hex.as_bytes(), &mut dest_payload).expect("dest payload must be 128 hex chars (64 bytes)");
-            let spk = kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&dest_payload);
+            let spk = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&dest_payload);
             let mut calldata = spk.version().to_be_bytes().to_vec();
             calldata.extend_from_slice(spk.script());
 

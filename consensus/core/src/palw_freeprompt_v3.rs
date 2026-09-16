@@ -1079,7 +1079,7 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
         if job.executor_pubkey.is_empty() {
             return Err(PalwFpV3Error::MissingPublicKey);
         }
-        let expected = crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
+        let expected = crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
         if self.signature.len() != expected {
             return Err(PalwFpV3Error::SignatureLength { got: self.signature.len(), expected });
         }
@@ -1250,7 +1250,7 @@ impl PalwReceiptSpendEnvelopeV3 {
         if s.producer_pubkey.is_empty() {
             return Err(PalwFpV3Error::MissingPublicKey);
         }
-        let expected = crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
+        let expected = crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
         if self.signature.len() != expected {
             return Err(PalwFpV3Error::SignatureLength { got: self.signature.len(), expected });
         }
@@ -1799,7 +1799,7 @@ mod tests {
     }
 
     fn sig() -> Vec<u8> {
-        vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN]
+        vec![0x5A; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN]
     }
 
     /// The header position the spend fixture binds (see [`spend_challenge_v3`]).

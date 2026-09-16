@@ -121,6 +121,7 @@ pub mod daa_score_timestamp;
 /// (StakeScore aggregation, reorg gate) land in PR-10.4
 /// onward once Phases 1–9 stabilise.
 pub mod dns_finality;
+pub mod mldsa87_primitives;
 pub mod errors;
 /// kaspa-pq Selected-Parent EVM Lane (ADR-0020): EVM execution-lane consensus
 /// types (block-body payload, executor-output header, EVM-domain newtypes).

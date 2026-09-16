@@ -19,7 +19,7 @@
 //!
 //! Each UTXO locks to the standard single-key ML-DSA-87 P2PKH `scriptPubKey`
 //! `OP_DUP OP_BLAKE2B_512 OP_DATA_64 <64-byte payload> OP_EQUALVERIFY OP_CHECKSIG_MLDSA87`
-//! (built by [`crate::dns_finality::p2pkh_mldsa87_spk`]), where the 64-byte payload
+//! (built by [`crate::mldsa87_primitives::p2pkh_mldsa87_spk`]), where the 64-byte payload
 //! is the keyed BLAKE2b-512 address payload decoded from the recipient address. The
 //! addresses are stored as text (not opaque hashes) so the premine is auditable.
 //!
@@ -187,7 +187,7 @@ pub fn misaka_premine_utxos_for(net: NetworkId) -> UtxoCollection {
 }
 
 fn misaka_premine_utxos_inner(main: &str) -> UtxoCollection {
-    let script_public_key = crate::dns_finality::p2pkh_mldsa87_spk(&owner_payload(main));
+    let script_public_key = crate::mldsa87_primitives::p2pkh_mldsa87_spk(&owner_payload(main));
     UtxoCollection::from_iter([(premine_outpoint(MAIN_PREMINE_INDEX), premine_entry(MISAKA_PREMINE_CAP_SOMPI, script_public_key))])
 }
 
@@ -269,7 +269,7 @@ pub fn testnet11_community_utxos() -> UtxoCollection {
     let txid = Hash64::from_bytes(TESTNET11_COMMUNITY_TXID);
     let mut utxos: Vec<(TransactionOutpoint, UtxoEntry)> = Vec::with_capacity(TESTNET11_COMMUNITY_ALLOCATIONS.len());
     for (i, (addr, whole_msk)) in TESTNET11_COMMUNITY_ALLOCATIONS.iter().enumerate() {
-        let script_public_key = crate::dns_finality::p2pkh_mldsa87_spk(&owner_payload(addr));
+        let script_public_key = crate::mldsa87_primitives::p2pkh_mldsa87_spk(&owner_payload(addr));
         let outpoint = TransactionOutpoint { transaction_id: txid, index: i as u32 };
         let amount = whole_msk.checked_mul(SOMPI_PER_KASPA).expect("a community allocation cannot overflow sompi");
         utxos.push((outpoint, premine_entry(amount, script_public_key)));
@@ -382,7 +382,7 @@ pub(crate) fn bonded_genesis_utxos(
     cards: &[(u32, [u8; 64])],
     community: impl IntoIterator<Item = (TransactionOutpoint, UtxoEntry)>,
 ) -> UtxoCollection {
-    let main_spk = crate::dns_finality::p2pkh_mldsa87_spk(&owner_payload(main_address_for(net)));
+    let main_spk = crate::mldsa87_primitives::p2pkh_mldsa87_spk(&owner_payload(main_address_for(net)));
 
     let mut utxos: Vec<(TransactionOutpoint, UtxoEntry)> = Vec::with_capacity(2 * cards.len() + 1);
     let mut carved: u64 = 0;
@@ -399,7 +399,7 @@ pub(crate) fn bonded_genesis_utxos(
 
     // Per-bond fee floats, after the main wallet's index, at each bond's own payout key.
     for (i, (_, payout_payload)) in cards.iter().enumerate() {
-        let script_public_key = crate::dns_finality::p2pkh_mldsa87_spk(payout_payload);
+        let script_public_key = crate::mldsa87_primitives::p2pkh_mldsa87_spk(payout_payload);
         utxos.push((
             premine_outpoint(MAIN_PREMINE_INDEX + 1 + i as u32),
             premine_entry(PALW_RC_BOND_FEE_FLOAT_SOMPI, script_public_key),
@@ -532,7 +532,7 @@ mod tests {
             assert_eq!(collateral.amount, GENESIS_BOND_COLLATERAL_SOMPI, "bond {i} collateral");
             assert_eq!(collateral.script_public_key, main_spk, "bond {i} collateral is the main wallet bonding");
             // Every registered bond can pay a fee, at the address its own card names.
-            let spk = crate::dns_finality::p2pkh_mldsa87_spk(&card.payout_payload);
+            let spk = crate::mldsa87_primitives::p2pkh_mldsa87_spk(&card.payout_payload);
             let funded: u64 = set.values().filter(|e| e.script_public_key == spk).map(|e| e.amount).sum();
             assert!(
                 funded >= PALW_RC_BOND_FEE_FLOAT_SOMPI,
@@ -553,8 +553,8 @@ mod tests {
     /// its carve-outs.
     #[test]
     fn the_public_palw_net_holds_the_main_wallet_at_the_operator_address() {
-        let public_spk = crate::dns_finality::p2pkh_mldsa87_spk(&owner_payload(PALW_PUBLIC_MAIN_ADDRESS));
-        let claude_spk = crate::dns_finality::p2pkh_mldsa87_spk(&owner_payload(TESTNET_MAIN_ADDRESS));
+        let public_spk = crate::mldsa87_primitives::p2pkh_mldsa87_spk(&owner_payload(PALW_PUBLIC_MAIN_ADDRESS));
+        let claude_spk = crate::mldsa87_primitives::p2pkh_mldsa87_spk(&owner_payload(TESTNET_MAIN_ADDRESS));
         assert_ne!(public_spk, claude_spk, "the fixture must actually differ or this test proves nothing");
 
         let main_of = |net: NetworkId| genesis_premine_utxos_for(net)[&premine_outpoint(MAIN_PREMINE_INDEX)].clone();

@@ -447,7 +447,7 @@ mod tests {
             version: PALW_FP_V3_VERSION,
             commitment,
             prompt_token_ids: ids,
-            signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
         }
     }
 

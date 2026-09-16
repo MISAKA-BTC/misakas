@@ -550,7 +550,7 @@ mod tests {
     /// widen nor close silently.
     #[test]
     fn every_standard_pq_utxo_has_plurality_two_and_bounds_the_relaxed_branch() {
-        let spk = crate::dns_finality::p2pkh_mldsa87_spk(&[0x11u8; 64]);
+        let spk = crate::mldsa87_primitives::p2pkh_mldsa87_spk(&[0x11u8; 64]);
         assert_eq!(spk.script().len(), 69, "the sole standard PQ send template (ADR-0019 §8)");
         assert_eq!(utxo_plurality(&spk), 2, "95 fixed bytes + a 69-byte script over a 100-byte unit");
 

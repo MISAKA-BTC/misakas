@@ -5,7 +5,7 @@
 //! ML-DSA-87 signature under the routing context with the record's own public key — the same
 //! `verify_mldsa87_with_context` the virtual processor uses. Exit 0 = every claim held.
 
-use kaspa_consensus_core::dns_finality::validator_id_from_pubkey;
+use kaspa_consensus_core::mldsa87_primitives::mldsa87_key_id;
 use kaspa_consensus_core::palw_routing::{
     PALW_ROUTING_MLDSA87_CAPABILITY_CONTEXT, PalwVerifierCapabilityV1, verifier_capability_message_v1, verify_ready_binding_v1,
 };
@@ -55,7 +55,7 @@ fn main() {
     // The public key must BE the verifier: validator_id = H(pubkey), the consensus rule.
     let mut pubkey = vec![0u8; record.verifier_public_key.len() / 2];
     faster_hex::hex_decode(record.verifier_public_key.as_bytes(), &mut pubkey).unwrap_or_else(|e| die(format!("public key hex: {e}")));
-    if validator_id_from_pubkey(&pubkey) != capability.verifier_id {
+    if mldsa87_key_id(&pubkey) != capability.verifier_id {
         die("the published public key does not hash to the capability's verifier_id".into());
     }
 

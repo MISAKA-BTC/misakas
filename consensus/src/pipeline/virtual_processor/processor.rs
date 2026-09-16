@@ -5751,7 +5751,7 @@ impl VirtualStateProcessor {
             .map(|(_, payout)| {
                 TransactionOutput::new(
                     payout.amount,
-                    kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&payout.payload.as_bytes()),
+                    kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payout.payload.as_bytes()),
                 )
             })
             .collect()
@@ -8384,7 +8384,7 @@ impl VirtualStateProcessor {
                 let transactions = self.block_transactions_store.get(block).ok()?;
                 let coinbase = self.coinbase_manager.deserialize_coinbase_payload(&transactions.first()?.payload).ok()?;
                 if coinbase.miner_data.script_public_key
-                    != kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&bond.payout_payload.as_bytes())
+                    != kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&bond.payout_payload.as_bytes())
                 {
                     return None;
                 }

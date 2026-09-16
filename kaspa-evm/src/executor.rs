@@ -1388,7 +1388,7 @@ mod tests {
     #[test]
     fn f002_withdraw_emits_op_and_burns_from_evm() {
         let basefee = EVM_INITIAL_BASE_FEE as u128;
-        let spk = kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&[0x42u8; 64]);
+        let spk = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&[0x42u8; 64]);
         let f002 = crate::withdraw::f002_address();
         // Withdraw 5 sompi = 5e10 wei.
         let withdraw_wei = 5u128 * EVM_NATIVE_SCALE as u128;
@@ -1440,7 +1440,7 @@ mod tests {
     #[test]
     fn withdraw_cap_skips_overflow_and_preserves_state() {
         let basefee = EVM_INITIAL_BASE_FEE as u128;
-        let spk = kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&[0x42u8; 64]);
+        let spk = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&[0x42u8; 64]);
         let f002 = crate::withdraw::f002_address();
         let n = MAX_WITHDRAWALS_PER_EVM_BLOCK + 1; // one past the cap
 
@@ -1500,7 +1500,7 @@ mod tests {
     #[test]
     fn f002_user_faults_revert_without_withdrawal() {
         let basefee = EVM_INITIAL_BASE_FEE as u128;
-        let spk = kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&[0x42u8; 64]);
+        let spk = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&[0x42u8; 64]);
         let f002 = crate::withdraw::f002_address();
 
         // (a) amount not an exact sompi multiple; (b) zero value;

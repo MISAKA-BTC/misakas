@@ -154,7 +154,7 @@ impl PalwRoundProducerService {
         let payload = session
             .palw_bond_payout_payload_v2(bond)
             .ok_or_else(|| "the bond is not registered on this node's chain".to_string())?;
-        let payout = kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&payload.as_bytes());
+        let payout = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payload.as_bytes());
         let template = self
             .mining_manager
             .clone()

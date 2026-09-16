@@ -258,7 +258,7 @@ impl PalwBlockCommitmentV1 {
         if self.pwu_claim == 0 {
             return Err(PalwBlockCommitmentError::ZeroPwuClaim);
         }
-        let expected = crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
+        let expected = crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
         if self.signature.len() != expected {
             return Err(PalwBlockCommitmentError::SignatureLength { got: self.signature.len(), expected });
         }
@@ -444,7 +444,7 @@ impl PalwBlockCommitmentV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
+    use crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
 
     const NET: &[u8] = b"misaka-testnet-11";
 
@@ -461,7 +461,7 @@ mod tests {
             trace_root: Hash64::from_u64_word(4),
             output_root: Hash64::from_u64_word(5),
             pwu_claim: 100,
-            signature: vec![0x5A; STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; MLDSA87_SIGNATURE_LEN],
         }
     }
 
@@ -506,7 +506,7 @@ mod tests {
         c.signature = vec![0x5A; 64];
         assert_eq!(
             c.validate_shape(),
-            Err(PalwBlockCommitmentError::SignatureLength { got: 64, expected: STAKE_ATTESTATION_SIG_LEN })
+            Err(PalwBlockCommitmentError::SignatureLength { got: 64, expected: MLDSA87_SIGNATURE_LEN })
         );
     }
 
@@ -532,7 +532,7 @@ mod tests {
         c.pwu_claim = 101;
         assert_ne!(base, c.commitment_root(ch));
         let mut c = commitment();
-        c.signature = vec![0x77; STAKE_ATTESTATION_SIG_LEN];
+        c.signature = vec![0x77; MLDSA87_SIGNATURE_LEN];
         assert_eq!(base, c.commitment_root(ch));
     }
 
@@ -680,7 +680,7 @@ mod w8_executor_bond_tests {
             trace_root: Hash64::from_u64_word(4),
             output_root: Hash64::from_u64_word(5),
             pwu_claim: 100,
-            signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
         }
     }
 
@@ -740,7 +740,7 @@ mod w8_executor_bond_tests {
 #[cfg(test)]
 mod decision_a_gate_tests {
     use super::*;
-    use crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
+    use crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
     use crate::pow_layer0::{POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_PALW_LLM, PowLayer0Error, check_palw_commitment_shape};
 
     fn a_commitment() -> PalwBlockCommitmentV1 {
@@ -751,7 +751,7 @@ mod decision_a_gate_tests {
             trace_root: Hash64::from_u64_word(4),
             output_root: Hash64::from_u64_word(5),
             pwu_claim: 100,
-            signature: vec![0x5A; STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; MLDSA87_SIGNATURE_LEN],
         }
     }
 

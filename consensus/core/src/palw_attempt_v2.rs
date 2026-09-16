@@ -684,7 +684,7 @@ impl PalwAttemptEnvelopeV2 {
         if a.executor_pubkey.is_empty() {
             return Err(PalwAttemptV2Error::MissingPublicKey);
         }
-        let expected = crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
+        let expected = crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
         if self.signature.len() != expected {
             return Err(PalwAttemptV2Error::SignatureLength { got: self.signature.len(), expected });
         }
@@ -906,7 +906,7 @@ mod tests {
     }
 
     fn envelope(a: PalwAttemptUnsignedV2) -> PalwAttemptEnvelopeV2 {
-        PalwAttemptEnvelopeV2 { attempt: a, signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN] }
+        PalwAttemptEnvelopeV2 { attempt: a, signature: vec![0x5A; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN] }
     }
 
     /// **ADR-0042 Decision 3a, priced per ADR-0072**: mutating any EXECUTION field fails the PoW —
@@ -1258,7 +1258,7 @@ mod tests {
         let a = attempt();
         let one = envelope(a.clone());
         let mut two = envelope(a.clone());
-        two.signature = vec![0xA5; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN];
+        two.signature = vec![0xA5; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN];
         assert_ne!(one.signature, two.signature);
         assert_eq!(attempt_id_v2(&one.attempt), attempt_id_v2(&two.attempt), "the signature must not reach identity");
 
@@ -1418,7 +1418,7 @@ mod tests {
     #[test]
     fn a_real_envelope_fits_the_header_wire_cap() {
         let mut a = attempt();
-        a.executor_pubkey = vec![7u8; crate::dns_finality::STAKE_VALIDATOR_PUBKEY_LEN];
+        a.executor_pubkey = vec![7u8; crate::mldsa87_primitives::MLDSA87_PUBKEY_LEN];
         let bytes = envelope(a).encode_wire();
         assert_eq!(bytes.len(), 7897, "4 magic + 3262 unsigned attempt + 4 + 4627 ML-DSA-87 signature");
         assert!(

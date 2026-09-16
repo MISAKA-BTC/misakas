@@ -179,7 +179,7 @@ mod tests {
             observed_roots: vec![h(0x74)],
             verdict,
             verifier_bond_outpoint: op(bond),
-            signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
         }
     }
 
@@ -1162,7 +1162,7 @@ mod resolver_tests {
                 observed_roots: vec![h(0x74)],
                 verdict,
                 verifier_bond_outpoint: op(bond),
-                signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+                signature: vec![0x5A; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
             },
         };
         (PALW_CARRIAGE_KIND_RECEIPT, daa, body(&PalwCarriageV1::Receipt(r)))
@@ -1206,7 +1206,7 @@ mod resolver_tests {
                 full_logits_trace_root: logits_root,
                 committed_root: composite_root,
                 bond_outpoint: op(0xB1),
-                signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+                signature: vec![0x5A; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
             },
             refutation,
         };
@@ -1232,7 +1232,7 @@ mod resolver_tests {
                 full_logits_trace_root: refutation.binding.full_logits_trace_root,
                 committed_root: refutation.binding.committed_execution_root,
                 bond_outpoint: op(0xB1),
-                signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+                signature: vec![0x5A; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
             },
             refutation,
         };
@@ -1252,7 +1252,7 @@ mod resolver_tests {
             full_logits_trace_root: root,
             committed_root: root,
             bond_outpoint: op(0xB1),
-            signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
         };
         let e = PalwEquivocationCarriageV1 {
             version: PALW_CARRIAGE_VERSION_V1,
@@ -1326,7 +1326,7 @@ mod resolver_tests {
     /// in for ML-DSA-87, which lives outside consensus-core — the point under test is that the
     /// resolver ASKS, not what the curve answers.
     fn accept_fixture_signature(key: &[u8], _digest: &kaspa_hashes::Hash, signature: &[u8], _context: &[u8]) -> bool {
-        !key.is_empty() && signature == vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN].as_slice()
+        !key.is_empty() && signature == vec![0x5A; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN].as_slice()
     }
 
     /// Rejects everything — a node that cannot verify must count nothing.
@@ -2375,7 +2375,7 @@ mod resolver_tests {
             full_logits_trace_root: root,
             committed_root: root,
             bond_outpoint: op(0xB1),
-            signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
         };
         let e = PalwEquivocationCarriageV1 {
             version: PALW_CARRIAGE_VERSION_V1,
@@ -2480,7 +2480,7 @@ mod resolver_tests {
             full_logits_trace_root: root,
             committed_root: root,
             bond_outpoint: op(0xB1),
-            signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
         };
         let equivocation = |root: Hash64| {
             let e = crate::palw_carriage::PalwEquivocationCarriageV1 {

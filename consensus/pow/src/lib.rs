@@ -1056,7 +1056,7 @@ mod tests_pq {
     /// A V2 attempt whose challenge matches `(header position, nonce, class, bond)`, carried the
     /// way a real block carries it: in `Header::palw_commitment`, PAV2 wire form.
     fn v2_envelope_for(header: &Header, nonce: u64) -> PalwAttemptEnvelopeV2 {
-        use kaspa_consensus_core::dns_finality::{STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN};
+        use kaspa_consensus_core::mldsa87_primitives::{MLDSA87_PUBKEY_LEN, MLDSA87_SIGNATURE_LEN};
         let net = Hash64::from_u64_word(0x7E57_00D0);
         let bond = kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_bytes([3u8; 64]), 1);
         let class = Hash64::from_u64_word(0xC1A55);
@@ -1067,7 +1067,7 @@ mod tests_pq {
             challenge: challenge_v2(net, pph, header.timestamp, nonce, class, &bond),
             class_id: class,
             executor_bond: bond,
-            executor_pubkey: vec![7u8; STAKE_VALIDATOR_PUBKEY_LEN],
+            executor_pubkey: vec![7u8; MLDSA87_PUBKEY_LEN],
             operator_id: Hash64::from_u64_word(0x0E0),
             artifact_root: Hash64::from_u64_word(0xA7),
             trace_root: Hash64::from_u64_word(0x7A),
@@ -1078,7 +1078,7 @@ mod tests_pq {
             trace_retention_daa: 1_000_000,
             execution_root: Hash64::from_u64_word(0x41),
         };
-        PalwAttemptEnvelopeV2 { attempt, signature: vec![0x5A; STAKE_ATTESTATION_SIG_LEN] }
+        PalwAttemptEnvelopeV2 { attempt, signature: vec![0x5A; MLDSA87_SIGNATURE_LEN] }
     }
 
     /// **ADR-0072 SA-4 — a valid attempt built for one lane is not a candidate in the other, and

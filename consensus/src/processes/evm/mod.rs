@@ -2743,7 +2743,7 @@ mod bridge_tests {
 
     fn refund_script() -> Vec<u8> {
         // The standard 69-byte ML-DSA P2PKH shape.
-        let spk = kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&[0x42u8; 64]);
+        let spk = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&[0x42u8; 64]);
         spk.script().to_vec()
     }
 
@@ -2795,7 +2795,7 @@ mod bridge_tests {
             "duplicate outpoint"
         );
         let mut plain = UtxoCollection::default();
-        plain.insert(op, UtxoEntry::new(500, kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&[1u8; 64]), 10, false));
+        plain.insert(op, UtxoEntry::new(500, kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&[1u8; 64]), 10, false));
         assert!(
             validate_evm_deposit_claims(&claim_payload(vec![claim(op, addr, 500, 7)]), &MapView(plain), 999).is_err(),
             "not a lock"
@@ -2811,7 +2811,7 @@ mod bridge_tests {
         let evm_tx_hash = kaspa_hashes::EvmH256::from_bytes([7; 32]);
         let op = outpoint(1);
         let lock_entry = UtxoEntry::new(500, lock_spk([0xCC; 20], 1_000, 0), 10, false);
-        let spk = kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&[0x42u8; 64]);
+        let spk = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&[0x42u8; 64]);
         let w = WithdrawOp {
             receipt_index: 3,
             op_index: 1,
@@ -2878,7 +2878,7 @@ mod bridge_tests {
             ),
             "from must bind the outpoint"
         );
-        let other_spk = kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&[0x43u8; 64]);
+        let other_spk = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&[0x43u8; 64]);
         assert_ne!(
             expected_txid,
             kaspa_consensus_core::evm::synthetic_withdrawal_txid(evm_tx_hash, 1, w.from, w.amount_sompi, &other_spk),

@@ -458,7 +458,7 @@ mod tests {
             trace_root: Hash64::from_u64_word(4),
             output_root: Hash64::from_u64_word(5),
             pwu_claim: 100,
-            signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
         };
         let bytes = commitment.encode();
         assert!(bytes.len() <= crate::pow_layer0::PALW_COMMITMENT_MAX_BYTES, "PBC1 must fit the header cap");

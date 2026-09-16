@@ -71,7 +71,7 @@ fn attempt_carriage(header: &Header) -> Vec<u8> {
         trace_chunk_count: 8,
         trace_retention_daa: 999_999,
     };
-    PalwAttemptEnvelopeV2 { attempt, signature: vec![0x5A; kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN] }
+    PalwAttemptEnvelopeV2 { attempt, signature: vec![0x5A; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN] }
         .encode_wire()
 }
 
@@ -89,7 +89,7 @@ fn spend_carriage(header: &Header, quantum_index: u32) -> Vec<u8> {
         producer_bond: bond(),
         producer_pubkey: vec![7u8; 32],
     };
-    PalwReceiptSpendEnvelopeV3 { spend, signature: vec![0x5A; kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN] }.encode()
+    PalwReceiptSpendEnvelopeV3 { spend, signature: vec![0x5A; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN] }.encode()
 }
 
 /// **The rule the removed tripwire really protected**: a peer-controlled header must never panic

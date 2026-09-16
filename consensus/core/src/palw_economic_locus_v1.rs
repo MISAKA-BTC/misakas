@@ -39,7 +39,7 @@
 //! | free-prompt exposure | `quanta × quantum × slash_value_per_pwu` | `apply_free_prompt`'s `reserved` (`palw_state_v2.rs:6831`) | per-leaf **until the cap**, then flat — so above `cap · quantum` leaves, N segments reserve N × the ceiling |
 //! | **challenger** exposure to open a court | the claim's own `reserved`, again | `apply_court_opened` (`palw_state_v2.rs:6674`) | N reservations to PROSECUTE one answer. *"the ceiling it already lives under does the counting"* — so a bond that could challenge M claims can challenge only M/N segmented answers, and segmentation raises the price of policing as fast as it raises the price of producing |
 //! | panel seats | [`crate::palw_fp_devnet_v3::PALW_V2_PANEL_SEATS`] = 5 | `palw_fp_devnet_v3.rs:459` | N panels drawn, N × 5 seats put on duty |
-//! | receipts to quorum | [`crate::palw_fp_devnet_v3::PALW_V2_PANEL_QUORUM`] = 3 | `palw_fp_devnet_v3.rs:460`, enforced by [`crate::palw_panel_v2::validate_receipt_quorum_v2`] | N × 3 ML-DSA-87 signatures on chain, at [`crate::dns_finality::STAKE_ATTESTATION_SIG_LEN`] = 4,627 bytes each |
+//! | receipts to quorum | [`crate::palw_fp_devnet_v3::PALW_V2_PANEL_QUORUM`] = 3 | `palw_fp_devnet_v3.rs:460`, enforced by [`crate::palw_panel_v2::validate_receipt_quorum_v2`] | N × 3 ML-DSA-87 signatures on chain, at [`crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN`] = 4,627 bytes each |
 //! | seat replay work | [`crate::palw_fp_interval_v1::PALW_FP_SEAT_INTERVAL_SAMPLES_V1`] = 4 intervals **per seat per claim** | `palw_fp_interval_v1.rs:28` | N × 5 × 4 interval replays for one answer. The draw is short-circuited only when `interval_count <= k`, so a short segment is checked WHOLE — segmentation buys denser sampling and pays the panel's CPU for it |
 //! | derivations | [`crate::palw_derived_v1::PALW_DERIVED_MAX_PER_CLAIM`] = 4 | `palw_derived_v1.rs:36` | the ceiling is per claim, but a `PalwDerivedArtifactV1` names a SINGULAR `claim_id`/`output_root` — N × 4 slots that no derivation can span |
 //! | abandon hold | `fp_abandon_hold` = 600 DAA (RC) | `palw_fp_devnet_v3.rs:100`, read by [`crate::palw_state_v2::palw_claim_is_on_abandon_hold_v2`] (`:1070`) | N reservations held past the void, not one |
@@ -101,7 +101,7 @@
 //! No `ForkActivation`, no state field, no wire type. `palw_segmentation_cost_v1` is arithmetic
 //! over constants that already exist; a consensus path that called it would be a bug.
 
-use crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
+use crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
 use crate::palw_derived_v1::PALW_DERIVED_MAX_PER_CLAIM;
 use crate::palw_fp_devnet_v3::{PALW_V2_PANEL_QUORUM, PALW_V2_PANEL_SEATS};
 use crate::palw_fp_interval_v1::PALW_FP_SEAT_INTERVAL_SAMPLES_V1;
@@ -314,7 +314,7 @@ pub struct PalwSegmentationCostV1 {
     pub panels: u64,
     /// The MINIMUM receipt set that reaches quorum, per claim, summed.
     pub quorum_receipts: u64,
-    /// `quorum_receipts × STAKE_ATTESTATION_SIG_LEN` — the signature bytes alone.
+    /// `quorum_receipts × MLDSA87_SIGNATURE_LEN` — the signature bytes alone.
     pub receipt_signature_bytes: u64,
     /// The whole `ReceiptLicensed` carriage, envelopes included. Strictly larger than the
     /// signature total, which is why the signature total alone understates the bill.
@@ -347,7 +347,7 @@ pub struct PalwSegmentationCostV1 {
 ///
 /// The 32-byte reading of an outpoint's transaction id is upstream Kaspa's and is wrong here;
 /// `the_seat_receipt_wire_size_is_what_the_constant_says` is what caught it.
-pub const PALW_SEAT_RECEIPT_VALID_WIRE_BYTES_V1: u64 = 64 + 1 + (64 + 4) + 8 + 4 + STAKE_ATTESTATION_SIG_LEN as u64;
+pub const PALW_SEAT_RECEIPT_VALID_WIRE_BYTES_V1: u64 = 64 + 1 + (64 + 4) + 8 + 4 + MLDSA87_SIGNATURE_LEN as u64;
 
 /// The borsh wire size of a `PalwConsensusObjectV2::ReceiptLicensed` carrying `receipts` receipts:
 /// the object's own enum tag (1) + `claim` (64) + the vector's length prefix (4) + the receipts.
@@ -366,7 +366,7 @@ pub fn palw_segmentation_cost_v1(segments: u64, per_claim_exposure_sompi: u128) 
         segments,
         panels: segments,
         quorum_receipts,
-        receipt_signature_bytes: quorum_receipts.saturating_mul(STAKE_ATTESTATION_SIG_LEN as u64),
+        receipt_signature_bytes: quorum_receipts.saturating_mul(MLDSA87_SIGNATURE_LEN as u64),
         licensed_object_bytes: segments.saturating_mul(palw_receipt_licensed_wire_bytes_v1(PALW_V2_PANEL_QUORUM as u64)),
         seat_interval_replays: segments
             .saturating_mul(PALW_V2_PANEL_SEATS as u64)
@@ -497,7 +497,7 @@ mod tests {
         assert_eq!(PALW_V2_PANEL_QUORUM, 3, "quorum is three (palw_fp_devnet_v3.rs:460)");
         assert_eq!(PALW_FP_SEAT_INTERVAL_SAMPLES_V1, 4, "a seat opens k=4 intervals per claim");
         assert_eq!(PALW_DERIVED_MAX_PER_CLAIM, 4, "four derivations per claim");
-        assert_eq!(STAKE_ATTESTATION_SIG_LEN, 4_627, "one ML-DSA-87 signature");
+        assert_eq!(MLDSA87_SIGNATURE_LEN, 4_627, "one ML-DSA-87 signature");
         assert_eq!(PALW_V2_MAX_PAYOUTS_PER_BLOCK, 8, "the payout queue drains eight claims per block");
         // **The queue's ceiling and its drain are one design, and this is what keeps them tied**
         // (mainnet audit 2026-09-06, M-10). The ceiling exists because ADR-0087's market is a
@@ -1032,7 +1032,7 @@ mod tests {
                 index: 0,
             }),
             signed_daa: 1_234,
-            signature: vec![0x5A; STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; MLDSA87_SIGNATURE_LEN],
         };
         let bytes = borsh::to_vec(&receipt).expect("a receipt is borsh-serializable");
         assert_eq!(bytes.len() as u64, PALW_SEAT_RECEIPT_VALID_WIRE_BYTES_V1);

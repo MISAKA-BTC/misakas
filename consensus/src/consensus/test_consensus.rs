@@ -1,7 +1,7 @@
 use async_channel::Sender;
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::coinbase::MinerData;
-use kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk;
+use kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk;
 use kaspa_consensus_core::mining_rules::MiningRules;
 use kaspa_consensus_core::{
     api::ConsensusApi, block::MutableBlock, blockstatus::BlockStatus, header::Header, merkle::calc_hash_merkle_root,
@@ -294,7 +294,7 @@ impl TestConsensus {
                 .as_ref()
                 .to_vec()
         } else {
-            vec![0x5A; kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN]
+            vec![0x5A; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN]
         };
         PalwReceiptSpendEnvelopeV3 { spend, signature }.encode()
     }

@@ -4134,7 +4134,7 @@ mod tests {
                     temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
                 },
             },
-            signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+            signature: vec![0x5A; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
         };
         envelope
             .validate_stateless_under_ruleset_v3(network_domain, false, ruleset, None)
