@@ -1930,7 +1930,9 @@ mod tests {
     /// **The DNS-overlay validator and its VLT compute role are retired, flags included.** PALW does
     /// not involve validators, so kaspad has no in-process validator service to configure: a unit
     /// file still carrying one of these flags is refused at parse time rather than started into a
-    /// node that silently ignores what its operator asked for.
+    /// node that silently ignores what its operator asked for. The private-devnet switches that armed
+    /// the overlay's VLT and token fences went with them: with no validator left to attest or compute,
+    /// a devnet started with one had nothing to exercise.
     #[test]
     fn the_retired_validator_and_compute_flags_are_refused() {
         for flag in [
@@ -1948,6 +1950,14 @@ mod tests {
             "--compute-fixture-job-limit=1",
             "--tkn-fixture-transfer=00:1:0:0",
             "--tkn-fixture-burn=1:0:0",
+            "--vlt-devnet=100",
+            "--vlt-devnet-credit-window-epochs=8",
+            "--vlt-shadow-only",
+            "--vlt-devnet-flat-decay",
+            "--tkn-devnet=400",
+            "--tkn-devnet-shadow-span=300",
+            "--tkn-devnet-epoch-budget-tok=1000",
+            "--node-profile=validator",
         ] {
             assert!(Args::parse(vec!["kaspad", flag]).is_err(), "{flag} is accepted again, but nothing in kaspad reads it");
         }
