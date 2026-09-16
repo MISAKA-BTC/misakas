@@ -448,6 +448,21 @@ pub struct PalwExecRoundViewV1 {
     pub used: Vec<u16>,
 }
 
+/// **ADR-0125 §7.4: the lane as the sink's state holds it** — what an operator or an explorer asks
+/// of a node: the round's permits, the span's schedule, how many permits the span has accepted, and
+/// the finals recorded toward the next span's schedule.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwExecLaneStatusV1 {
+    pub view: PalwExecRoundViewV1,
+    /// The schedule the view's permits are drawn from, where the span has one.
+    pub schedule: Option<PalwExecScheduleV1>,
+    /// Permits accepted on the sink's chain in the view's span.
+    pub accepted_in_span: u64,
+    /// The span whose finals are being recorded, and how many it holds.
+    pub finals_span: u64,
+    pub finals: u64,
+}
+
 /// Why an execution envelope was refused.
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum PalwExecEnvelopeError {

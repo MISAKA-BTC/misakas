@@ -4296,6 +4296,194 @@ impl Deserializer for GetPalwRegistrationTermsResponse {
     }
 }
 
+/// ADR-0125 §7.4: `getPalwRoundLane` — the execution lane as the node's sink state holds it. Rounds
+/// are whole seconds since genesis; the node answers for the round its clock is in.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwRoundLaneRequest {}
+
+impl Serializer for GetPalwRoundLaneRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwRoundLaneRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {})
+    }
+}
+
+/// One stage of the lane's width: from the first span opening at or past `activation_daa`, a round
+/// holds `permits_per_round` permits. The first stage is the lane's opening.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwRoundLaneStage {
+    pub activation_daa: u64,
+    pub permits_per_round: u16,
+}
+
+impl Serializer for RpcPalwRoundLaneStage {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(u64, &self.activation_daa, writer)?;
+        store!(u16, &self.permits_per_round, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwRoundLaneStage {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { activation_daa: load!(u64, reader)?, permits_per_round: load!(u16, reader)? })
+    }
+}
+
+/// One permit of the current round.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwRoundPermit {
+    pub index: u16,
+    /// `<txid>:<index>` of the bond the permit is drawn to.
+    pub bond: String,
+    pub operator_id: String,
+    pub domain: String,
+    /// Accepted on the sink's chain already.
+    pub used: bool,
+}
+
+impl Serializer for RpcPalwRoundPermit {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(u16, &self.index, writer)?;
+        store!(String, &self.bond, writer)?;
+        store!(String, &self.operator_id, writer)?;
+        store!(String, &self.domain, writer)?;
+        store!(bool, &self.used, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwRoundPermit {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            index: load!(u16, reader)?,
+            bond: load!(String, reader)?,
+            operator_id: load!(String, reader)?,
+            domain: load!(String, reader)?,
+            used: load!(bool, reader)?,
+        })
+    }
+}
+
+/// One security domain of the span's schedule.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwRoundLaneDomain {
+    pub domain: String,
+    /// Finalized attempts of the span before.
+    pub credits: u64,
+    pub quota_permille: u16,
+    /// The rounds it holds permits in: even (0) or odd (1).
+    pub parity: u8,
+    pub bonds: u32,
+}
+
+impl Serializer for RpcPalwRoundLaneDomain {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.domain, writer)?;
+        store!(u64, &self.credits, writer)?;
+        store!(u16, &self.quota_permille, writer)?;
+        store!(u8, &self.parity, writer)?;
+        store!(u32, &self.bonds, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwRoundLaneDomain {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            domain: load!(String, reader)?,
+            credits: load!(u64, reader)?,
+            quota_permille: load!(u16, reader)?,
+            parity: load!(u8, reader)?,
+            bonds: load!(u32, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwRoundLaneResponse {
+    /// The network configures the lane.
+    pub armed: bool,
+    /// The lane is open at the virtual DAA score and the sink's state could be read.
+    pub open: bool,
+    pub schedule_span_daa: u64,
+    pub max_per_mergeset: u64,
+    /// The opening stage, then each widening, in height order.
+    pub stages: Vec<RpcPalwRoundLaneStage>,
+    pub virtual_daa: u64,
+    pub round: u64,
+    /// The span a round block built now hangs in, and its width — the lane's blocks per second.
+    pub span: u64,
+    pub permits_per_round: u16,
+    pub permits: Vec<RpcPalwRoundPermit>,
+    pub domains: Vec<RpcPalwRoundLaneDomain>,
+    pub accepted_in_span: u64,
+    /// The span whose finalized attempts are being recorded for the next schedule, and their count.
+    pub finals_span: u64,
+    pub finals: u64,
+}
+
+impl Serializer for GetPalwRoundLaneResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.armed, writer)?;
+        store!(bool, &self.open, writer)?;
+        store!(u64, &self.schedule_span_daa, writer)?;
+        store!(u64, &self.max_per_mergeset, writer)?;
+        serialize!(Vec<RpcPalwRoundLaneStage>, &self.stages, writer)?;
+        store!(u64, &self.virtual_daa, writer)?;
+        store!(u64, &self.round, writer)?;
+        store!(u64, &self.span, writer)?;
+        store!(u16, &self.permits_per_round, writer)?;
+        serialize!(Vec<RpcPalwRoundPermit>, &self.permits, writer)?;
+        serialize!(Vec<RpcPalwRoundLaneDomain>, &self.domains, writer)?;
+        store!(u64, &self.accepted_in_span, writer)?;
+        store!(u64, &self.finals_span, writer)?;
+        store!(u64, &self.finals, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwRoundLaneResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            armed: load!(bool, reader)?,
+            open: load!(bool, reader)?,
+            schedule_span_daa: load!(u64, reader)?,
+            max_per_mergeset: load!(u64, reader)?,
+            stages: deserialize!(Vec<RpcPalwRoundLaneStage>, reader)?,
+            virtual_daa: load!(u64, reader)?,
+            round: load!(u64, reader)?,
+            span: load!(u64, reader)?,
+            permits_per_round: load!(u16, reader)?,
+            permits: deserialize!(Vec<RpcPalwRoundPermit>, reader)?,
+            domains: deserialize!(Vec<RpcPalwRoundLaneDomain>, reader)?,
+            accepted_in_span: load!(u64, reader)?,
+            finals_span: load!(u64, reader)?,
+            finals: load!(u64, reader)?,
+        })
+    }
+}
+
 /// ADR-0122: `getPalwNodeStatus` — what this node is doing, which until now only its log said.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

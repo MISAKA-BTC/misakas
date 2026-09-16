@@ -13393,6 +13393,9 @@ async fn adr0125_round_blocks_hang_beside_the_chain_and_never_move_it() {
     let payout = p2pkh_mldsa87_spk(state.bond(&adr0125_harness_bond()).expect("row 0 is registered").payout_payload.as_byte_slice());
     let view = vp.palw_round_view_v1(first_round).expect("the lane is open");
     assert!(view.permits.is_empty(), "no attempt has reached Final, so no span is scheduled and no permit exists");
+    let status = vp.palw_round_lane_status_v1(first_round).expect("the status reads the same state");
+    assert_eq!(status.view, view);
+    assert!(status.schedule.is_none() && status.accepted_in_span == 0 && status.finals == 0, "an unscheduled lane reports nothing");
 
     // A round block hangs from the sink's selected parent.
     let e1 = adr0125_round_block(&ctx, &config, first_round, 0, payout.clone(), 0);

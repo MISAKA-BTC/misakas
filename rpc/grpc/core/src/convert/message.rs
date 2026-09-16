@@ -786,6 +786,47 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwNodeStatusResponse>, protowire::Ge
         error: None,
     }
 });
+from!(&kaspa_rpc_core::GetPalwRoundLaneRequest, protowire::GetPalwRoundLaneRequestMessage);
+from!(item: &kaspa_rpc_core::RpcPalwRoundLaneStage, protowire::RpcPalwRoundLaneStage, {
+    Self { activation_daa: item.activation_daa, permits_per_round: item.permits_per_round.into() }
+});
+from!(item: &kaspa_rpc_core::RpcPalwRoundPermit, protowire::RpcPalwRoundPermit, {
+    Self {
+        index: item.index.into(),
+        bond: item.bond.clone(),
+        operator_id: item.operator_id.clone(),
+        domain: item.domain.clone(),
+        used: item.used,
+    }
+});
+from!(item: &kaspa_rpc_core::RpcPalwRoundLaneDomain, protowire::RpcPalwRoundLaneDomain, {
+    Self {
+        domain: item.domain.clone(),
+        credits: item.credits,
+        quota_permille: item.quota_permille.into(),
+        parity: item.parity.into(),
+        bonds: item.bonds,
+    }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwRoundLaneResponse>, protowire::GetPalwRoundLaneResponseMessage, {
+    Self {
+        armed: item.armed,
+        open: item.open,
+        schedule_span_daa: item.schedule_span_daa,
+        max_per_mergeset: item.max_per_mergeset,
+        stages: item.stages.iter().map(protowire::RpcPalwRoundLaneStage::from).collect(),
+        virtual_daa: item.virtual_daa,
+        round: item.round,
+        span: item.span,
+        permits_per_round: item.permits_per_round.into(),
+        permits: item.permits.iter().map(protowire::RpcPalwRoundPermit::from).collect(),
+        domains: item.domains.iter().map(protowire::RpcPalwRoundLaneDomain::from).collect(),
+        accepted_in_span: item.accepted_in_span,
+        finals_span: item.finals_span,
+        finals: item.finals,
+        error: None,
+    }
+});
 from!(&kaspa_rpc_core::GetPalwRegistrationTermsRequest, protowire::GetPalwRegistrationTermsRequestMessage);
 from!(item: &kaspa_rpc_core::RpcPalwCertifiedFamily, protowire::RpcPalwCertifiedFamily, {
     Self { lane: item.lane.clone(), digest: item.digest.clone(), certified_daa: item.certified_daa, family_hex: item.family_hex.clone() }
@@ -1885,6 +1926,52 @@ try_from!(item: &protowire::GetPalwNodeStatusResponseMessage, RpcResult<kaspa_rp
         panel_running: item.panel_running,
         panel_submitter: item.panel_submitter,
         retention_dir: item.retention_dir.clone(),
+    }
+});
+try_from!(&protowire::GetPalwRoundLaneRequestMessage, kaspa_rpc_core::GetPalwRoundLaneRequest);
+try_from!(item: &protowire::RpcPalwRoundLaneStage, kaspa_rpc_core::RpcPalwRoundLaneStage, {
+    Self {
+        activation_daa: item.activation_daa,
+        permits_per_round: u16::try_from(item.permits_per_round)
+            .map_err(|_| RpcError::General(format!("permits_per_round {} is not a width", item.permits_per_round)))?,
+    }
+});
+try_from!(item: &protowire::RpcPalwRoundPermit, kaspa_rpc_core::RpcPalwRoundPermit, {
+    Self {
+        index: u16::try_from(item.index).map_err(|_| RpcError::General(format!("permit index {} is not a permit", item.index)))?,
+        bond: item.bond.clone(),
+        operator_id: item.operator_id.clone(),
+        domain: item.domain.clone(),
+        used: item.used,
+    }
+});
+try_from!(item: &protowire::RpcPalwRoundLaneDomain, kaspa_rpc_core::RpcPalwRoundLaneDomain, {
+    Self {
+        domain: item.domain.clone(),
+        credits: item.credits,
+        quota_permille: u16::try_from(item.quota_permille)
+            .map_err(|_| RpcError::General(format!("quota {} is not a permille", item.quota_permille)))?,
+        parity: u8::try_from(item.parity).map_err(|_| RpcError::General(format!("parity {} is not a parity", item.parity)))?,
+        bonds: item.bonds,
+    }
+});
+try_from!(item: &protowire::GetPalwRoundLaneResponseMessage, RpcResult<kaspa_rpc_core::GetPalwRoundLaneResponse>, {
+    Self {
+        armed: item.armed,
+        open: item.open,
+        schedule_span_daa: item.schedule_span_daa,
+        max_per_mergeset: item.max_per_mergeset,
+        stages: item.stages.iter().map(kaspa_rpc_core::RpcPalwRoundLaneStage::try_from).collect::<RpcResult<Vec<_>>>()?,
+        virtual_daa: item.virtual_daa,
+        round: item.round,
+        span: item.span,
+        permits_per_round: u16::try_from(item.permits_per_round)
+            .map_err(|_| RpcError::General(format!("permits_per_round {} is not a width", item.permits_per_round)))?,
+        permits: item.permits.iter().map(kaspa_rpc_core::RpcPalwRoundPermit::try_from).collect::<RpcResult<Vec<_>>>()?,
+        domains: item.domains.iter().map(kaspa_rpc_core::RpcPalwRoundLaneDomain::try_from).collect::<RpcResult<Vec<_>>>()?,
+        accepted_in_span: item.accepted_in_span,
+        finals_span: item.finals_span,
+        finals: item.finals,
     }
 });
 try_from!(&protowire::GetPalwRegistrationTermsRequestMessage, kaspa_rpc_core::GetPalwRegistrationTermsRequest);

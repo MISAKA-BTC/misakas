@@ -96,6 +96,7 @@ message KaspadRequest {
     GetPalwClassesRequestMessage getPalwClassesRequest = 1158;
     GetPalwNodeStatusRequestMessage getPalwNodeStatusRequest = 1160;
     GetPalwRegistrationTermsRequestMessage getPalwRegistrationTermsRequest = 1162;
+    GetPalwRoundLaneRequestMessage getPalwRoundLaneRequest = 1164;
   }
 }
 
@@ -187,6 +188,7 @@ message KaspadResponse {
     GetPalwClassesResponseMessage getPalwClassesResponse = 1159;
     GetPalwNodeStatusResponseMessage getPalwNodeStatusResponse = 1161;
     GetPalwRegistrationTermsResponseMessage getPalwRegistrationTermsResponse = 1163;
+    GetPalwRoundLaneResponseMessage getPalwRoundLaneResponse = 1165;
   }
 }
 

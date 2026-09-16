@@ -13240,6 +13240,11 @@ impl VirtualStateProcessor {
     /// now.** The anchor such a block hangs from is the sink's selected parent — the chain block the
     /// next chain block can merge it beside — so the schedule is that anchor's span's.
     pub fn palw_round_view_v1(&self, round: u64) -> Option<kaspa_consensus_core::palw_execution_lane_v1::PalwExecRoundViewV1> {
+        self.palw_round_lane_status_v1(round).map(|status| status.view)
+    }
+
+    /// **ADR-0125 §7.4: the round's view, and the span it belongs to as the sink's state holds it.**
+    pub fn palw_round_lane_status_v1(&self, round: u64) -> Option<kaspa_consensus_core::palw_execution_lane_v1::PalwExecLaneStatusV1> {
         let lane = self.palw_execution_lane?;
         let virtual_state = self.virtual_stores.read().state.get().unwrap();
         if !lane.activation.is_active(virtual_state.daa_score) {
@@ -13266,13 +13271,20 @@ impl VirtualStateProcessor {
             .map(|schedule| kaspa_consensus_core::palw_execution_lane_v1::palw_execution_permits_v1(schedule, round, width))
             .unwrap_or_default();
         let used = (0..width).filter(|index| state.round_permit_used(span, round, *index)).collect();
-        Some(kaspa_consensus_core::palw_execution_lane_v1::PalwExecRoundViewV1 {
-            round,
-            span,
-            width,
-            genesis_timestamp_ms: self.genesis.timestamp,
-            permits,
-            used,
+        let (finals_span, finals) = state.round_finals();
+        Some(kaspa_consensus_core::palw_execution_lane_v1::PalwExecLaneStatusV1 {
+            view: kaspa_consensus_core::palw_execution_lane_v1::PalwExecRoundViewV1 {
+                round,
+                span,
+                width,
+                genesis_timestamp_ms: self.genesis.timestamp,
+                permits,
+                used,
+            },
+            schedule: state.round_schedule(span).cloned(),
+            accepted_in_span: state.round_permits_accepted(span),
+            finals_span,
+            finals: finals.len() as u64,
         })
     }
 

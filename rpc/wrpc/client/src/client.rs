@@ -680,6 +680,7 @@ impl RpcApi for KaspaRpcClient {
             GetPalwClasses,
             GetPalwNodeStatus,
             GetPalwRegistrationTerms,
+            GetPalwRoundLane,
             GetTokenSupply,
             GetTokenEmissionInfo,
             GetStakeBond,

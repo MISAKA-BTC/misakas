@@ -719,6 +719,19 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwRegistrationTermsResponse::default())
     }
 
+    /// ADR-0125 §7.4: the execution lane as the node's sink state holds it.
+    async fn get_palw_round_lane(&self) -> RpcResult<GetPalwRoundLaneResponse> {
+        self.get_palw_round_lane_call(None, GetPalwRoundLaneRequest {}).await
+    }
+    async fn get_palw_round_lane_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwRoundLaneRequest,
+    ) -> RpcResult<GetPalwRoundLaneResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwRoundLaneResponse::default())
+    }
+
     /// MISAKA Compute Token Program (design §9.3): an asset's supply counters.
     async fn get_token_supply(&self, asset_id: u64) -> RpcResult<GetTokenSupplyResponse> {
         self.get_token_supply_call(None, GetTokenSupplyRequest { asset_id }).await

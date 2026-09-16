@@ -180,6 +180,13 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// ADR-0125 §7.4: the view of `round` with the span's schedule, its accepted permits and the
+    /// finals recorded toward the next span — `getPalwRoundLane`'s read. `None` where the view is.
+    fn palw_round_lane_status_v1(&self, round: u64) -> Option<crate::palw_execution_lane_v1::PalwExecLaneStatusV1> {
+        let _ = round;
+        unimplemented!()
+    }
+
     /// ADR-0125: re-shape a standard template into a round block of `round` whose fees pay `payout`
     /// — the round lane's parents, algo 10, a zero-subsidy coinbase with no outputs, an empty EVM
     /// payload and an empty `palw_commitment` for the caller to fill with its signed envelope once

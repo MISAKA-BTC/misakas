@@ -1847,3 +1847,45 @@ message GetPalwRegistrationTermsResponseMessage {
   repeated RpcPalwCertifiedFamily families = 9;
   RPCError error = 1000;
 }
+
+// ADR-0125 §7.4: the execution lane as the node's sink state holds it.
+message GetPalwRoundLaneRequestMessage {}
+
+message RpcPalwRoundLaneStage {
+  uint64 activationDaa = 1;
+  uint32 permitsPerRound = 2;
+}
+
+message RpcPalwRoundPermit {
+  uint32 index = 1;
+  string bond = 2;
+  string operatorId = 3;
+  string domain = 4;
+  bool used = 5;
+}
+
+message RpcPalwRoundLaneDomain {
+  string domain = 1;
+  uint64 credits = 2;
+  uint32 quotaPermille = 3;
+  uint32 parity = 4;
+  uint32 bonds = 5;
+}
+
+message GetPalwRoundLaneResponseMessage {
+  bool armed = 1;
+  bool open = 2;
+  uint64 scheduleSpanDaa = 3;
+  uint64 maxPerMergeset = 4;
+  repeated RpcPalwRoundLaneStage stages = 5;
+  uint64 virtualDaa = 6;
+  uint64 round = 7;
+  uint64 span = 8;
+  uint32 permitsPerRound = 9;
+  repeated RpcPalwRoundPermit permits = 10;
+  repeated RpcPalwRoundLaneDomain domains = 11;
+  uint64 acceptedInSpan = 12;
+  uint64 finalsSpan = 13;
+  uint64 finals = 14;
+  RPCError error = 1000;
+}

@@ -488,6 +488,14 @@ impl ConsensusSessionOwned {
         self.consensus.palw_round_view_v1(round)
     }
 
+    /// ADR-0125 §7.4: the round's view with the span's schedule and ledger, off the async runtime.
+    pub async fn async_palw_round_lane_status_v1(
+        &self,
+        round: u64,
+    ) -> Option<kaspa_consensus_core::palw_execution_lane_v1::PalwExecLaneStatusV1> {
+        self.clone().spawn_blocking(move |c| c.palw_round_lane_status_v1(round)).await
+    }
+
     /// ADR-0125: re-shape a standard template into a round block — the template build's call profile.
     pub fn round_adapt_block_template(
         &self,

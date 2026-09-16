@@ -208,6 +208,9 @@ pub enum RpcApiOps {
     /// from the chain — the base target, the slash value, the registered ids and roots — and the
     /// families the chain certified on both lanes, read from one state.
     GetPalwRegistrationTerms = 180,
+    /// ADR-0125 §7.4: the execution lane — its stage table, the current round's permits, the span's
+    /// schedule and ledger, and the finals recorded toward the next span.
+    GetPalwRoundLane = 181,
 }
 
 impl RpcApiOps {

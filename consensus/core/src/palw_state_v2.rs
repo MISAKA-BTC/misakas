@@ -5502,6 +5502,11 @@ impl PalwChainStateV2 {
     }
 
     /// ADR-0125: has the permit `(span, round, index)` already been accepted on this chain?
+    /// ADR-0125 §7.4: how many permits of `span` this chain has accepted.
+    pub fn round_permits_accepted(&self, span: u64) -> u64 {
+        self.round_permits_used.range((span, 0)..=(span, u64::MAX)).map(|(_, bits)| u64::from(bits.count_ones())).sum()
+    }
+
     pub fn round_permit_used(&self, span: u64, round: u64, index: u16) -> bool {
         index < 16 && self.round_permits_used.get(&(span, round)).is_some_and(|bits| bits & (1u16 << index) != 0)
     }
@@ -5513,7 +5518,10 @@ impl PalwChainStateV2 {
 
     /// Whether the execution lane has written anything: the gate the root and the carriage share.
     fn round_lane_is_written(&self) -> bool {
-        self.round_span != 0 || !self.round_finals.is_empty() || !self.round_schedules.is_empty() || !self.round_permits_used.is_empty()
+        self.round_span != 0
+            || !self.round_finals.is_empty()
+            || !self.round_schedules.is_empty()
+            || !self.round_permits_used.is_empty()
     }
 
     /// **ADR-0119 Decision 2: the step ladder of a class, given the network's** — the ladder this
@@ -7555,7 +7563,10 @@ impl<'a> TransitionBuilder<'a> {
     fn record_round_permits(&mut self, uses: &[crate::palw_execution_lane_v1::PalwExecPermitUseV1]) -> Result<(), PalwStateV2Error> {
         for used in uses {
             if used.permit_index >= crate::palw_execution_lane_v1::PALW_EXEC_MAX_PERMITS_PER_ROUND_V1 {
-                return Err(PalwStateV2Error::RoundPermitRefused(format!("permit index {} above the widest round", used.permit_index)));
+                return Err(PalwStateV2Error::RoundPermitRefused(format!(
+                    "permit index {} above the widest round",
+                    used.permit_index
+                )));
             }
             let key = (used.span, used.round);
             let bits = self.state.round_permits_used.get(&key).copied().unwrap_or(0);
@@ -14871,7 +14882,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             self.panel_duties.serialize(writer)?;
             self.panel_reserve_sompi.serialize(writer)?;
         }
-        if self.round_span != 0 || !self.round_finals.is_empty() || !self.round_schedules.is_empty() || !self.round_permits_used.is_empty()
+        if self.round_span != 0
+            || !self.round_finals.is_empty()
+            || !self.round_schedules.is_empty()
+            || !self.round_permits_used.is_empty()
         {
             PALW_CARRIAGE_ROUND_LANE_TAIL_V1.serialize(writer)?;
             self.round_span.serialize(writer)?;
@@ -17900,9 +17914,8 @@ pub(crate) mod tests {
         // Re-fold the bound claim's licensing and finalization with the lane armed at a span of 100.
         let lane = round_extras(100, Vec::new());
         let receipts = vec![receipt_at(claim_id, bond_key(1), true, 103), receipt_at(claim_id, bond_key(2), true, 103)];
-        let s4 =
-            apply_round(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts }], &lane)
-                .expect("licensed");
+        let s4 = apply_round(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts }], &lane)
+            .expect("licensed");
         assert!(s4.round_finals().1.is_empty(), "nothing is a credit before Final");
         let s5 = apply_round(&s4, &p, &ctx(5, 124, 5), &[], &lane).expect("finalized");
         let claim = s5.claim(&claim_id).unwrap().clone();
@@ -17934,7 +17947,23 @@ pub(crate) mod tests {
         let s7 = apply_round(&s6, &p, &ctx(7, 201, 7), &[], &round_extras(100, vec![used])).expect("the permit is recorded");
         assert!(s7.round_permit_used(2, 10, 0));
         assert!(!s7.round_permit_used(2, 12, 0), "another round's permit is not");
-        let twice = apply_palw_transition_v2_with_extras(&s7, &p, &ctx(8, 202, 8), &[], None, false, false, false, false, &round_extras(100, vec![used]));
+        assert_eq!(
+            (s7.round_permits_accepted(2), s7.round_permits_accepted(1), s7.round_permits_accepted(3)),
+            (1, 0, 0),
+            "the span's count"
+        );
+        let twice = apply_palw_transition_v2_with_extras(
+            &s7,
+            &p,
+            &ctx(8, 202, 8),
+            &[],
+            None,
+            false,
+            false,
+            false,
+            false,
+            &round_extras(100, vec![used]),
+        );
         assert!(matches!(twice, Err(PalwStateV2Error::RoundPermitRefused(_))), "a permit is accepted once: {twice:?}");
 
         // Two spans on, nothing of span 2 is kept.

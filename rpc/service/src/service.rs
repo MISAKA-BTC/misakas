@@ -1302,6 +1302,76 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         })
     }
 
+    async fn get_palw_round_lane_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        _request: GetPalwRoundLaneRequest,
+    ) -> RpcResult<GetPalwRoundLaneResponse> {
+        let Some(lane) = self.config.params.palw_execution_lane_fence() else {
+            return Ok(GetPalwRoundLaneResponse::default());
+        };
+        let stages = std::iter::once(RpcPalwRoundLaneStage {
+            activation_daa: lane.activation.daa_score(),
+            permits_per_round: lane.permits_per_round,
+        })
+        .chain(lane.widenings.iter().filter(|stage| stage.is_used()).map(|stage| RpcPalwRoundLaneStage {
+            activation_daa: stage.activation.daa_score(),
+            permits_per_round: stage.permits_per_round,
+        }))
+        .collect();
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let virtual_daa = session.get_virtual_daa_score();
+        let round = kaspa_consensus_core::palw_execution_lane_v1::palw_execution_round_v1(
+            kaspa_core::time::unix_now(),
+            self.config.params.genesis.timestamp,
+        );
+        let mut response = GetPalwRoundLaneResponse {
+            armed: true,
+            schedule_span_daa: lane.schedule_span_daa,
+            max_per_mergeset: lane.max_per_mergeset,
+            stages,
+            virtual_daa,
+            round,
+            ..Default::default()
+        };
+        let Some(status) = session.async_palw_round_lane_status_v1(round).await else {
+            return Ok(response);
+        };
+        let bond_string =
+            |bond: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2| format!("{}:{}", bond.0.transaction_id, bond.0.index);
+        response.open = true;
+        response.span = status.view.span;
+        response.permits_per_round = status.view.width;
+        response.permits = status
+            .view
+            .permits
+            .iter()
+            .map(|permit| RpcPalwRoundPermit {
+                index: permit.index,
+                bond: bond_string(&permit.bond),
+                operator_id: permit.operator_id.to_string(),
+                domain: permit.domain.to_string(),
+                used: status.view.used.contains(&permit.index),
+            })
+            .collect();
+        response.domains = status
+            .schedule
+            .iter()
+            .flat_map(|schedule| schedule.domains.iter())
+            .map(|domain| RpcPalwRoundLaneDomain {
+                domain: domain.domain.to_string(),
+                credits: domain.credits,
+                quota_permille: domain.quota_permille,
+                parity: domain.parity,
+                bonds: domain.bonds.len() as u32,
+            })
+            .collect();
+        response.accepted_in_span = status.accepted_in_span;
+        response.finals_span = status.finals_span;
+        response.finals = status.finals;
+        Ok(response)
+    }
+
     async fn get_palw_producer_facts_call(
         &self,
         _connection: Option<&DynRpcConnection>,

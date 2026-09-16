@@ -1169,6 +1169,10 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_round_view_v1(round)
     }
 
+    fn palw_round_lane_status_v1(&self, round: u64) -> Option<kaspa_consensus_core::palw_execution_lane_v1::PalwExecLaneStatusV1> {
+        self.virtual_processor.palw_round_lane_status_v1(round)
+    }
+
     fn round_adapt_block_template(
         &self,
         template: BlockTemplate,
