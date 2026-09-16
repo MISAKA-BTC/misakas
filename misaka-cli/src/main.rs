@@ -868,6 +868,13 @@ enum PalwCmd {
     /// ADR-0108: verify, preflight, submit and receipt an extension manifest.
     #[command(subcommand)]
     Extension(ExtensionCmd),
+    /// ADR-0125: the execution lane as the node holds it — the stage table, the round's permits,
+    /// the span's schedule and accepted permits, and the finals toward the next span.
+    RoundLane {
+        /// Only the permits of this bond (`txid:index`) in the human view.
+        #[arg(long)]
+        bond: Option<String>,
+    },
     /// Submit a free-prompt commitment built by `misaka-palw-fp-rail` (dry-run unless --yes).
     FpSubmit {
         /// The rail's `*.commitment-tx.borsh`.
@@ -2258,6 +2265,7 @@ async fn main() -> std::process::ExitCode {
         }
         Command::Evm(EvmCmd::Tx(EvmTxCmd::Status { hash })) => eth::tx_status(&ctx, &hash),
         Command::Evm(EvmCmd::Tx(EvmTxCmd::Wait { hash, timeout, poll })) => eth::tx_wait(&ctx, &hash, timeout, poll),
+        Command::Palw(PalwCmd::RoundLane { bond }) => palw_round_lane(&ctx, bond.as_deref()).await,
         Command::Palw(PalwCmd::FpSubmit { tx, yes, material_out, capture, dsl_payload }) => {
             palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
         }
@@ -2548,6 +2556,43 @@ async fn main() -> std::process::ExitCode {
 /// have no way in at all. A unit test on a handler cannot see either — the handler is not reached
 /// when the flag it would have to refuse does not exist, and that absence is what has to be
 /// checked, and kept.
+/// `misaka palw round-lane`: ADR-0125's lane from the node's sink state (`getPalwRoundLane`).
+async fn palw_round_lane(ctx: &node::Ctx, bond: Option<&str>) -> CliResult {
+    use kaspa_rpc_core::api::rpc::RpcApi;
+    let nv = wallet::connect(ctx).await?;
+    let lane = nv.client.get_palw_round_lane().await.map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwRoundLane: {e}")))?;
+    match ctx.output {
+        OutputFormat::Json => println!("{}", serde_json::to_string(&lane).unwrap_or_else(|_| "{}".to_string())),
+        OutputFormat::Human => {
+            println!("{}", operator::status::round_lane_line(Some(&Ok(lane.clone())), bond).unwrap_or_default());
+            if lane.armed {
+                let stages: Vec<String> =
+                    lane.stages.iter().map(|s| format!("{} BPS from DAA {}", s.permits_per_round, s.activation_daa)).collect();
+                println!("stages  : {}", stages.join(" · "));
+                println!(
+                    "span    : {} DAA a span · at most {} round blocks a mergeset",
+                    lane.schedule_span_daa, lane.max_per_mergeset
+                );
+                for domain in &lane.domains {
+                    println!(
+                        "domain  : {}… credits {} · quota {}‰ · parity {} · {} bond(s)",
+                        &domain.domain[..16.min(domain.domain.len())],
+                        domain.credits,
+                        domain.quota_permille,
+                        domain.parity,
+                        domain.bonds
+                    );
+                }
+                for permit in lane.permits.iter().filter(|p| bond.is_none_or(|b| p.bond == b)) {
+                    println!("permit  : #{} → {}{}", permit.index, permit.bond, if permit.used { " (used)" } else { "" });
+                }
+            }
+        }
+    }
+    let _ = nv.client.disconnect().await;
+    Ok(())
+}
+
 #[cfg(test)]
 mod cli_surface_tests {
     use super::*;

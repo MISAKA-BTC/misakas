@@ -1735,6 +1735,21 @@ impl VirtualStateProcessor {
                     ctx.palw_round_verdicts =
                         palw_state.as_ref().and_then(|s| self.palw_round_verdicts_v1(s, &ctx.ghostdag_data, pov_daa_score));
                     self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, pov_daa_score);
+                    // ADR-0125: one line a chain block that merges the lane — what an operator (and the
+                    // devnet drill) reads to see permits granted and the transactions they carried.
+                    if let Some(verdicts) = ctx.palw_round_verdicts.as_ref().filter(|v| !v.round_blocks.is_empty()) {
+                        let carried: usize = ctx
+                            .mergeset_acceptance_data
+                            .iter()
+                            .filter(|entry| verdicts.permitted.contains(&entry.block_hash))
+                            .map(|entry| entry.accepted_transactions.iter().filter(|tx| tx.index_within_block != 0).count())
+                            .sum();
+                        info!(
+                            "[palw-round-lane] chain block {current} merged {} round block(s): {} permit(s) granted, {carried} transaction(s) accepted from them",
+                            verdicts.round_blocks.len(),
+                            verdicts.permitted.len()
+                        );
+                    }
 
                     // kaspa-pq EVM Lane v0.4 (§2.3/§9): the lazy chain-context
                     // EVM step — the FIRST time a block becomes a selected-chain
