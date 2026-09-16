@@ -432,6 +432,43 @@ fn fork_marks(snap: &Snapshot) -> (String, String) {
     (f, s)
 }
 
+/// **ADR-0125 §7.4: the execution lane in one line** — its blocks per second (the span's width), the
+/// round's permits and whether this miner's bond holds one, what the span has accepted, and the
+/// finals gathering toward the next span's schedule. `None` where the network does not arm it.
+pub(crate) fn round_lane_line(
+    lane: Option<&Result<kaspa_rpc_core::GetPalwRoundLaneResponse, String>>,
+    bond: Option<&str>,
+) -> Option<String> {
+    let lane = match lane? {
+        Err(e) => return Some(paint::yellow(&format!("unreadable — {e}"))),
+        Ok(lane) => lane,
+    };
+    if !lane.armed {
+        return Some("not armed on this node's ruleset".to_string());
+    }
+    if !lane.open {
+        let opening = lane.stages.first().map(|s| s.activation_daa).unwrap_or_default();
+        return Some(format!("armed, opens at DAA {}", group(opening)));
+    }
+    let mine = bond.and_then(|bond| lane.permits.iter().find(|permit| permit.bond == bond));
+    let yours = match mine {
+        Some(permit) if permit.used => format!(" · yours: permit {} (used)", permit.index),
+        Some(permit) => format!(" · yours: permit {}", permit.index),
+        None if bond.is_some() => " · none yours this round".to_string(),
+        None => String::new(),
+    };
+    Some(format!(
+        "{} BPS · span {} · round {}: {} permit{}{yours} · {} accepted this span · {} finals toward the next",
+        lane.permits_per_round,
+        group(lane.span),
+        group(lane.round),
+        lane.permits.len(),
+        if lane.permits.len() == 1 { "" } else { "s" },
+        group(lane.accepted_in_span),
+        group(lane.finals)
+    ))
+}
+
 /// **The whole screen**, as ADR-0122 §11 draws it.
 pub(crate) fn render(snap: &Snapshot, view: &MinerView, now_unix: i64) -> String {
     let p = &snap.profile;
@@ -548,6 +585,10 @@ pub(crate) fn render(snap: &Snapshot, view: &MinerView, now_unix: i64) -> String
             let up = |n: usize| if n > 0 { paint::green("up") } else { paint::red("down") };
             out.push_str(&format!("  {}  outbox {outbox} · gateway {} · rail {}\n", paint::bold("Prompt "), up(gateways), up(rails)));
         }
+    }
+    // Execution lane (ADR-0125), only where the network arms it.
+    if let Some(line) = round_lane_line(snap.round_lane.as_ref(), snap.profile.bond.as_deref()) {
+        out.push_str(&format!("  {}  {line}\n", paint::bold("Lane   ")));
     }
     out.push('\n');
 
@@ -727,6 +768,20 @@ pub(crate) fn document(snap: &Snapshot, view: &MinerView) -> serde_json::Value {
             "panel_running": r.panel_running,
             "panel_submitter": r.panel_submitter,
         })),
+        "round_lane": snap.round_lane.as_ref().map(|lane| match lane {
+            Err(e) => json!({ "error": e }),
+            Ok(lane) => json!({
+                "armed": lane.armed,
+                "open": lane.open,
+                "bps": lane.permits_per_round,
+                "span": lane.span,
+                "round": lane.round,
+                "stages": lane.stages.iter().map(|s| json!({ "activation_daa": s.activation_daa, "permits_per_round": s.permits_per_round })).collect::<Vec<_>>(),
+                "permits": lane.permits.iter().map(|p| json!({ "index": p.index, "bond": p.bond, "used": p.used })).collect::<Vec<_>>(),
+                "accepted_in_span": lane.accepted_in_span,
+                "finals": lane.finals,
+            }),
+        }),
         "next": next_step(view),
         "sources": {
             "network": p.network_source,
@@ -822,6 +877,34 @@ mod tests {
             unsynced_mining: false,
             now_unix: NOW,
         }
+    }
+
+    /// ADR-0125 §7.4: the lane's line names the BPS, the round's permits and the miner's own.
+    #[test]
+    fn the_lane_line_names_the_width_the_round_and_the_miners_permit() {
+        use kaspa_rpc_core::{GetPalwRoundLaneResponse, RpcPalwRoundLaneStage, RpcPalwRoundPermit};
+        assert_eq!(round_lane_line(None, Some("aa:0")), None, "a network without the lane shows no line");
+        let open = GetPalwRoundLaneResponse {
+            armed: true,
+            open: true,
+            stages: vec![RpcPalwRoundLaneStage { activation_daa: 100, permits_per_round: 1 }],
+            span: 12,
+            round: 4_321,
+            permits_per_round: 2,
+            permits: vec![
+                RpcPalwRoundPermit { index: 0, bond: "bb:0".into(), used: true, ..Default::default() },
+                RpcPalwRoundPermit { index: 1, bond: "aa:0".into(), used: false, ..Default::default() },
+            ],
+            accepted_in_span: 33,
+            finals: 5,
+            ..Default::default()
+        };
+        let line = round_lane_line(Some(&Ok(open.clone())), Some("aa:0")).unwrap();
+        assert!(line.starts_with("2 BPS · span 12 · round 4,321: 2 permits · yours: permit 1 ·"), "{line}");
+        assert!(line.contains("33 accepted this span") && line.contains("5 finals toward the next"), "{line}");
+        assert!(round_lane_line(Some(&Ok(open.clone())), Some("cc:0")).unwrap().contains("none yours this round"));
+        let closed = GetPalwRoundLaneResponse { open: false, ..open };
+        assert_eq!(round_lane_line(Some(&Ok(closed)), None).unwrap(), "armed, opens at DAA 100");
     }
 
     fn drawing_log() -> NodeLog {

@@ -135,6 +135,9 @@ pub(crate) struct Snapshot {
     /// Where the works came from: `node` (`getPalwClaims`) or `log` (the produced blocks the node's
     /// log names, followed one by one).
     pub(crate) works_source: &'static str,
+    /// ADR-0125 §7.4: `getPalwRoundLane`, read only where this CLI's ruleset arms the execution lane
+    /// (a node on such a network serves the op; one on any other network is never asked).
+    pub(crate) round_lane: Option<Result<kaspa_rpc_core::GetPalwRoundLaneResponse, String>>,
 }
 
 impl Snapshot {
@@ -247,6 +250,7 @@ impl Snapshot {
             boot_current: false,
             node_status: None,
             works_source: "log",
+            round_lane: None,
         };
         (snap.log_live, snap.boot_current) = log_liveness(&snap.log, &snap.profile, snap.node.is_ok());
         let Ok(node) = snap.node.as_ref() else { return snap };
@@ -276,6 +280,10 @@ impl Snapshot {
             snap.works = works;
             snap.work_errors = errors;
             snap.works_source = source;
+        }
+        // Last, so a node that somehow does not know the op can drop only this read.
+        if params.palw_execution_lane_fence().is_some() {
+            snap.round_lane = Some(node.client().get_palw_round_lane().await.map_err(|e| format!("getPalwRoundLane: {e}")));
         }
         snap
     }
