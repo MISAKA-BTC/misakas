@@ -1765,9 +1765,9 @@ impl Deserializer for GetAttestationQualityDeficitsResponse {
     }
 }
 
-// kaspa-pq Phase 11 (ADR-0010): getValidatorStatus. Reports the in-process
-// validator service's operational status. `enabled` is false when the node was
-// started without `--enable-validator`, in which case the other fields are defaults.
+// kaspa-pq Phase 11 (ADR-0010): getValidatorStatus. Reported the in-process
+// validator service's operational status. That service is retired, so a node built
+// from this tree answers `enabled: false` with every other field at its default.
 /// kaspa-pq EVM Lane v0.4 (§16): one EVM log entry (RPC view).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -2071,7 +2071,7 @@ impl Deserializer for GetValidatorStatusRequest {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetValidatorStatusResponse {
-    /// Whether the in-process validator service is running (`--enable-validator`).
+    /// Whether an in-process validator service is running. Always false: the service is retired.
     pub enabled: bool,
     /// Operating mode: "active" / "standby" / "observer".
     pub mode: String,

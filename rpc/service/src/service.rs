@@ -99,10 +99,10 @@ use workflow_rpc::server::WebSocketCounters as WrpcServerCounters;
 /// from this instance to registered services and backwards should occur
 /// by adding respectively to the registered service a Collector and a
 /// Subscriber.
-/// kaspa-pq Phase 11 (ADR-0010): bridges the in-process validator service (defined in
-/// the `kaspad` crate) to the RPC layer without a circular dependency — `kaspad`
-/// implements this trait for its `ValidatorService`, and `RpcCoreService` holds an
-/// optional `dyn` to serve `getValidatorStatus`.
+/// kaspa-pq Phase 11 (ADR-0010): bridged an in-process validator service (defined in the
+/// `kaspad` crate) to the RPC layer without a circular dependency. That service is retired, so
+/// no type in this tree implements the trait any more: `kaspad` passes `None`, and
+/// `getValidatorStatus` answers `enabled: false`. The trait and the op stay for wire compatibility.
 #[async_trait]
 pub trait ValidatorStatusProvider: Send + Sync {
     async fn rpc_validator_status(&self) -> GetValidatorStatusResponse;
@@ -1838,8 +1838,9 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         _connection: Option<&DynRpcConnection>,
         _: GetValidatorStatusRequest,
     ) -> RpcResult<GetValidatorStatusResponse> {
-        // kaspa-pq Phase 11 (ADR-0010): delegate to the in-process validator service when
-        // present (`--enable-validator`); `enabled: false` otherwise.
+        // kaspa-pq Phase 11 (ADR-0010): delegate to a registered validator status provider.
+        // kaspad registers none since the in-process validator was retired, so this answers
+        // `enabled: false`.
         Ok(match &self.validator_status_provider {
             Some(provider) => provider.rpc_validator_status().await,
             None => GetValidatorStatusResponse::default(),
