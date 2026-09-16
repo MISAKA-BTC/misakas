@@ -1,9 +1,11 @@
 # ADR-0125 — The execution lane is a second lane inside the cadence, and it widens one permit at a time
 
 * Status: **IMPLEMENTED 2026-09-17, dormant** on `feat/palw-exec-lane-and-validator-retirement`
-  (from `main` at `6fdf6ba7`, after ADR-0124). `Params::palw_execution_lane` is `None` on every
-  shipped preset, so every fingerprint, every root and every block of testnet-11 is what it was; the
-  lane runs where a network arms it. The devnet drill and the testnet-11 height are §7's.
+  (from `main` at `6fdf6ba7`, after ADR-0124), including the stage table (§7.2), equivocation
+  evidence and relay de-duplication (§7.3), the RPC read and the operator's status line (§7.4), and
+  the devnet drill (§7.1). `Params::palw_execution_lane` is `None` on every shipped preset, so every
+  fingerprint, every root and every block of testnet-11 is what it was; the lane runs where a
+  network arms it. What remains is the operator's: testnet-11's height (§7).
 * Operator's request: "testnet では BPS 1 から実装して最終目標を BPS 10 とする", with the design
   quoted in §1.
 * Builds on: [0060](0060-the-liveness-doctrine.md) / [0066](0066-the-heartbeat-lane-out-of-header-bits-and-a-committed-liveness-table.md)
@@ -144,8 +146,17 @@ the script its coinbase names, aggregated per script in order of first appearanc
 — never to the merging miner, never through the ADR-0018 carve and never into a validator pool. The
 coinbase output cap widens by the 64 payees where the lane is configured. The lane mints nothing.
 
-**Decision 7 — widening is one value.** `permits_per_round` is 1 on the first stage and at most 10
-(`PALW_EXEC_MAX_PERMITS_PER_ROUND_V1`). Every rule reads it; nothing else changes between 1 and 10.
+**Decision 7 — widening is a stage table, and a span keeps the width it opens with.** The lane opens
+at `permits_per_round` (1 on the first stage) and `widenings` lists up to nine later stages, each a
+height and a wider round, up to 10 (`PALW_EXEC_MAX_PERMITS_PER_ROUND_V1`) — enough to go from 1 BPS to
+10 one permit at a time. A span's width is the widest stage in force at the DAA score the span opens
+with (`width_of_span`), so the draw, the permit index and the per-round mergeset bound read one number
+for a whole span, and history validates at the width it was produced at. Stages only widen, so the
+header's per-round bound — the width at the block's own span — bounds every span a mergeset reaches
+back to; a template and virtual's parents use the width at their anchor, never wider than what the
+block is judged by. Each widening's height is a fence (scheduled, normalised out of the identity with
+its width, named to the fork-id gate as `palw_execution_lane_widening_1..9`); its width is reported in
+the schedule id.
 
 **Decision 8 — the chain merges the lane, and a node produces it.** Virtual offers round tips as
 parents after the chain's own candidates, newest round first, keeping one parent slot for them, taking
@@ -170,23 +181,45 @@ solves, signs and submits the round block.
   ledger — rooted and carried only once written, so no state version moves), the virtual processor
   (verdicts, skipped transactions, payouts, sink search, virtual parents, round view and template),
   the consensus API and session, `kaspad`'s round producer.
-* Tests: the rules module; the state (`adr0125_*` in `palw_state_v2.rs`: a finalized attempt
-  schedules the next span, a permit is accepted once, spans are dropped, the delta and the carriage
-  round-trip, nothing is written below the fence); the pipeline (`adr0125_*` in the virtual
-  processor's tests: round blocks hang beside the chain and never move it; a chain block naming only
-  round blocks, a permit twice and a forged envelope are refused; a merging block grants exactly the
-  permits its parent state schedules); the coinbase (payouts aggregate after the lump and fund no
-  pool).
+* §7.2: `PalwExecWideningV1` and the stage table in `config/params.rs` (validation, hashing, fence
+  visitor, fence names, fork-id and ruleset-candidate probes); every width reader in the header, the
+  verdict, virtual's parents, the round template and the round view.
+* §7.3: `PalwExecEquivocationV1` (`palw_execution_lane_v1.rs`), the object and its acceptance and fold
+  (`round_equivocations`, delta 48, carriage tail `0xA8`), the verdict's refusal of a burned permit,
+  `protocol/flows/src/palw_round_relay.rs` (announce one block a permit, queue the evidence), the
+  panel's filing, and the round producer's persist-before-sign record.
+* §7.4: `getPalwRoundLane` (op 181; wRPC and gRPC; `PalwExecLaneStatusV1` through the consensus API),
+  `misaka palw round-lane`, the lane line in `misaka mining status`, and one chain-walk log line per
+  chain block that merges the lane.
+* §7.1: `kaspad --palw-execution-lane-devnet=activation,width,span[,daa:width…]` and
+  `scripts/misaka-palw-round-lane-devnet-drill.sh`.
+* Tests: the rules module (including the evidence's own proofs); the state (`adr0125_*` in
+  `palw_state_v2.rs`: a finalized attempt schedules the next span, a permit is accepted once, spans
+  are dropped, the delta and the carriage round-trip, nothing is written below the fence, a permit
+  signed twice burns once and slashes the floor, a reorg across a span boundary reverts the schedule
+  and the ledger exactly); the stage table (`palw_execution_lane_stage_tests`); the pipeline
+  (`adr0125_*` in the virtual processor's tests: round blocks hang beside the chain and never move it;
+  a chain block naming only round blocks, a permit twice and a forged envelope are refused; a merging
+  block grants exactly the permits its parent state schedules; a widening holds for whole spans; two
+  real signed round blocks for one permit are evidence the chain accepts once); the coinbase (payouts
+  aggregate after the lump and fund no pool); the relay memory; the producer's round record; the CLI's
+  lane line; the devnet flag's parser.
 
 ## 5. Security amendments
 
 * **SA-1 — the schedule costs work to move.** Its seed and its credits are finalized attempts; a
   fabricated one is a claim the panel and the court void and slash.
-* **SA-2 — a permit holder can equivocate, and only on its own permit.** ML-DSA signatures are
-  randomised and the envelope is outside the PoW pre-image, so a holder can publish several blocks for
-  one permit. One mergeset accepts at most one of them, the ledger accepts the permit once, and a
-  stranger cannot sign one. Relay-side deduplication by `(round, index, bond)` and slashing a holder
-  that signs two are §7's.
+* **SA-2 — a permit holder can equivocate, only on its own permit, and it costs the floor.** ML-DSA
+  signatures are randomised and the envelope is outside the PoW pre-image, so a holder can publish
+  several blocks for one permit; a stranger cannot sign one. One mergeset accepts at most one of them
+  and the ledger accepts the permit once. A node announces only the first block it holds for a
+  `(round, index, bond)` (`PalwRoundRelayV1`); a second, different signed block is stored, not
+  announced, and becomes evidence a funded panel files as `RoundPermitEquivocated` (object tag 46).
+  The chain admits it when the named span's schedule grants that permit to that bond and both
+  signatures verify under the bond's REGISTERED key; the fold then burns the permit (no merging block
+  grants it again) and slashes the registry's collateral floor, once per permit, within the two spans
+  the ledger keeps. A producer records each round before signing it, so a restart cannot sign one
+  permit twice.
 * **SA-3 — the anchor rule is what makes the lane invisible to the chain** (Decision 2). Without it a
   round block could carry a chain block into a mergeset through a block that is never a selected
   parent.
@@ -209,13 +242,17 @@ every DAG parameter, depth and PALW window; every network until its fence is arm
 
 ## 7. What remains
 
-1. The devnet drill: two nodes, an attempt reaching `Final`, the next span scheduled, round blocks a
-   second with fee-paying transactions, a reorg across a span boundary.
-2. A stage table before the first widening: `permits_per_round` becomes a list of
-   `(activation, width)` so history validates at the width it was produced at.
-3. Relay deduplication of equivocated round blocks and a slash for a holder that signs two.
-4. RPC and explorer surfaces (the lane's BPS, permits, payouts) and `misaka mining`'s status line.
-5. The testnet-11 height, at a NEW height with a roll window.
+1. **Built** — the devnet drill (`scripts/misaka-palw-round-lane-devnet-drill.sh`, four nodes: an
+   attempt reaches `Final`, the next span is scheduled, round blocks are produced for held permits,
+   chain blocks grant them, a granted round block carries fee-paying transactions). A reorg across a
+   span boundary is pinned at the state layer (`adr0125_a_reorg_across_a_span_boundary_…`); the drill
+   does not partition its network. The run's result is recorded in §9.
+2. **Built** — the stage table (Decision 7).
+3. **Built** — relay de-duplication and the equivocation slash (SA-2).
+4. **Built** — `getPalwRoundLane`, `misaka palw round-lane` and `misaka mining status`'s lane line.
+   An explorer reads op 181; misakascan lives in its own repository.
+5. **The operator's** — testnet-11's height and its first stage table, at a NEW height with a roll
+   window. Nothing is scheduled by this branch.
 
 ## 8. Corrections
 
