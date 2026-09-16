@@ -25,7 +25,7 @@ use kaspa_grpc_server::service::GrpcService;
 use kaspa_notify::{address::tracker::Tracker, subscription::context::SubscriptionContext};
 use kaspa_p2p_lib::Hub;
 use kaspa_p2p_mining::rule_engine::MiningRuleEngine;
-use kaspa_rpc_service::service::{RpcCoreService, ValidatorStatusProvider};
+use kaspa_rpc_service::service::RpcCoreService;
 use kaspa_txscript::caches::TxScriptCacheCounters;
 use kaspa_utils::git;
 use kaspa_utils::networking::ContextualNetAddress;
@@ -70,17 +70,6 @@ const MINIMUM_RETENTION_PERIOD_DAYS: f64 = 2.0;
 const ONE_GIGABYTE: f64 = 1_000_000_000.0;
 
 use crate::args::{Args, NodeProfile, VPS_8GB_MIN_SYSTEM_MEMORY_BYTES};
-use crate::compute::ComputeConfig;
-use crate::validator_service::{ValidatorConfig, ValidatorMode, ValidatorService};
-
-/// Default wall-clock ceiling for one compute job. A Qwen3.6-35B-A3B replay at the registered
-/// profile's 4096-token limit is minutes, not seconds; the ceiling exists to bound a wedged
-/// worker, not to pace a healthy one.
-const DEFAULT_COMPUTE_TIMEOUT_SECS: u64 = 900;
-/// Default token ceiling this node asks for. Clamped down to the registered profile's own limit,
-/// and deliberately well under it: every accepted job is re-executed in full by each verifier, so
-/// the ceiling is an audit-cost decision the operator can raise once the mesh has capacity.
-const DEFAULT_COMPUTE_MAX_TOKENS: u32 = 512;
 
 const DEFAULT_DATA_DIR: &str = "datadir";
 const CONSENSUS_DB: &str = "consensus";
@@ -160,12 +149,6 @@ pub fn validate_args(args: &Args) -> ConfigResult<()> {
         if args.utxoindex {
             return Err(ConfigError::NodeProfileIncompatible(profile, "--utxoindex"));
         }
-        if args.enable_validator {
-            return Err(ConfigError::NodeProfileIncompatible(profile, "--enable-validator"));
-        }
-        if args.enable_compute {
-            return Err(ConfigError::NodeProfileIncompatible(profile, "--enable-compute"));
-        }
         if args.evm_rpc_listen.is_some() {
             return Err(ConfigError::NodeProfileIncompatible(profile, "--evm-rpc-listen"));
         }
@@ -175,11 +158,6 @@ pub fn validate_args(args: &Args) -> ConfigResult<()> {
     }
     if matches!(args.node_profile, NodeProfile::RecoverySync) && args.connect_peers.is_empty() {
         return Err(ConfigError::RecoverySyncRequiresConnect);
-    }
-    // The compute role rides the validator service — it signs with the validator's key and stakes
-    // the validator's bond — so `--enable-compute` alone would silently do nothing.
-    if args.enable_compute && !args.enable_validator {
-        return Err(ConfigError::MissingDependentArg("--enable-compute", "--enable-validator"));
     }
     Ok(())
 }
@@ -1143,9 +1121,9 @@ Do you confirm? (y/n)";
         Arc::new(MiningMonitor::new(mining_manager.clone(), mining_counters, tx_script_cache_counters.clone(), tick_service.clone()));
 
     let hub = Hub::new();
-    // One gate, consulted by mining, both validator paths, and compute. Scoped to the networks that
-    // have peers to be wrong about, mirroring `has_sufficient_peer_connectivity`: a peerless
-    // devnet/simnet node has no competing branch to overlook, so holding it back only stalls tests.
+    // One gate, consulted through the mining rule engine by everything that mines or signs. Scoped to
+    // the networks that have peers to be wrong about, mirroring `has_sufficient_peer_connectivity`: a
+    // peerless devnet/simnet node has no competing branch to overlook, so holding it back only stalls tests.
     // Restored from the meta DB before anyone can consult it: a quarantine that a restart clears is
     // not a quarantine, and this is the one object every signer asks for permission.
     let chain_participation_store = Arc::new(ChainParticipationStore::new(meta_db.clone()));
@@ -1204,74 +1182,12 @@ Do you confirm? (y/n)";
     // MISAKA PALW v2 (Land stage): monitor a palw-agent when one is configured. Observation
     // and a capability handle only — an absent or quarantined agent withdraws v2 compute
     // capability (which nothing consensus-visible consumes yet) and the node continues
-    // validator-only, exactly as the VPS design's failure policy requires. Independent of
-    // `--enable-validator`: watching a runtime is not a validator role.
+    // without it, exactly as the VPS design's failure policy requires.
     let _palw_agent_capability = args.compute_endpoint.as_ref().map(|endpoint| {
         // Accept both the bare socket path and the design docs' `unix://` URI spelling.
         let path = endpoint.strip_prefix("unix://").unwrap_or(endpoint);
         crate::palw_agent::spawn_palw_agent_monitor(PathBuf::from(path))
     });
-
-    // kaspa-pq Phase 11 (ADR-0010): in-process DNS-overlay validator service. Built only
-    // when `--enable-validator` is set (so default node behavior is unchanged) and after
-    // `flow_context`, which it uses to submit attestation-shard transactions.
-    let validator_service = if args.enable_validator {
-        let mode = match args.validator_mode.as_deref() {
-            Some(s) => s.parse::<ValidatorMode>().unwrap_or_else(|err| {
-                warn!("{err}; falling back to observer mode");
-                ValidatorMode::default()
-            }),
-            None => ValidatorMode::default(),
-        };
-        // Equivocation-safety log lives beside the per-network data dir (NOT inside it),
-        // so it survives a `--reset-db` and still binds the validator to its network.
-        let state_path = app_dir.join(network.to_prefixed()).join("validator-state.json");
-        // MISAKA Verified LLM Token-Weighted BFT: the compute role rides the validator service, so
-        // it is only reachable behind `--enable-validator`. `ComputeRole::new` decides whether it
-        // actually starts — the runtime has to probe as the consensus-registered profile, which on
-        // a network with an empty model cost table (every shipped preset) it cannot.
-        let compute = ComputeConfig {
-            enabled: args.enable_compute,
-            worker_bin: args.compute_worker.as_ref().map(PathBuf::from),
-            work_dir: args.compute_work_dir.as_ref().map(PathBuf::from).unwrap_or_else(std::env::temp_dir),
-            timeout: Duration::from_secs(args.compute_timeout_secs.unwrap_or(DEFAULT_COMPUTE_TIMEOUT_SECS)),
-            prompt_path: args.compute_prompt.as_ref().map(PathBuf::from),
-            max_tokens: args.compute_max_tokens.unwrap_or(DEFAULT_COMPUTE_MAX_TOKENS),
-            auto_challenge: args.compute_auto_challenge,
-            fixture_job_limit: args.compute_fixture_job_limit,
-            // Beside the app dir, not the compute work dir: the work dir defaults to the system
-            // temp directory, and a quota that evaporates on reboot is not a quota.
-            fixture_state_path: Some(app_dir.join("fixture-quota.json")),
-        };
-        let validator_config = ValidatorConfig {
-            mode,
-            key_path: args.validator_key.clone(),
-            stake_bond: args.stake_bond.clone(),
-            state_path: Some(state_path),
-            address_prefix: config.prefix(),
-            // ADR-0009 Addendum A.3: the network discriminator is the per-network genesis hash,
-            // the same value consensus binds into every overlay message it verifies.
-            network_id: config.params.genesis.hash.as_byte_slice().to_vec(),
-            vlt: config.params.dns_params.as_ref().map(|p| p.vlt),
-            compute,
-            tkn_fixture_transfers: args.tkn_fixture_transfers.clone(),
-            tkn_fixture_burns: args.tkn_fixture_burns.clone(),
-        };
-        let validator_mass_calculator = kaspa_consensus_core::mass::MassCalculator::new_with_consensus_params(&config.params);
-        Some(Arc::new(ValidatorService::new(
-            validator_config,
-            consensus_manager.clone(),
-            tick_service.clone(),
-            flow_context.clone(),
-            validator_mass_calculator,
-            index_service.as_ref().map(|x| x.utxoindex().unwrap()),
-            // Effective spend maturity (floor ∨ settlement): the floor alone selects coinbases
-            // the node refuses (issue #81).
-            config.params.coinbase_spend_maturity(),
-        )))
-    } else {
-        None
-    };
 
     let p2p_service = Arc::new(P2pService::new(
         flow_context.clone(),
@@ -1285,8 +1201,6 @@ Do you confirm? (y/n)";
         p2p_tower_counters.clone(),
     ));
 
-    // kaspa-pq Phase 11 (ADR-0010): expose the in-process validator service's status via
-    // the `getValidatorStatus` RPC (None when `--enable-validator` is off).
     // ADR-0042: the in-process PALW-RC producer. Everything it needs that is not chain state comes
     // from the operator — a key it did not generate, the bond that key signs for, and where the
     // reward goes. A missing one is a startup refusal rather than a producer that runs and cannot
@@ -1533,10 +1447,6 @@ Do you confirm? (y/n)";
         None
     };
 
-    let validator_status_provider: Option<Arc<dyn ValidatorStatusProvider>> = match &validator_service {
-        Some(v) => Some(v.clone()),
-        None => None,
-    };
     // kaspa-pq EVM Lane (ADR-0020 §16): keep a mining-manager handle for the
     // Ethereum JSON-RPC adapter (`eth_sendRawTransaction`). Routed through the
     // `flow_context` (admit + P2P-broadcast to EVM-relay peers, like the UTXO RPC
@@ -1565,7 +1475,9 @@ Do you confirm? (y/n)";
         grpc_tower_counters.clone(),
         system_info,
         mining_rule_engine.clone(),
-        validator_status_provider,
+        // The in-process DNS-overlay validator is retired, so nothing provides `getValidatorStatus`
+        // here; the RPC op stays for wire compatibility and answers `enabled: false`.
+        None,
     ));
     let grpc_service_broadcasters: usize = 3; // TODO: add a command line argument or derive from other arg/config/host-related fields
     let grpc_service = if !args.disable_grpc {
@@ -1597,9 +1509,6 @@ Do you confirm? (y/n)";
     }
     async_runtime.register(p2p_service);
     async_runtime.register(consensus_monitor);
-    if let Some(validator_service) = validator_service {
-        async_runtime.register(validator_service)
-    };
     // ADR-0042: the PALW-RC block producer. Registered only when it was asked for AND the network
     // actually has a ConsensusV2 lane — a producer on a hash-only chain would build templates for
     // an algo nobody declares and log a refusal every few hundred milliseconds.
@@ -1905,7 +1814,7 @@ Do you confirm? (y/n)";
         info!("MISAKA node endpoints (network {network}):");
         info!("  P2P:             {p2p_server_addr}   node-to-node only (not RPC)");
         info!("  node-grpc:       {grpc_server_addr}   miner / low-level node RPC");
-        info!("  node-wrpc-borsh: {}   validator / wallet / operator", show(&borsh));
+        info!("  node-wrpc-borsh: {}   wallet / operator", show(&borsh));
         info!("  node-wrpc-json:  {}   explorer / browser", show(&json));
         info!("  evm-rpc-http:    {}   Ethereum JSON-RPC (EVM lane)", show(&evm));
 
@@ -1936,7 +1845,7 @@ Do you confirm? (y/n)";
         }
 
         // Endpoint registry (design §7): record the loopback RPC endpoints this node
-        // bound to `~/.misaka/<network-id>/endpoints.json`, so the miner / validator /
+        // bound to `~/.misaka/<network-id>/endpoints.json`, so the miner /
         // unified CLI can auto-discover them and the operator never types a port. The
         // host is normalized to 127.0.0.1 (a co-located reader connects over loopback);
         // a registry write failure is non-fatal (just a missing convenience).
@@ -2018,24 +1927,46 @@ mod tests {
         assert!(matches!(validate_args(&args), Err(ConfigError::NodeProfileIncompatible(_, "--archival"))));
     }
 
+    /// **The DNS-overlay validator and its VLT compute role are retired, flags included.** PALW does
+    /// not involve validators, so kaspad has no in-process validator service to configure: a unit
+    /// file still carrying one of these flags is refused at parse time rather than started into a
+    /// node that silently ignores what its operator asked for. The private-devnet switches that armed
+    /// the overlay's VLT and token fences went with them: with no validator left to attest or compute,
+    /// a devnet started with one had nothing to exercise.
     #[test]
-    fn bootstrap_pruned_rejects_enable_validator() {
-        let args = parse(&["--node-profile=bootstrap-pruned", "--enable-validator"]);
-        assert!(matches!(validate_args(&args), Err(ConfigError::NodeProfileIncompatible(_, "--enable-validator"))));
-    }
-
-    /// The compute role signs with the validator's key and stakes the validator's bond, so
-    /// `--enable-compute` on its own has nothing to hang off. Failing at startup beats a node that
-    /// looks configured for compute and silently never does any.
-    #[test]
-    fn enable_compute_requires_the_validator_service() {
-        let args = parse(&["--enable-compute"]);
-        assert!(matches!(validate_args(&args), Err(ConfigError::MissingDependentArg("--enable-compute", "--enable-validator"))));
-        assert!(validate_args(&parse(&["--enable-compute", "--enable-validator"])).is_ok());
+    fn the_retired_validator_and_compute_flags_are_refused() {
+        for flag in [
+            "--enable-validator",
+            "--validator-key=/tmp/validator.seed",
+            "--stake-bond=00:0",
+            "--validator-mode=active",
+            "--enable-compute",
+            "--compute-worker=/tmp/palw-worker",
+            "--compute-work-dir=/tmp",
+            "--compute-prompt=/tmp/prompt",
+            "--compute-max-tokens=512",
+            "--compute-timeout-secs=900",
+            "--compute-auto-challenge",
+            "--compute-fixture-job-limit=1",
+            "--tkn-fixture-transfer=00:1:0:0",
+            "--tkn-fixture-burn=1:0:0",
+            "--vlt-devnet=100",
+            "--vlt-devnet-credit-window-epochs=8",
+            "--vlt-shadow-only",
+            "--vlt-devnet-flat-decay",
+            "--tkn-devnet=400",
+            "--tkn-devnet-shadow-span=300",
+            "--tkn-devnet-epoch-budget-tok=1000",
+            "--node-profile=validator",
+        ] {
+            assert!(Args::parse(vec!["kaspad", flag]).is_err(), "{flag} is accepted again, but nothing in kaspad reads it");
+        }
+        // The palw-agent monitor is PALW's, not the retired compute role's, and stays.
+        assert_eq!(
+            parse(&["--compute-endpoint=unix:///tmp/palw-agent.sock"]).compute_endpoint.as_deref(),
+            Some("unix:///tmp/palw-agent.sock")
+        );
         assert!(validate_args(&parse(&[])).is_ok());
-
-        let pruned = parse(&["--node-profile=bootstrap-pruned", "--enable-compute", "--enable-validator"]);
-        assert!(matches!(validate_args(&pruned), Err(ConfigError::NodeProfileIncompatible(_, _))));
     }
 
     #[test]
@@ -2070,7 +2001,7 @@ mod tests {
 
     #[test]
     fn full_profile_allows_heavy_flags() {
-        let args = parse(&["--utxoindex", "--archival", "--enable-validator", "--evm-rpc-listen=127.0.0.1:8545"]);
+        let args = parse(&["--utxoindex", "--archival", "--evm-rpc-listen=127.0.0.1:8545"]);
         assert!(validate_args(&args).is_ok());
     }
 }

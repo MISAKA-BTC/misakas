@@ -57,7 +57,7 @@ HARD_SECP_GATE="${HARD_SECP_GATE:-1}"
 # invariant and had been failing ever since, which nobody could see because the Lints job died at
 # `cargo fmt` long before it ran. A gate that outlived its premise reports the same red as a real
 # violation, and that is worse than no gate: it teaches people the colour means nothing.
-for crate in kaspa-consensus kaspad kaspa-pq-cli kaspa-wallet kaspa-cli kaspa-daemon misaminer kaspa-pq-miner kaspa-pq-validator; do
+for crate in kaspa-consensus kaspad kaspa-pq-cli kaspa-wallet kaspa-cli kaspa-daemon misaminer kaspa-pq-miner kaspa-pq-validator-core; do
   tree_args=(-p "$crate" -e normal)
   if [ "$crate" = "kaspad" ]; then
     tree_args+=(--no-default-features)
@@ -106,7 +106,7 @@ echo "== [5/6] ML-DSA-87 multisig helper must not be exposed outside txscript (a
 # multisig_redeem_script_mldsa87 is #[doc(hidden)] and P2SH is consensus-disabled in PQ-only, so
 # surfacing it from wallet / CLI / RPC would let a user lock funds. It may only appear inside
 # crypto/txscript (its def + re-export + tests).
-if grep -rn "multisig_redeem_script_mldsa87" --include="*.rs" wallet/ cli/ rpc/ kaspa-pq-validator*/ 2>/dev/null; then
+if grep -rn "multisig_redeem_script_mldsa87" --include="*.rs" wallet/ cli/ rpc/ kaspa-pq-validator-core/ 2>/dev/null; then
   echo "  -> FAIL: the ML-DSA-87 multisig helper is referenced outside crypto/txscript (see above)."
   fail=1
 else

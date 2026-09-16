@@ -44,7 +44,6 @@ kaspa-perf-monitor.workspace = true
 kaspa-pq-validator-core.workspace = true
 misaka-palw-base0.workspace = true
 misaka-palw-sdk.workspace = true
-kaspa-rpc-core.workspace = true
 kaspa-rpc-service.workspace = true
 kaspa-txscript.workspace = true
 kaspa-utils.workspace = true
@@ -93,8 +92,6 @@ serde_with = "3.7.0"
 default = ["evm"]
 heap = ["dhat", "kaspa-alloc/heap"]
 devnet-prealloc = ["kaspa-consensus/devnet-prealloc"]
-# MISAKA: devnet-only deterministic VLT fixture (consensus profile + matching runtime).
-devnet-vlt-fixture = ["kaspa-consensus/devnet-vlt-fixture", "misaka-palw/devnet-vlt-fixture"]
 semaphore-trace = ["kaspa-utils/semaphore-trace"]
 # kaspa-pq Selected-Parent EVM Lane (ADR-0020). Default since 2026-08-21 (see `default` above);
 # the revm executor runs IN this process — there is no separate EVM daemon.

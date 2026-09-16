@@ -1,9 +1,10 @@
 //! Guided VPS setup helpers.
 //!
 //! This module intentionally keeps the host-mutation surface narrow: preflight
-//! and status checks are read-only, node/validator service installers are
-//! explicit, and validator funding operations require a user action from the
-//! browser UI before submitting a stake bond.
+//! and status checks are read-only, and the node service installer is explicit.
+//! It sets up a node only. The DNS-finality validator onboarding it used to carry
+//! (validator key, funding miner, stake bond, validator sidecar) is retired: PALW
+//! does not use validators, and PALW mining is set up with `misaka mining setup`.
 
 use std::ffi::OsStr;
 use std::fs;
@@ -19,12 +20,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::os::unix::fs::PermissionsExt;
 
 use clap::{Args, Subcommand};
-use kaspa_addresses::Prefix;
-use kaspa_consensus_core::{
-    config::params::Params,
-    network::{EndpointKind, NetworkId, NetworkType},
-};
-use kaspa_pq_validator_core::{ValidatorKey, load_validator_seed};
+use kaspa_consensus_core::network::{EndpointKind, NetworkId, NetworkType};
 use kaspa_rpc_core::api::rpc::RpcApi;
 use kaspa_wrpc_client::{
     KaspaRpcClient, WrpcEncoding,
@@ -46,8 +42,6 @@ const DEFAULT_STATE_FILE: &str = "/etc/misaka/setup.toml";
 #[cfg(test)]
 const DEFAULT_KASPAD_SERVICE: &str = "misaka-kaspad";
 const DEFAULT_SEEDER_SERVICE: &str = "misaka-dnsseeder";
-const DEFAULT_VALIDATOR_SERVICE: &str = "misaka-validator";
-const DEFAULT_MINER_SERVICE: &str = "misaka-miner";
 #[cfg(test)]
 const DEFAULT_REPO_DIR: &str = "/opt/misakas";
 #[cfg(test)]
@@ -57,11 +51,6 @@ const DEFAULT_WEB_SESSION_FILE: &str = "/var/log/misaka-setup/web-session.json";
 const DEFAULT_WEB_URL_FILE: &str = "/var/log/misaka-setup/web-url.txt";
 const DEFAULT_WEB_TMUX_SESSION: &str = "misaka-setup-web";
 const PREPARE_JOB: &str = "prepare-vps";
-const DEFAULT_VALIDATOR_DIR: &str = "/var/lib/misaka/validator";
-const DEFAULT_VALIDATOR_KEY: &str = "/var/lib/misaka/validator/validator.seed";
-const DEFAULT_VALIDATOR_DB: &str = "/var/lib/misaka/validator/validator.state";
-const DEFAULT_VALIDATOR_ENV: &str = "/etc/misaka/validator.env";
-const DEFAULT_MINER_ENV: &str = "/etc/misaka/miner.env";
 
 #[derive(Subcommand, Debug)]
 pub enum SetupCmd {
@@ -69,7 +58,7 @@ pub enum SetupCmd {
     Preflight(PreflightArgs),
     /// Create or preview the kaspad systemd service.
     Node(NodeSetupArgs),
-    /// Show node/seeder/validator status in one place.
+    /// Show node/seeder status in one place.
     Status(StatusArgs),
     /// Start a temporary browser setup wizard for button-first node joining.
     Web(WebArgs),
@@ -137,7 +126,7 @@ pub struct NodeSetupArgs {
     /// Storage tuning for kaspad RocksDB. auto enables HDD tuning when the data mount is rotational.
     #[arg(long, default_value = "auto", value_parser = ["auto", "default", "hdd"])]
     storage_profile: String,
-    /// Do not add --utxoindex. By default node setup is validator/wallet-ready.
+    /// Do not add --utxoindex. By default node setup is wallet-ready.
     #[arg(long)]
     no_utxoindex: bool,
 }
@@ -150,9 +139,6 @@ pub struct StatusArgs {
     /// DNS seeder service name.
     #[arg(long, default_value = "misaka-dnsseeder")]
     seeder_service: String,
-    /// Validator service name.
-    #[arg(long, default_value = "misaka-validator")]
-    validator_service: String,
     /// Setup state file path.
     #[arg(long, default_value = "/etc/misaka/setup.toml")]
     state_file: PathBuf,
@@ -163,12 +149,6 @@ pub struct DiscordArgs {
     /// Public node IP. Defaults to setup state, then a best-effort lookup.
     #[arg(long)]
     public_ip: Option<String>,
-    /// Stake bond outpoint, if already created.
-    #[arg(long)]
-    validator_bond: Option<String>,
-    /// Validator ID, if already known.
-    #[arg(long)]
-    validator_id: Option<String>,
     /// Wallet/mining reward address, if the operator wants to register it.
     #[arg(long)]
     wallet: Option<String>,
@@ -316,13 +296,15 @@ pub struct WebStopArgs {
     tmux_session: String,
 }
 
+/// `/etc/misaka/setup.toml`. Not `deny_unknown_fields`: a state file written while this module
+/// still onboarded validators carries a `[validator]` table, and it must keep loading. The next
+/// write drops that table; the key file it named is left where it is.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default)]
 struct SetupState {
     network_id: Option<String>,
     public_ip: Option<String>,
     node: StateNode,
-    validator: StateValidator,
     discord: StateDiscord,
 }
 
@@ -338,19 +320,6 @@ struct StateNode {
     utxoindex: Option<bool>,
     storage_profile: Option<String>,
     rocksdb_preset: Option<String>,
-}
-
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-#[serde(default)]
-struct StateValidator {
-    bond_outpoint: Option<String>,
-    validator_id: Option<String>,
-    funding_address: Option<String>,
-    mining_address: Option<String>,
-    miner_threads: Option<u16>,
-    miner_start_daa_score: Option<u64>,
-    key: Option<String>,
-    signed_epoch_db: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -455,12 +424,6 @@ fn wrpc_borsh_endpoint(network: &str, explicit: &Option<String>) -> Result<Strin
     Ok(misaka_endpoints::resolve(&nid, EndpointKind::NodeWrpcBorsh, explicit.as_deref(), registry.as_ref()))
 }
 
-fn node_grpc_endpoint(network: &str, explicit: &Option<String>) -> Result<String, CliError> {
-    let nid = parse_network(network)?;
-    let registry = misaka_endpoints::EndpointRegistry::load(network);
-    Ok(misaka_endpoints::resolve(&nid, EndpointKind::NodeGrpc, explicit.as_deref(), registry.as_ref()))
-}
-
 fn command_path(name: &str) -> Option<PathBuf> {
     let path = Path::new(name);
     if path.components().count() > 1 {
@@ -540,26 +503,6 @@ where
         Ok(())
     } else {
         Err(CliError::new(exit::GENERIC, format!("{program} {} exited with {status}", args_vec.join(" "))))
-    }
-}
-
-fn run_capture<I, S>(program: &str, args: I) -> SetupResult<String>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-{
-    let args_vec: Vec<String> = args.into_iter().map(|a| a.as_ref().to_string_lossy().into_owned()).collect();
-    let output = Command::new(program)
-        .args(&args_vec)
-        .output()
-        .map_err(|e| CliError::new(exit::GENERIC, format!("run {program} {}: {e}", args_vec.join(" "))))?;
-    let mut text = String::new();
-    text.push_str(&String::from_utf8_lossy(&output.stdout));
-    text.push_str(&String::from_utf8_lossy(&output.stderr));
-    if output.status.success() {
-        Ok(text)
-    } else {
-        Err(CliError::new(exit::GENERIC, format!("{program} {} exited with {}\n{text}", args_vec.join(" "), output.status)))
     }
 }
 
@@ -664,26 +607,6 @@ fn rocksdb_preset_for_storage(storage_profile: &str, appdir: &Path) -> Option<&'
         "auto" if storage_is_rotational(appdir) == Some(true) => Some("hdd"),
         _ => None,
     }
-}
-
-fn mem_available_gib() -> Option<f64> {
-    let text = fs::read_to_string("/proc/meminfo").ok()?;
-    let line = text.lines().find(|line| line.starts_with("MemAvailable:"))?;
-    let kb = line.split_whitespace().nth(1)?.parse::<f64>().ok()?;
-    Some(kb / 1024.0 / 1024.0)
-}
-
-fn logical_cpu_count() -> Option<u16> {
-    run_output("nproc", ["--all"]).and_then(|value| value.trim().parse::<u16>().ok()).filter(|value| *value > 0).or_else(|| {
-        let text = fs::read_to_string("/proc/cpuinfo").ok()?;
-        let count = text.lines().filter(|line| line.starts_with("processor")).count();
-        u16::try_from(count).ok().filter(|value| *value > 0)
-    })
-}
-
-fn load_average_1m() -> Option<f64> {
-    let text = fs::read_to_string("/proc/loadavg").ok()?;
-    text.split_whitespace().next()?.parse::<f64>().ok()
 }
 
 fn os_pretty_name() -> Option<String> {
@@ -910,7 +833,7 @@ fn preflight_checks(ctx: &Ctx, args: &PreflightArgs) -> SetupResult<Vec<Check>> 
         if user_exists(&args.service_user) { "OK" } else { "INFO" },
         if user_exists(&args.service_user) { None } else { Some("will be created by setup node --yes".to_string()) },
     ));
-    for bin in ["kaspad", "kaspa-pq-validator", "misaminer"] {
+    for bin in ["kaspad", "misaka"] {
         checks.push(match binary_available(bin) {
             Some(path) => check(format!("Binary {bin}"), path.display().to_string(), "OK", None),
             None => check(format!("Binary {bin}"), "not found", "WARN", Some("install release binaries first".to_string())),
@@ -1257,8 +1180,6 @@ async fn status_json_value(ctx: &Ctx, args: &StatusArgs) -> SetupResult<serde_js
     let public_ip = state.public_ip.clone().or_else(detect_public_ip);
     let node_service = service_state(&args.node_service);
     let seeder_service = service_state(&args.seeder_service);
-    let validator_service = service_state(&args.validator_service);
-    let miner_service = service_state(DEFAULT_MINER_SERVICE);
 
     Ok(serde_json::json!({
         "ok": snapshot.reachable && snapshot.synced,
@@ -1277,12 +1198,6 @@ async fn status_json_value(ctx: &Ctx, args: &StatusArgs) -> SetupResult<serde_js
         },
         "p2p": { "port": p2p_port, "listening": p2p },
         "seeder": { "service": &args.seeder_service, "serviceState": &seeder_service },
-        "validator": { "service": &args.validator_service, "serviceState": &validator_service },
-        "miner": {
-            "service": DEFAULT_MINER_SERVICE,
-            "serviceState": &miner_service,
-            "maturity": maturity_progress_value(&ctx.network, state.validator.miner_start_daa_score, snapshot.virtual_daa_score),
-        },
     }))
 }
 
@@ -1300,8 +1215,6 @@ async fn status(ctx: &Ctx, args: &StatusArgs) -> CliResult {
     let public_ip = state.public_ip.clone().or_else(detect_public_ip);
     let node_service = service_state(&args.node_service);
     let seeder_service = service_state(&args.seeder_service);
-    let validator_service = service_state(&args.validator_service);
-    let miner_service = service_state(DEFAULT_MINER_SERVICE);
 
     println!("MISAKA setup status");
     println!();
@@ -1312,8 +1225,6 @@ async fn status(ctx: &Ctx, args: &StatusArgs) -> CliResult {
     println!("P2P:       {}/tcp {}", p2p_port, if p2p { "LISTENING" } else { "NOT LISTENING" });
     println!("UTXO:      {}", snapshot.utxoindex.map(|v| if v { "ENABLED" } else { "DISABLED" }).unwrap_or("UNKNOWN"));
     println!("Seeder:    {}", status_label(&seeder_service));
-    println!("Validator: {}", status_label(&validator_service));
-    println!("Miner:     {}", status_label(&miner_service));
     if let Some(daa) = snapshot.virtual_daa_score {
         println!("DAA:       {daa}");
     }
@@ -1340,14 +1251,8 @@ fn status_label(state: &str) -> &'static str {
     }
 }
 
-fn discord_command(ip: &str, bond: Option<&str>, validator_id: Option<&str>, wallet: Option<&str>) -> String {
+fn discord_command(ip: &str, wallet: Option<&str>) -> String {
     let mut parts = vec![format!("/misaka register ip:{ip}")];
-    if let Some(bond) = bond {
-        parts.push(format!("validator_bond:{bond}"));
-    }
-    if let Some(validator_id) = validator_id {
-        parts.push(format!("validator_id:{validator_id}"));
-    }
     if let Some(wallet) = wallet {
         parts.push(format!("wallet:{wallet}"));
     }
@@ -1362,9 +1267,7 @@ fn discord(ctx: &Ctx, args: &DiscordArgs) -> CliResult {
         .or(state.public_ip)
         .or_else(detect_public_ip)
         .ok_or_else(|| CliError::new(exit::GENERIC, "public IP unknown; pass --public-ip <IP>"))?;
-    let bond = args.validator_bond.clone().or(state.validator.bond_outpoint);
-    let validator_id = args.validator_id.clone().or(state.validator.validator_id);
-    let command = discord_command(&ip, bond.as_deref(), validator_id.as_deref(), args.wallet.as_deref());
+    let command = discord_command(&ip, args.wallet.as_deref());
 
     match ctx.output {
         OutputFormat::Json => println!(
@@ -1373,8 +1276,6 @@ fn discord(ctx: &Ctx, args: &DiscordArgs) -> CliResult {
                 "ok": true,
                 "network": &ctx.network,
                 "publicIp": &ip,
-                "validatorBond": &bond,
-                "validatorId": &validator_id,
                 "wallet": &args.wallet,
                 "command": &command,
             })
@@ -1418,7 +1319,6 @@ fn web_status_args(args: &WebArgs) -> StatusArgs {
     StatusArgs {
         node_service: args.service.clone(),
         seeder_service: DEFAULT_SEEDER_SERVICE.to_string(),
-        validator_service: DEFAULT_VALIDATOR_SERVICE.to_string(),
         state_file: args.state_file.clone(),
     }
 }
@@ -1484,51 +1384,6 @@ fn public_ip_confirm(ctx: &Ctx, args: &WebArgs, ip: &str) -> SetupResult<serde_j
     state.public_ip = Some(ip.to_string());
     write_state(&args.state_file, &state)?;
     Ok(public_ip_summary(args, Some(ip.to_string())))
-}
-
-fn format_msk_amount(sompi: u64) -> String {
-    format!("{}.{:08}", sompi / 100_000_000, sompi % 100_000_000)
-}
-
-fn parse_balance_output(output: &str, address: &str) -> Option<(u64, String)> {
-    for line in output.lines() {
-        let mut parts = line.split_whitespace();
-        let Some(line_address) = parts.next() else { continue };
-        if line_address != address {
-            continue;
-        }
-        let sompi = parts.next()?.parse::<u64>().ok()?;
-        let msk = parts.next().map(str::to_string).unwrap_or_else(|| format_msk_amount(sompi));
-        return Some((sompi, msk));
-    }
-    None
-}
-
-fn coinbase_maturity_blocks(network: &str) -> u64 {
-    NetworkId::from_str(network).map(Params::from).map(|params| params.coinbase_maturity()).unwrap_or(1000)
-}
-
-fn maturity_progress_value(network: &str, start_daa: Option<u64>, current_daa: Option<u64>) -> serde_json::Value {
-    let required = coinbase_maturity_blocks(network);
-    let elapsed = match (start_daa, current_daa) {
-        (Some(start), Some(current)) => Some(current.saturating_sub(start)),
-        _ => None,
-    };
-    let remaining = elapsed.map(|value| required.saturating_sub(value));
-    let ready = elapsed.is_some_and(|value| value >= required);
-    let percent =
-        elapsed.map(|value| if required == 0 { 100 } else { value.saturating_mul(100).checked_div(required).unwrap_or(0).min(100) });
-    serde_json::json!({
-        "approx": true,
-        "basis": "minerStartDaa",
-        "coinbaseMaturityBlocks": required,
-        "minerStartDaa": start_daa,
-        "currentDaa": current_daa,
-        "elapsedBlocks": elapsed,
-        "remainingBlocks": remaining,
-        "percent": percent,
-        "readyByStartEstimate": ready,
-    })
 }
 
 fn job_paths(name: &str) -> (PathBuf, PathBuf, PathBuf) {
@@ -1609,14 +1464,12 @@ echo
 
 echo "== 4/5 build release binaries =="
 cargo build --release -p kaspad --features evm
-cargo build --release -p misaka-cli -p kaspa-pq-validator -p misaminer
+cargo build --release -p misaka-cli
 echo
 
 echo "== 5/5 install release binaries =="
 install -o root -g root -m 0755 target/release/kaspad /usr/local/bin/kaspad
 install -o root -g root -m 0755 target/release/misaka /usr/local/bin/misaka
-install -o root -g root -m 0755 target/release/kaspa-pq-validator /usr/local/bin/kaspa-pq-validator
-install -o root -g root -m 0755 target/release/misaminer /usr/local/bin/misaminer
 
 probe_binary() {{
   label="$1"
@@ -1631,8 +1484,6 @@ probe_binary() {{
 
 probe_binary "kaspad" /usr/local/bin/kaspad --version
 probe_binary "misaka" /usr/local/bin/misaka --version
-probe_binary "kaspa-pq-validator" /usr/local/bin/kaspa-pq-validator --help
-probe_binary "misaminer" /usr/local/bin/misaminer --help
 echo
 
 echo "== MISAKA VPS prepare complete =="
@@ -1695,7 +1546,7 @@ fn bootstrap_status_value(args: &WebArgs) -> serde_json::Value {
             })
         })
         .collect();
-    let release_bins = ["kaspad", "misaka", "kaspa-pq-validator", "misaminer"];
+    let release_bins = ["kaspad", "misaka"];
     let release_values: Vec<serde_json::Value> = release_bins
         .iter()
         .map(|name| {
@@ -1724,532 +1575,6 @@ fn bootstrap_status_value(args: &WebArgs) -> serde_json::Value {
         },
         "job": job_status_value(PREPARE_JOB),
     })
-}
-
-fn validator_dir() -> PathBuf {
-    PathBuf::from(DEFAULT_VALIDATOR_DIR)
-}
-
-fn validator_key_path() -> PathBuf {
-    PathBuf::from(DEFAULT_VALIDATOR_KEY)
-}
-
-fn validator_db_path() -> PathBuf {
-    PathBuf::from(DEFAULT_VALIDATOR_DB)
-}
-
-fn validator_env_path() -> PathBuf {
-    PathBuf::from(DEFAULT_VALIDATOR_ENV)
-}
-
-fn miner_env_path() -> PathBuf {
-    PathBuf::from(DEFAULT_MINER_ENV)
-}
-
-fn read_env_value(path: &Path, key: &str) -> Option<String> {
-    let needle = format!("{key}=");
-    fs::read_to_string(path).ok()?.lines().find_map(|line| {
-        line.strip_prefix(&needle)
-            .map(|value| value.trim().trim_matches('"').trim_matches('\'').to_string())
-            .filter(|value| !value.is_empty())
-    })
-}
-
-fn parse_prefixed_output(output: &str, key: &str) -> Option<String> {
-    output.lines().find_map(|line| {
-        let trimmed = line.trim();
-        trimmed.strip_prefix(key).map(|value| value.trim_start_matches(':').trim().to_string()).filter(|value| !value.is_empty())
-    })
-}
-
-fn setup_prefix(network: &str) -> SetupResult<Prefix> {
-    let net = NetworkId::from_str(network).map_err(|e| CliError::new(exit::GENERIC, format!("bad --network '{network}': {e}")))?;
-    Ok(net.network_type().into())
-}
-
-fn validator_identity_from_key(network: &str, key_path: &Path) -> SetupResult<Option<(String, String)>> {
-    if !key_path.is_file() {
-        return Ok(None);
-    }
-    let key_path_string = key_path.display().to_string();
-    let seed = load_validator_seed(&key_path_string)
-        .map_err(|e| CliError::new(exit::GENERIC, format!("validator key exists but cannot be read safely: {e}")))?;
-    let key = ValidatorKey::from_seed(seed);
-    let prefix = setup_prefix(network)?;
-    Ok(Some((key.validator_id.to_string(), key.funding_address(prefix).to_string())))
-}
-
-fn hydrate_validator_state_from_key(network: &str, state_file: &Path, mut state: SetupState) -> SetupState {
-    let key_path = state.validator.key.clone().unwrap_or_else(|| DEFAULT_VALIDATOR_KEY.to_string());
-    if state.validator.validator_id.is_some() && state.validator.funding_address.is_some() {
-        return state;
-    }
-    if let Ok(Some((validator_id, funding_address))) = validator_identity_from_key(network, Path::new(&key_path)) {
-        state.validator.key = Some(key_path);
-        state.validator.signed_epoch_db.get_or_insert_with(|| DEFAULT_VALIDATOR_DB.to_string());
-        state.validator.validator_id.get_or_insert(validator_id);
-        state.validator.funding_address.get_or_insert(funding_address);
-        let _ = write_state(state_file, &state);
-    }
-    state
-}
-
-fn missing_funding_address_message() -> &'static str {
-    "funding address is unknown. Generate validator key first. If validator.seed already exists, press Validator Status/Key creation once to restore setup state, or restore /etc/misaka/setup.toml."
-}
-
-fn ensure_validator_dir(service_user: &str) -> SetupResult<()> {
-    if root_uid() != Some(0) {
-        return Err(CliError::new(exit::UNSAFE_REFUSED, "validator setup must be run as root or through sudo"));
-    }
-    fs::create_dir_all(validator_dir())
-        .map_err(|e| CliError::new(exit::GENERIC, format!("mkdir {}: {e}", validator_dir().display())))?;
-    let user_group = format!("{service_user}:{service_user}");
-    run_checked("chown", vec!["-R".to_string(), user_group, validator_dir().display().to_string()])?;
-    run_checked("chmod", vec!["0700".to_string(), validator_dir().display().to_string()])?;
-    Ok(())
-}
-
-async fn validator_status_value_async(ctx: &Ctx, args: &WebArgs) -> serde_json::Value {
-    let state = hydrate_validator_state_from_key(&ctx.network, &args.state_file, load_state(&args.state_file));
-    let key_path = state.validator.key.clone().unwrap_or_else(|| DEFAULT_VALIDATOR_KEY.to_string());
-    let db_path = state.validator.signed_epoch_db.clone().unwrap_or_else(|| DEFAULT_VALIDATOR_DB.to_string());
-    let binary = binary_available("kaspa-pq-validator");
-    let service = service_state(DEFAULT_VALIDATOR_SERVICE);
-    let node_snapshot = node_snapshot(ctx).await;
-    serde_json::json!({
-        "ok": binary.is_some() && Path::new(&key_path).is_file() && state.validator.bond_outpoint.is_some(),
-        "validator": {
-            "service": DEFAULT_VALIDATOR_SERVICE,
-            "serviceState": service,
-            "binary": binary.map(|p| p.display().to_string()),
-            "keyPath": key_path,
-            "keyExists": Path::new(&state.validator.key.clone().unwrap_or_else(|| DEFAULT_VALIDATOR_KEY.to_string())).is_file(),
-            "signedEpochDb": db_path,
-            "validatorId": state.validator.validator_id,
-            "fundingAddress": state.validator.funding_address,
-            "bondOutpoint": state.validator.bond_outpoint,
-            "nodeSynced": node_snapshot.synced,
-            "nodeReachable": node_snapshot.reachable,
-        }
-    })
-}
-
-fn validator_keygen(ctx: &Ctx, args: &WebArgs) -> SetupResult<serde_json::Value> {
-    if binary_available("kaspa-pq-validator").is_none() {
-        return Err(CliError::new(exit::GENERIC, "kaspa-pq-validator is not installed; press Prepare VPS first"));
-    }
-    if !user_exists(&args.service_user) {
-        return Err(CliError::new(exit::GENERIC, "service user is missing; press Install / Start Node first"));
-    }
-    ensure_validator_dir(&args.service_user)?;
-    let key_path = validator_key_path();
-    if key_path.exists() {
-        let mut state = hydrate_validator_state_from_key(&ctx.network, &args.state_file, load_state(&args.state_file));
-        if state.validator.funding_address.is_none()
-            && let Some((validator_id, funding_address)) = validator_identity_from_key(&ctx.network, &key_path)?
-        {
-            state.validator.key = Some(key_path.display().to_string());
-            state.validator.signed_epoch_db = Some(validator_db_path().display().to_string());
-            state.validator.validator_id = Some(validator_id);
-            state.validator.funding_address = Some(funding_address);
-            write_state(&args.state_file, &state)?;
-        }
-        if state.validator.funding_address.is_some() {
-            return Ok(serde_json::json!({
-                "ok": true,
-                "message": "Validator key already exists. Setup state was restored from the existing key.",
-                "validator": {
-                    "keyPath": key_path.display().to_string(),
-                    "keyExists": true,
-                    "validatorId": state.validator.validator_id,
-                    "fundingAddress": state.validator.funding_address,
-                    "bondOutpoint": state.validator.bond_outpoint,
-                },
-            }));
-        }
-        return Err(CliError::new(
-            exit::UNSAFE_REFUSED,
-            format!("validator key already exists at {}, but the funding address could not be restored", key_path.display()),
-        ));
-    }
-    let output = run_capture(
-        "kaspa-pq-validator",
-        vec!["keygen".to_string(), "--out".to_string(), key_path.display().to_string(), "--network".to_string(), ctx.network.clone()],
-    )?;
-    run_checked("chown", vec![format!("{}:{}", args.service_user, args.service_user), key_path.display().to_string()])?;
-    run_checked("chmod", vec!["0600".to_string(), key_path.display().to_string()])?;
-    let validator_id = parse_prefixed_output(&output, "validator_id");
-    let funding_address = parse_prefixed_output(&output, "funding_address");
-    let mut state = load_state(&args.state_file);
-    state.validator.key = Some(key_path.display().to_string());
-    state.validator.signed_epoch_db = Some(validator_db_path().display().to_string());
-    state.validator.validator_id = validator_id.clone();
-    state.validator.funding_address = funding_address.clone();
-    write_state(&args.state_file, &state)?;
-    Ok(serde_json::json!({
-        "ok": true,
-        "message": "Validator key created. Start the funding miner to mine testnet MSK to this funding address, or fund it from a wallet/faucet, then press Check Funding.",
-        "validator": {
-            "keyPath": key_path.display().to_string(),
-            "keyExists": true,
-            "validatorId": validator_id,
-            "fundingAddress": funding_address,
-        },
-        "output": output,
-    }))
-}
-
-async fn validator_balance(ctx: &Ctx, args: &WebArgs) -> SetupResult<serde_json::Value> {
-    let state = hydrate_validator_state_from_key(&ctx.network, &args.state_file, load_state(&args.state_file));
-    let address =
-        state.validator.funding_address.clone().ok_or_else(|| CliError::new(exit::GENERIC, missing_funding_address_message()))?;
-    let borsh = wrpc_borsh_endpoint(&ctx.network, &ctx.rpc)?;
-    let output = run_capture(
-        "kaspa-pq-validator",
-        vec![
-            "balance".to_string(),
-            "--node-wrpc-borsh".to_string(),
-            borsh,
-            "--network".to_string(),
-            ctx.network.clone(),
-            "--address".to_string(),
-            address.clone(),
-        ],
-    )?;
-    let (balance_sompi, balance_msk) = match parse_balance_output(&output, &address) {
-        Some((sompi, msk)) => (Some(sompi), Some(msk)),
-        None => (None, None),
-    };
-    let snapshot = node_snapshot(ctx).await;
-    Ok(serde_json::json!({
-        "ok": true,
-        "message": "Funding balance checked.",
-        "validator": {
-            "fundingAddress": address,
-            "balanceSompi": balance_sompi,
-            "balanceMsk": balance_msk,
-            "maturity": maturity_progress_value(&ctx.network, state.validator.miner_start_daa_score, snapshot.virtual_daa_score),
-            "balanceOutput": output,
-        },
-        "logs": output,
-    }))
-}
-
-async fn validator_bond(ctx: &Ctx, args: &WebArgs, amount: &str) -> SetupResult<serde_json::Value> {
-    if amount.trim().is_empty() {
-        return Err(CliError::new(exit::GENERIC, "amount is required, e.g. 10MSK"));
-    }
-    let key_path = validator_key_path();
-    if !key_path.is_file() {
-        return Err(CliError::new(exit::GENERIC, "validator key is missing; generate validator key first"));
-    }
-    let borsh = wrpc_borsh_endpoint(&ctx.network, &ctx.rpc)?;
-    let output = match run_capture(
-        "kaspa-pq-validator",
-        vec![
-            "bond".to_string(),
-            "--node-wrpc-borsh".to_string(),
-            borsh,
-            "--validator-key".to_string(),
-            key_path.display().to_string(),
-            "--amount".to_string(),
-            amount.trim().to_string(),
-            "--network".to_string(),
-            ctx.network.clone(),
-        ],
-    ) {
-        Ok(output) => output,
-        Err(e) if e.msg.contains("not enough MATURE funding") => {
-            let state = hydrate_validator_state_from_key(&ctx.network, &args.state_file, load_state(&args.state_file));
-            let snapshot = node_snapshot(ctx).await;
-            return Ok(serde_json::json!({
-                "ok": false,
-                "error": e.msg,
-                "validator": {
-                    "keyPath": key_path.display().to_string(),
-                    "keyExists": key_path.is_file(),
-                    "validatorId": state.validator.validator_id,
-                    "fundingAddress": state.validator.funding_address,
-                    "bondOutpoint": state.validator.bond_outpoint,
-                    "nodeSynced": snapshot.synced,
-                    "maturity": maturity_progress_value(&ctx.network, state.validator.miner_start_daa_score, snapshot.virtual_daa_score),
-                }
-            }));
-        }
-        Err(e) => return Err(e),
-    };
-    let bond = parse_prefixed_output(&output, "bond_outpoint");
-    let mut state = hydrate_validator_state_from_key(&ctx.network, &args.state_file, load_state(&args.state_file));
-    state.validator.bond_outpoint = bond.clone();
-    state.validator.key = Some(key_path.display().to_string());
-    state.validator.signed_epoch_db = Some(validator_db_path().display().to_string());
-    write_state(&args.state_file, &state)?;
-    Ok(serde_json::json!({
-        "ok": bond.is_some(),
-        "message": if bond.is_some() { "Bond transaction submitted. Press Validator Status, then Start Validator when active." } else { "Bond command finished, but bond_outpoint was not found in output." },
-        "validator": {
-            "bondOutpoint": bond,
-            "amount": amount,
-            "keyPath": key_path.display().to_string(),
-            "keyExists": key_path.is_file(),
-            "validatorId": state.validator.validator_id,
-            "fundingAddress": state.validator.funding_address,
-        },
-        "logs": output,
-    }))
-}
-
-fn validator_chain_status(ctx: &Ctx, args: &WebArgs) -> SetupResult<serde_json::Value> {
-    let state = hydrate_validator_state_from_key(&ctx.network, &args.state_file, load_state(&args.state_file));
-    let bond = state
-        .validator
-        .bond_outpoint
-        .clone()
-        .ok_or_else(|| CliError::new(exit::GENERIC, "bond outpoint is unknown; create bond first"))?;
-    let borsh = wrpc_borsh_endpoint(&ctx.network, &ctx.rpc)?;
-    let output = run_capture(
-        "kaspa-pq-validator",
-        vec![
-            "status".to_string(),
-            "--node-wrpc-borsh".to_string(),
-            borsh,
-            "--network".to_string(),
-            ctx.network.clone(),
-            "--stake-bond".to_string(),
-            bond.clone(),
-        ],
-    )?;
-    Ok(serde_json::json!({
-        "ok": true,
-        "message": "Validator bond status checked.",
-        "validator": {
-            "bondOutpoint": bond,
-            "statusOutput": output,
-        },
-        "logs": output,
-    }))
-}
-
-fn render_validator_unit(service_user: &str, network: &str, borsh: &str) -> String {
-    format!(
-        "[Unit]\n\
-Description=MISAKA validator sidecar\n\
-After=misaka-kaspad.service\n\
-Requires=misaka-kaspad.service\n\n\
-[Service]\n\
-User={service_user}\n\
-Group={service_user}\n\
-EnvironmentFile=/etc/misaka/validator.env\n\
-ExecStart=/usr/local/bin/kaspa-pq-validator run \\\n  --node-wrpc-borsh {borsh} \\\n  --validator-key {DEFAULT_VALIDATOR_KEY} \\\n  --stake-bond ${{STAKE_BOND}} \\\n  --signed-epoch-db {DEFAULT_VALIDATOR_DB} \\\n  --network {network}\n\
-Restart=always\n\
-RestartSec=10\n\
-LimitNOFILE=1048576\n\n\
-[Install]\n\
-WantedBy=multi-user.target\n"
-    )
-}
-
-async fn validator_service_install(ctx: &Ctx, args: &WebArgs) -> SetupResult<serde_json::Value> {
-    if root_uid() != Some(0) {
-        return Err(CliError::new(exit::UNSAFE_REFUSED, "validator service install must be run as root or through sudo"));
-    }
-    let state = hydrate_validator_state_from_key(&ctx.network, &args.state_file, load_state(&args.state_file));
-    let bond = state
-        .validator
-        .bond_outpoint
-        .clone()
-        .ok_or_else(|| CliError::new(exit::GENERIC, "bond outpoint is unknown; create bond first"))?;
-    if !validator_key_path().is_file() {
-        return Err(CliError::new(exit::GENERIC, "validator key is missing; generate validator key first"));
-    }
-    ensure_validator_dir(&args.service_user)?;
-    let env_path = validator_env_path();
-    let env = format!("STAKE_BOND={bond}\n");
-    write_if_changed(&env_path, &env, args.force)?;
-    run_checked("chmod", vec!["0600".to_string(), env_path.display().to_string()])?;
-    let borsh = wrpc_borsh_endpoint(&ctx.network, &ctx.rpc)?;
-    let unit = render_validator_unit(&args.service_user, &ctx.network, &borsh);
-    let unit_path = service_unit_path(DEFAULT_VALIDATOR_SERVICE);
-    write_if_changed(&unit_path, &unit, args.force)?;
-    run_checked("systemctl", ["daemon-reload"])?;
-    run_checked("systemctl", ["enable", "--now", DEFAULT_VALIDATOR_SERVICE])?;
-    let snapshot = node_snapshot(ctx).await;
-    Ok(serde_json::json!({
-        "ok": true,
-        "message": "Validator service installed and started.",
-        "validator": {
-            "service": DEFAULT_VALIDATOR_SERVICE,
-            "serviceState": service_state(DEFAULT_VALIDATOR_SERVICE),
-            "keyPath": DEFAULT_VALIDATOR_KEY,
-            "keyExists": validator_key_path().is_file(),
-            "validatorId": state.validator.validator_id,
-            "fundingAddress": state.validator.funding_address,
-            "bondOutpoint": bond,
-            "nodeSynced": snapshot.synced,
-            "unitPath": unit_path.display().to_string(),
-        }
-    }))
-}
-
-fn render_miner_unit(service_user: &str, network: &str, grpc: &str) -> String {
-    format!(
-        "[Unit]\n\
-Description=MISAKA funding miner\n\
-After=misaka-kaspad.service\n\
-Requires=misaka-kaspad.service\n\n\
-[Service]\n\
-User={service_user}\n\
-Group={service_user}\n\
-EnvironmentFile=/etc/misaka/miner.env\n\
-ExecStart=/usr/local/bin/misaminer \\\n  --pool {grpc} \\\n  --network-id {network} \\\n  --wallet ${{MINER_WALLET}} \\\n  --worker validator-funding \\\n  --threads ${{MINER_THREADS}} \\\n  --blocks 0 \\\n  --min-block-interval-ms 1000\n\
-Restart=always\n\
-RestartSec=10\n\
-Nice=10\n\
-LimitNOFILE=1048576\n\n\
-[Install]\n\
-WantedBy=multi-user.target\n"
-    )
-}
-
-async fn miner_status_value(ctx: &Ctx, args: &WebArgs) -> serde_json::Value {
-    let state = hydrate_validator_state_from_key(&ctx.network, &args.state_file, load_state(&args.state_file));
-    let env_path = miner_env_path();
-    let mining_address = read_env_value(&env_path, "MINER_WALLET")
-        .or(state.validator.mining_address.clone())
-        .or(state.validator.funding_address.clone());
-    let threads = read_env_value(&env_path, "MINER_THREADS")
-        .and_then(|value| value.parse::<u16>().ok())
-        .or(state.validator.miner_threads)
-        .unwrap_or(1);
-    let grpc = node_grpc_endpoint(&ctx.network, &ctx.node_grpc).ok();
-    let binary = binary_available("misaminer");
-    let service = service_state(DEFAULT_MINER_SERVICE);
-    let snapshot = node_snapshot(ctx).await;
-    serde_json::json!({
-        "ok": binary.is_some() && mining_address.is_some(),
-        "miner": {
-            "service": DEFAULT_MINER_SERVICE,
-            "serviceState": service,
-            "binary": binary.map(|p| p.display().to_string()),
-            "envPath": env_path.display().to_string(),
-            "grpc": grpc,
-            "threads": threads,
-            "miningAddress": mining_address,
-            "fundingAddress": state.validator.funding_address,
-            "maturity": maturity_progress_value(&ctx.network, state.validator.miner_start_daa_score, snapshot.virtual_daa_score),
-        }
-    })
-}
-
-fn miner_thread_recommendation(ctx: &Ctx, args: &WebArgs) -> serde_json::Value {
-    let state = hydrate_validator_state_from_key(&ctx.network, &args.state_file, load_state(&args.state_file));
-    let key_path = state.validator.key.clone().unwrap_or_else(|| DEFAULT_VALIDATOR_KEY.to_string());
-    let cpus = logical_cpu_count().unwrap_or(1);
-    let load1 = load_average_1m();
-    let available_mem = mem_available_gib();
-    let mut max_threads = cpus.saturating_sub(1).clamp(1, 16);
-    if available_mem.is_some_and(|gib| gib < 4.0) {
-        max_threads = max_threads.min(1);
-    }
-    let mut recommended = match cpus {
-        0..=4 => 1,
-        5..=8 => 2,
-        9..=16 => 4,
-        _ => 6,
-    }
-    .min(max_threads)
-    .max(1);
-    if let Some(load) = load1
-        && load > f64::from(cpus) * 0.6
-    {
-        recommended = recommended.saturating_sub(1).max(1);
-    }
-    let options: Vec<u16> = (1..=max_threads).collect();
-    serde_json::json!({
-        "ok": true,
-        "diagnostics": {
-            "target": "vps",
-            "logicalCpus": cpus,
-            "load1m": load1,
-            "memoryAvailableGiB": available_mem,
-            "maxThreads": max_threads,
-            "recommendedThreads": recommended,
-            "options": options,
-            "note": "Mining runs on the VPS, not on the browser computer.",
-        },
-        "validator": {
-            "service": DEFAULT_VALIDATOR_SERVICE,
-            "serviceState": service_state(DEFAULT_VALIDATOR_SERVICE),
-            "keyPath": key_path,
-            "keyExists": Path::new(&state.validator.key.clone().unwrap_or_else(|| DEFAULT_VALIDATOR_KEY.to_string())).is_file(),
-            "validatorId": state.validator.validator_id,
-            "fundingAddress": state.validator.funding_address,
-            "bondOutpoint": state.validator.bond_outpoint,
-        }
-    })
-}
-
-async fn miner_service_install(ctx: &Ctx, args: &WebArgs, threads: u16) -> SetupResult<serde_json::Value> {
-    if root_uid() != Some(0) {
-        return Err(CliError::new(exit::UNSAFE_REFUSED, "miner service install must be run as root or through sudo"));
-    }
-    if binary_available("misaminer").is_none() {
-        return Err(CliError::new(exit::GENERIC, "misaminer is not installed; press Prepare VPS first"));
-    }
-    if !user_exists(&args.service_user) {
-        return Err(CliError::new(exit::GENERIC, "service user is missing; press Install / Start Node first"));
-    }
-    let mut state = hydrate_validator_state_from_key(&ctx.network, &args.state_file, load_state(&args.state_file));
-    let address =
-        state.validator.funding_address.clone().ok_or_else(|| CliError::new(exit::GENERIC, missing_funding_address_message()))?;
-    let grpc = node_grpc_endpoint(&ctx.network, &ctx.node_grpc)?;
-    let threads = threads.clamp(1, 16);
-    let snapshot = node_snapshot(ctx).await;
-    let env_path = miner_env_path();
-    let env = format!("MINER_WALLET={address}\nMINER_THREADS={threads}\n");
-    write_if_changed(&env_path, &env, true)?;
-    run_checked("chmod", vec!["0600".to_string(), env_path.display().to_string()])?;
-    let unit = render_miner_unit(&args.service_user, &ctx.network, &grpc);
-    let unit_path = service_unit_path(DEFAULT_MINER_SERVICE);
-    write_if_changed(&unit_path, &unit, true)?;
-    run_checked("systemctl", ["daemon-reload"])?;
-    run_checked("systemctl", ["enable", "--now", DEFAULT_MINER_SERVICE])?;
-    state.validator.mining_address = Some(address.clone());
-    state.validator.miner_threads = Some(threads);
-    state.validator.miner_start_daa_score = snapshot.virtual_daa_score;
-    let maturity = maturity_progress_value(&ctx.network, state.validator.miner_start_daa_score, snapshot.virtual_daa_score);
-    write_state(&args.state_file, &state)?;
-    Ok(serde_json::json!({
-        "ok": true,
-        "message": "Funding miner started. It mines testnet MSK to the validator funding address. Wait for coinbase maturity, then check funding and create the bond.",
-        "miner": {
-            "service": DEFAULT_MINER_SERVICE,
-            "serviceState": service_state(DEFAULT_MINER_SERVICE),
-            "threads": threads,
-            "grpc": grpc,
-            "miningAddress": address,
-            "unitPath": unit_path.display().to_string(),
-            "maturity": maturity,
-        }
-    }))
-}
-
-fn miner_service_stop() -> SetupResult<serde_json::Value> {
-    if root_uid() != Some(0) {
-        return Err(CliError::new(exit::UNSAFE_REFUSED, "miner service stop must be run as root or through sudo"));
-    }
-    if systemd_unit_exists(DEFAULT_MINER_SERVICE) {
-        run_checked("systemctl", ["disable", "--now", DEFAULT_MINER_SERVICE])?;
-    }
-    Ok(serde_json::json!({
-        "ok": true,
-        "message": "Funding miner stopped.",
-        "miner": {
-            "service": DEFAULT_MINER_SERVICE,
-            "serviceState": service_state(DEFAULT_MINER_SERVICE),
-        }
-    }))
 }
 
 fn random_token() -> String {
@@ -2506,67 +1831,6 @@ async fn web_route(ctx: &Ctx, args: &WebArgs, token: &str, req: &HttpRequest) ->
             Ok(value) => json_response(value),
             Err(e) => json_error(500, e.msg),
         },
-        ("GET", "/api/validator/status") => json_response(validator_status_value_async(ctx, args).await),
-        ("GET", "/api/miner/status") => json_response(miner_status_value(ctx, args).await),
-        ("GET", "/api/miner/diagnostics") => json_response(miner_thread_recommendation(ctx, args)),
-        ("POST", "/api/validator/keygen") => match validator_keygen(ctx, args) {
-            Ok(value) => json_response(value),
-            Err(e) => json_error(500, e.msg),
-        },
-        ("POST", "/api/miner/service/apply") => {
-            let threads = query_param(&req.target, "threads").and_then(|v| v.parse::<u16>().ok()).unwrap_or(1);
-            match miner_service_install(ctx, args, threads).await {
-                Ok(value) => json_response(value),
-                Err(e) => json_error(500, e.msg),
-            }
-        }
-        ("POST", "/api/miner/service/stop") => match miner_service_stop() {
-            Ok(value) => json_response(value),
-            Err(e) => json_error(500, e.msg),
-        },
-        ("GET", "/api/miner/logs") => {
-            let logs = run_output("journalctl", ["-u", DEFAULT_MINER_SERVICE, "-n", "100", "--no-pager"])
-                .unwrap_or_else(|| "No miner logs available, or journalctl is unavailable.".to_string());
-            json_response(serde_json::json!({
-                "ok": true,
-                "logs": logs,
-                "miner": {
-                    "service": DEFAULT_MINER_SERVICE,
-                    "serviceState": service_state(DEFAULT_MINER_SERVICE),
-                }
-            }))
-        }
-        ("POST", "/api/validator/balance") => match validator_balance(ctx, args).await {
-            Ok(value) => json_response(value),
-            Err(e) => json_error(500, e.msg),
-        },
-        ("POST", "/api/validator/bond") => {
-            let amount = query_param(&req.target, "amount").unwrap_or_else(|| "10MSK".to_string());
-            match validator_bond(ctx, args, &amount).await {
-                Ok(value) => json_response(value),
-                Err(e) => json_error(500, e.msg),
-            }
-        }
-        ("GET", "/api/validator/chain-status") => match validator_chain_status(ctx, args) {
-            Ok(value) => json_response(value),
-            Err(e) => json_error(500, e.msg),
-        },
-        ("POST", "/api/validator/service/apply") => match validator_service_install(ctx, args).await {
-            Ok(value) => json_response(value),
-            Err(e) => json_error(500, e.msg),
-        },
-        ("GET", "/api/validator/logs") => {
-            let logs = run_output("journalctl", ["-u", DEFAULT_VALIDATOR_SERVICE, "-n", "100", "--no-pager"])
-                .unwrap_or_else(|| "No validator logs available, or journalctl is unavailable.".to_string());
-            json_response(serde_json::json!({
-                "ok": true,
-                "logs": logs,
-                "validator": {
-                    "service": DEFAULT_VALIDATOR_SERVICE,
-                    "serviceState": service_state(DEFAULT_VALIDATOR_SERVICE),
-                }
-            }))
-        }
         ("POST", "/api/node/dry-run") => {
             let node_args = web_node_args(args, false, true);
             match build_node_plan(ctx, &node_args) {
@@ -3031,6 +2295,28 @@ mod tests {
         std::env::temp_dir().join(format!("misaka-setup-{name}-{}.toml", std::process::id()))
     }
 
+    fn web_args() -> WebArgs {
+        WebArgs {
+            public: true,
+            port: 8787,
+            public_ip: Some("203.0.113.10".to_string()),
+            token: None,
+            ttl_minutes: 60,
+            max_ttl_minutes: 720,
+            restrict_to_ssh_client: false,
+            allow_client_ips: vec![],
+            force: false,
+            storage_profile: "auto".to_string(),
+            no_ufw: false,
+            service_user: DEFAULT_SERVICE_USER.to_string(),
+            appdir: PathBuf::from(DEFAULT_APPDIR),
+            service: DEFAULT_KASPAD_SERVICE.to_string(),
+            state_file: PathBuf::from(DEFAULT_STATE_FILE),
+            repo_dir: PathBuf::from(DEFAULT_REPO_DIR),
+            repo_url: DEFAULT_REPO_URL.to_string(),
+        }
+    }
+
     #[test]
     fn network_flags_match_testnet_suffix() {
         assert_eq!(net_flags("testnet-10").unwrap(), vec!["--testnet".to_string(), "--netsuffix=10".to_string()]);
@@ -3038,11 +2324,90 @@ mod tests {
 
     #[test]
     fn discord_command_omits_missing_optional_values() {
-        assert_eq!(discord_command("203.0.113.10", None, None, None), "/misaka register ip:203.0.113.10");
+        assert_eq!(discord_command("203.0.113.10", None), "/misaka register ip:203.0.113.10");
         assert_eq!(
-            discord_command("203.0.113.10", Some("abc:0"), Some("validator123"), None),
-            "/misaka register ip:203.0.113.10 validator_bond:abc:0 validator_id:validator123"
+            discord_command("203.0.113.10", Some("misakatest:qexample")),
+            "/misaka register ip:203.0.113.10 wallet:misakatest:qexample"
         );
+    }
+
+    #[test]
+    fn setup_state_with_a_retired_validator_table_still_loads() {
+        let old = r#"
+network_id = "testnet-10"
+public_ip = "203.0.113.30"
+
+[node]
+service = "misaka-kaspad"
+service_user = "misaka_user"
+appdir = "/var/lib/misaka"
+profile = "local-validator"
+p2p_port = 26211
+utxoindex = true
+
+[validator]
+bond_outpoint = "abc:0"
+validator_id = "validator123"
+funding_address = "misakatest:qexample"
+mining_address = "misakatest:qexample"
+miner_threads = 2
+miner_start_daa_score = 1000
+key = "/var/lib/misaka/validator/validator.seed"
+signed_epoch_db = "/var/lib/misaka/validator/validator.state"
+
+[discord]
+registered = true
+"#;
+        let state: SetupState = toml::from_str(old).expect("a state file with a [validator] table must still parse");
+        assert_eq!(state.network_id.as_deref(), Some("testnet-10"));
+        assert_eq!(state.public_ip.as_deref(), Some("203.0.113.30"));
+        assert_eq!(state.node.service.as_deref(), Some("misaka-kaspad"));
+        assert_eq!(state.node.service_user.as_deref(), Some("misaka_user"));
+        assert_eq!(state.node.profile.as_deref(), Some("local-validator"));
+        assert_eq!(state.node.p2p_port, Some(26211));
+        assert_eq!(state.node.utxoindex, Some(true));
+        assert!(state.discord.registered);
+
+        // load_state swallows parse errors into the default, so check the file path too:
+        // a default state would have no public IP.
+        let state_file = test_state_file("retired-validator-table");
+        fs::write(&state_file, old).unwrap();
+        let loaded = load_state(&state_file);
+        assert_eq!(loaded.public_ip.as_deref(), Some("203.0.113.30"));
+        assert_eq!(loaded.node.appdir.as_deref(), Some("/var/lib/misaka"));
+
+        // The limitation, pinned: the next write keeps the node values and drops the retired table.
+        write_state(&state_file, &loaded).unwrap();
+        let rewritten = fs::read_to_string(&state_file).unwrap();
+        let _ = fs::remove_file(&state_file);
+        assert!(rewritten.contains("203.0.113.30"));
+        assert!(!rewritten.contains("[validator]"));
+        assert!(!rewritten.contains("bond_outpoint"));
+    }
+
+    #[tokio::test]
+    async fn retired_validator_and_miner_endpoints_are_unknown() {
+        let web = web_args();
+        for (method, path) in [
+            ("GET", "/api/validator/status"),
+            ("POST", "/api/validator/keygen"),
+            ("POST", "/api/validator/balance"),
+            ("POST", "/api/validator/bond"),
+            ("GET", "/api/validator/chain-status"),
+            ("POST", "/api/validator/service/apply"),
+            ("GET", "/api/validator/logs"),
+            ("GET", "/api/miner/status"),
+            ("GET", "/api/miner/diagnostics"),
+            ("POST", "/api/miner/service/apply"),
+            ("POST", "/api/miner/service/stop"),
+            ("GET", "/api/miner/logs"),
+        ] {
+            let req = HttpRequest { method: method.to_string(), target: format!("{path}?token=tok") };
+            let (code, _content_type, body, stop) = web_route(&base_ctx(), &web, "tok", &req).await;
+            assert_eq!(code, 404, "{method} {path} should be gone");
+            assert!(body.contains("unknown setup API"), "{method} {path}: {body}");
+            assert!(!stop);
+        }
     }
 
     #[test]
@@ -3054,7 +2419,7 @@ mod tests {
     }
 
     #[test]
-    fn node_plan_defaults_to_validator_ready_utxoindex() {
+    fn node_plan_defaults_to_wallet_ready_utxoindex() {
         let args = NodeSetupArgs {
             yes: false,
             dry_run: true,
@@ -3075,6 +2440,8 @@ mod tests {
         let plan = build_node_plan(&base_ctx(), &args).unwrap();
         assert!(plan.unit.contains("--externalip=203.0.113.10:26211"));
         assert!(plan.unit.contains("--utxoindex"));
+        // kaspad's loopback wRPC-Borsh listener bundle keeps its name.
+        assert!(plan.unit.contains("--profile=local-validator"));
         assert_eq!(plan.state.node.service_user.as_deref(), Some("misaka_user"));
     }
 
@@ -3138,14 +2505,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_validator_balance_output() {
-        let addr = "misakatest:qexample";
-        let output = format!("[validator] note\n{addr}\t123456789\t1.23456789 MSK\n");
-        assert_eq!(parse_balance_output(&output, addr), Some((123456789, "1.23456789".to_string())));
-        assert_eq!(parse_balance_output("other\t1\t0.00000001 MSK\n", addr), None);
-    }
-
-    #[test]
     fn status_label_is_stable() {
         assert_eq!(status_label("active"), "RUNNING");
         assert_eq!(status_label("not configured"), "NOT CONFIGURED");
@@ -3169,30 +2528,12 @@ mod tests {
     }
 
     #[test]
-    fn web_node_args_are_validator_ready_by_default() {
-        let web = WebArgs {
-            public: true,
-            port: 8787,
-            public_ip: Some("203.0.113.10".to_string()),
-            token: None,
-            ttl_minutes: 60,
-            max_ttl_minutes: 720,
-            restrict_to_ssh_client: false,
-            allow_client_ips: vec![],
-            force: false,
-            storage_profile: "auto".to_string(),
-            no_ufw: false,
-            service_user: DEFAULT_SERVICE_USER.to_string(),
-            appdir: PathBuf::from(DEFAULT_APPDIR),
-            service: DEFAULT_KASPAD_SERVICE.to_string(),
-            state_file: PathBuf::from(DEFAULT_STATE_FILE),
-            repo_dir: PathBuf::from(DEFAULT_REPO_DIR),
-            repo_url: DEFAULT_REPO_URL.to_string(),
-        };
-        let args = web_node_args(&web, true, false);
+    fn web_node_args_are_wallet_ready_by_default() {
+        let args = web_node_args(&web_args(), true, false);
         assert!(args.yes);
         assert!(!args.dry_run);
         assert!(!args.no_utxoindex);
+        assert_eq!(args.profile, "local-validator");
         assert_eq!(args.public_ip.as_deref(), Some("203.0.113.10"));
     }
 
@@ -3228,37 +2569,15 @@ mod tests {
 
     #[test]
     fn prepare_script_builds_kaspad_with_evm_feature() {
-        let script = prepare_script(&WebArgs {
-            public: true,
-            port: 8787,
-            public_ip: Some("203.0.113.10".to_string()),
-            token: None,
-            ttl_minutes: 60,
-            max_ttl_minutes: 720,
-            restrict_to_ssh_client: false,
-            allow_client_ips: vec![],
-            force: false,
-            storage_profile: "auto".to_string(),
-            no_ufw: false,
-            service_user: DEFAULT_SERVICE_USER.to_string(),
-            appdir: PathBuf::from(DEFAULT_APPDIR),
-            service: DEFAULT_KASPAD_SERVICE.to_string(),
-            state_file: PathBuf::from(DEFAULT_STATE_FILE),
-            repo_dir: PathBuf::from(DEFAULT_REPO_DIR),
-            repo_url: DEFAULT_REPO_URL.to_string(),
-        });
-        assert!(script.contains("cargo build --release -p kaspad --features evm"));
-        assert!(script.contains("cargo build --release -p misaka-cli -p kaspa-pq-validator -p misaminer"));
-        assert!(script.contains("install -o root -g root -m 0755 target/release/misaminer /usr/local/bin/misaminer"));
-    }
-
-    #[test]
-    fn miner_unit_mines_to_env_wallet_with_limited_threads() {
-        let unit = render_miner_unit("misaka_user", "testnet-10", "127.0.0.1:26210");
-        assert!(unit.contains("User=misaka_user"));
-        assert!(unit.contains("--pool 127.0.0.1:26210"));
-        assert!(unit.contains("--network-id testnet-10"));
-        assert!(unit.contains("--wallet ${MINER_WALLET}"));
-        assert!(unit.contains("--threads ${MINER_THREADS}"));
+        let script = prepare_script(&web_args());
+        assert!(script.contains("cargo build --release -p kaspad --features evm\n"));
+        assert!(script.contains("cargo build --release -p misaka-cli\n"));
+        assert!(script.contains("install -o root -g root -m 0755 target/release/kaspad /usr/local/bin/kaspad"));
+        assert!(script.contains("install -o root -g root -m 0755 target/release/misaka /usr/local/bin/misaka"));
+        assert!(script.contains("probe_binary \"kaspad\" /usr/local/bin/kaspad --version"));
+        assert!(script.contains("probe_binary \"misaka\" /usr/local/bin/misaka --version"));
+        // The retired validator sidecar and funding miner are neither built nor installed.
+        assert!(!script.contains("kaspa-pq-validator"));
+        assert!(!script.contains("misaminer"));
     }
 }

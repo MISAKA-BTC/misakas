@@ -1,8 +1,8 @@
 //! `misaka` — the unified MISAKA operator CLI.
 //!
 //! One user-facing front-end over the functionality that today is scattered
-//! across `kaspa-pq-cli`, the interactive wallet REPL, `kaspa-pq-validator`,
-//! and the `evm_tx_gen` dev example. This is the **Tier A (observability)**
+//! across `kaspa-pq-cli`, the interactive wallet REPL and the `evm_tx_gen` dev
+//! example. This is the **Tier A (observability)**
 //! slice: read-only commands that wrap the EXISTING node wRPC + EVM JSON-RPC —
 //! no new RPCs, no private keys, no transaction construction. They cover the
 //! day-to-day "is my node healthy / where is my EVM tx" questions that
@@ -50,7 +50,6 @@ mod prea;
 /// ADR-0079 Decision 13: `node security-report` — the host posture, printed from live state.
 mod security;
 mod setup;
-mod validator_reader;
 mod wallet;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -149,7 +148,7 @@ struct Cli {
     #[arg(long, global = true, visible_alias = "network-id", env = "MISAKA_NETWORK")]
     network: Option<String>,
 
-    /// Node wRPC Borsh endpoint host:port (validator/wallet/operator transport).
+    /// Node wRPC Borsh endpoint host:port (wallet/operator transport).
     /// Default derives from --network (testnet-10 => 127.0.0.1:27210). NOTE: this is
     /// the CODE default; some deployments bind borsh on a non-standard port (e.g.
     /// 27610) — pass it here. This is NOT node gRPC (26210) nor EVM JSON-RPC (8545).
@@ -182,8 +181,8 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// What should this machine do? Mine, verify, validate, add a model, hold positions — then
-    /// the setup for it.
+    /// What should this machine do? Mine, verify, add a model, hold positions — then the setup
+    /// for it.
     Init(SetupCliArgs),
     /// Mining, as one purpose: is this host mining, and if not, why and what to do (ADR-0122).
     #[command(subcommand)]
@@ -248,11 +247,6 @@ enum Command {
     /// Guided VPS setup: preflight, node service, status, and Discord registration helpers.
     #[command(subcommand)]
     Setup(setup::SetupCmd),
-    /// The DNS-finality validator: `setup` and `status` here, and the `kaspa-pq-validator` sidecar's
-    /// own subcommands (keygen, bond, unbond, run, …) forwarded with --network and --rpc injected.
-    /// `misaka validator --help` lists both.
-    #[command(disable_help_flag = true)]
-    Validator(PassThrough),
     /// Join the network for --network-id: start a local node that discovers peers via the DNS
     /// seeds (port-free). A newcomer-friendly front-end over `node start` that names the seeds.
     Join(NodeStartArgs),
@@ -279,7 +273,7 @@ struct NodeStartArgs {
     #[arg(long)]
     profile: Option<String>,
     /// kaspad operational role profile: full | bootstrap-pruned | recovery-sync |
-    /// validator | archive | public-rpc.
+    /// archive | public-rpc.
     #[arg(long)]
     node_profile: Option<String>,
     /// Apply kaspad's 8GB-VPS resource defaults for unspecified knobs.
@@ -362,9 +356,6 @@ struct SetupCliArgs {
     /// Read the artifact through and check its root against the class's (minutes for a large model).
     #[arg(long)]
     verify_artifact: bool,
-    /// The validator's stake in MSK (validator setup; default: the network's minimum bond).
-    #[arg(long, value_name = "MSK")]
-    amount: Option<String>,
     /// Answer yes to every question: make the key, register the bond, declare, write the file.
     #[arg(long)]
     yes: bool,
@@ -373,21 +364,9 @@ struct SetupCliArgs {
     no_wait: bool,
 }
 
-/// `misaka validator setup` — parsed from the passthrough's own arguments, so the sidecar's
-/// subcommands keep working as they are.
-#[derive(clap::Parser, Debug)]
-#[command(
-    about = "Set this host up as a DNS-finality validator: key, node, funds, stake bond, then ~/.misaka/validator.toml. Running it again resumes."
-)]
-struct ValidatorSetupCli {
-    #[command(flatten)]
-    setup: SetupCliArgs,
-}
-
 impl SetupCliArgs {
-    fn into_setup(self, network: Option<String>, rpc: Option<String>) -> Result<operator::wizard::SetupArgs, CliError> {
-        let amount = self.amount.as_deref().map(parse_msk_to_sompi).transpose()?;
-        Ok(operator::wizard::SetupArgs {
+    fn into_setup(self, network: Option<String>, rpc: Option<String>) -> operator::wizard::SetupArgs {
+        operator::wizard::SetupArgs {
             network,
             rpc,
             config: self.config,
@@ -399,10 +378,9 @@ impl SetupCliArgs {
             artifacts: self.artifacts,
             fee_outpoint: self.fee_outpoint,
             verify_artifact: self.verify_artifact,
-            amount,
             yes: self.yes,
             no_wait: self.no_wait,
-        })
+        }
     }
 }
 
@@ -677,14 +655,6 @@ enum WorkCmd {
         #[command(flatten)]
         profile: ProfileArgs,
     },
-}
-
-/// Captures all remaining args verbatim to forward to an underlying binary.
-#[derive(Args, Debug)]
-struct PassThrough {
-    /// Arguments forwarded verbatim to the underlying binary (e.g. `keygen --out k`).
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-    args: Vec<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -1863,7 +1833,7 @@ enum NodeCmd {
         verify_artifacts: bool,
     },
     /// Show the effective local node RPC endpoints (the registry the node wrote, else the
-    /// network defaults). Lets you see what `misaka validator` will auto-connect to.
+    /// network defaults). Lets you see what `misaka` will auto-connect to.
     Endpoints,
     /// Start a local node for --network-id (port-free; peers via the DNS seeds). Forwards to
     /// `kaspad` with the network selected and an optional --profile; extra kaspad args after `--`.
@@ -2101,18 +2071,14 @@ async fn main() -> std::process::ExitCode {
         |args: &ProfileArgs| operator::profile::Profile::resolve(&args.overrides(), named_network.as_deref(), ctx.rpc.as_deref());
 
     let result = match cli.command {
-        Command::Init(args) => match args.into_setup(named_network.clone(), ctx.rpc.clone()) {
-            Ok(a) => operator::wizard::init(&ctx, a).await,
-            Err(e) => Err(e),
-        },
-        Command::Mining(MiningCmd::Setup(args)) => match args.into_setup(named_network.clone(), ctx.rpc.clone()) {
-            Ok(a) => operator::wizard::run(&ctx, operator::wizard::Purpose::Mine, a).await,
-            Err(e) => Err(e),
-        },
-        Command::Verifier(VerifierCmd::Setup(args)) => match args.into_setup(named_network.clone(), ctx.rpc.clone()) {
-            Ok(a) => operator::wizard::run(&ctx, operator::wizard::Purpose::Verify, a).await,
-            Err(e) => Err(e),
-        },
+        Command::Init(args) => operator::wizard::init(&ctx, args.into_setup(named_network.clone(), ctx.rpc.clone())).await,
+        Command::Mining(MiningCmd::Setup(args)) => {
+            operator::wizard::run(&ctx, operator::wizard::Purpose::Mine, args.into_setup(named_network.clone(), ctx.rpc.clone())).await
+        }
+        Command::Verifier(VerifierCmd::Setup(args)) => {
+            operator::wizard::run(&ctx, operator::wizard::Purpose::Verify, args.into_setup(named_network.clone(), ctx.rpc.clone()))
+                .await
+        }
         Command::Mining(MiningCmd::Status { profile: args, watch }) => match profile(&args) {
             Ok(p) => operator::status::run(&ctx, p, watch).await,
             Err(e) => Err(e),
@@ -2453,40 +2419,6 @@ async fn main() -> std::process::ExitCode {
         Command::Config(ConfigCmd::Show) => {
             config::show(ctx.output, &ctx.network, &ctx.rpc, &cli.node_grpc, &cfg.node.grpc, &ctx.evm_rpc)
         }
-        Command::Validator(p)
-            if p.args.first().is_none_or(|a| matches!(a.as_str(), "--help" | "-h" | "help")) && p.args.len() <= 1 =>
-        {
-            // Help lists what is served here and what the sidecar serves — clap's own stub named
-            // only itself and pointed back at itself (ADR-0122 §8.2).
-            println!("The DNS-finality validator.\n");
-            println!("Served by misaka:");
-            println!("  setup     key → node → funds → stake bond → ~/.misaka/validator.toml, then the command that runs it");
-            println!("  status    what this validator is doing (and why not), from ~/.misaka/validator.toml or --stake-bond");
-            println!("  bonds     the stake-bond registry (--owner, --status, --all)\n");
-            println!("Forwarded to kaspa-pq-validator (beside misaka, or MISAKA_VALIDATOR_BIN):");
-            println!("  keygen · bond · unbond · run · balance     misaka validator <subcommand> --help for each\n");
-            println!("Start here: misaka validator setup   (misaka --network testnet-10 validator setup for another network)");
-            Ok(())
-        }
-        Command::Validator(p) if p.args.first().is_some_and(|a| a == "setup") => {
-            // ADR-0122 §8.2: the guided setup, in front of the sidecar's own subcommands.
-            match ValidatorSetupCli::try_parse_from(
-                std::iter::once("misaka validator setup".to_string()).chain(p.args[1..].iter().cloned()),
-            ) {
-                Ok(cli) => match cli.setup.into_setup(named_network.clone(), ctx.rpc.clone()) {
-                    Ok(a) => operator::wizard::run(&ctx, operator::wizard::Purpose::Validate, a).await,
-                    Err(e) => Err(e),
-                },
-                Err(e) => {
-                    let _ = e.print();
-                    Err(CliError::new(if e.use_stderr() { exit::CONFIG } else { exit::SUCCESS }, String::new()))
-                }
-            }
-        }
-        Command::Validator(p) => match validator_reader::maybe_handle(&ctx, &p.args, named_network.as_deref()).await {
-            Some(result) => result,
-            None => forward::validator(&ctx, &p.args),
-        },
         #[cfg(feature = "evm-send")]
         Command::Evm(EvmCmd::Wallet(EvmWalletCmd::Create { out })) => evm_send::wallet_create(&ctx, &out),
         #[cfg(feature = "evm-send")]
@@ -2663,8 +2595,27 @@ mod cli_surface_tests {
         assert!(Cli::command().find_subcommand("miner").is_none(), "`misaka miner` is back — SA-4 deleted it");
         assert!(Cli::try_parse_from(["misaka", "miner"]).is_err());
         assert!(Cli::try_parse_from(["misaka", "miner", "--blocks", "1"]).is_err());
-        // The sibling forwarder is deliberately untouched: `validator` forwards to a binary this
-        // tree actually builds, which is the difference SA-4 turns on.
-        assert!(Cli::command().find_subcommand("validator").is_some());
+    }
+
+    /// **`misaka validator` does not exist either.** It forwarded to the `kaspa-pq-validator`
+    /// sidecar and ran the DNS-finality validator's setup and status. The overlay is retired — PALW
+    /// does not involve validators — and the sidecar is no longer built, so the forwarder would
+    /// reach the same bare-`$PATH` fallthrough SA-4 removed `miner` for. Its `--amount` (the
+    /// validator's stake) left the setup flags with it.
+    #[test]
+    fn the_validator_subcommand_is_gone() {
+        assert!(Cli::command().find_subcommand("validator").is_none(), "`misaka validator` is back, but the overlay is retired");
+        for argv in [
+            vec!["misaka", "validator"],
+            vec!["misaka", "validator", "setup"],
+            vec!["misaka", "validator", "status"],
+            vec!["misaka", "validator", "keygen", "--out", "v.seed"],
+        ] {
+            assert!(Cli::try_parse_from(&argv).is_err(), "{argv:?} parses");
+        }
+        assert!(Cli::try_parse_from(["misaka", "init", "--amount", "10"]).is_err());
+        assert!(Cli::try_parse_from(["misaka", "mining", "setup", "--amount", "10"]).is_err());
+        // The sibling forwarder that remains starts the node, which this tree does build.
+        assert!(Cli::command().find_subcommand("node").is_some_and(|n| n.find_subcommand("start").is_some()));
     }
 }

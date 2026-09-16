@@ -215,7 +215,7 @@ async fn main() {
         }
         Some("dns") => {
             // The node-wide DNS confirmation view over gRPC — the operator's
-            // dnsConfirmed signal (also wired into `kaspa-pq-validator status`
+            // dnsConfirmed signal (also wired into the retired `kaspa-pq-validator status`
             // over wRPC; this is the gRPC differential).
             let url = args[2].clone();
             let client = GrpcClient::connect(url).await.expect("gRPC connect");

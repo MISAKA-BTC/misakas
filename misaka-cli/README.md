@@ -1,6 +1,6 @@
 # `misaka` — unified operator CLI
 
-`misaka` is the current operator entry point for Testnet-11 mining, verification, model, validator, wallet and observability tasks.
+`misaka` is the current operator entry point for Testnet-11 mining, verification, model, wallet and observability tasks.
 
 ## Build
 
@@ -44,10 +44,11 @@ Exact-outpoint status is read-only and keyless. `--class-id` is optional; when o
 - `verifier` — unpaid PALW panel seat
 - `model`, `position` — class/catalog/market operations
 - `dashboard` — read-only UI on `127.0.0.1:8791`
-- `validator` — DNS-finality setup/status and sidecar forwarding
 - `node`, `wallet`, `bond`, `palw`, `evm`, `key`
 
 Use each subcommand's `--help`; it is generated from the same argument definitions as the binary.
+
+There is no `validator` group: the DNS-finality validator overlay is retired (PALW does not use validators), together with the `kaspa-pq-validator` sidecar it forwarded to. A bond key is made with `misaka key gen --out <file>`.
 
 ## Endpoints
 

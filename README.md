@@ -55,10 +55,10 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 > `Consensus fence schedule: 1150, 1900, 2150, 2400, 2125000`, and that line is the check. Do **not**
 > run `7f4dded4` (the first build with that fence): it cannot sync from an empty datadir. To rejoin,
 > rebuild, move your `datadir` aside (keep the rest of the appdir) and resync — the steps are in
-> [the node-operator doc](docs/testnet11-node-operator.md). Validators: restart yours once the node
-> is synced. DNS finality stalled from DAA 2,246 while most bonded stake attested on the dead arm; it
-> recovered on the network's chain on 2026-09-10, and the EVM bridge carried its first deposit the
-> same day.
+> [the node-operator doc](docs/testnet11-node-operator.md). (The DNS-finality validator overlay has
+> since been retired — PALW does not use validators — so there is no validator to restart.) DNS
+> finality stalled from DAA 2,246 while most bonded stake attested on the dead arm; it recovered on
+> the network's chain on 2026-09-10, and the EVM bridge carried its first deposit the same day.
 >
 > The chain was re-minted 2026-09-03 (Relaunch 5f) — no flag day since has re-minted the genesis.
 > Four fences are scheduled on it: ADR-0083's at **DAA 1150**, the DA court, private prompts and the
@@ -205,7 +205,6 @@ Authoritative design & spec live under [`docs/`](docs/):
 - [Design doc — `docs/kaspa-pq-design-mldsa87.md`](docs/kaspa-pq-design-mldsa87.md)
 - [Spec — `docs/kaspa-pq-spec.md`](docs/kaspa-pq-spec.md)
 - [Verification runbook — `docs/kaspa-pq-mldsa87-verification-runbook.md`](docs/kaspa-pq-mldsa87-verification-runbook.md)
-- [Validator runbook — `docs/validator-runbook.md`](docs/validator-runbook.md)
 - [PALW provenance map — `docs/palw-registry-map.md`](docs/palw-registry-map.md) — **where the model registry, the artifact hash, the runtime registry, the receipt, the output root, the verification, the metering and the capability profile already are**, field by field, plus the layers that are refused and why (ADR-0079 §7 / R-09). Read it before proposing a provenance layer.
 - [ADR index — `docs/adr/README.md`](docs/adr/README.md) (what governs, and what was reversed)
 
@@ -223,16 +222,16 @@ The check is never the tag: it is the fingerprint your node prints on its second
 the fence schedule on the line after it. If either does not match the Status block above, you are
 on the wrong ruleset whatever you downloaded. Older releases on that page are earlier chains and are refused at the handshake.
 
-Linux x86_64 binaries (`kaspad`, `kaspa-pq-miner`, `kaspa-pq-validator`, `kaspa-pq-signer`, `misaka`) are published under [Releases](https://github.com/MISAKA-BTC/misakas/releases). Each release is built from the source snapshot of the same tag; verify with the `SHA256SUMS` attached to the release.
+Linux x86_64 binaries (`kaspad`, `kaspa-pq-miner`, `kaspa-pq-signer`, `misaka`) are published under [Releases](https://github.com/MISAKA-BTC/misakas/releases). Each release is built from the source snapshot of the same tag; verify with the `SHA256SUMS` attached to the release.
 
 The unified operator CLI is the `misaka` binary from the `misaka-cli` package. The package name is `misaka-cli`, while the installed binary name is `misaka`; build commands should name both explicitly (`-p misaka-cli --bin misaka`) so Cargo never depends on workspace defaults.
 
-DNS hard-inclusion is deliberately liveness-gated: the hard mandatory attestation rule only engages when the active validator set can satisfy the configured quality floor within one block under the conservative single-shard capacity invariant (`max_block_mass / max_attestation_shard_mass`). With the current production cap (`max_block_mass = 500_000`, `max_attestation_shard_mass = 50_200`), a block can carry at most 9 single-attestation shards for the capacity check. If the validator set becomes too large or too evenly distributed for that one-block invariant, the hard gate stays dormant instead of halting the base ledger; monitor rollout/health and validator count before relying on it as an anti-censorship backstop. Because `max_attestation_shard_mass` is a consensus parameter, changing it on a live testnet requires a coordinated upgrade or reset.
+**Validators are retired.** The DNS-finality / VLT committee overlay depended on bonded validators, and PALW does not involve validators, so this tree no longer ships one: there is no `kaspa-pq-validator` sidecar, no `kaspad --enable-validator`, and no `misaka validator`. What testnet-11 already recorded from the overlay (validator reward outputs, attestation transactions, the overlay commitment) is still validated as part of that chain's history; nothing asks an operator to run a validator.
 
 ## Building from source
 
-`cargo build --release` at the workspace root builds everything you need to run a node, a miner, a
-validator and the CLI. It does **not** build `misaka-palw-worker`, which is excluded from
+`cargo build --release` at the workspace root builds everything you need to run a node, a miner and
+the CLI. It does **not** build `misaka-palw-worker`, which is excluded from
 `default-members` on purpose: that crate links a **pinned llama.cpp static build** which this
 repository deliberately does not contain, so including it would mean a fresh clone could not build
 at all. Nothing needs it to run a node — since ADR-0053 there is one execution family and it is BASE-0's,
@@ -288,7 +287,7 @@ describes the artifacts the binary is actually made of).
       ```
   7. Build the node + tools
       ```bash
-      cargo build --release -p kaspad -p kaspa-pq-miner -p kaspa-pq-validator -p kaspa-pq-signer -p misaka-cli
+      cargo build --release -p kaspad -p kaspa-pq-miner -p kaspa-pq-signer -p misaka-cli
       ```
      To check only the unified operator CLI:
       ```bash
@@ -300,7 +299,6 @@ describes the artifacts the binary is actually made of).
       cargo build --release \
         -p kaspad \
         -p kaspa-pq-miner \
-        -p kaspa-pq-validator \
         -p kaspa-pq-signer \
         -p misaka-cli \
         --features kaspad/evm
@@ -315,7 +313,7 @@ describes the artifacts the binary is actually made of).
   <summary>Building on Windows</summary>
 
   **What a Windows build gives you, and what it does not.** `kaspad` builds and runs on
-  `x86_64-pc-windows-msvc`: it syncs, serves RPC and runs the validator daemon. The **PALW v2
+  `x86_64-pc-windows-msvc`: it syncs and serves RPC. The **PALW v2
   agent** path (`--compute-endpoint`) is *not* served on Windows — `misaka-palw-agent-borsh/v1`
   is a Unix-domain-socket protocol whose admission check is peer credentials (`SO_PEERCRED` /
   `getpeereid`), and neither has a Windows equivalent. Passing `--compute-endpoint` on Windows is
@@ -415,77 +413,51 @@ explorer backend) needs to connect locally.
 
   If discovery is slow, bootstrap explicitly: `--addpeer=169.58.39.220:26311` (or `--connect=` to
   use only that peer). Block explorer: **[misakascan.com](https://misakascan.com)**.
-- `--utxoindex` is required for wallet/validator funding lookups.
+- `--utxoindex` is required for wallet funding lookups.
 - **gRPC is always on by default** (loopback, `127.0.0.1:26210` on testnet) even with no RPC flag,
   so the **miner needs no extra flag** — it connects over gRPC. **wRPC (Borsh / JSON) is off by
   default** and must be enabled with `--rpclisten-borsh` / `--rpclisten-json`; it is required by the
-  CLI wallet and the `kaspa-pq-validator` sidecar (which speak wRPC, **not** gRPC).
+  CLI wallet and `misaka` (which speak wRPC, **not** gRPC).
 - **Connecting a wallet / RPC client — pick the right port.** The RPC ports are per network TYPE,
   so **every testnet suffix shares them**; only P2P carries the suffix. Default **testnet** ports:
   **gRPC** `26210` (protobuf over TCP, default-on at loopback), **wRPC Borsh** `27210`
-  (the CLI wallet & validator transport, WebSocket — enable with `--rpclisten-borsh=default`),
+  (the CLI wallet & `misaka` transport, WebSocket — enable with `--rpclisten-borsh=default`),
   **wRPC JSON** `28210` (WebSocket — enable with `--rpclisten-json=default`). Mainnet uses
   `26110/27110/28110`; devnet `26610/27610/28610`.
   The `kaspa-pq` CLI wallet connects over **wRPC Borsh** — point it at `27210`, **not** the gRPC
   port `26210` (a wallet pointed at gRPC fails with `WebSocket protocol error: httparse err`
   or `WebSocket is not connected`, because gRPC is not a WebSocket). In the wallet REPL:
   `server 127.0.0.1:27210` → `connect`. (P2P is a separate, non-RPC port: `26311` on testnet-11.)
-- **Headless balance (no interactive wallet).** For scripting / monitoring, query a balance in one
-  shot over wRPC:
-  `kaspa-pq-validator balance --node-rpc 127.0.0.1:27210 --address misakatest:q… [--address …] [--network testnet-11]`.
-  It prints `address <sompi> <MSK> MSK` per line (plus `TOTAL` for several) to stdout — connection /
-  sync notes go to stderr, so `… balance --address misakatest:q… | awk '{print $2}'` yields just the
-  sompi. The node must run `--utxoindex`.
+- **Headless balance (no interactive wallet).** For scripting / monitoring, read an address's
+  outputs in one shot over wRPC, no key needed:
+  `misaka --network testnet-11 --rpc 127.0.0.1:27210 wallet utxo list --address misakatest:q…`.
+  It prints the mature, immature and bonded totals; with `--output json` the same numbers come as
+  `mature.sompi` / `immature.sompi` / `bonded.sompi`. The node must run `--utxoindex`.
 - Add `--enable-unsynced-mining` **only** when bootstrapping a brand-new isolated network with no peers (mining before you have synced to the public testnet would fork from genesis).
 
 Testnet-11 cannot be mined with `kaspa-pq-miner` or `misaminer`: they do not create the required
 PALW attempt envelope. Block production runs inside `kaspad --palw-produce`; use
 `misaka mining setup/start` rather than an external hash miner.
 
-## Running a validator (testnet)
+## Validators (retired)
 
-The `kaspa-pq-validator` sidecar connects to a local node over wRPC and attests while its ML-DSA-87 stake bond is active. See [docs/validator-runbook.md](docs/validator-runbook.md). Quickstart:
-
-```bash
-# 1. generate a validator key + print its funding address
-kaspa-pq-validator keygen --out val.seed --network testnet
-# 2. send funds to the printed funding address (mine to it, or transfer from another wallet)
-# 3. stake a DNS-finality bond. Testnet-11's minimum is 10 MSK = 1,000,000,000 sompi.
-#    Omit --fee to auto-size it (mass-based; the flat floor is too low for the 2592-byte pubkey).
-kaspa-pq-validator bond --node-rpc 127.0.0.1:27210 --validator-key val.seed \
-  --amount 1000000000 --network testnet-11
-# 4. run the validator daemon (attests every epoch while the bond is active)
-kaspa-pq-validator run --node-rpc 127.0.0.1:27210 --validator-key val.seed \
-  --stake-bond <txid:index> --signed-epoch-db val.state --network testnet-11 --attest-poll-secs 3
-```
-
-> Note: the funding/`run`/`bond` subcommands want the **full** network id (`testnet-11`); `keygen`'s `--network` takes the short form (`testnet`). Use a **fresh** `--signed-epoch-db` per network — reusing one across networks trips the anti-equivocation guard on overlapping epoch numbers.
-
-The validator attests the one current canonical-ready epoch per round; the poll cadence defaults to
-**3 s**. Testnet-11 is not a 10-BPS network: PALW cadence is 120 seconds per block and its DNS
-attestation epoch is rescaled to 2 blue-score. Keep the generated/default poll interval unless the
-current validator runbook and `--help` say otherwise.
-
-Once enough active stake has attested across the recent epochs, `getDnsConfirmation` reports
-`dnsConfirmed: true` plus a `lastDnsConfirmedAnchor` (the stake-confirmed finality point — treat
-this as DNS-final, not the pov-dependent `blockHash` sink). Confirmation is two-dimensional on
-Testnet-11: it requires both anchor-relative `WorkDepth` and `StakeDepth` under the live network
-parameters. The current experimental mesh permits one active validator, but the 10 MSK minimum
-does not bypass the work-depth, anchor-attester or freshness checks. Per-block finality is queryable:
-`getDnsConfirmation` accepts an optional `blockHash` and answers whether that block is DNS-final
-(`blockIsDnsFinal` / `blockIsConfirmedAnchor`); the explorer's **DNS Finality** page lists the
-confirmed chain in order.
+The DNS-finality validator — the `kaspa-pq-validator` sidecar and the in-process
+`kaspad --enable-validator` service — is retired together with the overlay it served; PALW does
+not involve validators. Block production and claim verification are PALW roles: use
+`misaka mining setup` and `misaka verifier setup` ([testnet11-join-mining.md](docs/testnet11-join-mining.md)).
+The `getDnsConfirmation` / `getStakeBond(s)` / `getValidatorStatus` RPCs stay on the wire for
+explorers and wallets reading the chain's history.
 
 ### Remote signer / HSM (optional, ADR-0015)
 
-`kaspa-pq-signer` is a standalone daemon that holds the ML-DSA-87 validator key **outside** the validator process and answers sign requests over a `0700` (owner-only) Unix domain socket, enforcing a signing policy (`permissive` / `audit-only` / `strict`), a `strict`-policy anti-equivocation guard (backed by a crash-consistent `SignedEpochStore`), and a tamper-evident hash-chained audit log. A compromised validator node then cannot exfiltrate the key or double-sign.
+`kaspa-pq-signer` is a standalone daemon that holds an ML-DSA-87 bond key **outside** the node process and answers sign requests over a `0700` (owner-only) Unix domain socket, enforcing a signing policy (`permissive` / `audit-only` / `strict`), a `strict`-policy anti-equivocation guard (backed by crash-consistent journals), and a tamper-evident hash-chained audit log. A compromised node then cannot exfiltrate the key or double-sign.
 
 ```bash
 kaspa-pq-signer --socket /run/kaspa-pq-signer.sock --key val.seed \
   --state-dir ./kpq-signer-state --policy strict
 ```
 
-This is a **software** signer; a hardware-HSM / PKCS#11 backend and HA failover are out of scope (see [docs/adr/0015-remote-signer-hsm-protocol.md](docs/adr/0015-remote-signer-hsm-protocol.md)). The local key-file signer used by `kaspa-pq-validator` above remains the default.
+This is a **software** signer; a hardware-HSM / PKCS#11 backend and HA failover are out of scope (see [docs/adr/0015-remote-signer-hsm-protocol.md](docs/adr/0015-remote-signer-hsm-protocol.md)). A local key file (e.g. `kaspad --palw-producer-key`) remains the default.
 
 <details>
 <summary>Using a configuration file</summary>

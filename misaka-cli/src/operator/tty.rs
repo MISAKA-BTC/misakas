@@ -1,7 +1,7 @@
 //! **The guided flows' questions, marks and stops** — ADR-0122 Decision 7.
 //!
-//! `mining setup`, `verifier setup`, `validator setup`, `model add` and `model market open` all ask
-//! the same way and stop the same way. A spending question is shown with the move it makes and
+//! `mining setup`, `verifier setup`, `model add` and `model market open` all ask the same way and
+//! stop the same way. A spending question is shown with the move it makes and
 //! answered by a person: `--yes` for a script, `y`/`n` at a terminal. Input that closes before a
 //! line is no answer, never the default, and Ctrl-C at a question stops the flow. Every flow ends in
 //! one of four ways — done, blocked (a finding says what only the operator can change), waiting

@@ -6,7 +6,6 @@ The code, current `main` CLI `--help` and ADR decisions are authoritative. This 
 
 - [Join as a PALW producer](testnet11-join-mining.md)
 - [Run a full node](testnet11-node-operator.md)
-- [Run a DNS-finality validator](validator-runbook.md)
 - [Operate model classes](palw-public-testnet-classes-runbook.md)
 - [Add a model through the SDK](palw-model-onboarding-sdk.md)
 - [Free-prompt mining](testnet11-free-prompt-mining.md)

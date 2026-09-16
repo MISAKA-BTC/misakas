@@ -99,10 +99,10 @@ use workflow_rpc::server::WebSocketCounters as WrpcServerCounters;
 /// from this instance to registered services and backwards should occur
 /// by adding respectively to the registered service a Collector and a
 /// Subscriber.
-/// kaspa-pq Phase 11 (ADR-0010): bridges the in-process validator service (defined in
-/// the `kaspad` crate) to the RPC layer without a circular dependency — `kaspad`
-/// implements this trait for its `ValidatorService`, and `RpcCoreService` holds an
-/// optional `dyn` to serve `getValidatorStatus`.
+/// kaspa-pq Phase 11 (ADR-0010): bridged an in-process validator service (defined in the
+/// `kaspad` crate) to the RPC layer without a circular dependency. That service is retired, so
+/// no type in this tree implements the trait any more: `kaspad` passes `None`, and
+/// `getValidatorStatus` answers `enabled: false`. The trait and the op stay for wire compatibility.
 #[async_trait]
 pub trait ValidatorStatusProvider: Send + Sync {
     async fn rpc_validator_status(&self) -> GetValidatorStatusResponse;
@@ -1908,8 +1908,9 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         _connection: Option<&DynRpcConnection>,
         _: GetValidatorStatusRequest,
     ) -> RpcResult<GetValidatorStatusResponse> {
-        // kaspa-pq Phase 11 (ADR-0010): delegate to the in-process validator service when
-        // present (`--enable-validator`); `enabled: false` otherwise.
+        // kaspa-pq Phase 11 (ADR-0010): delegate to a registered validator status provider.
+        // kaspad registers none since the in-process validator was retired, so this answers
+        // `enabled: false`.
         Ok(match &self.validator_status_provider {
             Some(provider) => provider.rpc_validator_status().await,
             None => GetValidatorStatusResponse::default(),
@@ -1922,7 +1923,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         request: GetValidatorAttestationTargetRequest,
     ) -> RpcResult<GetValidatorAttestationTargetResponse> {
         // kaspa-pq Phase 12 (ADR-0011): assemble the ready-to-sign attestation target for
-        // `request.bond_outpoint` so the `kaspa-pq-validator` sidecar can fetch the signing
+        // `request.bond_outpoint` so the (now retired) `kaspa-pq-validator` sidecar could fetch the signing
         // message over local wRPC. A malformed outpoint is a request error; `available: false`
         // when the overlay is not configured or no target could be assembled.
         let bond_outpoint = parse_bond_outpoint(&request.bond_outpoint)?;
@@ -2772,7 +2773,7 @@ Use getBalancesByAddresses for balances, or consolidate the address's UTXOs.",
     ) -> RpcResult<GetServerInfoResponse> {
         let session = self.consensus_manager.consensus().unguarded_session();
         let sink_daa_score_timestamp = session.async_get_sink_daa_score_timestamp().await;
-        // Same definition as getSyncStatus and getInfo. This one is what `kaspa-pq-validator` polls
+        // Same definition as getSyncStatus and getInfo. This one is what the retired `kaspa-pq-validator` polled
         // before it will attest, and it used to omit the transitional-IBD check the other two had —
         // so a node mid-IBD whose sink had advanced could report synced to the one caller whose
         // reaction is to start signing.

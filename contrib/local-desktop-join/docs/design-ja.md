@@ -20,10 +20,6 @@ flowchart TD
   B --> C["clone / build"]
   C --> D["~/.misaka-desktop-node/bin/kaspad"]
   D --> E["MISAKA testnetへoutbound接続"]
-  B --> F["kaspa-pq-validator"]
-  B --> G["misaminer"]
-  D --> F
-  D --> G
 ```
 
 ## 設計上の制約
@@ -32,7 +28,7 @@ flowchart TD
 - PowerShellからWSL2 Ubuntuを呼ぶ方式をWindows向けルートにする
 - ローカルWeb UIを主導線にする
 - CLI/ダブルクリックは予備導線として残す
-- validator/minerは同じscriptの追加コマンドで扱う
+- 扱うのはnodeの起動と同期確認だけにする（DNS-finality validator参加フローは廃止。PALWはvalidatorを使わず、PALWのマイニングは `misaka mining setup` で設定する）
 
 ## ローカルWeb UI
 
@@ -43,8 +39,6 @@ flowchart LR
   A["Browser localhost"] --> B["scripts/misaka-desktop-web.py"]
   B --> C["scripts/misaka-desktop-node.sh"]
   C --> D["kaspad"]
-  C --> E["misaminer"]
-  C --> F["kaspa-pq-validator"]
 ```
 
 特徴:
@@ -66,7 +60,7 @@ flowchart LR
 - 用語をその場で調べられる
 - 現在の状態と用語をつなげる
 - ログの読み方を初心者向けに示す
-- 「残高はあるのにBondできない」など、誤解しやすい状態を先に説明する
+- 「Synced false」など、失敗に見えやすい状態を先に説明する
 
 主な構成:
 
@@ -76,5 +70,5 @@ flowchart LR
 - ログの読み方
 - 困った時の判断
 
-このページは読み取り専用で、nodeやvalidatorの操作は行わない。
+このページは読み取り専用で、nodeの操作は行わない。
 操作はsetup、確認はdashboard、理解補助はlearnに分ける。

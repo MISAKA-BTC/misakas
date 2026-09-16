@@ -1,13 +1,12 @@
-//! `misaka validator …` / `misaka node start` — thin shell-out front-ends over the
-//! existing `kaspa-pq-validator` / `kaspad` binaries (design §6, option A).
+//! `misaka node start` / `misaka join` — a thin shell-out front-end over the existing `kaspad`
+//! binary (design §6, option A).
 //!
-//! The unified CLI does NOT re-implement bond / attestation / ML-DSA key handling; it
-//! forwards the user's args verbatim and injects the global context. The validator's
-//! flags are PER-SUBCOMMAND (e.g. `keygen --network-id`), so a top-level flag cannot
-//! be prepended — instead the context flows through the validator's own env vars
-//! (`KASPA_PQ_NETWORK`, `KASPA_PQ_NODE_RPC`), which an explicit flag still overrides.
-//! An operator-exported env var / explicit flag wins, the child inherits stdio, and
-//! its exact exit code is propagated.
+//! The unified CLI forwards the user's args verbatim and injects the global context (the network
+//! selection, and the listener / role profiles asked for). An explicit kaspad flag wins, the child
+//! inherits stdio, and its exact exit code is propagated.
+//!
+//! **There is no `validator` front-end any more.** It forwarded to the `kaspa-pq-validator`
+//! sidecar of the DNS-finality overlay, which is retired along with the sidecar itself.
 //!
 //! **There is deliberately no `miner` front-end** (ADR-0063 D4, resolved to deletion by
 //! the 2026-09-02 security amendment SA-4). It forwarded to `kaspa-pq-miner`, which is
@@ -28,17 +27,6 @@ use std::str::FromStr;
 /// so the corresponding default is not injected twice (clap rejects duplicates).
 fn has_flag(args: &[String], names: &[&str]) -> bool {
     args.iter().any(|a| names.iter().any(|n| a == n || a.starts_with(&format!("{n}="))))
-}
-
-/// Env defaults to hand the validator (it reads `--network-id`/`--node-wrpc-borsh` from
-/// these). Always carries the network; the Borsh endpoint only when `misaka` has one.
-/// `exec` skips any that the operator already exported.
-fn validator_envs(network: &str, rpc: &Option<String>) -> Vec<(&'static str, String)> {
-    let mut envs = vec![("KASPA_PQ_NETWORK", network.to_string())];
-    if let Some(rpc) = rpc {
-        envs.push(("KASPA_PQ_NODE_RPC", rpc.clone()));
-    }
-    envs
 }
 
 /// Resolve the target binary: explicit `env_override` → a sibling next to the running
@@ -79,12 +67,6 @@ fn exec(bin: &str, env_override: &str, env_defaults: &[(&str, String)], injected
         )
     })?;
     std::process::exit(status.code().unwrap_or(1));
-}
-
-/// `misaka validator …` → `kaspa-pq-validator …` (context via env; explicit flags win).
-pub fn validator(ctx: &Ctx, args: &[String]) -> CliResult {
-    let envs = validator_envs(&ctx.network, &ctx.rpc);
-    exec("kaspa-pq-validator", "MISAKA_VALIDATOR_BIN", &envs, &[], args)
 }
 
 /// Map a network-id to kaspad's network-selection flags. Port-free: kaspad derives every
@@ -177,17 +159,6 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
-    }
-
-    #[test]
-    fn validator_envs_carry_network_and_borsh() {
-        let e = validator_envs("testnet-10", &Some("127.0.0.1:27210".to_string()));
-        assert_eq!(e, vec![("KASPA_PQ_NETWORK", "testnet-10".to_string()), ("KASPA_PQ_NODE_RPC", "127.0.0.1:27210".to_string())]);
-    }
-
-    #[test]
-    fn validator_envs_skip_borsh_when_rpc_unset() {
-        assert_eq!(validator_envs("simnet", &None), vec![("KASPA_PQ_NETWORK", "simnet".to_string())]);
     }
 
     #[test]

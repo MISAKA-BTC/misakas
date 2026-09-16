@@ -80,7 +80,7 @@ struct LiveProcess {
 
 /// Every process this report knows how to say anything about.
 const PALW_PROCESS_NAMES: &[&str] =
-    &["kaspad", "palw-agent", "misaka-palw-gateway", "misaka-palw-fp-rail", "palw-worker", "kaspa-pq-signer", "kaspa-pq-validator"];
+    &["kaspad", "palw-agent", "misaka-palw-gateway", "misaka-palw-fp-rail", "palw-worker", "kaspa-pq-signer"];
 
 /// **SA-7.** A flag whose VALUE would name or carry key material keeps its name and loses its
 /// value. The report says "this process was pointed at a key", never where or which.

@@ -20,8 +20,8 @@
 //!
 //! ```text
 //! # 1. ON EACH OPERATOR'S OWN HOST — two keys, secrets never leave
-//! misaka validator keygen --out /etc/misaka/t12-bond.key
-//! misaka validator keygen --out /etc/misaka/t12-operator.key
+//! misaka key gen --out /etc/misaka/t12-bond.key
+//! misaka key gen --out /etc/misaka/t12-operator.key
 //!
 //! # 2. ON THE SAME HOST — one public row, derived from those seeds
 //! palw-rc-genesis --emit-row \
@@ -267,8 +267,8 @@ fn main() {
         println!();
         println!("  --rows <file>  ANYWHERE. Assembles collected rows into the card and runs the gate.");
         println!();
-        println!("  misaka validator keygen --out /etc/misaka/t12-bond.key");
-        println!("  misaka validator keygen --out /etc/misaka/t12-operator.key");
+        println!("  misaka key gen --out /etc/misaka/t12-bond.key");
+        println!("  misaka key gen --out /etc/misaka/t12-operator.key");
         println!();
         println!("The seeds stay where keygen wrote them (0600, owner-only). This tool reads them to");
         println!("DERIVE public values and prints nothing secret. It mints no key: the whole point of");

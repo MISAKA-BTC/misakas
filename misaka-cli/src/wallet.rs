@@ -1,7 +1,6 @@
 //! PQ wallet commands (Tier B). L1 is PQ-only ML-DSA-87 P2PKH UTXO. These wrap
 //! the node wRPC + the consensus-proven tx builders in kaspa-pq-validator-core
-//! (the SAME signing path the validator bonds with), adding the large-UTXO
-//! remedy:
+//! (the SAME signing path PALW keys use), adding the large-UTXO remedy:
 //!
 //!   misaka wallet utxo list  --address misakatest:q… | --key-file …   (read-only, PAGED)
 //!   misaka wallet utxo consolidate --key-file … [--max-inputs 20] [--max-txs-per-run 100] [--yes]
@@ -41,11 +40,12 @@ pub(crate) struct Funding {
     ///
     /// Spending it is never what an operator meant: the block carrying the spend is disqualified
     /// from the chain, and where the mergeset spend gate is not armed it is accepted anyway and the
-    /// bond record survives with no backing (audit M1-1). Every other spender in this tree already
-    /// excludes it — `validator_service.rs` calls it "a validator self-wedge", and the sidecar
-    /// threads an exclusion through bond, unbond and equivocate. The wallet, which wraps the SAME
-    /// signing path a validator bonds with, did not (audit M1-3): the bond is typically the largest
-    /// UTXO at that address, and selection is largest-first.
+    /// bond record survives with no backing (audit M1-1). Every other spender excluded it — the
+    /// retired in-node validator called it "a validator self-wedge", and the retired sidecar threaded
+    /// an exclusion through bond, unbond and equivocate. The wallet, which wraps the SAME signing
+    /// path a validator bonded with, did not (audit M1-3): the bond is typically the largest UTXO at
+    /// that address, and selection is largest-first. The overlay is retired, but bonds already on a
+    /// chain keep their lock, so the exclusion stays.
     pub(crate) bonded: bool,
 }
 
@@ -130,8 +130,8 @@ impl NodeView {
 /// bond that has completed its unbonding period keeps its record and keeps being returned here —
 /// while consensus positively ALLOWS the spend (`PalwSpendLocks::locks`,
 /// `utxo_validation.rs:238-250`, is false exactly when the bond is `Unbonding` and past its release
-/// height). The sidecar's `unbond` only files the request and explicitly refuses to touch output-0,
-/// so `wallet send` is the only shipped way to reclaim it. Excluding it unconditionally stranded a
+/// height). The retired sidecar's `unbond` only filed the request and refused to touch output-0, so
+/// `wallet send` is the shipped way to reclaim it. Excluding it unconditionally stranded a
 /// mainnet validator's 20M KAS behind a hand-built transaction.
 ///
 /// So the predicate below is `locks`, read back: skip a bond that is releasable at the node's

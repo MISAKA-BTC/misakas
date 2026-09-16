@@ -29,7 +29,7 @@ Default ports:
 | wRPC Borsh | 27210 |
 | wRPC JSON | 28210 |
 
-`misaka`, the wallet and the validator use wRPC Borsh. If the node uses a custom listener, pass its actual address with `--rpc`.
+`misaka` and the wallet use wRPC Borsh. If the node uses a custom listener, pass its actual address with `--rpc`.
 
 The startup log must report:
 
