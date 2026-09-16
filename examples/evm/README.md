@@ -46,7 +46,7 @@ cast send $MKT "buy(uint256)" 1 --value 1000000000000000 --rpc-url $RPC --privat
 ```
 
 Fund an EVM address by bridging from the UTXO side:
-`kaspa-pq-validator deposit-lock --evm-address 0x… --amount <sompi>` → `… claim --outpoint <txid>:0`
+`misaka evm deposit-lock --key-file <seed> --evm-address 0x… --amount <sompi> --yes` → `misaka evm claim --outpoint <txid>:0`
 (the claim credits `amount` sompi × 1e10 wei). See `../../docs/misaka-evm-wallet-profile-v1.md`.
 
 ## Hardhat / ethers / viem

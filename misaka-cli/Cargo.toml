@@ -26,6 +26,8 @@ kaspa-txscript.workspace = true
 kaspa-wrpc-client.workspace = true
 
 faster-hex.workspace = true
+# `misaka evm deposit-lock`: the EIP-55 checksum on the bridge destination (Keccak-256).
+sha3.workspace = true
 # `misaka ask`: one shared deterministic client with the legacy PoW tag path, so the CLI and
 # block validation cannot drift apart on what "the same request" means. The driver crate, not
 # kaspa-pow: ADR-0042 Decision 4 moved every model-reaching call out of the consensus build.

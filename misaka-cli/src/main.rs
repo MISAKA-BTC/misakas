@@ -23,6 +23,7 @@ mod bond;
 mod bootstrap;
 mod config;
 mod eth;
+mod evm_deposit;
 #[cfg(feature = "evm-send")]
 mod evm_send;
 mod forward;
@@ -1875,6 +1876,37 @@ enum EvmCmd {
         #[arg(long)]
         data: Option<String>,
     },
+    /// Bridge MSK into the EVM lane: lock it for an EVM address (dry-run unless --yes). Claim the
+    /// lock afterwards with `evm claim` against a mining node.
+    DepositLock {
+        /// The EVM address to credit — paste the EIP-55 checksummed form so a typo is caught.
+        #[arg(long)]
+        evm_address: String,
+        /// Amount in sompi, locked into the deposit output.
+        #[arg(long)]
+        amount: u64,
+        /// Claim-inclusion tip in sompi (at most the amount), paid to the block that executes the claim.
+        #[arg(long, default_value_t = 0)]
+        claim_tip: u64,
+        /// Refund timeout as a DAA delta from the node's virtual DAA: claimable before it, refundable to this key after.
+        #[arg(long, default_value_t = 1_000_000)]
+        timeout_daa_delta: u64,
+        /// Fee in sompi (default: mass-based).
+        #[arg(long)]
+        fee: Option<u64>,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+        #[command(flatten)]
+        key: KeyArgs,
+    },
+    /// Queue the claim of a deposit lock on this node (`submitEvmDepositClaim`); run it against a
+    /// mining node so the claim is included.
+    Claim {
+        /// The lock outpoint `deposit-lock` printed, `txid_hex:index`.
+        #[arg(long)]
+        outpoint: String,
+    },
     /// EVM transaction lifecycle (`misaka_getEvmTxStatus`).
     /// A read-only eth_call at latest (ADR-0089's doors answer any caller): --to <addr> --data <hex>.
     View {
@@ -2215,6 +2247,10 @@ async fn main() -> std::process::ExitCode {
         Command::Bootstrap(BootstrapCmd::Resolve) => bootstrap::resolve(ctx.output, &ctx.network),
         Command::Setup(cmd) => setup::run(&ctx, cmd).await,
         Command::Evm(EvmCmd::View { to, data }) => eth::view(&ctx, &to, &data),
+        Command::Evm(EvmCmd::DepositLock { evm_address, amount, claim_tip, timeout_daa_delta, fee, yes, key }) => {
+            evm_deposit::deposit_lock(&ctx, &key.source(), &evm_address, amount, claim_tip, timeout_daa_delta, fee, yes).await
+        }
+        Command::Evm(EvmCmd::Claim { outpoint }) => evm_deposit::claim(&ctx, &outpoint).await,
         Command::Evm(EvmCmd::Balance { address }) => eth::balance(&ctx, &address),
         Command::Evm(EvmCmd::Nonce { address }) => eth::nonce(&ctx, &address),
         Command::Evm(EvmCmd::EstimateGas { from, to, value, data }) => {

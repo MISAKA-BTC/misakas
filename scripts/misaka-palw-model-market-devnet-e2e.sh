@@ -29,7 +29,7 @@
 #   cargo build --release -p kaspad -p kaspa-pq-validator
 #   cargo build --release -p misaka-cli --features evm-send
 #
-# Env: KASPAD_BIN, CLI_BIN, PQV_BIN (defaults target/release/*), NODES (5, at least 4), WORK_DIR,
+# Env: KASPAD_BIN, CLI_BIN (defaults target/release/*), NODES (5, at least 4), WORK_DIR,
 #      WAIT (s, first blocks), STEP_WAIT (s, any one poll), FENCE_DAA (0), LINE_ID (override the
 #      founding line id if the node's log does not name it), EXTRA_NODE_ARGS.
 set -euo pipefail
@@ -39,7 +39,6 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 KASPAD_BIN="${KASPAD_BIN:-$REPO_ROOT/target/release/kaspad}"
 CLI_BIN="${CLI_BIN:-$REPO_ROOT/target/release/misaka}"
-PQV_BIN="${PQV_BIN:-$REPO_ROOT/target/release/kaspa-pq-validator}"
 NODES="${NODES:-5}"
 WORK_DIR="${WORK_DIR:-$REPO_ROOT/.misaka-palw-model-market-devnet}"
 WAIT="${WAIT:-600}"
@@ -56,7 +55,7 @@ log() { printf '[market-e2e %s] %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
 die() { log "FATAL: $*"; exit 1; }
 [ "$NODES" -ge 4 ] || die "NODES must be at least 4 (two on side A, two or more on side B)"
 [ "$NODES" -le 6 ] || die "devnet seats six public-seed bonds; NODES must be at most 6"
-for b in "$KASPAD_BIN" "$CLI_BIN" "$PQV_BIN"; do [ -x "$b" ] || die "missing binary $b"; done
+for b in "$KASPAD_BIN" "$CLI_BIN"; do [ -x "$b" ] || die "missing binary $b"; done
 # The EVM half of this drill signs its own transactions, which lives behind misaka-cli's
 # `evm-send` feature — NOT a default. A CLI built without it has no `evm wallet` at all, and run 10
 # discovered that by dying three steps in with clap's "unrecognized subcommand". Ask the binary.
@@ -279,14 +278,14 @@ EVM_ADDR="$(jfind address "$WORK_DIR/out/evm-wallet.json")"
 [ -n "$EVM_ADDR" ] || die "no EVM address from wallet create"
 log "EVM account $EVM_ADDR"
 EVM_KEY=(--mnemonic-file "$WORK_DIR/keys/evm.mnemonic")
-"$PQV_BIN" deposit-lock --node-wrpc-borsh "127.0.0.1:$(rpc_of 0)" --network devnet --validator-key "$WORK_DIR/keys/main.seed" \
-  --evm-address "$EVM_ADDR" --amount 10003000000000 --claim-tip 0 > "$WORK_DIR/out/deposit-lock.txt" 2>&1 || { cat "$WORK_DIR/out/deposit-lock.txt" >&2; die "deposit-lock failed"; }
-OUTPOINT="$( { grep -o -E "deposit_lock_outpoint: [0-9a-f]{128}:[0-9]+" "$WORK_DIR/out/deposit-lock.txt" || true; } | awk '{print $2}')"
+cli 0 evm deposit-lock --key-file "$WORK_DIR/keys/main.seed" --evm-address "$EVM_ADDR" --amount 10003000000000 --claim-tip 0 --yes \
+  --output json > "$WORK_DIR/out/deposit-lock.txt" 2>&1 || { cat "$WORK_DIR/out/deposit-lock.txt" >&2; die "deposit-lock failed"; }
+OUTPOINT="$(jfind lockOutpoint "$WORK_DIR/out/deposit-lock.txt")"
 [ -n "$OUTPOINT" ] || { cat "$WORK_DIR/out/deposit-lock.txt" >&2; die "deposit-lock printed no outpoint"; }
 log "deposit lock $OUTPOINT (100,030 MSK: the seed and change); waiting for it to be mined, then claiming on node-0"
 advance 2
 deadline=$((SECONDS + STEP_WAIT))
-until "$PQV_BIN" claim --node-wrpc-borsh "127.0.0.1:$(rpc_of 0)" --network devnet --outpoint "$OUTPOINT" > "$WORK_DIR/out/claim.txt" 2>&1; do
+until cli 0 evm claim --outpoint "$OUTPOINT" > "$WORK_DIR/out/claim.txt" 2>&1; do
   [ $SECONDS -lt $deadline ] || { cat "$WORK_DIR/out/claim.txt" >&2; die "the deposit claim was never accepted"; }
   sleep 5
 done

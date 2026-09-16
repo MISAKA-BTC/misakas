@@ -5866,6 +5866,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.8",
+ "sha3",
  "sysinfo",
  "tokio",
  "toml",
