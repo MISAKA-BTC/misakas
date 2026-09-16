@@ -902,7 +902,7 @@ impl PalwPanelService {
             return self.pay_script();
         };
         let payload = session.palw_bond_payout_payload_v2(PalwBondKeyV2(bond))?;
-        Some(kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&payload.as_bytes()))
+        Some(kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payload.as_bytes()))
     }
 
     /// The 64-byte payee behind `--palw-producer-pay-address`, and the script that pays it.
@@ -923,7 +923,7 @@ impl PalwPanelService {
         }
         let payload: [u8; 64] =
             address.payload.as_ref().try_into().map_err(|_| "an ML-DSA-87 address must carry 64 payload bytes".to_string())?;
-        Ok((payload, kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&payload)))
+        Ok((payload, kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payload)))
     }
 
     fn pay_script(&self) -> Option<kaspa_consensus_core::tx::ScriptPublicKey> {
@@ -4819,6 +4819,55 @@ impl PalwPanelService {
                     }
                 }
                 court_pending = unsent;
+                // **ADR-0125 §7.3: a permit signed twice, filed.** The relay queues each pair once;
+                // the evidence proves itself, so any funded panel may carry it. Behind the court's
+                // moves (they have deadlines) and ahead of receipts; one carrier a tick at most,
+                // and evidence the carrier cannot take goes back to the queue.
+                if inflight < MAX_INFLIGHT_CARRIERS
+                    && let Some(evidence) = self.flow_context.palw_round_relay().take_evidence()
+                {
+                    match funding.clone() {
+                        None => self.flow_context.palw_round_relay().return_evidence(evidence),
+                        Some((funding_outpoint, funding_entry)) => {
+                            let (round, index) = (evidence.round, evidence.permit_index);
+                            let object = PalwConsensusObjectV2::RoundPermitEquivocated { evidence: Box::new(evidence) };
+                            match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
+                                Ok(tx) => {
+                                    let txid = tx.id();
+                                    let change = tx.outputs[0].clone();
+                                    match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
+                                        Ok(()) => {
+                                            info!(
+                                                "[{PALW_PANEL}] filed a permit signed twice (round {round}, permit {index}) in tx {txid}"
+                                            );
+                                            let next = TransactionOutpoint::new(txid, 0);
+                                            self.persist_fee_outpoint(next);
+                                            funding = Some((
+                                                next,
+                                                UtxoEntry {
+                                                    amount: change.value,
+                                                    script_public_key: change.script_public_key,
+                                                    block_daa_score: current_daa,
+                                                    is_coinbase: false,
+                                                },
+                                            ));
+                                            inflight += 1;
+                                        }
+                                        // Refused evidence is not retried: the mempool judged it against the
+                                        // same rules the chain would, and a burned permit burns once.
+                                        Err(e) => {
+                                            warn!(
+                                                "[{PALW_PANEL}] the mempool refused the equivocation evidence (round {round}, permit {index}): {e}"
+                                            );
+                                            funding = None;
+                                        }
+                                    }
+                                }
+                                Err(e) => warn!("[{PALW_PANEL}] cannot build the equivocation evidence carrier: {e}"),
+                            }
+                        }
+                    }
+                }
                 let claims: Vec<Hash64> = receipts.keys().copied().collect();
                 for claim in claims {
                     if inflight >= MAX_INFLIGHT_CARRIERS {
@@ -5100,7 +5149,9 @@ fn min_carryable_collateral(
 /// pre-sign guard in `build_lifecycle_tx_with_outputs` — and a rule spelled twice is a rule that
 /// drifts in one of its copies.
 fn signable_script(verification_key: &[u8]) -> kaspa_consensus_core::tx::ScriptPublicKey {
-    kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&kaspa_hashes::blake2b_512_address_payload(verification_key).as_bytes())
+    kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(
+        &kaspa_hashes::blake2b_512_address_payload(verification_key).as_bytes(),
+    )
 }
 
 /// Whether a REMEMBERED funding outpoint — the persisted one or `--palw-fee-outpoint` — belongs
@@ -6920,7 +6971,7 @@ mod tests {
     }
 
     fn mldsa_script(byte: u8) -> kaspa_consensus_core::tx::ScriptPublicKey {
-        kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&[byte; 64])
+        kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&[byte; 64])
     }
 
     /// **The pool's byte counter must survive the sweep, or the ceiling becomes a slashing
@@ -7209,7 +7260,7 @@ mod tests {
         // `pay_payee` builds the script from exactly these payload bytes; the guard builds it from
         // the key. The two must be one script.
         assert_eq!(
-            kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&payload),
+            kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payload),
             signable_script(key.public_key()),
             "a seat funded at its own documented pay address must not be refused before signing"
         );

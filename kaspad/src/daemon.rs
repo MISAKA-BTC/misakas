@@ -1425,6 +1425,7 @@ Do you confirm? (y/n)";
                     network_id: config.params.net,
                     genesis_hash: config.params.genesis.hash,
                     genesis_timestamp_ms: config.params.genesis.timestamp,
+                    last_signed_round_path: palw_panel_state_dir(&app_dir, network).join("palw-round-last-signed"),
                 },
                 consensus_manager.clone(),
                 mining_manager.clone(),

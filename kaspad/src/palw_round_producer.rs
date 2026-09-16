@@ -48,6 +48,9 @@ pub struct PalwRoundProducerConfig {
     pub genesis_hash: kaspa_hashes::Hash64,
     /// Rounds are whole seconds since this.
     pub genesis_timestamp_ms: u64,
+    /// Where the last round this producer signed for survives a restart (ADR-0125 §7.3): a permit is
+    /// one block, and a node restarted inside a round must not sign a second block for it.
+    pub last_signed_round_path: std::path::PathBuf,
 }
 
 pub struct PalwRoundProducerService {
@@ -101,7 +104,9 @@ impl PalwRoundProducerService {
             self.config.network_id.to_string().as_bytes(),
             Some(self.config.genesis_hash),
         );
-        let mut last_round = 0u64;
+        // ADR-0125 §7.3: never sign a round at or below the last one signed before a restart — two
+        // blocks for one permit burn the permit and slash the bond, whoever's crash caused them.
+        let mut last_round = last_signed_round(&self.config.last_signed_round_path);
         let mut produced = 0u64;
         loop {
             if !self.tick(std::time::Duration::from_millis(POLL_MS)).await {
@@ -151,9 +156,8 @@ impl PalwRoundProducerService {
         round: u64,
         permit_index: u16,
     ) -> Result<kaspa_consensus_core::BlockHash, String> {
-        let payload = session
-            .palw_bond_payout_payload_v2(bond)
-            .ok_or_else(|| "the bond is not registered on this node's chain".to_string())?;
+        let payload =
+            session.palw_bond_payout_payload_v2(bond).ok_or_else(|| "the bond is not registered on this node's chain".to_string())?;
         let payout = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payload.as_bytes());
         let template = self
             .mining_manager
@@ -172,6 +176,9 @@ impl PalwRoundProducerService {
         .await
         .map_err(|e| format!("the nonce search task did not finish: {e}"))?
         .ok_or_else(|| format!("no nonce in {NONCES_PER_ROUND_BLOCK} tries"))?;
+        // ADR-0125 §7.3: the round is recorded BEFORE it is signed. A crash between the two costs this
+        // round's permit; the other order could sign one permit twice across a restart.
+        record_signed_round(&self.config.last_signed_round_path, round)?;
         let header = &mut adapted.block.header;
         header.nonce = nonce;
         let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
@@ -200,6 +207,20 @@ impl PalwRoundProducerService {
     }
 }
 
+/// The last round this producer recorded before signing, or 0 when nothing was.
+fn last_signed_round(path: &std::path::Path) -> u64 {
+    std::fs::read_to_string(path).ok().and_then(|text| text.trim().parse::<u64>().ok()).unwrap_or(0)
+}
+
+/// Record `round` before signing for it. A failure refuses the signature: a round this node cannot
+/// remember signing is a round a restart could sign again.
+fn record_signed_round(path: &std::path::Path, round: u64) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::write(path, round.to_string()).map_err(|e| format!("cannot record round {round} before signing it (not signing): {e}"))
+}
+
 impl AsyncService for PalwRoundProducerService {
     fn ident(self: Arc<Self>) -> &'static str {
         PALW_ROUND_PRODUCER
@@ -222,5 +243,30 @@ impl AsyncService for PalwRoundProducerService {
             trace!("{} stopped", PALW_ROUND_PRODUCER);
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **ADR-0125 §7.3: a restart resumes after the last round it recorded**, so a producer never
+    /// signs a second block for a permit it already signed — and a round it cannot record is a
+    /// round it does not sign.
+    #[test]
+    fn a_restart_resumes_after_the_last_signed_round() {
+        let dir = std::env::temp_dir().join(format!("palw-round-producer-test-{}", std::process::id()));
+        let path = dir.join("state").join("palw-round-last-signed");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(last_signed_round(&path), 0, "nothing recorded");
+        record_signed_round(&path, 41).expect("recorded");
+        record_signed_round(&path, 42).expect("recorded");
+        assert_eq!(last_signed_round(&path), 42, "the last round signed survives the restart");
+        std::fs::write(&path, "not a round").unwrap();
+        assert_eq!(last_signed_round(&path), 0, "an unreadable record reads as none");
+        let blocked = dir.join("a-file");
+        std::fs::write(&blocked, "").unwrap();
+        assert!(record_signed_round(&blocked.join("under-a-file"), 43).is_err(), "no record, no signature");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
