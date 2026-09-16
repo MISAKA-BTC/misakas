@@ -715,6 +715,19 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// **ADR-0124 Decision 2: assemble a seat's own supplementary receipt set** — the `Valid`
+    /// receipts in `mine` for `claim` that the chain has licensed without crediting, as the
+    /// `ReceiptLicensed` object the supplementary door accepts, or `None` while the door is shut
+    /// (fence dormant, claim not licensed, every receipt credited, window closed). Checked by the
+    /// acceptance validator itself at virtual's point, so what this returns is what a block takes.
+    fn palw_v2_supplementary_receipt_assemble(
+        &self,
+        _claim: crate::Hash64,
+        _mine: Vec<crate::palw_panel_v2::PalwSeatReceiptV2>,
+    ) -> Option<crate::palw_state_v2::PalwConsensusObjectV2> {
+        None
+    }
+
     /// **The seat duties this node holds** (launch blockers §2) — the claims whose panels name a
     /// bond in `mine`, with the roots each seat must decide against.
     fn palw_seat_duties_v2(&self, _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>) -> Vec<crate::palw_producer_v2::PalwSeatDutyV2> {

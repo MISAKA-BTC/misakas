@@ -2439,6 +2439,13 @@ impl PalwPanelService {
         // reached `ReceiptLicensed`.
         let mut submitted: HashMap<Hash64, u64> = HashMap::new();
         let mut submit_attempts: HashMap<Hash64, u32> = HashMap::new();
+        // **ADR-0124 Decision 2: this seat's own `Valid` receipts, with the receipt deadline of the
+        // duty each discharged.** Kept apart from the gossip pool, which is swept by age and by
+        // what other nodes submitted, because the one thing a seat must not lose is the receipt it
+        // may still have to carry itself: once the chain licenses the claim without crediting this
+        // seat, the receipt rides a supplementary object until the window closes.
+        let mut own_receipts: HashMap<Hash64, (PalwSeatReceiptV2, u64)> = HashMap::new();
+        let mut supplementary_submitted: HashMap<Hash64, u64> = HashMap::new();
         // One move per (session, round, side): the ladder advances on acceptance, so a move
         // resubmitted before the block that carries it lands is a duplicate the chain drops.
         // **A debounce, not a receipt.** This used to be a `HashSet` written on MEMPOOL acceptance
@@ -4550,6 +4557,10 @@ impl PalwPanelService {
                 let receipt = PalwSeatReceiptV2 { claim: duty.claim_id, verdict, seat_bond: bond_key, signed_daa, signature };
                 let bytes = borsh::to_vec(&receipt).expect("a receipt serializes");
                 info!("[{PALW_PANEL}] filed a {:?} receipt for claim {}", verdict_name(&verdict), duty.claim_id);
+                // ADR-0124 Decision 2: a `Valid` receipt is the one this seat may have to carry itself.
+                if matches!(verdict, kaspa_consensus_core::palw_panel_v2::PalwReceiptVerdictV2::Valid) {
+                    own_receipts.insert(duty.claim_id, (receipt.clone(), duty.receipt_deadline));
+                }
                 receipts.entry(duty.claim_id).or_default().push(receipt);
                 answered.insert((duty.claim_id, duty.bound_daa));
                 self.flow_context.broadcast_palw_seat_receipt(bytes).await;
@@ -4872,6 +4883,59 @@ impl PalwPanelService {
                         }
                     }
                 }
+                // **ADR-0124 Decision 2: a seat carries its own receipt after the licence.** For
+                // every claim this seat answered `Valid` on, once the chain has licensed it without
+                // crediting this seat, the receipt rides a supplementary `ReceiptLicensed` while
+                // the receipt window is open. The chain decides what "in time" and "already
+                // credited" mean (`palw_v2_supplementary_receipt_assemble` runs the acceptance
+                // validator itself), so this loop only asks, and re-asks after the replan interval
+                // if the carrier it sent was lost.
+                let mut own: Vec<(Hash64, PalwSeatReceiptV2)> =
+                    own_receipts.iter().map(|(claim, (receipt, _))| (*claim, receipt.clone())).collect();
+                own.sort_by_key(|(claim, _)| *claim);
+                for (claim, receipt) in own {
+                    if inflight >= MAX_INFLIGHT_CARRIERS {
+                        break;
+                    }
+                    let Some((funding_outpoint, funding_entry)) = funding.clone() else { break };
+                    if let Some(at) = supplementary_submitted.get(&claim)
+                        && current_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA)
+                    {
+                        continue;
+                    }
+                    let Some(object) = session.palw_v2_supplementary_receipt_assemble(claim, vec![receipt]) else { continue };
+                    match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
+                        Ok(tx) => {
+                            let txid = tx.id();
+                            let change = tx.outputs[0].clone();
+                            match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
+                                Ok(()) => {
+                                    info!(
+                                        "[{PALW_PANEL}] submitted this seat's own receipt for claim {claim} (supplementary) in tx {txid}"
+                                    );
+                                    let next = TransactionOutpoint::new(txid, 0);
+                                    self.persist_fee_outpoint(next);
+                                    funding = Some((
+                                        next,
+                                        UtxoEntry {
+                                            amount: change.value,
+                                            script_public_key: change.script_public_key,
+                                            block_daa_score: current_daa,
+                                            is_coinbase: false,
+                                        },
+                                    ));
+                                    inflight += 1;
+                                    supplementary_submitted.insert(claim, current_daa);
+                                }
+                                Err(e) => {
+                                    warn!("[{PALW_PANEL}] the mempool refused the supplementary receipt for claim {claim}: {e}");
+                                    funding = None;
+                                }
+                            }
+                        }
+                        Err(e) => warn!("[{PALW_PANEL}] cannot build the supplementary carrier for claim {claim}: {e}"),
+                    }
+                }
                 // What the next tick continues from. `None` here means a refusal cleared it, and
                 // the next tick resolves afresh.
                 //
@@ -4956,6 +5020,10 @@ impl PalwPanelService {
             // leaves `live` only once no duty names it, and the duty loop refuses anything past
             // `receipt_deadline` regardless of what this set remembers.
             answered.retain(|(claim, _)| live.contains(claim));
+            // ADR-0124 Decision 2: a receipt this seat may still carry itself lives exactly as long
+            // as its window; the chain refuses anything past `receipt_deadline` regardless.
+            own_receipts.retain(|_, (_, deadline)| current_daa <= *deadline);
+            supplementary_submitted.retain(|claim, _| own_receipts.contains_key(claim));
             // Our own executions are only needed while the dispute they support is open.
             own_executions.retain(|claim, _| live.contains(claim));
             submit_attempts.retain(|claim, _| receipts.contains_key(claim));

@@ -324,6 +324,17 @@ impl ConsensusSessionOwned {
         self.consensus.palw_v2_receipt_quorum_assemble(claim, candidates)
     }
 
+    /// ADR-0124 Decision 2: a seat's own supplementary receipt set, as the door will take it —
+    /// `None` while the door is shut (fence dormant, claim not licensed, seat already credited,
+    /// window closed).
+    pub fn palw_v2_supplementary_receipt_assemble(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        mine: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2>,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        self.consensus.palw_v2_supplementary_receipt_assemble(claim, mine)
+    }
+
     /// One virtual-UTXO point lookup — the fee-outpoint resolution the PALW panel submitter runs.
     pub fn get_virtual_utxo_entry(
         &self,

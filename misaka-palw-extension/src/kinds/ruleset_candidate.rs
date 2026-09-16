@@ -87,6 +87,8 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         "palw_signature_contexts_v2" => params.palw_signature_contexts_v2 = Some(at),
         "palw_heartbeat_transparent" => params.palw_heartbeat_transparent = Some(at),
         "palw_share_growth_final" => params.palw_share_growth_final = Some(at),
+        "palw_panel_economy" => params.palw_panel_economy = Some(at),
+        "palw_work_priced_reward" => params.palw_work_priced_reward = Some(at),
         other => return Err(format!("this build has no fence `{other}`: the candidate needs a build before it needs a height")),
     }
     Ok(())

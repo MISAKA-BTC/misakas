@@ -114,6 +114,13 @@ pub struct PalwStateSyncV2 {
     /// re-runs admission on every merged attempt, so a replay that left it to `..Default` would
     /// refuse attempts the live fold released and write a different state root for the block.
     epoch_budget_release: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0124's panel economy, carried for its siblings' reason: past it a bound panel writes
+    /// duty rows and seat exposure and a `Final` names seat payouts, so a replay without it would
+    /// write a different state root for the block.
+    panel_economy: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0124's work price, carried for the same reason: past it a `Final` names a different
+    /// producer amount.
+    work_priced_reward: Option<kaspa_consensus_core::config::params::ForkActivation>,
     // **`palw_kary_court` is deliberately NOT carried here, and that is not the gap the three
     // fences above are** (ADR-0082 Decision 2, audit A C-5).
     //
@@ -148,6 +155,8 @@ impl PalwStateSyncV2 {
         audit_2026_09_11: Option<kaspa_consensus_core::config::params::ForkActivation>,
         audit_2026_09_11_deep: Option<kaspa_consensus_core::config::params::ForkActivation>,
         epoch_budget_release: Option<kaspa_consensus_core::config::params::ForkActivation>,
+        panel_economy: Option<kaspa_consensus_core::config::params::ForkActivation>,
+        work_priced_reward: Option<kaspa_consensus_core::config::params::ForkActivation>,
     ) -> Result<Self, PalwSyncV2Error> {
         let tip = store.load_tip(&params)?;
         Ok(Self {
@@ -162,6 +171,8 @@ impl PalwStateSyncV2 {
             audit_2026_09_11,
             audit_2026_09_11_deep,
             epoch_budget_release,
+            panel_economy,
+            work_priced_reward,
         })
     }
 
@@ -237,6 +248,8 @@ impl PalwStateSyncV2 {
                     audit_2026_09_11_deep_active: self.audit_2026_09_11_deep.is_some_and(|fence| fence.is_active(step.ctx.daa_score)),
                     share_growth_final_active: self.share_growth_final.is_some_and(|fence| fence.is_active(step.ctx.daa_score)),
                     epoch_budget_release_active: self.epoch_budget_release.is_some_and(|fence| fence.is_active(step.ctx.daa_score)),
+                    panel_economy_active: self.panel_economy.is_some_and(|fence| fence.is_active(step.ctx.daa_score)),
+                    work_priced_reward_active: self.work_priced_reward.is_some_and(|fence| fence.is_active(step.ctx.daa_score)),
                     // The model-registry and EVM fences are NOT resolved here, and that is the
                     // pre-existing behaviour rather than a decision taken with this patch: this
                     // walk passed `PalwTransitionExtrasV1::default()` before it, and it is a REAL
@@ -428,7 +441,8 @@ mod tests {
         }
 
         // The subject: sync + store + batches.
-        let mut sync = PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None).unwrap();
+        let mut sync =
+            PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None, None, None).unwrap();
         assert!(sync.tip().is_none(), "a fresh database has no tip");
         let mut batch = WriteBatch::default();
         sync.install_genesis(&mut store, &mut batch, genesis_block()).unwrap();
@@ -440,7 +454,8 @@ mod tests {
         assert_eq!(tip_state, book.state_of(&steps[1].ctx.block).unwrap(), "the sync's tip is the book's state");
 
         // A restart resumes at the same tip, root-verified.
-        let resumed = PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None).unwrap();
+        let resumed =
+            PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None, None, None).unwrap();
         let (r_block, r_state) = resumed.tip().unwrap();
         assert_eq!((r_block, r_state), (tip_block, tip_state));
 
@@ -470,7 +485,8 @@ mod tests {
         let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
         store.reindex_if_stale().unwrap();
 
-        let mut sync = PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None).unwrap();
+        let mut sync =
+            PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None, None, None).unwrap();
         let mut batch = WriteBatch::default();
         sync.install_genesis(&mut store, &mut batch, genesis_block()).unwrap();
         db.write(batch).unwrap();
@@ -496,7 +512,8 @@ mod tests {
         // not exist durably, and the polluted write-through cache of the old handle must not be
         // what answers (the carriage store's crash-window lesson, applied to a refusal).
         let fresh = DbPalwStateV2Store::new(db, CachePolicy::Count(16));
-        let resumed = PalwStateSyncV2::load(&fresh, params(), None, None, None, None, None, None, None, None, None).unwrap();
+        let resumed =
+            PalwStateSyncV2::load(&fresh, params(), None, None, None, None, None, None, None, None, None, None, None).unwrap();
         assert_eq!(*resumed.tip().unwrap().0, genesis_block(), "and neither did the durable one");
         assert!(!fresh.has_delta(bad_steps[0].ctx.block).unwrap(), "no row of the refused walk was committed");
     }
@@ -510,7 +527,8 @@ mod tests {
         store.reindex_if_stale().unwrap();
 
         let steps = steps();
-        let mut sync = PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None).unwrap();
+        let mut sync =
+            PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None, None, None).unwrap();
         let mut batch = WriteBatch::default();
         sync.install_genesis(&mut store, &mut batch, genesis_block()).unwrap();
         sync.advance(&mut store, &mut batch, &steps).unwrap();

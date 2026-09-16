@@ -1179,6 +1179,28 @@ pub struct Params {
     /// [`crate::palw_state_v2::palw_epoch_budget_release_v1`]. `None` on every shipped preset.
     pub palw_epoch_budget_release: Option<ForkActivation>,
 
+    /// **ADR-0124 Decisions 1–5: the panel economy.** Past this fence a panel's seats are paid
+    /// out of the claim's own reward (20 % of it, one fixed share per drawn seat, to the seats
+    /// whose `Valid` receipts the chain credited inside the receipt window; the unpaid shares go
+    /// to the panel reserve, never to the producer), every drawn seat reserves three times the
+    /// claim's exposure on its bond for the claim's life and loses exactly that for contradicting
+    /// its panel's quorum, a bond is drawn only while it holds ten producer floors and its free
+    /// collateral covers the reservation, the draw is one ticket per eligible bond, and a seat
+    /// may carry its own `Valid` receipt after the licence until the receipt deadline. Resolved at
+    /// the block's DAA for the fold and at the claim's ANCHOR for the draw (the panel is a pure
+    /// function of the claim). No new issuance: the split is of the escrow the accepting block
+    /// already withheld. `None` on every shipped preset; a mainnet card states it from genesis.
+    pub palw_panel_economy: Option<ForkActivation>,
+
+    /// **ADR-0124 Decision 6: a claim is paid for the compute it certifies.** Past this fence a
+    /// `Final` claim of a model class is named the fraction of its escrow that its class's
+    /// canonical inference (`pwu_per_inference`, the pwu its exposure is priced on) is of the
+    /// heaviest `Active`, weight-bearing model class's at the paying block, and the rest is never
+    /// named — never minted, exactly as a voided escrow is. The liveness floor is not a model and
+    /// is paid at the schedule. Resolved at the block's DAA. `None` on every shipped preset; a
+    /// mainnet card states it from genesis.
+    pub palw_work_priced_reward: Option<ForkActivation>,
+
     /// **ADR-0044 Decision 9's two advertised caps, enforced** (mainnet audit 2026-09-06, L-2).
     /// `None` on every shipped preset, so the behaviour is byte-identical to not having the field.
     ///
@@ -3414,6 +3436,12 @@ impl Params {
         if self.palw_epoch_budget_release == Some(ForkActivation::never()) {
             self.palw_epoch_budget_release = None;
         }
+        if self.palw_panel_economy == Some(ForkActivation::never()) {
+            self.palw_panel_economy = None;
+        }
+        if self.palw_work_priced_reward == Some(ForkActivation::never()) {
+            self.palw_work_priced_reward = None;
+        }
         if self.palw_fp_ruleset_caps == Some(ForkActivation::never()) {
             self.palw_fp_ruleset_caps = None;
         }
@@ -3853,6 +3881,45 @@ impl Params {
         self.palw_shard_licensing_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
+    /// ADR-0124 Decisions 1–5: the panel economy's fence, meaningful only on a `ConsensusV2`
+    /// network (a panel economy for a lane that does not exist is meaningless).
+    pub fn palw_panel_economy_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_panel_economy) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    pub fn palw_panel_economy_active_at(&self, daa_score: u64) -> bool {
+        self.palw_panel_economy_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// ADR-0124 Decision 6: the work price's fence, meaningful only on a `ConsensusV2` network.
+    pub fn palw_work_priced_reward_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_work_priced_reward) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    pub fn palw_work_priced_reward_active_at(&self, daa_score: u64) -> bool {
+        self.palw_work_priced_reward_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// **ADR-0124's two numbers the draw needs past the panel-economy fence**, from the bundle's
+    /// own state params: the panel floor (ten producer floors) and the exposure ceiling every
+    /// reservation shares. `None` where the fence is dormant at `daa_score` or no bundle exists.
+    pub fn palw_seat_economy_at(&self, daa_score: u64) -> Option<crate::palw_panel_economy_v1::PalwSeatEconomyV1> {
+        if !self.palw_panel_economy_active_at(daa_score) {
+            return None;
+        }
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else { return None };
+        Some(crate::palw_panel_economy_v1::PalwSeatEconomyV1 {
+            panel_floor_sompi: crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(bundle.state.min_collateral_sompi()),
+            max_exposure_ratio_permille: bundle.state.fp_max_exposure_ratio_permille(),
+        })
+    }
+
     /// ADR-0102's fence, resolved: `Some` only on a `ConsensusV2` network that armed it. The ONE
     /// place "may a class reach the per-token lift kernel" is decided.
     pub fn palw_token_lift_fence(&self) -> Option<ForkActivation> {
@@ -4048,6 +4115,8 @@ impl Params {
             palw_validator_payout_bounds,
             palw_epoch_boundary_budget,
             palw_epoch_budget_release,
+            palw_panel_economy,
+            palw_work_priced_reward,
             palw_fp_ruleset_caps,
             palw_model_market,
             palw_model_lines,
@@ -4109,6 +4178,8 @@ impl Params {
             ("palw_validator_payout_bounds", *palw_validator_payout_bounds),
             ("palw_epoch_boundary_budget", *palw_epoch_boundary_budget),
             ("palw_epoch_budget_release", *palw_epoch_budget_release),
+            ("palw_panel_economy", *palw_panel_economy),
+            ("palw_work_priced_reward", *palw_work_priced_reward),
             ("palw_fp_ruleset_caps", *palw_fp_ruleset_caps),
             ("palw_model_market", *palw_model_market),
             ("palw_model_lines", *palw_model_lines),
@@ -4372,6 +4443,14 @@ impl Params {
             h.write(b"palw_epoch_budget_release");
             h.write(activation.daa_score().to_le_bytes());
         }
+        if let Some(activation) = self.palw_panel_economy {
+            h.write(b"palw_panel_economy");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = self.palw_work_priced_reward {
+            h.write(b"palw_work_priced_reward");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         if let Some(activation) = self.palw_fp_ruleset_caps {
             h.write(b"palw_fp_ruleset_caps");
             h.write(activation.daa_score().to_le_bytes());
@@ -4512,6 +4591,8 @@ impl Params {
             palw_validator_payout_bounds,
             palw_epoch_boundary_budget,
             palw_epoch_budget_release,
+            palw_panel_economy,
+            palw_work_priced_reward,
             palw_fp_ruleset_caps,
             palw_heartbeat_transparent,
             palw_share_growth_final,
@@ -4876,6 +4957,12 @@ impl Params {
         if let Some(activation) = palw_epoch_budget_release.as_mut() {
             fork(activation, visit);
         }
+        if let Some(activation) = palw_panel_economy.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_work_priced_reward.as_mut() {
+            fork(activation, visit);
+        }
         if let Some(activation) = palw_fp_ruleset_caps.as_mut() {
             fork(activation, visit);
         }
@@ -5118,6 +5205,8 @@ impl Params {
             palw_validator_payout_bounds,
             palw_epoch_boundary_budget,
             palw_epoch_budget_release,
+            palw_panel_economy,
+            palw_work_priced_reward,
             palw_fp_ruleset_caps,
             palw_heartbeat_transparent,
             palw_share_growth_final,
@@ -5542,6 +5631,14 @@ impl Params {
             h.write(b"palw_epoch_budget_release");
             h.write(activation.daa_score().to_le_bytes());
         }
+        if let Some(activation) = palw_panel_economy {
+            h.write(b"palw_panel_economy");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_work_priced_reward {
+            h.write(b"palw_work_priced_reward");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         if let Some(activation) = palw_fp_ruleset_caps {
             h.write(b"palw_fp_ruleset_caps");
             h.write(activation.daa_score().to_le_bytes());
@@ -5888,6 +5985,8 @@ impl Params {
             palw_validator_payout_bounds: self.palw_validator_payout_bounds,
             palw_epoch_boundary_budget: self.palw_epoch_boundary_budget,
             palw_epoch_budget_release: self.palw_epoch_budget_release,
+            palw_panel_economy: self.palw_panel_economy,
+            palw_work_priced_reward: self.palw_work_priced_reward,
             palw_fp_ruleset_caps: self.palw_fp_ruleset_caps,
             palw_heartbeat_transparent: self.palw_heartbeat_transparent,
             palw_share_growth_final: self.palw_share_growth_final,
@@ -6855,6 +6954,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_validator_payout_bounds: None,
     palw_epoch_boundary_budget: None,
     palw_epoch_budget_release: None,
+    palw_panel_economy: None,
+    palw_work_priced_reward: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
@@ -7036,6 +7137,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_validator_payout_bounds: None,
     palw_epoch_boundary_budget: None,
     palw_epoch_budget_release: None,
+    palw_panel_economy: None,
+    palw_work_priced_reward: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
@@ -7199,6 +7302,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_validator_payout_bounds: None,
     palw_epoch_boundary_budget: None,
     palw_epoch_budget_release: None,
+    palw_panel_economy: None,
+    palw_work_priced_reward: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
@@ -10641,6 +10746,14 @@ fn mainnet_card_base_v1(mut base: Params, dense_tier_pinned: bool) -> Params {
     base.palw_audit_2026_09_11 = Some(ForkActivation::always());
     // The deep audit findings (B-1/C-01/B-4/court cluster) likewise — correct from a card's genesis.
     base.palw_audit_2026_09_11_deep = Some(ForkActivation::always());
+    // **ADR-0124, stated from a card's genesis.** A mainnet is born with its panel paid out of the
+    // claim's own reward, its seats holding exposure, its seat floor at ten producer floors and
+    // its claims priced by the compute they certify: the economics the operator asked for, with
+    // no history judged under the other reading. testnet-11 reaches both by a scheduled height
+    // (a flag day, `PALW_RC_PANEL_ECONOMY_FENCE_DAA`) or not at all — a live chain whose seats
+    // have never held exposure cannot start holding it retroactively.
+    base.palw_panel_economy = Some(ForkActivation::always());
+    base.palw_work_priced_reward = Some(ForkActivation::always());
     base
 }
 
@@ -11649,6 +11762,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_validator_payout_bounds: None,
     palw_epoch_boundary_budget: None,
     palw_epoch_budget_release: None,
+    palw_panel_economy: None,
+    palw_work_priced_reward: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
@@ -16389,6 +16504,10 @@ mod consensus_params_id_tests {
             "palw_fp_ruleset_caps",
             "palw_heartbeat",
             "palw_panel_da",
+            // ADR-0124: a card is born paying its panel out of the claim's reward, its seats
+            // holding exposure, and its claims priced by the compute they certify; testnet-11
+            // reaches both by a flag day or not at all.
+            "palw_panel_economy",
             "palw_prompt_ids_merkle",
             "palw_receipt_rows_unpriced",
             "palw_signature_contexts_v2",
@@ -16398,6 +16517,7 @@ mod consensus_params_id_tests {
             "palw_unavailable_abstains",
             "palw_uncertified_weightless",
             "palw_validator_payout_bounds",
+            "palw_work_priced_reward",
         ]
         .into_iter()
         .collect();
@@ -17242,6 +17362,70 @@ mod consensus_params_id_tests {
         );
         assert_eq!(carded.palw_fp_da_pins, Some(ForkActivation::always()));
         assert_eq!(carded.palw_da_court, Some(ForkActivation::always()), "the court it makes meaningful is armed with it");
+    }
+
+    /// **ADR-0124's two fences are dormant on every shipped preset, visible the moment they are not,
+    /// meaningless without a V2 bundle, and stated from genesis on a mainnet card.** A scheduled
+    /// height moves the fingerprint and the schedule and never the identity — an armed and an
+    /// un-armed build peer until the height fires — and arming from genesis moves the identity.
+    #[test]
+    fn adr0124_the_panel_economy_and_the_work_price_are_dormant_everywhere_and_stated_on_a_card() {
+        for p in [&MAINNET_PARAMS, &TESTNET_PARAMS, &SIMNET_PARAMS, &DEVNET_PARAMS] {
+            assert!(
+                p.palw_panel_economy.is_none() && p.palw_work_priced_reward.is_none(),
+                "{}: a shipped preset states neither",
+                p.net
+            );
+        }
+        let rc = palw_rc_shipped_params();
+        assert!(rc.palw_panel_economy.is_none(), "testnet-11 pays no seat until a flag day says otherwise");
+        assert!(rc.palw_work_priced_reward.is_none(), "and prices no claim's work until then");
+        assert!(rc.palw_panel_economy_fence().is_none() && rc.palw_work_priced_reward_fence().is_none());
+        assert!(rc.palw_seat_economy_at(u64::MAX).is_none(), "no seat floor while the fence is dormant");
+        assert!(devnet_shipped_params().palw_panel_economy.is_none() && devnet_shipped_params().palw_work_priced_reward.is_none());
+
+        for field in [
+            (|p: &mut Params, a: Option<ForkActivation>| p.palw_panel_economy = a) as fn(&mut Params, Option<ForkActivation>),
+            |p: &mut Params, a: Option<ForkActivation>| p.palw_work_priced_reward = a,
+        ] {
+            let mut spelled_out = rc.clone();
+            field(&mut spelled_out, Some(ForkActivation::never()));
+            assert_eq!(spelled_out.consensus_identity_id(), rc.consensus_identity_id(), "Some(never()) is absence");
+
+            let mut scheduled = rc.clone();
+            field(&mut scheduled, Some(ForkActivation::new(9_000_000)));
+            assert_eq!(
+                scheduled.consensus_identity_id(),
+                rc.consensus_identity_id(),
+                "an armed and an un-armed build peer until the height"
+            );
+            assert_ne!(scheduled.consensus_params_id(), rc.consensus_params_id(), "…while the fingerprint names the rule");
+            assert_ne!(scheduled.consensus_schedule_id(), rc.consensus_schedule_id(), "…and the operator log names the height");
+            scheduled.validate_palw_v2().expect("armable on the RC");
+
+            let mut armed = rc.clone();
+            field(&mut armed, Some(ForkActivation::always()));
+            assert_ne!(armed.consensus_identity_id(), rc.consensus_identity_id(), "at genesis the handshake must see it");
+        }
+
+        // Past the fence the seat floor is ten producer floors and the ceiling is the bundle's.
+        let mut armed = rc.clone();
+        armed.palw_panel_economy = Some(ForkActivation::always());
+        let economy = armed.palw_seat_economy_at(0).expect("armed");
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &armed.palw_consensus_mode else { unreachable!() };
+        assert_eq!(economy.panel_floor_sompi, bundle.state.min_collateral_sompi() * 10);
+        assert_eq!(economy.max_exposure_ratio_permille, bundle.state.fp_max_exposure_ratio_permille());
+
+        // Fail-closed: no V2 bundle, no panel to pay and no work to price.
+        let mut hash_only = MAINNET_PARAMS;
+        hash_only.palw_panel_economy = Some(ForkActivation::always());
+        hash_only.palw_work_priced_reward = Some(ForkActivation::always());
+        assert!(hash_only.palw_panel_economy_fence().is_none() && hash_only.palw_work_priced_reward_fence().is_none());
+
+        // A mainnet card states both from genesis.
+        let card = mainnet_card_base_v1(MAINNET_PARAMS, false);
+        assert_eq!(card.palw_panel_economy, Some(ForkActivation::always()));
+        assert_eq!(card.palw_work_priced_reward, Some(ForkActivation::always()));
     }
 
     /// **ADR-0107's share-growth fence is dormant on every shipped preset, visible the moment it is

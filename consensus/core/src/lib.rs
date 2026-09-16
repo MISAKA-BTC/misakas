@@ -208,6 +208,9 @@ pub mod palw_e2e_adjudicability;
 /// claim or per block and do not. A doc comment with a test suite attached; no rule, no state,
 /// no caller. Read it before proposing that one answer become several claims.
 pub mod palw_economic_locus_v1;
+/// ADR-0125 — the execution lane's round rules (a second, a seed, capped quotas, alternating
+/// permits) as pure functions; consensus-inert until the lane that reads them is built.
+pub mod palw_execution_lane_v1;
 pub mod palw_exposure;
 pub mod palw_facts;
 pub mod palw_fork_authority_v2;
@@ -259,6 +262,10 @@ pub mod palw_model_market_v1;
 /// ADR-0077 Decision 16 (P-16): `PanelDa`, the privacy mode whose prompt stays off chain — and
 /// ADR-0077 SA-5, which says what arming it does NOT buy.
 pub mod palw_panel_da_v1;
+/// ADR-0124 — the panel is paid out of the claim's own reward, a seat holds exposure while it
+/// judges, and a claim is paid for the compute it certifies: the three pure rules, and nothing
+/// that reads a fence.
+pub mod palw_panel_economy_v1;
 pub mod palw_panel_v2;
 pub mod palw_producer_v2;
 /// ADR-0081 Decision 3 — the one decision of ADR-0081 that survives its refutation: the

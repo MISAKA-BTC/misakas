@@ -56,6 +56,22 @@ pub const PALW_PANEL_V2_DOMAIN_SEAT_TICKET: &[u8] = b"misaka-palw/panel-v2/seat-
 /// and it only bites past the fence, where the whole weighted draw is fenced. Tunable if the
 /// weighting granularity ceiling proves too low for a network's collateral distribution.
 pub const PALW_V2_MAX_SEAT_TICKETS_PER_BOND: u64 = 4096;
+
+/// **How a panel is drawn at a claim's anchor, as one value** — resolved by the processor at the
+/// ANCHOR (where every rule that decides a panel is resolved) and carried to the draw and to the
+/// acceptance layer alike, so build and validate recompute one identical panel.
+///
+/// `weighted` is C-02's stake-weighted sortition (`Params::palw_audit_2026_09_11_deep`); `economy`
+/// is `Some` past ADR-0124's `Params::palw_panel_economy` and carries the seat floor and the
+/// exposure ceiling the eligibility predicate reads. **Past the panel-economy fence the draw is
+/// one ticket per eligible bond whatever `weighted` says** (ADR-0124 Decision 5): once a seat's
+/// risk is the exposure it reserves and a bond is eligible only while its free collateral covers
+/// it, stake no longer needs to buy probability — it buys the capacity to hold more seats at once.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwPanelDrawPolicyV1 {
+    pub weighted: bool,
+    pub economy: Option<crate::palw_panel_economy_v1::PalwSeatEconomyV1>,
+}
 pub const PALW_RECEIPT_V2_DOMAIN_MESSAGE: &[u8] = b"misaka-palw/receipt-v2/message/v1";
 /// ML-DSA-87 signing context for a V2 seat receipt — its own family domain (audit P0-6).
 pub const PALW_RECEIPT_V2_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/receipt-v2/mldsa87/v1";
@@ -143,6 +159,15 @@ impl PalwPanelParamsV2 {
 pub enum PalwPanelV2Error {
     #[error("invalid panel params: {0}")]
     InvalidParams(&'static str),
+    // ADR-0124 Decision 2 — the supplementary door's refusals, by name.
+    #[error(
+        "claim {0}: no seat is on duty, so no supplementary receipt can be credited (the panel was bound below the panel-economy fence)"
+    )]
+    NotOnDuty(Hash64),
+    #[error("seat {0:?} is already credited on this claim")]
+    SeatAlreadyCredited(PalwBondKeyV2),
+    #[error("a supplementary receipt set is refused: {0}")]
+    SupplementaryRefused(&'static str),
     #[error("claim {0} does not exist at this chain point")]
     MissingClaim(Hash64),
     #[error("claim {claim} is in the wrong phase for {edge}")]
@@ -210,7 +235,11 @@ pub fn derive_stratified_panel_v2(
 ) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
     let class_id = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?.class_id;
     let candidates: Vec<crate::palw_shard_panel_v1::PalwShardCandidateV1> =
-        palw_panel_eligible_bonds_v2(state, claim_id, min_collateral_sompi, registered_by_daa, capability_proof)?
+        // **The stratified (shard) draw does not read ADR-0124's seat economy yet.** It is dormant
+        // on every network (`palw_shard_licensing` is `None` everywhere), so the economy rides the
+        // flat draw below; when the shard fence is armed, this draw needs the same floor and
+        // headroom — a follow-up gated behind the shard fence, not this one (C-02's precedent).
+        palw_panel_eligible_bonds_v2(state, claim_id, min_collateral_sompi, registered_by_daa, capability_proof, None)?
             .into_iter()
             .filter_map(|(bond_key, bond)| {
                 state.shards_of_bond(bond_key, &class_id).map(|shards| crate::palw_shard_panel_v1::PalwShardCandidateV1 {
@@ -423,19 +452,38 @@ fn palw_panel_eligible_bonds_v2<'a>(
     min_collateral_sompi: u64,
     registered_by_daa: Option<u64>,
     capability_proof: bool,
+    economy: Option<crate::palw_panel_economy_v1::PalwSeatEconomyV1>,
 ) -> Result<Vec<(&'a PalwBondKeyV2, &'a PalwBondStateV2)>, PalwPanelV2Error> {
     let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
     let executor_bond = claim.bond;
     let executor = state.bond(&executor_bond).ok_or(PalwPanelV2Error::SeatBondMissing(executor_bond))?;
     let executor_operator = executor.operator_id;
     let executor_key = executor.pubkey.clone();
+    // **ADR-0124 Decisions 3 and 4, past the panel-economy fence.** The floor a seat must hold is
+    // the panel's (ten producer floors), and a bond is drawn only while its free collateral covers
+    // the exposure the seat would reserve — the same ceiling every other reservation on the bond
+    // lives under, so the collateral behind a claim it produces cannot double as the collateral
+    // behind a claim it judges. Below the fence: the registry's floor, and no headroom question.
+    let floor = economy.map(|economy| economy.panel_floor_sompi).unwrap_or(min_collateral_sompi);
+    let seat_stake = crate::palw_panel_economy_v1::palw_seat_exposure_v1(claim.reserved);
     let mut eligible = Vec::new();
     for (bond_key, bond) in state.bonds_iter() {
         // **A seat has to have something left to lose** — status AND balance, through the one
         // predicate, so the RPC that reports eligibility and the sortition that decides it cannot
         // answer differently.
-        if !crate::palw_state_v2::palw_bond_may_take_work_v2(bond, min_collateral_sompi) {
+        if !crate::palw_state_v2::palw_bond_may_take_work_v2(bond, floor) {
             continue;
+        }
+        if let Some(economy) = economy {
+            let backed = state.reserved_exposure(bond_key).saturating_add(state.registration_exposure(bond_key));
+            if !crate::palw_panel_economy_v1::palw_seat_has_headroom_v1(
+                bond.collateral,
+                backed,
+                seat_stake,
+                economy.max_exposure_ratio_permille,
+            ) {
+                continue;
+            }
         }
         // ADR-0065 D1: a bond has to have been standing for a while before it may judge.
         if registered_by_daa.is_some_and(|by| bond.registered_daa > by) {
@@ -480,10 +528,41 @@ pub fn derive_panel_v2_with_capability_proof(
     capability_proof: bool,
     weighted: bool,
 ) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
+    derive_panel_v2_with_policy(
+        state,
+        params,
+        claim_id,
+        anchor_block,
+        min_collateral_sompi,
+        registered_by_daa,
+        capability_proof,
+        PalwPanelDrawPolicyV1 { weighted, economy: None },
+    )
+}
+
+/// [`derive_panel_v2_with_capability_proof`] with the whole draw policy (ADR-0124): the seat
+/// floor and the exposure headroom past `Params::palw_panel_economy`, and one ticket per bond
+/// there whatever the deep fence says. `economy: None` is byte-identical to the draw before the
+/// policy existed.
+#[allow(clippy::too_many_arguments)]
+pub fn derive_panel_v2_with_policy(
+    state: &PalwChainStateV2,
+    params: &PalwPanelParamsV2,
+    claim_id: &Hash64,
+    anchor_block: BlockHash,
+    min_collateral_sompi: u64,
+    registered_by_daa: Option<u64>,
+    capability_proof: bool,
+    policy: PalwPanelDrawPolicyV1,
+) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
+    // ADR-0124 Decision 5: the panel economy retires stake weighting (see the policy's doc).
+    let weighted = policy.weighted && policy.economy.is_none();
     // Ticket every eligible bond (`palw_panel_eligible_bonds_v2`: the exclusions per Decision 7
     // and every seat predicate, spelled once for this draw and the stratified one).
     let mut tickets: Vec<(Hash64, PalwBondKeyV2, Hash64)> = Vec::new();
-    for (bond_key, bond) in palw_panel_eligible_bonds_v2(state, claim_id, min_collateral_sompi, registered_by_daa, capability_proof)? {
+    for (bond_key, bond) in
+        palw_panel_eligible_bonds_v2(state, claim_id, min_collateral_sompi, registered_by_daa, capability_proof, policy.economy)?
+    {
         // **C-02 (deep fence): stake-weighted sortition by bucketed sub-tickets.** Below the fence
         // (`weighted == false`) each eligible bond draws ONE ticket, so the draw ignores how much
         // collateral is at stake and a min-collateral bond has the same seat odds as a whale. Past
@@ -643,6 +722,40 @@ pub fn validate_panel_bound_v2_with_shards(
     weighted: bool,
     stratified: Option<u32>,
 ) -> Result<(), PalwPanelV2Error> {
+    validate_panel_bound_v2_with_policy(
+        state,
+        params,
+        state_params,
+        ctx,
+        claim_id,
+        anchor,
+        proposed_anchor,
+        proposed_seats,
+        bond_maturity_daa,
+        capability_proof,
+        PalwPanelDrawPolicyV1 { weighted, economy: None },
+        stratified,
+    )
+}
+
+/// [`validate_panel_bound_v2_with_shards`] with the whole draw policy (ADR-0124), resolved at the
+/// ANCHOR by the caller for the reason every field of it gives: the panel is a pure function of
+/// the claim, and the acceptance layer must recompute exactly the panel the assembler built.
+#[allow(clippy::too_many_arguments)]
+pub fn validate_panel_bound_v2_with_policy(
+    state: &PalwChainStateV2,
+    params: &PalwPanelParamsV2,
+    state_params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    claim_id: &Hash64,
+    anchor: &PalwAnchorFactV2,
+    proposed_anchor: Hash64,
+    proposed_seats: &[PalwPanelSeatV2],
+    bond_maturity_daa: Option<u64>,
+    capability_proof: bool,
+    policy: PalwPanelDrawPolicyV1,
+    stratified: Option<u32>,
+) -> Result<(), PalwPanelV2Error> {
     let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
     if !matches!(claim.phase, PalwClaimPhaseV2::Provisional) {
         return Err(PalwPanelV2Error::WrongPhase { claim: *claim_id, edge: "PanelBound" });
@@ -700,7 +813,7 @@ pub fn validate_panel_bound_v2_with_shards(
             capability_proof,
             shard_count,
         )?,
-        None => derive_panel_v2_with_capability_proof(
+        None => derive_panel_v2_with_policy(
             state,
             params,
             claim_id,
@@ -708,7 +821,7 @@ pub fn validate_panel_bound_v2_with_shards(
             state_params.min_collateral_sompi(),
             registered_by_daa,
             capability_proof,
-            weighted,
+            policy,
         )?,
     };
     if derived != proposed_seats {
@@ -795,6 +908,10 @@ pub enum PalwReceiptQuorumV2 {
     /// ≥ quorum seats signed `Unavailable`: the producer defaulted on its DA obligation, and the
     /// `ProducerDefaulted` object is acceptable — the panel answered, the producer did not.
     ProducerUnavailable { unavailable: u16 },
+    /// **ADR-0124 Decision 2: a supplementary set on a claim already licensed** — `credited`
+    /// `Valid` receipts of seats on duty the chain had not credited, all inside the receipt
+    /// window. The `ReceiptLicensed` object is acceptable and moves no phase; it only credits.
+    Supplementary { credited: u16 },
 }
 
 /// Validate a receipt set against the bound panel at this chain point. Every receipt must name
@@ -856,6 +973,48 @@ pub fn validate_receipt_quorum_v2_with_policy<V>(
 where
     V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 {
+    validate_receipt_quorum_v2_with_economy(
+        state,
+        params,
+        state_params,
+        ctx,
+        network_domain,
+        claim_id,
+        receipts,
+        verify_mldsa87,
+        unavailable_abstains,
+        false,
+    )
+}
+
+/// [`validate_receipt_quorum_v2_with_policy`] with ADR-0124's supplementary door: past
+/// `Params::palw_panel_economy` (`panel_economy`, resolved at the carrying block) a
+/// `ReceiptLicensed` object on a claim ALREADY licensed is acceptable while its receipt window is
+/// open, provided every receipt it carries is a `Valid` one of a seat on duty the chain has not
+/// credited — see [`validate_supplementary_receipts_v1`]. `false` is byte-identical to the check
+/// before the door existed.
+#[allow(clippy::too_many_arguments)]
+pub fn validate_receipt_quorum_v2_with_economy<V>(
+    state: &PalwChainStateV2,
+    params: &PalwPanelParamsV2,
+    state_params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    network_domain: Hash64,
+    claim_id: &Hash64,
+    receipts: &[PalwSeatReceiptV2],
+    verify_mldsa87: V,
+    unavailable_abstains: bool,
+    panel_economy: bool,
+) -> Result<PalwReceiptQuorumV2, PalwPanelV2Error>
+where
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+{
+    if panel_economy {
+        let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
+        if matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }) {
+            return validate_supplementary_receipts_v1(state, state_params, ctx, network_domain, claim_id, receipts, verify_mldsa87);
+        }
+    }
     receipt_quorum_over_seats_v2(
         state,
         state_params,
@@ -875,6 +1034,79 @@ where
         verify_mldsa87,
         unavailable_abstains,
     )
+}
+
+/// **ADR-0124 Decision 2: a seat carries its own receipt after the licence.** The licensing
+/// object carries whatever receipts its assembler held at one tick; a seat whose receipt arrived a
+/// moment later, or that the assembler simply left out, would otherwise be a seat the chain never
+/// saw answer. So until the receipt deadline a claim already `ReceiptLicensed` accepts a
+/// `ReceiptLicensed` object again, and what it may carry is exactly: one or more `Valid` receipts,
+/// each from a seat on duty for this claim that the chain has not credited, each signed by the
+/// seat's registered key inside `[bound_daa, bound_daa + window_receipt]` and not after the block
+/// that carries it, no seat twice. Nothing else — an `Unavailable` or `Incapable` receipt is not a
+/// discharge the pool pays, and a seat that already counted is not counted again. The fold
+/// re-derives every structural fact from its own state (`credit_supplementary_receipts`), so the
+/// sync walk credits exactly what this layer admitted.
+pub fn validate_supplementary_receipts_v1<V>(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    network_domain: Hash64,
+    claim_id: &Hash64,
+    receipts: &[PalwSeatReceiptV2],
+    verify_mldsa87: V,
+) -> Result<PalwReceiptQuorumV2, PalwPanelV2Error>
+where
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+{
+    let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
+    if !matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }) {
+        return Err(PalwPanelV2Error::WrongPhase { claim: *claim_id, edge: "SupplementaryReceipts" });
+    }
+    let duties = state.panel_duties_of(claim_id).ok_or(PalwPanelV2Error::NotOnDuty(*claim_id))?;
+    let bound_daa = state.panel(claim_id).ok_or(PalwPanelV2Error::NoPanel(*claim_id))?.bound_daa;
+    let receipt_deadline = bound_daa
+        .checked_add(state_params.window_receipt())
+        .ok_or(PalwPanelV2Error::ReceiptOutsideWindow { seat: claim.bond, why: "the receipt deadline overflows the DAA score" })?;
+    if receipts.is_empty() {
+        return Err(PalwPanelV2Error::SupplementaryRefused("no receipt"));
+    }
+    if ctx.daa_score > receipt_deadline {
+        return Err(PalwPanelV2Error::SupplementaryRefused("the receipt window has closed"));
+    }
+    let mut answered: Vec<PalwBondKeyV2> = Vec::new();
+    for receipt in receipts {
+        if receipt.claim != *claim_id {
+            return Err(PalwPanelV2Error::ReceiptClaimMismatch { got: receipt.claim, expected: *claim_id });
+        }
+        match duties.get(&receipt.seat_bond) {
+            None => return Err(PalwPanelV2Error::NotASeat(receipt.seat_bond)),
+            Some(at) if *at != 0 => return Err(PalwPanelV2Error::SeatAlreadyCredited(receipt.seat_bond)),
+            Some(_) => {}
+        }
+        if answered.contains(&receipt.seat_bond) {
+            return Err(PalwPanelV2Error::DuplicateSeat(receipt.seat_bond));
+        }
+        if !matches!(receipt.verdict, PalwReceiptVerdictV2::Valid) {
+            return Err(PalwPanelV2Error::SupplementaryRefused("a receipt whose verdict is not Valid"));
+        }
+        let bond = state.bond(&receipt.seat_bond).ok_or(PalwPanelV2Error::SeatBondMissing(receipt.seat_bond))?;
+        let message = palw_receipt_message_v2(network_domain, *claim_id, receipt.verdict, receipt.signed_daa);
+        if !verify_mldsa87(&bond.pubkey, message.as_byte_slice(), &receipt.signature, PALW_RECEIPT_V2_MLDSA87_CONTEXT) {
+            return Err(PalwPanelV2Error::ReceiptSignatureInvalid);
+        }
+        if receipt.signed_daa < bound_daa {
+            return Err(PalwPanelV2Error::ReceiptOutsideWindow { seat: receipt.seat_bond, why: "signed before the panel was bound" });
+        }
+        if receipt.signed_daa > receipt_deadline {
+            return Err(PalwPanelV2Error::ReceiptOutsideWindow { seat: receipt.seat_bond, why: "signed past the receipt deadline" });
+        }
+        if receipt.signed_daa > ctx.daa_score {
+            return Err(PalwPanelV2Error::ReceiptOutsideWindow { seat: receipt.seat_bond, why: "signed after the block carrying it" });
+        }
+        answered.push(receipt.seat_bond);
+    }
+    Ok(PalwReceiptQuorumV2::Supplementary { credited: answered.len() as u16 })
 }
 
 /// **One shard's part** (ADR-0100 Decision 4): the same receipt checks, over the seats of THAT
@@ -1316,6 +1548,125 @@ mod tests {
         assert!(
             weighted * 3 < unweighted,
             "past the fence the min-collateral operator is crowded out by the whales: seated {weighted}/40 weighted vs {unweighted}/40 unweighted"
+        );
+    }
+
+    /// **ADR-0124 Decisions 3–5 in the draw.** Past the panel-economy fence a bond is drawn only
+    /// while it holds ten producer floors AND its free collateral covers the seat's reservation
+    /// under the shared ceiling; and every eligible bond draws one ticket, so the whale is no
+    /// likelier than the minimum bond — the deep fence's weighting is retired by the economy.
+    #[test]
+    fn adr0124_the_economy_draws_by_floor_and_headroom_and_one_ticket_a_bond() {
+        let mc = 100u64; // state_params()'s min_collateral: the panel floor is 1,000
+        let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+        let bond = |b: u64, pk: u8, op: u64, collateral: u64| PalwConsensusObjectV2::BondRegistered {
+            bond: PalwBondKeyV2(bond_outpoint(b)),
+            pubkey: vec![pk; 4],
+            operator_pubkey: op_key(op),
+            collateral,
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+            capable_classes: std::collections::BTreeSet::from([h64(1)]),
+            signature: Vec::new(),
+        };
+        let objects = vec![
+            PalwConsensusObjectV2::ClassRegistered {
+                class_id: h64(1),
+                artifact_root: h64(11),
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+                initial_target: u128::MAX / 2,
+                share_permille: 1000,
+                activation_daa: 0,
+                admission: None,
+            },
+            bond(1, 7, 0x21, 1_000_000),     // executor — excluded from its own panel
+            bond(2, 8, 0x22, mc),            // holds the registry's floor, not the panel's
+            bond(3, 9, 0x23, 1_000),         // holds the panel floor, but its ceiling (500) is under the seat's 600
+            bond(4, 10, 0x24, 2_000),        // eligible: ceiling 1,000 covers 600
+            bond(5, 11, 0x25, 2_000),        // eligible
+            bond(6, 12, 0x26, 2_000 * 4096), // eligible, a whale
+        ];
+        let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &sp, &ctx(1, 100, 1), &objects, None).unwrap();
+        let env = attempt(40, 1); // reserved = 40 × 5 = 200, so a seat reserves 600
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (state, _) = apply_palw_transition_v2(&s1, &sp, &ctx(2, 101, 2), &[], Some(&env)).unwrap();
+        assert_eq!(state.claim(&claim_id).unwrap().reserved, 200);
+        let params = panel_params(); // seat_count 3
+        let economy = crate::palw_panel_economy_v1::PalwSeatEconomyV1 {
+            panel_floor_sompi: crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(mc),
+            max_exposure_ratio_permille: 500,
+        };
+        assert_eq!(economy.panel_floor_sompi, 1_000);
+        let policy = PalwPanelDrawPolicyV1 { weighted: true, economy: Some(economy) };
+
+        for i in 0..40u64 {
+            let anchor = BlockHash::from_u64_word(0xB000 + i);
+            let seats =
+                derive_panel_v2_with_policy(&state, &params, &claim_id, anchor, mc, None, false, policy).expect("a full panel");
+            assert_eq!(seats.len(), 3);
+            for seat in &seats {
+                assert!(
+                    (4..=6u64).any(|n| seat.bond == PalwBondKeyV2(bond_outpoint(n))),
+                    "only bonds 4, 5 and 6 may sit: {:?} is under the floor or the ceiling",
+                    seat.bond
+                );
+            }
+            // One ticket a bond: the draw past the economy equals the legacy unweighted draw over the
+            // same eligible set, whatever `weighted` says.
+            let unweighted = PalwPanelDrawPolicyV1 { weighted: false, economy: Some(economy) };
+            assert_eq!(
+                derive_panel_v2_with_policy(&state, &params, &claim_id, anchor, mc, None, false, unweighted).unwrap(),
+                seats,
+                "the economy retires stake weighting"
+            );
+        }
+        // Below the fence the same registry draws bond 2 and bond 3 too (the legacy predicate).
+        let legacy = (0..40u64).any(|i| {
+            let anchor = BlockHash::from_u64_word(0xB000 + i);
+            derive_panel_v2_with_policy(&state, &params, &claim_id, anchor, mc, None, false, PalwPanelDrawPolicyV1::default())
+                .unwrap()
+                .iter()
+                .any(|s| (2..=3u64).any(|n| s.bond == PalwBondKeyV2(bond_outpoint(n))))
+        });
+        assert!(legacy, "below the fence the registry's floor is the only bar");
+        // The acceptance layer recomputes the same panel under the same policy.
+        let anchor = BlockHash::from_u64_word(0xB007);
+        let seats = derive_panel_v2_with_policy(&state, &params, &claim_id, anchor, mc, None, false, policy).unwrap();
+        let fact = PalwAnchorFactV2 { anchor_block: anchor, anchor_daa: 105, predecessor_daa: 104 };
+        validate_panel_bound_v2_with_policy(
+            &state,
+            &params,
+            &sp,
+            &ctx(3, 106, 3),
+            &claim_id,
+            &fact,
+            anchor,
+            &seats,
+            None,
+            false,
+            policy,
+            None,
+        )
+        .expect("the same policy recomputes the same panel");
+        assert!(
+            matches!(
+                validate_panel_bound_v2_with_policy(
+                    &state,
+                    &params,
+                    &sp,
+                    &ctx(3, 106, 3),
+                    &claim_id,
+                    &fact,
+                    anchor,
+                    &seats,
+                    None,
+                    false,
+                    PalwPanelDrawPolicyV1::default(),
+                    None
+                ),
+                Err(PalwPanelV2Error::PanelMismatch)
+            ),
+            "a validator below the fence refuses the economy's panel, and vice versa"
         );
     }
 

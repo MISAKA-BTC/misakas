@@ -616,6 +616,8 @@ mod tests {
             "palw_signature_contexts_v2" => params.palw_signature_contexts_v2 = Some(at),
             "palw_heartbeat_transparent" => params.palw_heartbeat_transparent = Some(at),
             "palw_share_growth_final" => params.palw_share_growth_final = Some(at),
+            "palw_panel_economy" => params.palw_panel_economy = Some(at),
+            "palw_work_priced_reward" => params.palw_work_priced_reward = Some(at),
             other => panic!("{other} is a PALW fence `palw_fences_v1` returns and this probe cannot set — add it here"),
         }
     }

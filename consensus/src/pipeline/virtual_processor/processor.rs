@@ -516,6 +516,12 @@ pub struct VirtualStateProcessor {
     pub(super) palw_model_leg_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0120: `Params::palw_model_seed_v2_fence` — the one-million-MSK floor's height.
     pub(super) palw_model_seed_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0124 Decisions 1–5: `Params::palw_panel_economy_fence` — the panel economy's height.
+    /// Resolved at the BLOCK's DAA for the fold and the receipt door, and at the claim's ANCHOR
+    /// for the draw (the panel is a pure function of the claim).
+    pub(super) palw_panel_economy: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0124 Decision 6: `Params::palw_work_priced_reward_fence` — the work price's height.
+    pub(super) palw_work_priced_reward: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **ADR-0089 Decision 9's fence, `None` on every shipped preset.** Past it the EVM's
     /// window and hand exist and the block's EVM actions reach its transition. Resolved at the
     /// BLOCK's DAA.
@@ -1046,6 +1052,8 @@ impl VirtualStateProcessor {
             palw_model_benefits: params.palw_model_benefits_fence(),
             palw_model_leg_v2: params.palw_model_leg_v2_fence(),
             palw_model_seed_v2: params.palw_model_seed_v2_fence(),
+            palw_panel_economy: params.palw_panel_economy_fence(),
+            palw_work_priced_reward: params.palw_work_priced_reward_fence(),
             palw_model_evm: params.palw_model_evm_fence(),
             palw_context_ladder: params.palw_context_ladder,
             palw_epoch_boundary_budget: params.palw_epoch_boundary_budget,
@@ -6471,6 +6479,63 @@ impl VirtualStateProcessor {
     /// accepted. A quorum that assembles here can still lapse before inclusion (the receipt
     /// window is checked against the ACCEPTING block's DAA); that is the submitter's race to
     /// lose, not a soundness gap.
+    /// **ADR-0124 Decision 2: a seat's own supplementary receipt set, as the door will take it.**
+    /// The door is shut — `None` — while the panel-economy fence is dormant at virtual's DAA, while
+    /// the claim is not `ReceiptLicensed`, when every receipt in `mine` is already credited or is
+    /// not `Valid`, and once the receipt window has closed; otherwise the object carries exactly
+    /// the uncredited `Valid` receipts, validated by the same function the acceptance layer runs.
+    pub fn palw_v2_supplementary_receipt_assemble_impl(
+        &self,
+        claim: kaspa_hashes::Hash64,
+        mine: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2],
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        use kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2;
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (tip_block, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let virtual_state = self.lkg_virtual_state.load();
+        let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: tip_block,
+            daa_score: virtual_state.daa_score,
+            blue_score: virtual_state.ghostdag_data.blue_score,
+            subsidy: 0,
+        };
+        if !self.palw_panel_economy_active_at(point.daa_score) {
+            return None;
+        }
+        let record = state.claim(&claim)?;
+        if !matches!(record.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }) {
+            return None;
+        }
+        let duties = state.panel_duties_of(&claim)?;
+        let receipts: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2> = mine
+            .iter()
+            .filter(|receipt| {
+                receipt.claim == claim
+                    && matches!(receipt.verdict, kaspa_consensus_core::palw_panel_v2::PalwReceiptVerdictV2::Valid)
+                    && duties.get(&receipt.seat_bond).is_some_and(|at| *at == 0)
+            })
+            .cloned()
+            .collect();
+        if receipts.is_empty() {
+            return None;
+        }
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.network_id_bytes.as_slice(),
+            Some(self.genesis.hash),
+        );
+        kaspa_consensus_core::palw_panel_v2::validate_supplementary_receipts_v1(
+            &state,
+            state_params,
+            &point,
+            network_domain,
+            &claim,
+            &receipts,
+            Self::verify_mldsa87_with_context_bool,
+        )
+        .ok()?;
+        Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensed { claim, receipts })
+    }
+
     pub fn palw_v2_receipt_quorum_assemble_impl(
         &self,
         claim: kaspa_hashes::Hash64,
@@ -6607,6 +6672,11 @@ impl VirtualStateProcessor {
             Q::ProducerUnavailable { .. } => {
                 Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ProducerDefaulted { claim, receipts: kept })
             }
+            // Unreachable from this assembler (it validates without the supplementary door), and
+            // harmless if it were not: the object is the same kind the door accepts.
+            Q::Supplementary { .. } => {
+                Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensed { claim, receipts: kept })
+            }
         }
     }
 
@@ -6637,7 +6707,7 @@ impl VirtualStateProcessor {
                     // `point.daa_score` would make the derived panel change from block to block
                     // around the fence height, and a `PanelBound` that missed the block it was
                     // built for would be refused as a mismatch rather than accepted late.
-                    kaspa_consensus_core::palw_panel_v2::validate_panel_bound_v2_with_shards(
+                    kaspa_consensus_core::palw_panel_v2::validate_panel_bound_v2_with_policy(
                         state,
                         panel_params,
                         state_params,
@@ -6651,10 +6721,10 @@ impl VirtualStateProcessor {
                         // a pure function of the claim, so the rule that narrows it must be one
                         // too — and the assembler below resolves it at the same point.
                         self.palw_capability_bound_at(anchor_fact.anchor_daa),
-                        // C-02 (deep fence): the stake-weighted draw, resolved at the ANCHOR for the
-                        // same purity reason — the assembler resolves it at the same point, so build
-                        // and validate recompute one identical weighted panel.
-                        self.palw_audit_2026_09_11_deep_at(anchor_fact.anchor_daa),
+                        // C-02 (deep fence) and ADR-0124 (the panel economy): the whole draw policy,
+                        // resolved at the ANCHOR for the same purity reason — the assembler resolves
+                        // it at the same point, so build and validate recompute one identical panel.
+                        self.palw_panel_draw_policy_at(anchor_fact.anchor_daa),
                         // ADR-0100 Decision 4: the same one-place decision the binding made.
                         self.palw_stratified_shard_count(state, &claim_record.class_id, anchor_fact.anchor_daa),
                     )
@@ -7436,7 +7506,7 @@ impl VirtualStateProcessor {
                 // two provably disjoint, so exactly one of these objects can ever be acceptable
                 // for a given receipt set.
                 Obj::ReceiptLicensed { claim, receipts } | Obj::ProducerDefaulted { claim, receipts } => {
-                    let quorum = kaspa_consensus_core::palw_panel_v2::validate_receipt_quorum_v2_with_policy(
+                    let quorum = kaspa_consensus_core::palw_panel_v2::validate_receipt_quorum_v2_with_economy(
                         state,
                         panel_params,
                         state_params,
@@ -7449,12 +7519,20 @@ impl VirtualStateProcessor {
                         receipts,
                         Self::verify_mldsa87_with_context_bool,
                         self.palw_unavailable_abstains_at(point.daa_score),
+                        // ADR-0124 Decision 2: the supplementary door, at the carrying block's DAA.
+                        self.palw_panel_economy_active_at(point.daa_score),
                     )
                     .map_err(|e| format!("claim {claim}'s receipt set does not carry a quorum: {e}"))?;
                     use kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2 as Q;
                     match (object, quorum) {
                         (Obj::ReceiptLicensed { .. }, Q::Licensed { .. })
                         | (Obj::ProducerDefaulted { .. }, Q::ProducerUnavailable { .. }) => {}
+                        // ADR-0124 Decision 2: a supplementary set rides the licensing object's kind
+                        // and credits seats on a claim already licensed; it can default nobody.
+                        (Obj::ReceiptLicensed { .. }, Q::Supplementary { .. }) => {}
+                        (Obj::ProducerDefaulted { .. }, Q::Supplementary { .. }) => {
+                            return Err(format!("claim {claim} is already licensed; a supplementary receipt set defaults nobody"));
+                        }
                         (Obj::ReceiptLicensed { .. }, Q::ProducerUnavailable { .. }) => {
                             return Err(format!("claim {claim} is licensed by a quorum that says the producer withheld"));
                         }
@@ -8202,6 +8280,37 @@ impl VirtualStateProcessor {
         self.palw_model_seed_v2.is_some_and(|fence| fence.is_active(daa_score))
     }
 
+    /// ADR-0124 Decisions 1–5, resolved at one DAA — the BLOCK's for the fold and the receipt
+    /// door, the claim's ANCHOR for the draw.
+    pub(super) fn palw_panel_economy_active_at(&self, daa_score: u64) -> bool {
+        self.palw_panel_economy.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// ADR-0124 Decision 6, resolved at the BLOCK's own DAA like every other fence.
+    pub(super) fn palw_work_priced_reward_active_at(&self, daa_score: u64) -> bool {
+        self.palw_work_priced_reward.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0124's draw policy at a claim's anchor** — the deep fence's weighting and the panel
+    /// economy's floor and ceiling, resolved at ONE point so the assembler and the acceptance layer
+    /// recompute one identical panel. `economy` is `None` while the fence is dormant at the anchor.
+    pub(super) fn palw_panel_draw_policy_at(&self, anchor_daa: u64) -> kaspa_consensus_core::palw_panel_v2::PalwPanelDrawPolicyV1 {
+        let economy = if self.palw_panel_economy_active_at(anchor_daa) {
+            self.palw_state_params_v2.as_ref().map(|state| kaspa_consensus_core::palw_panel_economy_v1::PalwSeatEconomyV1 {
+                panel_floor_sompi: kaspa_consensus_core::palw_panel_economy_v1::palw_panel_collateral_floor_v1(
+                    state.min_collateral_sompi(),
+                ),
+                max_exposure_ratio_permille: state.fp_max_exposure_ratio_permille(),
+            })
+        } else {
+            None
+        };
+        kaspa_consensus_core::palw_panel_v2::PalwPanelDrawPolicyV1 {
+            weighted: self.palw_audit_2026_09_11_deep_at(anchor_daa),
+            economy,
+        }
+    }
+
     /// **ADR-0089 Decision 9, resolved in exactly one place, at the BLOCK's own DAA.**
     pub(super) fn palw_model_evm_active_at(&self, daa_score: u64) -> bool {
         self.palw_model_evm.is_some_and(|fence| fence.is_active(daa_score))
@@ -8244,6 +8353,10 @@ impl VirtualStateProcessor {
             // ADR-0123: the fold re-runs admission on every merged attempt, so it must release what
             // admission released for this block. Explicit for the reason the lines above give.
             epoch_budget_release_active: self.palw_epoch_budget_release_at(daa_score),
+            // ADR-0124: these two decide who a `Final` claim pays and what a seat reserves and can
+            // lose. Explicit for the reason every line above gives.
+            panel_economy_active: self.palw_panel_economy_active_at(daa_score),
+            work_priced_reward_active: self.palw_work_priced_reward_active_at(daa_score),
             evm_actions: Vec::new(),
             // ADR-0093 Decision 8: which form of move 1 opens a phase. Written explicitly for the
             // reason the lines above give — an unwritten default here would refuse, or admit, a
@@ -8606,7 +8719,11 @@ impl VirtualStateProcessor {
         let Some(window) = self.palw_bond_maturity_at(daa) else { return };
 
         let floor = kaspa_consensus_core::palw_panel_v2::palw_seat_maturity_floor_v1(daa, Some(window));
-        let seatable = kaspa_consensus_core::palw_panel_v2::palw_seatable_operators_v1(state, min_collateral_sompi, floor);
+        // ADR-0124 Decision 4: past the panel economy the seat floor is the panel's, not the
+        // registry's — the counter must count what the draw would seat.
+        let seat_floor =
+            self.palw_panel_draw_policy_at(daa).economy.map(|economy| economy.panel_floor_sompi).unwrap_or(min_collateral_sompi);
+        let seatable = kaspa_consensus_core::palw_panel_v2::palw_seatable_operators_v1(state, seat_floor, floor);
         let armable = kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_maturity_armable_bonds_v1();
         if seatable >= armable {
             // Recovered. Forget both, so a later relapse is reported at once rather than waiting
@@ -9074,9 +9191,10 @@ impl VirtualStateProcessor {
             );
             // ADR-0071 SA-3, from the same anchor as the acceptance layer's sibling call.
             let capability_bound = self.palw_capability_bound_at(anchor.anchor_daa);
-            // C-02 (deep fence): the stake-weighted draw, from the same anchor as the acceptance
-            // layer's sibling call — so this assembler builds the exact panel that layer recomputes.
-            let weighted = self.palw_audit_2026_09_11_deep_at(anchor.anchor_daa);
+            // C-02 (deep fence) and ADR-0124 (the panel economy): the whole draw policy, from the
+            // same anchor as the acceptance layer's sibling call — so this assembler builds the
+            // exact panel that layer recomputes.
+            let policy = self.palw_panel_draw_policy_at(anchor.anchor_daa);
             // ADR-0100 Decision 4: a class with a plan draws per shard, or not at all — a flat
             // panel of a sharded class would ask shard seats to judge a whole model.
             let drawn = match self.palw_stratified_shard_count(state, &claim.class_id, anchor.anchor_daa) {
@@ -9090,7 +9208,7 @@ impl VirtualStateProcessor {
                     capability_bound,
                     shard_count,
                 ),
-                None => kaspa_consensus_core::palw_panel_v2::derive_panel_v2_with_capability_proof(
+                None => kaspa_consensus_core::palw_panel_v2::derive_panel_v2_with_policy(
                     state,
                     panel_params,
                     claim_id,
@@ -9098,7 +9216,7 @@ impl VirtualStateProcessor {
                     min_collateral,
                     maturity_floor,
                     capability_bound,
-                    weighted,
+                    policy,
                 ),
             };
             let Ok(seats) = drawn else {
