@@ -69,14 +69,6 @@ COMMANDS: dict[str, list[str]] = {
     "doctor": ["doctor"],
     "collect-support-log": ["collect-support-log"],
     "wait-sync": ["wait-sync"],
-    "auto-validator": ["auto-validator"],
-    "keygen": ["keygen"],
-    "miner-start": ["miner-start"],
-    "miner-stop": ["miner-stop"],
-    "balance": ["balance"],
-    "bond": ["bond", "10MSK"],
-    "validator-start": ["validator-start"],
-    "validator-stop": ["validator-stop"],
     "stop-all": ["stop-all"],
     "logs": ["logs"],
 }
@@ -145,7 +137,7 @@ def job_json(job: JobState) -> dict:
 def bootstrap_status(share_dir: Path, job: JobState) -> dict:
     home = desktop_home()
     repo_dir = Path(os.environ.get("MISAKA_REPO_DIR", str(home / "misakas"))).expanduser()
-    binaries = [binary_info(name) for name in ["kaspad", "misaka", "kaspa-pq-validator", "misaminer"]]
+    binaries = [binary_info(name) for name in ["kaspad", "misaka"]]
     tools = [{"name": name, "ok": tool_path(name) is not None, "path": tool_path(name)} for name in ["git", "curl", "python3"]]
     cargo = tool_path("cargo")
     rustc = tool_path("rustc")
@@ -177,86 +169,6 @@ def public_ip_info(confirmed: bool = True) -> dict:
             "source": "local",
             "confirmed": confirmed,
         },
-    }
-
-
-def parse_balance(output: str) -> tuple[int | None, str | None]:
-    for line in output.splitlines():
-        parts = line.split("\t")
-        if len(parts) >= 3 and parts[1].isdigit():
-            return int(parts[1]), parts[2].strip()
-    match = re.search(r"\b([0-9]+)\s+sompi\b", output)
-    if match:
-        return int(match.group(1)), None
-    return None, None
-
-
-def current_daa_value() -> int | None:
-    binary = desktop_home() / "bin" / "misaka"
-    if not binary.exists():
-        return None
-    try:
-        proc = subprocess.run(
-            [
-                str(binary),
-                "--network",
-                os.environ.get("MISAKA_NETWORK", "testnet-10"),
-                "--rpc",
-                f"127.0.0.1:{os.environ.get('MISAKA_WRPC_BORSH_PORT', '27210')}",
-                "node",
-                "doctor",
-            ],
-            env={**os.environ, "HOME": str(desktop_home() / "home"), "NO_COLOR": "1"},
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=20,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    match = re.search(r"Virtual DAA score\s+([0-9]+)", clean_output(proc.stdout))
-    return int(match.group(1)) if match else None
-
-
-def first_mined_daa_value() -> int | None:
-    log_path = desktop_home() / "logs" / "misaminer.log"
-    try:
-        with log_path.open(errors="replace") as log_file:
-            for line in log_file:
-                match = re.search(r"mined block\s+#\d+.*?daa_score=(\d+)", line, re.IGNORECASE)
-                if match:
-                    return int(match.group(1))
-    except OSError:
-        return None
-    return None
-
-
-def maturity_value(current_daa: int | None) -> dict:
-    state = read_state()
-    start_raw = state.get("MINER_START_DAA")
-    start_daa = int(start_raw) if start_raw and start_raw.isdigit() else None
-    basis = "minerStartDaa"
-    if start_daa is None:
-        start_daa = first_mined_daa_value()
-        if start_daa is not None:
-            basis = "firstMinedDaa"
-    try:
-        required = max(0, int(os.environ.get("MISAKA_COINBASE_MATURITY_BLOCKS", "1000")))
-    except ValueError:
-        required = 1000
-    elapsed = max(0, current_daa - start_daa) if current_daa is not None and start_daa is not None else None
-    remaining = max(0, required - elapsed) if elapsed is not None else None
-    percent = min(100, elapsed * 100 // required) if elapsed is not None and required > 0 else None
-    return {
-        "approx": True,
-        "basis": basis,
-        "coinbaseMaturityBlocks": required,
-        "minerStartDaa": start_daa,
-        "currentDaa": current_daa,
-        "elapsedBlocks": elapsed,
-        "remainingBlocks": remaining,
-        "percent": percent,
-        "readyByStartEstimate": bool(elapsed is not None and elapsed >= required),
     }
 
 
@@ -294,85 +206,8 @@ def status_value(share_dir: Path) -> dict:
         },
         "p2p": {"listening": bool(status["p2pListening"]), "port": 26211},
         "seeder": {"service": "not used locally", "serviceState": "not configured"},
-        "validator": {"service": "misaka-local-validator", "serviceState": "active" if status["validatorRunning"] else "not configured"},
-        "miner": miner_status_value(status["daa"]),
         "raw": output,
         "exitCode": code,
-    }
-
-
-def normalize_bond_outpoint(value: str | None) -> str | None:
-    candidate = "".join((value or "").split())
-    txid_pattern = r"(?:[0-9a-fA-F]{64}|[0-9a-fA-F]{128})"
-    if re.fullmatch(rf"{txid_pattern}:[0-9]+", candidate):
-        return candidate
-    if re.fullmatch(txid_pattern, candidate):
-        return f"{candidate}:0"
-    return None
-
-
-def validator_status_value(share_dir: Path) -> dict:
-    home = desktop_home()
-    state = read_state()
-    status = status_value(share_dir)
-    key_path = home / "validator" / "validator.seed"
-    validator_pid = read_pid(home / "run" / "validator.pid")
-    funding = state.get("FUNDING_ADDRESS")
-    bond = normalize_bond_outpoint(state.get("BOND_OUTPOINT"))
-    value = {
-        "ok": bool(validator_pid and bond),
-        "validator": {
-            "binary": str(home / "bin" / "kaspa-pq-validator") if (home / "bin" / "kaspa-pq-validator").exists() else None,
-            "service": "misaka-local-validator",
-            "serviceState": "active" if validator_pid else "not configured",
-            "keyExists": key_path.exists(),
-            "keyPath": str(key_path),
-            "signedEpochDb": str(home / "validator" / "validator.state"),
-            "validatorId": None,
-            "fundingAddress": funding,
-            "bondOutpoint": bond,
-            "nodeReachable": bool(status["node"]["reachable"]),
-            "nodeSynced": bool(status["node"]["synced"]),
-        },
-    }
-    return value
-
-
-def miner_status_value(current_daa: int | None = None) -> dict:
-    home = desktop_home()
-    state = read_state()
-    miner_pid = read_pid(home / "run" / "misaminer.pid")
-    threads = state.get("MINER_THREADS") or os.environ.get("MISAKA_MINER_THREADS", "1")
-    try:
-        thread_count = int(threads)
-    except ValueError:
-        thread_count = 1
-    return {
-        "service": "misaka-local-miner",
-        "serviceState": "active" if miner_pid else "not configured",
-        "binary": str(home / "bin" / "misaminer") if (home / "bin" / "misaminer").exists() else None,
-        "grpc": "127.0.0.1:26210",
-        "threads": thread_count,
-        "miningAddress": state.get("FUNDING_ADDRESS"),
-        "fundingAddress": state.get("FUNDING_ADDRESS"),
-        "maturity": maturity_value(current_daa),
-    }
-
-
-def diagnostics_value() -> dict:
-    cpus = os.cpu_count() or 1
-    max_threads = max(1, min(16, cpus))
-    recommended = max(1, min(max_threads, max(1, cpus // 4)))
-    return {
-        "ok": True,
-        "diagnostics": {
-            "logicalCpus": cpus,
-            "load1m": os.getloadavg()[0] if hasattr(os, "getloadavg") else None,
-            "memoryAvailableGiB": None,
-            "recommendedThreads": recommended,
-            "maxThreads": max_threads,
-            "options": list(range(1, max_threads + 1)),
-        },
     }
 
 
@@ -385,7 +220,6 @@ def local_ui_html(share_dir: Path, name: str, token: str) -> str:
     replacements = {
         "VPS public IP": "Local address",
         "VPS公開IP": "ローカルアドレス",
-        "VPS CPU": "PC CPU",
         "VPS": "PC",
         "public IP": "local address",
         "Public IP": "Local address",
@@ -410,8 +244,6 @@ def local_ui_html(share_dir: Path, name: str, token: str) -> str:
         "ローカルアドレスを自動検出できませんでした。127.0.0.1を入力してください。": "ローカルアドレスを確認できませんでした。通常は127.0.0.1で進めます。",
         "このIPをnodeのローカルアドレスとして使いますか？": "このローカルアドレスで進めますか？",
         "ローカルアドレスを保存しました。": "ローカルアドレスを確認しました。",
-        "診断対象はPCです。あなたのPC/Macではなく、PCのCPU数と現在負荷からおすすめを出します。": "診断対象はこのPCです。CPU数と現在負荷から、控えめなおすすめスレッド数を出します。",
-        "The diagnosis checks the PC, not your PC/Mac. It recommends threads from PC CPU count and current load.": "The diagnosis checks this local machine and recommends a conservative thread count from CPU count and current load.",
     }
     for old, new in replacements.items():
         text = text.replace(old, new)
@@ -486,12 +318,8 @@ def parse_status(output: str) -> dict:
     p2p_listening = reports_listening("P2P")
     wrpc_listening = reports_listening("wRPC Borsh")
     utxo_enabled = has(r"UTXO index\s+enabled")
-    miner_running = has(r"miner:\s+running")
-    validator_running = has(r"valid\.:\s+running")
     return {
         "kaspadRunning": kaspad_running,
-        "minerRunning": miner_running,
-        "validatorRunning": validator_running,
         "wrpcListening": wrpc_listening,
         "p2pListening": p2p_listening,
         "utxoIndex": utxo_enabled,
@@ -576,27 +404,9 @@ class Handler(BaseHTTPRequestHandler):
             })
         elif parsed.path == "/api/status":
             self.send_json(status_value(self.server.share_dir))  # type: ignore[attr-defined]
-        elif parsed.path == "/api/validator/status":
-            self.send_json(validator_status_value(self.server.share_dir))  # type: ignore[attr-defined]
-        elif parsed.path == "/api/validator/chain-status":
-            value = validator_status_value(self.server.share_dir)  # type: ignore[attr-defined]
-            value["message"] = "Local validator status checked."
-            self.send_json(value)
-        elif parsed.path == "/api/miner/status":
-            self.send_json({"ok": True, "miner": miner_status_value(current_daa_value())})
-        elif parsed.path == "/api/miner/diagnostics":
-            value = diagnostics_value()
-            value["validator"] = validator_status_value(self.server.share_dir)["validator"]  # type: ignore[attr-defined]
-            self.send_json(value)
         elif parsed.path == "/api/logs":
             code, output = run_script(self.server.share_dir, ["node-logs"], timeout=45)  # type: ignore[attr-defined]
             self.send_json({"ok": code == 0, "logs": output})
-        elif parsed.path == "/api/miner/logs":
-            code, output = run_script(self.server.share_dir, ["miner-logs"], timeout=45)  # type: ignore[attr-defined]
-            self.send_json({"ok": code == 0, "logs": output, "miner": miner_status_value(current_daa_value())})
-        elif parsed.path == "/api/validator/logs":
-            code, output = run_script(self.server.share_dir, ["validator-logs"], timeout=45)  # type: ignore[attr-defined]
-            self.send_json({"ok": code == 0, "logs": output, "validator": validator_status_value(self.server.share_dir)["validator"]})  # type: ignore[attr-defined]
         elif parsed.path == "/api/job":
             self.send_json({"ok": True, "job": self.server.job.snapshot()})  # type: ignore[attr-defined]
         else:
@@ -606,7 +416,6 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if not self.require_token():
             return
-        params = parse_qs(parsed.query)
         if parsed.path == "/api/public-ip/confirm":
             self.send_json(public_ip_info(True))
         elif parsed.path == "/api/bootstrap/prepare":
@@ -643,55 +452,6 @@ class Handler(BaseHTTPRequestHandler):
         elif parsed.path == "/api/node/restart":
             code, output = run_script(self.server.share_dir, ["restart-node"], timeout=60)  # type: ignore[attr-defined]
             self.send_json({"ok": code == 0, "message": "Local node restarted.", "logs": output}, 200 if code == 0 else 500)
-        elif parsed.path == "/api/validator/keygen":
-            code, output = run_script(self.server.share_dir, ["keygen"], timeout=60)  # type: ignore[attr-defined]
-            value = validator_status_value(self.server.share_dir)  # type: ignore[attr-defined]
-            value["ok"] = code == 0
-            value["message"] = "Validator key created." if code == 0 else "Validator key generation failed."
-            value["logs"] = output
-            self.send_json(value, 200 if code == 0 else 500)
-        elif parsed.path == "/api/miner/service/apply":
-            threads = params.get("threads", ["1"])[0]
-            if not re.fullmatch(r"[0-9]{1,2}", threads):
-                threads = "1"
-            code, output = run_script(self.server.share_dir, ["miner-start"], timeout=60, extra_env={"MISAKA_MINER_THREADS": threads})  # type: ignore[attr-defined]
-            self.send_json({
-                "ok": code == 0,
-                "message": "Local funding miner started." if code == 0 else "Local funding miner failed.",
-                "logs": output,
-                "miner": miner_status_value(current_daa_value()),
-            }, 200 if code == 0 else 500)
-        elif parsed.path == "/api/miner/service/stop":
-            code, output = run_script(self.server.share_dir, ["miner-stop"], timeout=45)  # type: ignore[attr-defined]
-            self.send_json({"ok": code == 0, "message": "Local miner stopped.", "logs": output, "miner": miner_status_value(current_daa_value())})
-        elif parsed.path == "/api/validator/balance":
-            code, output = run_script(self.server.share_dir, ["balance"], timeout=90)  # type: ignore[attr-defined]
-            value = validator_status_value(self.server.share_dir)  # type: ignore[attr-defined]
-            balance_sompi, balance_msk = parse_balance(output)
-            value["ok"] = code == 0
-            value["logs"] = output
-            value["message"] = "Funding balance checked."
-            value["validator"]["balanceOutput"] = output
-            value["validator"]["balanceSompi"] = balance_sompi
-            value["validator"]["balanceMsk"] = balance_msk
-            self.send_json(value, 200 if code == 0 else 500)
-        elif parsed.path == "/api/validator/bond":
-            amount = params.get("amount", ["10MSK"])[0]
-            code, output = run_script(self.server.share_dir, ["bond", amount], timeout=120)  # type: ignore[attr-defined]
-            value = validator_status_value(self.server.share_dir)  # type: ignore[attr-defined]
-            value["logs"] = output
-            value["message"] = "Bond submitted." if code == 0 else "Bond failed."
-            if code != 0:
-                value["ok"] = False
-                value["error"] = output
-            self.send_json(value, 200 if code == 0 else 500)
-        elif parsed.path == "/api/validator/service/apply":
-            code, output = run_script(self.server.share_dir, ["validator-start"], timeout=60)  # type: ignore[attr-defined]
-            value = validator_status_value(self.server.share_dir)  # type: ignore[attr-defined]
-            value["ok"] = code == 0
-            value["logs"] = output
-            value["message"] = "Validator started." if code == 0 else "Validator failed to start."
-            self.send_json(value, 200 if code == 0 else 500)
         elif parsed.path == "/api/stop-setup":
             self.send_json({"ok": True, "message": "Local setup page is stopping."})
             threading.Thread(target=self.server.shutdown, daemon=True).start()

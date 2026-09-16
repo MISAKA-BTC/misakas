@@ -15,26 +15,18 @@ LOG_DIR="$ROOT_DIR/logs"
 RUN_DIR="$ROOT_DIR/run"
 STATE_DIR="$ROOT_DIR/state"
 HOME_DIR="$ROOT_DIR/home"
-VALIDATOR_DIR="$ROOT_DIR/validator"
 SUPPORT_DIR="$ROOT_DIR/support"
-VALIDATOR_KEY="$VALIDATOR_DIR/validator.seed"
-VALIDATOR_DB="$VALIDATOR_DIR/validator.state"
 STATE_FILE="$STATE_DIR/state.env"
 WEB_STATE_FILE="$STATE_DIR/web.env"
 
 KASPAD_PID="$RUN_DIR/kaspad.pid"
-MINER_PID="$RUN_DIR/misaminer.pid"
-VALIDATOR_PID="$RUN_DIR/validator.pid"
 CAFFEINATE_PID="$RUN_DIR/caffeinate.pid"
 
 KASPAD_LOG="$LOG_DIR/kaspad.log"
-MINER_LOG="$LOG_DIR/miner.log"
-VALIDATOR_LOG="$LOG_DIR/validator.log"
 
 P2P_PORT="${MISAKA_P2P_PORT:-26211}"
 GRPC_PORT="${MISAKA_GRPC_PORT:-26210}"
 WRPC_BORSH_PORT="${MISAKA_WRPC_BORSH_PORT:-27210}"
-MINER_THREADS="${MISAKA_MINER_THREADS:-1}"
 
 say() {
   if [ -n "${NO_COLOR:-}" ]; then
@@ -69,9 +61,8 @@ Usage:
   scripts/misaka-desktop-node.sh <command>
 
 Commands:
-  prepare           Install/check local tools, clone source, build binaries
+  prepare           Install/check local tools, clone source, build kaspad and misaka
   auto-node         prepare + start-node + status
-  auto-validator    Wait sync, create key, start miner, and show next bond steps
   start-node        Start local kaspad in the background
   stop-node         Stop local kaspad
   restart-node      Restart local kaspad
@@ -82,29 +73,22 @@ Commands:
   wait-sync         Poll node doctor until Synced true
   logs              Tail local logs
   node-logs         Tail node logs only
-  miner-logs        Tail funding miner logs only
-  validator-logs    Tail validator logs only
-  keygen            Create validator key and funding address
-  miner-start       Start funding miner to the validator funding address
-  miner-stop        Stop funding miner
-  balance           Check funding address balance
-  bond [amount]     Create stake bond, default 10MSK
-  validator-start   Start validator sidecar
-  validator-stop    Stop validator sidecar
-  stop-all          Stop validator, miner, and node
+  stop-all          Stop the node
   clean             Remove local desktop runtime directory
+
+This kit runs a node only. The DNS-finality validator flow is retired (PALW does
+not use validators); PALW mining is set up with: misaka mining setup
 
 Environment:
   MISAKA_NETWORK=testnet-10
   MISAKA_DESKTOP_HOME=$HOME/.misaka-desktop-node
   MISAKA_REPO_URL=https://github.com/MISAKA-BTC/misakas.git
-  MISAKA_MINER_THREADS=1
   MISAKA_KEEP_AWAKE=1       # macOS only: run caffeinate while kaspad is running
 EOF
 }
 
 mkdirs() {
-  mkdir -p "$BIN_DIR" "$TOOL_DIR" "$APPDIR" "$LOG_DIR" "$RUN_DIR" "$STATE_DIR" "$HOME_DIR" "$VALIDATOR_DIR"
+  mkdir -p "$BIN_DIR" "$TOOL_DIR" "$APPDIR" "$LOG_DIR" "$RUN_DIR" "$STATE_DIR" "$HOME_DIR"
 }
 
 is_macos() {
@@ -362,13 +346,6 @@ net_args() {
   esac
 }
 
-load_state() {
-  if [ -f "$STATE_FILE" ]; then
-    # shellcheck disable=SC1090
-    . "$STATE_FILE"
-  fi
-}
-
 save_state_value() {
   mkdirs
   local key="$1"
@@ -403,12 +380,10 @@ build_bins() {
     . "$HOME/.cargo/env"
   fi
   cargo build --release -p kaspad --features evm
-  cargo build --release -p misaka-cli -p kaspa-pq-validator -p misaminer
+  cargo build --release -p misaka-cli
   cp target/release/kaspad "$BIN_DIR/kaspad"
   cp target/release/misaka "$BIN_DIR/misaka"
-  cp target/release/kaspa-pq-validator "$BIN_DIR/kaspa-pq-validator"
-  cp target/release/misaminer "$BIN_DIR/misaminer"
-  chmod +x "$BIN_DIR/kaspad" "$BIN_DIR/misaka" "$BIN_DIR/kaspa-pq-validator" "$BIN_DIR/misaminer"
+  chmod +x "$BIN_DIR/kaspad" "$BIN_DIR/misaka"
   "$BIN_DIR/kaspad" --version || true
   "$BIN_DIR/misaka" --version || true
 }
@@ -528,30 +503,11 @@ status() {
   printf 'home:    %s\n' "$ROOT_DIR"
   printf 'network: %s\n' "$NETWORK"
   printf 'kaspad:  %s\n' "$(pid_alive "$KASPAD_PID" && printf 'running pid=%s' "$(cat "$KASPAD_PID")" || printf 'stopped')"
-  printf 'miner:   %s\n' "$(pid_alive "$MINER_PID" && printf 'running pid=%s' "$(cat "$MINER_PID")" || printf 'stopped')"
-  printf 'valid.:  %s\n' "$(pid_alive "$VALIDATOR_PID" && printf 'running pid=%s' "$(cat "$VALIDATOR_PID")" || printf 'stopped')"
   if is_macos; then
     printf 'awake:   %s\n' "$(pid_alive "$CAFFEINATE_PID" && printf 'caffeinate pid=%s' "$(cat "$CAFFEINATE_PID")" || printf 'off')"
   fi
   printf '\n'
   node_doctor
-}
-
-validator_status() {
-  load_state
-  if [ ! -x "$BIN_DIR/kaspa-pq-validator" ]; then
-    warn "kaspa-pq-validator binary missing"
-    return 0
-  fi
-  if [ -z "${BOND_OUTPOINT:-}" ]; then
-    printf 'BOND_OUTPOINT missing. Run bond first.\n'
-    return 0
-  fi
-  ensure_valid_bond_outpoint
-  "$BIN_DIR/kaspa-pq-validator" status \
-    --node-wrpc-borsh "127.0.0.1:$WRPC_BORSH_PORT" \
-    --network "$NETWORK" \
-    --stake-bond "$BOND_OUTPOINT" || true
 }
 
 print_system_info() {
@@ -607,7 +563,7 @@ print_resources() {
     df -h "$ROOT_DIR" "$APPDIR" 2>/dev/null | sed 's/^/  /' || true
   fi
   if command -v du >/dev/null 2>&1; then
-    du -sh "$ROOT_DIR" "$APPDIR" "$LOG_DIR" "$VALIDATOR_DIR" 2>/dev/null | sed 's/^/  /' || true
+    du -sh "$ROOT_DIR" "$APPDIR" "$LOG_DIR" 2>/dev/null | sed 's/^/  /' || true
   fi
   if command -v free >/dev/null 2>&1; then
     free -h 2>/dev/null | sed 's/^/  /' || true
@@ -628,22 +584,13 @@ print_next_action() {
     printf 'Run: scripts/misaka-desktop-node.sh start-node\n'
   elif ! printf '%s\n' "$node_doctor_output" | grep -q 'Synced[[:space:]]*true'; then
     printf 'Run: scripts/misaka-desktop-node.sh wait-sync\n'
-  elif [ ! -f "$VALIDATOR_KEY" ]; then
-    printf 'Run: scripts/misaka-desktop-node.sh keygen\n'
-  elif ! pid_alive "$MINER_PID" && [ -z "${BOND_OUTPOINT:-}" ]; then
-    printf 'Run: scripts/misaka-desktop-node.sh miner-start\n'
-  elif [ -z "${BOND_OUTPOINT:-}" ]; then
-    printf 'Run: scripts/misaka-desktop-node.sh balance, then bond 10MSK after mature funding is available\n'
-  elif ! pid_alive "$VALIDATOR_PID"; then
-    printf 'Run: scripts/misaka-desktop-node.sh validator-start\n'
   else
-    printf 'Validator appears configured. Check validator status/logs for attestation progress.\n'
+    printf 'Node is synced. Keep it running. PALW mining is set up separately with: misaka mining setup\n'
   fi
 }
 
 doctor() {
   mkdirs
-  load_state
 
   say "desktop node doctor"
   print_system_info
@@ -654,7 +601,6 @@ doctor() {
   print_key_value "bin_dir" "$BIN_DIR"
   print_key_value "appdir" "$APPDIR"
   print_key_value "log_dir" "$LOG_DIR"
-  print_key_value "validator_dir" "$VALIDATOR_DIR"
   print_key_value "network" "$NETWORK"
 
   say "share layout"
@@ -675,13 +621,9 @@ doctor() {
   say "binaries"
   print_binary_check kaspad
   print_binary_check misaka
-  print_binary_check kaspa-pq-validator
-  print_binary_check misaminer
 
   say "processes"
   print_pid_check kaspad "$KASPAD_PID"
-  print_pid_check miner "$MINER_PID"
-  print_pid_check validator "$VALIDATOR_PID"
   if is_macos; then
     print_pid_check caffeinate "$CAFFEINATE_PID"
   fi
@@ -692,12 +634,7 @@ doctor() {
   print_port_check "wRPC Borsh" "$WRPC_BORSH_PORT"
 
   say "state"
-  print_key_value "validator_key" "$([ -f "$VALIDATOR_KEY" ] && printf 'exists' || printf 'missing')"
-  print_key_value "validator_db" "$([ -e "$VALIDATOR_DB" ] && printf 'exists' || printf 'missing')"
   print_key_value "web_state" "$([ -f "$WEB_STATE_FILE" ] && printf 'exists' || printf 'missing')"
-  print_key_value "funding_address" "${FUNDING_ADDRESS:-missing}"
-  print_key_value "bond_outpoint" "${BOND_OUTPOINT:-missing}"
-  print_key_value "miner_threads" "${MINER_THREADS:-$MISAKA_MINER_THREADS}"
 
   say "resources"
   print_resources
@@ -711,16 +648,9 @@ doctor() {
     warn "misaka binary missing"
   fi
 
-  say "validator status"
-  validator_status 2>&1 | redact_stream || true
-
   say "recent logs"
   printf '\n[kaspad]\n'
   tail -n 30 "$KASPAD_LOG" 2>/dev/null | redact_stream || true
-  printf '\n[miner]\n'
-  tail -n 20 "$MINER_LOG" 2>/dev/null | redact_stream || true
-  printf '\n[validator]\n'
-  tail -n 30 "$VALIDATOR_LOG" 2>/dev/null | redact_stream || true
 
   print_next_action "$node_out"
 }
@@ -740,20 +670,18 @@ collect_support_log() {
 
   NO_COLOR=1 doctor 2>&1 | redact_stream > "$bundle_dir/doctor.txt"
   redact_tail_to "$KASPAD_LOG" "$bundle_dir/kaspad.tail.log" 500
-  redact_tail_to "$MINER_LOG" "$bundle_dir/miner.tail.log" 300
-  redact_tail_to "$VALIDATOR_LOG" "$bundle_dir/validator.tail.log" 500
   redact_file_to "$STATE_FILE" "$bundle_dir/state.env.redacted"
   redact_file_to "$WEB_STATE_FILE" "$bundle_dir/web.env.redacted"
 
   {
     say "runtime tree"
-    printf 'The validator seed/key file is intentionally not copied.\n'
-    for dir in "$ROOT_DIR" "$BIN_DIR" "$RUN_DIR" "$STATE_DIR" "$LOG_DIR" "$VALIDATOR_DIR" "$SUPPORT_DIR" "$SHARE_DIR"; do
+    printf 'Key and seed files are intentionally not copied.\n'
+    for dir in "$ROOT_DIR" "$BIN_DIR" "$RUN_DIR" "$STATE_DIR" "$LOG_DIR" "$SUPPORT_DIR" "$SHARE_DIR"; do
       printf '\n[%s]\n' "$dir"
       ls -la "$dir" 2>/dev/null || true
     done
     say "pid files"
-    for f in "$KASPAD_PID" "$MINER_PID" "$VALIDATOR_PID" "$CAFFEINATE_PID"; do
+    for f in "$KASPAD_PID" "$CAFFEINATE_PID"; do
       if [ -f "$f" ]; then
         printf '%s: %s\n' "$f" "$(cat "$f" 2>/dev/null || true)"
       else
@@ -762,8 +690,6 @@ collect_support_log() {
     done
     say "process snapshot"
     ps -ww -o pid,ppid,stat,etime,command -p "$(cat "$KASPAD_PID" 2>/dev/null || printf 0)" 2>/dev/null || true
-    ps -ww -o pid,ppid,stat,etime,command -p "$(cat "$MINER_PID" 2>/dev/null || printf 0)" 2>/dev/null || true
-    ps -ww -o pid,ppid,stat,etime,command -p "$(cat "$VALIDATOR_PID" 2>/dev/null || printf 0)" 2>/dev/null || true
   } 2>&1 | redact_stream > "$bundle_dir/runtime.txt"
   chmod 600 "$bundle_dir"/* 2>/dev/null || true
 
@@ -794,7 +720,7 @@ collect_support_log() {
 Share this support artifact with the project maintainer:
   ${support_artifact}
 
-It should not contain validator.seed or private key material. The command also
+It should not contain seed or private key material. The command also
 redacts common token/seed/key patterns from logs before writing the bundle.
 EOF
 }
@@ -812,215 +738,13 @@ wait_sync() {
   done
 }
 
-auto_validator() {
-  say "auto validator preparation"
-  [ -x "$BIN_DIR/misaka" ] || prepare
-  if ! pid_alive "$KASPAD_PID"; then
-    start_node
-  fi
-  wait_sync
-  keygen
-  miner_start
-  printf '\n'
-  say "funding status"
-  balance || true
-  cat <<EOF
-
-Next:
-  1. Keep the miner running until coinbase maturity passes.
-  2. Re-check balance:
-       scripts/misaka-desktop-node.sh balance
-  3. When mature funding is available, create the bond:
-       scripts/misaka-desktop-node.sh bond 10MSK
-  4. Start validator:
-       scripts/misaka-desktop-node.sh validator-start
-
-Note:
-  Visible balance is not always bondable. Mined rewards need coinbase maturity first.
-EOF
-}
-
-keygen() {
-  mkdirs
-  [ -x "$BIN_DIR/misaka" ] || die "misaka is missing. Run prepare first."
-  if [ ! -f "$VALIDATOR_KEY" ]; then
-    say "create validator key"
-    env HOME="$HOME_DIR" "$BIN_DIR/misaka" --network "$NETWORK" key gen --out "$VALIDATOR_KEY"
-    chmod 600 "$VALIDATOR_KEY"
-  else
-    say "validator key already exists"
-  fi
-  addr="$(env HOME="$HOME_DIR" "$BIN_DIR/misaka" --network "$NETWORK" key address --key-file "$VALIDATOR_KEY")"
-  save_state_value FUNDING_ADDRESS "$addr"
-  printf 'funding_address: %s\n' "$addr"
-}
-
-funding_address() {
-  load_state
-  if [ -n "${FUNDING_ADDRESS:-}" ]; then
-    printf '%s\n' "$FUNDING_ADDRESS"
-    return
-  fi
-  [ -f "$VALIDATOR_KEY" ] || die "validator key missing. Run keygen first."
-  env HOME="$HOME_DIR" "$BIN_DIR/misaka" --network "$NETWORK" key address --key-file "$VALIDATOR_KEY"
-}
-
-extract_virtual_daa() {
-  awk '/Virtual DAA score/ {for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+$/) {print $i; exit}}'
-}
-
-miner_start() {
-  mkdirs
-  [ -x "$BIN_DIR/misaminer" ] || die "misaminer is missing. Run prepare first."
-  if pid_alive "$MINER_PID"; then
-    say "miner already running pid=$(cat "$MINER_PID")"
-    return
-  fi
-  addr="$(funding_address)"
-  save_state_value MINER_THREADS "$MINER_THREADS"
-  miner_start_daa="$(node_doctor 2>/dev/null | extract_virtual_daa || true)"
-  if printf '%s' "$miner_start_daa" | grep -Eq '^[0-9]+$'; then
-    save_state_value MINER_START_DAA "$miner_start_daa"
-  fi
-  say "start funding miner"
-  (
-    cd "$ROOT_DIR"
-    env HOME="$HOME_DIR" "$BIN_DIR/misaminer" \
-      --pool "127.0.0.1:$GRPC_PORT" \
-      --network-id "$NETWORK" \
-      --wallet "$addr" \
-      --worker desktop-funding \
-      --threads "$MINER_THREADS" \
-      --blocks 0 \
-      --min-block-interval-ms 1000 > "$MINER_LOG" 2>&1 &
-    echo $! > "$MINER_PID"
-  )
-  sleep 2
-  if pid_alive "$MINER_PID"; then
-    printf 'miner started pid=%s\n' "$(cat "$MINER_PID")"
-    printf 'funding_address: %s\n' "$addr"
-    printf 'log: %s\n' "$MINER_LOG"
-  else
-    tail -n 80 "$MINER_LOG" || true
-    die "miner failed to start"
-  fi
-}
-
-balance() {
-  [ -x "$BIN_DIR/kaspa-pq-validator" ] || die "kaspa-pq-validator is missing. Run prepare first."
-  addr="$(funding_address)"
-  "$BIN_DIR/kaspa-pq-validator" balance \
-    --node-wrpc-borsh "127.0.0.1:$WRPC_BORSH_PORT" \
-    --network "$NETWORK" \
-    --address "$addr"
-}
-
-normalize_bond_outpoint() {
-  local value="${1:-}"
-  value="$(printf '%s' "$value" | tr -d '[:space:]')"
-  if printf '%s' "$value" | grep -Eq '^([0-9a-fA-F]{64}|[0-9a-fA-F]{128}):[0-9]+$'; then
-    printf '%s\n' "$value"
-    return
-  fi
-  if printf '%s' "$value" | grep -Eq '^([0-9a-fA-F]{64}|[0-9a-fA-F]{128})$'; then
-    printf '%s:0\n' "$value"
-    return
-  fi
-  return 1
-}
-
-extract_bond_outpoint() {
-  local output="$1"
-  local raw_outpoint
-  raw_outpoint="$(printf '%s\n' "$output" | awk '/^[ \t]*bond_outpoint[ \t]*:/ {line=$0; sub(/^[ \t]*bond_outpoint[ \t]*:[ \t]*/, "", line); print line; exit}')"
-  normalize_bond_outpoint "$raw_outpoint"
-}
-
-ensure_valid_bond_outpoint() {
-  local normalized
-  if ! normalized="$(normalize_bond_outpoint "${BOND_OUTPOINT:-}")"; then
-    die "invalid BOND_OUTPOINT. Expected txid:index; create the bond again if the saved value is not a transaction ID."
-  fi
-  if [ "$normalized" != "$BOND_OUTPOINT" ]; then
-    warn "repair saved BOND_OUTPOINT by adding the StakeBond output index :0"
-    BOND_OUTPOINT="$normalized"
-    save_state_value BOND_OUTPOINT "$BOND_OUTPOINT"
-  fi
-}
-
-bond() {
-  [ -x "$BIN_DIR/kaspa-pq-validator" ] || die "kaspa-pq-validator is missing. Run prepare first."
-  amount="${1:-10MSK}"
-  say "create stake bond amount=$amount"
-  set +e
-  output="$("$BIN_DIR/kaspa-pq-validator" bond \
-    --node-wrpc-borsh "127.0.0.1:$WRPC_BORSH_PORT" \
-    --validator-key "$VALIDATOR_KEY" \
-    --amount "$amount" \
-    --network "$NETWORK" 2>&1)"
-  code=$?
-  set -e
-  printf '%s\n' "$output"
-  if [ "$code" -ne 0 ]; then
-    die "bond failed. If it says not enough MATURE funding, keep mining and wait for coinbase maturity."
-  fi
-  if ! outpoint="$(extract_bond_outpoint "$output")"; then
-    die "valid bond_outpoint not found in output"
-  fi
-  save_state_value BOND_OUTPOINT "$outpoint"
-  printf 'bond_outpoint: %s\n' "$outpoint"
-}
-
-validator_start() {
-  mkdirs
-  [ -x "$BIN_DIR/kaspa-pq-validator" ] || die "kaspa-pq-validator is missing. Run prepare first."
-  load_state
-  [ -n "${BOND_OUTPOINT:-}" ] || die "BOND_OUTPOINT missing. Run bond first."
-  ensure_valid_bond_outpoint
-  if pid_alive "$VALIDATOR_PID"; then
-    say "validator already running pid=$(cat "$VALIDATOR_PID")"
-    return
-  fi
-  say "start validator sidecar"
-  (
-    cd "$ROOT_DIR"
-    env HOME="$HOME_DIR" "$BIN_DIR/kaspa-pq-validator" run \
-      --node-wrpc-borsh "127.0.0.1:$WRPC_BORSH_PORT" \
-      --validator-key "$VALIDATOR_KEY" \
-      --stake-bond "$BOND_OUTPOINT" \
-      --signed-epoch-db "$VALIDATOR_DB" \
-      --network "$NETWORK" > "$VALIDATOR_LOG" 2>&1 &
-    echo $! > "$VALIDATOR_PID"
-  )
-  sleep 2
-  if pid_alive "$VALIDATOR_PID"; then
-    printf 'validator started pid=%s\n' "$(cat "$VALIDATOR_PID")"
-    printf 'log: %s\n' "$VALIDATOR_LOG"
-  else
-    tail -n 80 "$VALIDATOR_LOG" || true
-    die "validator failed to start"
-  fi
-}
-
 logs() {
   say "kaspad log"
   tail -n 80 "$KASPAD_LOG" 2>/dev/null || true
-  say "miner log"
-  tail -n 60 "$MINER_LOG" 2>/dev/null || true
-  say "validator log"
-  tail -n 80 "$VALIDATOR_LOG" 2>/dev/null || true
 }
 
 node_logs() {
   tail -n 120 "$KASPAD_LOG" 2>/dev/null || true
-}
-
-miner_logs() {
-  tail -n 160 "$MINER_LOG" 2>/dev/null || true
-}
-
-validator_logs() {
-  tail -n 160 "$VALIDATOR_LOG" 2>/dev/null || true
 }
 
 clean() {
@@ -1030,8 +754,6 @@ clean() {
 }
 
 stop_all() {
-  stop_pid "validator" "$VALIDATOR_PID"
-  stop_pid "miner" "$MINER_PID"
   stop_pid "caffeinate" "$CAFFEINATE_PID"
   stop_pid "kaspad" "$KASPAD_PID"
 }
@@ -1043,7 +765,6 @@ case "$cmd" in
   help|-h|--help) usage ;;
   prepare) prepare ;;
   auto-node) prepare; start_node; status ;;
-  auto-validator) auto_validator ;;
   start-node) start_node ;;
   stop-node) stop_pid "caffeinate" "$CAFFEINATE_PID"; stop_pid "kaspad" "$KASPAD_PID" ;;
   restart-node) stop_pid "caffeinate" "$CAFFEINATE_PID"; stop_pid "kaspad" "$KASPAD_PID"; start_node ;;
@@ -1053,15 +774,6 @@ case "$cmd" in
   wait-sync) wait_sync ;;
   logs) logs ;;
   node-logs) node_logs ;;
-  miner-logs) miner_logs ;;
-  validator-logs) validator_logs ;;
-  keygen) keygen ;;
-  miner-start) miner_start ;;
-  miner-stop) stop_pid "miner" "$MINER_PID" ;;
-  balance) balance ;;
-  bond) bond "${1:-10MSK}" ;;
-  validator-start) validator_start ;;
-  validator-stop) stop_pid "validator" "$VALIDATOR_PID" ;;
   stop-all) stop_all ;;
   clean) clean ;;
   *) usage; die "unknown command: $cmd" ;;

@@ -16,7 +16,7 @@ Finderでこの順に実行します。
 初回はbuildに時間がかかります。
 
 Web UIはVPS版と同じ画面構成に寄せています。
-setup画面からnode参加を進め、Dashboardで同期、P2P、validator、miner状態を確認できます。
+setup画面からnode参加を進め、Dashboardで同期とP2Pの状態を確認できます。
 
 ブラウザタブを閉じても、`start-local-web-ui.command` をもう一度実行すれば、起動中のWeb UIを検出して同じURLを開き直します。
 Terminal windowを閉じるとWeb UI自体は止まりますが、起動済みnodeは `stop-all.command` まで動き続けます。
@@ -42,33 +42,11 @@ HomebrewがないMacでも、buildに必要な `protoc` はscriptがローカル
 brew install pkg-config openssl@3 protobuf
 ```
 
-## validatorまで試す
+## validator参加について
 
-nodeが `Synced true` になったあとに実行します。
+以前あった `prepare-validator.command`（validator key作成、funding miner、Bond作成）は、DNS-finality validator参加フローの廃止に合わせて削除しました。PALWはvalidatorを使いません。
 
-```text
-prepare-validator.command
-```
-
-これは以下を行います。
-
-```text
-node同期待ち
-validator key作成
-funding address表示
-funding miner開始
-Bond用残高確認
-```
-
-Bondは成熟済みUTXOが必要なので、報酬が見えてもすぐ使えない場合があります。
-
-成熟後にTerminalで実行します。
-
-```bash
-cd contrib/local-desktop-join
-scripts/misaka-desktop-node.sh bond 10MSK
-scripts/misaka-desktop-node.sh validator-start
-```
+PALWのマイニングは、このフォルダではなく `misaka` CLI の `misaka mining setup` で設定します。
 
 ## 止める
 
@@ -90,6 +68,6 @@ MISAKA_KEEP_AWAKE=0 scripts/misaka-desktop-node.sh start-node
 
 ## 注意
 
-- Macを閉じる、再起動する、スリープするとnode/miner/validatorは止まります。
+- Macを閉じる、再起動する、スリープするとnodeは止まります。
 - 自宅回線では外部から `26211/tcp` に接続されにくいです。
 - 同期はできますが、公開peerとしてはVPSより弱いです。
