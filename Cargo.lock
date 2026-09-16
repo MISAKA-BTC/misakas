@@ -5265,7 +5265,6 @@ dependencies = [
  "kaspa-perf-monitor",
  "kaspa-pow",
  "kaspa-pq-validator-core",
- "kaspa-rpc-core",
  "kaspa-rpc-service",
  "kaspa-txscript",
  "kaspa-utils",

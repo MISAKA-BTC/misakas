@@ -44,7 +44,6 @@ kaspa-perf-monitor.workspace = true
 kaspa-pq-validator-core.workspace = true
 misaka-palw-base0.workspace = true
 misaka-palw-sdk.workspace = true
-kaspa-rpc-core.workspace = true
 kaspa-rpc-service.workspace = true
 kaspa-txscript.workspace = true
 kaspa-utils.workspace = true

@@ -33,12 +33,10 @@ pub enum NodeProfile {
     /// No constraints, no resource overrides.
     #[default]
     Full,
-    /// Permanent sync-only source: pruned consensus + P2P, no archive/index/validator/RPC.
+    /// Permanent sync-only source: pruned consensus + P2P, no archive/index/RPC.
     BootstrapPruned,
     /// One-shot fresh-DB catch-up from a `--connect` seed, then promote to bootstrap.
     RecoverySync,
-    /// Staking/attestation node label; does not force `--enable-validator`.
-    Validator,
     /// Archival node label; does not force `--archival`.
     Archive,
     /// Public RPC node label; does not force any RPC listener.
@@ -51,20 +49,18 @@ impl NodeProfile {
             NodeProfile::Full => "full",
             NodeProfile::BootstrapPruned => "bootstrap-pruned",
             NodeProfile::RecoverySync => "recovery-sync",
-            NodeProfile::Validator => "validator",
             NodeProfile::Archive => "archive",
             NodeProfile::PublicRpc => "public-rpc",
         }
     }
 
-    pub const VARIANTS: [&'static str; 6] = ["full", "bootstrap-pruned", "recovery-sync", "validator", "archive", "public-rpc"];
+    pub const VARIANTS: [&'static str; 5] = ["full", "bootstrap-pruned", "recovery-sync", "archive", "public-rpc"];
 
     fn from_cli(s: &str) -> Option<Self> {
         Some(match s {
             "full" => NodeProfile::Full,
             "bootstrap-pruned" => NodeProfile::BootstrapPruned,
             "recovery-sync" => NodeProfile::RecoverySync,
-            "validator" => NodeProfile::Validator,
             "archive" => NodeProfile::Archive,
             "public-rpc" => NodeProfile::PublicRpc,
             _ => return None,
@@ -202,9 +198,6 @@ pub struct Args {
     /// is present for: remove it from the unit after the node is back.
     pub clear_quarantine: bool,
 
-    // kaspa-pq Phase 11 (ADR-0010): in-process DNS-overlay validator service. Default off.
-    pub enable_validator: bool,
-    pub validator_key: Option<String>,
     /// ADR-0042: run the in-process PALW-RC block producer. Only a `ConsensusV2` network has
     /// anything for it to do, and it says so and stops otherwise.
     pub palw_produce: bool,
@@ -300,25 +293,12 @@ pub struct Args {
     /// kaspa-pq EVM Lane v0.4 (§8.2/§16): the miner's EVM coinbase (20-byte hex,
     /// optional 0x) — claims the priority fees of this node's own payload txs.
     pub evm_fee_recipient: Option<String>,
-    pub stake_bond: Option<String>,
-    pub validator_mode: Option<String>,
 
-    // MISAKA Verified LLM Token-Weighted BFT: the compute role. Default off, and additionally
-    // inert on any network whose model cost table is empty (which is every shipped preset).
-    pub enable_compute: bool,
-    pub compute_worker: Option<String>,
     /// PALW v2 (Land stage): path to a `palw-agent` Unix socket to monitor. Observation only —
     /// health-probed and logged, feeding the capability handle nothing consensus-visible
-    /// consumes yet. The VLT compute role (v1) is untouched by it. Served on Unix hosts only
-    /// (see `crate::palw_agent`); elsewhere it warns and the capability stays withdrawn.
+    /// consumes yet. Served on Unix hosts only (see `crate::palw_agent`); elsewhere it warns and
+    /// the capability stays withdrawn.
     pub compute_endpoint: Option<String>,
-    pub compute_work_dir: Option<String>,
-    pub compute_prompt: Option<String>,
-    pub compute_max_tokens: Option<u32>,
-    pub compute_timeout_secs: Option<u64>,
-    pub compute_auto_challenge: bool,
-    /// MISAKA devnet fixture: originate at most this many jobs, ever (persisted across restarts).
-    pub compute_fixture_job_limit: Option<u32>,
 
     // MISAKA VLT activation, for PRIVATE devnets only. These are consensus fences: on a public
     // network they belong to a release, not to whoever started the node, so `apply_to_config`
@@ -358,11 +338,6 @@ pub struct Args {
     pub tkn_devnet_shadow_span: u64,
     /// Flat per-epoch emission budget in whole TOK (atomic = ×10^8). Devnet-only calibration.
     pub tkn_devnet_epoch_budget_tok: u64,
-    /// Fixture token ops, submitted by the validator service once the chain reaches each op's
-    /// DAA: `to_hex128:amount_atomic:nonce:at_daa` per entry.
-    pub tkn_fixture_transfers: Vec<String>,
-    /// `amount_atomic:nonce:at_daa` per entry.
-    pub tkn_fixture_burns: Vec<String>,
 
     pub testnet: bool,
     #[serde(rename = "netsuffix")]
@@ -400,7 +375,7 @@ pub struct Args {
     pub rocksdb_cache_size: Option<usize>,
 
     /// Operational role profile for constrained VPS deployments. Sync-only profiles apply
-    /// 8GB resource defaults and reject archive/index/validator/EVM-RPC roles.
+    /// 8GB resource defaults and reject archive/index/EVM-RPC roles.
     pub node_profile: NodeProfile,
     /// Convenience flag that applies the same 8GB resource defaults for unspecified knobs,
     /// regardless of the chosen node profile.
@@ -443,8 +418,6 @@ impl Default for Args {
             trusted_checkpoint: None,
             enforce_chain_participation: false,
             clear_quarantine: false,
-            enable_validator: false,
-            validator_key: None,
             palw_produce: false,
             palw_heartbeat_miner_address: None,
             palw_round_lane: false,
@@ -474,17 +447,7 @@ impl Default for Args {
             palw_panel: false,
             palw_fee_outpoint: None,
             evm_fee_recipient: None,
-            stake_bond: None,
-            validator_mode: None,
-            enable_compute: false,
-            compute_worker: None,
             compute_endpoint: None,
-            compute_work_dir: None,
-            compute_prompt: None,
-            compute_max_tokens: None,
-            compute_timeout_secs: None,
-            compute_auto_challenge: false,
-            compute_fixture_job_limit: None,
             vlt_devnet_shadow_daa: None,
             vlt_devnet_credit_window_epochs: 8,
             vlt_shadow_only: false,
@@ -497,8 +460,6 @@ impl Default for Args {
             tkn_devnet_active_daa: None,
             tkn_devnet_shadow_span: 300,
             tkn_devnet_epoch_budget_tok: 1_000,
-            tkn_fixture_transfers: Vec::new(),
-            tkn_fixture_burns: Vec::new(),
             testnet: false,
             testnet_suffix: 10,
             devnet: false,
@@ -762,8 +723,6 @@ impl Args {
                 dns.tkn.settlement_delay_epochs,
             );
             config.params.dns_params = Some(dns);
-        } else if !self.tkn_fixture_transfers.is_empty() || !self.tkn_fixture_burns.is_empty() {
-            panic!("--tkn-fixture-transfer/--tkn-fixture-burn only mean something together with --tkn-devnet");
         }
 
         // A malformed checkpoint is fatal on purpose. Continuing without one would leave the node
@@ -914,7 +873,7 @@ pub fn cli() -> Command {
                 .require_equals(true)
                 .default_missing_value("default") // TODO: Find a way to use defaults.rpclisten_borsh
                 .value_parser(clap::value_parser!(WrpcNetAddress))
-                .help("Interface:port to listen for node wRPC Borsh connections — validator / wallet / operator (default port: 27110, testnet: 27210). NOT gRPC 26210, NOT wRPC JSON 28210, NOT EVM 8545."),
+                .help("Interface:port to listen for node wRPC Borsh connections — wallet / operator (default port: 27110, testnet: 27210). NOT gRPC 26210, NOT wRPC JSON 28210, NOT EVM 8545."),
 
         )
         .arg(
@@ -1019,7 +978,6 @@ pub fn cli() -> Command {
             arg!(--"clear-quarantine" "kaspa-pq (ADR-0025): operator override — clear a persisted Quarantined chain-participation state at startup and resume normal participation. Clears quarantine ONLY (a pending candidate review keeps its deadline). Fires on EVERY boot it is present for; remove it from the service unit once the node is back.")
                 .env("KASPAD_CLEAR_QUARANTINE"),
         )
-        .arg(arg!(--"enable-validator" "kaspa-pq: run the in-process DNS-overlay validator service (ADR-0010). Default off.").env("KASPAD_ENABLE_VALIDATOR"))
         .arg(
             arg!(--"palw-produce" "PALW ADR-0042: run the in-process PALW-RC block producer. Needs --palw-producer-key and --palw-producer-bond; --palw-producer-pay-address defaults to the key's own address. Only a ConsensusV2 network can use it. Default off.")
                 .env("KASPAD_PALW_PRODUCE"),
@@ -1321,46 +1279,6 @@ pub fn cli() -> Command {
                 .help("kaspa-pq EVM Lane: the miner's EVM coinbase address (20-byte hex, optional 0x) — receives the priority fees of this node's own EVM payload txs."),
         )
         .arg(
-            Arg::new("validator-key")
-                .long("validator-key")
-                .env("KASPAD_VALIDATOR_KEY")
-                .require_equals(true)
-                .value_parser(clap::value_parser!(String))
-                .help("kaspa-pq: path to the validator ML-DSA-87 signing seed file (64 hex chars = 32 bytes)."),
-        )
-        .arg(
-            Arg::new("stake-bond")
-                .long("stake-bond")
-                .env("KASPAD_STAKE_BOND")
-                .require_equals(true)
-                .value_parser(clap::value_parser!(String))
-                .help("kaspa-pq: stake-bond outpoint backing this validator's attestations, as 'txid:index'."),
-        )
-        .arg(
-            Arg::new("validator-mode")
-                .long("validator-mode")
-                .env("KASPAD_VALIDATOR_MODE")
-                .require_equals(true)
-                .value_parser(clap::value_parser!(String))
-                .help("kaspa-pq: validator operating mode {active, standby, observer} (default: observer)."),
-        )
-        .arg(
-            arg!(--"enable-compute" "MISAKA VLT: run the compute role (execute + audit LLM jobs) alongside the validator service. \
-                 Requires --enable-validator and --compute-worker; inert on networks whose model cost table is empty. Default off.")
-                .env("KASPAD_ENABLE_COMPUTE"),
-        )
-        .arg(
-            Arg::new("compute-worker")
-                .long("compute-worker")
-                .env("KASPAD_COMPUTE_WORKER")
-                .require_equals(true)
-                .value_parser(clap::value_parser!(String))
-                .help(
-                    "MISAKA VLT: path to the pinned palw-worker binary. Without it the compute role stays disabled — an \
-                     unregistered runtime mints nothing and would refute honest peers if it were drawn as a verifier.",
-                ),
-        )
-        .arg(
             Arg::new("compute-endpoint")
                 .long("compute-endpoint")
                 .env("KASPAD_COMPUTE_ENDPOINT")
@@ -1368,68 +1286,10 @@ pub fn cli() -> Command {
                 .value_parser(clap::value_parser!(String))
                 .help(
                     "MISAKA PALW v2: path to a palw-agent Unix socket to health-monitor (Land stage: observation and \
-                     capability state only; grants no reward, no work, no fork-choice weight, and does not replace \
-                     --compute-worker). The node runs validator-only regardless of the agent's state. Unix hosts \
-                     only — the agent protocol is AF_UNIX; on Windows the flag is accepted, logs one warning and \
-                     leaves compute capability withdrawn.",
+                     capability state only; grants no reward, no work, no fork-choice weight). The node runs the same \
+                     regardless of the agent's state. Unix hosts only — the agent protocol is AF_UNIX; on Windows the \
+                     flag is accepted, logs one warning and leaves compute capability withdrawn.",
                 ),
-        )
-        .arg(
-            Arg::new("compute-work-dir")
-                .long("compute-work-dir")
-                .env("KASPAD_COMPUTE_WORK_DIR")
-                .require_equals(true)
-                .value_parser(clap::value_parser!(String))
-                .help("MISAKA VLT: scratch directory the compute worker runs in (default: the system temp directory)."),
-        )
-        .arg(
-            Arg::new("compute-prompt")
-                .long("compute-prompt")
-                .env("KASPAD_COMPUTE_PROMPT")
-                .require_equals(true)
-                .value_parser(clap::value_parser!(String))
-                .help(
-                    "MISAKA VLT: file holding this node's executor job input. Omit to run verifier-only, auditing peers' jobs \
-                     without originating any.",
-                ),
-        )
-        .arg(
-            Arg::new("compute-max-tokens")
-                .long("compute-max-tokens")
-                .env("KASPAD_COMPUTE_MAX_TOKENS")
-                .require_equals(true)
-                .value_parser(clap::value_parser!(u32))
-                .help("MISAKA VLT: token ceiling for this node's own jobs, clamped down to the registered profile's limit."),
-        )
-        .arg(
-            Arg::new("compute-timeout-secs")
-                .long("compute-timeout-secs")
-                .env("KASPAD_COMPUTE_TIMEOUT_SECS")
-                .require_equals(true)
-                .value_parser(clap::value_parser!(u64))
-                .help("MISAKA VLT: wall-clock ceiling for one compute job, in seconds (default: 900)."),
-        )
-        .arg(
-            arg!(--"compute-auto-challenge" "MISAKA VLT: file a ForgedReceipt fraud proof when a replay refutes a peer. Off by \
-                 default: the refuting verdict already blocks the credit, while a challenge stakes this node's own bond on a \
-                 divergence that a mis-declared determinism class would also produce.")
-                .env("KASPAD_COMPUTE_AUTO_CHALLENGE"),
-        )
-        .arg(
-            Arg::new("compute-fixture-job-limit")
-                .long("compute-fixture-job-limit")
-                .value_name("N")
-                .value_parser(clap::value_parser!(u32))
-                .require_equals(false)
-                .help(
-                    "MISAKA devnet fixture: originate at most N JOBS — not N VLT — ever, then stop. The fixture runs \
-                     one fixed job shape worth exactly 50 VLT, so a plan of 400/250/150/100/100 VLT is N = 8/5/3/2/2. \
-                     The count is persisted next to the compute work dir, so a restart does not reset it. This is what \
-                     makes an ASYMMETRIC weight experiment possible: five validators running the same fixed job differ \
-                     only in how many they complete. Without it an executor keeps originating forever and every \
-                     validator converges on the same weight.",
-                )
-                .env("KASPAD_COMPUTE_FIXTURE_JOB_LIMIT"),
         )
         .arg(
             Arg::new("vlt-devnet")
@@ -1491,26 +1351,6 @@ pub fn cli() -> Command {
                 .value_parser(clap::value_parser!(u64))
                 .require_equals(false)
                 .help("MISAKA TOK: flat per-epoch emission budget in whole TOK for --tkn-devnet (default 1000; no halving within a run)."),
-        )
-        .arg(
-            Arg::new("tkn-fixture-transfer")
-                .long("tkn-fixture-transfer")
-                .value_name("to-hex128:amount-atomic:nonce:at-daa")
-                .action(clap::ArgAction::Append)
-                .require_equals(false)
-                .help(
-                    "MISAKA TOK devnet fixture: once the chain reaches at-daa, sign and submit ONE TOK transfer from this \
-                     node's validator identity. Repeatable; nonce is taken literally so a harness can submit deliberately \
-                     void ops (bad nonce, overdraft) and assert they stay void.",
-                ),
-        )
-        .arg(
-            Arg::new("tkn-fixture-burn")
-                .long("tkn-fixture-burn")
-                .value_name("amount-atomic:nonce:at-daa")
-                .action(clap::ArgAction::Append)
-                .require_equals(false)
-                .help("MISAKA TOK devnet fixture: once the chain reaches at-daa, sign and submit ONE TOK burn. Repeatable."),
         )
         .arg(
             arg!(--"vlt-shadow-only" "MISAKA VLT Shadow Mode: with --vlt-devnet, leave the WEIGHT fence dormant. The overlay \
@@ -1678,8 +1518,8 @@ a large RAM (~64GB) can set this value to ~3.0-4.0 and gain superior performance
                 .env("KASPAD_NODE_PROFILE")
                 .require_equals(true)
                 .value_parser(NodeProfile::VARIANTS)
-                .help("MISAKA node role profile: full | bootstrap-pruned | recovery-sync | validator | archive | public-rpc. \
-                       The sync-only profiles apply 8GB resource defaults and reject --archival/--utxoindex/--enable-validator/\
+                .help("MISAKA node role profile: full | bootstrap-pruned | recovery-sync | archive | public-rpc. \
+                       The sync-only profiles apply 8GB resource defaults and reject --archival/--utxoindex/\
                        --evm-rpc-listen/--unsaferpc; recovery-sync additionally requires --connect. Consensus rules are unchanged.")
         )
         .arg(
@@ -1841,8 +1681,6 @@ impl Args {
                 "enforce-chain-participation",
                 defaults.enforce_chain_participation,
             ),
-            enable_validator: arg_match_unwrap_or::<bool>(&m, "enable-validator", defaults.enable_validator),
-            validator_key: m.get_one::<String>("validator-key").cloned().or(defaults.validator_key),
             palw_produce: arg_match_unwrap_or::<bool>(&m, "palw-produce", defaults.palw_produce),
             palw_panel: arg_match_unwrap_or::<bool>(&m, "palw-panel", defaults.palw_panel),
             palw_fee_outpoint: m.get_one::<String>("palw-fee-outpoint").cloned().or(defaults.palw_fee_outpoint),
@@ -1896,17 +1734,7 @@ impl Args {
                 .or(defaults.palw_heartbeat_miner_address),
             palw_round_lane: arg_match_unwrap_or::<bool>(&m, "palw-round-lane", defaults.palw_round_lane),
             evm_fee_recipient: m.get_one::<String>("evm-fee-recipient").cloned().or(defaults.evm_fee_recipient),
-            stake_bond: m.get_one::<String>("stake-bond").cloned().or(defaults.stake_bond),
-            validator_mode: m.get_one::<String>("validator-mode").cloned().or(defaults.validator_mode),
-            enable_compute: arg_match_unwrap_or::<bool>(&m, "enable-compute", defaults.enable_compute),
-            compute_worker: m.get_one::<String>("compute-worker").cloned().or(defaults.compute_worker),
             compute_endpoint: m.get_one::<String>("compute-endpoint").cloned().or(defaults.compute_endpoint),
-            compute_work_dir: m.get_one::<String>("compute-work-dir").cloned().or(defaults.compute_work_dir),
-            compute_prompt: m.get_one::<String>("compute-prompt").cloned().or(defaults.compute_prompt),
-            compute_max_tokens: m.get_one::<u32>("compute-max-tokens").copied().or(defaults.compute_max_tokens),
-            compute_timeout_secs: m.get_one::<u64>("compute-timeout-secs").copied().or(defaults.compute_timeout_secs),
-            compute_auto_challenge: arg_match_unwrap_or::<bool>(&m, "compute-auto-challenge", defaults.compute_auto_challenge),
-            compute_fixture_job_limit: m.get_one::<u32>("compute-fixture-job-limit").copied(),
             vlt_devnet_shadow_daa: m.get_one::<u64>("vlt-devnet").copied(),
             vlt_devnet_credit_window_epochs: arg_match_unwrap_or::<u32>(
                 &m,
@@ -1930,8 +1758,6 @@ impl Args {
                 "tkn-devnet-epoch-budget-tok",
                 defaults.tkn_devnet_epoch_budget_tok,
             ),
-            tkn_fixture_transfers: m.get_many::<String>("tkn-fixture-transfer").map(|v| v.cloned().collect()).unwrap_or_default(),
-            tkn_fixture_burns: m.get_many::<String>("tkn-fixture-burn").map(|v| v.cloned().collect()).unwrap_or_default(),
             utxoindex: arg_match_unwrap_or::<bool>(&m, "utxoindex", defaults.utxoindex),
             testnet: arg_match_unwrap_or::<bool>(&m, "testnet", defaults.testnet),
             testnet_suffix: arg_match_unwrap_or::<u32>(&m, "netsuffix", defaults.testnet_suffix),
