@@ -52,10 +52,6 @@ pub const PALW_EXEC_MAX_DOMAINS_V1: usize = 32;
 /// bond key. Bounds the schedule's bytes in the state root and a draw's work.
 pub const PALW_EXEC_MAX_BONDS_PER_DOMAIN_V1: usize = 64;
 
-/// The most rounds of grace a network may give a late round block (`PalwExecutionLaneV1::late_rounds`)
-/// — the permit ledger keeps one entry per round inside the grace, so this bounds its bytes.
-pub const PALW_EXEC_MAX_LATE_ROUNDS_V1: u64 = 64;
-
 /// **What the fold needs of the lane where it is open**: the span a schedule covers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwExecLaneFoldV1 {

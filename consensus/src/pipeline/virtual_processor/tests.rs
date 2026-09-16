@@ -13282,3 +13282,293 @@ fn every_held_court_acceptance_arm_reads_the_claims_class_ladder() {
     assert_eq!(source.matches("adjudicate_court_close_v3(").count(), 3, "the node's verdict, a close chunk and a close");
     assert!(source.contains("palw_fp_objects_from_accepted_txs_by_class_v1("), "the walk bounds each commitment by its class");
 }
+
+// ---- ADR-0125: the execution lane through the real pipeline ----------------------------------
+
+/// A network with the round lane open from genesis, two permits a round, and one schedule span far
+/// longer than the test, so every block is in span 0.
+fn adr0125_config() -> (kaspa_consensus_core::config::Config, kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2) {
+    use kaspa_consensus_core::config::params::{ForkActivation, PalwExecutionLaneV1};
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 8);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
+            p.palw_execution_lane = Some(PalwExecutionLaneV1 {
+                activation: ForkActivation::always(),
+                permits_per_round: 2,
+                max_per_mergeset: 600,
+                schedule_span_daa: 1_000,
+            });
+        })
+        .build();
+    config.params.validate_palw_v2().expect("the fixture bundle with the lane is a runnable ruleset");
+    (config, bundle)
+}
+
+/// The genesis registry's row-0 bond: the harness identity, whose key signs every envelope here.
+fn adr0125_harness_bond() -> kaspa_consensus_core::palw_state_v2::PalwBondKeyV2 {
+    kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(TransactionOutpoint::new(
+        kaspa_consensus_core::tx::TransactionId::from_u64_word(0xB0),
+        0,
+    ))
+}
+
+/// Solve (the fixture skips PoW, so nonce 0 stands) and sign a round block the way a permit holder
+/// does: the envelope names the round, the permit and the bond, and its signature covers the
+/// pre-PoW hash, the timestamp and the nonce.
+fn adr0125_sign_round_block(
+    block: &mut MutableBlock,
+    config: &kaspa_consensus_core::config::Config,
+    round: u64,
+    permit_index: u16,
+    nonce: u64,
+) {
+    use kaspa_consensus_core::palw_execution_lane_v1::{
+        PALW_EXEC_ENVELOPE_VERSION_V1, PALW_EXEC_MLDSA87_CONTEXT, PalwExecEnvelopeV1, palw_exec_signing_message_v1,
+    };
+    let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+        config.params.net.to_string().as_bytes(),
+        Some(config.params.genesis.hash),
+    );
+    let bond = adr0125_harness_bond();
+    block.header.nonce = nonce;
+    block.header.palw_commitment = Vec::new();
+    let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&block.header);
+    let message =
+        palw_exec_signing_message_v1(network_domain, pre_pow, block.header.timestamp, block.header.nonce, round, permit_index, &bond);
+    let kp = TestConsensus::palw_v2_harness_keypair();
+    let signature = libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, message.as_byte_slice(), PALW_EXEC_MLDSA87_CONTEXT, [0u8; 32])
+        .expect("ML-DSA-87 sign")
+        .as_ref()
+        .to_vec();
+    let envelope = PalwExecEnvelopeV1 {
+        version: PALW_EXEC_ENVELOPE_VERSION_V1,
+        network_domain,
+        round,
+        permit_index,
+        bond,
+        pubkey: TestConsensus::palw_v2_harness_pubkey(),
+        signature,
+    };
+    block.header.palw_commitment = envelope.encode();
+    block.header.finalize();
+}
+
+/// A round block of `round`, adapted from the current template and signed.
+fn adr0125_round_block(
+    ctx: &TestContext,
+    config: &kaspa_consensus_core::config::Config,
+    round: u64,
+    permit_index: u16,
+    payout: kaspa_consensus_core::tx::ScriptPublicKey,
+    nonce: u64,
+) -> MutableBlock {
+    let template = ctx
+        .consensus
+        .build_block_template(new_miner_data(), Box::new(OnetimeTxSelector::new(Default::default())), TemplateBuildMode::Standard)
+        .unwrap();
+    let mut adapted =
+        ctx.consensus.virtual_processor().round_adapt_block_template(template, round, payout).expect("the lane adapts a template");
+    adr0125_sign_round_block(&mut adapted.block, config, round, permit_index, nonce);
+    adapted.block
+}
+
+/// **ADR-0125 through the pipeline: round blocks hang beside the chain and never move it.**
+///
+/// A round block names the sink's selected parent as its anchor; the next chain block merges it as
+/// a red, keeps the sink as its selected parent and counts one DAA step, as if the round block were
+/// not there. A round block that extends the lane names only the round tip and inherits its anchor.
+/// The header stage refuses a chain block that names only round blocks, a mergeset holding one
+/// permit twice, and an envelope whose signature does not verify; a template never merges a
+/// duplicate permit.
+#[tokio::test]
+async fn adr0125_round_blocks_hang_beside_the_chain_and_never_move_it() {
+    use crate::model::stores::ghostdag::GhostdagStoreReader;
+    use kaspa_consensus_core::errors::block::RuleError;
+    let (config, bundle) = adr0125_config();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..4 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let vp = ctx.consensus.virtual_processor().clone();
+    let sink0 = ctx.consensus.get_sink();
+    let anchor0 = vp.ghostdag_store.get_selected_parent(sink0).unwrap();
+    let genesis_ts = config.params.genesis.timestamp;
+    let first_round = {
+        let r = (vp.headers_store.get_timestamp(sink0).unwrap() - genesis_ts) / 1_000 + 2;
+        r + r % 2
+    };
+    let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    let payout = p2pkh_mldsa87_spk(state.bond(&adr0125_harness_bond()).expect("row 0 is registered").payout_payload.as_byte_slice());
+    let view = vp.palw_round_view_v1(first_round).expect("the lane is open");
+    assert!(view.permits.is_empty(), "no attempt has reached Final, so no span is scheduled and no permit exists");
+
+    // A round block hangs from the sink's selected parent.
+    let e1 = adr0125_round_block(&ctx, &config, first_round, 0, payout.clone(), 0);
+    assert_eq!(e1.header.pow_algo_id, kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1);
+    assert_eq!(e1.header.direct_parents(), &[anchor0], "with no round tip, the anchor alone");
+    let e1_hash = e1.header.hash;
+    ctx.consensus.validate_and_insert_block(e1.to_immutable()).virtual_state_task.await.expect("a signed round block is valid");
+    assert_eq!(vp.ghostdag_store.get_selected_parent(e1_hash).unwrap(), anchor0);
+    assert_eq!(ctx.consensus.get_sink(), sink0, "a round block never moves the sink");
+
+    // The next chain block merges it as a red and counts one DAA step.
+    ctx.simulated_time = ctx.simulated_time.max(genesis_ts + first_round * 1_000) + config.params.target_time_per_block();
+    let p1 = ctx.build_block_template(11, ctx.simulated_time);
+    assert!(p1.block.header.direct_parents().contains(&e1_hash), "virtual offers the round tip as a parent");
+    assert!(p1.block.header.direct_parents().contains(&sink0));
+    let p1_hash = p1.block.header.hash;
+    ctx.validate_and_insert_block(p1.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+    assert_eq!(ctx.consensus.get_sink(), p1_hash);
+    let p1_data = vp.ghostdag_store.get_data(p1_hash).unwrap();
+    assert_eq!(p1_data.selected_parent, sink0, "the chain block's selected parent is the chain block");
+    assert!(p1_data.mergeset_reds.contains(&e1_hash), "the round block is a red");
+    assert!(!p1_data.mergeset_blues.contains(&e1_hash));
+    assert_eq!(
+        vp.headers_store.get_daa_score(p1_hash).unwrap(),
+        vp.headers_store.get_daa_score(sink0).unwrap() + 1,
+        "the round block is outside the DAA set"
+    );
+
+    // A round block anchored at the new sink's selected parent, then one extending it alone.
+    let e2 = adr0125_round_block(&ctx, &config, first_round + 2, 0, payout.clone(), 0);
+    let e2_hash = e2.header.hash;
+    assert_eq!(e2.header.direct_parents(), &[sink0], "the lane moves onto the chain block the next one can merge it beside");
+    ctx.consensus.validate_and_insert_block(e2.to_immutable()).virtual_state_task.await.expect("valid");
+    let e3 = adr0125_round_block(&ctx, &config, first_round + 4, 0, payout.clone(), 0);
+    let e3_hash = e3.header.hash;
+    assert_eq!(e3.header.direct_parents(), &[e2_hash], "a round block extending the lane names only the round tip");
+    ctx.consensus.validate_and_insert_block(e3.to_immutable()).virtual_state_task.await.expect("valid");
+    assert_eq!(vp.ghostdag_store.get_selected_parent(e3_hash).unwrap(), sink0, "and inherits its anchor");
+    assert_eq!(ctx.consensus.get_sink(), p1_hash);
+
+    // A chain block may not name only round blocks.
+    ctx.simulated_time += 1_000;
+    let orphaned = ctx.build_block_with_parents(vec![e3_hash], 91, ctx.simulated_time);
+    match ctx.consensus.validate_and_insert_block(orphaned.to_immutable()).virtual_state_task.await {
+        Err(RuleError::BadRoundLaneParents(_)) => {}
+        other => panic!("a chain block naming only round blocks must be BadRoundLaneParents, got {other:?}"),
+    }
+
+    // One permit twice: each alone is valid; a mergeset holding both is refused, and a template
+    // never builds one.
+    let twin_round = first_round + 6;
+    let e4a = adr0125_round_block(&ctx, &config, twin_round, 1, payout.clone(), 1);
+    let mut e4b = e4a.clone();
+    adr0125_sign_round_block(&mut e4b, &config, twin_round, 1, 2);
+    let (e4a_hash, e4b_hash) = (e4a.header.hash, e4b.header.hash);
+    assert_ne!(e4a_hash, e4b_hash);
+    ctx.consensus.validate_and_insert_block(e4a.to_immutable()).virtual_state_task.await.expect("valid alone");
+    ctx.consensus.validate_and_insert_block(e4b.to_immutable()).virtual_state_task.await.expect("valid alone");
+    ctx.simulated_time = ctx.simulated_time.max(genesis_ts + twin_round * 1_000) + config.params.target_time_per_block();
+    let both = ctx.build_block_with_parents(vec![p1_hash, e4a_hash, e4b_hash], 92, ctx.simulated_time);
+    match ctx.consensus.validate_and_insert_block(both.to_immutable()).virtual_state_task.await {
+        Err(RuleError::BadRoundLaneMergeset(why)) => assert!(why.contains("permit"), "names the duplicate: {why}"),
+        other => panic!("a mergeset holding one permit twice must be BadRoundLaneMergeset, got {other:?}"),
+    }
+    let template = ctx.build_block_template(93, ctx.simulated_time);
+    let parents = template.block.header.direct_parents();
+    assert!(!(parents.contains(&e4a_hash) && parents.contains(&e4b_hash)), "a template never merges one permit twice");
+
+    // An envelope whose signature does not verify is refused at the header.
+    let mut forged = adr0125_round_block(&ctx, &config, twin_round + 2, 0, payout.clone(), 5);
+    let mut envelope =
+        kaspa_consensus_core::palw_execution_lane_v1::PalwExecEnvelopeV1::decode(&forged.header.palw_commitment).unwrap();
+    envelope.signature[0] ^= 0xFF;
+    forged.header.palw_commitment = envelope.encode();
+    forged.header.finalize();
+    match ctx.consensus.validate_and_insert_block(forged.to_immutable()).virtual_state_task.await {
+        Err(RuleError::BadPalwCarriageAdmission { .. }) => {}
+        other => panic!("a forged envelope must be refused at the header, got {other:?}"),
+    }
+}
+
+/// **ADR-0125: a merging block's verdict.** Against a state whose span-0 schedule lists the harness
+/// bond (installed through the carriage, as a pruned sync would install a state), the virtual block
+/// that merges two round blocks of even rounds grants both their permits; a permit already in the
+/// ledger is refused; and a round block naming a payout other than its bond's is refused. Without
+/// the schedule — the chain's own state here — nothing is granted.
+#[tokio::test]
+async fn adr0125_a_merging_block_grants_exactly_the_permits_its_parent_state_schedules() {
+    use crate::model::stores::virtual_state::VirtualStateStoreReader;
+    use kaspa_consensus_core::palw_execution_lane_v1::{PalwExecFinalV1, palw_execution_schedule_v1};
+    use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
+    let (config, bundle) = adr0125_config();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..4 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let vp = ctx.consensus.virtual_processor().clone();
+    let sink0 = ctx.consensus.get_sink();
+    let genesis_ts = config.params.genesis.timestamp;
+    let first_round = {
+        let r = (vp.headers_store.get_timestamp(sink0).unwrap() - genesis_ts) / 1_000 + 2;
+        r + r % 2
+    };
+    let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    let bond = state.bond(&adr0125_harness_bond()).expect("row 0").clone();
+    let payout = p2pkh_mldsa87_spk(bond.payout_payload.as_byte_slice());
+
+    let e1 = adr0125_round_block(&ctx, &config, first_round, 0, payout.clone(), 0);
+    let e1_hash = e1.header.hash;
+    ctx.consensus.validate_and_insert_block(e1.to_immutable()).virtual_state_task.await.expect("valid");
+    let e2 = adr0125_round_block(&ctx, &config, first_round + 2, 0, payout.clone(), 0);
+    let e2_hash = e2.header.hash;
+    ctx.consensus.validate_and_insert_block(e2.to_immutable()).virtual_state_task.await.expect("valid");
+    let stranger = new_miner_data().script_public_key;
+    let e3 = adr0125_round_block(&ctx, &config, first_round + 4, 0, stranger, 0);
+    let e3_hash = e3.header.hash;
+    ctx.consensus.validate_and_insert_block(e3.to_immutable()).virtual_state_task.await.expect("valid at the header: the payout is state");
+
+    let virtual_state = vp.virtual_stores.read().state.get().unwrap();
+    let merged: Vec<_> = virtual_state.ghostdag_data.mergeset_reds.iter().copied().collect();
+    for round_block in [e1_hash, e2_hash, e3_hash] {
+        assert!(merged.contains(&round_block), "virtual merges every round tip's chain of round blocks");
+    }
+    let daa = virtual_state.daa_score;
+    let none = vp.palw_round_verdicts_v1(&state, &virtual_state.ghostdag_data, daa).expect("the lane is open");
+    assert_eq!(none.round_blocks.len(), 3);
+    assert!(none.permitted.is_empty(), "no schedule, no permit");
+
+    let schedule = palw_execution_schedule_v1(
+        0,
+        &[PalwExecFinalV1 {
+            domain: bundle.base_class_id,
+            bond: adr0125_harness_bond(),
+            operator_id: bond.operator_id,
+            claim_id: kaspa_hashes::Hash64::from_u64_word(0xC1A1),
+            execution_root: kaspa_hashes::Hash64::from_u64_word(0xE0),
+        }],
+    );
+    let with_schedule = |used: &[(u64, u64)]| {
+        let mut carriage = PalwStateCarriageV2::from_state(&state);
+        carriage.round_schedules.insert(0, schedule.clone());
+        for key in used {
+            carriage.round_permits_used.insert(*key, 1);
+        }
+        carriage.into_state(&bundle.state, None).expect("a carriage with a schedule rebuilds")
+    };
+    let scheduled = with_schedule(&[]);
+    let verdicts = vp.palw_round_verdicts_v1(&scheduled, &virtual_state.ghostdag_data, daa).expect("open");
+    assert!(verdicts.permitted.contains(&e1_hash) && verdicts.permitted.contains(&e2_hash), "both even-round permits are granted");
+    assert!(!verdicts.permitted.contains(&e3_hash), "a round block paying a stranger is not its bond's");
+    assert_eq!(verdicts.uses.len(), 2);
+    assert!(verdicts.uses.iter().all(|u| u.span == 0 && u.permit_index == 0));
+
+    let spent = with_schedule(&[(0, first_round)]);
+    let verdicts = vp.palw_round_verdicts_v1(&spent, &virtual_state.ghostdag_data, daa).expect("open");
+    assert!(!verdicts.permitted.contains(&e1_hash), "a permit in the ledger is not granted again");
+    assert!(verdicts.permitted.contains(&e2_hash));
+
+    // The template's coinbase pays nothing for an unpermitted round block, and the block it becomes
+    // is valid — construction and validation agree on the lane.
+    ctx.simulated_time = ctx.simulated_time.max(genesis_ts + (first_round + 4) * 1_000) + config.params.target_time_per_block();
+    let p1 = ctx.build_block_template(21, ctx.simulated_time);
+    assert!(p1.block.transactions[0].outputs.iter().all(|o| o.script_public_key != payout), "no payout without a permit");
+    ctx.validate_and_insert_block(p1.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+    assert_eq!(ctx.consensus.get_sink(), p1.block.header.hash);
+}

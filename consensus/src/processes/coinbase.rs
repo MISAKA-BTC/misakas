@@ -871,6 +871,91 @@ mod tests {
         assert_eq!(data2, deserialized_data);
     }
 
+    /// **ADR-0125: a round block's fees are its payout's, aggregated, after the red lump.** Two round
+    /// blocks paying one script and a third paying another become two outputs in first-appearance
+    /// order; an ordinary red's reward stays in the lump; a round block with no accepted fee adds no
+    /// output; and none of it funds the validator pool.
+    #[test]
+    fn adr0125_round_block_fees_go_to_their_payouts_and_never_the_lump_or_the_pool() {
+        use kaspa_consensus_core::coinbase::{BlockRewardData, MinerData};
+        use kaspa_consensus_core::tx::ScriptPublicKey;
+        use kaspa_hashes::Hash64;
+        let cbm = create_manager(&MAINNET_PARAMS);
+        let script = |b: u8| ScriptPublicKey::new(0, scriptvec![0xAA, b]);
+        let (sp, red, r1, r2, r3, idle) = (
+            Hash64::from_u64_word(1),
+            Hash64::from_u64_word(2),
+            Hash64::from_u64_word(3),
+            Hash64::from_u64_word(4),
+            Hash64::from_u64_word(5),
+            Hash64::from_u64_word(6),
+        );
+        let ghostdag = GhostdagData::new(
+            10,
+            0.into(),
+            sp,
+            kaspa_consensus_core::blockhash::BlockHashes::new(vec![sp]),
+            kaspa_consensus_core::blockhash::BlockHashes::new(vec![red, r1, idle, r2, r3]),
+            Default::default(),
+        );
+        let mut rewards = BlockHashMap::default();
+        rewards.insert(sp, BlockRewardData::new(1_000, 0, 0, script(1)));
+        rewards.insert(red, BlockRewardData::new(500, 7, 0, script(2)));
+        rewards.insert(r1, BlockRewardData::new(0, 30, 0, script(9)));
+        rewards.insert(r2, BlockRewardData::new(0, 12, 0, script(8)));
+        rewards.insert(r3, BlockRewardData::new(0, 5, 0, script(9)));
+        rewards.insert(idle, BlockRewardData::new(0, 0, 0, script(7)));
+        let rounds: BlockHashSet = [r1, r2, r3, idle].into_iter().collect();
+        let non_daa: BlockHashSet = [r1, r2, r3, idle].into_iter().collect();
+        let miner = MinerData::new(script(0x33), vec![]);
+        let coinbase = cbm
+            .expected_coinbase_transaction(
+                10,
+                0,
+                miner,
+                &ghostdag,
+                &rewards,
+                &non_daa,
+                &[],
+                None,
+                (0, 0),
+                0,
+                &Default::default(),
+                false,
+                &Default::default(),
+                &rounds,
+            )
+            .unwrap();
+        let outputs: Vec<(u64, ScriptPublicKey)> = coinbase.tx.outputs.iter().map(|o| (o.value, o.script_public_key.clone())).collect();
+        assert_eq!(
+            outputs,
+            vec![(1_000, script(1)), (507, script(0x33)), (35, script(9)), (12, script(8))],
+            "the selected parent, the red lump without the round blocks, then one output per payout in order of appearance"
+        );
+
+        let split = FeeSplitParams {
+            subsidy_worker_base_bps: 6200,
+            subsidy_worker_inclusion_bps: 800,
+            subsidy_validator_bps: 3000,
+            subsidy_service_bps: 0,
+            normal_fee_worker_bps: 9000,
+            normal_fee_validator_bps: 1000,
+            normal_fee_service_bps: 0,
+            finality_fee_validator_bps: 7500,
+            finality_fee_worker_bps: 2500,
+            finality_fee_service_bps: 0,
+        };
+        let with_rounds = cbm.coinbase_validator_pool(&ghostdag, &rewards, &non_daa, &split, &Default::default(), &rounds);
+        let without_round_rows = {
+            let mut only_chain = rewards.clone();
+            for round in &rounds {
+                only_chain.insert(*round, BlockRewardData::new(0, 0, 0, script(0)));
+            }
+            cbm.coinbase_validator_pool(&ghostdag, &only_chain, &non_daa, &split, &Default::default(), &Default::default())
+        };
+        assert_eq!(with_rounds, without_round_rows, "a round block's fees fund no validator pool");
+    }
+
     fn create_manager(params: &Params) -> CoinbaseManager {
         CoinbaseManager::new(
             params.coinbase_payload_script_public_key_max_len,

@@ -624,7 +624,6 @@ mod tests {
                     permits_per_round: 1,
                     max_per_mergeset: 600,
                     schedule_span_daa: 30,
-                    late_rounds: 8,
                 })
             }
             other => panic!("{other} is a PALW fence `palw_fences_v1` returns and this probe cannot set — add it here"),

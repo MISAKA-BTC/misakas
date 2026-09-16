@@ -421,12 +421,9 @@ pub struct PalwExecutionLaneV1 {
     /// which keeps bounding the chain's own blocks exactly as before.
     pub max_per_mergeset: u64,
     /// The DAA span of one schedule: the attempts finalized in span `s` decide the permits of span
-    /// `s + 1`.
+    /// `s + 1`. A round block is judged by the schedule of its anchor's span, and a merging block
+    /// accepts round blocks anchored in its own span or the one before.
     pub schedule_span_daa: u64,
-    /// How many rounds below the newest round a merging block has accepted a round block may still
-    /// be accepted — the grace for propagation. Older round blocks are stale: merged, never
-    /// accepted.
-    pub late_rounds: u64,
 }
 
 /// **ADR-0066 Decision 3's parameter (finding F2), closed by ADR-0068 Phase 1: the attempt lane's
@@ -2739,9 +2736,7 @@ impl Params {
         if let Some(lane) = self.palw_execution_lane
             && lane.activation != ForkActivation::never()
         {
-            use crate::palw_execution_lane_v1::{
-                PALW_EXEC_MAX_LATE_ROUNDS_V1, PALW_EXEC_MAX_PER_MERGESET_BOUND_V1, PALW_EXEC_MAX_PERMITS_PER_ROUND_V1,
-            };
+            use crate::palw_execution_lane_v1::{PALW_EXEC_MAX_PER_MERGESET_BOUND_V1, PALW_EXEC_MAX_PERMITS_PER_ROUND_V1};
             if lane.permits_per_round == 0 || lane.permits_per_round > PALW_EXEC_MAX_PERMITS_PER_ROUND_V1 {
                 return Err(PalwModeV2Error::Invalid(
                     "palw_execution_lane declares a permits_per_round outside 1..=10: a round block's permit index is \
@@ -2756,12 +2751,6 @@ impl Params {
             }
             if lane.schedule_span_daa == 0 {
                 return Err(PalwModeV2Error::Invalid("palw_execution_lane declares a zero schedule span"));
-            }
-            if lane.late_rounds > PALW_EXEC_MAX_LATE_ROUNDS_V1 {
-                return Err(PalwModeV2Error::Invalid(
-                    "palw_execution_lane declares more late rounds than the permit ledger keeps: a duplicate permit \
-                     inside the grace would be accepted twice",
-                ));
             }
         }
         if let Some(attempt_work) = self.palw_attempt_work
@@ -4401,7 +4390,6 @@ impl Params {
             h.write(lane.permits_per_round.to_le_bytes());
             h.write(lane.max_per_mergeset.to_le_bytes());
             h.write(lane.schedule_span_daa.to_le_bytes());
-            h.write(lane.late_rounds.to_le_bytes());
         }
         if let Some(attempt) = self.palw_attempt_work {
             h.write(b"palw_attempt_work_price");
@@ -5753,7 +5741,6 @@ impl Params {
             h.write(lane.permits_per_round.to_le_bytes());
             h.write(lane.max_per_mergeset.to_le_bytes());
             h.write(lane.schedule_span_daa.to_le_bytes());
-            h.write(lane.late_rounds.to_le_bytes());
         }
         if let Some(activation) = palw_fp_ruleset_caps {
             h.write(b"palw_fp_ruleset_caps");
