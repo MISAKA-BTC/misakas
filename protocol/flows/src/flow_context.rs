@@ -527,6 +527,9 @@ pub struct FlowContextInner {
     /// Present on every node (the state is a few KB); active only where the flow feeds it, and the
     /// flow refuses everything on a network with no ConsensusV2 ruleset.
     palw_gossip: crate::palw_gossip::PalwGossipCenter,
+
+    /// ADR-0125 §7.3: round blocks by permit — one relayed a permit, and the evidence of two.
+    palw_round_relay: crate::palw_round_relay::PalwRoundRelayV1,
 }
 
 /// **This node's PALW runtime** (ADR-0122 §6.5): the producer's state and why, its counts and its
@@ -728,6 +731,7 @@ impl FlowContext {
                 node_id: Uuid::new_v4().into(),
                 consensus_manager,
                 palw_gossip: crate::palw_gossip::PalwGossipCenter::default(),
+                palw_round_relay: Default::default(),
                 orphans_pool: AsyncRwLock::new(OrphanBlocksPool::new(max_orphans)),
                 shared_block_requests: Arc::new(Mutex::new(HashMap::new())),
                 transactions_spread: AsyncRwLock::new(TransactionsSpread::new(hub.clone())),
@@ -801,6 +805,41 @@ impl FlowContext {
 
     pub fn palw_gossip(&self) -> &crate::palw_gossip::PalwGossipCenter {
         &self.palw_gossip
+    }
+
+    /// ADR-0125 §7.3: the round lane's relay memory and its equivocation evidence.
+    pub fn palw_round_relay(&self) -> &crate::palw_round_relay::PalwRoundRelayV1 {
+        &self.palw_round_relay
+    }
+
+    /// **ADR-0125 §7.3: may this validated block be announced onward?** Every block but a round
+    /// block may; a round block may when it is the first this node has seen for its permit. A
+    /// second, different signed block for the permit is kept, not announced, and queued as
+    /// evidence. Where the lane is not configured the question does not arise.
+    pub async fn palw_round_relay_admits(&self, consensus: &ConsensusProxy, block: &Block) -> bool {
+        use crate::palw_round_relay::PalwRoundRelayVerdictV1 as V;
+        let Some(lane) = self.config.params.palw_execution_lane_fence() else {
+            return true;
+        };
+        if block.header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1 {
+            return true;
+        }
+        let hash = block.hash();
+        let anchor_daa = match consensus.async_get_ghostdag_data(hash).await {
+            Ok(ghostdag) => consensus.async_get_header(ghostdag.selected_parent).await.map(|h| h.daa_score).unwrap_or_default(),
+            Err(_) => 0,
+        };
+        let span = kaspa_consensus_core::palw_execution_lane_v1::palw_execution_span_v1(anchor_daa, lane.schedule_span_daa);
+        match self.palw_round_relay.observe(hash, &block.header, span) {
+            V::NotRound | V::First => true,
+            V::Repeat => false,
+            V::Equivocation => {
+                warn!(
+                    "[palw-round-relay] round block {hash} is a second signed block for a permit already seen — kept, not relayed, filed as evidence"
+                );
+                false
+            }
+        }
     }
 
     /// Whether this network runs the PALW ConsensusV2 ruleset — the gate on every PALW gossip
@@ -1253,8 +1292,11 @@ impl FlowContext {
             warn!("Validation failed for block {}: {}", hash, err);
             return Err(err)?;
         }
-        // Broadcast as soon as the block has been validated and inserted into the DAG
-        self.hub.broadcast(make_message!(Payload::InvRelayBlock, InvRelayBlockMessage { hash: Some(hash.into()) }), None).await;
+        // Broadcast as soon as the block has been validated and inserted into the DAG — a round
+        // block only if it is the first this node holds for its permit (ADR-0125 §7.3).
+        if self.palw_round_relay_admits(consensus, &block).await {
+            self.hub.broadcast(make_message!(Payload::InvRelayBlock, InvRelayBlockMessage { hash: Some(hash.into()) }), None).await;
+        }
 
         self.on_new_block(consensus, Default::default(), block, virtual_state_task).await;
         self.log_block_event(BlockLogEvent::Submit(hash));

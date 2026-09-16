@@ -314,7 +314,9 @@ impl HandleRelayInvsFlow {
 
             // As a policy, we only relay blocks who stand a chance to enter past(virtual).
             // The only mining rule which permanently excludes a block is the merge depth bound
-            // (as opposed to "max parents" and "mergeset size limit" rules)
+            // (as opposed to "max parents" and "mergeset size limit" rules). ADR-0125 §7.3: and a
+            // round block only when it is the first this node holds for its permit.
+            let broadcast = broadcast && self.ctx.palw_round_relay_admits(&session, &block).await;
             if broadcast {
                 let msgs = ancestor_batch
                     .blocks
