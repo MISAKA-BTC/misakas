@@ -489,8 +489,12 @@ impl HeaderProcessor {
         // Anything that later reads this tip to decide chain state reopens P0-5, and it will not
         // look like a fork-choice change when it does — it will look like reading a tip.
         let candidate_tip = SortableBlock::new(ctx.hash, header.blue_work);
-        let heavier =
-            kaspa_consensus_core::palw_chain_weight::order_tips_v1(self.palw_tip_order, (None, &candidate_tip), (None, &prev_hst))
+        // ADR-0125: a round block is never a selected parent, so it is never the headers' selected tip
+        // either — it would hint reachability toward a chain that does not exist.
+        let round_block = self.palw_execution_lane.is_some()
+            && header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1;
+        let heavier = !round_block
+            && kaspa_consensus_core::palw_chain_weight::order_tips_v1(self.palw_tip_order, (None, &candidate_tip), (None, &prev_hst))
                 == std::cmp::Ordering::Greater;
         if heavier && reachability::is_chain_ancestor_of(&staging, ctx.pruning_point, ctx.hash).unwrap() {
             // Hint reachability about the new tip.

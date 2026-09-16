@@ -1307,6 +1307,9 @@ impl VirtualStateProcessor {
         // No consumer yet (b2a): `verify_expected_utxo_state` receives it inert.
         let mut accumulated_bond_view = self.initial_active_bond_view();
 
+        // ADR-0125: round tips are never sink candidates; they are offered to virtual as parents to
+        // merge, after the sink is chosen among the chain's own blocks.
+        let round_tips = self.palw_round_tips(&tips);
         let (new_sink, virtual_parent_candidates) = self.sink_search_algorithm(
             &virtual_read,
             &mut accumulated_diff,
@@ -1316,7 +1319,8 @@ impl VirtualStateProcessor {
             finality_point,
             pruning_point,
         );
-        let (virtual_parents, virtual_ghostdag_data) = self.pick_virtual_parents(new_sink, virtual_parent_candidates, pruning_point);
+        let (virtual_parents, virtual_ghostdag_data) =
+            self.pick_virtual_parents(new_sink, virtual_parent_candidates, pruning_point, round_tips);
         assert_eq!(virtual_ghostdag_data.selected_parent, new_sink);
 
         let sink_multiset = self.utxo_multisets_store.get(new_sink).unwrap();
@@ -13418,6 +13422,10 @@ impl VirtualStateProcessor {
     ) -> (BlockHash, VecDeque<BlockHash>) {
         // TODO (relaxed): additional tests
 
+        // ADR-0125: a round block is never a sink. Each round tip stands for its anchor, and the set
+        // is reduced to an antichain again — the heap's invariant below.
+        let tips = self.palw_project_round_blocks(tips);
+
         // The initial diff point is the previous sink
         let mut diff_point = prev_sink;
 
@@ -13636,6 +13644,8 @@ impl VirtualStateProcessor {
             // PRUNE SAFETY: see comment within [`resolve_virtual`]
             let prune_guard = self.pruning_lock.blocking_read();
             for parent in self.relations_service.get_parents(candidate).unwrap().iter().copied() {
+                // ADR-0125: a round parent stands for its anchor, which is on the candidate's chain.
+                let parent = self.palw_project_round_block(parent);
                 if self.reachability_service.is_dag_ancestor_of(finality_point, parent)
                     && !self.reachability_service.is_dag_ancestor_of_any(parent, &mut heap.iter().map(|sb| sb.block.hash))
                 {
@@ -13660,6 +13670,9 @@ impl VirtualStateProcessor {
         selected_parent: BlockHash,
         mut candidates: VecDeque<BlockHash>,
         pruning_point: BlockHash,
+        // ADR-0125: the round tips, offered after the chain's own candidates. Empty where the lane
+        // is not configured.
+        round_tips: Vec<BlockHash>,
     ) -> (Vec<BlockHash>, GhostdagData) {
         // TODO (relaxed): additional tests
 
@@ -13713,9 +13726,12 @@ impl VirtualStateProcessor {
             }
         }
 
+        // ADR-0125: one parent slot is kept for the round lane while it has a tip to offer, so a DAG
+        // wide with chain tips cannot starve the lane of every merge.
+        let round_reserve = usize::from(!round_tips.is_empty() && max_block_parents > 1);
         // Try adding parents as long as mergeset size and number of parents limits are not reached
         while let Some(candidate) = candidates.pop_front() {
-            if mergeset_size >= mergeset_size_limit || virtual_parents.len() >= max_block_parents {
+            if mergeset_size >= mergeset_size_limit || virtual_parents.len() >= max_block_parents - round_reserve {
                 break;
             }
             match self.mergeset_increase(&virtual_parents, candidate, mergeset_size_limit - mergeset_size, track_heartbeats) {
@@ -13747,7 +13763,108 @@ impl VirtualStateProcessor {
         }
         assert!(mergeset_size <= mergeset_size_limit);
         assert!(virtual_parents.len() <= max_block_parents);
+        self.palw_add_round_parents(&mut virtual_parents, selected_parent, round_tips, max_block_parents);
         self.remove_bounded_merge_breaking_parents(virtual_parents, pruning_point)
+    }
+
+    /// ADR-0125: the round blocks among `tips`, where the lane is configured.
+    pub(super) fn palw_round_tips(&self, tips: &[BlockHash]) -> Vec<BlockHash> {
+        if self.palw_execution_lane.is_none() {
+            return Vec::new();
+        }
+        tips.iter().copied().filter(|tip| self.ghostdag_manager.is_round_block(*tip)).collect()
+    }
+
+    /// ADR-0125: a round block stands for its anchor — its selected parent, never itself a round
+    /// block — wherever the chain's own blocks are being chosen among.
+    fn palw_project_round_block(&self, block: BlockHash) -> BlockHash {
+        if self.palw_execution_lane.is_some() && self.ghostdag_manager.is_round_block(block) {
+            self.ghostdag_store.get_selected_parent(block).unwrap_or(block)
+        } else {
+            block
+        }
+    }
+
+    /// ADR-0125: [`Self::palw_project_round_block`] over a set, reduced back to an antichain (an
+    /// anchor is often an ancestor of another candidate — the sink above all).
+    fn palw_project_round_blocks(&self, blocks: Vec<BlockHash>) -> Vec<BlockHash> {
+        if self.palw_execution_lane.is_none() {
+            return blocks;
+        }
+        let mut projected: Vec<BlockHash> = Vec::with_capacity(blocks.len());
+        for block in blocks {
+            let block = self.palw_project_round_block(block);
+            if !projected.contains(&block) {
+                projected.push(block);
+            }
+        }
+        let all = projected.clone();
+        projected.retain(|block| {
+            !all.iter().any(|other| {
+                other != block && self.reachability_service.try_is_dag_ancestor_of(*block, *other).unwrap_or(false)
+            })
+        });
+        projected
+    }
+
+    /// **ADR-0125: merge the round lane into virtual.** Round tips are offered newest round first; a
+    /// tip is taken when its anchor lies on virtual's selected chain (the header rule's anchor
+    /// half), it is not already merged, it keeps the parents an antichain, and the mergeset it would
+    /// make still passes both bounds — the chain's own `mergeset_size_limit` over its non-round
+    /// members and the round lane's rule over its round members. So a template never builds a block
+    /// the header stage refuses, and a tip that does not fit waits for a later template.
+    fn palw_add_round_parents(
+        &self,
+        virtual_parents: &mut Vec<BlockHash>,
+        selected_parent: BlockHash,
+        mut round_tips: Vec<BlockHash>,
+        max_block_parents: usize,
+    ) {
+        use kaspa_consensus_core::palw_execution_lane_v1::{PalwExecEnvelopeV1, palw_execution_mergeset_rule_v1};
+        let Some(lane) = self.palw_execution_lane else {
+            return;
+        };
+        let envelope_of =
+            |block: BlockHash| self.headers_store.get_header(block).ok().and_then(|h| PalwExecEnvelopeV1::decode(&h.palw_commitment).ok());
+        round_tips.sort_by_key(|tip| std::cmp::Reverse((envelope_of(*tip).map(|e| e.round).unwrap_or(0), *tip)));
+        for tip in round_tips {
+            if virtual_parents.len() >= max_block_parents {
+                break;
+            }
+            let Ok(anchor) = self.ghostdag_store.get_selected_parent(tip) else {
+                continue;
+            };
+            if !self.reachability_service.try_is_chain_ancestor_of(anchor, selected_parent).unwrap_or(false) {
+                continue;
+            }
+            if virtual_parents.iter().any(|parent| {
+                self.reachability_service.try_is_dag_ancestor_of(tip, *parent).unwrap_or(true)
+                    || self.reachability_service.try_is_dag_ancestor_of(*parent, tip).unwrap_or(true)
+            }) {
+                continue;
+            }
+            let mut tentative = virtual_parents.clone();
+            tentative.push(tip);
+            let ghostdag = self.ghostdag_manager.ghostdag(&tentative);
+            let mut members = Vec::new();
+            let mut malformed = false;
+            for red in ghostdag.mergeset_reds.iter().copied() {
+                if !self.ghostdag_manager.is_round_block(red) {
+                    continue;
+                }
+                match envelope_of(red) {
+                    Some(envelope) => members.push((envelope.round, envelope.permit_index, envelope.bond)),
+                    None => malformed = true,
+                }
+            }
+            if malformed || ghostdag.mergeset_size() as u64 - members.len() as u64 > self.mergeset_size_limit {
+                continue;
+            }
+            if palw_execution_mergeset_rule_v1(None, &members, lane.permits_per_round, lane.max_per_mergeset).is_err() {
+                continue;
+            }
+            virtual_parents.push(tip);
+        }
     }
 
     fn mergeset_increase(
