@@ -1,11 +1,14 @@
-//! Shared kaspa-pq validator signing primitives (ADR-0010 / ADR-0011).
+//! Shared kaspa-pq ML-DSA-87 key and transaction primitives.
 //!
-//! Used by BOTH the in-process `--enable-validator` service in `kaspad` and the
-//! standalone `kaspa-pq-validator` sidecar binary, so the two deployment shapes share a
-//! single implementation of: the ML-DSA-87 validator key + its derived overlay identity
-//! ([`ValidatorKey`]), fee-funded attestation-shard transaction building, and the
-//! persistent equivocation-safety log ([`SignedEpochStore`], ADR-0011). No consensus
-//! surface — this is a node-local helper crate.
+//! Named for the DNS-finality validator it was first written for (ADR-0010 / ADR-0011). That
+//! overlay and its in-node service and `kaspa-pq-validator` sidecar are retired — PALW does not
+//! involve validators — and their attestation, precommit, slashing-evidence, stake-bond, unbond,
+//! VLT compute and token builders went with them. What remains is what PALW and the wallet use:
+//! the seed loader/writer and [`ValidatorKey`] (a bond key's ML-DSA-87 keypair and address),
+//! the funded carrier builders (PALW lifecycle objects, Stage-0 carriage, free-prompt commitments
+//! and receipt spends, native send/consolidate), relay-fee helpers, funding selection, and the
+//! signer's persistent equivocation logs ([`SignedEpochStore`], [`PalwAttemptJournalStore`]).
+//! No consensus surface — this is a node-local helper crate.
 
 /// ADR-0079 Decision 8 / SA-2: the ONE message shape a free-prompt signature may cover, and the
 /// only place a `PalwFpCommitmentV3` claim id is allowed to come from. Both signing forms — the
@@ -15,11 +18,8 @@ pub mod palw_fp_sign_gate;
 use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_consensus_core::constants::{MAX_TX_IN_SEQUENCE_NUM, TX_VERSION};
 use kaspa_consensus_core::dns_finality::{
-    ATTESTATION_MLDSA87_CONTEXT, DNS_PAYLOAD_VERSION_V1, PRECOMMIT_MLDSA87_CONTEXT, PalwAttemptSignRecordV1, PrecommitEvidencePayload,
-    PrecommitLock, SignedEpochCheckOutcome, SignedEpochRecord, SlashingEvidencePayload, StakeAttestation,
-    StakeAttestationShardPayload, StakeBondPayload, StakePrecommitPayload, StakeUnbondRequestPayload, UNBOND_REQUEST_CONTEXT,
-    check_palw_attempt_sign_record_v1, check_signed_epoch_record, precommit_fault, single_attestation_shard,
-    stake_attestation_message, stake_precommit_message, unbond_request_message, validator_id_from_pubkey,
+    PalwAttemptSignRecordV1, SignedEpochCheckOutcome, SignedEpochRecord, check_palw_attempt_sign_record_v1, check_signed_epoch_record,
+    validator_id_from_pubkey,
 };
 use kaspa_consensus_core::hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash};
 use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
@@ -29,27 +29,11 @@ use kaspa_consensus_core::palw_freeprompt_v3::{
     PalwFreePromptCommitmentV3, fp_claim_id_v3,
 };
 use kaspa_consensus_core::subnets::{
-    SUBNETWORK_ID_COMPUTE_CAPABILITY, SUBNETWORK_ID_COMPUTE_CERTIFICATE, SUBNETWORK_ID_COMPUTE_CHALLENGE,
-    SUBNETWORK_ID_COMPUTE_COMMITMENT, SUBNETWORK_ID_COMPUTE_VERDICT, SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_PALW_FP_COMMITMENT,
-    SUBNETWORK_ID_PRECOMMIT_EVIDENCE, SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD,
-    SUBNETWORK_ID_STAKE_BOND, SUBNETWORK_ID_STAKE_PRECOMMIT, SUBNETWORK_ID_STAKE_UNBOND, SUBNETWORK_ID_TOKEN_BURN,
-    SUBNETWORK_ID_TOKEN_TRANSFER, SubnetworkId,
-};
-use kaspa_consensus_core::token::{
-    TOK_ASSET_ID, TOKEN_BURN_MLDSA87_CONTEXT, TOKEN_PAYLOAD_VERSION_V1, TOKEN_TRANSFER_MLDSA87_CONTEXT, TokenBurnPayload,
-    TokenTransferPayload, token_burn_message, token_transfer_message,
+    SUBNETWORK_ID_COMPUTE_CERTIFICATE, SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_PALW_FP_COMMITMENT, SubnetworkId,
 };
 use kaspa_consensus_core::tx::{
-    MutableTransaction, PopulatedTransaction, ScriptPublicKey, Transaction, TransactionId, TransactionInput, TransactionOutpoint,
-    TransactionOutput, UtxoEntry,
-};
-use kaspa_consensus_core::vlt::{
-    COMPUTE_CAPABILITY_MLDSA87_CONTEXT, COMPUTE_CERT_MLDSA87_CONTEXT, COMPUTE_CHALLENGE_MLDSA87_CONTEXT,
-    COMPUTE_COMMITMENT_MLDSA87_CONTEXT, ComputeCapabilityPayload, ComputeCertificatePayload, ComputeChallengePayload,
-    ComputeCommitmentPayload, ComputeFraudKind, ComputeReceipt, ComputeVerdictPayload, LlmJobSpec, MAX_JOB_INPUT_BYTES, ReplayProof,
-    VERIFIER_VERDICT_MLDSA87_CONTEXT, VerificationVerdict, VerifierAttestation, compute_capability_message,
-    compute_certificate_message, compute_challenge_message, compute_commitment_message, compute_receipt_hash,
-    compute_receipt_hash_for_job, job_input_commitment, job_spec_id, verifier_verdict_message,
+    MutableTransaction, PopulatedTransaction, ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput,
+    UtxoEntry,
 };
 use kaspa_hashes::{Hash64, blake2b_512_address_payload};
 use kaspa_txscript::{
@@ -68,11 +52,10 @@ use std::str::FromStr;
 /// (matches the wallet's `KaspaPqMlDsa87KeyPair`).
 pub const VALIDATOR_SEED_LEN: usize = 32;
 
-/// Safety floor (sompi) for an overlay-tx fee — attestation shard / StakeBond / StakeUnbondRequest.
-/// It is the minimum the mass-based estimators ([`ValidatorKey::estimate_attestation_fee`],
-/// [`ValidatorKey::estimate_bond_fee`], [`ValidatorKey::estimate_unbond_fee`]) ever return, and the
-/// value used when a `MassCalculator` is unavailable. The real fee is the relay-rate fee derived
-/// from the transaction's compute mass — see [`relay_fee_for_compute_mass`], which mirrors the
+/// Safety floor (sompi) for a funded carrier's fee. It is the minimum the mass-based estimators
+/// ([`ValidatorKey::estimate_overlay_fee`], [`ValidatorKey::estimate_deposit_lock_fee_for_inputs`])
+/// ever return, and the value used when a `MassCalculator` is unavailable. The real fee is the
+/// relay-rate fee derived from the transaction's compute mass — see [`relay_fee_for_compute_mass`], which mirrors the
 /// node's `minimum_required_transaction_relay_fee` at the kaspa-pq production rate (10× compute
 /// mass); for these payload-heavy ML-DSA txs (2592-byte pubkey, 4627-byte sig) that lands at
 /// ≈ 272 000–319 000 sompi, all comfortably above this floor (so on the normal path the floor never
@@ -215,7 +198,7 @@ impl ValidatorKey {
     /// keyed_BLAKE2b-512("kaspa-pq-v2/address/mldsa87", public_key))`. This is the
     /// **spend** address (64-byte keyed BLAKE2b-512 payload — md2 §4.2 / ADR-0019
     /// §8), distinct from the 64-byte overlay `validator_id` (an *unkeyed*
-    /// BLAKE2b-512). Funding UTXOs sent here back the attestation-shard
+    /// BLAKE2b-512). Funding UTXOs sent here fund this key's carrier
     /// transactions (funding model A).
     pub fn funding_address(&self, prefix: Prefix) -> Address {
         let payload = blake2b_512_address_payload(self.keypair.verification_key.as_ref()).as_bytes();
@@ -224,8 +207,9 @@ impl ValidatorKey {
 
     /// Sign `message` under an explicit ML-DSA-87 `context` (domain separator) with fresh
     /// hedged randomness. Distinct contexts keep attestation signatures
-    /// ([`ATTESTATION_MLDSA87_CONTEXT`]) and transaction-input signatures
-    /// ([`MLDSA87_TX_CONTEXT`]) in disjoint domains — neither can be replayed as the other.
+    /// ([`ATTESTATION_MLDSA87_CONTEXT`](kaspa_consensus_core::dns_finality::ATTESTATION_MLDSA87_CONTEXT))
+    /// and transaction-input signatures ([`MLDSA87_TX_CONTEXT`]) in disjoint domains — neither can
+    /// be replayed as the other.
     pub fn sign_with_context(&self, message: &[u8], context: &[u8]) -> [u8; MLDSA87_SIG_LEN] {
         // audit L: ML-DSA `sign` only fails for an over-long (>255-byte) context; every caller
         // passes a short fixed domain-separator constant, so this precondition turns the
@@ -237,13 +221,6 @@ impl ValidatorKey {
         let sig = ml_dsa_87::sign(&self.keypair.signing_key, message, context, randomness)
             .expect("ML-DSA-87 sign is infallible for a <= 255-byte context");
         *sig.as_ref()
-    }
-
-    /// Sign a stake-attestation `message` digest under [`ATTESTATION_MLDSA87_CONTEXT`].
-    /// Verifies via [`verify_mldsa87_with_context`] — the same call the `virtual_processor`
-    /// aggregator uses.
-    pub fn sign_attestation(&self, message: &[u8]) -> [u8; MLDSA87_SIG_LEN] {
-        self.sign_with_context(message, ATTESTATION_MLDSA87_CONTEXT)
     }
 
     /// Sign a PALW **block commitment** on the miner's behalf — ADR-0038 Decision A's producer.
@@ -263,11 +240,13 @@ impl ValidatorKey {
     ///    and the attempt it was mined under; `PalwBlockCommitmentV1::message` recomputes what is
     ///    signed. There is no input to this method that can express "an attestation".
     /// 2. **The context is [`PALW_BLOCK_COMMITMENT_MLDSA87_CONTEXT`]**, disjoint from
-    ///    [`ATTESTATION_MLDSA87_CONTEXT`], [`PRECOMMIT_MLDSA87_CONTEXT`] and the transaction
-    ///    context. ML-DSA binds the context into the signature, so even a digest that collided
-    ///    with an attestation message would produce a signature no attestation verifier accepts.
+    ///    [`ATTESTATION_MLDSA87_CONTEXT`](kaspa_consensus_core::dns_finality::ATTESTATION_MLDSA87_CONTEXT),
+    ///    [`PRECOMMIT_MLDSA87_CONTEXT`](kaspa_consensus_core::dns_finality::PRECOMMIT_MLDSA87_CONTEXT)
+    ///    and the transaction context. ML-DSA binds the context into the signature, so even a digest
+    ///    that collided with an attestation message would produce a signature no attestation
+    ///    verifier accepts.
     ///
-    /// The commitment is shape-checked first, in `sign_precommit`'s spirit: signing something
+    /// The commitment is shape-checked first, in the retired precommit signer's spirit: signing something
     /// consensus will reject only burns an attempt, and doing it silently makes the miner look
     /// broken rather than misconfigured. `signature` on the input is ignored — pass anything.
     ///
@@ -308,200 +287,6 @@ impl ValidatorKey {
                 kaspa_consensus_core::palw_block_commitment::PALW_BLOCK_COMMITMENT_MLDSA87_CONTEXT,
             )
             .to_vec())
-    }
-
-    /// Sign a **precommit** — round 2 of DNS finality (MISAKA §5).
-    ///
-    /// `held` is the lock this validator is currently carrying, as the chain shows it; `None`
-    /// means it has never precommitted. It is a parameter rather than something this method
-    /// remembers, because the chain — not this process — is the authority on what a validator has
-    /// published, and a node that restarted, resynced or was restored from a backup must restate
-    /// the lock the network can see rather than one its local state invented.
-    ///
-    /// The lock goes into the signed digest, which is what makes the declaration binding: a
-    /// signature that did not cover it would leave anyone free to restate this validator's lock as
-    /// whatever suited them, and both the on-chain lock check and the cross-branch equivocation
-    /// proof would then rest on an unsigned field.
-    ///
-    /// Refuses to sign a lock that is not strictly below the epoch being locked — that is a lock
-    /// the signer could not yet have held, and consensus rejects it at the stateless layer, so
-    /// producing one only burns a fee.
-    #[allow(clippy::too_many_arguments)]
-    pub fn sign_precommit(
-        &self,
-        network_id: &[u8],
-        epoch: u64,
-        target_hash: Hash64,
-        target_daa_score: u64,
-        held: Option<PrecommitLock>,
-        snapshot_commitment: Hash64,
-        bond_outpoint: TransactionOutpoint,
-    ) -> Result<StakePrecommitPayload, String> {
-        let lock = held.unwrap_or_default();
-        // §5.1: the snapshot commitment comes from the duty (the chain's word on which frozen
-        // denominator is in force), never from this process's memory — same authority rule as
-        // the lock.
-        let message = stake_precommit_message(
-            network_id,
-            epoch,
-            target_hash,
-            target_daa_score,
-            lock.epoch,
-            lock.anchor,
-            snapshot_commitment,
-            bond_outpoint,
-        );
-        let signature = self.sign_with_context(message.as_bytes().as_slice(), PRECOMMIT_MLDSA87_CONTEXT).to_vec();
-        let payload = StakePrecommitPayload {
-            version: DNS_PAYLOAD_VERSION_V1,
-            validator_id: self.validator_id,
-            bond_outpoint,
-            epoch,
-            target_hash,
-            target_daa_score,
-            locked_epoch: lock.epoch,
-            locked_hash: lock.anchor,
-            snapshot_commitment,
-            signature,
-        };
-        if !payload.lock_is_self_consistent() {
-            return Err(format!("held lock (epoch {}) is not strictly below the epoch {epoch} being locked", lock.epoch));
-        }
-        Ok(payload)
-    }
-
-    /// Sign one attestation over an arbitrary target, without the equivocation guard.
-    ///
-    /// **Deliberately guard-free, and the only method here that is.** Every production path signs
-    /// through [`SignedEpochStore`], which refuses a second target in one epoch — that guard is
-    /// what stops an honest node from slashing itself after a restart. This method exists for the
-    /// opposite purpose: producing the two conflicting signatures that PROVE the §9 offence, so a
-    /// devnet can demonstrate that equivocation actually burns a bond. It is called by the
-    /// `equivocate` subcommand and by tests; nothing else may use it.
-    ///
-    /// Signing two targets for one epoch with a bonded key on a live network is a slashable act
-    /// against your own stake. That is the point of the tool, and the reason this doc says so.
-    pub fn sign_attestation_unguarded(
-        &self,
-        network_id: &[u8],
-        epoch: u64,
-        target_hash: Hash64,
-        target_daa_score: u64,
-        validator_set_commitment: Hash64,
-        bond_outpoint: TransactionOutpoint,
-    ) -> StakeAttestation {
-        let message =
-            stake_attestation_message(network_id, epoch, target_hash, target_daa_score, validator_set_commitment, bond_outpoint);
-        let signature = self.sign_attestation(message.as_bytes().as_slice()).to_vec();
-        StakeAttestation {
-            version: DNS_PAYLOAD_VERSION_V1,
-            validator_id: self.validator_id,
-            bond_outpoint,
-            epoch,
-            target_hash,
-            target_daa_score,
-            validator_set_commitment,
-            signature,
-        }
-    }
-
-    /// Assemble round-1 (attestation) equivocation evidence: one validator, one bond, one epoch,
-    /// two different anchors.
-    ///
-    /// The reporter signs nothing — the proof is the accused's own two signatures, exactly as in
-    /// [`Self::build_precommit_evidence`]. Refuses a pair that does not contradict, because
-    /// filing one burns a fee to prove nothing.
-    pub fn build_slashing_evidence(
-        a: StakeAttestation,
-        b: StakeAttestation,
-        reporter_reward_spk_payload: [u8; 64],
-    ) -> Result<SlashingEvidencePayload, String> {
-        if a.bond_outpoint != b.bond_outpoint || a.validator_id != b.validator_id || a.epoch != b.epoch {
-            return Err("the two attestations are not one validator, one bond and one epoch".to_string());
-        }
-        if a.target_hash == b.target_hash {
-            return Err("the two attestations approve the same anchor; this proves nothing".to_string());
-        }
-        Ok(SlashingEvidencePayload {
-            version: DNS_PAYLOAD_VERSION_V1,
-            bond_outpoint: a.bond_outpoint,
-            attestation_a: a,
-            attestation_b: b,
-            reporter_reward_spk_payload,
-        })
-    }
-
-    /// Build the fee-funded transaction carrying round-1 slashing evidence. Output-less for the
-    /// same reason as the round-2 one: consensus mints the reporter reward at `(evidence_tx_id, 0)`.
-    pub fn build_slashing_evidence_tx(
-        &self,
-        evidence: &SlashingEvidencePayload,
-        funding_outpoint: TransactionOutpoint,
-        funding: &UtxoEntry,
-        fee: u64,
-    ) -> Result<Transaction, String> {
-        let bytes = borsh::to_vec(evidence).expect("borsh serialization of well-formed evidence is infallible");
-        self.build_funded_overlay_tx(SUBNETWORK_ID_SLASHING_EVIDENCE, bytes, funding_outpoint, funding, fee, true)
-    }
-
-    /// Assemble precommit evidence against a validator that cannot have been honest.
-    ///
-    /// The reporter signs nothing: the proof is the accused validator's own two signatures, and
-    /// this node only carries them. That is what makes the evidence checkable by anyone with the
-    /// two payloads, with no reference to the branch either came from — which matters because the
-    /// second one is typically from a fork whose blocks this node may never have.
-    ///
-    /// Refuses a pair that does not actually contradict. Filing one would burn a fee and be
-    /// rejected at the stateless layer, and more importantly the honest reading of "these two
-    /// could both be true" is that this node's detector is wrong, not that the validator is
-    /// guilty.
-    pub fn build_precommit_evidence(
-        &self,
-        a: StakePrecommitPayload,
-        b: StakePrecommitPayload,
-        reporter_reward_spk_payload: [u8; 64],
-    ) -> Result<PrecommitEvidencePayload, String> {
-        if a.bond_outpoint != b.bond_outpoint || a.validator_id != b.validator_id {
-            return Err("the two precommits are not from one validator and one bond".to_string());
-        }
-        let Some(fault) = precommit_fault(&a, &b) else {
-            return Err("the two precommits could both be honest; this proves nothing".to_string());
-        };
-        let _ = fault;
-        Ok(PrecommitEvidencePayload {
-            version: DNS_PAYLOAD_VERSION_V1,
-            bond_outpoint: a.bond_outpoint,
-            precommit_a: a,
-            precommit_b: b,
-            reporter_reward_spk_payload,
-        })
-    }
-
-    /// Build the fee-funded transaction carrying precommit evidence.
-    ///
-    /// Output-less, like the round-1 slashing-evidence tx: consensus mints the reporter reward at
-    /// `(evidence_tx_id, 0)`, and a declared change output would collide with that mint.
-    pub fn build_precommit_evidence_tx(
-        &self,
-        evidence: &PrecommitEvidencePayload,
-        funding_outpoint: TransactionOutpoint,
-        funding: &UtxoEntry,
-        fee: u64,
-    ) -> Result<Transaction, String> {
-        let bytes = borsh::to_vec(evidence).expect("borsh serialization of well-formed evidence is infallible");
-        self.build_funded_overlay_tx(SUBNETWORK_ID_PRECOMMIT_EVIDENCE, bytes, funding_outpoint, funding, fee, true)
-    }
-
-    /// Build the fee-funded transaction carrying a signed precommit.
-    pub fn build_precommit_tx(
-        &self,
-        precommit: &StakePrecommitPayload,
-        funding_outpoint: TransactionOutpoint,
-        funding: &UtxoEntry,
-        fee: u64,
-    ) -> Result<Transaction, String> {
-        let bytes = borsh::to_vec(precommit).expect("borsh serialization of a well-formed precommit is infallible");
-        self.build_funded_overlay_tx(SUBNETWORK_ID_STAKE_PRECOMMIT, bytes, funding_outpoint, funding, fee, false)
     }
 
     /// **A PALW V2 lifecycle object, carried on subnetwork 0x4b** (launch blockers §2).
@@ -662,67 +447,18 @@ impl ValidatorKey {
         self.build_funded_overlay_tx(SUBNETWORK_ID_NATIVE, payload, funding_outpoint, funding, fee, false)
     }
 
-    /// Build a fee-funded, signed `StakeAttestationShard` transaction (ADR-0010 step 9,
-    /// funding model A). Spends `funding` — a UTXO locked to this key's own P2PKH-ML-DSA
-    /// script — to pay the fee, returns the change to the same script, and carries the
-    /// borsh-encoded `shard` payload. The single input is signed under
-    /// [`MLDSA87_TX_CONTEXT`] over the SIG_HASH_ALL sighash and wrapped as
-    /// `<sig ‖ sighash-type> <pubkey>` so it satisfies `OpCheckSigMlDsa87`.
-    ///
-    /// `fee` is taken as a parameter; choosing it from the mass-based minimum and
-    /// discovering the funding UTXO are the caller's job.
-    pub fn build_funded_shard_tx(
-        &self,
-        shard: &StakeAttestationShardPayload,
-        funding_outpoint: TransactionOutpoint,
-        funding: &UtxoEntry,
-        fee: u64,
-    ) -> Result<Transaction, String> {
-        if funding.amount <= fee {
-            return Err(format!("funding UTXO amount {} does not cover fee {}", funding.amount, fee));
-        }
-        let payload = borsh::to_vec(shard).expect("borsh serialization of a well-formed shard is infallible");
-        // Input with an empty signature script (filled after the sighash is computed);
-        // change returns to the same script so the validator can fund the next attestation.
-        let input = TransactionInput::new(funding_outpoint, vec![], MAX_TX_IN_SEQUENCE_NUM, 1);
-        let change = TransactionOutput::new(funding.amount - fee, funding.script_public_key.clone());
-        let tx = Transaction::new(TX_VERSION, vec![input], vec![change], 0, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, 0, payload);
-
-        // Sighash is computed over the tx with empty signature scripts (canonical), so
-        // signing before filling the script is correct.
-        let mtx = MutableTransaction::with_entries(tx, vec![funding.clone()]);
-        let reused_mldsa = Mldsa87SigHashReusedValuesUnsync::new();
-        let sighash = calc_mldsa87_signature_hash(&mtx.as_verifiable(), 0, SIG_HASH_ALL, &reused_mldsa);
-
-        let mut sig_data = self.sign_with_context(sighash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT).to_vec();
-        sig_data.push(SIG_HASH_ALL.to_u8()); // OpCheckSigMlDsa87 pops the trailing sighash-type byte
-        let signature_script = ScriptBuilder::new()
-            .add_data(&sig_data)
-            .map_err(|e| format!("attestation funding sig push failed: {e}"))?
-            .add_data(self.keypair.verification_key.as_ref())
-            .map_err(|e| format!("attestation funding pubkey push failed: {e}"))?
-            .drain();
-
-        let mut tx = mtx.tx;
-        tx.inputs[0].signature_script = signature_script;
-        Ok(tx)
-    }
-
     // ---------------------------------------------------------------------
-    // MISAKA Verified LLM Token-Weighted BFT: the four compute-overlay transactions.
-    //
-    // Each mirrors `build_funded_shard_tx` exactly — one funding input, change back to this
-    // key's own P2PKH-ML-DSA script, ML-DSA-signed over the SIG_HASH_ALL v2 sighash under
-    // MLDSA87_TX_CONTEXT — and differs only in subnetwork id and payload. Factored through
-    // `build_funded_overlay_tx` so the funding/signing path cannot drift between them.
+    // The shared funded-carrier path: one funding input, change back to this key's own
+    // P2PKH-ML-DSA script, ML-DSA-signed over the SIG_HASH_ALL v2 sighash under
+    // MLDSA87_TX_CONTEXT. Factored so the funding/signing path cannot drift between the
+    // transactions that use it (PALW lifecycle carriers, Stage-0 carriage, free-prompt commitments).
     // ---------------------------------------------------------------------
 
-    /// Shared body of the compute-overlay transaction builders: one funding input, change to
-    /// self, payload on `subnetwork_id`, input-0 ML-DSA-signed.
+    /// Shared body of the funded-carrier transaction builders: one funding input, change to self,
+    /// payload on `subnetwork_id`, input-0 ML-DSA-signed.
     ///
-    /// `no_change` builds an output-less transaction, which the compute-challenge rule requires
-    /// (like slashing evidence, a challenge is a pure evidence carrier whose reporter reward is
-    /// minted by consensus at `(tx_id, 0)`; a declared output would collide with that mint).
+    /// `no_change` builds an output-less transaction — the shape of a pure evidence carrier whose
+    /// reward consensus mints at `(tx_id, 0)`, where a declared output would collide with the mint.
     fn build_funded_overlay_tx(
         &self,
         subnetwork_id: SubnetworkId,
@@ -761,147 +497,6 @@ impl ValidatorKey {
         let mut tx = mtx.tx;
         tx.inputs[0].signature_script = signature_script;
         Ok(tx)
-    }
-
-    /// Sign and build the validator's compute-**capability** declaration — "I run this
-    /// `(model, runtime, determinism class)` profile".
-    ///
-    /// This is what puts the validator into verifier committees for that profile. Consensus caps
-    /// `expiry_daa_score` at `max_capability_validity_blocks` past the accepting block, so a
-    /// declaration has to be renewed; a validator that stops running the runtime then drops out
-    /// of committees instead of sinking every job it is sampled for.
-    #[allow(clippy::too_many_arguments)]
-    pub fn build_capability_tx(
-        &self,
-        network_id: &[u8],
-        bond_outpoint: TransactionOutpoint,
-        model_weights_hash: Hash64,
-        runtime_hash: Hash64,
-        runtime_class_id: Hash64,
-        expiry_daa_score: u64,
-        funding_outpoint: TransactionOutpoint,
-        funding: &UtxoEntry,
-        fee: u64,
-    ) -> Result<Transaction, String> {
-        let validator_id = self.validator_id;
-        let message = compute_capability_message(
-            network_id,
-            validator_id,
-            bond_outpoint,
-            model_weights_hash,
-            runtime_hash,
-            runtime_class_id,
-            expiry_daa_score,
-        );
-        let signature = self.sign_with_context(message.as_bytes().as_slice(), COMPUTE_CAPABILITY_MLDSA87_CONTEXT).to_vec();
-        let payload = ComputeCapabilityPayload {
-            version: DNS_PAYLOAD_VERSION_V1,
-            validator_id,
-            bond_outpoint,
-            model_weights_hash,
-            runtime_hash,
-            runtime_class_id,
-            expiry_daa_score,
-            signature,
-        };
-        let bytes = borsh::to_vec(&payload).expect("borsh serialization of a well-formed capability is infallible");
-        self.build_funded_overlay_tx(SUBNETWORK_ID_COMPUTE_CAPABILITY, bytes, funding_outpoint, funding, fee, false)
-    }
-
-    /// Sign and build a **TOK transfer** (Compute Token Program design v0.1 §4.3) from this
-    /// validator's ledger account to `to`.
-    ///
-    /// Devnet-harness surface for now: the ledger fold judges everything stateful (nonce
-    /// currency, balance), so a transfer built here with a wrong nonce is void on chain, not
-    /// invalid — which is exactly what the harness's void-case assertions rely on.
-    pub fn build_token_transfer_tx(
-        &self,
-        network_id: &[u8],
-        to: Hash64,
-        amount: u128,
-        nonce: u64,
-        funding_outpoint: TransactionOutpoint,
-        funding: &UtxoEntry,
-        fee: u64,
-    ) -> Result<Transaction, String> {
-        if to == self.validator_id {
-            return Err("token transfer to self is rejected statelessly; pick a different recipient".into());
-        }
-        let message = token_transfer_message(network_id, TOK_ASSET_ID, self.validator_id, to, amount, nonce);
-        let signature = self.sign_with_context(message.as_bytes().as_slice(), TOKEN_TRANSFER_MLDSA87_CONTEXT).to_vec();
-        let payload = TokenTransferPayload {
-            version: TOKEN_PAYLOAD_VERSION_V1,
-            asset_id: TOK_ASSET_ID,
-            from_pubkey: self.public_key().to_vec(),
-            to,
-            amount,
-            nonce,
-            signature,
-        };
-        let bytes = borsh::to_vec(&payload).expect("borsh serialization of a well-formed transfer is infallible");
-        self.build_funded_overlay_tx(SUBNETWORK_ID_TOKEN_TRANSFER, bytes, funding_outpoint, funding, fee, false)
-    }
-
-    /// Sign and build a **TOK burn** — same stance as [`Self::build_token_transfer_tx`].
-    pub fn build_token_burn_tx(
-        &self,
-        network_id: &[u8],
-        amount: u128,
-        nonce: u64,
-        funding_outpoint: TransactionOutpoint,
-        funding: &UtxoEntry,
-        fee: u64,
-    ) -> Result<Transaction, String> {
-        let message = token_burn_message(network_id, TOK_ASSET_ID, self.validator_id, amount, nonce);
-        let signature = self.sign_with_context(message.as_bytes().as_slice(), TOKEN_BURN_MLDSA87_CONTEXT).to_vec();
-        let payload = TokenBurnPayload {
-            version: TOKEN_PAYLOAD_VERSION_V1,
-            asset_id: TOK_ASSET_ID,
-            owner_pubkey: self.public_key().to_vec(),
-            amount,
-            nonce,
-            signature,
-        };
-        let bytes = borsh::to_vec(&payload).expect("borsh serialization of a well-formed burn is infallible");
-        self.build_funded_overlay_tx(SUBNETWORK_ID_TOKEN_BURN, bytes, funding_outpoint, funding, fee, false)
-    }
-
-    /// Sign and build the **phase-1 job commitment**.
-    ///
-    /// Must be published BEFORE the job's verifier committee is drawn — the beacon is the
-    /// canonical anchor of the epoch after the one that accepts this transaction, so an executor
-    /// that grinds `sampling_seed` here is grinding against randomness that has not been drawn.
-    /// Publishing the certificate without a matching accepted commitment credits nothing.
-    ///
-    /// `input` is the job's actual prompt bytes, published here because a full-replay verifier
-    /// needs them and the spec carries only their digest. It must be the input the committed
-    /// `job_id`'s spec commits to — the credit walk checks exactly that, so a mismatch produces a
-    /// commitment no certificate of this job can ever resolve against.
-    pub fn build_commitment_tx(
-        &self,
-        network_id: &[u8],
-        job_id: Hash64,
-        input: Vec<u8>,
-        bond_outpoint: TransactionOutpoint,
-        funding_outpoint: TransactionOutpoint,
-        funding: &UtxoEntry,
-        fee: u64,
-    ) -> Result<Transaction, String> {
-        if input.is_empty() || input.len() > MAX_JOB_INPUT_BYTES {
-            return Err(format!("job input is {} bytes; must be 1..={MAX_JOB_INPUT_BYTES}", input.len()));
-        }
-        let message = compute_commitment_message(network_id, job_id, job_input_commitment(&input), bond_outpoint);
-        let signature = self.sign_with_context(message.as_bytes().as_slice(), COMPUTE_COMMITMENT_MLDSA87_CONTEXT).to_vec();
-        let payload = ComputeCommitmentPayload {
-            version: DNS_PAYLOAD_VERSION_V1,
-            job_id,
-            executor_id: self.validator_id,
-            executor_bond_outpoint: bond_outpoint,
-            input,
-            signature,
-        };
-        let bytes = borsh::to_vec(&payload).expect("borsh serialization of a well-formed commitment is infallible");
-        self.build_funded_overlay_tx(SUBNETWORK_ID_COMPUTE_COMMITMENT, bytes, funding_outpoint, funding, fee, false)
     }
 
     /// Sign and build a **free-prompt execution commitment** transaction (ADR-0044 FP-08).
@@ -1020,159 +615,13 @@ impl ValidatorKey {
         PalwReceiptSpendEnvelopeV3 { spend, signature }
     }
 
-    /// Sign this validator's **verifier verdict** over a peer's receipt.
-    ///
-    /// `replay_receipt_hash` MUST be what this node's own independent re-execution produced. The
-    /// verdict itself follows from the comparison, never from intent: equal ⇒ `Confirmed`,
-    /// different ⇒ `Refuted`. Deriving it here rather than accepting it as a parameter removes
-    /// the call site's ability to sign a verdict its own replay does not support — which is
-    /// exactly the §7(b) contradictory-verification offence, and provable from two signatures.
-    pub fn sign_verifier_verdict(
-        &self,
-        network_id: &[u8],
-        certificate_tx_id: TransactionId,
-        job_id: Hash64,
-        executor_receipt_hash: Hash64,
-        replay_proof: ReplayProof,
-        bond_outpoint: TransactionOutpoint,
-    ) -> ComputeVerdictPayload {
-        // Both the reported hash and the verdict are DERIVED from this node's own execution rather
-        // than taken as parameters. A call site that could state either separately could state one
-        // its execution does not support — which is the §7(b) offence, and, for a refutation, the
-        // cheapest attack there is on an honest executor.
-        let replay_receipt_hash = compute_receipt_hash_for_job(job_id, &replay_proof.receipt);
-        let verdict =
-            if replay_receipt_hash == executor_receipt_hash { VerificationVerdict::Confirmed } else { VerificationVerdict::Refuted };
-        let message = verifier_verdict_message(
-            network_id,
-            certificate_tx_id,
-            job_id,
-            executor_receipt_hash,
-            verdict,
-            replay_receipt_hash,
-            bond_outpoint,
-        );
-        let signature = self.sign_with_context(message.as_bytes().as_slice(), VERIFIER_VERDICT_MLDSA87_CONTEXT).to_vec();
-        ComputeVerdictPayload {
-            version: DNS_PAYLOAD_VERSION_V1,
-            certificate_tx_id,
-            job_id,
-            executor_receipt_hash,
-            verifier_id: self.validator_id,
-            bond_outpoint,
-            verdict,
-            replay_receipt_hash,
-            replay_proof,
-            signature,
-        }
-    }
-
-    /// Build the fee-funded transaction carrying a signed verdict.
-    ///
-    /// A verdict is its own transaction rather than something handed to the executor: embedding
-    /// it in the certificate would force the executor to collect verdicts off-chain before it
-    /// could publish, and a verifier's judgement should not travel through the party it judges.
-    pub fn build_verdict_tx(
-        &self,
-        verdict: &ComputeVerdictPayload,
-        funding_outpoint: TransactionOutpoint,
-        funding: &UtxoEntry,
-        fee: u64,
-    ) -> Result<Transaction, String> {
-        let bytes = borsh::to_vec(verdict).expect("borsh serialization of a well-formed verdict is infallible");
-        self.build_funded_overlay_tx(SUBNETWORK_ID_COMPUTE_VERDICT, bytes, funding_outpoint, funding, fee, false)
-    }
-
-    /// Sign and build the **compute certificate** — phase 2, completing the commitment.
-    #[allow(clippy::too_many_arguments)]
-    pub fn build_certificate_tx(
-        &self,
-        network_id: &[u8],
-        epoch: u64,
-        commitment_tx_id: TransactionId,
-        spec: LlmJobSpec,
-        receipt: ComputeReceipt,
-        bond_outpoint: TransactionOutpoint,
-        funding_outpoint: TransactionOutpoint,
-        funding: &UtxoEntry,
-        fee: u64,
-    ) -> Result<Transaction, String> {
-        let job_id = job_spec_id(&spec);
-        let receipt_hash = compute_receipt_hash(&spec, &receipt);
-        let message = compute_certificate_message(network_id, epoch, job_id, receipt_hash, bond_outpoint);
-        let executor_signature = self.sign_with_context(message.as_bytes().as_slice(), COMPUTE_CERT_MLDSA87_CONTEXT).to_vec();
-        let payload = ComputeCertificatePayload {
-            version: DNS_PAYLOAD_VERSION_V1,
-            epoch,
-            executor_id: self.validator_id,
-            executor_bond_outpoint: bond_outpoint,
-            commitment_tx_id,
-            spec,
-            receipt,
-            executor_signature,
-        };
-        let bytes = borsh::to_vec(&payload).expect("borsh serialization of a well-formed certificate is infallible");
-        self.build_funded_overlay_tx(SUBNETWORK_ID_COMPUTE_CERTIFICATE, bytes, funding_outpoint, funding, fee, false)
-    }
-
-    /// Sign and build a **compute fraud proof** against an accepted certificate.
-    ///
-    /// Output-less by construction (see [`Self::build_funded_overlay_tx`]). `target_bond_outpoint`
-    /// names the bond a successful challenge slashes, and which bond that is depends on `kind`:
-    /// the executor's for a forged receipt or invalid certificate, the contradicting verifier's
-    /// for a contradictory verification, the losing claimant's for a failed challenge.
-    #[allow(clippy::too_many_arguments)]
-    pub fn build_challenge_tx(
-        &self,
-        network_id: &[u8],
-        certificate_tx_id: TransactionId,
-        job_id: Hash64,
-        kind: ComputeFraudKind,
-        executor_receipt_hash: Hash64,
-        replay_receipt_hash: Hash64,
-        target_bond_outpoint: TransactionOutpoint,
-        contradictory_verdicts: Vec<VerifierAttestation>,
-        bond_outpoint: TransactionOutpoint,
-        reporter_reward_spk_payload: [u8; 64],
-        funding_outpoint: TransactionOutpoint,
-        funding: &UtxoEntry,
-        fee: u64,
-    ) -> Result<Transaction, String> {
-        let message = compute_challenge_message(
-            network_id,
-            certificate_tx_id,
-            job_id,
-            kind,
-            executor_receipt_hash,
-            replay_receipt_hash,
-            bond_outpoint,
-        );
-        let signature = self.sign_with_context(message.as_bytes().as_slice(), COMPUTE_CHALLENGE_MLDSA87_CONTEXT).to_vec();
-        let payload = ComputeChallengePayload {
-            version: DNS_PAYLOAD_VERSION_V1,
-            certificate_tx_id,
-            job_id,
-            executor_receipt_hash,
-            kind,
-            challenger_id: self.validator_id,
-            challenger_bond_outpoint: bond_outpoint,
-            target_bond_outpoint,
-            replay_receipt_hash,
-            contradictory_verdicts,
-            signature,
-            reporter_reward_spk_payload,
-        };
-        let bytes = borsh::to_vec(&payload).expect("borsh serialization of a well-formed challenge is infallible");
-        self.build_funded_overlay_tx(SUBNETWORK_ID_COMPUTE_CHALLENGE, bytes, funding_outpoint, funding, fee, true)
-    }
-
     /// Build a fee-funded, signed NATIVE transfer that SPLITS one funding UTXO into
     /// `num_outputs` change outputs back to this key's own P2PKH-ML-DSA script — a generic
     /// value-moving transaction used for load generation (each output becomes a fresh
     /// spendable UTXO, so a chain of these fans out into many transactions). The KIP-9
     /// storage mass is committed (value-based, so it matches the node's `calc_contextual_masses`
     /// recheck), and input-0 is ML-DSA-signed over the `SIG_HASH_ALL` v2 sighash under
-    /// [`MLDSA87_TX_CONTEXT`] exactly as [`Self::build_funded_shard_tx`].
+    /// [`MLDSA87_TX_CONTEXT`] exactly as every other funded carrier here.
     pub fn build_funded_split_tx(
         &self,
         funding_outpoint: TransactionOutpoint,
@@ -1221,133 +670,13 @@ impl ValidatorKey {
         Ok(tx)
     }
 
-    /// Build a fee-funded, signed `StakeBond` transaction (ADR-0010 / ADR-0016 §D.1) that
-    /// stakes `amount` sompi: this is how mined coins become locked stake backing a
-    /// validator. Spends `funding` — a UTXO at this key's own P2PKH-ML-DSA script — into:
-    ///   - **output-0** = `amount` to the same script (the *locked stake*; its outpoint
-    ///     `(txid, 0)` becomes the `bond_outpoint`). Consensus pins this output's value to
-    ///     `payload.amount` at acceptance (§D.1) and the bond-spend-gate locks it while the
-    ///     bond is Pending/Active/unbonding, so the declared `amount` is real capital.
-    ///   - **output-1** = change (`funding.amount − amount − fee`) to the same script, emitted
-    ///     only when non-zero.
-    /// The borsh-encoded [`StakeBondPayload`] carries the bond terms; the validator's own
-    /// 2592-byte ML-DSA-87 pubkey and the matching `validator_pubkey_hash`/`owner_pubkey_hash`
-    /// (both = `validator_id`) are written so any node can verify attestations without a
-    /// registry. `owner_reward_spk_payload` is where this bond's rewards are paid — set to the
-    /// caller-supplied 64-byte P2PKH-ML-DSA payload (ADR-0019 §8; defaults to the validator's
-    /// own funding payload). The single input is signed under [`MLDSA87_TX_CONTEXT`] exactly as
-    /// [`Self::build_funded_shard_tx`].
-    #[allow(clippy::too_many_arguments)]
-    pub fn build_funded_stake_bond_tx(
-        &self,
-        amount: u64,
-        activation_daa_score: u64,
-        unbonding_period_blocks: u64,
-        owner_reward_spk_payload: [u8; 64],
-        funding_outpoint: TransactionOutpoint,
-        funding: &UtxoEntry,
-        fee: u64,
-    ) -> Result<Transaction, String> {
-        self.build_funded_stake_bond_tx_multi(
-            amount,
-            activation_daa_score,
-            unbonding_period_blocks,
-            owner_reward_spk_payload,
-            &[(funding_outpoint, funding.clone())],
-            fee,
-        )
-    }
-
-    /// Multi-input variant of [`Self::build_funded_stake_bond_tx`]: fund the bond from SEVERAL
-    /// mature UTXOs at this key's own funding address. Mining pays the funding address as many
-    /// ~subsidy-sized coinbase fragments, so a single UTXO rarely covers `amount + fee`; the `bond`
-    /// CLI aggregates the largest mature ones here. All `fundings` MUST be at this key's funding
-    /// script (self-spend); each input is signed independently under [`MLDSA87_TX_CONTEXT`].
-    /// output-0 is the locked stake (== `amount`); the remainder (Σ funding − amount − fee) is a
-    /// single change output back to the funding script. The caller keeps the input count within the
-    /// block mass limit (each ML-DSA-87 input adds a ~2592-byte pubkey + ~4627-byte signature).
-    #[allow(clippy::too_many_arguments)]
-    pub fn build_funded_stake_bond_tx_multi(
-        &self,
-        amount: u64,
-        activation_daa_score: u64,
-        unbonding_period_blocks: u64,
-        owner_reward_spk_payload: [u8; 64],
-        fundings: &[(TransactionOutpoint, UtxoEntry)],
-        fee: u64,
-    ) -> Result<Transaction, String> {
-        if amount == 0 {
-            return Err("stake-bond amount must be > 0".to_string());
-        }
-        if fundings.is_empty() {
-            return Err("stake-bond needs at least one funding UTXO".to_string());
-        }
-        let needed = amount.checked_add(fee).ok_or_else(|| "amount + fee overflows u64".to_string())?;
-        let mut total: u64 = 0;
-        for (_, e) in fundings {
-            total = total.checked_add(e.amount).ok_or_else(|| "funding total overflows u64".to_string())?;
-        }
-        if total < needed {
-            return Err(format!("funding UTXOs total {total} does not cover amount {amount} + fee {fee}"));
-        }
-        // validator_id = BLAKE2b-512(pubkey) is both the owner and validator identity for a
-        // self-bonded validator; the 64-byte reward payload is a separate spend target.
-        let payload = StakeBondPayload {
-            version: DNS_PAYLOAD_VERSION_V1,
-            owner_pubkey_hash: self.validator_id,
-            validator_pubkey_hash: self.validator_id,
-            validator_pubkey: self.keypair.verification_key.as_ref().to_vec(),
-            amount,
-            activation_daa_score,
-            unbonding_period_blocks,
-            owner_reward_spk_payload,
-        };
-        let payload = borsh::to_vec(&payload).expect("borsh serialization of a well-formed stake-bond is infallible");
-
-        // All fundings are at this key's own funding script (self-spend), so change goes back there.
-        let spk = fundings[0].1.script_public_key.clone();
-        let inputs: Vec<TransactionInput> =
-            fundings.iter().map(|(op, _)| TransactionInput::new(*op, vec![], MAX_TX_IN_SEQUENCE_NUM, 1)).collect();
-        // output-0 MUST be the locked stake (value == amount); change (if any) follows.
-        let mut outputs = vec![TransactionOutput::new(amount, spk.clone())];
-        let change = total - needed;
-        if change > 0 {
-            outputs.push(TransactionOutput::new(change, spk));
-        }
-        let tx = Transaction::new(TX_VERSION, inputs, outputs, 0, SUBNETWORK_ID_STAKE_BOND, 0, payload);
-
-        // Sighash over the canonical (empty-sig-script) tx for EACH input, then fill the scripts.
-        // Every input spends the same self funding script, so all are signed with this key.
-        let entries: Vec<UtxoEntry> = fundings.iter().map(|(_, e)| e.clone()).collect();
-        let mtx = MutableTransaction::with_entries(tx, entries);
-        let reused_mldsa = Mldsa87SigHashReusedValuesUnsync::new();
-        let mut sig_scripts = Vec::with_capacity(fundings.len());
-        for i in 0..fundings.len() {
-            let sighash = calc_mldsa87_signature_hash(&mtx.as_verifiable(), i, SIG_HASH_ALL, &reused_mldsa);
-            let mut sig_data = self.sign_with_context(sighash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT).to_vec();
-            sig_data.push(SIG_HASH_ALL.to_u8());
-            let signature_script = ScriptBuilder::new()
-                .add_data(&sig_data)
-                .map_err(|e| format!("stake-bond funding sig push failed: {e}"))?
-                .add_data(self.keypair.verification_key.as_ref())
-                .map_err(|e| format!("stake-bond funding pubkey push failed: {e}"))?
-                .drain();
-            sig_scripts.push(signature_script);
-        }
-        let mut tx = mtx.tx;
-        for (i, script) in sig_scripts.into_iter().enumerate() {
-            tx.inputs[i].signature_script = script;
-        }
-        Ok(tx)
-    }
-
     /// Build a fee-funded, signed NATIVE SEND: spend `fundings` (all at this key's
     /// own funding script — a self-spend) into output-0 = `amount` to
     /// `recipient_spk`, output-1 = change back to self (emitted only when > 0).
     /// Plain native subnetwork, no payload, KIP-9 storage mass committed. Each
-    /// input is signed independently under [`MLDSA87_TX_CONTEXT`] — the SAME proven
-    /// path as [`Self::build_funded_stake_bond_tx_multi`] (only the outputs +
-    /// subnetwork differ), so signature validity is inherited from the bond path.
+    /// input is signed independently under [`MLDSA87_TX_CONTEXT`] — the same
+    /// per-input path as [`Self::build_palw_lifecycle_tx_multi`] (only the outputs +
+    /// subnetwork differ).
     pub fn build_funded_send_tx(
         &self,
         recipient_spk: ScriptPublicKey,
@@ -1379,7 +708,7 @@ impl ValidatorKey {
     /// Build a fee-funded, signed NATIVE CONSOLIDATE: spend `fundings` (all at this
     /// key's own funding script) into a SINGLE self-output of `Σ inputs − fee`.
     /// Merges many small UTXOs into one — the large-UTXO remedy. Same proven
-    /// per-input signing as the send/bond path.
+    /// per-input signing as the send path.
     pub fn build_funded_consolidate_tx(
         &self,
         fundings: &[(TransactionOutpoint, UtxoEntry)],
@@ -1488,7 +817,7 @@ impl ValidatorKey {
         }
         let tx = Transaction::new(TX_VERSION, inputs, outputs, 0, SUBNETWORK_ID_NATIVE, 0, vec![]);
 
-        // Sign each self-spend input over the canonical sighash (same loop as the bond builder).
+        // Sign each self-spend input over the canonical sighash (same loop as the native multi-input builders).
         let entries: Vec<UtxoEntry> = fundings.iter().map(|(_, e)| e.clone()).collect();
         let mtx = MutableTransaction::with_entries(tx, entries);
         let reused_mldsa = Mldsa87SigHashReusedValuesUnsync::new();
@@ -1512,8 +841,9 @@ impl ValidatorKey {
         Ok(tx)
     }
 
-    /// Mass-based fee (sompi) for an `n_inputs`-funded deposit-lock tx — the
-    /// same dummy-shape approach as [`Self::estimate_bond_fee_for_inputs`].
+    /// Mass-based fee (sompi) for an `n_inputs`-funded deposit-lock tx: build a dummy
+    /// `n_inputs`-input lock of the real shape (field *sizes*, not values, drive the compute
+    /// mass) and take its relay fee, clamped up to [`ATTESTATION_TX_FEE_FLOOR_SOMPI`].
     pub fn estimate_deposit_lock_fee_for_inputs(&self, mass_calculator: &MassCalculator, prefix: Prefix, n_inputs: usize) -> u64 {
         let funding_spk = pay_to_address_script(&self.funding_address(prefix));
         let n = n_inputs.max(1);
@@ -1532,116 +862,13 @@ impl ValidatorKey {
         }
     }
 
-    /// Build a fee-funded, signed `StakeUnbondRequest` transaction (subnetwork
-    /// `SUBNETWORK_ID_STAKE_UNBOND`, ADR-0016 / audit H-05) that begins unbonding the
-    /// `StakeBond` at `bond_outpoint`. Accepting it stamps the bond's
-    /// `unbond_request_daa_score` (→ `Unbonding`); the bond's locked output-0 then becomes
-    /// spendable once `unbond_request_daa_score + unbonding_period_blocks` is reached
-    /// (the consensus `bond_spend_gate`).
+    /// Mass-based fee (sompi) for a funded carrier transaction carrying `payload_len` bytes.
     ///
-    /// `funding` is a UTXO at this key's own P2PKH-ML-DSA funding script — and MUST NOT be the
-    /// bond's locked output-0 (the spend-gate keeps that locked until release). It is spent into
-    /// a single change output (`funding.amount − fee`) back to the same script so the validator
-    /// can fund the next overlay tx. The borsh-encoded [`StakeUnbondRequestPayload`] carries the
-    /// owner's authorization, and input-0 carries the funding-spend authorization — two
-    /// independent ML-DSA-87 signatures under two distinct domains:
-    ///   - the payload `signature` is the owner's authorization over [`unbond_request_message`]
-    ///     (`bond_outpoint`) under [`UNBOND_REQUEST_CONTEXT`] — without it any party could grief
-    ///     honest validators into `Unbonding` and out of the active set (audit H-05). It carries
-    ///     no trailing sighash-type byte: it is verified by the stateful `unbond_request_authorized`
-    ///     rule, which also binds the key (`validator_id_from_pubkey(owner_pubkey) ==
-    ///     bond.owner_pubkey_hash`).
-    ///   - input-0's `signature_script` proves the funding spend, signed over the tx sighash
-    ///     under [`MLDSA87_TX_CONTEXT`] exactly as [`Self::build_funded_shard_tx`].
-    pub fn build_funded_unbond_tx(
-        &self,
-        network_id: &[u8],
-        bond_outpoint: TransactionOutpoint,
-        funding_outpoint: TransactionOutpoint,
-        funding: &UtxoEntry,
-        fee: u64,
-    ) -> Result<Transaction, String> {
-        if funding.amount <= fee {
-            return Err(format!("funding UTXO amount {} does not cover fee {}", funding.amount, fee));
-        }
-        // Owner authorization: ML-DSA-87 signature over the network- and bond-bound unbond message
-        // (audit M-04: `network_id` = the node's genesis hash, prevents cross-network replay) under
-        // the unbond context (domain-separated from the tx-spend context). Standalone — no trailing
-        // sighash-type byte — since it is the payload's own authorization, not a script signature.
-        let auth_bytes = unbond_request_message(network_id, bond_outpoint).as_bytes();
-        let auth_sig = self.sign_with_context(&auth_bytes[..], UNBOND_REQUEST_CONTEXT).to_vec();
-        let payload = borsh::to_vec(&StakeUnbondRequestPayload {
-            version: DNS_PAYLOAD_VERSION_V1,
-            bond_outpoint,
-            owner_pubkey: self.keypair.verification_key.as_ref().to_vec(),
-            signature: auth_sig,
-        })
-        .expect("borsh serialization of a well-formed unbond request is infallible");
-
-        let spk = funding.script_public_key.clone(); // self-spend; change returns to the funding script
-        let input = TransactionInput::new(funding_outpoint, vec![], MAX_TX_IN_SEQUENCE_NUM, 1);
-        let change = TransactionOutput::new(funding.amount - fee, spk);
-        let tx = Transaction::new(TX_VERSION, vec![input], vec![change], 0, SUBNETWORK_ID_STAKE_UNBOND, 0, payload);
-
-        // Sighash over the canonical (empty-sig-script) tx, then fill input 0's spend script.
-        let mtx = MutableTransaction::with_entries(tx, vec![funding.clone()]);
-        let reused_mldsa = Mldsa87SigHashReusedValuesUnsync::new();
-        let sighash = calc_mldsa87_signature_hash(&mtx.as_verifiable(), 0, SIG_HASH_ALL, &reused_mldsa);
-        let mut sig_data = self.sign_with_context(sighash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT).to_vec();
-        sig_data.push(SIG_HASH_ALL.to_u8());
-        let signature_script = ScriptBuilder::new()
-            .add_data(&sig_data)
-            .map_err(|e| format!("unbond funding sig push failed: {e}"))?
-            .add_data(self.keypair.verification_key.as_ref())
-            .map_err(|e| format!("unbond funding pubkey push failed: {e}"))?
-            .drain();
-        let mut tx = mtx.tx;
-        tx.inputs[0].signature_script = signature_script;
-        Ok(tx)
-    }
-
-    /// The 64-byte P2PKH-ML-DSA reward payload for this key — keyed
-    /// `BLAKE2b-512(public_key)` under `kaspa-pq-v2/address/mldsa87` (md2 §4.2 /
-    /// ADR-0019 §8), the same payload as [`Self::funding_address`]. Default
-    /// `owner_reward_spk_payload` for a self-bonded validator (rewards return to the
-    /// validator's own spend address).
-    pub fn reward_spk_payload(&self) -> [u8; 64] {
-        blake2b_512_address_payload(self.keypair.verification_key.as_ref()).as_bytes()
-    }
-
-    /// Mass-based fee (sompi) for this validator's attestation-shard transaction. The tx
-    /// shape is fixed (1 P2PKH-ML-DSA input, 1 change output, a single-attestation shard),
-    /// so a dummy build's compute mass equals the real one's — letting the service compute
-    /// the fee once at startup. Clamped up to [`ATTESTATION_TX_FEE_FLOOR_SOMPI`].
-    pub fn estimate_attestation_fee(&self, mass_calculator: &MassCalculator, prefix: Prefix) -> u64 {
-        let funding_spk = pay_to_address_script(&self.funding_address(prefix));
-        let dummy = StakeAttestation {
-            version: DNS_PAYLOAD_VERSION_V1,
-            validator_id: self.validator_id,
-            bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([0u8; 64]), 0),
-            epoch: 0,
-            target_hash: Hash64::from_bytes([0u8; 64]),
-            target_daa_score: 0,
-            validator_set_commitment: Hash64::from_bytes([0u8; 64]),
-            signature: vec![0u8; MLDSA87_SIG_LEN],
-        };
-        let shard = single_attestation_shard(dummy);
-        let funding = UtxoEntry::new(u64::MAX / 2, funding_spk, 0, false);
-        let outpoint = TransactionOutpoint::new(Hash64::from_bytes([0u8; 64]), 0);
-        match self.build_funded_shard_tx(&shard, outpoint, &funding, ATTESTATION_TX_FEE_FLOOR_SOMPI) {
-            Ok(tx) => relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&tx).compute_mass),
-            Err(_) => ATTESTATION_TX_FEE_FLOOR_SOMPI,
-        }
-    }
-
-    /// Mass-based fee (sompi) for a compute-overlay transaction carrying `payload_len` bytes.
+    /// Every carrier built through `build_funded_overlay_tx` shares one shape (1 P2PKH-ML-DSA
+    /// input, change to self, a borsh payload), so the only thing that moves its mass is the
+    /// payload size. Hence a parameterized estimate rather than one computed once at startup.
     ///
-    /// All four compute transactions share one shape (1 P2PKH-ML-DSA input, change to self, a
-    /// borsh payload), so the only thing that moves their mass is the payload size — which, unlike
-    /// the attestation shard's, is *not* fixed: a commitment carries the job input. Hence a
-    /// parameterized estimate rather than one computed once at startup.
-    ///
-    /// `no_change` mirrors [`Self::build_challenge_tx`]'s output-less shape.
+    /// `no_change` mirrors the output-less evidence-carrier shape.
     pub fn estimate_overlay_fee(&self, mass_calculator: &MassCalculator, prefix: Prefix, payload_len: usize, no_change: bool) -> u64 {
         let funding_spk = pay_to_address_script(&self.funding_address(prefix));
         let funding = UtxoEntry::new(u64::MAX / 2, funding_spk, 0, false);
@@ -1657,69 +884,6 @@ impl ValidatorKey {
             Ok(tx) => relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&tx).compute_mass),
             Err(_) => ATTESTATION_TX_FEE_FLOOR_SOMPI,
         }
-    }
-
-    /// Mass-based fee (sompi) for this validator's `StakeBond` transaction — same approach as
-    /// [`Self::estimate_attestation_fee`]. Builds a dummy bond of the real shape (a bond is always
-    /// a 2592-byte-pubkey payload + locked output + change output, so the field *sizes* — not the
-    /// amount/term *values* — drive the compute mass; a dummy's mass equals the real one's), takes
-    /// its non-contextual compute mass (the 1 sompi/gram relay minimum), and clamps up to
-    /// [`ATTESTATION_TX_FEE_FLOOR_SOMPI`]. The flat attestation floor is far below a bond's
-    /// mempool minimum, so `bond` sizes its fee from the network's mass params via this.
-    pub fn estimate_bond_fee(&self, mass_calculator: &MassCalculator, prefix: Prefix) -> u64 {
-        self.estimate_bond_fee_for_inputs(mass_calculator, prefix, 1)
-    }
-
-    /// Mass-based bond fee for `n_inputs` funding UTXOs. Each ML-DSA-87 input adds a ~2592-byte
-    /// pubkey + ~4627-byte signature, so the fee grows materially with the input count; `bond`
-    /// recomputes this as it aggregates coinbase fragments. Builds a dummy `n_inputs`-input bond of
-    /// the real shape (field *sizes*, not values, drive the mass) and takes its relay fee.
-    pub fn estimate_bond_fee_for_inputs(&self, mass_calculator: &MassCalculator, prefix: Prefix, n_inputs: usize) -> u64 {
-        let funding_spk = pay_to_address_script(&self.funding_address(prefix));
-        let n = n_inputs.max(1);
-        let per = u64::MAX / (2 * n as u64); // each dummy big enough that Σ ≥ amount(1) + fee floor
-        let fundings: Vec<(TransactionOutpoint, UtxoEntry)> = (0..n)
-            .map(|i| {
-                let mut id = [0u8; 64];
-                id[0] = i as u8;
-                id[1] = (i >> 8) as u8;
-                (TransactionOutpoint::new(Hash64::from_bytes(id), 0), UtxoEntry::new(per, funding_spk.clone(), 0, false))
-            })
-            .collect();
-        match self.build_funded_stake_bond_tx_multi(1, 0, 0, [0u8; 64], &fundings, ATTESTATION_TX_FEE_FLOOR_SOMPI) {
-            Ok(tx) => relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&tx).compute_mass),
-            Err(_) => ATTESTATION_TX_FEE_FLOOR_SOMPI,
-        }
-    }
-
-    /// Mass-based fee (sompi) for this validator's `StakeUnbondRequest` transaction — same approach
-    /// as [`Self::estimate_bond_fee`]. The unbond payload carries the 2592-byte owner pubkey plus a
-    /// 4627-byte authorization signature, so its compute mass (and thus this fee) is well above the
-    /// flat attestation floor.
-    pub fn estimate_unbond_fee(&self, mass_calculator: &MassCalculator, prefix: Prefix) -> u64 {
-        let funding_spk = pay_to_address_script(&self.funding_address(prefix));
-        let funding = UtxoEntry::new(u64::MAX / 2, funding_spk, 0, false);
-        let outpoint = TransactionOutpoint::new(Hash64::from_bytes([0u8; 64]), 0);
-        // Dummy bond_outpoint + net_id — the payload's field sizes drive the mass (the ML-DSA-87
-        // signature is fixed-length regardless of the message), not the values.
-        match self.build_funded_unbond_tx(
-            &[0u8; 32],
-            TransactionOutpoint::new(Hash64::from_bytes([0u8; 64]), 0),
-            outpoint,
-            &funding,
-            ATTESTATION_TX_FEE_FLOOR_SOMPI,
-        ) {
-            Ok(tx) => relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&tx).compute_mass),
-            Err(_) => ATTESTATION_TX_FEE_FLOOR_SOMPI,
-        }
-    }
-
-    /// Verify an attestation signature against this key (local round-trip sanity check).
-    pub fn verify_attestation(&self, message: &[u8], signature: &[u8]) -> bool {
-        matches!(
-            verify_mldsa87_with_context(self.keypair.verification_key.as_ref(), message, signature, ATTESTATION_MLDSA87_CONTEXT),
-            Ok(true)
-        )
     }
 
     /// Verify a signature this key produced under an explicit `context`
@@ -2000,13 +1164,13 @@ pub fn is_spendable_settled(
     confirmed_anchor_daa.is_some_and(|anchor| anchor >= block_daa_score)
 }
 
-/// Choose the funding input for the next attestation tx. Prefers the local funding-chain head (our
+/// Choose the funding input for the next carrier tx. Prefers the local funding-chain head (our
 /// previous change output, still unconfirmed in the node's utxoindex view) so we never re-select a
 /// UTXO our own in-flight tx already spent — the cause of "output … already spent … in the mempool".
 /// Falls back to the largest MATURE node UTXO not already spent in flight. Pure (no I/O); the caller
 /// resyncs a mined chain head (`pending_change`) and prunes `inflight_spent` against the node's
-/// current set before calling. Shared by the standalone `kaspa-pq-validator` daemon and the
-/// in-process `--enable-validator` service so both funding paths behave identically.
+/// current set before calling. Shared by the PALW fp rail and fp-submit so their funding paths behave
+/// identically.
 pub fn select_funding(
     pending_change: &Option<(TransactionOutpoint, UtxoEntry)>,
     inflight_spent: &HashSet<TransactionOutpoint>,
@@ -2043,7 +1207,7 @@ pub fn select_funding(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kaspa_consensus_core::config::params::{DEVNET_PARAMS, MAINNET_PARAMS, Params, SIMNET_PARAMS, TESTNET_PARAMS};
+    use kaspa_consensus_core::dns_finality::{ATTESTATION_MLDSA87_CONTEXT, PRECOMMIT_MLDSA87_CONTEXT};
     use kaspa_consensus_core::tx::ScriptPublicKey;
     use std::io::Write;
 
@@ -2114,7 +1278,7 @@ mod tests {
         assert!(err.contains("consensus would reject"), "the refusal should say why: {err}");
     }
 
-    // ---- funding selection (shared by the daemon + the in-process service) ----
+    // ---- funding selection (the PALW rail and fp-submit share it) ----
 
     fn fop(seed: u8, idx: u32) -> TransactionOutpoint {
         TransactionOutpoint::new(Hash64::from_bytes([seed; 64]), idx)
@@ -2319,227 +1483,9 @@ mod tests {
         assert!(err.contains("earns no quanta"), "got {err}");
     }
 
-    // ---- MISAKA Verified LLM Token-Weighted BFT: compute-overlay transaction builders ----
-
+    /// The fixed key the free-prompt builder tests above sign with.
     fn compute_key() -> ValidatorKey {
         ValidatorKey::from_seed([0x5Au8; VALIDATOR_SEED_LEN])
-    }
-
-    fn compute_funding() -> (TransactionOutpoint, UtxoEntry) {
-        (fop(0x77, 0), UtxoEntry::new(10_000_000, ScriptPublicKey::default(), 1_000, false))
-    }
-
-    const COMPUTE_INPUT: &[u8] = b"the capital of France is";
-
-    /// Stand-in for a real replay's proof: internally consistent, so it satisfies the same rule a
-    /// real one does. Reproducing PALW's actual values needs the runtime.
-    fn proof(tag: u8) -> ReplayProof {
-        let residuals = residuals(tag);
-        let receipt = ComputeReceipt {
-            version: DNS_PAYLOAD_VERSION_V1,
-            output_commitment: Hash64::from_bytes([tag; 64]),
-            prefill_tokens: 100,
-            decode_tokens: 20,
-            trace_commitment: kaspa_consensus_core::vlt::residual_commitment(&residuals),
-        };
-        ReplayProof { receipt, residuals }
-    }
-
-    fn residuals(tag: u8) -> kaspa_consensus_core::vlt::ReplayResiduals {
-        let h = |b: u8| Hash64::from_bytes([b; 64]);
-        kaspa_consensus_core::vlt::ReplayResiduals {
-            job_nullifier: h(tag),
-            request_commitment: h(tag.wrapping_add(1)),
-            model_profile_id: h(tag.wrapping_add(2)),
-            runtime_class_id: h(tag.wrapping_add(3)),
-            runtime_manifest_hash: h(tag.wrapping_add(4)),
-            shape_profile_id: h(tag.wrapping_add(5)),
-            cu_ruleset_id: h(tag.wrapping_add(6)),
-            canonical_compute_units: 41_692,
-            operation_schedule_commitment: h(tag.wrapping_add(7)),
-            schedule_event_count: 80,
-            trace_scheme_id: h(tag.wrapping_add(8)),
-            gemm_trace_root: h(tag.wrapping_add(9)),
-            trace_event_count: 2_466,
-        }
-    }
-
-    fn compute_spec() -> LlmJobSpec {
-        let entry = kaspa_consensus_core::vlt::palw_qwen36_metal_entry();
-        LlmJobSpec {
-            version: DNS_PAYLOAD_VERSION_V1,
-            model_weights_hash: entry.model_weights_hash,
-            runtime_hash: entry.runtime_hash,
-            quantization: kaspa_consensus_core::vlt::QuantizationProfile::Int4,
-            input_commitment: job_input_commitment(COMPUTE_INPUT),
-            sampling_seed: [0x42; 32],
-            max_tokens: 512,
-            verification_scheme: kaspa_consensus_core::vlt::VerificationScheme::CanonicalFullReplay,
-        }
-    }
-
-    fn compute_receipt() -> ComputeReceipt {
-        ComputeReceipt {
-            version: DNS_PAYLOAD_VERSION_V1,
-            output_commitment: Hash64::from_bytes([0x51; 64]),
-            prefill_tokens: 24,
-            decode_tokens: 8,
-            trace_commitment: Hash64::from_bytes([0x61; 64]),
-        }
-    }
-
-    /// Every compute-overlay transaction must land on its own subnetwork, carry a payload the
-    /// consensus stateless validator accepts, and be spendable (input-0 signed, change to self).
-    #[test]
-    fn compute_overlay_txs_are_wellformed_and_stateless_valid() {
-        use kaspa_consensus_core::dns_finality::{
-            DnsTxKind, dns_tx_kind, validate_compute_capability_payload, validate_compute_certificate_payload,
-            validate_compute_challenge_tx, validate_compute_commitment_payload, validate_compute_verdict_payload,
-        };
-        let key = compute_key();
-        let (fop, fentry) = compute_funding();
-        let net = b"misaka-test";
-        let bond = fop_bond();
-        let entry = kaspa_consensus_core::vlt::palw_qwen36_metal_entry();
-        let fee = 250_000;
-
-        let cap = key
-            .build_capability_tx(
-                net,
-                bond,
-                entry.model_weights_hash,
-                entry.runtime_hash,
-                entry.runtime_class_id,
-                9_000,
-                fop,
-                &fentry,
-                fee,
-            )
-            .unwrap();
-        assert_eq!(dns_tx_kind(&cap.subnetwork_id), Some(DnsTxKind::ComputeCapability));
-        assert_eq!(validate_compute_capability_payload(&cap.payload), Ok(()));
-        assert_eq!(cap.outputs.len(), 1, "change returns to the validator so it can fund the next tx");
-        assert_eq!(cap.outputs[0].value, fentry.amount - fee);
-        assert!(!cap.inputs[0].signature_script.is_empty(), "input-0 must be signed");
-
-        let spec = compute_spec();
-        let job_id = job_spec_id(&spec);
-        let commit = key.build_commitment_tx(net, job_id, COMPUTE_INPUT.to_vec(), bond, fop, &fentry, fee).unwrap();
-        assert_eq!(dns_tx_kind(&commit.subnetwork_id), Some(DnsTxKind::ComputeCommitment));
-        assert_eq!(validate_compute_commitment_payload(&commit.payload), Ok(()));
-        // The prompt a verifier will replay rides the commitment, so it is public before the
-        // beacon that draws the committee exists.
-        let committed: ComputeCommitmentPayload = borsh::from_slice(&commit.payload).unwrap();
-        assert_eq!(committed.input, COMPUTE_INPUT);
-        assert_eq!(job_input_commitment(&committed.input), spec.input_commitment);
-
-        let receipt = compute_receipt();
-        let receipt_hash = compute_receipt_hash(&spec, &receipt);
-        let cert = key.build_certificate_tx(net, 7, commit.id(), spec.clone(), receipt, bond, fop, &fentry, fee).unwrap();
-        assert_eq!(dns_tx_kind(&cert.subnetwork_id), Some(DnsTxKind::ComputeCertificate));
-        assert_eq!(validate_compute_certificate_payload(&cert.payload), Ok(()));
-
-        // Verdicts are standalone transactions published by the verifiers themselves, so the
-        // executor never has to collect them before it can publish its certificate.
-        let verifier = ValidatorKey::from_seed([0x01; VALIDATOR_SEED_LEN]);
-        let verdict = verifier.sign_verifier_verdict(net, cert.id(), job_id, receipt_hash, proof(0x40), fop_bond2());
-        let vtx = verifier.build_verdict_tx(&verdict, fop, &fentry, fee).unwrap();
-        assert_eq!(dns_tx_kind(&vtx.subnetwork_id), Some(DnsTxKind::ComputeVerdict));
-        assert_eq!(validate_compute_verdict_payload(&vtx.payload), Ok(()));
-
-        // A challenge is a pure evidence carrier: NO outputs, or it would collide with the
-        // reporter reward consensus mints at (challenge_tx_id, 0).
-        let chal = key
-            .build_challenge_tx(
-                net,
-                cert.id(),
-                job_id,
-                ComputeFraudKind::ForgedReceipt,
-                receipt_hash,
-                Hash64::from_bytes([0x99; 64]),
-                bond,
-                vec![],
-                fop_bond2(),
-                [0u8; 64],
-                fop,
-                &fentry,
-                fee,
-            )
-            .unwrap();
-        assert_eq!(dns_tx_kind(&chal.subnetwork_id), Some(DnsTxKind::ComputeChallenge));
-        assert!(chal.outputs.is_empty(), "a challenge must declare no outputs");
-        assert_eq!(validate_compute_challenge_tx(&chal.payload, &chal.outputs), Ok(()));
-    }
-
-    fn fop_bond() -> TransactionOutpoint {
-        fop(0xB0, 0)
-    }
-    fn fop_bond2() -> TransactionOutpoint {
-        fop(0xB1, 0)
-    }
-
-    /// A verifier's verdict follows from its own replay, never from intent. Signing `Confirmed`
-    /// over a hash it did not reproduce is the §7(b) contradictory-verification offence, so the
-    /// builder derives the verdict from the comparison instead of accepting it as a parameter.
-    #[test]
-    fn verifier_verdict_is_derived_from_the_replay_not_chosen() {
-        let key = ValidatorKey::from_seed([0x0Fu8; VALIDATOR_SEED_LEN]);
-        let net = b"misaka-test";
-        let job = Hash64::from_bytes([0x21; 64]);
-        let bond = fop_bond();
-
-        let cert_tx = fop(0xC0, 0).transaction_id;
-        // A proof that reproduces the executor's claim confirms; one that does not refutes.
-        let matching = proof(0x40);
-        let executor = compute_receipt_hash_for_job(job, &matching.receipt);
-        let agreed = key.sign_verifier_verdict(net, cert_tx, job, executor, matching, bond);
-        assert_eq!(agreed.verdict, VerificationVerdict::Confirmed);
-        assert_eq!(agreed.replay_receipt_hash, executor);
-
-        let diverged = key.sign_verifier_verdict(net, cert_tx, job, executor, proof(0x41), bond);
-        assert_eq!(diverged.verdict, VerificationVerdict::Refuted, "a replay that differs must refute");
-
-        // Both verdicts must exhibit an execution that really produces the hash they report — a
-        // confirmation so it is not a field copied off the certificate, a refutation so it is not
-        // a hash pulled out of the air. Neither is free.
-        assert!(agreed.is_self_consistent() && diverged.is_self_consistent());
-        assert!(agreed.replay_proof.attests(job, agreed.replay_receipt_hash));
-        assert!(diverged.replay_proof.attests(job, diverged.replay_receipt_hash));
-        // Swapping in another execution's proof breaks the verdict, whichever way it points.
-        let mut swapped = agreed.clone();
-        swapped.replay_proof = proof(0x41);
-        assert!(!swapped.is_self_consistent(), "a confirmation cannot borrow a divergent execution's proof");
-
-        // Both are signed by this validator's own key over the matching message, and the two
-        // verdicts are distinct messages — which is what makes a contradiction provable from the
-        // signatures alone.
-        assert_eq!(agreed.verifier_id, key.validator_id);
-        assert_ne!(agreed.signature, diverged.signature);
-        assert_eq!(agreed.signature.len(), kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN);
-    }
-
-    /// Underfunded builders must fail loudly rather than emit an unminable transaction.
-    #[test]
-    fn compute_builders_reject_funding_that_cannot_cover_the_fee() {
-        let key = compute_key();
-        let (fop, _) = compute_funding();
-        let thin = UtxoEntry::new(100, ScriptPublicKey::default(), 1_000, false);
-        assert!(
-            key.build_commitment_tx(b"n", Hash64::from_bytes([1; 64]), b"prompt".to_vec(), fop_bond(), fop, &thin, 250_000).is_err()
-        );
-    }
-
-    /// The job input is the one unbounded field in the compute overlay. An oversized or absent
-    /// one is refused by the builder, not left to fail at the node — a commitment that cannot be
-    /// accepted has already spent the executor's funding UTXO.
-    #[test]
-    fn commitment_builder_rejects_an_unusable_job_input() {
-        let key = compute_key();
-        let (fop, fentry) = compute_funding();
-        let job_id = Hash64::from_bytes([1; 64]);
-        assert!(key.build_commitment_tx(b"n", job_id, Vec::new(), fop_bond(), fop, &fentry, 250_000).is_err());
-        assert!(key.build_commitment_tx(b"n", job_id, vec![0u8; MAX_JOB_INPUT_BYTES + 1], fop_bond(), fop, &fentry, 250_000).is_err());
-        assert!(key.build_commitment_tx(b"n", job_id, vec![0u8; MAX_JOB_INPUT_BYTES], fop_bond(), fop, &fentry, 250_000).is_ok());
     }
 
     #[test]
@@ -2708,19 +1654,6 @@ mod tests {
     }
 
     #[test]
-    fn sign_attestation_roundtrip_and_tamper() {
-        let key = ValidatorKey::from_seed([0x55u8; VALIDATOR_SEED_LEN]);
-        let msg = [0x99u8; 32]; // stand-in for a stake_attestation_message digest
-        let sig = key.sign_attestation(&msg);
-        assert_eq!(sig.len(), MLDSA87_SIG_LEN);
-        assert!(key.verify_attestation(&msg, &sig));
-        // A tampered digest must fail verification.
-        let mut bad = msg;
-        bad[0] ^= 0x01;
-        assert!(!key.verify_attestation(&bad, &sig));
-    }
-
-    #[test]
     fn sign_with_context_is_domain_separated() {
         let key = ValidatorKey::from_seed([0x88u8; VALIDATOR_SEED_LEN]);
         let msg = [0x5au8; 32]; // stand-in for a SIG_HASH_ALL sighash
@@ -2730,198 +1663,6 @@ mod tests {
         assert!(matches!(verify_mldsa87_with_context(pk, &msg, &sig, MLDSA87_TX_CONTEXT), Ok(true)));
         // ...but NOT under the attestation context (domain separation).
         assert!(!matches!(verify_mldsa87_with_context(pk, &msg, &sig, ATTESTATION_MLDSA87_CONTEXT), Ok(true)));
-    }
-
-    #[test]
-    fn build_funded_shard_tx_structure_and_funding() {
-        use kaspa_consensus_core::dns_finality::validate_stake_attestation_shard_payload;
-        use kaspa_consensus_core::tx::ScriptPublicKey;
-
-        let key = ValidatorKey::from_seed([0x77u8; VALIDATOR_SEED_LEN]);
-        let shard = single_attestation_shard(StakeAttestation {
-            version: DNS_PAYLOAD_VERSION_V1,
-            validator_id: key.validator_id,
-            bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([0x01u8; 64]), 0),
-            epoch: 7,
-            target_hash: Hash64::from_bytes([0x11u8; 64]),
-            target_daa_score: 700,
-            validator_set_commitment: Hash64::from_bytes([0u8; 64]), // ADR-0017: VSC is a fixed-zero wire invariant (sortition committee dropped)
-            signature: vec![0u8; MLDSA87_SIG_LEN],
-        });
-        let funding_spk = ScriptPublicKey::default();
-        let funding = UtxoEntry::new(1_000, funding_spk.clone(), 1, false);
-        let funding_outpoint = TransactionOutpoint::new(Hash64::from_bytes([0x99u8; 64]), 3);
-
-        let tx = key.build_funded_shard_tx(&shard, funding_outpoint, &funding, 250).unwrap();
-        assert_eq!(tx.inputs.len(), 1);
-        assert_eq!(tx.inputs[0].previous_outpoint, funding_outpoint);
-        assert!(!tx.inputs[0].signature_script.is_empty()); // signed
-        assert_eq!(tx.outputs.len(), 1);
-        assert_eq!(tx.outputs[0].value, 750); // amount - fee, change back to self
-        assert_eq!(tx.outputs[0].script_public_key, funding_spk);
-        assert_eq!(tx.subnetwork_id, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD);
-        assert_eq!(tx.gas, 0);
-        assert!(validate_stake_attestation_shard_payload(&tx.payload).is_ok());
-
-        // Fee must be strictly less than the funding amount.
-        assert!(key.build_funded_shard_tx(&shard, funding_outpoint, &funding, 1_000).is_err());
-    }
-
-    fn funded_single_attestation_shard_mass(params: &Params) -> u64 {
-        let key = ValidatorKey::from_seed([0x77u8; VALIDATOR_SEED_LEN]);
-        let shard = single_attestation_shard(StakeAttestation {
-            version: DNS_PAYLOAD_VERSION_V1,
-            validator_id: key.validator_id,
-            bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([0x01u8; 64]), 0),
-            epoch: 7,
-            target_hash: Hash64::from_bytes([0x11u8; 64]),
-            target_daa_score: 700,
-            validator_set_commitment: Hash64::from_bytes([0u8; 64]),
-            signature: vec![0u8; MLDSA87_SIG_LEN],
-        });
-        let funding_spk = pay_to_address_script(&key.funding_address(Prefix::Testnet));
-        let funding = UtxoEntry::new(10_000_000, funding_spk, 1, false);
-        let funding_outpoint = TransactionOutpoint::new(Hash64::from_bytes([0x99u8; 64]), 3);
-        let tx = key.build_funded_shard_tx(&shard, funding_outpoint, &funding, ATTESTATION_TX_FEE_FLOOR_SOMPI).unwrap();
-        MassCalculator::new(
-            params.mass_per_tx_byte,
-            params.mass_per_script_pub_key_byte,
-            params.mass_per_sig_op,
-            params.storage_mass_parameter,
-        )
-        .calc_non_contextual_masses(&tx)
-        .max()
-    }
-
-    #[test]
-    fn funded_single_attestation_shard_mass_fits_all_dns_param_caps() {
-        for (name, params) in
-            [("mainnet", &MAINNET_PARAMS), ("testnet-10", &TESTNET_PARAMS), ("devnet", &DEVNET_PARAMS), ("simnet", &SIMNET_PARAMS)]
-        {
-            let Some(dns_params) = params.dns_params.as_ref() else {
-                continue;
-            };
-            let mass = funded_single_attestation_shard_mass(params);
-            assert!(
-                mass <= dns_params.max_attestation_shard_mass,
-                "{name} funded single-attestation shard mass {mass} exceeds cap {}",
-                dns_params.max_attestation_shard_mass
-            );
-        }
-    }
-
-    #[test]
-    fn build_funded_unbond_tx_structure_and_auth() {
-        use kaspa_consensus_core::dns_finality::validate_stake_unbond_payload;
-        use kaspa_consensus_core::tx::ScriptPublicKey;
-
-        let key = ValidatorKey::from_seed([0x33u8; VALIDATOR_SEED_LEN]);
-        let bond_outpoint = TransactionOutpoint::new(Hash64::from_bytes([0x07u8; 64]), 0);
-        let funding_spk = ScriptPublicKey::default();
-        let funding = UtxoEntry::new(1_000, funding_spk.clone(), 1, false);
-        let funding_outpoint = TransactionOutpoint::new(Hash64::from_bytes([0x44u8; 64]), 2);
-        let net_id: &[u8] = &[0x55u8; 32]; // audit M-04: the network the unbond authorizes on
-
-        let tx = key.build_funded_unbond_tx(net_id, bond_outpoint, funding_outpoint, &funding, 250).unwrap();
-        assert_eq!(tx.inputs.len(), 1);
-        assert_eq!(tx.inputs[0].previous_outpoint, funding_outpoint);
-        assert!(!tx.inputs[0].signature_script.is_empty()); // funding spend signed
-        assert_eq!(tx.outputs.len(), 1);
-        assert_eq!(tx.outputs[0].value, 750); // funding − fee, change back to self
-        assert_eq!(tx.outputs[0].script_public_key, funding_spk);
-        assert_eq!(tx.subnetwork_id, SUBNETWORK_ID_STAKE_UNBOND);
-        assert_eq!(tx.gas, 0);
-
-        // Payload decodes + passes stateless validation, carries the requested bond_outpoint,
-        // and binds THIS validator's key (its derived overlay id matches).
-        assert!(validate_stake_unbond_payload(&tx.payload).is_ok());
-        let req: StakeUnbondRequestPayload = borsh::from_slice(&tx.payload).unwrap();
-        assert_eq!(req.bond_outpoint, bond_outpoint);
-        assert_eq!(validator_id_from_pubkey(&req.owner_pubkey), key.validator_id);
-
-        // The owner authorization signature verifies over the network- and bond-bound message under
-        // the unbond context — and is bound to THIS (network, bond) pair.
-        let auth_bytes = unbond_request_message(net_id, bond_outpoint).as_bytes();
-        assert!(matches!(
-            verify_mldsa87_with_context(&req.owner_pubkey, &auth_bytes[..], &req.signature, UNBOND_REQUEST_CONTEXT),
-            Ok(true)
-        ));
-        // Bond-binding: a DIFFERENT bond (same network) must not verify.
-        let other_bond = unbond_request_message(net_id, TransactionOutpoint::new(Hash64::from_bytes([0x08u8; 64]), 0)).as_bytes();
-        assert!(!matches!(
-            verify_mldsa87_with_context(&req.owner_pubkey, &other_bond[..], &req.signature, UNBOND_REQUEST_CONTEXT),
-            Ok(true)
-        ));
-        // audit M-04 — network-binding: the SAME bond on a DIFFERENT network must not verify
-        // (cross-network replay of the unbond authorization is prevented).
-        let other_net = unbond_request_message(&[0xAAu8; 32], bond_outpoint).as_bytes();
-        assert!(!matches!(
-            verify_mldsa87_with_context(&req.owner_pubkey, &other_net[..], &req.signature, UNBOND_REQUEST_CONTEXT),
-            Ok(true)
-        ));
-
-        // Fee must be strictly less than the funding amount.
-        assert!(key.build_funded_unbond_tx(net_id, bond_outpoint, funding_outpoint, &funding, 1_000).is_err());
-    }
-
-    #[test]
-    fn mass_based_bond_and_unbond_fees_exceed_the_flat_floor() {
-        // StakeBond / StakeUnbondRequest carry the 2592-byte ML-DSA-87 pubkey (+ a 4627-byte sig),
-        // so a mass-based fee (≈ 272 000 / 319 000 sompi) stays above the safety floor even after it
-        // was raised to 250 000 — that gap is exactly why the bond/unbond commands estimate from the
-        // network mass params instead of pinning the floor.
-        let key = ValidatorKey::from_seed([0x5au8; VALIDATOR_SEED_LEN]);
-        // kaspa-pq mass params (mass_per_sig_op = 10_000 per the Phase-7 recalibration).
-        let mc = MassCalculator::new(1, 10, 10_000, 10_000_000_000);
-        let bond_fee = key.estimate_bond_fee(&mc, Prefix::Testnet);
-        let unbond_fee = key.estimate_unbond_fee(&mc, Prefix::Testnet);
-        assert!(
-            bond_fee > ATTESTATION_TX_FEE_FLOOR_SOMPI,
-            "mass-based bond fee {bond_fee} must exceed the flat floor {ATTESTATION_TX_FEE_FLOOR_SOMPI}"
-        );
-        assert!(
-            unbond_fee > ATTESTATION_TX_FEE_FLOOR_SOMPI,
-            "mass-based unbond fee {unbond_fee} must exceed the flat floor {ATTESTATION_TX_FEE_FLOOR_SOMPI}"
-        );
-    }
-
-    #[test]
-    fn build_funded_stake_bond_tx_structure_and_lock() {
-        use kaspa_consensus_core::dns_finality::{StakeBondPayload, validate_stake_bond_payload};
-        use kaspa_consensus_core::subnets::SUBNETWORK_ID_STAKE_BOND;
-        use kaspa_consensus_core::tx::ScriptPublicKey;
-
-        let key = ValidatorKey::from_seed([0x66u8; VALIDATOR_SEED_LEN]);
-        let funding_spk = ScriptPublicKey::default();
-        let funding = UtxoEntry::new(10_000, funding_spk.clone(), 1, false);
-        let funding_outpoint = TransactionOutpoint::new(Hash64::from_bytes([0x42u8; 64]), 2);
-        let reward = key.reward_spk_payload();
-
-        // Stake 6_000 with a 250 fee from a 10_000 UTXO → output-0=6_000 (locked), change=3_750.
-        let tx = key.build_funded_stake_bond_tx(6_000, 0, 700, reward, funding_outpoint, &funding, 250).unwrap();
-        assert_eq!(tx.subnetwork_id, SUBNETWORK_ID_STAKE_BOND);
-        assert_eq!(tx.gas, 0);
-        assert_eq!(tx.inputs.len(), 1);
-        assert!(!tx.inputs[0].signature_script.is_empty()); // signed
-        assert_eq!(tx.outputs.len(), 2);
-        assert_eq!(tx.outputs[0].value, 6_000); // §D.1: output-0 == amount (locked stake)
-        assert_eq!(tx.outputs[0].script_public_key, funding_spk);
-        assert_eq!(tx.outputs[1].value, 3_750); // change = 10_000 - 6_000 - 250
-        // Payload round-trips, is stateless-valid, and binds the validator pubkey + reward target.
-        assert!(validate_stake_bond_payload(&tx.payload).is_ok());
-        let decoded: StakeBondPayload = borsh::from_slice(&tx.payload).unwrap();
-        assert_eq!(decoded.amount, 6_000);
-        assert_eq!(decoded.validator_pubkey_hash, key.validator_id);
-        assert_eq!(decoded.owner_reward_spk_payload, reward);
-        assert_eq!(decoded.validator_pubkey, key.keypair.verification_key.as_ref().to_vec());
-
-        // Exact-fit (amount + fee == funding) → no change output.
-        let exact = key.build_funded_stake_bond_tx(9_750, 0, 700, reward, funding_outpoint, &funding, 250).unwrap();
-        assert_eq!(exact.outputs.len(), 1);
-        assert_eq!(exact.outputs[0].value, 9_750);
-        // Underfunded (amount + fee > funding) → error; zero amount → error.
-        assert!(key.build_funded_stake_bond_tx(10_000, 0, 700, reward, funding_outpoint, &funding, 250).is_err());
-        assert!(key.build_funded_stake_bond_tx(0, 0, 700, reward, funding_outpoint, &funding, 250).is_err());
     }
 
     fn signed_record(epoch: u64, target: u8) -> SignedEpochRecord {
