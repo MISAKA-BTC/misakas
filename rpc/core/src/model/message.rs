@@ -4554,7 +4554,7 @@ impl Deserializer for GetTokenEmissionInfoResponse {
 // kaspa-pq Phase 12 (ADR-0011): getValidatorAttestationTarget. Given a stake-bond
 // outpoint ("txid_hex:index"), returns the exact ready-to-sign attestation message
 // (and its bound fields) the validator must ML-DSA-87-sign for the current sink — so
-// the `kaspa-pq-validator` sidecar can fetch the signing target over local wRPC.
+// the (now retired) `kaspa-pq-validator` sidecar could fetch the signing target over local wRPC.
 // `available` is false when the overlay is not configured or no target can be assembled.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -4624,7 +4624,7 @@ impl Deserializer for GetValidatorAttestationTargetResponse {
 
 // kaspa-pq DNS v3 (batch): getValidatorAttestationTargets. Returns every READY, creditable
 // attestation target for a bond in `[from_epoch, latest_ready]` (ascending, capped at `limit`),
-// so an external `kaspa-pq-validator` that fell behind can sign every missed epoch in one poll
+// so an external (now retired) `kaspa-pq-validator` that fell behind could sign every missed epoch in one poll
 // instead of one epoch per poll (which lets a briefly-slow validator lag the epoch cadence).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

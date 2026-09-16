@@ -1853,7 +1853,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         request: GetValidatorAttestationTargetRequest,
     ) -> RpcResult<GetValidatorAttestationTargetResponse> {
         // kaspa-pq Phase 12 (ADR-0011): assemble the ready-to-sign attestation target for
-        // `request.bond_outpoint` so the `kaspa-pq-validator` sidecar can fetch the signing
+        // `request.bond_outpoint` so the (now retired) `kaspa-pq-validator` sidecar could fetch the signing
         // message over local wRPC. A malformed outpoint is a request error; `available: false`
         // when the overlay is not configured or no target could be assembled.
         let bond_outpoint = parse_bond_outpoint(&request.bond_outpoint)?;
@@ -2703,7 +2703,7 @@ Use getBalancesByAddresses for balances, or consolidate the address's UTXOs.",
     ) -> RpcResult<GetServerInfoResponse> {
         let session = self.consensus_manager.consensus().unguarded_session();
         let sink_daa_score_timestamp = session.async_get_sink_daa_score_timestamp().await;
-        // Same definition as getSyncStatus and getInfo. This one is what `kaspa-pq-validator` polls
+        // Same definition as getSyncStatus and getInfo. This one is what the retired `kaspa-pq-validator` polled
         // before it will attest, and it used to omit the transitional-IBD check the other two had —
         // so a node mid-IBD whose sink had advanced could report synced to the one caller whose
         // reaction is to start signing.
