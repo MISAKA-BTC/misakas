@@ -42,7 +42,7 @@ pub fn endpoints(output: OutputFormat, network: &str) -> CliResult {
                 if reg.is_some() { "(from endpoint registry)" } else { "(network defaults — no registry; is the node running?)" };
             println!("network-id: {network}  {src}");
             println!("  node-grpc:       {grpc}   miner");
-            println!("  node-wrpc-borsh: {borsh}   validator / wallet");
+            println!("  node-wrpc-borsh: {borsh}   wallet / operator");
             println!("  node-wrpc-json:  {}   explorer", json.as_deref().unwrap_or("disabled"));
             println!("  evm-rpc-http:    {}   Ethereum JSON-RPC", evm.as_deref().unwrap_or("disabled"));
         }

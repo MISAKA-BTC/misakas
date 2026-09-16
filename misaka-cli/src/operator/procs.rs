@@ -41,8 +41,6 @@ pub(crate) enum Component {
     Kaspad,
     Gateway,
     Rail,
-    /// The DNS-finality validator sidecar (`kaspa-pq-validator run`).
-    Validator,
 }
 
 impl Component {
@@ -51,7 +49,6 @@ impl Component {
             Component::Kaspad => basename == "kaspad",
             Component::Gateway => basename == "misaka-palw-gateway",
             Component::Rail => basename == "misaka-palw-fp-rail",
-            Component::Validator => basename == "kaspa-pq-validator",
         }
     }
 }
@@ -154,11 +151,6 @@ pub(crate) struct KaspadArgs {
     pub(crate) addpeers: Vec<String>,
     pub(crate) register_bond: bool,
     pub(crate) enable_unsynced_mining: bool,
-    /// The DNS-finality validator in-process (`--enable-validator`), and what it signs with.
-    pub(crate) enable_validator: bool,
-    pub(crate) validator_key: Option<String>,
-    pub(crate) stake_bond: Option<String>,
-    pub(crate) validator_mode: Option<String>,
     /// Flags that swap a devnet's consensus parameters (`--palw-devnet-floor-only`, the
     /// `--palw-*-devnet` family): a node started with one runs a ruleset of its own, and this
     /// CLI's fingerprint for the network does not describe it.
@@ -188,9 +180,6 @@ const VALUED: &[&str] = &[
     "palw-attempt-retention-minutes",
     "palw-heartbeat-miner-address",
     "evm-rpc-listen",
-    "validator-key",
-    "stake-bond",
-    "validator-mode",
 ];
 
 pub(crate) fn parse_kaspad_args(argv: &[String]) -> KaspadArgs {
@@ -229,10 +218,6 @@ pub(crate) fn parse_kaspad_args(argv: &[String]) -> KaspadArgs {
             "utxoindex" => a.utxoindex = value().is_none_or(|v| v != "false"),
             "palw-register-bond" => a.register_bond = value().is_none_or(|v| v != "false"),
             "enable-unsynced-mining" => a.enable_unsynced_mining = value().is_none_or(|v| v != "false"),
-            "enable-validator" => a.enable_validator = value().is_none_or(|v| v != "false"),
-            "validator-key" => a.validator_key = take(&mut i),
-            "stake-bond" => a.stake_bond = take(&mut i),
-            "validator-mode" => a.validator_mode = take(&mut i),
             "palw-producer-key" => a.key = take(&mut i),
             "palw-producer-bond" => a.bond = take(&mut i),
             "palw-producer-pay-address" => a.pay_address = take(&mut i),
