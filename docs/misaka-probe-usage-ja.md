@@ -1,6 +1,8 @@
 # misaka-probe 使い方メモ
 
-このドキュメントは、`scripts/misaka-probe.sh` をVPSに入れて、IPからMISAKA node / DNS seeder / validator状態を確認するための手順です。
+このドキュメントは、`scripts/misaka-probe.sh` をVPSに入れて、IPからMISAKA node / DNS seeder の状態を確認するための手順です。
+
+DNS-finality validator は廃止されました（PALW は validator を使いません）。以前あった `--stake-bond` による validator 登録確認と `Validator verdict` は、probe からも削除されています。
 
 ## できること
 
@@ -11,8 +13,6 @@
 | node参加 | かなり可能 | `26211/tcp` に到達できるか、seedに載っているか |
 | DNS seeder動作 | 可能 | `53/udp` と `53/tcp` が複数Aレコードを返すか |
 | local service状態 | 可能 | VPS上の `systemctl` と `misaka node doctor` を見る |
-| validator登録状態 | bondが必要 | `--stake-bond <txid>:0` があれば確認可能 |
-| validator実稼働の完全証明 | IPだけでは不可 | validatorはIPではなく `validator_id` / `stake bond` で識別されるため |
 
 ## 重要な前提
 
@@ -22,8 +22,6 @@
 
 - node再起動
 - DNS seeder再起動
-- validator起動
-- bond作成
 - 秘密鍵読み取り
 - 秘密鍵出力
 
@@ -65,7 +63,6 @@ Verdict
 -------
 Node verdict                    NODE_OK: reachable and advertised by seed         OK
 DNS seeder verdict              DNS_SEEDER_OK                                     OK
-Validator verdict               UNKNOWN: IP alone cannot prove validator participation  INFO
 ```
 
 この場合の意味です。
@@ -74,32 +71,6 @@ Validator verdict               UNKNOWN: IP alone cannot prove validator partici
 |---|---|
 | `NODE_OK` | nodeとして外から到達でき、seedにも載っている |
 | `DNS_SEEDER_OK` | DNS seederとしてUDP/TCP 53で複数peer IPを返している |
-| `Validator UNKNOWN` | IPだけではvalidator判定できない |
-
-`Validator UNKNOWN` はエラーではありません。
-
-まだbondしていない場合、または `--stake-bond` を渡していない場合は、この表示が正常です。
-
-## validator bond後の確認
-
-validatorのbond作成後は、`bond_outpoint` を渡します。
-
-```bash
-misaka-probe --ip 217.76.57.217 --stake-bond <txid>:0
-```
-
-`<txid>:0` は、`kaspa-pq-validator bond` 実行後に表示された `bond_outpoint` に置き換えます。
-
-期待する表示です。
-
-```text
-Stake bond                      active                                            OK
-Validator verdict               VALIDATOR_REGISTERED_ACTIVE                       OK
-```
-
-ただし、この確認で分かるのは「そのbondがregistry上でactive」ということです。
-
-IPとvalidator keyが完全に紐付いていることまでは、IPだけでは証明できません。
 
 ## よく使うコマンド集
 
@@ -189,11 +160,3 @@ Connection to 217.76.57.217 port 26211 [tcp/*] succeeded!
 | `DNS_SEEDER_OK` | UDP/TCP 53で複数Aを返す | 問題なし |
 | `PARTIAL_DNS_SEEDER` | UDP/TCPの片方だけ成功 | firewallやDNS seeder serviceを確認 |
 | `NOT_A_DNS_SEEDER_OR_NOT_PUBLIC` | DNS seederとして応答していない | 通常nodeなら問題なし。seeder運用なら要確認 |
-
-### Validator verdict
-
-| 表示 | 意味 | 対応 |
-|---|---|---|
-| `UNKNOWN` | `--stake-bond` がないため判定不可 | bond後に `--stake-bond` を付ける |
-| `VALIDATOR_REGISTERED_ACTIVE` | bondがactive | validator registry上はOK |
-| `BOND_NOT_ACTIVE_OR_UNKNOWN` | bondがactiveではない、または確認失敗 | `kaspa-pq-validator status` で詳細確認 |

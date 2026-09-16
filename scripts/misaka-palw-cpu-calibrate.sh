@@ -2,7 +2,7 @@
 # MISAKA — calibrate the portable CPU compute profile on ONE machine.
 #
 # This is the last unchecked box before the ADR-0024 step-3 (SHADOW) fence can be scheduled:
-# `docs/testnet10-vlt-shadow-fork-runbook.md` requires that two machines of the same architecture
+# the testnet-10 VLT shadow-fork runbook (retired with the overlay; ADR-0024 keeps the design) required that two machines of the same architecture
 # independently reproduce a job's `gemm_trace_root`, because that digest is what a verifier's
 # replay has to match byte-for-byte. Determinism ON one machine is already proven in CI-style
 # reruns; what a fleet needs is determinism ACROSS machines, and no single host can show it.

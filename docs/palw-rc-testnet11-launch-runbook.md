@@ -50,8 +50,8 @@ where they do not.**
 
 ```bash
 # ON EACH OPERATOR'S HOST — two keys, secrets never leave it
-misaka validator keygen --out /etc/misaka/t12-bond.key
-misaka validator keygen --out /etc/misaka/t12-operator.key
+misaka key gen --out /etc/misaka/t12-bond.key
+misaka key gen --out /etc/misaka/t12-operator.key
 
 # ON THE SAME HOST — one public row (two verification keys + an address payload, nothing signable)
 palw-rc-genesis --emit-row --bond-index 3 \
