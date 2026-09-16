@@ -1499,6 +1499,40 @@ Do you confirm? (y/n)";
         (None, _) => None,
     };
 
+    // ADR-0125: the execution lane's producer. Gated on the lane's fence for the heartbeat miner's
+    // reason — on a network without the lane every round block would be refused — and on the bond's
+    // credentials, which it shares with the attempt producer.
+    let palw_round_producer_service = if args.palw_round_lane {
+        match (config.params.palw_execution_lane_fence(), &args.palw_producer_key, &args.palw_producer_bond) {
+            (Some(_), Some(key_path), Some(bond)) => Some(Arc::new(crate::palw_round_producer::PalwRoundProducerService::new(
+                crate::palw_round_producer::PalwRoundProducerConfig {
+                    key_path: key_path.clone(),
+                    bond: bond.clone(),
+                    network_id: config.params.net,
+                    genesis_hash: config.params.genesis.hash,
+                    genesis_timestamp_ms: config.params.genesis.timestamp,
+                },
+                consensus_manager.clone(),
+                mining_manager.clone(),
+                flow_context.clone(),
+            ))),
+            (None, _, _) => {
+                warn!(
+                    "--palw-round-lane was given but {} does not configure the execution lane (`palw_execution_lane`); the \
+                     round producer is not started rather than producing blocks every peer would refuse",
+                    config.params.net
+                );
+                None
+            }
+            _ => {
+                warn!("--palw-round-lane needs --palw-producer-key and --palw-producer-bond; the round producer is not started");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let validator_status_provider: Option<Arc<dyn ValidatorStatusProvider>> = match &validator_service {
         Some(v) => Some(v.clone()),
         None => None,
@@ -1784,6 +1818,9 @@ Do you confirm? (y/n)";
     }
     if let Some(palw_panel_service) = palw_panel_service {
         async_runtime.register(palw_panel_service);
+    }
+    if let Some(palw_round_producer_service) = palw_round_producer_service {
+        async_runtime.register(palw_round_producer_service);
     }
     if let Some(palw_heartbeat_miner_service) = palw_heartbeat_miner_service {
         async_runtime.register(palw_heartbeat_miner_service)
