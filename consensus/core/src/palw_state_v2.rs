@@ -5501,12 +5501,12 @@ impl PalwChainStateV2 {
         &self.round_schedules
     }
 
-    /// ADR-0125: has the permit `(span, round, index)` already been accepted on this chain?
     /// ADR-0125 §7.4: how many permits of `span` this chain has accepted.
     pub fn round_permits_accepted(&self, span: u64) -> u64 {
         self.round_permits_used.range((span, 0)..=(span, u64::MAX)).map(|(_, bits)| u64::from(bits.count_ones())).sum()
     }
 
+    /// ADR-0125: has the permit `(span, round, index)` already been accepted on this chain?
     pub fn round_permit_used(&self, span: u64, round: u64, index: u16) -> bool {
         index < 16 && self.round_permits_used.get(&(span, round)).is_some_and(|bits| bits & (1u16 << index) != 0)
     }
