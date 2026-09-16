@@ -314,6 +314,9 @@ pub struct Args {
     /// format 4 and the tiled prompt ids, the k-ary and one-move courts, `PanelDa`, and
     /// `Params::palw_held_context` (`palw_held_context_mint_v1`, at the devnet's own ladder).
     pub palw_held_context_devnet: bool,
+    /// ADR-0125 on a private devnet: open the execution lane — `activation,width,span[,daa:width…]`
+    /// (the opening DAA, the first width, the schedule span, then any widenings).
+    pub palw_execution_lane_devnet: Option<String>,
     /// PALW on a PRIVATE devnet: run the floor-only ruleset (the base class alone, seeded by
     /// ADR-0076 with the whole share, `MAX/278`) instead of the shipped devnet's testnet-11 class
     /// set, whose floor holds a sliver of the share and prices a fixture block at minutes per
@@ -433,6 +436,7 @@ impl Default for Args {
             palw_shard_court_devnet_daa: None,
             palw_shard_licensing_devnet_daa: None,
             palw_held_context_devnet: false,
+            palw_execution_lane_devnet: None,
             palw_devnet_floor_only: false,
             testnet: false,
             testnet_suffix: 10,
@@ -620,6 +624,28 @@ impl Args {
             let ladder = bundle.court.max_step_leaf_count();
             config.params = kaspa_consensus_core::config::params::palw_held_context_mint_v1(config.params.clone(), ladder)
                 .unwrap_or_else(|e| panic!("--palw-held-context-devnet produced a ruleset the node refuses: {e:?}"));
+        }
+
+        // **ADR-0125 on a private devnet: the execution lane.** Its shape is in the consensus
+        // fingerprint, so every node of the drill carries the same spec; `validate_palw_v2` asks the
+        // question every network's assembly asks. Last, so it rides whichever bundle the flags above
+        // assembled.
+        if let Some(spec) = self.palw_execution_lane_devnet.as_deref() {
+            let net = self.network().network_type();
+            if !matches!(net, NetworkType::Devnet | NetworkType::Simnet) {
+                panic!(
+                    "--palw-execution-lane-devnet is devnet/simnet only (got {net:?}). Opening the lane is a consensus \
+                     change and ships in a release, not a command line."
+                );
+            }
+            if !matches!(config.params.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)) {
+                panic!("--palw-execution-lane-devnet needs a ConsensusV2 network, and {net:?} here is not one");
+            }
+            let lane = parse_palw_execution_lane_devnet(spec).unwrap_or_else(|e| panic!("--palw-execution-lane-devnet={spec}: {e}"));
+            config.params.palw_execution_lane = Some(lane);
+            if let Err(e) = config.params.validate_palw_v2() {
+                panic!("--palw-execution-lane-devnet={spec} produced a ruleset the node refuses: {e:?}");
+            }
         }
 
         // A malformed checkpoint is fatal on purpose. Continuing without one would leave the node
@@ -1209,6 +1235,18 @@ pub fn cli() -> Command {
                 .env("KASPAD_PALW_HELD_CONTEXT_DEVNET"),
         )
         .arg(
+            Arg::new("palw-execution-lane-devnet")
+                .long("palw-execution-lane-devnet")
+                .value_name("activation,width,span[,daa:width...]")
+                .require_equals(false)
+                .help(
+                    "ADR-0125's execution lane on a PRIVATE devnet: open it at the activation DAA with `width` permits a \
+                     round and schedules of `span` DAA, then widen at each daa:width. DEVNET/SIMNET ONLY; every node of the \
+                     drill must carry the same spec (it is in the consensus fingerprint).",
+                )
+                .env("KASPAD_PALW_EXECUTION_LANE_DEVNET"),
+        )
+        .arg(
             Arg::new("palw-shard-licensing-devnet")
                 .long("palw-shard-licensing-devnet")
                 .value_name("daa-score")
@@ -1565,6 +1603,10 @@ impl Args {
                 .copied()
                 .or(defaults.palw_shard_licensing_devnet_daa),
             palw_held_context_devnet: arg_match_unwrap_or::<bool>(&m, "palw-held-context-devnet", defaults.palw_held_context_devnet),
+            palw_execution_lane_devnet: m
+                .get_one::<String>("palw-execution-lane-devnet")
+                .cloned()
+                .or(defaults.palw_execution_lane_devnet),
             palw_devnet_floor_only: arg_match_unwrap_or::<bool>(&m, "palw-devnet-floor-only", defaults.palw_devnet_floor_only),
             utxoindex: arg_match_unwrap_or::<bool>(&m, "utxoindex", defaults.utxoindex),
             testnet: arg_match_unwrap_or::<bool>(&m, "testnet", defaults.testnet),
@@ -1787,6 +1829,58 @@ fn arg_match_many_unwrap_or<T: Clone + Send + Sync + 'static>(m: &clap::ArgMatch
   -s, --service=                            Service command {install, remove, start, stop}
       --nogrpc                              Don't initialize the gRPC server
 */
+
+/// `activation,width,span[,daa:width…]` — the execution lane's devnet spec (ADR-0125).
+pub fn parse_palw_execution_lane_devnet(spec: &str) -> Result<kaspa_consensus_core::config::params::PalwExecutionLaneV1, String> {
+    use kaspa_consensus_core::config::params::{ForkActivation, PalwExecWideningV1, PalwExecutionLaneV1};
+    let mut parts = spec.split(',').map(str::trim);
+    let mut number = |what: &str| -> Result<u64, String> {
+        parts.next().ok_or_else(|| format!("missing {what}"))?.parse::<u64>().map_err(|e| format!("{what}: {e}"))
+    };
+    let activation = number("the activation DAA")?;
+    let width = u16::try_from(number("the width")?).map_err(|_| "the width is not a width".to_string())?;
+    let span = number("the schedule span")?;
+    let mut widenings = PalwExecutionLaneV1::NO_WIDENINGS;
+    for (slot, stage) in parts.enumerate() {
+        let (daa, stage_width) = stage.split_once(':').ok_or_else(|| format!("widening '{stage}' is not daa:width"))?;
+        let daa = daa.parse::<u64>().map_err(|e| format!("widening height '{daa}': {e}"))?;
+        let stage_width = stage_width.parse::<u16>().map_err(|e| format!("widening width '{stage_width}': {e}"))?;
+        let slot = widenings.get_mut(slot).ok_or_else(|| "more widenings than a lane holds".to_string())?;
+        *slot = PalwExecWideningV1 { activation: ForkActivation::new(daa), permits_per_round: stage_width };
+    }
+    Ok(PalwExecutionLaneV1 {
+        activation: ForkActivation::new(activation),
+        permits_per_round: width,
+        widenings,
+        max_per_mergeset: kaspa_consensus_core::palw_execution_lane_v1::PALW_EXEC_MAX_PER_MERGESET_BOUND_V1.min(600),
+        schedule_span_daa: span,
+    })
+}
+
+#[cfg(test)]
+mod execution_lane_devnet_tests {
+    use super::*;
+
+    #[test]
+    fn the_devnet_lane_spec_parses_its_stages_and_refuses_the_malformed() {
+        let lane = parse_palw_execution_lane_devnet("0,1,50,200:2,400:5").expect("a spec with two widenings");
+        assert_eq!((lane.activation.daa_score(), lane.permits_per_round, lane.schedule_span_daa), (0, 1, 50));
+        assert_eq!((lane.widenings[0].activation.daa_score(), lane.widenings[0].permits_per_round), (200, 2));
+        assert_eq!((lane.widenings[1].activation.daa_score(), lane.widenings[1].permits_per_round), (400, 5));
+        assert!(!lane.widenings[2].is_used());
+        assert!(parse_palw_execution_lane_devnet("0,1").is_err(), "no span");
+        assert!(parse_palw_execution_lane_devnet("0,1,50,200").is_err(), "a widening without a width");
+        assert!(parse_palw_execution_lane_devnet("0,70000,50").is_err(), "a width past u16");
+        let parsed = parse(&["--devnet", "--palw-execution-lane-devnet=0,1,50"]);
+        assert_eq!(parsed.palw_execution_lane_devnet.as_deref(), Some("0,1,50"));
+    }
+
+    fn parse(extra: &[&str]) -> Args {
+        let mut argv = vec!["kaspad"];
+        argv.extend_from_slice(extra);
+        Args::parse(argv).expect("args parse")
+    }
+}
 
 #[cfg(test)]
 mod profile_tests {
