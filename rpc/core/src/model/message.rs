@@ -5242,6 +5242,16 @@ pub struct RpcPalwModelLifecycle {
     /// ADR-0135 §7: the share the registry priced the class's target for when it seated it
     /// (`attempt_target_seed_v1(share, pwu)`, once); `0` until it is seated.
     pub priced_share_permille: u16,
+    /// ADR-0137 (shadow): the class's CCU, `CCU / W` in permille, the expected forwards a win
+    /// (Q32), the work target's ticket beside the class target, the panel room in this class's
+    /// claims, and the reader's share of finalized work over ten and a hundred epochs.
+    pub work_ratio_permille: u32,
+    pub expected_forwards_q32: String,
+    pub work_ticket_target: String,
+    pub class_target: String,
+    pub panel_room: u64,
+    pub final_work_share_10_permille: u16,
+    pub final_work_share_100_permille: u16,
     pub ready_seats_now: u32,
     pub inflight_now: u32,
     pub share_permille: u16,
@@ -5282,6 +5292,13 @@ impl Serializer for RpcPalwModelLifecycle {
         store!(u16, &self.share_permille, writer)?;
         store!(u32, &self.no_capable_panel_voids, writer)?;
         store!(String, &self.reason, writer)?;
+        store!(u32, &self.work_ratio_permille, writer)?;
+        store!(String, &self.expected_forwards_q32, writer)?;
+        store!(String, &self.work_ticket_target, writer)?;
+        store!(String, &self.class_target, writer)?;
+        store!(u64, &self.panel_room, writer)?;
+        store!(u16, &self.final_work_share_10_permille, writer)?;
+        store!(u16, &self.final_work_share_100_permille, writer)?;
         Ok(())
     }
 }
@@ -5319,6 +5336,13 @@ impl Deserializer for RpcPalwModelLifecycle {
             share_permille: load!(u16, reader)?,
             no_capable_panel_voids: load!(u32, reader)?,
             reason: load!(String, reader)?,
+            work_ratio_permille: load!(u32, reader)?,
+            expected_forwards_q32: load!(String, reader)?,
+            work_ticket_target: load!(String, reader)?,
+            class_target: load!(String, reader)?,
+            panel_room: load!(u64, reader)?,
+            final_work_share_10_permille: load!(u16, reader)?,
+            final_work_share_100_permille: load!(u16, reader)?,
         })
     }
 }
@@ -5406,6 +5430,22 @@ pub struct GetPalwModelRegistryResponse {
     /// collateral multiple free), and every active bond.
     pub bonds_active: u32,
     pub bonds_with_headroom: u32,
+    /// ADR-0137 (shadow): the work target `W` (CCU a block), its floor `W₀`, the epoch it governs,
+    /// the closed epoch's model and expected blocks, the rate `W₀` was priced with, the panel's
+    /// in-flight replay, the budget's horizon and the finalized-work epochs kept; `false` where no
+    /// shadow has folded yet.
+    pub work_target_shadow: bool,
+    pub work_target: String,
+    pub work_floor: String,
+    pub work_network_draws_q32: String,
+    pub work_effective: String,
+    pub work_epoch_index: u64,
+    pub work_closed_model_blocks: u64,
+    pub work_closed_expected_blocks: u64,
+    pub work_rate_sompi_per_giga: u64,
+    pub panel_inflight_replay: String,
+    pub panel_horizon_spans: u64,
+    pub final_work_epochs: u64,
 }
 
 impl Serializer for GetPalwModelRegistryResponse {
@@ -5437,6 +5477,18 @@ impl Serializer for GetPalwModelRegistryResponse {
         store!(u32, &self.classes_held, writer)?;
         store!(u32, &self.bonds_active, writer)?;
         store!(u32, &self.bonds_with_headroom, writer)?;
+        store!(bool, &self.work_target_shadow, writer)?;
+        store!(String, &self.work_target, writer)?;
+        store!(String, &self.work_floor, writer)?;
+        store!(String, &self.work_network_draws_q32, writer)?;
+        store!(String, &self.work_effective, writer)?;
+        store!(u64, &self.work_epoch_index, writer)?;
+        store!(u64, &self.work_closed_model_blocks, writer)?;
+        store!(u64, &self.work_closed_expected_blocks, writer)?;
+        store!(u64, &self.work_rate_sompi_per_giga, writer)?;
+        store!(String, &self.panel_inflight_replay, writer)?;
+        store!(u64, &self.panel_horizon_spans, writer)?;
+        store!(u64, &self.final_work_epochs, writer)?;
         Ok(())
     }
 }
@@ -5471,6 +5523,18 @@ impl Deserializer for GetPalwModelRegistryResponse {
             classes_held: load!(u32, reader)?,
             bonds_active: load!(u32, reader)?,
             bonds_with_headroom: load!(u32, reader)?,
+            work_target_shadow: load!(bool, reader)?,
+            work_target: load!(String, reader)?,
+            work_floor: load!(String, reader)?,
+            work_network_draws_q32: load!(String, reader)?,
+            work_effective: load!(String, reader)?,
+            work_epoch_index: load!(u64, reader)?,
+            work_closed_model_blocks: load!(u64, reader)?,
+            work_closed_expected_blocks: load!(u64, reader)?,
+            work_rate_sompi_per_giga: load!(u64, reader)?,
+            panel_inflight_replay: load!(String, reader)?,
+            panel_horizon_spans: load!(u64, reader)?,
+            final_work_epochs: load!(u64, reader)?,
         })
     }
 }

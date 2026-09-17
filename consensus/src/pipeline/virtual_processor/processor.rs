@@ -3865,12 +3865,16 @@ impl VirtualStateProcessor {
         let (tip, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
         let tip_daa = self.headers_store.get_header(tip).map(|h| h.daa_score).unwrap_or(0);
         let fold = self.palw_model_registry_fold_at(tip_daa);
+        let tip_point =
+            kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 { block: tip, daa_score: tip_daa, blue_score: 0, subsidy: 0 };
+        let work = self.palw_work_target_fold_for(&tip_point);
         Some(kaspa_consensus_core::palw_model_registry_v1::palw_model_registry_read_v1(
             &state,
             state_params,
             tip_daa,
             self.palw_model_registry.map(|f| f.daa_score()),
             fold.as_ref(),
+            work.as_ref(),
         ))
     }
 
@@ -7468,6 +7472,9 @@ impl VirtualStateProcessor {
             // same reading at every site that folds this block, because it is derived from the
             // point and the header store alone.
             economic_payout: self.palw_economic_payout_fold_for(point),
+            // ADR-0137 (shadow): the work target's fold input — the rate, the clamp and every
+            // class's work — on every ConsensusV2 network, so every node prints the same `W`.
+            work_target: self.palw_work_target_fold_for(point),
             evm_actions: Vec::new(),
             // ADR-0093 Decision 8: which form of move 1 opens a phase. Written explicitly for the
             // reason the lines above give — an unwritten default here would refuse, or admit, a
@@ -7843,6 +7850,30 @@ impl VirtualStateProcessor {
     /// ADR-0132 Upgrade C: the fold's payout input at the block `point` names — the fence's numbers
     /// where it is active at the block's DAA, with the block's compact `bits` (`0` where the store
     /// holds no header for it, which prices the network draw at one).
+    /// **ADR-0137 (shadow): the work target's fold input.** The rate is the payout fence's where
+    /// it is armed at `daa_score` and the shadow constant otherwise; the clamp is the class DAA's;
+    /// the works are the registry's (the genesis classes from the canonical table, the registered
+    /// ones from their carriages). `None` off ConsensusV2, where there is no work to price.
+    pub(super) fn palw_work_target_fold_for(
+        &self,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+    ) -> Option<kaspa_consensus_core::palw_work_target_v1::PalwWorkTargetFoldV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        self.palw_v2_bundle.as_ref()?;
+        let rate = self
+            .palw_economic_payout
+            .filter(|payout| payout.activation.is_active(point.daa_score))
+            .map(|payout| payout.rate_sompi_per_giga)
+            .unwrap_or(kaspa_consensus_core::palw_work_target_v1::PALW_WORK_TARGET_SHADOW_RATE_SOMPI_PER_GIGA_V1);
+        let block_bits = self.headers_store.get_header(point.block).map(|header| header.bits).unwrap_or(0);
+        Some(kaspa_consensus_core::palw_work_target_v1::PalwWorkTargetFoldV1 {
+            rate_sompi_per_giga: rate,
+            block_bits,
+            max_factor: state_params.class_daa_max_factor(),
+            works: self.palw_known_model_works_v1(),
+        })
+    }
+
     pub(super) fn palw_economic_payout_fold_for(
         &self,
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,

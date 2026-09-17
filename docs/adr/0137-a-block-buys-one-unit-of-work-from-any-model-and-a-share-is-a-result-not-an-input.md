@@ -1,9 +1,13 @@
 # ADR-0137 — A block buys one unit of work from any model, and a share is a result, not an input
 
 **Status:** PROPOSED 2026-09-18 on `feat/palw-exec-lane-and-validator-retirement`, design with a
-reproducible simulation (`scripts/palw-share-sim.py`); nothing armed, no fingerprint moves. The
-interim commit `804af11d` (a class the registry seats is priced by `attempt_target_seed_v1`) stays
-as a shadow of the shipped rule and is **not** the final design — §6 says why.
+reproducible simulation (`scripts/palw-share-sim.py`); **the shadow (§17 step 1) built the same
+day** — `palw_work_target_v1.rs`, the state's `work_target_shadow` and `final_work` carried outside
+the root, op 186's work-target block and per-class `CCU / W`, ticket, room and finalized-work
+shares (§22); nothing armed, no fingerprint moves. The interim commit `804af11d` (a class the
+registry seats is priced by `attempt_target_seed_v1`) stays as a shadow of the shipped rule and is
+**not** the final design — §6 says why. **Arming ADR-0135 D5's shares on testnet-11 is stopped**
+(§3.5, §17): the registry's rows, proofs and gate may arm; the share → target rule may not.
 
 **Supersedes the share-as-input reading of:** ADR-0045 D3 (the grant table), ADR-0039 D5 (epoch
 budgets), ADR-0071 D1 / ADR-0076 (the class DAA and its seed), ADR-0054 / ADR-0107 (share growth,
@@ -171,10 +175,14 @@ Register `N` classes (the same weights, `N` variants, `N` graphs a node apart). 
 * a class target — the floor's price (§2), so each draws like a second floor;
 * an epoch budget of **at least one block** (`derive_epoch_budgets_v2` floors at one, share 0
   included: "a weightless class still produces"); `N = 1000` is ten epochs of cadence a span;
-* no gate at acceptance: `palw_admission_v2` refuses a bad ticket, a spent budget and a missing
-  target — it does not refuse a class in REGISTERED/PREFETCHING/HELD; the claim voids later
-  (`NoCapablePanel`) but the block stood, the network draw hardened for everyone, and the honest
-  classes' cadence was diluted;
+* a gate at acceptance only where the registry gave the class a row: the transition refuses an
+  attempt of a rowed class that does not admit (`ClassNotAdmitting`: REGISTERED, PREFETCHING,
+  HELD) or is at its in-flight cap (`ClassInflightCapped`) — a real gate, corrected here from the
+  first draft's "no gate" — but a class registered before the fence without a carriage has no row
+  and is never gated, below the registry fence nothing is gated, and a rowed class in PROBATION
+  admits at a twentieth; the block of an ungated class stands, its claim voids later
+  (`NoCapablePanel`), the network draw hardened for everyone, and the honest classes' cadence was
+  diluted;
 * if admitted, share ∝ 1 / CCU (§3.3): a thousand cheap variants own the room.
 
 Cost: the registration bond (`registration_bond_per_span · window`, 1,000 MSK a span-window) —
@@ -291,9 +299,11 @@ wasted; without the pre-check the capacity-bound class's pay per CCU falls to 2.
 `--no-hold` run); `NoCapablePanel` and the window void as today.
 
 **D6 — the lifecycle is a gate, not a price.** REGISTERED / PREFETCHING / HELD: claims refused at
-acceptance (a new error, the gate §4 found missing). PROBATION: one claim in flight, ten Finals to
-leave — a probe costs `W` of real compute, so it is Sybil-resistant. ACTIVE_LIMITED / ACTIVE: D5's
-room only. `admission_permille` (50 / 100 / 1000) has no reader.
+acceptance (the registry's `ClassNotAdmitting`, kept as is, and extended to a class the fence
+found without a row — every class past the work-target fence has a row or is refused). PROBATION:
+one claim in flight, ten Finals to leave — a probe costs `W` of real compute, so it is
+Sybil-resistant. ACTIVE_LIMITED / ACTIVE: D5's room only, replacing the per-class
+`ClassInflightCapped`. `admission_permille` (50 / 100 / 1000) has no reader.
 
 **D7 — share is a reader's number.** `share_m` is §5(c), computed by op 185/186 and the CLI from the
 Finals in any window the reader chooses; it is not written to the state and nothing consensual reads
@@ -419,8 +429,9 @@ No regenesis; the devnet drill re-runs from genesis as it does for every fence.
 
 * `palw_state_v2.rs`: the epoch boundary (a `W` update; skip class retarget / idle convergence /
   budget derivation / share growth for non-floor classes past the fence); the attempt acceptance
-  (the lifecycle gate; the room check); the registry step (no shares past the fence); a `work_target`
-  fold value in the state (in the root).
+  (the lifecycle gate as it is, extended to unrowed classes; the room check in place of the
+  per-class cap); the registry step (no shares past the fence); a `work_target` fold value in the
+  state (in the root).
 * `palw_admission_v2.rs`: `check_palw_class_lottery_v3` reads `W` (a class's target is derived); the
   budget check bypassed past the fence.
 * `palw_model_registry_v1.rs`: no arithmetic change; `admission_permille` unread; the row loses
@@ -539,6 +550,50 @@ half to four fifths of the time with the pay per CCU spread 1.7–7.9 ×; (iii) 
 under-paying everyone; (iv) the pre-check is load-bearing; (v) a thousand classes behave as one.
 The regime itself — supply ten times what the panel verifies — is testnet-11 today (ADR-0132: Final
 13 %, 87 % `receipt_timeout`), and its cure is seats, which no share table supplies.
+
+## 22. What the shadow built, and what it found
+
+Built 2026-09-18 (`consensus/core/src/palw_work_target_v1.rs`; `palw_state_v2.rs`;
+`processor.rs`; op 186; `misaka palw registry`):
+
+* the arithmetic: `palw_work_floor_v1` (`W₀ = escrow · 10⁹ / rate`), `palw_work_target_step_v1`
+  (the clamped epoch step, floored), `palw_work_ticket_target_v1` (`MAX · min(1, CCU / W)`),
+  `palw_work_ratio_permille_v1`, `palw_expected_forwards_q32_v1`, `palw_effective_work_v1`,
+  `palw_panel_room_v1` (D5), `palw_final_work_shares_v1` (§5c);
+* the state carries `work_target_shadow` (`W`, `W₀`, the boundary block's network draws in Q32
+  and their product, the epoch, the closed epoch's model blocks against the cadence's attempt-lane
+  slice) and `final_work` (finalized work by closed epoch and class, a hundred epochs kept) in one
+  carriage tail (`0xAC`) that never enters the state root — a state folded with the shadow has the
+  root of the same state folded without it (pinned); the delta carries them (54, 55) so a reorg
+  reverts them (pinned);
+* the fold's input rides `PalwTransitionExtrasV1::work_target` (the rate: the payout fence's where
+  armed, else 9 MSK/G; the block's `bits`; the class DAA's clamp; every class's work), built by
+  the node for every block of a ConsensusV2 network;
+* a Final of a model class writes `W` of work — the Upgrade C snapshot's attempted compute where
+  one was taken, the shadow's `W` otherwise; the floor and the receipt lane write nothing;
+* op 186 prints the shadow (`W`, `W₀`, network draws, effective work, epoch, census, rate, the
+  panel's in-flight replay, the budget's horizon) and, a class, `CCU / W` in permille, the expected
+  forwards a win, the ticket the work target would set beside the class target the shipped rule
+  sets, the panel room in that class's claims, and the finalized-work share over ten and a hundred
+  epochs; the CLI prints them as columns.
+
+Found while building it — corrections to this text:
+
+1. **Under the shipped double draw, `W`'s own DAA is redundant.** The network draw against `bits`
+   already holds the cadence; model blocks can never exceed the attempt lane's slice of it, so
+   §7 D2's step sits at `W₀` and the second draw is the controller above the cap (`rate ·
+   p_net`). The fence therefore needs no new DAA state: the ticket reads `W₀` off the block's own
+   escrow and the rate — stateless — and `bits` does the rest. The epoch step stays in the module
+   for the single lottery (ADR-0132 S), where it is the controller; the shadow folds it against the
+   cadence (`epoch_length · split`) so it is meaningful in both worlds, and prints the effective
+   work `W · network draws` beside it.
+2. **The registry does gate at acceptance** (`ClassNotAdmitting`, `ClassInflightCapped`), for rowed
+   classes under the fold; §4 and D6 are corrected above. What the gate does not cover — unrowed
+   classes, and everything below the registry fence — stands.
+3. **The fixtures' `W₀` is tiny** (620 000 sompi at 10 000 sompi/G: 62 G MAC-eq), so a toy class of
+   800 000 MAC-eq prints `CCU / W` as 0 ‰ and 77 500 forwards a win; testnet-11's `W₀` is 306 G
+   MAC-eq against forwards of 21–199 G (69–650 ‰). The shadow's numbers on a live network are what
+   §17's measurement is for.
 
 ## 21. Number hygiene
 

@@ -677,6 +677,8 @@ pub fn palw_registry_shares_v1(
 /// **What op 186 answers**: the registry as the tip state holds it.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct PalwModelRegistryReadV1 {
+    /// ADR-0137 (shadow): the work target and the panel's replay budget, where the shadow folds.
+    pub work_target: Option<PalwWorkTargetReadV1>,
     pub tip_daa: u64,
     /// The fence's height, if scheduled, and whether it is in force at the tip.
     pub fence_daa: Option<u64>,
@@ -733,6 +735,18 @@ pub fn palw_lifecycle_reason_v1(row: &PalwModelLifecycleRowV1, is_base_class: bo
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwModelRegistryClassReadV1 {
+    /// ADR-0137 (shadow): the class's economic compute a claim (its CCU), `CCU / W` in permille,
+    /// the expected forwards a win (Q32), the ticket the work target would set beside the class
+    /// target the shipped rule sets, the panel room in this class's claims, and the reader's share
+    /// of finalized work over ten and a hundred epochs.
+    pub economic_ccu_per_claim: u128,
+    pub work_ratio_permille: u32,
+    pub expected_forwards_q32: u128,
+    pub work_ticket_target: u128,
+    pub class_target: u128,
+    pub panel_room: u64,
+    pub final_work_share_10_permille: u16,
+    pub final_work_share_100_permille: u16,
     pub class_id: Hash64,
     pub artifact_root: Hash64,
     pub is_base_class: bool,
@@ -850,17 +864,78 @@ pub fn palw_model_registry_inflight_v1(state: &crate::palw_state_v2::PalwChainSt
 }
 
 /// The registry read of a tip state.
+/// ADR-0137 (shadow): what op 186 prints of the work target — the state's shadow row, the rate it
+/// was floored with, the panel's in-flight replay and the budget's horizon.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwWorkTargetReadV1 {
+    pub target: crate::palw_work_target_v1::PalwWorkTargetV2,
+    pub rate_sompi_per_giga: u64,
+    pub panel_inflight_replay: u128,
+    pub panel_horizon_spans: u64,
+    pub final_work_epochs: u64,
+}
+
 pub fn palw_model_registry_read_v1(
     state: &crate::palw_state_v2::PalwChainStateV2,
     params: &crate::palw_state_v2::PalwStateParamsV2,
     tip_daa: u64,
     fence_daa: Option<u64>,
     fold: Option<&PalwModelRegistryFoldV1>,
+    work: Option<&crate::palw_work_target_v1::PalwWorkTargetFoldV1>,
 ) -> PalwModelRegistryReadV1 {
+    use crate::palw_work_target_v1 as wt;
     let base = params.base_class_id();
+    // ADR-0137 (shadow): every class's CCU (the fold's works, else its row's), the network-wide
+    // in-flight replay, the budget's common horizon (the shortest admitted window) and the
+    // reader's shares — computed once, read per class below.
+    let shadow = state.work_target_shadow().copied();
+    let g = fold.map(|f| f.globals).unwrap_or(PALW_REGISTRY_GLOBALS_V1);
+    let ccu_of = |class_id: &Hash64| -> u128 {
+        work.and_then(|w| w.works.get(class_id))
+            .map(|w| w.economic_ccu_per_claim)
+            .or_else(|| state.model_lifecycle(class_id).map(|row| row.work.economic_ccu_per_claim))
+            .unwrap_or(0)
+    };
+    let seat_count = g.seat_count as u128;
+    let panel_inflight_replay: u128 = state
+        .classes_iter()
+        .filter(|(id, _)| **id != base)
+        .map(|(id, _)| (palw_model_registry_inflight_v1(state, id) as u128).saturating_mul(ccu_of(id)).saturating_mul(seat_count))
+        .fold(0u128, u128::saturating_add);
+    let panel_horizon_spans = state
+        .model_lifecycles_iter()
+        .filter(|(id, row)| **id != base && row.state.admission_permille() > 0)
+        .map(|(_, row)| row.profile.verification_window_spans as u64)
+        .min()
+        .unwrap_or(1)
+        .max(1);
+    let shares_10 = state.final_work_shares_v1(10);
+    let shares_100 = state.final_work_shares_v1(100);
+    let share_of =
+        |shares: &[(Hash64, u16)], class_id: &Hash64| shares.iter().find(|(id, _)| id == class_id).map(|(_, s)| *s).unwrap_or(0);
     let classes = state
         .classes_iter()
         .map(|(class_id, record)| PalwModelRegistryClassReadV1 {
+            economic_ccu_per_claim: ccu_of(class_id),
+            work_ratio_permille: shadow.map(|t| wt::palw_work_ratio_permille_v1(ccu_of(class_id), t.work)).unwrap_or(0),
+            expected_forwards_q32: shadow.map(|t| wt::palw_expected_forwards_q32_v1(ccu_of(class_id), t.work)).unwrap_or(0),
+            work_ticket_target: shadow.map(|t| wt::palw_work_ticket_target_v1(ccu_of(class_id), t.work)).unwrap_or(0),
+            class_target: state.class_target(class_id).map(|t| t.target).unwrap_or(0),
+            panel_room: if *class_id == base {
+                0
+            } else {
+                let ready = fold.map(|f| palw_model_registry_ready_seats_v1(state, params, class_id, tip_daa, f)).unwrap_or(0) as u128;
+                let per_span =
+                    ready.saturating_mul(g.reference_work_per_span).saturating_mul(g.utilization_permille.min(1_000) as u128) / 1_000;
+                wt::palw_panel_room_v1(
+                    per_span,
+                    panel_horizon_spans,
+                    panel_inflight_replay,
+                    ccu_of(class_id).saturating_mul(seat_count),
+                )
+            },
+            final_work_share_10_permille: share_of(&shares_10, class_id),
+            final_work_share_100_permille: share_of(&shares_100, class_id),
             class_id: *class_id,
             artifact_root: record.artifact_root,
             is_base_class: *class_id == base,
@@ -935,6 +1010,13 @@ pub fn palw_model_registry_read_v1(
         counts[slot] += 1;
     }
     PalwModelRegistryReadV1 {
+        work_target: shadow.map(|target| PalwWorkTargetReadV1 {
+            target,
+            rate_sompi_per_giga: work.map(|w| w.rate_sompi_per_giga).unwrap_or(0),
+            panel_inflight_replay,
+            panel_horizon_spans,
+            final_work_epochs: state.final_work_iter().count() as u64,
+        }),
         tip_daa,
         fence_daa,
         active: fold.is_some(),

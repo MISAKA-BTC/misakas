@@ -44,9 +44,31 @@ pub(crate) fn render(r: &GetPalwModelRegistryResponse) -> String {
             r.readiness_collateral_multiple
         ));
     }
+    if r.work_target_shadow {
+        out.push_str(&format!(
+            "  work target (ADR-0137 shadow): W {} CCU/block · floor W₀ {} · network draws (Q32) {} · effective {} · epoch {} · closed model blocks {}/{} expected · rate {} sompi/G · panel in-flight replay {} · horizon {} spans · final-work epochs {}\n",
+            r.work_target, r.work_floor, r.work_network_draws_q32, r.work_effective, r.work_epoch_index, r.work_closed_model_blocks, r.work_closed_expected_blocks, r.work_rate_sompi_per_giga, r.panel_inflight_replay, r.panel_horizon_spans, r.final_work_epochs
+        ));
+    }
     out.push_str(&format!(
-        "  {:<14} {:<15} {:>6} {:>7} {:>8} {:>5} {:>6} {:>6} {:>8} {:>8} {:>8} {:>6} {:>6}\n",
-        "class", "state", "since", "window", "prefetch", "cap", "need", "ready", "inflight", "util‰", "adm‰", "share", "priced"
+        "  {:<14} {:<15} {:>6} {:>7} {:>8} {:>5} {:>6} {:>6} {:>8} {:>8} {:>8} {:>6} {:>6} {:>7} {:>5} {:>5} {:>6}\n",
+        "class",
+        "state",
+        "since",
+        "window",
+        "prefetch",
+        "cap",
+        "need",
+        "ready",
+        "inflight",
+        "util‰",
+        "adm‰",
+        "share",
+        "priced",
+        "ccu/W‰",
+        "room",
+        "fw10‰",
+        "fw100‰"
     ));
     for c in r.classes.iter().filter(|c| c.has_row) {
         out.push_str(&format!("    {} — {}\n", short(&c.class_id), c.reason));
@@ -63,7 +85,7 @@ pub(crate) fn render(r: &GetPalwModelRegistryResponse) -> String {
     }
     for c in &r.classes {
         out.push_str(&format!(
-            "  {:<14} {:<15} {:>6} {:>7} {:>8} {:>5} {:>6} {:>6} {:>8} {:>8} {:>8} {:>6} {:>6}\n",
+            "  {:<14} {:<15} {:>6} {:>7} {:>8} {:>5} {:>6} {:>6} {:>8} {:>8} {:>8} {:>6} {:>6} {:>7} {:>5} {:>5} {:>6}\n",
             format!("{}{}", short(&c.class_id), if c.is_base_class { "*" } else { "" }),
             if c.has_row { c.state.clone() } else { "legacy".to_string() },
             c.since_span,
@@ -76,7 +98,11 @@ pub(crate) fn render(r: &GetPalwModelRegistryResponse) -> String {
             c.utilization_permille,
             c.admission_milli,
             c.share_permille,
-            if c.priced_share_permille == 0 { "-".to_string() } else { c.priced_share_permille.to_string() }
+            if c.priced_share_permille == 0 { "-".to_string() } else { c.priced_share_permille.to_string() },
+            c.work_ratio_permille,
+            c.panel_room,
+            c.final_work_share_10_permille,
+            c.final_work_share_100_permille
         ));
     }
     if r.readiness.is_empty() {

@@ -2089,6 +2089,15 @@ message RpcPalwModelLifecycle {
   uint32 capUtilizationPermille = 28;
   // ADR-0135 §7: the share the registry priced the class's target for at its seating (0 = not seated).
   uint32 pricedSharePermille = 29;
+  // ADR-0137 (shadow): the class's CCU, CCU/W (permille), expected forwards a win (Q32), the work
+  // target's ticket beside the class target, the panel room in claims, finalized-work shares.
+  uint32 workRatioPermille = 31;
+  string expectedForwardsQ32 = 32;
+  string workTicketTarget = 33;
+  string classTarget = 34;
+  uint64 panelRoom = 35;
+  uint32 finalWorkShare10Permille = 36;
+  uint32 finalWorkShare100Permille = 37;
   string reason = 27;
 }
 
@@ -2130,5 +2139,19 @@ message GetPalwModelRegistryResponseMessage {
   uint32 classesHeld = 24;
   uint32 bondsActive = 25;
   uint32 bondsWithHeadroom = 26;
+  // ADR-0137 (shadow): the work target W, its floor, the epoch it governs, the closed epoch's
+  // census, the rate, the panel's in-flight replay, the budget's horizon, the epochs kept.
+  bool workTargetShadow = 27;
+  string workTarget = 28;
+  string workFloor = 29;
+  uint64 workEpochIndex = 30;
+  string workNetworkDrawsQ32 = 37;
+  string workEffective = 38;
+  uint64 workClosedModelBlocks = 31;
+  uint64 workClosedExpectedBlocks = 32;
+  uint64 workRateSompiPerGiga = 33;
+  string panelInflightReplay = 34;
+  uint64 panelHorizonSpans = 35;
+  uint64 finalWorkEpochs = 36;
   RPCError error = 1000;
 }
