@@ -1914,8 +1914,8 @@ mod tests {
     fn every_tensor_is_inside_the_digest() {
         let base = Base0ArtifactV1::derive_deterministic(tiny(), 3).unwrap();
         let id = base.artifact_digest();
-        let flip = |v: &Vec<i8>| -> Vec<i8> {
-            let mut v = v.clone();
+        let flip = |v: &[i8]| -> Vec<i8> {
+            let mut v = v.to_vec();
             v[0] = v[0].wrapping_add(1);
             v
         };
@@ -1938,7 +1938,12 @@ mod tests {
                     5 => &mut l.w_up,
                     _ => &mut l.w_down,
                 };
-                t[0] = t[0].wrapping_add(1);
+                let flipped = {
+                    let mut v = t.to_vec();
+                    v[0] = v[0].wrapping_add(1);
+                    v
+                };
+                *t = flipped.into();
                 assert_ne!(id, a.artifact_digest(), "layer {li} {name} is outside the digest");
                 // And the requantisation, which changes the output without changing a weight.
                 let mut a = base.clone();
@@ -2010,11 +2015,13 @@ mod tests {
         assert_eq!(err, Err(ArtifactError::WeightLen { tensor: "embed", want: s.vocab * d, got: 3 }));
         let mut short = good.layers.clone();
         short.pop();
-        let err = mk(good.embed.clone(), short);
+        let err = mk(good.embed.to_vec(), short);
         assert_eq!(err, Err(ArtifactError::WeightLen { tensor: "layers", want: 2, got: 1 }));
         let mut bad = good.layers.clone();
-        bad[0].wq.pop();
-        let err = mk(good.embed.clone(), bad);
+        let mut wq = bad[0].wq.to_vec();
+        wq.pop();
+        bad[0].wq = wq.into();
+        let err = mk(good.embed.to_vec(), bad);
         assert_eq!(err, Err(ArtifactError::WeightLen { tensor: "wq", want: d * d, got: d * d - 1 }));
     }
 
@@ -2085,5 +2092,45 @@ mod tests {
         }
         assert_eq!(decode_artifact_file_v1(b"not an artifact at all"), Err(ArtifactFileError::Magic));
         assert!(matches!(decode_artifact_file_v1(&bytes[..40]), Err(ArtifactFileError::Truncated(_))));
+    }
+
+    /// **A mapped file decodes to the same artifact as a read one, with its slabs pointing into the
+    /// mapping** — the property that lets every process on a host share one copy of the weights
+    /// through the page cache instead of each holding a 1.7 GiB `Vec`.
+    #[cfg(unix)]
+    #[test]
+    fn a_mapped_artifact_file_decodes_zero_copy_to_the_same_artifact() {
+        let shape = Base0ShapeV1 {
+            n_layers: 2,
+            n_heads: 2,
+            n_kv_heads: 1,
+            d_head: 4,
+            d_ff: 8,
+            vocab: 16,
+            max_position: 8,
+            ln_theta_gen_q: LN_THETA_10000_GEN_Q,
+            eps_q: 1,
+        };
+        let artifact = Base0ArtifactV1::derive_deterministic(shape, 7)
+            .expect("a valid shape")
+            .with_a16_params(vec![("a".to_string(), vec![1, 2, 3])])
+            .expect("sorted, unique");
+        let bytes = encode_artifact_file_v1(&artifact);
+        let path = std::env::temp_dir().join(format!("palw-mapped-artifact-{}.palwart", std::process::id()));
+        std::fs::write(&path, &bytes).expect("the fixture writes");
+        let map = std::sync::Arc::new(crate::mmap::ReadOnlyMap::open(&path).expect("the file maps"));
+        let mapped = decode_artifact_file_mapped_v1(map).expect("a mapped file decodes");
+        let owned = decode_artifact_file_v1(&bytes).expect("the bytes decode");
+        assert_eq!(mapped, owned, "one artifact, wherever its bytes live");
+        assert_eq!(mapped.artifact_digest(), artifact.artifact_digest());
+        assert!(
+            mapped.embed.is_mapped()
+                && mapped.unembed.is_mapped()
+                && mapped.layers.iter().all(|l| l.wq.is_mapped() && l.wk.is_mapped() && l.w_down.is_mapped()),
+            "the slabs point into the mapping"
+        );
+        assert!(!owned.embed.is_mapped() && !artifact.embed.is_mapped(), "a read file and a derived artifact own their bytes");
+        assert_eq!(encode_artifact_file_v1(&mapped), bytes, "and it re-encodes to the same file");
+        std::fs::remove_file(&path).ok();
     }
 }

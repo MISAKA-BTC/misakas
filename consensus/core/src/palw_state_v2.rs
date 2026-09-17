@@ -18038,6 +18038,241 @@ pub(crate) mod tests {
             assert_eq!(back, object, "the readiness proof round-trips");
             assert_eq!(bytes[0], PALW_SEAT_READINESS_PROVED_DISCRIMINANT, "the object is the enum's last variant");
         }
+
+        // ---- ADR-0132 Upgrade C: the economic payout, in the fold ----------------------------
+
+        fn payout_fold(rate: u64, bits: u32) -> crate::palw_economic_payout_v1::PalwEconomicPayoutFoldV1 {
+            crate::palw_economic_payout_v1::PalwEconomicPayoutFoldV1 {
+                rate_sompi_per_giga: rate,
+                panel_share_alpha_permille: 1_000,
+                panel_share_min_permille: 100,
+                panel_share_max_permille: 300,
+                cap_utilization_max_permille: 800,
+                block_bits: bits,
+            }
+        }
+
+        /// The registry governing from genesis, the panel economy on, and the payout as given.
+        fn priced_extras(payout: Option<crate::palw_economic_payout_v1::PalwEconomicPayoutFoldV1>) -> PalwTransitionExtrasV1 {
+            PalwTransitionExtrasV1 {
+                round_lane: Some(PalwExecLaneFoldV1 { schedule_span_daa: SPAN }),
+                model_registry: Some(fold(kimi_work())),
+                panel_economy_active: true,
+                economic_payout: payout,
+                ..Default::default()
+            }
+        }
+
+        /// A block that funds an escrow: a million sompi of subsidy, 620 000 of it the worker carve.
+        fn funded(block_word: u64, daa: u64, blue: u64) -> PalwBlockContextV2 {
+            PalwBlockContextV2 { block: block(block_word), daa_score: daa, blue_score: blue, subsidy: 1_000_000 }
+        }
+
+        fn step_with(
+            parent: &PalwChainStateV2,
+            p: &PalwStateParamsV2,
+            c: &PalwBlockContextV2,
+            objects: &[PalwConsensusObjectV2],
+            att: Option<&PalwAttemptEnvelopeV2>,
+            extras: &PalwTransitionExtrasV1,
+        ) -> (PalwChainStateV2, PalwStateDeltaV2) {
+            let out = apply_palw_transition_v2_with_extras(parent, p, c, objects, att, false, false, false, false, extras)
+                .unwrap_or_else(|e| panic!("the block at DAA {} applies: {e:?}", c.daa_score));
+            out.0.assert_internal_consistency(p).expect("internal consistency after apply");
+            assert_eq!(
+                apply_delta_v2(parent, &out.1, p).expect("the delta re-applies").state_root(),
+                out.0.state_root(),
+                "the delta is the transition"
+            );
+            out
+        }
+
+        fn bound_to(claim: Hash64, anchor: u64, seat: u64) -> PalwConsensusObjectV2 {
+            PalwConsensusObjectV2::PanelBound {
+                claim,
+                anchor: h64(anchor),
+                seats: vec![PalwPanelSeatV2 { bond: bond_key(seat), operator_id: op_id(20 + seat) }],
+            }
+        }
+
+        fn licensed_by(claim: Hash64, seat: u64, daa: u64) -> PalwConsensusObjectV2 {
+            PalwConsensusObjectV2::ReceiptLicensed { claim, receipts: vec![receipt_at(claim, bond_key(seat), true, daa)] }
+        }
+
+        /// Kimi ACTIVE under the registry with seven ready seats and the payout in force at `rate`:
+        /// the chain every Upgrade C test starts from, at DAA 130 (the first block of span 13).
+        fn kimi_active_and_priced(p: &PalwStateParamsV2, rate: u64) -> (PalwChainStateV2, Hash64) {
+            let (operands, root) = inventory();
+            let s5 = kimi_with_a_final(p, root);
+            let priced = priced_extras(Some(payout_fold(rate, 0)));
+            let proofs: Vec<PalwConsensusObjectV2> = (2..=8).map(|n| proof(&operands, bond_key(n), 12)).collect();
+            let (s6, _) = step_with(&s5, p, &funded(6, 125, 6), &proofs, None, &priced);
+            let (s7, _) = step_with(&s6, p, &funded(7, 130, 7), &[], None, &priced);
+            let kimi = s7.model_lifecycle(&kimi_id()).expect("Kimi has a row");
+            assert_eq!(
+                (kimi.state, kimi.ready_seats),
+                (PalwModelLifecycleV1::Active, 7),
+                "the premise: Kimi active with seven ready seats"
+            );
+            (s7, root)
+        }
+
+        fn paid_to(state: &PalwChainStateV2, key: &Hash64) -> u64 {
+            state.pending_payouts.get(key).map(|row| row.amount).unwrap_or(0)
+        }
+
+        fn seat_row(state: &PalwChainStateV2, seat: u64) -> u64 {
+            let payload = state.bond(&bond_key(seat)).expect("the seat's bond").payout_payload;
+            paid_to(state, &palw_panel_payout_key_v1(&payload))
+        }
+
+        /// **A claim accepted past the fence snapshots its economics and its `Final` is paid at the
+        /// rate**: `min(620 000, 1.6 M MAC-eq × 0.1 sompi) = 160 000`, the panel's 30 % to its one
+        /// credited seat, 460 000 never named. The snapshot rides the delta, the root and the carriage,
+        /// reverts with its block and leaves with the `Final`. The same chain with the payout dormant
+        /// pays the escrow whole at 80 / 20 and holds no snapshot.
+        #[test]
+        fn adr0132_a_claim_past_the_fence_snapshots_its_economics_and_its_final_is_priced_at_the_rate() {
+            use crate::palw_economic_compute_v1::PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1 as ONE;
+            let p = params().with_worker_carve_permille(620).expect("a legal carve");
+            let (s7, root) = kimi_active_and_priced(&p, 100_000_000);
+            let priced = priced_extras(Some(payout_fold(100_000_000, 0)));
+            let env = kimi_attempt(2, root);
+            let claim_id = attempt_id_v2(&env.attempt);
+            let (s8, d8) = step_with(&s7, &p, &funded(8, 131, 8), &[], Some(&env), &priced);
+            assert_eq!(s8.claim(&claim_id).expect("accepted").escrowed_reward, 620_000, "62 % of the subsidy is the escrow");
+            let snap = s8.claim_economics_of(&claim_id).copied().expect("a model-class claim past the fence snapshots its economics");
+            assert_eq!((snap.draw_ccu, snap.verification_ccu, snap.seat_count), (800_000, 1_000_000, 5));
+            assert_eq!(snap.expected_attempts_q32, 2 * ONE, "Kimi at half of MAX draws two forwards a claim");
+            assert_eq!(snap.network_expected_attempts_q32, ONE, "no bits at hand: one network draw, never a refusal");
+            assert_eq!(snap.attempted_ccu(), 1_600_000);
+            assert_eq!(
+                (snap.rate_sompi_per_giga, snap.panel_share_permille),
+                (100_000_000, 300),
+                "5 M of verification against 1.6 M of production is a share at its ceiling"
+            );
+            assert!(d8.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::ClaimEconomics { new: Some(_), .. })));
+            let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s8)).unwrap();
+            let carriage: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
+            assert_eq!(carriage.claim_economics.get(&claim_id), Some(&snap), "the snapshot rides the carriage");
+            assert_eq!(revert_delta_v2(&s8, &d8, &p).unwrap().state_root(), s7.state_root(), "and reverts with its block");
+
+            let (s9, _) = step_with(&s8, &p, &funded(9, 132, 9), &[bound_to(claim_id, 78, 2)], None, &priced);
+            assert!(s9.panel_duties_of(&claim_id).is_some(), "the economy put the seat on duty");
+            let (s10, _) = step_with(&s9, &p, &funded(10, 133, 10), &[licensed_by(claim_id, 2, 133)], None, &priced);
+            let (s11, d11) = step_with(&s10, &p, &funded(11, 154, 11), &[], None, &priced);
+            assert!(matches!(s11.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "{:?}", s11.claim(&claim_id).unwrap().phase);
+            assert!(s11.claim_economics_of(&claim_id).is_none(), "the snapshot leaves with the Final");
+            assert_eq!(
+                (paid_to(&s11, &claim_id), seat_row(&s11, 2), s11.panel_reserve_sompi),
+                (112_000, 48_000, 0),
+                "160 000 priced: 112 000 to the producer, 48 000 to the one credited seat, nothing to the reserve"
+            );
+            assert_eq!(revert_delta_v2(&s11, &d11, &p).unwrap().state_root(), s10.state_root(), "the Final reverts, snapshot and payouts alike");
+
+            let plain = priced_extras(None);
+            let (u8, _) = step_with(&s7, &p, &funded(8, 131, 8), &[], Some(&env), &plain);
+            assert!(u8.claim_economics_of(&claim_id).is_none(), "dormant: no snapshot");
+            assert_ne!(u8.state_root(), s8.state_root(), "the snapshot is in the root");
+            let (u9, _) = step_with(&u8, &p, &funded(9, 132, 9), &[bound_to(claim_id, 78, 2)], None, &plain);
+            let (u10, _) = step_with(&u9, &p, &funded(10, 133, 10), &[licensed_by(claim_id, 2, 133)], None, &plain);
+            let (u11, _) = step_with(&u10, &p, &funded(11, 154, 11), &[], None, &plain);
+            assert_eq!(
+                (paid_to(&u11, &claim_id), seat_row(&u11, 2), u11.panel_reserve_sompi),
+                (496_000, 124_000, 0),
+                "below the fence: the escrow whole at 80 / 20"
+            );
+        }
+
+        /// **The snapshot fixes the price** (proposal B): a claim accepted at one rate is paid at that
+        /// rate however the fence's numbers move before its `Final`, and a claim accepted while the
+        /// payout was dormant holds no snapshot and is paid as before, whatever the fence says now.
+        #[test]
+        fn adr0132_the_snapshot_fixes_the_price_and_a_claim_without_one_is_paid_as_before() {
+            let p = params().with_worker_carve_permille(620).expect("a legal carve");
+            let (s7, root) = kimi_active_and_priced(&p, 100_000_000);
+            let low = priced_extras(Some(payout_fold(100_000_000, 0)));
+            let high = priced_extras(Some(payout_fold(1_000_000_000_000, 0)));
+            let env_a = kimi_attempt(2, root);
+            let env_b = kimi_attempt(3, root);
+            let (a, b) = (attempt_id_v2(&env_a.attempt), attempt_id_v2(&env_b.attempt));
+            let (s8, _) = step_with(&s7, &p, &funded(8, 131, 8), &[], Some(&env_a), &low);
+            let (s9, _) = step_with(&s8, &p, &funded(9, 132, 9), &[], Some(&env_b), &priced_extras(None));
+            assert!(s8.claim_economics_of(&a).is_some() && s9.claim_economics_of(&b).is_none(), "A snapshotted, B accepted while dormant");
+            let (s10, _) = step_with(&s9, &p, &funded(10, 133, 10), &[bound_to(a, 81, 2), bound_to(b, 82, 3)], None, &high);
+            let (s11, _) =
+                step_with(&s10, &p, &funded(11, 134, 11), &[licensed_by(a, 2, 134), licensed_by(b, 3, 134)], None, &high);
+            let (s12, _) = step_with(&s11, &p, &funded(12, 155, 12), &[], None, &high);
+            for id in [a, b] {
+                assert!(matches!(s12.claim(&id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
+                assert!(s12.claim_economics_of(&id).is_none());
+            }
+            assert_eq!(paid_to(&s12, &a), 112_000, "A is paid at the rate it was accepted under, not the rate at its Final");
+            assert_eq!(paid_to(&s12, &b), 496_000, "B holds no snapshot: the escrow whole at 80 / 20, whatever the fence says now");
+            assert_eq!((seat_row(&s12, 2), seat_row(&s12, 3), s12.panel_reserve_sompi), (48_000, 124_000, 0));
+        }
+
+        /// **The liveness floor takes no snapshot and folds byte-identically; a voided claim drops
+        /// its row** and names nothing.
+        #[test]
+        fn adr0132_the_floor_takes_no_snapshot_and_a_voided_claim_drops_its_row() {
+            let p = params().with_worker_carve_permille(620).expect("a legal carve");
+            let (s7, root) = kimi_active_and_priced(&p, 100_000_000);
+            let priced = priced_extras(Some(payout_fold(100_000_000, 0)));
+            let floor = attempt_for_class(40, 9, h64(1), bond_key(1), vec![7; 4], op_id(21), h64(11));
+            let floor_id = attempt_id_v2(&floor.attempt);
+            let (f1, _) = step_with(&s7, &p, &funded(8, 131, 8), &[], Some(&floor), &priced);
+            let (f2, _) = step_with(&s7, &p, &funded(8, 131, 8), &[], Some(&floor), &priced_extras(None));
+            assert!(f1.claim(&floor_id).is_some() && f1.claim_economics_of(&floor_id).is_none(), "the floor is not a model");
+            assert_eq!(f1.state_root(), f2.state_root(), "and folds byte-identically under the fence");
+
+            let env = kimi_attempt(2, root);
+            let id = attempt_id_v2(&env.attempt);
+            let (s8, _) = step_with(&s7, &p, &funded(8, 131, 8), &[], Some(&env), &priced);
+            assert!(s8.claim_economics_of(&id).is_some());
+            let (s9, d9) = step_with(&s8, &p, &funded(9, 131 + p.window_bind + 1, 9), &[], None, &priced);
+            assert!(matches!(s9.claim(&id).unwrap().phase, PalwClaimPhaseV2::Voided { .. }), "{:?}", s9.claim(&id).unwrap().phase);
+            assert!(s9.claim_economics_of(&id).is_none(), "a voided claim's snapshot leaves with it");
+            assert_eq!(paid_to(&s9, &id), 0);
+            assert_eq!(revert_delta_v2(&s9, &d9, &p).unwrap().state_root(), s8.state_root());
+        }
+
+        /// **ADR-0133 Fence 3 as a rule**: the boundary records each class's cap utilization
+        /// (`attempted × rate` against the escrow a claim holds), and a class over the ceiling is not
+        /// activatable — an ACTIVE one falls back to a tenth and stays there however many stable
+        /// spans pass. Nothing is priced while the payout is dormant or where the boundary block
+        /// funds no escrow.
+        #[test]
+        fn adr0132_the_boundary_records_cap_utilization_and_a_saturated_class_is_not_activated() {
+            let p = params().with_worker_carve_permille(620).expect("a legal carve");
+            let (s7, _) = kimi_active_and_priced(&p, 100_000_000);
+            let kimi = s7.model_lifecycle(&kimi_id()).unwrap();
+            assert_eq!(
+                (kimi.state, kimi.cap_utilization_permille),
+                (PalwModelLifecycleV1::Active, 258),
+                "160 000 of a 620 000 escrow: 258 ‰, under the ceiling"
+            );
+            let saturating = priced_extras(Some(payout_fold(1_000_000_000_000, 0)));
+            let (s8, _) = step_with(&s7, &p, &funded(8, 140, 8), &[], None, &saturating);
+            let kimi = s8.model_lifecycle(&kimi_id()).unwrap();
+            assert_eq!(kimi.state, PalwModelLifecycleV1::ActiveLimited { stable_epochs: 0 }, "saturated: back to a tenth");
+            assert_eq!(kimi.cap_utilization_permille, 2_580_645, "1.6 G sompi against 620 000");
+            let mut s = s8;
+            for (word, daa) in [(9u64, 150u64), (10, 160), (11, 170), (12, 180)] {
+                s = step_with(&s, &p, &funded(word, daa, word), &[], None, &saturating).0;
+            }
+            assert_eq!(
+                s.model_lifecycle(&kimi_id()).unwrap().state,
+                PalwModelLifecycleV1::ActiveLimited { stable_epochs: 4 },
+                "four stable spans on, still a tenth: not activatable above the ceiling"
+            );
+            let (dormant, _) = step_with(&s7, &p, &funded(8, 140, 8), &[], None, &priced_extras(None));
+            let kimi = dormant.model_lifecycle(&kimi_id()).unwrap();
+            assert_eq!((kimi.state, kimi.cap_utilization_permille), (PalwModelLifecycleV1::Active, 0), "dormant: nothing priced");
+            let (unfunded, _) = step_with(&s7, &p, &ctx(8, 140, 8), &[], None, &saturating);
+            let kimi = unfunded.model_lifecycle(&kimi_id()).unwrap();
+            assert_eq!((kimi.state, kimi.cap_utilization_permille), (PalwModelLifecycleV1::Active, 0), "no escrow at the boundary: no verdict");
+        }
     }
 
     // ---- lattice ----

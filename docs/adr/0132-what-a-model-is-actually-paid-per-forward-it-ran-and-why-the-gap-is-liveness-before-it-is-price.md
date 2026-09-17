@@ -252,6 +252,37 @@ Nothing consensus reads; the fingerprint does not move.
   `rpc_tests::sanity_test` 1 — all green; clippy `-D warnings` over the eleven crates clean;
   `shipped_presets_have_pinned_fingerprints` unmoved (`ab4e7b9c…`).
 
+* 2026-09-17 (later the same day), **Protocol Upgrade C behind a dormant fence** — `Params::palw_economic_payout:
+  Option<PalwEconomicPayoutV1 { activation, rate_sompi_per_giga, panel_share_alpha_permille,
+  panel_share_min_permille, panel_share_max_permille, cap_utilization_max_permille }>`, `None` on every shipped
+  preset (the testnet-11 fingerprint `135b6ee0…` does not move), hashed `Some`-only with its five numbers,
+  refused without `palw_model_registry` and `palw_panel_economy` at or below its height, and by name in the
+  fork-id arm (`palw_economic_payout`, the devnet's numbers). What it does: **C + A + B** together — a
+  model-class claim accepted past the fence writes a `claim_economics` row (state tail `0xAB`, delta
+  discriminant 53, rooted once any exists, byte-identical below): the class draws at its target (Q32), the
+  network draws at the carrying block's `bits` (Q32, one where no header was at hand), one draw's job and one
+  seat's verification compute from the registry's work for the class, the rate then, and the panel share
+  `clamp(α·C_V / (C_P + α·C_V), S_min, S_max)` with `C_P` the attempted compute and `C_V = seats ×
+  verification` (the operator's rule; `α`, the bounds and the ceiling are the fence's, the same for every
+  class). Its `Final` is paid `min(escrow, attempted × rate)`, the panel that share (per seat fixed, the
+  uncredited to the reserve), the rest never named; the row leaves with the `Final` or the void. The floor takes
+  no row and folds byte-identically; a claim accepted below the fence is paid as before whatever the fence says
+  at its `Final`. **The cap ceiling as a rule** (ADR-0133 Fence 3): each registry boundary records a class's
+  cap utilization (`attempted × rate` against the escrow a claim of the boundary block holds) and a class over
+  the ceiling is not stepped to `ACTIVE`; an `ACTIVE` one falls back to a tenth. **Not in this fence**: S (the
+  single lottery, Upgrade B — its own ADR, ADR-0133 Fence 2) and H (a licence-rate correction, which is a
+  per-class multiplier by another name and stays rejected); "budgeted admission" is Upgrade A's admission-derived
+  shares, already in force under the registry. Surfaces: op 186 carries `capUtilizationPermille`; the shadow
+  ledger prices a snapshotted `Final` by its snapshot (`PalwLedgerEconomicRuleV1`; the row keeps the chain's
+  numbers over the recorder's reading); `--palw-economic-payout-devnet <daa>` arms it on a private devnet with
+  `PALW_ECONOMIC_PAYOUT_DEVNET_V1`. Tests: `adr0132_*` — the module's own (price, network draw, share bounds,
+  cap, borsh layout), the fold's four (snapshot and Final at the rate against the same chain below the fence;
+  the snapshot fixes the price; the floor and a void; cap utilization recorded and a saturated class not
+  activated), the registry's step, the ledger's mirror, the params' fence — 21 green on consensus-core.
+  **Arming**: testnet-11 at 6,001 beside the registry, after Upgrade A's end-to-end drill passes, with `rate`
+  calibrated from the shadow so the heaviest live class sits under the 80 % ceiling (a class paid its escrow
+  whole reads as saturated and would not activate).
+
 ## 8. Number hygiene
 
 0132 was free when written; the next free number is 0133.

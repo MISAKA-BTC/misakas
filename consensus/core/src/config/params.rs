@@ -19825,4 +19825,48 @@ mod palw_model_registry_fence_tests {
         let refusal = early.validate_palw_v2().expect_err("the registry cannot precede the panel economy");
         assert!(format!("{refusal:?}").contains("palw_model_registry"), "{refusal:?}");
     }
+
+    /// **ADR-0132 Upgrade C: dormant on every shipped preset; armed beside the registry it moves the
+    /// identity and the schedule and its numbers reach the fingerprint; alone, or with a zero rate
+    /// or an inverted share, it is refused.**
+    #[test]
+    fn adr0132_the_economic_payout_fence_is_dormant_everywhere_arms_by_height_and_is_refused_alone() {
+        use crate::palw_economic_payout_v1::PALW_ECONOMIC_PAYOUT_DEVNET_V1;
+        for (name, preset) in
+            [("testnet-11", palw_rc_shipped_params()), ("devnet", devnet_shipped_params()), ("mainnet", MAINNET_PARAMS.clone())]
+        {
+            assert!(preset.palw_economic_payout.is_none(), "{name}: the payout is not scheduled");
+            assert!(preset.palw_economic_payout_at(u64::MAX - 1).is_none(), "{name}: never active while dormant");
+        }
+        let rc = palw_rc_shipped_params();
+        assert!(rc.palw_fences_v1().iter().any(|(name, fence)| *name == "palw_economic_payout" && fence.is_none()));
+        let mut never = rc.clone();
+        never.palw_economic_payout =
+            Some(PalwEconomicPayoutV1 { activation: ForkActivation::never(), ..PALW_ECONOMIC_PAYOUT_DEVNET_V1 });
+        assert!(never.palw_economic_payout_at(u64::MAX - 1).is_none(), "never is never active");
+        assert_eq!(never.consensus_identity_id(), rc.consensus_identity_id(), "a never-armed payout is one identity with dormant");
+
+        let height = PALW_RC_FLAG_DAY_6001_FENCE_DAA + 1_000;
+        let mut armed = rc.clone();
+        armed.palw_model_registry = Some(ForkActivation::new(height));
+        armed.palw_economic_payout = Some(PalwEconomicPayoutV1 { activation: ForkActivation::new(height), ..PALW_ECONOMIC_PAYOUT_DEVNET_V1 });
+        armed.validate_palw_v2().expect("armed beside the registry, above the economy");
+        assert_ne!(armed.consensus_params_id(), rc.consensus_params_id(), "arming moves the identity");
+        assert!(armed.fence_schedule_v1().contains(&height), "and the schedule names the height");
+        assert!(armed.palw_economic_payout_at(height - 1).is_none() && armed.palw_economic_payout_at(height).is_some());
+        let mut dearer = armed.clone();
+        dearer.palw_economic_payout.as_mut().unwrap().rate_sompi_per_giga += 1;
+        assert_ne!(dearer.consensus_params_id(), armed.consensus_params_id(), "the rate is in the fingerprint");
+
+        let mut alone = rc.clone();
+        alone.palw_economic_payout = armed.palw_economic_payout;
+        let refusal = alone.validate_palw_v2().expect_err("the payout cannot precede the registry whose work it prices");
+        assert!(format!("{refusal:?}").contains("palw_economic_payout"), "{refusal:?}");
+        let mut zero = armed.clone();
+        zero.palw_economic_payout.as_mut().unwrap().rate_sompi_per_giga = 0;
+        assert!(format!("{:?}", zero.validate_palw_v2().expect_err("a zero rate pays nothing")).contains("zero rate"));
+        let mut inverted = armed.clone();
+        inverted.palw_economic_payout.as_mut().unwrap().panel_share_min_permille = 400;
+        assert!(inverted.validate_palw_v2().is_err(), "a floor above the ceiling is refused");
+    }
 }

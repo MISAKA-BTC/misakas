@@ -517,6 +517,7 @@ pub fn palw_ledger_gap_permille_v1(a: u128, b: u128) -> Option<u128> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::palw_panel_economy_v1::palw_panel_split_v1;
     use crate::palw_economic_compute_v1::{
         PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1, palw_expected_attempts_q32_v1, palw_network_expected_attempts_q32_v1,
     };
@@ -862,5 +863,56 @@ mod tests {
         assert_eq!(palw_void_reason_name_v1(&PalwVoidReasonV2::ReceiptTimeout), "receipt_timeout");
         assert_eq!(palw_void_reason_name_v1(&PalwVoidReasonV2::CourtFraud), "court_fraud");
         assert_eq!(palw_void_reason_name_v1(&PalwVoidReasonV2::ProducerWithholding), "producer_withholding");
+    }
+
+    /// **ADR-0132 Upgrade C: a snapshotted claim's `Final` is priced by its snapshot, whatever the
+    /// fences say at the `Final`'s height** — the fold's rule, mirrored — and the row keeps the
+    /// chain's numbers over the recorder's reading of the class.
+    #[test]
+    fn adr0132_a_snapshotted_final_is_priced_by_its_snapshot_whatever_the_fences_say() {
+        use crate::palw_economic_payout_v1::PalwClaimEconomicsV1;
+        let snapshot = PalwClaimEconomicsV1 {
+            draw_ccu: 800_000,
+            verification_ccu: 1_000_000,
+            seat_count: 5,
+            expected_attempts_q32: 2 * ONE,
+            network_expected_attempts_q32: ONE,
+            rate_sompi_per_giga: 100_000_000,
+            panel_share_permille: 300,
+        };
+        let mut o = obs(1, 2, 4_000, 620_000);
+        o.economics = Some(snapshot);
+        o.seats = 1;
+        o.credited_seats = 1;
+        let facts = PalwLedgerClassFactsV1 { expected_attempts_q32: 7 * ONE, network_expected_attempts_q32: 3 * ONE, draw_compute: 1, leaves: 5 };
+        let row = palw_ledger_merge_v1(None, &o, 4_001, facts, |_| rule_6001(5));
+        assert!(row.economic_snapshotted);
+        assert_eq!((row.expected_attempts_q32, row.network_expected_attempts_q32, row.draw_compute), (2 * ONE, ONE, 800_000));
+        assert_eq!(palw_ledger_row_attempted_compute_v1(&row), 1_600_000);
+        // The Final, seen after the chain dropped the snapshot: 160 000 at a 30 % panel share, while
+        // the rule at the height says the work price and the fifth.
+        let mut fin = obs(1, 2, 4_000, 620_000);
+        fin.final_daa = Some(4_100);
+        fin.seats = 1;
+        fin.credited_seats = 1;
+        let paid = palw_ledger_merge_v1(Some(&row), &fin, 4_101, facts, |_| rule_6001(5));
+        assert_eq!(
+            (paid.producer_paid_sompi, paid.panel_paid_sompi, paid.reserve_sompi, paid.burned_sompi),
+            (112_000, 48_000, 0, 460_000),
+            "min(620 000, 1.6 M × 0.1) = 160 000: 112 000 to the producer, 48 000 to the one seat, 460 000 never named"
+        );
+        // A row that never saw a snapshot is priced by the rule at the height, as before.
+        let plain = palw_ledger_merge_v1(None, &fin, 4_101, facts, |_| rule_6001(5));
+        assert!(!plain.economic_snapshotted);
+        let expected = palw_ledger_payout_v1(620_000, rule_6001(5), 1, 1);
+        assert_eq!((plain.producer_paid_sompi, plain.panel_paid_sompi), (expected.producer_sompi, expected.panel_sompi));
+        // The rule itself, over a five-seat panel with three credited: the pool is 48 000, a seat 9 600.
+        let rule = PalwLedgerPayoutRuleV1 {
+            economic: Some(PalwLedgerEconomicRuleV1 { attempted_ccu: 1_600_000, rate_sompi_per_giga: 100_000_000, panel_share_permille: 300 }),
+            ..rule_6001(5)
+        };
+        let out = palw_ledger_payout_v1(620_000, rule, 5, 3);
+        assert_eq!((out.producer_sompi, out.panel_sompi, out.reserve_sompi, out.burned_sompi), (112_000, 28_800, 19_200, 460_000));
+        assert_eq!(out.total(), 620_000);
     }
 }

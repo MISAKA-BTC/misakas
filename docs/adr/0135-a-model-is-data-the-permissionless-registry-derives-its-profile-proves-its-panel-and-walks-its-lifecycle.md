@@ -150,6 +150,7 @@ now      ADR-0132 / 0133 / 0135 in shadow: the CLI prints each class's derived p
          lifecycle, class-local capacity gate (ADR-0132 F1/F2 folded in); the dense tier and the hybrid walk it live
    B     the single lottery, if adopted (ADR-0132 S): class shares from admission
    C     EconomicAttempted + a global rate + budgeted admission (ADR-0132 Fence 3), no per-model cap
+         — built 2026-09-17 behind the dormant `palw_economic_payout` fence (ADR-0132 §7); armed after A's drill
 after    Kimi, Llama, a new mixture, a 100B model: a manifest and a bond, no fork
 ```
 

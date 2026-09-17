@@ -866,7 +866,7 @@ pub fn palw_verify_context_vector_v1(
             return f;
         }
     };
-    let artifact_root = match crate::inventory::a16_inventory_v1(&class.artifact, &class.profile) {
+    let artifact_root = match crate::inventory::a16_inventory_digest_v1(&class.artifact, &class.profile) {
         Ok(inventory) => inventory.root(),
         Err(e) => {
             f.verdicts.insert(St::Commit, V::Fail(format!("the artifact has no inventory: {e:?}")));

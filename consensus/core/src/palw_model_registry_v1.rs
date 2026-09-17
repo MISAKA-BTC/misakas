@@ -1161,4 +1161,42 @@ mod tests {
         );
         assert!(!palw_readiness_duty_due_v1(Some(&half), 1_000, 200, Some(200), span, &g));
     }
+
+    /// **ADR-0132 Upgrade C / ADR-0133 Fence 3: a cap-saturated class is not activatable.** The
+    /// stable count keeps running; the full share does not come, and an active class over the
+    /// ceiling falls back to a tenth. Probation still exits to a tenth: the cap gates the full
+    /// share only.
+    #[test]
+    fn adr0132_a_cap_saturated_class_is_not_activated_and_an_active_one_falls_to_a_tenth() {
+        use PalwModelLifecycleV1::*;
+        let k = palw_derive_profile_v1(&kimi(), &G);
+        let obs = |cap_ok: bool| PalwLifecycleObservationV1 {
+            manifest: PalwManifestVerdictV1Flag::Valid,
+            ready_seats: 7,
+            probes_passed_this_span: 0,
+            probes_failed_this_span: 0,
+            utilization_permille: 300,
+            collateral_ok: true,
+            cap_ok,
+            span_stable: true,
+        };
+        assert_eq!(palw_lifecycle_step_v1(ActiveLimited { stable_epochs: 2 }, &obs(true), &k, &G), Active, "three stable spans activate");
+        assert_eq!(
+            palw_lifecycle_step_v1(ActiveLimited { stable_epochs: 2 }, &obs(false), &k, &G),
+            ActiveLimited { stable_epochs: 3 },
+            "…unless the class is cap-saturated: it keeps counting and stays at a tenth"
+        );
+        assert_eq!(palw_lifecycle_step_v1(ActiveLimited { stable_epochs: 9 }, &obs(false), &k, &G), ActiveLimited { stable_epochs: 10 });
+        assert_eq!(
+            palw_lifecycle_step_v1(Active, &obs(false), &k, &G),
+            ActiveLimited { stable_epochs: 0 },
+            "an active class over the ceiling falls back to a tenth"
+        );
+        assert_eq!(palw_lifecycle_step_v1(Active, &obs(true), &k, &G), Active);
+        assert_eq!(
+            palw_lifecycle_step_v1(Probation { probes_passed: 10 }, &obs(false), &k, &G),
+            ActiveLimited { stable_epochs: 0 },
+            "probation still exits to a tenth: the cap gates the full share only"
+        );
+    }
 }
