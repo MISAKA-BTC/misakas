@@ -37,7 +37,7 @@ When a historical report conflicts with a current operator document, use the cur
 ## Current invariants worth checking
 
 - network: `testnet-11`
-- fingerprint: `ae1d61628da50c7becea62f0a8f08c8654d190c60b2e104df0010b121ba4d3d8`
+- fingerprint: `4787b92a0e20065aac88f8258b581f415ace9f6093dfab35c345b48135269005` (schedules the DAA 7,001 flag day: ADR-0124, 0125, 0126, 0128)
 - PALW cadence: 120 seconds per block
 - class shares at Relaunch 5f genesis: Floor 22‰, A16 489‰, QWEN36 489‰
 - DNS Testnet-11 minimum stake Bond: 10 MSK

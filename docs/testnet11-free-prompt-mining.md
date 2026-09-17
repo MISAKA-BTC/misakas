@@ -42,7 +42,7 @@ DAA, about two days) after the draw**: a winning quantum not spent inside it is 
 
 | | |
 |---|---|
-| a `kaspad` from `main` | on the network's current ruleset — its first log lines print fingerprint `ae1d61628da50c7becea62f0a8f08c8654d190c60b2e104df0010b121ba4d3d8` and fence schedule `1150, 1900, 2150, 2400, 3500, 4000, 6900, 7000, 2125000`; see [testnet11-join-mining.md](testnet11-join-mining.md) §1 |
+| a `kaspad` from `main` | on the network's current ruleset — its first log lines print fingerprint `4787b92a0e20065aac88f8258b581f415ace9f6093dfab35c345b48135269005` and fence schedule `1150, 1900, 2150, 2400, 3500, 4000, 6900, 7000, 7001, 2125000`; see [testnet11-join-mining.md](testnet11-join-mining.md) §1 |
 | a registered bond | [testnet11-join-mining.md](testnet11-join-mining.md) §2–§3; the floor-sized default holds two or three 256-token claims at once (§3 below) |
 | the tokenizer-**bound** A16 artifact | the same file for the gateway's worker AND for `kaspad --palw-class-artifact` (§2) |
 | a second output at the bond key's address | ≥ 0.1 MSK, for the carriers' fees — the registration carrier's change is reserved by the node's panel and cannot be used (§4) |
