@@ -93,7 +93,12 @@ pub const PALW_PANEL_REWARD_MULTIPLE_MAX_PERMILLE_V1: u32 = 100_000;
 /// what every network that has not armed `Params::palw_panel_exposure_floor` reserves. Pure: the
 /// draw's headroom, the fold's reservation and a shadow reader asking what a hypothetical `λ` would
 /// require all call this one function with the numbers they hold.
-pub fn palw_panel_seat_exposure_v1(claim_reserved: u128, escrowed_reward: u64, seat_count: usize, reward_multiple_permille: u32) -> u128 {
+pub fn palw_panel_seat_exposure_v1(
+    claim_reserved: u128,
+    escrowed_reward: u64,
+    seat_count: usize,
+    reward_multiple_permille: u32,
+) -> u128 {
     let stake = palw_seat_exposure_v1(claim_reserved);
     if reward_multiple_permille == 0 {
         return stake;
@@ -166,8 +171,7 @@ pub fn palw_shadow_seat_exposure_ledger_v1(state: &PalwChainStateV2, reward_mult
         // A row names a live claim (the consistency check refuses a state where it does not), so
         // the lookup only misses on a state no fold wrote; such a row contributes nothing.
         let Some(claim) = state.claim(claim_id) else { continue };
-        let per_seat =
-            palw_panel_seat_exposure_v1(claim.reserved, claim.escrowed_reward, row.seats.len(), reward_multiple_permille);
+        let per_seat = palw_panel_seat_exposure_v1(claim.reserved, claim.escrowed_reward, row.seats.len(), reward_multiple_permille);
         for seat in row.seats.keys() {
             let held = ledger.entry(*seat).or_insert(0);
             *held = held.saturating_add(per_seat);

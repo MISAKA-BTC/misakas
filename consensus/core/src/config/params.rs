@@ -16478,7 +16478,16 @@ mod consensus_params_id_tests {
                 // (`the_7001_flag_day_keeps_the_7000_release_until_7001`); every node must carry it
                 // before the height. Previous (the 7,000 release, 13520042):
                 // ae1d61628da50c7becea62f0a8f08c8654d190c60b2e104df0010b121ba4d3d8.
-                "4787b92a0e20065aac88f8258b581f415ace9f6093dfab35c345b48135269005",
+                // **Re-pinned 2026-09-17 for ADR-0130's operator lottery.** Past `palw_panel_economy`
+                // the draw is one lottery entry per OPERATOR, not one ticket per bond, so the fence
+                // now writes `palw_panel_draw/operator_ticket_v1` beside its height and this build and
+                // the one above it deal different panels for the same claim at the same 7,001. **The
+                // SCHEDULE is unchanged, so the fork-id gate cannot tell them apart** (a rule added at
+                // a height the schedule already names is invisible to it): the 7,001 build below must
+                // not be deployed beside this one. ADR-0130's own fence, `palw_panel_exposure_floor`,
+                // is `None` here and writes nothing. Previous (the 7,001 build, never deployed):
+                // 4787b92a0e20065aac88f8258b581f415ace9f6093dfab35c345b48135269005.
+                "236cdb562c8945bd55089f1674c5817a19022ec8baf44535984af57a848605e7",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -17274,6 +17283,17 @@ mod consensus_params_id_tests {
             ],
             "a carded mainnet must arm every fence testnet-11 arms except the four named above \
              (rc: {rc_armed:?}, mainnet: {mainnet_armed:?})"
+        );
+        // **And one exception that shows up in neither list, because neither side arms it.**
+        // ADR-0130's `palw_panel_exposure_floor` is dormant on testnet-11 (the operator's direction
+        // of 2026-09-17: `λ` stays OFF at the 7,001 flag day, and the shadow read that measures what
+        // it would require is node-local) and stated by no card: the multiple a mainnet seat must
+        // reserve against its reward — 5× to 10× is the range under discussion — is the operator's
+        // open decision, and a card that picked one would mint an economics constant nobody has
+        // chosen. Named here so a card that ever states it has to change this sentence.
+        assert!(
+            carded.palw_panel_exposure_floor.is_none() && rc.palw_panel_exposure_floor.is_none(),
+            "ADR-0130's seat exposure floor is stated by neither testnet-11 nor a card: λ is the operator's open decision"
         );
         for name in ["palw_model_market", "palw_model_lines", "palw_model_evm"] {
             assert!(
@@ -18256,6 +18276,151 @@ mod consensus_params_id_tests {
         );
         assert_eq!(bundle.state.min_collateral_sompi(), crate::palw_fp_devnet_v3::PALW_POLICY_MIN_COLLATERAL_SOMPI);
         assert_eq!(bundle.state.min_collateral_sompi(), 400_000, "testnet-11's floor and fingerprint do not move");
+    }
+
+    /// **ADR-0130's seat exposure floor is dormant on every shipped preset AND on every card, refused
+    /// wherever it could not floor anything, and Some-only in both ids.**
+    ///
+    /// A card states it nowhere on purpose, and that is the one exception this file's
+    /// carded-mainnet parity keeps by name: `λ` for a mainnet is the operator's open decision
+    /// (5–10× is the range under discussion), and a card that picked one would be minting an
+    /// economics constant nobody has chosen. testnet-11 leaves it dormant too — the operator's
+    /// direction of 2026-09-17 is that `λ` stays OFF at the 7,001 flag day.
+    #[test]
+    fn adr0130_the_seat_exposure_floor_is_dormant_everywhere_and_refused_where_it_cannot_floor() {
+        for p in [&MAINNET_PARAMS, &TESTNET_PARAMS, &TESTNET11_PARAMS, &SIMNET_PARAMS, &DEVNET_PARAMS] {
+            assert!(p.palw_panel_exposure_floor.is_none(), "{}: a shipped preset states no exposure floor", p.net);
+        }
+        let rc = palw_rc_shipped_params();
+        assert!(rc.palw_panel_exposure_floor.is_none(), "testnet-11's 7,001 flag day arms the economy, not the floor");
+        assert!(devnet_shipped_params().palw_panel_exposure_floor.is_none());
+        for dense in [false, true] {
+            assert!(
+                mainnet_card_fixture_v1(dense).palw_panel_exposure_floor.is_none(),
+                "a card states no λ: the multiple a mainnet seat reserves is the operator's open decision"
+            );
+        }
+        assert!(rc.palw_panel_exposure_floor_fence().is_none(), "the reader is the one place the rule is decided");
+        assert_eq!(rc.palw_panel_reward_multiple_permille_at(u64::MAX), 0, "no floor is no multiple, at any height");
+        assert_eq!(
+            rc.palw_seat_economy_at(PALW_RC_FLAG_DAY_7001_FENCE_DAA).expect("the economy is armed there").reward_multiple_permille,
+            0,
+            "the draw past the economy prices a seat at the claim's exposure while the floor is dormant"
+        );
+
+        let armed = |activation: ForkActivation, reward_multiple_permille: u32| {
+            let mut params = rc.clone();
+            params.palw_panel_exposure_floor = Some(PalwPanelExposureFloorV1 { activation, reward_multiple_permille });
+            params
+        };
+        let refusal = |params: &Params| match params.validate_palw_v2() {
+            Err(why) => why.to_string(),
+            Ok(()) => panic!("expected validate_palw_v2 to refuse {:?}", params.palw_panel_exposure_floor),
+        };
+        let flag_day = ForkActivation::new(PALW_RC_FLAG_DAY_7001_FENCE_DAA);
+        // A network with no V2 lane has no seat to floor.
+        let mut hash_only = MAINNET_PARAMS;
+        hash_only.palw_panel_exposure_floor = Some(PalwPanelExposureFloorV1 { activation: flag_day, reward_multiple_permille: 2_000 });
+        assert!(refusal(&hash_only).contains("not ConsensusV2"), "{}", refusal(&hash_only));
+        assert!(hash_only.palw_panel_exposure_floor_fence().is_none(), "…and nothing would answer it");
+        // No economy: no duty row is ever written, so the floor would hash and reserve nothing.
+        let mut no_economy = armed(flag_day, 2_000);
+        no_economy.palw_panel_economy = None;
+        assert!(refusal(&no_economy).contains("without palw_panel_economy"), "{}", refusal(&no_economy));
+        let mut never_economy = armed(flag_day, 2_000);
+        never_economy.palw_panel_economy = Some(ForkActivation::never());
+        assert!(refusal(&never_economy).contains("without palw_panel_economy"), "{}", refusal(&never_economy));
+        // Below the economy's own height, and the degenerate multiples.
+        assert!(
+            refusal(&armed(ForkActivation::new(PALW_RC_FLAG_DAY_7001_FENCE_DAA - 1), 2_000)).contains("activates below"),
+            "a floor that fires before any seat is on duty is refused"
+        );
+        assert!(refusal(&armed(flag_day, 0)).contains("zero"));
+        assert!(
+            refusal(&armed(flag_day, crate::palw_panel_economy_v1::PALW_PANEL_REWARD_MULTIPLE_MAX_PERMILLE_V1 + 1))
+                .contains("past 100,000")
+        );
+        // What IS armable: the economy's own height, a later one, and the whole legal range.
+        for (activation, multiple) in [
+            (flag_day, 2_000u32),
+            (ForkActivation::new(9_000_000), 5_000),
+            (ForkActivation::new(9_000_000), 10_000),
+            (flag_day, crate::palw_panel_economy_v1::PALW_PANEL_REWARD_MULTIPLE_MAX_PERMILLE_V1),
+        ] {
+            armed(activation, multiple).validate_palw_v2().expect("armable on the RC");
+        }
+        // `never()` is absence, and absence is refused by nothing — even where the economy is unset.
+        let mut dormant = armed(ForkActivation::never(), 0);
+        dormant.palw_panel_economy = None;
+        dormant.validate_palw_v2().expect("a never() floor is not a floor");
+    }
+
+    /// **ADR-0130's floor is hashed Some-only, reported with its multiple, and normalised out of the
+    /// identity until it fires** — the contract every fence beside it keeps, so scheduling one is a
+    /// rolling deploy and arming one at genesis is a different network.
+    #[test]
+    fn adr0130_the_exposure_floor_is_hashed_some_only_and_scheduled_like_a_fence() {
+        let rc = palw_rc_shipped_params();
+        let armed = |activation: ForkActivation, reward_multiple_permille: u32| {
+            let mut params = rc.clone();
+            params.palw_panel_exposure_floor = Some(PalwPanelExposureFloorV1 { activation, reward_multiple_permille });
+            params
+        };
+        let base = armed(ForkActivation::new(9_000_000), 2_000);
+        let later = armed(ForkActivation::new(9_000_001), 2_000);
+        let deeper = armed(ForkActivation::new(9_000_000), 5_000);
+        for (what, other) in [("the height", &later), ("the multiple", &deeper), ("the fence", &rc)] {
+            assert_ne!(base.consensus_params_id(), other.consensus_params_id(), "{what} reaches the fingerprint");
+            assert_ne!(base.consensus_schedule_id(), other.consensus_schedule_id(), "{what} is reported in the schedule id");
+            assert_eq!(
+                base.consensus_identity_id(),
+                other.consensus_identity_id(),
+                "{what} of a height that has not fired leaves the identity — a rolling deploy, not a flag day"
+            );
+        }
+        assert_eq!(armed(ForkActivation::never(), 2_000).consensus_identity_id(), rc.consensus_identity_id(), "never() is absence");
+        // The fork-id gate reads it by name, and a scheduled height joins the schedule it digests.
+        assert!(
+            base.palw_fences_v1()
+                .iter()
+                .any(|(name, fence)| *name == "palw_panel_exposure_floor" && *fence == Some(ForkActivation::new(9_000_000))),
+            "the named fence list the gate reads carries it"
+        );
+        assert!(rc.palw_fences_v1().iter().any(|(name, fence)| *name == "palw_panel_exposure_floor" && fence.is_none()));
+        assert!(base.fence_schedule_v1().contains(&9_000_000) && !rc.fence_schedule_v1().contains(&9_000_000));
+
+        // Armed at genesis on a card — where the economy is also genesis — it is a rule about block
+        // one, and its multiple with it.
+        let card = mainnet_card_fixture_v1(false);
+        let carded = |multiple: u32| {
+            let mut params = card.clone();
+            params.palw_panel_exposure_floor =
+                Some(PalwPanelExposureFloorV1 { activation: ForkActivation::always(), reward_multiple_permille: multiple });
+            params
+        };
+        carded(5_000).validate_palw_v2().expect("a card may state a floor from genesis");
+        assert_ne!(carded(5_000).consensus_identity_id(), card.consensus_identity_id(), "a floor in force at genesis parts networks");
+        assert_ne!(carded(5_000).consensus_identity_id(), carded(10_000).consensus_identity_id(), "and so does its multiple");
+
+        // The accessors: the multiple at a height, and the seat economy that carries it to the draw.
+        let scheduled = armed(ForkActivation::new(9_000), 2_000);
+        assert_eq!(scheduled.palw_panel_reward_multiple_permille_at(8_999), 0, "below the height, no floor");
+        assert_eq!(scheduled.palw_panel_reward_multiple_permille_at(9_000), 2_000);
+        assert_eq!(scheduled.palw_seat_economy_at(9_000).expect("armed").reward_multiple_permille, 2_000);
+        assert_eq!(
+            scheduled
+                .palw_seat_economy_at(PALW_RC_FLAG_DAY_7001_FENCE_DAA)
+                .expect("the economy is armed there")
+                .reward_multiple_permille,
+            0,
+            "the economy is in force and the floor is not: the draw prices a seat at the claim's exposure"
+        );
+        assert!(scheduled.palw_seat_economy_at(PALW_RC_FLAG_DAY_7001_FENCE_DAA - 1).is_none(), "below the economy, no draw economy");
+        // testnet-11's numbers, tied to the one function that prices a seat: at λ = 2 a seat of a
+        // five-seat panel reserves twice the ~128 MSK it can be paid, not the ~0.40 MSK it risks today.
+        let economy = scheduled.palw_seat_economy_at(9_000).unwrap();
+        assert_eq!(economy.seat_exposure(13_426_800, 320_084_650_080, 5), 25_606_772_006);
+        assert_eq!(rc.palw_seat_economy_at(9_000).unwrap().seat_exposure(13_426_800, 320_084_650_080, 5), 40_280_400);
     }
 
     /// **ADR-0107's share-growth fence is dormant on every shipped preset, visible the moment it is

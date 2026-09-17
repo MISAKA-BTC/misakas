@@ -7457,7 +7457,9 @@ impl VirtualStateProcessor {
     /// BLOCK's for the fold's reservation (`palw_transition_extras_at`); a binding the chain derives
     /// at its anchor block reads one number at both.
     pub(super) fn palw_panel_reward_multiple_permille_at(&self, daa_score: u64) -> u32 {
-        self.palw_panel_exposure_floor.filter(|floor| floor.activation.is_active(daa_score)).map_or(0, |floor| floor.reward_multiple_permille)
+        self.palw_panel_exposure_floor
+            .filter(|floor| floor.activation.is_active(daa_score))
+            .map_or(0, |floor| floor.reward_multiple_permille)
     }
 
     /// **ADR-0126 Decision 2: the overlay's reward split for the block at `daa_score` — the one
