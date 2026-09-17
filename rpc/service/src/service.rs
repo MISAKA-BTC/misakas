@@ -115,6 +115,23 @@ pub trait ValidatorStatusProvider: Send + Sync {
 /// a node constructed without one answers from the chain alone.
 pub trait PalwClassLedgerProvider: Send + Sync {
     fn class_context(&self, class_id: kaspa_hashes::Hash64) -> Option<PalwClassLedgerContext>;
+
+    /// ADR-0131: the economic compute of the class's job as this build derives it from the class's
+    /// own graph — the draw job (ADR-0117's, without decode calls) and the canonical job. `None` for
+    /// a class the build does not supply; a build that has not derived it answers nothing.
+    fn class_economic_compute(&self, class_id: kaspa_hashes::Hash64) -> Option<PalwClassLedgerCompute> {
+        let _ = class_id;
+        None
+    }
+}
+
+/// A class's economic compute as a build ledger derives it (ADR-0131 `EconomicComputeV1`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwClassLedgerCompute {
+    /// The job an attempt runs past `palw_prefill_draw`: the canonical job without decode calls.
+    pub draw: u128,
+    /// The canonical job, decode calls included — the job an attempt runs below that fence.
+    pub canonical: u128,
 }
 
 /// One class as a build ledger records it. No footprint: the service derives it from the prefill and
@@ -1547,6 +1564,91 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             .map(|(class_id, declared)| palw_class_context_row(class_id, declared, ledger.and_then(|l| l.class_context(class_id))))
             .collect();
         Ok(GetPalwClassContextsResponse { available: !classes.is_empty(), fp_max_prompt_tokens, fp_max_decode_tokens, classes })
+    }
+
+    async fn get_palw_class_economics_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        _request: GetPalwClassEconomicsRequest,
+    ) -> RpcResult<GetPalwClassEconomicsResponse> {
+        use kaspa_consensus_core::palw_economic_compute_v1::{
+            PALW_ECONOMIC_COMPUTE_VERSION_V1, PALW_ECONOMIC_COST_TABLE_V1, palw_attempt_economic_compute_v1,
+            palw_job_economic_compute_v1,
+        };
+        // ADR-0131 Decision 1: the census the chain holds, and each class's compute from the graph it
+        // registered (the carriage) or, for a genesis class that carried none, from this build.
+        let seat_count = match &self.config.params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => bundle.panel.seat_count(),
+            _ => 0,
+        };
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let read = session
+            .spawn_blocking(|c| {
+                c.palw_class_census_v1().map(|census| {
+                    let carriages: Vec<_> =
+                        census.classes.iter().map(|row| c.palw_registered_class_carriage_v1(row.class_id)).collect();
+                    (census, carriages)
+                })
+            })
+            .await;
+        let Some((census, carriages)) = read else { return Ok(GetPalwClassEconomicsResponse::default()) };
+        let prefill_draw = self.config.params.palw_prefill_draw_active_at(census.tip_daa);
+        let ledger = self.palw_class_ledger_provider.as_deref();
+        let classes: Vec<RpcPalwClassEconomics> = census
+            .classes
+            .into_iter()
+            .zip(carriages)
+            .map(|(row, carriage)| {
+                let (job, canonical, source) = match carriage {
+                    Some((profile, canonical_job)) => {
+                        let table = &PALW_ECONOMIC_COST_TABLE_V1;
+                        match (
+                            palw_attempt_economic_compute_v1(&profile, &canonical_job, prefill_draw, table),
+                            palw_job_economic_compute_v1(&profile, &canonical_job, table),
+                        ) {
+                            (Ok(job), Ok(canonical)) => (job, canonical, "chain_registration"),
+                            _ => (0, 0, "unknown"),
+                        }
+                    }
+                    None => match ledger.and_then(|l| l.class_economic_compute(row.class_id)) {
+                        Some(compute) => {
+                            (if prefill_draw { compute.draw } else { compute.canonical }, compute.canonical, "build_ledger")
+                        }
+                        None => (0, 0, "unknown"),
+                    },
+                };
+                RpcPalwClassEconomics {
+                    class_id: row.class_id.to_string(),
+                    model_id: ledger.and_then(|l| l.class_context(row.class_id)).map(|c| c.model_id).unwrap_or_default(),
+                    is_base_class: row.is_base_class,
+                    status: row.status,
+                    share_permille: row.share_permille.unwrap_or(0),
+                    pwu_per_inference: row.pwu_per_inference,
+                    class_target: row.class_target.to_string(),
+                    expected_attempts: row.expected_attempts,
+                    economic_compute_job: job.to_string(),
+                    economic_compute_canonical: canonical.to_string(),
+                    economic_source: source.to_string(),
+                    claims_accepted: row.claims_accepted,
+                    claims_provisional: row.claims_provisional,
+                    claims_panel_bound: row.claims_panel_bound,
+                    claims_licensed: row.claims_licensed,
+                    claims_final: row.claims_final,
+                    claims_voided: row.claims_voided,
+                    claims_redrawn: row.claims_redrawn,
+                    escrow_accepted_sompi: row.escrow_accepted_sompi.to_string(),
+                    escrow_final_sompi: row.escrow_final_sompi.to_string(),
+                }
+            })
+            .collect();
+        Ok(GetPalwClassEconomicsResponse {
+            available: !classes.is_empty(),
+            tip_daa: census.tip_daa,
+            economic_compute_version: PALW_ECONOMIC_COMPUTE_VERSION_V1,
+            seat_count,
+            prefill_draw,
+            classes,
+        })
     }
 
     async fn get_palw_producer_facts_call(

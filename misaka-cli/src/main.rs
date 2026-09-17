@@ -37,13 +37,14 @@ mod palw_claim;
 mod palw_court;
 mod palw_da;
 mod palw_derived;
+/// ADR-0127 Decision 3: `palw settlement` — settled, and how deep in settled PALW anchors.
+mod palw_economics;
 /// ADR-0108: `palw extension inspect|verify|preflight|submit|receipt-verify`.
 mod palw_extension;
 mod palw_fp;
 /// ADR-0088 Decision 12: `palw line-… / version-… / proposal-… / evaluate` — the model registry.
 mod palw_line;
 mod palw_model;
-/// ADR-0127 Decision 3: `palw settlement` — settled, and how deep in settled PALW anchors.
 mod palw_settlement;
 mod palw_shard_court;
 mod palw_shard_licensing;
@@ -910,6 +911,11 @@ enum PalwCmd {
     /// ADR-0127: whether what the chain accepted at a DAA score is settled, and its settlement depth
     /// — counted in settled PALW anchors (blocks whose PALW claim reached Final), never in blocks.
     /// Execution and heartbeat blocks add no anchor, however many there are.
+    /// ADR-0131: what each class is paid per unit of the compute it ran — today's leaf basis and
+    /// the economic-compute bases side by side, `F` (per Final compute), `A` (per attempted compute,
+    /// draws and voided claims included), the panel's rate per verification, and the gap between the
+    /// model classes. Read from the node's state (`getPalwClassEconomics`); a shadow, not a rule.
+    Economics {},
     Settlement {
         /// The DAA score of the block that accepted the transaction (an output's block DAA score, as
         /// `misaka wallet utxo list` prints it).
@@ -2321,6 +2327,7 @@ async fn main() -> std::process::ExitCode {
         Command::Evm(EvmCmd::Tx(EvmTxCmd::Wait { hash, timeout, poll })) => eth::tx_wait(&ctx, &hash, timeout, poll),
         Command::Palw(PalwCmd::RoundLane { bond }) => palw_round_lane(&ctx, bond.as_deref()).await,
         Command::Palw(PalwCmd::Settlement { daa, min_depth }) => palw_settlement::run(&ctx, daa, min_depth).await,
+        Command::Palw(PalwCmd::Economics {}) => palw_economics::run(&ctx).await,
         Command::Palw(PalwCmd::FpSubmit { tx, yes, material_out, capture, dsl_payload }) => {
             palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
         }

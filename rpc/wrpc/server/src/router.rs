@@ -97,6 +97,7 @@ impl Router {
                 GetPalwSettlement,
                 GetPrecommitDuty,
                 GetPalwClassContexts,
+                GetPalwClassEconomics,
                 GetTokenSupply,
                 GetTokenEmissionInfo,
                 GetValidatorAttestationTarget,

@@ -4136,6 +4136,13 @@ impl VirtualStateProcessor {
             .collect()
     }
 
+    /// ADR-0131 Decision 1: the class census at the PALW state's own tip.
+    pub fn palw_class_census_v1_impl(&self) -> Option<kaspa_consensus_core::palw_economic_compute_v1::PalwClassCensusReadV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        Some(kaspa_consensus_core::palw_economic_compute_v1::palw_class_census_v1(&state, state_params))
+    }
+
     pub fn palw_bond_of_pubkey_v2_impl(
         &self,
         pubkey: &[u8],

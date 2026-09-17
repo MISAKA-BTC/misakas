@@ -1700,6 +1700,58 @@ mod mockery {
 
     test!(GetPalwClassContextsResponse);
 
+    impl Mock for GetPalwClassEconomicsRequest {
+        fn mock() -> Self {
+            GetPalwClassEconomicsRequest {}
+        }
+    }
+
+    test!(GetPalwClassEconomicsRequest);
+
+    impl Mock for RpcPalwClassEconomics {
+        fn mock() -> Self {
+            RpcPalwClassEconomics {
+                class_id: mock_hex(),
+                model_id: mock_hex(),
+                is_base_class: mock(),
+                status: "Active".to_string(),
+                share_permille: mock(),
+                pwu_per_inference: mock(),
+                class_target: u128::MAX.to_string(),
+                expected_attempts: mock(),
+                economic_compute_job: "18055200736".to_string(),
+                economic_compute_canonical: "21070759296".to_string(),
+                economic_source: "build_ledger".to_string(),
+                claims_accepted: mock(),
+                claims_provisional: mock(),
+                claims_panel_bound: mock(),
+                claims_licensed: mock(),
+                claims_final: mock(),
+                claims_voided: mock(),
+                claims_redrawn: mock(),
+                escrow_accepted_sompi: "320084650080".to_string(),
+                escrow_final_sompi: "0".to_string(),
+            }
+        }
+    }
+
+    test!(RpcPalwClassEconomics);
+
+    impl Mock for GetPalwClassEconomicsResponse {
+        fn mock() -> Self {
+            GetPalwClassEconomicsResponse {
+                available: mock(),
+                tip_daa: mock(),
+                economic_compute_version: mock(),
+                seat_count: mock(),
+                prefill_draw: mock(),
+                classes: mock(),
+            }
+        }
+    }
+
+    test!(GetPalwClassEconomicsResponse);
+
     struct Misalign;
 
     impl Mock for Misalign {

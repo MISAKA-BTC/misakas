@@ -109,6 +109,7 @@ impl Factory {
                 GetPalwSettlement,
                 GetPrecommitDuty,
                 GetPalwClassContexts,
+                GetPalwClassEconomics,
                 GetTokenSupply,
                 GetTokenEmissionInfo,
                 NotifyBlockAdded,

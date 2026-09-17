@@ -1955,3 +1955,39 @@ message GetPalwClassContextsResponseMessage {
   repeated RpcPalwClassContext classes = 4;
   RPCError error = 1000;
 }
+
+// ADR-0131 Decision 1: each class's registration numbers, target, economic compute and claim census.
+message GetPalwClassEconomicsRequestMessage {}
+
+message RpcPalwClassEconomics {
+  string classId = 1;
+  string modelId = 2;
+  bool isBaseClass = 3;
+  string status = 4;
+  uint32 sharePermille = 5;
+  uint64 pwuPerInference = 6;
+  string classTarget = 7;
+  uint64 expectedAttempts = 8;
+  string economicComputeJob = 9;
+  string economicComputeCanonical = 10;
+  string economicSource = 11;
+  uint64 claimsAccepted = 12;
+  uint64 claimsProvisional = 13;
+  uint64 claimsPanelBound = 14;
+  uint64 claimsLicensed = 15;
+  uint64 claimsFinal = 16;
+  uint64 claimsVoided = 17;
+  uint64 claimsRedrawn = 18;
+  string escrowAcceptedSompi = 19;
+  string escrowFinalSompi = 20;
+}
+
+message GetPalwClassEconomicsResponseMessage {
+  bool available = 1;
+  uint64 tipDaa = 2;
+  uint32 economicComputeVersion = 3;
+  uint32 seatCount = 4;
+  bool prefillDraw = 5;
+  repeated RpcPalwClassEconomics classes = 6;
+  RPCError error = 1000;
+}
