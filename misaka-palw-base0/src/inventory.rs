@@ -123,123 +123,163 @@ fn tile_matrix(name: &str, layer: Option<u16>, weights: &[i8], in_dim: usize, ti
 /// [`Base0ArtifactV1::execution_class_id`]: `tile_len` decides where a matmul row starts, and no
 /// weight file contains it. The artifact is checked against the geometry first, so an inventory can
 /// never describe a layout for a class this artifact does not belong to.
-pub fn base0_inventory_v1(
+/// One row of the BASE-0 inventory as the visitor emits it (see [`A16RowSinkV1`]).
+pub type Base0RowSinkV1<'s> = dyn FnMut(&str, Option<u16>, u32, Vec<u8>) -> Result<(), InventoryBuildError> + 's;
+
+/// **The BASE-0 inventory's rows, streamed** in generation order (unsorted; the inventory sorts).
+pub fn base0_visit_inventory_rows_v1(
     artifact: &Base0ArtifactV1,
     geometry: PalwBase0GeometryV1,
-) -> Result<PalwArtifactInventoryV1, InventoryBuildError> {
+    sink: &mut Base0RowSinkV1<'_>,
+) -> Result<(), InventoryBuildError> {
     artifact.check_geometry(&geometry).map_err(InventoryBuildError::Geometry)?;
     if geometry.tile_len == 0 {
         return Err(InventoryBuildError::ZeroTile);
     }
     let tile = geometry.tile_len as usize;
     let shape = artifact.shape;
-    let mut rows: Vec<PalwArtifactOperandV1> = Vec::new();
-
-    // **Every tensor the graph names, resolved through the one binding the engine reads**
-    // (ADR-0049 Decision F). The list is `base0_tensor_names_v1`, projected from `BASE0_LAYER_IR`;
-    // the bytes come from `base0_resolve_operand_v1`, which is what the forward pass computes
-    // against. This module used to carry a second copy of that mapping — twenty-five suffixes
-    // beside twenty-five artifact fields — and one entry of it was already wrong: `attn_q.requant`
-    // served `layer.requant[0]` unconditionally, while the engine narrows through the per-channel
-    // table whenever the artifact carries one. A court opening that tensor against a class with a
-    // projection bias would have recomputed an honest step from parameters nobody applied.
-    //
-    // The ROW SHAPE is still this module's, because it is the refuter's: a matmul opens a tile of
-    // output rows, a gather opens the row it gathered, a narrowing opens its whole parameter
-    // block, a rotation opens one position.
-    let emit = |name: &'static str, layer: Option<usize>, rows: &mut Vec<PalwArtifactOperandV1>| -> Result<(), InventoryBuildError> {
+    let mut emit = |name: &'static str, layer: Option<usize>| -> Result<(), InventoryBuildError> {
         let li = layer.map(|l| l as u16);
-        let block = |bytes: Vec<u8>| PalwArtifactOperandV1 { tensor_name: name.to_string(), layer: li, row_start: 0, bytes };
         match base0_resolve_operand_v1(artifact, name, layer, BASE0_ENGINE_HEAD_TENSOR).map_err(InventoryBuildError::Operand)? {
-            Base0OperandV1::Matrix { data, in_dim } => rows.extend(tile_matrix(name, li, data, in_dim, tile)),
-            Base0OperandV1::Gather { data, width } => {
-                for token in 0..data.len() / width.max(1) {
-                    rows.push(PalwArtifactOperandV1 {
-                        tensor_name: name.to_string(),
-                        layer: li,
-                        row_start: (token * width) as u32,
-                        bytes: data[token * width..(token + 1) * width].iter().map(|v| *v as u8).collect(),
-                    });
+            Base0OperandV1::Matrix { data, in_dim } => {
+                for row in tile_matrix(name, li, data, in_dim, tile) {
+                    sink(name, li, row.row_start, row.bytes)?;
                 }
             }
-            // Nine bytes for a tensor-wide narrowing, nine per channel for a per-channel one —
-            // the two shapes `palw_step_refute` accepts, and which one this is is the artifact's
-            // answer rather than this module's guess.
-            Base0OperandV1::Quant(q) => rows.push(block(q.bytes())),
-            Base0OperandV1::Scale(s) => rows.push(block(scale_bytes(s))),
+            Base0OperandV1::Gather { data, width } => {
+                for token in 0..data.len() / width.max(1) {
+                    sink(
+                        name,
+                        li,
+                        (token * width) as u32,
+                        data[token * width..(token + 1) * width].iter().map(|v| *v as u8).collect(),
+                    )?;
+                }
+            }
+            Base0OperandV1::Quant(q) => sink(name, li, 0, q.bytes())?,
+            Base0OperandV1::Scale(sc) => sink(name, li, 0, scale_bytes(sc))?,
             Base0OperandV1::Rope(table) => {
                 let mut offset = 0u32;
                 for position in 0..shape.max_position {
                     let bytes = rope_row_bytes(table, shape.d_head, position);
                     let len = bytes.len() as u32;
-                    rows.push(PalwArtifactOperandV1 { tensor_name: name.to_string(), layer: li, row_start: offset, bytes });
+                    sink(name, li, offset, bytes)?;
                     offset += len;
                 }
             }
         }
         Ok(())
     };
-
     for name in base0_tensor_names_v1() {
         if name.starts_with(BASE0_LAYER_PREFIX) {
             for li in 0..shape.n_layers {
-                emit(name, Some(li), &mut rows)?;
+                emit(name, Some(li))?;
             }
         } else {
-            emit(name, None, &mut rows)?;
+            emit(name, None)?;
         }
     }
+    Ok(())
+}
 
-    // **Audit finding 11 (per-channel q/k/v narrowings) is closed here by NOT being here.**
-    //
-    // The finding was real and its consequence the worst kind: the loop this replaced emitted one
-    // tensor-wide 9-byte narrowing per tensor while the engine narrows through the per-CHANNEL
-    // table when the artifact carries one, `operand_bytes` refused the exact-length request, and
-    // `palw_step_refute`'s `.cycle()` fallback answered with the uniform leaf repeated —
-    // recomputing every channel with ZERO bias and convicting an honest producer of arithmetic it
-    // never performed.
-    //
-    // Two lines of work found it independently and fixed it in different places. The fix that
-    // survives is ADR-0049 Decision F's: `operands.rs` is the ONE resolver the engine and this
-    // inventory both read through (`emit` above goes through it), and it serves
-    // `qkv_channel_requant` when the artifact has one. Re-adding the hand-written emission here
-    // would restore exactly the defect both fixes were about — two name-to-bytes mappings, free to
-    // disagree — so the audit's own remedy is deliberately not taken, and its FINDING is what this
-    // comment preserves.
-
-    // The canonical order is `(tensor_name, layer, row_start)` ascending, and the constructor
-    // refuses anything else. Sorting HERE rather than emitting in order keeps the layout above
-    // readable as the graph — and the constructor still checks, so a sort that got it wrong is a
-    // refusal rather than a silently different root.
+/// **The BASE-0 inventory** (unchanged: the visitor's rows, sorted, checked).
+pub fn base0_inventory_v1(
+    artifact: &Base0ArtifactV1,
+    geometry: PalwBase0GeometryV1,
+) -> Result<PalwArtifactInventoryV1, InventoryBuildError> {
+    let mut rows: Vec<PalwArtifactOperandV1> = Vec::new();
+    base0_visit_inventory_rows_v1(artifact, geometry, &mut |name, layer, row_start, bytes| {
+        rows.push(PalwArtifactOperandV1 { tensor_name: name.to_string(), layer, row_start, bytes });
+        Ok(())
+    })?;
     rows.sort_by(|a, b| (a.tensor_name.as_str(), a.layer, a.row_start).cmp(&(b.tensor_name.as_str(), b.layer, b.row_start)));
     PalwArtifactInventoryV1::new(rows).map_err(InventoryBuildError::NotCanonical)
 }
 
-/// **Every operand row an A16-tier execution can open, for one artifact under one registered
-/// profile** — the model tier's answer to [`base0_inventory_v1`], and the other half of the
-/// court-side parameter conventions `palw_step_refute`'s A16 arms encode.
-///
-/// The layout normalises the artifact's parameter store to the shapes the arms request:
-///
-/// * a matmul's codes tile at the NODE's own `tile_len` (the per-node budget, not one global
-///   number), and its per-channel triples ride the `.a16` suffix at the same tiling — with the
-///   `.sink0` variants carried verbatim where the store registers them;
-/// * a `Fixed`-width narrowing's triples are served per lane. A site whose store registers ONE
-///   triple is EXPANDED — the engine tiles that triple across the row, so the expansion commits
-///   exactly the parameters the execution applied, and the court's one per-lane rule serves
-///   every site;
-/// * a `KvScaled` narrowing (the probs), the scores and the values keep their single registered
-///   triple at offset zero — their lane counts are the job's, so no fixed table can exist;
-/// * the softmax widening is its registered single byte; the rotation is one row per position,
-///   `cos` then `sin`, exactly the floor's layout.
-///
-/// The root over these rows is what a court-capable A16 registration pins as `artifact_root`:
-/// a flat digest can answer "are these the same bytes" but nothing can be OPENED against it,
-/// and a close needs openings.
-pub fn a16_inventory_v1(
+/// **The BASE-0 inventory as digests** — one row's bytes alive at a time.
+pub fn base0_inventory_digest_v1(
+    artifact: &Base0ArtifactV1,
+    geometry: PalwBase0GeometryV1,
+) -> Result<PalwArtifactInventoryDigestV1, InventoryBuildError> {
+    let mut rows: Vec<PalwArtifactRowDigestV1> = Vec::new();
+    base0_visit_inventory_rows_v1(artifact, geometry, &mut |name, layer, row_start, bytes| {
+        rows.push(PalwArtifactRowDigestV1 {
+            tensor_name: name.to_string(),
+            layer,
+            row_start,
+            byte_len: bytes.len() as u32,
+            leaf_hash: artifact_leaf_parts_v1(name, layer, row_start, &bytes),
+        });
+        Ok(())
+    })?;
+    rows.sort_by(|a, b| (a.tensor_name.as_str(), a.layer, a.row_start).cmp(&(b.tensor_name.as_str(), b.layer, b.row_start)));
+    PalwArtifactInventoryDigestV1::new(rows).map_err(InventoryBuildError::NotCanonical)
+}
+
+/// **One row's bytes** of the BASE-0 inventory, by its key.
+pub fn base0_inventory_row_bytes_v1(
+    artifact: &Base0ArtifactV1,
+    geometry: PalwBase0GeometryV1,
+    tensor_name: &str,
+    layer: Option<u16>,
+    row_start: u32,
+) -> Result<Option<Vec<u8>>, InventoryBuildError> {
+    let mut wanted: Option<Vec<u8>> = None;
+    base0_visit_inventory_rows_v1(artifact, geometry, &mut |name, l, start, bytes| {
+        if wanted.is_none() && name == tensor_name && l == layer && start == row_start {
+            wanted = Some(bytes);
+        }
+        Ok(())
+    })?;
+    Ok(wanted)
+}
+
+/// One row of the A16 inventory as the visitor emits it: name, layer, byte offset, bytes — the
+/// same rows [`a16_inventory_v1`] sorts into the inventory, in generation order, one at a time, so
+/// a digest or a single opening never holds the artifact's bytes twice (ADR-0135: eight nodes that
+/// materialised the whole inventory to root it rebooted a 24 GiB host).
+pub type A16RowSinkV1<'s> = dyn FnMut(&str, Option<u16>, u32, Vec<u8>) -> Result<(), InventoryBuildError> + 's;
+
+fn a16_push(
+    sink: &mut A16RowSinkV1<'_>,
+    seen: &mut std::collections::BTreeSet<(String, Option<u16>, u32)>,
+    name: &str,
+    layer: Option<u16>,
+    start: u32,
+    bytes: Vec<u8>,
+) -> Result<(), InventoryBuildError> {
+    if seen.insert((name.to_string(), layer, start)) {
+        sink(name, layer, start, bytes)?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn a16_push_tiled(
+    sink: &mut A16RowSinkV1<'_>,
+    seen: &mut std::collections::BTreeSet<(String, Option<u16>, u32)>,
+    name: &str,
+    layer: Option<u16>,
+    table: &[u8],
+    unit: usize,
+    tile_len: usize,
+) -> Result<(), InventoryBuildError> {
+    let stride = tile_len.max(1) * unit;
+    let mut offset = 0usize;
+    while offset < table.len() {
+        let end = (offset + stride).min(table.len());
+        a16_push(sink, seen, name, layer, offset as u32, table[offset..end].to_vec())?;
+        offset = end;
+    }
+    Ok(())
+}
+
+/// **The A16 inventory's rows, streamed** in generation order (unsorted; the inventory sorts).
+pub fn a16_visit_inventory_rows_v1(
     artifact: &Base0ArtifactV1,
     profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
-) -> Result<PalwArtifactInventoryV1, InventoryBuildError> {
+    sink: &mut A16RowSinkV1<'_>,
+) -> Result<(), InventoryBuildError> {
     use kaspa_consensus_core::palw_base0_a16::A16QuantParams;
     use kaspa_consensus_core::palw_step::PalwStepOutLenV1;
     use kaspa_consensus_core::palw_step::kernel_semantics_id_v1 as kid;
@@ -259,18 +299,7 @@ pub fn a16_inventory_v1(
     };
     let missing = |name: &str| InventoryBuildError::Operand(OperandError::UnknownTensor { name: name.to_string() });
 
-    let mut rows: Vec<PalwArtifactOperandV1> = Vec::new();
     let mut seen: std::collections::BTreeSet<(String, Option<u16>, u32)> = std::collections::BTreeSet::new();
-    let push = |rows: &mut Vec<PalwArtifactOperandV1>,
-                seen: &mut std::collections::BTreeSet<(String, Option<u16>, u32)>,
-                name: &str,
-                layer: Option<u16>,
-                start: u32,
-                bytes: Vec<u8>| {
-        if seen.insert((name.to_string(), layer, start)) {
-            rows.push(PalwArtifactOperandV1 { tensor_name: name.to_string(), layer, row_start: start, bytes });
-        }
-    };
 
     // A per-lane triple table for a `Fixed`-width site: the store's own table where it holds one,
     // the single triple expanded across the width where it holds one triple — the engine's own
@@ -286,22 +315,6 @@ pub fn a16_inventory_v1(
     };
     // Emit a per-lane table chunked at the node's tile — the offsets the arm's
     // `(lane_base × wire, lanes × wire)` requests land on.
-    let push_tiled = |rows: &mut Vec<PalwArtifactOperandV1>,
-                      seen: &mut std::collections::BTreeSet<(String, Option<u16>, u32)>,
-                      name: &str,
-                      layer: Option<u16>,
-                      table: &[u8],
-                      unit: usize,
-                      tile_len: usize| {
-        let stride = tile_len.max(1) * unit;
-        let mut offset = 0usize;
-        while offset < table.len() {
-            let end = (offset + stride).min(table.len());
-            push(rows, seen, name, layer, offset as u32, table[offset..end].to_vec());
-            offset = end;
-        }
-    };
-
     let matmul_codes = |name: &str, layer: Option<u16>| -> Result<&[i8], InventoryBuildError> {
         let suffix = name.strip_prefix("blk.{layer}.").unwrap_or(name);
         let l = layer.map(|l| l as usize).unwrap_or(0);
@@ -345,14 +358,14 @@ pub fn a16_inventory_v1(
         if kidv == k_embed {
             let width = fixed.ok_or_else(|| missing(name))?;
             for token in 0..artifact.embed.len() / width.max(1) {
-                push(
-                    &mut rows,
+                a16_push(
+                    sink,
                     &mut seen,
                     name,
                     layer,
                     (token * width) as u32,
                     artifact.embed[token * width..(token + 1) * width].iter().map(|v| *v as u8).collect(),
-                );
+                )?;
             }
         } else if kidv == k_mm || kidv == k_rs {
             let out_dim = fixed.ok_or_else(|| missing(name))?;
@@ -363,7 +376,7 @@ pub fn a16_inventory_v1(
             let in_dim = codes.len() / out_dim;
             let tile = node.tile_len as usize;
             for (t, chunk) in codes.chunks(tile.max(1) * in_dim).enumerate() {
-                push(&mut rows, &mut seen, name, layer, (t * tile * in_dim) as u32, chunk.iter().map(|v| *v as u8).collect());
+                a16_push(sink, &mut seen, name, layer, (t * tile * in_dim) as u32, chunk.iter().map(|v| *v as u8).collect())?;
             }
             for variant in ["", ".sink0"] {
                 let triple_name = format!("{name}.a16{variant}");
@@ -375,7 +388,7 @@ pub fn a16_inventory_v1(
                 match store_row(&store_key, layer) {
                     Some(bytes) => {
                         let table = lane_table(bytes, out_dim, &triple_name)?;
-                        push_tiled(&mut rows, &mut seen, &triple_name, layer, &table, w, tile);
+                        a16_push_tiled(sink, &mut seen, &triple_name, layer, &table, w, tile)?;
                     }
                     None if variant == ".sink0" => {} // a site without the sink convention
                     None => return Err(missing(&triple_name)),
@@ -389,7 +402,7 @@ pub fn a16_inventory_v1(
                         match store_row(&triple_name, layer) {
                             Some(bytes) => {
                                 let table = lane_table(bytes, width, &triple_name)?;
-                                push_tiled(&mut rows, &mut seen, &triple_name, layer, &table, w, node.tile_len as usize);
+                                a16_push_tiled(sink, &mut seen, &triple_name, layer, &table, w, node.tile_len as usize)?;
                             }
                             None if variant == ".sink0" => {}
                             None => return Err(missing(&triple_name)),
@@ -402,7 +415,7 @@ pub fn a16_inventory_v1(
                     if bytes.len() != w {
                         return Err(missing(&format!("{name}: a job-scaled site registers exactly one triple")));
                     }
-                    push(&mut rows, &mut seen, name, layer, 0, bytes.to_vec());
+                    a16_push(sink, &mut seen, name, layer, 0, bytes.to_vec())?;
                 }
             }
         } else if kidv == k_scores || kidv == k_values {
@@ -410,13 +423,13 @@ pub fn a16_inventory_v1(
             if bytes.len() != w {
                 return Err(missing(&format!("{name}: the attention sites register exactly one triple")));
             }
-            push(&mut rows, &mut seen, name, layer, 0, bytes.to_vec());
+            a16_push(sink, &mut seen, name, layer, 0, bytes.to_vec())?;
         } else if kidv == k_soft {
             let bytes = store_row(name, layer).ok_or_else(|| missing(name))?;
             if bytes.len() != 1 {
                 return Err(missing(&format!("{name}: the softmax widening is one registered byte")));
             }
-            push(&mut rows, &mut seen, name, layer, 0, bytes.to_vec());
+            a16_push(sink, &mut seen, name, layer, 0, bytes.to_vec())?;
         } else if kidv == k_fused {
             // **ADR-0082 Decision 1: ONE node, FOUR registered operands, and the artifact is
             // unchanged.** A fused site reads exactly the tensors the four nodes it replaces read
@@ -434,20 +447,20 @@ pub fn a16_inventory_v1(
             if up.len() != 1 {
                 return Err(missing(&format!("{}: the softmax widening is one registered byte", t.softmax_up)));
             }
-            push(&mut rows, &mut seen, &t.softmax_up, layer, 0, up.to_vec());
+            a16_push(sink, &mut seen, &t.softmax_up, layer, 0, up.to_vec())?;
             for triple in [&t.scores, &t.probs, &t.values] {
                 let bytes = store_row(triple, layer).ok_or_else(|| missing(triple))?;
                 if bytes.len() != w {
                     return Err(missing(&format!("{triple}: the attention sites register exactly one triple")));
                 }
-                push(&mut rows, &mut seen, triple, layer, 0, bytes.to_vec());
+                a16_push(sink, &mut seen, triple, layer, 0, bytes.to_vec())?;
             }
         } else if kidv == k_rope {
             let mut offset = 0u32;
             for position in 0..artifact.shape.max_position {
                 let bytes = rope_row_bytes(&artifact.rope, artifact.shape.d_head, position);
                 let len = bytes.len() as u32;
-                push(&mut rows, &mut seen, name, layer, offset, bytes);
+                a16_push(sink, &mut seen, name, layer, offset, bytes)?;
                 offset += len;
             }
         } else if k_none.contains(&kidv) {
@@ -457,8 +470,60 @@ pub fn a16_inventory_v1(
         }
     }
 
+    Ok(())
+}
+
+/// **The A16 inventory** (unchanged: the visitor's rows, sorted, checked).
+pub fn a16_inventory_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+) -> Result<PalwArtifactInventoryV1, InventoryBuildError> {
+    let mut rows: Vec<PalwArtifactOperandV1> = Vec::new();
+    a16_visit_inventory_rows_v1(artifact, profile, &mut |name, layer, row_start, bytes| {
+        rows.push(PalwArtifactOperandV1 { tensor_name: name.to_string(), layer, row_start, bytes });
+        Ok(())
+    })?;
     rows.sort_by(|a, b| (a.tensor_name.as_str(), a.layer, a.row_start).cmp(&(b.tensor_name.as_str(), b.layer, b.row_start)));
     PalwArtifactInventoryV1::new(rows).map_err(InventoryBuildError::NotCanonical)
+}
+
+/// **The A16 inventory as digests** — one row's bytes alive at a time.
+pub fn a16_inventory_digest_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+) -> Result<PalwArtifactInventoryDigestV1, InventoryBuildError> {
+    let mut rows: Vec<PalwArtifactRowDigestV1> = Vec::new();
+    a16_visit_inventory_rows_v1(artifact, profile, &mut |name, layer, row_start, bytes| {
+        rows.push(PalwArtifactRowDigestV1 {
+            tensor_name: name.to_string(),
+            layer,
+            row_start,
+            byte_len: bytes.len() as u32,
+            leaf_hash: artifact_leaf_parts_v1(name, layer, row_start, &bytes),
+        });
+        Ok(())
+    })?;
+    rows.sort_by(|a, b| (a.tensor_name.as_str(), a.layer, a.row_start).cmp(&(b.tensor_name.as_str(), b.layer, b.row_start)));
+    PalwArtifactInventoryDigestV1::new(rows).map_err(InventoryBuildError::NotCanonical)
+}
+
+/// **One row's bytes** of the A16 inventory, by its key — a second pass over the artifact that
+/// keeps nothing but the row asked for.
+pub fn a16_inventory_row_bytes_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    tensor_name: &str,
+    layer: Option<u16>,
+    row_start: u32,
+) -> Result<Option<Vec<u8>>, InventoryBuildError> {
+    let mut wanted: Option<Vec<u8>> = None;
+    a16_visit_inventory_rows_v1(artifact, profile, &mut |name, l, start, bytes| {
+        if wanted.is_none() && name == tensor_name && l == layer && start == row_start {
+            wanted = Some(bytes);
+        }
+        Ok(())
+    })?;
+    Ok(wanted)
 }
 
 /// **Does this hybrid graph register its operand-inventory root?** (ADR-0102.) Exactly when it

@@ -220,8 +220,9 @@ registry is in force for it proves when the chain holds none of this bond's proo
 or the one it holds is past half the readiness age (`palw_readiness_duty_due_v1` — a restart
 re-reads the chain and never re-sends a fresh proof), never twice in a span; the leaf is the first
 under the opening cap inside the challenge's window, opened from the held artifact
-(`PalwExecutionBackendV1::artifact_row_opening`; a Qwen3.6-class artifact is rooted in one
-streaming pass and never held in memory), rooted locally against the class's registered root
+(`PalwExecutionBackendV1::artifact_row_opening`; every family roots its artifact in one
+streaming pass and opens one row by a second — the inventory is never materialised: eight nodes
+that materialised the A16 inventory to root it rebooted a 24 GiB host on 2026-09-17), rooted locally against the class's registered root
 before it is signed by the bond's key. **Fail-closed**: a class this node holds no artifact for, or
 holds under a different root, gets no proof and is named once in the log; a node in IBD or not near
 the tip proves nothing; a bond that is inactive, below the floor or without the readiness multiple of

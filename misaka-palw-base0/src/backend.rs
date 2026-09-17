@@ -1086,15 +1086,26 @@ impl PalwExecutionBackendV1 for Base0Backend {
     }
 
     fn artifact_inventory_digest(&self) -> Result<kaspa_consensus_core::palw_artifact::PalwArtifactInventoryDigestV1, String> {
-        let inventory = crate::inventory::base0_inventory_v1(&self.artifact, self.inventory_geometry).map_err(|e| format!("{e:?}"))?;
-        let rows = inventory.operands().iter().map(kaspa_consensus_core::palw_artifact::PalwArtifactRowDigestV1::of).collect();
-        kaspa_consensus_core::palw_artifact::PalwArtifactInventoryDigestV1::new(rows).map_err(|e| format!("{e:?}"))
+        crate::inventory::base0_inventory_digest_v1(&self.artifact, self.inventory_geometry).map_err(|e| format!("{e:?}"))
     }
 
     fn artifact_row_opening(&self, index: u32) -> Result<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1, String> {
-        let inventory = crate::inventory::base0_inventory_v1(&self.artifact, self.inventory_geometry).map_err(|e| format!("{e:?}"))?;
-        kaspa_consensus_core::palw_artifact::open_artifact_leaf_v1(inventory.operands(), index)
-            .ok_or_else(|| format!("leaf {index} is outside an inventory of {}", inventory.operands().len()))
+        let digest =
+            crate::inventory::base0_inventory_digest_v1(&self.artifact, self.inventory_geometry).map_err(|e| format!("{e:?}"))?;
+        let row = digest
+            .rows()
+            .get(index as usize)
+            .ok_or_else(|| format!("leaf {index} is outside an inventory of {}", digest.leaf_count()))?;
+        let bytes = crate::inventory::base0_inventory_row_bytes_v1(
+            &self.artifact,
+            self.inventory_geometry,
+            &row.tensor_name,
+            row.layer,
+            row.row_start,
+        )
+        .map_err(|e| format!("{e:?}"))?
+        .ok_or_else(|| format!("leaf {index} names a row the artifact does not emit"))?;
+        digest.opening_v1(index, bytes).ok_or_else(|| format!("leaf {index} does not open against the digest"))
     }
 }
 
