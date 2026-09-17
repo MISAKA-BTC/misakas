@@ -1,6 +1,6 @@
 # ADR-0130 — BPS 1 is hardened before it is widened
 
-* Status: **ACCEPTED 2026-09-17, implementation in progress** on `feat/palw-exec-lane-and-validator-retirement`.
+* Status: **ACCEPTED 2026-09-17; Decisions 2–6 IMPLEMENTED the same day, Decision 1 built dormant, Decisions 7–8 not built** — on `feat/palw-exec-lane-and-validator-retirement` (§7).
   Decisions 2–5 ride testnet-11's DAA 7,001 flag day with ADR-0124/0125/0126/0128. Decision 1 is built
   dormant and computed in shadow (Decision 8); the operator decided (2026-09-17) that λ is off at 7,001 and
   gets a height only once the shadow shows the capacity and a shorter liability lifetime exists (§3).
@@ -181,6 +181,58 @@ seconds ahead (before mainnet); Decision 7's slash.
   reorgs, panel response/correct/slash rates, panel and producer reward per reserved sompi, MSK per canonical
   compute by class.
 
-## 7. Number hygiene
+## 7. Implementation record (2026-09-17)
+
+Merged into `feat/palw-exec-lane-and-validator-retirement` as M1 (`fc4325d9`, the seat exposure floor and the
+operator lottery) and M2 (`da837d62`, the scheduler). testnet-11's fingerprint is the union pin
+`ab4e7b9c7e20d14cbadc0874312b8c6dff89ca66ed7e9be3af2f5523dc58b5f2`; M1 alone measured `236cdb56…`, M2 alone
+`a4df92df…`, and the first 7,001 build `4787b92a…` — none of the three was deployed. The identity and the fence
+schedule (…, 7000, 7001, 2125000) did not move, so the fork-id gate cannot tell these builds apart: the fleet
+carries one pin or it forks silently at 7,001.
+
+* **Decision 1 — built, dormant.** `Params::palw_panel_exposure_floor: Option<PalwPanelExposureFloorV1
+  { activation, reward_multiple_permille }>`, hashed `Some`-only, `None` on every preset and card, refused where
+  it cannot floor (`adr0130_the_seat_exposure_floor_is_dormant_everywhere_and_refused_where_it_cannot_floor`,
+  `adr0130_the_exposure_floor_is_hashed_some_only_and_scheduled_like_a_fence`). Past it a seat reserves
+  `max(3 × claim.reserved, λ × max_seat_reward)`, the draw's headroom asks for that amount, and the duty row
+  stores what binding reserved, so the release and the dissent slash move that amount across a fence crossing
+  (`adr0130_what_a_release_returns_is_what_binding_reserved_across_the_fence`,
+  `adr0130_the_dissent_slash_takes_the_stored_exposure`,
+  `adr0130_no_floor_is_the_shipped_reservation_and_the_shadow_ledger_prices_another`). The seat exposure, the
+  eligibility, the lottery and the stored/hypothetical seat ledgers are pure public functions for a shadow read.
+* **Decision 2 — at 7,001.** Past `palw_panel_economy` the draw groups the eligible bonds by operator, an
+  operator's candidate is its bond with the lowest bond ticket, and each operator draws one ticket under its own
+  domain; the rule is named in the fingerprint as `palw_panel_draw/operator_ticket_v1` beside the fence's height
+  (`palw_panel_v2.rs`, `palw_panel_economy_v1.rs`, `palw_state_v2.rs`, `palw_state_v2_sync.rs`, the virtual
+  processor). Where it does not reach (`51330459`): the stratified shard draw takes no economy, so neither
+  ADR-0124's floor and headroom nor this lottery and exposure floor ride it; the operator counter the maturity
+  warning prints is the lottery's unit; the seat economy carries three numbers, not two.
+* **Decisions 3, 4, 5 — at 7,001.** `palw_execution_lane_v1.rs` scheduler v2: the snapshot/seed split, one
+  parity an operator (`adr0130_an_operator_spread_over_both_parities_misses_one_paritys_rounds`,
+  `adr0130_no_operator_holds_permits_in_two_consecutive_rounds_of_a_span`), the pending-snapshot and
+  seed-anchor rows in `palw_state_v2.rs` (`adr0130_a_snapshot_is_seeded_only_by_an_anchor_recorded_after_it_was_taken`,
+  `adr0130_a_gap_drops_stale_finals_and_snapshots`,
+  `adr0130_the_attempt_carrying_block_that_opens_a_span_anchors_the_next_target`,
+  `adr0130_the_seed_moves_with_the_anchor_span_and_frontier_and_nothing_the_finals_choose`), and the pipeline
+  (`adr0130_a_span_is_seeded_at_its_first_block_from_the_anchor_of_the_span_before`,
+  `adr0130_a_round_block_whose_permit_the_previous_round_held_is_not_granted`,
+  `adr0125_a_finalized_attempt_schedules_the_span_two_on_and_a_permit_is_accepted_once`). The rule set
+  `palw_execution_lane/scheduler_v2` rides the fingerprint and the schedule id; testnet-11's
+  `schedule_span_daa` is 5 (was 30). Readers: `getPalwRoundLane` names the span its finals are for
+  (`finals_span + 2`), `misaka mining status` prints "N finals toward span s+2" or "no finals gathered yet",
+  the round producer's doc names the two-span delay, and the devnet drill waits for two span boundaries with a
+  default span of 10 DAA (`LANE=0,2,10`). **The drill has not been re-run on the merged branch.**
+* **Decision 6 —** unchanged: width 1, no widening scheduled. **Decision 7 —** recorded, not built.
+  **Decision 8 —** not built: no node computes the λ = 2 table yet; ADR-0131's op 185 carries the per-class
+  census (claims by state, escrow, compute), not the seat-exposure shadow.
+* **Residuals the implementation named.** An operator is the registry's operator id, so the parity rule and
+  the lottery inherit ADR-0125's Sybil residual (SA-2: until Decision 1 has a height, a second operator id is a
+  second entry and a second parity). SA-3 stands: two schedules meet at a span boundary. The seed anchor is the
+  execution key of the latest attempt-carrying chain block of the span before, chosen among that producer's own
+  winning draws (SA-4). The fork-id gate does not see the rule change (above).
+* **Verification of the union branch (M1 + M2 + ADR-0131's shadow):** recorded in the merge commits
+  `da837d62` / `ffadce3b` and below once the full run completes.
+
+## 8. Number hygiene
 
 0130 was free when written; the next free number is 0131.
