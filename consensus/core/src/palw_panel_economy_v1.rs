@@ -29,9 +29,26 @@
 //!   on is the pwu its exposure is priced on (`palw_exposure_pwu_v1`): a claim is paid on the
 //!   same number it can be slashed on. The liveness floor is not a model and is not priced.
 //!
+//! * **The exposure floor (ADR-0130).** Past `Params::palw_panel_exposure_floor` a seat reserves
+//!   the larger of the claim-priced stake above and `λ` × the most the seat can be paid on the claim
+//!   ([`palw_panel_seat_exposure_v1`]), so a seat's reward can never outgrow what it stands to lose
+//!   by a factor the operator did not choose. The reservation is written into the duty row when the
+//!   panel binds and every release and every dissent slash reads the row, never a recomputation.
+//!
 //! Nothing here reads a fence. The fold decides, at the block's own DAA, whether each rule is in
-//! force (`PalwTransitionExtrasV1::panel_economy_active`, `::work_priced_reward_active`), and a
-//! network that never arms them folds byte-identically to one built before this module existed.
+//! force (`PalwTransitionExtrasV1::panel_economy_active`, `::work_priced_reward_active`,
+//! `::panel_reward_multiple_permille`), and a network that never arms them folds byte-identically to
+//! one built before this module existed.
+//!
+//! **Every function here is pure and callable from a state snapshot**, which is what a node-local
+//! shadow read (what a `λ` WOULD require, never enforced) is built from: the seat exposure
+//! ([`palw_panel_seat_exposure_v1`]), the headroom predicate ([`palw_seat_has_headroom_v1`]), the
+//! stored and the hypothetical seat ledgers ([`palw_seat_exposure_ledger_v1`],
+//! [`palw_shadow_seat_exposure_ledger_v1`]) and what a bond would back under a hypothetical `λ`
+//! ([`palw_shadow_backed_v1`]).
+
+use crate::palw_state_v2::{PalwBondKeyV2, PalwChainStateV2};
+use std::collections::BTreeMap;
 
 /// The panel's share of a `Final` claim's reward, in permille — ADR-0124 Decision 1: 80 % to
 /// the producer, 20 % to the panel pool. A starting value the operator asked to measure against
@@ -54,9 +71,36 @@ pub fn palw_panel_collateral_floor_v1(min_collateral_sompi: u64) -> u64 {
     min_collateral_sompi.saturating_mul(PALW_PANEL_COLLATERAL_MULTIPLE_V1)
 }
 
-/// What one seat reserves on one claim, saturating.
+/// What one seat reserves on one claim below ADR-0130's floor, saturating.
 pub fn palw_seat_exposure_v1(claim_reserved: u128) -> u128 {
     claim_reserved.saturating_mul(PALW_SEAT_EXPOSURE_MULTIPLE_V1)
+}
+
+/// **ADR-0130: the largest reward multiple a network may state**, in permille — 100×. A floor past
+/// it would price a seat out of every panel on any real collateral distribution; `validate_palw_v2`
+/// refuses it before a peer is dialed.
+pub const PALW_PANEL_REWARD_MULTIPLE_MAX_PERMILLE_V1: u32 = 100_000;
+
+/// **ADR-0130: what one seat reserves on one claim** —
+/// `max(3 × claim.reserved, ⌊λ‰ × max_seat_reward / 1000⌋)`, saturating.
+///
+/// `max_seat_reward` is [`palw_panel_split_v1`]`(escrowed_reward, seat_count, _).per_seat`: the pool
+/// share of the escrow the claim holds, divided by the seats the panel is drawn with. It is the MOST
+/// a seat can be paid on this claim — the work price and the buyback only lower the reward the pool
+/// is carved from — so a floor on it bounds every payout the seat can receive.
+///
+/// `reward_multiple_permille == 0` is "no floor" and is [`palw_seat_exposure_v1`] exactly, which is
+/// what every network that has not armed `Params::palw_panel_exposure_floor` reserves. Pure: the
+/// draw's headroom, the fold's reservation and a shadow reader asking what a hypothetical `λ` would
+/// require all call this one function with the numbers they hold.
+pub fn palw_panel_seat_exposure_v1(claim_reserved: u128, escrowed_reward: u64, seat_count: usize, reward_multiple_permille: u32) -> u128 {
+    let stake = palw_seat_exposure_v1(claim_reserved);
+    if reward_multiple_permille == 0 {
+        return stake;
+    }
+    let max_seat_reward = palw_panel_split_v1(escrowed_reward, seat_count, 0).per_seat;
+    let floor = (max_seat_reward as u128).saturating_mul(reward_multiple_permille as u128) / 1000;
+    stake.max(floor)
 }
 
 /// **A seat may be drawn only while its free collateral covers what the seat would reserve.**
@@ -71,15 +115,75 @@ pub fn palw_seat_has_headroom_v1(collateral: u64, backed: u128, seat_exposure: u
     backed.saturating_add(seat_exposure) <= ceiling
 }
 
-/// The two numbers the draw needs past the fence, resolved by the processor at the claim's
-/// ANCHOR (where every other rule that decides a panel is resolved) and carried to the draw and
-/// to the acceptance layer as one value, so both recompute one panel.
+/// The numbers the draw needs past the fence, resolved by the processor at the claim's ANCHOR
+/// (where every other rule that decides a panel is resolved) and carried to the draw and to the
+/// acceptance layer as one value, so both recompute one panel.
+///
+/// A caller may also build one by hand — a shadow reader asking whether a claim's panel WOULD be
+/// drawable under a hypothetical `reward_multiple_permille` passes it to
+/// `palw_panel_v2::derive_panel_v2_with_policy` against a state snapshot, and nothing is written.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwSeatEconomyV1 {
     /// [`palw_panel_collateral_floor_v1`] of the network's producer floor.
     pub panel_floor_sompi: u64,
     /// The state params' `fp_max_exposure_ratio_permille`, the ceiling every reservation shares.
     pub max_exposure_ratio_permille: u32,
+    /// ADR-0130: `Params::palw_panel_exposure_floor`'s `λ` where it is active at the anchor, `0`
+    /// (no floor) where it is not — the fourth argument of [`palw_panel_seat_exposure_v1`].
+    pub reward_multiple_permille: u32,
+}
+
+impl PalwSeatEconomyV1 {
+    /// What a seat drawn on a claim holding `claim_reserved` and `escrowed_reward` would reserve on a
+    /// panel of `seat_count` seats under this economy.
+    pub fn seat_exposure(&self, claim_reserved: u128, escrowed_reward: u64, seat_count: usize) -> u128 {
+        palw_panel_seat_exposure_v1(claim_reserved, escrowed_reward, seat_count, self.reward_multiple_permille)
+    }
+}
+
+/// **The seat exposure every bond holds on the live duty rows, as the rows STORE it** — the seat
+/// half of `reserved_exposure`, per bond. What the fold reserved when each panel bound and what it
+/// will release; `PalwChainStateV2::assert_internal_consistency` rebuilds the same sum.
+pub fn palw_seat_exposure_ledger_v1(state: &PalwChainStateV2) -> BTreeMap<PalwBondKeyV2, u128> {
+    let mut ledger: BTreeMap<PalwBondKeyV2, u128> = BTreeMap::new();
+    for (_, row) in state.panel_duty_rows_iter() {
+        for seat in row.seats.keys() {
+            let held = ledger.entry(*seat).or_insert(0);
+            *held = held.saturating_add(row.seat_exposure);
+        }
+    }
+    ledger
+}
+
+/// **The shadow ledger: the seat exposure every bond WOULD hold on the live duty rows had each
+/// panel reserved under `reward_multiple_permille`** — [`palw_panel_seat_exposure_v1`] of each
+/// row's claim, over the row's own seat count, summed per seat bond. Pure and snapshot-only: no
+/// incremental bookkeeping, nothing written, and `0` reproduces the stored ledger of a network that
+/// never armed a floor.
+pub fn palw_shadow_seat_exposure_ledger_v1(state: &PalwChainStateV2, reward_multiple_permille: u32) -> BTreeMap<PalwBondKeyV2, u128> {
+    let mut ledger: BTreeMap<PalwBondKeyV2, u128> = BTreeMap::new();
+    for (claim_id, row) in state.panel_duty_rows_iter() {
+        // A row names a live claim (the consistency check refuses a state where it does not), so
+        // the lookup only misses on a state no fold wrote; such a row contributes nothing.
+        let Some(claim) = state.claim(claim_id) else { continue };
+        let per_seat =
+            palw_panel_seat_exposure_v1(claim.reserved, claim.escrowed_reward, row.seats.len(), reward_multiple_permille);
+        for seat in row.seats.keys() {
+            let held = ledger.entry(*seat).or_insert(0);
+            *held = held.saturating_add(per_seat);
+        }
+    }
+    ledger
+}
+
+/// **What `bond` would back under `reward_multiple_permille`** — the `backed` argument of
+/// [`palw_seat_has_headroom_v1`] as the draw computes it (`reserved_exposure + registration_exposure`),
+/// with the seat half replaced by the shadow ledger's. A shadow reader's capacity is then
+/// `ceiling − palw_shadow_backed_v1(..)`, with `ceiling = collateral × fp_max_exposure_ratio_permille / 1000`.
+pub fn palw_shadow_backed_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2, reward_multiple_permille: u32) -> u128 {
+    let stored = palw_seat_exposure_ledger_v1(state).get(bond).copied().unwrap_or(0);
+    let shadow = palw_shadow_seat_exposure_ledger_v1(state, reward_multiple_permille).get(bond).copied().unwrap_or(0);
+    state.reserved_exposure(bond).saturating_sub(stored).saturating_add(shadow).saturating_add(state.registration_exposure(bond))
 }
 
 /// **The price of work: the escrow times the fraction the claim's inference is of the unit's,
@@ -224,6 +328,58 @@ mod tests {
             100_000 * crate::constants::SOMPI_PER_KASPA
         );
         assert_eq!(palw_panel_collateral_floor_v1(u64::MAX), u64::MAX);
+    }
+
+    /// **ADR-0130 on testnet-11's numbers.** Past DAA 7,001 an attempt escrows 72 % of the 4,445.62 MSK
+    /// block — 3,200.85 MSK — and a QWEN36 claim reserves 5 sompi/pwu × 2,685,360 pwu = 0.134 MSK, so a
+    /// seat of a five-seat panel is paid up to 128.03 MSK while it risks 3 × 0.134 = 0.40 MSK. At
+    /// `λ = 2` the seat reserves twice its most, 256.07 MSK, and the claim-priced stake no longer binds.
+    ///
+    /// The brief that asked for this quoted "per seat 64,016,930,016 sompi" and "λ = 2000 ‰ →
+    /// 128,033,860,032 sompi": those are the POOL (20 % of the escrow) and twice the pool, i.e. the
+    /// share of a ONE-seat panel. Both readings are pinned — the formula is the rule, and the one-seat
+    /// row is where the brief's figures come from — and the five-seat row is testnet-11's.
+    #[test]
+    fn adr0130_the_seat_exposure_floor_on_testnet_11s_numbers() {
+        const T11_ESCROW_7001: u64 = 320_084_650_080;
+        const T11_QWEN36_RESERVED: u128 = 13_426_800;
+        assert_eq!(T11_QWEN36_RESERVED, 5 * T11_QWEN36_PWU as u128, "5 sompi a pwu × one QWEN36 inference");
+        assert_eq!(palw_seat_exposure_v1(T11_QWEN36_RESERVED), 40_280_400, "3 × 13,426,800: the 0.40 MSK a seat risks today");
+
+        // The brief's figures: the pool, and λ = 2 of it — a one-seat panel.
+        assert_eq!(palw_panel_split_v1(T11_ESCROW_7001, 1, 0).per_seat, 64_016_930_016);
+        assert_eq!(palw_panel_seat_exposure_v1(T11_QWEN36_RESERVED, T11_ESCROW_7001, 1, 2_000), 128_033_860_032);
+
+        // testnet-11's five-seat panel: 128.03 MSK a seat, 256.07 MSK reserved at λ = 2.
+        assert_eq!(palw_panel_split_v1(T11_ESCROW_7001, 5, 0).per_seat, 12_803_386_003);
+        let t11 = palw_panel_seat_exposure_v1(T11_QWEN36_RESERVED, T11_ESCROW_7001, 5, 2_000);
+        assert_eq!(t11, 25_606_772_006);
+        assert!(t11 > palw_seat_exposure_v1(T11_QWEN36_RESERVED), "the floor binds: 256.07 MSK against 0.40 MSK");
+        // The mainnet range the operator is considering: 5× and 10× the seat's most.
+        assert_eq!(palw_panel_seat_exposure_v1(T11_QWEN36_RESERVED, T11_ESCROW_7001, 5, 5_000), 64_016_930_015);
+        assert_eq!(palw_panel_seat_exposure_v1(T11_QWEN36_RESERVED, T11_ESCROW_7001, 5, 10_000), 128_033_860_030);
+
+        // No floor is today's stake exactly, whatever the escrow.
+        for escrow in [0, 1, T11_ESCROW, T11_ESCROW_7001, u64::MAX] {
+            for seats in [0usize, 1, 5] {
+                assert_eq!(palw_panel_seat_exposure_v1(T11_QWEN36_RESERVED, escrow, seats, 0), 40_280_400);
+            }
+        }
+        // A claim-priced stake above the floor is kept: the floor only raises a reservation.
+        assert_eq!(palw_panel_seat_exposure_v1(10_000_000_000_000, T11_ESCROW_7001, 5, 2_000), 30_000_000_000_000);
+        // A panel of no seats has no seat reward to floor.
+        assert_eq!(palw_panel_seat_exposure_v1(T11_QWEN36_RESERVED, T11_ESCROW_7001, 0, 2_000), 40_280_400);
+        // Monotone in λ, and saturating rather than wrapping.
+        let mut last = 0;
+        for lambda in (0..=PALW_PANEL_REWARD_MULTIPLE_MAX_PERMILLE_V1).step_by(2_500) {
+            let e = palw_panel_seat_exposure_v1(T11_QWEN36_RESERVED, T11_ESCROW_7001, 5, lambda);
+            assert!(e >= last);
+            last = e;
+        }
+        assert_eq!(palw_panel_seat_exposure_v1(u128::MAX, u64::MAX, 1, u32::MAX), u128::MAX);
+        // The economy value carries λ to the same function.
+        let economy = PalwSeatEconomyV1 { panel_floor_sompi: 0, max_exposure_ratio_permille: 500, reward_multiple_permille: 2_000 };
+        assert_eq!(economy.seat_exposure(T11_QWEN36_RESERVED, T11_ESCROW_7001, 5), t11);
     }
 
     #[test]

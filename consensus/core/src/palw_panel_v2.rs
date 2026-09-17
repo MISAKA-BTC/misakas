@@ -22,6 +22,13 @@
 //! `accepted_daa + anchor_delay` — so it exists only after the attempt was fixed, and neither
 //! the executor nor the binder can grind it.
 //!
+//! **Past the panel-economy fence the lottery is one entry per OPERATOR (ADR-0130).** Below it an
+//! operator holding ten eligible bonds held ten tickets and kept the best, so splitting collateral
+//! across bonds bought draws even though it could never buy a second seat. Past it each operator's
+//! candidate is its eligible bond with the lowest bond ticket, and the operator draws ONE ticket
+//! `H(operator-ticket domain ‖ anchor ‖ claim ‖ operator_id)` — a function of who the operator is,
+//! never of how many bonds it holds ([`palw_panel_operator_lottery_v1`]).
+//!
 //! ## Receipts and the four DA states (Decision 7, the DA half of P0-8's wiring)
 //!
 //! A seat answers with a signed verdict: **`Valid`** (the trace opened and verified) or
@@ -45,6 +52,9 @@ use crate::palw_state_v2::{
 use blake2b_simd::Params;
 
 pub const PALW_PANEL_V2_DOMAIN_SEAT_TICKET: &[u8] = b"misaka-palw/panel-v2/seat-ticket/v1";
+/// **ADR-0130: the operator's lottery entry.** Past the panel-economy fence an operator draws one
+/// ticket under this domain, over the anchor, the claim and its operator id — never over a bond.
+pub const PALW_PANEL_V2_DOMAIN_OPERATOR_TICKET: &[u8] = b"misaka-palw/panel-v2/operator-ticket/v1";
 /// **C-02 (mainnet audit 2026-09-11 deep fence): the ceiling on a bond's stake-weighted
 /// sub-tickets.** Past the fence a bond draws `floor(collateral / min_collateral)` sub-tickets, but
 /// a premine-scale bond would otherwise mint hundreds of thousands (t11's `min_collateral` is
@@ -62,11 +72,16 @@ pub const PALW_V2_MAX_SEAT_TICKETS_PER_BOND: u64 = 4096;
 /// acceptance layer alike, so build and validate recompute one identical panel.
 ///
 /// `weighted` is C-02's stake-weighted sortition (`Params::palw_audit_2026_09_11_deep`); `economy`
-/// is `Some` past ADR-0124's `Params::palw_panel_economy` and carries the seat floor and the
-/// exposure ceiling the eligibility predicate reads. **Past the panel-economy fence the draw is
-/// one ticket per eligible bond whatever `weighted` says** (ADR-0124 Decision 5): once a seat's
-/// risk is the exposure it reserves and a bond is eligible only while its free collateral covers
-/// it, stake no longer needs to buy probability — it buys the capacity to hold more seats at once.
+/// is `Some` past ADR-0124's `Params::palw_panel_economy` and carries the seat floor, the exposure
+/// ceiling and ADR-0130's reward multiple the eligibility predicate reads. **Past the panel-economy
+/// fence the draw is one lottery entry per eligible OPERATOR whatever `weighted` says** (ADR-0124
+/// Decision 5, ADR-0130): once a seat's risk is the exposure it reserves and a bond is eligible only
+/// while its free collateral covers it, stake no longer needs to buy probability — it buys the
+/// capacity to hold more seats at once — and splitting it across bonds buys nothing.
+///
+/// A caller may build one with a hypothetical `economy` (a shadow reader's `λ`) and hand it to
+/// [`derive_panel_v2_with_policy`] or [`palw_panel_eligible_bonds_v2`] against a state snapshot:
+/// both are pure and write nothing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PalwPanelDrawPolicyV1 {
     pub weighted: bool,
@@ -76,8 +91,12 @@ pub const PALW_RECEIPT_V2_DOMAIN_MESSAGE: &[u8] = b"misaka-palw/receipt-v2/messa
 /// ML-DSA-87 signing context for a V2 seat receipt — its own family domain (audit P0-6).
 pub const PALW_RECEIPT_V2_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/receipt-v2/mldsa87/v1";
 
-pub const PALW_PANEL_V2_ALL_DOMAINS: &[&[u8]] =
-    &[PALW_PANEL_V2_DOMAIN_SEAT_TICKET, PALW_RECEIPT_V2_DOMAIN_MESSAGE, PALW_RECEIPT_V2_MLDSA87_CONTEXT];
+pub const PALW_PANEL_V2_ALL_DOMAINS: &[&[u8]] = &[
+    PALW_PANEL_V2_DOMAIN_SEAT_TICKET,
+    PALW_PANEL_V2_DOMAIN_OPERATOR_TICKET,
+    PALW_RECEIPT_V2_DOMAIN_MESSAGE,
+    PALW_RECEIPT_V2_MLDSA87_CONTEXT,
+];
 
 fn keyed(domain: &[u8]) -> blake2b_simd::State {
     Params::new().hash_length(64).key(domain).to_state()
@@ -239,7 +258,7 @@ pub fn derive_stratified_panel_v2(
         // on every network (`palw_shard_licensing` is `None` everywhere), so the economy rides the
         // flat draw below; when the shard fence is armed, this draw needs the same floor and
         // headroom — a follow-up gated behind the shard fence, not this one (C-02's precedent).
-        palw_panel_eligible_bonds_v2(state, claim_id, min_collateral_sompi, registered_by_daa, capability_proof, None)?
+        palw_panel_eligible_bonds_v2(state, claim_id, min_collateral_sompi, registered_by_daa, capability_proof, None, params.seat_count)?
             .into_iter()
             .filter_map(|(bond_key, bond)| {
                 state.shards_of_bond(bond_key, &class_id).map(|shards| crate::palw_shard_panel_v1::PalwShardCandidateV1 {
@@ -446,13 +465,20 @@ pub fn derive_panel_v2_with_maturity(
 /// ONE registry, so no second namespace exists for them to diverge in (the P0-7 defect). Shared by
 /// the flat draw and the stratified one (ADR-0100 Decision 4), so a seat predicate added to one
 /// cannot be missing from the other.
-fn palw_panel_eligible_bonds_v2<'a>(
+///
+/// `seat_count` is the panel the claim would be drawn with; past the economy it prices ADR-0130's
+/// exposure floor (`economy.seat_exposure(claim.reserved, claim.escrowed_reward, seat_count)`), which
+/// is the amount the bond must be able to reserve under its ceiling to be drawn at all. Pure and
+/// public: a shadow reader passes a hand-built `economy` carrying a hypothetical reward multiple and
+/// reads which bonds — and so which operators — WOULD be eligible against a state snapshot.
+pub fn palw_panel_eligible_bonds_v2<'a>(
     state: &'a PalwChainStateV2,
     claim_id: &Hash64,
     min_collateral_sompi: u64,
     registered_by_daa: Option<u64>,
     capability_proof: bool,
     economy: Option<crate::palw_panel_economy_v1::PalwSeatEconomyV1>,
+    seat_count: u16,
 ) -> Result<Vec<(&'a PalwBondKeyV2, &'a PalwBondStateV2)>, PalwPanelV2Error> {
     let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
     let executor_bond = claim.bond;
@@ -464,8 +490,12 @@ fn palw_panel_eligible_bonds_v2<'a>(
     // the exposure the seat would reserve — the same ceiling every other reservation on the bond
     // lives under, so the collateral behind a claim it produces cannot double as the collateral
     // behind a claim it judges. Below the fence: the registry's floor, and no headroom question.
+    // **ADR-0130:** the exposure is the one the fold reserves at binding — the claim-priced stake,
+    // raised to `λ` × the seat's most where the floor is in force at the anchor.
     let floor = economy.map(|economy| economy.panel_floor_sompi).unwrap_or(min_collateral_sompi);
-    let seat_stake = crate::palw_panel_economy_v1::palw_seat_exposure_v1(claim.reserved);
+    let seat_stake = economy
+        .map(|economy| economy.seat_exposure(claim.reserved, claim.escrowed_reward, seat_count as usize))
+        .unwrap_or_else(|| crate::palw_panel_economy_v1::palw_seat_exposure_v1(claim.reserved));
     let mut eligible = Vec::new();
     for (bond_key, bond) in state.bonds_iter() {
         // **A seat has to have something left to lose** — status AND balance, through the one
@@ -541,9 +571,12 @@ pub fn derive_panel_v2_with_capability_proof(
 }
 
 /// [`derive_panel_v2_with_capability_proof`] with the whole draw policy (ADR-0124): the seat
-/// floor and the exposure headroom past `Params::palw_panel_economy`, and one ticket per bond
-/// there whatever the deep fence says. `economy: None` is byte-identical to the draw before the
-/// policy existed.
+/// floor and the exposure headroom past `Params::palw_panel_economy`, and one lottery entry per
+/// operator there whatever the deep fence says (ADR-0130, [`palw_panel_operator_lottery_v1`]).
+/// `economy: None` is byte-identical to the draw before the policy existed.
+///
+/// Pure: a shadow reader may call it with a hand-built policy (a hypothetical reward multiple)
+/// against a state snapshot to ask whether a claim's panel WOULD be drawable, and nothing is written.
 #[allow(clippy::too_many_arguments)]
 pub fn derive_panel_v2_with_policy(
     state: &PalwChainStateV2,
@@ -555,14 +588,27 @@ pub fn derive_panel_v2_with_policy(
     capability_proof: bool,
     policy: PalwPanelDrawPolicyV1,
 ) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
-    // ADR-0124 Decision 5: the panel economy retires stake weighting (see the policy's doc).
-    let weighted = policy.weighted && policy.economy.is_none();
-    // Ticket every eligible bond (`palw_panel_eligible_bonds_v2`: the exclusions per Decision 7
-    // and every seat predicate, spelled once for this draw and the stratified one).
+    // Every eligible bond (`palw_panel_eligible_bonds_v2`: the exclusions per Decision 7 and every
+    // seat predicate, spelled once for this draw and the stratified one).
+    let eligible = palw_panel_eligible_bonds_v2(
+        state,
+        claim_id,
+        min_collateral_sompi,
+        registered_by_daa,
+        capability_proof,
+        policy.economy,
+        params.seat_count,
+    )?;
+    // **ADR-0130: past the panel economy, one lottery entry per operator.** The eligibility is the
+    // same list; only how it is ticketed changes.
+    if policy.economy.is_some() {
+        return palw_panel_operator_lottery_v1(params, claim_id, anchor_block, &eligible);
+    }
+    // ADR-0124 Decision 5: the panel economy retires stake weighting (see the policy's doc) — and
+    // below it `weighted` is the deep fence's.
+    let weighted = policy.weighted;
     let mut tickets: Vec<(Hash64, PalwBondKeyV2, Hash64)> = Vec::new();
-    for (bond_key, bond) in
-        palw_panel_eligible_bonds_v2(state, claim_id, min_collateral_sompi, registered_by_daa, capability_proof, policy.economy)?
-    {
+    for (bond_key, bond) in eligible {
         // **C-02 (deep fence): stake-weighted sortition by bucketed sub-tickets.** Below the fence
         // (`weighted == false`) each eligible bond draws ONE ticket, so the draw ignores how much
         // collateral is at stake and a min-collateral bond has the same seat odds as a whale. Past
@@ -578,10 +624,7 @@ pub fn derive_panel_v2_with_policy(
         let sub_tickets: u64 =
             if weighted { (bond.collateral / min_collateral_sompi.max(1)).clamp(1, PALW_V2_MAX_SEAT_TICKETS_PER_BOND) } else { 1 };
         for j in 0..sub_tickets {
-            let mut ticket = keyed(PALW_PANEL_V2_DOMAIN_SEAT_TICKET);
-            ticket.update(anchor_block.as_byte_slice());
-            ticket.update(claim_id.as_byte_slice());
-            ticket.update(&borsh::to_vec(bond_key).expect("bond keys are borsh-serializable"));
+            let mut ticket = palw_panel_seat_ticket_state_v1(anchor_block, claim_id, bond_key);
             // The sub-ticket index is mixed in ONLY past the fence: below it the loop runs once and
             // this line does not execute, so the digest is `H(domain ‖ anchor ‖ claim ‖ bond)` byte
             // for byte as before — a fenced build above the height and an unfenced one below it
@@ -611,6 +654,98 @@ pub fn derive_panel_v2_with_policy(
         return Err(PalwPanelV2Error::InsufficientEligibleBonds { needed: params.seat_count, available: seats.len() as u16 });
     }
     Ok(seats)
+}
+
+/// `H(seat-ticket domain ‖ anchor ‖ claim ‖ bond)` before it is finished — the bond ticket's one
+/// spelling. The deep fence's weighted draw mixes a sub-ticket index into it; everything else
+/// finishes it as it is ([`palw_panel_seat_ticket_v1`]).
+fn palw_panel_seat_ticket_state_v1(anchor_block: BlockHash, claim_id: &Hash64, bond_key: &PalwBondKeyV2) -> blake2b_simd::State {
+    let mut ticket = keyed(PALW_PANEL_V2_DOMAIN_SEAT_TICKET);
+    ticket.update(anchor_block.as_byte_slice());
+    ticket.update(claim_id.as_byte_slice());
+    ticket.update(&borsh::to_vec(bond_key).expect("bond keys are borsh-serializable"));
+    ticket
+}
+
+/// **A bond's ticket on a claim's panel** — `H(seat-ticket domain ‖ anchor ‖ claim ‖ bond)`, the
+/// unweighted draw's ticket. Past the panel economy it no longer decides who sits; it decides which
+/// of an operator's eligible bonds the operator sits with.
+pub fn palw_panel_seat_ticket_v1(anchor_block: BlockHash, claim_id: &Hash64, bond_key: &PalwBondKeyV2) -> Hash64 {
+    finish(palw_panel_seat_ticket_state_v1(anchor_block, claim_id, bond_key))
+}
+
+/// **ADR-0130: an operator's one lottery entry on a claim's panel** —
+/// `H(operator-ticket domain ‖ anchor ‖ claim ‖ operator_id)`. Nothing about the operator's bonds
+/// enters it, so an operator's odds are the same whether it holds one eligible bond or a thousand.
+pub fn palw_panel_operator_ticket_v1(anchor_block: BlockHash, claim_id: &Hash64, operator_id: &Hash64) -> Hash64 {
+    let mut ticket = keyed(PALW_PANEL_V2_DOMAIN_OPERATOR_TICKET);
+    ticket.update(anchor_block.as_byte_slice());
+    ticket.update(claim_id.as_byte_slice());
+    ticket.update(operator_id.as_byte_slice());
+    finish(ticket)
+}
+
+/// One operator's standing in a claim's lottery: its candidate bond (its eligible bond with the
+/// lowest bond ticket, ties by bond key) and its one operator ticket.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PalwPanelOperatorEntryV1 {
+    /// Sorts first: the lottery's order.
+    pub operator_ticket: Hash64,
+    pub operator_id: Hash64,
+    pub bond: PalwBondKeyV2,
+}
+
+/// **ADR-0130: every eligible operator's lottery entry, in lottery order.** `eligible` is
+/// [`palw_panel_eligible_bonds_v2`]'s list. Each operator is entered ONCE — with its eligible bond
+/// whose [`palw_panel_seat_ticket_v1`] is lowest (ties broken by the bond key) — under its
+/// [`palw_panel_operator_ticket_v1`]; the entries sort by `(operator ticket, operator id)`. Pure, so a
+/// shadow reader can list which operators would stand in a draw and where.
+pub fn palw_panel_operator_entries_v1(
+    claim_id: &Hash64,
+    anchor_block: BlockHash,
+    eligible: &[(&PalwBondKeyV2, &PalwBondStateV2)],
+) -> Vec<PalwPanelOperatorEntryV1> {
+    let mut candidates: std::collections::BTreeMap<Hash64, (Hash64, PalwBondKeyV2)> = std::collections::BTreeMap::new();
+    for (bond_key, bond) in eligible {
+        let ranked = (palw_panel_seat_ticket_v1(anchor_block, claim_id, bond_key), **bond_key);
+        candidates
+            .entry(bond.operator_id)
+            .and_modify(|best| {
+                if ranked < *best {
+                    *best = ranked;
+                }
+            })
+            .or_insert(ranked);
+    }
+    let mut entries: Vec<PalwPanelOperatorEntryV1> = candidates
+        .into_iter()
+        .map(|(operator_id, (_, bond))| PalwPanelOperatorEntryV1 {
+            operator_ticket: palw_panel_operator_ticket_v1(anchor_block, claim_id, &operator_id),
+            operator_id,
+            bond,
+        })
+        .collect();
+    entries.sort();
+    entries
+}
+
+/// **ADR-0130: the draw past the panel economy — one lottery entry per operator.** The first
+/// `seat_count` entries of [`palw_panel_operator_entries_v1`] sit, each with its candidate bond, in
+/// lottery order (the canonical panel order `validate_panel_bound_v2_with_policy` compares). Fewer
+/// eligible operators than seats is `InsufficientEligibleBonds`, exactly as the per-bond draw
+/// refused a short jury.
+pub fn palw_panel_operator_lottery_v1(
+    params: &PalwPanelParamsV2,
+    claim_id: &Hash64,
+    anchor_block: BlockHash,
+    eligible: &[(&PalwBondKeyV2, &PalwBondStateV2)],
+) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
+    let entries = palw_panel_operator_entries_v1(claim_id, anchor_block, eligible);
+    let needed = params.seat_count as usize;
+    if entries.len() < needed {
+        return Err(PalwPanelV2Error::InsufficientEligibleBonds { needed: params.seat_count, available: entries.len() as u16 });
+    }
+    Ok(entries.into_iter().take(needed).map(|entry| PalwPanelSeatV2 { bond: entry.bond, operator_id: entry.operator_id }).collect())
 }
 
 /// May THIS `PanelBound` object be accepted at THIS chain point? Everything is recomputed:
@@ -1595,6 +1730,7 @@ mod tests {
         let economy = crate::palw_panel_economy_v1::PalwSeatEconomyV1 {
             panel_floor_sompi: crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(mc),
             max_exposure_ratio_permille: 500,
+            reward_multiple_permille: 0,
         };
         assert_eq!(economy.panel_floor_sompi, 1_000);
         let policy = PalwPanelDrawPolicyV1 { weighted: true, economy: Some(economy) };

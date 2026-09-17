@@ -460,6 +460,10 @@ pub struct VirtualStateProcessor {
     /// ADR-0126: `Params::palw_overlay_carve_fence` — the height from which the overlay's full split
     /// pays validators a fifth and a claim escrows the tenth they gave up.
     pub(super) palw_overlay_carve: Option<kaspa_consensus_core::config::params::PalwOverlayCarveV1>,
+    /// ADR-0130: `Params::palw_panel_exposure_floor_fence` — the seat exposure floor's height and
+    /// reward multiple. Resolved at the claim's ANCHOR for the draw and at the BLOCK's DAA for the
+    /// fold's reservation, which the duty row stores.
+    pub(super) palw_panel_exposure_floor: Option<kaspa_consensus_core::config::params::PalwPanelExposureFloorV1>,
     /// **ADR-0089 Decision 9's fence, `None` on every shipped preset.** Past it the EVM's
     /// window and hand exist and the block's EVM actions reach its transition. Resolved at the
     /// BLOCK's DAA.
@@ -934,6 +938,7 @@ impl VirtualStateProcessor {
             palw_work_priced_reward: params.palw_work_priced_reward_fence(),
             palw_execution_lane: params.palw_execution_lane_fence(),
             palw_overlay_carve: params.palw_overlay_carve_fence(),
+            palw_panel_exposure_floor: params.palw_panel_exposure_floor_fence(),
             palw_model_evm: params.palw_model_evm_fence(),
             palw_context_ladder: params.palw_context_ladder,
             palw_epoch_boundary_budget: params.palw_epoch_boundary_budget,
@@ -7447,6 +7452,14 @@ impl VirtualStateProcessor {
         self.palw_work_priced_reward.is_some_and(|fence| fence.is_active(daa_score))
     }
 
+    /// **ADR-0130: the seat exposure floor's reward multiple at one DAA, in permille — `0` where the
+    /// floor is dormant.** The claim's ANCHOR for the draw (inside `palw_panel_draw_policy_at`), the
+    /// BLOCK's for the fold's reservation (`palw_transition_extras_at`); a binding the chain derives
+    /// at its anchor block reads one number at both.
+    pub(super) fn palw_panel_reward_multiple_permille_at(&self, daa_score: u64) -> u32 {
+        self.palw_panel_exposure_floor.filter(|floor| floor.activation.is_active(daa_score)).map_or(0, |floor| floor.reward_multiple_permille)
+    }
+
     /// **ADR-0126 Decision 2: the overlay's reward split for the block at `daa_score` — the one
     /// reader.** The coinbase carve and `coinbase_validator_pool`, on the template path and the
     /// validation path, read it here, and so do the quality sub-pool and the audit fee through the
@@ -7599,6 +7612,9 @@ impl VirtualStateProcessor {
                     state.min_collateral_sompi(),
                 ),
                 max_exposure_ratio_permille: state.fp_max_exposure_ratio_permille(),
+                // ADR-0130: the floor at the same anchor, so the headroom the draw checks is the
+                // reservation the seat will hold.
+                reward_multiple_permille: self.palw_panel_reward_multiple_permille_at(anchor_daa),
             })
         } else {
             None
@@ -7655,6 +7671,9 @@ impl VirtualStateProcessor {
             // lose. Explicit for the reason every line above gives.
             panel_economy_active: self.palw_panel_economy_active_at(daa_score),
             work_priced_reward_active: self.palw_work_priced_reward_active_at(daa_score),
+            // ADR-0130: what a seat put on duty in this block reserves — the duty row stores it, so
+            // this is read once per binding and never at release. Explicit for the same reason.
+            panel_reward_multiple_permille: self.palw_panel_reward_multiple_permille_at(daa_score),
             // ADR-0125: the lane's span, where it is open. The permits a block accepted are the
             // chain walk's to add — it is the only caller holding the verdicts.
             round_lane: self.palw_execution_lane_at(daa_score).map(|lane| {

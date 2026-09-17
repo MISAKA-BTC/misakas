@@ -579,6 +579,36 @@ pub fn palw_overlay_escrow_carve_at_v1(
     carve.filter(|carve| carve.activation.is_active(daa_score)).and_then(|carve| carve.escrow_carve())
 }
 
+/// **ADR-0130: a seat's exposure is floored at a multiple of the most it can be paid on the claim.**
+///
+/// Past `activation` a seat drawn onto a claim's panel reserves
+/// [`crate::palw_panel_economy_v1::palw_panel_seat_exposure_v1`]: the larger of ADR-0124's
+/// `3 × claim.reserved` and `⌊reward_multiple_permille × max_seat_reward / 1000⌋`, where
+/// `max_seat_reward` is the pool share of the claim's escrow divided by the seats the panel is drawn
+/// with. A bond is drawn only while its free collateral covers that amount, and the amount reserved
+/// is written into the claim's duty row, so the release and the dissent slash read what binding
+/// took. On testnet-11's numbers past DAA 7,001 a seat is paid up to ~128 MSK a claim and reserved
+/// ~0.40 MSK; at `λ = 2` it reserves ~256 MSK.
+///
+/// The draw resolves the multiple at the claim's ANCHOR (with every other rule that decides a panel,
+/// `PalwSeatEconomyV1::reward_multiple_permille`), the fold at the binding block's DAA
+/// (`PalwTransitionExtrasV1::panel_reward_multiple_permille`) — the same block for every binding the
+/// chain derives at its anchor.
+///
+/// `reward_multiple_permille` is a companion value: hashed into `consensus_params_id`, reported
+/// beside the height in `consensus_schedule_id`, invisible to the fence visitor. Answered only on a
+/// `ConsensusV2` network ([`Params::palw_panel_exposure_floor_fence`]), and refused by
+/// [`Params::validate_palw_v2`] without the panel economy it floors, below that economy's height, at
+/// zero, and past [`crate::palw_panel_economy_v1::PALW_PANEL_REWARD_MULTIPLE_MAX_PERMILLE_V1`]. `None`
+/// on every shipped preset, and stated by no card: `λ` for a mainnet is the operator's open decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwPanelExposureFloorV1 {
+    /// When a seat's reservation starts being floored.
+    pub activation: ForkActivation,
+    /// `λ`, in permille of the most a seat can be paid on the claim: `2_000` reserves twice it.
+    pub reward_multiple_permille: u32,
+}
+
 /// **ADR-0066 Decision 3's parameter (finding F2), closed by ADR-0068 Phase 1: the attempt lane's
 /// fork-choice work leaves `calc_work(header.bits)`.**
 ///
@@ -1459,6 +1489,11 @@ pub struct Params {
     /// that carried the attempt and the block that pays it ([`palw_overlay_escrow_carve_at_v1`]).
     /// `None` on every shipped preset.
     pub palw_overlay_carve: Option<PalwOverlayCarveV1>,
+
+    /// **ADR-0130: the seat exposure floor** — see [`PalwPanelExposureFloorV1`]. Resolved at the
+    /// claim's anchor for the draw and at the binding block's DAA for the reservation, which the
+    /// duty row stores. `None` on every shipped preset and on every card.
+    pub palw_panel_exposure_floor: Option<PalwPanelExposureFloorV1>,
 
     /// **ADR-0044 Decision 9's two advertised caps, enforced** (mainnet audit 2026-09-06, L-2).
     /// `None` on every shipped preset, so the behaviour is byte-identical to not having the field.
@@ -2658,6 +2693,45 @@ impl Params {
                 ));
             }
         }
+        // **ADR-0130: the exposure floor raises a seat's reservation, so it must have a seat economy
+        // to raise and a number that means something.** Armed without the panel economy (or below
+        // its height) the floor would hash into the fingerprint and reserve nothing — no duty row is
+        // written there — and a zero or runaway multiple is a fence that either does nothing or
+        // prices every bond out of every panel. Refused before a peer is dialed.
+        if let Some(floor) = self.palw_panel_exposure_floor
+            && floor.activation != ForkActivation::never()
+        {
+            if !matches!(self.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_)) {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_panel_exposure_floor is armed on a network that is not ConsensusV2: the reservation it floors is a \
+                     V2 seat's (ADR-0130)",
+                ));
+            }
+            let Some(economy) = self.palw_panel_economy.filter(|economy| *economy != ForkActivation::never()) else {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_panel_exposure_floor is armed without palw_panel_economy: no seat holds exposure to floor, so the \
+                     fence would hash and reserve nothing (ADR-0130)",
+                ));
+            };
+            if floor.activation.daa_score() < economy.daa_score() {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_panel_exposure_floor activates below palw_panel_economy: between the two heights no seat is on duty, \
+                     so the floor would be in force and floor nothing (ADR-0130)",
+                ));
+            }
+            if floor.reward_multiple_permille == 0 {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_panel_exposure_floor's reward_multiple_permille is zero: that is no floor, and a fence that changes \
+                     nothing must not move the fingerprint (ADR-0130)",
+                ));
+            }
+            if floor.reward_multiple_permille > crate::palw_panel_economy_v1::PALW_PANEL_REWARD_MULTIPLE_MAX_PERMILLE_V1 {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_panel_exposure_floor's reward_multiple_permille is past 100,000 ‰: a seat reserving more than a \
+                     hundred times its most prices every real bond out of every panel (ADR-0130)",
+                ));
+            }
+        }
         let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
             return Ok(());
         };
@@ -3827,6 +3901,11 @@ impl Params {
         if self.palw_overlay_carve.is_some_and(|carve| carve.activation == ForkActivation::never()) {
             self.palw_overlay_carve = None;
         }
+        // ADR-0130, the carve's shape: the whole option collapses, so the reward multiple beside a
+        // scheduled height leaves the identity with it (the schedule id reports it).
+        if self.palw_panel_exposure_floor.is_some_and(|floor| floor.activation == ForkActivation::never()) {
+            self.palw_panel_exposure_floor = None;
+        }
         if self.palw_fp_ruleset_caps == Some(ForkActivation::never()) {
             self.palw_fp_ruleset_caps = None;
         }
@@ -4314,6 +4393,24 @@ impl Params {
         }
     }
 
+    /// ADR-0130: the seat exposure floor, meaningful only on a `ConsensusV2` network (the seats it
+    /// floors are a V2 panel's) — what the processors store.
+    pub fn palw_panel_exposure_floor_fence(&self) -> Option<PalwPanelExposureFloorV1> {
+        match (&self.palw_consensus_mode, self.palw_panel_exposure_floor) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(floor)) => Some(floor),
+            _ => None,
+        }
+    }
+
+    /// ADR-0130: the reward multiple in force at `daa_score`, in permille — `0` (no floor) where the
+    /// floor is dormant or absent. The fourth argument of
+    /// [`crate::palw_panel_economy_v1::palw_panel_seat_exposure_v1`].
+    pub fn palw_panel_reward_multiple_permille_at(&self, daa_score: u64) -> u32 {
+        self.palw_panel_exposure_floor_fence()
+            .filter(|floor| floor.activation.is_active(daa_score))
+            .map_or(0, |floor| floor.reward_multiple_permille)
+    }
+
     /// **ADR-0124's two numbers the draw needs past the panel-economy fence**, from the bundle's
     /// own state params: the panel floor (ten producer floors) and the exposure ceiling every
     /// reservation shares. `None` where the fence is dormant at `daa_score` or no bundle exists.
@@ -4325,6 +4422,8 @@ impl Params {
         Some(crate::palw_panel_economy_v1::PalwSeatEconomyV1 {
             panel_floor_sompi: crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(bundle.state.min_collateral_sompi()),
             max_exposure_ratio_permille: bundle.state.fp_max_exposure_ratio_permille(),
+            // ADR-0130: the floor where it is in force at the same score.
+            reward_multiple_permille: self.palw_panel_reward_multiple_permille_at(daa_score),
         })
     }
 
@@ -4540,6 +4639,7 @@ impl Params {
             palw_work_priced_reward,
             palw_execution_lane,
             palw_overlay_carve,
+            palw_panel_exposure_floor,
             palw_fp_ruleset_caps,
             palw_model_market,
             palw_model_lines,
@@ -4642,6 +4742,7 @@ impl Params {
                 palw_execution_lane.and_then(|lane| lane.widenings[8].is_used().then_some(lane.widenings[8].activation)),
             ),
             ("palw_overlay_carve", palw_overlay_carve.map(|carve| carve.activation)),
+            ("palw_panel_exposure_floor", palw_panel_exposure_floor.map(|floor| floor.activation)),
             ("palw_fp_ruleset_caps", *palw_fp_ruleset_caps),
             ("palw_model_market", *palw_model_market),
             ("palw_model_lines", *palw_model_lines),
@@ -4952,6 +5053,14 @@ impl Params {
             h.write(carve.subsidy_validator_bps.to_le_bytes());
             h.write(carve.worker_carve_permille.to_le_bytes());
         }
+        // ADR-0130: the height, and beside it the reward multiple it floors seats at. Some-only, and
+        // reported here and never gated, for the SA-4 reason the carve's numbers are: two operators
+        // scheduling the floor at one height with different multiples must see it in the log.
+        if let Some(floor) = self.palw_panel_exposure_floor {
+            h.write(b"palw_panel_exposure_floor");
+            h.write(floor.activation.daa_score().to_le_bytes());
+            h.write(floor.reward_multiple_permille.to_le_bytes());
+        }
         if let Some(activation) = self.palw_fp_ruleset_caps {
             h.write(b"palw_fp_ruleset_caps");
             h.write(activation.daa_score().to_le_bytes());
@@ -5097,6 +5206,7 @@ impl Params {
             palw_work_priced_reward,
             palw_execution_lane,
             palw_overlay_carve,
+            palw_panel_exposure_floor,
             palw_fp_ruleset_caps,
             palw_heartbeat_transparent,
             palw_share_growth_final,
@@ -5486,6 +5596,12 @@ impl Params {
         if let Some(carve) = palw_overlay_carve.as_mut() {
             fork(&mut carve.activation, visit);
         }
+        // ADR-0130: the height only, Some-only — the reward multiple is a value beside it (the D1
+        // rule), and a `u64::MAX`-for-absence arm would put eight bytes into every preset that
+        // leaves the floor `None`.
+        if let Some(floor) = palw_panel_exposure_floor.as_mut() {
+            fork(&mut floor.activation, visit);
+        }
         if let Some(activation) = palw_fp_ruleset_caps.as_mut() {
             fork(activation, visit);
         }
@@ -5733,6 +5849,7 @@ impl Params {
             palw_work_priced_reward,
             palw_execution_lane,
             palw_overlay_carve,
+            palw_panel_exposure_floor,
             palw_fp_ruleset_caps,
             palw_heartbeat_transparent,
             palw_share_growth_final,
@@ -6170,6 +6287,11 @@ impl Params {
         if let Some(activation) = palw_panel_economy {
             h.write(b"palw_panel_economy");
             h.write(activation.daa_score().to_le_bytes());
+            // **ADR-0130: the draw past the economy is one lottery entry per OPERATOR**, not one
+            // ticket per bond — a different panel for the same claim and registry. Named here, beside
+            // the fence it rides, so a build that tickets bonds and one that tickets operators never
+            // print one `consensus_params_id` for the same schedule.
+            h.write(b"palw_panel_draw/operator_ticket_v1");
         }
         if let Some(activation) = palw_work_priced_reward {
             h.write(b"palw_work_priced_reward");
@@ -6197,6 +6319,13 @@ impl Params {
             h.write(carve.activation.daa_score().to_le_bytes());
             h.write(carve.subsidy_validator_bps.to_le_bytes());
             h.write(carve.worker_carve_permille.to_le_bytes());
+        }
+        // ADR-0130: Some-only, so every preset that leaves the floor unset fingerprints exactly as a
+        // build without the field; the reward multiple rides with the height.
+        if let Some(floor) = palw_panel_exposure_floor {
+            h.write(b"palw_panel_exposure_floor/v1");
+            h.write(floor.activation.daa_score().to_le_bytes());
+            h.write(floor.reward_multiple_permille.to_le_bytes());
         }
         if let Some(activation) = palw_fp_ruleset_caps {
             h.write(b"palw_fp_ruleset_caps");
@@ -6549,6 +6678,7 @@ impl Params {
             palw_work_priced_reward: self.palw_work_priced_reward,
             palw_execution_lane: self.palw_execution_lane,
             palw_overlay_carve: self.palw_overlay_carve,
+            palw_panel_exposure_floor: self.palw_panel_exposure_floor,
             palw_fp_ruleset_caps: self.palw_fp_ruleset_caps,
             palw_heartbeat_transparent: self.palw_heartbeat_transparent,
             palw_share_growth_final: self.palw_share_growth_final,
@@ -7485,6 +7615,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_work_priced_reward: None,
     palw_execution_lane: None,
     palw_overlay_carve: None,
+    palw_panel_exposure_floor: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
@@ -7671,6 +7802,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_work_priced_reward: None,
     palw_execution_lane: None,
     palw_overlay_carve: None,
+    palw_panel_exposure_floor: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
@@ -7839,6 +7971,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_work_priced_reward: None,
     palw_execution_lane: None,
     palw_overlay_carve: None,
+    palw_panel_exposure_floor: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
@@ -12362,6 +12495,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_work_priced_reward: None,
     palw_execution_lane: None,
     palw_overlay_carve: None,
+    palw_panel_exposure_floor: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
