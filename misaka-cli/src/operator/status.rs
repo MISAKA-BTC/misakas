@@ -435,7 +435,7 @@ fn fork_marks(snap: &Snapshot) -> (String, String) {
 /// **ADR-0125 §7.4: the execution lane in one line** — the blocks per second the span's schedule
 /// actually carries (this round's permits and the next round's, over their two seconds) beside the
 /// width a round could hold, the round's permits and whether this miner's bond holds one, what the
-/// span has accepted, and the finals gathering toward the next span's schedule. The width is a
+/// span has accepted, and the finals gathering toward the schedule two spans on (ADR-0130). The width is a
 /// ceiling, not a rate: a domain holds at most a third of a round and only rounds of its parity, so
 /// one domain alone fills a third of every other round. `None` where the network does not arm it.
 pub(crate) fn round_lane_line(
@@ -462,8 +462,15 @@ pub(crate) fn round_lane_line(
     };
     let two_rounds = lane.permits.len() + lane.next_round_permits as usize;
     let scheduled = if two_rounds.is_multiple_of(2) { format!("{}", two_rounds / 2) } else { format!("{}.5", two_rounds / 2) };
+    // ADR-0130: credits earned in a span are spendable two spans on, so the line names the span the
+    // finals are for rather than "the next" — and says so plainly while a span has gathered none.
+    let toward = if lane.finals == 0 {
+        "no finals gathered yet".to_string()
+    } else {
+        format!("{} finals toward span {}", group(lane.finals), group(lane.finals_span + 2))
+    };
     Some(format!(
-        "{scheduled} BPS scheduled (width {}) · span {} · round {}: {} permit{}{yours} · next round {} · {} accepted this span · {} finals toward the next",
+        "{scheduled} BPS scheduled (width {}) · span {} · round {}: {} permit{}{yours} · next round {} · {} accepted this span · {toward}",
         lane.permits_per_round,
         group(lane.span),
         group(lane.round),
@@ -471,7 +478,6 @@ pub(crate) fn round_lane_line(
         if lane.permits.len() == 1 { "" } else { "s" },
         lane.next_round_permits,
         group(lane.accepted_in_span),
-        group(lane.finals)
     ))
 }
 
@@ -914,7 +920,9 @@ mod tests {
             line.starts_with("1.5 BPS scheduled (width 2) · span 12 · round 4,321: 2 permits · yours: permit 1 · next round 1 ·"),
             "{line}"
         );
-        assert!(line.contains("33 accepted this span") && line.contains("5 finals toward the next"), "{line}");
+        assert!(line.contains("33 accepted this span") && line.contains("5 finals toward span 2"), "{line}");
+        let none_yet = GetPalwRoundLaneResponse { finals: 0, ..open.clone() };
+        assert!(round_lane_line(Some(&Ok(none_yet)), None).unwrap().ends_with("no finals gathered yet"));
         assert!(round_lane_line(Some(&Ok(open.clone())), Some("cc:0")).unwrap().contains("none yours this round"));
         // One domain at width 2: a permit in every other round is half a block a second, not two.
         let one_domain = GetPalwRoundLaneResponse { permits: open.permits[..1].to_vec(), next_round_permits: 0, ..open.clone() };

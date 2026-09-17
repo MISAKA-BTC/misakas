@@ -4439,7 +4439,9 @@ pub struct GetPalwRoundLaneResponse {
     pub permits: Vec<RpcPalwRoundPermit>,
     pub domains: Vec<RpcPalwRoundLaneDomain>,
     pub accepted_in_span: u64,
-    /// The span whose finalized attempts are being recorded for the next schedule, and their count.
+    /// The span whose finalized attempts are being recorded, and their count. They are the
+    /// participants of `finals_span + 2`, fixed at the first chain block of `finals_span + 1` and
+    /// seeded into that span's schedule at its own first chain block (ADR-0130).
     pub finals_span: u64,
     pub finals: u64,
     /// The permits the schedule grants the round after this one — the other parity — so this

@@ -1,8 +1,10 @@
 //! ADR-0125: the execution lane's producer — a round block in every one-second round this node's bond
 //! holds a permit for.
 //!
-//! The lane is permissioned by the chain, not by work: each span's schedule, derived from the attempt
-//! claims that reached `Final` in the span before, grants each round's permits to bonds. This service
+//! The lane is permissioned by the chain, not by work: each span's schedule — the attempt claims that
+//! reached `Final` two spans before, seeded at the span's first chain block by the latest
+//! attempt-carrying chain block of the span between (ADR-0130) — grants each round's permits to bonds,
+//! at most one an operator and never in two consecutive rounds of the span. This service
 //! asks the node's own consensus which permits the current round has
 //! (`ConsensusApi::palw_round_view_v1`), and when one names the producer's bond and has not been used,
 //! it takes an ordinary template (the mining manager's transaction selection), has consensus re-shape
