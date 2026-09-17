@@ -9584,7 +9584,7 @@ async fn run_the_bft_gate(script: BftGateScript) -> BftGateRun {
         )
     };
     let depth_rule_clears = state_before_attack.stake_depth >= dns.required_stake_depth;
-    let gate_abstaining = ctx.consensus.virtual_processor().dns_bft_gate_abstains.load(std::sync::atomic::Ordering::Relaxed);
+    let gate_abstaining = ctx.consensus.virtual_processor().dns_bft_runtime.gate_abstains();
 
     // ---- A longer, stake-less branch from genesis arrives. ----
     let mut atk = TestContext::new(TestConsensus::new(&config));
@@ -9715,7 +9715,7 @@ async fn adr0128_validators_that_never_reach_precommit_quorum_advance_no_anchor(
 /// is carried, not re-derived — and the gate that would have refused the heavier branch stands aside
 /// instead of judging on evidence this node does not hold.
 #[tokio::test]
-async fn adr0128_an_evaluation_that_cannot_cover_its_walk_confirms_nothing_and_the_gate_abstains() {
+async fn adr0128_an_evaluation_that_cannot_cover_its_walk_does_not_advance_and_the_gate_abstains() {
     use kaspa_consensus_core::{Hash64, config::params::ForkActivation};
     kaspa_core::log::try_init_logger("info");
     let run = run_the_bft_gate(BftGateScript {

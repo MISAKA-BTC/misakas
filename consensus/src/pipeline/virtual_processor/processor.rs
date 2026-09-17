@@ -365,10 +365,10 @@ pub struct VirtualStateProcessor {
     /// ADR-0128: the DNS validators' BFT vote and the stake reorg gate that follows it, where the
     /// network runs an overlay (`Params::dns_bft_gate_fence`). `None` on every shipped preset.
     pub(super) dns_bft_gate: Option<kaspa_consensus_core::config::params::DnsBftGateV1>,
-    /// ADR-0128 Decision 3: the last BFT evaluation could not cover its walk, so the stake reorg
-    /// gate abstains until an evaluation that does. Node-local by design — it records what this
-    /// node could read, which is exactly what it must not judge beyond.
-    pub(super) dns_bft_gate_abstains: std::sync::atomic::AtomicBool,
+    /// ADR-0128's node-local runtime state: whether the last evaluation covered its walk (the gate
+    /// abstains while it did not), and the memoised signature verdicts and duty evaluation. Nothing
+    /// in it is consensus.
+    pub(super) dns_bft_runtime: super::dns_bft::DnsBftRuntime,
     /// ADR-0038 Decision A: the network's PALW commitment fence. `None` on every shipped preset.
     pub(super) palw_block_commitment: Option<kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentParamsV1>,
     /// ADR-0064's fence, `None` on every shipped preset. See
@@ -901,7 +901,7 @@ impl VirtualStateProcessor {
             evm_lane_kpi: EvmLaneKpi::default(),
             dns_params: params.dns_params.clone(),
             dns_bft_gate: params.dns_bft_gate_fence(),
-            dns_bft_gate_abstains: std::sync::atomic::AtomicBool::new(false),
+            dns_bft_runtime: Default::default(),
             palw_block_commitment: params.palw_block_commitment,
             palw_bootstrap_activation: params.palw_bootstrap_activation,
             palw_unavailable_abstains: params.palw_unavailable_abstains,

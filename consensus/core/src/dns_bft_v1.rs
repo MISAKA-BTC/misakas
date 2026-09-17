@@ -183,12 +183,18 @@ pub struct PrecommitRecord {
     pub accepted_daa_score: u64,
 }
 
+/// The [`StakePrecommitPayload`] `tx` carries: `Some` iff `tx` is on the precommit subnetwork and its
+/// payload decodes.
+pub fn decode_stake_precommit_v1(tx: &Transaction) -> Option<StakePrecommitPayload> {
+    if dns_tx_kind(&tx.subnetwork_id) != Some(DnsTxKind::StakePrecommit) {
+        return None;
+    }
+    borsh::from_slice::<StakePrecommitPayload>(&tx.payload).ok()
+}
+
 /// Every decodable [`StakePrecommitPayload`] among `txs`.
 pub fn precommits_from_accepted_txs(txs: &[Transaction]) -> Vec<StakePrecommitPayload> {
-    txs.iter()
-        .filter(|tx| dns_tx_kind(&tx.subnetwork_id) == Some(DnsTxKind::StakePrecommit))
-        .filter_map(|tx| borsh::from_slice::<StakePrecommitPayload>(&tx.payload).ok())
-        .collect()
+    txs.iter().filter_map(decode_stake_precommit_v1).collect()
 }
 
 /// **The epochs a sink evaluates: its StakeScore window's**, derived exactly as

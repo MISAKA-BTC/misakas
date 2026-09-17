@@ -16,8 +16,8 @@ use super::VirtualStateProcessor;
 use crate::model::{
     services::reachability::ReachabilityService,
     stores::{
-        acceptance_data::AcceptanceDataStoreReader, dns_state::DnsStateStoreReader, headers::HeaderStoreReader,
-        stake_bonds::StakeBondsStoreReader,
+        acceptance_data::AcceptanceDataStoreReader, block_transactions::BlockTransactionsStoreReader, dns_state::DnsStateStoreReader,
+        headers::HeaderStoreReader, stake_bonds::StakeBondsStoreReader,
     },
 };
 use kaspa_consensus_core::{
@@ -25,20 +25,78 @@ use kaspa_consensus_core::{
     config::params::DnsBftGateV1,
     dns_bft_v1::{
         DnsBftAttestationV1, DnsBftChainBlockV1, DnsBftEpochV1, DnsBftEpochVerdictV1, DnsBftRulesV1, PrecommitRecord,
-        dns_bft_confirmed_anchor_v1, dns_bft_evaluate_epochs_v1, dns_bft_precommit_duty_v1, dns_bft_window_epochs_v1,
-        newest_dns_final_v1, precommits_from_accepted_txs,
+        decode_stake_precommit_v1, dns_bft_confirmed_anchor_v1, dns_bft_evaluate_epochs_v1, dns_bft_precommit_duty_v1,
+        dns_bft_window_epochs_v1, newest_dns_final_v1,
     },
     dns_finality::{
-        ATTESTATION_MLDSA87_CONTEXT, DnsParams, DnsReorgOutcome, DnsRolloutStage, DnsState, PRECOMMIT_MLDSA87_CONTEXT, PrecommitDuty,
-        PrecommitLock, StakeAttestation, StakeBondRecord, StakePrecommitPayload, anchor_cutoff_blue_score,
-        attestations_from_accepted_txs, canonical_lagged_epoch_anchor, is_bond_active_at, ready_epoch_from_tip_blue_score,
+        ATTESTATION_MLDSA87_CONTEXT, DnsParams, DnsReorgOutcome, DnsRolloutStage, DnsState, DnsTxKind, PRECOMMIT_MLDSA87_CONTEXT,
+        PrecommitDuty, PrecommitLock, StakeAttestation, StakeBondRecord, StakePrecommitPayload, anchor_cutoff_blue_score,
+        canonical_lagged_epoch_anchor, decode_attestation_shard, dns_tx_kind, is_bond_active_at, ready_epoch_from_tip_blue_score,
         stake_attestation_message, stake_precommit_message,
     },
-    tx::TransactionOutpoint,
+    tx::{TransactionId, TransactionOutpoint},
 };
 use kaspa_core::{debug, info, warn};
 use kaspa_txscript::verify_mldsa87_with_context;
-use std::collections::HashMap;
+use parking_lot::Mutex;
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
+
+/// How many signature verdicts the memo keeps before it starts over. A walk that reaches back
+/// `t_leak_daa` holds every vote of that span, so the bound is sized for a validator set's week of
+/// attestations and precommits at a two-minute cadence, with room; starting over costs one cold
+/// evaluation, never a different answer.
+const DNS_BFT_VERIFIED_MEMO_LIMIT: usize = 1 << 18;
+
+/// **ADR-0128's node-local runtime state.** Nothing in it is consensus: it records what this node
+/// could read, and memoises work whose answer cannot change.
+#[derive(Default)]
+pub(crate) struct DnsBftRuntime {
+    /// The last evaluation could not cover its walk: the gate abstains until one does.
+    gate_abstains: AtomicBool,
+    /// ML-DSA-87 verdicts by `(transaction id, the vote's index in it)`. The transaction id commits to
+    /// the vote's bytes; the bond outpoint inside them fixes the key it verifies under (a bond's key is
+    /// in the bond transaction's own payload); the network id is this node's. So the verdict for a key
+    /// never changes, and a walk that reads a week of votes verifies each of them once.
+    verified: Mutex<HashMap<(TransactionId, u32), bool>>,
+    /// The last duty evaluation and the sink it was made at: a validator asks every heartbeat, and
+    /// the chain it asks about moves only when the sink does.
+    duty: Mutex<Option<(BlockHash, Arc<DnsBftEvaluation>)>>,
+}
+
+impl DnsBftRuntime {
+    /// Whether the last evaluation could not cover its walk.
+    pub(crate) fn gate_abstains(&self) -> bool {
+        self.gate_abstains.load(Ordering::Relaxed)
+    }
+
+    fn verified(&self, key: (TransactionId, u32), verify: impl FnOnce() -> bool) -> bool {
+        if let Some(&verdict) = self.verified.lock().get(&key) {
+            return verdict;
+        }
+        let verdict = verify();
+        let mut memo = self.verified.lock();
+        if memo.len() >= DNS_BFT_VERIFIED_MEMO_LIMIT {
+            memo.clear();
+        }
+        memo.insert(key, verdict);
+        verdict
+    }
+}
+
+/// A vote the walk read, before any rule looked at it.
+struct RawVote<T> {
+    vote: T,
+    /// `(transaction id, index in it)` — the memo key.
+    key: (TransactionId, u32),
+    accepted_blue_score: u64,
+    accepted_daa_score: u64,
+}
 
 /// **Everything one evaluation at a sink read, and what it decided.**
 pub(crate) struct DnsBftEvaluation {
@@ -91,8 +149,8 @@ impl VirtualStateProcessor {
         let backoff = dns_params.attestation_anchor_backoff_blue_score;
 
         let mut chain: Vec<DnsBftChainBlockV1> = Vec::new();
-        let mut raw_attestations: Vec<(StakeAttestation, u64, u64)> = Vec::new();
-        let mut raw_precommits: Vec<(StakePrecommitPayload, u64, u64)> = Vec::new();
+        let mut raw_attestations: Vec<RawVote<StakeAttestation>> = Vec::new();
+        let mut raw_precommits: Vec<RawVote<StakePrecommitPayload>> = Vec::new();
         let mut epochs: Option<Vec<DnsBftEpochV1>> = None;
         let mut floor: Option<u64> = None;
         let mut covered = false;
@@ -123,10 +181,40 @@ impl VirtualStateProcessor {
                 .acceptance_data_store
                 .get(block)
                 .map_err(|e| format!("chain block {block}'s acceptance data does not read before the walk's bound ({e})"))?;
-            let txs = self.accepted_txs_from_acceptance_data(&acceptance);
-            raw_attestations
-                .extend(attestations_from_accepted_txs(&txs).into_iter().map(|a| (a, compact.blue_score, compact.daa_score)));
-            raw_precommits.extend(precommits_from_accepted_txs(&txs).into_iter().map(|p| (p, compact.blue_score, compact.daa_score)));
+            // The accepted transactions, borrowed where they are stored: only the two vote subnetworks
+            // are decoded, and nothing is cloned.
+            for mergeset in acceptance.iter() {
+                let block_txs = self.block_transactions_store.get(mergeset.block_hash).map_err(|e| {
+                    format!("the transactions of {}, merged by chain block {block}, do not read ({e})", mergeset.block_hash)
+                })?;
+                for entry in mergeset.accepted_transactions.iter() {
+                    let Some(tx) = block_txs.get(entry.index_within_block as usize) else {
+                        continue;
+                    };
+                    let (accepted_blue_score, accepted_daa_score) = (compact.blue_score, compact.daa_score);
+                    match dns_tx_kind(&tx.subnetwork_id) {
+                        Some(DnsTxKind::StakeAttestationShard) => {
+                            let Some(shard) = decode_attestation_shard(tx) else { continue };
+                            raw_attestations.extend(shard.attestations.into_iter().enumerate().map(|(i, vote)| RawVote {
+                                vote,
+                                key: (entry.transaction_id, i as u32),
+                                accepted_blue_score,
+                                accepted_daa_score,
+                            }));
+                        }
+                        Some(DnsTxKind::StakePrecommit) => {
+                            let Some(vote) = decode_stake_precommit_v1(tx) else { continue };
+                            raw_precommits.push(RawVote {
+                                vote,
+                                key: (entry.transaction_id, 0),
+                                accepted_blue_score,
+                                accepted_daa_score,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+            }
             chain.push(block_point);
         }
         let reached_genesis = chain.last().is_some_and(|b| b.hash == self.genesis.hash);
@@ -152,7 +240,7 @@ impl VirtualStateProcessor {
         let mut anchors: HashMap<u64, Option<(Hash64, u64)>> = HashMap::new();
 
         let mut attestations: Vec<DnsBftAttestationV1> = Vec::new();
-        for (att, accepted_blue, accepted_daa) in raw_attestations {
+        for RawVote { vote: att, key, accepted_blue_score, accepted_daa_score } in raw_attestations {
             if att.epoch > latest_ready {
                 continue;
             }
@@ -193,10 +281,13 @@ impl VirtualStateProcessor {
                 att.bond_outpoint,
             )
             .as_bytes();
-            if !matches!(
-                verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &att.signature, ATTESTATION_MLDSA87_CONTEXT),
-                Ok(true)
-            ) {
+            let signed = self.dns_bft_runtime.verified(key, || {
+                matches!(
+                    verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &att.signature, ATTESTATION_MLDSA87_CONTEXT),
+                    Ok(true)
+                )
+            });
+            if !signed {
                 continue;
             }
             attestations.push(DnsBftAttestationV1 {
@@ -205,13 +296,13 @@ impl VirtualStateProcessor {
                 epoch: att.epoch,
                 anchor_hash,
                 anchor_daa_score: anchor_daa,
-                accepted_blue_score: accepted_blue,
-                accepted_daa_score: accepted_daa,
+                accepted_blue_score,
+                accepted_daa_score,
             });
         }
 
         let mut precommits: Vec<PrecommitRecord> = Vec::new();
-        for (p, accepted_blue, accepted_daa) in raw_precommits {
+        for RawVote { vote: p, key, accepted_blue_score, accepted_daa_score } in raw_precommits {
             if !p.lock_is_self_consistent() {
                 continue;
             }
@@ -232,10 +323,13 @@ impl VirtualStateProcessor {
                 p.bond_outpoint,
             )
             .as_bytes();
-            if !matches!(
-                verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &p.signature, PRECOMMIT_MLDSA87_CONTEXT),
-                Ok(true)
-            ) {
+            let signed = self.dns_bft_runtime.verified(key, || {
+                matches!(
+                    verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &p.signature, PRECOMMIT_MLDSA87_CONTEXT),
+                    Ok(true)
+                )
+            });
+            if !signed {
                 continue;
             }
             precommits.push(PrecommitRecord {
@@ -246,8 +340,8 @@ impl VirtualStateProcessor {
                 target_daa_score: p.target_daa_score,
                 declared_lock: PrecommitLock { epoch: p.locked_epoch, anchor: p.locked_hash },
                 snapshot_commitment: p.snapshot_commitment,
-                accepted_blue_score: accepted_blue,
-                accepted_daa_score: accepted_daa,
+                accepted_blue_score,
+                accepted_daa_score,
             });
         }
 
@@ -285,7 +379,7 @@ impl VirtualStateProcessor {
             // (included).
             .filter(|(anchor, _)| self.reachability_service.try_is_chain_ancestor_of(*anchor, sink).unwrap_or(true));
         let evaluation = self.dns_bft_evaluate(sink, bonds, dns_params, gate);
-        self.dns_bft_gate_abstains.store(evaluation.is_err(), std::sync::atomic::Ordering::Relaxed);
+        self.dns_bft_runtime.gate_abstains.store(evaluation.is_err(), Ordering::Relaxed);
         let confirmed = match evaluation {
             Err(gap) => {
                 warn!(
@@ -361,7 +455,7 @@ impl VirtualStateProcessor {
         let dns_params = self.dns_params.as_ref()?;
         let incumbent_daa = self.headers_store.get_daa_score(prev_sink).ok()?;
         let gate = self.dns_bft_gate.filter(|gate| gate.activation.is_active(incumbent_daa))?;
-        if self.dns_bft_gate_abstains.load(std::sync::atomic::Ordering::Relaxed) {
+        if self.dns_bft_runtime.gate_abstains() {
             debug!("[dns-bft] gate: the last evaluation could not cover its walk; abstaining for candidate {candidate}");
             return None;
         }
@@ -402,8 +496,10 @@ impl VirtualStateProcessor {
     /// `None` where the network runs no overlay. Below the fence `round_active` is `false` and nothing
     /// else is answered. Past it, the evaluation `update_dns_state` makes, re-made at `sink` over the
     /// bond store as it stands: the lock the chain shows the bond holding and the epochs it owes a
-    /// precommit for ([`dns_bft_precommit_duty_v1`]). An evaluation that cannot cover its walk owes
-    /// nothing — a node that cannot count the set cannot tell a validator what to sign.
+    /// precommit for ([`dns_bft_precommit_duty_v1`]). The evaluation is remembered for the sink it was
+    /// made at, so a validator asking every heartbeat walks once per sink. An evaluation that cannot
+    /// cover its walk owes nothing — a node that cannot count the set cannot tell a validator what
+    /// to sign.
     pub(crate) fn dns_bft_precommit_duty(
         &self,
         sink: BlockHash,
@@ -415,22 +511,36 @@ impl VirtualStateProcessor {
         let Some(gate) = self.dns_bft_gate.filter(|gate| gate.activation.is_active(sink_daa)) else {
             return Some(PrecommitDuty { round_active: false, sink_daa_score: sink_daa, ..Default::default() });
         };
-        let bonds: Vec<StakeBondRecord> =
-            self.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
-        match self.dns_bft_evaluate(sink, &bonds, dns_params, &gate) {
-            Ok(evaluation) => Some(dns_bft_precommit_duty_v1(
-                true,
-                sink_daa,
-                &evaluation.verdicts,
-                &evaluation.precommits,
-                validator_id,
-                bond_outpoint,
-                &evaluation.rules,
-            )),
-            Err(gap) => {
-                warn!("[dns-bft] precommit duty at sink {sink}: the evaluation walk does not cover its bound — {gap}; nothing is due");
-                Some(PrecommitDuty { round_active: true, sink_daa_score: sink_daa, ..Default::default() })
+        let remembered =
+            self.dns_bft_runtime.duty.lock().as_ref().filter(|(at, _)| *at == sink).map(|(_, evaluation)| evaluation.clone());
+        let evaluation = match remembered {
+            Some(evaluation) => evaluation,
+            None => {
+                let bonds: Vec<StakeBondRecord> =
+                    self.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
+                match self.dns_bft_evaluate(sink, &bonds, dns_params, &gate) {
+                    Ok(evaluation) => {
+                        let evaluation = Arc::new(evaluation);
+                        *self.dns_bft_runtime.duty.lock() = Some((sink, evaluation.clone()));
+                        evaluation
+                    }
+                    Err(gap) => {
+                        warn!(
+                            "[dns-bft] precommit duty at sink {sink}: the evaluation walk does not cover its bound — {gap}; nothing is due"
+                        );
+                        return Some(PrecommitDuty { round_active: true, sink_daa_score: sink_daa, ..Default::default() });
+                    }
+                }
             }
-        }
+        };
+        Some(dns_bft_precommit_duty_v1(
+            true,
+            sink_daa,
+            &evaluation.verdicts,
+            &evaluation.precommits,
+            validator_id,
+            bond_outpoint,
+            &evaluation.rules,
+        ))
     }
 }
