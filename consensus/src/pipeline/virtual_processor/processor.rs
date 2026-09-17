@@ -417,10 +417,19 @@ pub struct VirtualStateProcessor {
     /// ADR-0132 Upgrade C: `Params::palw_economic_payout` — past it a claim snapshots its economics
     /// at acceptance and is paid at the rate; the registry reads the cap ceiling.
     pub(super) palw_economic_payout: Option<kaspa_consensus_core::config::params::PalwEconomicPayoutV1>,
-    /// ADR-0135: the genesis classes' work, derived once from the bundle's registrations (every
-    /// node derives the same map from `Params`), handed to the fold where the registry is active.
+    /// ADR-0135: the genesis classes' work, derived once from the bundle's registrations that carry
+    /// an admission carriage (every node derives the same map from `Params`). A genesis class that
+    /// carries none — every shipped one: its profile lives in the catalog, not the bundle — is
+    /// described through the canonical class table instead ([`Self::palw_known_model_works_v1`]).
     pub(super) palw_genesis_model_works:
         std::collections::BTreeMap<kaspa_hashes::Hash64, kaspa_consensus_core::palw_model_registry_v1::PalwModelWorkV1>,
+    /// ADR-0135: the work of every class this node can describe, derived once per class and kept —
+    /// genesis classes through the canonical class table the binary compiles, registered classes
+    /// through the carriage the chain carried (`palw_class_carriage_store`). `None` is a class the
+    /// node cannot describe, which the registry leaves as a legacy row.
+    pub(super) palw_model_work_cache: std::sync::Mutex<
+        std::collections::BTreeMap<kaspa_hashes::Hash64, Option<kaspa_consensus_core::palw_model_registry_v1::PalwModelWorkV1>>,
+    >,
     /// **ADR-0089 Decision 9's fence, `None` on every shipped preset.** Past it the EVM's
     /// window and hand exist and the block's EVM actions reach its transition. Resolved at the
     /// BLOCK's DAA.
@@ -906,6 +915,7 @@ impl VirtualStateProcessor {
                 }
                 _ => Default::default(),
             },
+            palw_model_work_cache: std::sync::Mutex::new(std::collections::BTreeMap::new()),
             palw_model_evm: params.palw_model_evm_fence(),
             palw_context_ladder: params.palw_context_ladder,
             palw_epoch_boundary_budget: params.palw_epoch_boundary_budget,
@@ -7722,6 +7732,84 @@ impl VirtualStateProcessor {
         self.palw_model_registry.is_some_and(|fence| fence.is_active(daa_score))
     }
 
+    /// **ADR-0135: the work of every class this node can describe** — what the registry opens rows
+    /// from. A genesis class carries no admission carriage in any shipped bundle (its profile is the
+    /// catalog's), so its work comes from the canonical class table every node compiles
+    /// (`canonical_classes_v1`: the floor and the shipped rows) — the same derivation the
+    /// registration message uses for a post-genesis class. A class registered on the chain is
+    /// described through the carriage the registration carried, whether it landed before or after
+    /// the registry's fence (the store keeps it; a syncing node adopts it before the block that
+    /// needs it). Derived once per class and cached; a class the node cannot describe is `None`
+    /// and stays a legacy row. Deterministic across nodes running one binary: the table is
+    /// compiled in and the carriages are the chain's.
+    pub(super) fn palw_known_model_works_v1(
+        &self,
+    ) -> std::collections::BTreeMap<kaspa_hashes::Hash64, kaspa_consensus_core::palw_model_registry_v1::PalwModelWorkV1> {
+        use kaspa_consensus_core::palw_model_registry_v1::palw_model_work_from_carriage_v1;
+        use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
+        let mut cache = self.palw_model_work_cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        for object in &self.palw_genesis_objects_v2 {
+            let PalwConsensusObjectV2::ClassRegistered { class_id, .. } = object else { continue };
+            if cache.contains_key(class_id) {
+                continue;
+            }
+            // The bundle's own carriage first, then the typed catalog (the shipped rows), then the
+            // canonical class table (the floor and the tiers' other rows).
+            let work = self
+                .palw_genesis_model_works
+                .get(class_id)
+                .copied()
+                .or_else(|| kaspa_consensus_core::palw_model_registry_v1::palw_rc_typed_class_works_v1().get(class_id).copied())
+                .or_else(|| self.palw_canonical_class_work_v1(*class_id));
+            cache.insert(*class_id, work);
+        }
+        if let Some(state_params) = self.palw_state_params_v2.as_ref()
+            && let Ok(Some((_, state))) = self.palw_state_v2_store.read().load_tip_cached(state_params)
+        {
+            for class_id in state.class_ids() {
+                if cache.contains_key(&class_id) {
+                    continue;
+                }
+                let Some(record) = self.palw_class_carriage_store.read().get(class_id) else { continue };
+                let work = borsh::from_slice::<kaspa_consensus_core::palw_state_v2::PalwClassAdmissionCarriageV2>(&record.carriage)
+                    .ok()
+                    .filter(|carriage| carriage.profile.shape_profile_id() == class_id)
+                    .and_then(|carriage| palw_model_work_from_carriage_v1(&carriage.profile, &carriage.canonical));
+                // A carriage that does not describe the class is left uncached: a later adoption
+                // (the sync protocol's) may carry the one that does.
+                if work.is_some() {
+                    cache.insert(class_id, work);
+                }
+            }
+        }
+        cache.iter().filter_map(|(id, work)| work.map(|work| (*id, work))).collect()
+    }
+
+    /// A genesis class's work from the canonical class table (the floor and the shipped rows), by
+    /// the class id its profile derives — `None` for a class the table does not carry.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn palw_canonical_class_work_v1(
+        &self,
+        class_id: kaspa_hashes::Hash64,
+    ) -> Option<kaspa_consensus_core::palw_model_registry_v1::PalwModelWorkV1> {
+        let court = self.palw_court_params_v2.as_ref()?;
+        let entry = misaka_palw_base0::classes::canonical_classes_v1(court)
+            .into_iter()
+            .find(|c: &misaka_palw_base0::classes::CanonicalClassV1| c.class_id() == class_id)?;
+        let canonical =
+            kaspa_consensus_core::palw_base0_profile::rc_job_context(&entry.profile, entry.canonical_job.0, entry.canonical_job.1);
+        kaspa_consensus_core::palw_model_registry_v1::palw_model_work_from_carriage_v1(&entry.profile, &canonical)
+    }
+
+    /// The table is not compiled for wasm: a class is described there only through its carriage.
+    #[cfg(target_arch = "wasm32")]
+    fn palw_canonical_class_work_v1(
+        &self,
+        _class_id: kaspa_hashes::Hash64,
+    ) -> Option<kaspa_consensus_core::palw_model_registry_v1::PalwModelWorkV1> {
+        None
+    }
+
     /// ADR-0135: the fold's registry input at `daa_score` — the globals, the lane's span clock and
     /// the genesis classes' work — or `None` below the fence (and where no lane is scheduled: the
     /// registry steps at span boundaries, and `validate_palw_v2` refuses a registry without a lane).
@@ -7743,7 +7831,7 @@ impl VirtualStateProcessor {
         Some(kaspa_consensus_core::palw_model_registry_v1::PalwModelRegistryFoldV1 {
             globals,
             span_daa: lane.schedule_span_daa,
-            genesis_works: self.palw_genesis_model_works.clone(),
+            genesis_works: self.palw_known_model_works_v1(),
             grace_until_daa: kaspa_consensus_core::palw_model_registry_v1::PalwModelRegistryFoldV1::grace_until_v1(
                 activation_daa,
                 lane.schedule_span_daa,

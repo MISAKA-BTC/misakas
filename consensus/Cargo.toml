@@ -59,6 +59,10 @@ rand = { workspace = true, features = ["small_rng"] }
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# ADR-0135: the canonical class table describes a genesis class to the registry fold.
+misaka-palw-base0.workspace = true
+
 [dev-dependencies]
 criterion.workspace = true
 serde_json.workspace = true

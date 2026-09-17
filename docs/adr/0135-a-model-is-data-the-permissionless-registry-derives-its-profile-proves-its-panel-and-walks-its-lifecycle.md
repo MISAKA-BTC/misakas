@@ -156,6 +156,17 @@ after    Kimi, Llama, a new mixture, a 100B model: a manifest and a bond, no for
 
 ## 7. What is built — Protocol Upgrade A, behind a dormant fence (2026-09-17)
 
+**Amended 2026-09-17 (evening), found by the devnet drill:** the fold's registry input named "the genesis
+classes' work, from the registrations the bundle carries" — but no shipped bundle registration carries an
+admission carriage (a genesis class's profile is the catalog's, of which the bundle holds only a root), so no
+genesis class had a work, no row opened for the floor or for testnet-11's three classes, and a class node-1
+registered before the fence had no row either (its carriage was consumed by the registration block). The
+node now describes a class from what it can prove it computes: a genesis class through the canonical class
+table the binary compiles (`canonical_classes_v1`, the same derivation the registration message uses), a
+registered class through the carriage the chain carried — before or after the fence — kept in the class
+carriage store and adopted by a syncing node before the block that needs it. A class the node cannot
+describe stays a legacy row. The fold itself is unchanged: it opens rows from the works it is handed.
+
 **The fence.** `Params::palw_model_registry: Option<ForkActivation>` — `None` on every shipped preset
 (the t11 fingerprint `135b6ee0…` does not move); hashed `Some`-only; the fork-id gate names it when
 armed; `validate_palw_v2` refuses it without `palw_panel_economy` and `palw_execution_lane` at or

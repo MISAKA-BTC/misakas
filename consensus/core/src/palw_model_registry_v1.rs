@@ -424,6 +424,38 @@ pub fn palw_model_work_from_carriage_v1(
     })
 }
 
+/// **The shipped classes' work, from the typed catalog every node compiles** — the floor, the
+/// Qwen3.6 hybrid, the Qwen2.5 A16 graph-v5 row and the Qwen3.8-27B row, each with the canonical
+/// job its registration prices — for the genesis classes no bundle registration describes (a genesis
+/// class carries no admission carriage; its profile is the catalog's, of which the bundle holds only
+/// a root). A function of the binary, so every node running it derives the same works.
+pub fn palw_rc_typed_class_works_v1() -> BTreeMap<Hash64, PalwModelWorkV1> {
+    use crate::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1, rc_job_context};
+    use crate::palw_context_ladder::palw_a16_context_row_profile_v5;
+    use crate::palw_qwen25_profile::{QWEN25_A16_GRAPH_V5_N_CTX, qwen25_a16_graph_v5_canonical_v1};
+    use crate::palw_qwen36_profile::qwen36_geometry_artifact_eps;
+    use crate::palw_qwen36_profile::{QWEN36_35B_A3B, QWEN36_RC_CANONICAL, QWEN38_27B, qwen36_profile_v2};
+    let mut rows: Vec<(crate::palw_step::PalwShapeProfileV3, (u32, u32))> = Vec::with_capacity(4);
+    if let Ok(floor) = base0_profile_v1(PALW_RC_BASE0_GEOMETRY) {
+        rows.push((floor, PALW_RC_BASE0_CANONICAL));
+    }
+    if let Ok(hybrid) = qwen36_profile_v2(qwen36_geometry_artifact_eps(QWEN36_35B_A3B)) {
+        rows.push((hybrid, QWEN36_RC_CANONICAL));
+    }
+    if let Ok(dense) = palw_a16_context_row_profile_v5(QWEN25_A16_GRAPH_V5_N_CTX) {
+        rows.push((dense, qwen25_a16_graph_v5_canonical_v1()));
+    }
+    if let Ok(unit) = qwen36_profile_v2(qwen36_geometry_artifact_eps(QWEN38_27B)) {
+        rows.push((unit, QWEN36_RC_CANONICAL));
+    }
+    rows.into_iter()
+        .filter_map(|(profile, (prefill, decode))| {
+            let canonical = rc_job_context(&profile, prefill, decode);
+            palw_model_work_from_carriage_v1(&profile, &canonical).map(|work| (profile.shape_profile_id(), work))
+        })
+        .collect()
+}
+
 /// **The genesis classes' work**, from the registrations the bundle's genesis carries — every node
 /// derives the bundle from `Params`, so this map is a function of the ruleset, not of a store.
 pub fn palw_genesis_model_works_v1(objects: &[crate::palw_state_v2::PalwConsensusObjectV2]) -> BTreeMap<Hash64, PalwModelWorkV1> {
@@ -1205,5 +1237,21 @@ mod tests {
             ActiveLimited { stable_epochs: 0 },
             "probation still exits to a tenth: the cap gates the full share only"
         );
+    }
+
+    /// **The typed catalog describes the four shipped rows to the registry**, each with a non-zero
+    /// draw and verification compute — the works testnet-11's genesis classes get, since no bundle
+    /// registration carries a carriage for them.
+    #[test]
+    fn adr0135_the_typed_catalog_describes_the_shipped_rows() {
+        let works = palw_rc_typed_class_works_v1();
+        let ids: Vec<String> = works.keys().map(|id| id.to_string()[..16].to_string()).collect();
+        for expected in ["f1c5635c6e47e96e", "5bd9ae3d91df8065", "4277d84f7d91528c", "2705b8f65f7ba54a"] {
+            assert!(ids.contains(&expected.to_string()), "{expected} is described; have {ids:?}");
+        }
+        for (id, work) in &works {
+            assert!(work.ops_supported && work.economic_ccu_per_claim > 0 && work.verification_ccu > 0, "{id}: {work:?}");
+        }
+        assert_eq!(works, palw_rc_typed_class_works_v1(), "a function of the binary alone");
     }
 }

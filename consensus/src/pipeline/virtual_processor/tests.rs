@@ -12291,6 +12291,42 @@ async fn palw_v2_an_ungradeable_certification_does_not_starve_the_block_cap() {
 ///
 /// Three arms, and the middle one is the whole test: arming the OTHER ladder must not move this
 /// answer.
+
+/// **ADR-0135: every genesis class the binary can describe has a work for the registry** — the
+/// devnet's shipped ruleset registers its classes with no admission carriage (their profiles are
+/// the catalog's), so the works come from the canonical class table, base class included, and a
+/// class the table does not carry is absent rather than invented.
+#[test]
+fn adr0135_the_registry_describes_the_genesis_classes_from_the_canonical_table() {
+    use kaspa_consensus_core::config::params::devnet_shipped_params;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
+    let params = devnet_shipped_params();
+    let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("the devnet ruleset is V2") };
+    let genesis: Vec<_> = bundle
+        .genesis_objects
+        .iter()
+        .filter_map(|o| match o {
+            PalwConsensusObjectV2::ClassRegistered { class_id, admission, .. } => Some((*class_id, admission.is_some())),
+            _ => None,
+        })
+        .collect();
+    assert!(!genesis.is_empty(), "the premise: the devnet registers classes at genesis");
+    let base = bundle.state.base_class_id();
+    assert!(
+        genesis.iter().any(|(id, carried)| *id == base && !carried),
+        "the premise: the floor is registered without an admission carriage (it is derived, not declared)"
+    );
+    let config = ConfigBuilder::new(params.clone()).skip_proof_of_work().build();
+    let consensus = TestConsensus::new(&config);
+    let works = consensus.virtual_processor().palw_known_model_works_v1();
+    let floor = works.get(&base).expect("the floor is described: derived, every node has it");
+    assert!(floor.ops_supported && floor.verification_ccu > 0 && floor.economic_ccu_per_claim > 0, "{floor:?}");
+    for (class_id, _) in &genesis {
+        assert!(works.contains_key(class_id), "genesis class {class_id} is described from the canonical table");
+    }
+    assert_eq!(consensus.virtual_processor().palw_known_model_works_v1(), works, "derived once, answered the same again");
+}
 #[test]
 fn the_processor_resolves_the_refutation_ladder_from_palw_court_ladder_alone() {
     use kaspa_consensus_core::config::params::{ForkActivation, devnet_shipped_params};
