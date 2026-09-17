@@ -542,6 +542,45 @@ pub fn palw_expected_attempts_q32_v1(class_target: u128) -> u128 {
     (q << 32) | frac
 }
 
+/// **The network draws a class win costs in expectation, in Q32** (ADR-0132 §1.1–1.2): a forward
+/// that won its class ticket still faces the Layer-0 digest against the header's `bits`, and a lost
+/// network draw is a lost inference (ADR-0072: nothing is searched). `⌊2²⁵⁶ · 2³² / (target₂₅₆ + 1)⌋`
+/// from the compact `bits`, the target the difficulty lift compares against (`target₅₁₂ = target₂₅₆
+/// ≪ 256`, so the probability is the 256-bit one). At the difficulty floor `0x207fffff` this is 2.0:
+/// half of every class's winning forwards are discarded even on a starved chain. One `bits` prices
+/// every class at a moment, so this factor never moves a cross-model ratio; it multiplies every
+/// class's attempted compute. Saturates at `u128::MAX` for a target under 2⁹⁶ draws a win (mantissa
+/// zero, or a negative compact mantissa, decodes to a zero target). Nothing on the block path reads it.
+pub fn palw_network_expected_attempts_q32_v1(bits: u32) -> u128 {
+    use kaspa_math::Uint256;
+    let target = Uint256::from_compact_target_bits(bits);
+    if target == Uint256::MAX {
+        return PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1;
+    }
+    if target.is_zero() {
+        return u128::MAX;
+    }
+    let one = Uint256::from_u64(1);
+    let d = target + one;
+    // ⌊2²⁵⁶ / d⌋ and 2²⁵⁶ mod d from `2²⁵⁶ − d = MAX − target`, as the 128-bit reading does.
+    let (q, r) = (Uint256::MAX - target).div_rem(d);
+    let q = q + one;
+    if q.bits() > 96 {
+        return u128::MAX;
+    }
+    let (mut rem, mut frac) = (r, 0u128);
+    for _ in 0..32 {
+        let (shifted, carry) = rem.overflowing_shl(1);
+        rem = shifted;
+        frac <<= 1;
+        if carry || rem >= d {
+            rem = rem.overflowing_sub(d).0;
+            frac |= 1;
+        }
+    }
+    (q.as_u128() << 32) | frac
+}
+
 /// [`palw_attempted_compute_per_claim_v1`] with the draws in Q32: `⌊expected_attempts_q32 × draw / 2³²⌋`,
 /// never below one draw. Saturating.
 pub fn palw_attempted_compute_q32_per_claim_v1(expected_attempts_q32: u128, draw_compute: u128) -> u128 {
@@ -576,7 +615,8 @@ pub enum PalwRewardBasisV1 {
     CurrentLeaves,
     /// The economic compute of the job an attempt runs, once.
     EconomicJob,
-    /// The economic compute a claim cost in expectation: `expected_attempts × the draw's compute`.
+    /// The economic compute a claim cost in expectation: `class draws × network draws × the draw's
+    /// compute` (ADR-0132: both lotteries, both from chain facts).
     EconomicAttempted,
 }
 
@@ -590,6 +630,9 @@ pub struct PalwClassMeasureV1 {
     /// `palw_expected_attempts_q32_v1` of the class target: the draws a claim costs in expectation,
     /// fraction included — not the integer fork-choice factor.
     pub expected_attempts_q32: u128,
+    /// `palw_network_expected_attempts_q32_v1` of the header's `bits`: the network draws each class
+    /// win costs in expectation (ADR-0132). One value for every class at a moment.
+    pub network_expected_attempts_q32: u128,
     /// Whether the class is a weight-bearing model class — the only classes that can set the unit.
     pub sets_unit: bool,
     /// Whether the class is priced at all: the liveness floor is not (ADR-0124 Decision 6, "the
@@ -602,9 +645,10 @@ impl PalwClassMeasureV1 {
         match basis {
             PalwRewardBasisV1::CurrentLeaves => self.leaves as u128,
             PalwRewardBasisV1::EconomicJob => self.draw_compute,
-            PalwRewardBasisV1::EconomicAttempted => {
-                palw_attempted_compute_q32_per_claim_v1(self.expected_attempts_q32, self.draw_compute)
-            }
+            PalwRewardBasisV1::EconomicAttempted => palw_attempted_compute_q32_per_claim_v1(
+                self.network_expected_attempts_q32,
+                palw_attempted_compute_q32_per_claim_v1(self.expected_attempts_q32, self.draw_compute),
+            ),
         }
     }
 }
@@ -652,11 +696,14 @@ pub struct PalwClassCensusV1 {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PalwClassCensusReadV1 {
     pub tip_daa: u64,
+    /// The tip's compact `bits` and the network draws a class win costs at it (ADR-0132).
+    pub network_bits: u32,
+    pub network_expected_attempts_q32: u128,
     pub classes: Vec<PalwClassCensusV1>,
 }
 
 /// **The census, from the state** — one pass over the classes and one over the claims.
-pub fn palw_class_census_v1(state: &PalwChainStateV2, params: &PalwStateParamsV2) -> PalwClassCensusReadV1 {
+pub fn palw_class_census_v1(state: &PalwChainStateV2, params: &PalwStateParamsV2, network_bits: u32) -> PalwClassCensusReadV1 {
     use std::collections::BTreeMap;
     let mut rows: BTreeMap<Hash64, PalwClassCensusV1> = state
         .classes_iter()
@@ -700,7 +747,16 @@ pub fn palw_class_census_v1(state: &PalwChainStateV2, params: &PalwStateParamsV2
             _ => {}
         }
     }
-    PalwClassCensusReadV1 { tip_daa: state.last_point().map(|p| p.daa_score).unwrap_or(0), classes: rows.into_values().collect() }
+    PalwClassCensusReadV1 {
+        tip_daa: state.last_point().map(|p| p.daa_score).unwrap_or(0),
+        network_bits,
+        network_expected_attempts_q32: if network_bits == 0 {
+            PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1
+        } else {
+            palw_network_expected_attempts_q32_v1(network_bits)
+        },
+        classes: rows.into_values().collect(),
+    }
 }
 
 /// **What one class did over a window, as the shadow reads it.** Claims are the attempt lane's;
@@ -1039,6 +1095,7 @@ mod tests {
                 leaves: 7_708,
                 draw_compute: 100,
                 expected_attempts_q32: 26_404 << 32,
+                network_expected_attempts_q32: NET_ONE,
                 sets_unit: false,
                 priced: false,
             },
@@ -1046,6 +1103,7 @@ mod tests {
                 leaves: 2_685_360,
                 draw_compute: 16_000,
                 expected_attempts_q32: 1 << 32,
+                network_expected_attempts_q32: NET_ONE,
                 sets_unit: true,
                 priced: true,
             },
@@ -1053,6 +1111,7 @@ mod tests {
                 leaves: 6_630_544,
                 draw_compute: 80_000,
                 expected_attempts_q32: 1 << 32,
+                network_expected_attempts_q32: NET_ONE,
                 sets_unit: true,
                 priced: true,
             },
@@ -1068,6 +1127,9 @@ mod tests {
     /// two model classes as this table measures them at the live targets (both at one expected
     /// attempt, `getPalwProducerFacts` 2026-09-17).
     const T11_ESCROW_7001: u64 = 320_084_650_080;
+    /// One network draw a class win: the factor the measures below hold fixed, so every pin above
+    /// reads as it did before ADR-0132 added the factor.
+    const NET_ONE: u128 = PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1;
     const SEATS: u64 = 5;
     fn qwen36(expected_attempts: u64) -> PalwClassMeasureV1 {
         let expected_attempts_q32 = (expected_attempts as u128) << 32;
@@ -1075,6 +1137,7 @@ mod tests {
             leaves: 2_685_360,
             draw_compute: PIN_QWEN36_DRAW_CCU,
             expected_attempts_q32,
+            network_expected_attempts_q32: NET_ONE,
             sets_unit: true,
             priced: true,
         }
@@ -1085,6 +1148,7 @@ mod tests {
             leaves: 6_630_544,
             draw_compute: PIN_QWEN25_DRAW_CCU,
             expected_attempts_q32,
+            network_expected_attempts_q32: NET_ONE,
             sets_unit: true,
             priced: true,
         }
@@ -1267,6 +1331,7 @@ mod tests {
                 leaves: 9_000_776,
                 draw_compute: PIN_QWEN38_DRAW_CCU,
                 expected_attempts_q32: 3_165 << 32,
+                network_expected_attempts_q32: NET_ONE,
                 sets_unit: true,
                 priced: true,
             },
@@ -1353,8 +1418,14 @@ mod tests {
         // Two classes of equal draw compute, one drawn at MAX and one at two thirds of it, over one
         // window: the attempted basis reads the second at 1.5 × the first (its A rates agree); the
         // job basis reads both as one execution and its A rates differ by that half.
-        let at_max =
-            PalwClassMeasureV1 { leaves: 1, draw_compute: 1_000_000, expected_attempts_q32: one, sets_unit: true, priced: true };
+        let at_max = PalwClassMeasureV1 {
+            leaves: 1,
+            draw_compute: 1_000_000,
+            expected_attempts_q32: one,
+            network_expected_attempts_q32: one,
+            sets_unit: true,
+            priced: true,
+        };
         let at_two_thirds = PalwClassMeasureV1 { expected_attempts_q32: q, ..at_max };
         assert_eq!(at_two_thirds.measure(PalwRewardBasisV1::EconomicAttempted), 1_499_999);
         assert_eq!(at_two_thirds.measure(PalwRewardBasisV1::EconomicJob), 1_000_000);
@@ -1383,6 +1454,7 @@ mod tests {
             leaves: 7_708,
             draw_compute: PIN_FLOOR_DRAW_CCU,
             expected_attempts_q32: 26_404 << 32,
+            network_expected_attempts_q32: NET_ONE,
             sets_unit: false,
             priced: false,
         };
@@ -1403,5 +1475,47 @@ mod tests {
         assert_eq!(palw_gap_permille_v1(100, 150), Some(500));
         assert_eq!(palw_gap_permille_v1(0, 150), None);
         assert_eq!(palw_gap_permille_v1(150, 0), None);
+    }
+
+    /// **The network draw is the second lottery, and it is priced from `bits`** (ADR-0132). At the
+    /// difficulty floor `0x207fffff` a class win faces a coin flip (2.0 draws a win, to the 2⁻²³ the
+    /// mantissa's top bit leaves); a tighter target costs more; a zero target saturates; and the
+    /// attempted basis multiplies the class draws by it, so a class's attempted compute reads
+    /// `class × network × draw` while every cross-model ratio is unchanged (one `bits` for all).
+    #[test]
+    fn adr0132_the_network_draw_is_priced_from_bits() {
+        let one = PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1;
+        let floor = palw_network_expected_attempts_q32_v1(0x207f_ffff);
+        assert!(floor >= 2 * one && floor <= 2 * one + 2_048, "the difficulty floor is a coin flip: {floor}");
+        // Bitcoin's genesis bits, `0xffff << 208`: 2⁴⁸ / 0xffff draws a win, to the one the `+ 1` drops.
+        let genesis = palw_network_expected_attempts_q32_v1(0x1d00_ffff);
+        let expected = (1u128 << 48) / 0xffff;
+        assert!((genesis >> 32).abs_diff(expected) <= 1, "{}", genesis >> 32);
+        assert!(genesis > floor, "a tighter target costs more draws");
+        assert!(palw_network_expected_attempts_q32_v1(0x1c00_ffff) > genesis, "and a tighter one still, monotone in the target");
+        assert_eq!(palw_network_expected_attempts_q32_v1(0x0100_0000), u128::MAX, "a zero target saturates");
+        assert_eq!(palw_network_expected_attempts_q32_v1(0x2080_0000), u128::MAX, "a negative compact mantissa is a zero target");
+        let both = PalwClassMeasureV1 {
+            leaves: 1,
+            draw_compute: 1_000_000,
+            expected_attempts_q32: one * 3 / 2,
+            network_expected_attempts_q32: floor,
+            sets_unit: true,
+            priced: true,
+        };
+        let attempted = both.measure(PalwRewardBasisV1::EconomicAttempted);
+        assert!((2_999_990..=3_001_500).contains(&attempted), "1.5 class draws × 2.0 network draws × 10⁶: {attempted}");
+        let net_only = PalwClassMeasureV1 { expected_attempts_q32: one, ..both };
+        assert!(net_only.measure(PalwRewardBasisV1::EconomicAttempted) >= 1_999_990);
+        // The factor is common to every class at a moment: the ratio between two classes on the
+        // attempted basis is the same at the floor and at genesis bits.
+        let (a, b) = (both, PalwClassMeasureV1 { draw_compute: 250_000, ..both });
+        let ratio_at = |bits: u32| {
+            let n = palw_network_expected_attempts_q32_v1(bits);
+            let ma = PalwClassMeasureV1 { network_expected_attempts_q32: n, ..a }.measure(PalwRewardBasisV1::EconomicAttempted);
+            let mb = PalwClassMeasureV1 { network_expected_attempts_q32: n, ..b }.measure(PalwRewardBasisV1::EconomicAttempted);
+            ma * 1000 / mb
+        };
+        assert_eq!(ratio_at(0x207f_ffff) / 10, ratio_at(0x1d00_ffff) / 10, "one bits for all: the ratio does not move");
     }
 }

@@ -214,6 +214,7 @@ pub mod palw_e2e_adjudicability;
 /// no caller. Read it before proposing that one answer become several claims.
 pub mod palw_economic_compute_v1;
 pub mod palw_economic_locus_v1;
+pub mod palw_economics_ledger_v1;
 /// ADR-0125 — the execution lane's round rules (a second, a seed, capped quotas, alternating
 /// permits) as pure functions; consensus-inert until the lane that reads them is built.
 pub mod palw_execution_lane_v1;

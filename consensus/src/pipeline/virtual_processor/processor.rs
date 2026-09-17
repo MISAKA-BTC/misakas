@@ -4144,8 +4144,10 @@ impl VirtualStateProcessor {
     /// ADR-0131 Decision 1: the class census at the PALW state's own tip.
     pub fn palw_class_census_v1_impl(&self) -> Option<kaspa_consensus_core::palw_economic_compute_v1::PalwClassCensusReadV1> {
         let state_params = self.palw_state_params_v2.as_ref()?;
-        let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
-        Some(kaspa_consensus_core::palw_economic_compute_v1::palw_class_census_v1(&state, state_params))
+        let (tip, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        // ADR-0132: the tip's `bits` prices the network draw every class win faces at this height.
+        let network_bits = self.headers_store.get_header(tip).map(|h| h.bits).unwrap_or(0);
+        Some(kaspa_consensus_core::palw_economic_compute_v1::palw_class_census_v1(&state, state_params, network_bits))
     }
 
     pub fn palw_bond_of_pubkey_v2_impl(
