@@ -9383,8 +9383,10 @@ struct BftGateRun {
     /// Whether the StakeScore depth rule's own threshold was cleared at that point — what it would
     /// have confirmed on without the fence.
     depth_rule_clears: bool,
-    /// Whether this node's own BFT evaluation at the sink could cover its walk.
+    /// Whether this node's own BFT evaluation at the sink could cover its walk, and whether the gate
+    /// was abstaining when the heavier branch arrived.
     evaluation_covered: bool,
+    gate_abstaining: bool,
     /// After the heavier stake-less branch arrived: the sink moved onto it, and the attested anchor
     /// is (not) still on the selected chain.
     sink_is_attacker: bool,
@@ -9582,6 +9584,7 @@ async fn run_the_bft_gate(script: BftGateScript) -> BftGateRun {
         )
     };
     let depth_rule_clears = state_before_attack.stake_depth >= dns.required_stake_depth;
+    let gate_abstaining = ctx.consensus.virtual_processor().dns_bft_gate_abstains.load(std::sync::atomic::Ordering::Relaxed);
 
     // ---- A longer, stake-less branch from genesis arrives. ----
     let mut atk = TestContext::new(TestConsensus::new(&config));
@@ -9604,6 +9607,7 @@ async fn run_the_bft_gate(script: BftGateScript) -> BftGateRun {
         state_before_attack,
         depth_rule_clears,
         evaluation_covered,
+        gate_abstaining,
         sink_is_attacker: new_sink == attacker_tip,
         anchor_survived,
     }
@@ -9638,6 +9642,7 @@ async fn adr0128_a_reorg_abandoning_a_dns_final_anchor_is_refused_past_the_fence
     assert!(after.due.iter().all(|d| d.0 > epoch), "the precommitted epoch, and every one below the lock, is no longer due");
     assert_eq!(past.state_before_attack.last_dns_confirmed_anchor, past.attested.anchor_hash, "the DNS-final anchor is confirmed");
     assert_eq!(past.state_before_attack.last_dns_confirmed_anchor_daa_score, past.attested.anchor_daa_score);
+    assert!(!past.gate_abstaining && past.evaluation_covered);
     assert!(past.anchor_survived && !past.sink_is_attacker, "past the fence the heavier branch that abandons the anchor is refused");
 
     let below = run_the_bft_gate(BftGateScript { fence: Some(ForkActivation::new(10_000_000)), ..script }).await;
@@ -9706,8 +9711,9 @@ async fn adr0128_validators_that_never_reach_precommit_quorum_advance_no_anchor(
 
 /// **ADR-0128 Decision 3: a node whose walk cannot cover its bound abstains.** The past-the-fence run
 /// with one chain block's acceptance data deleted after the votes: the next evaluation cannot read
-/// the walk, confirms nothing (the log names the block), and the gate that would have refused the
-/// heavier branch stands aside instead of judging on evidence it does not have.
+/// the walk (the log names the block), the confirmed anchor does not advance — the DNS-final anchor
+/// is carried, not re-derived — and the gate that would have refused the heavier branch stands aside
+/// instead of judging on evidence this node does not hold.
 #[tokio::test]
 async fn adr0128_an_evaluation_that_cannot_cover_its_walk_confirms_nothing_and_the_gate_abstains() {
     use kaspa_consensus_core::{Hash64, config::params::ForkActivation};
@@ -9721,8 +9727,13 @@ async fn adr0128_an_evaluation_that_cannot_cover_its_walk_confirms_nothing_and_t
     })
     .await;
     assert!(!run.evaluation_covered, "the hole is inside the walk");
-    assert_eq!(run.state_before_attack.last_dns_confirmed_anchor, Hash64::default(), "an uncovered evaluation confirms nothing");
+    assert!(run.gate_abstaining, "the evaluation after the hole says so");
+    assert_eq!(
+        run.state_before_attack.last_dns_confirmed_anchor, run.attested.anchor_hash,
+        "the confirmation is carried, not advanced"
+    );
     assert!(run.sink_is_attacker, "the gate abstains");
+    assert_ne!(run.attested.anchor_hash, Hash64::default());
 }
 
 /// **ADR-0128 Decision 5 on a ConsensusV2 network: the BFT gate is asked before the PALW comparator,

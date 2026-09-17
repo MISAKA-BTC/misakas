@@ -265,8 +265,9 @@ impl VirtualStateProcessor {
     ///   written past the fence — an anchor the depth rule confirmed below it gains no veto it never
     ///   had) and it is still a chain ancestor of the sink;
     /// * the newest DNS-final anchor of the sink's StakeScore window replaces it when newer;
-    /// * when the walk cannot cover its bound, nothing is confirmed in this state, so the gate
-    ///   abstains (`GateInactive`) until an evaluation that covers it, and the log says why.
+    /// * when the walk cannot cover its bound, the confirmation does not advance — the previous one is
+    ///   carried by the same rule — and the gate abstains ([`Self::dns_bft_gate_refusal`] reads the
+    ///   flag this sets) until an evaluation covers it; the log says why.
     pub(super) fn dns_bft_confirmed_state(
         &self,
         mut depth_state: DnsState,
@@ -276,13 +277,22 @@ impl VirtualStateProcessor {
         dns_params: &DnsParams,
         gate: &DnsBftGateV1,
     ) -> DnsState {
-        let confirmed = match self.dns_bft_evaluate(sink, bonds, dns_params, gate) {
+        let carried = prev
+            .filter(|p| gate.activation.is_active(p.anchor_daa_score))
+            .map(|p| (p.last_dns_confirmed_anchor, p.last_dns_confirmed_anchor_daa_score))
+            .filter(|(anchor, _)| *anchor != Hash64::default())
+            // Unreadable reachability is an anchor behind the pruning point: kept, as the gate treats it
+            // (included).
+            .filter(|(anchor, _)| self.reachability_service.try_is_chain_ancestor_of(*anchor, sink).unwrap_or(true));
+        let evaluation = self.dns_bft_evaluate(sink, bonds, dns_params, gate);
+        self.dns_bft_gate_abstains.store(evaluation.is_err(), std::sync::atomic::Ordering::Relaxed);
+        let confirmed = match evaluation {
             Err(gap) => {
                 warn!(
-                    "[dns-bft] sink {sink}: the evaluation walk does not cover its bound — {gap}. No anchor is confirmed at this \
-                     evaluation and the stake reorg gate abstains until one covers it"
+                    "[dns-bft] sink {sink}: the evaluation walk does not cover its bound — {gap}. The confirmed anchor does not \
+                     advance, and the stake reorg gate abstains until an evaluation covers its walk"
                 );
-                None
+                carried
             }
             Ok(evaluation) => {
                 // The newest epoch at info, once per evaluation (once per blue-score epoch); the rest
@@ -314,13 +324,6 @@ impl VirtualStateProcessor {
                     evaluation.walked,
                     evaluation.verdicts.len()
                 );
-                let carried = prev
-                    .filter(|p| gate.activation.is_active(p.anchor_daa_score))
-                    .map(|p| (p.last_dns_confirmed_anchor, p.last_dns_confirmed_anchor_daa_score))
-                    .filter(|(anchor, _)| *anchor != Hash64::default())
-                    // Unreadable reachability is an anchor behind the pruning point: kept, as the gate
-                    // treats it (included).
-                    .filter(|(anchor, _)| self.reachability_service.try_is_chain_ancestor_of(*anchor, sink).unwrap_or(true));
                 let newest = newest_dns_final_v1(&evaluation.verdicts).map(|e| (e.anchor_hash, e.anchor_daa_score));
                 let confirmed = dns_bft_confirmed_anchor_v1(carried, newest);
                 if confirmed.is_some() && confirmed != carried {
@@ -346,10 +349,11 @@ impl VirtualStateProcessor {
     /// stale under `dns_veto_ttl_daa_score` measured on this node's own chain, which releases it.
     /// `None` is "this gate does not refuse": the caller goes on to the PALW comparator and ADR-0065
     /// D2 (or, on a network without a PALW authority, the gate below) exactly as it does without the
-    /// fence. It is `None` below the fence; where no state is written; where the state predates the
-    /// fence (the depth rule's anchor is not the vote's); outside the `Active` stage; with nothing
-    /// confirmed (including an evaluation that could not cover its walk); where the anchor is behind
-    /// the pruning point; and for a candidate that contains the anchor.
+    /// fence. It is `None` below the fence; while the last evaluation could not cover its walk (the
+    /// gate abstains rather than judge on evidence this node does not hold); where no state is
+    /// written; where the state predates the fence (the depth rule's anchor is not the vote's);
+    /// outside the `Active` stage; with nothing confirmed; where the anchor is behind the pruning
+    /// point; and for a candidate that contains the anchor.
     ///
     /// It only refuses. It never selects a tip, and a released candidate still has to win the
     /// comparator.
@@ -357,6 +361,10 @@ impl VirtualStateProcessor {
         let dns_params = self.dns_params.as_ref()?;
         let incumbent_daa = self.headers_store.get_daa_score(prev_sink).ok()?;
         let gate = self.dns_bft_gate.filter(|gate| gate.activation.is_active(incumbent_daa))?;
+        if self.dns_bft_gate_abstains.load(std::sync::atomic::Ordering::Relaxed) {
+            debug!("[dns-bft] gate: the last evaluation could not cover its walk; abstaining for candidate {candidate}");
+            return None;
+        }
         let state = self.dns_state_store.read().get().ok()?;
         if !gate.activation.is_active(state.anchor_daa_score)
             || state.rollout_stage != DnsRolloutStage::Active

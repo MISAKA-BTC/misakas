@@ -253,14 +253,27 @@ pub fn dns_bft_window_lower_edge_daa_v1(chain: &[DnsBftChainBlockV1], epoch: &Dn
         .unwrap_or(epoch.anchor_daa_score)
 }
 
-/// **`last_E(bond)` where the bond has evidence**: the anchor DAA of the youngest epoch it attested
-/// in an attestation that is final for `epoch` (Decision 3).
+/// **Is `attestation` final evidence for `epoch` (Decision 3)?**
 ///
 /// Final means all of: accepted by a chain block at or below the epoch's anchor (so the evidence is
 /// in the prefix that ends there, whichever sink reads it); that block inside the evidence window;
 /// the attested anchor a strict ancestor of the epoch's and at least `reentry_final_depth_daa` below
 /// it (ADR-0066 SA-2 — re-entry waits for an attestation that is itself buried); and the attested
 /// anchor decidable inside the window ([`DnsBftRulesV1::anchor_decidable_within`]).
+///
+/// One spelling for both readers: the fold below, and the walk that decides which candidates are
+/// worth a signature check.
+pub fn dns_bft_is_final_evidence_v1(attestation: &DnsBftAttestationV1, epoch: &DnsBftEpochV1, rules: &DnsBftRulesV1) -> bool {
+    let a = attestation;
+    let accepted_in_prefix =
+        a.accepted_daa_score <= epoch.anchor_daa_score && a.accepted_blue_score >= rules.evidence_floor_blue_score(epoch);
+    let buried = a.anchor_daa_score < epoch.anchor_daa_score
+        && a.anchor_daa_score.saturating_add(rules.reentry_final_depth_daa) <= epoch.anchor_daa_score;
+    accepted_in_prefix && buried && rules.anchor_decidable_within(a.epoch, epoch)
+}
+
+/// **`last_E(bond)` where the bond has evidence**: the anchor DAA of the youngest epoch it attested
+/// in an attestation that is final evidence for `epoch` ([`dns_bft_is_final_evidence_v1`]).
 ///
 /// A bond absent from the map has no such evidence and is measured from
 /// `max(activation, window lower edge)` instead.
@@ -269,15 +282,8 @@ pub fn dns_bft_last_final_attestation_daa_v1(
     attestations: &[DnsBftAttestationV1],
     rules: &DnsBftRulesV1,
 ) -> HashMap<TransactionOutpoint, u64> {
-    let floor = rules.evidence_floor_blue_score(epoch);
     let mut last: HashMap<TransactionOutpoint, u64> = HashMap::new();
-    for a in attestations {
-        let accepted_in_prefix = a.accepted_daa_score <= epoch.anchor_daa_score && a.accepted_blue_score >= floor;
-        let buried = a.anchor_daa_score < epoch.anchor_daa_score
-            && a.anchor_daa_score.saturating_add(rules.reentry_final_depth_daa) <= epoch.anchor_daa_score;
-        if !accepted_in_prefix || !buried || !rules.anchor_decidable_within(a.epoch, epoch) {
-            continue;
-        }
+    for a in attestations.iter().filter(|a| dns_bft_is_final_evidence_v1(a, epoch, rules)) {
         let entry = last.entry(a.bond_outpoint).or_insert(a.anchor_daa_score);
         *entry = (*entry).max(a.anchor_daa_score);
     }
@@ -473,69 +479,138 @@ impl PrecommitLockHorizonV1 {
     }
 }
 
-/// Two precommits that cast the same vote — a rebroadcast, which `precommit_fault` does not convict
-/// and the lock chain does not count twice or read as a misdeclaration.
-fn same_vote(a: &PrecommitRecord, b: &PrecommitRecord) -> bool {
-    a.epoch == b.epoch
-        && a.target_hash == b.target_hash
-        && a.target_daa_score == b.target_daa_score
-        && a.declared_lock == b.declared_lock
+/// A precommit's vote, as a key: `(epoch, target, target DAA, declared lock epoch, declared lock
+/// anchor)`. Two records with one key are a rebroadcast, which `precommit_fault` does not convict and
+/// the lock chain neither counts twice nor reads as a misdeclaration.
+type PrecommitVoteKey = (u64, Hash64, u64, u64, Hash64);
+
+fn vote_key(r: &PrecommitRecord) -> PrecommitVoteKey {
+    (r.epoch, r.target_hash, r.target_daa_score, r.declared_lock.epoch, r.declared_lock.anchor)
 }
 
-/// One bond's precommits in view, in chain order, truncated at the first misdeclared lock; plus the
-/// lock the surviving prefix leaves it holding.
-///
-/// Chain order is the accepting block's DAA score, ties broken by `(epoch, bond txid, index,
-/// target)` so every node orders identically. The first precommit must declare no lock or a lock
-/// the horizon hides; each later one must declare its predecessor's `(epoch, target)`. A rebroadcast
-/// of a vote already in the prefix is kept (it is the same vote) and moves nothing.
-fn lock_consistent_prefix<'a>(
-    mut chain: Vec<&'a PrecommitRecord>,
+/// Chain order: the accepting block's DAA score, ties broken by `(epoch, bond txid, index, target)`
+/// so every node orders identically. The accepting block's blue score never decreases in it.
+fn chain_order(r: &PrecommitRecord) -> (u64, u64, TransactionId, u32, Hash64) {
+    (r.accepted_daa_score, r.epoch, r.bond_outpoint.transaction_id, r.bond_outpoint.index, r.target_hash)
+}
+
+/// **One bond's lock chain under `horizon`**, `chain` in chain order: the records in view, cut at the
+/// first misdeclared lock. The first record in view must declare no lock or a lock the horizon
+/// hides; each later one must declare its predecessor's `(epoch, target)`. `visit` sees every
+/// lock-consistent record in order — a rebroadcast of a vote already in the chain included, which
+/// moves nothing — and stops the walk by returning `false`. Returns the lock the walked records
+/// leave the bond holding.
+fn walk_lock_chain<'a>(
+    chain: &[&'a PrecommitRecord],
     horizon: &PrecommitLockHorizonV1,
-) -> (Vec<&'a PrecommitRecord>, PrecommitLock) {
-    chain.retain(|r| horizon.sees(r));
-    chain.sort_by_key(|r| (r.accepted_daa_score, r.epoch, r.bond_outpoint.transaction_id, r.bond_outpoint.index, r.target_hash));
+    mut visit: impl FnMut(&'a PrecommitRecord) -> bool,
+) -> PrecommitLock {
     let mut held = PrecommitLock::default();
-    let mut kept: Vec<&PrecommitRecord> = Vec::new();
-    for r in chain {
-        if kept.iter().any(|k| same_vote(k, r)) {
-            kept.push(r);
-            continue;
+    let mut votes: HashSet<PrecommitVoteKey> = HashSet::new();
+    for r in chain.iter().copied().filter(|r| horizon.sees(r)) {
+        let key = vote_key(r);
+        if !votes.contains(&key) {
+            let consistent = if votes.is_empty() {
+                r.declared_lock == PrecommitLock::default() || horizon.hides(&r.declared_lock)
+            } else {
+                r.declared_lock == held
+            };
+            if !consistent {
+                break; // misdeclared: this one and everything after it are uncountable
+            }
+            held = PrecommitLock { epoch: r.epoch, anchor: r.target_hash };
+            votes.insert(key);
         }
-        let consistent = if kept.is_empty() {
-            r.declared_lock == PrecommitLock::default() || horizon.hides(&r.declared_lock)
-        } else {
-            r.declared_lock == held
-        };
-        if !consistent {
-            break; // misdeclared: this one and everything after it are uncountable
+        if !visit(r) {
+            break;
         }
-        held = PrecommitLock { epoch: r.epoch, anchor: r.target_hash };
-        kept.push(r);
     }
-    (kept, held)
+    held
 }
 
-/// **The precommits whose declared lock is the one the chain shows**, every bond's
-/// [`lock_consistent_prefix`] under `horizon`, grouped in a deterministic order.
+/// **Every bond's precommits, grouped once and put in chain order** — what the lock rule walks for
+/// each epoch without regrouping the whole set.
+pub struct DnsBftPrecommitChainsV1<'a> {
+    by_bond: HashMap<(Hash64, TransactionOutpoint), Vec<&'a PrecommitRecord>>,
+}
+
+impl<'a> DnsBftPrecommitChainsV1<'a> {
+    pub fn new(records: &'a [PrecommitRecord]) -> Self {
+        let mut by_bond: HashMap<(Hash64, TransactionOutpoint), Vec<&'a PrecommitRecord>> = HashMap::new();
+        for r in records {
+            by_bond.entry((r.validator_id, r.bond_outpoint)).or_default().push(r);
+        }
+        for chain in by_bond.values_mut() {
+            chain.sort_by_key(|r| chain_order(r));
+        }
+        Self { by_bond }
+    }
+
+    fn chain(&self, validator_id: Hash64, bond_outpoint: TransactionOutpoint) -> &[&'a PrecommitRecord] {
+        self.by_bond.get(&(validator_id, bond_outpoint)).map_or(&[], |chain| chain.as_slice())
+    }
+
+    /// Whether `(validator_id, bond_outpoint)`'s lock-consistent chain under `horizon` holds a
+    /// precommit for which `wanted` is true. The walk stops at the first one.
+    pub fn has_consistent(
+        &self,
+        validator_id: Hash64,
+        bond_outpoint: TransactionOutpoint,
+        horizon: &PrecommitLockHorizonV1,
+        wanted: impl Fn(&PrecommitRecord) -> bool,
+    ) -> bool {
+        let chain = self.chain(validator_id, bond_outpoint);
+        if !chain.iter().any(|r| wanted(r)) {
+            return false;
+        }
+        let mut found = false;
+        walk_lock_chain(chain, horizon, |r| {
+            found = wanted(r);
+            !found
+        });
+        found
+    }
+
+    /// The lock `(validator_id, bond_outpoint)` carries under `horizon`.
+    pub fn held_lock(
+        &self,
+        validator_id: Hash64,
+        bond_outpoint: TransactionOutpoint,
+        horizon: &PrecommitLockHorizonV1,
+    ) -> PrecommitLock {
+        walk_lock_chain(self.chain(validator_id, bond_outpoint), horizon, |_| true)
+    }
+
+    /// Whether the chain shows `(validator_id, bond_outpoint)` signing any precommit for `epoch`.
+    pub fn signed_epoch(&self, validator_id: Hash64, bond_outpoint: TransactionOutpoint, epoch: u64) -> bool {
+        self.chain(validator_id, bond_outpoint).iter().any(|r| r.epoch == epoch)
+    }
+}
+
+/// **The precommits whose declared lock is the one the chain shows**: every bond's lock chain under
+/// `horizon`, bonds in `(validator, outpoint)` order, each in chain order.
 ///
 /// That severity is the point: the declaration is what a validator can later be held to, so it
 /// has to be a faithful running record. A validator that misdeclares stops counting in round two
 /// until the misdeclaration leaves the horizon, and if it misdeclared because it carries a different
 /// lock on another branch, the two signed payloads are the proof (`precommit_fault`).
 pub fn lock_consistent_precommits<'a>(records: &'a [PrecommitRecord], horizon: &PrecommitLockHorizonV1) -> Vec<&'a PrecommitRecord> {
-    // `TransactionOutpoint` is not `Ord`, so group in a hash map and impose the order on the way out.
-    let mut by_bond: HashMap<(Hash64, TransactionOutpoint), Vec<&PrecommitRecord>> = HashMap::new();
-    for r in records {
-        by_bond.entry((r.validator_id, r.bond_outpoint)).or_default().push(r);
+    let chains = DnsBftPrecommitChainsV1::new(records);
+    // `TransactionOutpoint` is not `Ord`, so the order is imposed on the way out.
+    let mut bonds: Vec<(Hash64, TransactionOutpoint)> = chains.by_bond.keys().copied().collect();
+    bonds.sort_by_key(|(validator, outpoint)| (*validator, outpoint_key(outpoint)));
+    let mut kept = Vec::new();
+    for (validator, outpoint) in bonds {
+        walk_lock_chain(chains.chain(validator, outpoint), horizon, |r| {
+            kept.push(r);
+            true
+        });
     }
-    let mut groups: Vec<_> = by_bond.into_iter().collect();
-    groups.sort_by_key(|((validator, outpoint), _)| (*validator, outpoint_key(outpoint)));
-    groups.into_iter().flat_map(|(_, chain)| lock_consistent_prefix(chain, horizon).0).collect()
+    kept
 }
 
 /// **The lock `(validator_id, bond_outpoint)` carries on this chain** — the target of the last
-/// precommit in its lock-consistent prefix under `horizon`, or no lock when it has none. What its
+/// precommit in its lock-consistent chain under `horizon`, or no lock when it has none. What its
 /// next precommit must declare.
 pub fn held_precommit_lock(
     records: &[PrecommitRecord],
@@ -543,34 +618,32 @@ pub fn held_precommit_lock(
     bond_outpoint: TransactionOutpoint,
     horizon: &PrecommitLockHorizonV1,
 ) -> PrecommitLock {
-    let mine: Vec<&PrecommitRecord> =
-        records.iter().filter(|r| r.validator_id == validator_id && r.bond_outpoint == bond_outpoint).collect();
-    lock_consistent_prefix(mine, horizon).1
+    DnsBftPrecommitChainsV1::new(records).held_lock(validator_id, bond_outpoint, horizon)
 }
 
 /// **`C(E)`: the counted stake that precommitted the epoch's anchor under its snapshot commitment,
-/// with the lock the chain shows.** One vote per `(validator_id, bond_outpoint)`.
+/// with the lock the chain shows** — under the epoch's own horizon
+/// ([`PrecommitLockHorizonV1::for_epoch`]). One vote per counted `(validator_id, bond_outpoint)`.
 pub fn dns_bft_precommitted_stake_v1(
     epoch: &DnsBftEpochV1,
     counted: &DnsBftCountedSetV1,
     snapshot_commitment: Hash64,
-    precommits: &[PrecommitRecord],
+    chains: &DnsBftPrecommitChainsV1<'_>,
     rules: &DnsBftRulesV1,
 ) -> u128 {
     let horizon = PrecommitLockHorizonV1::for_epoch(epoch, rules);
-    let mut seen: HashSet<(Hash64, TransactionOutpoint)> = HashSet::new();
-    lock_consistent_precommits(precommits, &horizon)
-        .into_iter()
-        .filter(|p| {
-            p.epoch == epoch.epoch
-                && p.target_hash == epoch.anchor_hash
-                && p.target_daa_score == epoch.anchor_daa_score
-                && p.snapshot_commitment == snapshot_commitment
+    counted
+        .bonds
+        .iter()
+        .filter(|b| {
+            chains.has_consistent(b.validator_id, b.bond_outpoint, &horizon, |p| {
+                p.epoch == epoch.epoch
+                    && p.target_hash == epoch.anchor_hash
+                    && p.target_daa_score == epoch.anchor_daa_score
+                    && p.snapshot_commitment == snapshot_commitment
+            })
         })
-        .filter_map(|p| {
-            counted.vote_weight(&p.validator_id, &p.bond_outpoint).filter(|_| seen.insert((p.validator_id, p.bond_outpoint)))
-        })
-        .fold(0u128, |acc, w| acc.saturating_add(w))
+        .fold(0u128, |acc, b| acc.saturating_add(b.amount as u128))
 }
 
 /// **One epoch, decided (Decision 2).**
@@ -608,20 +681,31 @@ pub fn dns_bft_evaluate_epoch_v1(
     precommits: &[PrecommitRecord],
     rules: &DnsBftRulesV1,
 ) -> DnsBftEpochVerdictV1 {
+    decide_epoch(epoch, chain, bonds, attestations, &DnsBftPrecommitChainsV1::new(precommits), rules)
+}
+
+fn decide_epoch(
+    epoch: &DnsBftEpochV1,
+    chain: &[DnsBftChainBlockV1],
+    bonds: &[StakeBondRecord],
+    attestations: &[DnsBftAttestationV1],
+    chains: &DnsBftPrecommitChainsV1<'_>,
+    rules: &DnsBftRulesV1,
+) -> DnsBftEpochVerdictV1 {
     let edge = dns_bft_window_lower_edge_daa_v1(chain, epoch, rules);
     let last = dns_bft_last_final_attestation_daa_v1(epoch, attestations, rules);
     let counted = dns_bft_counted_set_v1(bonds, epoch.anchor_daa_score, edge, &last, rules);
     let snapshot_commitment = dns_bft_snapshot_commitment_v1(epoch, &counted);
     let attested_stake = dns_bft_attested_stake_v1(epoch, &counted, attestations);
     let precommitted_stake = if dns_bft_quorum_v1(attested_stake, counted.total_stake) {
-        dns_bft_precommitted_stake_v1(epoch, &counted, snapshot_commitment, precommits, rules)
+        dns_bft_precommitted_stake_v1(epoch, &counted, snapshot_commitment, chains, rules)
     } else {
         0
     };
     DnsBftEpochVerdictV1 { epoch: *epoch, counted, snapshot_commitment, attested_stake, precommitted_stake }
 }
 
-/// Decide every evaluated epoch, in the order given.
+/// Decide every evaluated epoch, in the order given, grouping the precommits once.
 pub fn dns_bft_evaluate_epochs_v1(
     epochs: &[DnsBftEpochV1],
     chain: &[DnsBftChainBlockV1],
@@ -630,7 +714,8 @@ pub fn dns_bft_evaluate_epochs_v1(
     precommits: &[PrecommitRecord],
     rules: &DnsBftRulesV1,
 ) -> Vec<DnsBftEpochVerdictV1> {
-    epochs.iter().map(|e| dns_bft_evaluate_epoch_v1(e, chain, bonds, attestations, precommits, rules)).collect()
+    let chains = DnsBftPrecommitChainsV1::new(precommits);
+    epochs.iter().map(|e| decide_epoch(e, chain, bonds, attestations, &chains, rules)).collect()
 }
 
 /// The DNS-final epochs among `verdicts`.
@@ -683,15 +768,14 @@ pub fn dns_bft_precommit_duty_v1(
     let horizon = verdicts
         .last()
         .map_or_else(|| PrecommitLockHorizonV1::from_genesis(rules), |v| PrecommitLockHorizonV1::for_epoch(&v.epoch, rules));
-    duty.held = held_precommit_lock(precommits, validator_id, bond_outpoint, &horizon);
-    let signed: BTreeSet<u64> =
-        precommits.iter().filter(|p| p.validator_id == validator_id && p.bond_outpoint == bond_outpoint).map(|p| p.epoch).collect();
+    let chains = DnsBftPrecommitChainsV1::new(precommits);
+    duty.held = chains.held_lock(validator_id, bond_outpoint, &horizon);
     let mut due: Vec<&DnsBftEpochVerdictV1> = verdicts
         .iter()
         .filter(|v| v.round_one())
         .filter(|v| v.epoch.epoch > duty.held.epoch)
         .filter(|v| v.counted.vote_weight(&validator_id, &bond_outpoint).is_some())
-        .filter(|v| !signed.contains(&v.epoch.epoch))
+        .filter(|v| !chains.signed_epoch(validator_id, bond_outpoint, v.epoch.epoch))
         .collect();
     due.sort_by_key(|v| v.epoch.epoch);
     duty.due =
