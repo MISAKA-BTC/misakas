@@ -22029,6 +22029,84 @@ pub(crate) mod tests {
         );
     }
 
+    /// **ADR-0126 Decision 3: a claim escrows at the carve its ATTEMPT block resolved.** The fold holds
+    /// no fence and no DAA of a merged block, so the processor resolves `palw_overlay_carve` once per
+    /// attempt block and hands the result in: through the block's extras for its own attempt (the
+    /// block that carried it is the block being folded), and on each merged record for merged work.
+    /// testnet-11's block: 720 ‰ past the height escrows 3,200.85 MSK, `None` keeps the bundle's
+    /// 620 ‰ and 2,756.28 MSK — and a merged claim's carve is its own record's, whatever the accepting
+    /// block resolved for itself, so the withhold sized from that record and the escrow agree.
+    #[test]
+    fn adr0126_a_claim_escrows_at_the_carve_its_attempt_block_resolved() {
+        const T11_SUBSIDY: u64 = 444_562_014_000;
+        let p = params().with_worker_carve_permille(620).unwrap();
+        let lowered = crate::palw_reward_v2::PalwRewardParamsV2::new(720).unwrap();
+        assert_eq!(p.worker_carve_at(T11_SUBSIDY, None), p.worker_carve(T11_SUBSIDY), "`None` is the bundle's carve");
+        assert_eq!(p.worker_carve_at(T11_SUBSIDY, None), 275_628_448_680, "2,756.28 MSK");
+        assert_eq!(p.worker_carve_at(T11_SUBSIDY, Some(lowered)), 320_084_650_080, "3,200.85 MSK");
+        let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let point = PalwBlockContextV2 { block: block(2), daa_score: 101, blue_score: 2, subsidy: T11_SUBSIDY };
+        let fold = |work: PalwBlockWorkV3<'_>, merged: &[PalwMergedWorkV1<'_>], extras: &PalwTransitionExtrasV1| {
+            let (next, _, skips) = apply_palw_transition_v7(
+                &s1,
+                &p,
+                Some(&admission),
+                &point,
+                &[],
+                work,
+                merged,
+                Hash64::default(),
+                false,
+                false,
+                false,
+                false,
+                extras,
+            )
+            .expect("the block stands");
+            next.assert_internal_consistency(&p).expect("internal consistency");
+            assert!(skips.is_empty(), "nothing is skipped");
+            next
+        };
+        let below = PalwTransitionExtrasV1 { audit_2026_09_11_deep_active: true, ..Default::default() };
+        let past = PalwTransitionExtrasV1 { escrow_carve: Some(lowered), ..below.clone() };
+
+        // Own work: the block's extras decide.
+        let env = attempt(40, 1);
+        let own = attempt_id_v2(&env.attempt);
+        let escrow = |state: &PalwChainStateV2, id: &Hash64| state.claim(id).expect("the claim exists").escrowed_reward;
+        assert_eq!(escrow(&fold(PalwBlockWorkV3::Attempt(&env), &[], &below), &own), 275_628_448_680, "below: the bundle's carve");
+        assert_eq!(escrow(&fold(PalwBlockWorkV3::Attempt(&env), &[], &past), &own), 320_084_650_080, "past: the fence's");
+
+        // Merged work: the record decides, not the accepting block.
+        let merged_env = attempt(40, 2);
+        let merged_id = attempt_id_v2(&merged_env.attempt);
+        let merged = |escrow_carve| {
+            [PalwMergedWorkV1 {
+                carrying_block: h64(0xB1),
+                work: PalwBlockWorkV3::Attempt(&merged_env),
+                execution_key: Hash64::default(),
+                subsidy: T11_SUBSIDY,
+                escrow_carve,
+            }]
+        };
+        for (record, extras, expected, why) in [
+            (Some(lowered), &below, 320_084_650_080, "a merged block past the height, accepted by a block the fence has not reached"),
+            (None, &past, 275_628_448_680, "a merged block below the height, accepted by a block past it"),
+            (Some(lowered), &past, 320_084_650_080, "both past"),
+            (None, &below, 275_628_448_680, "both below"),
+        ] {
+            let folded = fold(PalwBlockWorkV3::None, &merged(record), extras);
+            assert_eq!(escrow(&folded, &merged_id), expected, "{why}");
+            assert_eq!(
+                escrow(&folded, &merged_id),
+                p.worker_carve_at(T11_SUBSIDY, record),
+                "{why}: the withhold's function, the record's inputs"
+            );
+        }
+    }
+
     /// A spend licenses only what is certified: wrong phase, wrong source, absent claim — each
     /// refusal is named.
     #[test]

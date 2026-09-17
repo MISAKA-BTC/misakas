@@ -13542,3 +13542,177 @@ async fn adr0125_a_widening_holds_for_whole_spans() {
     ctx.validate_and_insert_block(template.block.clone().to_immutable()).await.assert_valid_utxo_tip();
     assert_eq!(ctx.consensus.get_sink(), template.block.header.hash);
 }
+
+// ---- ADR-0126: the validator carve drops to a fifth -------------------------------------------
+
+/// **ADR-0126 through the pipeline.** A `ConsensusV2` chain over mainnet's production overlay —
+/// testnet-11's shape: the Stage-3 split from genesis with validators at 30 % and the worker base at
+/// 62 %, a bundle escrowing 620 ‰ — with `palw_overlay_carve` at DAA 9 = { 2,000 bps, 720 ‰ } and
+/// B-1's merged escrow live from genesis. The chain crosses the height on single blocks, with one
+/// two-block row whose merging block lands exactly on the height (so it pays two blocks from below)
+/// and one row past it, and every block inserting UTXO-valid is the template and the validator
+/// agreeing on its coinbase, on both sides. Then, for every chain block down to the first, against
+/// the PALW state it was validated on:
+///
+/// * the split its coinbase carves with is lowered exactly from its own DAA — the validator pool,
+///   read back through the quality sub-pool the node persisted, is 20 % of what it merges from the
+///   height and 30 % below;
+/// * every attempt block's claim escrows 72 % of its subsidy from the height and 62 % below —
+///   resolved at the ATTEMPT block's DAA, for the selected parent (read from the state its own
+///   transition wrote) and for a merged block (the withhold the coinbase sized is the escrow the
+///   fold recorded);
+/// * the coinbase pays each merged block its worker base under the PAYING block's split less that
+///   escrow — so a block from below that is paid past the height keeps the tenth.
+#[tokio::test]
+async fn adr0126_a_palw_chain_crosses_the_overlay_carve() {
+    use crate::model::stores::daa::DaaStoreReader;
+    use crate::model::stores::ghostdag::GhostdagStoreReader;
+    use crate::model::stores::headers::HeaderStoreReader;
+    use kaspa_consensus_core::config::params::{ForkActivation, PalwOverlayCarveV1};
+    use kaspa_consensus_core::dns_finality::split_block_subsidy;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_state_v2::{PalwBlockContextV2, revert_delta_v2};
+    const CARVE_AT: u64 = 9;
+    let validator_bps_at = |daa: u64| if daa >= CARVE_AT { 2_000u128 } else { 3_000 };
+    let carve_permille_at = |daa: u64| if daa >= CARVE_AT { 720u128 } else { 620 };
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 16);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
+            p.palw_audit_2026_09_11_deep = Some(ForkActivation::always());
+            p.palw_overlay_carve = Some(PalwOverlayCarveV1 {
+                activation: ForkActivation::new(CARVE_AT),
+                subsidy_validator_bps: 2_000,
+                worker_carve_permille: 720,
+            });
+        })
+        .build();
+    config.params.validate_palw_v2().expect("the carve fits the overlay it lowers");
+    let dns = config.params.dns_params.clone().expect("the fixture runs mainnet's overlay");
+    assert_eq!(dns.reward_params.fee_split.subsidy_validator_bps, 3_000, "validators take 30 % below the height");
+    assert_eq!(bundle.state.worker_carve_permille(), 620, "and a claim escrows 62 %");
+    assert_eq!(dns.pos_v2_activation_daa_score, 0, "the quality sub-pool is persisted from genesis, so the pool can be read back");
+
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    let vp = ctx.consensus.virtual_processor().clone();
+    while vp.headers_store.get_daa_score(ctx.consensus.get_sink()).unwrap() + 3 < CARVE_AT {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    ctx.build_block_template_row(0..2).validate_and_insert_row().await.assert_valid_utxo_tip();
+    assert!(
+        ctx.current_tips.iter().all(|block| vp.headers_store.get_daa_score(*block).unwrap() == CARVE_AT - 2),
+        "the pair sits below the height, and the block that merges both lands on it"
+    );
+    for width in [1, 1, 1, 2, 1, 1] {
+        ctx.build_block_template_row(0..width).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    let genesis = config.params.genesis.hash;
+    let sink = ctx.consensus.get_sink();
+    let (tip, mut state_after) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    assert_eq!(tip, sink, "the walk left the tip at the sink");
+    let (mut below, mut at_height, mut past, mut straddles, mut merged_below, mut merged_past) = (0, 0, 0, 0, 0, 0);
+    let mut block = sink;
+    loop {
+        let header = vp.headers_store.get_header(block).unwrap();
+        let ghostdag = vp.ghostdag_store.get_data(block).unwrap();
+        // The first block merges genesis, which pays and escrows nothing: the walk ends above it.
+        if ghostdag.selected_parent == genesis {
+            break;
+        }
+        let non_daa = vp.daa_excluded_store.get_mergeset_non_daa(block).unwrap();
+        let state_before = {
+            let (_, delta) = vp.palw_state_v2_store.read().delta_of(block).expect("every chain block has a delta");
+            revert_delta_v2(&state_after, &delta, &bundle.state).expect("the delta reverts")
+        };
+        let point = PalwBlockContextV2 {
+            block,
+            daa_score: header.daa_score,
+            blue_score: header.blue_score,
+            subsidy: vp.coinbase_manager.calc_block_subsidy(header.daa_score),
+        };
+        match header.daa_score.cmp(&CARVE_AT) {
+            std::cmp::Ordering::Less => below += 1,
+            std::cmp::Ordering::Equal => at_height += 1,
+            std::cmp::Ordering::Greater => past += 1,
+        }
+
+        // The one split, at this block's own DAA.
+        let split = vp.fee_split_at(header.daa_score).expect("Stage 3 from genesis");
+        assert_eq!(split.subsidy_validator_bps as u128, validator_bps_at(header.daa_score), "block at DAA {}", header.daa_score);
+
+        // The escrows its coinbase withholds for the merged blocks it did not select, sized from the
+        // record its fold escrowed from.
+        let merged_withheld = vp.palw_v2_merged_escrow_withheld(&state_before, &ghostdag, &non_daa, &point);
+        for (merged, carve) in &merged_withheld {
+            let merged_daa = vp.headers_store.get_daa_score(*merged).unwrap();
+            let subsidy = vp.coinbase_manager.calc_block_subsidy(merged_daa) as u128;
+            assert_eq!(*carve as u128, subsidy * carve_permille_at(merged_daa) / 1_000, "merged block at DAA {merged_daa}");
+            assert_eq!(
+                vp.palw_v2_escrow_withheld_at(&state_after, *merged),
+                *carve,
+                "the carve withheld for the merged block at DAA {merged_daa} is the carve its claim escrowed"
+            );
+            if merged_daa >= CARVE_AT {
+                merged_past += 1;
+            } else {
+                merged_below += 1;
+            }
+        }
+
+        // What the coinbase paid each merged block, and what it carved for the validator pool.
+        let (mut expected_paid, mut pool) = (0u64, 0u64);
+        for merged in ghostdag.mergeset_blues.iter().chain(ghostdag.mergeset_reds.iter()).filter(|m| !non_daa.contains(*m)) {
+            let merged_daa = vp.headers_store.get_daa_score(*merged).unwrap();
+            let subsidy = vp.coinbase_manager.calc_block_subsidy(merged_daa);
+            let parts = split_block_subsidy(subsidy, &split);
+            assert_eq!(parts.validator_sompi as u128, subsidy as u128 * validator_bps_at(header.daa_score) / 10_000);
+            let escrow = if *merged == ghostdag.selected_parent {
+                // The selected parent's claim, from the state its own transition wrote.
+                let escrow = vp.palw_v2_escrow_withheld_at(&state_before, *merged);
+                assert_eq!(
+                    escrow as u128,
+                    subsidy as u128 * carve_permille_at(merged_daa) / 1_000,
+                    "the selected parent at DAA {merged_daa} escrowed at its own DAA's carve"
+                );
+                escrow
+            } else {
+                merged_withheld.get(merged).copied().unwrap_or(0)
+            };
+            let kept = parts.worker_base_sompi - escrow;
+            if merged_daa < CARVE_AT && header.daa_score >= CARVE_AT {
+                straddles += 1;
+                assert!(
+                    kept.abs_diff(subsidy / 10) <= 3,
+                    "a block from DAA {merged_daa} paid at DAA {} keeps the tenth: {kept} of {subsidy}",
+                    header.daa_score
+                );
+            } else {
+                assert!(kept <= 3, "a block paid under its own side's split escrows its whole worker base: {kept} kept");
+            }
+            expected_paid += kept;
+            pool += parts.validator_sompi;
+        }
+        let paid: u64 = ctx.consensus.get_block(block).unwrap().transactions[0].outputs.iter().map(|o| o.value).sum();
+        assert_eq!(paid, expected_paid, "the coinbase at DAA {} pays each merged block its base less its escrow", header.daa_score);
+        let quality = pool - pool * dns.reward_params.validator_participation_bps as u64 / 10_000;
+        assert_eq!(
+            vp.block_quality_pool_store.get(block).unwrap_or(0),
+            quality,
+            "the validator pool the block at DAA {} carved is its split's share of what it merged",
+            header.daa_score
+        );
+
+        state_after = state_before;
+        block = ghostdag.selected_parent;
+    }
+    assert!(
+        below >= 4 && at_height == 1 && past >= 5,
+        "the chain ran on both sides of the height ({below} below, {at_height} at, {past} past)"
+    );
+    assert_eq!(straddles, 2, "the block on the height merged the pair from below, and only it straddles");
+    assert!(merged_below >= 1 && merged_past >= 1, "a merged escrow on each side ({merged_below} below, {merged_past} past)");
+}
