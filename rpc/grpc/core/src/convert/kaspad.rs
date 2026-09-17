@@ -83,6 +83,9 @@ pub mod kaspad_request_convert {
     impl_into_kaspad_request!(GetPalwNodeStatus);
     impl_into_kaspad_request!(GetPalwRegistrationTerms);
     impl_into_kaspad_request!(GetPalwRoundLane);
+    impl_into_kaspad_request!(GetPalwSettlement);
+    impl_into_kaspad_request!(GetPrecommitDuty);
+    impl_into_kaspad_request!(GetPalwClassContexts);
     impl_into_kaspad_request!(GetTokenSupply);
     impl_into_kaspad_request!(GetTokenEmissionInfo);
     impl_into_kaspad_request!(GetValidatorStatus);
@@ -247,6 +250,9 @@ pub mod kaspad_response_convert {
     impl_into_kaspad_response!(GetPalwNodeStatus);
     impl_into_kaspad_response!(GetPalwRegistrationTerms);
     impl_into_kaspad_response!(GetPalwRoundLane);
+    impl_into_kaspad_response!(GetPalwSettlement);
+    impl_into_kaspad_response!(GetPrecommitDuty);
+    impl_into_kaspad_response!(GetPalwClassContexts);
     impl_into_kaspad_response!(GetTokenSupply);
     impl_into_kaspad_response!(GetTokenEmissionInfo);
     impl_into_kaspad_response!(GetValidatorStatus);

@@ -108,6 +108,65 @@ pub trait ValidatorStatusProvider: Send + Sync {
     async fn rpc_validator_status(&self) -> GetValidatorStatusResponse;
 }
 
+/// **What this node's build knows about a PALW class** — its model and the context its canonical
+/// job runs at. `getPalwClassContexts` asks it for a class whose declaration this node did not index
+/// (a genesis class carries none), and for the model id of one it did. Defined here, beside the
+/// node crate's other bridge, so the build's ledger can be handed in without a circular dependency;
+/// a node constructed without one answers from the chain alone.
+pub trait PalwClassLedgerProvider: Send + Sync {
+    fn class_context(&self, class_id: kaspa_hashes::Hash64) -> Option<PalwClassLedgerContext>;
+}
+
+/// One class as a build ledger records it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PalwClassLedgerContext {
+    pub model_id: String,
+    pub n_ctx: u32,
+    pub canonical_prefill_tokens: u32,
+    pub canonical_decode_tokens: u32,
+    pub max_context_tokens: u32,
+}
+
+/// The numbers a class declaration the chain registered fixes: its graph's `n_ctx` and its canonical
+/// job's token counts.
+struct PalwRegisteredClassContext {
+    n_ctx: u32,
+    canonical_prefill_tokens: u32,
+    canonical_decode_tokens: u32,
+    max_context_tokens: u32,
+}
+
+/// **One `getPalwClassContexts` row**: the registered declaration first — with the ledger's model id
+/// when the ledger knows the class — the build ledger second, and zeros named `unknown` last, so a
+/// reader can tell a context the chain fixed from one this build supplied and from none at all.
+fn palw_class_context_row(
+    class_id: kaspa_hashes::Hash64,
+    declared: Option<PalwRegisteredClassContext>,
+    ledger: Option<PalwClassLedgerContext>,
+) -> RpcPalwClassContext {
+    match (declared, ledger) {
+        (Some(declared), ledger) => RpcPalwClassContext {
+            class_id: class_id.to_string(),
+            model_id: ledger.map(|ledger| ledger.model_id).unwrap_or_default(),
+            n_ctx: declared.n_ctx,
+            canonical_prefill_tokens: declared.canonical_prefill_tokens,
+            canonical_decode_tokens: declared.canonical_decode_tokens,
+            max_context_tokens: declared.max_context_tokens,
+            source: "chain_registration".to_string(),
+        },
+        (None, Some(ledger)) => RpcPalwClassContext {
+            class_id: class_id.to_string(),
+            model_id: ledger.model_id,
+            n_ctx: ledger.n_ctx,
+            canonical_prefill_tokens: ledger.canonical_prefill_tokens,
+            canonical_decode_tokens: ledger.canonical_decode_tokens,
+            max_context_tokens: ledger.max_context_tokens,
+            source: "build_ledger".to_string(),
+        },
+        (None, None) => RpcPalwClassContext { class_id: class_id.to_string(), source: "unknown".to_string(), ..Default::default() },
+    }
+}
+
 /// Parse a "txid_hex:index" stake-bond outpoint (txid = 64-byte Hash64) for the
 /// kaspa-pq Phase 12 (ADR-0011) validator RPCs. A malformed value is a client error.
 fn parse_bond_outpoint(s: &str) -> RpcResult<kaspa_consensus_core::tx::TransactionOutpoint> {
@@ -212,6 +271,8 @@ pub struct RpcCoreService {
     mining_rule_engine: Arc<MiningRuleEngine>,
     /// kaspa-pq Phase 11: optional bridge to the in-process validator service.
     validator_status_provider: Option<Arc<dyn ValidatorStatusProvider>>,
+    /// `getPalwClassContexts`: the build's class ledger, where the node has one.
+    palw_class_ledger_provider: Option<Arc<dyn PalwClassLedgerProvider>>,
 }
 
 const RPC_CORE: &str = "rpc-core";
@@ -335,7 +396,15 @@ impl RpcCoreService {
             fee_estimate_verbose_cache: ExpiringCache::new(Duration::from_millis(500), Duration::from_millis(1000)),
             mining_rule_engine,
             validator_status_provider,
+            palw_class_ledger_provider: None,
         }
+    }
+
+    /// Hand `getPalwClassContexts` the build's class ledger. A consuming setter, so a node built
+    /// without calling it — every construction site today — answers from the chain alone.
+    pub fn with_palw_class_ledger_provider(mut self, provider: Option<Arc<dyn PalwClassLedgerProvider>>) -> Self {
+        self.palw_class_ledger_provider = provider;
+        self
     }
 
     pub fn start_impl(&self) {
@@ -1370,6 +1439,104 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             })
             .unwrap_or(0);
         Ok(response)
+    }
+
+    async fn get_palw_settlement_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwSettlementRequest,
+    ) -> RpcResult<GetPalwSettlementResponse> {
+        // ADR-0127 Decision 3: one read of the sink's PALW state. Unavailable is not unsettled — a
+        // node with no V2 state, or one that cannot date its frontier, says so.
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let Some(settlement) = session.async_palw_settlement_v1(request.daa_score).await else {
+            let sink_daa = session.async_get_sink_daa_score_timestamp().await.daa_score;
+            return Ok(GetPalwSettlementResponse { sink_daa, daa_score: request.daa_score, ..Default::default() });
+        };
+        Ok(GetPalwSettlementResponse {
+            available: true,
+            sink_daa: settlement.sink_daa,
+            daa_score: request.daa_score,
+            settled: settlement.settled,
+            depth: settlement.depth,
+            pending_anchors: settlement.pending,
+            depth_is_lower_bound: settlement.depth_is_lower_bound,
+            safe_frontier_blue_score: settlement.safe_frontier_blue_score,
+            safe_frontier_daa: settlement.safe_frontier_daa,
+        })
+    }
+
+    async fn get_precommit_duty_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPrecommitDutyRequest,
+    ) -> RpcResult<GetPrecommitDutyResponse> {
+        // MISAKA §5 round 2: the duty view, read from the chain rather than remembered by the
+        // signer. A malformed id or outpoint is a request error; `available: false` when the node
+        // has no view for this validator.
+        let validator_id = request
+            .validator_id
+            .parse::<kaspa_hashes::Hash64>()
+            .map_err(|_| RpcError::General(format!("validator_id '{}' is not a valid 64-byte Hash64", request.validator_id)))?;
+        let bond_outpoint = parse_bond_outpoint(&request.bond_outpoint)?;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        Ok(match session.async_get_precommit_duty(validator_id, bond_outpoint).await {
+            Some(duty) => GetPrecommitDutyResponse {
+                available: true,
+                round_active: duty.round_active,
+                sink_daa_score: duty.sink_daa_score,
+                held_epoch: duty.held.epoch,
+                held_anchor: duty.held.anchor.to_string(),
+                due: duty
+                    .due
+                    .into_iter()
+                    .map(|(epoch, anchor, anchor_daa_score, snapshot_commitment)| RpcPrecommitDue {
+                        epoch,
+                        anchor_hash: anchor.to_string(),
+                        anchor_daa_score,
+                        snapshot_commitment: snapshot_commitment.to_string(),
+                    })
+                    .collect(),
+            },
+            None => GetPrecommitDutyResponse::default(),
+        })
+    }
+
+    async fn get_palw_class_contexts_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        _request: GetPalwClassContextsRequest,
+    ) -> RpcResult<GetPalwClassContextsResponse> {
+        let (fp_max_prompt_tokens, fp_max_decode_tokens) = match &self.config.params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
+                (bundle.freeprompt.max_prompt_tokens(), bundle.freeprompt.max_decode_tokens())
+            }
+            _ => (0, 0),
+        };
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let registered = session
+            .spawn_blocking(|c| {
+                c.palw_v2_class_table()
+                    .into_iter()
+                    .map(|row| {
+                        let declared =
+                            c.palw_registered_class_carriage_v1(row.class_id).map(|(profile, canonical)| PalwRegisteredClassContext {
+                                n_ctx: profile.n_ctx,
+                                canonical_prefill_tokens: canonical.declared_prefill_tokens,
+                                canonical_decode_tokens: canonical.exact_decode_tokens,
+                                max_context_tokens: canonical.max_context_tokens,
+                            });
+                        (row.class_id, declared)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .await;
+        let ledger = self.palw_class_ledger_provider.as_deref();
+        let classes: Vec<RpcPalwClassContext> = registered
+            .into_iter()
+            .map(|(class_id, declared)| palw_class_context_row(class_id, declared, ledger.and_then(|l| l.class_context(class_id))))
+            .collect();
+        Ok(GetPalwClassContextsResponse { available: !classes.is_empty(), fp_max_prompt_tokens, fp_max_decode_tokens, classes })
     }
 
     async fn get_palw_producer_facts_call(
@@ -3005,5 +3172,68 @@ fn rpc_palw_model_version(
         work_leaves: row.usage.work_leaves.to_string(),
         first_used_daa: row.usage.first_used_daa,
         last_used_daa: row.usage.last_used_daa,
+    }
+}
+
+#[cfg(test)]
+mod palw_class_context_tests {
+    use super::*;
+
+    struct Ledger;
+
+    impl PalwClassLedgerProvider for Ledger {
+        fn class_context(&self, class_id: kaspa_hashes::Hash64) -> Option<PalwClassLedgerContext> {
+            (class_id != kaspa_hashes::Hash64::from_u64_word(3)).then(|| PalwClassLedgerContext {
+                model_id: format!("model-{}", &class_id.to_string()[..8]),
+                n_ctx: 4_096,
+                canonical_prefill_tokens: 60,
+                canonical_decode_tokens: 3,
+                max_context_tokens: 512,
+            })
+        }
+    }
+
+    fn declared() -> PalwRegisteredClassContext {
+        PalwRegisteredClassContext { n_ctx: 512, canonical_prefill_tokens: 7, canonical_decode_tokens: 2, max_context_tokens: 64 }
+    }
+
+    /// **The chain's declaration outranks the build's ledger, the ledger names the model, and a class
+    /// neither knows is zeros that say `unknown`** — never a ledger's numbers passed off as the
+    /// chain's, and never zeros passed off as a context.
+    #[test]
+    fn a_class_context_is_the_chains_then_the_builds_then_unknown() {
+        let (one, two, three) =
+            (kaspa_hashes::Hash64::from_u64_word(1), kaspa_hashes::Hash64::from_u64_word(2), kaspa_hashes::Hash64::from_u64_word(3));
+        let ledger: Arc<dyn PalwClassLedgerProvider> = Arc::new(Ledger);
+
+        let registered = palw_class_context_row(one, Some(declared()), ledger.class_context(one));
+        assert_eq!(registered.source, "chain_registration");
+        assert_eq!(
+            (registered.n_ctx, registered.canonical_prefill_tokens, registered.canonical_decode_tokens, registered.max_context_tokens),
+            (512, 7, 2, 64),
+            "the registered declaration's numbers, not the ledger's"
+        );
+        assert_eq!(registered.model_id, ledger.class_context(one).unwrap().model_id, "the ledger names the model");
+        assert_eq!(registered.class_id, one.to_string());
+
+        let registered_unnamed = palw_class_context_row(three, Some(declared()), ledger.class_context(three));
+        assert_eq!(
+            (registered_unnamed.source.as_str(), registered_unnamed.model_id.as_str(), registered_unnamed.n_ctx),
+            ("chain_registration", "", 512)
+        );
+
+        let built = palw_class_context_row(two, None, ledger.class_context(two));
+        assert_eq!(built.source, "build_ledger");
+        assert_eq!(
+            (built.n_ctx, built.canonical_prefill_tokens, built.canonical_decode_tokens, built.max_context_tokens),
+            (4_096, 60, 3, 512)
+        );
+        assert!(!built.model_id.is_empty());
+
+        let unknown = palw_class_context_row(three, None, ledger.class_context(three));
+        assert_eq!(unknown.source, "unknown");
+        assert_eq!((unknown.n_ctx, unknown.max_context_tokens, unknown.model_id.as_str()), (0, 0, ""));
+        let no_ledger = palw_class_context_row(two, None, None);
+        assert_eq!(no_ledger.source, "unknown", "a node built without a ledger answers from the chain alone");
     }
 }

@@ -1570,6 +1570,105 @@ mod mockery {
 
     test!(UnsubscribeResponse);
 
+    // ops 182–184: the settlement read, the precommit duty and the class contexts round-trip.
+    fn mock_hex() -> String {
+        format!("{:016x}{:016x}", mock::<u64>(), mock::<u64>())
+    }
+
+    impl Mock for GetPalwSettlementRequest {
+        fn mock() -> Self {
+            GetPalwSettlementRequest { daa_score: mock() }
+        }
+    }
+
+    test!(GetPalwSettlementRequest);
+
+    impl Mock for GetPalwSettlementResponse {
+        fn mock() -> Self {
+            GetPalwSettlementResponse {
+                available: mock(),
+                sink_daa: mock(),
+                daa_score: mock(),
+                settled: mock(),
+                depth: mock(),
+                pending_anchors: mock(),
+                depth_is_lower_bound: mock(),
+                safe_frontier_blue_score: mock(),
+                safe_frontier_daa: mock(),
+            }
+        }
+    }
+
+    test!(GetPalwSettlementResponse);
+
+    impl Mock for GetPrecommitDutyRequest {
+        fn mock() -> Self {
+            GetPrecommitDutyRequest { validator_id: mock_hex(), bond_outpoint: format!("{}:{}", mock_hex(), mock::<u32>()) }
+        }
+    }
+
+    test!(GetPrecommitDutyRequest);
+
+    impl Mock for RpcPrecommitDue {
+        fn mock() -> Self {
+            RpcPrecommitDue { epoch: mock(), anchor_hash: mock_hex(), anchor_daa_score: mock(), snapshot_commitment: mock_hex() }
+        }
+    }
+
+    test!(RpcPrecommitDue);
+
+    impl Mock for GetPrecommitDutyResponse {
+        fn mock() -> Self {
+            GetPrecommitDutyResponse {
+                available: mock(),
+                round_active: mock(),
+                sink_daa_score: mock(),
+                held_epoch: mock(),
+                held_anchor: mock_hex(),
+                due: mock(),
+            }
+        }
+    }
+
+    test!(GetPrecommitDutyResponse);
+
+    impl Mock for GetPalwClassContextsRequest {
+        fn mock() -> Self {
+            GetPalwClassContextsRequest {}
+        }
+    }
+
+    test!(GetPalwClassContextsRequest);
+
+    impl Mock for RpcPalwClassContext {
+        fn mock() -> Self {
+            RpcPalwClassContext {
+                class_id: mock_hex(),
+                model_id: mock_hex(),
+                n_ctx: mock(),
+                canonical_prefill_tokens: mock(),
+                canonical_decode_tokens: mock(),
+                max_context_tokens: mock(),
+                source: "chain_registration".to_string(),
+            }
+        }
+    }
+
+    test!(RpcPalwClassContext);
+
+    impl Mock for GetPalwClassContextsResponse {
+        fn mock() -> Self {
+            GetPalwClassContextsResponse {
+                available: mock(),
+                fp_max_prompt_tokens: mock(),
+                fp_max_decode_tokens: mock(),
+                classes: mock(),
+            }
+        }
+    }
+
+    test!(GetPalwClassContextsResponse);
+
     struct Misalign;
 
     impl Mock for Misalign {

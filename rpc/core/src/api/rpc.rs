@@ -732,6 +732,48 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwRoundLaneResponse::default())
     }
 
+    /// ADR-0127 Decision 3: whether what the selected chain accepted at `daa_score` is settled, and
+    /// its settlement depth in `Final` PALW anchors, from the sink's state.
+    async fn get_palw_settlement(&self, daa_score: u64) -> RpcResult<GetPalwSettlementResponse> {
+        self.get_palw_settlement_call(None, GetPalwSettlementRequest { daa_score }).await
+    }
+    async fn get_palw_settlement_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwSettlementRequest,
+    ) -> RpcResult<GetPalwSettlementResponse> {
+        let _ = connection;
+        Ok(GetPalwSettlementResponse { daa_score: request.daa_score, ..Default::default() })
+    }
+
+    /// MISAKA §5 round 2: the lock a validator carries on the selected chain and the epochs it still
+    /// owes a precommit for.
+    async fn get_precommit_duty(&self, request: GetPrecommitDutyRequest) -> RpcResult<GetPrecommitDutyResponse> {
+        self.get_precommit_duty_call(None, request).await
+    }
+    /// Default returns `available: false`; the node's core service overrides it.
+    async fn get_precommit_duty_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPrecommitDutyRequest,
+    ) -> RpcResult<GetPrecommitDutyResponse> {
+        let _ = (connection, request);
+        Ok(GetPrecommitDutyResponse::default())
+    }
+
+    /// The context each registered PALW class runs at, and the free-prompt lane's token limits.
+    async fn get_palw_class_contexts(&self) -> RpcResult<GetPalwClassContextsResponse> {
+        self.get_palw_class_contexts_call(None, GetPalwClassContextsRequest {}).await
+    }
+    async fn get_palw_class_contexts_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwClassContextsRequest,
+    ) -> RpcResult<GetPalwClassContextsResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwClassContextsResponse::default())
+    }
+
     /// MISAKA Compute Token Program (design §9.3): an asset's supply counters.
     async fn get_token_supply(&self, asset_id: u64) -> RpcResult<GetTokenSupplyResponse> {
         self.get_token_supply_call(None, GetTokenSupplyRequest { asset_id }).await
