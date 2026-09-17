@@ -5,8 +5,7 @@ use crate::{
         RuleError::{
             BadAcceptedIDMerkleRoot, BadCoinbaseTransaction, BadOverlayCommitment, BadPalwCommitmentShape, BadUTXOCommitment,
             ComputeOverlayRetired, IneligibleAttestationInBlock, InvalidTransactionsInUtxoContext, UnauthorizedUnbondRequestInBlock,
-            UnverifiablePrecommitEvidenceInBlock, UnverifiableSlashingEvidenceInBlock,
-            WrongHeaderPruningPoint,
+            UnverifiablePrecommitEvidenceInBlock, UnverifiableSlashingEvidenceInBlock, WrongHeaderPruningPoint,
         },
     },
     model::stores::{
@@ -34,11 +33,11 @@ use kaspa_consensus_core::{
         ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BlockEpochContribution, BondMutation, BondStatus, DnsParams, EpochTally,
         FeeSplitParams, OverlaySnapshot, PRECOMMIT_MLDSA87_CONTEXT, RewardedEpochSet, SlashingSideEffect, StakeAttestation,
         UNBOND_REQUEST_CONTEXT, attestations_from_accepted_txs, bond_mutations_from_accepted_txs, bond_release_daa_score,
-        decode_attestation_shard, deferred_quality_bonus_outputs_for_block, effective_bond_status,
-        epochs_finalized_at, precommit_evidence_from_accepted_txs, precommit_fault, recompute_epoch_tallies,
-        reserve_drip_outputs_for_block, resolve_slashing_side_effects, slashing_evidence_from_accepted_txs, split_validator_pool,
-        stake_attestation_message, stake_precommit_message, unbond_request_message, unbond_requests_from_accepted_txs,
-        validator_id_from_pubkey, validator_participation_reward_outputs, victim_compensation_outputs,
+        decode_attestation_shard, deferred_quality_bonus_outputs_for_block, effective_bond_status, epochs_finalized_at,
+        precommit_evidence_from_accepted_txs, precommit_fault, recompute_epoch_tallies, reserve_drip_outputs_for_block,
+        resolve_slashing_side_effects, slashing_evidence_from_accepted_txs, split_validator_pool, stake_attestation_message,
+        stake_precommit_message, unbond_request_message, unbond_requests_from_accepted_txs, validator_id_from_pubkey,
+        validator_participation_reward_outputs, victim_compensation_outputs,
     },
     hashing,
     header::Header,
@@ -1559,7 +1558,7 @@ impl VirtualStateProcessor {
     /// five subnetworks) is refused as a block rule. Below the fence they are accepted and do
     /// nothing, as they always did on every shipped chain.
     fn check_compute_overlay_retired(&self, txs: &[Transaction], daa_score: u64) -> BlockProcessResult<()> {
-        if !self.palw_compute_overlay_retired.as_ref().is_some_and(|f| f.is_active(daa_score)) {
+        if !self.palw_compute_overlay_retired.is_some_and(|f| f.is_active(daa_score)) {
             return Ok(());
         }
         match txs.iter().find(|tx| tx.subnetwork_id.is_compute_overlay()) {
@@ -1850,7 +1849,7 @@ impl VirtualStateProcessor {
 
         // ADR-0134: a compute-overlay transaction is not admitted to the mempool past the
         // retirement — the block rule above would refuse the template that carried it.
-        let retired_here = self.palw_compute_overlay_retired.as_ref().is_some_and(|f| f.clone().is_active(pov_daa_score));
+        let retired_here = self.palw_compute_overlay_retired.is_some_and(|f| f.is_active(pov_daa_score));
         if retired_here && mutable_tx.tx.subnetwork_id.is_compute_overlay() {
             return Err(TxRuleError::ComputeOverlayRetired(mutable_tx.tx.subnetwork_id.clone()));
         }

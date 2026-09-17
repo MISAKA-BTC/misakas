@@ -19561,4 +19561,30 @@ mod palw_overlay_carve_tests {
         assert_eq!(base.palw_overlay_carve_fence(), Some(t11_carve()), "a ConsensusV2 network with an overlay answers it");
         assert_eq!(none.palw_overlay_carve_fence(), None);
     }
+
+    /// **ADR-0134: the compute overlay retires at its own height on testnet-11, from genesis on a
+    /// card, and nowhere else** — and the fence is a bare `Option<ForkActivation>` the fork-id gate
+    /// names, so a build without it is refused past 7,201 rather than forked silently.
+    #[test]
+    fn adr0134_the_compute_overlay_retires_at_its_own_height() {
+        let rc = palw_rc_shipped_params();
+        assert_eq!(rc.palw_compute_overlay_retired, Some(ForkActivation::new(PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA)));
+        assert!(!rc.palw_compute_overlay_retired_at(PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA - 1));
+        assert!(rc.palw_compute_overlay_retired_at(PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA));
+        assert_ne!(PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA, PALW_RC_FLAG_DAY_7001_FENCE_DAA, "its own height, so the gate sees it");
+        assert!(rc.palw_fences_v1().iter().any(|(name, fence)| *name == "palw_compute_overlay_retired" && fence.is_some()));
+        for (name, preset) in [
+            ("mainnet", MAINNET_PARAMS.clone()),
+            ("testnet", TESTNET_PARAMS.clone()),
+            ("simnet", SIMNET_PARAMS.clone()),
+            ("devnet", devnet_shipped_params()),
+        ] {
+            assert!(preset.palw_compute_overlay_retired.is_none(), "{name}: no retirement scheduled");
+        }
+        // A card arms it from genesis (`mainnet_card_base_v1`); `a_carded_mainnet_arms_every_fence_testnet_11_arms`
+        // is the pin, since the card fixtures live in that module.
+        let mut never = rc.clone();
+        never.palw_compute_overlay_retired = Some(ForkActivation::never());
+        assert!(!never.palw_compute_overlay_retired_at(u64::MAX - 1), "never is never active");
+    }
 }

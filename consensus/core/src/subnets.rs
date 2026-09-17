@@ -405,4 +405,32 @@ mod tests {
         assert_eq!(SUBNETWORK_ID_PALW_FP_COMMITMENT, SubnetworkId::from_byte(0x4a));
         assert_eq!(SUBNETWORK_ID_PALW_LIFECYCLE, SubnetworkId::from_byte(0x4b));
     }
+
+    /// ADR-0134: exactly the VLT's five compute subnetworks are the overlay's; the stake, slashing,
+    /// precommit, EVM and native ids are not.
+    #[test]
+    fn adr0134_the_five_compute_subnetworks_are_the_overlays() {
+        for id in [
+            SUBNETWORK_ID_COMPUTE_CERTIFICATE,
+            SUBNETWORK_ID_COMPUTE_CHALLENGE,
+            SUBNETWORK_ID_COMPUTE_CAPABILITY,
+            SUBNETWORK_ID_COMPUTE_COMMITMENT,
+            SUBNETWORK_ID_COMPUTE_VERDICT,
+        ] {
+            assert!(id.is_compute_overlay() && id.is_dns_overlay(), "{id}");
+        }
+        for id in [
+            SUBNETWORK_ID_NATIVE,
+            SUBNETWORK_ID_COINBASE,
+            SUBNETWORK_ID_STAKE_BOND,
+            SUBNETWORK_ID_STAKE_ATTESTATION_SHARD,
+            SUBNETWORK_ID_SLASHING_EVIDENCE,
+            SUBNETWORK_ID_STAKE_UNBOND,
+            SUBNETWORK_ID_STAKE_PRECOMMIT,
+            SUBNETWORK_ID_PRECOMMIT_EVIDENCE,
+            SUBNETWORK_ID_EVM_DEPOSIT,
+        ] {
+            assert!(!id.is_compute_overlay(), "{id}");
+        }
+    }
 }

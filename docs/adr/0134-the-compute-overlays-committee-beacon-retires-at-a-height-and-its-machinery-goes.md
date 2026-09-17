@@ -105,9 +105,18 @@ ADR-0133 §9a.
 
 ## 6. Implementation record
 
-* 2026-09-17: the fence, the block and mempool rules, the deletions and the test rewrites; testnet-11's
-  fingerprint re-pinned for the new height; the fork-id schedule pin extended; the operator docs' schedule
-  lines updated. Verification in the closing commit.
+* 2026-09-17, `feat/palw-exec-lane-and-validator-retirement` (`4e1757af` and the closing commit): the fence,
+  the block and mempool rules, the deletions and the test rewrites; testnet-11's fingerprint re-pinned
+  `ab4e7b9c…` → **`dd805c9f2c4e9db3c0d6ffa2d87fa6ffb4263078ab8b7eb857f8fb11f8aa010c`** (the schedule gains 7,201, so
+  the fork-id gate separates this build from the 7,001 union build and the 7,000 release); the fork-id and
+  fence-set pins extended (`the_shipped_schedules_are_measured_not_assumed`, the gate sets, the flag-day
+  counterfactual, the carded-mainnet comparison — a card arms the retirement from genesis); the operator docs'
+  schedule lines print `…, 7001, 7201, 2125000`. New pins: `adr0134_the_compute_overlay_retires_at_its_own_height`,
+  `adr0134_the_five_compute_subnetworks_are_the_overlays`. Verification (this branch, the closing run):
+  consensus-core 2,140 (nine VLT/DNS committee tests deleted with their subject), consensus (evm) 296 (nine
+  compute-challenge tests deleted likewise), kaspad 98, misaka-cli 176, rpc-core 148, rpc-service 1, misaka-palw
+  24, misaka-palw-extension 2, pq-validator-core 12 + pq-validator 42, mining 92, integration
+  `rpc_tests::sanity_test` 1 — all green; clippy `-D warnings` over fourteen crates clean.
 
 ## 7. Number hygiene
 

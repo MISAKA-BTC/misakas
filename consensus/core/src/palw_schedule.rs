@@ -1004,7 +1004,7 @@ mod tests {
         // test below); here the PALW assignment is checked against a draw under the VLT's key.
         let cands = candidates();
         let palw_panel = select_replay_panel_v1(&h64(0x01), &h64(0x02), &h64(0x03), &h64(0xC1), &cands, 8);
-        assert_eq!(palw_panel.len(), 8);
+        assert!(!palw_panel.is_empty() && palw_panel.len() < cands.len(), "the executor is excluded: {}", palw_panel.len());
         let under_vlt_key: Vec<Hash64> = {
             let mut scored: Vec<(Hash64, Hash64)> = cands
                 .iter()
@@ -1019,7 +1019,7 @@ mod tests {
                 })
                 .collect();
             scored.sort();
-            scored.into_iter().take(8).map(|(_, id)| id).collect()
+            scored.into_iter().take(palw_panel.len()).map(|(_, id)| id).collect()
         };
         assert_ne!(under_vlt_key, palw_panel, "domain separation failed: the PALW draw equals a draw under the VLT key");
     }

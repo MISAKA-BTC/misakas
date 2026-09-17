@@ -40,8 +40,8 @@ use blake2b_simd::Params as Blake2bParams;
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::{Hash, Hash64};
 
-use crate::tx::TransactionOutpoint;
 use crate::TransactionId;
+use crate::tx::TransactionOutpoint;
 
 // ---------------------------------------------------------------------
 // Scale constants.

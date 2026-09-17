@@ -72,12 +72,11 @@ use kaspa_consensus_core::{
     config::genesis::GenesisBlock,
     dns_finality::{
         ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, AttestationContribution, BlockEpochContribution, BlockOverlayContribution,
-        BondMutation, CanonicalLaggedEpochAnchor, DnsCoinbaseSettlement, DnsParams, DnsReorgMode, DnsReorgOutcome, DnsRolloutStage, OverlaySnapshot,
-        PruningPointOverlaySnapshot, StakeBondRecord, StakePreferenceInputs, StakeScore, UNBOND_REQUEST_CONTEXT,
+        BondMutation, CanonicalLaggedEpochAnchor, DnsCoinbaseSettlement, DnsParams, DnsReorgMode, DnsReorgOutcome, DnsRolloutStage,
+        OverlaySnapshot, PruningPointOverlaySnapshot, StakeBondRecord, StakePreferenceInputs, StakeScore, UNBOND_REQUEST_CONTEXT,
         advance_dns_confirmation, aggregate_epoch_tallies, anchor_cutoff_blue_score, apply_bond_stamp, attestations_from_accepted_txs,
-        bond_mutations_from_accepted_txs, canonical_lagged_epoch_anchor, check_dns_reorg_rule,
-        compute_stake_score, derive_dns_health, dns_finality_fresh_for_bridge,
-        effective_bond_status, is_bond_active_at, is_dns_confirmed, ready_epoch_from_tip_blue_score,
+        bond_mutations_from_accepted_txs, canonical_lagged_epoch_anchor, check_dns_reorg_rule, compute_stake_score, derive_dns_health,
+        dns_finality_fresh_for_bridge, effective_bond_status, is_bond_active_at, is_dns_confirmed, ready_epoch_from_tip_blue_score,
         recompute_epoch_tallies, reorg_inputs_since_common_ancestor, revert_bond_stamp, stake_attestation_message,
         stake_preference_verdict, total_active_stake_by_epoch, unbond_request_message, unbond_requests_from_accepted_txs,
         validator_id_from_pubkey,
@@ -3216,8 +3215,7 @@ impl VirtualStateProcessor {
         let accepted_daa_score = self.headers_store.get_header(chain_block).unwrap().daa_score;
         let (min_bond, unbonding_floor) = self.dns_bond_floors();
         let txs = self.accepted_txs_of_chain_block(chain_block);
-        let muts = self.dns_bond_mutations_from_txs(&txs, bond_view, accepted_daa_score, min_bond, unbonding_floor);
-        muts
+        self.dns_bond_mutations_from_txs(&txs, bond_view, accepted_daa_score, min_bond, unbonding_floor)
     }
 
     /// Shared tail of the two bond-mutation derivations: map accepted txs to mutations, then —
@@ -8434,8 +8432,7 @@ impl VirtualStateProcessor {
     ) -> Vec<BondMutation> {
         let (min_bond, unbonding_floor) = self.dns_bond_floors();
         let txs = self.accepted_txs_from_acceptance_data(acceptance_data);
-        let muts = self.dns_bond_mutations_from_txs(&txs, bond_view, accepted_daa_score, min_bond, unbonding_floor);
-        muts
+        self.dns_bond_mutations_from_txs(&txs, bond_view, accepted_daa_score, min_bond, unbonding_floor)
     }
 
     /// kaspa-pq Phase 10 (ADR-0009 Addendum A.5): recompute the DNS StakeScore
