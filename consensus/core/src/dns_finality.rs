@@ -2055,25 +2055,6 @@ pub struct ValidatorAttestationTarget {
 // Byte-deterministic derivations.
 // ---------------------------------------------------------------------
 
-/// Derive a validator's overlay identity (`validator_id`, equal to its
-/// `validator_pubkey_hash`) from its ML-DSA-87 public key, per ADR-0008
-/// §"Hash64 consensus identity" and ADR-0012 (`validator_id ==
-/// BLAKE2b-512(validator_pubkey)`):
-///
-/// ```text
-/// validator_id = BLAKE2b-512(validator_pubkey)   // unkeyed, 64-byte output
-/// ```
-///
-/// This is the **canonical** derivation and the single source of truth for
-/// the overlay: the in-process validator service uses it to advertise its
-/// own identity, and the stateful `StakeBond` validation rule uses it to
-/// enforce `validator_pubkey_hash == validator_id_from_pubkey(validator_pubkey)`
-/// (the `owner_pubkey_hash` is derived identically from the owner key). It is
-/// intentionally distinct from the 32-byte BLAKE2b-256 P2PKH *spend* address
-/// payload: the overlay identity is the full 64-byte digest that the `Hash64`
-/// registry fields require. Unkeyed (no domain separator) to match the ADR
-/// text byte-for-byte; domain separation is unnecessary because the input is a
-/// fixed-length public key, not a multi-field structure.
 // (`validator_id_from_pubkey` is re-exported above from `crate::mldsa87_primitives::mldsa87_key_id`.)
 
 /// Local-only fingerprint of an ML-DSA-87 signature: unkeyed `BLAKE2b-512` of the
@@ -3547,21 +3528,6 @@ pub fn validator_participation_reward_outputs(
     (outputs, rewarded_keys)
 }
 
-/// Build the canonical kaspa-pq ML-DSA-87 P2PKH `scriptPublicKey`
-/// for a 32-byte spend payload (ADR-0002 / ADR-0013 Addendum B).
-///
-/// The 37-byte script is
-/// `OpDup ‖ OpBlake2b512 ‖ OpData64 ‖ <payload64> ‖ OpEqualVerify ‖ OpCheckSigMlDsa87`
-/// at `ScriptPublicKey` version 0 (ADR-0019 §8 — widened from the former
-/// 32-byte BLAKE2b-256 / `OpBlake2b`+`OpData32` form). The opcode bytes are
-/// pinned as literals here because `consensus-core` does not depend on full
-/// `kaspa-txscript` (only `kaspa-txscript-errors`); the output is
-/// **byte-identical** to
-/// `kaspa_txscript::pay_to_address_script(&Address::new(_, Version::PubKeyHashMlDsa87, payload))`
-/// and a parity test in the `consensus` crate
-/// (`processes::coinbase`) pins that equality. The `ScriptPublicKey`
-/// bytes are prefix-independent, so coinbase construction and
-/// validation need agree only on the 64-byte payload.
 // (`p2pkh_mldsa87_spk` is re-exported above from `crate::mldsa87_primitives`.)
 
 /// Build the validator-side coinbase outputs for a block (ADR-0013
