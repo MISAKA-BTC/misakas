@@ -106,9 +106,8 @@ pub enum TxRuleError {
     /// MISAKA Compute Token Program (design v0.1 §4.3): a transaction on the
     /// token-op band (0x30/0x31) carried a payload that failed stateless
     /// validation (see [`crate::token::validate_token_transfer_payload`] /
-    /// `validate_token_burn_payload`). Nonce currency, balance sufficiency and
-    /// the ML-DSA-87 signature are stateful and judged by the ledger fold —
-    /// where a failing op is void (skip-class), not consensus-fatal.
+    /// `validate_token_burn_payload`). That check is all there is: the token
+    /// overlay that applied an op is removed.
     #[error("transaction has an invalid token-op payload: {0}")]
     InvalidTokenPayload(crate::token::TokenTxError),
 

@@ -360,11 +360,11 @@ fn check_transaction_subnetwork(
     } else if tx.subnetwork_id == SUBNETWORK_ID_TOKEN_TRANSFER {
         // MISAKA Compute Token Program (design v0.1 §4.3): the token-op band is
         // routed + stateless-validated like every overlay band — admitting the
-        // ids is part of the coordinated release, exactly as 0x10-0x1a and
-        // 0x20-0x22 were. What the DAA fence governs is the *effect*: the
-        // ledger fold binds an op only past `tkn_activation_daa_score`, and a
-        // stateless-valid op that fails statefully (nonce, balance, signature)
-        // is void, not consensus-fatal.
+        // ids was part of a coordinated release, exactly as 0x10-0x1a and
+        // 0x20-0x22 were, so this shape check stays on every network. The token
+        // overlay that applied an op is removed: an admitted op moves nothing,
+        // and past the validator overlay's retirement (ADR-0126) the
+        // header-context door refuses both ids.
         validate_token_transfer_payload(&tx.payload).map_err(TxRuleError::InvalidTokenPayload)?;
         Ok(())
     } else if tx.subnetwork_id == SUBNETWORK_ID_TOKEN_BURN {

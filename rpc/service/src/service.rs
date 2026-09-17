@@ -750,23 +750,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
     async fn get_token_ledger_entry_call(
         &self,
         _connection: Option<&DynRpcConnection>,
-        request: GetTokenLedgerEntryRequest,
+        _request: GetTokenLedgerEntryRequest,
     ) -> RpcResult<GetTokenLedgerEntryResponse> {
-        // MISAKA Compute Token Program (design §9.3). `available: false` when the
-        // token program is not configured for this network, or the owner id does
-        // not parse as a 128-hex overlay identity. An absent row is NOT an error:
-        // it reads as the empty account (balance 0, nonce 0 — design §4.2).
-        let Ok(owner) = request.owner.parse::<kaspa_hashes::Hash64>() else {
-            return Ok(GetTokenLedgerEntryResponse::default());
-        };
-        let session = self.consensus_manager.consensus().unguarded_session();
-        let response = match session.async_get_token_account(request.asset_id, owner).await {
-            Some(account) => {
-                GetTokenLedgerEntryResponse { available: true, balance: account.balance.to_string(), nonce: account.nonce }
-            }
-            None => GetTokenLedgerEntryResponse::default(),
-        };
-        Ok(response)
+        // The token overlay is removed and no node holds a token ledger, so every request gets the
+        // "not configured" answer (`available: false`). The op stays for wire compatibility.
+        Ok(GetTokenLedgerEntryResponse::default())
     }
 
     // ------------------------------------------------------------------------------------------
@@ -1555,45 +1543,19 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
     async fn get_token_supply_call(
         &self,
         _connection: Option<&DynRpcConnection>,
-        request: GetTokenSupplyRequest,
+        _request: GetTokenSupplyRequest,
     ) -> RpcResult<GetTokenSupplyResponse> {
-        let session = self.consensus_manager.consensus().unguarded_session();
-        let response = match session.async_get_token_supply(request.asset_id).await {
-            Some(supply) => GetTokenSupplyResponse {
-                available: true,
-                minted: supply.minted.to_string(),
-                burned: supply.burned.to_string(),
-                circulating: supply.circulating().to_string(),
-            },
-            None => GetTokenSupplyResponse::default(),
-        };
-        Ok(response)
+        // The token overlay is removed: `available: false`, kept for wire compatibility.
+        Ok(GetTokenSupplyResponse::default())
     }
 
     async fn get_token_emission_info_call(
         &self,
         _connection: Option<&DynRpcConnection>,
-        request: GetTokenEmissionInfoRequest,
+        _request: GetTokenEmissionInfoRequest,
     ) -> RpcResult<GetTokenEmissionInfoResponse> {
-        let epoch = if request.latest { None } else { Some(request.epoch) };
-        let session = self.consensus_manager.consensus().unguarded_session();
-        let response = match session.async_get_token_emission_info(epoch).await {
-            Some(info) => GetTokenEmissionInfoResponse {
-                available: true,
-                epoch: info.epoch,
-                settled: info.settled,
-                budget: info.budget.to_string(),
-                network_compute: info.network_compute.to_string(),
-                paid_total: info.paid_total.to_string(),
-                audit_paid: info.audit_paid.to_string(),
-                reward_count: info.reward_count,
-                settlement_root: if info.settled { info.settlement_root.to_string() } else { String::new() },
-                next_settlement_epoch: info.next_settlement_epoch,
-                fold_cursor: info.fold_cursor,
-            },
-            None => GetTokenEmissionInfoResponse::default(),
-        };
-        Ok(response)
+        // The token overlay is removed: `available: false`, kept for wire compatibility.
+        Ok(GetTokenEmissionInfoResponse::default())
     }
 
     async fn get_dns_confirmation_call(
