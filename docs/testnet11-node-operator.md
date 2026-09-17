@@ -11,9 +11,8 @@ A normal full node validates and serves the chain without a model artifact, prod
 | sync / validate | `kaspad --testnet --netsuffix=11` |
 | PALW producer | `misaka --network testnet-11 mining setup` |
 | panel verifier | `misaka --network testnet-11 verifier setup` |
+| DNS-finality validator | `misaka --network testnet-11 validator setup` |
 | EVM history/RPC | see `misaka-evm-flat-backend-runbook-v0.1.md` |
-
-There is no validator role: the DNS-finality validator overlay is retired (PALW does not use validators), and `kaspad` refuses the old `--enable-validator` / `--validator-key` / `--stake-bond` / `--validator-mode` flags and `--node-profile=validator`. Remove them from a unit file before upgrading.
 
 ## Build
 
@@ -73,6 +72,7 @@ Also inspect the startup fingerprint, peer count, sync state, virtual DAA and re
 - `full`
 - `bootstrap-pruned`
 - `recovery-sync`
+- `validator`
 - `archive`
 - `public-rpc`
 

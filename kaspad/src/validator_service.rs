@@ -1,0 +1,1184 @@
+//! kaspa-pq Phase 11 (ADR-0010): in-process validator node service.
+//!
+//! Loads the ML-DSA-87 signing key (deriving the overlay `validator_id =
+//! BLAKE2b-512(public_key)` and the P2PKH-ML-DSA funding address) and runs an async
+//! heartbeat that, per epoch: evaluates eligibility (bond active),
+//! and — when eligible — builds + signs a stake attestation, wraps it in a fee-funded
+//! `StakeAttestationShard` transaction (funded from a UTXO at the validator's own
+//! address), and, in `Active` mode, submits it via `flow_context`. A persistent
+//! signed-epoch log (ADR-0011) guards against double-signing across restarts. After the
+//! attestations (the prevotes) it signs round 2 — a `StakePrecommit` for the epoch the chain's
+//! precommit duty names, declaring the lock the chain shows this validator holding.
+//!
+//! The service is registered only when `--enable-validator` is set, so default node
+//! behavior is unchanged; `Observer`/`Standby` modes never submit. The DNS overlay
+//! reorg gate itself remains dormant until activated per-network.
+
+use async_trait::async_trait;
+use kaspa_addresses::Prefix;
+use kaspa_consensus_core::dns_finality::{
+    BondStatus, DNS_PAYLOAD_VERSION_V1, PrecommitLock, SignedEpochCheckOutcome, SignedEpochRecord, StakeAttestation,
+    ValidatorAttestationTarget, ValidatorStatus, effective_bond_status, is_bond_active_at, signature_fingerprint,
+    single_attestation_shard,
+};
+use kaspa_consensus_core::mass::MassCalculator;
+use kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
+use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionId, TransactionOutpoint, UtxoEntry};
+use kaspa_consensusmanager::ConsensusManager;
+use kaspa_core::{
+    debug, info,
+    task::{
+        service::{AsyncService, AsyncServiceFuture},
+        tick::{TickReason, TickService},
+    },
+    trace, warn,
+};
+use kaspa_hashes::Hash64;
+use kaspa_mining::{mempool::tx::Orphan, model::tx_query::TransactionQuery};
+use kaspa_p2p_flows::flow_context::FlowContext;
+use kaspa_pq_validator_core::{
+    ATTESTATION_TX_FEE_FLOOR_SOMPI, SignedEpochStore, ValidatorKey, load_validator_seed, parse_stake_bond_ref, select_funding,
+};
+use kaspa_rpc_core::model::GetValidatorStatusResponse;
+use kaspa_rpc_service::service::ValidatorStatusProvider;
+use kaspa_txscript::pay_to_address_script;
+use kaspa_utxoindex::api::UtxoIndexProxy;
+use std::{
+    collections::HashSet,
+    fmt,
+    path::PathBuf,
+    str::FromStr,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+
+const VALIDATOR: &str = "validator-service";
+
+/// Heartbeat cadence for the skeleton worker loop. Later slices replace this
+/// fixed tick with epoch-boundary–driven attestation issuance.
+const HEARTBEAT_INTERVAL_SECS: u64 = 30;
+
+/// kaspa-pq DNS v3: max ready epochs to (re-)attest per heartbeat when catching up after
+/// downtime. Bounds per-tick work + fees; a deeper backlog converges over several ticks.
+const ATTESTATION_CATCH_UP_LIMIT: usize = 16;
+
+/// Bounded paginated scan of the virtual UTXO set when locating a funding UTXO at the
+/// validator's address. This is a full-set scan (NOT address-indexed); the utxoindex is
+/// the production optimization. Caps keep a large UTXO set from stalling the heartbeat.
+const FUNDING_SCAN_CHUNK_SIZE: usize = 1000;
+const MAX_FUNDING_SCAN_CHUNKS: usize = 64;
+
+/// Payload size used to price the precommit transaction. The payload is fixed-shape, so this is
+/// exact rather than an estimate: a 4627-byte ML-DSA-87 signature plus the payload's own fields.
+/// A slight over-estimate only overpays the relay minimum, which `relay_fee_for_compute_mass`
+/// already pads.
+///
+/// MISAKA §5 round 2: version + validator_id + bond outpoint + epoch + target (hash, daa) + the
+/// declared lock (epoch, hash).
+// MISAKA VLT PR 2: + 64 for the §5.1 `snapshot_commitment` the payload now carries.
+const PRECOMMIT_PAYLOAD_BYTES: usize = MLDSA87_SIGNATURE_LEN + 2 + 64 + 68 + 8 + 64 + 8 + 8 + 64 + 64 + 64;
+
+/// Operating mode for the in-process validator service (ADR-0010, operational modes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ValidatorMode {
+    /// Sign and submit stake attestations when eligible (full validator).
+    Active,
+    /// Track eligibility and stay warm, but never sign/submit (hot spare for failover).
+    Standby,
+    /// Observe only — never sign, never submit (telemetry / dry-run). Default.
+    #[default]
+    Observer,
+}
+
+impl fmt::Display for ValidatorMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            ValidatorMode::Active => "active",
+            ValidatorMode::Standby => "standby",
+            ValidatorMode::Observer => "observer",
+        })
+    }
+}
+
+impl FromStr for ValidatorMode {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "active" => Ok(ValidatorMode::Active),
+            "standby" => Ok(ValidatorMode::Standby),
+            "observer" => Ok(ValidatorMode::Observer),
+            other => Err(format!("unknown validator mode '{other}' (expected one of: active, standby, observer)")),
+        }
+    }
+}
+
+/// Static validator configuration derived from CLI args (`--enable-validator` and friends).
+#[derive(Debug, Clone)]
+pub struct ValidatorConfig {
+    pub mode: ValidatorMode,
+    /// Path to the ML-DSA-87 signing seed file (64 hex chars = 32 bytes), if provided.
+    pub key_path: Option<String>,
+    /// Stake-bond outpoint backing this validator's attestations, as "txid:index", if provided.
+    pub stake_bond: Option<String>,
+    /// Path to the persistent equivocation-safety log (`validator-state.json`). When
+    /// `None`, signing is disabled (the guard cannot be enforced without persistence).
+    pub state_path: Option<PathBuf>,
+    /// Network address prefix, used to render the validator's funding address for logs.
+    pub address_prefix: Prefix,
+    /// ADR-0009 Addendum A.3 network discriminator — the per-network genesis hash. The
+    /// attestation path never needs it (consensus hands the service a pre-bound message), but the
+    /// precommit path signs its own message, so it must bind the same discriminator consensus does.
+    pub network_id: Vec<u8>,
+}
+
+/// A point-in-time snapshot of the validator's operational status, produced by
+/// [`ValidatorService::status`] (consumed by the `getValidatorStatus` RPC). Combines
+/// service-local facts (mode, identity, signing history) with a fresh consensus read of
+/// eligibility (bond + active-set membership).
+#[derive(Clone, Debug)]
+pub struct ValidatorStatusSnapshot {
+    pub mode: ValidatorMode,
+    /// `None` if no signing key is configured/loaded.
+    pub validator_id: Option<Hash64>,
+    /// The P2PKH-ML-DSA funding address (bech32), if a key is loaded.
+    pub funding_address: Option<String>,
+    /// Current epoch at the sink (`None` if the overlay is not configured for this network).
+    pub epoch: Option<u64>,
+    /// Effective bond status at the sink (`None` if no bond is configured/found).
+    pub bond_status: Option<BondStatus>,
+    /// Whether the validator is in the current epoch's active validator set.
+    pub is_active_validator: bool,
+    /// Highest epoch with a local signing record (the equivocation log).
+    pub last_signed_epoch: Option<u64>,
+    /// Coarse, RPC-stable status code (ADR-0010/0011).
+    pub status: ValidatorStatus,
+}
+
+/// Derive the coarse [`ValidatorStatus`] from the validator's mode and its
+/// consensus-derived eligibility facts. Without a key, or outside `Active` mode, the
+/// validator never produces an attestation, so it maps to `DryRun`; `Active` walks the
+/// bond → active-set → already-signed ladder.
+fn derive_validator_status(
+    mode: ValidatorMode,
+    key_loaded: bool,
+    bond_status: Option<BondStatus>,
+    is_active_validator: bool,
+    signed_this_epoch: bool,
+) -> ValidatorStatus {
+    if !key_loaded || mode != ValidatorMode::Active {
+        return ValidatorStatus::DryRun;
+    }
+    match bond_status {
+        None => ValidatorStatus::BondNotFound,
+        Some(BondStatus::Pending) => ValidatorStatus::BondPending,
+        Some(BondStatus::Unbonding) => ValidatorStatus::Unbonding,
+        Some(BondStatus::Slashed) => ValidatorStatus::Slashed,
+        Some(BondStatus::Active) => {
+            if !is_active_validator {
+                ValidatorStatus::ActiveIdle
+            } else if signed_this_epoch {
+                ValidatorStatus::SignedThisEpoch
+            } else {
+                ValidatorStatus::ActiveEligible
+            }
+        }
+    }
+}
+
+/// In-process validator node service (skeleton).
+/// In-memory funding-chain state for attestation submission. The node's utxoindex keeps listing a
+/// just-spent funding UTXO as available until our tx is mined, so re-querying it re-selects an
+/// outpoint our own in-flight tx already spent → "output … already spent … in the mempool". We
+/// instead chain off the previous tx's change output (`pending_change`) and exclude outpoints we
+/// have already spent in flight (`inflight_spent`, self-pruned to what the node still lists). See
+/// [`kaspa_pq_validator_core::select_funding`]. Reset on restart (a fresh chain is reselected).
+#[derive(Default)]
+struct FundingChain {
+    pending_change: Option<(TransactionOutpoint, UtxoEntry)>,
+    inflight_spent: HashSet<TransactionOutpoint>,
+    /// kaspa-pq DNS-v3 hardening (Fix B — port of the external validator's stall recovery, audit
+    /// M-2): the tx id of the attestation that produced the current `pending_change` chain head.
+    /// `None` when there is no in-flight chain. Used for a cheap per-txid mempool residency lookup
+    /// (`MiningManagerProxy::has_transaction`) to detect whether the head mined/dropped, rather than
+    /// re-scanning the whole funding address's UTXO set.
+    chain_head_txid: Option<TransactionId>,
+    /// kaspa-pq DNS-v3 hardening (Fix B): the epoch whose attestation produced the current
+    /// `pending_change` chain head. `None` when there is no in-flight chain. Used to count distinct
+    /// served epochs the head has gone unconfirmed (advance the stall counter at most once/epoch).
+    chain_head_epoch: Option<u64>,
+    /// kaspa-pq DNS-v3 hardening (Fix B): consecutive served epochs the funding-chain head has
+    /// stayed in the mempool without confirming. Reset to 0 whenever the head leaves the mempool
+    /// (mined or dropped) or the local pending chain is cleared. A present head is NOT abandoned:
+    /// during congestion, re-funding from confirmed UTXOs creates parallel funding chains and
+    /// amplifies the flood.
+    stalled_epochs: u64,
+}
+
+impl FundingChain {
+    /// Update stall bookkeeping for the current funding-chain head.
+    ///
+    /// Returns true when the caller should warn. A head that is still in the mempool is kept as the
+    /// authoritative next funding UTXO; only the stall counter/logging advances. A head that is gone
+    /// (mined or dropped) clears the stall counter, and the submit path handles any dropped-head
+    /// failure by resetting the chain before selecting fresh confirmed funding.
+    fn note_head_mempool_status(&mut self, latest_epoch: u64, head_unmined: bool) -> bool {
+        if self.pending_change.is_none() {
+            self.stalled_epochs = 0;
+            return false;
+        }
+
+        if head_unmined {
+            if self.chain_head_epoch != Some(latest_epoch) {
+                self.stalled_epochs = self.stalled_epochs.saturating_add(1);
+                self.chain_head_epoch = Some(latest_epoch);
+            }
+            self.stalled_epochs >= STALL_WARN_EPOCHS
+        } else {
+            self.stalled_epochs = 0;
+            self.chain_head_epoch = None;
+            false
+        }
+    }
+}
+
+/// kaspa-pq DNS-v3 hardening (Fix B): consecutive served epochs before warning that the
+/// funding-chain head is still pending. The chain is kept while the head remains in mempool.
+const STALL_WARN_EPOCHS: u64 = 3;
+
+pub struct ValidatorService {
+    config: ValidatorConfig,
+    consensus_manager: Arc<ConsensusManager>,
+    tick_service: Arc<TickService>,
+    /// Used to submit attestation-shard transactions to the local mempool + p2p.
+    flow_context: Arc<FlowContext>,
+    /// Loaded signing key + derived identity. `None` until/unless a valid key is configured.
+    key: Option<ValidatorKey>,
+    /// Parsed stake-bond outpoint, if `--stake-bond` was provided and well-formed.
+    bond_outpoint: Option<TransactionOutpoint>,
+    /// Persistent equivocation-safety log. `None` (signing disabled) unless a key, bond,
+    /// and state path are all present and the on-disk log belongs to this validator.
+    signed_epochs: Mutex<Option<SignedEpochStore>>,
+    /// Address-indexed UTXO lookup for funding (when `--utxoindex` is enabled); falls back
+    /// to a bounded virtual-UTXO-set scan otherwise.
+    utxoindex: Option<UtxoIndexProxy>,
+    /// Mass-based fee (sompi) for the attestation-shard tx, computed once at startup.
+    attestation_fee_sompi: u64,
+    /// Network coinbase-maturity (blocks): a coinbase funding UTXO younger than this cannot be
+    /// spent. Captured once at startup from the consensus params.
+    coinbase_maturity: u64,
+    /// Local funding chain so consecutive attestations (within a heartbeat's catch-up loop and
+    /// across heartbeats) don't re-select a UTXO an in-flight tx already spent.
+    funding_chain: Mutex<FundingChain>,
+    /// Mass calculator, kept for the precommit path: its transaction is priced through the
+    /// payload-sized [`ValidatorKey::estimate_overlay_fee`] at submission rather than once at
+    /// startup like the attestation shard.
+    mass_calculator: MassCalculator,
+}
+
+impl ValidatorService {
+    pub fn new(
+        config: ValidatorConfig,
+        consensus_manager: Arc<ConsensusManager>,
+        tick_service: Arc<TickService>,
+        flow_context: Arc<FlowContext>,
+        mass_calculator: MassCalculator,
+        utxoindex: Option<UtxoIndexProxy>,
+        coinbase_maturity: u64,
+    ) -> Self {
+        // Validate configuration eagerly so misconfiguration surfaces at startup, not at first use.
+        let key = match &config.key_path {
+            Some(path) => match load_validator_seed(path) {
+                Ok(seed) => {
+                    let key = ValidatorKey::from_seed(seed);
+                    info!("[{VALIDATOR}] loaded validator signing key from {path} (validator_id={})", key.validator_id);
+                    info!(
+                        "[{VALIDATOR}] funding address: {} — send UTXOs here to fund attestation-shard submission",
+                        key.funding_address(config.address_prefix)
+                    );
+                    Some(key)
+                }
+                Err(err) => {
+                    warn!("[{VALIDATOR}] {err} — validator will run without a signing key");
+                    None
+                }
+            },
+            None => None,
+        };
+        let bond_outpoint = match &config.stake_bond {
+            Some(s) => match parse_stake_bond_ref(s) {
+                Ok(outpoint) => Some(outpoint),
+                Err(err) => {
+                    warn!("[{VALIDATOR}] {err}");
+                    None
+                }
+            },
+            None => None,
+        };
+        // The equivocation-safety log requires a key (validator_id), a bond, and a path.
+        // A load failure (e.g. a foreign state file) leaves it `None`, which disables signing.
+        let signed_epochs = match (&key, bond_outpoint, &config.state_path) {
+            (Some(key), Some(outpoint), Some(path)) => match SignedEpochStore::load_or_empty(path.clone(), key.validator_id, outpoint)
+            {
+                Ok(store) => {
+                    info!("[{VALIDATOR}] equivocation-safety log {} ({} prior epoch(s))", path.display(), store.record_count());
+                    Some(store)
+                }
+                Err(err) => {
+                    warn!("[{VALIDATOR}] {err} — signing disabled until resolved");
+                    None
+                }
+            },
+            _ => None,
+        };
+        // The attestation-shard tx shape is fixed, so its mass-based fee is computed once.
+        let attestation_fee_sompi = key
+            .as_ref()
+            .map_or(ATTESTATION_TX_FEE_FLOOR_SOMPI, |k| k.estimate_attestation_fee(&mass_calculator, config.address_prefix));
+        Self {
+            config,
+            consensus_manager,
+            tick_service,
+            flow_context,
+            key,
+            bond_outpoint,
+            signed_epochs: Mutex::new(signed_epochs),
+            utxoindex,
+            attestation_fee_sompi,
+            coinbase_maturity,
+            funding_chain: Mutex::new(FundingChain::default()),
+            mass_calculator,
+        }
+    }
+
+    pub async fn worker(self: &Arc<ValidatorService>) {
+        let validator_id = match &self.key {
+            Some(key) => key.validator_id.to_string(),
+            None => "none".to_string(),
+        };
+        info!(
+            "[{VALIDATOR}] starting (mode={}, validator_id={}, stake-bond={})",
+            self.config.mode,
+            validator_id,
+            self.config.stake_bond.as_deref().unwrap_or("none"),
+        );
+        if self.config.mode == ValidatorMode::Active && self.key.is_none() {
+            warn!("[{VALIDATOR}] mode=active but no signing key is loaded; no attestations can be produced");
+        }
+
+        loop {
+            if let TickReason::Shutdown = self.tick_service.tick(Duration::from_secs(HEARTBEAT_INTERVAL_SECS)).await {
+                break;
+            }
+
+            // Before reading any consensus state: is this node entitled to act on the chain it is
+            // holding at all?
+            //
+            // This service reads consensus directly and submits attestation transactions through
+            // `flow_context` (see `try_attest` / `run_precommit_cycle`). It never went through the
+            // RPC `is_synced` flag, so the gate that stops the EXTERNAL validator did nothing here:
+            // an in-process validator would happily attest mid-IBD, on a chain that `staging.commit()`
+            // had swapped in minutes earlier and that nothing had compared. Attesting that chain is
+            // what mints the branch-local DNS anchor which then refuses the opposing branch forever
+            // — precisely the amplification this work exists to break.
+            //
+            // Note this asks the participation gate, NOT `should_mine`: that folds in the sync-rate
+            // rule, which can hold true on a chain nobody has compared, and peer connectivity, which
+            // is a mining concern. Signing needs the stricter question.
+            if !self.flow_context.is_consensus_participation_allowed() {
+                info!(
+                    "[{VALIDATOR}] status=ChainReviewPending (participation={}); not attesting or signing",
+                    self.flow_context.chain_participation().state().as_str()
+                );
+                continue;
+            }
+
+            // Heartbeat: report the node tip, the validator's own bond status, and its
+            // active-set membership for the current epoch. When eligible (bond active AND
+            // in the active set) it also builds + signs the attestation for the sink and
+            // verifies it locally — but does NOT gossip or submit it (the equivocation
+            // guard and submission are later slices).
+            let my_id = self.key.as_ref().map(|k| k.validator_id);
+            let session = self.consensus_manager.consensus().session().await;
+            let sink = session.async_get_sink_daa_score_timestamp().await;
+            let dns = session.async_get_dns_confirmation().await;
+            // The overlay reads return None on non-overlay networks too, so skip the
+            // lookups there to avoid misleading status lines.
+            let (bond, active_set, attestation_targets) = if dns.is_some() {
+                let bond = match self.bond_outpoint {
+                    Some(outpoint) => session.async_get_stake_bond(outpoint).await,
+                    None => None,
+                };
+                let active_set = session.async_get_active_validator_set().await;
+                // Eligible iff our bond is active AND our validator_id is in the active set.
+                let eligible = match (&bond, &active_set, my_id) {
+                    (Some(b), Some(c), Some(id)) => is_bond_active_at(b, sink.daa_score) && c.members.contains(&id),
+                    _ => false,
+                };
+                // kaspa-pq DNS v3: sign the canonical lagged anchor(s). Once we have signed at
+                // least one epoch, batch-sign every ready epoch SINCE then (catch-up after
+                // downtime / when epoch_duration < heartbeat); on the first run just take the
+                // latest ready target. `SignedEpochStore` dedups, so re-offered epochs are no-ops.
+                let attestation_targets = match (eligible, self.bond_outpoint) {
+                    (true, Some(outpoint)) => {
+                        let last_signed = self.signed_epochs.lock().unwrap().as_ref().and_then(|s| s.last_signed_epoch());
+                        match last_signed {
+                            Some(e) => {
+                                session.async_get_validator_attestation_targets(outpoint, e + 1, ATTESTATION_CATCH_UP_LIMIT).await
+                            }
+                            None => session.async_get_validator_attestation_target(outpoint).await.into_iter().collect(),
+                        }
+                    }
+                    _ => Vec::new(),
+                };
+                (bond, active_set, attestation_targets)
+            } else {
+                (None, None, Vec::new())
+            };
+            drop(session);
+
+            match dns {
+                Some(conf) => {
+                    let bond_status = match (self.bond_outpoint.is_some(), &bond) {
+                        (false, _) => "unconfigured".to_string(),
+                        (true, Some(b)) => {
+                            format!("{:?}(active={})", effective_bond_status(b, sink.daa_score), is_bond_active_at(b, sink.daa_score))
+                        }
+                        (true, None) => "not-found".to_string(),
+                    };
+                    let active_set_status = match (&active_set, my_id) {
+                        (Some(c), Some(id)) => format!(
+                            "epoch={} is_active_validator={} (active_validators={})",
+                            c.epoch,
+                            c.members.contains(&id),
+                            c.active_validator_count
+                        ),
+                        (Some(c), None) => {
+                            format!("epoch={} no-signing-key (active_validators={})", c.epoch, c.active_validator_count)
+                        }
+                        (None, _) => "unavailable".to_string(),
+                    };
+                    info!(
+                        "[{VALIDATOR}] heartbeat: mode={} sink_daa={} bond={} active_set=[{}] dns_overlay=configured (stage={:?}, dns_confirmed={})",
+                        self.config.mode, sink.daa_score, bond_status, active_set_status, conf.rollout_stage, conf.dns_confirmed
+                    );
+
+                    // Eligible: fund + sign + (in Active mode) submit each ready epoch's
+                    // attestation shard tx, under the per-epoch equivocation guard.
+                    if let (Some(key), Some(outpoint)) = (&self.key, self.bond_outpoint) {
+                        // kaspa-pq DNS-v3 hardening (Fix A — anchor-deep start-gate): skip any epoch
+                        // whose canonical lagged anchor predates the bond's activation. The consensus
+                        // §B.4 rule (attestation_reward_eligibility → active_bond_at(.., target_daa_score))
+                        // makes ANY block including such a shard INVALID, so it would submit-OK but never
+                        // mine and would stall the funding chain on a young chain (e.g. just after a
+                        // re-genesis). Gate on the exact §B.4 condition.
+                        let activation = bond.as_ref().map(|b| b.activation_daa_score).unwrap_or(u64::MAX);
+                        // kaspa-pq DNS-v3 hardening (Fix B): ONCE per heartbeat (before the catch-up
+                        // loop, which legitimately chains many epochs per tick), check whether the
+                        // funding-chain head is still pending. If it is still in mempool, keep the
+                        // pending chain and warn after STALL_WARN_EPOCHS; do not re-fund from a
+                        // confirmed UTXO, because congestion-time re-funding creates parallel chains
+                        // and amplifies the flood. Keyed on the latest served epoch so the counter
+                        // advances at most once per wall-clock epoch.
+                        if let Some(latest_epoch) = attestation_targets.iter().map(|t| t.epoch).max() {
+                            self.recover_stalled_funding_chain(latest_epoch).await;
+                        }
+                        for target in &attestation_targets {
+                            if target.target_daa_score < activation {
+                                trace!(
+                                    "[{VALIDATOR}] gating epoch {} target_daa={} < activation_daa={} (bond not anchor-deep yet)",
+                                    target.epoch, target.target_daa_score, activation
+                                );
+                                continue;
+                            }
+                            self.try_attest(target, key, outpoint).await;
+                        }
+
+                        // MISAKA §5 round 2, immediately after the prevotes. Nothing is
+                        // DNS-confirmed until the precommit round reaches quorum, so the lock is
+                        // signed in the same heartbeat as the prevotes that made it due.
+                        self.run_precommit_cycle(key, outpoint).await;
+                    }
+                }
+                None => {
+                    trace!("[{VALIDATOR}] heartbeat: mode={} sink_daa={} dns_overlay=not-configured", self.config.mode, sink.daa_score)
+                }
+            }
+        }
+
+        trace!("[{VALIDATOR}] worker exiting");
+    }
+
+    /// On-demand snapshot of the validator's operational status, for the `getValidatorStatus`
+    /// RPC. Combines local config/identity + the signing log with a fresh consensus read of
+    /// bond + active-set eligibility.
+    pub async fn status(&self) -> ValidatorStatusSnapshot {
+        let validator_id = self.key.as_ref().map(|k| k.validator_id);
+        let funding_address = self.key.as_ref().map(|k| k.funding_address(self.config.address_prefix).to_string());
+
+        let session = self.consensus_manager.consensus().session().await;
+        let active_set = session.async_get_active_validator_set().await;
+        let bond = match self.bond_outpoint {
+            Some(outpoint) => session.async_get_stake_bond(outpoint).await,
+            None => None,
+        };
+        let sink_daa = session.async_get_sink_daa_score_timestamp().await.daa_score;
+        drop(session);
+
+        let epoch = active_set.as_ref().map(|c| c.epoch);
+        let bond_status = bond.as_ref().map(|b| effective_bond_status(b, sink_daa));
+        let is_active_validator = matches!((&active_set, validator_id), (Some(c), Some(id)) if c.members.contains(&id));
+        let (last_signed_epoch, signed_this_epoch) = {
+            let guard = self.signed_epochs.lock().unwrap();
+            match guard.as_ref() {
+                Some(s) => (s.last_signed_epoch(), epoch.map(|e| s.has_signed_epoch(e)).unwrap_or(false)),
+                None => (None, false),
+            }
+        };
+        let status =
+            derive_validator_status(self.config.mode, self.key.is_some(), bond_status, is_active_validator, signed_this_epoch);
+
+        ValidatorStatusSnapshot {
+            mode: self.config.mode,
+            validator_id,
+            funding_address,
+            epoch,
+            bond_status,
+            is_active_validator,
+            last_signed_epoch,
+            status,
+        }
+    }
+
+    /// kaspa-pq DNS-v3 hardening (Fix B). Run once per heartbeat (NOT per epoch — the
+    /// catch-up loop chains many epochs per tick).
+    ///
+    /// If the funding-chain head is still resident in the local mempool (unmined), advance the
+    /// per-epoch stall counter at most once per distinct served `latest_epoch`. If it remains
+    /// present, keep the pending chain and warn only; do not re-fund from a confirmed node UTXO,
+    /// because congestion-time re-funding creates parallel chains and amplifies the mempool flood.
+    /// If the head has left the mempool (mined or dropped), reset the counter.
+    ///
+    /// Behavioral note vs. the external validator: that sidecar's per-txid `get_mempool_entry`
+    /// returns a tri-state (Present / Gone / Unknown-on-RPC-error). In-process there is no RPC, so
+    /// `has_transaction` is a direct in-memory read with only Present / Gone — there is no transient
+    /// error to suppress, so the Unknown "make no change" branch is intentionally absent.
+    async fn recover_stalled_funding_chain(&self, latest_epoch: u64) {
+        // Snapshot the head id under the lock; do the (await-ing) mempool read without holding it.
+        let (has_head, head_txid) = {
+            let chain = self.funding_chain.lock().unwrap();
+            (chain.pending_change.is_some(), chain.chain_head_txid)
+        };
+        if !has_head {
+            // No in-flight chain ⇒ nothing can be stalled.
+            self.funding_chain.lock().unwrap().stalled_epochs = 0;
+            return;
+        }
+        // Is the head still unmined? A cheap per-txid mempool lookup (TransactionsOnly, mirroring the
+        // external validator's `get_mempool_entry(txid, false, false)`), never a full address scan.
+        let head_unmined = match head_txid {
+            Some(txid) => self.flow_context.mining_manager().clone().has_transaction(txid, TransactionQuery::TransactionsOnly).await,
+            // A pending change with no recorded head id (e.g. carried over an upgrade): treat as mined
+            // so we don't count a phantom stall; the next submit re-stamps the head id.
+            None => false,
+        };
+        let mut chain = self.funding_chain.lock().unwrap();
+        // Re-check under the lock: a concurrent path may have cleared the head (e.g. a submit failure
+        // in try_attest) while we were awaiting the mempool read.
+        if chain.pending_change.is_none() {
+            chain.stalled_epochs = 0;
+            return;
+        }
+        let should_warn = chain.note_head_mempool_status(latest_epoch, head_unmined);
+        if should_warn {
+            warn!(
+                "[{VALIDATOR}] funding-chain head still in mempool for {} epochs (now epoch {latest_epoch}); keeping pending chain, not re-funding",
+                chain.stalled_epochs
+            );
+        }
+    }
+
+    /// Async attestation cycle for an eligible epoch: discover a funding UTXO, build the
+    /// guarded + signed shard transaction, and — in `Active` mode — submit it. No-ops
+    /// cleanly when there is no funding UTXO or the equivocation guard blocks/skips.
+    async fn try_attest(&self, target: &ValidatorAttestationTarget, key: &ValidatorKey, bond_outpoint: TransactionOutpoint) {
+        // Re-checked here, not only at the top of the heartbeat.
+        //
+        // This is where an attestation is signed, and the gate must be enforced AT the dangerous
+        // operation rather than upstream of it: a future caller that reaches this function by some
+        // other path — a new mode, an RPC trigger, a retry — would otherwise sign on a chain the
+        // node has said it cannot vouch for. The whole class of bug being fixed here is a signer
+        // that decided sync state for itself.
+        if !self.flow_context.is_consensus_participation_allowed() {
+            debug!("[{VALIDATOR}] not attesting: chain participation is {}", self.flow_context.chain_participation().state().as_str());
+            return;
+        }
+        let funding_spk = pay_to_address_script(&key.funding_address(self.config.address_prefix));
+        let fee = self.attestation_fee_sompi;
+        let candidates = self.find_funding_candidates(&funding_spk).await;
+        let virtual_daa = self.consensus_manager.consensus().unguarded_session().get_virtual_daa_score();
+
+        // Select funding under the chain lock (NOT held across the await below). Prefer chaining off
+        // our own unconfirmed change so we never re-select a UTXO the node's utxoindex still lists as
+        // available but which an in-flight attestation tx of ours already spent ("already spent in
+        // the mempool"). This matters most in the per-heartbeat catch-up loop, where several ready
+        // epochs are attested before any of their txs are mined.
+        let funding = {
+            let mut chain = self.funding_chain.lock().unwrap();
+            let node_outpoints: HashSet<TransactionOutpoint> = candidates.iter().map(|(op, _)| *op).collect();
+            // Forget in-flight exclusions the node no longer lists (mined ⇒ safe to forget): self-heals.
+            chain.inflight_spent.retain(|op| node_outpoints.contains(op));
+            // If our chain head has been mined (now in the node set), resync to the node view and
+            // clear the stall-tracking state (the head confirmed ⇒ not stalled).
+            if let Some((head, _)) = &chain.pending_change
+                && node_outpoints.contains(head)
+            {
+                chain.pending_change = None;
+                chain.chain_head_txid = None;
+                chain.chain_head_epoch = None;
+                chain.stalled_epochs = 0;
+            }
+            select_funding(&chain.pending_change, &chain.inflight_spent, candidates, fee, virtual_daa, self.coinbase_maturity).ok()
+        };
+
+        // **A non-Active mode signs nothing.** `guarded_build_funded` flushes the signed-epoch
+        // record before it returns, and the heartbeat's cursor is that log — so a node started
+        // Passive used to consume every epoch it observed, permanently, while never submitting
+        // anything (audit M1-4). The operator signal that mode is what is holding the node back is
+        // kept; the state change is not.
+        if self.config.mode != ValidatorMode::Active {
+            info!(
+                "[{VALIDATOR}] eligible for epoch {} but mode={} — not signing (Active is required to attest)",
+                target.epoch, self.config.mode
+            );
+            return;
+        }
+        let Some(tx) = self.guarded_build_funded(target, key, bond_outpoint, funding.clone(), fee) else {
+            return;
+        };
+        let tx_id = tx.id();
+        if self.config.mode == ValidatorMode::Active {
+            // Same path the RPC `submitTransaction` uses: validate + insert to mempool, then broadcast.
+            let session = self.consensus_manager.consensus().unguarded_session();
+            match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
+                Ok(()) => {
+                    info!("[{VALIDATOR}] submitted attestation shard tx {tx_id} for epoch {}", target.epoch);
+                    // Advance the funding chain: this tx's change output (index 0, back to self) funds
+                    // the next ready epoch. The tx id excludes signature scripts, so it is stable.
+                    if let Some((funding_outpoint, funding_entry)) = funding {
+                        let mut chain = self.funding_chain.lock().unwrap();
+                        chain.inflight_spent.insert(funding_outpoint);
+                        let change =
+                            UtxoEntry::new(funding_entry.amount - fee, funding_entry.script_public_key.clone(), virtual_daa, false);
+                        chain.pending_change = Some((TransactionOutpoint::new(tx_id, 0), change));
+                        // kaspa-pq DNS-v3 hardening (Fix B, audit M-2): record the head tx id (for the
+                        // per-txid mempool confirmation lookup) and the epoch that produced it (so the
+                        // stall counter advances once per unconfirmed epoch). A fresh head is, by
+                        // definition, not yet stalled.
+                        chain.chain_head_txid = Some(tx_id);
+                        chain.chain_head_epoch = Some(target.epoch);
+                        chain.stalled_epochs = 0;
+                    }
+                }
+                Err(e) => {
+                    warn!("[{VALIDATOR}] submit of attestation shard tx {tx_id} (epoch {}) failed: {e}", target.epoch);
+                    // Drop the chain head (and its stall-tracking state) so the next attempt reselects
+                    // from the node view. No new change output exists, so there is nothing to chain.
+                    let mut chain = self.funding_chain.lock().unwrap();
+                    chain.pending_change = None;
+                    chain.chain_head_txid = None;
+                    chain.chain_head_epoch = None;
+                    chain.stalled_epochs = 0;
+                }
+            }
+        } else {
+            info!(
+                "[{VALIDATOR}] built funded attestation shard tx {tx_id} for epoch {} — mode={} so NOT submitting",
+                target.epoch, self.config.mode
+            );
+        }
+    }
+
+    /// List the UTXOs locked to `funding_spk` (the validator's own P2PKH-ML-DSA address). Prefers the
+    /// address-indexed utxoindex lookup; falls back to a bounded virtual-UTXO-set scan when
+    /// `--utxoindex` is not enabled. Returns them filtered ONLY by our own bond outpoint (see below);
+    /// fee/maturity/in-flight filtering and the chain-head-vs-node choice are [`select_funding`]'s job.
+    ///
+    /// kaspa-pq (bond spend-gate hardening): EXCLUDE our own `bond_outpoint` from funding candidates.
+    /// A StakeBond's output-0 is a normal owner-controlled UTXO whose stake-lock is enforced solely by
+    /// the consensus bond spend-gate (ADR-0016 §D.2) — it is typically the LARGEST mature non-coinbase
+    /// UTXO at the funding address, so `select_funding` (which picks max-by-amount) would otherwise
+    /// select it. Building an attestation tx that spends a non-releasable bond gets the carrying block
+    /// disqualified (`NonReleasableBondSpendInBlock`), so the tx is mempool-accepted but never mines —
+    /// a validator self-wedge. The explicit unbond CLI path already excludes it
+    /// (kaspa-pq-validator/src/main.rs); this mirrors that onto the attestation funding path.
+    async fn find_funding_candidates(&self, funding_spk: &ScriptPublicKey) -> Vec<(TransactionOutpoint, UtxoEntry)> {
+        let bond_outpoint = self.bond_outpoint;
+        if let Some(utxoindex) = &self.utxoindex {
+            // Address-indexed: O(matches) instead of O(utxo-set). The utxoindex stores a
+            // compact entry (no spk — it's the lookup key), so rebuild the full UtxoEntry.
+            let Ok(set) = utxoindex.clone().get_utxos_by_script_public_keys([funding_spk.clone()].into_iter().collect()).await else {
+                return Vec::new();
+            };
+            return set
+                .into_values()
+                .flatten()
+                .filter(|(outpoint, _)| Some(*outpoint) != bond_outpoint)
+                .map(|(outpoint, c)| (outpoint, UtxoEntry::new(c.amount, funding_spk.clone(), c.block_daa_score, c.is_coinbase)))
+                .collect();
+        }
+        // Fallback: bounded paginated scan of the virtual UTXO set, collecting all of OUR outputs.
+        let session = self.consensus_manager.consensus().session().await;
+        let mut from: Option<TransactionOutpoint> = None;
+        let mut candidates = Vec::new();
+        for _ in 0..MAX_FUNDING_SCAN_CHUNKS {
+            let chunk = session.async_get_virtual_utxos(from, FUNDING_SCAN_CHUNK_SIZE, from.is_some()).await;
+            if chunk.is_empty() {
+                break;
+            }
+            from = chunk.last().map(|(outpoint, _)| *outpoint);
+            candidates.extend(
+                chunk
+                    .into_iter()
+                    .filter(|(outpoint, entry)| &entry.script_public_key == funding_spk && Some(*outpoint) != bond_outpoint),
+            );
+        }
+        candidates
+    }
+
+    // ---------------------------------------------------------------------
+    // MISAKA §5 round 2: the precommit cycle.
+    // ---------------------------------------------------------------------
+
+    /// MISAKA §5 round 2: lock on the oldest epoch whose prevote quorum this chain shows and that
+    /// this validator has not locked yet.
+    ///
+    /// **One per tick, oldest first.** The lock a precommit declares must be the previous counted
+    /// one, so the chain of locks is built a link at a time and in order; signing several at once
+    /// would produce a batch whose later members declare locks the chain has not accepted yet, and
+    /// the walk would drop everything after the first.
+    ///
+    /// The lock comes from `duty.held` — what the network can see this validator has published —
+    /// and never from local state. A node restored from a backup, or resynced, would otherwise
+    /// declare a lock the chain contradicts, which stops its precommits counting at best and, if
+    /// its old lock came from another branch, is precisely the equivocation this round exists to
+    /// make provable.
+    async fn run_precommit_cycle(&self, key: &ValidatorKey, bond_outpoint: TransactionOutpoint) {
+        let session = self.consensus_manager.consensus().session().await;
+        let duty = session.async_get_precommit_duty(key.validator_id, bond_outpoint).await;
+        drop(session);
+        let Some(duty) = duty.filter(|d| d.round_active) else {
+            trace!("[{VALIDATOR}] precommit: round 2 is not live at the sink; nothing to lock");
+            return;
+        };
+        // Oldest first while the backlog is short, and STRAIGHT TO THE FRONTIER when it is not.
+        //
+        // A precommit costs a transaction and an acceptance round-trip before the chain shows it
+        // as this validator's lock, so a validator drains its backlog at roughly one epoch per
+        // round-trip. That is fine at a backlog of one or two. It is a liveness bug at a backlog
+        // of ten: the chain mints new epochs faster than the drain, nobody ever precommits the
+        // epoch the network is actually trying to finalize, and finality stops even though the
+        // prevote round is passing comfortably. A deep reorg — healing a partition, say — puts
+        // every validator exactly there, because the lock chain is a statement about accepted
+        // history and a reorg resets it to "no lock at all".
+        //
+        // Skipping the backlog costs nothing that matters: an old epoch's certificate would
+        // certify an anchor already buried under the one the frontier is finalizing, and the
+        // finalized anchor is the NEWEST certified. Round 2 is about the frontier.
+        //
+        // The threshold is what keeps validators together. Jumping unconditionally would let two
+        // validators whose sinks differ by an epoch precommit different epochs forever, and no
+        // single epoch would accumulate quorum; jumping only when far behind puts everyone within
+        // an epoch of each other, after which oldest-first pulls them onto exactly the same one.
+        const PRECOMMIT_FRONTIER_JUMP_EPOCHS: u64 = 3;
+        let pick = match (duty.due.first(), duty.due.last()) {
+            (Some(oldest), Some(newest)) if newest.0.saturating_sub(oldest.0) > PRECOMMIT_FRONTIER_JUMP_EPOCHS => {
+                info!(
+                    "[{VALIDATOR}] precommit: {} epochs behind the frontier (held {}, due {}..{}); skipping the backlog to epoch {}",
+                    newest.0.saturating_sub(oldest.0),
+                    duty.held.epoch,
+                    oldest.0,
+                    newest.0,
+                    newest.0
+                );
+                Some(newest)
+            }
+            (oldest, _) => oldest,
+        };
+        let Some(&(epoch, target_hash, target_daa_score, snapshot_commitment)) = pick else {
+            trace!("[{VALIDATOR}] precommit: nothing due (held lock is epoch {})", duty.held.epoch);
+            return;
+        };
+        let held = if duty.held == PrecommitLock::default() { None } else { Some(duty.held) };
+        let precommit = match key.sign_precommit(
+            &self.config.network_id,
+            epoch,
+            target_hash,
+            target_daa_score,
+            held,
+            snapshot_commitment,
+            bond_outpoint,
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("[{VALIDATOR}] precommit: refusing to sign epoch {epoch}: {e}");
+                return;
+            }
+        };
+        let build = |funding_outpoint, funding: &UtxoEntry, fee| key.build_precommit_tx(&precommit, funding_outpoint, funding, fee);
+        if self.build_and_submit_overlay_tx("precommit", PRECOMMIT_PAYLOAD_BYTES, false, build).await.is_some() {
+            info!("[{VALIDATOR}] precommit: LOCKED epoch {epoch} on anchor {target_hash} (previous lock: epoch {})", duty.held.epoch);
+        }
+    }
+
+    /// Fund, build and submit one overlay transaction (the precommit), reusing the attestation
+    /// path's funding chain so a precommit and an attestation never select the same UTXO.
+    ///
+    /// Returns the submitted transaction's id, or `None` if funding, building or submission
+    /// failed — every one of which is a retry-next-tick condition, not an error to escalate.
+    /// Gated here for the same reason as `try_attest`: the check belongs at the point of
+    /// signing, so a new submitter cannot bypass it by not knowing about the heartbeat's check.
+    async fn build_and_submit_overlay_tx<F>(
+        &self,
+        kind: &str,
+        payload_bytes: usize,
+        no_change: bool,
+        build: F,
+    ) -> Option<TransactionId>
+    where
+        F: FnOnce(TransactionOutpoint, &UtxoEntry, u64) -> Result<Transaction, String>,
+    {
+        let key = self.key.as_ref()?;
+        if !self.flow_context.is_consensus_participation_allowed() {
+            debug!(
+                "[{VALIDATOR}] not submitting the {kind} transaction: chain participation is {}",
+                self.flow_context.chain_participation().state().as_str()
+            );
+            return None;
+        }
+        if self.config.mode != ValidatorMode::Active {
+            trace!("[{VALIDATOR}] {kind}: mode={} so not submitting the transaction", self.config.mode);
+            return None;
+        }
+        let fee = key.estimate_overlay_fee(&self.mass_calculator, self.config.address_prefix, payload_bytes, no_change);
+        let funding_spk = pay_to_address_script(&key.funding_address(self.config.address_prefix));
+        let candidates = self.find_funding_candidates(&funding_spk).await;
+        let virtual_daa = self.consensus_manager.consensus().unguarded_session().get_virtual_daa_score();
+        let funding = {
+            let mut chain = self.funding_chain.lock().unwrap();
+            let node_outpoints: HashSet<TransactionOutpoint> = candidates.iter().map(|(op, _)| *op).collect();
+            chain.inflight_spent.retain(|op| node_outpoints.contains(op));
+            if let Some((head, _)) = &chain.pending_change
+                && node_outpoints.contains(head)
+            {
+                chain.pending_change = None;
+                chain.chain_head_txid = None;
+                chain.chain_head_epoch = None;
+                chain.stalled_epochs = 0;
+            }
+            select_funding(&chain.pending_change, &chain.inflight_spent, candidates, fee, virtual_daa, self.coinbase_maturity).ok()
+        };
+        let Some((funding_outpoint, funding_entry)) = funding else {
+            info!("[{VALIDATOR}] {kind}: no funding UTXO covering the fee of {fee} sompi; retrying next heartbeat");
+            return None;
+        };
+        let tx = match build(funding_outpoint, &funding_entry, fee) {
+            Ok(tx) => tx,
+            Err(e) => {
+                warn!("[{VALIDATOR}] {kind}: could not build the transaction: {e}");
+                return None;
+            }
+        };
+        let tx_id = tx.id();
+        let session = self.consensus_manager.consensus().unguarded_session();
+        match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
+            Ok(()) => {
+                let mut chain = self.funding_chain.lock().unwrap();
+                chain.inflight_spent.insert(funding_outpoint);
+                if no_change {
+                    // An output-less transaction leaves nothing to chain from; the next selection
+                    // falls back to the node's confirmed view.
+                    chain.pending_change = None;
+                    chain.chain_head_txid = None;
+                } else {
+                    let change =
+                        UtxoEntry::new(funding_entry.amount - fee, funding_entry.script_public_key.clone(), virtual_daa, false);
+                    chain.pending_change = Some((TransactionOutpoint::new(tx_id, 0), change));
+                    chain.chain_head_txid = Some(tx_id);
+                }
+                chain.chain_head_epoch = None;
+                chain.stalled_epochs = 0;
+                Some(tx_id)
+            }
+            Err(e) => {
+                warn!("[{VALIDATOR}] {kind}: submit of transaction {tx_id} failed: {e}");
+                let mut chain = self.funding_chain.lock().unwrap();
+                chain.pending_change = None;
+                chain.chain_head_txid = None;
+                chain.chain_head_epoch = None;
+                chain.stalled_epochs = 0;
+                None
+            }
+        }
+    }
+
+    /// Equivocation-guarded build of the funded attestation shard tx (ADR-0011). Only on
+    /// [`SignedEpochCheckOutcome::Allow`] does it sign the attestation, self-verify it,
+    /// persist the signed-epoch record (before any submission), and return the funded
+    /// transaction. Refuses on `Block` (would be slashable), skips on `AllowRebroadcast`
+    /// (already signed this target this epoch), and returns `None` when no funding UTXO is
+    /// available — so the next tick retries once funds arrive.
+    fn guarded_build_funded(
+        &self,
+        target: &ValidatorAttestationTarget,
+        key: &ValidatorKey,
+        bond_outpoint: TransactionOutpoint,
+        funding: Option<(TransactionOutpoint, UtxoEntry)>,
+        fee: u64,
+    ) -> Option<Transaction> {
+        let mut guard = self.signed_epochs.lock().unwrap();
+        let Some(store) = guard.as_mut() else {
+            trace!("[{VALIDATOR}] eligible for epoch {} but no equivocation-safety log; not signing", target.epoch);
+            return None;
+        };
+        // `signature_fingerprint` is not part of the equivocation predicate, so a
+        // placeholder is fine for the pre-sign check; the stored record carries the real one.
+        let candidate = SignedEpochRecord {
+            epoch: target.epoch,
+            target_hash: target.target_hash,
+            target_daa_score: target.target_daa_score,
+            signature_fingerprint: Hash64::from_bytes([0u8; 64]),
+        };
+        match store.check(&candidate) {
+            SignedEpochCheckOutcome::Block => {
+                warn!(
+                    "[{VALIDATOR}] EQUIVOCATION BLOCKED: epoch {} already signed a different target; refusing to sign {}",
+                    target.epoch, target.target_hash
+                );
+                None
+            }
+            // **`AllowRebroadcast` REBUILDS.** It used to return `None`, and that is what made any
+            // submit failure permanent (audit M1-4): the record is flushed before submission and the
+            // next heartbeat picks its targets from the SIGNED log, so an epoch whose submit failed —
+            // full mempool, orphaned parent, storage-mass refusal — was never offered to a path that
+            // would act on it again. The standalone sidecar has always fallen through
+            // (`Allow | AllowRebroadcast => {}`) and rebuilt; this is that behaviour.
+            //
+            // **Why it is safe, corrected** (re-audit R-6). It is NOT because signing is
+            // deterministic: `sign_with_context` draws fresh `randomness` from `thread_rng`
+            // (`kaspa-pq-validator-core/src/lib.rs:230-232`) — ML-DSA-87 is hedged — so a rebuild
+            // produces a DIFFERENT signature, and `select_funding` may pick a different funding
+            // UTXO, so the transaction differs too. The earlier claim of an "identical signature and
+            // identical transaction" was simply false, and a false invariant on a slashing-adjacent
+            // path is how the next edit goes wrong.
+            //
+            // It is safe because equivocation is decided on `(target_hash, target_daa_score)` and
+            // NOTHING else: `dns_finality.rs:2127-2129` and `:2437-2444` state that the signature
+            // fingerprint is deliberately outside the predicate, for exactly this reason ("two valid
+            // signatures over the same message differ on the `rnd` parameter, so bit-equality would
+            // be too strict"). `AllowRebroadcast` means the SAME target was signed, so re-signing it
+            // is not a second attestation — it is the same vote, carried again. Only `Block`, which
+            // is a DIFFERENT target for a signed epoch, is a refusal, and it still refuses.
+            outcome @ (SignedEpochCheckOutcome::Allow | SignedEpochCheckOutcome::AllowRebroadcast) => {
+                let already_recorded = matches!(outcome, SignedEpochCheckOutcome::AllowRebroadcast);
+                if already_recorded {
+                    info!("[{VALIDATOR}] epoch {} was signed before; rebuilding the same shard tx to rebroadcast", target.epoch);
+                }
+                let Some((funding_outpoint, funding_entry)) = funding else {
+                    info!(
+                        "[{VALIDATOR}] eligible for epoch {} but no funding UTXO at the validator address; skipping (send funds to enable submission)",
+                        target.epoch
+                    );
+                    return None;
+                };
+                // Sign the attestation, self-verify (never broadcast a bad sig), then build
+                // the fee-funded shard tx around it.
+                let digest = target.message.as_bytes();
+                let signature = key.sign_attestation(&digest);
+                if !key.verify_attestation(&digest, &signature) {
+                    warn!("[{VALIDATOR}] self-verify of attestation signature failed for epoch {}; not submitting", target.epoch);
+                    return None;
+                }
+                let attestation = StakeAttestation {
+                    version: DNS_PAYLOAD_VERSION_V1,
+                    validator_id: key.validator_id,
+                    bond_outpoint,
+                    epoch: target.epoch,
+                    target_hash: target.target_hash,
+                    target_daa_score: target.target_daa_score,
+                    validator_set_commitment: target.validator_set_commitment,
+                    signature: signature.to_vec(),
+                };
+                let shard = single_attestation_shard(attestation);
+                let tx = match key.build_funded_shard_tx(&shard, funding_outpoint, &funding_entry, fee) {
+                    Ok(tx) => tx,
+                    Err(e) => {
+                        warn!("[{VALIDATOR}] could not build funded attestation shard tx: {e}");
+                        return None;
+                    }
+                };
+                // Persist BEFORE submission. If the flush fails, do not advance — retrying
+                // next tick is safe, but submitting without a durable record is not.
+                //
+                // **The rebuild rewrites it too** (re-audit R-6). The record is not "already durable
+                // and identical": the fingerprint is of the signature, the signature is hedged, and
+                // the one thing the fingerprint is FOR is recognising a re-broadcast of the
+                // in-flight attestation across a restart. Leaving the old value there points that
+                // recognition at a signature this node never put on the wire. The target fields are
+                // unchanged, so this rewrite cannot move the equivocation guard.
+                //
+                // A flush failure is fatal only for a first signature. On a rebuild a durable record
+                // for this exact target already exists — the guard is intact either way — so a
+                // failure to refresh the fingerprint must not suppress the rebroadcast the whole
+                // arm exists to perform.
+                let record = SignedEpochRecord { signature_fingerprint: signature_fingerprint(&signature), ..candidate };
+                if let Err(e) = store.record_and_flush(record) {
+                    if already_recorded {
+                        warn!(
+                            "[{VALIDATOR}] could not refresh the signed-epoch fingerprint for epoch {} ({e}); \
+                             rebroadcasting anyway — the target record is already durable",
+                            target.epoch
+                        );
+                    } else {
+                        warn!("[{VALIDATOR}] failed to persist signed-epoch record (not advancing): {e}");
+                        return None;
+                    }
+                }
+                Some(tx)
+            }
+        }
+    }
+}
+
+// service trait implementation for the validator service
+impl AsyncService for ValidatorService {
+    fn ident(self: Arc<Self>) -> &'static str {
+        VALIDATOR
+    }
+
+    fn start(self: Arc<Self>) -> AsyncServiceFuture {
+        Box::pin(async move {
+            self.worker().await;
+            Ok(())
+        })
+    }
+
+    fn signal_exit(self: Arc<Self>) {
+        trace!("sending an exit signal to {}", VALIDATOR);
+    }
+
+    fn stop(self: Arc<Self>) -> AsyncServiceFuture {
+        Box::pin(async move {
+            trace!("{} stopped", VALIDATOR);
+            Ok(())
+        })
+    }
+}
+
+// kaspa-pq Phase 11 (ADR-0010): bridge the validator service's status to the RPC layer
+// (`getValidatorStatus`). `RpcCoreService` holds this as `Option<Arc<dyn …>>` to avoid a
+// crate cycle (rpc-service must not depend on kaspad).
+#[async_trait]
+impl ValidatorStatusProvider for ValidatorService {
+    async fn rpc_validator_status(&self) -> GetValidatorStatusResponse {
+        let s = self.status().await;
+        GetValidatorStatusResponse {
+            enabled: true,
+            mode: s.mode.to_string(),
+            has_key: s.validator_id.is_some(),
+            validator_id: s.validator_id.map(|id| id.to_string()).unwrap_or_default(),
+            funding_address: s.funding_address.unwrap_or_default(),
+            overlay_configured: s.epoch.is_some(),
+            epoch: s.epoch.unwrap_or(0),
+            bond_status: match s.bond_status {
+                Some(BondStatus::Pending) => "pending",
+                Some(BondStatus::Active) => "active",
+                Some(BondStatus::Unbonding) => "unbonding",
+                Some(BondStatus::Slashed) => "slashed",
+                None => "none",
+            }
+            .to_string(),
+            is_active_validator: s.is_active_validator,
+            has_signed_epoch: s.epoch.is_some() && s.last_signed_epoch == s.epoch,
+            last_signed_epoch: s.last_signed_epoch.unwrap_or(0),
+            status: s.status as u32,
+            status_label: format!("{:?}", s.status),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dummy_pending_change() -> (TransactionOutpoint, UtxoEntry) {
+        (TransactionOutpoint::default(), UtxoEntry::new(1_000, ScriptPublicKey::from_vec(0, vec![]), 0, false))
+    }
+
+    #[test]
+    fn validator_mode_parsing_roundtrip() {
+        for (s, m) in [("active", ValidatorMode::Active), ("standby", ValidatorMode::Standby), ("observer", ValidatorMode::Observer)] {
+            assert_eq!(ValidatorMode::from_str(s).unwrap(), m);
+            assert_eq!(m.to_string(), s);
+        }
+        // Case-insensitive and trimmed.
+        assert_eq!(ValidatorMode::from_str("  ACTIVE ").unwrap(), ValidatorMode::Active);
+        assert!(ValidatorMode::from_str("bogus").is_err());
+        // Default is the safe observer mode.
+        assert_eq!(ValidatorMode::default(), ValidatorMode::Observer);
+    }
+
+    #[test]
+    fn derive_validator_status_ladder() {
+        use ValidatorStatus::*;
+        // Without a key, or outside Active mode → DryRun regardless of eligibility.
+        assert_eq!(derive_validator_status(ValidatorMode::Observer, true, Some(BondStatus::Active), true, false), DryRun);
+        assert_eq!(derive_validator_status(ValidatorMode::Standby, true, Some(BondStatus::Active), true, false), DryRun);
+        assert_eq!(derive_validator_status(ValidatorMode::Active, false, Some(BondStatus::Active), true, false), DryRun);
+        // Active mode walks the bond → active-set → already-signed ladder.
+        assert_eq!(derive_validator_status(ValidatorMode::Active, true, None, false, false), BondNotFound);
+        assert_eq!(derive_validator_status(ValidatorMode::Active, true, Some(BondStatus::Pending), false, false), BondPending);
+        assert_eq!(derive_validator_status(ValidatorMode::Active, true, Some(BondStatus::Unbonding), false, false), Unbonding);
+        assert_eq!(derive_validator_status(ValidatorMode::Active, true, Some(BondStatus::Slashed), false, false), Slashed);
+        assert_eq!(derive_validator_status(ValidatorMode::Active, true, Some(BondStatus::Active), false, false), ActiveIdle);
+        assert_eq!(derive_validator_status(ValidatorMode::Active, true, Some(BondStatus::Active), true, false), ActiveEligible);
+        assert_eq!(derive_validator_status(ValidatorMode::Active, true, Some(BondStatus::Active), true, true), SignedThisEpoch);
+    }
+
+    #[test]
+    fn funding_chain_keeps_pending_head_when_mempool_resident_past_warn_threshold() {
+        let mut chain = FundingChain {
+            pending_change: Some(dummy_pending_change()),
+            chain_head_txid: Some(TransactionId::default()),
+            chain_head_epoch: Some(10),
+            ..FundingChain::default()
+        };
+
+        assert!(!chain.note_head_mempool_status(11, true));
+        assert!(!chain.note_head_mempool_status(12, true));
+        assert!(chain.note_head_mempool_status(13, true));
+        assert!(chain.note_head_mempool_status(13, true));
+
+        assert!(chain.pending_change.is_some());
+        assert_eq!(chain.chain_head_txid, Some(TransactionId::default()));
+        assert_eq!(chain.chain_head_epoch, Some(13));
+        assert_eq!(chain.stalled_epochs, STALL_WARN_EPOCHS);
+    }
+
+    #[test]
+    fn funding_chain_gone_head_resets_stall_without_clearing_pending_chain() {
+        let mut chain = FundingChain {
+            pending_change: Some(dummy_pending_change()),
+            chain_head_txid: Some(TransactionId::default()),
+            chain_head_epoch: Some(12),
+            stalled_epochs: 9,
+            ..FundingChain::default()
+        };
+
+        assert!(!chain.note_head_mempool_status(13, false));
+
+        assert!(chain.pending_change.is_some());
+        assert_eq!(chain.chain_head_txid, Some(TransactionId::default()));
+        assert_eq!(chain.chain_head_epoch, None);
+        assert_eq!(chain.stalled_epochs, 0);
+    }
+}

@@ -92,6 +92,42 @@ impl MiningToml {
     }
 }
 
+/// **`~/.misaka/validator.toml`** — what `misaka validator setup` writes and `misaka validator
+/// status` reads: the DNS-finality validator's key and stake bond, and the same `[advanced]` node
+/// settings `mining.toml` takes. A file of its own because the validator is a different role, often
+/// on a different network, and a host may be both.
+#[derive(Debug, Default, Clone, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct ValidatorToml {
+    pub(crate) validator: ValidatorSection,
+    pub(crate) advanced: AdvancedSection,
+}
+
+#[derive(Debug, Default, Clone, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct ValidatorSection {
+    pub(crate) network: Option<String>,
+    /// The validator's own seed file — a different key from the miner's.
+    pub(crate) key: Option<String>,
+    /// The stake bond, `<txid>:0`.
+    pub(crate) bond: Option<String>,
+    pub(crate) amount_sompi: Option<u64>,
+}
+
+impl ValidatorToml {
+    pub(crate) fn default_path() -> Option<PathBuf> {
+        dirs::home_dir().map(|h| h.join(".misaka").join("validator.toml"))
+    }
+
+    pub(crate) fn load(path: &Path) -> Result<Option<ValidatorToml>, CliError> {
+        match std::fs::read_to_string(path) {
+            Ok(s) => toml::from_str(&s).map(Some).map_err(|e| CliError::new(exit::CONFIG, format!("{}: {e}", path.display()))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(CliError::new(exit::CONFIG, format!("read {}: {e}", path.display()))),
+        }
+    }
+}
+
 /// Where each value of the profile came from, so a screen can say "from the running node" rather
 /// than let a value read off a process pass for one the operator configured.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]

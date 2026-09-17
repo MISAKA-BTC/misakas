@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Read-only MISAKA node / DNS-seeder probe.
+# Read-only MISAKA node/DNS/validator probe.
 #
 # This script is intentionally a VPS-side PoC. It does not mutate node state.
 # It is suitable for trying the operator UX before porting it into `misaka node probe`.
@@ -16,6 +16,7 @@ P2P_PORT="${MISAKA_PROBE_P2P_PORT:-26211}"
 DNS_PORT="${MISAKA_PROBE_DNS_PORT:-53}"
 TIMEOUT="${MISAKA_PROBE_TIMEOUT:-3}"
 TARGET_IP=""
+STAKE_BOND=""
 SKIP_LOCAL=0
 
 fail_count=0
@@ -34,12 +35,14 @@ Options:
                            (seeder2/seeder4 are dead — see the note at the top of this file).
   --p2p-port <port>        P2P port. Default: 26211.
   --dns-port <port>        DNS seeder port. Default: 53.
+  --stake-bond <txid:n>    Optional bond outpoint for validator registry check.
   --skip-local             Skip systemctl / local doctor / ss checks.
   --timeout <seconds>      Network timeout. Default: 3.
   -h, --help               Show this help.
 
 Examples:
   misaka-probe.sh --ip 217.76.57.217
+  misaka-probe.sh --ip 217.76.57.217 --stake-bond <txid>:0
 EOF
 }
 
@@ -67,6 +70,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --dns-port)
       DNS_PORT="${2:-}"
+      shift 2
+      ;;
+    --stake-bond)
+      STAKE_BOND="${2:-}"
       shift 2
       ;;
     --timeout)
@@ -154,6 +161,7 @@ p2p_ok=0
 seed_has_ip=0
 dns_udp_ok=0
 dns_tcp_ok=0
+validator_ok=0
 
 printf 'External checks\n'
 printf '%s\n' '---------------'
@@ -225,6 +233,16 @@ else
     else
       info "systemd misaka-dnsseeder" "not active or not installed"
     fi
+
+    if systemctl list-unit-files misaka-validator.service >/dev/null 2>&1; then
+      if systemctl is-active --quiet misaka-validator 2>/dev/null; then
+        ok "systemd misaka-validator" "active"
+      else
+        warn "systemd misaka-validator" "installed but not active"
+      fi
+    else
+      info "systemd misaka-validator" "not installed"
+    fi
   else
     info "systemd checks" "systemctl not available"
   fi
@@ -258,6 +276,33 @@ else
 fi
 
 printf '\n'
+printf 'Validator registry check\n'
+printf '%s\n' '------------------------'
+
+if [ -n "$STAKE_BOND" ]; then
+  if have kaspa-pq-validator; then
+    validator_output="$(kaspa-pq-validator status --node-rpc "$RPC" --stake-bond "$STAKE_BOND" --network "$NETWORK" 2>&1 || true)"
+    if printf '%s\n' "$validator_output" | grep -q "bond_status:[[:space:]]*active"; then
+      validator_ok=1
+      ok "Stake bond" "active"
+      vid="$(printf '%s\n' "$validator_output" | awk '/validator_id:/ {print $2; exit}')"
+      [ -n "$vid" ] && info "Validator ID" "$vid"
+    elif printf '%s\n' "$validator_output" | grep -q "bond_status:"; then
+      bond_status="$(printf '%s\n' "$validator_output" | awk '/bond_status:/ {print $2; exit}')"
+      warn "Stake bond" "${bond_status:-not active}"
+    elif printf '%s\n' "$validator_output" | grep -q "not found"; then
+      fail "Stake bond" "not found in registry"
+    else
+      warn "Stake bond" "query failed"
+    fi
+  else
+    warn "Stake bond" "kaspa-pq-validator not installed; skipped"
+  fi
+else
+  info "Stake bond" "not provided; validator status is UNKNOWN from IP alone"
+fi
+
+printf '\n'
 printf 'Verdict\n'
 printf '%s\n' '-------'
 
@@ -277,8 +322,19 @@ else
   info "DNS seeder verdict" "NOT_A_DNS_SEEDER_OR_NOT_PUBLIC"
 fi
 
+if [ -n "$STAKE_BOND" ]; then
+  if [ "$validator_ok" -eq 1 ]; then
+    ok "Validator verdict" "VALIDATOR_REGISTERED_ACTIVE"
+  else
+    warn "Validator verdict" "BOND_NOT_ACTIVE_OR_UNKNOWN"
+  fi
+else
+  info "Validator verdict" "UNKNOWN: IP alone cannot prove validator participation"
+fi
+
 printf '\n'
-printf 'Note: this probe is read-only and does not change node or DNS state.\n'
+printf 'Note: validator participation is identified by stake bond / validator_id, not by IP alone.\n'
+printf '      This probe is read-only and does not change node, DNS, or validator state.\n'
 
 if [ "$fail_count" -gt 0 ]; then
   exit 1

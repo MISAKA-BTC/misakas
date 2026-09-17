@@ -10,10 +10,11 @@ pub mod palw_dump;
 /// and Decision 16's `PanelDa` gate. See the module's own header.
 pub mod palw_fp_seat;
 pub mod palw_heartbeat_miner;
-pub mod palw_round_producer;
 pub mod palw_panel;
 pub mod palw_producer;
 pub mod palw_retention;
+pub mod palw_round_producer;
+pub mod validator_service;
 
 #[cfg(test)]
 mod workspace_default_members {

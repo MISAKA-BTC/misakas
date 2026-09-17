@@ -2,7 +2,7 @@
 //! claim the lock on a mining node, which credits the address when an accepting chain block
 //! executes the claim.
 //!
-//! Moved here from the retired validator sidecar, which was the only shipped tool that carried it.
+//! Moved here from the `kaspa-pq-validator` sidecar, which was the only shipped tool that carried it.
 //! The builders are unchanged (`kaspa-pq-validator-core`), and so are the guards: the lane must be
 //! active (a lock that can never be claimed can only be refunded after its timeout), and the EVM
 //! address is checked — a typo credits a stranger and there is no refund once the claim executes.

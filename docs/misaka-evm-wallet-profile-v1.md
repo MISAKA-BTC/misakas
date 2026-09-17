@@ -97,7 +97,7 @@ change to `EvmAddress`):
 - **deposit‑to‑self** as the default; a raw `--evm-address` is advanced mode.
 - Always show recipient + **network name + chain id** + amount in the final confirmation; recommend
   a small test deposit first.
-- Status as of this writing: the `misaka evm deposit-lock` CLI (moved from the retired validator sidecar) performs the EIP‑55 +
+- Status as of this writing: the `misaka evm deposit-lock` CLI (moved from the `kaspa-pq-validator` sidecar) performs the EIP‑55 +
   zero/system‑address checks (this profile's enforcement at the CLI boundary). Wallet + JSON‑RPC
   boundaries SHOULD mirror them.
 

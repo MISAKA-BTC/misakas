@@ -33,10 +33,12 @@ pub enum NodeProfile {
     /// No constraints, no resource overrides.
     #[default]
     Full,
-    /// Permanent sync-only source: pruned consensus + P2P, no archive/index/RPC.
+    /// Permanent sync-only source: pruned consensus + P2P, no archive/index/validator/RPC.
     BootstrapPruned,
     /// One-shot fresh-DB catch-up from a `--connect` seed, then promote to bootstrap.
     RecoverySync,
+    /// Staking/attestation node label; does not force `--enable-validator`.
+    Validator,
     /// Archival node label; does not force `--archival`.
     Archive,
     /// Public RPC node label; does not force any RPC listener.
@@ -49,18 +51,20 @@ impl NodeProfile {
             NodeProfile::Full => "full",
             NodeProfile::BootstrapPruned => "bootstrap-pruned",
             NodeProfile::RecoverySync => "recovery-sync",
+            NodeProfile::Validator => "validator",
             NodeProfile::Archive => "archive",
             NodeProfile::PublicRpc => "public-rpc",
         }
     }
 
-    pub const VARIANTS: [&'static str; 5] = ["full", "bootstrap-pruned", "recovery-sync", "archive", "public-rpc"];
+    pub const VARIANTS: [&'static str; 6] = ["full", "bootstrap-pruned", "recovery-sync", "validator", "archive", "public-rpc"];
 
     fn from_cli(s: &str) -> Option<Self> {
         Some(match s {
             "full" => NodeProfile::Full,
             "bootstrap-pruned" => NodeProfile::BootstrapPruned,
             "recovery-sync" => NodeProfile::RecoverySync,
+            "validator" => NodeProfile::Validator,
             "archive" => NodeProfile::Archive,
             "public-rpc" => NodeProfile::PublicRpc,
             _ => return None,
@@ -198,6 +202,9 @@ pub struct Args {
     /// is present for: remove it from the unit after the node is back.
     pub clear_quarantine: bool,
 
+    // kaspa-pq Phase 11 (ADR-0010): in-process DNS-overlay validator service. Default off.
+    pub enable_validator: bool,
+    pub validator_key: Option<String>,
     /// ADR-0042: run the in-process PALW-RC block producer. Only a `ConsensusV2` network has
     /// anything for it to do, and it says so and stops otherwise.
     pub palw_produce: bool,
@@ -293,6 +300,8 @@ pub struct Args {
     /// kaspa-pq EVM Lane v0.4 (§8.2/§16): the miner's EVM coinbase (20-byte hex,
     /// optional 0x) — claims the priority fees of this node's own payload txs.
     pub evm_fee_recipient: Option<String>,
+    pub stake_bond: Option<String>,
+    pub validator_mode: Option<String>,
 
     /// PALW v2 (Land stage): path to a `palw-agent` Unix socket to monitor. Observation only —
     /// health-probed and logged, feeding the capability handle nothing consensus-visible
@@ -359,7 +368,7 @@ pub struct Args {
     pub rocksdb_cache_size: Option<usize>,
 
     /// Operational role profile for constrained VPS deployments. Sync-only profiles apply
-    /// 8GB resource defaults and reject archive/index/EVM-RPC roles.
+    /// 8GB resource defaults and reject archive/index/validator/EVM-RPC roles.
     pub node_profile: NodeProfile,
     /// Convenience flag that applies the same 8GB resource defaults for unspecified knobs,
     /// regardless of the chosen node profile.
@@ -402,6 +411,8 @@ impl Default for Args {
             trusted_checkpoint: None,
             enforce_chain_participation: false,
             clear_quarantine: false,
+            enable_validator: false,
+            validator_key: None,
             palw_produce: false,
             palw_heartbeat_miner_address: None,
             palw_round_lane: false,
@@ -431,6 +442,8 @@ impl Default for Args {
             palw_panel: false,
             palw_fee_outpoint: None,
             evm_fee_recipient: None,
+            stake_bond: None,
+            validator_mode: None,
             compute_endpoint: None,
             palw_model_devnet_daa: None,
             palw_shard_court_devnet_daa: None,
@@ -796,7 +809,7 @@ pub fn cli() -> Command {
                 .require_equals(true)
                 .default_missing_value("default") // TODO: Find a way to use defaults.rpclisten_borsh
                 .value_parser(clap::value_parser!(WrpcNetAddress))
-                .help("Interface:port to listen for node wRPC Borsh connections — wallet / operator (default port: 27110, testnet: 27210). NOT gRPC 26210, NOT wRPC JSON 28210, NOT EVM 8545."),
+                .help("Interface:port to listen for node wRPC Borsh connections — validator / wallet / operator (default port: 27110, testnet: 27210). NOT gRPC 26210, NOT wRPC JSON 28210, NOT EVM 8545."),
 
         )
         .arg(
@@ -901,6 +914,7 @@ pub fn cli() -> Command {
             arg!(--"clear-quarantine" "kaspa-pq (ADR-0025): operator override — clear a persisted Quarantined chain-participation state at startup and resume normal participation. Clears quarantine ONLY (a pending candidate review keeps its deadline). Fires on EVERY boot it is present for; remove it from the service unit once the node is back.")
                 .env("KASPAD_CLEAR_QUARANTINE"),
         )
+        .arg(arg!(--"enable-validator" "kaspa-pq: run the in-process DNS-overlay validator service (ADR-0010). Default off.").env("KASPAD_ENABLE_VALIDATOR"))
         .arg(
             arg!(--"palw-produce" "PALW ADR-0042: run the in-process PALW-RC block producer. Needs --palw-producer-key and --palw-producer-bond; --palw-producer-pay-address defaults to the key's own address. Only a ConsensusV2 network can use it. Default off.")
                 .env("KASPAD_PALW_PRODUCE"),
@@ -1202,6 +1216,30 @@ pub fn cli() -> Command {
                 .help("kaspa-pq EVM Lane: the miner's EVM coinbase address (20-byte hex, optional 0x) — receives the priority fees of this node's own EVM payload txs."),
         )
         .arg(
+            Arg::new("validator-key")
+                .long("validator-key")
+                .env("KASPAD_VALIDATOR_KEY")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help("kaspa-pq: path to the validator ML-DSA-87 signing seed file (64 hex chars = 32 bytes)."),
+        )
+        .arg(
+            Arg::new("stake-bond")
+                .long("stake-bond")
+                .env("KASPAD_STAKE_BOND")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help("kaspa-pq: stake-bond outpoint backing this validator's attestations, as 'txid:index'."),
+        )
+        .arg(
+            Arg::new("validator-mode")
+                .long("validator-mode")
+                .env("KASPAD_VALIDATOR_MODE")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help("kaspa-pq: validator operating mode {active, standby, observer} (default: observer)."),
+        )
+        .arg(
             Arg::new("compute-endpoint")
                 .long("compute-endpoint")
                 .env("KASPAD_COMPUTE_ENDPOINT")
@@ -1379,8 +1417,8 @@ a large RAM (~64GB) can set this value to ~3.0-4.0 and gain superior performance
                 .env("KASPAD_NODE_PROFILE")
                 .require_equals(true)
                 .value_parser(NodeProfile::VARIANTS)
-                .help("MISAKA node role profile: full | bootstrap-pruned | recovery-sync | archive | public-rpc. \
-                       The sync-only profiles apply 8GB resource defaults and reject --archival/--utxoindex/\
+                .help("MISAKA node role profile: full | bootstrap-pruned | recovery-sync | validator | archive | public-rpc. \
+                       The sync-only profiles apply 8GB resource defaults and reject --archival/--utxoindex/--enable-validator/\
                        --evm-rpc-listen/--unsaferpc; recovery-sync additionally requires --connect. Consensus rules are unchanged.")
         )
         .arg(
@@ -1542,6 +1580,8 @@ impl Args {
                 "enforce-chain-participation",
                 defaults.enforce_chain_participation,
             ),
+            enable_validator: arg_match_unwrap_or::<bool>(&m, "enable-validator", defaults.enable_validator),
+            validator_key: m.get_one::<String>("validator-key").cloned().or(defaults.validator_key),
             palw_produce: arg_match_unwrap_or::<bool>(&m, "palw-produce", defaults.palw_produce),
             palw_panel: arg_match_unwrap_or::<bool>(&m, "palw-panel", defaults.palw_panel),
             palw_fee_outpoint: m.get_one::<String>("palw-fee-outpoint").cloned().or(defaults.palw_fee_outpoint),
@@ -1595,6 +1635,8 @@ impl Args {
                 .or(defaults.palw_heartbeat_miner_address),
             palw_round_lane: arg_match_unwrap_or::<bool>(&m, "palw-round-lane", defaults.palw_round_lane),
             evm_fee_recipient: m.get_one::<String>("evm-fee-recipient").cloned().or(defaults.evm_fee_recipient),
+            stake_bond: m.get_one::<String>("stake-bond").cloned().or(defaults.stake_bond),
+            validator_mode: m.get_one::<String>("validator-mode").cloned().or(defaults.validator_mode),
             compute_endpoint: m.get_one::<String>("compute-endpoint").cloned().or(defaults.compute_endpoint),
             palw_model_devnet_daa: m.get_one::<u64>("palw-model-devnet").copied().or(defaults.palw_model_devnet_daa),
             palw_shard_court_devnet_daa: m.get_one::<u64>("palw-shard-court-devnet").copied().or(defaults.palw_shard_court_devnet_daa),
