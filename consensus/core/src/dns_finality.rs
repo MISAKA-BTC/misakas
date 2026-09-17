@@ -5282,10 +5282,8 @@ pub fn total_active_stake_by_epoch(bonds: &[StakeBondRecord], epoch_anchor_daa: 
     epoch_anchor_daa
         .iter()
         .map(|(&epoch, &anchor_daa)| {
-            let total = bonds
-                .iter()
-                .filter(|b| is_bond_active_at(b, anchor_daa))
-                .fold(0u128, |acc, b| acc.saturating_add(b.amount as u128));
+            let total =
+                bonds.iter().filter(|b| is_bond_active_at(b, anchor_daa)).fold(0u128, |acc, b| acc.saturating_add(b.amount as u128));
             (epoch, total)
         })
         .collect()

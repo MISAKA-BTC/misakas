@@ -36,8 +36,6 @@
 //! limit, so an honest verifier re-executing it must reproduce the executor's
 //! receipt hash **byte-for-byte**. The other scheme ids are reserved and rejected.
 
-use std::fmt::{self, Display, Formatter};
-
 use blake2b_simd::Params as Blake2bParams;
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::{Hash, Hash64};
@@ -1142,9 +1140,9 @@ pub fn palw_qwen36_metal_entry() -> ModelCostEntry {
     }
 }
 
-/// Per-job token ceiling for the Qwen3.5-2B palw-lite profile. `prefill + decode` per job is
-/// bounded by this (see `normalize_vlt`'s `ReceiptExceedsSpecLimit`), so it is the audit-cost
-/// bound for a committee that must fully re-execute every accepted job — sized so one replay is
+/// Per-job token ceiling for the Qwen3.5-2B palw-lite profile. `prefill + decode` per job was
+/// bounded by this (the removed VLT normalization's `ReceiptExceedsSpecLimit`), so it is the
+/// audit-cost bound for a committee that must fully re-execute every accepted job — sized so one replay is
 /// seconds on the machine class the profile names.
 pub const PALW_QWEN35_2B_MAX_TOKENS: u32 = 512;
 
@@ -1733,7 +1731,7 @@ impl VltParams {
 }
 
 // ---------------------------------------------------------------------
-// Certificate resolution and normalization (§3.2 eq. 4, §6).
+// Certificate resolution and verification (§6).
 // ---------------------------------------------------------------------
 
 /// Why a certificate did not resolve against the chain — the error of the virtual processor's
@@ -1795,41 +1793,6 @@ pub fn commitment_within_dependency_horizon(commitment_blue: u64, certificate_bl
     commitment_blue <= certificate_blue && certificate_blue.saturating_sub(commitment_blue) <= max_commitment_age_blocks
 }
 
-/// Why a job minted no VLT. Diagnostic only — every variant normalizes to `0`, which
-/// is the entire consensus effect.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum VltRejection {
-    /// `v_j` is not consensus-eligible in this version.
-    IneligibleScheme(VerificationScheme),
-    /// `q` is an unknown discriminant.
-    UnknownQuantization,
-    /// `(h_M, h_R)` is not in the network's [`ModelCostTable`].
-    UnregisteredModel,
-    /// `L_j` exceeds the registered model's `max_tokens`.
-    TokenLimitExceeded { max_tokens: u32, declared: u32 },
-    /// The receipt's token counts exceed the spec's `L_j`.
-    ReceiptExceedsSpecLimit { max_tokens: u32, produced: u64 },
-    /// `Verify(S_j, R_j, C_j) ≠ 1` — too few confirming verdicts, or any refutation.
-    VerificationFailed,
-}
-
-impl Display for VltRejection {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::IneligibleScheme(s) => write!(f, "verification scheme {s:?} is not consensus-eligible"),
-            Self::UnknownQuantization => write!(f, "unknown quantization profile"),
-            Self::UnregisteredModel => write!(f, "(model_weights_hash, runtime_hash) is not in the model cost table"),
-            Self::TokenLimitExceeded { max_tokens, declared } => {
-                write!(f, "spec max_tokens {declared} exceeds the model's registered limit {max_tokens}")
-            }
-            Self::ReceiptExceedsSpecLimit { max_tokens, produced } => {
-                write!(f, "receipt produced {produced} tokens against a spec limit of {max_tokens}")
-            }
-            Self::VerificationFailed => write!(f, "Verify(S_j, R_j, C_j) != 1"),
-        }
-    }
-}
-
 /// `Verify(S_j, R_j, C_j) = 1` (§3.1 eq. 3) for
 /// [`VerificationScheme::CanonicalFullReplay`], given the verdicts already
 /// signature-checked and sortition-checked by the caller.
@@ -1874,46 +1837,6 @@ pub fn refutation_quorum_reached(verdicts: &[VerifierAttestation], min_refutatio
     refutations > 0 && refutations >= (min_refutations as usize).max(1)
 }
 
-/// `x_j = ρ(S_j)·(a·t_j^in + b·t_j^out)` when `Verify = 1`, else `0` (§3.2 eq. 4).
-///
-/// Result unit is **µRTE** (micro reference-token-equivalents): with the reference
-/// model (`ρ = 1.0`), `a = 1.0`, and `b = 8.0`, one prefill token is `1_000_000` and
-/// one decode token is `8_000_000`.
-///
-/// `verified` is the caller's [`verify_compute_certificate`] outcome, kept as a
-/// parameter so this stays a pure function of already-checked facts. Everything is
-/// `u128`: the largest representable job (`u32::MAX` tokens at the widest sane `ρ`)
-/// is ~1e26, far inside `u128`, and `saturating_*` is defensive rather than expected.
-pub fn normalize_vlt(spec: &LlmJobSpec, receipt: &ComputeReceipt, params: &VltParams, verified: bool) -> Result<u128, VltRejection> {
-    if !spec.verification_scheme.is_consensus_eligible() {
-        return Err(VltRejection::IneligibleScheme(spec.verification_scheme));
-    }
-    if !spec.quantization.is_known() {
-        return Err(VltRejection::UnknownQuantization);
-    }
-    let Some(entry) = params.model_cost_table.lookup(spec.model_weights_hash, spec.runtime_hash) else {
-        return Err(VltRejection::UnregisteredModel);
-    };
-    if spec.max_tokens > entry.max_tokens {
-        return Err(VltRejection::TokenLimitExceeded { max_tokens: entry.max_tokens, declared: spec.max_tokens });
-    }
-    // A receipt may not claim more work than its own spec permitted; otherwise an
-    // executor could mint arbitrary VLT from a cheap, small spec.
-    let produced = receipt.prefill_tokens as u64 + receipt.decode_tokens as u64;
-    if produced > spec.max_tokens as u64 {
-        return Err(VltRejection::ReceiptExceedsSpecLimit { max_tokens: spec.max_tokens, produced });
-    }
-    if !verified {
-        return Err(VltRejection::VerificationFailed);
-    }
-    let token_cost = (params.prefill_cost_micro as u128)
-        .saturating_mul(receipt.prefill_tokens as u128)
-        .saturating_add((params.decode_cost_micro as u128).saturating_mul(receipt.decode_tokens as u128));
-    // ρ and (a,b) are each VLT_MICRO-scaled, so the product carries VLT_MICRO²;
-    // divide once to land back in µRTE.
-    Ok((entry.rho_micro as u128).saturating_mul(token_cost) / VLT_MICRO)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1924,19 +1847,6 @@ mod tests {
 
     fn outpoint(b: u8) -> TransactionOutpoint {
         TransactionOutpoint::new(TransactionId::from_bytes([b; 64]), 0)
-    }
-
-    fn params_with_model() -> VltParams {
-        let mut table = ModelCostTable::EMPTY;
-        table.len = 1;
-        table.entries[0] = ModelCostEntry {
-            model_weights_hash: h64(1),
-            runtime_hash: h64(2),
-            runtime_class_id: h64(3),
-            rho_micro: 1_000_000,
-            max_tokens: 100_000,
-        };
-        VltParams { model_cost_table: table, ..VltParams::INERT }
     }
 
     fn spec() -> LlmJobSpec {
@@ -2236,45 +2146,6 @@ mod tests {
         assert!(no_conf.is_coherent().is_err(), "0 confirmations would mint unverified VLT");
         let over = VltParams { min_verifier_confirmations: 4, verifier_committee_size: 3, ..VltParams::INERT };
         assert!(over.is_coherent().is_err(), "unsatisfiable confirmation threshold");
-    }
-
-    #[test]
-    fn normalization_matches_the_paper_formula() {
-        let p = params_with_model();
-        // rho = 1.0, a = 1.0, b = 8.0 => 100 prefill + 10 decode = 100 + 80 = 180 RTE.
-        let x = normalize_vlt(&spec(), &receipt(100, 10), &p, true).unwrap();
-        assert_eq!(x, 180 * VLT_MICRO);
-    }
-
-    #[test]
-    fn unverified_and_unregistered_jobs_mint_nothing() {
-        let p = params_with_model();
-        assert_eq!(normalize_vlt(&spec(), &receipt(100, 10), &p, false), Err(VltRejection::VerificationFailed));
-
-        let mut unknown = spec();
-        unknown.model_weights_hash = h64(0xAA);
-        assert_eq!(normalize_vlt(&unknown, &receipt(100, 10), &p, true), Err(VltRejection::UnregisteredModel));
-
-        let mut reserved = spec();
-        reserved.verification_scheme = VerificationScheme::SuccinctProof;
-        assert!(matches!(normalize_vlt(&reserved, &receipt(1, 1), &p, true), Err(VltRejection::IneligibleScheme(_))));
-    }
-
-    #[test]
-    fn a_receipt_cannot_claim_more_work_than_its_spec_allows() {
-        let p = params_with_model();
-        let mut small = spec();
-        small.max_tokens = 10;
-        // 100 + 10 tokens produced against a 10-token spec: the cheap-spec inflation attack.
-        assert!(matches!(normalize_vlt(&small, &receipt(100, 10), &p, true), Err(VltRejection::ReceiptExceedsSpecLimit { .. })));
-    }
-
-    #[test]
-    fn a_spec_cannot_exceed_its_models_registered_token_ceiling() {
-        let p = params_with_model();
-        let mut huge = spec();
-        huge.max_tokens = 100_001;
-        assert!(matches!(normalize_vlt(&huge, &receipt(1, 1), &p, true), Err(VltRejection::TokenLimitExceeded { .. })));
     }
 
     /// Refutation still dominates — but by quorum, not by one voice. At one voice, a single drawn

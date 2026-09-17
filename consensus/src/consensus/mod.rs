@@ -62,8 +62,8 @@ use kaspa_consensus_core::{
     dns_finality::{
         ActiveValidatorSet, AttestationQualityDeficit, CanonicalLaggedEpochAnchor, DnsConfirmation, StakeBondPage, StakeBondQuery,
         StakeBondRecord, ValidatorAttestationTarget, ValidatorRecord, dns_confirmation_from_state, epoch_meets_quality_floor,
-        is_bond_active_at,
-        paginate_stake_bonds, ready_epoch_from_tip_blue_score, required_stake_for_quality_floor, stake_attestation_message,
+        is_bond_active_at, paginate_stake_bonds, ready_epoch_from_tip_blue_score, required_stake_for_quality_floor,
+        stake_attestation_message,
     },
     errors::{
         coinbase::CoinbaseResult,

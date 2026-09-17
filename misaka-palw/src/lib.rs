@@ -174,8 +174,8 @@ impl MatchProjection {
 
     /// Fold this projection into the consensus [`ComputeReceipt`].
     ///
-    /// `prefill_tokens` / `decode_tokens` cross over unchanged, because they are what
-    /// `normalize_vlt` prices — and they are *projection* fields, so consensus prices only work
+    /// `prefill_tokens` / `decode_tokens` cross over unchanged, because they are what the (removed)
+    /// VLT normalization priced — and they are *projection* fields, so a price only covers work
     /// two independent replicas agreed on.
     pub fn to_compute_receipt(&self) -> ComputeReceipt {
         ComputeReceipt {

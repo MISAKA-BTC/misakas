@@ -106,5 +106,4 @@ mod tests {
         db.write(batch).unwrap();
         assert_eq!(store.get().unwrap(), s2);
     }
-
 }

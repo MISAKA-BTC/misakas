@@ -12453,7 +12453,8 @@ mod consensus_params_id_tests {
             }
             for activation in [ForkActivation::always(), ForkActivation::new(9_000_000), ForkActivation::never()] {
                 let mut armed = shipped.clone();
-                armed.palw_inactivity_leak = Some(PalwInactivityLeakV1 { activation, t_leak_daa: 5_040, reentry_final_depth_daa: 720 });
+                armed.palw_inactivity_leak =
+                    Some(PalwInactivityLeakV1 { activation, t_leak_daa: 5_040, reentry_final_depth_daa: 720 });
                 let error = armed.validate_palw_v2().expect_err(&format!("{net}: a leak at {activation:?} must not start"));
                 assert!(error.to_string().contains("the inactivity leak is removed"), "{net}: refused for another reason: {error}");
             }
@@ -12935,7 +12936,6 @@ mod consensus_params_id_tests {
                 "scheduling the attempt lane must not disconnect the first upgraded host from the rest of the fleet"
             );
         }
-
     }
 
     /// **ADR-0065 D2's fence — the comparison-site rule — in the same four positions, plus the
