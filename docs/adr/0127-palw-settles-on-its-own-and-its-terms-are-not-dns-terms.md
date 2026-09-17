@@ -68,6 +68,13 @@ not layered on it.
   producer, panel and round producer load their ML-DSA key with `kaspa-pq-validator-core`'s loader.
   Both are shared utilities under an overlay name, not dependencies on validators; moving them under a
   neutral name is housekeeping this ADR records.
+* `palw_state_v2.rs` sums a ConsensusV2 coinbase's output cap from `PALW_V2_MAX_VALIDATOR_PAYOUTS` and
+  `PALW_V2_MAX_DEFERRED_VALIDATOR_PAYOUTS` — the slots the coinbase reserves for the overlay's §E
+  participation and deferred quality-bonus payouts, since a V2 block's coinbase pays validators too
+  (ADR-0126). No claim, frontier or settlement decision reads them. The CI guard found them where a
+  case-sensitive scan had called the path clean, and pins their exact use counts (3 and 2,
+  `KNOWN_UNSEPARATED`), so a new use fails as a removed one does; moving them beside the overlay's
+  payout code is housekeeping.
 
 ## 5. Tests
 
