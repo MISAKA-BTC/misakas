@@ -61,11 +61,10 @@ node状態確認
 | `windows/start-node-wsl.cmd` | node準備から起動まで |
 | `windows/start-web-ui-wsl.cmd` | ローカルWeb UIを起動 |
 | `windows/check-status-wsl.cmd` | 現在の状態確認 |
-| `windows/stop-all-wsl.cmd` | nodeを停止 |
+| `windows/prepare-validator-wsl.cmd` | validator準備を進める |
+| `windows/stop-all-wsl.cmd` | node / miner / validatorを停止 |
 | `windows/list-distros-wsl.cmd` | WSL distro一覧 |
 | `windows/install-ubuntu-wsl.cmd` | UbuntuをWSLへインストール |
-
-以前あった `windows/prepare-validator-wsl.cmd`（validator key作成、funding miner、Bond作成）は、DNS-finality validator参加フローの廃止に合わせて削除しました。PALWはvalidatorを使いません。PALWのマイニングは `misaka` CLI の `misaka mining setup` で設定します。
 
 ## PowerShellから直接使う
 
@@ -85,6 +84,18 @@ powershell -ExecutionPolicy Bypass -File .\windows\start-misaka-local-node-wsl.p
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\windows\start-misaka-local-node-wsl.ps1 -Command collect-support-log
+```
+
+validator準備:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\windows\start-misaka-local-node-wsl.ps1 -Command auto-validator
+```
+
+Bond作成:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\windows\start-misaka-local-node-wsl.ps1 -Command bond -Amount 10MSK
 ```
 
 全停止:
@@ -173,7 +184,7 @@ powershell -ExecutionPolicy Bypass -File .\windows\start-misaka-local-node-wsl.p
 
 ## 注意
 
-- PCをスリープするとnodeは止まります
+- PCをスリープするとnode/validator/minerは止まります
 - 自宅回線では外部peerから入りにくい場合があります
 - 長期安定運用はVPS版を推奨します
 - Windows native実行ではなく、WSL2 Ubuntuを利用します

@@ -12,15 +12,13 @@ VPS版との構成の違いは[`docs/design-ja.md`](docs/design-ja.md)を参照�
 
 - MISAKA source clone
 - 必要toolchain準備
-- `kaspad` / `misaka` build
+- `kaspad` / `misaka` / `kaspa-pq-validator` / `misaminer` build
 - ローカルPC内で `kaspad` 起動
 - node同期確認
-
-## validator参加フローの廃止について
-
-以前このキットにあった DNS-finality validator の参加フロー（validator key作成、funding miner起動、Bond作成、validator sidecar起動）は廃止されました。PALWはvalidatorを使いません。
-
-このキットはnodeの起動と同期確認だけを扱います。PALWのマイニングは `misaka` CLI の `misaka mining setup` で設定します。
+- validator key作成
+- funding miner起動
+- Bond作成
+- validator sidecar起動
 
 ## 重要な注意
 
@@ -28,10 +26,10 @@ VPS版との構成の違いは[`docs/design-ja.md`](docs/design-ja.md)を参照�
 
 ローカルPCの場合:
 
-- PCをスリープするとnodeが止まります
+- PCをスリープするとnode/validator/minerが止まります
 - 自宅回線やNAT環境では外部から `26211/tcp` へ接続されにくいです
 - 公開peerとしてはVPSより弱いです
-- 長期運用には常時起動が必要です
+- 長期validator運用には常時起動が必要です
 - Windows nativeではなく、まずはWSL2 Ubuntuを推奨します
 
 この機能の位置づけ:
@@ -71,7 +69,11 @@ scripts/misaka-desktop-web.sh
 
 Ubuntu / Debian系Linuxでは、初回起動時に必要なpackageが不足している場合、Web UIを開く前にTerminalでsudo passwordを確認してpackageを導入します。
 
-nodeが起動中なのにWeb UIが「node接続を確認する」のまま変わらない場合は、更新後にnodeを一度再起動してください。Local nodeはWeb UIの状態確認に使うwRPC Borshを `127.0.0.1:27210` で明示的に起動します。
+nodeが起動中なのにWeb UIが「node接続を確認する」のまま変わらない場合は、更新後にnodeを一度再起動してください。Local nodeはWeb UIの状態確認とvalidator操作に使うwRPC Borshを `127.0.0.1:27210` で明示的に起動します。
+
+旧版で作成済みのBondがtxidだけで保存されている場合、validator起動時にStakeBondのoutput index `:0`を自動補正します。Bond transactionを作り直す必要はありません。
+
+旧版でminer開始DAAが保存されていない場合は、既存minerログの最初の採掘DAAからcoinbase maturityの目安を復元します。
 
 これは以下を行います。
 
@@ -103,15 +105,19 @@ mac/start-local-web-ui.command
 - setup画面
 - 自動node setup
 - 同期の動き
+- validator準備
+- miner / Bond操作
 - dashboard画面
 - 用語と仕組みの解説ページ
 - 現在状態に合わせた「次に押すボタン」の1操作表示
+- minerの採掘成功block数とcoinbase maturity目安
+- validatorのattestation送信成功表示
 - エラー提出用support reportのコピー / `.txt`保存
 
 ローカル版では裏側の実行だけ `systemd` ではなく `scripts/misaka-desktop-node.sh` のPID管理になります。
 
 Web UI右上またはsetup画面の「用語と仕組み」から、初心者向けの解説ページを開けます。
-node、sync、DAA、P2P、UTXOなどを、現在の状態とつなげて確認できます。
+node、sync、DAA、UTXO、miner、coinbase maturity、Bond、validator、attestationなどを、現在の状態とつなげて確認できます。
 
 ブラウザタブを閉じてしまった場合も、同じ `mac/start-local-web-ui.command` または `scripts/misaka-desktop-web.sh` をもう一度実行すると、起動中のWeb UIを検出して同じURLを開き直します。
 新しいWeb UIを意図的に起動したい場合だけ、Terminalで `scripts/misaka-desktop-web.sh --force-new` を使います。
@@ -129,6 +135,12 @@ mac/start-misaka-local-node.command
 
 ```text
 mac/check-status.command
+```
+
+validator準備:
+
+```text
+mac/prepare-validator.command
 ```
 
 全停止:
@@ -167,6 +179,12 @@ windows/start-node-wsl.cmd
 windows/check-status-wsl.cmd
 ```
 
+validator準備:
+
+```text
+windows/prepare-validator-wsl.cmd
+```
+
 全停止:
 
 ```text
@@ -201,12 +219,11 @@ windows/install-ubuntu-wsl.cmd
 bin/              build済みバイナリ
 misakas/          cloneしたsource
 node-data/        kaspad appdir
-logs/             kaspad logs
+validator/        validator key / state
+logs/             kaspad / miner / validator logs
 run/              PID files
 state/            Web UI用の状態ファイル
 ```
-
-旧版で作成した `validator/`（validator key / state）が残っていても、このキットはもう使いません。自動では削除しません（ただし `clean` は `~/.misaka-desktop-node/` 全体を削除します）。
 
 場所を変える場合:
 
@@ -232,11 +249,29 @@ scripts/misaka-desktop-node.sh doctor
 # supportへ共有する診断bundle作成
 scripts/misaka-desktop-node.sh collect-support-log
 
+# validator準備をまとめて進める
+scripts/misaka-desktop-node.sh auto-validator
+
 # 同期完了まで監視
 scripts/misaka-desktop-node.sh wait-sync
 
 # node停止
 scripts/misaka-desktop-node.sh stop-node
+
+# validator key作成
+scripts/misaka-desktop-node.sh keygen
+
+# funding miner起動
+scripts/misaka-desktop-node.sh miner-start
+
+# funding balance確認
+scripts/misaka-desktop-node.sh balance
+
+# Bond作成
+scripts/misaka-desktop-node.sh bond 10MSK
+
+# validator起動
+scripts/misaka-desktop-node.sh validator-start
 
 # 全停止
 scripts/misaka-desktop-node.sh stop-all
@@ -244,8 +279,10 @@ scripts/misaka-desktop-node.sh stop-all
 # ログ確認
 scripts/misaka-desktop-node.sh logs
 
-# nodeログだけを確認
+# node / miner / validatorを個別に確認
 scripts/misaka-desktop-node.sh node-logs
+scripts/misaka-desktop-node.sh miner-logs
+scripts/misaka-desktop-node.sh validator-logs
 ```
 
 ## 推奨フロー
@@ -254,11 +291,16 @@ scripts/misaka-desktop-node.sh node-logs
 flowchart TD
   A["auto-node"] --> B["node起動"]
   B --> C["wait-sync"]
-  C --> D["status / doctorで確認"]
-  D --> E["dashboardで同期とP2Pを確認"]
+  C --> D["keygen"]
+  D --> E["miner-start"]
+  E --> F["balance"]
+  F --> G{"成熟済みUTXO足りる?"}
+  G -->|"No"| H["待つ"]
+  H --> F
+  G -->|"Yes"| I["bond 10MSK"]
+  I --> J["validator-start"]
+  J --> K["logsでattestation確認"]
 ```
-
-PALWのマイニングはこのフローとは別に、`misaka mining setup` で設定します。
 
 ## P2P受信について
 

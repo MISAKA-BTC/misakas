@@ -9,6 +9,7 @@ param(
   [ValidateSet(
     "auto-node",
     "status",
+    "auto-validator",
     "stop-all",
     "logs",
     "prepare",
@@ -18,6 +19,13 @@ param(
     "doctor",
     "collect-support-log",
     "wait-sync",
+    "keygen",
+    "miner-start",
+    "miner-stop",
+    "balance",
+    "bond",
+    "validator-start",
+    "validator-stop",
     "clean",
     "web",
     "help"
@@ -25,6 +33,8 @@ param(
   [string]$Command = "auto-node",
 
   [string]$Distro = "",
+
+  [string]$Amount = "10MSK",
 
   [switch]$InstallUbuntu,
 
@@ -398,6 +408,9 @@ try {
   }
 
   $scriptArgs = @($Command)
+  if ($Command -eq "bond") {
+    $scriptArgs += $Amount
+  }
 
   if ($Command -eq "web") {
     $bashCommand = @'
@@ -418,7 +431,11 @@ scripts/misaka-desktop-web.sh
 set -e
 cd "$MISAKA_SHARE_DIR"
 chmod +x scripts/misaka-desktop-node.sh
-scripts/misaka-desktop-node.sh "$MISAKA_DESKTOP_COMMAND"
+if [ "$MISAKA_DESKTOP_COMMAND" = "bond" ]; then
+  scripts/misaka-desktop-node.sh bond "$MISAKA_DESKTOP_AMOUNT"
+else
+  scripts/misaka-desktop-node.sh "$MISAKA_DESKTOP_COMMAND"
+fi
 '@
 
   Write-Section "Run"
@@ -428,6 +445,7 @@ scripts/misaka-desktop-node.sh "$MISAKA_DESKTOP_COMMAND"
   $bashCommand = New-BashScriptWithEnv -Vars @{
     MISAKA_SHARE_DIR = $wslShareDir
     MISAKA_DESKTOP_COMMAND = $Command
+    MISAKA_DESKTOP_AMOUNT = $Amount
   } -Body $bashCommand
   Invoke-WslBashScript -DistroName $selectedDistro -ScriptText $bashCommand
 } finally {
