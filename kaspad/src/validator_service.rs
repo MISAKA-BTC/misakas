@@ -17,12 +17,10 @@
 use async_trait::async_trait;
 use kaspa_addresses::Prefix;
 use kaspa_consensus_core::dns_finality::{
-    BondStatus, DNS_PAYLOAD_VERSION_V1, PrecommitLock, SignedEpochCheckOutcome, SignedEpochRecord, StakeAttestation,
-    ValidatorAttestationTarget, ValidatorStatus, effective_bond_status, is_bond_active_at, signature_fingerprint,
-    single_attestation_shard,
+    BondStatus, DNS_PAYLOAD_VERSION_V1, SignedEpochCheckOutcome, SignedEpochRecord, StakeAttestation, ValidatorAttestationTarget,
+    ValidatorStatus, effective_bond_status, is_bond_active_at, signature_fingerprint, single_attestation_shard,
 };
 use kaspa_consensus_core::mass::MassCalculator;
-use kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
 use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionId, TransactionOutpoint, UtxoEntry};
 use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::{
@@ -37,8 +35,9 @@ use kaspa_hashes::Hash64;
 use kaspa_mining::{mempool::tx::Orphan, model::tx_query::TransactionQuery};
 use kaspa_p2p_flows::flow_context::FlowContext;
 use kaspa_pq_validator_core::{
-    ATTESTATION_TX_FEE_FLOOR_SOMPI, SignedEpochStore, SignedPrecommitRecord, SignedPrecommitStore, ValidatorKey, load_validator_seed,
-    parse_stake_bond_ref, select_funding,
+    ATTESTATION_TX_FEE_FLOOR_SOMPI, PRECOMMIT_FRONTIER_JUMP_EPOCHS, PRECOMMIT_PAYLOAD_BYTES, SignedEpochStore, SignedPrecommitRecord,
+    SignedPrecommitStore, ValidatorKey, declared_precommit_lock, load_validator_seed, parse_stake_bond_ref, pick_precommit_due,
+    select_funding,
 };
 use kaspa_rpc_core::model::GetValidatorStatusResponse;
 use kaspa_rpc_service::service::ValidatorStatusProvider;
@@ -68,16 +67,6 @@ const ATTESTATION_CATCH_UP_LIMIT: usize = 16;
 /// the production optimization. Caps keep a large UTXO set from stalling the heartbeat.
 const FUNDING_SCAN_CHUNK_SIZE: usize = 1000;
 const MAX_FUNDING_SCAN_CHUNKS: usize = 64;
-
-/// Payload size used to price the precommit transaction. The payload is fixed-shape, so this is
-/// exact rather than an estimate: a 4627-byte ML-DSA-87 signature plus the payload's own fields.
-/// A slight over-estimate only overpays the relay minimum, which `relay_fee_for_compute_mass`
-/// already pads.
-///
-/// MISAKA §5 round 2: version + validator_id + bond outpoint + epoch + target (hash, daa) + the
-/// declared lock (epoch, hash).
-// MISAKA VLT PR 2: + 64 for the §5.1 `snapshot_commitment` the payload now carries.
-const PRECOMMIT_PAYLOAD_BYTES: usize = MLDSA87_SIGNATURE_LEN + 2 + 64 + 68 + 8 + 64 + 8 + 8 + 64 + 64 + 64;
 
 /// Operating mode for the in-process validator service (ADR-0010, operational modes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -796,56 +785,30 @@ impl ValidatorService {
             trace!("[{VALIDATOR}] precommit: round 2 is not live at the sink; nothing to lock");
             return;
         };
-        // Oldest first while the backlog is short, and STRAIGHT TO THE FRONTIER when it is not.
-        //
-        // A precommit costs a transaction and an acceptance round-trip before the chain shows it
-        // as this validator's lock, so a validator drains its backlog at roughly one epoch per
-        // round-trip. That is fine at a backlog of one or two. It is a liveness bug at a backlog
-        // of ten: the chain mints new epochs faster than the drain, nobody ever precommits the
-        // epoch the network is actually trying to finalize, and finality stops even though the
-        // prevote round is passing comfortably. A deep reorg — healing a partition, say — puts
-        // every validator exactly there, because the lock chain is a statement about accepted
-        // history and a reorg resets it to "no lock at all".
-        //
-        // Skipping the backlog costs nothing that matters: an old epoch's certificate would
-        // certify an anchor already buried under the one the frontier is finalizing, and the
-        // finalized anchor is the NEWEST certified. Round 2 is about the frontier.
-        //
-        // The threshold is what keeps validators together. Jumping unconditionally would let two
-        // validators whose sinks differ by an epoch precommit different epochs forever, and no
-        // single epoch would accumulate quorum; jumping only when far behind puts everyone within
-        // an epoch of each other, after which oldest-first pulls them onto exactly the same one.
-        const PRECOMMIT_FRONTIER_JUMP_EPOCHS: u64 = 3;
-        let pick = match (duty.due.first(), duty.due.last()) {
-            (Some(oldest), Some(newest)) if newest.0.saturating_sub(oldest.0) > PRECOMMIT_FRONTIER_JUMP_EPOCHS => {
-                info!(
-                    "[{VALIDATOR}] precommit: {} epochs behind the frontier (held {}, due {}..{}); skipping the backlog to epoch {}",
-                    newest.0.saturating_sub(oldest.0),
-                    duty.held.epoch,
-                    oldest.0,
-                    newest.0,
-                    newest.0
-                );
-                Some(newest)
-            }
-            (oldest, _) => oldest,
-        };
-        let Some(&(epoch, target_hash, target_daa_score, snapshot_commitment)) = pick else {
+        // Oldest first while the backlog is short, and STRAIGHT TO THE FRONTIER when it is not
+        // (`pick_precommit_due`, the rule the sidecar applies too). A deep reorg — healing a
+        // partition, say — resets the lock chain to "no lock at all" and puts every validator
+        // there; draining one epoch per acceptance round-trip would never reach the epoch the
+        // network is finalizing.
+        let Some((&(epoch, target_hash, target_daa_score, snapshot_commitment), jumped)) = pick_precommit_due(&duty.due, |due| due.0)
+        else {
             trace!("[{VALIDATOR}] precommit: nothing due (held lock is epoch {})", duty.held.epoch);
             return;
         };
-        let held = if duty.held == PrecommitLock::default() { None } else { Some(duty.held) };
+        if jumped {
+            let oldest = duty.due.first().map_or(epoch, |due| due.0);
+            info!(
+                "[{VALIDATOR}] precommit: {} epochs behind the frontier (held {}, due {oldest}..{epoch}, jump past {PRECOMMIT_FRONTIER_JUMP_EPOCHS}); skipping the backlog to epoch {epoch}",
+                epoch.saturating_sub(oldest),
+                duty.held.epoch,
+            );
+        }
+        let held = declared_precommit_lock(duty.held);
         // ADR-0128 Decision 7: never release a precommit this validator's own log contradicts. The
         // duty is re-offered until the chain counts it, and a reorg between two offers can move the
         // epoch's anchor or the held lock — signing the new one would be evidence against this bond.
         // A new vote is made durable before it is signed.
-        let record = SignedPrecommitRecord {
-            epoch,
-            target_hash,
-            target_daa_score,
-            locked_epoch: duty.held.epoch,
-            locked_hash: duty.held.anchor,
-        };
+        let record = SignedPrecommitRecord::for_vote(epoch, target_hash, target_daa_score, duty.held);
         {
             let mut guard = self.signed_precommits.lock().unwrap();
             let Some(store) = guard.as_mut() else {

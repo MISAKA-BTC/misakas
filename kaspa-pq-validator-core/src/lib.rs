@@ -1553,6 +1553,37 @@ impl SignedEpochStore {
     }
 }
 
+/// **The precommit carrier's payload size, for its fee.** The payload is fixed-shape, so this is exact
+/// rather than an estimate up to a few bytes of slack: a 4627-byte ML-DSA-87 signature plus version,
+/// validator id, bond outpoint, epoch, target (hash, DAA score), the declared lock (epoch, hash) and the
+/// §5.1 snapshot commitment. A slight over-estimate only overpays the relay minimum. One spelling for
+/// the in-node service and the sidecar, which fund the same carrier.
+pub const PRECOMMIT_PAYLOAD_BYTES: usize = MLDSA87_SIG_LEN + 2 + 64 + 68 + 8 + 64 + 8 + 8 + 64 + 64 + 64;
+
+/// **How far behind the frontier a validator's precommit backlog may run before it skips to the
+/// frontier** (MISAKA §5 round 2), in epochs between the oldest and the newest due epoch.
+pub const PRECOMMIT_FRONTIER_JUMP_EPOCHS: u64 = 3;
+
+/// **Which due precommit to sign this tick** — `due` ascending by epoch, as the duty lists it. Returns
+/// the entry and whether the backlog was skipped.
+///
+/// **Oldest first while the backlog is short**: a precommit declares the previous counted lock, so
+/// the chain of locks is built a link at a time and in order. **The newest once the oldest and newest
+/// due epochs are more than [`PRECOMMIT_FRONTIER_JUMP_EPOCHS`] apart**: each precommit costs a
+/// transaction and an acceptance round-trip, so a deep backlog (a reorg resets the lock chain) drains
+/// slower than the chain mints epochs and nobody precommits the epoch the network is finalizing. An
+/// old epoch's certificate would certify an anchor already buried under the frontier's. The threshold
+/// keeps validators whose sinks differ by an epoch together: a jump happens only far behind, after
+/// which oldest-first pulls everyone onto the same epoch.
+pub fn pick_precommit_due<T>(due: &[T], epoch_of: impl Fn(&T) -> u64) -> Option<(&T, bool)> {
+    let (oldest, newest) = (due.first()?, due.last()?);
+    if epoch_of(newest).saturating_sub(epoch_of(oldest)) > PRECOMMIT_FRONTIER_JUMP_EPOCHS {
+        Some((newest, true))
+    } else {
+        Some((oldest, false))
+    }
+}
+
 /// **One precommit this validator released for an epoch** (ADR-0128 Decision 7): exactly the fields
 /// `dns_finality::precommit_fault` compares — the vote and the lock it declared. The snapshot
 /// commitment and the signature bytes are not part of it: two precommits that differ only there are
@@ -1565,6 +1596,20 @@ pub struct SignedPrecommitRecord {
     pub target_daa_score: u64,
     pub locked_epoch: u64,
     pub locked_hash: Hash64,
+}
+
+impl SignedPrecommitRecord {
+    /// The record a precommit for `epoch` on `target_hash` releases when it declares `held` — the lock
+    /// the chain shows this validator holding, the zero lock before its first counted precommit.
+    pub fn for_vote(epoch: u64, target_hash: Hash64, target_daa_score: u64, held: PrecommitLock) -> Self {
+        Self { epoch, target_hash, target_daa_score, locked_epoch: held.epoch, locked_hash: held.anchor }
+    }
+}
+
+/// The lock a precommit declares: `None` for the zero lock, which is what a validator with no counted
+/// precommit holds and what [`ValidatorKey::sign_precommit`] signs for `None`.
+pub fn declared_precommit_lock(held: PrecommitLock) -> Option<PrecommitLock> {
+    if held == PrecommitLock::default() { None } else { Some(held) }
 }
 
 /// What signing `candidate` would prove against the precommits this validator already released.
@@ -2670,6 +2715,58 @@ mod tests {
         assert_eq!(reloaded.record_count(), 2);
         assert_eq!(reloaded.check(&vote(5, 0xb5, 0, 0)), SignedEpochCheckOutcome::Block, "the refusal survives a restart");
         assert!(SignedPrecommitStore::load_or_empty(path, h(0x0b), outpoint).is_err(), "a foreign log is refused");
+    }
+
+    /// **The precommit a validator signs next, and the carrier it funds.** Oldest first while the
+    /// backlog spans at most [`PRECOMMIT_FRONTIER_JUMP_EPOCHS`], the newest past it; nothing when
+    /// nothing is due. The fee is sized for the real carrier: a signed precommit's borsh payload fits
+    /// [`PRECOMMIT_PAYLOAD_BYTES`].
+    #[test]
+    fn the_precommit_picked_is_the_oldest_until_the_backlog_is_deep_and_its_carrier_fits_the_fee_size() {
+        let epoch = |e: &u64| *e;
+        assert_eq!(pick_precommit_due::<u64>(&[], epoch), None, "nothing due");
+        assert_eq!(pick_precommit_due(&[9], epoch), Some((&9, false)));
+        assert_eq!(pick_precommit_due(&[9, 10, 11, 12], epoch), Some((&9, false)), "a span of exactly the threshold drains in order");
+        assert_eq!(pick_precommit_due(&[9, 13], epoch), Some((&13, true)), "one past it jumps to the frontier");
+        assert_eq!(pick_precommit_due(&[0, u64::MAX], epoch), Some((&u64::MAX, true)));
+
+        let key = ValidatorKey::from_seed([0x5au8; VALIDATOR_SEED_LEN]);
+        let outpoint = TransactionOutpoint::new(Hash64::from_bytes([0x02u8; 64]), 0);
+        let held = PrecommitLock { epoch: 11, anchor: Hash64::from_bytes([0xb1; 64]) };
+        let payload = key
+            .sign_precommit(
+                b"network",
+                12,
+                Hash64::from_bytes([0xc2; 64]),
+                1_200,
+                declared_precommit_lock(held),
+                Hash64::from_bytes([0xd3; 64]),
+                outpoint,
+            )
+            .expect("a lock below the epoch is signable");
+        let bytes = borsh::to_vec(&payload).unwrap().len();
+        assert!(
+            bytes <= PRECOMMIT_PAYLOAD_BYTES,
+            "the carrier's payload is {bytes} bytes, above the fee size {PRECOMMIT_PAYLOAD_BYTES}"
+        );
+        assert!(
+            PRECOMMIT_PAYLOAD_BYTES - bytes <= 64,
+            "and the fee size stays a close bound: slack {}",
+            PRECOMMIT_PAYLOAD_BYTES - bytes
+        );
+
+        assert_eq!(declared_precommit_lock(PrecommitLock::default()), None, "the zero lock is declared as none");
+        assert_eq!(declared_precommit_lock(held), Some(held));
+        assert_eq!(
+            SignedPrecommitRecord::for_vote(12, Hash64::from_bytes([0xc2; 64]), 1_200, held),
+            SignedPrecommitRecord {
+                epoch: 12,
+                target_hash: Hash64::from_bytes([0xc2; 64]),
+                target_daa_score: 1_200,
+                locked_epoch: 11,
+                locked_hash: Hash64::from_bytes([0xb1; 64]),
+            }
+        );
     }
 
     #[test]
