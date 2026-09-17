@@ -6805,8 +6805,8 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // TBD R0/H schedule numbers the design deliberately leaves open).
     tkn: TokenParams::INERT,
     // Sized for `VltParams::INERT`'s K = 96 + delay 1 epochs at the 100-blue_score attestation
-    // epoch length, plus the 300-block challenge window and a lag/grace margin. This is the walk
-    // cost VLT weighting adds per recompute; it is paid only once the fence above is moved.
+    // epoch length, plus the 300-block challenge window and a lag/grace margin. The compute-overlay
+    // walk pays it only once the shadow fence above is moved.
     vlt_credit_window_blue_score: 10_400,
     // ---- DNS-veto reach and its release paths (calibrated together; see the field docs) ----
     //
@@ -6885,10 +6885,10 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
 /// * `vlt.model_cost_table` — the registered profiles, without which every job mints zero and the
 ///   fork would cost a hard fork to discover it did nothing.
 ///
-/// The weight fence (`vlt_activation_daa_score`) deliberately stays `u64::MAX` even now: moving
-/// the VOTE is step 4, after the soak has measured what the weight is made of. Genesis-active
-/// step 3 means the overlay credits, draws committees, pays the audit fee and slashes settled
-/// challenges from block 1 — it does NOT mean compute weight decides finality yet.
+/// The weight fence (`vlt_activation_daa_score`) stays `u64::MAX`: VLT voting weight is removed
+/// and `Params::validate_palw_v2` refuses any other value. Genesis-active step 3 means the overlay
+/// draws committees, pays the audit fee and slashes settled challenges from block 1 — compute
+/// weight never decides finality.
 ///
 /// Choosing the height, the fleet-update procedure and the exit criteria are in
 /// `docs/testnet10-vlt-shadow-fork-runbook.md`. The rule of thumb: current tip plus twice the

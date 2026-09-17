@@ -344,10 +344,9 @@ fn check_transaction_subnetwork(
             // declared verdict must be what comparing the two receipt hashes implies) is
             // context-free and lives here; committee membership and the signature are stateful.
             DnsTxKind::ComputeVerdict => validate_compute_verdict_payload(&tx.payload),
-            // Round 2 of DNS finality. The declared lock's *internal* possibility is context-free
-            // and checked here; whether it is the lock this chain actually shows is a question
-            // about history, answered by the credit walk, which counts a precommit only if the
-            // declaration matches.
+            // Round 2 of DNS finality, which never ran and is removed. The declared lock's
+            // *internal* possibility is context-free and still checked here, so the payload stays
+            // admissible and its equivocation evidence provable.
             DnsTxKind::StakePrecommit => validate_stake_precommit_payload(&tx.payload),
             // Round 2's equivocation evidence. Like slashing evidence it is a pure evidence
             // carrier and must declare no outputs; the two signatures are verified as a

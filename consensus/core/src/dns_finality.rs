@@ -518,9 +518,9 @@ pub fn stake_attestation_shard_tx(shard: &StakeAttestationShardPayload) -> Trans
 /// is visible, and it carries [`Self::locked_epoch`] / [`Self::locked_hash`] — the lock the signer
 /// held when it signed. Two consequences:
 ///
-/// * **On chain**, the credit walk counts a precommit only if its declared lock matches what this
-///   chain shows as that validator's previous precommit. A validator cannot quietly forget a lock
-///   it published; it has to restate it, correctly, every time it locks again.
+/// * **On chain**, the round was to count a precommit only if its declared lock matched what this
+///   chain shows as that validator's previous precommit, so a validator could not quietly forget a
+///   lock it published.
 /// * **Across branches**, that restatement is self-contained evidence. Two precommits naming the
 ///   same `locked_epoch` with different `locked_hash` prove the signer held two different locks at
 ///   one height, and proving it needs only the two payloads — no reachability, no access to the
@@ -1181,8 +1181,7 @@ pub struct DnsParams {
     /// zero — which would under-count honest validators' weight rather than over-count it, but would
     /// still make weight depend on a window the paper does not define. Kept as its own knob (rather
     /// than reusing [`Self::stake_score_window_blue_score`]) because the compute-credit window is
-    /// necessarily much longer than the attestation window, and its walk cost is the price of
-    /// activating VLT weighting. `0` while the fence is inert.
+    /// necessarily much longer than the attestation window.
     pub vlt_credit_window_blue_score: u64,
 
     /// **Reorg-gate evaluation horizon** — how far back (selected-chain blocks) the gate is
@@ -1940,9 +1939,8 @@ pub fn stake_attestation_message(
 /// The **snapshot commitment is inside the digest** for the same shape of reason, at the
 /// denominator instead of the lock (§5.1): a precommit whose signature did not cover which
 /// `W(E)` it was weighed under could be counted against a different one, and `Q(E)` would
-/// silently stop meaning two thirds of anything. Zero below the VLT weight fence, where the
-/// round does not exist — the round and the commitment activate together, so there is no signed
-/// precommit anywhere whose digest predates the field.
+/// silently stop meaning two thirds of anything. The round and its snapshots are removed with the
+/// VLT weight fence, so the commitment a signer supplies is zero.
 ///
 /// `network_id` and `bond_outpoint` bind the precommit to a network and to the specific bond whose
 /// weight it pledges, exactly as in [`stake_attestation_message`].
@@ -5740,9 +5738,8 @@ pub fn validate_compute_verdict_payload(payload: &[u8]) -> Result<(), DnsTxError
 /// Stateless shape of a [`StakePrecommitPayload`] (subnetwork `SUBNETWORK_ID_STAKE_PRECOMMIT`).
 ///
 /// Everything checkable without a chain: version, signature width, and the lock's internal
-/// consistency. Whether the declared lock is the *true* one is a question about history and is
-/// answered by the credit walk, which counts a precommit only if its lock matches what the chain
-/// shows.
+/// consistency. Whether the declared lock is the *true* one was a question for the precommit
+/// round, which is removed; nothing counts a precommit toward confirmation.
 pub fn validate_stake_precommit_payload(payload: &[u8]) -> Result<(), DnsTxError> {
     let p: StakePrecommitPayload = borsh::from_slice(payload).map_err(|_| DnsTxError::Decode)?;
     if p.version != DNS_PAYLOAD_VERSION_V1 {
@@ -8532,10 +8529,9 @@ mod tests {
         let mut bad = fixture_shard(2);
         bad.attestations[0].epoch = 999;
         assert_eq!(validate_stake_attestation_shard_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::ShardTupleMismatch));
-        // MISAKA VLT PR 2: a non-zero validator_set_commitment is stateless-VALID — above the
-        // weight fence it is the §5.1 snapshot binding. (Below the fence the acceptance gate
-        // still rejects it; a stateless layer cannot see the fence.) It remains part of the
-        // shard tuple, so members must agree on it.
+        // MISAKA VLT PR 2: a non-zero validator_set_commitment is stateless-VALID — the zero rule
+        // lives at the acceptance gate, not here. It remains part of the shard tuple, so members
+        // must agree on it.
         let mut shard = fixture_shard(2);
         shard.validator_set_commitment = Hash64::from_bytes([0x01; 64]);
         for att in shard.attestations.iter_mut() {
