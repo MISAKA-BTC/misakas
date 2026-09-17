@@ -20,11 +20,13 @@ const PALW_DUMP: &str = "palw-dump";
 
 pub struct PalwDumpService {
     consensus_manager: Arc<ConsensusManager>,
+    /// The build's class ledger, for the context of a class the chain holds no carriage for.
+    ledger: crate::palw_class_context::PalwBuildClassLedgerV1,
 }
 
 impl PalwDumpService {
-    pub fn new(consensus_manager: Arc<ConsensusManager>) -> Self {
-        Self { consensus_manager }
+    pub fn new(consensus_manager: Arc<ConsensusManager>, ledger: crate::palw_class_context::PalwBuildClassLedgerV1) -> Self {
+        Self { consensus_manager, ledger }
     }
 
     async fn worker(self: &Arc<Self>) {
@@ -52,8 +54,11 @@ impl PalwDumpService {
             }
             info!("[{PALW_DUMP}] {} class(es) at daa {}", rows.len(), daa);
             for row in rows {
+                // The class's window (and where it was read from): what a client sizing a prompt for
+                // this class needs, and what nothing printed before.
+                let context = self.ledger.class_context(row.class_id, session.palw_registered_class_carriage_v1(row.class_id));
                 info!(
-                    "[{PALW_DUMP}]   class={} base={} status={} share={} budget={} leaves={}",
+                    "[{PALW_DUMP}]   class={} base={} status={} share={} budget={} leaves={} n_ctx={} canonical={}+{} model={} context_source={}",
                     row.class_id,
                     row.is_base_class,
                     row.status,
@@ -63,7 +68,12 @@ impl PalwDumpService {
                     // The canonical job in leaves. An operator who runs a gateway or a rail against
                     // this class needs it for `--class-leaves`, and until now the only published
                     // value was the floor's 7,708 sitting in both binaries as a default.
-                    row.canonical_leaves
+                    row.canonical_leaves,
+                    context.n_ctx,
+                    context.canonical_prefill_tokens,
+                    context.canonical_decode_tokens,
+                    if context.model_id.is_empty() { "-" } else { context.model_id.as_str() },
+                    context.source
                 );
             }
             return;
