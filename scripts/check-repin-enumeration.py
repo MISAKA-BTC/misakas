@@ -112,6 +112,7 @@ FROZEN = [
     "consensus/core/src/palw_step_refute.rs",
     "consensus/core/src/palw_v2.rs",
     "kaspad/src/palw_fp_seat.rs",
+    "kaspad/src/validator_service.rs",
     "misaka-cli/src/key_roles.rs",
     "misaka-cli/src/keys.rs",
     "misaka-cli/src/main.rs",
