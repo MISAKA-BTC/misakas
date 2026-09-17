@@ -121,6 +121,10 @@ pub mod daa_score_timestamp;
 /// (StakeScore aggregation, reorg gate) land in PR-10.4
 /// onward once Phases 1–9 stabilise.
 pub mod dns_finality;
+/// ADR-0128 — DNS validators vote BFT by bonded stake, and that vote decides the stake reorg gate:
+/// the quorum, the counted set and its leak, the snapshot commitment, the lock chain and the
+/// precommit duty, as pure functions of what the virtual processor's walk verified.
+pub mod dns_bft_v1;
 pub mod mldsa87_primitives;
 pub mod errors;
 /// kaspa-pq Selected-Parent EVM Lane (ADR-0020): EVM execution-lane consensus

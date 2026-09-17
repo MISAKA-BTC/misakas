@@ -564,6 +564,14 @@ mod tests {
                 work.activation = at;
             }
             "palw_attempt_activation" => params.palw_attempt_activation = Some(at),
+            "dns_bft_gate" => {
+                params.dns_bft_gate = Some(crate::config::params::DnsBftGateV1 {
+                    activation: at,
+                    t_leak_daa: 5_040,
+                    reentry_final_depth_daa: 200,
+                    min_retained_validators: 4,
+                })
+            }
             "palw_inactivity_leak" => {
                 params.palw_inactivity_leak = Some(crate::config::params::PalwInactivityLeakV1 {
                     activation: at,

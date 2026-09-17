@@ -524,6 +524,56 @@ pub struct PalwAttemptWorkV1 {
     pub ticket_bucket_log2: u32,
 }
 
+/// **ADR-0128 Decision 8: DNS validators vote BFT by bonded stake, and that vote decides the stake
+/// reorg gate.**
+///
+/// Past `activation` (resolved at the sink's DAA score) an epoch's canonical lagged anchor is
+/// DNS-final when bonded stake above two thirds of the epoch's counted set has both attested it
+/// and precommitted it under a lock the chain can check, the precommit binding the counted set
+/// through its snapshot commitment ([`crate::dns_bft_v1`]). `DnsState.last_dns_confirmed_anchor`
+/// then follows the newest DNS-final anchor instead of the StakeScore depth rule, and
+/// `dns_reorg_outcome` refuses every candidate that abandons it — before the PALW comparator,
+/// for a reorg and an extension alike — until it goes stale under `dns_veto_ttl_daa_score`.
+/// Below the fence, and on every network that leaves it `None` (every shipped preset), nothing
+/// changes.
+///
+/// The three numbers beside the height are the counted set's leak (ADR-0128 Decision 3), which
+/// is this fence's own and replaces [`PalwInactivityLeakV1`]:
+///
+/// * a bond is leaked at an epoch whose anchor is at DAA `a` when `a − last ≥ t_leak_daa`, `last`
+///   being the anchor DAA of its youngest attestation accepted at or below `a` with an anchor at
+///   least `reentry_final_depth_daa` below `a`, or — with no such attestation in the evidence
+///   window — the later of the bond's activation and the window's lower edge;
+/// * nothing is leaked where leaking would leave fewer than `min_retained_validators` distinct
+///   validators.
+///
+/// **Values beside a height, so the height is visited and the values are not** — the
+/// [`PalwBondMaturityV1::window_daa`] rule for the D1 reason: the identity visitor normalises
+/// what it visits, and a normalised duration would let two builds leaking at different silences
+/// fingerprint identically. All four reach `consensus_params_id` and `consensus_schedule_id`
+/// Some-only; a scheduled height collapses out of the identity with its values.
+///
+/// Refused at start by [`Params::validate_palw_v2`] where the network runs no overlay, where
+/// `t_leak_daa` is zero, where the re-entry depth is not below it, where the floor is under four
+/// validators, and where the pruning depth is shorter than the walk a sink's evaluation reads
+/// ([`crate::dns_bft_v1::dns_bft_walk_blue_score_v1`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DnsBftGateV1 {
+    /// When the BFT confirmation and the gate that follows it come into force, judged at the
+    /// sink's DAA score (and, in the gate, at the incumbent sink's).
+    pub activation: ForkActivation,
+    /// How long a bond must have been silent before the counted set leaks it, in DAA. testnet-11's
+    /// planned value is 5,040: seven days at the chain's 120-second cadence.
+    pub t_leak_daa: u64,
+    /// How deep an attestation's anchor must be buried below an epoch's anchor before it counts as
+    /// that epoch's re-entry evidence, in DAA (ADR-0066 SA-2's hysteresis). Strictly below
+    /// `t_leak_daa`, or nobody who leaks ever comes back.
+    pub reentry_final_depth_daa: u64,
+    /// The fewest distinct validators leaking may leave in a counted set; below it nothing is
+    /// leaked and finality waits. At least four — the smallest set in which one fault is tolerated.
+    pub min_retained_validators: u32,
+}
+
 /// **ADR-0066 Decision 4's parameter: the inactivity leak, and how long silence must last.**
 ///
 /// **The leak is removed.** No code reads this value any more and [`Params::validate_palw_v2`]
@@ -880,6 +930,13 @@ pub struct Params {
     /// algo-6 arm past the fence, refuses the majority's algo-9 blocks, and neither side's
     /// handshake says anything is wrong.
     pub palw_attempt_activation: Option<ForkActivation>,
+
+    /// **ADR-0128 — the DNS validators' BFT vote by bonded stake, and the stake reorg gate that
+    /// follows it.** `None` on every shipped preset.
+    ///
+    /// A top-level fence with three values beside it; see [`DnsBftGateV1`]. Read through
+    /// [`Self::dns_bft_gate_fence`], which answers only where the network runs an overlay.
+    pub dns_bft_gate: Option<DnsBftGateV1>,
 
     /// **ADR-0066 Decision 4 — the inactivity leak.** `None` on every shipped preset.
     ///
@@ -2260,6 +2317,45 @@ impl Params {
                  claim is a move of a dissection the network does not run (ADR-0093 Decision 8)",
             ));
         }
+        // **ADR-0128 Decision 8: the BFT gate's refusals**, ahead of the V2 gate below because the
+        // overlay is any lineage's. Every `Some` is judged, a `never()` height included: the values
+        // reach the fingerprint whether or not the height does.
+        if let Some(gate) = self.dns_bft_gate {
+            let Some(dns) = self.dns_params.as_ref() else {
+                return Err(PalwModeV2Error::Invalid(
+                    "dns_bft_gate is set on a network that runs no DNS overlay: there are no validators to vote and no \
+                     stake reorg gate to decide (ADR-0128 Decision 8)",
+                ));
+            };
+            if gate.t_leak_daa == 0 {
+                return Err(PalwModeV2Error::Invalid(
+                    "dns_bft_gate.t_leak_daa is zero: every bond would be leaked the moment its epoch closed, and no counted \
+                     set could keep a validator (ADR-0128 Decision 8)",
+                ));
+            }
+            if gate.reentry_final_depth_daa >= gate.t_leak_daa {
+                return Err(PalwModeV2Error::Invalid(
+                    "dns_bft_gate.reentry_final_depth_daa is not below t_leak_daa: the re-entry window is empty, so a leaked \
+                     validator could never be counted again (ADR-0066 SA-2, ADR-0128 Decision 8)",
+                ));
+            }
+            if gate.min_retained_validators < crate::dns_bft_v1::DNS_BFT_MIN_RETAINED_VALIDATORS_FLOOR_V1 {
+                return Err(PalwModeV2Error::Invalid(
+                    "dns_bft_gate.min_retained_validators is below four: a counted set smaller than that tolerates no fault, so \
+                     leaking down to it would let a handful of validators finalize for the network (ADR-0128 Decision 3)",
+                ));
+            }
+            let walk = crate::dns_bft_v1::dns_bft_walk_blue_score_v1(&gate, dns);
+            if walk.is_none_or(|walk| self.blockrate.pruning_depth < walk) {
+                return Err(PalwModeV2Error::InvalidOwned(format!(
+                    "dns_bft_gate reads a walk of {} blue score from the sink (the StakeScore window plus the leak's evidence \
+                     window) and the pruning depth is {}: the pruning point would pass the evidence a sink's leak reads, and \
+                     two synced nodes could count different sets (ADR-0128 Decision 3, SA-3)",
+                    walk.map_or_else(|| "more than u64::MAX".to_owned(), |w| w.to_string()),
+                    self.blockrate.pruning_depth
+                )));
+            }
+        }
         // **The inactivity leak is removed** (ADR-0060 Decision 4 / ADR-0066 Decision 4): nothing
         // builds a leak view or excludes a silent validator from a quorum denominator any more.
         // `palw_inactivity_leak` stays a field — hashed only when set, so an unset preset's ids are
@@ -3391,6 +3487,12 @@ impl Params {
         if self.palw_attempt_activation == Some(ForkActivation::never()) {
             self.palw_attempt_activation = None;
         }
+        // ADR-0128: the WHOLE option collapses, the D1 rule for the D1 reason — a present `never()`
+        // would carry the three leak numbers into `consensus_params_id` that an unset build never
+        // writes, and scheduling the gate would partition the fleet at deploy.
+        if self.dns_bft_gate.is_some_and(|g| g.activation == ForkActivation::never()) {
+            self.dns_bft_gate = None;
+        }
         if self.palw_inactivity_leak.is_some_and(|l| l.activation == ForkActivation::never()) {
             self.palw_inactivity_leak = None;
         }
@@ -4193,6 +4295,18 @@ impl Params {
         crate::pow_layer0::PalwAttemptLaneV1::from_fence(self.palw_attempt_activation.map(|fence| fence.is_active(daa_score)))
     }
 
+    /// ADR-0128: the BFT gate, where the network runs an overlay at all — a vote of no validators
+    /// decides nothing. What the processors store.
+    pub fn dns_bft_gate_fence(&self) -> Option<DnsBftGateV1> {
+        self.dns_params.as_ref().and(self.dns_bft_gate)
+    }
+
+    /// ADR-0128: the BFT gate where it is in force at `daa_score` — the sink's, when a sink's
+    /// confirmation is evaluated, and the incumbent sink's, when the reorg gate is.
+    pub fn dns_bft_gate_at(&self, daa_score: u64) -> Option<DnsBftGateV1> {
+        self.dns_bft_gate_fence().filter(|gate| gate.activation.is_active(daa_score))
+    }
+
     /// **Every top-level PALW activation fence, named, in ONE compiler-forced spelling.**
     ///
     /// The destructure below is exhaustive, for [`Self::for_each_fence`]'s reason: a fence added to
@@ -4202,7 +4316,7 @@ impl Params {
     /// which the merge grew four fences without touching either.
     ///
     /// Some-only fences that carry a companion value (`palw_heartbeat`, `palw_attempt_work`,
-    /// `palw_bond_maturity`, `palw_inactivity_leak`, `palw_beacon_fold`) contribute their
+    /// `palw_bond_maturity`, `dns_bft_gate`, `palw_inactivity_leak`, `palw_beacon_fold`) contribute their
     /// `activation` and nothing else: a duration beside a fence is deliberately not a fence, for
     /// the reason `for_each_fence` gives about normalisation.
     ///
@@ -4251,6 +4365,7 @@ impl Params {
             palw_heartbeat,
             palw_attempt_work,
             palw_attempt_activation,
+            dns_bft_gate,
             palw_inactivity_leak,
             palw_beacon_fold,
             palw_capability_bound,
@@ -4316,6 +4431,7 @@ impl Params {
             ("palw_heartbeat", palw_heartbeat.map(|f| f.activation)),
             ("palw_attempt_work", palw_attempt_work.map(|f| f.activation)),
             ("palw_attempt_activation", *palw_attempt_activation),
+            ("dns_bft_gate", dns_bft_gate.map(|f| f.activation)),
             ("palw_inactivity_leak", palw_inactivity_leak.map(|f| f.activation)),
             ("palw_beacon_fold", palw_beacon_fold.map(|f| f.activation)),
             ("palw_capability_bound", *palw_capability_bound),
@@ -4512,6 +4628,17 @@ impl Params {
             h.write(b"palw_attempt_work_price");
             h.write(attempt.work_log2.to_le_bytes());
             h.write(attempt.ticket_bucket_log2.to_le_bytes());
+        }
+        // ADR-0128: NAMED, with its height, because its `for_each_fence` arm is Some-only (the
+        // `palw_certification_rent` reason below); and the three leak numbers beside it, by the SA-4
+        // rule above — two operators scheduling the gate at one height with different silences
+        // leak different validators the moment it fires, and this is where the log can say so.
+        if let Some(gate) = self.dns_bft_gate {
+            h.write(b"dns_bft_gate");
+            h.write(gate.activation.daa_score().to_le_bytes());
+            h.write(gate.t_leak_daa.to_le_bytes());
+            h.write(gate.reentry_final_depth_daa.to_le_bytes());
+            h.write(gate.min_retained_validators.to_le_bytes());
         }
         if let Some(leak) = self.palw_inactivity_leak {
             h.write(b"palw_inactivity_leak_grace");
@@ -4766,6 +4893,7 @@ impl Params {
             palw_heartbeat,
             palw_attempt_work,
             palw_attempt_activation,
+            dns_bft_gate,
             palw_inactivity_leak,
             palw_beacon_fold,
             palw_capability_bound,
@@ -4922,6 +5050,12 @@ impl Params {
                 absent = u64::MAX;
                 visit(&mut absent);
             }
+        }
+        // ADR-0128: the height only, and Some-only — the three leak numbers are values beside it (the
+        // D1 rule), and a `u64::MAX`-for-absence arm would put eight bytes into every preset that
+        // leaves the gate `None`. The schedule id names it, which keeps absence from aliasing.
+        if let Some(gate) = dns_bft_gate.as_mut() {
+            fork(&mut gate.activation, visit);
         }
         match palw_inactivity_leak.as_mut() {
             Some(leak) => fork(&mut leak.activation, visit),
@@ -5394,6 +5528,7 @@ impl Params {
             palw_heartbeat,
             palw_attempt_work,
             palw_attempt_activation,
+            dns_bft_gate,
             palw_inactivity_leak,
             palw_beacon_fold,
             palw_capability_bound,
@@ -5624,6 +5759,16 @@ impl Params {
         if let Some(activation) = palw_attempt_activation {
             h.write(b"palw_attempt_activation");
             h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0128: the height and all three leak numbers, Some-only — they decide which bonds an
+        // epoch counts and therefore which anchors are DNS-final and vetoed, and every shipped
+        // preset leaves the gate `None` and fingerprints byte-identically to a build without it.
+        if let Some(gate) = dns_bft_gate {
+            h.write(b"dns_bft_gate");
+            h.write(gate.activation.daa_score().to_le_bytes());
+            h.write(gate.t_leak_daa.to_le_bytes());
+            h.write(gate.reentry_final_depth_daa.to_le_bytes());
+            h.write(gate.min_retained_validators.to_le_bytes());
         }
         if let Some(leak) = palw_inactivity_leak {
             // The label carries the RULE's semantic version: ADR-0066 SA-2 added the re-entry
@@ -6196,6 +6341,7 @@ impl Params {
             palw_heartbeat: self.palw_heartbeat,
             palw_attempt_work: self.palw_attempt_work,
             palw_attempt_activation: self.palw_attempt_activation,
+            dns_bft_gate: self.dns_bft_gate,
             palw_inactivity_leak: self.palw_inactivity_leak,
             palw_beacon_fold: self.palw_beacon_fold,
             palw_capability_bound: self.palw_capability_bound,
@@ -7128,6 +7274,7 @@ pub const MAINNET_PARAMS: Params = Params {
     // every height on algo-6, exactly as it does today, and arming the fence is the only thing
     // that would change a block.
     palw_attempt_activation: None,
+    dns_bft_gate: None,
     palw_inactivity_leak: None,
     palw_beacon_fold: None,
     palw_capability_bound: None,
@@ -7313,6 +7460,7 @@ pub const TESTNET_PARAMS: Params = Params {
     // every height on algo-6, exactly as it does today, and arming the fence is the only thing
     // that would change a block.
     palw_attempt_activation: None,
+    dns_bft_gate: None,
     palw_inactivity_leak: None,
     palw_beacon_fold: None,
     palw_capability_bound: None,
@@ -7480,6 +7628,7 @@ pub const SIMNET_PARAMS: Params = Params {
     // every height on algo-6, exactly as it does today, and arming the fence is the only thing
     // that would change a block.
     palw_attempt_activation: None,
+    dns_bft_gate: None,
     palw_inactivity_leak: None,
     palw_beacon_fold: None,
     palw_capability_bound: None,
@@ -11914,6 +12063,7 @@ pub const DEVNET_PARAMS: Params = Params {
     // ADR-0072 ships dormant here too: the drill devnet was re-minted onto the execution-priced
     // rule, so it has no pre-ADR-0072 history for a fence to protect.
     palw_attempt_activation: None,
+    dns_bft_gate: None,
     palw_inactivity_leak: None,
     palw_beacon_fold: None,
     palw_capability_bound: None,
