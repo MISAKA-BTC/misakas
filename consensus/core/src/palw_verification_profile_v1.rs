@@ -705,7 +705,7 @@ mod tests {
         let duties_per_seat = heavy.reserved_exposure_sompi / lambda_exposure / 26;
         assert!(duties_per_seat <= 39, "{duties_per_seat} duties a seat hold under a 10,000 MSK bond at λ = 2");
         let bonds_needed = heavy.reserved_exposure_sompi.div_ceil(bond_collateral);
-        assert!(bonds_needed >= 1 && bonds_needed <= 26, "{bonds_needed}");
+        assert!((1..=26).contains(&bonds_needed), "{bonds_needed}");
         // Exhaustion: at two hundred times that exposure (a seat reward of 25,600 MSK under λ = 2)
         // the inflight duties need more bonds than there are seats — the gate must hold before the
         // collateral runs out, and the profile's cap is what holds it.

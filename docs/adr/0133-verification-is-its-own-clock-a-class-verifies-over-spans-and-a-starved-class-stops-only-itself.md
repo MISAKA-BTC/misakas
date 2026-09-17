@@ -250,7 +250,18 @@ exceeds every profile in §6; shortening it is ADR-0130's next ADR).
 
 ## 11. Implementation record
 
-*Tests and the verification run: filled in by the closing commit.*
+* 2026-09-17, `feat/palw-exec-lane-and-validator-retirement`. Tests (`adr0133_*`, `palw_verification_profile_v1`):
+  the profile is derived and cannot be shrunk (the dense tier one span, the hybrid two, the Kimi stand-in five;
+  under-reporting floored at the estimate); Little's law sizes the panel (5 % / 236 %, 24 seats, the rate at
+  70 %, cold replays cost more); the gate is class-local; **a Kimi-class starvation stops only Kimi** (120 grid
+  cases: Qwen only, Kimi only, both, one-span beside five-span, slow 90 %, fast 90 %, one and two operators
+  down, warm and cold caches, 100 and 300 GiB — Qwen's every count identical with and without Kimi, Kimi
+  licensed exactly when its own arithmetic says it is live, the real lane snapshot schedules exactly the classes
+  with a `Final`, the anchor cadence untouched, recovery with the seats the profile needs, the cap holding the
+  surplus); collateral bounds the inflight before time does (exhaustion at 200 × λ = 2); the grid is monotone
+  and is what §6 prints. Verification: consensus-core 2,149 / rpc-core 148 / misaka-cli 176 / rpc-service 1 /
+  kaspad 98 / integration `rpc_tests::sanity_test` 1 — all green; clippy `-D warnings` over the eleven crates
+  clean; `shipped_presets_have_pinned_fingerprints` unmoved (`ab4e7b9c…`).
 
 ## 12. Number hygiene
 
