@@ -1,7 +1,8 @@
 # ADR-0131 — A claim is paid for the compute it cost, in economic compute, not leaves
 
-* Status: **PROPOSED 2026-09-17; shadow implementation in progress** on `feat/palw-exec-lane-and-validator-retirement`.
-  No consensus rule changes until a later fenced height; everything here first runs as node-local measurement.
+* Status: **PROPOSED 2026-09-17; Decisions 1 and 2 IMPLEMENTED the same day, in shadow** on
+  `feat/palw-exec-lane-and-validator-retirement` (§7). No consensus rule, parameter or fingerprint
+  moves: everything here is node-local measurement until Decision 3 gets a height.
 * Operator's direction, in the operator's words: "次に見るべきは claim数ではなく `MSK / canonical compute`";
   "PWU = fork choice / consensus work、CCU = model間の経済価格 を分離"; "M4で何秒だったかを直接consensus値に
   しない — 時間は校正用データに留めます"; "DAA補正を二重に掛けないこと"; "Producer CCUとPanel CCUを分離";
@@ -33,11 +34,24 @@ in the open, how many MSK each class earns per unit of compute it finalized and 
   (the class target's expected attempts times the per-inference leaves) is fork-choice work and is not read.
   So there is no double count today; the expected-attempts factor is simply missing: a class drawn at
   0.61 × MAX pays ~1.64 forwards a claim and is paid as if it paid one.
-* **Leaves are not compute.** A leaf is a tile of a node's output: a Q4 dense matmul, a GatedDeltaNet state
-  update, a softmax row over the kv length and an MoE expert matmul each commit leaves at very different
-  costs, and the canonical jobs above differ nine-fold in tokens.
+* **Leaves are not compute, and the two model tiers are priced 1.86× apart per unit of the compute
+  they ran.** A leaf is `elements / tile_len` of a node's output — the dense tier tiles at 128, the hybrid
+  at 512 — so the same row commits four times the leaves on one class; a routed-expert row commits eight
+  experts' matmuls as one row; and the canonical jobs differ nine-fold in tokens. Measured with Decision 2
+  (§7): the dense tier runs 12,767 MAC-equivalents a leaf, the hybrid 7,846 (canonical against canonical,
+  1.63×); and since the job an attempt runs is the prefill-only job (ADR-0117) while the price is the
+  canonical job's leaves, the hybrid — which loses two of its nine tokens' decode calls to the rule where
+  the dense tier loses two of sixty-five — is paid **86.4 % more per MAC-equivalent it ran** than the
+  dense tier on today's basis. By the operator's line (5 % good, 10 % acceptable, 20 % a distortion) that
+  is a distortion, and it is the basis's, not the mix's: it is the same at any claim ratio.
 * **The unit is whichever weight-bearing model class is heaviest**, and a class bears weight once its share is
-  above zero — a class registered at 1 ‰ set testnet-11's unit and lowered every other class's pay.
+  above zero — a class registered at 1 ‰ set testnet-11's unit and lowered every other class's pay. Read
+  in expected attempts the same rule is unusable: that class's target is 3,165 draws a claim, so an
+  attempted-compute unit set by it would price both live tiers at 0 ‰ (§7).
+* **Panels license nothing for the hybrid.** In the live window (§7) the hybrid's 500 sampled claims
+  reached no licence; every one timed out and was redrawn. Its producers' `A_m` is therefore zero
+  whatever the price says — the largest live distortion is panel liveness for the 33 GiB class, not a
+  formula. The dense tier licensed 133 of 453 terminal claims (48 `Final`, 320 voided).
 * **What is already separate:** the 45 % domain cap and the parity rules shape execution slots only (ADR-0125,
   ADR-0130); pay is per `Final` claim. Execution-block fees go to the permit holder's payout — a future source of
   cross-class income differences, left for later.
@@ -76,6 +90,69 @@ job, or the span's compute-weighted average) is decided with Decision 3.
 measured (compute, runtime on reference hosts, final rate, calibration residual) before its claims are priced by
 compute.
 
+## 7. Implementation record and measurements (2026-09-17)
+
+**Built, in shadow.** `consensus/core/src/palw_economic_compute_v1.rs`: the cost table
+(`PALW_ECONOMIC_COST_TABLE_V1`: a MAC-equivalent is one 8-bit-weight multiply–accumulate; attention over
+the cache by heads × head dim × true kv length; the gated-delta recurrence at four MACs a state element;
+norms 2, rotations 2, transcendentals 4, GLU 5, the convolution a tap a channel; wider weight dtypes at their
+byte width), the per-node derivation from the profile's own node tables (a dense matmul is input width ×
+output width; a routed-expert matmul is the concatenated row's active experts only, the down projection
+block-diagonal over the router's `k`; the LM head where logits are computed), the closed form over exactly
+the positions the leaf enumeration counts, the priced reward over `u128` measures, the three bases, the
+unit, and the class census (`palw_class_census_v1`: registration numbers, target, expected attempts, claims
+by phase, redraws, escrows). `getPalwClassEconomics` (op 185) hands a client the census with each class's
+compute from its registered carriage or this build's ledger; `misaka palw economics` prices every class on
+every basis with the same functions and prints `F_m`, `A_m`, the panel's rate per verification compute and
+the gaps. Nothing on the block path reads any of it.
+
+**The live classes, measured** (cost table v1; the job an attempt runs is the prefill-only job):
+
+| class | canonical job | leaves | canonical MAC-eq | attempt job MAC-eq | MAC-eq / leaf | per token |
+|---|---|---|---|---|---|---|
+| `PALW-BASE-0/rc` | 8 + 4 | 7,708 | 30,504,896 | 21,657,728 | 3,957 | 2.5 M |
+| `Qwen3.6-35B-A3B/graph-v3` | 7 + 2 | 2,685,360 | 21,070,759,296 | 18,055,200,736 | 7,846 | 2.34 G |
+| `Qwen/Qwen2.5-1.5B/graph-v5@512` | 63 + 2 | 6,630,544 | 84,653,733,376 | 83,102,171,136 | 12,767 | 1.30 G |
+| `Qwen/Qwen3.8-27B/graph-v3` | 7 + 2 | 9,000,776 | 198,712,432,640 | 172,919,123,392 | 22,077 | 22.1 G |
+
+By kind, the hybrid's canonical job is 11.4 G dense projections, 8.1 G routed experts (eight of 256 at
+2048 × 512, three matmuls, forty layers), 0.5 G recurrence, 1.0 G logits (2048 × 248,320 twice), 3 M
+attention at kv ≤ 8; the dense tier's is 83.9 G dense (28 layers of 1536 × 8960 SwiGLU over 64 positions),
+0.18 G attention, 0.47 G logits. The 27B is a one-expert mixture of 5120 × 17,408 over 64 layers.
+
+**Per claim, at testnet-11's 7,001 escrow (3,200.85 MSK), the live targets (one expected attempt each) and
+the live unit (the 27B):**
+
+| basis | unit | Qwen3.6 price | Qwen2.5 price | `F₃₆ / F₂₅` = `A₃₆ / A₂₅` | gap |
+|---|---|---|---|---|---|
+| leaves (in force) | 9,000,776 | 29.8 % (954.96 MSK) | 73.7 % (2,357.95 MSK) | 1.864 | **86.4 %** |
+| economic job | 172.9 G | 10.4 % (334.21 MSK) | 48.1 % (1,538.28 MSK) | 1.000 | 0.0 % |
+| economic attempted | 547 T | 0 % | 0 % | 1.000 | 0.0 % (nothing paid) |
+
+`F` and `A` coincide while both classes are at one expected attempt; at three expected attempts the job
+basis pays the hybrid a third per attempted unit and the attempted basis pays it three times per `Final`
+unit, and the panel's rate per verification compute follows the job on the job basis only (Decision 4) —
+each pinned in `adr0131_*`. On every basis and every mix `producer + pool + burned == escrow`: no basis
+changes what the schedule withheld. The floor is paid whole on every basis.
+
+**The live window** (1,311 distinct claims read from four bonds at DAA 5,774, before 7,001, when every
+`Final` paid its whole 2,756.28 MSK escrow to the producer and no panel was paid): the dense tier's
+`F` = 29,021 MSK per 10¹² MAC-eq and `A` = 1,748 (48 `Final` of 797 accepted; 320 voided at
+`receipt_timeout`, 451 redrawn); the hybrid's `A` = 0 (500 accepted, none licensed, 282 redrawn); the floor's
+window held no `Final`. The hybrid's gap is not a price: its panels do not license it.
+
+**Calibration.** The operator's timings — the dense tier's A16 runtime at ~50 prefill / ~33 decode tokens a
+second on an M4 Pro, the hybrid's canonical job at ~7.7 s on the reference host — put the dense tier at
+~65 G MAC-eq/s and the hybrid at ~2.7 G/s: a twenty-fold gap this table does not predict (its per-token
+cost ratio is 1.8). The hybrid's 33 GiB artifact is not resident on that host (ADR-0112's page faults), so
+its timing is a host property, not the graph's; calibration needs a host where the artifact is resident,
+and the routed experts' per-token weight traffic (~1 GB a token at batch one) is the term to measure there.
+
+**Not built.** Decision 1's recorder of what was actually paid (the census prices `Final` claims by the
+rule at read time and reports the panel pool, since credited seats are not retained past `Final`); a
+durable window past the state's retention; Decision 3's fence; Decision 4's panel compute measurement
+(a seat replays the attempt's job once, so today `panel compute = seats × job`); Decision 5's rate.
+
 ## 3. Deferred
 
 An execution-fee common pool; panel pay by verification compute (after Decision 4's measurement); a DA/availability
@@ -83,8 +160,8 @@ reward.
 
 ## 4. Status
 
-* Decision 2's module and its measured table: in progress (`wip/adr0131-economic-compute`).
-* Decision 1's recorder and RPC: after ADR-0130's M1/M2 merge (it reads their functions for ADR-0130's λ shadow).
+* Decisions 1 and 2: built in shadow (§7); the λ shadow of ADR-0130 Decision 8 is not yet read by op 185.
+* Decisions 3–6: the operator's, after the shadow has run.
 
 ## 5. Number hygiene
 
