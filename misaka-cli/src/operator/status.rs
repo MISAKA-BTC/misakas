@@ -461,7 +461,7 @@ pub(crate) fn round_lane_line(
         None => String::new(),
     };
     let two_rounds = lane.permits.len() + lane.next_round_permits as usize;
-    let scheduled = if two_rounds % 2 == 0 { format!("{}", two_rounds / 2) } else { format!("{}.5", two_rounds / 2) };
+    let scheduled = if two_rounds.is_multiple_of(2) { format!("{}", two_rounds / 2) } else { format!("{}.5", two_rounds / 2) };
     Some(format!(
         "{scheduled} BPS scheduled (width {}) · span {} · round {}: {} permit{}{yours} · next round {} · {} accepted this span · {} finals toward the next",
         lane.permits_per_round,
