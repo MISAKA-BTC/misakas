@@ -557,6 +557,28 @@ pub fn palw_overlay_fee_split_at_v1(dns: &DnsParams, carve: Option<PalwOverlayCa
     })
 }
 
+/// **The carve a claim escrows** (ADR-0126 Decision 3): the fence's where it is active at the LOWER of
+/// two DAA scores — the block that carried the attempt, and the block whose coinbase pays that
+/// block's reward — and `None`, the bundle's own `worker_carve_permille`, below it.
+///
+/// The escrow is withheld from the worker base of the split the PAYING block uses
+/// ([`palw_overlay_fee_split_at_v1`] at the payer's score), so a carve resolved past the fence has to
+/// meet a lowered split. For a block's own attempt the payer is its selected-chain child, always
+/// later, and the lower score is the attempt block's. For merged work the order is the DAG's, not a
+/// rule: nothing makes a merged block's DAA score lower than its merger's, and a carve resolved at
+/// the merged block's score alone would escrow 72 % against a 62 % base — the coinbase withholds
+/// what it can (`saturating_sub`) and the claim later releases the whole 72 %, minting the rest on
+/// top of the schedule. At the lower score a lowered carve only ever meets a lowered split, so
+/// `escrow ≤ worker base` holds by construction.
+pub fn palw_overlay_escrow_carve_at_v1(
+    carve: Option<PalwOverlayCarveV1>,
+    attempt_daa_score: u64,
+    paying_daa_score: u64,
+) -> Option<crate::palw_reward_v2::PalwRewardParamsV2> {
+    let daa_score = attempt_daa_score.min(paying_daa_score);
+    carve.filter(|carve| carve.activation.is_active(daa_score)).and_then(|carve| carve.escrow_carve())
+}
+
 /// **ADR-0066 Decision 3's parameter (finding F2), closed by ADR-0068 Phase 1: the attempt lane's
 /// fork-choice work leaves `calc_work(header.bits)`.**
 ///
@@ -1374,8 +1396,9 @@ pub struct Params {
     pub palw_execution_lane: Option<PalwExecutionLaneV1>,
 
     /// **ADR-0126: the validator carve drops to a fifth** — see [`PalwOverlayCarveV1`]. The split is
-    /// resolved at each block's own DAA score, the escrow at the DAA score of the block that carried
-    /// the attempt. `None` on every shipped preset.
+    /// resolved at each block's own DAA score, the escrow at the lower of the DAA scores of the block
+    /// that carried the attempt and the block that pays it ([`palw_overlay_escrow_carve_at_v1`]).
+    /// `None` on every shipped preset.
     pub palw_overlay_carve: Option<PalwOverlayCarveV1>,
 
     /// **ADR-0044 Decision 9's two advertised caps, enforced** (mainnet audit 2026-09-06, L-2).
@@ -2521,6 +2544,18 @@ impl Params {
                 return Err(PalwModeV2Error::Invalid(
                     "palw_overlay_carve's worker carve exceeds the worker base its lowered split leaves: the escrow could not \
                      be funded from the block it is carved from (ADR-0126 Decision 4)",
+                ));
+            }
+            // Admission's collateral gate (`min_slash_permille_of_escrow`) sizes a claim's escrow at
+            // the bundle's carve and does not read this fence. It is zero on every bundle, where it
+            // checks nothing; armed beside the fence it would back a grown escrow as if it had not
+            // grown, so the pair is refused until admission reads the carve as well.
+            if let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
+                && bundle.state.min_slash_permille_of_escrow() != 0
+            {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_overlay_carve is armed beside a non-zero min_slash_permille_of_escrow: admission sizes the \
+                     escrow it backs at the bundle's carve, not the fence's (ADR-0126 Decision 4)",
                 ));
             }
         }
@@ -18630,6 +18665,69 @@ mod palw_overlay_carve_tests {
         let mut dormant_hash = MAINNET_PARAMS.clone();
         dormant_hash.palw_overlay_carve = Some(never);
         dormant_hash.validate_palw_v2().expect("a never() fence is no fence");
+    }
+
+    /// **The escrow never outgrows the base it is withheld from, in either order of the two scores.**
+    /// For every pair of attempt and paying scores around testnet-11's height the carve fits the
+    /// payer's worker base; the ordered pairs escrow what the fence says (72 % past it, 62 % for a
+    /// block from below paid past it); and the inverted pair — a merged block past the height paid
+    /// by a block below it — escrows the 62 % its payer's base holds, where the attempt score alone
+    /// would have escrowed 72 % against it.
+    #[test]
+    fn the_carve_is_resolved_at_the_lower_score_so_it_always_fits_the_payers_base() {
+        let t11 = palw_rc_shipped_params();
+        let dns = t11.dns_params.clone().expect("testnet-11 runs the overlay");
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &t11.palw_consensus_mode else {
+            panic!("testnet-11 is ConsensusV2")
+        };
+        let carve = t11_carve();
+        let bundle_carve = PalwRewardParamsV2::new(bundle.state.worker_carve_permille()).unwrap();
+        let escrow = |attempt: u64, paying: u64| {
+            let resolved = palw_overlay_escrow_carve_at_v1(Some(carve), attempt, paying);
+            palw_reward_carve_v2(T11_SUBSIDY, &resolved.unwrap_or(bundle_carve)).worker
+        };
+        let base = |paying: u64| parts(T11_SUBSIDY, &palw_overlay_fee_split_at_v1(&dns, Some(carve), paying).unwrap()).0;
+
+        let scores = [0, T11_HEIGHT - 2, T11_HEIGHT - 1, T11_HEIGHT, T11_HEIGHT + 1, T11_HEIGHT + 2, u64::MAX];
+        for attempt in scores {
+            for paying in scores {
+                assert!(
+                    escrow(attempt, paying) <= base(paying),
+                    "attempt at {attempt}, paid at {paying}: {} escrowed against a base of {}",
+                    escrow(attempt, paying),
+                    base(paying)
+                );
+            }
+        }
+        assert_eq!(escrow(T11_HEIGHT, T11_HEIGHT + 1), 320_084_650_080, "own work past the height: 72 %, the whole lowered base");
+        assert_eq!(
+            escrow(T11_HEIGHT - 1, T11_HEIGHT),
+            275_628_448_680,
+            "a block from below paid past the height: 62 %, the tenth paid"
+        );
+        assert_eq!(escrow(T11_HEIGHT, T11_HEIGHT - 1), 275_628_448_680, "a merged block past the height paid from below: 62 %");
+        let attempt_score_alone = palw_reward_carve_v2(T11_SUBSIDY, &carve.escrow_carve().unwrap()).worker;
+        assert!(
+            attempt_score_alone > base(T11_HEIGHT - 1),
+            "the inverted pair is the case the lower score exists for: 72 % does not fit a 62 % base"
+        );
+        assert_eq!(palw_overlay_escrow_carve_at_v1(None, u64::MAX, u64::MAX), None, "no fence, no carve");
+    }
+
+    /// **Admission's collateral gate does not read the fence, so the two are not armed together.**
+    #[test]
+    fn the_carve_is_refused_beside_an_armed_escrow_backing_gate() {
+        let mut params = armed(t11_carve());
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut params.palw_consensus_mode else {
+            panic!("testnet-11 is ConsensusV2")
+        };
+        bundle.state = bundle.state.clone().with_min_slash_permille_of_escrow(1).expect("1 permille is legal");
+        assert!(refusal(&params).contains("min_slash_permille_of_escrow"), "{}", refusal(&params));
+        params.palw_overlay_carve = None;
+        assert!(
+            !params.validate_palw_v2().err().is_some_and(|why| why.to_string().contains("palw_overlay_carve")),
+            "without the fence this refusal says nothing"
+        );
     }
 
     /// **Some-only, and a scheduled height is reported, never gated.** An unset fence writes nothing,

@@ -49,15 +49,22 @@ the validation path alike.
 
 **Decision 3 — the escrow grows with the worker base.** Past the fence a claim escrows
 `⌊subsidy × worker_carve_permille / 1000⌋` of the block that carried its attempt, and the coinbase
-withholds exactly that for the block — both resolved at **the attempt block's own DAA score**, so the
+withholds exactly that for the block — both resolved at **the lower of two DAA scores: the block that
+carried the attempt, and the block whose coinbase pays it** (`palw_overlay_escrow_carve_at_v1`), so the
 carve the fold records and the carve the coinbase withholds remain one number (ADR-0042 Decision 10,
-B-1). ADR-0124's work price, buyback and 80 / 20 split read the escrow and follow it.
+B-1). For a block's own attempt the payer is its selected-chain child and the lower score is the attempt
+block's. For merged work the lower score is what keeps a grown carve out of a split that has not been
+lowered: nothing bounds a merged block's score by its merger's, and a 72 % escrow withheld from a 62 %
+base would be released in full while only the base was withheld. ADR-0124's work price, buyback and
+80 / 20 split read the escrow and follow it.
 
 **Decision 4 — refused at start** (`validate_palw_v2`): a fence without `dns_params` or a V2 bundle; an
 activation below `full_reward_split_daa_score`; `subsidy_validator_bps` above the network's full-split
 share (the fence only lowers it); and `worker_carve_permille × 10` above the worker base the new split
 leaves (`10,000 − inclusion − validator − service`) — the carve must fit the share it is carved from,
-the invariant this repository already refuses a bundle on.
+the invariant this repository already refuses a bundle on; and a non-zero
+`min_slash_permille_of_escrow` beside the fence, because admission's collateral gate sizes the escrow
+at the bundle's carve (zero, and so inert, on every bundle).
 
 **Decision 5 — the retirement is deleted, not kept.** The first version's machinery — the
 `palw_validator_overlay_retirement` fence, `dns_params_at`, the PALW coinbase carve, the refusal of
@@ -109,7 +116,11 @@ without the compute worker, compute declarations or verdicts, and without VLT st
 * **SA-2 — no new issuance.** The tenth moves from one line of the split to another and is paid, like
   the rest of the escrow, only if the claim reaches `Final`; a voided claim's escrow is never minted.
 * **SA-3 — construction equals validation** because every split reader and both escrow sites resolve
-  the fence at the same DAA score (the block's for the split, the attempt block's for the escrow).
+  the fence at the same DAA score (the paying block's for the split, the lower of the attempt block's
+  and the paying block's for the escrow).
+* **SA-4 — the escrow fits its base in any DAG.** A lowered carve is resolved only where the paying
+  block's own split is lowered, so `escrow ≤ worker base` is a property of the resolution, not of DAA
+  scores growing along merges; pinned over every pair of scores around the height.
 
 ## 6. testnet-11
 
@@ -119,10 +130,11 @@ escrow grows from 2,756.28 to 3,200.85 MSK.
 
 ## 7. Tests
 
-The split below and past the height, summing to the subsidy; the escrow and the withhold at the
-attempt block's DAA on both sides of the height; the four refusals; Some-only hashing and the schedule
-id; a pipeline chain crossing the height with template and validation agreeing and the validator pool
-at 20 %.
+The split below and past the height, summing to the subsidy; the escrow and the withhold on both
+sides of the height, and the carve fitting the payer's base for every pair of attempt and paying scores
+around it, the inverted pair included; the refusals, the escrow-backing pair among them; Some-only
+hashing and the schedule id; a pipeline chain crossing the height with template and validation agreeing
+and the validator pool at 20 %.
 
 ## 8. Corrections
 
@@ -131,3 +143,8 @@ at 20 %.
   and the stake reorg gate they vote for stays by design. The retirement was deleted before any network
   scheduled it; its deletion list (§4) was kept, and the validator's operational code it had taken with
   it was restored.
+* **Decision 3 first resolved the escrow at the attempt block's own score** for merged work too, which
+  holds the escrow inside its base only while a merged block's score stays at or below its merger's. The
+  integration review found nothing enforcing that, and the resolution became the lower of the two scores
+  before any network armed the fence. The same review found admission's escrow-backing gate reading the
+  bundle's carve; it is inert at zero and now refused beside the fence (Decision 4).

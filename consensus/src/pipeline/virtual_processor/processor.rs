@@ -4560,15 +4560,16 @@ impl VirtualStateProcessor {
     /// may still refuse one in its LIVE state (a budget race, a B-4 execution duplicate); then the
     /// withheld carve is simply not minted (burned), never released, so the withhold set is a safe
     /// SUPERSET of the escrow set. The amount is `PalwStateParamsV2::worker_carve_at` of the merged
-    /// block's own subsidy at the carve resolved at the merged block's own DAA (ADR-0126) — both read
-    /// from the SAME `PalwMergedOwnedWorkV1::Attempt` fields the fold escrows from — so the carve
-    /// withheld and the carve recorded are one number on both the build and validate paths. That
-    /// subsidy is `calc_block_subsidy(the block's DAA)`, which for an attempt block equals the
-    /// coinbase-declared subsidy the block is actually paid from (body validation pins it; an attempt
-    /// block is never a heartbeat), so the withheld carve never exceeds the worker share the coinbase
-    /// would otherwise pay (`validate_palw_v2`'s carve bounds: the bundle's against the network's
-    /// split, and ADR-0126's against the split it lowers — which the paying block carves with
-    /// whenever its own DAA is at or past the merged block's).
+    /// block's own subsidy at the carve resolved at the lower of the merged block's DAA and this
+    /// block's (ADR-0126) — both read from the SAME `PalwMergedOwnedWorkV1::Attempt` fields the fold
+    /// escrows from — so the carve withheld and the carve recorded are one number on both the build
+    /// and validate paths. That subsidy is `calc_block_subsidy(the block's DAA)`, which for an attempt
+    /// block equals the coinbase-declared subsidy the block is actually paid from (body validation
+    /// pins it; an attempt block is never a heartbeat), so the withheld carve never exceeds the worker
+    /// share the coinbase would otherwise pay: `validate_palw_v2` fits the bundle's carve into the
+    /// network's split and ADR-0126's into the split it lowers, and the lower score puts a lowered
+    /// carve only under a paying block whose own split is lowered, whatever order the DAG gives the
+    /// two scores.
     ///
     /// **Empty below `palw_audit_2026_09_11_deep`** and on every network without a V2 bundle, where
     /// merged carves are paid in full at acceptance (ADR-0058 Decision 5) — byte-identical to before.
@@ -7452,12 +7453,22 @@ impl VirtualStateProcessor {
         )
     }
 
-    /// **ADR-0126 Decision 3: the carve a claim escrows for the attempt block at `daa_score`** — the
-    /// DAA score of the block that CARRIED the attempt: the chain block's own for its own work, the
-    /// merged block's for merged work, so the fold's escrow and the coinbase's withhold are resolved
-    /// at one score. `None` below the fence, where the bundle's own `worker_carve_permille` applies.
-    pub(super) fn palw_escrow_carve_at(&self, daa_score: u64) -> Option<kaspa_consensus_core::palw_reward_v2::PalwRewardParamsV2> {
-        self.palw_overlay_carve.filter(|carve| carve.activation.is_active(daa_score)).and_then(|carve| carve.escrow_carve())
+    /// **ADR-0126 Decision 3: the carve a claim escrows** for an attempt carried at
+    /// `attempt_daa_score` and paid by the block at `paying_daa_score`, resolved at the lower of the
+    /// two ([`kaspa_consensus_core::config::params::palw_overlay_escrow_carve_at_v1`]) so it never
+    /// outgrows the worker base of the split its payer withholds it from. The fold's escrow and the
+    /// coinbase's withhold read the same resolved value. `None` below the fence, where the bundle's
+    /// own `worker_carve_permille` applies.
+    pub(super) fn palw_escrow_carve_at(
+        &self,
+        attempt_daa_score: u64,
+        paying_daa_score: u64,
+    ) -> Option<kaspa_consensus_core::palw_reward_v2::PalwRewardParamsV2> {
+        kaspa_consensus_core::config::params::palw_overlay_escrow_carve_at_v1(
+            self.palw_overlay_carve,
+            attempt_daa_score,
+            paying_daa_score,
+        )
     }
 
     /// ADR-0125: the execution lane's shape where it is open at `daa_score`.
@@ -7642,9 +7653,10 @@ impl VirtualStateProcessor {
             }),
             round_permit_uses: Vec::new(),
             // ADR-0126 Decision 3: the carve this block's own attempt escrows at — the block that
-            // carried it is this one. Explicit for the reason every line above gives: it decides how
-            // much of the subsidy a claim holds.
-            escrow_carve: self.palw_escrow_carve_at(daa_score),
+            // carried it is this one, and the block that pays it is its selected-chain child, always
+            // later, so the lower score is this one's. Explicit for the reason every line above
+            // gives: it decides how much of the subsidy a claim holds.
+            escrow_carve: self.palw_escrow_carve_at(daa_score, daa_score),
             evm_actions: Vec::new(),
             // ADR-0093 Decision 8: which form of move 1 opens a phase. Written explicitly for the
             // reason the lines above give — an unwritten default here would refuse, or admit, a
@@ -8269,8 +8281,9 @@ impl VirtualStateProcessor {
                     // the deep fence. An attempt block is never a heartbeat, so this equals the
                     // coinbase-declared subsidy body validation pinned.
                     self.coinbase_manager.calc_block_subsidy(header.daa_score),
-                    // ADR-0126: and the carve, at the same header's DAA — the attempt block's.
-                    self.palw_escrow_carve_at(header.daa_score),
+                    // ADR-0126: and the carve, at the lower of the attempt block's score and the
+                    // accepting block's — the block whose coinbase pays and withholds it.
+                    self.palw_escrow_carve_at(header.daa_score, point.daa_score),
                 )),
                 Ok(None) => match self.palw_v2_check_receipt_spend(&header, state, state_params, point) {
                     Ok(Some(envelope)) => works.push(PalwMergedOwnedWorkV1::Spend(*blue, envelope)),
