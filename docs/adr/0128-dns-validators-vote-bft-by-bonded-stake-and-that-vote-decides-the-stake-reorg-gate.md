@@ -1,8 +1,8 @@
 # ADR-0128 — DNS validators vote BFT by bonded stake, and that vote decides the stake reorg gate
 
-* Status: **ACCEPTED 2026-09-17, implementation in progress** on `feat/palw-exec-lane-and-validator-retirement`.
-  testnet-11 arms it at DAA 7,001 with ADR-0124, ADR-0125, ADR-0126 (revised) and ADR-0127 (the
-  operator's choice, §8).
+* Status: **ACCEPTED and IMPLEMENTED 2026-09-17** on `feat/palw-exec-lane-and-validator-retirement`
+  (§8). testnet-11 arms it at DAA 7,001 with ADR-0124, ADR-0125, ADR-0126 (revised) and ADR-0127 (the
+  operator's choice, §5).
 * Operator's direction, in the operator's words: "DNS validator の投票力を単純な bond 額に戻して
   inactivity leak は再実装して — 必要な過去 attestation 履歴を正しく取得できず『実装されたままでは有効化
   できない』というテストコメントがあるため、正しく取得して正しく有効化できるようにして — また DNS
@@ -92,8 +92,8 @@ bonds `Active` at `a_E`, less those leaked at `E`:
 * **Every synced node holds that walk.** `validate_palw_v2` refuses a network whose pruning depth is
   below `stake_score_window_blue_score` plus the leak window, so the pruning point never passes the
   evidence a sink's leak reads. On testnet-11 (two-block epochs, lag 2, StakeScore window 30) the walk
-  is 30 + 5,040 + 200 + 2 + 2 = 5,274 blue score and the pruning depth is 12,000 (the claim lattice with
-  the DA court). A node whose walk nonetheless cannot
+  is 30 + 5,040 + 200 + 2 + 2 = 5,274 blue score and the derived pruning depth is 12,002 (the claim
+  lattice with the DA court), both measured in the fence's refusal test. A node whose walk nonetheless cannot
   cover it (a store that will not read, a sync still in progress) does not compute a different
   quorum: the gate abstains for that evaluation (`GateInactive`) and says so in the log.
 * **The floor is a halt, not a hole.** If leaking would leave fewer than `min_retained_validators`
@@ -198,3 +198,63 @@ quorum behaves as without the fence.
 ## 7. Number hygiene
 
 0128 was free when written; the next free number is 0129.
+
+## 8. Implementation record (2026-09-17)
+
+**Where it is.** The pure rules are `consensus/core/src/dns_bft_v1.rs`: the strict quorum (u128), the
+window epochs and the evidence window's lower edge, the counted set with the leak and the floor, the
+snapshot root and commitment, attested and precommitted stake, the lock chain
+(`lock_consistent_precommits`, `held_precommit_lock`, restored from `f0cade50` with a horizon), epoch
+verdicts, DNS-final, the confirmed anchor and the duty. The chain side is
+`consensus/src/pipeline/virtual_processor/dns_bft.rs`: the walk, the confirmed state, the gate's
+refusal and the duty, with a node-local `DnsBftRuntime` (the abstain flag, cached signature verdicts,
+the duty cached per sink — none of it consensus state), hooked into `update_dns_state` and
+`dns_reorg_outcome`. `Consensus::get_precommit_duty` answers Decision 6; ADR-0127's branch carries it
+over RPC as op 183, and the in-node service and the sidecar precommit from it with one picker
+(`pick_precommit_due`) and one precommit log path (`precommit_log_path`), the sidecar only where
+`dns_bft_gate` is scheduled.
+
+**The walk.** Once from the sink down the selected chain: the StakeScore window decides the evaluated
+epochs, as `canonical_anchors_in_window` does; the walk continues to `min(anchor blue) − L` with
+`L = t_leak + reentry + epoch + lag`, plus one block so the oldest anchors can be decided. It is
+covered when it reaches that block or ends at genesis, and a gap when a header, acceptance-data or
+block-transactions read fails first or the chain ends anywhere else. Evidence for epoch `E` counts only
+when it is decidable inside `E`'s own window, so a counted set does not depend on how far a sink's walk
+reached.
+
+**The state and the gate.** Past the fence at the sink, `DnsState` keeps every field the depth rule
+computes except the confirmed anchor and its DAA: the previous anchor is carried while the previous
+state was written past the fence and the anchor is still a chain ancestor, and the newest DNS-final
+anchor replaces it only when newer. A walk with a gap carries the anchor, logs, and the gate abstains
+until a covered evaluation. The gate, in order: past the fence at the incumbent sink and the last
+evaluation covered; a state written past the fence, the Active stage, a confirmed anchor; a candidate
+that contains the anchor (or whose reachability is unreadable) continues; one that abandons a stale
+anchor logs the release and continues; anything else is `HardCheckpointReject`. "Continues" is the V2
+PALW comparator and ADR-0065 D2, or the old DNS half off V2; `dns_stake_preferred_tip` is untouched.
+
+**What the decisions left open, decided here.**
+* **The lock chain has a horizon.** Each epoch judges lock consistency from the floor of its own
+  evidence window: the first precommit in view may declare no lock or a lock older than that floor, a
+  rebroadcast of the same vote does not truncate, and every signed precommit is a link whether it
+  counted or not. Read literally ("the first counted precommit declares no lock"), Decision 2 drops
+  every long-running validator's count to zero once its first precommit leaves the walk.
+* **A stale release on a V2 reorg candidate goes on to the PALW comparator** rather than returning
+  `ConfirmedAnchorStale`, which would let a stale DNS anchor bypass it; off V2 and for extensions the old
+  DNS half still returns it.
+* An anchor from a state written below the fence never becomes a veto at the crossing; the gate
+  requires the Active stage; the abstain flag is in memory and resets on restart; a due epoch also
+  requires the bond in `S(E)` and no precommit of any kind for that epoch.
+
+**Named, not closed.**
+* **Pipeline coverage.** The V2 pipeline test writes `DnsState` by hand rather than running both rounds
+  on a ConsensusV2 chain; the leak, the floor and lock truncation are pinned at the pure level (a
+  single-validator pipeline always holds the floor); a pruned node's coverage gap is simulated by
+  deleting one block's acceptance data.
+* **Bond-set timing.** Bonds are read from the store as of the previous commit, as the credit walk
+  reads them; a reorg that removes a bond can shift `S(E)` for one evaluation, which only delays
+  finality (the commitments stop matching).
+* **Cost.** Every evaluation re-reads the walk; signature verdicts and the duty are cached, so the
+  first evaluation after a restart verifies about a week of votes.
+* **SA-1's cross-branch edge.** `precommit_fault` cannot convict a precommit on another branch that
+  declares a lock OLDER than one the bond already precommitted: such a precommit does not count on the
+  chain that knows the newer lock, but it is not evidence either.
