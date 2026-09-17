@@ -1670,10 +1670,11 @@ impl Attestor {
     }
 }
 
-/// Whether `params` runs a precommit round: a DNS overlay. Where there is none, the node answers
-/// `available: false` and the sidecar does not ask.
+/// Whether `params` schedules a precommit round: ADR-0128's BFT gate, at any height. Where it is not
+/// scheduled there is nothing to lock on and op 183 is never asked — which is also what keeps a sidecar
+/// on such a network from probing a node built before the op.
 fn network_runs_a_precommit_round(params: &Params) -> bool {
-    params.dns_params.is_some()
+    params.dns_bft_gate_fence().is_some()
 }
 
 /// Residency of a tx in the node's normal (non-orphan) mempool, as a tri-state so a transient RPC
@@ -2120,6 +2121,28 @@ mod tests {
     /// backlog is short, whatever order the transport delivered it in; the frontier past a deep one,
     /// naming the epoch it skipped from; the chain's lock, the zero lock included; and a hash that
     /// does not parse is an error rather than something signed.
+    /// Only a network that schedules the BFT gate is asked for a precommit duty: none ships it yet, so
+    /// no shipped network's sidecar probes op 183, and scheduling the gate is what turns the round on.
+    #[test]
+    fn the_duty_is_asked_only_where_the_bft_gate_is_scheduled() {
+        for net in [
+            NetworkId::new(NetworkType::Mainnet),
+            NetworkId::with_suffix(NetworkType::Testnet, 11),
+            NetworkId::new(NetworkType::Devnet),
+        ] {
+            let params = Params::from(net);
+            assert_eq!(network_runs_a_precommit_round(&params), params.dns_bft_gate_fence().is_some(), "{net}");
+        }
+        let mut scheduled = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11));
+        scheduled.dns_bft_gate = Some(kaspa_consensus_core::config::params::DnsBftGateV1 {
+            activation: kaspa_consensus_core::config::params::ForkActivation::new(9_000_000),
+            t_leak_daa: 5_040,
+            reentry_final_depth_daa: 200,
+            min_retained_validators: 4,
+        });
+        assert!(network_runs_a_precommit_round(&scheduled), "a scheduled gate, even far above the tip, turns the reads on");
+    }
+
     #[test]
     fn the_precommit_planned_is_the_duty_the_chain_names() {
         let h = |b: u8| Hash64::from_bytes([b; 64]);
