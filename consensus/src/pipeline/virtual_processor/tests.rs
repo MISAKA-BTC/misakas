@@ -13541,6 +13541,274 @@ async fn adr0125_a_widening_holds_for_whole_spans() {
     assert_eq!(ctx.consensus.get_sink(), template.block.header.hash);
 }
 
+// ---- ADR-0127: conflicting spends in the execution lane, and what a burst of it confirms -------
+
+/// What one [`adr0127_round_burst`] run leaves at the chain block that merged the burst.
+struct Adr0127BurstOutcome {
+    merging: BlockHash,
+    /// `[e1, e2, e3]`: e1 carries `spends[0]`, e2 carries `spends[1]`, e3 carries nothing. Empty
+    /// when the run built no round blocks.
+    round_blocks: Vec<BlockHash>,
+    rounds: [u64; 3],
+    spends: [kaspa_consensus_core::tx::TransactionId; 2],
+    funding: TransactionOutpoint,
+    /// Every transaction id the merging block accepted.
+    accepted: Vec<kaspa_consensus_core::tx::TransactionId>,
+    /// The merging block's mergeset, without its selected parent, in consensus order.
+    mergeset_order: Vec<BlockHash>,
+    utxos: std::collections::HashMap<TransactionOutpoint, kaspa_consensus_core::tx::UtxoEntry>,
+    /// The span-0 permits the merging block's state records as used, by round.
+    permits_used: [bool; 3],
+    /// The chain's PALW fork-choice inputs at the merging block: frontier blue score, safe weight,
+    /// live total — and its blue work, blue score and DAA score.
+    fork_choice: (u64, u128, u128),
+    blue_work: kaspa_consensus_core::BlueWorkType,
+    blue_score: u64,
+    daa_score: u64,
+    /// The settlement read at the funding output's DAA score and at the merging block's.
+    settlement: [Option<kaspa_consensus_core::palw_settlement_v1::PalwSettlementV1>; 2],
+}
+
+/// **One chain, built twice**: a key is funded and matures, the sink's state is given a span-0 schedule
+/// that grants the harness bond permit 0 of every even round (installed at the tip, as a pruned sync
+/// installs a state — on a live chain the schedule is earned by attempts that reached `Final` in the
+/// span before, which a unit-test chain cannot finalize), and then the next chain block is built —
+/// `with_round_blocks` merging three permitted round blocks, e1 and e2 each carrying a spend of the
+/// one funded output and e3 carrying none, and otherwise merging nothing. Every other step, time and
+/// nonce is the same in both runs, so the two merging blocks differ by the burst alone.
+async fn adr0127_round_burst(with_round_blocks: bool) -> Adr0127BurstOutcome {
+    use crate::model::stores::ghostdag::GhostdagStoreReader;
+    use kaspa_consensus_core::hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash};
+    use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
+    use kaspa_consensus_core::mass::MassCalculator;
+    use kaspa_consensus_core::palw_execution_lane_v1::{PalwExecFinalV1, palw_execution_schedule_v1};
+    use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
+    use kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE;
+    use kaspa_consensus_core::tx::{PopulatedTransaction, TransactionInput, TransactionOutput, UtxoEntry};
+    use kaspa_txscript::{MLDSA87_TX_CONTEXT, script_builder::ScriptBuilder};
+    use libcrux_ml_dsa::ml_dsa_87 as mldsa;
+    use std::ops::Deref;
+
+    let (mut config, bundle) = adr0125_config_funded_for(32);
+    // So the funding coinbase is spendable within a short chain.
+    config.params.coinbase_maturity = 2;
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..4 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    // A key this test can spend from. A linear V2 chain escrows each selected parent's reward, so two
+    // siblings are mined to the key and the block merging them pays the one that is not its selected
+    // parent (`palw_v2_a_funded_carrier_is_priced_by_the_fee_the_utxo_walk_read` funds its carrier so).
+    let kp = mldsa::generate_key_pair([0x27u8; 32]);
+    let pubkey = kp.verification_key.as_ref().to_vec();
+    let address_payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&pubkey).as_bytes();
+    let spk = p2pkh_mldsa87_spk(&address_payload);
+    ctx.miner_data = MinerData::new(spk.clone(), vec![]);
+    ctx.build_block_template_row(0..2).validate_and_insert_row().await;
+    ctx.miner_data = new_miner_data();
+    ctx.simulated_time += config.params.target_time_per_block();
+    let harvest = ctx.build_block_template(40, ctx.simulated_time);
+    ctx.validate_and_insert_block(harvest.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+    let coinbase = &harvest.block.transactions[0];
+    let (index, output) = coinbase
+        .outputs
+        .iter()
+        .enumerate()
+        .find(|(_, o)| o.script_public_key == spk)
+        .expect("the block merging the row pays the sibling's miner");
+    let funding = TransactionOutpoint::new(coinbase.id(), index as u32);
+    let (value, funding_daa) = (output.value, harvest.block.header.daa_score);
+    for _ in 0..4 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    // Two spends of the one output, differing in their fee.
+    let spend = |fee: u64| {
+        let mut tx = Transaction::new(
+            crate::constants::TX_VERSION,
+            vec![TransactionInput::new(funding, vec![], 0, 1)],
+            vec![TransactionOutput::new(value - fee, spk.clone())],
+            0,
+            SUBNETWORK_ID_NATIVE,
+            0,
+            vec![],
+        );
+        let utxo = UtxoEntry::new(value, spk.clone(), funding_daa, true);
+        let storage_mass = MassCalculator::new(0, 0, 0, config.params.storage_mass_parameter)
+            .calc_contextual_masses(&PopulatedTransaction::new(&tx, vec![utxo.clone()]))
+            .expect("contextual mass is computable for the spend")
+            .storage_mass;
+        tx.set_mass(storage_mass);
+        let reused = Mldsa87SigHashReusedValuesUnsync::new();
+        let sig_hash = calc_mldsa87_signature_hash(&PopulatedTransaction::new(&tx, vec![utxo]), 0, SIG_HASH_ALL, &reused);
+        let sig = mldsa::sign(&kp.signing_key, sig_hash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT, [0x27u8; 32])
+            .expect("ML-DSA-87 sign on the 64-byte sighash");
+        let mut sig_item = sig.as_ref().to_vec();
+        sig_item.push(SIG_HASH_ALL.to_u8());
+        tx.inputs[0].signature_script = ScriptBuilder::new()
+            .add_data(&sig_item)
+            .expect("the signature push fits")
+            .add_data(&pubkey)
+            .expect("the key fits")
+            .drain();
+        tx
+    };
+    let spends = [spend(10_000), spend(20_000)];
+
+    // The schedule, at the sink's state.
+    let vp = ctx.consensus.virtual_processor().clone();
+    let sink0 = ctx.consensus.get_sink();
+    let (tip, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    assert_eq!(tip, sink0);
+    let bond = state.bond(&adr0125_harness_bond()).expect("row 0").clone();
+    let payout = p2pkh_mldsa87_spk(bond.payout_payload.as_byte_slice());
+    let schedule = palw_execution_schedule_v1(
+        0,
+        &[PalwExecFinalV1 {
+            domain: bundle.base_class_id,
+            bond: adr0125_harness_bond(),
+            operator_id: bond.operator_id,
+            claim_id: kaspa_hashes::Hash64::from_u64_word(0xC1A1),
+            execution_root: kaspa_hashes::Hash64::from_u64_word(0xE0),
+            credit: 1,
+        }],
+    );
+    let scheduled = {
+        let mut carriage = PalwStateCarriageV2::from_state(&state);
+        carriage.round_schedules.insert(0, schedule);
+        carriage.into_state(&bundle.state, None).expect("a carriage with a schedule rebuilds")
+    };
+    vp.palw_state_v2_store.write().set_tip_for_tests(sink0, &scheduled).unwrap();
+
+    let genesis_ts = config.params.genesis.timestamp;
+    let first_round = {
+        let r = (vp.headers_store.get_timestamp(sink0).unwrap() - genesis_ts) / 1_000 + 2;
+        r + r % 2
+    };
+    let rounds = [first_round, first_round + 2, first_round + 4];
+    let mut round_blocks = Vec::new();
+    if with_round_blocks {
+        // Both spends are valid against the virtual UTXO set until one is accepted, so both carriers
+        // are built before either is inserted.
+        let carrying = |round: u64, nonce: u64, txs: Vec<Transaction>| {
+            let template = ctx
+                .consensus
+                .build_block_template(new_miner_data(), Box::new(OnetimeTxSelector::new(txs)), TemplateBuildMode::Standard)
+                .expect("a template carrying one valid spend");
+            let mut adapted = vp.round_adapt_block_template(template, round, payout.clone()).expect("the lane adapts a template");
+            adr0125_sign_round_block(&mut adapted.block, &config, round, 0, nonce);
+            adapted.block
+        };
+        let e1 = carrying(rounds[0], 1, vec![spends[0].clone()]);
+        let e2 = carrying(rounds[1], 2, vec![spends[1].clone()]);
+        assert!(
+            e1.transactions.iter().any(|tx| tx.id() == spends[0].id()) && e2.transactions.iter().any(|tx| tx.id() == spends[1].id())
+        );
+        for block in [&e1, &e2] {
+            round_blocks.push(block.header.hash);
+            ctx.consensus
+                .validate_and_insert_block(block.clone().to_immutable())
+                .virtual_state_task
+                .await
+                .expect("valid at the header");
+        }
+        let e3 = adr0125_round_block(&ctx, &config, rounds[2], 0, payout.clone(), 3);
+        round_blocks.push(e3.header.hash);
+        ctx.consensus.validate_and_insert_block(e3.to_immutable()).virtual_state_task.await.expect("valid at the header");
+        assert_eq!(ctx.consensus.get_sink(), sink0, "round blocks never move the sink");
+    }
+
+    ctx.simulated_time = ctx.simulated_time.max(genesis_ts + rounds[2] * 1_000) + config.params.target_time_per_block();
+    let merging = ctx.build_block_template(50, ctx.simulated_time);
+    let merging_hash = merging.block.header.hash;
+    ctx.validate_and_insert_block(merging.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+    assert_eq!(ctx.consensus.get_sink(), merging_hash, "the merging block is the sink");
+    assert_eq!(ctx.consensus.block_status(merging_hash), BlockStatus::StatusUTXOValid);
+
+    let data = vp.ghostdag_store.get_data(merging_hash).unwrap();
+    assert_eq!(data.selected_parent, sink0);
+    let mergeset_order: Vec<BlockHash> = data.consensus_ordered_mergeset_without_selected_parent(vp.ghostdag_store.deref()).collect();
+    let accepted = ctx
+        .consensus
+        .get_block_acceptance_data(merging_hash)
+        .unwrap()
+        .iter()
+        .flat_map(|merged| merged.accepted_transactions.iter().map(|entry| entry.transaction_id).collect::<Vec<_>>())
+        .collect();
+    let utxos = ctx.consensus.get_virtual_utxos(None, 100_000, false).into_iter().collect();
+    let (_, merged_state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    let permits_used = rounds.map(|round| merged_state.round_permit_used(0, round, 0));
+    let order = vp.palw_candidate_order_v2(merging_hash).expect("a V2 network orders its sink");
+    let daa_score = vp.headers_store.get_daa_score(merging_hash).unwrap();
+    Adr0127BurstOutcome {
+        merging: merging_hash,
+        round_blocks,
+        rounds,
+        spends: [spends[0].id(), spends[1].id()],
+        funding,
+        accepted,
+        mergeset_order,
+        utxos,
+        permits_used,
+        fork_choice: (order.safe_frontier_blue_score, order.safe_weight, order.live_total),
+        blue_work: vp.ghostdag_store.get_blue_work(merging_hash).unwrap(),
+        blue_score: vp.ghostdag_store.get_blue_score(merging_hash).unwrap(),
+        daa_score,
+        settlement: [ctx.consensus.palw_settlement_v1(funding_daa), ctx.consensus.palw_settlement_v1(daa_score)],
+    }
+}
+
+/// **ADR-0127 Decision 4 through the pipeline: conflicting spends are ordered, not raced.** Two
+/// round blocks, each holding its permit, carry spends of one output; the chain block that merges
+/// them accepts the one its mergeset orders first and skips the other, and the UTXO set holds that
+/// spend's output and not the other's — while the merging block stays valid and both permits are
+/// recorded as used, so the skipped spend was refused as a double spend, not as an unpermitted block.
+#[tokio::test]
+async fn adr0127_two_permitted_round_blocks_spending_one_output_are_ordered_by_the_merging_block() {
+    let run = adr0127_round_burst(true).await;
+    let [e1, e2, e3] = run.round_blocks[..] else { panic!("three round blocks") };
+    for block in [e1, e2, e3] {
+        assert!(run.mergeset_order.contains(&block), "the merging block merges every round block");
+    }
+    assert_eq!(run.permits_used, [true; 3], "all three permits were granted and recorded: {:?}", run.rounds);
+    let position = |block| run.mergeset_order.iter().position(|b| *b == block).unwrap();
+    let (first, second) = if position(e1) < position(e2) { (run.spends[0], run.spends[1]) } else { (run.spends[1], run.spends[0]) };
+    assert!(run.accepted.contains(&first), "the spend the mergeset orders first is accepted");
+    assert!(!run.accepted.contains(&second), "the conflicting spend ordered after it is not");
+    assert!(!run.utxos.contains_key(&run.funding), "the output is spent");
+    assert!(run.utxos.contains_key(&TransactionOutpoint::new(first, 0)), "the UTXO set holds the accepted spend's output");
+    assert!(!run.utxos.contains_key(&TransactionOutpoint::new(second, 0)), "and not the other's");
+    assert_ne!(run.merging, kaspa_hashes::ZERO_HASH64);
+}
+
+/// **A burst of execution blocks is zero confirmations** (ADR-0127 §1, the ADR-0129 pin). The same
+/// chain block built with three permitted round blocks in its mergeset and without any leaves every
+/// PALW fork-choice input where it was — the safe frontier's blue score, the safe weight, the live
+/// total — and the selected chain's blue work, blue score and DAA score; and the settlement read
+/// answers the same settled, depth and pending anchors for the funding output and for the block.
+#[tokio::test]
+async fn adr0127_a_burst_of_permitted_round_blocks_moves_no_fork_choice_input() {
+    let with = adr0127_round_burst(true).await;
+    let without = adr0127_round_burst(false).await;
+    assert_eq!(with.round_blocks.len(), 3);
+    assert_eq!(with.permits_used, [true; 3], "the burst held its permits");
+    assert!(without.round_blocks.is_empty() && without.permits_used == [false; 3]);
+    assert_ne!(with.merging, without.merging, "two different merging blocks");
+    assert_eq!(with.fork_choice, without.fork_choice, "frontier, safe weight and live total");
+    assert_eq!(with.blue_work, without.blue_work, "blue work");
+    assert_eq!((with.blue_score, with.daa_score), (without.blue_score, without.daa_score), "blue score and DAA score");
+    let reading = |s: Option<kaspa_consensus_core::palw_settlement_v1::PalwSettlementV1>| {
+        s.map(|s| (s.settled, s.depth, s.pending, s.depth_is_lower_bound, s.safe_frontier_blue_score, s.sink_daa))
+    };
+    for (at, (w, wo)) in
+        ["the funding output", "the merging block"].into_iter().zip(with.settlement.into_iter().zip(without.settlement))
+    {
+        assert!(w.is_some(), "a V2 node answers the settlement read at {at}");
+        assert_eq!(reading(w), reading(wo), "the settlement read at {at}");
+    }
+}
+
 // ---- ADR-0126: the validator overlay retires at a height --------------------------------------
 
 /// **ADR-0126 through the pipeline.** On a network whose overlay is live from genesis (mainnet's
