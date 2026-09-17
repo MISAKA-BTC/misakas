@@ -292,3 +292,30 @@ every DAG parameter, depth and PALW window; every network until its fence is arm
 * **The permit ledger first dropped rounds below the newest merged round.** A holder of a future
   round's permit could then publish early and make every honest round block of the rounds between
   stale. The ledger is keyed by `(span, round)` and kept for two spans instead.
+
+## 9. The drill, run (2026-09-17)
+
+Four nodes on one host (Apple silicon, 12 cores, three builds running beside it), `--devnet
+--palw-devnet-floor-only --palw-execution-lane-devnet=0,2,30`: the lane open from genesis at two
+permits a round, 30-DAA spans, and one security domain — the floor class — so SA-4 applies: its
+permits fall in even rounds only, at most one a round (width 2 caps a domain at one). Binaries were built
+from this branch before the compute credit (§8) and before the chain walk named native transactions.
+
+| step | result | evidence |
+|---|---|---|
+| 0 | the lane armed on the nodes' ruleset | `getPalwRoundLane` `armed: true` at DAA 0, 08:53 JST |
+| 1 | attempts reached `Final` in span 3 and span 4 was scheduled from them | DAA 120 at 10:09; the step took 76 minutes of chain time at 1.2–2.4 DAA a minute, which is why a step now waits on chain progress (`STALL_WAIT`) and a stalled run can `ATTACH=1` |
+| 2 | a node produced a round block for a permit its bond held | `[palw-round-producer] 1 round blocks produced (latest round 41216982)`, 10:09:42 |
+| 3 | chain blocks merged round blocks and granted their permits | 10:09:48: 3 round blocks, 3 permits, 4 transactions accepted from them; later merges of 6, 1, 51 and 3 |
+| 4 | **partly established** — see below | 16 transactions accepted from permitted round blocks after the first payment (8 at 10:09:59, 7 in the 51-block merge at 10:11:44, 1 at 10:11:50); the recipient's balance went 0 → 3.00000003 MSK (three of five payments applied when read) |
+| 5 | two nodes reported one lane | node-1 and node-3: span 4, width 2, one domain |
+
+**What step 4 did not prove.** Round blocks carried fee-paying transactions — the chain walk accepted
+them from granted permits and paid their fees to the permits' payouts — but the lane also carries the
+nodes' own PALW carriers, and the script accepted the first lane line with any transaction, which was
+written two seconds *before* the first payment. The balance moved, but a chain block could have carried
+those payments. So the drill proved the lane carries transactions, not that it carried *the*
+payments. Fixed the same day: the chain walk's lane line now counts native transactions apart from
+carriers and names the first four, and step 4 requires one of the sent transaction ids in a lane line
+written after the sends. That run belongs to the release build that carries ADR-0126 (revised),
+ADR-0127 and ADR-0128, and its result is appended here when it is taken.

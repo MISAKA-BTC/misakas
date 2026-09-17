@@ -1637,18 +1637,36 @@ impl VirtualStateProcessor {
                         palw_state.as_ref().and_then(|s| self.palw_round_verdicts_v1(s, &ctx.ghostdag_data, pov_daa_score));
                     self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, pov_daa_score);
                     // ADR-0125: one line a chain block that merges the lane — what an operator (and the
-                    // devnet drill) reads to see permits granted and the transactions they carried.
+                    // devnet drill) reads to see permits granted and the transactions they carried. The
+                    // native (payment) transactions are counted apart from PALW carriers and the first
+                    // few named, so a payment can be traced to the lane rather than inferred from a
+                    // balance that a chain block could equally have moved.
                     if let Some(verdicts) = ctx.palw_round_verdicts.as_ref().filter(|v| !v.round_blocks.is_empty()) {
-                        let carried: usize = ctx
-                            .mergeset_acceptance_data
-                            .iter()
-                            .filter(|entry| verdicts.permitted.contains(&entry.block_hash))
-                            .map(|entry| entry.accepted_transactions.iter().filter(|tx| tx.index_within_block != 0).count())
-                            .sum();
+                        let mut carried = 0usize;
+                        let mut native: Vec<kaspa_consensus_core::tx::TransactionId> = Vec::new();
+                        for entry in ctx.mergeset_acceptance_data.iter().filter(|entry| verdicts.permitted.contains(&entry.block_hash)) {
+                            let txs = self.block_transactions_store.get(entry.block_hash).ok();
+                            for accepted in entry.accepted_transactions.iter().filter(|tx| tx.index_within_block != 0) {
+                                carried += 1;
+                                if txs.as_ref().and_then(|txs| txs.get(accepted.index_within_block as usize)).is_some_and(|tx| {
+                                    tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE
+                                }) {
+                                    native.push(accepted.transaction_id);
+                                }
+                            }
+                        }
+                        const NAMED: usize = 4;
+                        let mut named: Vec<String> = native.iter().take(NAMED).map(|id| id.to_string()).collect();
+                        if native.len() > NAMED {
+                            named.push(format!("+{}", native.len() - NAMED));
+                        }
                         info!(
-                            "[palw-round-lane] chain block {current} merged {} round block(s): {} permit(s) granted, {carried} transaction(s) accepted from them",
+                            "[palw-round-lane] chain block {current} merged {} round block(s): {} permit(s) granted, {carried} transaction(s) accepted from them ({} native{}{})",
                             verdicts.round_blocks.len(),
-                            verdicts.permitted.len()
+                            verdicts.permitted.len(),
+                            native.len(),
+                            if named.is_empty() { "" } else { ": " },
+                            named.join(", ")
                         );
                     }
 

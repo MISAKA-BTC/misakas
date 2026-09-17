@@ -15,8 +15,9 @@
 #   1. an attempt reaches Final and the span after it is scheduled (getPalwRoundLane lists a domain);
 #   2. a node produces a round block for a permit its bond holds;
 #   3. a chain block merges round blocks and grants their permits (the chain walk's lane line);
-#   4. a transaction paying a fee is sent and a granted round block carries it (a lane line with
-#      accepted transactions after the send), and the recipient's balance moves;
+#   4. payments are sent and a granted round block carries one of THEM: a lane line written after
+#      the sends names a sent transaction id among its native transactions (PALW carriers, which
+#      round blocks carry all the time, do not count), and the recipient's balance moves;
 #   5. two nodes report the same lane: span, accepted permits and schedule.
 # A reorg across a span boundary is the pipeline suite's (`adr0125_*` in the virtual processor's
 # tests); this drill does not partition the network.
@@ -185,19 +186,42 @@ balance() {
     | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v["mature"]["sompi"] + v["immature"]["sompi"])' 2>/dev/null || echo "?"
 }
 before_balance="$(balance)"
+# Where each node log ends now: step 4's evidence must be written after this point, or a lane line
+# from before the first payment (carriers ride the lane from the moment it opens) would pass it.
+for ((i=0; i<NODES; i++)); do wc -c < "$WORK_DIR/node-$i.log" > "$WORK_DIR/out/offset-$i"; done
 sent=0
+sent_ids=()
 for ((k=0; k<SENDS; k++)); do
   if cli 0 wallet send --key-file "$WORK_DIR/keys/main.seed" --to "$RECIPIENT" --amount "1.0000000$k" --yes --output json \
       >"$WORK_DIR/out/send-$k.json" 2>&1; then
     sent=$((sent + 1))
-    log "    sent $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("txid"))' "$WORK_DIR/out/send-$k.json" 2>/dev/null || echo '?')"
+    txid="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("txid") or "")' "$WORK_DIR/out/send-$k.json" 2>/dev/null || true)"
+    [ -n "$txid" ] && sent_ids+=("$txid")
+    log "    sent ${txid:-?}"
   else
     log "    send $k refused: $(tail -1 "$WORK_DIR/out/send-$k.json")"
   fi
   sleep "$SEND_EVERY"
 done
 [ "$sent" -gt 0 ] || die "no fee-paying transaction was accepted by the mempool"
-carried="$(wait_log "\\[palw-round-lane\\] chain block [0-9a-f]+ merged [0-9]+ round block\\(s\\): [1-9][0-9]* permit\\(s\\) granted, [1-9][0-9]* transaction\\(s\\) accepted from them" "a round block carrying a transaction")"
+[ "${#sent_ids[@]}" -gt 0 ] || die "the sends were accepted but printed no transaction id"
+# The lane lines written since the offsets, from every node; a payment is carried when one of them
+# names its id. The chain walk names the first four native ids of each merging block.
+since_offsets() {
+  for ((i=0; i<NODES; i++)); do
+    tail -c +"$(( $(cat "$WORK_DIR/out/offset-$i") + 1 ))" "$WORK_DIR/node-$i.log" 2>/dev/null
+  done
+}
+ids_pattern="$(IFS='|'; echo "${sent_ids[*]}")"
+step_start
+carried=""
+while ! step_expired; do
+  carried="$(since_offsets | grep -m1 -E "\\[palw-round-lane\\] chain block [0-9a-f]+ merged .*native: .*(${ids_pattern})" || true)"
+  [ -n "$carried" ] && break
+  alive
+  sleep 5
+done
+[ -n "$carried" ] || gave_up "a round block carrying one of the sent payments"
 log "    $carried"
 after_balance="$(balance)"
 log "    recipient balance ${before_balance:-?} → ${after_balance:-?} sompi"
@@ -210,7 +234,7 @@ for n in 1 $((NODES - 1)); do cli "$n" palw round-lane --output json > "$WORK_DI
 granted_lines="$(cat "$WORK_DIR"/node-*.log | grep -c "\\[palw-round-lane\\] chain block" || true)"
 produced_blocks="$(grep -h -oE "\\[palw-round-producer\\] [0-9]+ round blocks produced" "$WORK_DIR"/node-*.log | awk '{s+=$2} END {print s+0}' || true)"
 log "    lane lines across the fleet: $granted_lines · round-block production reports (powers of two, summed): $produced_blocks"
-log "PASS — attempts reached Final, the next span was scheduled, round blocks were produced for held permits, chain blocks granted them, and a granted round block carried a fee-paying transaction"
+log "PASS — attempts reached Final, the next span was scheduled, round blocks were produced for held permits, chain blocks granted them, and a granted round block carried a sent payment"
 log "evidence: $WORK_DIR/node-*.log, $WORK_DIR/out/"
 [ "$ATTACH" = 1 ] && log "the attached nodes are still running: kill ${pids[*]}"
 exit 0
