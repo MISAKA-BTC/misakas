@@ -257,7 +257,8 @@ pub fn derive_stratified_panel_v2(
         // **The stratified (shard) draw does not read ADR-0124's seat economy yet.** It is dormant
         // on every network (`palw_shard_licensing` is `None` everywhere), so the economy rides the
         // flat draw below; when the shard fence is armed, this draw needs the same floor and
-        // headroom — a follow-up gated behind the shard fence, not this one (C-02's precedent).
+        // headroom — and ADR-0130's exposure floor and one-entry-per-operator lottery with them,
+        // per shard — a follow-up gated behind the shard fence, not this one (C-02's precedent).
         palw_panel_eligible_bonds_v2(state, claim_id, min_collateral_sompi, registered_by_daa, capability_proof, None, params.seat_count)?
             .into_iter()
             .filter_map(|(bond_key, bond)| {
@@ -304,7 +305,9 @@ pub struct PalwAnchorFactV2 {
 /// a second implementation of the draw: it calls
 /// [`crate::palw_state_v2::palw_bond_may_take_work_v2`] and applies the identical maturity
 /// comparison, and it counts operators rather than bonds because the draw seats one bond per
-/// operator — a registry of ten bonds under two operators seats two.
+/// operator — a registry of ten bonds under two operators seats two. Past the panel economy the
+/// operator is the draw's own unit (ADR-0130: one lottery entry each), so this count is the number
+/// of entrants, less whatever the seat floor and the headroom exclude.
 ///
 /// **The executor exclusions are deliberately NOT applied**, and that is the whole reason the
 /// answer is comparable to `palw_v2_maturity_armable_bonds_v1()`. That bar is derived as

@@ -4411,9 +4411,11 @@ impl Params {
             .map_or(0, |floor| floor.reward_multiple_permille)
     }
 
-    /// **ADR-0124's two numbers the draw needs past the panel-economy fence**, from the bundle's
-    /// own state params: the panel floor (ten producer floors) and the exposure ceiling every
-    /// reservation shares. `None` where the fence is dormant at `daa_score` or no bundle exists.
+    /// **The numbers the draw needs past the panel-economy fence**, from the bundle's own state
+    /// params: ADR-0124's panel floor (ten producer floors) and the exposure ceiling every
+    /// reservation shares, and ADR-0130's reward multiple where its own fence is in force at the same
+    /// score (`0` while it is not). `None` where the economy is dormant at `daa_score` or no bundle
+    /// exists.
     pub fn palw_seat_economy_at(&self, daa_score: u64) -> Option<crate::palw_panel_economy_v1::PalwSeatEconomyV1> {
         if !self.palw_panel_economy_active_at(daa_score) {
             return None;
