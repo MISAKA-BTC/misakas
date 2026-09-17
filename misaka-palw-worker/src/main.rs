@@ -1969,7 +1969,7 @@ fn execute_on_context(ctx: *mut ShimCtx, input: &[u8], n_predict: u32, started: 
     let n_vocab = unsafe { shim_n_vocab(ctx) };
 
     // Tokenize the raw input bytes. A prompt that does not fit the job's own ceiling is a hard
-    // error, not a truncation: `normalize_vlt` rejects `prefill + decode > max_tokens`, so a
+    // error, not a truncation: the job's ceiling bounds `prefill + decode`, so a
     // silently-truncated job would commit to bytes it did not fully prefill.
     let max_prompt = (N_CTX - 8) as usize;
     let mut tokens = vec![0i32; max_prompt];

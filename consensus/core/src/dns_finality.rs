@@ -9,10 +9,9 @@
 //! for the single-host deployment + equivocation-safety operating
 //! model, and
 //! [ADR-0024](../../docs/adr/0024-verified-llm-token-weighted-bft.md) for
-//! the MISAKA Verified LLM Token-Weighted BFT replacement of the
-//! **voting-weight source** (bonded capital → verified useful compute)
-//! implemented in [`crate::vlt`] and switched here by
-//! [`DnsParams::epoch_credit_rule`]. This module carries the **type surface only** that Phase
+//! the MISAKA Verified LLM Token-Weighted BFT compute overlay ([`crate::vlt`]; its
+//! voting-weight half is removed, so finality weighs bonded stake). This module carries the
+//! **type surface only** that Phase
 //! 10 follow-up PRs (10.4 — 10.14) will reference; consensus rule
 //! implementations panic with explicit `unimplemented!()` so the
 //! missing surface is loud rather than silently-zero.
@@ -130,8 +129,7 @@ use crate::{
     tx::{Transaction, TransactionOutpoint, TransactionOutput},
     vlt::{
         ComputeCapabilityPayload, ComputeCertificatePayload, ComputeChallengePayload, ComputeCommitmentPayload, ComputeFraudKind,
-        ComputeVerdictPayload, MAX_JOB_INPUT_BYTES, MAX_VERIFIER_ATTESTATIONS, VerifierAttestation, VltEpochSnapshot, VltParams,
-        VltValidatorWeight, VltVotingSnapshot,
+        ComputeVerdictPayload, MAX_JOB_INPUT_BYTES, MAX_VERIFIER_ATTESTATIONS, VerifierAttestation, VltParams,
     },
 };
 
@@ -520,18 +518,17 @@ pub fn stake_attestation_shard_tx(shard: &StakeAttestationShardPayload) -> Trans
 /// is visible, and it carries [`Self::locked_epoch`] / [`Self::locked_hash`] — the lock the signer
 /// held when it signed. Two consequences:
 ///
-/// * **On chain**, the credit walk counts a precommit only if its declared lock matches what this
-///   chain shows as that validator's previous precommit. A validator cannot quietly forget a lock
-///   it published; it has to restate it, correctly, every time it locks again.
+/// * **On chain**, the round was to count a precommit only if its declared lock matched what this
+///   chain shows as that validator's previous precommit, so a validator could not quietly forget a
+///   lock it published.
 /// * **Across branches**, that restatement is self-contained evidence. Two precommits naming the
 ///   same `locked_epoch` with different `locked_hash` prove the signer held two different locks at
 ///   one height, and proving it needs only the two payloads — no reachability, no access to the
 ///   losing branch's blocks. That is the accountability a single round cannot produce.
 ///
-/// An anchor is DNS-confirmed only once **both** rounds reach quorum over the same pinned `W(E)`
-/// ([`crate::vlt::VltEpochSnapshot`]). Two conflicting anchors for one epoch therefore cannot both
-/// commit without more than a third of the weight having signed both — which is equivocation, on
-/// chain, with the signature attached.
+/// **The round never ran.** It was to count above the VLT weight fence, which is removed; the
+/// payload stays admissible and its equivocation evidence slashable ([`precommit_fault`]), and
+/// nothing counts a precommit toward confirmation.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct StakePrecommitPayload {
     pub version: u16,
@@ -557,12 +554,9 @@ pub struct StakePrecommitPayload {
     /// `locked_epoch` on two branches is provable equivocation.
     pub locked_hash: Hash64,
 
-    /// §5.1: [`crate::vlt::vote_snapshot_commitment`] over the frozen voting snapshot this
-    /// precommit was weighed under (`snapshot_root` + `validator_set_root`). In the signed
-    /// digest, so a lock counted against one denominator cannot be restated against another; the
-    /// credit walk requires it to equal the commitment the chain froze for the epoch the
-    /// precommit landed in. [`Hash64::default`] below the VLT weight fence, where no snapshot is
-    /// frozen and the round does not run.
+    /// §5.1: the commitment to the frozen voting snapshot this precommit was to be weighed under.
+    /// In the signed digest. The voting snapshots are removed with the weight fence, so no
+    /// value is checked against anything; [`Hash64::default`] is what a signer supplies.
     pub snapshot_commitment: Hash64,
 
     /// ML-DSA-87 over [`stake_precommit_message`] under [`PRECOMMIT_MLDSA87_CONTEXT`].
@@ -584,16 +578,6 @@ impl StakePrecommitPayload {
             (l, false) => l < self.epoch,
         }
     }
-}
-
-/// The lock a validator is carrying, as the chain shows it.
-///
-/// `None` for a validator with no counted precommit yet; that is the `(0, default)` a first
-/// precommit must declare.
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-pub struct PrecommitLock {
-    pub epoch: u64,
-    pub anchor: Hash64,
 }
 
 /// What two precommits from one validator prove, when they cannot both be honest.
@@ -619,11 +603,9 @@ pub enum PrecommitFault {
 /// key that bond pledges, and a pair from two different signers proves nothing about either.
 /// Byte-identical payloads are a rebroadcast, not an offence.
 ///
-/// Deliberately narrower than "anything the walk would reject". A precommit that re-declares a
-/// lock the validator has already moved past is refused credit by
-/// [`lock_consistent_precommits`], but the two payloads alone cannot say which came first on
-/// chain, so it is not *proof* of two histories and must not burn a bond. Slashing is for what is
-/// provable from the evidence itself; everything else is denied credit and left alone.
+/// Deliberately narrow. A precommit that re-declares a lock the validator has already moved past
+/// cannot be ordered against its sibling from the two payloads alone, so it is not *proof* of two
+/// histories and must not burn a bond. Slashing is for what is provable from the evidence itself.
 pub fn precommit_fault(a: &StakePrecommitPayload, b: &StakePrecommitPayload) -> Option<PrecommitFault> {
     if a.validator_id != b.validator_id || a.bond_outpoint != b.bond_outpoint {
         return None;
@@ -660,53 +642,6 @@ pub struct PrecommitEvidencePayload {
     /// [`SlashingEvidencePayload::reporter_reward_spk_payload`]. A malformed value only misdirects
     /// the reporter's own reward, so consensus checks nothing beyond the fixed width.
     pub reporter_reward_spk_payload: [u8; 64],
-}
-
-/// MISAKA: the node's VLT activation and finality status, as an operator (or a scraper) sees it.
-///
-/// The named state and the flat gauges together, because each answers a question the other
-/// cannot: the state says *why* finality is or is not running, the gauges are what a monitoring
-/// query can actually match on. The one alert worth writing is
-/// `weight_fence_reached && !finality_active` — the fork happened and nothing is being finalized.
-///
-/// `sink_daa_score` is when these numbers were last written. A scraper comparing it to the node's
-/// current DAA can tell a steady state from a recompute that has stopped, which the values alone
-/// cannot express.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct VltStatusView {
-    /// Stable label: `pre_shadow` | `shadow` | `fence_reached_no_snapshot` | `active` | `recovery`.
-    pub state: &'static str,
-    pub gauges: crate::vlt::VltGauges,
-    pub shadow_fence_daa_score: u64,
-    pub weight_fence_daa_score: u64,
-    pub sink_daa_score: u64,
-}
-
-/// What round 2 asks of one validator at the current sink.
-///
-/// Read from the chain rather than remembered locally, and that is the point: `held` is what the
-/// **network** can see this validator has locked, so a node that restarted, resynced or was
-/// restored from a backup restates the lock everyone else already has a signature for. A node
-/// trusting its own memory here would eventually declare a lock the chain contradicts — which
-/// stops its precommits counting — or, worse, one that contradicts a lock it published on another
-/// branch, which is the equivocation the round exists to make provable.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct PrecommitDuty {
-    /// Whether the precommit round is live at the sink (the VLT weight fence).
-    pub round_active: bool,
-    pub sink_daa_score: u64,
-    /// The lock this validator is carrying on this chain, as counted.
-    pub held: PrecommitLock,
-    /// Epochs whose prevote quorum is met and which this validator has not precommitted yet:
-    /// `(epoch, anchor_hash, anchor_daa, snapshot_commitment)`, ascending.
-    ///
-    /// Ascending because a lock must name a STRICTLY EARLIER epoch, so a validator's own
-    /// precommits can only ever move forward — it may skip entries (and should, when it is far
-    /// behind: see the frontier jump in the validator service) but must never go back. The
-    /// commitment is per entry (§5.1, PR 4):
-    /// each precommit binds ITS target epoch's frozen denominator, so a late signature for an
-    /// old due epoch carries that epoch's commitment, not whichever happens to be current.
-    pub due: Vec<(u64, Hash64, u64, Hash64)>,
 }
 
 /// Phase 10 transaction payload that burns a validator's bond by
@@ -1222,20 +1157,10 @@ pub struct DnsParams {
     /// testnet cycle later.
     pub coinbase_settlement_consensus_activation_daa_score: u64,
 
-    /// **MISAKA Verified LLM Token-Weighted BFT** ([`crate::vlt`]): the parameters that replace
-    /// bonded capital with verified useful compute as the source of validator voting power.
-    ///
-    /// At and above [`VltParams::vlt_activation_daa_score`] a validator's per-epoch voting weight
-    /// becomes `W_i(E) = min{C_i(E), λ·B_i(E)}` instead of its bonded `amount`, and an epoch earns
-    /// credit through the `Q(E) = ⌊2W(E)/3⌋ + 1` quorum instead of the
-    /// [`Self::stake_event_quality_floor_bps`] φS floor. Below the fence every VLT code path is
-    /// dormant and the overlay is byte-identical to the stake-weighted behaviour.
-    ///
-    /// This is INDEPENDENT of [`Self::min_bond_amount_sompi`], which is deliberately unchanged:
-    /// under the VLT model the bond stops being voting power and becomes purely (a) the
-    /// participation requirement and (b) the slashable collateral that caps how much verified
-    /// compute a validator may convert into weight. The 20M-KAS production floor therefore keeps
-    /// its exact prior value and meaning as a *collateral* threshold.
+    /// **MISAKA Verified LLM Token-Weighted BFT** ([`crate::vlt`]): the compute overlay's
+    /// parameters. Its shadow fence runs the overlay (committees, the audit fee, challenge
+    /// slashing); its weight fence — the switch of voting power from bonded stake to verified
+    /// compute — is removed, and `Params::validate_palw_v2` refuses any value but `u64::MAX`.
     ///
     /// [`VltParams::INERT`] on every shipped preset. Appended last to keep the borsh layout change
     /// localized; NOT a genesis-block input, so adopting it leaves genesis hashes unchanged.
@@ -1248,16 +1173,15 @@ pub struct DnsParams {
     /// genesis-block input.
     pub tkn: crate::token::TokenParams,
 
-    /// blue_score window the VLT credit walk scans back from the tip when collecting each
-    /// validator's per-epoch `X_i(e)` for [`crate::vlt::recent_compute_score`].
+    /// blue_score window the compute-overlay walk scans back from the tip (the credit window of the
+    /// removed voting-weight half, which the audit fee and challenge adjudication still walk).
     ///
     /// Must cover `(credit_window_epochs + credit_delay_epochs) × attestation_epoch_length_blue_score`
     /// plus the challenge window, or the oldest epochs of the `C_i(E)` sum are silently truncated to
     /// zero — which would under-count honest validators' weight rather than over-count it, but would
     /// still make weight depend on a window the paper does not define. Kept as its own knob (rather
     /// than reusing [`Self::stake_score_window_blue_score`]) because the compute-credit window is
-    /// necessarily much longer than the attestation window, and its walk cost is the price of
-    /// activating VLT weighting. `0` while the fence is inert.
+    /// necessarily much longer than the attestation window.
     pub vlt_credit_window_blue_score: u64,
 
     /// **Reorg-gate evaluation horizon** — how far back (selected-chain blocks) the gate is
@@ -1363,17 +1287,10 @@ pub struct DnsParams {
 
     /// **ADR-0060 Decision 4: the finality inactivity leak's time constant, in DAA.**
     ///
-    /// A validator silent (no signature-verified attestation, no fresh bond) for longer than
-    /// this leaves the quorum DENOMINATOR — weight excluded, bond untouched, re-entry by
-    /// attesting or re-bonding — so finality self-heals after validator loss instead of halting
-    /// until manual intervention. See [`InactivityLeakViewV1`] for the mechanism and the
-    /// long-partition trade-off it deliberately accepts.
-    ///
-    /// **RETIRED at `u64::MAX` (ADR-0066 Decision 4). Do not give this a live value.**
-    ///
-    /// The leak is armed by `Params::palw_inactivity_leak`, a top-level fence. This field stays
-    /// so that the preset shape and its borsh encoding are unchanged, and it is pinned at
-    /// `u64::MAX` on every preset by `the_inactivity_leak_constant_stays_retired`.
+    /// **The inactivity leak is removed.** No code reads this field and `u64::MAX` is its value on
+    /// every preset; it stays so that the preset shape and its borsh encoding (hashed into
+    /// `consensus_params_id`) are unchanged. `Params::palw_inactivity_leak`, the fence that
+    /// replaced it (ADR-0066 Decision 4), is refused by `Params::validate_palw_v2`.
     ///
     /// Why it could not be the switch: `DnsParams` is hashed into `consensus_params_id` as one raw
     /// borsh blob, and `for_each_fence` deliberately does not visit inside it. Both halves are
@@ -1428,21 +1345,6 @@ pub fn ready_epoch_from_tip_blue_score(tip_blue_score: u64, epoch_len_blue_score
     let safe = tip_blue_score.checked_sub(lag_blue_score)?;
     let completed = safe.checked_add(1)? / epoch_len;
     if completed == 0 { None } else { Some(completed - 1) }
-}
-
-/// MISAKA VLT PR 4: the wall epoch in which target epoch `e` becomes votable — where its
-/// canonical anchor first satisfies the readiness lag, and therefore whose FROZEN voting
-/// snapshot is the denominator every vote on `e` is weighed against (§5/§7.1: one `W(E)` per
-/// epoch, fixed for the epoch).
-///
-/// `w(e) = ⌊((e+1)·L + lag) / L⌋` — pure arithmetic, no chain access, so signer and verifier
-/// cannot disagree on which snapshot a vote for `e` must bind. Keying the denominator on the
-/// TARGET (rather than on whichever wall epoch a vote happened to land in) is what makes late
-/// votes for `e` count against the same `W` as prompt ones: one epoch, one denominator, no
-/// grace windows.
-pub fn voting_epoch_for_target(target_epoch: u64, epoch_len_blue_score: u64, lag_blue_score: u64) -> u64 {
-    let epoch_len = epoch_len_blue_score.max(1);
-    epoch_start_blue_score(target_epoch.saturating_add(1), epoch_len).saturating_add(lag_blue_score) / epoch_len
 }
 
 /// Pure core of canonical-anchor selection (testable without a store). `ancestors` is the tip's
@@ -1522,176 +1424,21 @@ impl DnsParams {
         self
     }
 
-    /// Which epoch-credit rule — and therefore which source of voting weight — is in force at
-    /// `daa_score`.
+    /// The epoch-credit rule: the φS graded floor over bonded stake.
     ///
-    /// This single call site is the switch that performs the paper's replacement. Below
-    /// [`VltParams::vlt_activation_daa_score`] it returns the pre-VLT φS graded rule over bonded
-    /// stake, so every shipped network is byte-identical to its behaviour before this module
-    /// existed. At and above the fence it returns [`EpochCreditRule::BftQuorum`], and the weight
-    /// producers switch to `W_i(E) = min{C_i(E), λ·B_i(E)}` in lockstep.
-    ///
-    /// Keyed on DAA (not on the pov-dependent `DnsState.rollout_stage`) for the same reason the
-    /// reward-split stage is: the construction and validation paths must select the same rule for
-    /// the same block, or they would disagree on whether an epoch is credited.
-    pub fn epoch_credit_rule(&self, daa_score: u64) -> EpochCreditRule {
-        if self.vlt.weight_active_at(daa_score) {
-            EpochCreditRule::BftQuorum { min_network_compute: self.vlt.min_network_compute }
-        } else {
-            EpochCreditRule::QualityFloor { quality_floor_bps: self.stake_event_quality_floor_bps }
-        }
+    /// The VLT quorum rule that the weight fence would have switched to is removed, so this is the
+    /// one rule on every network, at every height.
+    pub fn epoch_credit_rule(&self) -> EpochCreditRule {
+        EpochCreditRule::QualityFloor { quality_floor_bps: self.stake_event_quality_floor_bps }
     }
 
-    /// Whether VLT-weighted voting is live at `daa_score` — i.e. whether the weight fed to the
-    /// tally is verified compute rather than bonded stake. Convenience mirror of
-    /// [`Self::epoch_credit_rule`] for the weight-producing call sites.
+    /// Whether the compute overlay is **running** at `daa_score`: committees drawn, verdicts
+    /// counted and paid, a settled challenge slashing the side that lost.
     ///
-    /// This is the **narrow** fence. Only the three places that decide *what a vote weighs* may
-    /// ask it: the credit rule, and the two `ContributionWeight` selections. Everything else the
-    /// compute overlay does belongs to [`Self::vlt_shadow_active_at`], which opens earlier —
-    /// gating the machinery on the weight fence is what would make activation a single
-    /// all-or-nothing fork with finality inside the blast radius.
-    pub fn vlt_weighting_active_at(&self, daa_score: u64) -> bool {
-        self.vlt.weight_active_at(daa_score)
-    }
-
-    /// Whether the compute overlay is **running** at `daa_score`: certificates credited into
-    /// `X_i(e)`, committees drawn, verdicts counted and paid, a settled challenge slashing the
-    /// side that lost, and the credit accumulator filling.
-    ///
-    /// True from the shadow fence onward, which is at or below the weight fence, so every VLT
-    /// machinery call site is live for at least one full credit window before anything depends on
-    /// what it produced. Below it the overlay is dormant and every shipped network stays
-    /// byte-identical to its pre-VLT behaviour.
+    /// Below the shadow fence the overlay is dormant and every such network stays byte-identical
+    /// to its pre-VLT behaviour.
     pub fn vlt_shadow_active_at(&self, daa_score: u64) -> bool {
         self.vlt.shadow_active_at(daa_score)
-    }
-
-    /// Whether this preset's VLT configuration is internally consistent **and** its unbonding
-    /// window covers the §7 bound `U ≥ credit window + max challenge period`.
-    ///
-    /// Not a block-validity rule — a startup/test assertion. A preset whose fence is inert trivially
-    /// passes (nothing reads the VLT knobs), so this only bites on a network that has actually
-    /// switched the weight source. The unbonding term matters because a validator that could exit
-    /// faster than its compute credit decays would still be drawing voting weight from jobs it can
-    /// no longer be slashed for.
-    /// The one span that governs both how far back the credit walk must reach and how long the
-    /// overlay must run before the vote may depend on it: `K + delay` epochs, plus the challenge
-    /// window a certificate waits out before it counts, plus the lag and backoff an epoch's anchor
-    /// needs before it is decidable.
-    ///
-    /// One definition because it is one quantity — how long `C_i(E)` takes to mean anything. A
-    /// walk shorter than this silently truncates the oldest epochs of every validator's score; a
-    /// soak shorter than this moves the vote onto a score that has not finished forming.
-    pub fn vlt_credit_span(&self) -> u64 {
-        (self.vlt.credit_window_epochs as u64)
-            .saturating_add(self.vlt.credit_delay_epochs as u64)
-            .saturating_mul(self.attestation_epoch_length_blue_score)
-            .saturating_add(self.vlt.challenge_window_blocks)
-            .saturating_add(self.attestation_lag_blue_score)
-            .saturating_add(self.attestation_anchor_backoff_blue_score)
-    }
-
-    /// Rewrite this preset's VLT knobs into a coherent **private-devnet** calibration, with the
-    /// shadow fence at `shadow_daa` and the weight fence one full soak above it (or dormant, if
-    /// `shadow_only` — that is Shadow Mode: the overlay runs and is policed for real while
-    /// finality stays on bonded stake indefinitely).
-    ///
-    /// Only the calibration changes, never a rule. `credit_window_epochs` drops from the
-    /// production 96 to `K` so the soak is minutes rather than tens of minutes, and the model cost
-    /// table gains the shipped PALW entry — without a registered model every job mints zero VLT,
-    /// so a devnet with the empty production table would run the whole overlay and produce a
-    /// `W(E)` of nothing. The committee shape (5 drawn, 3 to decide either way) is the shipped one
-    /// and is left alone: it is exactly a five-validator network's shape already.
-    ///
-    /// `vlt_credit_window_blue_score` is derived rather than configured, so the walk depth and the
-    /// soak cannot drift apart — they are the same quantity ([`Self::vlt_credit_span`]).
-    ///
-    /// **Devnet and simnet only.** These are consensus fences: on a public network they belong to
-    /// a release, not to whoever started the node. The caller enforces that.
-    pub fn with_vlt_devnet(mut self, shadow_daa: u64, credit_window_epochs: u32, shadow_only: bool, genesis_hash: Hash64) -> Self {
-        // With the fixture feature the devnet registers ONLY the fixture profile, derived from
-        // this network's own genesis — so a fixture certificate names a profile that exists on no
-        // other network, and a real PALW executor pointed here would find its own profile
-        // unregistered. Without the feature the devnet registers the real PALW profile, which is
-        // what an actual model-running devnet wants.
-        #[cfg(feature = "devnet-vlt-fixture")]
-        let model_cost_table = crate::vlt::ModelCostTable::devnet_fixture(genesis_hash);
-        #[cfg(not(feature = "devnet-vlt-fixture"))]
-        let model_cost_table = {
-            let _ = genesis_hash;
-            // Both pinned Metal profiles: the node resolves its own entry from the worker it was
-            // pointed at, and on a one-machine devnet that worker is realistically the Qwen3.5-2B
-            // palw-lite one — five executors plus their replay committees cannot share a 24 GB
-            // model. The 35B profile stays registered so a real PALW worker is a configuration
-            // choice on the same network, not a different network.
-            crate::vlt::ModelCostTable::palw_metal_registered()
-        };
-        // `W_min` is profile-relative and the shipped value is the real PALW profile's: it comes
-        // from "a handful of validators each having completed roughly one full job" at that
-        // profile's 4096-token ceiling, ~3.3e10 µRTE apiece. The fixture's job is 5e7 µRTE, so the
-        // SAME derivation over the profile this preset actually registers is four jobs, not the
-        // two thousand the inherited number would demand. Left alone, a fixture devnet runs the
-        // entire compute path correctly — commitments, certificates, quorums, credit — and still
-        // reports the overlay inactive forever, which reads as a broken overlay rather than as a
-        // threshold sized for a model that is not registered here.
-        #[cfg(feature = "devnet-vlt-fixture")]
-        let min_network_compute = (1 + self.vlt.min_verifier_confirmations as u128)
-            * crate::vlt::devnet_fixture_job_vlt(self.vlt.prefill_cost_micro, self.vlt.decode_cost_micro);
-        // Same derivation as the fixture arm — "a committee's worth of modest jobs" — but over the
-        // small-model floor, because the inherited production default is sized for the 35B
-        // profile (~three 4096-token jobs): behind it, a 2B devnet runs the whole overlay
-        // correctly and still reports `below_min_network_compute` forever.
-        #[cfg(not(feature = "devnet-vlt-fixture"))]
-        let min_network_compute = (1 + self.vlt.min_verifier_confirmations as u128)
-            * crate::vlt::palw_devnet_floor_job_vlt(self.vlt.prefill_cost_micro, self.vlt.decode_cost_micro);
-        self.vlt = VltParams {
-            vlt_shadow_activation_daa_score: shadow_daa,
-            vlt_activation_daa_score: u64::MAX,
-            credit_window_epochs,
-            model_cost_table,
-            min_network_compute,
-            ..self.vlt
-        };
-        let soak = self.vlt_credit_span();
-        self.vlt_credit_window_blue_score = soak;
-        // §7: a validator must not be able to exit faster than the compute it still draws weight
-        // from can be challenged, or it would vote with jobs it can no longer be slashed for.
-        // Devnet's stock 700-block unbonding window predates VLT and does not cover it, so raise
-        // it to the bound rather than leave the preset quietly inconsistent — this is the one
-        // knob outside `vlt` that a live credit window forces.
-        self.unbonding_period_blocks =
-            self.unbonding_period_blocks.max(self.vlt.min_unbonding_period_blocks(self.attestation_epoch_length_blue_score));
-        if !shadow_only {
-            self.vlt.vlt_activation_daa_score = shadow_daa.saturating_add(soak);
-        }
-        self
-    }
-
-    pub fn vlt_params_consistent(&self) -> bool {
-        if self.vlt.vlt_activation_daa_score == u64::MAX {
-            return true;
-        }
-        if self.vlt.is_coherent().is_err() {
-            return false;
-        }
-        // The credit walk — AND the canonical-anchor map it resolves each certificate's epoch
-        // against — must reach back over the whole `C_i(E)` sum: `K + delay` epochs, plus the
-        // challenge window a certificate waits out before counting, plus the lag/backoff an
-        // epoch's anchor needs before it is decidable. A short window here does not fail loudly;
-        // it silently truncates the oldest epochs of every validator's `C_i(E)` to zero.
-        let needed_credit_window = self.vlt_credit_span();
-        // The soak. `C_i(E)` sums a `credit_window_epochs` window, so the weight fence must sit at
-        // least one full window above the shadow fence or it switches the vote to a table that has
-        // not finished filling: `W(E)` short of what the mesh actually produces, or 0 outright, and
-        // no epoch reaches quorum. This is the same span the credit walk must cover, for the same
-        // reason — it is how long it takes for `C_i(E)` to mean anything. A misordered or
-        // too-close pair is a preset error, catchable here, rather than a finality stall found
-        // after the fork.
-        let soak = self.vlt.vlt_activation_daa_score.saturating_sub(self.vlt.vlt_shadow_activation_daa_score);
-        self.vlt_credit_window_blue_score >= needed_credit_window
-            && soak >= needed_credit_window
-            && self.unbonding_period_blocks >= self.vlt.min_unbonding_period_blocks(self.attestation_epoch_length_blue_score)
     }
 
     /// kaspa-pq DNS v3: are the blue_score canonical-anchor parameters self-consistent?
@@ -2192,9 +1939,8 @@ pub fn stake_attestation_message(
 /// The **snapshot commitment is inside the digest** for the same shape of reason, at the
 /// denominator instead of the lock (§5.1): a precommit whose signature did not cover which
 /// `W(E)` it was weighed under could be counted against a different one, and `Q(E)` would
-/// silently stop meaning two thirds of anything. Zero below the VLT weight fence, where the
-/// round does not exist — the round and the commitment activate together, so there is no signed
-/// precommit anywhere whose digest predates the field.
+/// silently stop meaning two thirds of anything. The round and its snapshots are removed with the
+/// VLT weight fence, so the commitment a signer supplies is zero.
 ///
 /// `network_id` and `bond_outpoint` bind the precommit to a network and to the specific bond whose
 /// weight it pledges, exactly as in [`stake_attestation_message`].
@@ -3935,20 +3681,15 @@ pub fn resolve_slashing_side_effects(
 /// `(bond_outpoint, validator_id, epoch)` uniqueness rule, so
 /// `signed_stake_sompi` already excludes any validator double-counted
 /// across attestation shards.
-/// **Voting-weight units.** Under the pre-VLT rule these are sompi of bonded stake; at and above
-/// [`DnsParams::vlt`]'s fence they are µRTE of [`crate::vlt::effective_voting_weight`]
-/// (`W_i(E) = min{C_i(E), λ·B_i(E)}`). The tally is unit-agnostic on purpose — it only ever
-/// compares `signed` against `total`, so the same aggregation, dedup and credit code serves both
-/// weight sources and only the *producer* of the numbers changes at the fence. `u128` because VLT
-/// weight is µRTE-scaled and overflows `u64` far sooner than sompi does.
+/// **Voting-weight units:** sompi of bonded stake. `u128` because the tally was shared with the
+/// removed µRTE-scaled VLT weight, and widening it back would move nothing but the type.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct EpochStakeTally {
     pub epoch: u64,
     /// Deduplicated voting weight whose validators signed this epoch's
     /// selected-chain anchor.
     pub signed_weight: u128,
-    /// Total active voting weight at this epoch — `W(E)` under the VLT rule
-    /// (the normalisation denominator, and the quorum base).
+    /// Total active voting weight at this epoch (the normalisation denominator).
     pub total_weight: u128,
 }
 
@@ -3991,49 +3732,24 @@ pub fn epoch_stake_credit(included_stake: u128, expected_stake: u128, quality_fl
 
 /// Which rule turns an epoch's `(signed, total)` voting weight into StakeScore credit.
 ///
-/// The two variants are the before and after of the MISAKA Verified LLM Token-Weighted BFT
-/// replacement, selected per block by [`DnsParams::epoch_credit_rule`]:
-///
-/// * [`Self::QualityFloor`] — the pre-VLT ADR-0018 §B graded credit. Weight is bonded stake and an
-///   epoch earns a *fraction* of `STAKE_SCORE_SCALE` that rises smoothly above φS.
-/// * [`Self::BftQuorum`] — the paper's §4/§5 rule. Weight is verified compute and an epoch earns
-///   credit **binarily**, on whether its signed weight reached `Q(E) = ⌊2W(E)/3⌋ + 1`.
-///
-/// The move from graded to binary is not incidental: a Precommit set either constitutes a Finality
-/// Certificate or it does not (§5 eq. 8), and it is that all-or-nothing threshold — not a partial
-/// score — that the §8.1 quorum-intersection safety argument rests on. A graded credit would let
-/// two sub-quorum sets on competing branches both accumulate StakeScore, which is precisely the
-/// case the intersection argument has to exclude.
+/// One rule is left: [`Self::QualityFloor`], the ADR-0018 §B graded credit over bonded stake. The
+/// binary BFT-quorum rule the VLT weight fence would have switched to is removed.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum EpochCreditRule {
-    /// Pre-VLT: ADR-0018 §B graded credit above the φS stake-event quality floor.
+    /// ADR-0018 §B graded credit above the φS stake-event quality floor.
     QualityFloor { quality_floor_bps: u16 },
-    /// VLT-weighted BFT: binary credit on the `Q(E) = ⌊2W(E)/3⌋ + 1` quorum, over a network whose
-    /// total weight clears `W_min` — the rule carries its own floor exactly as the graded arm
-    /// carries φS, so a call site cannot apply the quorum without it.
-    BftQuorum { min_network_compute: u128 },
 }
 
 /// One epoch's StakeScore credit under `rule`.
-///
-/// Under [`EpochCreditRule::BftQuorum`] an epoch that reaches quorum earns the **full**
-/// [`STAKE_SCORE_SCALE`], exactly as a fully-participated epoch does under the graded rule. That
-/// keeps the existing `required_stake_depth` calibrations meaningful across the fence: PRODUCTION's
-/// `10 × STAKE_SCORE_SCALE` still means "ten confirmed epochs", it just now means ten epochs that
-/// reached a BFT quorum of verified-compute weight rather than ten epochs of full stake inclusion.
 pub fn epoch_credit(signed_weight: u128, total_weight: u128, rule: EpochCreditRule) -> u128 {
     match rule {
         EpochCreditRule::QualityFloor { quality_floor_bps } => epoch_stake_credit(signed_weight, total_weight, quality_floor_bps),
-        EpochCreditRule::BftQuorum { min_network_compute } => {
-            if crate::vlt::meets_bft_quorum(signed_weight, total_weight, min_network_compute) { STAKE_SCORE_SCALE } else { 0 }
-        }
     }
 }
 
 /// Deterministic `StakeScore(H)` aggregation over the epochs whose anchors lie on the
 /// selected chain ending at the target (ADR-0009 §"StakeScore mechanics", quality-gated
-/// per ADR-0018 §B; quorum-gated per the VLT paper §4 when `rule` is
-/// [`EpochCreditRule::BftQuorum`]). Every node observing the same on-chain shard set + the same
+/// per ADR-0018 §B). Every node observing the same on-chain shard set + the same
 /// `rule` reaches the same number — integer `u128` throughout, no floats.
 pub fn compute_stake_score(per_epoch: &[EpochStakeTally], rule: EpochCreditRule) -> StakeScore {
     let mut acc: u128 = 0;
@@ -4049,17 +3765,14 @@ pub fn compute_stake_score(per_epoch: &[EpochStakeTally], rule: EpochCreditRule)
 /// never affects block validity.
 ///
 /// - `overlay_active == false` → `DisabledBeforeActivation`.
-/// - Healthy (`Active`) if any of the last `degraded_epochs` epochs **earned credit under `rule`**
-///   (met φS, or reached the BFT quorum), or if there is less than `degraded_epochs` epochs of
-///   history.
+/// - Healthy (`Active`) if any of the last `degraded_epochs` epochs **met φS**, or if there is
+///   less than `degraded_epochs` epochs of history.
 /// - Otherwise the last `degraded_epochs` epochs all earned nothing → degraded:
 ///   `DegradedCertificateCensored` when they are **all** below the near-zero
 ///   `censorship_floor_bps` (the censorship signature), else `DegradedStakeQualityLow`.
 ///
-/// The censorship discriminator stays fraction-based under both rules: "essentially no signed
-/// weight is landing on chain" reads the same whether weight is stake or verified compute, and it
-/// is what separates *nobody's shards are being included* from *validators are participating but
-/// not reaching the threshold*.
+/// The censorship discriminator is fraction-based: it is what separates *nobody's shards are
+/// being included* from *validators are participating but not reaching the threshold*.
 pub fn derive_dns_health(
     per_epoch: &[EpochStakeTally],
     rule: EpochCreditRule,
@@ -4081,16 +3794,12 @@ pub fn derive_dns_health(
         }
         e.signed_weight.min(e.total_weight) * 10_000 / e.total_weight
     };
-    // "Cleared the threshold" is per-rule, and deliberately NOT `epoch_credit(..) > 0`:
-    // `epoch_stake_credit` pays exactly zero at `f == φS` (its numerator vanishes there), so a
-    // credit-based test would flip an epoch sitting exactly on φS from Active to degraded and
-    // change the legacy signal below the VLT fence. The φS arm keeps the original
-    // `frac >= φS` comparison byte-for-byte; the quorum arm asks the quorum directly.
+    // "Cleared the threshold" is deliberately NOT `epoch_credit(..) > 0`: `epoch_stake_credit`
+    // pays exactly zero at `f == φS` (its numerator vanishes there), so a credit-based test would
+    // flip an epoch sitting exactly on φS from Active to degraded. The original `frac >= φS`
+    // comparison is kept byte-for-byte.
     let cleared = |e: &EpochStakeTally| match rule {
         EpochCreditRule::QualityFloor { quality_floor_bps } => frac_bps(e) >= quality_floor_bps as u128,
-        EpochCreditRule::BftQuorum { min_network_compute } => {
-            crate::vlt::meets_bft_quorum(e.signed_weight, e.total_weight, min_network_compute)
-        }
     };
     if window.iter().any(cleared) {
         return DnsHealth::Active; // a recent epoch cleared the active threshold
@@ -4733,14 +4442,10 @@ fn check_attestation_wellformed(att: &StakeAttestation) -> Result<(), DnsTxError
     if att.signature.len() != STAKE_ATTESTATION_SIG_LEN {
         return Err(DnsTxError::InvalidSignatureLen(att.signature.len()));
     }
-    // MISAKA VLT PR 2: the audit-#4 "VSC is fixed zero" rule is no longer stateless, because the
-    // field now has a value above the VLT weight fence — §5.1's vote_snapshot_commitment binding
-    // the vote to the frozen denominator it was weighed under. A stateless check cannot see the
-    // fence, so the zero rule moved to the acceptance gate (`classify_one_attestation`), which
-    // enforces exactly the old invariant below the fence and the snapshot binding above it. The
-    // slashing-evidence path deliberately accepts any VSC here: an above-fence equivocation
-    // carries real commitments, and refusing to decode it would make exactly those votes
-    // unprovable.
+    // MISAKA VLT PR 2: the audit-#4 "VSC is fixed zero" rule is not stateless: it lives at the
+    // acceptance gate (`classify_one_attestation`), which both the template and the block-validity
+    // rule funnel through. The slashing-evidence path accepts any VSC here, so an equivocation is
+    // provable whatever commitment the two votes carried.
     Ok(())
 }
 
@@ -5148,8 +4853,8 @@ pub fn bond_mutations_from_accepted_txs(
                 // cannot do. `InvalidCertificate` and `FailedChallenge` need an adjudication the
                 // protocol does not yet have. Slashing on an unprovable claim is worse than not
                 // slashing at all: it lets any bonded party burn any other party's stake. They
-                // still deny the certificate its credit (`aggregate_compute_credits` drops any
-                // challenged certificate), which is the part that IS decidable from chain data.
+                // are adjudicated by the virtual processor against the certificate's own settled
+                // verdicts, which is the part that IS decidable from chain data.
                 if let Ok(c) = borsh::from_slice::<ComputeChallengePayload>(&tx.payload)
                     && c.kind == ComputeFraudKind::ContradictoryVerification
                 {
@@ -5447,9 +5152,8 @@ pub struct AttestationContribution {
     pub epoch: u64,
     pub validator_id: Hash64,
     pub bond_outpoint: TransactionOutpoint,
-    /// This validator's voting weight for `epoch`, in the units described on
-    /// [`EpochStakeTally`]: the bond's stake in sompi below the VLT fence, and
-    /// `W_i(E) = min{C_i(E), λ·B_i(E)}` in µRTE at and above it.
+    /// This validator's voting weight for `epoch`: the bond's stake in sompi (see
+    /// [`EpochStakeTally`]).
     pub signed_weight: u128,
 }
 
@@ -5471,11 +5175,8 @@ pub fn aggregate_epoch_tallies(
     let mut seen: HashSet<(Hash64, u64)> = HashSet::new();
     let mut signed_by_epoch: BTreeMap<u64, u128> = BTreeMap::new();
     for c in contributions {
-        // Dedup on (VALIDATOR, epoch) — not on the bond. A validator's weight is `min{C_i, λ·ΣB}`
-        // over its aggregate bond (`active_bond_total_sompi`), so counting one attestation per
-        // bond would add that whole aggregate weight once per bond: the numerator half of the
-        // bond-split inflation, and the half that actually manufactures a quorum. One identity,
-        // one vote per epoch, whichever of its bonds signed it.
+        // Dedup on (VALIDATOR, epoch) — not on the bond. One identity, one vote per epoch,
+        // whichever of its bonds signed it.
         if seen.insert((c.validator_id, c.epoch)) {
             let entry = signed_by_epoch.entry(c.epoch).or_insert(0);
             *entry = entry.saturating_add(c.signed_weight);
@@ -5490,487 +5191,6 @@ pub fn aggregate_epoch_tallies(
             signed_weight: signed_by_epoch.get(&epoch).copied().unwrap_or(0),
             total_weight: total,
         })
-        .collect()
-}
-
-/// One validator's precommit as the walk collected it, in chain order.
-///
-/// `accepted_daa_score` is what puts them in order: the lock chain is a statement about *history*,
-/// so it can only be checked against the sequence the chain actually accepted.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PrecommitRecord {
-    pub epoch: u64,
-    pub validator_id: Hash64,
-    pub bond_outpoint: TransactionOutpoint,
-    pub target_hash: Hash64,
-    pub declared_lock: PrecommitLock,
-    pub accepted_daa_score: u64,
-    /// The bond's weight for this epoch, in whatever unit the round is denominated in — the same
-    /// number the prevote round used, from the same pinned snapshot.
-    pub signed_weight: u128,
-    /// The §5.1 snapshot commitment the payload carried (and its signature covers). Kept so a
-    /// [`DnsFinalityCertificate`] built from this record is verifiable without the original tx.
-    pub snapshot_commitment: Hash64,
-    /// The raw ML-DSA-87 signature bytes, for the same reason. Empty in contexts that only
-    /// tally weight (tests, duty views) — a certificate builder must be given real ones.
-    pub signature: Vec<u8>,
-}
-
-/// One signer's contribution inside a [`DnsFinalityCertificate`] (§7.2): everything needed to
-/// re-derive that signer's precommit digest and verify `signature` against the validator set the
-/// certificate's `validator_set_root` commits — no chain walk, no original transaction.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
-pub struct WeightedSignature {
-    pub validator_id: Hash64,
-    pub bond_outpoint: TransactionOutpoint,
-    /// `W_i` under the certificate's snapshot — the number this signature added to `signed_weight`.
-    pub signed_weight: u128,
-    /// The lock the precommit declared (inside its digest).
-    pub locked_epoch: u64,
-    pub locked_hash: Hash64,
-    /// The §5.1 snapshot commitment the precommit bound (inside its digest).
-    pub snapshot_commitment: Hash64,
-    /// 4627-byte ML-DSA-87 signature over [`stake_precommit_message`].
-    pub signature: Vec<u8>,
-}
-
-/// MISAKA §7.2: the persistent proof that one epoch's anchor reached the precommit quorum —
-/// "enough weight locked on this anchor, under this frozen denominator, and here are the
-/// signatures."
-///
-/// This is what makes DNS finality an ARTIFACT rather than a recomputation: the credit walk that
-/// established the quorum sees only the current window, so once the window slides past the
-/// epoch, the fact that it finalized would otherwise survive only as `last_dns_confirmed_anchor`
-/// — one hash, no evidence. The certificate carries the whole §5.1 chain of custody: the
-/// denominator roots the votes bound, the weight arithmetic, and every signature, so a §12
-/// checkpoint consumer can verify finality with nothing but this record and the validator set it
-/// names.
-///
-/// `round` is 0 in v1: the chain proposes and there is one prevote/precommit pair per epoch —
-/// the field exists so v2's round-based certificates share the layout.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
-pub struct DnsFinalityCertificate {
-    pub version: u16,
-    pub epoch: u64,
-    pub round: u32,
-    /// The DNS-confirmed anchor in force when this certificate formed (§5.1's source).
-    pub source_anchor: Hash64,
-    /// The canonical lagged anchor this epoch's quorum locked on.
-    pub target_anchor: Hash64,
-    pub target_anchor_daa: u64,
-    /// Roots of the frozen [`crate::vlt::VltVotingSnapshot`] the votes were weighed under.
-    pub snapshot_root: Hash64,
-    pub validator_set_root: Hash64,
-    pub total_weight: u128,
-    /// `Q = ⌊2·total/3⌋ + 1`, restated so the certificate is checkable arithmetic in isolation.
-    pub quorum_weight: u128,
-    /// Σ of the distinct signers' weights below. `>= quorum_weight` by construction.
-    pub signed_weight: u128,
-    /// Ascending by `validator_id` — consensus order, the same rule the snapshot's rows follow.
-    pub precommit_signatures: Vec<WeightedSignature>,
-}
-
-/// Assemble the §7.2 certificate for `epoch` from the lock-consistent precommits the walk
-/// counted, under the frozen snapshot those precommits were weighed against.
-///
-/// Pure, so the arithmetic is testable without a chain: dedups one signature per
-/// `(validator, bond)` (the tally's own uniqueness rule), sums the weights, sorts into
-/// consensus order, and returns `None` unless the summed weight actually clears
-/// `snapshot.quorum_weight` — a certificate that does not certify is not an artifact worth
-/// writing.
-pub fn build_finality_certificate(
-    epoch: u64,
-    source_anchor: Hash64,
-    target_anchor: Hash64,
-    target_anchor_daa: u64,
-    records: &[PrecommitRecord],
-    snapshot: &crate::vlt::VltVotingSnapshot,
-) -> Option<DnsFinalityCertificate> {
-    let mut seen: HashSet<(Hash64, TransactionOutpoint)> = HashSet::new();
-    let mut signatures: Vec<WeightedSignature> = Vec::new();
-    let mut signed_weight: u128 = 0;
-    for r in records.iter().filter(|r| r.epoch == epoch && r.target_hash == target_anchor) {
-        if !seen.insert((r.validator_id, r.bond_outpoint)) {
-            continue;
-        }
-        signed_weight = signed_weight.saturating_add(r.signed_weight);
-        signatures.push(WeightedSignature {
-            validator_id: r.validator_id,
-            bond_outpoint: r.bond_outpoint,
-            signed_weight: r.signed_weight,
-            locked_epoch: r.declared_lock.epoch,
-            locked_hash: r.declared_lock.anchor,
-            snapshot_commitment: r.snapshot_commitment,
-            signature: r.signature.clone(),
-        });
-    }
-    if signed_weight < snapshot.quorum_weight || snapshot.total_weight == 0 {
-        return None;
-    }
-    signatures.sort_by(|a, b| {
-        (a.validator_id, a.bond_outpoint.transaction_id, a.bond_outpoint.index).cmp(&(
-            b.validator_id,
-            b.bond_outpoint.transaction_id,
-            b.bond_outpoint.index,
-        ))
-    });
-    Some(DnsFinalityCertificate {
-        version: crate::vlt::VLT_PAYLOAD_VERSION_V1,
-        epoch,
-        round: 0,
-        source_anchor,
-        target_anchor,
-        target_anchor_daa,
-        snapshot_root: snapshot.snapshot_root,
-        validator_set_root: snapshot.validator_set_root,
-        total_weight: snapshot.total_weight,
-        quorum_weight: snapshot.quorum_weight,
-        signed_weight,
-        precommit_signatures: signatures,
-    })
-}
-
-// Owned signature vectors ⇒ count-cached only, like the snapshot itself.
-impl MemSizeEstimator for DnsFinalityCertificate {}
-
-/// Persisted schema version for [`BftLlmCheckpoint`].
-pub const BFT_LLM_CHECKPOINT_VERSION_V1: u16 = 1;
-
-/// MISAKA §12.1: the weak-subjectivity package a joining node needs in order to trust a finalized
-/// prefix without replaying the chain that produced it.
-///
-/// A signature-based finality layer has a long-range problem that PoW does not: the signatures
-/// that finalized an old anchor were made by a validator set that may have since unbonded, so a
-/// node syncing from genesis cannot distinguish the real history from one an old key-holder wrote
-/// later. §12 answers it the standard way — the joining node needs a finalized checkpoint newer
-/// than the unbonding horizon — and this is that checkpoint, as one verifiable value.
-///
-/// Every field is either the anchor being vouched for, the proof that it was finalized, or a
-/// COMMITMENT to state the importer receives separately (the pruning snapshot). The commitments
-/// are what make the two halves checkable against each other: rows arrive, roots are re-derived,
-/// and a mismatch names which subsystem disagreed instead of surfacing later as an unexplained
-/// consensus split.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
-pub struct BftLlmCheckpoint {
-    pub version: u16,
-    /// The network discriminator every signature in this package is bound to — the genesis hash
-    /// (ADR-0009 Addendum A.3). Carried so a checkpoint cannot be replayed onto another network,
-    /// where its signatures would verify against nothing and its roots would mean other things.
-    pub network_id: Hash64,
-    pub finalized_anchor: Hash64,
-    pub finalized_anchor_daa: u64,
-    /// The §7.2 proof that `finalized_anchor` reached its precommit quorum.
-    pub finality_certificate: DnsFinalityCertificate,
-    /// Where the §6 activation machine stood — so an importer resumes the same machine rather
-    /// than deriving a fresh opinion, exactly as a restart does.
-    pub activation_record: crate::vlt::VltActivationRecord,
-    pub snapshot_epoch: u64,
-    pub snapshot_root: Hash64,
-    pub validator_set_root: Hash64,
-    /// Commitments to the overlay state the importer receives with the pruning snapshot.
-    pub bond_state_root: Hash64,
-    pub capability_state_root: Hash64,
-    pub vlt_accumulator_root: Hash64,
-    pub model_table_hash: Hash64,
-    pub reward_state_root: Hash64,
-    /// The DAA score below which a bond may already have unbonded, so its signatures prove
-    /// nothing about the present. A checkpoint older than this is not a trust root — it is a
-    /// story told by keys with nothing at stake.
-    pub unbonding_horizon_start: u64,
-}
-
-/// Why a [`BftLlmCheckpoint`] was rejected. Specific by design: an importer that says only
-/// "invalid checkpoint" sends its operator to read the whole subsystem, and the whole point of
-/// carrying separate roots is to say which one disagreed.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CheckpointError {
-    UnsupportedVersion(u16),
-    /// The package is for a different network than this node runs.
-    NetworkMismatch {
-        expected: Hash64,
-        got: Hash64,
-    },
-    /// The certificate certifies a different anchor (or DAA) than the checkpoint names.
-    AnchorMismatch,
-    /// The certificate was formed under a different denominator than the checkpoint commits to.
-    SnapshotRootMismatch,
-    ValidatorSetRootMismatch,
-    /// `quorum_weight != ⌊2·total/3⌋ + 1`, or the signed weight does not clear it.
-    QuorumArithmetic {
-        total_weight: u128,
-        quorum_weight: u128,
-        signed_weight: u128,
-    },
-    /// The per-signature weights do not sum to `signed_weight`.
-    SignedWeightMismatch {
-        declared: u128,
-        summed: u128,
-    },
-    /// Signatures are not in consensus order, or one signer appears twice.
-    SignatureOrder,
-    /// The checkpoint is not post-activation, so nothing it names was ever finalized by weight.
-    NotActivated,
-    /// The certificate's epoch predates the activation epoch — finality before there was any.
-    CertificatePredatesActivation {
-        certificate_epoch: u64,
-        activation_epoch: u64,
-    },
-    /// The unbonding horizon is not behind the anchor, so the package vouches for a point its
-    /// own signers could already have exited before.
-    HorizonNotBehindAnchor {
-        horizon: u64,
-        anchor_daa: u64,
-    },
-    /// A signer in the certificate is not in the validator set the snapshot carries.
-    UnknownSigner(Hash64),
-    /// A signer's weight in the certificate is not the weight the snapshot gives it.
-    SignerWeightMismatch {
-        validator_id: Hash64,
-        certificate: u128,
-        snapshot: u128,
-    },
-}
-
-impl Display for CheckpointError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnsupportedVersion(v) => write!(f, "checkpoint version {v} is not supported"),
-            Self::NetworkMismatch { expected, got } => write!(f, "checkpoint is for network {got}, this node runs {expected}"),
-            Self::AnchorMismatch => write!(f, "the finality certificate certifies a different anchor than the checkpoint names"),
-            Self::SnapshotRootMismatch => write!(f, "the certificate's snapshot_root differs from the checkpoint's"),
-            Self::ValidatorSetRootMismatch => write!(f, "the certificate's validator_set_root differs from the checkpoint's"),
-            Self::QuorumArithmetic { total_weight, quorum_weight, signed_weight } => {
-                write!(f, "quorum arithmetic does not hold: total={total_weight} quorum={quorum_weight} signed={signed_weight}")
-            }
-            Self::SignedWeightMismatch { declared, summed } => {
-                write!(f, "the certificate declares signed_weight {declared} but its signatures sum to {summed}")
-            }
-            Self::SignatureOrder => write!(f, "certificate signatures are out of consensus order or contain a duplicate signer"),
-            Self::NotActivated => {
-                write!(f, "the checkpoint's activation record has never activated, so nothing was finalized by weight")
-            }
-            Self::CertificatePredatesActivation { certificate_epoch, activation_epoch } => {
-                write!(f, "certificate epoch {certificate_epoch} predates the activation epoch {activation_epoch}")
-            }
-            Self::HorizonNotBehindAnchor { horizon, anchor_daa } => {
-                write!(f, "unbonding horizon {horizon} is not below the finalized anchor's DAA {anchor_daa}")
-            }
-            Self::UnknownSigner(id) => write!(f, "certificate signer {id} is not in the committed validator set"),
-            Self::SignerWeightMismatch { validator_id, certificate, snapshot } => {
-                write!(f, "signer {validator_id} weighs {certificate} in the certificate but {snapshot} in the snapshot")
-            }
-        }
-    }
-}
-
-/// One ML-DSA-87 verification the caller must perform: `(public key, digest, signature)` under
-/// [`PRECOMMIT_MLDSA87_CONTEXT`].
-///
-/// Returned rather than performed because `consensus-core` deliberately does not depend on the
-/// signature crate — every rule here stays a pure function of its inputs, and the crypto happens
-/// where the crypto lives. Nothing is skipped: [`BftLlmCheckpoint::signature_checks`] has already
-/// bound each triple to a committed validator row before handing it over.
-pub struct CheckpointSignatureCheck<'a> {
-    pub validator_id: Hash64,
-    pub public_key: &'a [u8],
-    pub digest: Hash,
-    pub signature: &'a [u8],
-}
-
-impl BftLlmCheckpoint {
-    /// Everything checkable from the package alone — no chain, no validator keys, no network.
-    ///
-    /// This is the cheap gate an importer runs before spending anything: a checkpoint that fails
-    /// here is malformed or forged in a way no amount of downloaded state would fix.
-    pub fn verify_structure(&self, expected_network_id: Hash64) -> Result<(), CheckpointError> {
-        if self.version != BFT_LLM_CHECKPOINT_VERSION_V1 {
-            return Err(CheckpointError::UnsupportedVersion(self.version));
-        }
-        if self.network_id != expected_network_id {
-            return Err(CheckpointError::NetworkMismatch { expected: expected_network_id, got: self.network_id });
-        }
-        let cert = &self.finality_certificate;
-        if cert.target_anchor != self.finalized_anchor || cert.target_anchor_daa != self.finalized_anchor_daa {
-            return Err(CheckpointError::AnchorMismatch);
-        }
-        if cert.snapshot_root != self.snapshot_root {
-            return Err(CheckpointError::SnapshotRootMismatch);
-        }
-        if cert.validator_set_root != self.validator_set_root {
-            return Err(CheckpointError::ValidatorSetRootMismatch);
-        }
-        if cert.quorum_weight != crate::vlt::bft_quorum(cert.total_weight)
-            || cert.signed_weight < cert.quorum_weight
-            || cert.total_weight == 0
-        {
-            return Err(CheckpointError::QuorumArithmetic {
-                total_weight: cert.total_weight,
-                quorum_weight: cert.quorum_weight,
-                signed_weight: cert.signed_weight,
-            });
-        }
-        let summed = cert.precommit_signatures.iter().fold(0u128, |acc, s| acc.saturating_add(s.signed_weight));
-        if summed != cert.signed_weight {
-            return Err(CheckpointError::SignedWeightMismatch { declared: cert.signed_weight, summed });
-        }
-        // Strictly ascending: the same order the snapshot's rows follow, and strictness is what
-        // rules out one signer counted twice to reach the bar.
-        if cert.precommit_signatures.windows(2).any(|w| {
-            (w[0].validator_id, w[0].bond_outpoint.transaction_id, w[0].bond_outpoint.index)
-                >= (w[1].validator_id, w[1].bond_outpoint.transaction_id, w[1].bond_outpoint.index)
-        }) {
-            return Err(CheckpointError::SignatureOrder);
-        }
-        if !self.activation_record.is_active() {
-            return Err(CheckpointError::NotActivated);
-        }
-        if cert.epoch < self.activation_record.activation_epoch {
-            return Err(CheckpointError::CertificatePredatesActivation {
-                certificate_epoch: cert.epoch,
-                activation_epoch: self.activation_record.activation_epoch,
-            });
-        }
-        if self.unbonding_horizon_start >= self.finalized_anchor_daa {
-            return Err(CheckpointError::HorizonNotBehindAnchor {
-                horizon: self.unbonding_horizon_start,
-                anchor_daa: self.finalized_anchor_daa,
-            });
-        }
-        Ok(())
-    }
-
-    /// Bind the certificate to the validator set the importer received, and return the ML-DSA
-    /// verifications that remain.
-    ///
-    /// The snapshot is checked against the checkpoint's committed roots FIRST, so the keys the
-    /// signatures are verified against are provably the ones the certificate was formed under —
-    /// otherwise an importer could be handed a set of keys that verify a forged certificate
-    /// perfectly.
-    pub fn signature_checks<'a>(
-        &'a self,
-        snapshot: &'a crate::vlt::VltVotingSnapshot,
-    ) -> Result<Vec<CheckpointSignatureCheck<'a>>, CheckpointError> {
-        if snapshot.snapshot_root != self.snapshot_root || snapshot.compute_snapshot_root() != self.snapshot_root {
-            return Err(CheckpointError::SnapshotRootMismatch);
-        }
-        if snapshot.validator_set_root != self.validator_set_root
-            || crate::vlt::VltVotingSnapshot::compute_validator_set_root(&snapshot.validators) != self.validator_set_root
-        {
-            return Err(CheckpointError::ValidatorSetRootMismatch);
-        }
-        let cert = &self.finality_certificate;
-        let mut checks = Vec::with_capacity(cert.precommit_signatures.len());
-        for sig in &cert.precommit_signatures {
-            let row = snapshot
-                .validators
-                .iter()
-                .find(|v| v.validator_id == sig.validator_id && v.bond_outpoint == sig.bond_outpoint)
-                .ok_or(CheckpointError::UnknownSigner(sig.validator_id))?;
-            if row.effective_weight != sig.signed_weight {
-                return Err(CheckpointError::SignerWeightMismatch {
-                    validator_id: sig.validator_id,
-                    certificate: sig.signed_weight,
-                    snapshot: row.effective_weight,
-                });
-            }
-            checks.push(CheckpointSignatureCheck {
-                validator_id: sig.validator_id,
-                public_key: &row.consensus_key,
-                digest: stake_precommit_message(
-                    self.network_id.as_byte_slice(),
-                    cert.epoch,
-                    cert.target_anchor,
-                    cert.target_anchor_daa,
-                    sig.locked_epoch,
-                    sig.locked_hash,
-                    sig.snapshot_commitment,
-                    sig.bond_outpoint,
-                ),
-                signature: &sig.signature,
-            });
-        }
-        Ok(checks)
-    }
-}
-
-/// Keep only the precommits whose declared lock matches what this chain shows, and turn them into
-/// contributions the ordinary tally can count.
-///
-/// Per validator, in chain order: the first counted precommit must declare no lock at all, and
-/// every later one must declare its predecessor's `(epoch, target_hash)` exactly. A precommit that
-/// declares anything else is dropped — and dropping it drops everything after it too, because the
-/// next one's declaration refers to a precommit that never counted.
-///
-/// That severity is the point. The declaration is what a validator can later be held to, so it has
-/// to be a faithful running record rather than a field it fills in when convenient. A validator
-/// that misdeclares stops accumulating weight in round 2 until it restates the truth, and if it
-/// misdeclared because it is carrying a *different* lock on another branch, the two signed
-/// payloads are the proof.
-///
-pub fn lock_consistent_precommits(records: &[PrecommitRecord]) -> Vec<AttestationContribution> {
-    // `TransactionOutpoint` is not `Ord`, so group in a hash map and impose the order explicitly
-    // on the way out — the answer must not depend on map iteration order.
-    let mut by_validator: HashMap<(Hash64, TransactionOutpoint), Vec<&PrecommitRecord>> = HashMap::new();
-    for r in records {
-        by_validator.entry((r.validator_id, r.bond_outpoint)).or_default().push(r);
-    }
-    let mut groups: Vec<_> = by_validator.into_iter().collect();
-    groups.sort_by_key(|((v, op), _)| (*v, op.transaction_id, op.index));
-
-    let mut out = Vec::new();
-    for (_, chain) in groups {
-        let (kept, _) = lock_consistent_prefix(chain);
-        out.extend(kept.into_iter().map(|r| AttestationContribution {
-            epoch: r.epoch,
-            validator_id: r.validator_id,
-            bond_outpoint: r.bond_outpoint,
-            signed_weight: r.signed_weight,
-        }));
-    }
-    out
-}
-
-/// The lock `(validator_id, bond_outpoint)` is carrying on this chain — the anchor of the last
-/// precommit in its own lock-consistent prefix, or the default when it has none.
-///
-/// This is what a validator must declare in its next precommit, and reading it from the chain
-/// rather than from local memory is deliberate: the chain is what everyone else can check the
-/// declaration against.
-pub fn held_precommit_lock(records: &[PrecommitRecord], validator_id: Hash64, bond_outpoint: TransactionOutpoint) -> PrecommitLock {
-    let mine: Vec<&PrecommitRecord> =
-        records.iter().filter(|r| r.validator_id == validator_id && r.bond_outpoint == bond_outpoint).collect();
-    lock_consistent_prefix(mine).1
-}
-
-/// One validator's precommits in chain order, truncated at the first misdeclared lock, plus the
-/// lock the surviving prefix leaves it holding.
-///
-/// Ties inside one DAA score are broken by `(epoch, bond txid, index, target)` so the order — and
-/// therefore the answer — is identical on every node.
-fn lock_consistent_prefix(mut chain: Vec<&PrecommitRecord>) -> (Vec<&PrecommitRecord>, PrecommitLock) {
-    chain.sort_by_key(|r| (r.accepted_daa_score, r.epoch, r.bond_outpoint.transaction_id, r.bond_outpoint.index, r.target_hash));
-    let mut held = PrecommitLock::default();
-    let mut kept = Vec::new();
-    for r in chain {
-        if r.declared_lock != held {
-            break; // misdeclared: this one and everything after it are uncountable.
-        }
-        held = PrecommitLock { epoch: r.epoch, anchor: r.target_hash };
-        kept.push(r);
-    }
-    (kept, held)
-}
-
-/// The epochs in `tallies` that reached the §4 quorum.
-///
-/// Used by **both** rounds, and deliberately so: two rounds counted by different rules would not
-/// compose into a commit, and the §8.1 intersection argument needs both to be fractions of one
-/// `W(E)`. What differs between the rounds is only which signatures were tallied.
-pub fn quorum_epochs(tallies: &[EpochStakeTally], min_network_compute: u128) -> BTreeSet<u64> {
-    tallies
-        .iter()
-        .filter(|t| crate::vlt::meets_bft_quorum(t.signed_weight, t.total_weight, min_network_compute))
-        .map(|t| t.epoch)
         .collect()
 }
 
@@ -6010,7 +5230,6 @@ pub fn advance_dns_confirmation(
     required_stake_depth: StakeScore,
     anchor_epoch_attesters: u32,
     min_anchor_attesters: u32,
-    anchor_epoch_precommitted: bool,
 ) -> DnsState {
     // Confirm the CANONICAL anchor (deterministic across nodes), never the POV-dependent sink.
     //
@@ -6026,21 +5245,8 @@ pub fn advance_dns_confirmation(
     // same reasoning to *who* the support comes from: a veto that can hold a whole network off its
     // chain should not be arm-able by one signer. `1` is exactly the original "≥1 credited
     // attestation" rule.
-    //
-    // `anchor_epoch_precommitted` is round 2 (MISAKA §5). Everything above it is the prevote
-    // tally: enough weight approved this anchor. That is a quorum, and a quorum is not a commit —
-    // it says nothing about whether the same validators will approve a conflicting anchor at a
-    // later epoch, and nothing anywhere would prove that they had. Confirming also on the
-    // precommit quorum means the anchor is only finalized once two thirds of the weight has
-    // **locked** on it, having published the lock it held while doing so. Two conflicting anchors
-    // then cannot both confirm without more than a third of the weight having signed both locks,
-    // which is equivocation with the signature attached.
-    //
-    // Passed as `true` below the VLT weight fence, where the precommit round does not exist and
-    // confirmation is the single-round rule every current network already runs.
     let confirmed = confirmable_anchor.is_some()
         && anchor_epoch_attesters >= min_anchor_attesters.max(1)
-        && anchor_epoch_precommitted
         && is_dns_confirmed(work_depth, stake_depth, required_work_depth, required_stake_depth);
     let (last_dns_confirmed_anchor, last_dns_confirmed_anchor_daa_score) = match (confirmed, confirmable_anchor, prev) {
         (true, Some(canonical), _) => canonical,
@@ -6060,507 +5266,25 @@ pub fn advance_dns_confirmation(
     }
 }
 
-/// **The finality inactivity leak (ADR-0060 Decision 4).**
-///
-/// A validator that has fallen silent for longer than `leak_after_daa` leaves the QUORUM
-/// DENOMINATOR — its bond is not burned, its records do not move; the remaining active set
-/// simply stops being measured against weight that will never vote, so finality re-forms on its
-/// own instead of halting until an operator re-bonds by hand.
-///
-/// The baseline a validator is measured from is the LATER of its last attestation and each
-/// bond's own activation: a freshly bonded validator that has never attested is inside its
-/// grace window, not leaked — the leak punishes going silent, never arriving. Re-entry is
-/// therefore either attesting again or bonding again, both ordinary chain acts.
-///
-/// **The trade-off this buys, stated where the code is:** a partition longer than
-/// `leak_after_daa` can let BOTH sides re-form local quorums and finalize conflicting
-/// histories (each leaks the other side's validators). That is the accepted price — the same
-/// one Ethereum's inactivity leak pays — chosen over indefinite finality halt; equivocation
-/// slashing still burns any validator that signs both sides, and the time constant is long
-/// enough (days) that uniqueness is only at risk in a partition nobody could have missed.
-///
-/// `leak_after_daa == u64::MAX` disables the leak (no silence can exceed it); that is the
-/// shipped devnet/simnet posture, where drills assume a frozen validator set.
-/// **Where the leak's per-validator table came from — ADR-0066 security amendment SA-1.**
-///
-/// The leak decides QUORUM DENOMINATORS, so two nodes that compute different tables exclude
-/// different validators and the finality overlay partitions along whatever made their tables
-/// differ. The table is built by walking back from the tip over
-/// `DnsParams::stake_score_window_blue_score`, and that walk terminates on
-/// `get_blue_score(chain_block) => break` — a **node-local** fact: an archival node never hits it
-/// and a pruned node hits it at its own pruning point. That is finding F4 exactly, the one this
-/// ADR deleted from the heartbeat lane, and it must not be reintroduced one decision over.
-///
-/// So provenance is a value the view carries and `retains` reads, and the rule is fail closed:
-/// **no verified table ⇒ full denominator ⇒ no leak.** A node that cannot establish the table
-/// finalizes less; it never finalizes something a node with the table would not.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum LeakTableProvenanceV1 {
-    /// This node computed the table itself over a window it could walk in full — the header at
-    /// the window's far edge is one it holds, so nothing in the table depends on where this
-    /// node's pruning point happens to sit.
-    SelfComputed,
-    /// No table this node can stand behind: the walk hit a header this node does not hold before
-    /// it covered the window, or the table arrived from somewhere without an authenticated
-    /// commitment to check it against. The leak computes NOTHING under this — see the type doc.
-    ///
-    /// **This is NOT the ordinary state of a pruned node, and planning a deployment as if it were
-    /// is the mistake this paragraph exists to stop.** A pruned node in steady state holds every
-    /// header above a pruning point that sits far below its tip, so it covers
-    /// `stake_score_window_blue_score` and answers [`Self::SelfComputed`] exactly as an archival
-    /// peer does — which is right, and which means **arming the leak on a pruned fleet leaks
-    /// validators there.** `Unverified` is for the node that genuinely cannot reach the far edge:
-    /// mid-IBD, or a store truncated above the window.
-    ///
-    /// Such a node ought to be able to IMPORT the table under `PruningPointOverlaySnapshot`'s
-    /// trustless gate; that fourth component ADR-0066 Decision 4 budgets for is not built, so it
-    /// stays on the full denominator rather than guessing — conservative, and the direction that
-    /// cannot partition.
-    Unverified,
-}
-
-/// **ADR-0066 SA-1's question, as a pure function of the walk that answers it.**
-///
-/// The leak table is built by iterating the backward chain from the tip and stopping on the first
-/// of two things: a blue score more than `stake_score_window_blue_score` below the tip's (the
-/// window is COVERED — every block the table is defined over was read), or a header this node
-/// cannot read (the walk is TRUNCATED — the table has a hole in it, and a hole silently excludes
-/// validators whose attestations this node cannot see). Running out of chain is the covered case:
-/// on a chain younger than the window, "every block there is" is the same table an archival node
-/// builds.
-///
-/// `walk` yields one entry per chain block from the tip downwards, `Some(blue_score)` for a header
-/// this node holds and `None` for one it does not. It is consumed lazily and abandoned at the
-/// first decisive step, so the caller pays for the prefix and no more.
-///
-/// **Why a walk and not the pruning point.** The obvious proxy — "is the consensus pruning point at
-/// least a window below the tip" — cannot answer this: the pruning point is derived from the chain,
-/// so it is the same number on an archival node and a pruned one, and a store that is short for any
-/// other reason is told it is fine. The divergence SA-1 closes is node-local, so the measurement
-/// has to be node-local too.
-pub fn leak_table_provenance_from_walk_v1(
-    tip_blue_score: u64,
-    stake_score_window_blue_score: u64,
-    walk: impl IntoIterator<Item = Option<u64>>,
-) -> LeakTableProvenanceV1 {
-    for blue_score in walk {
-        let Some(bs) = blue_score else { return LeakTableProvenanceV1::Unverified };
-        if tip_blue_score.saturating_sub(bs) > stake_score_window_blue_score {
-            return LeakTableProvenanceV1::SelfComputed;
-        }
-    }
-    LeakTableProvenanceV1::SelfComputed
-}
-
-#[derive(Copy, Clone, Debug)]
-pub struct InactivityLeakViewV1<'a> {
-    /// Youngest attestation anchor DAA per validator, from the SAME contribution set the
-    /// numerator is built from ([`last_attestation_daa_by_validator`]). A validator absent
-    /// here has not attested within the walked window at all.
-    ///
-    /// **Built through the finality horizon** (SA-2): the builder takes that horizon and keeps the
-    /// youngest anchor at or below it, so a fresh attestation cannot move a baseline until it is
-    /// itself final. There is one builder for this map for exactly that reason.
-    pub last_attestation_daa: &'a BTreeMap<Hash64, u64>,
-    /// The T_leak of ADR-0060 Decision 4, in DAA units.
-    pub leak_after_daa: u64,
-    /// **ADR-0066 SA-3: the leak may never take the denominator below this many validators.**
-    ///
-    /// `DnsParams::min_active_validators`. If applying the leak would drop the retained set below
-    /// it, finality HALTS for that epoch — the denominator is zero, and
-    /// [`crate::vlt::meets_bft_quorum`] is `false` at zero — rather than continuing as a
-    /// small-quorum overlay. ADR-0060 Decision 4 accepted double-finality risk under a long
-    /// partition; it did not accept a two-validator quorum, and a floor that is not a rule is not
-    /// a floor.
-    pub min_retained_validators: u32,
-    /// See [`LeakTableProvenanceV1`]. `Unverified` disables the leak entirely.
-    pub table: LeakTableProvenanceV1,
-}
-
-impl<'a> InactivityLeakViewV1<'a> {
-    /// A view that never leaks anyone — byte-identical denominators to the pre-leak protocol.
-    pub fn disabled(empty: &'a BTreeMap<Hash64, u64>) -> Self {
-        Self {
-            last_attestation_daa: empty,
-            leak_after_daa: u64::MAX,
-            min_retained_validators: 0,
-            table: LeakTableProvenanceV1::Unverified,
-        }
-    }
-
-    /// [`Self::disabled`] without a borrow to thread — for fixtures and for callers that have
-    /// no attestation walk at hand.
-    pub fn none() -> InactivityLeakViewV1<'static> {
-        static EMPTY: std::sync::OnceLock<BTreeMap<Hash64, u64>> = std::sync::OnceLock::new();
-        InactivityLeakViewV1::disabled(EMPTY.get_or_init(BTreeMap::new))
-    }
-
-    /// **Is this view capable of excluding anybody?** Both halves are necessary: an armed fence
-    /// (`leak_after_daa != u64::MAX`) and a table this node can stand behind (SA-1). Every rule
-    /// below asks this rather than the duration alone, so "the fence is on" and "the evidence is
-    /// sound" cannot drift into two spellings of one question.
-    pub fn is_armed(&self) -> bool {
-        self.leak_after_daa != u64::MAX && self.table == LeakTableProvenanceV1::SelfComputed
-    }
-
-    /// Does `validator` still count toward the denominator at `anchor_daa`, given the freshest
-    /// of its attestations and bond activations?
-    ///
-    /// **Monotone with hysteresis (SA-2).** For a fixed table the answer only ever goes from
-    /// retained to excluded as `anchor_daa` grows — silence accumulates, it does not lapse. The
-    /// one thing that moves a baseline back up is a fresh attestation, and the table's builder
-    /// admits an attestation only once it is FINAL, so a validator cannot re-enter the quorum on
-    /// a block of its own choosing: it flaps around the threshold and the denominator does not.
-    ///
-    /// Re-bonding is still a re-entry path, deliberately and at its own price. The bond-activation
-    /// half of the baseline is NOT finality-gated, because it is what keeps a freshly bonded
-    /// validator that has never attested inside its grace window — the leak punishes going silent,
-    /// never arriving. Resetting a baseline that way costs a new bond and its activation delay,
-    /// which is not the cheap per-block swing SA-2 is about.
-    pub fn retains(&self, validator: &Hash64, freshest_bond_activation_daa: u64, anchor_daa: u64) -> bool {
-        // SA-1, fail closed: an unverified table excludes nobody. Read before anything else, so
-        // there is no path on which an unverified table can shrink a denominator.
-        if !self.is_armed() {
-            return true;
-        }
-        let baseline = self.last_attestation_daa.get(validator).copied().unwrap_or(0).max(freshest_bond_activation_daa);
-        anchor_daa.saturating_sub(baseline) <= self.leak_after_daa
-    }
-}
-
-/// **ADR-0066 SA-3: would applying the leak at this anchor take the denominator below the floor?**
-///
-/// Only the leak's own effect counts. A network that is already below `min_active_validators`
-/// without the leak is a network the rollout gate handles (`DnsRolloutStage::Bootstrap`), and
-/// zeroing its denominator here would change behaviour on chains where the leak is dormant — which
-/// every shipped preset is. So this is `true` only when the ACTIVE set clears the floor and the
-/// RETAINED set does not: the leak, and nothing else, is what would take it under.
-fn leak_would_breach_floor(bonds: &[StakeBondRecord], anchor_daa: u64, leak: InactivityLeakViewV1<'_>) -> bool {
-    if !leak.is_armed() || leak.min_retained_validators == 0 {
-        return false;
-    }
-    let mut active: BTreeSet<Hash64> = BTreeSet::new();
-    let mut retained: BTreeSet<Hash64> = BTreeSet::new();
-    for b in bonds.iter().filter(|b| is_bond_active_at(b, anchor_daa)) {
-        active.insert(b.validator_pubkey_hash);
-        let bond_baseline = freshest_active_bond_activation(bonds, &b.validator_pubkey_hash, anchor_daa);
-        if leak.retains(&b.validator_pubkey_hash, bond_baseline, anchor_daa) {
-            retained.insert(b.validator_pubkey_hash);
-        }
-    }
-    let floor = leak.min_retained_validators as usize;
-    active.len() >= floor && retained.len() < floor
-}
-
-/// The leak's evidence: for each validator, the youngest **final** epoch-anchor DAA it contributed
-/// a (signature-verified, bond-active) attestation to. Built from the same
-/// [`AttestationContribution`] slice the numerator aggregation consumes, so "counted as present"
-/// and "counted as voting" can never drift apart.
-///
-/// **`final_through_daa` is ADR-0066 SA-2's hysteresis, and it belongs HERE rather than at the
-/// read.** An anchor above the horizon is skipped, so the youngest anchor a validator gets credit
-/// for is the youngest one that is already final. Filtering at the read instead would have been
-/// wrong in the direction that matters: this map keeps one number per validator, so discarding a
-/// too-fresh entry at read time would discard the validator's whole history and leak a
-/// continuously-attesting node. Discarding it at BUILD time falls back to the previous final
-/// anchor, which is the number the rule is about.
-///
-/// The effect is the asymmetry SA-2 asks for. Exclusion still follows `t_leak_daa` of silence.
-/// Re-inclusion needs an attestation that has already been buried, so a validator sitting on the
-/// threshold cannot re-enter the quorum on a block of its choosing — by the time its attestation
-/// counts, which block carried it is no longer its to choose.
-///
-/// `u64::MAX` means "everything is final", which is what an unarmed fence passes and what makes
-/// this byte-identical to the pre-amendment table on every network that has not armed the leak.
-pub fn last_attestation_daa_by_validator(
-    contributions: &[AttestationContribution],
-    epoch_anchor_daa: &BTreeMap<u64, u64>,
-    final_through_daa: u64,
-) -> BTreeMap<Hash64, u64> {
-    let mut last: BTreeMap<Hash64, u64> = BTreeMap::new();
-    for c in contributions {
-        let Some(&anchor) = epoch_anchor_daa.get(&c.epoch) else { continue };
-        if anchor > final_through_daa {
-            continue;
-        }
-        let entry = last.entry(c.validator_id).or_insert(0);
-        *entry = (*entry).max(anchor);
-    }
-    last
-}
-
-/// The freshest activation DAA among `validator`'s bonds active at `anchor_daa` — the grace
-/// half of the leak baseline (see [`InactivityLeakViewV1::retains`]).
-fn freshest_active_bond_activation(bonds: &[StakeBondRecord], validator: &Hash64, anchor_daa: u64) -> u64 {
-    bonds
-        .iter()
-        .filter(|b| b.validator_pubkey_hash == *validator && is_bond_active_at(b, anchor_daa))
-        .map(|b| b.activation_daa_score)
-        .max()
-        .unwrap_or(0)
-}
-
 /// Per-epoch normalisation denominator for StakeScore: for each epoch in
 /// `epoch_anchor_daa` (epoch → that epoch's selected-chain anchor DAA
 /// score), the total stake of bonds that are `Active` at that anchor's DAA
-/// score (ADR-0009 §"StakeScore mechanics" / Addendum A.5) — minus, since
-/// ADR-0060 Decision 4, the validators the inactivity `leak` has excluded.
+/// score (ADR-0009 §"StakeScore mechanics" / Addendum A.5).
 ///
 /// Pure: the caller supplies the bonds in the (bounded) window and each
 /// epoch's anchor DAA score; activation / slash / unbond are evaluated via
 /// [`is_bond_active_at`] (DAA-stamped, so this is reorg-safe with no
 /// incremental state). Pairs with [`aggregate_epoch_tallies`] to feed
 /// [`compute_stake_score`].
-pub fn total_active_stake_by_epoch(
-    bonds: &[StakeBondRecord],
-    epoch_anchor_daa: &BTreeMap<u64, u64>,
-    leak: InactivityLeakViewV1<'_>,
-) -> BTreeMap<u64, u128> {
+pub fn total_active_stake_by_epoch(bonds: &[StakeBondRecord], epoch_anchor_daa: &BTreeMap<u64, u64>) -> BTreeMap<u64, u128> {
     epoch_anchor_daa
         .iter()
         .map(|(&epoch, &anchor_daa)| {
-            // ADR-0066 SA-3: a leak that would take the retained set under the floor halts the
-            // epoch instead of shrinking it. Zero is how this file already spells "no quorum is
-            // reachable here" — `meets_bft_quorum` refuses a zero denominator outright, and
-            // `epoch_credit` earns nothing from one — so the halt needs no second mechanism.
-            if leak_would_breach_floor(bonds, anchor_daa, leak) {
-                return (epoch, 0u128);
-            }
-            let total = bonds
-                .iter()
-                .filter(|b| is_bond_active_at(b, anchor_daa))
-                .filter(|b| {
-                    leak.retains(
-                        &b.validator_pubkey_hash,
-                        freshest_active_bond_activation(bonds, &b.validator_pubkey_hash, anchor_daa),
-                        anchor_daa,
-                    )
-                })
-                .fold(0u128, |acc, b| acc.saturating_add(b.amount as u128));
+            let total =
+                bonds.iter().filter(|b| is_bond_active_at(b, anchor_daa)).fold(0u128, |acc, b| acc.saturating_add(b.amount as u128));
             (epoch, total)
         })
         .collect()
-}
-
-/// The VLT-weighted counterpart of [`total_active_stake_by_epoch`]: `W(E) = Σ_i W_i(E)` over the
-/// bonds active at each epoch's anchor (VLT paper §4 eq. 7).
-///
-/// `snapshot` is the [`VltEpochSnapshot`] pinned at a block every branch under comparison
-/// contains — never a per-branch walk. A validator absent from it contributes `C_i(E) = 0` and
-/// therefore `W_i(E) = 0`: an active, fully-bonded validator that has produced no verified compute
-/// adds **nothing** to the quorum base. That is the intended behaviour and the reason the fence
-/// must not be moved before the set can produce compute — `W(E)` would be 0 network-wide and no
-/// epoch could reach [`crate::vlt::bft_quorum`].
-///
-/// Pure and DAA-stamped like its stake counterpart, so it is reorg-safe with no incremental state:
-/// the caller supplies the per-epoch anchor DAA scores, and bond activation / slash / unbond are
-/// re-evaluated at each anchor via [`is_bond_active_at`].
-pub fn total_voting_weight_by_epoch(
-    bonds: &[StakeBondRecord],
-    epoch_anchor_daa: &BTreeMap<u64, u64>,
-    snapshot: &VltEpochSnapshot,
-    vlt: &VltParams,
-    leak: InactivityLeakViewV1<'_>,
-) -> BTreeMap<u64, u128> {
-    epoch_anchor_daa
-        .iter()
-        .map(|(&epoch, &anchor_daa)| {
-            // ADR-0066 SA-3, the same floor on the VLT-weighted denominator — see
-            // `total_active_stake_by_epoch`. Both denominators feed `meets_bft_quorum`, so a floor
-            // on only one of them is a floor an operator can route around by arming the other rule.
-            if leak_would_breach_floor(bonds, anchor_daa, leak) {
-                return (epoch, 0u128);
-            }
-            // One term per VALIDATOR, never per bond — see `active_bond_total_sompi`. Summing
-            // per-bond terms is how the same `C_i` becomes `n` votes.
-            let mut seen: BTreeSet<Hash64> = BTreeSet::new();
-            let total = bonds
-                .iter()
-                .filter(|b| is_bond_active_at(b, anchor_daa))
-                .filter(|b| seen.insert(b.validator_pubkey_hash))
-                // ADR-0060 Decision 4: a validator the leak has excluded contributes nothing to
-                // W(E) — the same per-validator granularity as the weight itself.
-                .filter(|b| {
-                    leak.retains(&b.validator_pubkey_hash, freshest_active_bond_activation(bonds, &b.validator_pubkey_hash, anchor_daa), anchor_daa)
-                })
-                .fold(0u128, |acc, b| {
-                    let bonded = active_bond_total_sompi(bonds, &b.validator_pubkey_hash, anchor_daa, snapshot.pin_daa_score());
-                    acc.saturating_add(validator_voting_weight(&b.validator_pubkey_hash, bonded, epoch, snapshot, vlt))
-                });
-            (epoch, total)
-        })
-        .collect()
-}
-
-/// `λ·B_i(E)`'s input: the total sompi validator `validator_id` has bonded and eligible at
-/// `anchor_daa`, under the snapshot's pin.
-///
-/// **Aggregated per validator, and that is a security rule, not a convenience.** `C_i(E)` is
-/// keyed by validator (one identity's verified compute), so applying the collateral cap to each
-/// bond separately converts the SAME credit once per bond: a validator holding `n` bonds would
-/// weigh `n·min{C_i, λ·B}` instead of `min{C_i, λ·ΣB}`. Nothing in consensus binds a validator key
-/// to a single bond, so that is not a corner case — it is "split your bond into n outputs and
-/// multiply your vote", which collapses the whole design back onto purchased stake
-/// ([`crate::vlt::effective_voting_weight`]'s first bullet: buying stake must buy no voting power).
-///
-/// A bond that did not exist at the snapshot's pin contributes **zero on both sides**. It has no
-/// compute in the pinned table, so it is not in that denominator; letting it into the numerator
-/// anyway would hand a branch a quorum it never had, because [`crate::vlt::meets_bft_quorum`]
-/// clamps the signed weight up to the total and `total ≥ Q(total)` always holds. The rule this
-/// states is the same one the pin states: voting weight comes from what the branches agreed on,
-/// and a bond minted after the fork is not that.
-pub fn active_bond_total_sompi(bonds: &[StakeBondRecord], validator_id: &Hash64, anchor_daa: u64, pin_daa: u64) -> u64 {
-    bonds
-        .iter()
-        .filter(|b| b.validator_pubkey_hash == *validator_id && b.activation_daa_score <= pin_daa && is_bond_active_at(b, anchor_daa))
-        .fold(0u64, |acc, b| acc.saturating_add(b.amount))
-}
-
-/// `W_i(E) = min{C_i(E), λ·B_i(E)}` for one VALIDATOR at one epoch (VLT paper §4 eq. 5 + 6),
-/// against an already-aggregated bond total (see [`active_bond_total_sompi`]).
-///
-/// Shared by the denominator ([`total_voting_weight_by_epoch`]) and the numerator (the per-
-/// attestation contribution weight) so a validator's weight is by construction the same number on
-/// both sides of the quorum comparison. Computing them separately would be a latent consensus split.
-pub fn validator_voting_weight(
-    validator_id: &Hash64,
-    bond_total_sompi: u64,
-    epoch: u64,
-    snapshot: &VltEpochSnapshot,
-    vlt: &VltParams,
-) -> u128 {
-    let recent = snapshot.recent_compute(validator_id, epoch, vlt);
-    crate::vlt::effective_voting_weight(recent, bond_total_sompi, vlt.lambda_vlt_per_kas)
-}
-
-/// [`validator_voting_weight`] for a validator identified by one of its bonds — the aggregate is
-/// resolved from `bonds` first. The per-bond entry point exists so callers that hold a single
-/// record (an attestation's bond, a precommit's bond) cannot accidentally weigh that record alone.
-pub fn validator_voting_weight_of_bond(
-    bond: &StakeBondRecord,
-    bonds: &[StakeBondRecord],
-    anchor_daa: u64,
-    epoch: u64,
-    snapshot: &VltEpochSnapshot,
-    vlt: &VltParams,
-) -> u128 {
-    let total = active_bond_total_sompi(bonds, &bond.validator_pubkey_hash, anchor_daa, snapshot.pin_daa_score());
-    validator_voting_weight(&bond.validator_pubkey_hash, total, epoch, snapshot, vlt)
-}
-
-/// Assemble and seal the §5 frozen [`VltVotingSnapshot`] for one wall epoch, from the same pinned
-/// table and bond set every other weight consumer reads.
-///
-/// One row per bond **Active at the pin** — including zero-weight rows, deliberately: the
-/// validator-set root commits who was *eligible*, and "eligible with nothing to vote" is a fact
-/// (it is what [`crate::vlt::VltActivationBlocker::TooFewCreditedValidators`] counts against).
-/// Each row's numbers come from the identical primitives the live quorum comparison uses
-/// ([`VltEpochSnapshot::recent_compute`], [`crate::vlt::collateral_weight_cap`],
-/// [`crate::vlt::effective_voting_weight`]), so the frozen `total_weight` IS the denominator a
-/// vote under this snapshot is measured against — computing them differently here would freeze a
-/// number nothing ever divides by.
-///
-/// `seal` sorts the rows into consensus order (`validator_id` ascending) and derives both roots;
-/// callers never fill the root fields by hand.
-#[allow(clippy::too_many_arguments)]
-pub fn build_voting_snapshot(
-    source_finalized_anchor: Hash64,
-    source_anchor_daa: u64,
-    snapshot_epoch: u64,
-    activation_epoch: u64,
-    model_table_hash: Hash64,
-    capability_set_root: Hash64,
-    table: &VltEpochSnapshot,
-    bonds: &[StakeBondRecord],
-    vlt: &VltParams,
-) -> VltVotingSnapshot {
-    let mut seen: BTreeSet<Hash64> = BTreeSet::new();
-    let validators = bonds
-        .iter()
-        .filter(|b| is_bond_active_at(b, source_anchor_daa))
-        // One row per VALIDATOR. The rows are what `seal` sums into the frozen denominator, so a
-        // row per bond would freeze `n·min{C_i, λ·B}` as the number every vote is measured
-        // against — the same inflation `active_bond_total_sompi` exists to stop, made durable.
-        .filter(|b| seen.insert(b.validator_pubkey_hash))
-        .map(|b| {
-            let raw = table.recent_compute(&b.validator_pubkey_hash, snapshot_epoch, vlt);
-            let bonded = active_bond_total_sompi(bonds, &b.validator_pubkey_hash, source_anchor_daa, table.pin_daa_score());
-            let cap = crate::vlt::collateral_weight_cap(bonded, vlt.lambda_vlt_per_kas);
-            VltValidatorWeight {
-                validator_id: b.validator_pubkey_hash,
-                consensus_key: b.validator_pubkey.clone(),
-                // The validator's CANONICAL voting bond: lowest outpoint among the bonds that
-                // make up the aggregate above. A vote signed under any of this validator's bonds
-                // is matched to this row by `validator_id` — the field names which bond the row's
-                // identity is anchored to, it does not select which one may vote.
-                bond_outpoint: bonds
-                    .iter()
-                    .filter(|o| {
-                        o.validator_pubkey_hash == b.validator_pubkey_hash
-                            && o.activation_daa_score <= table.pin_daa_score()
-                            && is_bond_active_at(o, source_anchor_daa)
-                    })
-                    .map(|o| o.bond_outpoint)
-                    .min_by_key(|o| (o.transaction_id, o.index))
-                    .unwrap_or(b.bond_outpoint),
-                raw_recent_compute: raw,
-                bond_cap: cap,
-                effective_weight: validator_voting_weight(&b.validator_pubkey_hash, bonded, snapshot_epoch, table, vlt),
-            }
-        })
-        .collect();
-    VltVotingSnapshot {
-        version: crate::vlt::VLT_VOTING_SNAPSHOT_VERSION_V1,
-        source_finalized_anchor,
-        source_anchor_daa,
-        snapshot_epoch,
-        activation_epoch,
-        model_table_hash,
-        capability_set_root,
-        validator_set_root: Hash64::default(),
-        credit_table_root: table.commitment_root(),
-        snapshot_root: Hash64::default(),
-        validators,
-        total_weight: 0,
-        quorum_weight: 0,
-        resolution_complete: table.resolution_complete(),
-    }
-    .seal()
-}
-
-// Count-cached only (owned key vectors make the derived estimate wrong, exactly as for
-// [`VltEpochCredits`]); the store uses an untracked policy, so the estimate is never consulted.
-impl MemSizeEstimator for VltVotingSnapshot {}
-
-/// §5's `capability_set_root`: a commitment over the capability declarations live at a pin — the
-/// pool a verifier committee is drawn from — in canonical order. The caller supplies the records
-/// already filtered to the pin (liveness at the pin's DAA plus ancestry in the pin's chain);
-/// this sorts and hashes, so the root is a function of the SET and never of collection order.
-pub fn capability_set_root(records: &mut [ComputeCapabilityRecord]) -> Hash64 {
-    records.sort_by(|a, b| {
-        (a.validator_id, a.bond_outpoint.transaction_id, a.bond_outpoint.index, a.model_weights_hash, a.runtime_hash).cmp(&(
-            b.validator_id,
-            b.bond_outpoint.transaction_id,
-            b.bond_outpoint.index,
-            b.model_weights_hash,
-            b.runtime_hash,
-        ))
-    });
-    let mut hasher = Blake2bParams::new().hash_length(64).key(b"misaka-vlt-capability-set-v1").to_state();
-    hasher.update(&(records.len() as u64).to_le_bytes());
-    for r in records {
-        hasher.update(r.validator_id.as_byte_slice());
-        hasher.update(r.bond_outpoint.transaction_id.as_byte_slice());
-        hasher.update(&r.bond_outpoint.index.to_le_bytes());
-        hasher.update(r.model_weights_hash.as_byte_slice());
-        hasher.update(r.runtime_hash.as_byte_slice());
-        hasher.update(r.runtime_class_id.as_byte_slice());
-        hasher.update(&r.accepted_daa_score.to_le_bytes());
-        hasher.update(&r.expiry_daa_score.to_le_bytes());
-    }
-    let mut out = [0u8; 64];
-    out.copy_from_slice(hasher.finalize().as_bytes());
-    Hash64::from_bytes(out)
 }
 
 /// kaspa-pq ADR-0018 "本格版" (PoS-v2) — the per-epoch accumulator tally (Phase 1).
@@ -6917,11 +5641,11 @@ pub fn slashing_evidence_from_accepted_txs(txs: &[Transaction]) -> Vec<SlashingE
 }
 
 // =====================================================================
-// MISAKA Verified LLM Token-Weighted BFT — compute-credit collection.
+// MISAKA Verified LLM Token-Weighted BFT — compute-overlay collection.
 //
 // These mirror the attestation helpers above: pure extraction from a chain
 // block's accepted transactions, with the DAG-dependent facts (challenge
-// window, epoch anchoring) supplied by the consensus pipeline so the credit
+// window, epoch anchoring) supplied by the consensus pipeline so the
 // derivation stays deterministic and unit-testable.
 // =====================================================================
 
@@ -6955,69 +5679,6 @@ pub fn compute_challenges_with_ids(txs: &[Transaction]) -> Vec<(TransactionId, C
         {
             out.push((tx.id(), c));
         }
-    }
-    out
-}
-
-/// One certificate as seen by the credit walk, after signature and eligibility checks.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ComputeCreditContribution {
-    /// Executor's `validator_id`.
-    pub validator_id: Hash64,
-    /// Executor's bond — the `λ·B_i` cap this credit is later measured against.
-    pub bond_outpoint: TransactionOutpoint,
-    /// Epoch the credit is attributed to (`X_i(epoch)`).
-    pub epoch: u64,
-    /// The certificate transaction, for challenge matching and `(executor, job)` dedup.
-    pub certificate_tx_id: TransactionId,
-    /// `H(S_j)` — the dedup key that stops one job from being certified twice.
-    pub job_id: Hash64,
-    /// Normalized VLT (`x_j`, µRTE) from [`crate::vlt::normalize_vlt`].
-    pub vlt: u128,
-    /// DAA score of the chain block that accepted the certificate. Compared against the pov DAA to
-    /// decide whether the challenge window has closed.
-    pub accepted_daa_score: u64,
-}
-
-/// Fold verified certificate contributions into `validator_id → (epoch → X_i(epoch))`, the input
-/// [`validator_voting_weight`] reads (VLT paper §6, §4 eq. 5).
-///
-/// Two consensus rules are enforced here, both necessary for the weight to mean anything:
-///
-/// * **Challenge window.** A certificate counts only once
-///   `pov_daa_score − accepted_daa_score ≥ challenge_window_blocks` (§6: "challenge window を経て
-///   初めて X_i(E) へ加算される"). Without it an executor could mint credit and spend it as voting
-///   weight before anyone could re-execute the job and refute it — and, per §8.3, credit created on
-///   a fork could be used to defend that fork immediately.
-/// * **Successfully challenged certificates earn nothing.** §6 says "不正証明が**成立した** Receipt
-///   は credit をゼロにし" — the proof must *stand*, not merely be filed. `refuted` therefore holds
-///   the certificates whose challenges [`crate::vlt::adjudicate_compute_challenge`] resolved as
-///   [`crate::vlt::ChallengeOutcome::Succeeded`], not every certificate somebody pointed at.
-///   Dropping on the mere existence of a challenge would let one bonded party zero any executor's
-///   credit for a transaction fee, with no evidence and no recourse.
-///
-/// `(executor, job_id)` is deduplicated so resubmitting the same job — the cheapest possible
-/// inflation attack, since a replayed certificate carries valid signatures — credits once.
-pub fn aggregate_compute_credits(
-    contributions: &[ComputeCreditContribution],
-    refuted: &HashSet<TransactionId>,
-    pov_daa_score: u64,
-    challenge_window_blocks: u64,
-) -> HashMap<Hash64, BTreeMap<u64, u128>> {
-    let mut seen: HashSet<(Hash64, Hash64)> = HashSet::new();
-    let mut out: HashMap<Hash64, BTreeMap<u64, u128>> = HashMap::new();
-    for c in contributions {
-        if refuted.contains(&c.certificate_tx_id) {
-            continue;
-        }
-        if pov_daa_score.saturating_sub(c.accepted_daa_score) < challenge_window_blocks {
-            continue; // still challengeable — not creditable yet.
-        }
-        if !seen.insert((c.validator_id, c.job_id)) {
-            continue; // the same job cannot be certified twice.
-        }
-        let entry = out.entry(c.validator_id).or_default().entry(c.epoch).or_insert(0);
-        *entry = entry.saturating_add(c.vlt);
     }
     out
 }
@@ -7077,9 +5738,8 @@ pub fn validate_compute_verdict_payload(payload: &[u8]) -> Result<(), DnsTxError
 /// Stateless shape of a [`StakePrecommitPayload`] (subnetwork `SUBNETWORK_ID_STAKE_PRECOMMIT`).
 ///
 /// Everything checkable without a chain: version, signature width, and the lock's internal
-/// consistency. Whether the declared lock is the *true* one is a question about history and is
-/// answered by the credit walk, which counts a precommit only if its lock matches what the chain
-/// shows.
+/// consistency. Whether the declared lock is the *true* one was a question for the precommit
+/// round, which is removed; nothing counts a precommit toward confirmation.
 pub fn validate_stake_precommit_payload(payload: &[u8]) -> Result<(), DnsTxError> {
     let p: StakePrecommitPayload = borsh::from_slice(payload).map_err(|_| DnsTxError::Decode)?;
     if p.version != DNS_PAYLOAD_VERSION_V1 {
@@ -7092,19 +5752,6 @@ pub fn validate_stake_precommit_payload(payload: &[u8]) -> Result<(), DnsTxError
         return Err(DnsTxError::IncoherentPrecommitLock);
     }
     Ok(())
-}
-
-/// Every decodable [`StakePrecommitPayload`] among `txs`.
-pub fn precommits_from_accepted_txs(txs: &[Transaction]) -> Vec<StakePrecommitPayload> {
-    let mut out = Vec::new();
-    for tx in txs {
-        if dns_tx_kind(&tx.subnetwork_id) == Some(DnsTxKind::StakePrecommit)
-            && let Ok(p) = borsh::from_slice::<StakePrecommitPayload>(&tx.payload)
-        {
-            out.push(p);
-        }
-    }
-    out
 }
 
 /// Build the subnetwork [`Transaction`] carrying a borsh-encoded [`StakePrecommitPayload`].
@@ -7484,77 +6131,6 @@ pub fn capability_candidate_pool(
         }
     }
     best.into_iter().map(|(id, (_, class))| (id, class)).collect()
-}
-
-/// One accepted certificate this node was sortitioned to audit and has not yet judged.
-///
-/// Everything needed to form the verdict is here, and all of it came off the chain: the spec and
-/// the executor's claim from the certificate, the input from the phase-1 commitment. That is the
-/// point — a verifier that had to fetch anything from the executor would be auditing a job the
-/// party under audit chose what to reveal about.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PendingComputeVerdict {
-    pub certificate_tx_id: TransactionId,
-    pub job_id: Hash64,
-    /// The job to re-execute, exactly as the executor signed it.
-    pub spec: crate::vlt::LlmJobSpec,
-    /// The job's input bytes, from the commitment. `job_input_commitment(input)` equals
-    /// `spec.input_commitment` — the walk refuses the certificate otherwise.
-    pub input: Vec<u8>,
-    pub executor_id: Hash64,
-    /// `R_j` as the executor claimed it. The verdict is the comparison of this against what this
-    /// node's own replay produces; it is never an input to that replay.
-    pub executor_receipt_hash: Hash64,
-    pub executor_bond_outpoint: TransactionOutpoint,
-    /// DAA score of the chain block that accepted the certificate. A verdict must be accepted at
-    /// or after it to count.
-    pub certificate_daa_score: u64,
-}
-
-/// This node's own standing in the compute overlay — what the validator service needs to decide
-/// whether to declare a capability, commit to a job, or certify one it already committed.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ComputeStatusView {
-    /// Whether the compute overlay is **running** at the sink (the shadow fence). Everything else
-    /// here is idle when it is not — an operator's node has nothing to execute, audit or certify
-    /// below this fence.
-    pub shadow_active: bool,
-    /// Whether verified compute is the **voting weight** at the sink (the weight fence). False
-    /// with `shadow_active` true is the soak: the overlay is producing and policing real compute,
-    /// and finality is still running on bonded stake.
-    pub vlt_active: bool,
-    pub sink_daa_score: u64,
-    /// Epoch at the sink — what a certificate must declare to be creditable in the block that
-    /// accepts it.
-    pub epoch: u64,
-    /// Expiry of this validator's live capability declaration, if it has one. `None` means it is
-    /// not in any committee draw for the profile and cannot be audited into one.
-    pub capability_expiry_daa_score: Option<u64>,
-    /// In-class validators (excluding this one) that declared the same profile and are
-    /// active-bonded. A job needs `min_verifier_confirmations` of them to mint, so an executor
-    /// with fewer is doing work that cannot be credited.
-    pub in_class_peer_count: usize,
-    /// This validator's commitments that no certificate of its own has completed yet.
-    pub open_commitments: Vec<OpenComputeCommitment>,
-}
-
-/// A phase-1 commitment of this node's that is still waiting to be certified.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct OpenComputeCommitment {
-    pub commitment_tx_id: TransactionId,
-    pub job_id: Hash64,
-    /// The input this commitment published — the executor re-derives its spec from these bytes
-    /// rather than persisting one across the commit→certify gap.
-    pub input: Vec<u8>,
-    pub accepted_daa_score: u64,
-    /// The epoch whose canonical anchor is this job's sortition beacon.
-    pub beacon_epoch: u64,
-    /// Whether that epoch's anchor exists yet. Executing before it does is not wrong, but
-    /// certifying before it does is: a certificate may not predate its own beacon.
-    pub beacon_ready: bool,
-    /// Whether the commitment has aged past `max_commitment_age_blocks` — no certificate naming
-    /// it can be credited any more, so the job has to be re-committed.
-    pub expired: bool,
 }
 
 /// ADR-0013 Addendum C.2 shape rule, applied to compute challenges: like a
@@ -8893,685 +7469,7 @@ mod tests {
         assert!(SUBNETWORK_ID_STAKE_PRECOMMIT.is_dns_overlay());
     }
 
-    // ---- MISAKA Verified LLM Token-Weighted BFT: the voting-power replacement ----
-
-    /// A bond with `amount`, active from DAA 0, whose `validator_pubkey_hash` is `Hash64(seed + 2)`
-    /// (matching [`mk_bond`], so `credits` maps can be keyed the same way).
-    fn vlt_bond(seed: u64, amount: u64) -> StakeBondRecord {
-        StakeBondRecord { activation_daa_score: 0, ..mk_bond(seed, amount) }
-    }
-
-    fn vlt_params_active() -> VltParams {
-        VltParams { vlt_shadow_activation_daa_score: 0, vlt_activation_daa_score: 0, ..VltParams::INERT }
-    }
-
-    /// Credit `x` µRTE to validator `seed` for every epoch in `epochs`, as a table pinned at DAA
-    /// 0 — the same score [`vlt_bond`] activates its bonds at, so every fixture bond is "at or
-    /// below the pin" and carries the weight its credits say it does.
-    fn credits_for(entries: &[(u64, &[u64], u128)]) -> VltEpochSnapshot {
-        let mut out: HashMap<Hash64, BTreeMap<u64, u128>> = HashMap::new();
-        for (seed, epochs, x) in entries {
-            let per = out.entry(Hash64::from_u64_word(seed + 2)).or_default();
-            for e in *epochs {
-                per.insert(*e, *x);
-            }
-        }
-        VltEpochSnapshot::pinned(BlockHash::default(), 0, out)
-    }
-
-    /// The headline replacement property, end to end: capital alone no longer votes.
-    ///
-    /// Three validators bond the production 20M-KAS floor. Only two of them performed verified
-    /// compute. Under the *old* stake rule all three would carry weight and the epoch's included
-    /// fraction would be whatever signed; under the VLT rule the compute-less validator carries
-    /// **zero** weight and simply is not part of `W(E)` at all.
-    #[test]
-    fn vlt_weight_comes_from_compute_not_bond() {
-        let vlt = vlt_params_active();
-        let bond_amount = 20_000_000 * crate::constants::SOMPI_PER_KASPA;
-        let bonds = vec![vlt_bond(1, bond_amount), vlt_bond(2, bond_amount), vlt_bond(3, bond_amount)];
-        // Validators 1 and 2 produced compute in epoch 9; validator 3 produced none.
-        let credits = credits_for(&[(1, &[9], 1_000 * crate::vlt::VLT_MICRO), (2, &[9], 1_000 * crate::vlt::VLT_MICRO)]);
-
-        let w1 = validator_voting_weight_of_bond(&bonds[0], &bonds, u64::MAX, 10, &credits, &vlt);
-        let w3 = validator_voting_weight_of_bond(&bonds[2], &bonds, u64::MAX, 10, &credits, &vlt);
-        assert_eq!(w1, 1_000 * crate::vlt::VLT_MICRO, "compute at epoch 9 weights epoch 10 undecayed");
-        assert_eq!(w3, 0, "a fully-bonded validator with no verified compute has NO voting power");
-
-        let totals =
-            total_voting_weight_by_epoch(&bonds, &BTreeMap::from([(10u64, 0u64)]), &credits, &vlt, InactivityLeakViewV1::none());
-        assert_eq!(totals[&10], w1 * 2, "W(E) counts only validators with compute");
-    }
-
-    /// The §5 frozen snapshot must freeze THE denominator, not a parallel one: every row's
-    /// **Splitting a bond must not move any weight.** `C_i(E)` is one identity's verified compute,
-    /// so the collateral cap has to close over that identity's ENTIRE bond — apply it per bond and
-    /// the same credit converts once per output, which is "buy a second bond, vote twice" and
-    /// collapses VLT back onto purchased stake. Nothing in consensus binds a validator key to a
-    /// single bond, so this is the shape of the attack, not a hypothetical: one key, two bonds.
-    ///
-    /// Checked on every surface the number reaches, because fixing one and not the others is a
-    /// consensus split rather than a partial fix: the live denominator, the frozen snapshot's
-    /// per-row weight, the frozen total, and the sealed row count.
-    #[test]
-    fn splitting_a_bond_moves_no_weight() {
-        let vlt = vlt_params_active();
-        let cap_per_bond = 10_000_000 * crate::constants::SOMPI_PER_KASPA;
-        // λ·(2 × cap_per_bond) is well above this compute, so the cap never binds and the weight
-        // is `C_i` on both sides — the arithmetic the inflation would double.
-        let compute = 1_000 * crate::vlt::VLT_MICRO;
-        let credits = credits_for(&[(1, &[9, 10], compute)]);
-        let epochs = BTreeMap::from([(10u64, 0u64)]);
-
-        let whole = vec![vlt_bond(1, 2 * cap_per_bond)];
-        // The SAME validator key (mk_bond derives it from the seed), a different outpoint: the
-        // exact split an attacker performs. `vlt_bond(1, ..)` and this share `validator_pubkey_hash`.
-        let split = vec![
-            vlt_bond(1, cap_per_bond),
-            StakeBondRecord {
-                bond_outpoint: TransactionOutpoint::new(Hash64::from_u64_word(1_000_001), 0),
-                ..vlt_bond(1, cap_per_bond)
-            },
-        ];
-        assert_eq!(split[0].validator_pubkey_hash, split[1].validator_pubkey_hash, "the fixture must model ONE identity");
-
-        let w_whole = total_voting_weight_by_epoch(&whole, &epochs, &credits, &vlt, InactivityLeakViewV1::none());
-        let w_split = total_voting_weight_by_epoch(&split, &epochs, &credits, &vlt, InactivityLeakViewV1::none());
-        assert_eq!(w_split[&10], w_whole[&10], "the live denominator must not grow when a bond is split");
-        assert_eq!(w_split[&10], compute, "and it is C_i — the cap does not bind here");
-
-        let anchor = Hash64::from_u64_word(77);
-        let snap_whole =
-            build_voting_snapshot(anchor, 5_000, 10, 12, Hash64::from_u64_word(88), Hash64::from_u64_word(99), &credits, &whole, &vlt);
-        let snap_split =
-            build_voting_snapshot(anchor, 5_000, 10, 12, Hash64::from_u64_word(88), Hash64::from_u64_word(99), &credits, &split, &vlt);
-        assert_eq!(snap_split.validators.len(), 1, "one row per VALIDATOR, whatever its bonds");
-        assert_eq!(snap_split.total_weight, snap_whole.total_weight, "the frozen denominator must not grow either");
-        assert_eq!(snap_split.validators[0].effective_weight, compute);
-        assert_eq!(snap_split.validators[0].bond_cap, snap_whole.validators[0].bond_cap, "the cap is over the AGGREGATE bond");
-        assert_eq!(snap_split.quorum_weight, snap_whole.quorum_weight);
-
-        // The numerator half: one identity votes once per epoch, whichever of its bonds signed.
-        let contribs = vec![
-            AttestationContribution {
-                epoch: 10,
-                validator_id: split[0].validator_pubkey_hash,
-                bond_outpoint: split[0].bond_outpoint,
-                signed_weight: compute,
-            },
-            AttestationContribution {
-                epoch: 10,
-                validator_id: split[1].validator_pubkey_hash,
-                bond_outpoint: split[1].bond_outpoint,
-                signed_weight: compute,
-            },
-        ];
-        let tallies = aggregate_epoch_tallies(&contribs, &w_split);
-        assert_eq!(tallies[0].signed_weight, compute, "two bonds, one identity, one vote's worth of weight");
-        assert_eq!(tallies[0].total_weight, compute);
-
-        // And the sealing boundary refuses a hand-built snapshot that carries the identity twice.
-        let mut forged = snap_split.clone();
-        forged.validators.push(forged.validators[0].clone());
-        let forged = forged.seal();
-        assert_eq!(forged.validators.len(), 1, "seal must collapse a duplicated validator row");
-        assert_eq!(forged.total_weight, snap_split.total_weight, "and not count its weight twice");
-    }
-
-    /// `effective_weight` is byte-for-byte [`validator_voting_weight`], the total is the same sum
-    /// the live quorum divides by, zero-weight-but-eligible validators are committed rows (the
-    /// set root is about eligibility), and bond input order cannot move a root.
-    #[test]
-    fn frozen_voting_snapshot_freezes_the_live_denominator() {
-        let vlt = vlt_params_active();
-        let bond_amount = 20_000_000 * crate::constants::SOMPI_PER_KASPA;
-        let bonds = vec![vlt_bond(1, bond_amount), vlt_bond(2, bond_amount), vlt_bond(3, bond_amount)];
-        let credits = credits_for(&[(1, &[9], 1_000 * crate::vlt::VLT_MICRO), (2, &[9], 1_000 * crate::vlt::VLT_MICRO)]);
-        let anchor = Hash64::from_u64_word(77);
-
-        let snap =
-            build_voting_snapshot(anchor, 5_000, 10, 12, Hash64::from_u64_word(88), Hash64::from_u64_word(99), &credits, &bonds, &vlt);
-        assert_eq!(snap.validators.len(), 3, "eligible-with-zero-weight is a committed fact, not an omission");
-        for row in &snap.validators {
-            let bond = bonds.iter().find(|b| b.validator_pubkey_hash == row.validator_id).unwrap();
-            assert_eq!(row.effective_weight, validator_voting_weight_of_bond(bond, &bonds, u64::MAX, 10, &credits, &vlt));
-            assert_eq!(row.effective_weight, row.raw_recent_compute.min(row.bond_cap));
-        }
-        let totals =
-            total_voting_weight_by_epoch(&bonds, &BTreeMap::from([(10u64, 0u64)]), &credits, &vlt, InactivityLeakViewV1::none());
-        assert_eq!(snap.total_weight, totals[&10], "the frozen total IS the live quorum denominator");
-        assert_eq!(snap.quorum_weight, crate::vlt::bft_quorum(snap.total_weight));
-        assert!(snap.validators.windows(2).all(|w| w[0].validator_id < w[1].validator_id), "consensus order");
-        assert_eq!(snap.credit_table_root, credits.commitment_root());
-
-        // Bond input order is a collection accident, never consensus content.
-        let mut reversed: Vec<StakeBondRecord> = bonds.clone();
-        reversed.reverse();
-        let again = build_voting_snapshot(
-            anchor,
-            5_000,
-            10,
-            12,
-            Hash64::from_u64_word(88),
-            Hash64::from_u64_word(99),
-            &credits,
-            &reversed,
-            &vlt,
-        );
-        assert_eq!(again.snapshot_root, snap.snapshot_root);
-        assert_eq!(again.vote_commitment(), snap.vote_commitment());
-
-        // A bond that did not exist at the pin is not in the set — same rule as the weight fn.
-        let mut late = vlt_bond(4, bond_amount);
-        late.activation_daa_score = 6_000; // above the 5_000 pin
-        let with_late = [bonds.as_slice(), &[late]].concat();
-        let pruned = build_voting_snapshot(
-            anchor,
-            5_000,
-            10,
-            12,
-            Hash64::from_u64_word(88),
-            Hash64::from_u64_word(99),
-            &credits,
-            &with_late,
-            &vlt,
-        );
-        assert_eq!(
-            pruned.validator_set_root, snap.validator_set_root,
-            "a post-pin bond is on one branch only; the set must not see it"
-        );
-    }
-
-    /// The quorum is over *weight*, and a compute-less majority of validators cannot block or
-    /// forge it — they contribute nothing to either side of the comparison.
-    #[test]
-    fn vlt_epoch_credit_is_binary_on_the_two_thirds_quorum() {
-        let rule = EpochCreditRule::BftQuorum { min_network_compute: 0 };
-        // 2 of 3 weight is NOT a quorum (Q(3) = 3); 3 of 3 is.
-        assert_eq!(epoch_credit(2, 3, rule), 0);
-        assert_eq!(epoch_credit(3, 3, rule), STAKE_SCORE_SCALE);
-        // 67 of 99 is (Q(99) = 67); 66 is not. Credit is full or nothing — never partial.
-        assert_eq!(epoch_credit(66, 99, rule), 0);
-        assert_eq!(epoch_credit(67, 99, rule), STAKE_SCORE_SCALE);
-        // Zero total weight never credits, however much is claimed.
-        assert_eq!(epoch_credit(u128::MAX, 0, rule), 0);
-        // Contrast with the graded rule, which pays a fraction at the same inputs.
-        let graded = EpochCreditRule::QualityFloor { quality_floor_bps: 0 };
-        assert_eq!(epoch_credit(66, 99, graded), STAKE_SCORE_SCALE * 2 / 3);
-    }
-
-    /// Full path: attestations → dedup → per-epoch tally → quorum → StakeScore, with VLT weights.
-    #[test]
-    fn vlt_stake_score_accrues_only_on_quorum_epochs() {
-        let vlt = vlt_params_active();
-        let bond_amount = 20_000_000 * crate::constants::SOMPI_PER_KASPA;
-        let bonds = vec![vlt_bond(1, bond_amount), vlt_bond(2, bond_amount), vlt_bond(3, bond_amount)];
-        let x = 1_000 * crate::vlt::VLT_MICRO;
-        // All three earned identical compute in the epochs feeding epochs 10 and 11.
-        let credits = credits_for(&[(1, &[9, 10], x), (2, &[9, 10], x), (3, &[9, 10], x)]);
-        let epoch_anchor_daa = BTreeMap::from([(10u64, 0u64), (11u64, 0u64)]);
-        let totals = total_voting_weight_by_epoch(&bonds, &epoch_anchor_daa, &credits, &vlt, InactivityLeakViewV1::none());
-
-        let contrib = |b: &StakeBondRecord, epoch: u64| AttestationContribution {
-            epoch,
-            validator_id: b.validator_pubkey_hash,
-            bond_outpoint: b.bond_outpoint,
-            signed_weight: validator_voting_weight_of_bond(b, &bonds, u64::MAX, epoch, &credits, &vlt),
-        };
-        // Epoch 10: all three sign → quorum. Epoch 11: only two of three → 2/3 exactly, which is
-        // NOT strictly above two thirds, so it earns nothing.
-        let contributions = vec![
-            contrib(&bonds[0], 10),
-            contrib(&bonds[1], 10),
-            contrib(&bonds[2], 10),
-            contrib(&bonds[0], 11),
-            contrib(&bonds[1], 11),
-        ];
-        let per_epoch = aggregate_epoch_tallies(&contributions, &totals);
-        assert_eq!(per_epoch.len(), 2);
-        assert_eq!(
-            compute_stake_score(&per_epoch, EpochCreditRule::BftQuorum { min_network_compute: 0 }),
-            StakeScore(STAKE_SCORE_SCALE)
-        );
-    }
-
-    /// The attack the pin exists for, spelled out in arithmetic.
-    ///
-    /// Three validators with equal compute. A fork drops validator 3's certificates — nothing
-    /// else — and scores itself on what is left. Under a table it derives for itself its `W(E)`
-    /// is two thirds of the network's, so `Q(E) = ⌊2W/3⌋ + 1` falls with it and the two
-    /// validators the fork *does* hold clear a bar the fork lowered for itself. On the real
-    /// denominator the same two validators are exactly two thirds, which is not **strictly**
-    /// above two thirds, and the epoch earns nothing.
-    ///
-    /// That gap is a safety failure, not a scoring quirk: the honest branch credits epoch 10 to
-    /// no one while the fork credits it to itself, so both branches "finalize" the same epoch
-    /// over disjoint validator sets. Pinning the table at a block both contain is what removes
-    /// the fork's ability to choose. Its numerator falls with its denominator, and the answer
-    /// stops depending on who is asking.
-    #[test]
-    fn vlt_quorum_denominator_cannot_be_chosen_by_the_branch_asking() {
-        let vlt = vlt_params_active();
-        let bond_amount = 20_000_000 * crate::constants::SOMPI_PER_KASPA;
-        let bonds = vec![vlt_bond(1, bond_amount), vlt_bond(2, bond_amount), vlt_bond(3, bond_amount)];
-        let x = 1_000 * crate::vlt::VLT_MICRO;
-        let epoch_anchor_daa = BTreeMap::from([(10u64, 0u64)]);
-        let rule = EpochCreditRule::BftQuorum { min_network_compute: 0 };
-
-        // The shared table: all three validators certified compute in epoch 9.
-        let shared = credits_for(&[(1, &[9], x), (2, &[9], x), (3, &[9], x)]);
-        // What a fork that censored validator 3 would derive by walking its own chain.
-        let fork_local = credits_for(&[(1, &[9], x), (2, &[9], x)]);
-
-        // Only validators 1 and 2 attest on the fork — it does not have 3's attestation either.
-        let signed = |snapshot: &VltEpochSnapshot| {
-            let contributions: Vec<_> = bonds[..2]
-                .iter()
-                .map(|b| AttestationContribution {
-                    epoch: 10,
-                    validator_id: b.validator_pubkey_hash,
-                    bond_outpoint: b.bond_outpoint,
-                    signed_weight: validator_voting_weight_of_bond(b, &bonds, u64::MAX, 10, snapshot, &vlt),
-                })
-                .collect();
-            let totals = total_voting_weight_by_epoch(&bonds, &epoch_anchor_daa, snapshot, &vlt, InactivityLeakViewV1::none());
-            compute_stake_score(&aggregate_epoch_tallies(&contributions, &totals), rule)
-        };
-
-        assert_eq!(
-            total_voting_weight_by_epoch(&bonds, &epoch_anchor_daa, &fork_local, &vlt, InactivityLeakViewV1::none())[&10],
-            2 * x,
-            "a self-derived table is two thirds the size, so the bar it sets is two thirds as high"
-        );
-        assert_eq!(signed(&fork_local), StakeScore(STAKE_SCORE_SCALE), "the fork clears the bar it wrote for itself");
-        assert_eq!(
-            signed(&shared),
-            StakeScore(0),
-            "on the shared denominator the same two validators are exactly 2/3, which is not a quorum"
-        );
-    }
-
-    /// A bond minted after the fork weighs zero — on **both** sides of the comparison.
-    ///
-    /// Leaving it out of the pinned denominator alone would not be safe, it would be the opposite:
-    /// `meets_bft_quorum` clamps the signed weight up to the total, and `total ≥ Q(total)` always
-    /// holds, so weight admitted to the numerator but absent from the denominator manufactures a
-    /// quorum outright. The rule has to be the same rule on both sides, and it is, because both
-    /// sides call `validator_voting_weight`.
-    #[test]
-    fn vlt_a_bond_minted_after_the_pin_has_no_voting_weight() {
-        let vlt = vlt_params_active();
-        let bond_amount = 20_000_000 * crate::constants::SOMPI_PER_KASPA;
-        let x = 1_000 * crate::vlt::VLT_MICRO;
-        // Same validator id as bond 1 (`credits_for` keys on the id), but activated at DAA 500 —
-        // above the pin at 0. The compute is real and in the shared table; the bond is not.
-        let post_fork = StakeBondRecord { activation_daa_score: 500, ..vlt_bond(1, bond_amount) };
-        let pre_fork = vlt_bond(1, bond_amount);
-        let snapshot = credits_for(&[(1, &[9], x)]);
-        assert_eq!(snapshot.pin_daa_score(), 0);
-        assert_eq!(snapshot.credited(&post_fork.validator_pubkey_hash, 9), x, "the compute itself is in the shared table");
-
-        assert_eq!(
-            validator_voting_weight_of_bond(&pre_fork, std::slice::from_ref(&pre_fork), u64::MAX, 10, &snapshot, &vlt),
-            x,
-            "the bond the branches agreed on votes"
-        );
-        assert_eq!(
-            validator_voting_weight_of_bond(&post_fork, std::slice::from_ref(&post_fork), u64::MAX, 10, &snapshot, &vlt),
-            0,
-            "a bond only one branch has does not"
-        );
-
-        // And the denominator says the same thing, so a branch cannot shrink `W(E)` by withholding
-        // the other side's recent bonds either.
-        let totals = total_voting_weight_by_epoch(
-            &[post_fork],
-            &BTreeMap::from([(10u64, 600u64)]),
-            &snapshot,
-            &vlt,
-            InactivityLeakViewV1::none(),
-        );
-        assert_eq!(totals[&10], 0, "Active at the epoch anchor, but not at the pin — not in W(E)");
-    }
-
-    /// The inert table is the below-fence and pre-activation answer: no credit, no weight, no
-    /// quorum. `W(E) = 0` makes `Q(E) = 1` unreachable rather than trivial, which is the ADR-0024
-    /// "do not move the fence before the set can produce compute" caveat as a value.
-    #[test]
-    fn vlt_inert_snapshot_gives_every_validator_zero_weight() {
-        let vlt = vlt_params_active();
-        let bond = vlt_bond(1, 20_000_000 * crate::constants::SOMPI_PER_KASPA);
-        let inert = VltEpochSnapshot::inert();
-        assert!(inert.is_empty());
-        assert_eq!(validator_voting_weight_of_bond(&bond, std::slice::from_ref(&bond), u64::MAX, 10, &inert, &vlt), 0);
-        assert_eq!(
-            total_voting_weight_by_epoch(&[bond], &BTreeMap::from([(10u64, 0u64)]), &inert, &vlt, InactivityLeakViewV1::none())[&10],
-            0
-        );
-    }
-
-    // ---- MISAKA §5 round 2: prevote / precommit ----
-
-    /// One target epoch, one denominator: `w(e)` is arithmetic on consensus constants, so the
-    /// signer of a late vote and the verifier of a prompt one cannot disagree about which frozen
-    /// snapshot epoch `e` binds.
-    #[test]
-    fn voting_epoch_for_target_is_the_readiness_wall_epoch() {
-        // Devnet shape: L=100, lag=40 ⇒ e becomes votable in wall epoch e+1.
-        for e in [0u64, 1, 7, 41] {
-            assert_eq!(voting_epoch_for_target(e, 100, 40), e + 1);
-        }
-        // Production shape: L=100, lag=100 ⇒ e+2 (readiness lands exactly on a boundary).
-        assert_eq!(voting_epoch_for_target(9, 100, 100), 11);
-        // Lag longer than an epoch pushes further out; zero-length epochs are clamped sane.
-        assert_eq!(voting_epoch_for_target(9, 100, 250), 12);
-        assert_eq!(voting_epoch_for_target(0, 0, 0), 1);
-    }
-
-    /// The certificate is checkable arithmetic: dedup per (validator, bond), Σ weights against
-    /// the frozen quorum, consensus ordering — and no certificate at all below the bar, because
-    /// an artifact that does not certify must not exist to be mistaken for one.
-    #[test]
-    fn finality_certificate_certifies_exactly_at_the_frozen_quorum() {
-        let row = |id: u8, w: u128| crate::vlt::VltValidatorWeight {
-            validator_id: Hash64::from_bytes([id; 64]),
-            consensus_key: vec![id; 4],
-            bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([id; 64]), 0),
-            raw_recent_compute: w,
-            bond_cap: w,
-            effective_weight: w,
-        };
-        // The §8 plan: A=400 B=250 C=150 D=100 E=100, W=1000, Q=667.
-        let snap = crate::vlt::VltVotingSnapshot {
-            version: crate::vlt::VLT_VOTING_SNAPSHOT_VERSION_V1,
-            source_finalized_anchor: Hash64::from_bytes([9; 64]),
-            source_anchor_daa: 900,
-            snapshot_epoch: 4,
-            activation_epoch: 6,
-            model_table_hash: Hash64::default(),
-            capability_set_root: Hash64::default(),
-            validator_set_root: Hash64::default(),
-            credit_table_root: Hash64::default(),
-            snapshot_root: Hash64::default(),
-            validators: vec![row(1, 400), row(2, 250), row(3, 150), row(4, 100), row(5, 100)],
-            total_weight: 0,
-            quorum_weight: 0,
-            resolution_complete: true,
-        }
-        .seal();
-        assert_eq!((snap.total_weight, snap.quorum_weight), (1000, 667));
-
-        let anchor = Hash64::from_bytes([0xa1; 64]);
-        let rec = |seed: u8, w: u128| PrecommitRecord {
-            epoch: 5,
-            validator_id: Hash64::from_bytes([seed; 64]),
-            bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([seed; 64]), 0),
-            target_hash: anchor,
-            declared_lock: PrecommitLock::default(),
-            accepted_daa_score: 500,
-            signed_weight: w,
-            snapshot_commitment: snap.vote_commitment(),
-            signature: vec![seed; 8],
-        };
-        let cert =
-            |records: &[PrecommitRecord]| build_finality_certificate(5, Hash64::from_bytes([9; 64]), anchor, 480, records, &snap);
-
-        // B+C+D+E = 600 < 667: four signers and still no certificate — weight, not headcount.
-        assert!(cert(&[rec(2, 250), rec(3, 150), rec(4, 100), rec(5, 100)]).is_none());
-        // A+B = 650 < 667: no.
-        assert!(cert(&[rec(1, 400), rec(2, 250)]).is_none());
-        // A+B+C = 800 >= 667: three signers certify.
-        let c = cert(&[rec(3, 150), rec(1, 400), rec(2, 250)]).expect("800 certifies");
-        assert_eq!((c.signed_weight, c.total_weight, c.quorum_weight), (800, 1000, 667));
-        assert_eq!(c.precommit_signatures.len(), 3);
-        assert!(c.precommit_signatures.windows(2).all(|w| w[0].validator_id < w[1].validator_id), "consensus order");
-        assert_eq!((c.snapshot_root, c.validator_set_root), (snap.snapshot_root, snap.validator_set_root));
-        // A+C+D+E = 750 >= 667: four signers certify too.
-        assert!(cert(&[rec(1, 400), rec(3, 150), rec(4, 100), rec(5, 100)]).is_some());
-
-        // A duplicated signer counts once — the tally's own uniqueness rule, restated here so a
-        // replayed precommit cannot inflate a certificate over the bar.
-        assert!(cert(&[rec(2, 250), rec(2, 250), rec(2, 250), rec(3, 150)]).is_none());
-        // A precommit for a DIFFERENT anchor certifies nothing of this one.
-        let mut other = rec(1, 400);
-        other.target_hash = Hash64::from_bytes([0xbb; 64]);
-        assert!(cert(&[other, rec(2, 250)]).is_none());
-    }
-
-    /// §12.1: a checkpoint is a trust root, so every way it can lie has to be a named rejection —
-    /// and the roots it carries have to bind the keys the signatures are checked against, or an
-    /// importer can be handed a forged certificate together with the set that verifies it.
-    #[test]
-    fn checkpoint_rejects_every_way_it_can_lie() {
-        let net = Hash64::from_bytes([0x5e; 64]);
-        let row = |id: u8, w: u128| crate::vlt::VltValidatorWeight {
-            validator_id: Hash64::from_bytes([id; 64]),
-            consensus_key: vec![id; 8],
-            bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([id; 64]), 0),
-            raw_recent_compute: w,
-            bond_cap: w,
-            effective_weight: w,
-        };
-        let snap = crate::vlt::VltVotingSnapshot {
-            version: crate::vlt::VLT_VOTING_SNAPSHOT_VERSION_V1,
-            source_finalized_anchor: Hash64::from_bytes([9; 64]),
-            source_anchor_daa: 900,
-            snapshot_epoch: 4,
-            activation_epoch: 6,
-            model_table_hash: Hash64::default(),
-            capability_set_root: Hash64::default(),
-            validator_set_root: Hash64::default(),
-            credit_table_root: Hash64::default(),
-            snapshot_root: Hash64::default(),
-            validators: vec![row(1, 400), row(2, 250), row(3, 150), row(4, 100), row(5, 100)],
-            total_weight: 0,
-            quorum_weight: 0,
-            resolution_complete: true,
-        }
-        .seal();
-        let anchor = Hash64::from_bytes([0xa1; 64]);
-        let sig = |seed: u8, w: u128| WeightedSignature {
-            validator_id: Hash64::from_bytes([seed; 64]),
-            bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([seed; 64]), 0),
-            signed_weight: w,
-            locked_epoch: 6,
-            locked_hash: Hash64::from_bytes([0xaa; 64]),
-            snapshot_commitment: snap.vote_commitment(),
-            signature: vec![seed; 16],
-        };
-        let cert = DnsFinalityCertificate {
-            version: 1,
-            epoch: 7,
-            round: 0,
-            source_anchor: Hash64::from_bytes([9; 64]),
-            target_anchor: anchor,
-            target_anchor_daa: 4_800,
-            snapshot_root: snap.snapshot_root,
-            validator_set_root: snap.validator_set_root,
-            total_weight: 1000,
-            quorum_weight: 667,
-            signed_weight: 800,
-            precommit_signatures: vec![sig(1, 400), sig(2, 250), sig(3, 150)],
-        };
-        let record = crate::vlt::VltActivationRecord {
-            state: crate::vlt::PersistedVltActivationState::Active,
-            activation_epoch: 6,
-            scheduled_at_epoch: 5,
-            ..crate::vlt::VltActivationRecord::awaiting()
-        };
-        let good = BftLlmCheckpoint {
-            version: BFT_LLM_CHECKPOINT_VERSION_V1,
-            network_id: net,
-            finalized_anchor: anchor,
-            finalized_anchor_daa: 4_800,
-            finality_certificate: cert,
-            activation_record: record,
-            snapshot_epoch: 4,
-            snapshot_root: snap.snapshot_root,
-            validator_set_root: snap.validator_set_root,
-            bond_state_root: Hash64::from_bytes([0xb0; 64]),
-            capability_state_root: Hash64::from_bytes([0xc0; 64]),
-            vlt_accumulator_root: Hash64::from_bytes([0xd0; 64]),
-            model_table_hash: Hash64::from_bytes([0xe0; 64]),
-            reward_state_root: Hash64::from_bytes([0xf0; 64]),
-            unbonding_horizon_start: 1_000,
-        };
-        assert_eq!(good.verify_structure(net), Ok(()));
-
-        let bad = |f: &dyn Fn(&mut BftLlmCheckpoint)| {
-            let mut c = good.clone();
-            f(&mut c);
-            c.verify_structure(net).expect_err("must be rejected")
-        };
-        assert_eq!(bad(&|c| c.version = 9), CheckpointError::UnsupportedVersion(9));
-        assert!(matches!(bad(&|c| c.network_id = Hash64::default()), CheckpointError::NetworkMismatch { .. }));
-        assert_eq!(bad(&|c| c.finalized_anchor = Hash64::default()), CheckpointError::AnchorMismatch);
-        assert_eq!(bad(&|c| c.finalized_anchor_daa = 4_801), CheckpointError::AnchorMismatch);
-        assert_eq!(bad(&|c| c.snapshot_root = Hash64::default()), CheckpointError::SnapshotRootMismatch);
-        assert_eq!(bad(&|c| c.validator_set_root = Hash64::default()), CheckpointError::ValidatorSetRootMismatch);
-        // 600 of 1000 does not certify, however many signatures say it does.
-        assert!(matches!(
-            bad(&|c| {
-                c.finality_certificate.signed_weight = 600;
-                c.finality_certificate.precommit_signatures = vec![sig(2, 250), sig(3, 150), sig(4, 100), sig(5, 100)];
-            }),
-            CheckpointError::QuorumArithmetic { .. }
-        ));
-        // A quorum figure that is not ⌊2W/3⌋+1 is rejected even when the signed weight clears it.
-        assert!(matches!(bad(&|c| c.finality_certificate.quorum_weight = 500), CheckpointError::QuorumArithmetic { .. }));
-        assert!(matches!(bad(&|c| c.finality_certificate.signed_weight = 900), CheckpointError::SignedWeightMismatch { .. }));
-        // One signer counted twice to reach the bar.
-        assert_eq!(
-            bad(&|c| c.finality_certificate.precommit_signatures = vec![sig(1, 400), sig(1, 400)]),
-            CheckpointError::SignatureOrder
-        );
-        assert_eq!(
-            bad(&|c| c.finality_certificate.precommit_signatures = vec![sig(3, 150), sig(1, 400), sig(2, 250)]),
-            CheckpointError::SignatureOrder
-        );
-        assert_eq!(bad(&|c| c.activation_record = crate::vlt::VltActivationRecord::awaiting()), CheckpointError::NotActivated);
-        assert!(matches!(
-            bad(&|c| c.activation_record.activation_epoch = 9),
-            CheckpointError::CertificatePredatesActivation { certificate_epoch: 7, activation_epoch: 9 }
-        ));
-        assert!(matches!(bad(&|c| c.unbonding_horizon_start = 4_800), CheckpointError::HorizonNotBehindAnchor { .. }));
-
-        // The snapshot binding: the keys the signatures verify against must be the committed set.
-        let checks = good.signature_checks(&snap).expect("the committed set binds");
-        assert_eq!(checks.len(), 3);
-        assert_eq!(checks[0].public_key, &[1u8; 8]);
-        assert_eq!(
-            checks[0].digest,
-            stake_precommit_message(
-                net.as_byte_slice(),
-                7,
-                anchor,
-                4_800,
-                6,
-                Hash64::from_bytes([0xaa; 64]),
-                snap.vote_commitment(),
-                TransactionOutpoint::new(Hash64::from_bytes([1; 64]), 0)
-            )
-        );
-        // A set that does not hash to the committed root is refused before any key is used.
-        let mut tampered = snap.clone();
-        tampered.validators[0].consensus_key = vec![0xff; 8];
-        assert!(matches!(good.signature_checks(&tampered), Err(CheckpointError::ValidatorSetRootMismatch)));
-        // A signer the set does not contain, and a signer whose weight the set contradicts.
-        let mut unknown = good.clone();
-        unknown.finality_certificate.precommit_signatures = vec![sig(1, 400), sig(2, 250), sig(9, 150)];
-        assert!(matches!(unknown.signature_checks(&snap), Err(CheckpointError::UnknownSigner(_))));
-        let mut inflated = good.clone();
-        inflated.finality_certificate.precommit_signatures = vec![sig(1, 700), sig(2, 250)];
-        inflated.finality_certificate.signed_weight = 950;
-        assert!(matches!(inflated.signature_checks(&snap), Err(CheckpointError::SignerWeightMismatch { .. })));
-    }
-
-    fn pc(epoch: u64, seed: u8, anchor: u8, lock: (u64, u8), daa: u64, w: u128) -> PrecommitRecord {
-        PrecommitRecord {
-            epoch,
-            validator_id: Hash64::from_bytes([seed; 64]),
-            bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([seed; 64]), 0),
-            target_hash: Hash64::from_bytes([anchor; 64]),
-            declared_lock: PrecommitLock {
-                epoch: lock.0,
-                anchor: if lock.1 == 0 { Hash64::default() } else { Hash64::from_bytes([lock.1; 64]) },
-            },
-            accepted_daa_score: daa,
-            signed_weight: w,
-            snapshot_commitment: Hash64::from_bytes([0x5a; 64]),
-            signature: Vec::new(),
-        }
-    }
-
-    /// The lock chain is a running record, and it is checked link by link.
-    ///
-    /// A first precommit must declare no lock; each later one must declare its predecessor
-    /// exactly. The first misdeclaration takes everything after it too — not out of severity for
-    /// its own sake, but because the next declaration refers to a precommit that never counted, so
-    /// there is nothing left to check it against.
-    #[test]
-    fn precommit_lock_chain_must_be_declared_link_by_link() {
-        // Validator 1 declares faithfully: none → epoch 10 → epoch 11.
-        let honest = vec![pc(10, 1, 0xa1, (0, 0), 100, 5), pc(11, 1, 0xa2, (10, 0xa1), 200, 5), pc(12, 1, 0xa3, (11, 0xa2), 300, 5)];
-        assert_eq!(lock_consistent_precommits(&honest).len(), 3, "a faithful record counts in full");
-        assert_eq!(
-            held_precommit_lock(&honest, Hash64::from_bytes([1; 64]), TransactionOutpoint::new(Hash64::from_bytes([1; 64]), 0)),
-            PrecommitLock { epoch: 12, anchor: Hash64::from_bytes([0xa3; 64]) }
-        );
-
-        // Validator 2 forgets the middle lock — it declares epoch 10's anchor while actually
-        // holding epoch 11's. That one and the one after it are uncountable.
-        let forgetful =
-            vec![pc(10, 2, 0xa1, (0, 0), 100, 5), pc(11, 2, 0xa2, (10, 0xa1), 200, 5), pc(12, 2, 0xa3, (10, 0xa1), 300, 5)];
-        let counted = lock_consistent_precommits(&forgetful);
-        assert_eq!(counted.len(), 2, "the misdeclared link and everything after it drop out");
-        assert!(counted.iter().all(|c| c.epoch < 12));
-
-        // A first precommit that claims a lock it never published counts for nothing at all.
-        let inventing = vec![pc(10, 3, 0xa1, (9, 0xb0), 100, 5)];
-        assert!(lock_consistent_precommits(&inventing).is_empty(), "a lock the chain never saw is not a lock");
-        assert_eq!(
-            held_precommit_lock(&inventing, Hash64::from_bytes([3; 64]), TransactionOutpoint::new(Hash64::from_bytes([3; 64]), 0)),
-            PrecommitLock::default(),
-            "and it leaves the validator holding nothing"
-        );
-    }
-
-    /// Round 2 is a real second bar, over the same denominator as round 1.
-    ///
-    /// Two thirds prevoting is where the single-round overlay stopped. Here the same epoch also
-    /// has to clear the precommit quorum, and weight that only prevoted does not carry over — a
-    /// validator that approved an anchor but would not lock on it has not committed to anything.
-    #[test]
-    fn precommit_quorum_is_a_second_bar_over_the_same_denominator() {
-        let totals = BTreeMap::from([(10u64, 30u128)]);
-        let att = |seed: u8, w: u128| AttestationContribution {
-            epoch: 10,
-            validator_id: Hash64::from_bytes([seed; 64]),
-            bond_outpoint: TransactionOutpoint::new(Hash64::from_bytes([seed; 64]), 0),
-            signed_weight: w,
-        };
-        // All three prevoted: round 1 is met.
-        let prevotes = vec![att(1, 10), att(2, 10), att(3, 10)];
-        assert!(quorum_epochs(&aggregate_epoch_tallies(&prevotes, &totals), 0).contains(&10));
-
-        // Only two of the three lock. 20 of 30 is exactly two thirds, which is not strictly above
-        // it, so the anchor is prevoted but NOT committed.
-        let two = lock_consistent_precommits(&[pc(10, 1, 0xa1, (0, 0), 100, 10), pc(10, 2, 0xa1, (0, 0), 100, 10)]);
-        assert!(
-            !quorum_epochs(&aggregate_epoch_tallies(&two, &totals), 0).contains(&10),
-            "a quorum of prevotes is not a commit; round 2 has to clear on its own"
-        );
-
-        // The third locks too.
-        let three = lock_consistent_precommits(&[
-            pc(10, 1, 0xa1, (0, 0), 100, 10),
-            pc(10, 2, 0xa1, (0, 0), 100, 10),
-            pc(10, 3, 0xa1, (0, 0), 100, 10),
-        ]);
-        assert!(quorum_epochs(&aggregate_epoch_tallies(&three, &totals), 0).contains(&10));
-    }
+    // ---- MISAKA §5 round 2: the precommit payload ----
 
     /// The lock is inside the signed digest. Without that the declaration would be an unsigned
     /// field anyone could restate, and both the on-chain lock check and the cross-branch
@@ -9640,18 +7538,15 @@ mod tests {
         assert!(validate_stake_precommit_payload(&borsh::to_vec(&mk(9, some)).unwrap()).is_ok());
     }
 
-    /// The guard that makes scheduling a public fork a two-line edit rather than a research
-    /// project: whatever heights a shipped preset carries, it is either fully dormant or fully
-    /// forkable.
+    /// Whatever heights a shipped preset carries, it is either dormant or configured for the
+    /// compute overlay it runs.
     ///
-    /// Today every preset is dormant, so this asserts nothing about the present. It exists for the
-    /// commit that moves a fence — the one edit in this whole feature that cannot be tested on a
-    /// devnet first, because by the time it is wrong the network has already forked. Each clause
-    /// is a way that edit could look right and produce a network that does not finalize:
-    /// half-moved fences, a soak too short for `C_i(E)` to form, a walk shallower than the score
-    /// it computes, an unbonding window that lets a validator exit while its compute is still
-    /// challengeable, or an empty model table — which credits every job zero and makes the whole
-    /// fork a no-op that costs a hard fork to discover.
+    /// Each clause is a way a moved shadow fence could look right and run an overlay that does
+    /// nothing: an incoherent committee shape, an empty model table (no committee is ever drawn),
+    /// a walk too shallow to see a certificate leave its challenge window (no audit fee is ever
+    /// paid), or an unbonding window that lets a validator exit while its compute is still
+    /// challengeable. The weight fence has no clause: it is removed, and `validate_palw_v2`
+    /// refuses it anywhere but `u64::MAX`.
     #[test]
     fn shipped_presets_are_either_dormant_or_fully_forkable() {
         use crate::config::params::Params;
@@ -9676,126 +7571,21 @@ mod tests {
             if dormant {
                 continue;
             }
+            assert_eq!(p.vlt.vlt_activation_daa_score, u64::MAX, "{name}: the weight fence is removed");
             assert_eq!(p.vlt.is_coherent(), Ok(()), "{name}: a preset with a moved fence must be coherent");
-            assert!(p.vlt_params_consistent(), "{name}: fences moved but the configuration would keep it in Bootstrap");
             assert!(
                 !p.vlt.model_cost_table.live().is_empty(),
                 "{name}: fences moved with an empty model table — every job would mint zero and the fork would be a no-op"
             );
             assert!(
-                p.vlt_credit_window_blue_score >= p.vlt_credit_span(),
-                "{name}: the credit walk is shallower than the score it computes"
+                p.vlt_credit_window_blue_score > p.vlt.challenge_window_blocks,
+                "{name}: the compute-overlay walk cannot see a certificate leave its challenge window"
             );
             assert!(
                 p.unbonding_period_blocks >= p.vlt.min_unbonding_period_blocks(p.attestation_epoch_length_blue_score),
                 "{name}: §7 — a validator could exit while the compute it votes with is still challengeable"
             );
         }
-    }
-
-    /// The public presets are ready for the fork *as shipped*: moving the two heights is the whole
-    /// edit, apart from registering the model.
-    ///
-    /// Everything else — the credit window, the unbonding window, the epoch geometry — is already
-    /// sized for `VltParams::INERT`'s K = 96, so scheduling does not require re-deriving any of it.
-    /// This is what "the testnet hard fork is implemented" means concretely, and it is worth a test
-    /// because the alternative is discovering at fork time that one more constant also had to move.
-    #[test]
-    fn public_presets_need_only_the_two_heights_and_the_model_to_fork() {
-        use crate::config::params::{PRODUCTION_DNS_PARAMS, TESTNET_DNS_PARAMS};
-        for (name, p) in [("production", PRODUCTION_DNS_PARAMS), ("testnet", TESTNET_DNS_PARAMS)] {
-            // The edit: two heights one soak apart, plus the model table. Nothing else.
-            let shadow = 12_000_000u64;
-            let soak = p.vlt_credit_span();
-            let forked = DnsParams {
-                vlt: VltParams {
-                    vlt_shadow_activation_daa_score: shadow,
-                    vlt_activation_daa_score: shadow + soak,
-                    model_cost_table: crate::vlt::ModelCostTable::palw_qwen36_metal(),
-                    ..p.vlt
-                },
-                ..p.clone()
-            };
-            assert!(forked.vlt_params_consistent(), "{name} must be forkable without touching any other constant");
-            assert!(
-                forked.unbonding_period_blocks >= forked.vlt.min_unbonding_period_blocks(forked.attestation_epoch_length_blue_score),
-                "{name}: the shipped unbonding window already covers the §7 bound"
-            );
-            assert!(forked.vlt_credit_window_blue_score >= soak, "{name}: the shipped credit walk already covers the span");
-
-            // And the soak is a real interval, not a formality: at the nominal 10 BPS it is the
-            // time `C_i(E)` needs to form, and scheduling the two heights closer is refused.
-            assert!(soak > 0);
-            let hasty = DnsParams { vlt: VltParams { vlt_activation_daa_score: shadow + soak - 1, ..forked.vlt }, ..forked.clone() };
-            assert!(!hasty.vlt_params_consistent(), "{name}: one blue_score short of a soak is still short");
-        }
-    }
-
-    /// `--vlt-devnet` must produce a network that can actually reach weighted finality.
-    ///
-    /// Every part of this is a way the switch could hand someone a devnet that runs, logs
-    /// plausibly, and never does the thing they started it for: an inconsistent calibration stays
-    /// in Bootstrap with the gate dormant; a walk shorter than the soak silently truncates
-    /// `C_i(E)`; an empty model table credits every job zero, so `W(E)` stays at zero forever
-    /// while the overlay looks busy.
-    #[test]
-    fn vlt_devnet_switch_produces_a_network_that_can_actually_finalize() {
-        use crate::config::params::GENESIS_ACTIVE_DNS_PARAMS;
-        let base = GENESIS_ACTIVE_DNS_PARAMS;
-        let devnet = base.clone().with_vlt_devnet(200, 8, false, Hash64::from_u64_word(1));
-
-        assert!(devnet.vlt_params_consistent(), "the switch must not produce a Bootstrap-forever network");
-        assert_eq!(devnet.vlt.vlt_shadow_activation_daa_score, 200);
-        assert_eq!(
-            devnet.vlt.vlt_activation_daa_score,
-            200 + devnet.vlt_credit_span(),
-            "the weight fence sits exactly one soak above the shadow fence"
-        );
-        assert_eq!(devnet.vlt_credit_window_blue_score, devnet.vlt_credit_span(), "walk depth and soak are one quantity");
-        assert!(!devnet.vlt.model_cost_table.live().is_empty(), "without a registered model every job mints zero");
-        assert!(
-            devnet.unbonding_period_blocks >= devnet.vlt.min_unbonding_period_blocks(devnet.attestation_epoch_length_blue_score),
-            "§7: a validator must not be able to exit while the compute it votes with is still challengeable"
-        );
-        assert!(devnet.unbonding_period_blocks > base.unbonding_period_blocks, "devnet's stock window predates VLT and is raised");
-
-        // `W_min` must be reachable by the profile this preset registers. The shipped floor is
-        // sized for the real PALW profile's 4096-token job; against the fixture's 50-VLT job it
-        // would take 2000 jobs, and the devnet would run the whole compute path and never leave
-        // `FenceReachedNoSnapshot` — an overlay that looks broken because a threshold was inherited
-        // from a model that is not registered here.
-        #[cfg(feature = "devnet-vlt-fixture")]
-        {
-            let one_job = crate::vlt::devnet_fixture_job_vlt(devnet.vlt.prefill_cost_micro, devnet.vlt.decode_cost_micro);
-            assert!(devnet.vlt.min_network_compute < base.vlt.min_network_compute, "the floor must be re-derived, not inherited");
-            assert_eq!(
-                devnet.vlt.min_network_compute,
-                (1 + devnet.vlt.min_verifier_confirmations as u128) * one_job,
-                "one executor plus a confirming committee, each having completed one job"
-            );
-            // The shipped plan clears it with room: 8+5+3+2+2 jobs across five validators, and even
-            // the two largest quotas alone are enough for the overlay to activate.
-            assert!((8 + 5 + 3 + 2 + 2) * one_job > devnet.vlt.min_network_compute);
-            assert!((8 + 5) * one_job > devnet.vlt.min_network_compute, "a partial run must still activate");
-            // And it is still a floor: one job by one validator must NOT speak for the network.
-            assert!(one_job < devnet.vlt.min_network_compute);
-        }
-
-        // K is what makes a devnet's soak minutes rather than tens of minutes, and it must move
-        // both the fence gap and the walk together.
-        let slower = base.clone().with_vlt_devnet(200, 96, false, Hash64::from_u64_word(1));
-        assert!(slower.vlt_credit_span() > devnet.vlt_credit_span());
-        assert!(slower.vlt_params_consistent());
-
-        // Shadow Mode: the overlay runs, the vote never moves.
-        let shadow = base.clone().with_vlt_devnet(200, 8, true, Hash64::from_u64_word(1));
-        assert!(shadow.vlt_shadow_active_at(200));
-        assert!(!shadow.vlt_weighting_active_at(u64::MAX - 1), "the weight fence stays dormant");
-        assert!(shadow.vlt_params_consistent(), "and a dormant weight fence is trivially consistent");
-
-        // The shipped presets are untouched by any of this.
-        assert_eq!(base.vlt.vlt_shadow_activation_daa_score, u64::MAX);
-        assert_eq!(base.vlt.vlt_activation_daa_score, u64::MAX);
     }
 
     // ---- MISAKA §5 round 2: what a broken lock costs ----
@@ -9919,26 +7709,24 @@ mod tests {
         assert_eq!(effects[0].burned_sompi, 90_000_000_000);
     }
 
-    /// The fence is the whole safety story for existing networks: below it, nothing about the
-    /// weight or the credit changes, and every shipped preset sits below it forever.
+    /// Every shipped preset weighs bonded stake under the graded φS rule: the weight fence is removed
+    /// (`u64::MAX` everywhere, refused otherwise), and only testnet runs the compute overlay.
     #[test]
     fn vlt_fence_keeps_shipped_presets_on_the_legacy_rule() {
         use crate::config::params::{GENESIS_ACTIVE_DNS_PARAMS, PRODUCTION_DNS_PARAMS, TESTNET_DNS_PARAMS};
         for (name, p) in
             [("genesis-active", GENESIS_ACTIVE_DNS_PARAMS), ("production", PRODUCTION_DNS_PARAMS), ("testnet", TESTNET_DNS_PARAMS)]
         {
-            // The WEIGHT fence is dormant on every shipped preset, always: moving the vote is
-            // ADR-0024 step 4 and it has its own release. This assertion is the one that must
-            // never be relaxed, so it stays unconditional.
+            // The WEIGHT fence is removed: `u64::MAX` on every shipped preset, and
+            // `validate_palw_v2` refuses any other value.
             assert_eq!(p.vlt.vlt_activation_daa_score, u64::MAX, "{name} must ship with VLT dormant");
-            assert!(!p.vlt_weighting_active_at(u64::MAX - 1), "{name}");
 
             // The SHADOW fence is dormant everywhere EXCEPT where a release has deliberately
             // scheduled step 3 — testnet, at `TESTNET_VLT_SHADOW_FORK_DAA_SCORE`. Below that
             // height the preset is still byte-identical to the legacy rule, which is what this
             // test is really about; above it the overlay runs and is policed, with finality
             // untouched. A preset that scheduled its shadow fence is separately required to be
-            // fully forkable by `shipped_presets_are_either_dormant_or_fully_forkable`.
+            // configured for the overlay by `shipped_presets_are_either_dormant_or_fully_forkable`.
             let shadow = p.vlt.vlt_shadow_activation_daa_score;
             if shadow == u64::MAX {
                 assert!(!p.vlt_shadow_active_at(u64::MAX - 1), "{name}: no certificate is credited, no audit fee paid");
@@ -9961,8 +7749,8 @@ mod tests {
             assert!(!p.tkn.shadow_active_at(u64::MAX - 1), "{name}: the token fences never open");
             assert!(p.tkn.is_coherent().is_ok(), "{name}: the dormant token preset must be coherent");
             assert!(
-                matches!(p.epoch_credit_rule(u64::MAX - 1), EpochCreditRule::QualityFloor { quality_floor_bps } if quality_floor_bps == p.stake_event_quality_floor_bps),
-                "{name} must stay on the graded φS rule below the fence"
+                matches!(p.epoch_credit_rule(), EpochCreditRule::QualityFloor { quality_floor_bps } if quality_floor_bps == p.stake_event_quality_floor_bps),
+                "{name} must stay on the graded φS rule"
             );
             // The bond requirement is untouched by the VLT work — VLT changes what a bond BUYS
             // (weight capped at `lambda x collateral`), never what it costs to hold one. The
@@ -9990,53 +7778,10 @@ mod tests {
                     "{name}: the stake gate is the product of the two floors"
                 );
             }
-            // Inert presets pass the consistency gate trivially; a moved fence must still hold.
-            assert!(p.vlt_params_consistent(), "{name}");
-            // The one span that governs both the credit walk's depth and the soak between the two
-            // fences: `K + delay` epochs, plus the challenge window a certificate waits out, plus
-            // the lag/backoff an epoch's anchor needs. It is how long `C_i(E)` takes to mean
-            // anything, so it is both how far back the walk must reach and how long the overlay
-            // must run before the vote may depend on it.
-            let needed = (p.vlt.credit_window_epochs as u64 + p.vlt.credit_delay_epochs as u64)
-                * p.attestation_epoch_length_blue_score
-                + p.vlt.challenge_window_blocks
-                + p.attestation_lag_blue_score
-                + p.attestation_anchor_backoff_blue_score;
-            // Activation is TWO fences: the overlay starts running at `shadow`, and only after a
-            // full soak does the vote move to what it produced.
-            let activated = DnsParams {
-                vlt: VltParams { vlt_shadow_activation_daa_score: 0, vlt_activation_daa_score: needed, ..p.vlt },
-                ..p.clone()
-            };
-            if name == "production" || name == "testnet" {
-                assert!(activated.vlt_params_consistent(), "{name} would be self-consistent if activated as shipped");
-                // Both fences at the same height is the failure the split exists to make
-                // unrepresentable: the vote switches to a `C_i(E)` that has had no time to fill.
-                let at_once = DnsParams {
-                    vlt: VltParams { vlt_shadow_activation_daa_score: 0, vlt_activation_daa_score: 0, ..p.vlt },
-                    ..p.clone()
-                };
-                assert!(!at_once.vlt_params_consistent(), "{name}: shadow and weight at the same height must be rejected");
-                // One blue_score short of a full soak is still short.
-                let hasty = DnsParams {
-                    vlt: VltParams { vlt_shadow_activation_daa_score: 0, vlt_activation_daa_score: needed - 1, ..p.vlt },
-                    ..p.clone()
-                };
-                assert!(!hasty.vlt_params_consistent(), "{name}: a soak one blue_score short must be rejected");
-                // And the shadow fence may never sit ABOVE the weight fence — that would switch
-                // the vote onto an overlay that is not running.
-                let inverted = VltParams { vlt_shadow_activation_daa_score: needed + 1, vlt_activation_daa_score: needed, ..p.vlt };
-                assert!(inverted.is_coherent().is_err(), "{name}: shadow above weight must be incoherent");
-                // The credit window must genuinely cover that same span. A short window would not
-                // fail loudly at runtime — it would silently truncate the oldest epochs of every
-                // `C_i(E)` — so pin it here: one blue_score below the requirement must be rejected.
-                let short = DnsParams { vlt_credit_window_blue_score: needed - 1, ..activated.clone() };
-                assert!(!short.vlt_params_consistent(), "{name}: a credit window one short must be rejected");
-            }
         }
     }
 
-    /// Health must not shift under any network still on the legacy rule. The boundary case is
+    /// Health must not shift under the φS rule. The boundary case is
     /// `f == φS` exactly: it earns ZERO StakeScore credit (the graded numerator vanishes there)
     /// yet has always reported `Active`, so a credit-based health test would silently change the
     /// signal on live networks. Pin both halves.
@@ -10053,114 +7798,6 @@ mod tests {
         // Just below φS is genuinely degraded.
         let below = EpochStakeTally { epoch: 0, signed_weight: 5, total_weight: 10 };
         assert_eq!(derive_dns_health(&[below, below, below], rule, 1000, 3, true), DnsHealth::DegradedStakeQualityLow);
-
-        // Under the quorum rule the threshold is the quorum itself: 2 of 3 is not one, 3 of 3 is.
-        let q = EpochCreditRule::BftQuorum { min_network_compute: 0 };
-        let two_of_three = EpochStakeTally { epoch: 0, signed_weight: 2, total_weight: 3 };
-        let three_of_three = EpochStakeTally { epoch: 0, signed_weight: 3, total_weight: 3 };
-        assert_eq!(
-            derive_dns_health(&[two_of_three, two_of_three, two_of_three], q, 1000, 3, true),
-            DnsHealth::DegradedStakeQualityLow
-        );
-        assert_eq!(derive_dns_health(&[two_of_three, two_of_three, three_of_three], q, 1000, 3, true), DnsHealth::Active);
-    }
-
-    /// Above the fence the rule flips, and with it the weight source.
-    #[test]
-    fn vlt_fence_flips_the_credit_rule() {
-        use crate::config::params::PRODUCTION_DNS_PARAMS;
-        let p = DnsParams {
-            vlt: VltParams { vlt_shadow_activation_daa_score: 1_000, vlt_activation_daa_score: 5_000, ..VltParams::INERT },
-            ..PRODUCTION_DNS_PARAMS.clone()
-        };
-        assert!(matches!(p.epoch_credit_rule(4_999), EpochCreditRule::QualityFloor { .. }));
-        assert!(!p.vlt_weighting_active_at(4_999));
-        assert!(matches!(p.epoch_credit_rule(5_000), EpochCreditRule::BftQuorum { .. }));
-        assert!(p.vlt_weighting_active_at(5_000));
-    }
-
-    /// The soak: between the two fences the compute overlay is fully live and the vote has not
-    /// moved. That interval is the whole reason the fence was split — everything that mints,
-    /// audits, pays and slashes runs for a full credit window, under the legacy stake-weighted
-    /// finality, before anything depends on what it produced.
-    #[test]
-    fn vlt_shadow_fence_runs_the_overlay_while_stake_still_votes() {
-        use crate::config::params::PRODUCTION_DNS_PARAMS;
-        let p = DnsParams {
-            vlt: VltParams { vlt_shadow_activation_daa_score: 1_000, vlt_activation_daa_score: 5_000, ..VltParams::INERT },
-            ..PRODUCTION_DNS_PARAMS.clone()
-        };
-
-        // Below both: dormant, and byte-identical to the pre-VLT overlay.
-        assert!(!p.vlt_shadow_active_at(999));
-        assert!(!p.vlt_weighting_active_at(999));
-
-        // In the soak: the overlay runs, finality does not notice.
-        for daa in [1_000, 3_000, 4_999] {
-            assert!(p.vlt_shadow_active_at(daa), "overlay must be live at {daa}");
-            assert!(!p.vlt_weighting_active_at(daa), "but the vote must not have moved at {daa}");
-            assert!(
-                matches!(p.epoch_credit_rule(daa), EpochCreditRule::QualityFloor { .. }),
-                "finality stays on the graded φS rule for the whole soak"
-            );
-        }
-
-        // At the weight fence: the vote moves onto an overlay that has been running all along.
-        assert!(p.vlt_shadow_active_at(5_000));
-        assert!(p.vlt_weighting_active_at(5_000));
-    }
-
-    /// The ordering invariant, stated on its own: weight may never open before shadow. A preset
-    /// that inverted them would switch the vote to an overlay that credits nothing, so `W(E)` is
-    /// 0 and DNS finality stops at the fence.
-    #[test]
-    fn vlt_weight_fence_cannot_open_before_the_shadow_fence() {
-        let inverted = VltParams { vlt_shadow_activation_daa_score: 10_000, vlt_activation_daa_score: 9_999, ..VltParams::INERT };
-        assert_eq!(
-            inverted.is_coherent(),
-            Err("vlt_shadow_activation_daa_score must be <= vlt_activation_daa_score (weight cannot switch before the overlay runs)")
-        );
-        // Equal is not incoherent — it is merely too hasty, which `vlt_params_consistent` catches
-        // with the soak requirement rather than here.
-        let simultaneous = VltParams { vlt_shadow_activation_daa_score: 9_999, vlt_activation_daa_score: 9_999, ..VltParams::INERT };
-        assert!(simultaneous.is_coherent().is_ok());
-    }
-
-    /// §6: credit is withheld until the challenge window closes, dropped outright if challenged,
-    /// and counted once per `(executor, job)`.
-    #[test]
-    fn compute_credits_respect_the_challenge_window_and_dedup() {
-        let v = Hash64::from_u64_word(3);
-        let job = Hash64::from_u64_word(77);
-        let mk = |tx: u64, job_id: Hash64, vlt: u128, accepted: u64| ComputeCreditContribution {
-            validator_id: v,
-            bond_outpoint: TransactionOutpoint::new(Hash64::from_u64_word(1), 0),
-            epoch: 4,
-            certificate_tx_id: Hash64::from_u64_word(tx),
-            job_id,
-            vlt,
-            accepted_daa_score: accepted,
-        };
-        let window = 300;
-        let none = HashSet::new();
-
-        // Accepted at 1000, pov 1299 → still challengeable → no credit yet.
-        let fresh = [mk(1, job, 500, 1_000)];
-        assert!(aggregate_compute_credits(&fresh, &none, 1_299, window).is_empty());
-        // pov 1300 → the window has closed.
-        let credited = aggregate_compute_credits(&fresh, &none, 1_300, window);
-        assert_eq!(credited[&v][&4], 500);
-
-        // A challenged certificate earns nothing even after its window closes.
-        let challenged: HashSet<TransactionId> = HashSet::from([Hash64::from_u64_word(1)]);
-        assert!(aggregate_compute_credits(&fresh, &challenged, 9_999, window).is_empty());
-
-        // The same job resubmitted under a second tx credits ONCE...
-        let replayed = [mk(1, job, 500, 1_000), mk(2, job, 500, 1_000)];
-        assert_eq!(aggregate_compute_credits(&replayed, &none, 1_300, window)[&v][&4], 500);
-        // ...while a genuinely different job adds on top.
-        let two_jobs = [mk(1, job, 500, 1_000), mk(2, Hash64::from_u64_word(78), 700, 1_000)];
-        assert_eq!(aggregate_compute_credits(&two_jobs, &none, 1_300, window)[&v][&4], 1_200);
     }
 
     /// The whole point of phase 1 is that the beacon epoch is one the executor cannot see when
@@ -10892,10 +8529,9 @@ mod tests {
         let mut bad = fixture_shard(2);
         bad.attestations[0].epoch = 999;
         assert_eq!(validate_stake_attestation_shard_payload(&borsh::to_vec(&bad).unwrap()), Err(DnsTxError::ShardTupleMismatch));
-        // MISAKA VLT PR 2: a non-zero validator_set_commitment is stateless-VALID — above the
-        // weight fence it is the §5.1 snapshot binding. (Below the fence the acceptance gate
-        // still rejects it; a stateless layer cannot see the fence.) It remains part of the
-        // shard tuple, so members must agree on it.
+        // MISAKA VLT PR 2: a non-zero validator_set_commitment is stateless-VALID — the zero rule
+        // lives at the acceptance gate, not here. It remains part of the shard tuple, so members
+        // must agree on it.
         let mut shard = fixture_shard(2);
         shard.validator_set_commitment = Hash64::from_bytes([0x01; 64]);
         for att in shard.attestations.iter_mut() {
@@ -11902,7 +9538,6 @@ mod tests {
             // anchor's own epoch has live support (this test covers anchor SELECTION, not the guard)
             1,
             1,
-            true,
         );
         assert_eq!(s1.selected_chain_anchor, sink1);
         assert_eq!(s1.last_dns_confirmed_anchor, Hash64::default());
@@ -11925,7 +9560,6 @@ mod tests {
             // anchor's own epoch has live support (this test covers anchor SELECTION, not the guard)
             1,
             1,
-            true,
         );
         assert_eq!(s2.selected_chain_anchor, sink2, "selected_chain_anchor stays the sink (throttle only)");
         assert_eq!(s2.last_dns_confirmed_anchor, canon2, "confirmed anchor is the canonical anchor");
@@ -11950,7 +9584,6 @@ mod tests {
             // anchor's own epoch has live support (this test covers anchor SELECTION, not the guard)
             1,
             1,
-            true,
         );
         assert_eq!(s3.selected_chain_anchor, sink3);
         assert_eq!(s3.last_dns_confirmed_anchor, canon2, "no ready anchor -> keep prev confirmed");
@@ -11971,7 +9604,6 @@ mod tests {
             // anchor's own epoch has live support (this test covers anchor SELECTION, not the guard)
             1,
             1,
-            true,
         );
         assert_eq!(s4.last_dns_confirmed_anchor, canon2, "below-threshold -> keep prev confirmed");
         assert_eq!(s4.last_dns_confirmed_anchor_daa_score, 580);
@@ -12002,7 +9634,6 @@ mod tests {
                 cs,
                 attesters,
                 min_attesters,
-                true,
             )
             .last_dns_confirmed_anchor
         };
@@ -12045,7 +9676,6 @@ mod tests {
                 cs,
                 1,
                 1,
-                true,
             )
             .last_dns_confirmed_anchor
         };
@@ -12075,380 +9705,11 @@ mod tests {
         let bonds = vec![a, b, c];
 
         let epochs = BTreeMap::from([(1u64, 50u64), (2, 200), (3, 400), (4, 600)]);
-        let totals = total_active_stake_by_epoch(&bonds, &epochs, InactivityLeakViewV1::none());
+        let totals = total_active_stake_by_epoch(&bonds, &epochs);
         assert_eq!(totals.get(&1), Some(&0)); // daa 50: all activate >= 100 -> Pending
         assert_eq!(totals.get(&2), Some(&80)); // daa 200: A(30) + C(50) active
         assert_eq!(totals.get(&3), Some(&30)); // daa 400: A(30); C slashed @300; B not yet
         assert_eq!(totals.get(&4), Some(&50)); // daa 600: A(30) + B(20); C slashed
-    }
-
-    /// **ADR-0060 Decision 4's mechanism — and the reason it ships DORMANT.**
-    ///
-    /// The mechanism below is correct in isolation. What the 2026-08-30 audit showed is that the
-    /// pipeline cannot FEED it the evidence its meaning requires: `last_attestation_daa_by_validator`
-    /// can only report anchors drawn from `epoch_anchor_daa`, and that map spans
-    /// `stake_score_window_blue_score` — ~150 s on mainnet against a declared 7 days. So the rule
-    /// that would actually execute is "absent from a two-minute window", four orders of magnitude
-    /// early, and on the branch-comparison path it let a candidate branch shrink its own
-    /// denominator. `the_leak_cannot_be_fed_the_evidence_its_meaning_needs` pins that constraint,
-    /// every preset ships `u64::MAX`, and the branch comparison passes `none()` structurally.
-    /// Activation waits on PERSISTED per-validator last-attestation state.
-    #[test]
-    fn the_inactivity_leak_shrinks_the_denominator_until_quorum_reforms() {
-        // Three validators, equal stake 100, all activated at DAA 100.
-        let mut a = stake_bond_record_from_payload(&fixture_bond(), fixture_outpoint());
-        a.amount = 100;
-        a.activation_daa_score = 100;
-        a.validator_pubkey_hash = Hash64::from_u64_word(0xA);
-        let mut b = a.clone();
-        b.validator_pubkey_hash = Hash64::from_u64_word(0xB);
-        let mut c = a.clone();
-        c.validator_pubkey_hash = Hash64::from_u64_word(0xC);
-        let bonds = vec![a, b, c];
-        let epochs = BTreeMap::from([(9u64, 20_000u64)]);
-        let t_leak = 5_040u64;
-
-        // A attested recently; B and C have been silent since just after activation.
-        let last = BTreeMap::from([
-            (Hash64::from_u64_word(0xA), 19_000u64),
-            (Hash64::from_u64_word(0xB), 200u64),
-            (Hash64::from_u64_word(0xC), 300u64),
-        ]);
-        let leak = InactivityLeakViewV1 {
-            last_attestation_daa: &last,
-            leak_after_daa: t_leak,
-            // No floor in this case: it is the mechanism's own arithmetic under test, and SA-3's
-            // floor has its own test below.
-            min_retained_validators: 0,
-            table: LeakTableProvenanceV1::SelfComputed,
-        };
-        let totals = total_active_stake_by_epoch(&bonds, &epochs, leak);
-        // B and C are 19_700+ DAA silent > 5_040: leaked. Only A's 100 remains.
-        assert_eq!(totals.get(&9), Some(&100), "the silent two thirds leave the denominator");
-        // …and A alone now clears the 2/3 quorum of what remains — the self-heal.
-        assert!(crate::vlt::meets_bft_quorum(100, 100, 0), "the survivor is a quorum of the leaked denominator");
-        assert!(!crate::vlt::meets_bft_quorum(100, 300, 0), "against the un-leaked denominator it never was");
-
-        // The disabled view is byte-identical to the pre-leak protocol.
-        let all = total_active_stake_by_epoch(&bonds, &epochs, InactivityLeakViewV1::none());
-        assert_eq!(all.get(&9), Some(&300), "leak off: everyone counts");
-
-        // A validator with NO attestation on record but a FRESH bond is in its grace window —
-        // the leak punishes going silent, never arriving. Re-bonding is therefore re-entry.
-        let mut d = bonds[0].clone();
-        d.validator_pubkey_hash = Hash64::from_u64_word(0xD);
-        d.activation_daa_score = 19_500; // bonded 500 DAA ago, never attested
-        let with_fresh = vec![bonds[0].clone(), bonds[1].clone(), bonds[2].clone(), d];
-        let totals = total_active_stake_by_epoch(&with_fresh, &epochs, leak);
-        assert_eq!(totals.get(&9), Some(&200), "the fresh bond counts beside the attester");
-
-        // Exactly at the boundary is still retained; one past it is not.
-        let edge = BTreeMap::from([(Hash64::from_u64_word(0xA), 20_000u64 - t_leak)]);
-        let leak_edge = InactivityLeakViewV1 {
-            last_attestation_daa: &edge,
-            leak_after_daa: t_leak,
-            min_retained_validators: 0,
-            table: LeakTableProvenanceV1::SelfComputed,
-        };
-        assert!(leak_edge.retains(&Hash64::from_u64_word(0xA), 0, 20_000));
-        assert!(!leak_edge.retains(&Hash64::from_u64_word(0xA), 0, 20_001));
-    }
-
-    /// **ADR-0066 SA-1: a table this node cannot stand behind leaks NOBODY.**
-    ///
-    /// The failure this refuses is not hypothetical arithmetic — it is the shape of finding F4,
-    /// which this ADR deleted from the heartbeat lane for exactly the reason it must not
-    /// reintroduce here. The leak's table comes from a walk that ends at the walker's own pruning
-    /// point, so an archival node and a pruned node build different tables from one chain, exclude
-    /// different validators, and disagree about which epochs reached quorum. A finality overlay
-    /// that partitions along `--archival` is not a finality overlay.
-    ///
-    /// Fail closed: no verified table ⇒ full denominator ⇒ no leak. Same bonds, same silence, same
-    /// grace — only the provenance differs, and the denominator does not move.
-    #[test]
-    fn an_unverified_leak_table_computes_no_leak_at_all() {
-        let mut a = stake_bond_record_from_payload(&fixture_bond(), fixture_outpoint());
-        a.amount = 100;
-        a.activation_daa_score = 100;
-        a.validator_pubkey_hash = Hash64::from_u64_word(0xA);
-        let mut b = a.clone();
-        b.validator_pubkey_hash = Hash64::from_u64_word(0xB);
-        let mut c = a.clone();
-        c.validator_pubkey_hash = Hash64::from_u64_word(0xC);
-        let bonds = vec![a, b, c];
-        let epochs = BTreeMap::from([(9u64, 20_000u64)]);
-        let last = BTreeMap::from([
-            (Hash64::from_u64_word(0xA), 19_000u64),
-            (Hash64::from_u64_word(0xB), 200u64),
-            (Hash64::from_u64_word(0xC), 300u64),
-        ]);
-        let view =
-            |table| InactivityLeakViewV1 { last_attestation_daa: &last, leak_after_daa: 5_040, min_retained_validators: 0, table };
-        assert_eq!(
-            total_active_stake_by_epoch(&bonds, &epochs, view(LeakTableProvenanceV1::SelfComputed)).get(&9),
-            Some(&100),
-            "a table this node computed over a window it could walk excludes the silent two"
-        );
-        assert_eq!(
-            total_active_stake_by_epoch(&bonds, &epochs, view(LeakTableProvenanceV1::Unverified)).get(&9),
-            Some(&300),
-            "…and the SAME evidence with no provenance excludes nobody — the pruned node finalizes less, \
-             never something the archival node would not"
-        );
-        assert!(!view(LeakTableProvenanceV1::Unverified).is_armed());
-        assert!(view(LeakTableProvenanceV1::Unverified).retains(&Hash64::from_u64_word(0xB), 0, 20_000));
-    }
-
-    /// **ADR-0066 SA-1, the measurement rather than a proxy for it.**
-    ///
-    /// The first form of this check compared the CONSENSUS pruning point against the tip. That
-    /// number is derived from the chain, so it is identical on an archival node and a pruned one —
-    /// it cannot see the node-local divergence SA-1 exists to close, and on any chain older than
-    /// the window it answers `SelfComputed` on both. Two things follow and both are asserted here:
-    /// a store that is short of the window must come out `Unverified` even though its chain is
-    /// long, and a pruned node that DOES cover the window must come out `SelfComputed` — because
-    /// it computes the same table an archival node does, and "the leak is inert on a pruned fleet"
-    /// was never true and must not be planned around.
-    #[test]
-    fn leak_table_provenance_is_a_property_of_this_nodes_walk_not_of_the_chain() {
-        let window = 1_500u64;
-        let tip_blue = 200_000u64;
-        // A store that reaches past the far edge: covered on the step that crosses it.
-        let covered: Vec<Option<u64>> = (0..=window + 1).map(|d| Some(tip_blue - d)).collect();
-        assert_eq!(
-            leak_table_provenance_from_walk_v1(tip_blue, window, covered),
-            LeakTableProvenanceV1::SelfComputed,
-            "every header from the tip to past the window's far edge is readable — this is the table"
-        );
-        // The same long chain, with the store running out one block INSIDE the window. The
-        // pruning-point proxy called this SelfComputed; the walk that builds the table breaks here
-        // with a hole, so it is not.
-        let mut truncated: Vec<Option<u64>> = (0..window).map(|d| Some(tip_blue - d)).collect();
-        truncated.push(None);
-        assert_eq!(
-            leak_table_provenance_from_walk_v1(tip_blue, window, truncated),
-            LeakTableProvenanceV1::Unverified,
-            "a header this node does not hold, inside the window, is a hole in the table — fail closed"
-        );
-        // Exactly the far edge and nothing below it: still covered, because the far edge itself is
-        // the deepest block the table is defined over.
-        let to_the_edge: Vec<Option<u64>> = (0..=window).map(|d| Some(tip_blue - d)).collect();
-        assert_eq!(
-            leak_table_provenance_from_walk_v1(tip_blue, window, to_the_edge),
-            LeakTableProvenanceV1::SelfComputed,
-            "the walk that ran out having read the whole window read the whole window"
-        );
-        // A chain younger than the window: the iterator ends, and "every block there is" is the
-        // same table an archival node builds.
-        let young: Vec<Option<u64>> = (0..=30).map(|d| Some(30 - d)).collect();
-        assert_eq!(
-            leak_table_provenance_from_walk_v1(30, window, young),
-            LeakTableProvenanceV1::SelfComputed,
-            "a chain shorter than the window is covered by definition"
-        );
-        // And a node mid-IBD, which is the state `Unverified` is actually for: the first header
-        // below the tip is already missing.
-        assert_eq!(
-            leak_table_provenance_from_walk_v1(tip_blue, window, vec![Some(tip_blue), None]),
-            LeakTableProvenanceV1::Unverified,
-            "a store that is short at the very top leaks nobody"
-        );
-        // The lazy contract the caller relies on: a decided walk must not be drained, because in
-        // the processor each step is a `headers_store` read plus a reachability read-lock.
-        //
-        // **The fixture is deeper than the deciding step on purpose (round-3 defect I-4).** The
-        // first form of this check counted over `covered`, which holds exactly `window + 2`
-        // entries — the same number the assertion allows — so an implementation that drained the
-        // whole iterator produced exactly the expected count and this assertion could not fail
-        // either way. The walk is handed 50 blocks more than it can need now, so draining costs
-        // `window + 52` steps and the count says so.
-        let deep: Vec<Option<u64>> = (0..=window + 51).map(|d| Some(tip_blue - d)).collect();
-        let mut steps = 0usize;
-        let counted = deep.iter().map(|b| {
-            steps += 1;
-            *b
-        });
-        assert_eq!(leak_table_provenance_from_walk_v1(tip_blue, window, counted), LeakTableProvenanceV1::SelfComputed);
-        assert_eq!(
-            steps,
-            window as usize + 2,
-            "the walk stops on the step that decides it, not at the end of the chain — it was handed {} entries",
-            deep.len()
-        );
-    }
-
-    /// **ADR-0066 SA-2: exclusion is monotone, and re-entry waits for finality.**
-    ///
-    /// The attack this closes is a validator sitting on the threshold: it goes silent, the quorum
-    /// shrinks around it, and then it attests on a block of its own choosing and the denominator
-    /// jumps back. Whoever picks that block picks which epochs reached quorum. With the evidence
-    /// gated on finality, the re-entry lands where the chain puts it, not where the validator does.
-    #[test]
-    fn the_leak_is_monotone_and_re_entry_waits_for_a_final_attestation() {
-        let v = |x: u64| Hash64::from_u64_word(x);
-        let t_leak = 5_040u64;
-        let anchors = BTreeMap::from([(1u64, 10_000u64), (2, 20_000)]);
-        // One validator: an old (final) attestation at 10_000, and a fresh one at 20_000.
-        let contribs = vec![
-            AttestationContribution { epoch: 1, validator_id: v(1), bond_outpoint: fixture_outpoint(), signed_weight: 1 },
-            AttestationContribution { epoch: 2, validator_id: v(1), bond_outpoint: fixture_outpoint(), signed_weight: 1 },
-        ];
-        fn armed(last: &BTreeMap<Hash64, u64>, t_leak: u64) -> InactivityLeakViewV1<'_> {
-            InactivityLeakViewV1 {
-                last_attestation_daa: last,
-                leak_after_daa: t_leak,
-                min_retained_validators: 0,
-                table: LeakTableProvenanceV1::SelfComputed,
-            }
-        }
-
-        // With the fresh attestation NOT yet final, the baseline is still 10_000 and 20_001 is
-        // past the grace: excluded, exactly as it was before it attested.
-        let unsettled = last_attestation_daa_by_validator(&contribs, &anchors, 19_000);
-        assert!(!armed(&unsettled, t_leak).retains(&v(1), 0, 20_000), "a fresh attestation may not buy its way back in");
-
-        // Once the same attestation is final, it is re-entry — the identical evidence, judged at a
-        // point the validator does not choose.
-        let settled = last_attestation_daa_by_validator(&contribs, &anchors, 20_000);
-        assert!(armed(&settled, t_leak).retains(&v(1), 0, 20_000), "…and once it is final, it is");
-
-        // Monotone: for one table, silence only ever accumulates. Nothing about a later anchor can
-        // bring a validator back that an earlier one had excluded.
-        let mut was_out = false;
-        for anchor in (10_000u64..=30_000).step_by(500) {
-            let inside = armed(&unsettled, t_leak).retains(&v(1), 0, anchor);
-            if was_out {
-                assert!(!inside, "the leak flapped back on at anchor {anchor} with no new final evidence");
-            }
-            was_out |= !inside;
-        }
-        assert!(was_out, "the sweep must actually cross the threshold or it asserts nothing");
-    }
-
-    /// **ADR-0066 SA-3: the leak halts finality rather than shrinking the quorum below the floor.**
-    ///
-    /// ADR-0060 Decision 4 accepted double-finality risk under a long partition. It did not accept
-    /// a two-validator quorum, and the difference is not a matter of degree: a denominator small
-    /// enough to be held by one operator is not a BFT quorum with a smaller n, it is a chain whose
-    /// finality one party issues. So when the leak would take the retained set under
-    /// `min_active_validators`, the denominator is zero — and a zero denominator is refused by
-    /// `meets_bft_quorum` outright, which is how this file already spells "no certificate".
-    #[test]
-    fn the_leak_halts_finality_rather_than_dropping_below_the_validator_floor() {
-        let mut base = stake_bond_record_from_payload(&fixture_bond(), fixture_outpoint());
-        base.amount = 100;
-        base.activation_daa_score = 100;
-        let bonds: Vec<_> = (0xA..=0xC)
-            .map(|x| {
-                let mut b = base.clone();
-                b.validator_pubkey_hash = Hash64::from_u64_word(x);
-                b
-            })
-            .collect();
-        let epochs = BTreeMap::from([(9u64, 20_000u64)]);
-        // Two of the three are long silent, so the leak would leave a one-validator denominator.
-        let last = BTreeMap::from([
-            (Hash64::from_u64_word(0xA), 19_000u64),
-            (Hash64::from_u64_word(0xB), 200u64),
-            (Hash64::from_u64_word(0xC), 300u64),
-        ]);
-        let with_floor = |min_retained_validators| InactivityLeakViewV1 {
-            last_attestation_daa: &last,
-            leak_after_daa: 5_040,
-            min_retained_validators,
-            table: LeakTableProvenanceV1::SelfComputed,
-        };
-        assert_eq!(
-            total_active_stake_by_epoch(&bonds, &epochs, with_floor(3)).get(&9),
-            Some(&0),
-            "one survivor under a floor of three is a halt, not a quorum"
-        );
-        assert!(!crate::vlt::meets_bft_quorum(100, 0, 0), "and a zero denominator issues no certificate");
-        assert_eq!(
-            total_active_stake_by_epoch(&bonds, &epochs, with_floor(1)).get(&9),
-            Some(&100),
-            "a floor the leak does not breach changes nothing"
-        );
-
-        // **The floor is the LEAK's, not the network's.** A chain that is already under the floor
-        // without any leaking keeps the behaviour it has (the rollout gate is what handles that),
-        // so a dormant leak can never zero a denominator — which is what makes this amendment
-        // inert on every shipped preset.
-        let two = vec![bonds[0].clone(), bonds[1].clone()];
-        assert_eq!(
-            total_active_stake_by_epoch(&two, &epochs, InactivityLeakViewV1::none()).get(&9),
-            Some(&200),
-            "leak off: the floor is not this rule's business"
-        );
-    }
-
-    /// **The structural reason the leak cannot be switched on as implemented.**
-    ///
-    /// Whatever `leak_after_daa` says, the silence the evidence can EXPRESS is bounded by the
-    /// span of `epoch_anchor_daa` — the builder never writes a value from anywhere else. A
-    /// validator that attested at the oldest anchor in the window therefore looks at most
-    /// `span` stale, so a `leak_after_daa` larger than the span can never fire on an attesting
-    /// validator; and a validator absent from the window looks INFINITELY stale regardless of
-    /// how recently it really attested. Both halves are wrong in the same direction the audit
-    /// measured, and no constant fixes either.
-    #[test]
-    fn the_leak_cannot_be_fed_the_evidence_its_meaning_needs() {
-        let v = |x: u64| Hash64::from_u64_word(x);
-        // A window of three epochs spanning 300 DAA — the shape the pipeline really produces.
-        // Anchors on a MATURE chain (DAA well past any T_leak) with a short span — the shape
-        // the pipeline really produces once a network has run for a while.
-        let anchors = BTreeMap::from([(1u64, 20_000u64), (2, 20_150), (3, 20_300)]);
-        let contribs =
-            vec![AttestationContribution { epoch: 1, validator_id: v(1), bond_outpoint: fixture_outpoint(), signed_weight: 1 }];
-        let last = last_attestation_daa_by_validator(&contribs, &anchors, u64::MAX);
-        let span = anchors.values().max().unwrap() - anchors.values().min().unwrap();
-        let apparent_staleness = anchors.values().max().unwrap() - last[&v(1)];
-        assert!(apparent_staleness <= span, "the builder cannot report staleness beyond the window it read");
-        // So a 7-day constant is unreachable through the attestation half…
-        let seven_days_at_120s = 5_040u64;
-        assert!(span < seven_days_at_120s, "the window is orders of magnitude shorter than the intended T_leak");
-        let leak = InactivityLeakViewV1 {
-            last_attestation_daa: &last,
-            leak_after_daa: seven_days_at_120s,
-            min_retained_validators: 0,
-            table: LeakTableProvenanceV1::SelfComputed,
-        };
-        assert!(leak.retains(&v(1), 0, 20_300), "an attester can never be leaked, however long it has really been silent");
-        // …while a validator merely ABSENT from the window is leaked at once, with an old bond.
-        assert!(!leak.retains(&v(2), 0, 20_300), "absence reads as infinite staleness — the defect, in one line");
-    }
-
-    /// The leak's evidence builder keeps the YOUNGEST anchor per validator, ignores epochs
-    /// outside the anchor map, and shares the numerator's contribution type — so "present" and
-    /// "voting" are one fact.
-    #[test]
-    fn last_attestation_evidence_is_the_youngest_anchor_per_validator() {
-        let v = |x: u64| Hash64::from_u64_word(x);
-        let contribs = vec![
-            AttestationContribution { epoch: 1, validator_id: v(1), bond_outpoint: fixture_outpoint(), signed_weight: 1 },
-            AttestationContribution { epoch: 3, validator_id: v(1), bond_outpoint: fixture_outpoint(), signed_weight: 1 },
-            AttestationContribution { epoch: 2, validator_id: v(2), bond_outpoint: fixture_outpoint(), signed_weight: 1 },
-            // epoch 9 has no anchor: ignored rather than invented.
-            AttestationContribution { epoch: 9, validator_id: v(3), bond_outpoint: fixture_outpoint(), signed_weight: 1 },
-        ];
-        let anchors = BTreeMap::from([(1u64, 1_000u64), (2, 2_000), (3, 3_000)]);
-        let last = last_attestation_daa_by_validator(&contribs, &anchors, u64::MAX);
-        assert_eq!(last.get(&v(1)), Some(&3_000), "the youngest of its two epochs");
-        assert_eq!(last.get(&v(2)), Some(&2_000));
-        assert_eq!(last.get(&v(3)), None, "an unanchored epoch is no evidence");
-
-        // **ADR-0066 SA-2: the horizon is applied at BUILD time, and it falls back rather than
-        // erases.** v(1) attested at 1_000 and again at 3_000; with only 1_000 final, the entry
-        // must be 1_000 — not 3_000 (a fresh attestation may not grant re-entry) and not absent
-        // (which would read as infinite silence and leak a validator that never stopped
-        // attesting). Filtering at the read could only ever produce one of those two wrong
-        // answers, which is why this rule lives in the builder.
-        let final_through = last_attestation_daa_by_validator(&contribs, &anchors, 2_500);
-        assert_eq!(final_through.get(&v(1)), Some(&1_000), "falls back to the youngest FINAL anchor");
-        assert_eq!(final_through.get(&v(2)), Some(&2_000), "already final, unchanged");
-        // And a validator whose only evidence is above the horizon has no final evidence at all —
-        // the honest answer, and the conservative one: it is measured from its bond instead.
-        assert_eq!(last_attestation_daa_by_validator(&contribs, &anchors, 500).get(&v(1)), None);
     }
 
     #[test]

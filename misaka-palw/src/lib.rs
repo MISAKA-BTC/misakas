@@ -52,8 +52,6 @@ use kaspa_consensus_core::vlt::{
     ComputeReceipt, LlmJobSpec, ReplayResiduals, VLT_PAYLOAD_VERSION_V1, derive_runtime_class_id, derive_runtime_hash, palw_pins,
     qwen35_pins, residual_commitment,
 };
-#[cfg(feature = "devnet-vlt-fixture")]
-use kaspa_consensus_core::vlt::{devnet_fixture, devnet_fixture_id};
 use kaspa_hashes::Hash64;
 use serde::{Deserialize, Serialize};
 
@@ -110,16 +108,6 @@ pub enum PalwError {
     RuntimeIdentityMismatch { got: Hash64, expected: Hash64 },
     #[error("the PALW worker did not finish within {0:?}")]
     Timeout(Duration),
-    /// The devnet fixture runs exactly one job shape, so a spec asking for another is refused
-    /// rather than executed at a different price. Abstaining is the safe half of the asymmetry:
-    /// [`ComputeRuntime::replay`] returning an error costs a verdict, whereas a receipt at the
-    /// wrong shape would either mint the wrong VLT or refute an honest peer.
-    #[cfg(feature = "devnet-vlt-fixture")]
-    #[error(
-        "the devnet fixture executes a fixed {expected}-token job, but this spec declares max_tokens={declared}. \
-         Every node on a fixture devnet must run the same shape, or one job is not one job's worth of weight."
-    )]
-    FixtureJobShape { declared: u32, expected: u32 },
 }
 
 /// PALW's `MatchProjectionV1` — the 16 fields its k=2 matcher requires two replicas of one job to
@@ -186,8 +174,8 @@ impl MatchProjection {
 
     /// Fold this projection into the consensus [`ComputeReceipt`].
     ///
-    /// `prefill_tokens` / `decode_tokens` cross over unchanged, because they are what
-    /// `normalize_vlt` prices — and they are *projection* fields, so consensus prices only work
+    /// `prefill_tokens` / `decode_tokens` cross over unchanged, because they are what the (removed)
+    /// VLT normalization priced — and they are *projection* fields, so a price only covers work
     /// two independent replicas agreed on.
     pub fn to_compute_receipt(&self) -> ComputeReceipt {
         ComputeReceipt {
@@ -560,117 +548,6 @@ impl ComputeRuntime for MockRuntime {
     }
 }
 
-/// The devnet fixture's executor: a deterministic runtime that reports the identity consensus
-/// registered for `genesis_hash`, so a private devnet can drive the **whole** production compute
-/// path with no model on disk.
-///
-/// Deliberately not [`MockRuntime`] with a flag. Mock is a test double whose whole contract is
-/// that it does *not* claim a registered identity — reusing it here would delete the check that
-/// catches a node running an unregistered build. This is a separate type behind a separate
-/// feature, and it claims exactly one identity: the one derived from this network's own genesis.
-///
-/// Two replicas of this runtime agree byte-for-byte on the same `(spec, prompt)`, which is what
-/// makes a verifier quorum reachable — and they disagree with any other network's fixture, because
-/// the genesis hash is inside the projection as well as inside the identity.
-///
-/// # One job shape
-///
-/// It executes exactly [`devnet_fixture::JOB_MAX_TOKENS`]-token jobs — 10 prefill, 5 decode, 50
-/// VLT — and refuses anything else. A fixture whose token counts varied with the prompt would make
-/// each validator's weight depend on the size of a file on its own disk, which is precisely the
-/// variable the asymmetric-weight experiment is trying to isolate.
-#[cfg(feature = "devnet-vlt-fixture")]
-#[derive(Clone, Debug)]
-pub struct DevnetFixtureRuntime {
-    genesis_hash: Hash64,
-}
-
-#[cfg(feature = "devnet-vlt-fixture")]
-impl DevnetFixtureRuntime {
-    pub fn new(genesis_hash: Hash64) -> Self {
-        Self { genesis_hash }
-    }
-
-    /// The identity consensus registered for this network's fixture profile.
-    pub fn identity(&self) -> RuntimeIdentity {
-        RuntimeIdentity {
-            runtime_hash: devnet_fixture_id(self.genesis_hash, devnet_fixture::RUNTIME_TAG),
-            runtime_class_id: devnet_fixture_id(self.genesis_hash, devnet_fixture::CLASS_TAG),
-        }
-    }
-
-    fn project(&self, spec: &LlmJobSpec, prompt: &[u8]) -> Result<MatchProjection, PalwError> {
-        // One shape, checked rather than assumed. The token counts below are the *profile's*, so a
-        // spec with a different ceiling would either produce a receipt claiming more work than its
-        // own spec allowed (`ReceiptExceedsSpecLimit` — zero VLT, silently) or leave the executor
-        // room to decode more than the plan priced. Refusing makes both a logged abstention.
-        if spec.max_tokens != devnet_fixture::JOB_MAX_TOKENS {
-            return Err(PalwError::FixtureJobShape { declared: spec.max_tokens, expected: devnet_fixture::JOB_MAX_TOKENS });
-        }
-        let d = |tag: &str| -> Hash64 {
-            let mut h = Blake2bParams::new().hash_length(64).key(b"misaka-palw-devnet-fixture-v1").to_state();
-            h.update(tag.as_bytes());
-            h.update(self.genesis_hash.as_byte_slice());
-            h.update(spec.model_weights_hash.as_byte_slice());
-            h.update(spec.runtime_hash.as_byte_slice());
-            h.update(&spec.sampling_seed);
-            h.update(prompt);
-            let mut out = [0u8; 64];
-            out.copy_from_slice(h.finalize().as_bytes());
-            Hash64::from_bytes(out)
-        };
-        // The token counts are the registered profile's fixed job shape, NOT a measurement of this
-        // prompt. That is the point: the experiment varies how many jobs a validator completes, so
-        // one job must be worth the same everywhere — 50 VLT, pinned by
-        // `one_fixture_job_is_worth_fifty_vlt`. Sizing them off `prompt.len()` would instead make a
-        // validator's weight a function of the size of a file on its own disk.
-        //
-        // The prompt is still fully inside the projection above (`job_nullifier`,
-        // `request_commitment`, `output_commitment`, …), so two nodes' jobs stay distinct and a
-        // verifier replaying the same `(spec, prompt)` still reproduces the receipt byte for byte.
-        Ok(MatchProjection {
-            job_nullifier: d("job_nullifier"),
-            request_commitment: d("request_commitment"),
-            model_profile_id: spec.model_weights_hash,
-            runtime_class_id: devnet_fixture_id(self.genesis_hash, devnet_fixture::CLASS_TAG),
-            runtime_manifest_hash: spec.runtime_hash,
-            shape_profile_id: d("shape"),
-            cu_ruleset_id: d("cu_ruleset"),
-            canonical_compute_units: 1_024,
-            prefill_tokens: devnet_fixture::JOB_PREFILL_TOKENS,
-            decode_tokens: devnet_fixture::JOB_DECODE_TOKENS,
-            operation_schedule_commitment: d("schedule"),
-            schedule_event_count: 8,
-            output_commitment: d("output"),
-            trace_scheme_id: d("trace_scheme"),
-            gemm_trace_root: d("gemm"),
-            trace_event_count: 16,
-        })
-    }
-}
-
-#[cfg(feature = "devnet-vlt-fixture")]
-impl ComputeRuntime for DevnetFixtureRuntime {
-    fn probe(&self) -> Result<RuntimeIdentity, PalwError> {
-        Ok(self.identity())
-    }
-
-    fn execute(&self, spec: &LlmJobSpec, prompt: &[u8]) -> Result<MatchProjection, PalwError> {
-        self.project(spec, prompt)
-    }
-
-    fn replay(&self, spec: &LlmJobSpec, prompt: &[u8]) -> Result<MatchProjection, PalwError> {
-        self.project(spec, prompt)
-    }
-
-    /// The fixture's own identity is the registered one *on the network it was derived for*, so
-    /// this accepts it and nothing else. It does not accept the real PALW profile: a node running
-    /// the fixture must never be able to pass itself off as a real executor.
-    fn assert_registered(&self) -> Result<(), PalwError> {
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -846,50 +723,6 @@ mod tests {
     fn unregistered_runtimes_are_refused() {
         assert!(matches!(MockRuntime::default().assert_registered(), Err(PalwError::RuntimeIdentityMismatch { .. })));
         assert!(MockRuntime { claim_registered: true, ..Default::default() }.assert_registered().is_ok());
-    }
-
-    /// The fixture exists so that one job is worth one fixed amount of VLT on every node, and that
-    /// has to be a property of the runtime rather than of each operator's configuration — the
-    /// experiment varies how many jobs a validator completes, and nothing else.
-    ///
-    /// So: two prompts of very different lengths, one shape. And the prompt still separates the
-    /// jobs, or five validators would be committing to the same job id and only the first would
-    /// ever be creditable.
-    #[cfg(feature = "devnet-vlt-fixture")]
-    #[test]
-    fn the_fixture_executes_one_job_shape_whatever_the_prompt() {
-        let genesis = Hash64::from_bytes([0x11; 64]);
-        let rt = DevnetFixtureRuntime::new(genesis);
-        let mut s = spec();
-        s.max_tokens = devnet_fixture::JOB_MAX_TOKENS;
-
-        for prompt in [b"x".as_slice(), b"a very much longer prompt than the other one".as_slice()] {
-            let p = rt.execute(&s, prompt).unwrap();
-            assert_eq!(p.prefill_tokens, devnet_fixture::JOB_PREFILL_TOKENS, "prompt length must not price the job");
-            assert_eq!(p.decode_tokens, devnet_fixture::JOB_DECODE_TOKENS);
-        }
-
-        // Same weight, different job: the prompt is still fully inside the projection.
-        assert_ne!(rt.execute(&s, b"a").unwrap(), rt.execute(&s, b"b").unwrap());
-        // A verifier reproduces the executor's projection exactly — the k=2 property the quorum
-        // depends on — and another network's fixture does not.
-        assert_eq!(rt.execute(&s, b"a").unwrap(), DevnetFixtureRuntime::new(genesis).replay(&s, b"a").unwrap());
-        assert_ne!(
-            rt.execute(&s, b"a").unwrap(),
-            DevnetFixtureRuntime::new(Hash64::from_bytes([0x22; 64])).replay(&s, b"a").unwrap(),
-            "a fixture certificate must be meaningless on the network it was not built for"
-        );
-
-        // Any other ceiling is refused rather than repriced. A node quietly executing a 256-token
-        // spec would mint 1 978 VLT for a job every other node priced at 50, and the only visible
-        // symptom would be one validator's weight being wrong.
-        for ceiling in [devnet_fixture::JOB_MAX_TOKENS - 1, devnet_fixture::JOB_MAX_TOKENS + 1, devnet_fixture::MAX_TOKENS] {
-            let off = LlmJobSpec { max_tokens: ceiling, ..s.clone() };
-            assert!(matches!(rt.execute(&off, b"a"), Err(PalwError::FixtureJobShape { .. })), "ceiling {ceiling} must be refused");
-            // Including as a verifier: abstaining costs one verdict, whereas replaying a peer's
-            // off-shape job at this node's own shape would refute it.
-            assert!(matches!(rt.replay(&off, b"a"), Err(PalwError::FixtureJobShape { .. })));
-        }
     }
 
     #[test]

@@ -274,8 +274,8 @@ impl TokenParams {
     }
 
     /// The `D_settle` floor against the credit-finalization depth (design §5.3):
-    /// settlement may only read epochs [`crate::vlt::vlt_epoch_finalized`]
-    /// accepts, so the delay must cover the challenge window plus the reorg
+    /// settlement may only read epochs the (removed) VLT credit finalization
+    /// accepted, so the delay must cover the challenge window plus the reorg
     /// horizon (rounded up to whole epochs, plus one for the partial epoch in
     /// flight), and never sit below the vote-side `credit_delay_epochs`.
     pub fn min_settlement_delay_epochs(

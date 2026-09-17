@@ -3,7 +3,7 @@ use kaspa_muhash::MuHash;
 use std::sync::Arc;
 
 use crate::{
-    BlockHashSet, BlueWorkType, ChainPath, Hash64,
+    BlockHashSet, BlueWorkType, ChainPath,
     acceptance_data::{AcceptanceData, MergesetBlockAcceptanceData},
     api::args::{TransactionValidationArgs, TransactionValidationBatchArgs},
     block::{
@@ -13,8 +13,8 @@ use crate::{
     coinbase::MinerData,
     daa_score_timestamp::DaaScoreTimestamp,
     dns_finality::{
-        ActiveValidatorSet, AttestationQualityDeficit, ComputeStatusView, DnsConfirmation, PendingComputeVerdict, PrecommitDuty,
-        StakeBondPage, StakeBondQuery, StakeBondRecord, ValidatorAttestationTarget, VltStatusView,
+        ActiveValidatorSet, AttestationQualityDeficit, DnsConfirmation, StakeBondPage, StakeBondQuery, StakeBondRecord,
+        ValidatorAttestationTarget,
     },
     errors::{
         block::{BlockProcessResult, RuleError},
@@ -488,48 +488,6 @@ pub trait ConsensusApi: Send + Sync {
         _limit: usize,
     ) -> Vec<ValidatorAttestationTarget> {
         Vec::new()
-    }
-
-    /// MISAKA Verified LLM Token-Weighted BFT: the accepted compute certificates `validator_id`
-    /// was sortitioned to audit and has not published a verdict for, newest first, capped at
-    /// `limit`.
-    ///
-    /// A verifier learns it was drawn by asking this rather than by being told: the certificate,
-    /// its phase-1 commitment (including the job input) and the sortition beacon are all on chain,
-    /// so committee membership is derivable, and it is derived by the same code that credits the
-    /// certificate. A node that guessed differently from consensus would either publish verdicts
-    /// nobody counts or withhold ones a job needs to mint.
-    ///
-    /// Empty below the VLT fence, which is where every shipped preset sits.
-    fn get_pending_compute_verdicts(&self, _validator_id: Hash64, _limit: usize) -> Vec<PendingComputeVerdict> {
-        Vec::new()
-    }
-
-    /// MISAKA Verified LLM Token-Weighted BFT: this validator's own standing in the compute
-    /// overlay — capability expiry, in-class peers, and the commitments it has not certified yet.
-    ///
-    /// `None` when the DNS overlay is not configured for this network.
-    fn get_compute_status(&self, _validator_id: Hash64, _bond_outpoint: TransactionOutpoint) -> Option<ComputeStatusView> {
-        None
-    }
-
-    /// MISAKA: where this network sits on the two-fence activation path, plus the gauges behind
-    /// that decision — `W(E)`, `Q(E)`, the snapshot epoch and its root.
-    ///
-    /// Read from the last recompute rather than derived on demand: deriving it would re-walk the
-    /// credit window, and a metrics scrape must never be able to stall consensus. `None` when the
-    /// DNS overlay is not configured.
-    fn get_vlt_status(&self) -> Option<VltStatusView> {
-        None
-    }
-
-    /// MISAKA §5 round 2: the lock this validator is carrying on the selected chain and the epochs
-    /// it still owes a precommit for.
-    ///
-    /// `None` when the DNS overlay is not configured; `round_active: false` below the VLT weight
-    /// fence, which is where every shipped preset sits.
-    fn get_precommit_duty(&self, _validator_id: Hash64, _bond_outpoint: TransactionOutpoint) -> Option<PrecommitDuty> {
-        None
     }
 
     fn get_sink_daa_score_timestamp(&self) -> DaaScoreTimestamp {

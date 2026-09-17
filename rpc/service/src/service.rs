@@ -1580,10 +1580,6 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         // configured for this network (or no DnsState has been written yet).
         let session = self.consensus_manager.consensus().unguarded_session();
         let confirmation = session.async_get_dns_confirmation().await;
-        // MISAKA: the VLT activation/finality gauges, read from the last recompute rather than
-        // re-derived — a scrape must never re-walk the credit window. `pre_shadow`/zeroes when the
-        // overlay is not configured, which is what a network without the fences is.
-        let vlt = session.async_get_vlt_status().await;
         // Per-block finality is evaluated relative to the stable confirmed anchor; both
         // fields are `Copy`, so snapshot them before `confirmation` is consumed below.
         let anchor_info = confirmation.as_ref().map(|c| (c.last_dns_confirmed_anchor, c.dns_confirmed));
@@ -1612,15 +1608,18 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 block_is_dns_final: false,
                 block_is_confirmed_anchor: false,
                 block_daa_score: 0,
-                vlt_state: vlt.as_ref().map_or("pre_shadow", |v| v.state).to_string(),
-                vlt_shadow_active: vlt.as_ref().is_some_and(|v| v.gauges.shadow_active),
-                vlt_weight_fence_reached: vlt.as_ref().is_some_and(|v| v.gauges.weight_fence_reached),
-                vlt_finality_active: vlt.as_ref().is_some_and(|v| v.gauges.finality_active),
-                vlt_total_weight: vlt.as_ref().map_or(0, |v| v.gauges.total_weight).to_string(),
-                vlt_quorum_weight: vlt.as_ref().map_or(0, |v| v.gauges.quorum_weight).to_string(),
-                vlt_snapshot_epoch: vlt.as_ref().map_or(0, |v| v.gauges.snapshot_epoch),
-                vlt_snapshot_root: vlt.as_ref().map_or(String::new(), |v| v.gauges.snapshot_root.to_string()),
-                vlt_gauges_daa_score: vlt.as_ref().map_or(0, |v| v.sink_daa_score),
+                // The VLT activation state machine and its gauges are removed (VLT voting weight is
+                // gone). The fields stay for wire compatibility and answer what a pre-v4 payload
+                // decodes to: the empty status.
+                vlt_state: "pre_shadow".to_string(),
+                vlt_shadow_active: false,
+                vlt_weight_fence_reached: false,
+                vlt_finality_active: false,
+                vlt_total_weight: "0".to_string(),
+                vlt_quorum_weight: "0".to_string(),
+                vlt_snapshot_epoch: 0,
+                vlt_snapshot_root: String::new(),
+                vlt_gauges_daa_score: 0,
             },
             None => GetDnsConfirmationResponse::default(),
         };
