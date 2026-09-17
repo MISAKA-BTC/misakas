@@ -1,146 +1,133 @@
-# ADR-0126 — The validator overlay retires at a height, and PALW pays no validator
+# ADR-0126 — The validator carve drops to a fifth, and the stake reorg gate stays
 
-* Status: **IMPLEMENTED 2026-09-17, dormant** on `feat/palw-exec-lane-and-validator-retirement`.
-  `Params::palw_validator_overlay_retirement` is `None` on every shipped preset, so no fingerprint and
-  no block moves until a network names its height. Testnet-11's height is the operator's to choose.
-* Operator's direction: "DNS/VLT の committee beacon の使用されてない経路 コードの削除も追加で完了して
-  — これはバリデータに依存してる — PALW はバリデーターを巻き込まないように進めて — 現在の PoW を LLM に
-  置き換えるの方針からずれているため使用しない".
-* Builds on: [0009](0009-dns-probabilistic-finality.md) / [0018](0018-quality-gated-stakescore-inclusion-economics.md)
-  (the overlay and its carve — what retires), [0022](0022-pruned-ibd-evm-overlay-snapshot.md) (the header's
-  overlay root), [0042](0042-palw-mainnet-candidate-ruleset.md) Decision 10 (the PALW worker carve and its escrow),
-  [0109](0109-a-lock-is-its-own-claim-and-finality-is-a-label-not-a-pause.md) (the bridge does not
-  pause on overlay finality). Amends nothing below the height. Supersedes, at and past the height, the
-  overlay's consensus role.
+* Status: **REVISED 2026-09-17, implementation in progress** on `feat/palw-exec-lane-and-validator-retirement`.
+  testnet-11 arms it at DAA 7,001 (§6). The first version of this ADR (same day, never armed anywhere)
+  retired the whole validator overlay at a height; the operator reversed that before any network
+  scheduled it, and this text replaces it (§8).
+* Operator's direction, in the operator's words: "DNS/VLT の committee beacon の使用されてない経路 コードの
+  削除も追加で完了して — これはバリデータに依存してる — PALW はバリデーターを巻き込まないように進めて";
+  then "DNS stake reorg gate は設計上残すように変更して — coinbase の validator 向け 30% から 20% にして
+  DNS stake reorg gate は残して", with the freed tenth going to the PALW escrow and the retirement
+  machinery deleted rather than kept dormant.
+* Builds on: [0018](0018-quality-gated-stakescore-inclusion-economics.md) §F (the overlay's split),
+  [0042](0042-palw-mainnet-candidate-ruleset.md) Decision 10 (the PALW worker carve and its escrow),
+  [0124](0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md)
+  (the escrow is split 80 / 20 at `Final`), [0128](0128-dns-validators-vote-bft-by-bonded-stake-and-that-vote-decides-the-stake-reorg-gate.md)
+  (what the validators the gate needs now vote).
 
 ## 0. The sentence this ADR is
 
-**The validator overlay stops being consensus at one height, and nothing below it changes.** Past
-the height no block pays validators, carries an overlay transaction, commits an overlay root, locks
-or slashes an overlay bond, or asks stake which tip to prefer; the coinbase pays each producer the
-PALW worker carve and every fee, and the shares the overlay paid validators and includers are not
-minted. Below the height every rule is byte-identical, so a chain that ran the overlay validates its
-own history with the same binary that has retired it.
+**From one height the validator pool is 20 % of a block's subsidy instead of 30 %, and the tenth it
+gives up is escrowed for the PALW claim of the block that earned it — 72 % instead of 62 % — so it is
+paid at `Final`, 80 % to the producer and 20 % to its panel; the overlay, its bonds, its attestations
+and its stake reorg gate keep running, and nothing below the height changes.**
 
-## 1. Why a height and not a deletion
+## 1. Why the overlay stays
 
-Testnet-11 runs the overlay. Its tip at DAA 5,709 on 2026-09-17 carries six attestation-shard
-transactions and a coinbase of seven outputs, validator rewards among them; the overlay's carve has
-shaped every coinbase since genesis (worker base 62 %, inclusion 8 %, validator 30 % of the subsidy,
-normal fees 90/10). An uncommitted cleanup deleted those rules outright. A node built from it
-computes a different coinbase for every such block, refuses the attestation subnetwork, and — because
-no fingerprint moved — still peers with the network it can no longer follow. That is a silent fork of
-a live chain, which the project's doctrine forbids ("consensus changes by activation, not
-regenesis").
-
-So the rules that the chain's history depends on stay, gated below a height; the code that no shipped
-network runs is what can be deleted outright (§4).
+The first version retired the overlay because PALW must not depend on validators. It does not: PALW's
+claims, panels, `Final` and safe frontier read nothing of the overlay (ADR-0127 pins it). What the
+operator keeps is the overlay's one consensus role that is not a dependency — the stake reorg gate, a
+veto on reorgs past a validator-confirmed anchor, which ADR-0128 turns into a bonded-stake BFT vote.
+A veto needs voters, so validators keep bonding, attesting and being paid, and a smaller share of the
+subsidy pays them.
 
 ## 2. Decisions
 
-**Decision 1 — one fence.** `palw_validator_overlay_retirement: Option<ForkActivation>`, a top-level
-field hashed Some-only into the params id and the schedule id and visited as a fence, so a preset that
-leaves it unset fingerprints exactly as before. `Params::palw_validator_overlay_retirement_fence`
-answers it only where the network runs an overlay at all. It is resolved at each block's own DAA
-score.
+**Decision 1 — one fence, two numbers.** `Params::palw_overlay_carve: Option<PalwOverlayCarveV1 {
+activation, subsidy_validator_bps, worker_carve_permille }>`, a top-level fence hashed Some-only into
+the params id and the schedule id with its two numbers beside the height, visited as a fence, named to
+the fork-id gate as `palw_overlay_carve`, answered only on a `ConsensusV2` network that runs an
+overlay. `None` on every shipped preset but testnet-11 (§6).
 
-**Decision 2 — past the height the overlay reads as absent.** Every overlay gate in the virtual
-processor already had an arm for a network without an overlay (`dns_params = None`). The retirement
-is that arm, height-indexed: `dns_params_at(daa)` answers `None` at and past the height, and every
-consensus site that took the overlay's params from the processor now takes them at the block's DAA —
-the bond-spend view and the slashing side effects, the attestation eligibility and evidence checks,
-the unbond authorisation, the compute-challenge slashes, the §E participation outputs, the quality
-sub-pool, the audit fee and the reserve drip, the stake bond mutations, the overlay state and the
-epoch accumulator, the template's mandatory deficits, the stake-preferred tip and the stake reorg gate
-(the PALW deep-reorg authority is not the overlay's and keeps deciding).
+**Decision 2 — the overlay's split, from the height.** Where the full split is in force
+(`DnsParams::reward_fee_split` at the block's DAA), past the fence the split's `subsidy_validator_bps`
+is the fence's; the worker base, the split's primary, takes the remainder as it always has, so the
+four parts still sum to the subsidy exactly. The bootstrap split, normal-fee and finality-fee splits
+are untouched. Every reader of the split — the coinbase carve, `coinbase_validator_pool`, the quality
+sub-pool, the audit fee and reserve drip — reads the one height-resolved split, on the build path and
+the validation path alike.
 
-**Decision 3 — the coinbase carves PALW.** `CoinbaseCarve` names the three carves a merged block's
-reward can take: the whole reward (a network without an overlay), the overlay's split, and — past the
-retirement on a PALW network — `PalwStateParamsV2::worker_carve(subsidy)` plus every fee. That is the
-one function a claim's escrow is sized by, so the escrow the coinbase withholds and the share it carves
-remain one number; the rest of the subsidy is not minted, exactly as the overlay's unspent validator
-pool was not. There is no validator pool and no inclusion bounty past the height. A non-PALW network
-that retires its overlay pays the whole reward.
+**Decision 3 — the escrow grows with the worker base.** Past the fence a claim escrows
+`⌊subsidy × worker_carve_permille / 1000⌋` of the block that carried its attempt, and the coinbase
+withholds exactly that for the block — both resolved at **the attempt block's own DAA score**, so the
+carve the fold records and the carve the coinbase withholds remain one number (ADR-0042 Decision 10,
+B-1). ADR-0124's work price, buyback and 80 / 20 split read the escrow and follow it.
 
-**Decision 4 — the header commits no overlay.** Past the height a block's `overlay_commitment_root`
-must be zero (`BadOverlayCommitment` otherwise); the template writes zero. The field stays in the
-header and in its hash, so no identity moves.
+**Decision 4 — refused at start** (`validate_palw_v2`): a fence without `dns_params` or a V2 bundle; an
+activation below `full_reward_split_daa_score`; `subsidy_validator_bps` above the network's full-split
+share (the fence only lowers it); and `worker_carve_permille × 10` above the worker base the new split
+leaves (`10,000 − inclusion − validator − service`) — the carve must fit the share it is carved from,
+the invariant this repository already refuses a bundle on.
 
-**Decision 5 — overlay transactions are refused.** At and past the height the header-context
-transaction rule — which both block validation and the mempool run, at the block's and the virtual
-DAA respectively — refuses every overlay subnetwork (stake bond, attestation shard, slashing evidence,
-unbond, precommit, compute objects) as `SubnetworksDisabled`. Nothing past the height would read one.
-An overlay bond's collateral is an ordinary output from then on: no gate locks it and no evidence can
-burn it.
-
-**Decision 6 — the edges follow.** The EVM bridge treats overlay finality as fresh past the height (it
-must not pause on a clock that has stopped); the mempool's coinbase settlement policy stops waiting on
-an overlay confirmation; a pruning point past the height captures no overlay snapshot, and a pruned
-sync whose witness block is past the height installs none.
+**Decision 5 — the retirement is deleted, not kept.** The first version's machinery — the
+`palw_validator_overlay_retirement` fence, `dns_params_at`, the PALW coinbase carve, the refusal of
+overlay and token transactions, the zero overlay root, the bridge's and the mempool's retirement arms,
+the pruned-sync skip and the wallet's retirement-aware bond release — is removed. No network armed it,
+so no fingerprint and no block moves.
 
 ## 3. What does not change
 
-Every block below the height; the header layout and every hash; PALW's claim lattice, escrow and
-payouts; fork choice among PALW chains; testnet-11 until its height is set.
+Every block below the height; the header and every hash; the overlay root; attestations, bonds,
+unbonding and slashing; the inclusion bounty (8 %) and the fee splits; PALW's claim lattice and fork
+choice.
 
-## 4. What is deleted, and what waits
+## 4. What was deleted on 2026-09-17, and what came back
 
-**Deleted, because no shipped network runs it** (probed on mainnet, testnet-10, testnet-11, devnet and
-simnet: every fence below is unset or `u64::MAX` there). A `DnsParams` field is never removed — the
-struct is hashed whole into the fingerprint — so where a field armed deleted code, node start refuses a
-network that sets it (`validate_palw_v1` / `validate_palw_v2`), rather than running a rule nothing
-enforces.
+**Deleted, because no shipped network runs it** (every fence below is unset or `u64::MAX` on mainnet,
+testnet-10, testnet-11, devnet and simnet; a `DnsParams` field is never removed — the struct is hashed
+whole into the fingerprint — so where a field armed deleted code, node start refuses a network that
+sets it):
+* **PALW's dependence on validators**: the V1 fork choice (tip weights over the overlay's bond view),
+  the V1 credit gate and its audit-call bond gate, the V1 equivocation and step-conviction slashes of
+  overlay bonds, and their write-only indexes. The four V1 fences are refused at start. The ML-DSA-87
+  primitives PALW shares moved to `mldsa87_primitives`.
+* **Hard mandatory attestation inclusion**: the block rule, the template snapshot, the mining lane
+  that covered deficits, and the miner's wait; an overlay whose inclusion fence is set is refused.
+* **The legacy own-body bond spend gate**; an overlay whose mergeset gate starts later is refused.
+* **The token overlay** (`89c8fb0d`): its fold, ledger store, emission settlement and reads; token RPCs
+  answer `available: false`. Transfer and burn payloads keep their stateless check; any `tkn` fence is
+  refused.
+* **VLT voting weight and its shadow bookkeeping** (`4568b082`): the compute-weighted BFT round, frozen
+  voting snapshots, finality certificates, the activation state machine, VLT credits and metrics — the
+  "committee beacon" the operator named. `vlt_activation_daa_score` other than `u64::MAX` is refused.
+  The compute overlay's consensus half (capability declarations, certificate resolution and committee
+  draws, audit-fee outputs, challenge slashes) stays: testnet-10 and testnet-11 run its shadow, and
+  their history needs it.
+* **The window-bound inactivity leak** (`4568b082`), which could not be armed (ADR-0128 §1). ADR-0128
+  re-implements a leak that reads the evidence it needs; `palw_inactivity_leak` stays refused.
+* **The VLT compute worker** and the private-devnet switches that armed the VLT and token fences.
 
-* **The validator's operational code**: the in-node validator service and the VLT compute worker, their
-  flags and the devnet switches that armed the VLT and token fences; the `kaspa-pq-validator` sidecar
-  binary; `misaka validator`, its status reader and the setup purpose; the validator-only builders in
-  `kaspa-pq-validator-core`; the operator scripts, kits and runbooks. The sidecar's EVM bridge deposit —
-  not a validator function — moved to `misaka evm deposit-lock` / `misaka evm claim`.
-* **PALW's dependence on validators**: the V1 fork choice (tip weights over the overlay's bond view), the
-  V1 credit gate and its audit-call bond gate, the V1 equivocation and step-conviction slashes of overlay
-  bonds, and their write-only indexes (the PALW carriage store, the class state store). The four V1
-  fences (`palw_credit`, `palw_fork_choice`, `palw_schedule`, `palw_ramp`) are refused at start. The
-  ML-DSA-87 primitives PALW shares moved to `mldsa87_primitives`; no PALW crate imports the overlay.
-* **Hard mandatory attestation inclusion**: the block rule, the template snapshot, the mining lane that
-  covered deficits, and the miner's wait; an overlay whose inclusion fence is set is refused.
-* **The legacy own-body bond spend gate** (the mergeset gate runs from every overlay's activation); an
-  overlay whose mergeset gate starts later is refused.
-* **The token overlay** (fold, ledger store, emission settlement, reads) — §4a.
-* **VLT voting weight and the inactivity leak** — §4a.
-
-**Waits for the height to be buried**, because testnet-10 and testnet-11 ran it and a node that
-validates their history needs it: the overlay carve and its payouts, attestation and evidence
-validation, the bond set and its spend skip, the overlay root, the stake reorg gate, the VLT shadow's
-consensus half (capability declarations, certificate resolution and committee draws, the audit-fee
-outputs, challenge slashes), precommit-evidence slashing, token transaction payload validation (refused
-past the height), and the stores they read. Once a network's pruning point is past its retirement height
-nothing a node validates reaches them; deleting them then is a code change with no consensus effect on
-that network, and a mainnet that retires the overlay from genesis never needed them.
+**Came back**, because validators keep attesting (§1): the in-node validator service, the
+`kaspa-pq-validator` sidecar, `misaka validator` and the setup purpose, and the validator runbook —
+without the compute worker, compute declarations or verdicts, and without VLT status.
 
 ## 5. Security amendments
 
-* **SA-1 — a flag day, stated as one.** A node without this rule keeps paying validators past the
-  height, so every node must run a build that schedules it before the chain reaches it. The fence
-  moves the fork-id's schedule, which is what lets peers refuse a build that disagrees.
-* **SA-2 — no new issuance.** The retired shares are not redirected: the PALW producer is paid what
-  its escrow was always sized on, and fees, which the overlay split 90/10, now go wholly to the
-  producer.
-* **SA-3 — a straddling reorg is judged per block.** Every gate reads the block's own DAA score, and a
-  selected chain's DAA scores never decrease, so a reorg across the height re-validates each block
-  under the rule of its own side.
-* **SA-4 — the pruned sync cannot be fed a forged overlay past the height** because none is installed
-  there; below it the witness-root check is unchanged.
+* **SA-1 — a flag day, stated as one.** A node without the fence pays validators 30 % past the height
+  and refuses every coinbase that pays 20 %; every node must run a build that schedules it. The height
+  is its own (7,001 beside 7,000's flag day) so the fork-id gate separates the builds.
+* **SA-2 — no new issuance.** The tenth moves from one line of the split to another and is paid, like
+  the rest of the escrow, only if the claim reaches `Final`; a voided claim's escrow is never minted.
+* **SA-3 — construction equals validation** because every split reader and both escrow sites resolve
+  the fence at the same DAA score (the block's for the split, the attempt block's for the escrow).
 
-## 6. Tests
+## 6. testnet-11
 
-`adr0126_the_validator_overlay_retires_at_a_height` (an overlay-live hash network: the overlay's
-worker share below the height and the whole subsidy past it, the overlay root committed then zero, a
-funded stake bond admitted then refused by the mempool and in a block, a block committing an overlay
-past the height disqualified, the chain going on) and `adr0126_a_palw_chain_crosses_the_retirement`
-(a ConsensusV2 chain over the production overlay produces and validates attempt blocks across the
-height, construction and validation agreeing on the PALW carve and the zero root).
+`palw_overlay_carve` = `{ activation: 7,001, subsidy_validator_bps: 2,000, worker_carve_permille: 720 }`:
+worker base 72 %, inclusion 8 %, validator 20 %, service 0. At testnet-11's 4,445.62 MSK block the
+escrow grows from 2,756.28 to 3,200.85 MSK.
 
-## 7. Number hygiene
+## 7. Tests
 
-0126 was free on this branch when written (the README's residency line said so); the next free
-number is 0127.
+The split below and past the height, summing to the subsidy; the escrow and the withhold at the
+attempt block's DAA on both sides of the height; the four refusals; Some-only hashing and the schedule
+id; a pipeline chain crossing the height with template and validation agreeing and the validator pool
+at 20 %.
+
+## 8. Corrections
+
+* **The first version retired the overlay.** It read "PALW must not depend on validators" as "no
+  validator may be consensus". The operator's direction was narrower: PALW does not depend on them,
+  and the stake reorg gate they vote for stays by design. The retirement was deleted before any network
+  scheduled it; its deletion list (§4) was kept, and the validator's operational code it had taken with
+  it was restored.
