@@ -40,12 +40,12 @@ pub(crate) struct Funding {
     ///
     /// Spending it is never what an operator meant: the block carrying the spend is disqualified
     /// from the chain, and where the mergeset spend gate is not armed it is accepted anyway and the
-    /// bond record survives with no backing (audit M1-1). Every other spender excluded it — the
-    /// retired in-node validator called it "a validator self-wedge", and the retired sidecar threaded
-    /// an exclusion through bond, unbond and equivocate. The wallet, which wraps the SAME signing
-    /// path a validator bonded with, did not (audit M1-3): the bond is typically the largest UTXO at
-    /// that address, and selection is largest-first. The overlay keeps running and consensus keeps
-    /// locking its bonds, so the exclusion stays.
+    /// bond record survives with no backing (audit M1-1). Every other spender excludes it — the
+    /// in-node validator calls it "a validator self-wedge", and the sidecar threads an exclusion
+    /// through bond, unbond and equivocate. The wallet, which wraps the SAME signing path a validator
+    /// bonded with, did not (audit M1-3): the bond is typically the largest UTXO at that address, and
+    /// selection is largest-first. The overlay keeps running and consensus keeps locking its bonds
+    /// (ADR-0126, ADR-0128), so the exclusion stays.
     pub(crate) bonded: bool,
 }
 
@@ -130,7 +130,7 @@ impl NodeView {
 /// bond that has completed its unbonding period keeps its record and keeps being returned here —
 /// while consensus positively ALLOWS the spend (`PalwSpendLocks::locks`,
 /// `utxo_validation.rs:238-250`, is false exactly when the bond is `Unbonding` and past its release
-/// height). The retired sidecar's `unbond` only filed the request and refused to touch output-0, so
+/// height). The sidecar's `unbond` only files the request and refuses to touch output-0, so
 /// `wallet send` is the shipped way to reclaim it. Excluding it unconditionally stranded a
 /// mainnet validator's 20M KAS behind a hand-built transaction.
 ///
