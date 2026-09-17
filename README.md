@@ -5,13 +5,33 @@
 The node binary is still named `kaspad` and the crates keep their upstream `kaspa-*` names (this is a fork, not a rename); the **network**, addresses (`misaka…` mainnet / `misakatest…` testnet / `misakadev…` devnet), and project branding are misakas.
 
 > [!IMPORTANT]
-> **Current status (2026-09-13).** The live public network is **`testnet-11`**, Relaunch 5f.
+> **Current status (2026-09-17).** The live public network is **`testnet-11`**, Relaunch 5f.
 > Build current `main`, select it explicitly with `--testnet --netsuffix=11` or
 > `misaka --network testnet-11`, and verify fingerprint
-> **`ae1d61628da50c7becea62f0a8f08c8654d190c60b2e104df0010b121ba4d3d8`**.
+> **`4787b92a0e20065aac88f8258b581f415ace9f6093dfab35c345b48135269005`** (the build that schedules the
+> DAA 7,001 flag day; the 7,000 release prints `ae1d6162…`).
 > The network produces PALW blocks at a frozen 120-second cadence. Testnet-10 and older relaunches
 > are not supported entry points. ADR-0123's epoch-budget release is implemented but remains
 > dormant on every shipped preset (`palw_epoch_budget_release: None`).
+>
+> **Rebuild before DAA 7,001.** From DAA 7,001, together:
+> * **Panels are paid** (ADR-0124): 20 % of a `Final` claim's reward goes to the seats whose `Valid`
+>   receipts the chain credited, a drawn seat holds three times the claim's exposure, and a claim is
+>   paid for the compute it certifies.
+> * **The execution lane opens at one block a second** (ADR-0125): round blocks carry transactions
+>   between the 120-second PALW blocks. They add no confirmations: a payment is as final as the
+>   settled PALW anchors after it (ADR-0127/0129) — `misaka palw settlement --daa <d> --min-depth <n>`
+>   waits for them, and `misaka wallet utxo list` shows each output's depth.
+> * **Validators receive 20 % of a block's subsidy instead of 30 %** (ADR-0126); the tenth is escrowed
+>   for the block's PALW claim and paid at `Final`.
+> * **Validators vote BFT by bonded stake** (ADR-0128): an anchor is DNS-final when more than two thirds
+>   of the counted stake has attested and precommitted to it, and the DNS stake reorg gate refuses
+>   chains that abandon it. Validators restart on this build and precommit without new flags
+>   ([docs/validator-runbook.md](docs/validator-runbook.md)). PALW production and settlement do not
+>   depend on validators; the gate is a veto layered on top.
+>
+> These are consensus rules: a node on the 7,000 release keeps peering until 7,001 and is refused from
+> it.
 
 <details>
 <summary>Historical Relaunch 5f rollout log and crossed fences</summary>
@@ -151,8 +171,8 @@ The log must show this fingerprint and, on the next line, this fence schedule, o
 wrong ruleset:
 
 ```
-Consensus params fingerprint: ae1d61628da50c7becea62f0a8f08c8654d190c60b2e104df0010b121ba4d3d8 (network testnet-11)
-Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 4000, 6900, 7000, 2125000 (schedule id …)
+Consensus params fingerprint: 4787b92a0e20065aac88f8258b581f415ace9f6093dfab35c345b48135269005 (network testnet-11)
+Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 4000, 6900, 7000, 7001, 2125000 (schedule id …)
 ```
 
 A build from `891a1a14` up to `a5f1bdf7` prints `060e3597cd2950bc…` on the first line and the same
@@ -161,8 +181,9 @@ out (the build that added it never wrote it), and writing it moved the value wit
 The two stay peers — the handshake logs `schedules a FUTURE fence differently` between them rather
 than refusing — but rebuilding is how the first line becomes a check again. The second line is the
 one that names heights: a build without `3500` in it forks off at 3,500, one without `4000` at 4,000,
-one without `6900` at 6,900, one without `7000` at 7,000. One case the second line cannot show: `4000`
-and `7000` each carry more than one fence, and a build with only some of them (at 4,000, the audit's
+one without `6900` at 6,900, one without `7000` at 7,000, one without `7001` at 7,001 (the 7,000
+release, `ae1d6162…`). One case the second line cannot show: `4000`, `7000` and `7001` each carry more
+than one fence, and a build with only some of them (at 4,000, the audit's
 alone prints `09efd285…`) shows the same line and parts silently at that height — the first
 line is the check.
 
@@ -452,7 +473,8 @@ kaspa-pq-validator keygen --out val.seed --network testnet
 #    Omit --fee to auto-size it (mass-based; the flat floor is too low for the 2592-byte pubkey).
 kaspa-pq-validator bond --node-rpc 127.0.0.1:27210 --validator-key val.seed \
   --amount 1000000000 --network testnet-11
-# 4. run the validator daemon (attests every epoch while the bond is active)
+# 4. run the validator daemon (attests every epoch while the bond is active, and precommits
+#    where the network schedules ADR-0128's BFT gate — testnet-11 from DAA 7,001)
 kaspa-pq-validator run --node-rpc 127.0.0.1:27210 --validator-key val.seed \
   --stake-bond <txid:index> --signed-epoch-db val.state --network testnet-11 --attest-poll-secs 3
 ```
@@ -466,9 +488,16 @@ current validator runbook and `--help` say otherwise.
 
 Once enough active stake has attested across the recent epochs, `getDnsConfirmation` reports
 `dnsConfirmed: true` plus a `lastDnsConfirmedAnchor` (the stake-confirmed finality point — treat
-this as DNS-final, not the pov-dependent `blockHash` sink). Confirmation is two-dimensional on
-Testnet-11: it requires both anchor-relative `WorkDepth` and `StakeDepth` under the live network
-parameters. The current experimental mesh permits one active validator, but the 10 MSK minimum
+this as DNS-final, not the pov-dependent `blockHash` sink). Below DAA 7,001, confirmation on
+Testnet-11 is two-dimensional: it requires both anchor-relative `WorkDepth` and `StakeDepth` under the
+live network parameters. **From DAA 7,001 it is a vote** (ADR-0128): the confirmed anchor is the newest
+epoch anchor that validators holding more than two thirds of the counted bonded stake have attested
+and precommitted to, voting power is the bond amount, a bond silent for 5,040 DAA (about seven days)
+stops counting until it attests again, and the DNS stake reorg gate refuses chains that abandon the
+confirmed anchor until it goes stale. The sidecar and the in-node validator precommit by themselves
+from `getPrecommitDuty` and keep a second safety log, `<signed-epoch-db>.precommits.json` — back it up
+with the seed. Validators are paid 20 % of each block's subsidy from DAA 7,001 (30 % before). PALW does
+not wait for any of this: its payments settle on PALW anchors (`misaka palw settlement`). The current experimental mesh permits one active validator, but the 10 MSK minimum
 does not bypass the work-depth, anchor-attester or freshness checks. Per-block finality is queryable:
 `getDnsConfirmation` accepts an optional `blockHash` and answers whether that block is DNS-final
 (`blockIsDnsFinal` / `blockIsConfirmedAnchor`); the explorer's **DNS Finality** page lists the
