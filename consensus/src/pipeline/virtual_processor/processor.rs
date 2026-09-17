@@ -4541,10 +4541,13 @@ impl VirtualStateProcessor {
     /// SUPERSET of the escrow set. The amount is `PalwStateParamsV2::worker_carve_at` of the merged
     /// block's own subsidy at the carve resolved at the merged block's own DAA (ADR-0126) — both read
     /// from the SAME `PalwMergedOwnedWorkV1::Attempt` fields the fold escrows from — so the carve
-    /// withheld and the carve recorded are one number on both the build and validate paths. That subsidy is `calc_block_subsidy(the block's DAA)`, which for an
-    /// attempt block equals the coinbase-declared subsidy the block is actually paid from (body
-    /// validation pins it; an attempt block is never a heartbeat), so the withheld carve never
-    /// exceeds the worker share the coinbase would otherwise pay (`validate_palw_v2`'s carve bound).
+    /// withheld and the carve recorded are one number on both the build and validate paths. That
+    /// subsidy is `calc_block_subsidy(the block's DAA)`, which for an attempt block equals the
+    /// coinbase-declared subsidy the block is actually paid from (body validation pins it; an attempt
+    /// block is never a heartbeat), so the withheld carve never exceeds the worker share the coinbase
+    /// would otherwise pay (`validate_palw_v2`'s carve bounds: the bundle's against the network's
+    /// split, and ADR-0126's against the split it lowers — which the paying block carves with
+    /// whenever its own DAA is at or past the merged block's).
     ///
     /// **Empty below `palw_audit_2026_09_11_deep`** and on every network without a V2 bundle, where
     /// merged carves are paid in full at acceptance (ADR-0058 Decision 5) — byte-identical to before.
