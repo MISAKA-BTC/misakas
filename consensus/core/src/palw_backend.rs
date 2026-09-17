@@ -476,6 +476,19 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     ) -> Result<Vec<crate::palw_artifact::PalwArtifactOpeningV1>, String> {
         Err("this execution family cannot be adjudicated".to_string())
     }
+    /// **ADR-0135 Decision 4: the artifact's row inventory as digests** — every leaf's hash, none
+    /// of its bytes — so a seat can find the leaf a readiness challenge names and root a proof
+    /// without holding the inventory's bytes in memory. `Err` for a family that cannot root.
+    fn artifact_inventory_digest(&self) -> Result<crate::palw_artifact::PalwArtifactInventoryDigestV1, String> {
+        Err("this execution family cannot root its artifact".to_string())
+    }
+
+    /// **One leaf of the artifact, opened against the class root** (ADR-0135 Decision 4): the row's
+    /// bytes and its Merkle path, for a `SeatReadinessProved`. `Err` for a family that cannot root,
+    /// or an index outside the inventory.
+    fn artifact_row_opening(&self, _index: u32) -> Result<crate::palw_artifact::PalwArtifactOpeningV1, String> {
+        Err("this execution family cannot open its artifact".to_string())
+    }
 
     /// **The free-prompt run, streamed** (ADR-0077 Decision 2): `on_token` is called with each
     /// generated id in decode order, as soon as it is selected, from the SAME run whose capture

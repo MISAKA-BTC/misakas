@@ -2193,6 +2193,30 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         recorder.openings().ok_or_else(|| "the inventory could not open a recorded row".to_string())
     }
 
+    fn artifact_inventory_digest(&self) -> Result<kaspa_consensus_core::palw_artifact::PalwArtifactInventoryDigestV1, String> {
+        let profile = self.profile.as_ref().ok_or_else(|| "this backend holds no registered graph to root against".to_string())?;
+        crate::inventory::qwen36_inventory_digest_v1(&self.artifact, profile).map_err(|e| format!("{e:?}"))
+    }
+
+    fn artifact_row_opening(&self, index: u32) -> Result<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1, String> {
+        let profile = self.profile.as_ref().ok_or_else(|| "this backend holds no registered graph to open against".to_string())?;
+        // The digest roots the path; one pass over the rows copies the bytes of the named leaf alone —
+        // a 33 GiB artifact is never held in memory to open one row of it.
+        let digest = crate::inventory::qwen36_inventory_digest_v1(&self.artifact, profile).map_err(|e| format!("{e:?}"))?;
+        let mut at = 0u32;
+        let mut wanted: Option<Vec<u8>> = None;
+        crate::inventory::qwen36_visit_inventory_rows_v1(&self.artifact, profile, &mut |_name, _layer, _row_start, bytes| {
+            if at == index {
+                wanted = Some(bytes.to_vec());
+            }
+            at = at.saturating_add(1);
+            Ok(())
+        })
+        .map_err(|e| format!("{e:?}"))?;
+        let bytes = wanted.ok_or_else(|| format!("leaf {index} is outside an inventory of {}", digest.leaf_count()))?;
+        digest.opening_v1(index, bytes).ok_or_else(|| format!("leaf {index} does not open against the digest"))
+    }
+
     fn execute_with_injected_fault(
         &self,
         job: &PalwJobContextV2,

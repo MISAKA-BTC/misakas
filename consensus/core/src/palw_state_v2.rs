@@ -7941,6 +7941,7 @@ impl<'a> TransitionBuilder<'a> {
     /// panel voids as `NoCapablePanel` — the capacity's failure, named — otherwise `BindTimeout`.
     fn bind_timeout_reason(&self, claim: &PalwClaimStateV2, ctx: &PalwBlockContextV2) -> PalwVoidReasonV2 {
         if let Some(fold) = self.model_registry_fold()
+            && fold.governs_at(ctx.daa_score)
             && claim.class_id != self.params.base_class_id()
             && self.state.model_lifecycles.contains_key(&claim.class_id)
             && self.model_registry_ready_seats(&claim.class_id, ctx.daa_score, fold) < fold.globals.seat_count as u32
@@ -7980,6 +7981,7 @@ impl<'a> TransitionBuilder<'a> {
         };
         let Some(fold) = self.model_registry_fold().cloned() else { return };
         let base = self.params.base_class_id();
+        let governs = fold.governs_at(ctx.daa_score);
         let class_ids: Vec<Hash64> = self.state.classes.keys().copied().collect();
         for class_id in &class_ids {
             if self.state.model_lifecycles.contains_key(class_id) {
@@ -8015,6 +8017,11 @@ impl<'a> TransitionBuilder<'a> {
                     admission_milli: 0,
                 }),
             );
+        }
+        // The activation grace: rows are open and proofs are taken, but nothing is stepped and no
+        // share moves until the fence is one readiness age old — the seats' time to prove.
+        if !governs {
+            return;
         }
         let mut admissions: Vec<(Hash64, u64)> = Vec::new();
         let rowed: Vec<Hash64> = self.state.model_lifecycles.keys().copied().collect();
@@ -17288,7 +17295,7 @@ pub(crate) mod tests {
                 PalwModelWorkV1 { verification_ccu: 1_000, economic_ccu_per_claim: 500, ops_supported: true, ..Default::default() },
             );
             genesis_works.insert(kimi_id(), kimi_work);
-            PalwModelRegistryFoldV1 { globals: PALW_REGISTRY_GLOBALS_V1, span_daa: SPAN, genesis_works }
+            PalwModelRegistryFoldV1 { globals: PALW_REGISTRY_GLOBALS_V1, span_daa: SPAN, genesis_works, grace_until_daa: 0 }
         }
 
         /// A Kimi-class work the floor's globals derive a small profile from: window 2, 7 ready seats.
@@ -17604,6 +17611,94 @@ pub(crate) mod tests {
             let base_env = attempt(40, 9);
             step(&s11, &p, &ctx(12, 140 + age + SPAN + 1, 12), &[], Some(&base_env), Some(f.clone()))
                 .expect("the base class keeps producing");
+        }
+
+        /// **The activation grace**: rows open and proofs are taken from the fence, but nothing is
+        /// stepped, judged by evidence or voided as `NoCapablePanel` until the fence is one
+        /// readiness age old — so a live class is not HELD at activation for want of proofs the
+        /// fence itself refused.
+        #[test]
+        fn adr0135_the_activation_grace_opens_rows_and_takes_proofs_but_steps_nothing_until_it_ends() {
+            let p = params();
+            let (operands, root) = inventory();
+            let s5 = kimi_with_a_final(&p, root);
+            let mut f = fold(kimi_work());
+            f.grace_until_daa = 150;
+            let (s6, _) = step(&s5, &p, &ctx(6, 130, 6), &[], None, Some(f.clone())).unwrap();
+            let kimi = s6.model_lifecycle(&kimi_id()).expect("rows open at the boundary even in grace");
+            assert_eq!(kimi.state, PalwModelLifecycleV1::Active, "opened ACTIVE from its Final and NOT stepped to HELD");
+            assert_eq!(s6.class_shares.get(&h64(1)).copied(), Some(1000), "no share moves in grace");
+            // Kimi keeps producing in grace, and a bind window that closes voids as BindTimeout, not NoCapablePanel.
+            let env = kimi_attempt(2, root);
+            let claim_id = attempt_id_v2(&env.attempt);
+            let (s7, _) = step(&s6, &p, &ctx(7, 131, 7), &[], Some(&env), Some(f.clone())).expect("admitted in grace");
+            let (s8, _) = step(&s7, &p, &ctx(8, 142, 8), &[], None, Some(f.clone())).unwrap();
+            assert!(matches!(
+                s8.claim(&claim_id).unwrap().phase,
+                PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, .. }
+            ));
+            // Proofs are taken in grace; the first boundary past it steps: seven proofs keep Kimi ACTIVE.
+            let proofs: Vec<PalwConsensusObjectV2> = (2..=8).map(|n| proof(&operands, bond_key(n), 14)).collect();
+            let (s9, _) = step(&s8, &p, &ctx(9, 143, 9), &proofs, None, Some(f.clone())).unwrap();
+            let (s10, _) = step(&s9, &p, &ctx(10, 150, 10), &[], None, Some(f.clone())).unwrap();
+            let kimi = s10.model_lifecycle(&kimi_id()).unwrap();
+            assert_eq!((kimi.state, kimi.ready_seats), (PalwModelLifecycleV1::Active, 7), "governed from the grace's end");
+            // …and without the proofs the same boundary would have held it.
+            let (held, _) = step(&s8, &p, &ctx(9, 150, 9), &[], None, Some(f.clone())).unwrap();
+            assert_eq!(held.model_lifecycle(&kimi_id()).unwrap().state, PalwModelLifecycleV1::Held);
+        }
+
+        /// A proof replayed from an earlier span is refused; the same proof twice in one span is
+        /// idempotent (the row is rewritten, nothing accrues); and reverting the block that took a
+        /// proof drops its row.
+        #[test]
+        fn adr0135_a_proof_is_not_replayable_across_spans_and_is_idempotent_within_one() {
+            let p = params();
+            let (operands, root) = inventory();
+            let f = fold(kimi_work());
+            let (s1, _) = step(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &network(root), None, Some(f.clone())).unwrap();
+            let object = proof(&operands, bond_key(2), 10);
+            let (s2, d2) = step(&s1, &p, &ctx(2, 101, 2), &[object.clone()], None, Some(f.clone())).unwrap();
+            let (s3, _) = step(&s2, &p, &ctx(3, 102, 3), &[object.clone()], None, Some(f.clone())).unwrap();
+            assert_eq!(s3.seat_readiness_iter().count(), 1, "one row, however many times the span's proof lands");
+            assert_eq!(s3.seat_readiness(&bond_key(2), &kimi_id()).unwrap().proved_daa, 102, "the latest landing is the row");
+            let replayed = step(&s3, &p, &ctx(4, 125, 4), &[object], None, Some(f.clone()));
+            assert!(matches!(replayed, Err(PalwStateV2Error::ReadinessProofRefused(_))), "span 10's proof at span 12: {replayed:?}");
+            let back = revert_delta_v2(&s2, &d2, &p).unwrap();
+            assert!(back.seat_readiness_iter().next().is_none() && back.state_root() == s1.state_root());
+        }
+
+        /// The boundary step is a function of the state alone: the same parent and block give the
+        /// same child however many times they are folded, and shares always sum to 1,000 across
+        /// randomised admissions (a fixed-seed walk, not a clock).
+        #[test]
+        fn adr0135_the_step_is_deterministic_and_the_shares_conserve_under_random_admission() {
+            use crate::palw_model_registry_v1::palw_registry_shares_v1;
+            let p = params();
+            let (operands, root) = inventory();
+            let f = fold(kimi_work());
+            let (s1, _) = step(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &network(root), None, Some(f.clone())).unwrap();
+            let proofs: Vec<PalwConsensusObjectV2> = (2..=8).map(|n| proof(&operands, bond_key(n), 10)).collect();
+            let (s2, _) = step(&s1, &p, &ctx(2, 101, 2), &proofs, None, Some(f.clone())).unwrap();
+            let a = step(&s2, &p, &ctx(3, 110, 3), &[], None, Some(f.clone())).unwrap();
+            let b = step(&s2, &p, &ctx(3, 110, 3), &[], None, Some(f.clone())).unwrap();
+            assert_eq!(a.0.state_root(), b.0.state_root(), "the fold is a function of its inputs");
+            assert_eq!(a.1.entries.len(), b.1.entries.len());
+            let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+            for _ in 0..200 {
+                let n = (x % 6) as usize + 1;
+                let mut rows = Vec::new();
+                for i in 0..n {
+                    x ^= x << 13;
+                    x ^= x >> 7;
+                    x ^= x << 17;
+                    rows.push((h64(100 + i as u64), x % 5_000));
+                }
+                let base = h64(1);
+                let shares = palw_registry_shares_v1(&rows, base, 300);
+                assert_eq!(shares.values().map(|s| *s as u32).sum::<u32>(), 1_000, "{rows:?}");
+                assert!(shares[&base] >= 300);
+            }
         }
 
         #[test]

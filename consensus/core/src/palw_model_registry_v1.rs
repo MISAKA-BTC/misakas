@@ -388,8 +388,9 @@ pub fn palw_lifecycle_step_v1(
 /// draw (the prefill draw job) — the cadence step multiplies it by the class's expected draws a
 /// claim (Q32, from its live target), so the profile follows the target and the graph, never a
 /// declaration. `artifact_bytes` is an estimate from the graph's dense weights (two bytes a weight
-/// at the per-token dense MAC count), used only for the prefetch allowance; a manifest that carries
-/// the bytes is V2's.
+/// at the per-token dense MAC count), used only for the prefetch allowance — **never for admission,
+/// the bond, the window or the inflight cap** (those read the compute); a manifest that carries the
+/// bytes is V2's, and until then no rule may start reading this field.
 pub fn palw_model_work_from_carriage_v1(
     profile: &crate::palw_step::PalwShapeProfileV3,
     canonical: &crate::palw_v2::PalwJobContextV2,
@@ -480,6 +481,23 @@ pub struct PalwModelRegistryFoldV1 {
     pub globals: PalwRegistryGlobalsV1,
     pub span_daa: u64,
     pub genesis_works: BTreeMap<Hash64, PalwModelWorkV1>,
+    /// **The activation grace** (ADR-0135 §7): proofs are refused below the fence, so at activation
+    /// no seat is ready and every live class would be HELD at the first boundary. Until this DAA
+    /// (the fence plus one readiness age) the rows open and proofs are taken but no row is stepped
+    /// and the draw keeps judging by declaration; from it the registry governs. `0` = no grace.
+    pub grace_until_daa: u64,
+}
+
+impl PalwModelRegistryFoldV1 {
+    /// Whether the registry governs (steps rows, judges by evidence) at `daa_score`.
+    pub fn governs_at(&self, daa_score: u64) -> bool {
+        daa_score >= self.grace_until_daa
+    }
+
+    /// One readiness age past the fence: the grace every activation gets.
+    pub fn grace_until_v1(activation_daa: u64, span_daa: u64, globals: &PalwRegistryGlobalsV1) -> u64 {
+        activation_daa.saturating_add((globals.readiness_probe_max_age_spans as u64).saturating_mul(span_daa.max(1)))
+    }
 }
 
 /// **The draw's readiness policy** under the registry: a seat may judge a class only with a
@@ -584,6 +602,9 @@ pub struct PalwModelRegistryReadV1 {
     /// The fence's height, if scheduled, and whether it is in force at the tip.
     pub fence_daa: Option<u64>,
     pub active: bool,
+    /// The registry governs from here (the fence plus one readiness age); before it rows open and
+    /// proofs are taken but nothing is stepped or judged by evidence.
+    pub grace_until_daa: u64,
     pub span_daa: u64,
     pub globals: Option<PalwRegistryGlobalsV1>,
     pub classes: Vec<PalwModelRegistryClassReadV1>,
@@ -593,12 +614,15 @@ pub struct PalwModelRegistryReadV1 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwModelRegistryClassReadV1 {
     pub class_id: Hash64,
+    pub artifact_root: Hash64,
     pub is_base_class: bool,
     pub row: Option<PalwModelLifecycleRowV1>,
     /// Ready seats and claims in flight read NOW (the row keeps the last boundary's reading).
     pub ready_seats_now: u32,
     pub inflight_now: u32,
     pub share_permille: Option<u16>,
+    /// Claims of the class voided as `NoCapablePanel` (the capacity's failure, counted).
+    pub no_capable_panel_voids: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -607,6 +631,39 @@ pub struct PalwSeatReadinessReadV1 {
     pub class_id: Hash64,
     pub row: PalwSeatReadinessRowV1,
     pub fresh: bool,
+    /// Why the seat does not count as ready now, if it does not: `stale`, `bond inactive`,
+    /// `below floor`, `collateral short`; empty while it counts.
+    pub not_ready_reason: String,
+}
+
+/// Why a seat with a proof does not count as ready for a class now, or `None` while it does.
+pub fn palw_seat_not_ready_reason_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    params: &crate::palw_state_v2::PalwStateParamsV2,
+    bond_key: &crate::palw_state_v2::PalwBondKeyV2,
+    row: &PalwSeatReadinessRowV1,
+    now_daa: u64,
+    fold: &PalwModelRegistryFoldV1,
+) -> Option<&'static str> {
+    let max_age_daa = (fold.globals.readiness_probe_max_age_spans as u64).saturating_mul(fold.span_daa.max(1));
+    let floor = params.min_collateral_sompi();
+    let needed = (floor as u128).saturating_mul(fold.globals.readiness_collateral_multiple as u128);
+    let Some(bond) = state.bond(bond_key) else { return Some("bond missing") };
+    if !matches!(bond.status, crate::palw_state_v2::PalwBondStatusV2::Active) {
+        return Some("bond inactive");
+    }
+    if !crate::palw_state_v2::palw_bond_may_take_work_v2(bond, floor) {
+        return Some("below floor");
+    }
+    if now_daa.saturating_sub(row.proved_daa) > max_age_daa {
+        return Some("stale");
+    }
+    let held = state.reserved_exposure(bond_key).saturating_add(state.registration_exposure(bond_key));
+    let free = (bond.collateral as u128).saturating_sub(bond.slashed as u128).saturating_sub(held);
+    if free < needed {
+        return Some("collateral short");
+    }
+    None
 }
 
 /// The seats ready for a class now (ADR-0135 Decision 4), as the fold counts them: active, above
@@ -667,13 +724,28 @@ pub fn palw_model_registry_read_v1(
     let base = params.base_class_id();
     let classes = state
         .classes_iter()
-        .map(|(class_id, _)| PalwModelRegistryClassReadV1 {
+        .map(|(class_id, record)| PalwModelRegistryClassReadV1 {
             class_id: *class_id,
+            artifact_root: record.artifact_root,
             is_base_class: *class_id == base,
             row: state.model_lifecycle(class_id).cloned(),
             ready_seats_now: fold.map(|f| palw_model_registry_ready_seats_v1(state, params, class_id, tip_daa, f)).unwrap_or(0),
             inflight_now: palw_model_registry_inflight_v1(state, class_id),
             share_permille: state.class_share_permille(class_id),
+            no_capable_panel_voids: state
+                .claims_iter()
+                .filter(|(_, c)| {
+                    c.class_id == *class_id
+                        && matches!(
+                            c.phase,
+                            crate::palw_state_v2::PalwClaimPhaseV2::Voided {
+                                reason: crate::palw_state_v2::PalwVoidReasonV2::NoCapablePanel,
+                                ..
+                            }
+                        )
+                })
+                .count()
+                .min(u32::MAX as usize) as u32,
         })
         .collect();
     let max_age_daa = fold.map(|f| (f.globals.readiness_probe_max_age_spans as u64).saturating_mul(f.span_daa.max(1)));
@@ -684,16 +756,44 @@ pub fn palw_model_registry_read_v1(
             class_id: *class_id,
             row: *row,
             fresh: max_age_daa.is_some_and(|age| tip_daa.saturating_sub(row.proved_daa) <= age),
+            not_ready_reason: fold
+                .and_then(|f| palw_seat_not_ready_reason_v1(state, params, bond, row, tip_daa, f))
+                .unwrap_or("")
+                .to_string(),
         })
         .collect();
     PalwModelRegistryReadV1 {
         tip_daa,
         fence_daa,
         active: fold.is_some(),
+        grace_until_daa: fold.map(|f| f.grace_until_daa).unwrap_or(0),
         span_daa: fold.map(|f| f.span_daa).unwrap_or(0),
         globals: fold.map(|f| f.globals),
         classes,
         readiness,
+    }
+}
+
+/// **When a seat's node should submit a fresh possession proof** (the node's duty, ADR-0135 §7):
+/// when the chain holds no proof of this bond for the class, or the one it holds is older than
+/// half the readiness age (so a proof lands before the old one goes stale), and never twice in
+/// one span. Pure, so the node's cadence is testable: a restart re-reads the chain's row and does
+/// not re-send what is fresh.
+pub fn palw_readiness_duty_due_v1(
+    row: Option<&PalwSeatReadinessRowV1>,
+    now_daa: u64,
+    span_now: u64,
+    last_submitted_span: Option<u64>,
+    span_daa: u64,
+    g: &PalwRegistryGlobalsV1,
+) -> bool {
+    if last_submitted_span == Some(span_now) {
+        return false;
+    }
+    let age_daa = (g.readiness_probe_max_age_spans as u64).saturating_mul(span_daa.max(1));
+    match row {
+        None => true,
+        Some(row) => now_daa.saturating_sub(row.proved_daa) > age_daa / 2,
     }
 }
 
@@ -924,5 +1024,25 @@ mod tests {
             .map(|(w, p)| w.economic_ccu_per_claim.saturating_mul(p.admission_claims_per_span_milli as u128) / 1_000)
             .sum();
         assert!(spent <= 3 * G.budget_ccu_per_span, "each class spends at most the budget; a global cap then scales them");
+    }
+
+    #[test]
+    fn adr0135_the_node_proves_when_the_chain_has_no_fresh_proof_and_never_twice_a_span() {
+        let g = PALW_REGISTRY_GLOBALS_V1;
+        let span = 5;
+        assert!(palw_readiness_duty_due_v1(None, 1_000, 200, None, span, &g), "no proof on the chain: due");
+        assert!(!palw_readiness_duty_due_v1(None, 1_000, 200, Some(200), span, &g), "already sent this span");
+        let fresh = PalwSeatReadinessRowV1 { proved_daa: 990, proved_span: 198, leaf_index: 3 };
+        assert!(!palw_readiness_duty_due_v1(Some(&fresh), 1_000, 200, None, span, &g), "a fresh proof is not repeated");
+        let half = PalwSeatReadinessRowV1 {
+            proved_daa: 1_000 - (g.readiness_probe_max_age_spans as u64 * span) / 2 - 1,
+            proved_span: 0,
+            leaf_index: 3,
+        };
+        assert!(
+            palw_readiness_duty_due_v1(Some(&half), 1_000, 200, None, span, &g),
+            "past half the age: renewed before it goes stale"
+        );
+        assert!(!palw_readiness_duty_due_v1(Some(&half), 1_000, 200, Some(200), span, &g));
     }
 }

@@ -550,6 +550,22 @@ impl PalwProducerService {
             // only inside its use window, so the hold did not delay a free-prompt executor's pay, it
             // forfeited it. The bond that fills its ceiling is exactly the one committing
             // free-prompt claims.
+            // ADR-0135: the registry's class-local gate, read before a draw is built. Not a rule of
+            // this node's — the fold refuses what it refuses — but a draw for a HELD class or one at
+            // its inflight cap is a block the chain will not take, so it is not built.
+            if let Some(detail) = self.registry_holds_class(&session) {
+                self.flow_context.update_palw_runtime(|r| r.set_producer("holding", &detail));
+                let stale = last_hold_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
+                if last_hold.as_deref() != Some(detail.as_str()) || stale {
+                    info!("[{PALW_PRODUCER}] holding: {detail}");
+                    last_hold = Some(detail);
+                    last_hold_at = Some(std::time::Instant::now());
+                }
+                if !self.tick(std::time::Duration::from_secs(5)).await {
+                    break;
+                }
+                continue;
+            }
             if facts.ready_to_spend_receipts(&self.verification_key()).is_ok() {
                 match self.produce_receipt(&session, network_domain, bond, miner_data.clone()).await {
                     Ok(Some(hash)) => {
@@ -742,6 +758,31 @@ impl PalwProducerService {
     /// anchor's bucket and no timestamp moves; the ADR-0071 audit measured the search this
     /// replaced at four million free draws per inference. What a producer re-rolls is the
     /// inference itself: the next bucket is a different job. `cursor` is where that walk stands.
+    /// ADR-0135: why the registry would refuse this class's next claim now, if it would — `None`
+    /// below the fence, during the activation grace, for the base class, and for a class the
+    /// registry admits with room in flight.
+    fn registry_holds_class(&self, session: &kaspa_consensusmanager::ConsensusProxy) -> Option<String> {
+        let read = session.palw_model_registry_v1()?;
+        if !read.active || read.tip_daa < read.grace_until_daa {
+            return None;
+        }
+        let class = read.classes.iter().find(|c| c.class_id == self.config.class_id)?;
+        if class.is_base_class {
+            return None;
+        }
+        let row = class.row.as_ref()?;
+        if !row.state.admits_claims() {
+            return Some(format!("the model registry holds class {}: {:?} since span {}", class.class_id, row.state, row.since_span));
+        }
+        if class.inflight_now >= row.profile.max_inflight_claims {
+            return Some(format!(
+                "class {} is at the registry's inflight cap ({} of {})",
+                class.class_id, class.inflight_now, row.profile.max_inflight_claims
+            ));
+        }
+        None
+    }
+
     async fn produce_one(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,

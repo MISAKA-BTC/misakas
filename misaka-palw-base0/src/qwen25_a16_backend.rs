@@ -2510,6 +2510,18 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         recorder.openings().ok_or_else(|| "the inventory could not open a recorded row".to_string())
     }
 
+    fn artifact_inventory_digest(&self) -> Result<kaspa_consensus_core::palw_artifact::PalwArtifactInventoryDigestV1, String> {
+        let inventory = crate::inventory::a16_inventory_v1(&self.artifact, &self.profile).map_err(|e| format!("{e:?}"))?;
+        let rows = inventory.operands().iter().map(kaspa_consensus_core::palw_artifact::PalwArtifactRowDigestV1::of).collect();
+        kaspa_consensus_core::palw_artifact::PalwArtifactInventoryDigestV1::new(rows).map_err(|e| format!("{e:?}"))
+    }
+
+    fn artifact_row_opening(&self, index: u32) -> Result<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1, String> {
+        let inventory = crate::inventory::a16_inventory_v1(&self.artifact, &self.profile).map_err(|e| format!("{e:?}"))?;
+        kaspa_consensus_core::palw_artifact::open_artifact_leaf_v1(inventory.operands(), index)
+            .ok_or_else(|| format!("leaf {index} is outside an inventory of {}", inventory.operands().len()))
+    }
+
     fn execute_with_injected_fault(
         &self,
         job: &PalwJobContextV2,

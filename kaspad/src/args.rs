@@ -326,6 +326,10 @@ pub struct Args {
     /// ADR-0125 on a private devnet: open the execution lane — `activation,width,span[,daa:width…]`
     /// (the opening DAA, the first width, the schedule span, then any widenings).
     pub palw_execution_lane_devnet: Option<String>,
+    /// ADR-0135 on a private devnet: arm the permissionless model registry at this DAA score. Needs
+    /// the execution lane at or below it; arms the panel economy at the same height where the devnet
+    /// has none (the registry reads seat exposure).
+    pub palw_model_registry_devnet_daa: Option<u64>,
     /// PALW on a PRIVATE devnet: run the floor-only ruleset (the base class alone, seeded by
     /// ADR-0076 with the whole share, `MAX/278`) instead of the shipped devnet's testnet-11 class
     /// set, whose floor holds a sliver of the share and prices a fixture block at minutes per
@@ -450,6 +454,7 @@ impl Default for Args {
             palw_shard_licensing_devnet_daa: None,
             palw_held_context_devnet: false,
             palw_execution_lane_devnet: None,
+            palw_model_registry_devnet_daa: None,
             palw_devnet_floor_only: false,
             testnet: false,
             testnet_suffix: 10,
@@ -658,6 +663,29 @@ impl Args {
             config.params.palw_execution_lane = Some(lane);
             if let Err(e) = config.params.validate_palw_v2() {
                 panic!("--palw-execution-lane-devnet={spec} produced a ruleset the node refuses: {e:?}");
+            }
+        }
+
+        // **ADR-0135 on a private devnet: the model registry.** After the lane, which it needs; the
+        // panel economy it reads is armed at the same height where the devnet has none.
+        if let Some(daa) = self.palw_model_registry_devnet_daa {
+            let net = self.network().network_type();
+            if !matches!(net, NetworkType::Devnet | NetworkType::Simnet) {
+                panic!(
+                    "--palw-model-registry-devnet is devnet/simnet only (got {net:?}). Arming the registry is a consensus \
+                     change and ships in a release, not a command line."
+                );
+            }
+            if !matches!(config.params.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)) {
+                panic!("--palw-model-registry-devnet needs a ConsensusV2 network, and {net:?} here is not one");
+            }
+            let at = kaspa_consensus_core::config::params::ForkActivation::new(daa);
+            if config.params.palw_panel_economy.is_none() {
+                config.params.palw_panel_economy = Some(at);
+            }
+            config.params.palw_model_registry = Some(at);
+            if let Err(e) = config.params.validate_palw_v2() {
+                panic!("--palw-model-registry-devnet={daa} produced a ruleset the node refuses: {e:?}");
             }
         }
 
@@ -1285,6 +1313,19 @@ pub fn cli() -> Command {
                 .env("KASPAD_PALW_EXECUTION_LANE_DEVNET"),
         )
         .arg(
+            Arg::new("palw-model-registry-devnet")
+                .long("palw-model-registry-devnet")
+                .value_name("daa-score")
+                .value_parser(clap::value_parser!(u64))
+                .require_equals(false)
+                .help(
+                    "ADR-0135 on a PRIVATE devnet: arm the permissionless model registry at this DAA score. Needs \
+                     --palw-execution-lane-devnet at or below it; arms the panel economy at the same height where the devnet \
+                     has none. DEVNET/SIMNET ONLY; in the consensus fingerprint.",
+                )
+                .env("KASPAD_PALW_MODEL_REGISTRY_DEVNET"),
+        )
+        .arg(
             Arg::new("palw-shard-licensing-devnet")
                 .long("palw-shard-licensing-devnet")
                 .value_name("daa-score")
@@ -1649,6 +1690,10 @@ impl Args {
                 .get_one::<String>("palw-execution-lane-devnet")
                 .cloned()
                 .or(defaults.palw_execution_lane_devnet),
+            palw_model_registry_devnet_daa: m
+                .get_one::<u64>("palw-model-registry-devnet")
+                .copied()
+                .or(defaults.palw_model_registry_devnet_daa),
             palw_devnet_floor_only: arg_match_unwrap_or::<bool>(&m, "palw-devnet-floor-only", defaults.palw_devnet_floor_only),
             utxoindex: arg_match_unwrap_or::<bool>(&m, "utxoindex", defaults.utxoindex),
             testnet: arg_match_unwrap_or::<bool>(&m, "testnet", defaults.testnet),

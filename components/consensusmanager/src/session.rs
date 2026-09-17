@@ -411,6 +411,11 @@ impl ConsensusSessionOwned {
         self.consensus.palw_model_line_v1(line_id)
     }
 
+    /// ADR-0135: the model registry as the tip state holds it — rows, ready seats, proofs.
+    pub fn palw_model_registry_v1(&self) -> Option<kaspa_consensus_core::palw_model_registry_v1::PalwModelRegistryReadV1> {
+        self.consensus.palw_model_registry_v1()
+    }
+
     /// ADR-0088 Decision 12: one version of a line, with its usage and evaluations.
     pub fn palw_model_version_v1(
         &self,

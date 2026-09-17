@@ -1084,6 +1084,18 @@ impl PalwExecutionBackendV1 for Base0Backend {
         );
         recorder.openings().ok_or_else(|| "the inventory cannot open a row its own oracle resolved".to_string())
     }
+
+    fn artifact_inventory_digest(&self) -> Result<kaspa_consensus_core::palw_artifact::PalwArtifactInventoryDigestV1, String> {
+        let inventory = crate::inventory::base0_inventory_v1(&self.artifact, self.inventory_geometry).map_err(|e| format!("{e:?}"))?;
+        let rows = inventory.operands().iter().map(kaspa_consensus_core::palw_artifact::PalwArtifactRowDigestV1::of).collect();
+        kaspa_consensus_core::palw_artifact::PalwArtifactInventoryDigestV1::new(rows).map_err(|e| format!("{e:?}"))
+    }
+
+    fn artifact_row_opening(&self, index: u32) -> Result<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1, String> {
+        let inventory = crate::inventory::base0_inventory_v1(&self.artifact, self.inventory_geometry).map_err(|e| format!("{e:?}"))?;
+        kaspa_consensus_core::palw_artifact::open_artifact_leaf_v1(inventory.operands(), index)
+            .ok_or_else(|| format!("leaf {index} is outside an inventory of {}", inventory.operands().len()))
+    }
 }
 
 /// The capture's leaf hashes, laid out BY POSITION over the whole step space.

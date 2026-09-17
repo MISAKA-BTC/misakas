@@ -462,6 +462,14 @@ pub struct PalwPanelService {
     /// executor's own evidence cleared the leaf). Bounded: cleared past
     /// [`Self::LEAF_PURSUITS_CAP`], which at worst asks again.
     leaf_pursuits: std::sync::Mutex<HashMap<Hash64, LeafPursuitV1>>,
+    /// ADR-0135: the span each class's last readiness proof was submitted in (never twice a span),
+    /// the artifact digests this seat rooted (one pass per class per run), and the reason a class
+    /// gets no proof from this node, logged once.
+    readiness_submitted: std::sync::Mutex<HashMap<Hash64, u64>>,
+    readiness_digests:
+        std::sync::Mutex<HashMap<Hash64, std::sync::Arc<kaspa_consensus_core::palw_artifact::PalwArtifactInventoryDigestV1>>>,
+    readiness_logged: std::sync::Mutex<HashMap<Hash64, String>>,
+    readiness_read_at: std::sync::Mutex<Option<std::time::Instant>>,
     /// **What this node has already opened, so a second ask is not a second replay.**
     ///
     /// Keyed by the request as it was served — the claim, the request index, and the disputed
@@ -693,8 +701,158 @@ impl PalwPanelService {
             seat_faults: std::sync::Mutex::new(Default::default()),
             sample_refusals_logged: std::sync::Mutex::new(HashSet::new()),
             leaf_pursuits: std::sync::Mutex::new(HashMap::new()),
+            readiness_submitted: std::sync::Mutex::new(HashMap::new()),
+            readiness_digests: std::sync::Mutex::new(HashMap::new()),
+            readiness_logged: std::sync::Mutex::new(HashMap::new()),
+            readiness_read_at: std::sync::Mutex::new(None),
             shutdown: SingleTrigger::default(),
         }
+    }
+
+    /// Log a class's readiness verdict once per change, not once per tick.
+    fn readiness_note(&self, class_id: Hash64, note: String) {
+        let mut logged = self.readiness_logged.lock().unwrap();
+        if logged.get(&class_id) != Some(&note) {
+            info!("[{PALW_PANEL}] readiness for class {class_id}: {note}");
+            logged.insert(class_id, note);
+        }
+    }
+
+    /// **ADR-0135 Decision 4, the seat's side: the possession proofs due now.** Every thirty
+    /// seconds the registry is read; for each non-base class the registry governs or is about to
+    /// (proofs are taken from the fence, through the grace), a proof is built when the chain holds
+    /// none of this bond's for the class or the one it holds is past half the readiness age
+    /// (`palw_readiness_duty_due_v1`), and never twice in a span. The proof opens the first leaf
+    /// under the opening cap inside the window the (class, bond, span) challenge names, roots it
+    /// against the class's registered artifact locally before it is signed, and is signed by the
+    /// bond's key. **Fail-closed**: a class this node holds no artifact for, or holds under a
+    /// different root, gets no proof and is named once in the log — the node is not a seat for it.
+    fn readiness_duties(&self, session: &kaspa_consensusmanager::ConsensusProxy, current_daa: u64) -> Vec<PalwConsensusObjectV2> {
+        use kaspa_consensus_core::palw_model_registry_v1::{
+            PALW_READINESS_OPENING_MAX_BYTES_V1, PALW_SEAT_READINESS_V1_MLDSA87_CONTEXT, palw_readiness_challenge_seed_v1,
+            palw_readiness_duty_due_v1, palw_readiness_window_v1, palw_seat_readiness_message_v1,
+        };
+        let Some(bond) = self.bond else { return Vec::new() };
+        if self.keypair.is_none() {
+            return Vec::new();
+        }
+        {
+            let mut at = self.readiness_read_at.lock().unwrap();
+            if at.is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(30)) {
+                return Vec::new();
+            }
+            *at = Some(std::time::Instant::now());
+        }
+        let Some(read) = session.palw_model_registry_v1() else { return Vec::new() };
+        let (true, Some(globals)) = (read.active, read.globals) else { return Vec::new() };
+        if read.span_daa == 0 {
+            return Vec::new();
+        }
+        let span_now = current_daa / read.span_daa;
+        let bond_key = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(bond);
+        let bond_bytes = borsh::to_vec(&bond_key).expect("a bond key is borsh-serializable");
+        let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.consensus_config.params.net.to_string().as_bytes(),
+            Some(self.consensus_config.genesis.hash),
+        );
+        let backends = self.backends();
+        let mut out = Vec::new();
+        for class in read.classes.iter().filter(|c| !c.is_base_class) {
+            let row = read.readiness.iter().find(|r| r.bond == bond_key && r.class_id == class.class_id).map(|r| r.row);
+            let last = self.readiness_submitted.lock().unwrap().get(&class.class_id).copied();
+            if !palw_readiness_duty_due_v1(row.as_ref(), current_daa, span_now, last, read.span_daa, &globals) {
+                continue;
+            }
+            let backend = match backends.resolve(class.class_id, class.artifact_root) {
+                Ok(backend) => backend,
+                Err(e) => {
+                    self.readiness_note(
+                        class.class_id,
+                        format!("no proof — this node holds no artifact for it ({e}); not a seat for it"),
+                    );
+                    continue;
+                }
+            };
+            let digest = {
+                let cached = self.readiness_digests.lock().unwrap().get(&class.class_id).cloned();
+                match cached {
+                    Some(digest) => digest,
+                    None => {
+                        let started = std::time::Instant::now();
+                        match backend.artifact_inventory_digest() {
+                            Ok(digest) => {
+                                info!(
+                                    "[{PALW_PANEL}] rooted the artifact of class {} in {:.1} s: {} leaves, root {}",
+                                    class.class_id,
+                                    started.elapsed().as_secs_f64(),
+                                    digest.leaf_count(),
+                                    digest.root()
+                                );
+                                let digest = std::sync::Arc::new(digest);
+                                self.readiness_digests.lock().unwrap().insert(class.class_id, digest.clone());
+                                digest
+                            }
+                            Err(e) => {
+                                self.readiness_note(class.class_id, format!("no proof — the held artifact cannot be rooted ({e})"));
+                                continue;
+                            }
+                        }
+                    }
+                }
+            };
+            if digest.root() != class.artifact_root {
+                self.readiness_note(
+                    class.class_id,
+                    format!("no proof — the held artifact roots {} but the class registered {}", digest.root(), class.artifact_root),
+                );
+                continue;
+            }
+            let seed = palw_readiness_challenge_seed_v1(&class.class_id, &bond_bytes, span_now);
+            let (start, width) = palw_readiness_window_v1(&seed, digest.leaf_count());
+            let mut opened = None;
+            for offset in 0..width.max(1) {
+                let index = (start as u64 + offset as u64) % digest.leaf_count().max(1) as u64;
+                match backend.artifact_row_opening(index as u32) {
+                    Ok(opening) if opening.operand.bytes.len() <= PALW_READINESS_OPENING_MAX_BYTES_V1 => {
+                        if let Err(e) = kaspa_consensus_core::palw_artifact::verify_artifact_opening_v1(&opening, class.artifact_root)
+                        {
+                            self.readiness_note(
+                                class.class_id,
+                                format!("no proof — leaf {index} does not open the registered root ({e})"),
+                            );
+                            break;
+                        }
+                        opened = Some(opening);
+                        break;
+                    }
+                    Ok(_) => continue,
+                    Err(e) => {
+                        self.readiness_note(class.class_id, format!("no proof — leaf {index} cannot be opened ({e})"));
+                        break;
+                    }
+                }
+            }
+            let Some(opening) = opened else { continue };
+            let message = palw_seat_readiness_message_v1(domain, &bond_bytes, &class.class_id, span_now, opening.leaf_index);
+            let Some(signature) = self.sign(message.as_byte_slice(), PALW_SEAT_READINESS_V1_MLDSA87_CONTEXT) else { continue };
+            self.readiness_note(
+                class.class_id,
+                format!(
+                    "proving leaf {} of {} for span {span_now} ({} bytes)",
+                    opening.leaf_index,
+                    digest.leaf_count(),
+                    opening.operand.bytes.len()
+                ),
+            );
+            out.push(PalwConsensusObjectV2::SeatReadinessProved {
+                bond: bond_key,
+                class_id: class.class_id,
+                span: span_now,
+                opening,
+                signature,
+            });
+        }
+        out
     }
 
     fn fee_state_path(&self) -> PathBuf {
@@ -4777,6 +4935,45 @@ impl PalwPanelService {
                             }
                             Err(e) => warn!("[{PALW_PANEL}] cannot build the class registration carrier: {e}"),
                         }
+                    }
+                }
+                // ADR-0135: this seat's possession proofs, when the registry is in force and one is due.
+                for object in self.readiness_duties(&session, current_daa) {
+                    let PalwConsensusObjectV2::SeatReadinessProved { class_id, span, .. } = &object else { continue };
+                    let (class_id, span) = (*class_id, *span);
+                    let Some((funding_outpoint, funding_entry)) = funding.clone().filter(|_| inflight < MAX_INFLIGHT_CARRIERS) else {
+                        break;
+                    };
+                    match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
+                        Ok(tx) => {
+                            let txid = tx.id();
+                            let change = tx.outputs[0].clone();
+                            match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
+                                Ok(()) => {
+                                    info!(
+                                        "[{PALW_PANEL}] submitted a readiness proof for class {class_id} (span {span}) in tx {txid}"
+                                    );
+                                    self.readiness_submitted.lock().unwrap().insert(class_id, span);
+                                    let next = TransactionOutpoint::new(txid, 0);
+                                    self.persist_fee_outpoint(next);
+                                    funding = Some((
+                                        next,
+                                        UtxoEntry {
+                                            amount: change.value,
+                                            script_public_key: change.script_public_key,
+                                            block_daa_score: current_daa,
+                                            is_coinbase: false,
+                                        },
+                                    ));
+                                    inflight += 1;
+                                }
+                                Err(e) => {
+                                    warn!("[{PALW_PANEL}] the mempool refused the readiness proof for class {class_id}: {e}");
+                                    funding = None;
+                                }
+                            }
+                        }
+                        Err(e) => warn!("[{PALW_PANEL}] cannot build the readiness proof carrier for class {class_id}: {e}"),
                     }
                 }
                 // The court's moves first: a rung has a deadline and a receipt quorum does not.

@@ -7715,10 +7715,22 @@ impl VirtualStateProcessor {
             return None;
         }
         let lane = self.palw_execution_lane_at(daa_score)?;
+        // The panel's seat count is the network's (the bundle's panel params), not the global
+        // constant's: a devnet with three-seat panels needs five ready seats, testnet-11 seven.
+        let mut globals = kaspa_consensus_core::palw_model_registry_v1::PALW_REGISTRY_GLOBALS_V1;
+        if let Some(panel) = self.palw_panel_params_v2.as_ref() {
+            globals.seat_count = panel.seat_count();
+        }
+        let activation_daa = self.palw_model_registry.map(|f| f.daa_score()).unwrap_or(0);
         Some(kaspa_consensus_core::palw_model_registry_v1::PalwModelRegistryFoldV1 {
-            globals: kaspa_consensus_core::palw_model_registry_v1::PALW_REGISTRY_GLOBALS_V1,
+            globals,
             span_daa: lane.schedule_span_daa,
             genesis_works: self.palw_genesis_model_works.clone(),
+            grace_until_daa: kaspa_consensus_core::palw_model_registry_v1::PalwModelRegistryFoldV1::grace_until_v1(
+                activation_daa,
+                lane.schedule_span_daa,
+                &globals,
+            ),
         })
     }
 
@@ -7729,6 +7741,9 @@ impl VirtualStateProcessor {
         anchor_daa: u64,
     ) -> Option<kaspa_consensus_core::palw_model_registry_v1::PalwReadinessPolicyV1> {
         let fold = self.palw_model_registry_fold_at(anchor_daa)?;
+        if !fold.governs_at(anchor_daa) {
+            return None;
+        }
         let state = self.palw_state_params_v2.as_ref()?;
         Some(kaspa_consensus_core::palw_model_registry_v1::PalwReadinessPolicyV1 {
             now_daa: anchor_daa,

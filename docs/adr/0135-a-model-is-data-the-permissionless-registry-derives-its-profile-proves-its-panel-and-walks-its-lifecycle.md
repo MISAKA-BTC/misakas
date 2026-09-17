@@ -213,11 +213,60 @@ inflight cap refuses the claim after the cap; `NoCapablePanel` names the void an
 through probation, and an operator outage (every proof aged out) holds it alone; the discriminant
 pins (void reason 4, the object as the enum's last variant, delta entries 51 and 52).
 
-**Not built, stated.** The node's own proof submitter (a panel opening the challenged leaf from its
-loaded artifact every few spans) and the producer's pre-check of a class's state before drawing —
-node-side, no rule; the manifest's own `artifact_bytes` and a manifest transaction distinct from
-today's `ClassRegistered` (the carriage already carries the graph and the canonical job, which is
-what the profile reads); the possession proof's width (one leaf a proof, V1); a held class's
+**The seat's side, built the same night.** The panel service submits `SeatReadinessProved` on its
+own (`readiness_duties`): every thirty seconds it reads op 186; for each non-base class the
+registry is in force for it proves when the chain holds none of this bond's proofs for the class
+or the one it holds is past half the readiness age (`palw_readiness_duty_due_v1` — a restart
+re-reads the chain and never re-sends a fresh proof), never twice in a span; the leaf is the first
+under the opening cap inside the challenge's window, opened from the held artifact
+(`PalwExecutionBackendV1::artifact_row_opening`; a Qwen3.6-class artifact is rooted in one
+streaming pass and never held in memory), rooted locally against the class's registered root
+before it is signed by the bond's key. **Fail-closed**: a class this node holds no artifact for, or
+holds under a different root, gets no proof and is named once in the log. The producer reads the
+same op before a draw and holds (a log line, no rule) for a class the registry holds or has at its
+inflight cap. `--palw-model-registry-devnet=<daa>` arms the registry on a private devnet (with the
+panel economy it reads, where the devnet has none).
+
+**The activation grace.** Proofs are refused below the fence, so at the fence no seat is ready and
+every live class would be HELD at the first boundary. The fold therefore opens rows and takes
+proofs from the fence but steps no row, moves no share, judges no draw by evidence and names no
+`NoCapablePanel` until the fence is one readiness age old (`PalwModelRegistryFoldV1::grace_until_daa`,
+30 spans); the classes registered before the fence open in the state their history earns (ACTIVE
+with a `Final`, PREFETCHING without) and are governed from the grace's end. A test walks it.
+
+**What the review asked, answered.**
+
+* *Migration at activation*: nothing is migrated — the rows are derived at the first boundary from
+  the chain (the base class ACTIVE; a class with a `Final` ACTIVE; a class with work and no `Final`
+  PREFETCHING; a class the fence found without a carriage, none — never gated); the work comes
+  from the bundle's genesis registrations, the same on every node.
+* *Determinism*: the profile, the observation and the step read the state, the block context and
+  `PalwTransitionExtrasV1` built from `Params` — no clock, no local store, no RPC; the fold test
+  folds one block twice and compares roots, and the delta reverts to the parent.
+* *Expiry*: a proof counts for 30 spans of DAA and no longer; a bond that leaves `Active`, drops
+  below the floor or loses its collateral headroom stops counting at the next reading whatever its
+  proof says; a class's artifact is its registration — a new root is a new class and new rows.
+* *Inflight*: never a counter. Claims in flight are counted from the claims at every reading
+  (accepted, not terminal), so a `Final`, a void, a timeout or a reorg needs no decrement.
+* *NoCapablePanel*: named once per claim when its bind window closes without a panel; a HELD class
+  takes no new claim, so nothing loops; with zero eligible seats the claim voids and the class holds.
+* *Cadence*: shares move on the first block of a span (the lane's `opens_span`); a class enters the
+  lottery when its share is above zero — ACTIVE_LIMITED or ACTIVE — and its share key must already
+  exist (the registration grants it).
+* *Old nodes*: a build without the fence cannot decode `SeatReadinessProved`, and past the fence
+  computes no rows and no reasons — but it never gets there: the fork-id gate names the height, so
+  it is refused as a peer from the fence; below the fence the new build refuses the object, so no
+  block carries one.
+* *Observability*: op 186 prints each class's state, `since_span`, ready seats and claims in flight
+  now, utilization, admission, `no_capable_panel_voids`, and each proof's freshness with the reason
+  it does not count (`stale`, `bond inactive`, `below floor`, `collateral short`).
+
+**`artifact_bytes` is not consensus-critical.** It is an estimate from the graph's dense weights and
+feeds the prefetch allowance only; admission, the bond, the window and the inflight cap read the
+compute. No rule may start reading it before a manifest carries the value (V2).
+
+**Not built, stated.** The manifest's own `artifact_bytes` and a manifest transaction distinct from
+today's `ClassRegistered`; the possession proof's width (one leaf a proof, V1); a held class's
 existing claims run to their end untouched. The PALW state sync path (`PalwStateSyncV2`, unused by
 the live node) carries no lane and no registry.
 
