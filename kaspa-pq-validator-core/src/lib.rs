@@ -1606,6 +1606,15 @@ impl SignedPrecommitRecord {
     }
 }
 
+/// **Where a validator's precommit safety log lives: beside its attestation log**,
+/// `<state>.precommits.json` (`val.state` → `val.precommits.json`). One spelling for the in-node
+/// service's `--validator-state` and the sidecar's `--signed-epoch-db`, so an operator who moves a
+/// validator from one to the other with the same state path keeps the precommits it already
+/// released — the log is what refuses a contradicting one.
+pub fn precommit_log_path(state_path: &std::path::Path) -> PathBuf {
+    state_path.with_extension("precommits.json")
+}
+
 /// The lock a precommit declares: `None` for the zero lock, which is what a validator with no counted
 /// precommit holds and what [`ValidatorKey::sign_precommit`] signs for `None`.
 pub fn declared_precommit_lock(held: PrecommitLock) -> Option<PrecommitLock> {
@@ -2755,6 +2764,11 @@ mod tests {
             PRECOMMIT_PAYLOAD_BYTES - bytes
         );
 
+        assert_eq!(precommit_log_path(std::path::Path::new("val.state")), PathBuf::from("val.precommits.json"));
+        assert_eq!(
+            precommit_log_path(std::path::Path::new("/var/lib/misaka/validator-state.json")),
+            PathBuf::from("/var/lib/misaka/validator-state.precommits.json")
+        );
         assert_eq!(declared_precommit_lock(PrecommitLock::default()), None, "the zero lock is declared as none");
         assert_eq!(declared_precommit_lock(held), Some(held));
         assert_eq!(

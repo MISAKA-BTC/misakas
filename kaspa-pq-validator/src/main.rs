@@ -4,7 +4,9 @@
 //! (borsh) endpoint and, once its stake bond is active, attests to the selected-chain
 //! anchor each epoch: it fetches the ready-to-sign target over wRPC, signs it with its
 //! ML-DSA-87 validator key (under the equivocation-safety guard), funds a
-//! `StakeAttestationShard` transaction from a UTXO at its own address, and submits it.
+//! `StakeAttestationShard` transaction from a UTXO at its own address, and submits it. Where the
+//! network runs the precommit round (ADR-0128's BFT gate), it then locks on the epoch the node's
+//! precommit duty names (`getPrecommitDuty`, op 183), under a second guard, the precommit log.
 //! The signing primitives are shared with the in-process `--enable-validator` service via
 //! `kaspa-pq-validator-core`.
 //!
@@ -22,14 +24,16 @@ use kaspa_consensus_core::dns_finality::{
 };
 use kaspa_consensus_core::mass::{MassCalculator, UtxoCell, calc_storage_mass};
 use kaspa_consensus_core::network::{EndpointKind, NetworkId, NetworkType};
-use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint, UtxoEntry};
+use kaspa_consensus_core::tx::{Transaction, TransactionId, TransactionOutpoint, UtxoEntry};
 use kaspa_core::{info, warn};
 use kaspa_pq_validator_core::{
-    SignedEpochStore, VALIDATOR_SEED_LEN, ValidatorKey, is_spendable, load_validator_seed, parse_stake_bond_ref, select_funding,
+    PRECOMMIT_PAYLOAD_BYTES, SignedEpochStore, SignedPrecommitRecord, SignedPrecommitStore, VALIDATOR_SEED_LEN, ValidatorKey,
+    declared_precommit_lock, is_spendable, load_validator_seed, parse_stake_bond_ref, pick_precommit_due, precommit_log_path,
+    select_funding,
 };
 use kaspa_rpc_core::{
-    GetStakeBondRequest, GetValidatorAttestationTargetResponse, GetValidatorAttestationTargetsRequest, RpcError, RpcTransaction,
-    api::rpc::RpcApi,
+    GetPrecommitDutyRequest, GetPrecommitDutyResponse, GetStakeBondRequest, GetValidatorAttestationTargetResponse,
+    GetValidatorAttestationTargetsRequest, RpcError, RpcTransaction, api::rpc::RpcApi,
 };
 use kaspa_wrpc_client::{
     KaspaRpcClient, WrpcEncoding,
@@ -39,9 +43,15 @@ use rand::RngCore;
 use std::collections::{HashMap, HashSet};
 use std::process::ExitCode;
 use std::str::FromStr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const VALIDATOR: &str = "kaspa-pq-validator";
+
+/// How long a failed `getPrecommitDuty` read is not repeated. A node built before op 183 does not
+/// answer "method not found": it closes the WebSocket, and every read after it on that connection
+/// fails until the client reconnects. Asking once per this interval keeps the attestation loop, which
+/// shares the connection, from being cut every poll against such a node.
+const PRECOMMIT_DUTY_RETRY: Duration = Duration::from_secs(600);
 
 /// Kaspa-PQ validator sidecar (ADR-0011).
 #[derive(Parser, Debug)]
@@ -1036,15 +1046,26 @@ async fn run_daemon(args: RunArgs) -> Result<(), String> {
         params.storage_mass_parameter,
         params.max_block_mass,
         params.genesis.hash.as_byte_slice().to_vec(),
+        &params,
     )?;
     match &attestor {
-        Some(a) => info!(
-            "[{VALIDATOR}] attesting as validator_id={} (funding {}, fee {} sompi{})",
-            a.key.validator_id,
-            a.key.funding_address(prefix),
-            a.attestation_fee,
-            if args.fee.is_some() { "" } else { ", mass-based" }
-        ),
+        Some(a) => {
+            info!(
+                "[{VALIDATOR}] attesting as validator_id={} (funding {}, fee {} sompi{})",
+                a.key.validator_id,
+                a.key.funding_address(prefix),
+                a.attestation_fee,
+                if args.fee.is_some() { "" } else { ", mass-based" }
+            );
+            if a.precommit_round_configured {
+                info!(
+                    "[{VALIDATOR}] precommitting where the round is live (safety log {} with {} prior precommit(s), fee {} sompi)",
+                    a.precommit_log.display(),
+                    a.signed_precommits.record_count(),
+                    a.precommit_fee
+                );
+            }
+        }
         None => info!("[{VALIDATOR}] observe-only (need --validator-key + --stake-bond + --signed-epoch-db to attest)"),
     }
 
@@ -1125,12 +1146,80 @@ struct Attestor {
     /// during congestion, re-funding from confirmed UTXOs creates parallel funding chains and
     /// amplifies the flood.
     stalled_epochs: u64,
+    /// **ADR-0128 Decision 7: the precommits this validator released**, at
+    /// [`precommit_log_path`] of `--signed-epoch-db` — the in-node service's spelling, so a validator
+    /// moved between the two keeps the log that refuses a contradicting precommit. Loaded with the
+    /// attestation log; no precommit is signed without it.
+    signed_precommits: SignedPrecommitStore,
+    precommit_log: std::path::PathBuf,
+    /// Whether this network runs a precommit round at all. Where it does not, op 183 is never asked.
+    precommit_round_configured: bool,
+    /// The precommit carrier's fee, mass-based on [`PRECOMMIT_PAYLOAD_BYTES`] (`--fee` sizes the
+    /// attestation shard only).
+    precommit_fee: u64,
+    /// When the duty read last failed; see [`PRECOMMIT_DUTY_RETRY`].
+    precommit_duty_failed_at: Option<Instant>,
+    /// The precommit this process last submitted. The duty keeps naming its epoch until a chain block
+    /// accepts the carrier and the chain counts the lock, so while the carrier is in the mempool — or
+    /// for [`Self::precommit_resubmit_after`] after it left — the same vote is not re-funded every poll.
+    inflight_precommit: Option<InflightPrecommit>,
+    /// Two target block times, at least a minute: long enough for an accepted carrier to be counted
+    /// by the duty the node evaluates at its next sink.
+    precommit_resubmit_after: Duration,
+    /// The last duty this process logged a refusal or a dry run for, so a 3-second poll does not
+    /// repeat the same line.
+    precommit_last_logged: Option<(u64, Hash64, u64)>,
+}
+
+/// A precommit carrier submitted and not yet seen counted.
+struct InflightPrecommit {
+    epoch: u64,
+    target_hash: Hash64,
+    txid: TransactionId,
+    submitted_at: Instant,
+}
+
+/// **The precommit a duty asks this validator to sign now**, parsed from the node's answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PrecommitPlan {
+    epoch: u64,
+    target_hash: Hash64,
+    target_daa_score: u64,
+    snapshot_commitment: Hash64,
+    /// The lock the chain shows this validator holding — the zero lock before its first counted one.
+    held: PrecommitLock,
+    /// The oldest due epoch, when the backlog was deep enough to skip to the frontier.
+    skipped_from: Option<u64>,
+}
+
+/// What `duty` asks for: `None` where the node has no view, the round is not live or nothing is due;
+/// otherwise the epoch [`pick_precommit_due`] picks — oldest first, the frontier past a deep backlog —
+/// over the due list sorted by epoch (the transport's order is not relied on). A hash the node sent
+/// that does not parse is an error: nothing is signed over a value this process could not read.
+fn plan_precommit(duty: &GetPrecommitDutyResponse) -> Result<Option<PrecommitPlan>, String> {
+    if !duty.available || !duty.round_active {
+        return Ok(None);
+    }
+    let mut due: Vec<_> = duty.due.iter().collect();
+    due.sort_by_key(|due| due.epoch);
+    let Some((&pick, skipped)) = pick_precommit_due(&due, |due| due.epoch) else {
+        return Ok(None);
+    };
+    Ok(Some(PrecommitPlan {
+        epoch: pick.epoch,
+        target_hash: parse_hash64(&pick.anchor_hash)?,
+        target_daa_score: pick.anchor_daa_score,
+        snapshot_commitment: parse_hash64(&pick.snapshot_commitment)?,
+        held: PrecommitLock { epoch: duty.held_epoch, anchor: parse_hash64(&duty.held_anchor)? },
+        skipped_from: skipped.then(|| due.first().map_or(pick.epoch, |oldest| oldest.epoch)),
+    }))
 }
 
 impl Attestor {
     /// Load the signing identity iff `--validator-key`, `--stake-bond` and
     /// `--signed-epoch-db` are all provided. The state file is rejected if it belongs to a
     /// different validator/bond (cross-key equivocation guard).
+    #[allow(clippy::too_many_arguments)]
     fn load(
         args: &RunArgs,
         prefix: Prefix,
@@ -1139,6 +1228,7 @@ impl Attestor {
         storage_mass_parameter: u64,
         max_tx_mass: u64,
         genesis_hash: Vec<u8>,
+        params: &Params,
     ) -> Result<Option<Self>, String> {
         let (Some(key_path), Some(bond_ref), Some(db)) = (&args.validator_key, &args.stake_bond, &args.signed_epoch_db) else {
             return Ok(None);
@@ -1146,6 +1236,9 @@ impl Attestor {
         let key = ValidatorKey::from_seed(load_validator_seed(key_path)?);
         let bond_outpoint = parse_stake_bond_ref(bond_ref)?;
         let signed_store = SignedEpochStore::load_or_empty(db.into(), key.validator_id, bond_outpoint)?;
+        let precommit_log = precommit_log_path(std::path::Path::new(db));
+        let signed_precommits = SignedPrecommitStore::load_or_empty(precommit_log.clone(), key.validator_id, bond_outpoint)?;
+        let precommit_fee = key.estimate_overlay_fee(mass_calc, prefix, PRECOMMIT_PAYLOAD_BYTES, false);
         // Mass-based fee unless overridden (mirrors `bond`/`unbond`): an explicit `--fee` wins, else
         // size it from the network mass params (≈ 290 000 sompi for the shard's 4627-byte signature).
         let attestation_fee = args.fee.unwrap_or_else(|| key.estimate_attestation_fee(mass_calc, prefix));
@@ -1165,6 +1258,15 @@ impl Attestor {
             chain_head_txid: None,
             chain_head_epoch: None,
             stalled_epochs: 0,
+            signed_precommits,
+            precommit_log,
+            precommit_round_configured: network_runs_a_precommit_round(params),
+            precommit_fee,
+            precommit_duty_failed_at: None,
+            inflight_precommit: None,
+            precommit_resubmit_after: Duration::from_millis(params.target_time_per_block().saturating_mul(2))
+                .max(Duration::from_secs(60)),
+            precommit_last_logged: None,
         }))
     }
 
@@ -1329,34 +1431,7 @@ impl Attestor {
         // Chain off our own change while it covers the fee (the mempool accepts a chained spend of an
         // unconfirmed parent) — NO node fetch. Otherwise page the funding address for a mature
         // confirmed UTXO (bounded scan; never the full 88k set).
-        let (funding_outpoint, funding_entry) = match &self.pending_change {
-            // Chain off our own change only while it (a) covers the fee, (b) is not already
-            // in flight, and (c) would produce a tx whose KIP-0009 storage mass stays safely
-            // under the block mass ceiling. The change shrinks by `fee` every epoch, so without
-            // (c) the funding chain eventually builds a tx the mempool rejects with
-            // `storage mass … > …` (~hourly), missing that epoch until the next tick re-seeds.
-            Some((op, en))
-                if en.amount > fee
-                    && !self.inflight_spent.contains_key(op)
-                    && chained_tx_storage_mass_safe(en, fee, self.storage_mass_parameter, self.max_tx_mass) =>
-            {
-                (*op, en.clone())
-            }
-            _ => {
-                self.pending_change = None;
-                self.chain_head_txid = None;
-                select_funding_paged(
-                    client,
-                    &funding_addr,
-                    &self.inflight_spent,
-                    self.bond_outpoint,
-                    fee,
-                    virtual_daa,
-                    self.coinbase_maturity,
-                )
-                .await?
-            }
-        };
+        let (funding_outpoint, funding_entry) = self.next_funding(client, &funding_addr, fee, virtual_daa).await?;
 
         let tx = self.key.build_funded_shard_tx(&shard, funding_outpoint, &funding_entry, fee)?;
 
@@ -1369,28 +1444,236 @@ impl Attestor {
         match client.submit_transaction(RpcTransaction::from(&tx), false).await {
             Ok(txid) => {
                 info!("[{VALIDATOR}] submitted attestation shard for epoch {} (txid={txid})", target.epoch);
-                // Advance the funding chain: this tx's change output (index 0, back to self) funds the
-                // next epoch. The tx id excludes signature scripts, so it is stable post-sign and
-                // matches the id the node assigns.
-                self.inflight_spent.insert(funding_outpoint, tx.id());
-                let change = UtxoEntry::new(funding_entry.amount - fee, funding_entry.script_public_key.clone(), virtual_daa, false);
-                self.pending_change = Some((TransactionOutpoint::new(tx.id(), 0), change));
-                // Record the head tx id (for the per-txid mempool confirmation lookup) and which
-                // epoch produced it (so the stall counter advances once per unconfirmed epoch).
-                self.chain_head_txid = Some(tx.id());
+                self.chain_submitted(funding_outpoint, &funding_entry, &tx, fee, virtual_daa);
+                // Which epoch produced the head, so the stall counter advances once per unconfirmed epoch.
                 self.chain_head_epoch = Some(target.epoch);
                 Ok(())
             }
             Err(e) => {
-                // Submit failed ⇒ no new change output exists. Drop the chain head so the next tick
-                // re-funds (paginated); the in-flight set still excludes UTXOs our earlier (accepted)
-                // txs spent, so the fallback won't re-pick a mempool-spent outpoint.
-                self.pending_change = None;
-                self.chain_head_txid = None;
+                self.chain_submit_failed();
                 Err(format!("submitTransaction failed: {e}"))
             }
         }
     }
+
+    /// **The funding input for one overlay transaction paying `fee`.** Chain off this process's own
+    /// change only while it (a) covers the fee, (b) is not already in flight, and (c) would produce a
+    /// transaction whose KIP-0009 storage mass stays safely under the block mass ceiling — the change
+    /// shrinks by a fee per hop, so without (c) the chain eventually builds a transaction the mempool
+    /// rejects with `storage mass … > …`. Otherwise page the funding address for a mature confirmed
+    /// UTXO (bounded; never the full set). Attestations and precommits draw from this one chain, so the
+    /// two never select the same outpoint.
+    async fn next_funding(
+        &mut self,
+        client: &KaspaRpcClient,
+        funding_addr: &Address,
+        fee: u64,
+        virtual_daa: u64,
+    ) -> Result<(TransactionOutpoint, UtxoEntry), String> {
+        match &self.pending_change {
+            Some((op, en))
+                if en.amount > fee
+                    && !self.inflight_spent.contains_key(op)
+                    && chained_tx_storage_mass_safe(en, fee, self.storage_mass_parameter, self.max_tx_mass) =>
+            {
+                Ok((*op, en.clone()))
+            }
+            _ => {
+                self.pending_change = None;
+                self.chain_head_txid = None;
+                select_funding_paged(
+                    client,
+                    funding_addr,
+                    &self.inflight_spent,
+                    self.bond_outpoint,
+                    fee,
+                    virtual_daa,
+                    self.coinbase_maturity,
+                )
+                .await
+            }
+        }
+    }
+
+    /// Advance the funding chain past a submitted transaction: its change output (index 0, back to
+    /// self) funds the next one, and the input it spent stays excluded until the transaction leaves
+    /// the mempool. The id excludes signature scripts, so it is stable after signing and is the id the
+    /// node assigns; it is also the head the per-txid confirmation lookup asks about.
+    fn chain_submitted(
+        &mut self,
+        funding_outpoint: TransactionOutpoint,
+        funding_entry: &UtxoEntry,
+        tx: &Transaction,
+        fee: u64,
+        virtual_daa: u64,
+    ) {
+        self.inflight_spent.insert(funding_outpoint, tx.id());
+        let change = UtxoEntry::new(funding_entry.amount - fee, funding_entry.script_public_key.clone(), virtual_daa, false);
+        self.pending_change = Some((TransactionOutpoint::new(tx.id(), 0), change));
+        self.chain_head_txid = Some(tx.id());
+    }
+
+    /// A failed submission created no change output: drop the chain head so the next transaction
+    /// re-funds (paginated). The in-flight set still excludes what earlier accepted transactions spent,
+    /// so the fallback does not re-pick a mempool-spent outpoint.
+    fn chain_submit_failed(&mut self) {
+        self.pending_change = None;
+        self.chain_head_txid = None;
+    }
+
+    /// **MISAKA §5 round 2 / ADR-0128: lock on the epoch the node's precommit duty names** — one
+    /// precommit per poll, after the attestation batch, so a node that closes the connection on the
+    /// op costs this poll's precommit and nothing else.
+    ///
+    /// The lock and the snapshot commitment come from the duty — what the chain shows this validator
+    /// holding — never from this process's memory, exactly as the in-node service reads them. The
+    /// precommit log refuses a vote that contradicts one already released (another anchor for the
+    /// epoch, or a lock this validator never held), and a new vote is made durable before it is
+    /// signed. A dry run reads and checks, and signs nothing.
+    async fn precommit(&mut self, client: &KaspaRpcClient, bond: &str, dry_run: bool, virtual_daa: u64) {
+        if !self.precommit_round_configured || self.precommit_duty_failed_at.is_some_and(|at| at.elapsed() < PRECOMMIT_DUTY_RETRY) {
+            return;
+        }
+        let request = GetPrecommitDutyRequest { validator_id: self.key.validator_id.to_string(), bond_outpoint: bond.to_owned() };
+        let duty = match client.get_precommit_duty(request).await {
+            Ok(duty) => {
+                self.precommit_duty_failed_at = None;
+                duty
+            }
+            Err(e) => {
+                warn!(
+                    "[{VALIDATOR}] precommit: getPrecommitDuty failed ({e}); not asking again for {} s (a node built before op 183 closes the connection on it)",
+                    PRECOMMIT_DUTY_RETRY.as_secs()
+                );
+                self.precommit_duty_failed_at = Some(Instant::now());
+                return;
+            }
+        };
+        let plan = match plan_precommit(&duty) {
+            Ok(Some(plan)) => plan,
+            Ok(None) => {
+                self.inflight_precommit = None;
+                return;
+            }
+            Err(e) => {
+                warn!("[{VALIDATOR}] precommit: the node's duty does not parse ({e}); signing nothing");
+                return;
+            }
+        };
+        let logged = (plan.epoch, plan.target_hash, plan.held.epoch);
+        let first_sight = self.precommit_last_logged != Some(logged);
+        if let Some(inflight) = &self.inflight_precommit
+            && inflight.epoch == plan.epoch
+            && inflight.target_hash == plan.target_hash
+        {
+            match mempool_status(client, inflight.txid).await {
+                MempoolStatus::Present | MempoolStatus::Unknown => return,
+                MempoolStatus::Gone if inflight.submitted_at.elapsed() < self.precommit_resubmit_after => return,
+                MempoolStatus::Gone => info!(
+                    "[{VALIDATOR}] precommit: epoch {} is still due {} s after its carrier {} was submitted and left the mempool; submitting it again",
+                    plan.epoch,
+                    inflight.submitted_at.elapsed().as_secs(),
+                    inflight.txid
+                ),
+            }
+        }
+        if let Some(oldest) = plan.skipped_from
+            && first_sight
+        {
+            info!(
+                "[{VALIDATOR}] precommit: {} epochs behind the frontier (held {}, due {oldest}..{}); skipping the backlog to epoch {}",
+                plan.epoch.saturating_sub(oldest),
+                plan.held.epoch,
+                plan.epoch,
+                plan.epoch
+            );
+        }
+        let record = SignedPrecommitRecord::for_vote(plan.epoch, plan.target_hash, plan.target_daa_score, plan.held);
+        let outcome = self.signed_precommits.check(&record);
+        if outcome == SignedEpochCheckOutcome::Block {
+            if first_sight {
+                warn!(
+                    "[{VALIDATOR}] precommit: epoch {} on anchor {} (declared lock: epoch {}) contradicts a precommit this validator already released; refusing to sign",
+                    plan.epoch, plan.target_hash, plan.held.epoch
+                );
+                self.precommit_last_logged = Some(logged);
+            }
+            return;
+        }
+        if dry_run {
+            if first_sight {
+                info!(
+                    "[{VALIDATOR}] DRY-RUN precommit epoch {} on anchor {} (declared lock: epoch {}); not signing/submitting",
+                    plan.epoch, plan.target_hash, plan.held.epoch
+                );
+                self.precommit_last_logged = Some(logged);
+            }
+            return;
+        }
+        if outcome == SignedEpochCheckOutcome::Allow
+            && let Err(e) = self.signed_precommits.record_and_flush(record)
+        {
+            warn!("[{VALIDATOR}] precommit: cannot persist epoch {} before signing ({e}); refusing to sign", plan.epoch);
+            return;
+        }
+        let payload = match self.key.sign_precommit(
+            &self.genesis_hash,
+            plan.epoch,
+            plan.target_hash,
+            plan.target_daa_score,
+            declared_precommit_lock(plan.held),
+            plan.snapshot_commitment,
+            self.bond_outpoint,
+        ) {
+            Ok(payload) => payload,
+            Err(e) => {
+                warn!("[{VALIDATOR}] precommit: refusing to sign epoch {}: {e}", plan.epoch);
+                return;
+            }
+        };
+        let fee = self.precommit_fee;
+        let funding_addr = self.key.funding_address(self.prefix);
+        let (funding_outpoint, funding_entry) = match self.next_funding(client, &funding_addr, fee, virtual_daa).await {
+            Ok(funding) => funding,
+            Err(e) => {
+                warn!("[{VALIDATOR}] precommit: no funding for epoch {} ({e}); retrying next poll", plan.epoch);
+                return;
+            }
+        };
+        let tx = match self.key.build_precommit_tx(&payload, funding_outpoint, &funding_entry, fee) {
+            Ok(tx) => tx,
+            Err(e) => {
+                warn!("[{VALIDATOR}] precommit: cannot build the carrier for epoch {}: {e}", plan.epoch);
+                return;
+            }
+        };
+        match client.submit_transaction(RpcTransaction::from(&tx), false).await {
+            Ok(txid) => {
+                info!(
+                    "[{VALIDATOR}] precommit: LOCKED epoch {} on anchor {} (declared lock: epoch {}, txid={txid})",
+                    plan.epoch, plan.target_hash, plan.held.epoch
+                );
+                self.chain_submitted(funding_outpoint, &funding_entry, &tx, fee, virtual_daa);
+                self.inflight_precommit = Some(InflightPrecommit {
+                    epoch: plan.epoch,
+                    target_hash: plan.target_hash,
+                    txid: tx.id(),
+                    submitted_at: Instant::now(),
+                });
+                self.precommit_last_logged = Some(logged);
+            }
+            Err(e) => {
+                self.chain_submit_failed();
+                warn!("[{VALIDATOR}] precommit: submitTransaction failed for epoch {}: {e}", plan.epoch);
+            }
+        }
+    }
+}
+
+/// Whether `params` runs a precommit round: a DNS overlay. Where there is none, the node answers
+/// `available: false` and the sidecar does not ask.
+fn network_runs_a_precommit_round(params: &Params) -> bool {
+    params.dns_params.is_some()
 }
 
 /// Residency of a tx in the node's normal (non-orphan) mempool, as a tri-state so a transient RPC
@@ -1727,6 +2010,11 @@ async fn run_loop(client: &KaspaRpcClient, args: &RunArgs, mut attestor: Option<
                     }
                     Err(e) => warn!("[{VALIDATOR}] getValidatorAttestationTargets failed: {e}"),
                 }
+                // Round two, last in the poll: a node that does not know op 183 closes the connection,
+                // and nothing after this read shares it.
+                if let Some(a) = attestor.as_mut() {
+                    a.precommit(client, bond, args.dry_run, server.virtual_daa_score).await;
+                }
                 sleep_secs(args.attest_poll_secs).await;
             }
             other => {
@@ -1826,6 +2114,60 @@ fn parse_amount_sompi(s: &str) -> Result<u64, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **What a duty read asks the sidecar to sign**, with the in-node service's rule: nothing where
+    /// the node has no view, the round is not live or nothing is due; the oldest due epoch while the
+    /// backlog is short, whatever order the transport delivered it in; the frontier past a deep one,
+    /// naming the epoch it skipped from; the chain's lock, the zero lock included; and a hash that
+    /// does not parse is an error rather than something signed.
+    #[test]
+    fn the_precommit_planned_is_the_duty_the_chain_names() {
+        let h = |b: u8| Hash64::from_bytes([b; 64]);
+        let due = |epoch: u64| kaspa_rpc_core::RpcPrecommitDue {
+            epoch,
+            anchor_hash: h(epoch as u8).to_string(),
+            anchor_daa_score: epoch * 2,
+            snapshot_commitment: h(0x5c).to_string(),
+        };
+        let duty = |epochs: &[u64]| GetPrecommitDutyResponse {
+            available: true,
+            round_active: true,
+            sink_daa_score: 7_100,
+            held_epoch: 9,
+            held_anchor: h(9).to_string(),
+            due: epochs.iter().copied().map(due).collect(),
+        };
+
+        assert_eq!(plan_precommit(&GetPrecommitDutyResponse::default()), Ok(None), "an old or overlay-less node has no view");
+        assert_eq!(plan_precommit(&GetPrecommitDutyResponse { round_active: false, ..duty(&[10]) }), Ok(None), "below the fence");
+        assert_eq!(plan_precommit(&duty(&[])), Ok(None), "nothing due");
+
+        let plan = plan_precommit(&duty(&[12, 10, 11])).unwrap().expect("due");
+        assert_eq!(
+            plan,
+            PrecommitPlan {
+                epoch: 10,
+                target_hash: h(10),
+                target_daa_score: 20,
+                snapshot_commitment: h(0x5c),
+                held: PrecommitLock { epoch: 9, anchor: h(9) },
+                skipped_from: None,
+            },
+            "the oldest due epoch, sorted rather than trusted"
+        );
+        let frontier = plan_precommit(&duty(&[15, 10])).unwrap().expect("due");
+        assert_eq!((frontier.epoch, frontier.skipped_from), (15, Some(10)), "a deep backlog skips to the frontier");
+
+        let first = GetPrecommitDutyResponse { held_epoch: 0, held_anchor: Hash64::default().to_string(), ..duty(&[1]) };
+        let plan = plan_precommit(&first).unwrap().expect("due");
+        assert_eq!(declared_precommit_lock(plan.held), None, "a validator with no counted precommit declares none");
+
+        let mut bad = duty(&[10]);
+        bad.due[0].anchor_hash = "not-a-hash".into();
+        assert!(plan_precommit(&bad).is_err(), "an anchor that does not parse is not signed over");
+        let bad_lock = GetPrecommitDutyResponse { held_anchor: "zz".into(), ..duty(&[10]) };
+        assert!(plan_precommit(&bad_lock).is_err(), "nor a lock that does not parse");
+    }
 
     #[test]
     fn parse_prefix_known_and_unknown() {

@@ -37,7 +37,7 @@ use kaspa_p2p_flows::flow_context::FlowContext;
 use kaspa_pq_validator_core::{
     ATTESTATION_TX_FEE_FLOOR_SOMPI, PRECOMMIT_FRONTIER_JUMP_EPOCHS, PRECOMMIT_PAYLOAD_BYTES, SignedEpochStore, SignedPrecommitRecord,
     SignedPrecommitStore, ValidatorKey, declared_precommit_lock, load_validator_seed, parse_stake_bond_ref, pick_precommit_due,
-    select_funding,
+    precommit_log_path, select_funding,
 };
 use kaspa_rpc_core::model::GetValidatorStatusResponse;
 use kaspa_rpc_service::service::ValidatorStatusProvider;
@@ -326,7 +326,7 @@ impl ValidatorService {
         };
         let signed_precommits = match (&key, bond_outpoint, &config.state_path) {
             (Some(key), Some(outpoint), Some(path)) => {
-                let precommit_path = path.with_extension("precommits.json");
+                let precommit_path = precommit_log_path(path);
                 match SignedPrecommitStore::load_or_empty(precommit_path.clone(), key.validator_id, outpoint) {
                     Ok(store) => {
                         info!(
