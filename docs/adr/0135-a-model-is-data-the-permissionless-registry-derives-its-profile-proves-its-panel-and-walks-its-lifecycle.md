@@ -197,8 +197,9 @@ sub-block and carriage tail `0xAA`, delta entries 51/52):
 * **Decision 5 — shares from admission.** At every boundary the shares of the rowed classes are
   written from `admission_claims_per_span × admission_permille(state)` over the keys the table
   already holds — the base class holding what is left and never below its floor, a class
-  registered before the fence without a row keeping the share it has. `PROBATION` admits at zero
-  cadence, `ACTIVE_LIMITED` at a tenth, `ACTIVE` in full.
+  registered before the fence without a row keeping the share it has. `PROBATION` admits at a twentieth (a class must be able to produce the claims that probe it —
+at zero it could never leave probation), `ACTIVE_LIMITED` at a tenth, `ACTIVE` in full; a class that
+admits anything holds at least the grant floor of one permille, so a target exists for it.
 
 **Read.** Op 186 `getPalwModelRegistry` (`misaka palw registry`): the fence, the globals, every
 class's row and its reading now, every proof and whether it is fresh.
