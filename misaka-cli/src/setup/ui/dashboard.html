@@ -147,15 +147,9 @@
     .info { background: #e9f0ff; color: var(--blue); }
     .idle { background: #eef1f5; color: var(--muted); }
 
-    .pills {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-    }
-
     .summary {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 10px;
       padding: 14px;
     }
@@ -245,12 +239,25 @@
       overflow-wrap: anywhere;
       word-break: break-word;
     }
-    .next-actions {
+    .progress {
+      height: 10px;
+      border-radius: 999px;
+      background: #e8edf5;
+      overflow: hidden;
+    }
+    .progress span {
+      display: block;
+      height: 100%;
+      width: 0%;
+      background: var(--green);
+      transition: width 240ms ease;
+    }
+    .timeline, .next-actions {
       display: grid;
       gap: 10px;
       padding: 14px;
     }
-    .action {
+    .event, .action {
       display: grid;
       gap: 10px;
       padding: 12px;
@@ -259,6 +266,15 @@
       background: #fbfcfe;
       font-size: 13px;
       line-height: 1.45;
+    }
+    .event {
+      grid-template-columns: 92px minmax(0, 1fr);
+    }
+    .event time {
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .action {
       grid-template-columns: 28px minmax(0, 1fr);
       align-items: flex-start;
     }
@@ -290,6 +306,18 @@
       line-height: 1.45;
       overflow-wrap: anywhere;
     }
+    pre {
+      margin: 0;
+      max-height: 260px;
+      overflow: auto;
+      padding: 14px;
+      background: #0f172a;
+      color: #dbe7ff;
+      font-size: 12px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
     .footer-note {
       padding: 16px 2px 4px;
       color: var(--muted);
@@ -305,6 +333,13 @@
       line-height: 1.5;
       overflow-wrap: anywhere;
     }
+    .success-callout.ok {
+      border-left-color: var(--green);
+      background: #eaf8f1;
+    }
+    .success-callout strong,
+    .success-callout span { display: block; }
+    .success-callout span { margin-top: 4px; color: var(--muted); font-size: 13px; }
     .support-actions {
       display: flex;
       flex-wrap: wrap;
@@ -324,6 +359,7 @@
       .band-header { flex-direction: column; }
       .summary, .grid-two { grid-template-columns: 1fr; }
       .row { grid-template-columns: 1fr; gap: 2px; }
+      .event { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -332,7 +368,7 @@
     <header class="topbar">
       <div class="title">
         <h1 data-i18n="title">MISAKA参加ダッシュボード</h1>
-        <p class="subtitle" data-i18n="subtitle">このVPSのnodeがどこまで参加できているかを確認します。</p>
+        <p class="subtitle" data-i18n="subtitle">このVPSがnode、validator、minerとしてどこまで参加できているかを確認します。</p>
       </div>
       <div class="actions">
         <button class="button" id="jaBtn" type="button">日本語</button>
@@ -346,6 +382,24 @@
     <section class="band">
       <div class="band-header">
         <div>
+          <h2 data-i18n="attestationEvidenceTitle">validator参加の成功証跡</h2>
+          <p data-i18n="attestationEvidenceBody">RUNNINGだけでなく、attestation shardの送信成功まで確認します。</p>
+        </div>
+        <span class="pill wait" id="attestationPill">WAIT</span>
+      </div>
+      <div id="attestationCallout" class="success-callout">
+        <strong id="attestationHeadline">attestation成功待ち</strong>
+        <span id="attestationEvidenceDetail">validatorログを30秒ごとに確認します。</span>
+      </div>
+      <div class="grid-two">
+        <div class="row"><b data-i18n="lastEpoch">直近の成功epoch</b><span id="attestationEpoch">-</span></div>
+        <div class="row"><b data-i18n="attestationTx">transaction ID</b><span class="mono" id="attestationTxid">-</span></div>
+      </div>
+    </section>
+
+    <section class="band">
+      <div class="band-header">
+        <div>
           <h2 data-i18n="impactTitle">あなたの参加が効いている範囲</h2>
           <p data-i18n="impactBody">状態を「参加者目線」でまとめます。</p>
         </div>
@@ -354,6 +408,8 @@
       <div class="summary">
         <article class="metric"><label>node</label><strong id="nodeImpact">-</strong><span id="nodeImpactNote">-</span></article>
         <article class="metric"><label>sync</label><strong id="syncImpact">-</strong><span id="syncImpactNote">-</span></article>
+        <article class="metric"><label>validator</label><strong id="validatorImpact">-</strong><span id="validatorImpactNote">-</span></article>
+        <article class="metric"><label>miner</label><strong id="minerImpact">-</strong><span id="minerImpactNote">-</span></article>
       </div>
     </section>
 
@@ -361,11 +417,8 @@
       <div>
         <section class="band">
           <div class="band-header">
-            <div><h2 data-i18n="operationTitle">運用状態</h2><p data-i18n="operationBody">サービス、公開IP、P2P、同期、DAAを確認します。</p></div>
-            <div class="pills">
-              <span class="pill info" id="nodePill">loading</span>
-              <span class="pill info" id="syncPill">loading</span>
-            </div>
+            <div><h2 data-i18n="operationTitle">運用状態</h2><p data-i18n="operationBody">サービス、公開IP、P2P、DAA、validator IDを確認します。</p></div>
+            <span class="pill info" id="nodePill">loading</span>
           </div>
           <div class="grid-two">
             <article class="panel">
@@ -380,14 +433,75 @@
               </div>
             </article>
             <article class="panel">
-              <h3 data-i18n="syncPanelTitle">同期</h3>
+              <h3>validator</h3>
+              <div class="rows">
+                <div class="row"><b>service</b><span id="validatorService">-</span></div>
+                <div class="row"><b>key</b><span id="validatorKey">-</span></div>
+                <div class="row"><b>validator ID</b><span class="mono" id="validatorId">-</span></div>
+                <div class="row"><b>funding</b><span class="mono" id="fundingAddress">-</span></div>
+                <div class="row"><b>bond</b><span class="mono" id="bond">-</span></div>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="band">
+          <div class="band-header">
+            <div><h2 data-i18n="syncMaturityTitle">同期と成熟</h2><p data-i18n="syncMaturityBody">DAAとcoinbase maturityの目安です。</p></div>
+            <span class="pill info" id="syncPill">loading</span>
+          </div>
+          <div class="grid-two">
+            <article class="panel">
+              <h3>同期</h3>
               <div class="rows">
                 <div class="row"><b>synced</b><span id="synced">-</span></div>
                 <div class="row"><b>Virtual DAA</b><span id="daa">-</span></div>
                 <div class="row"><b data-i18n="updatedAt">更新時刻</b><span id="updatedAt">-</span></div>
               </div>
             </article>
+            <article class="panel">
+              <h3 data-i18n="bondMaturity">Bond用成熟目安</h3>
+              <div class="rows">
+                <div class="row"><b>必要block</b><span id="requiredBlocks">-</span></div>
+                <div class="row"><b>経過block</b><span id="elapsedBlocks">-</span></div>
+                <div class="row"><b>残りblock</b><span id="remainingBlocks">-</span></div>
+                <div class="row"><b data-i18n="visibleBalance">表示残高</b><span id="visibleBalance">-</span></div>
+                <div class="progress" aria-label="maturity progress"><span id="maturityBar"></span></div>
+                <div class="subtitle" id="maturityNote">-</div>
+              </div>
+            </article>
           </div>
+        </section>
+
+        <section class="band">
+          <div class="band-header">
+            <div><h2>miner</h2><p data-i18n="minerBody">採掘が動いているか、どのaddressへ掘っているかを確認します。</p></div>
+            <span class="pill info" id="minerPill">loading</span>
+          </div>
+          <div class="grid-two">
+            <article class="panel">
+              <h3>状態</h3>
+              <div class="rows">
+                <div class="row"><b>service</b><span id="minerService">-</span></div>
+                <div class="row"><b>threads</b><span id="minerThreads">-</span></div>
+                <div class="row"><b>gRPC</b><span id="minerGrpc">-</span></div>
+                <div class="row"><b>mining address</b><span class="mono" id="miningAddress">-</span></div>
+                <div class="row"><b data-i18n="minedBlocks">今回の採掘block数</b><span id="minedBlocks">-</span></div>
+                <div class="row"><b data-i18n="lastMinedDaa">直近の採掘DAA</b><span id="lastMinedDaa">-</span></div>
+              </div>
+            </article>
+            <article class="panel">
+              <h3 data-i18n="logSummary">ログ要約</h3>
+              <div id="logEvents" class="timeline"></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="band">
+          <div class="band-header">
+            <div><h2>validator logs</h2><p data-i18n="validatorLogsBody">attestation送信の根拠を確認します。</p></div>
+          </div>
+          <pre id="validatorLogs">loading...</pre>
         </section>
       </div>
 
@@ -419,7 +533,7 @@
       </aside>
     </div>
 
-    <p class="footer-note" data-i18n="footer">このページは読み取り専用です。秘密鍵やseedは表示しません。</p>
+    <p class="footer-note" data-i18n="footer">このページは読み取り専用です。秘密鍵やvalidator seedは表示しません。</p>
   </main>
 
   <script>
@@ -435,32 +549,50 @@
 
     const i18n = {
       ja: {
-        title: 'MISAKA参加ダッシュボード', subtitle: 'このVPSのnodeがどこまで参加できているかを確認します。',
+        title: 'MISAKA参加ダッシュボード', subtitle: 'このVPSがnode、validator、minerとしてどこまで参加できているかを確認します。',
         refresh: '参加状況を更新', learn: '用語と仕組み', backSetup: 'setupへ戻る',
-        impactTitle: 'あなたの参加が効いている範囲', impactBody: '状態を「参加者目線」でまとめます。',
-        operationTitle: '運用状態', operationBody: 'サービス、公開IP、P2P、同期、DAAを確認します。', publicAddress: '公開IP', syncPanelTitle: '同期', updatedAt: '更新時刻',
-        nextTitle: '次にすること', nextBody: '現在状態に必要な1操作を出します。', evidenceTitle: '確認できた根拠', evidenceBody: 'OK判断の材料です。',
+        attestationEvidenceTitle: 'validator参加の成功証跡', attestationEvidenceBody: 'RUNNINGだけでなく、attestation shardの送信成功まで確認します。',
+        lastEpoch: '直近の成功epoch', attestationTx: 'transaction ID', impactTitle: 'あなたの参加が効いている範囲', impactBody: '状態を「参加者目線」でまとめます。',
+        operationTitle: '運用状態', operationBody: 'サービス、公開IP、P2P、DAA、validator IDを確認します。', publicAddress: '公開IP',
+        syncMaturityTitle: '同期と成熟', syncMaturityBody: 'DAAとcoinbase maturityの目安です。', updatedAt: '更新時刻', bondMaturity: 'Bond用成熟目安', visibleBalance: '表示残高',
+        minerBody: '採掘が動いているか、どのaddressへ掘っているかを確認します。', minedBlocks: '今回の採掘block数', lastMinedDaa: '直近の採掘DAA', logSummary: 'ログ要約',
+        validatorLogsBody: 'attestation送信の根拠を確認します。', nextTitle: '次にすること', nextBody: '現在状態に必要な1操作を出します。', evidenceTitle: '確認できた根拠', evidenceBody: 'OK判断の材料です。',
         supportTitle: '提出用サポート情報', supportBody: '秘匿情報を除いた状態とエラーを、管理者やサポート窓口へ共有できます。', copySupport: '提出用レポートをコピー', saveSupport: 'レポートを保存 (.txt)',
-        footer: 'このページは読み取り専用です。秘密鍵やseedは表示しません。', supportNoError: '現在エラーは記録されていません。', supportCopied: '提出用レポートをコピーしました。',
+        footer: 'このページは読み取り専用です。秘密鍵やvalidator seedは表示しません。', supportNoError: '現在エラーは記録されていません。', supportCopied: '提出用レポートをコピーしました。',
+        attestationWaiting: 'attestation成功待ち', attestationWaitingBody: 'validatorログを30秒ごとに確認します。RUNNINGだけでは成功と判定しません。', attestationSuccess: 'attestation送信成功', attestationSuccessBody: 'epoch {epoch} の送信を確認しました。',
+        maturityUnknown: 'miner開始DAAをまだ取得できません。', maturityReady: '目安到達。実際の成熟UTXOはBond作成時に確認します。', maturityProgress: '残り約 {remaining} blocks（{percent}%）', balanceUnknown: '未確認',
+        noMinerLogs: 'minerログはまだありません。', minedSuccess: 'block #{block} の採掘成功を確認しました。', noValidatorLogs: 'validatorログはまだありません。',
         nextNode: 'nodeを開始する', nextNodeBody: 'setupへ戻り「5. nodeを開始」を押してください。', nextConnection: 'node接続を確認する', nextConnectionBody: 'nodeは起動しています。RPC接続が可能になるまで少し待ってから更新してください。', nextSync: '同期完了を待つ', nextSyncBody: 'DAAが増えていれば同期は進んでいます。',
-        nextP2p: 'P2Pを確認する', nextP2pBody: '26211/tcpが待受できているか確認してください。',
-        nextNodeSynced: 'nodeは同期済みです', nextNodeSyncedBody: 'nodeは同期し、P2Pも待受中です。このまま稼働を続けてください。PALWのマイニングはこのページではなく、misaka CLIの misaka mining setup で設定します。',
+        nextP2p: 'P2Pを確認する', nextP2pBody: '26211/tcpが待受できているか確認してください。', nextKey: 'validator keyを作成する', nextKeyBody: 'setupへ戻り「8. キー作成」を押してください。',
+        nextFunding: 'マイニングと成熟を進める', nextFundingBody: 'setupでminer、成熟見込み、Bond用残高を確認してください。', nextValidator: 'validatorを開始する', nextValidatorBody: 'setupへ戻り「14. validator開始」を押してください。',
+        nextAttesting: 'attestation成功を確認する', nextAttestingBody: 'validatorはRUNNINGです。ログを自動確認し、送信成功を待ちます。', nextDone: 'validator参加を確認できました', nextDoneBody: 'attestation shardの送信成功を確認しました。継続運用してください。',
         impactNodeOpen: 'P2P待受中', impactNodeWait: '確認中', impactNodeOpenBody: '他nodeから接続可能な状態です。', impactNodeWaitBody: '26211/tcpの待受を確認してください。',
         impactSynced: '同期済み', impactSyncing: '同期中', syncNotStarted: '未開始', syncChecking: '接続確認中', syncStopped: 'node停止', syncError: 'node接続エラー', impactSyncedBody: 'testnetの最新状態へ追従しています。', impactSyncingBody: 'DAAが増えていれば進行中です。', syncNotStartedBody: 'nodeはまだ開始されていません。', syncCheckingBody: 'nodeは起動しています。RPC接続を確認しています。', syncStoppedBody: 'nodeが停止しています。setupからnodeを開始してください。', syncErrorBody: 'nodeの起動または接続に失敗しました。service状態とログを確認してください。',
+        impactAttested: '送信成功', impactRunning: '稼働中', impactValidatorWait: '準備中', impactAttestedBody: 'attestation送信を確認しました。', impactRunningBody: 'attestation対象を待機または送信中です。', impactValidatorWaitBody: 'Bondとvalidator状態を確認してください。',
+        impactMining: '採掘中', impactMinerOptional: '停止中', impactMiningBody: 'funding addressへ掘っています。', impactMinerOptionalBody: 'Bond後の継続採掘は任意です。',
       },
       en: {
-        title: 'MISAKA participation dashboard', subtitle: 'See how far this VPS is participating as a node.',
+        title: 'MISAKA participation dashboard', subtitle: 'See how far this VPS is participating as a node, validator, and miner.',
         refresh: 'Refresh participation status', learn: 'Terms and guide', backSetup: 'Back to setup',
-        impactTitle: 'Where your participation helps', impactBody: 'Summarized from a participant perspective.',
-        operationTitle: 'Runtime status', operationBody: 'Services, public IP, P2P, sync, and DAA.', publicAddress: 'Public IP', syncPanelTitle: 'Sync', updatedAt: 'Updated at',
-        nextTitle: 'Next action', nextBody: 'Shows the single action required for the current state.', evidenceTitle: 'Observed evidence', evidenceBody: 'Facts used for the status judgment.',
+        attestationEvidenceTitle: 'Validator participation evidence', attestationEvidenceBody: 'Checks for a successful attestation-shard submission, not just a RUNNING process.',
+        lastEpoch: 'Last successful epoch', attestationTx: 'Transaction ID', impactTitle: 'Where your participation helps', impactBody: 'Summarized from a participant perspective.',
+        operationTitle: 'Runtime status', operationBody: 'Services, public IP, P2P, DAA, and validator ID.', publicAddress: 'Public IP',
+        syncMaturityTitle: 'Sync and maturity', syncMaturityBody: 'DAA and the coinbase-maturity estimate.', updatedAt: 'Updated at', bondMaturity: 'Bond maturity estimate', visibleBalance: 'Visible balance',
+        minerBody: 'See whether mining is running and which address receives rewards.', minedBlocks: 'Blocks mined this run', lastMinedDaa: 'Latest mined DAA', logSummary: 'Log summary',
+        validatorLogsBody: 'Evidence for attestation submission.', nextTitle: 'Next action', nextBody: 'Shows the single action required for the current state.', evidenceTitle: 'Observed evidence', evidenceBody: 'Facts used for the status judgment.',
         supportTitle: 'Support report for submission', supportBody: 'Share a redacted state and error report with the maintainer or support channel.', copySupport: 'Copy report for submission', saveSupport: 'Save report (.txt)',
-        footer: 'This page is read-only. It never displays private keys or seeds.', supportNoError: 'No error is currently recorded.', supportCopied: 'Support report copied.',
+        footer: 'This page is read-only. It never displays the private key or validator seed.', supportNoError: 'No error is currently recorded.', supportCopied: 'Support report copied.',
+        attestationWaiting: 'Waiting for attestation success', attestationWaitingBody: 'Validator logs are checked every 30 seconds. RUNNING alone is not treated as success.', attestationSuccess: 'Attestation submitted successfully', attestationSuccessBody: 'Submission for epoch {epoch} was found.',
+        maturityUnknown: 'The miner starting DAA is not available yet.', maturityReady: 'Estimate reached. Actual mature UTXOs are verified during bond creation.', maturityProgress: 'About {remaining} blocks left ({percent}%)', balanceUnknown: 'Not checked',
+        noMinerLogs: 'No miner logs yet.', minedSuccess: 'Successfully mined block #{block}.', noValidatorLogs: 'No validator logs yet.',
         nextNode: 'Start the node', nextNodeBody: 'Return to setup and press "5. Start node".', nextConnection: 'Check the node connection', nextConnectionBody: 'The node is running. Wait briefly for RPC to become available, then refresh.', nextSync: 'Wait for sync', nextSyncBody: 'Sync is progressing while DAA keeps increasing.',
-        nextP2p: 'Check P2P listening', nextP2pBody: 'Confirm that 26211/tcp is listening.',
-        nextNodeSynced: 'Node is synced', nextNodeSyncedBody: 'The node is synced and P2P is listening. Keep it running. PALW mining is set up with the misaka CLI (misaka mining setup), not from this page.',
+        nextP2p: 'Check P2P listening', nextP2pBody: 'Confirm that 26211/tcp is listening.', nextKey: 'Create a validator key', nextKeyBody: 'Return to setup and press "8. Generate key".',
+        nextFunding: 'Continue mining and maturity', nextFundingBody: 'Use setup to check the miner, maturity estimate, and bond balance.', nextValidator: 'Start the validator', nextValidatorBody: 'Return to setup and press "14. Start validator".',
+        nextAttesting: 'Confirm attestation success', nextAttestingBody: 'The validator is RUNNING. Logs are checked automatically for a successful submission.', nextDone: 'Validator participation confirmed', nextDoneBody: 'A successful attestation-shard submission was found. Keep the services running.',
         impactNodeOpen: 'P2P listening', impactNodeWait: 'Checking', impactNodeOpenBody: 'Other nodes can connect to this listener.', impactNodeWaitBody: 'Check the 26211/tcp listener.',
         impactSynced: 'Synced', impactSyncing: 'Syncing', syncNotStarted: 'Not started', syncChecking: 'Checking connection', syncStopped: 'Node stopped', syncError: 'Node connection error', impactSyncedBody: 'Following the latest testnet state.', impactSyncingBody: 'Progress continues while DAA increases.', syncNotStartedBody: 'The node has not been started yet.', syncCheckingBody: 'The node is running. Waiting for its RPC connection.', syncStoppedBody: 'The node is stopped. Start it from setup.', syncErrorBody: 'The node failed to start or cannot be reached. Check the service state and logs.',
+        impactAttested: 'Submitted', impactRunning: 'Running', impactValidatorWait: 'Preparing', impactAttestedBody: 'Attestation submission was observed.', impactRunningBody: 'Waiting for or submitting an attestation target.', impactValidatorWaitBody: 'Check the bond and validator state.',
+        impactMining: 'Mining', impactMinerOptional: 'Stopped', impactMiningBody: 'Mining to the funding address.', impactMinerOptionalBody: 'Continuing to mine after bonding is optional.',
       }
     };
 
@@ -574,10 +706,46 @@
       return root;
     }
 
-    function nextActions(status) {
+    function eventLine(time, body) {
+      const root = document.createElement('div');
+      root.className = 'event';
+      const timeEl = document.createElement('time');
+      timeEl.textContent = time;
+      const bodyEl = document.createElement('div');
+      bodyEl.textContent = body;
+      root.append(timeEl, bodyEl);
+      return root;
+    }
+
+    function maturityFrom(status, miner) {
+      return miner?.miner?.maturity || status?.miner?.maturity || null;
+    }
+
+    function renderMaturity(maturity, balance) {
+      text('visibleBalance', balance?.validator?.balanceMsk ? `${balance.validator.balanceMsk} MSK` : tr('balanceUnknown'));
+      if (!maturity || maturity.elapsedBlocks === null || maturity.elapsedBlocks === undefined) {
+        text('requiredBlocks', '-');
+        text('elapsedBlocks', '-');
+        text('remainingBlocks', '-');
+        byId('maturityBar').style.width = '0%';
+        text('maturityNote', tr('maturityUnknown'));
+        return;
+      }
+      text('requiredBlocks', number(maturity.coinbaseMaturityBlocks));
+      text('elapsedBlocks', number(maturity.elapsedBlocks));
+      text('remainingBlocks', number(maturity.remainingBlocks));
+      byId('maturityBar').style.width = `${Math.min(100, Number(maturity.percent || 0))}%`;
+      text('maturityNote', Number(maturity.remainingBlocks || 0) <= 0
+        ? tr('maturityReady')
+        : tr('maturityProgress', { remaining: number(maturity.remainingBlocks), percent: number(maturity.percent || 0) }));
+    }
+
+    function nextActions(status, validator, miner, attestation) {
       const node = status.node || {};
       const syncState = nodeSyncPresentation(node);
       const p2p = status.p2p || {};
+      const v = validator.validator || {};
+      const m = miner.miner || {};
       let item;
       if (syncState.code === 'notStarted' || syncState.code === 'stopped' || syncState.code === 'error') {
         lastStateCode = 'NeedsNode';
@@ -591,48 +759,126 @@
       } else if (!p2p.listening) {
         lastStateCode = 'NeedsP2P';
         item = [tr('nextP2p'), tr('nextP2pBody')];
+      } else if (!v.keyExists) {
+        lastStateCode = 'NeedsValidatorKey';
+        item = [tr('nextKey'), tr('nextKeyBody')];
+      } else if (!v.bondOutpoint) {
+        lastStateCode = m.serviceState === 'active' ? 'Mining' : 'NeedsFunding';
+        item = [tr('nextFunding'), tr('nextFundingBody')];
+      } else if (v.serviceState !== 'active') {
+        lastStateCode = 'Bonded';
+        item = [tr('nextValidator'), tr('nextValidatorBody')];
+      } else if (!attestation.success) {
+        lastStateCode = 'Attesting';
+        item = [tr('nextAttesting'), tr('nextAttestingBody')];
       } else {
-        lastStateCode = 'NodeSynced';
-        item = [tr('nextNodeSynced'), tr('nextNodeSyncedBody')];
+        lastStateCode = 'AttestationSucceeded';
+        item = [tr('nextDone'), tr('nextDoneBody')];
       }
       return [action(1, item[0], item[1])];
     }
 
-    function evidenceRows(status) {
+    function evidenceRows(status, validator, miner, attestation) {
       const node = status.node || {};
       const p2p = status.p2p || {};
+      const v = validator.validator || {};
+      const m = miner.miner || {};
       const rows = [
         ['node', node.synced ? 'OK' : 'WAIT', `service=${node.serviceState || '-'}, synced=${node.synced}`],
         ['P2P', p2p.listening ? 'OK' : 'CHECK', `port=${p2p.port || '-'}, listening=${p2p.listening}`],
+        ['validator', v.serviceState === 'active' ? 'OK' : 'WAIT', `service=${v.serviceState || '-'}, bond=${v.bondOutpoint ? 'yes' : 'no'}`],
+        ['miner', m.serviceState === 'active' ? 'RUNNING' : 'INFO', `service=${m.serviceState || '-'}, threads=${m.threads || '-'}`],
+        ['attestation', attestation.success ? 'OK' : 'WAIT', attestation.success ? `epoch=${attestation.epoch || '-'}, txid=${attestation.txid || '-'}` : 'successful submission not found yet'],
       ];
       return rows.map((item, index) => action(index + 1, `${item[0]}: ${item[1]}`, item[2]));
     }
 
-    function renderImpact(status) {
+    function summarizeLogs(logs, kind) {
+      const lines = String(logs || '').split('\n').filter(Boolean).slice(-8);
+      if (lines.length === 0) return [eventLine('-', kind === 'miner' ? tr('noMinerLogs') : tr('noValidatorLogs'))];
+      return lines.slice(-4).map((line) => {
+        const mined = line.match(/mined block\s+#(\d+)/i);
+        const sent = line.includes('submitted attestation')
+          ? tr('attestationSuccess')
+          : (mined ? tr('minedSuccess', { block: mined[1] }) : line.replace(/\s+/g, ' ').slice(0, 140));
+        const time = (line.match(/\d{2}:\d{2}:\d{2}/) || ['-'])[0];
+        return eventLine(time, sent);
+      });
+    }
+
+    function renderImpact(status, validator, miner, attestation) {
       const node = status.node || {};
       const syncState = nodeSyncPresentation(node);
       const p2p = status.p2p || {};
-      const ok = node.synced && p2p.listening;
+      const v = validator.validator || {};
+      const m = miner.miner || {};
+      const ok = node.synced && p2p.listening && v.serviceState === 'active' && attestation.success;
       setPill('overallPill', ok ? 'ok' : 'wait', ok ? 'healthy' : 'check');
       text('nodeImpact', p2p.listening ? tr('impactNodeOpen') : tr('impactNodeWait'));
       text('nodeImpactNote', p2p.listening ? tr('impactNodeOpenBody') : tr('impactNodeWaitBody'));
       text('syncImpact', syncState.label);
       text('syncImpactNote', syncState.note);
+      text('validatorImpact', attestation.success ? tr('impactAttested') : (v.serviceState === 'active' ? tr('impactRunning') : tr('impactValidatorWait')));
+      text('validatorImpactNote', attestation.success ? tr('impactAttestedBody') : (v.serviceState === 'active' ? tr('impactRunningBody') : tr('impactValidatorWaitBody')));
+      text('minerImpact', m.serviceState === 'active' ? tr('impactMining') : tr('impactMinerOptional'));
+      text('minerImpactNote', m.serviceState === 'active' ? tr('impactMiningBody') : tr('impactMinerOptionalBody'));
+    }
+
+    function parseAttestation(logs) {
+      const matches = Array.from(String(logs || '').matchAll(/submitted attestation shard(?: for epoch\s+(\d+))?(?:\s+\(txid=([^)]+)\))?/gi));
+      if (!matches.length) return { success: false, epoch: null, txid: null, line: null };
+      const latest = matches[matches.length - 1];
+      const line = String(logs || '').split('\n').filter(item => item.toLowerCase().includes('submitted attestation shard')).pop();
+      return { success: true, epoch: latest[1] || '-', txid: latest[2] || '-', line: line ? line.replace(/\s+/g, ' ').trim().slice(0, 320) : null };
+    }
+
+    function parseMinerEvidence(logs) {
+      const matches = Array.from(String(logs || '').matchAll(/mined block\s+#(\d+).*?daa_score=(\d+)/gi));
+      if (!matches.length) return { blocks: 0, daa: null };
+      const latest = matches[matches.length - 1];
+      return { blocks: Number(latest[1]), daa: Number(latest[2]) };
+    }
+
+    function renderAttestation(attestation, running) {
+      setPill('attestationPill', attestation.success ? 'ok' : (running ? 'info' : 'wait'), attestation.success ? 'ATTESTED' : (running ? 'RUNNING' : 'WAIT'));
+      byId('attestationCallout').classList.toggle('ok', attestation.success);
+      text('attestationHeadline', attestation.success ? tr('attestationSuccess') : tr('attestationWaiting'));
+      text('attestationEvidenceDetail', attestation.success
+        ? (attestation.line || tr('attestationSuccessBody', { epoch: attestation.epoch || '-' }))
+        : tr('attestationWaitingBody'));
+      text('attestationEpoch', attestation.epoch);
+      text('attestationTxid', attestation.txid);
     }
 
     async function loadDashboard() {
       setPill('overallPill', 'info', 'loading');
-      const status = await fetchJson('/api/status');
+      const [status, validator, miner, minerLogs, validatorLogs] = await Promise.all([
+        fetchJson('/api/status'),
+        fetchJson('/api/validator/status'),
+        fetchJson('/api/miner/status'),
+        fetchJson('/api/miner/logs'),
+        fetchJson('/api/validator/logs'),
+      ]);
 
       if (status.error) throw new Error(status.error);
 
       const node = status.node || {};
       const p2p = status.p2p || {};
+      const v = validator.validator || {};
+      const m = miner.miner || {};
+      const attestation = parseAttestation(validatorLogs.logs);
+      const mined = parseMinerEvidence(minerLogs.logs);
+      let balance = {};
+      if (node.synced && v.fundingAddress && !v.bondOutpoint) {
+        balance = await fetchJson('/api/validator/balance', 'POST');
+      }
 
-      renderImpact(status);
+      renderImpact(status, validator, miner, attestation);
+      renderAttestation(attestation, v.serviceState === 'active');
       setPill('nodePill', node.serviceState === 'active' ? 'ok' : 'wait', activeLabel(node.serviceState));
       const syncState = nodeSyncPresentation(node);
       setPill('syncPill', syncState.kind, syncState.label);
+      setPill('minerPill', m.serviceState === 'active' ? 'ok' : 'info', activeLabel(m.serviceState));
 
       text('nodeService', `${node.service || 'misaka-kaspad'}: ${node.serviceState || '-'}`);
       text('network', status.network || node.network);
@@ -648,9 +894,25 @@
         lastDaaTs = Date.now();
       }
 
-      clearAndAppend('nextActions', nextActions(status));
-      clearAndAppend('evidence', evidenceRows(status));
-      lastReportSnapshot = { status, state: lastStateCode };
+      text('validatorService', `${v.service || 'misaka-validator'}: ${v.serviceState || '-'}`);
+      text('validatorKey', v.keyExists ? 'created' : 'not created');
+      text('validatorId', v.validatorId);
+      text('fundingAddress', v.fundingAddress);
+      text('bond', v.bondOutpoint);
+
+      text('minerService', `${m.service || 'misaka-miner'}: ${m.serviceState || '-'}`);
+      text('minerThreads', m.threads);
+      text('minerGrpc', m.grpc);
+      text('miningAddress', m.miningAddress);
+      text('minedBlocks', mined.blocks ? number(mined.blocks) : 0);
+      text('lastMinedDaa', number(mined.daa));
+
+      renderMaturity(maturityFrom(status, miner), balance);
+      clearAndAppend('nextActions', nextActions(status, validator, miner, attestation));
+      clearAndAppend('evidence', evidenceRows(status, validator, miner, attestation));
+      clearAndAppend('logEvents', summarizeLogs(minerLogs.logs, 'miner'));
+      byId('validatorLogs').textContent = validatorLogs.logs || tr('noValidatorLogs');
+      lastReportSnapshot = { status, validator, miner, balance, minerLogs, validatorLogs, attestation, state: lastStateCode };
     }
 
     function redactSensitive(value) {
@@ -711,6 +973,7 @@
       } catch (err) {
         lastError = redactSensitive(String(err.message || err));
         setPill('overallPill', 'bad', 'error');
+        byId('validatorLogs').textContent = lastError;
         byId('supportError').textContent = lastError;
       }
     }
