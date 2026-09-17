@@ -70,6 +70,12 @@ pub struct PalwEpochBudgetFencesV1 {
     pub boundary_budget_active: bool,
     /// `Params::palw_epoch_budget_release` at the candidate block's DAA.
     pub budget_release_active: bool,
+    /// ADR-0137: `W₀` for the candidate block where `Params::palw_work_target` is in force — the
+    /// block's escrow at the payout's rate (`palw_work_floor_for_block_v1`), `u128::MAX` for a
+    /// block with no escrow. `Some` makes the lottery read `MAX · min(1, CCU_m / W₀)` from the
+    /// class's row instead of its class target, and stops the epoch budget being read for model
+    /// classes; `None` is the shipped rule.
+    pub work_target_floor: Option<u128>,
 }
 
 impl PalwAdmissionParamsV2 {
@@ -129,6 +135,12 @@ pub enum PalwAdmissionV2Error {
     ClassTargetMissing(Hash64),
     #[error("the attempt's class ticket {ticket} is above class {class_id}'s target {target}")]
     ClassTicketAboveTarget { class_id: Hash64, ticket: u128, target: u128 },
+    #[error(
+        "the attempt's class ticket {ticket} is above class {class_id}'s work-target ticket {target} (CCU {ccu} against W₀ {floor})"
+    )]
+    ClassTicketAboveWorkTarget { class_id: Hash64, ticket: u128, target: u128, ccu: u128, floor: u128 },
+    #[error("class {0} has no registry row, so no counted work prices it under the work target")]
+    ClassWorkUnknown(Hash64),
     #[error("class {0} does not exist at the candidate chain point")]
     ClassMissing(Hash64),
     #[error("class {0} is frozen and admits no new work")]
@@ -380,7 +392,9 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
     //    The cap keeps doing what Decision 2 says it is for ("a transiently mis-tuned DAA flooding
     //    the DAG") on every class that is not the floor; for the floor itself the control is its
     //    own per-class retarget, which is the instrument sized for it.
-    if attempt.class_id != state_params.base_class_id() {
+    // ADR-0137: past the work target the epoch budget is not read for a model class — a block
+    // costs `W₀` of work from any class, and the cadence is the network draw's to hold.
+    if attempt.class_id != state_params.base_class_id() && budget_fences.work_target_floor.is_none() {
         let epoch_index = ctx.daa_score / state_params.epoch_length();
         // **ADR-0045 Decision 2's boundary sentence** (mainnet audit 2026-09-06, M-2): "Admission
         // reads the snapshot; for the crossing block itself (whose apply has not happened yet) it
@@ -710,8 +724,35 @@ where
         &envelope.attempt.executor_bond,
         nonce,
     );
-    check_palw_class_lottery_v3(state, &envelope.attempt, execution_anchor)?;
+    check_palw_class_lottery_v4(state, state_params, &envelope.attempt, execution_anchor, budget_fences.work_target_floor)?;
     Ok(attempt_id)
+}
+
+/// **ADR-0137: the lottery past the work target.** A model class's ticket target is
+/// `MAX · min(1, CCU_m / W₀)` — its row's counted work against the block's `W₀` — and a class
+/// without a row has no price and is refused; the floor keeps its class target. With no floor at
+/// hand this is [`check_palw_class_lottery_v3`].
+pub fn check_palw_class_lottery_v4(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    attempt: &crate::palw_attempt_v2::PalwAttemptUnsignedV2,
+    execution_anchor: Hash64,
+    work_target_floor: Option<u128>,
+) -> Result<(), PalwAdmissionV2Error> {
+    let Some(floor) = work_target_floor else { return check_palw_class_lottery_v3(state, attempt, execution_anchor) };
+    if attempt.class_id == state_params.base_class_id() {
+        return check_palw_class_lottery_v3(state, attempt, execution_anchor);
+    }
+    let ccu = state
+        .model_lifecycle(&attempt.class_id)
+        .map(|row| row.work.economic_ccu_per_claim)
+        .ok_or(PalwAdmissionV2Error::ClassWorkUnknown(attempt.class_id))?;
+    let target = crate::palw_work_target_v1::palw_work_ticket_target_v1(ccu, floor);
+    let ticket = crate::palw_attempt_v2::class_ticket_v3(attempt, execution_anchor);
+    if ticket > target {
+        return Err(PalwAdmissionV2Error::ClassTicketAboveWorkTarget { class_id: attempt.class_id, ticket, target, ccu, floor });
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1691,6 +1732,20 @@ mod tests {
         );
         admit_with(&state, &late, &next, PalwEpochBudgetFencesV1 { budget_release_active: true, ..Default::default() })
             .expect("armed, the unfilled slots are the entrant's to use");
+    }
+
+    /// **ADR-0137: past the work target the epoch budget is not read for a model class** — the
+    /// same spent entrant is admitted with `W₀` at hand; a block costs `W₀` of work from any class
+    /// and the cadence is the network draw's to hold.
+    #[test]
+    fn adr0137_past_the_work_target_the_epoch_budget_is_not_read_for_a_model_class() {
+        let (state, budget) = an_entrant_at_its_cap();
+        let late = ctx(9_000, 900, 9_000);
+        let next = attempt_for_class(h64(2), 1, 90_001, bond_outpoint(2), vec![8; 4], op_id(0x22));
+        let refused = admit_with(&state, &late, &next, PalwEpochBudgetFencesV1::default()).expect_err("below the fence the cap binds");
+        assert!(matches!(refused, PalwAdmissionV2Error::EpochBudgetExceeded { budget: b, .. } if b == budget as u128));
+        admit_with(&state, &late, &next, PalwEpochBudgetFencesV1 { work_target_floor: Some(1), ..Default::default() })
+            .expect("past the work target no budget is read for a model class");
     }
 
     /// **Nothing is borrowed from slots that have not happened yet.** Early in the epoch the other

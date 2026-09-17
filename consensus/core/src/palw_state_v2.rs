@@ -4795,6 +4795,10 @@ pub enum PalwStateV2Error {
     ClassNotAdmitting { class: Hash64, state: String },
     #[error("class {class} has {inflight} claims in flight against the registry's cap of {cap}")]
     ClassInflightCapped { class: Hash64, inflight: u32, cap: u32 },
+    #[error(
+        "the panel has no room for a claim of class {class}: {inflight_replay} of replay in flight against a budget of {budget} over {horizon_spans} spans"
+    )]
+    PanelRoomExhausted { class: Hash64, inflight_replay: u128, budget: u128, horizon_spans: u64 },
     // There is deliberately NO size error here. A disclosure's ceiling is a wire bound, and it is
     // already applied on the only path into this fold: `palw_lifecycle_objects_from_accepted_txs_v2`
     // runs `palw_lifecycle_object_may_ride_v2` on every extracted object and SKIPS the ones that
@@ -8136,13 +8140,84 @@ impl<'a> TransitionBuilder<'a> {
     /// is never gated (every node runs it, the chain lives on it); a class without a row (registered
     /// before the fence without its carriage) is not gated either; a rowed class must admit claims
     /// and be under its inflight cap.
-    fn check_class_admits_claim(&self, class_id: &Hash64) -> Result<(), PalwStateV2Error> {
-        if self.model_registry_fold().is_none() || *class_id == self.params.base_class_id() {
+    /// ADR-0137: `W₀` for this block where the work target is in force — the block's escrow at the
+    /// payout's rate (the shadow's rate where, in a test, no payout folds).
+    fn work_target_floor(&self, ctx: &PalwBlockContextV2) -> Option<u128> {
+        if !self.extras.work_target_active {
+            return None;
+        }
+        let rate = self
+            .extras
+            .economic_payout
+            .map(|fold| fold.rate_sompi_per_giga)
+            .or_else(|| self.extras.work_target.as_ref().map(|fold| fold.rate_sompi_per_giga))
+            .unwrap_or(crate::palw_work_target_v1::PALW_WORK_TARGET_SHADOW_RATE_SOMPI_PER_GIGA_V1);
+        Some(palw_work_floor_for_block_v1(self.params, ctx.subsidy, self.extras.escrow_carve, rate))
+    }
+
+    /// **ADR-0137 D5: the verification budget in one class's claims** — this class's ready seats'
+    /// replay over the shortest admitted window, less every model class's replay in flight,
+    /// divided by what one of its claims costs the panel. Returns `(room, inflight_replay,
+    /// budget, horizon)`.
+    fn panel_room_v1(
+        &self,
+        class_id: &Hash64,
+        row: &crate::palw_model_registry_v1::PalwModelLifecycleRowV1,
+        fold: &crate::palw_model_registry_v1::PalwModelRegistryFoldV1,
+        now_daa: u64,
+    ) -> (u64, u128, u128, u64) {
+        let base = self.params.base_class_id();
+        let g = &fold.globals;
+        let seat_count = g.seat_count as u128;
+        let horizon = self
+            .state
+            .model_lifecycles
+            .iter()
+            .filter(|(id, r)| **id != base && r.state.admission_permille() > 0)
+            .map(|(_, r)| r.profile.verification_window_spans as u64)
+            .min()
+            .unwrap_or(1)
+            .max(1);
+        let inflight_replay: u128 = self
+            .state
+            .model_lifecycles
+            .iter()
+            .filter(|(id, _)| **id != base)
+            .map(|(id, r)| {
+                (self.model_registry_inflight(id) as u128).saturating_mul(r.work.economic_ccu_per_claim).saturating_mul(seat_count)
+            })
+            .fold(0u128, u128::saturating_add);
+        let ready = self.model_registry_ready_seats(class_id, now_daa, fold) as u128;
+        let per_span =
+            ready.saturating_mul(g.reference_work_per_span).saturating_mul(g.utilization_permille.min(1_000) as u128) / 1_000;
+        let budget = per_span.saturating_mul(horizon as u128);
+        let cost = row.work.economic_ccu_per_claim.saturating_mul(seat_count);
+        (crate::palw_work_target_v1::palw_panel_room_v1(per_span, horizon, inflight_replay, cost), inflight_replay, budget, horizon)
+    }
+
+    fn check_class_admits_claim(&self, class_id: &Hash64, now_daa: u64) -> Result<(), PalwStateV2Error> {
+        let Some(fold) = self.model_registry_fold() else { return Ok(()) };
+        if *class_id == self.params.base_class_id() {
             return Ok(());
         }
-        let Some(row) = self.state.model_lifecycles.get(class_id) else { return Ok(()) };
+        let Some(row) = self.state.model_lifecycles.get(class_id) else {
+            // ADR-0137: past the work target every model class is priced by its row; a class
+            // without one (registered before the fence without a carriage) is refused, not free.
+            if self.extras.work_target_active {
+                return Err(PalwStateV2Error::ClassNotAdmitting { class: *class_id, state: "no row".to_string() });
+            }
+            return Ok(());
+        };
         if !row.state.admits_claims() {
             return Err(PalwStateV2Error::ClassNotAdmitting { class: *class_id, state: format!("{:?}", row.state) });
+        }
+        if self.extras.work_target_active {
+            // ADR-0137 D5: one network-wide replay budget in place of the per-class cap.
+            let (room, inflight_replay, budget, horizon_spans) = self.panel_room_v1(class_id, row, fold, now_daa);
+            if room == 0 {
+                return Err(PalwStateV2Error::PanelRoomExhausted { class: *class_id, inflight_replay, budget, horizon_spans });
+            }
+            return Ok(());
         }
         let inflight = self.model_registry_inflight(class_id);
         if inflight >= row.profile.max_inflight_claims {
@@ -8251,13 +8326,21 @@ impl<'a> TransitionBuilder<'a> {
             // ADR-0132 Upgrade C / ADR-0133 Fence 3: the class's cap utilization at this boundary,
             // and whether it is under the fence's ceiling (always, where nothing prices it).
             let cap = if *class_id == base { 0 } else { self.class_cap_utilization_permille(&row.work, expected, ctx) };
-            let cap_ok = cap == 0 || self.extras.economic_payout.is_none_or(|fold| cap <= fold.cap_utilization_max_permille as u32);
+            let cap_ok = self.extras.work_target_active
+                || cap == 0
+                || self.extras.economic_payout.is_none_or(|fold| cap <= fold.cap_utilization_max_permille as u32);
             let (state, utilization) = if *class_id == base {
                 (PalwModelLifecycleV1::Active, 0)
             } else {
                 let window = profile.verification_window_spans.max(1) as u128;
                 let utilization = if ready == 0 {
                     1_000
+                } else if self.extras.work_target_active {
+                    // ADR-0137 D5: past the work target the panel's load is replay against the
+                    // budget the room check reads — one notion of capacity, so a class the room
+                    // admits is not a class the lifecycle holds.
+                    let (_, inflight_replay, budget, _) = self.panel_room_v1(class_id, &row, &fold, ctx.daa_score);
+                    if budget == 0 { 1_000 } else { (inflight_replay.saturating_mul(1_000) / budget).min(u32::MAX as u128) as u32 }
                 } else {
                     ((inflight as u128).saturating_mul(fold.globals.seat_count as u128).saturating_mul(1_000)
                         / (ready as u128).saturating_mul(window))
@@ -8303,6 +8386,11 @@ impl<'a> TransitionBuilder<'a> {
             if *class_id != base {
                 admissions.push((*class_id, admission_milli));
             }
+        }
+        // ADR-0137: past the work target the registry moves no share, refreshes no budget and
+        // seats no price — a share is a result, not an input.
+        if self.extras.work_target_active {
+            return;
         }
         if !self.state.class_shares.contains_key(&base) {
             return;
@@ -10139,6 +10227,7 @@ pub fn apply_palw_transition_v7(
                         // resolved once for this block and must remain armed in the fold.
                         crate::palw_admission_v2::PalwEpochBudgetFencesV1 {
                             budget_release_active: builder.extras.epoch_budget_release_active,
+                            work_target_floor: builder.work_target_floor(ctx),
                             ..Default::default()
                         },
                     ) {
@@ -11621,6 +11710,10 @@ fn apply_work_target_shadow(builder: &mut TransitionBuilder<'_>, parent: &PalwCh
 }
 
 fn apply_class_share_growth(builder: &mut TransitionBuilder<'_>, parent: &PalwChainStateV2, ctx: &PalwBlockContextV2) {
+    // ADR-0137: past the work target no share grows or decays.
+    if builder.extras.work_target_active {
+        return;
+    }
     if builder.params.class_growth_permille() == 0 {
         return;
     }
@@ -11995,6 +12088,12 @@ fn apply_class_retargets(
         };
         for class_id in &class_ids {
             let class_id = *class_id;
+            // ADR-0137: past the work target a model class has no target to walk — its ticket is
+            // `CCU / W₀` — and the floor's class DAA keeps holding the residual; the receipt lane
+            // is untouched.
+            if builder.extras.work_target_active && !counters_are_receipts && class_id != builder.params.base_class_id() {
+                continue;
+            }
             let class = builder.state.classes.get(&class_id).expect("iterating the map's own keys");
             if matches!(class.status, PalwClassStatusV2::Frozen { .. }) {
                 continue;
@@ -14355,6 +14454,22 @@ fn apply_receipt_spend(
 /// by construction because this IS that function, called with the state's own carve — or, past
 /// ADR-0126's fence at the attempt block's DAA, with `escrow_carve` — so a second arithmetic here
 /// is never a second answer waiting to disagree.
+/// **ADR-0137: `W₀` for a block** — its escrow (the worker carve of its subsidy) at `rate_max`;
+/// `u128::MAX` (the hardest floor: no model class can win) for a block with no escrow, because a
+/// block that pays nothing buys no work.
+pub fn palw_work_floor_for_block_v1(
+    params: &PalwStateParamsV2,
+    subsidy: u64,
+    escrow_carve: Option<crate::palw_reward_v2::PalwRewardParamsV2>,
+    rate_sompi_per_giga: u64,
+) -> u128 {
+    let escrow = worker_carve_v2(params, subsidy, escrow_carve);
+    if escrow == 0 {
+        return u128::MAX;
+    }
+    crate::palw_work_target_v1::palw_work_floor_v1(escrow, rate_sompi_per_giga)
+}
+
 fn worker_carve_v2(params: &PalwStateParamsV2, subsidy: u64, escrow_carve: Option<crate::palw_reward_v2::PalwRewardParamsV2>) -> u64 {
     let carve = match escrow_carve {
         Some(carve) => carve,
@@ -14378,6 +14493,11 @@ pub struct PalwTransitionExtrasV1 {
     /// ADR-0137 (shadow): the work target's fold input — the rate, the clamp and every class's
     /// work — where the node computes the shadow; `None` folds no shadow.
     pub work_target: Option<crate::palw_work_target_v1::PalwWorkTargetFoldV1>,
+    /// ADR-0137: `Params::palw_work_target` resolved at the block's DAA. Past it the lottery reads
+    /// `W₀`, the model classes' targets, shares and budgets are not read or moved, the registry
+    /// derives no share and seats no price, Fence 3's cap rule is off, an unrowed class is refused,
+    /// and one network-wide verification budget replaces the per-class in-flight cap.
+    pub work_target_active: bool,
     /// `Params::palw_model_lines` resolved at the block's DAA (ADR-0088 Decision 11). Below it
     /// the ten registry objects are refused and no claim is attributed.
     pub model_lines_active: bool,
@@ -15422,7 +15542,7 @@ fn apply_attempt(
     }
     // ADR-0135: a class the registry does not admit (REGISTERED, PREFETCHING, HELD) takes no new
     // claim, and one at its inflight cap takes none until a claim leaves flight.
-    builder.check_class_admits_claim(&attempt.class_id)?;
+    builder.check_class_admits_claim(&attempt.class_id, ctx.daa_score)?;
     let reserved = (palw_exposure_pwu_v1(class, attempt.pwu) as u128)
         .checked_mul(class.slash_value_per_pwu as u128)
         .ok_or(PalwStateV2Error::Overflow("reserve"))?;
@@ -18843,6 +18963,207 @@ pub(crate) mod tests {
             assert_eq!(kimi_shown.work_ratio_permille, 0, "800 000 of 62 G is 0.0129 ‰: floors to zero");
             assert_eq!(kimi_shown.work_ticket_target, crate::palw_work_target_v1::palw_work_ticket_target_v1(800_000, 62_000_000_000));
             assert_eq!(kimi_shown.expected_forwards_q32 >> 32, 77_500, "62 G / 800 000 forwards a win");
+        }
+
+        // ---- ADR-0137: the dormant fence, armed in the fold ----
+
+        /// **Past the work target the lottery reads `CCU / W₀` from the class's row**: a class
+        /// heavier than `W₀` draws the whole ticket, a floor of `MAX` prices it at 800 000 of the
+        /// space, a rowless class has no price, and the floor keeps its class target.
+        #[test]
+        fn adr0137_past_the_fence_the_lottery_reads_ccu_over_the_floor_and_a_rowless_class_has_no_price() {
+            use crate::palw_admission_v2::{PalwAdmissionV2Error, check_palw_class_lottery_v3, check_palw_class_lottery_v4};
+            let p = params().with_worker_carve_permille(620).expect("a legal carve");
+            let (s7, root) = kimi_active_and_priced(&p, 10_000);
+            let env = kimi_attempt(2, root);
+            let anchor = h64(77);
+            check_palw_class_lottery_v4(&s7, &p, &env.attempt, anchor, Some(1))
+                .expect("CCU ≥ W₀: the whole ticket, every forward wins");
+            let refused = check_palw_class_lottery_v4(&s7, &p, &env.attempt, anchor, Some(u128::MAX))
+                .expect_err("800 000 of 2^128: no forward wins");
+            assert!(
+                matches!(
+                    refused,
+                    PalwAdmissionV2Error::ClassTicketAboveWorkTarget { target: 800_000, ccu: 800_000, floor: u128::MAX, .. }
+                ),
+                "{refused:?}"
+            );
+            assert_eq!(
+                check_palw_class_lottery_v4(&s7, &p, &env.attempt, anchor, None).is_ok(),
+                check_palw_class_lottery_v3(&s7, &env.attempt, anchor).is_ok(),
+                "no floor at hand: the shipped verdict"
+            );
+            let floor = attempt_for_class(40, 9, h64(1), bond_key(1), vec![7; 4], op_id(21), h64(11));
+            assert_eq!(
+                check_palw_class_lottery_v4(&s7, &p, &floor.attempt, anchor, Some(u128::MAX)).is_ok(),
+                check_palw_class_lottery_v3(&s7, &floor.attempt, anchor).is_ok(),
+                "the floor keeps its class target"
+            );
+            let stranger = PalwConsensusObjectV2::ClassRegistered {
+                class_id: h64(3),
+                artifact_root: h64(33),
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+                initial_target: u128::MAX / 2,
+                share_permille: 0,
+                activation_daa: 0,
+                admission: None,
+            };
+            let (s8, _) = step_with(&s7, &p, &funded(8, 131, 8), &[stranger], None, &priced_extras(Some(payout_fold(10_000, 0))));
+            assert!(s8.model_lifecycle(&h64(3)).is_none(), "registered without a carriage: no row");
+            let rowless = attempt_for_class(40, 5, h64(3), bond_key(1), vec![7; 4], op_id(21), h64(33));
+            assert!(
+                matches!(check_palw_class_lottery_v4(&s8, &p, &rowless.attempt, anchor, Some(1)), Err(PalwAdmissionV2Error::ClassWorkUnknown(c)) if c == h64(3)),
+                "no row, no price"
+            );
+            // And the fold refuses the rowless class outright past the fence.
+            let fenced = PalwTransitionExtrasV1 { work_target_active: true, ..priced_extras(Some(payout_fold(10_000, 0))) };
+            let refused = apply_palw_transition_v2_with_extras(
+                &s8,
+                &p,
+                &funded(9, 132, 9),
+                &[],
+                Some(&rowless),
+                false,
+                false,
+                false,
+                false,
+                &fenced,
+            )
+            .expect_err("a class without a row is refused at acceptance past the fence");
+            assert!(
+                matches!(refused, PalwStateV2Error::ClassNotAdmitting { class, ref state } if class == h64(3) && state == "no row"),
+                "{refused:?}"
+            );
+            let (below, _) = step_with(&s8, &p, &funded(9, 132, 9), &[], Some(&rowless), &priced_extras(Some(payout_fold(10_000, 0))));
+            assert!(below.claim(&attempt_id_v2(&rowless.attempt)).is_some(), "below the fence the same class is never gated");
+        }
+
+        /// **Past the work target the registry moves no share, seats no price, refreshes no budget,
+        /// the model class's target does not walk, and Fence 3's cap rule is off.**
+        #[test]
+        fn adr0137_past_the_fence_the_registry_moves_no_share_seats_no_price_and_the_cap_rule_is_off() {
+            let p = params().with_worker_carve_permille(620).expect("a legal carve");
+            let (operands, root) = inventory();
+            let s5 = kimi_with_a_final(&p, root);
+            let fenced = |rate: u64| PalwTransitionExtrasV1 { work_target_active: true, ..priced_extras(Some(payout_fold(rate, 0))) };
+            let proofs: Vec<PalwConsensusObjectV2> = (2..=8).map(|n| proof(&operands, bond_key(n), 12)).collect();
+            let (s6, _) = step_with(&s5, &p, &funded(6, 125, 6), &proofs, None, &fenced(10_000));
+            let (s7, d7) = step_with(&s6, &p, &funded(7, 130, 7), &[], None, &fenced(10_000));
+            let kimi = s7.model_lifecycle(&kimi_id()).expect("Kimi has a row");
+            assert_eq!(
+                (kimi.state, kimi.ready_seats, kimi.priced_share_permille),
+                (PalwModelLifecycleV1::Active, 7, 0),
+                "active with seven ready seats, never seated at a price"
+            );
+            assert_eq!(s7.class_shares.get(&kimi_id()).copied(), Some(0), "the registration's share stays: the registry moves none");
+            assert_eq!(s7.class_shares.get(&h64(1)).copied(), Some(1_000));
+            assert_eq!(s7.class_target(&kimi_id()).unwrap().target, u128::MAX / 2, "the class target is not walked");
+            assert!(
+                !d7.entries.iter().any(|e| matches!(
+                    e,
+                    PalwDeltaEntryV2::Share { .. } | PalwDeltaEntryV2::Target { .. } | PalwDeltaEntryV2::EpochBudgets { .. }
+                )),
+                "no share, no target, no budget moved at the governed boundary"
+            );
+            let (s8, _) = step_with(&s7, &p, &funded(8, 140, 8), &[], None, &fenced(1_000_000_000_000));
+            let kimi = s8.model_lifecycle(&kimi_id()).unwrap();
+            assert_eq!(kimi.state, PalwModelLifecycleV1::Active, "Fence 3 does not read past the fence");
+            assert!(kimi.cap_utilization_permille > 800, "the reading is still taken: {}", kimi.cap_utilization_permille);
+            // Folded twice, one root: the fenced boundary is a function of the chain.
+            let (again, _) = step_with(&s6, &p, &funded(7, 130, 7), &[], None, &fenced(10_000));
+            assert_eq!(again.state_root(), s7.state_root());
+        }
+
+        /// **Past the work target one verification budget gates claims**: every claim in flight
+        /// takes from it, the per-class cap is not read, a full panel refuses
+        /// (`PanelRoomExhausted`), and a reorg gives the room back.
+        #[test]
+        fn adr0137_past_the_fence_one_verification_budget_gates_claims_and_a_reorg_returns_the_room() {
+            use crate::palw_work_target_v1::palw_panel_room_v1;
+            let p = params().with_worker_carve_permille(620).expect("a legal carve");
+            let (s7, root) = kimi_active_and_priced(&p, 10_000);
+            // A panel that replays 4 M MAC-eq a span a seat: seven ready seats over Kimi's window
+            // hold a handful of 800 000 × 5-seat claims — fewer than the bond's exposure allows.
+            let mut tiny = fold(kimi_work());
+            tiny.globals.reference_work_per_span = 4_000_000;
+            let fenced = PalwTransitionExtrasV1 {
+                work_target_active: true,
+                model_registry: Some(tiny),
+                ..priced_extras(Some(payout_fold(10_000, 0)))
+            };
+            let window = s7.model_lifecycle(&kimi_id()).unwrap().profile.verification_window_spans as u64;
+            let per_span = 7u128 * 4_000_000 * 700 / 1_000;
+            let cost = 800_000u128 * 5;
+            let expected_room = palw_panel_room_v1(per_span, window, 0, cost);
+            let cap = s7.model_lifecycle(&kimi_id()).unwrap().profile.max_inflight_claims as u64;
+            assert!(
+                expected_room < cap,
+                "the budget ({expected_room}) binds where the per-class cap ({cap}) never would: the two are told apart"
+            );
+            let mut s = s7;
+            let mut accepted = 0u64;
+            let mut last: Option<(PalwChainStateV2, PalwStateDeltaV2)> = None;
+            let mut nearly_full: Option<PalwChainStateV2> = None;
+            for i in 0..40u64 {
+                let env = attempt_for_class(8, 100 + i, kimi_id(), bond_key(1), vec![7; 4], op_id(21), root);
+                let c = funded(8 + i, 131 + i, 8 + i);
+                match apply_palw_transition_v2_with_extras(&s, &p, &c, &[], Some(&env), false, false, false, false, &fenced) {
+                    Ok((next, delta)) => {
+                        last = Some((s, delta));
+                        s = next;
+                        accepted += 1;
+                        if accepted + 1 == expected_room {
+                            nearly_full = Some(s.clone());
+                        }
+                    }
+                    Err(PalwStateV2Error::PanelRoomExhausted { class, inflight_replay, budget, horizon_spans }) => {
+                        assert_eq!(class, kimi_id());
+                        assert_eq!(inflight_replay, accepted as u128 * cost, "every claim in flight is on the budget");
+                        assert_eq!((budget, horizon_spans), (per_span * window as u128, window));
+                        break;
+                    }
+                    Err(e) => panic!("block {i}: {e:?}"),
+                }
+            }
+            assert_eq!(accepted, expected_room, "the panel holds exactly its budget of claims");
+            // Below the fence the same fold reads the per-class cap, which is nowhere near, and
+            // accepts a claim the fenced fold's budget also had room for (one short of full, before
+            // the span boundary the shipped lifecycle would hold the overloaded class at).
+            let nearly_full = nearly_full.expect("the budget holds more than one claim");
+            let unfenced = PalwTransitionExtrasV1 { work_target_active: false, ..fenced.clone() };
+            let env = attempt_for_class(8, 800, kimi_id(), bond_key(1), vec![7; 4], op_id(21), root);
+            apply_palw_transition_v2_with_extras(
+                &nearly_full,
+                &p,
+                &funded(80, 131 + accepted - 1, 80),
+                &[],
+                Some(&env),
+                false,
+                false,
+                false,
+                false,
+                &unfenced,
+            )
+            .expect("below the fence the per-class cap is what is read, and it does not bind");
+            // The reorg: revert the last accepted block and the room is one claim again.
+            let (parent, delta) = last.expect("something was accepted");
+            let reverted = revert_delta_v2(&s, &delta, &p).unwrap();
+            assert_eq!(reverted.state_root(), parent.state_root());
+            let env = attempt_for_class(8, 900, kimi_id(), bond_key(1), vec![7; 4], op_id(21), root);
+            apply_palw_transition_v2_with_extras(
+                &reverted,
+                &p,
+                &funded(90, 131 + accepted, 90),
+                &[],
+                Some(&env),
+                false,
+                false,
+                false,
+                false,
+                &fenced,
+            )
+            .expect("the reverted block's claim gave its room back");
         }
     }
 
@@ -33156,6 +33477,7 @@ pub(crate) mod tests {
         fn extras(actions: Vec<PalwEvmMarketActionV1>) -> PalwTransitionExtrasV1 {
             PalwTransitionExtrasV1 {
                 work_target: None,
+                work_target_active: false,
                 model_lines_active: true,
                 // ADR-0094's instalments ride ADR-0095's fence, and the EVM lane keeps the carrier
                 // lane's rule, so this fixture stands past it.
@@ -33383,6 +33705,7 @@ pub(crate) mod tests {
             // Below the fence the same actions write nothing.
             let dormant = PalwTransitionExtrasV1 {
                 work_target: None,
+                work_target_active: false,
                 model_lines_active: true,
                 model_benefits_active: false,
                 evm_market_active: false,

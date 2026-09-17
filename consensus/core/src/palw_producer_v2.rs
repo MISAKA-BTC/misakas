@@ -229,9 +229,19 @@ pub fn palw_producer_facts_v2(
     daa_score: u64,
     class_id: Hash64,
     bond: Option<&PalwBondKeyV2>,
+    work_target_floor: Option<u128>,
 ) -> Option<PalwProducerFactsV2> {
     let class = state.class(&class_id)?;
-    let class_target = state.class_target(&class_id)?.target;
+    // ADR-0137: past the work target a model class draws against `MAX · min(1, CCU / W₀)` from
+    // its registry row — no row, no price, no facts (the producer holds); the floor keeps its
+    // class target.
+    let class_target = match work_target_floor {
+        Some(floor) if class_id != state_params.base_class_id() => {
+            let ccu = state.model_lifecycle(&class_id)?.work.economic_ccu_per_claim;
+            crate::palw_work_target_v1::palw_work_ticket_target_v1(ccu, floor)
+        }
+        _ => state.class_target(&class_id)?.target,
+    };
     let pwu = match class.pwu_rule {
         PalwPwuRuleV2::DerivedV1 { pwu_per_inference } => crate::palw_pwu::palw_pwu_v1(class_target, pwu_per_inference),
         PalwPwuRuleV2::MaxPerAttempt(cap) => cap,
@@ -360,9 +370,17 @@ mod tests {
         let params = state_params();
         let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
         let bond_key = PalwBondKeyV2(bond_outpoint());
-        let facts =
-            palw_producer_facts_v2(&state, &params, &admission, crate::BlockHash::from_u64_word(1), 101, h64(1), Some(&bond_key))
-                .expect("the class is registered, so it has facts");
+        let facts = palw_producer_facts_v2(
+            &state,
+            &params,
+            &admission,
+            crate::BlockHash::from_u64_word(1),
+            101,
+            h64(1),
+            Some(&bond_key),
+            None,
+        )
+        .expect("the class is registered, so it has facts");
 
         assert_eq!(facts.ready_to_produce(&[7; 4]), Ok(()), "the producer is clear to run an inference");
         assert_eq!(
@@ -420,9 +438,17 @@ mod tests {
         let params = state_params();
         let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
         let bond_key = PalwBondKeyV2(bond_outpoint());
-        let facts =
-            palw_producer_facts_v2(&state, &params, &admission, crate::BlockHash::from_u64_word(1), 101, h64(1), Some(&bond_key))
-                .unwrap();
+        let facts = palw_producer_facts_v2(
+            &state,
+            &params,
+            &admission,
+            crate::BlockHash::from_u64_word(1),
+            101,
+            h64(1),
+            Some(&bond_key),
+            None,
+        )
+        .unwrap();
         let ctx = PalwBlockContextV2 { block: crate::BlockHash::from_u64_word(2), daa_score: 101, blue_score: 2, subsidy: 0 };
 
         let build = |mutate: &dyn Fn(&mut PalwAttemptUnsignedV2)| {
@@ -490,9 +516,17 @@ mod tests {
 
         // An epoch the chain has written no budget for — every epoch boundary, in other words.
         let far = params.epoch_length() * 9_999 + 1;
-        let facts =
-            palw_producer_facts_v2(&state, &params, &admission, crate::BlockHash::from_u64_word(1), far, h64(1), Some(&bond_key))
-                .expect("the class is still registered");
+        let facts = palw_producer_facts_v2(
+            &state,
+            &params,
+            &admission,
+            crate::BlockHash::from_u64_word(1),
+            far,
+            h64(1),
+            Some(&bond_key),
+            None,
+        )
+        .expect("the class is still registered");
         assert!(facts.is_base_class, "h64(1) is this fixture's floor");
         assert_eq!(facts.epoch_budget_blocks, 0, "and the chain has written no budget for this epoch");
         assert!(facts.has_epoch_room(), "a zero budget must not stop the floor — that is the deadlock");
@@ -500,8 +534,16 @@ mod tests {
 
         // A NON-floor class is still capped, because the cap is what Decision 2 is for. Nothing was
         // loosened; the exemption is exactly the one admission already makes.
-        let entrant =
-            palw_producer_facts_v2(&state, &params, &admission, crate::BlockHash::from_u64_word(1), far, h64(2), Some(&bond_key));
+        let entrant = palw_producer_facts_v2(
+            &state,
+            &params,
+            &admission,
+            crate::BlockHash::from_u64_word(1),
+            far,
+            h64(2),
+            Some(&bond_key),
+            None,
+        );
         assert!(entrant.is_none(), "this fixture registers no entrant; the floor is the only class");
     }
 
@@ -513,15 +555,24 @@ mod tests {
         let params = state_params();
         let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
         let stranger = PalwBondKeyV2(TransactionOutpoint { transaction_id: TransactionId::from_u64_word(0xDEAD), index: 0 });
-        let facts =
-            palw_producer_facts_v2(&state, &params, &admission, crate::BlockHash::from_u64_word(1), 101, h64(1), Some(&stranger))
-                .unwrap();
+        let facts = palw_producer_facts_v2(
+            &state,
+            &params,
+            &admission,
+            crate::BlockHash::from_u64_word(1),
+            101,
+            h64(1),
+            Some(&stranger),
+            None,
+        )
+        .unwrap();
         assert!(facts.bond.is_none());
         assert_eq!(facts.ready_to_produce(&[7; 4]), Err("the named bond is not registered on this chain"));
         assert_eq!(facts.ready_to_spend_receipts(&[7; 4]), Err("the named bond is not registered on this chain"));
         // And a class the chain does not know has no facts at all — there is nothing to be told.
         assert!(
-            palw_producer_facts_v2(&state, &params, &admission, crate::BlockHash::from_u64_word(1), 101, h64(0xBAD), None).is_none()
+            palw_producer_facts_v2(&state, &params, &admission, crate::BlockHash::from_u64_word(1), 101, h64(0xBAD), None, None)
+                .is_none()
         );
     }
 
@@ -535,9 +586,17 @@ mod tests {
         let params = state_params();
         let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
         let bond_key = PalwBondKeyV2(bond_outpoint());
-        let mut facts =
-            palw_producer_facts_v2(&state, &params, &admission, crate::BlockHash::from_u64_word(1), 101, h64(1), Some(&bond_key))
-                .unwrap();
+        let mut facts = palw_producer_facts_v2(
+            &state,
+            &params,
+            &admission,
+            crate::BlockHash::from_u64_word(1),
+            101,
+            h64(1),
+            Some(&bond_key),
+            None,
+        )
+        .unwrap();
         assert_eq!(facts.ready_to_spend_receipts(&[7; 4]), Ok(()));
 
         // The bond's ceiling is full — the state a bond that commits free-prompt claims reaches.

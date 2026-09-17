@@ -333,6 +333,9 @@ pub struct Args {
     /// ADR-0132 Upgrade C on a private devnet: arm the economic payout at this DAA score, with the
     /// devnet's numbers (`PALW_ECONOMIC_PAYOUT_DEVNET_V1`). Needs the registry at or below it.
     pub palw_economic_payout_devnet_daa: Option<u64>,
+    /// ADR-0137 on a private devnet: arm the work target at this DAA score. Needs the registry and
+    /// the payout at or below it.
+    pub palw_work_target_devnet_daa: Option<u64>,
     /// PALW on a PRIVATE devnet: run the floor-only ruleset (the base class alone, seeded by
     /// ADR-0076 with the whole share, `MAX/278`) instead of the shipped devnet's testnet-11 class
     /// set, whose floor holds a sliver of the share and prices a fixture block at minutes per
@@ -459,6 +462,7 @@ impl Default for Args {
             palw_execution_lane_devnet: None,
             palw_model_registry_devnet_daa: None,
             palw_economic_payout_devnet_daa: None,
+            palw_work_target_devnet_daa: None,
             palw_devnet_floor_only: false,
             testnet: false,
             testnet_suffix: 10,
@@ -718,6 +722,29 @@ impl Args {
             });
             if let Err(e) = config.params.validate_palw_v2() {
                 panic!("--palw-economic-payout-devnet={daa} produced a ruleset the node refuses: {e:?}");
+            }
+        }
+
+        if let Some(daa) = self.palw_work_target_devnet_daa {
+            let net = self.network().network_type();
+            if !matches!(net, NetworkType::Devnet | NetworkType::Simnet) {
+                panic!(
+                    "--palw-work-target-devnet is devnet/simnet only (got {net:?}). Arming the work target is a consensus \
+                     change and ships in a release, not a command line."
+                );
+            }
+            if !matches!(config.params.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)) {
+                panic!("--palw-work-target-devnet needs a ConsensusV2 network, and {net:?} here is not one");
+            }
+            if config.params.palw_model_registry.is_none() || config.params.palw_economic_payout.is_none() {
+                panic!(
+                    "--palw-work-target-devnet={daa} needs --palw-model-registry-devnet and --palw-economic-payout-devnet at or below it: \
+                     the work target prices the registry's classes at the payout's rate"
+                );
+            }
+            config.params.palw_work_target = Some(kaspa_consensus_core::config::params::ForkActivation::new(daa));
+            if let Err(e) = config.params.validate_palw_v2() {
+                panic!("--palw-work-target-devnet={daa} produced a ruleset the node refuses: {e:?}");
             }
         }
 
@@ -1345,6 +1372,20 @@ pub fn cli() -> Command {
                 .env("KASPAD_PALW_EXECUTION_LANE_DEVNET"),
         )
         .arg(
+            Arg::new("palw-work-target-devnet")
+                .long("palw-work-target-devnet")
+                .value_name("daa-score")
+                .value_parser(clap::value_parser!(u64))
+                .require_equals(false)
+                .help(
+                    "ADR-0137 on a PRIVATE devnet: arm the work target at this DAA score — a model class draws against \
+                     CCU / W₀ (the block's escrow at the payout's rate), shares, model targets and budgets are not read, \
+                     the registry's gate stays and one verification budget replaces the per-class cap. Needs \
+                     --palw-model-registry-devnet and --palw-economic-payout-devnet at or below it. DEVNET/SIMNET ONLY.",
+                )
+                .env("KASPAD_PALW_WORK_TARGET_DEVNET"),
+        )
+        .arg(
             Arg::new("palw-economic-payout-devnet")
                 .long("palw-economic-payout-devnet")
                 .value_name("daa-score")
@@ -1743,6 +1784,7 @@ impl Args {
                 .get_one::<u64>("palw-economic-payout-devnet")
                 .copied()
                 .or(defaults.palw_economic_payout_devnet_daa),
+            palw_work_target_devnet_daa: m.get_one::<u64>("palw-work-target-devnet").copied().or(defaults.palw_work_target_devnet_daa),
             palw_devnet_floor_only: arg_match_unwrap_or::<bool>(&m, "palw-devnet-floor-only", defaults.palw_devnet_floor_only),
             utxoindex: arg_match_unwrap_or::<bool>(&m, "utxoindex", defaults.utxoindex),
             testnet: arg_match_unwrap_or::<bool>(&m, "testnet", defaults.testnet),

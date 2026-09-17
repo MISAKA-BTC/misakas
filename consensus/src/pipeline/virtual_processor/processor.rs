@@ -414,6 +414,8 @@ pub struct VirtualStateProcessor {
     /// ADR-0135: `Params::palw_model_registry` — past it the fold walks every class's lifecycle,
     /// seats judge by possession proofs, and the class shares come from admission.
     pub(super) palw_model_registry: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0137: `Params::palw_work_target` — dormant everywhere; past it the lottery reads `W₀`.
+    pub(super) palw_work_target: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0132 Upgrade C: `Params::palw_economic_payout` — past it a claim snapshots its economics
     /// at acceptance and is paid at the rate; the registry reads the cap ceiling.
     pub(super) palw_economic_payout: Option<kaspa_consensus_core::config::params::PalwEconomicPayoutV1>,
@@ -908,6 +910,7 @@ impl VirtualStateProcessor {
             palw_panel_exposure_floor: params.palw_panel_exposure_floor_fence(),
             palw_compute_overlay_retired: params.palw_compute_overlay_retired,
             palw_model_registry: params.palw_model_registry,
+            palw_work_target: params.palw_work_target,
             palw_economic_payout: params.palw_economic_payout_fence(),
             palw_genesis_model_works: match &params.palw_consensus_mode {
                 kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
@@ -4098,6 +4101,7 @@ impl VirtualStateProcessor {
             candidate_daa,
             class_id,
             bond.map(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2).as_ref(),
+            budget_fences.work_target_floor,
         )?;
         // The producer reads the same parent snapshot as admission. At a crossing block the
         // snapshot still carries the closed epoch's table, so the boundary fence must derive the
@@ -7475,6 +7479,7 @@ impl VirtualStateProcessor {
             // ADR-0137 (shadow): the work target's fold input — the rate, the clamp and every
             // class's work — on every ConsensusV2 network, so every node prints the same `W`.
             work_target: self.palw_work_target_fold_for(point),
+            work_target_active: self.palw_work_target_at(daa_score),
             evm_actions: Vec::new(),
             // ADR-0093 Decision 8: which form of move 1 opens a phase. Written explicitly for the
             // reason the lines above give — an unwritten default here would refuse, or admit, a
@@ -7545,6 +7550,9 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_admission_v2::PalwEpochBudgetFencesV1 {
             boundary_budget_active: self.palw_epoch_boundary_budget.is_some_and(|fence| fence.is_active(daa_score)),
             budget_release_active: self.palw_epoch_budget_release_at(daa_score),
+            // ADR-0137: the block's W₀ where the work target is in force; the block's subsidy is
+            // `calc_block_subsidy` at its DAA, the same reading every attempt block's context takes.
+            work_target_floor: self.palw_work_target_floor_for(daa_score, self.coinbase_manager.calc_block_subsidy(daa_score)),
         }
     }
 
@@ -7737,6 +7745,31 @@ impl VirtualStateProcessor {
     /// ADR-0135: whether the model registry governs classes at `daa_score`.
     pub(super) fn palw_model_registry_at(&self, daa_score: u64) -> bool {
         self.palw_model_registry.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// ADR-0137: whether the work target is in force at `daa_score`.
+    pub(super) fn palw_work_target_at(&self, daa_score: u64) -> bool {
+        self.palw_work_target.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// ADR-0137: `W₀` for a block of `daa_score` paying `subsidy`, where the work target is in
+    /// force — the block's escrow at the payout's rate; `None` below the fence.
+    pub(super) fn palw_work_target_floor_for(&self, daa_score: u64, subsidy: u64) -> Option<u128> {
+        if !self.palw_work_target_at(daa_score) {
+            return None;
+        }
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let rate = self
+            .palw_economic_payout
+            .filter(|payout| payout.activation.is_active(daa_score))
+            .map(|payout| payout.rate_sompi_per_giga)
+            .unwrap_or(kaspa_consensus_core::palw_work_target_v1::PALW_WORK_TARGET_SHADOW_RATE_SOMPI_PER_GIGA_V1);
+        Some(kaspa_consensus_core::palw_state_v2::palw_work_floor_for_block_v1(
+            state_params,
+            subsidy,
+            self.palw_escrow_carve_at(daa_score, daa_score),
+            rate,
+        ))
     }
 
     /// **ADR-0135: the work of every class this node can describe** — what the registry opens rows

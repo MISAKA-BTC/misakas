@@ -593,6 +593,7 @@ mod tests {
             "palw_capability_bound" => params.palw_capability_bound = Some(at),
             "palw_compute_overlay_retired" => params.palw_compute_overlay_retired = Some(at),
             "palw_model_registry" => params.palw_model_registry = Some(at),
+            "palw_work_target" => params.palw_work_target = Some(at),
             "palw_economic_payout" => {
                 params.palw_economic_payout = Some(crate::config::params::PalwEconomicPayoutV1 {
                     activation: at,

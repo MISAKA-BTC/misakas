@@ -1173,6 +1173,14 @@ pub struct Params {
     /// at the rate; the registry reads the cap ceiling at its boundaries. `None` on every shipped
     /// preset.
     pub palw_economic_payout: Option<PalwEconomicPayoutV1>,
+    /// **ADR-0137 — the work target.** Past it a model class's ticket is `MAX · min(1, CCU_m / W₀)`
+    /// with `W₀ = escrow / rate_max` off the block's own subsidy and `palw_economic_payout`'s
+    /// rate; the class shares, the model classes' targets and the epoch budgets are no longer
+    /// read; the registry's rows, proofs and lifecycle gate stay, and one network-wide
+    /// verification budget replaces the per-class in-flight cap. `None` on every shipped preset;
+    /// hashed Some-only; refused without `palw_model_registry` and `palw_economic_payout` at or
+    /// below its height. Never set an activation height before the devnet drill has passed.
+    pub palw_work_target: Option<ForkActivation>,
     /// **ADR-0077 Phase B — the court prices the checkpoint, not the context.** `None` on every
     /// shipped preset, so the behaviour is byte-identical to not having the field at all.
     ///
@@ -2546,6 +2554,23 @@ impl Params {
                 ));
             }
         }
+        // ADR-0137: the work target reads the registry's rows (a class's CCU) and the payout's
+        // rate (W₀); both must be armed at or below it.
+        if let Some(work) = self.palw_work_target
+            && work != ForkActivation::never()
+        {
+            let registry_below =
+                self.palw_model_registry.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= work.daa_score());
+            let payout_below = self
+                .palw_economic_payout
+                .is_some_and(|p| p.activation != ForkActivation::never() && p.activation.daa_score() <= work.daa_score());
+            if !registry_below || !payout_below {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_work_target is armed without palw_model_registry and palw_economic_payout armed at or below its height: \
+                     the work target prices the registry's classes at the payout's rate",
+                ));
+            }
+        }
         // **ADR-0128 Decision 8: the BFT gate's refusals**, ahead of the V2 gate below because the
         // overlay is any lineage's. Every `Some` is judged, a `never()` height included: the values
         // reach the fingerprint whether or not the height does.
@@ -3843,6 +3868,9 @@ impl Params {
         if self.palw_model_registry == Some(ForkActivation::never()) {
             self.palw_model_registry = None;
         }
+        if self.palw_work_target == Some(ForkActivation::never()) {
+            self.palw_work_target = None;
+        }
         if self.palw_economic_payout.is_some_and(|payout| payout.activation == ForkActivation::never()) {
             self.palw_economic_payout = None;
         }
@@ -4142,6 +4170,11 @@ impl Params {
     /// ADR-0135: whether the permissionless model registry governs classes at `daa_score`.
     pub fn palw_model_registry_at(&self, daa_score: u64) -> bool {
         self.palw_model_registry.is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// ADR-0137: whether the work target is in force at `daa_score`.
+    pub fn palw_work_target_at(&self, daa_score: u64) -> bool {
+        self.palw_work_target.is_some_and(|f| f.is_active(daa_score))
     }
 
     /// ADR-0132 Upgrade C: the economic payout where it can mean something — a `ConsensusV2`
@@ -4767,6 +4800,7 @@ impl Params {
             palw_compute_overlay_retired,
             palw_model_registry,
             palw_economic_payout,
+            palw_work_target,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -4837,6 +4871,7 @@ impl Params {
             ("palw_compute_overlay_retired", *palw_compute_overlay_retired),
             ("palw_model_registry", *palw_model_registry),
             ("palw_economic_payout", palw_economic_payout.map(|payout| payout.activation)),
+            ("palw_work_target", *palw_work_target),
             ("palw_context_ladder", *palw_context_ladder),
             ("palw_panel_da", *palw_panel_da),
             ("palw_certification_rent", *palw_certification_rent),
@@ -5319,6 +5354,7 @@ impl Params {
             palw_compute_overlay_retired,
             palw_model_registry,
             palw_economic_payout,
+            palw_work_target,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -5526,6 +5562,14 @@ impl Params {
         // ADR-0132 Upgrade C: the height only, Some-only — the rate and the shares are values beside it.
         if let Some(payout) = palw_economic_payout.as_mut() {
             fork(&mut payout.activation, visit);
+        }
+        // ADR-0137, a bare fence: the same treatment as the registry's.
+        match palw_work_target.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
         }
         // ADR-0062. A pure fence with no payload beside it, so visiting it is safe — the identity
         // visitor normalises a height, and a height is all this field carries.
@@ -5985,6 +6029,7 @@ impl Params {
             palw_compute_overlay_retired,
             palw_model_registry,
             palw_economic_payout,
+            palw_work_target,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -6196,6 +6241,11 @@ impl Params {
         }
         if let Some(activation) = palw_model_registry {
             h.write(b"palw_model_registry");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0137: the height only, Some-only.
+        if let Some(activation) = palw_work_target {
+            h.write(b"palw_work_target");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0077 Decision 16, Some-only for the same reason: every shipped preset leaves it
@@ -6842,6 +6892,7 @@ impl Params {
             palw_compute_overlay_retired: self.palw_compute_overlay_retired,
             palw_model_registry: self.palw_model_registry,
             palw_economic_payout: self.palw_economic_payout,
+            palw_work_target: self.palw_work_target,
             palw_context_ladder: self.palw_context_ladder,
             palw_panel_da: self.palw_panel_da,
             palw_certification_rent: self.palw_certification_rent,
@@ -7779,6 +7830,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_compute_overlay_retired: None,
     palw_model_registry: None,
     palw_economic_payout: None,
+    palw_work_target: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -7969,6 +8021,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_compute_overlay_retired: None,
     palw_model_registry: None,
     palw_economic_payout: None,
+    palw_work_target: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -8141,6 +8194,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_compute_overlay_retired: None,
     palw_model_registry: None,
     palw_economic_payout: None,
+    palw_work_target: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -12671,6 +12725,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_compute_overlay_retired: None,
     palw_model_registry: None,
     palw_economic_payout: None,
+    palw_work_target: None,
     // **ARMED on devnet at genesis** — the testnet-11 5f genesis card §1's set, rehearsed here
     // first. Without the ladder the registered class cannot price a wide row, and the ladder is
     // the whole point of registering the graph-v5 512 row (`misaka_palw_base0::classes`).
@@ -19824,6 +19879,56 @@ mod palw_model_registry_fence_tests {
         early.palw_model_registry = Some(ForkActivation::new(PALW_RC_FLAG_DAY_6001_FENCE_DAA - 1));
         let refusal = early.validate_palw_v2().expect_err("the registry cannot precede the panel economy");
         assert!(format!("{refusal:?}").contains("palw_model_registry"), "{refusal:?}");
+    }
+
+    /// **ADR-0137: the work target is dormant on every shipped preset; armed beside the registry
+    /// and the payout it moves the identity and the schedule; alone, or above only one of them, it
+    /// is refused; `never` is dormant.**
+    #[test]
+    fn adr0137_the_work_target_fence_is_dormant_everywhere_arms_by_height_and_is_refused_alone() {
+        use crate::palw_economic_payout_v1::PALW_ECONOMIC_PAYOUT_DEVNET_V1;
+        for (name, preset) in
+            [("testnet-11", palw_rc_shipped_params()), ("devnet", devnet_shipped_params()), ("mainnet", MAINNET_PARAMS.clone())]
+        {
+            assert!(preset.palw_work_target.is_none(), "{name}: the work target is not scheduled");
+            assert!(!preset.palw_work_target_at(u64::MAX - 1), "{name}: never active while dormant");
+        }
+        let rc = palw_rc_shipped_params();
+        assert!(rc.palw_fences_v1().iter().any(|(name, fence)| *name == "palw_work_target" && fence.is_none()));
+        let mut never = rc.clone();
+        never.palw_work_target = Some(ForkActivation::never());
+        assert!(!never.palw_work_target_at(u64::MAX - 1), "never is never active");
+        assert_eq!(
+            never.consensus_identity_id(),
+            rc.consensus_identity_id(),
+            "a never-armed work target is one identity with dormant"
+        );
+
+        let height = PALW_RC_FLAG_DAY_6001_FENCE_DAA + 1_000;
+        let mut armed = rc.clone();
+        armed.palw_model_registry = Some(ForkActivation::new(height));
+        armed.palw_economic_payout =
+            Some(PalwEconomicPayoutV1 { activation: ForkActivation::new(height), ..PALW_ECONOMIC_PAYOUT_DEVNET_V1 });
+        armed.palw_work_target = Some(ForkActivation::new(height + 10));
+        armed.validate_palw_v2().expect("armed above the registry and the payout");
+        assert_ne!(armed.consensus_params_id(), rc.consensus_params_id(), "arming moves the identity");
+        assert!(armed.fence_schedule_v1().contains(&(height + 10)), "and the schedule names the height");
+        assert!(!armed.palw_work_target_at(height + 9) && armed.palw_work_target_at(height + 10));
+        let mut same_height = armed.clone();
+        same_height.palw_work_target = Some(ForkActivation::new(height));
+        same_height.validate_palw_v2().expect("the same height as the registry and the payout is at or below");
+
+        let mut alone = rc.clone();
+        alone.palw_work_target = Some(ForkActivation::new(height));
+        let refusal = alone.validate_palw_v2().expect_err("the work target cannot precede the registry and the payout");
+        assert!(format!("{refusal:?}").contains("palw_work_target"), "{refusal:?}");
+        let mut without_payout = rc.clone();
+        without_payout.palw_model_registry = Some(ForkActivation::new(height));
+        without_payout.palw_work_target = Some(ForkActivation::new(height));
+        assert!(without_payout.validate_palw_v2().is_err(), "the registry alone is not enough: W₀ needs a rate");
+        let mut early = armed.clone();
+        early.palw_work_target = Some(ForkActivation::new(height - 1));
+        assert!(early.validate_palw_v2().is_err(), "below the registry and the payout it is refused");
     }
 
     /// **ADR-0132 Upgrade C: dormant on every shipped preset; armed beside the registry it moves the

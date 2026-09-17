@@ -595,6 +595,51 @@ Found while building it — corrections to this text:
    MAC-eq against forwards of 21–199 G (69–650 ‰). The shadow's numbers on a live network are what
    §17's measurement is for.
 
+### 22.1 The dormant fence, built (2026-09-18, §17 step 2 and 3 together)
+
+`Params::palw_work_target: Option<ForkActivation>` — `None` on every shipped preset (pinned:
+`adr0137_the_work_target_fence_is_dormant_everywhere_arms_by_height_and_is_refused_alone`), hashed
+Some-only, in the fork-id's arm-by-name list, refused by `validate_palw_v2` unless
+`palw_model_registry` and `palw_economic_payout` are armed at or below it (it prices the registry's
+rows at the payout's rate), `never` normalised to dormant; `--palw-work-target-devnet=<daa>` for a
+drill (devnet/simnet only; needs the registry and payout flags). **No activation height is set, and
+none is to be set before the devnet drill has passed.** Past the fence, at a block:
+
+1. **The lottery** (`check_palw_class_lottery_v4`): a model class's ticket target is
+   `MAX · min(1, CCU_m / W₀)` with `CCU_m` its registry row's `economic_ccu_per_claim` and
+   `W₀ = escrow_of_this_block · 10⁹ / rate` (`palw_work_floor_for_block_v1`; a block with no escrow
+   prices the hardest floor, so nothing wins on a block that pays nothing); the floor class keeps
+   its class target; a class without a row has no price (`ClassWorkUnknown`). The producer draws
+   against the same ticket (`palw_producer_facts_v2` takes the floor). Stateless, by finding 1.
+2. **The epoch budget is not read** for a model class (`PalwEpochBudgetFencesV1::work_target_floor`
+   is `Some`); the floor's stays.
+3. **A model class's target is not walked** (`apply_class_retargets` skips it; the floor's class
+   DAA and the receipt lane are untouched).
+4. **The registry derives no share, refreshes no budget, seats no price** (`step_model_registry`
+   returns after the rows; `804af11d`'s seating is unreachable); the rows, proofs and the lifecycle
+   machine run as before.
+5. **Fence 3's cap rule is off** (`cap_ok` is true; the reading is still taken and printed).
+6. **An unrowed class is refused at acceptance** (`ClassNotAdmitting { state: "no row" }`) — below
+   the fence it was never gated.
+7. **One verification budget replaces the per-class cap**: `PanelRoomExhausted` where this class's
+   ready seats' replay over the shortest admitted window, less every model class's replay in
+   flight, holds no more of its claims (`panel_room_v1`); and the lifecycle's utilization reads the
+   same budget (replay in flight over budget), so a class the room admits is not a class the
+   lifecycle holds — the first draft's count-based utilization held the class at the span boundary
+   after nine admitted claims.
+8. **Nothing else moves**: the reward (Upgrade C's `min(E, attempted · rate)`, which the work
+   target makes `E`), the panel share, the snapshot, the network draw, the frozen fields' encoding.
+
+Pinned in `palw_state_v2.rs` (`adr0137_past_the_fence_*`) and `palw_admission_v2.rs`: the lottery
+reads `CCU / W₀` (a class heavier than `W₀` draws the whole ticket; `W₀ = MAX` prices 800 000 of the
+space; no floor at hand is the shipped verdict; the floor keeps its class target; a rowless class
+has no price and is refused at acceptance while the same class is never gated below the fence); the
+epoch budget is not read for a spent entrant; a governed boundary past the fence moves no share, no
+target and no budget, seats no price, and a saturating rate does not limit the class; a panel of
+seven seats at 4 M MAC-eq a span holds exactly its budget of claims (nine, where the per-class cap
+is 4.7 M), the tenth is `PanelRoomExhausted`, the reverted ninth gives its room back, and folded
+twice the fenced boundary has one root.
+
 ## 21. Number hygiene
 
 Written 2026-09-18 on `feat/palw-exec-lane-and-validator-retirement` as 0137, the next free
