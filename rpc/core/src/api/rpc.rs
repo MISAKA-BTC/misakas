@@ -775,7 +775,7 @@ pub trait RpcApi: Sync + Send + AnySync {
     }
 
     /// kaspa-pq Phase 12 (ADR-0011): the ready-to-sign attestation target for the given
-    /// stake-bond outpoint — the message the (now retired) `kaspa-pq-validator` sidecar ML-DSA-87-signed.
+    /// stake-bond outpoint — the message the `kaspa-pq-validator` sidecar ML-DSA-87-signs.
     async fn get_validator_attestation_target(
         &self,
         request: GetValidatorAttestationTargetRequest,
@@ -814,7 +814,7 @@ pub trait RpcApi: Sync + Send + AnySync {
     }
 
     /// kaspa-pq Phase 12 (ADR-0011): a stake bond's status at the node's sink, for the
-    /// (now retired) `kaspa-pq-validator` sidecar's bond-lifecycle state machine; wallets read it too.
+    /// `kaspa-pq-validator` sidecar's bond-lifecycle state machine.
     async fn get_stake_bond(&self, request: GetStakeBondRequest) -> RpcResult<GetStakeBondResponse> {
         self.get_stake_bond_call(None, request).await
     }
