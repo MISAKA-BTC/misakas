@@ -82,11 +82,8 @@ impl BlockBodyProcessor {
                 // zero keeps every reader of the payload from having to know that.
                 let round = block.header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1
                     && self.palw_round_lane.is_some_and(|fence| fence.is_active(block.header.daa_score));
-                let expected_subsidy = if heartbeat || round {
-                    0
-                } else {
-                    self.coinbase_manager.calc_block_subsidy(block.header.daa_score)
-                };
+                let expected_subsidy =
+                    if heartbeat || round { 0 } else { self.coinbase_manager.calc_block_subsidy(block.header.daa_score) };
 
                 if data.subsidy != expected_subsidy {
                     return Err(RuleError::WrongSubsidy(expected_subsidy, data.subsidy));
@@ -130,8 +127,8 @@ mod tests {
         api::ConsensusApi,
         coinbase::MinerData,
         config::params::MAINNET_PARAMS,
-        mldsa87_primitives::p2pkh_mldsa87_spk,
         merkle::calc_hash_merkle_root,
+        mldsa87_primitives::p2pkh_mldsa87_spk,
         subnets::SUBNETWORK_ID_NATIVE,
         tx::{ScriptPublicKey, ScriptVec, Transaction, TransactionInput, TransactionOutpoint},
     };

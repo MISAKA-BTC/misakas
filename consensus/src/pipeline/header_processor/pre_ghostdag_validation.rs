@@ -177,7 +177,9 @@ impl HeaderProcessor {
             // ADR-0066: the bundle answers for its own two lanes; the heartbeat is a TOP-LEVEL
             // fence, so it is ORed in here rather than inside a bundle that cannot see it.
             // ADR-0072 SA-4 adds the second attempt id on the same terms.
-            self.palw_consensus_mode.accepts_algo_id(header.pow_algo_id).map(|a| a || heartbeat_open || exec_lane_open || round_lane_open),
+            self.palw_consensus_mode
+                .accepts_algo_id(header.pow_algo_id)
+                .map(|a| a || heartbeat_open || exec_lane_open || round_lane_open),
             palw_ollama_active,
             palw_active,
             blake2b_sha3_active,
@@ -417,7 +419,9 @@ pub(crate) fn palw_carriage_stateless_v1(
                         header.timestamp,
                         header.nonce,
                         genesis_timestamp_ms,
-                        |key, message, sig, context| kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false),
+                        |key, message, sig, context| {
+                            kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                        },
                     )
                 })
                 .map_err(|e| e.to_string())
@@ -636,7 +640,13 @@ mod palw_carriage_lane_tests {
         // The negative side, so the test cannot pass by refusing everything: a non-PALW header has
         // no carriage to check and must still be admitted here.
         assert_eq!(
-            palw_carriage_stateless_v1(&header_with(POW_ALGO_ID_KHEAVYHASH, Vec::new()), PalwAttemptLaneV1::Unfenced, domain(), None, 0),
+            palw_carriage_stateless_v1(
+                &header_with(POW_ALGO_ID_KHEAVYHASH, Vec::new()),
+                PalwAttemptLaneV1::Unfenced,
+                domain(),
+                None,
+                0
+            ),
             Ok(())
         );
     }

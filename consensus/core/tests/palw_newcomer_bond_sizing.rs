@@ -19,8 +19,8 @@
 //! this test is why they can be trusted.
 
 use kaspa_consensus_core::constants::STORAGE_MASS_PARAMETER;
-use kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk;
 use kaspa_consensus_core::mass::{UtxoCell, calc_storage_mass, utxo_plurality};
+use kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk;
 use kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_collateral_for_claim_lifetime_v1;
 use kaspa_consensus_core::palw_state_v2::{PalwConsensusObjectV2, PalwPwuRuleV2};
 

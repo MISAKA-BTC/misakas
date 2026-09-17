@@ -504,10 +504,7 @@ mod tests {
         assert_eq!(c.validate_shape(), Err(PalwBlockCommitmentError::ZeroPwuClaim));
         let mut c = commitment();
         c.signature = vec![0x5A; 64];
-        assert_eq!(
-            c.validate_shape(),
-            Err(PalwBlockCommitmentError::SignatureLength { got: 64, expected: MLDSA87_SIGNATURE_LEN })
-        );
+        assert_eq!(c.validate_shape(), Err(PalwBlockCommitmentError::SignatureLength { got: 64, expected: MLDSA87_SIGNATURE_LEN }));
     }
 
     /// The commitment root binds class, bond, both Merkle roots and the pwu claim — and NOT

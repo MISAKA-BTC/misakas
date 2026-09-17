@@ -125,7 +125,6 @@ pub mod dns_bft_v1;
 /// (StakeScore aggregation, reorg gate) land in PR-10.4
 /// onward once Phases 1–9 stabilise.
 pub mod dns_finality;
-pub mod mldsa87_primitives;
 pub mod errors;
 /// kaspa-pq Selected-Parent EVM Lane (ADR-0020): EVM execution-lane consensus
 /// types (block-body payload, executor-output header, EVM-domain newtypes).
@@ -138,6 +137,7 @@ pub mod header;
 pub mod mass;
 pub mod merkle;
 pub mod mining_rules;
+pub mod mldsa87_primitives;
 pub mod muhash;
 pub mod network;
 pub mod palw_admission_v2;

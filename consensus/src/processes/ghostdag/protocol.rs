@@ -214,7 +214,8 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
     }
 
     pub fn find_selected_parent(&self, parents: impl IntoIterator<Item = BlockHash>) -> BlockHash {
-        let sortable = |parent: BlockHash| SortableBlock { hash: parent, blue_work: self.ghostdag_store.get_blue_work(parent).unwrap() };
+        let sortable =
+            |parent: BlockHash| SortableBlock { hash: parent, blue_work: self.ghostdag_store.get_blue_work(parent).unwrap() };
         if self.round_lane.is_none() {
             return parents.into_iter().map(sortable).max().unwrap().hash;
         }

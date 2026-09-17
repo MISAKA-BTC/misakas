@@ -89,7 +89,8 @@ fn spend_carriage(header: &Header, quantum_index: u32) -> Vec<u8> {
         producer_bond: bond(),
         producer_pubkey: vec![7u8; 32],
     };
-    PalwReceiptSpendEnvelopeV3 { spend, signature: vec![0x5A; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN] }.encode()
+    PalwReceiptSpendEnvelopeV3 { spend, signature: vec![0x5A; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN] }
+        .encode()
 }
 
 /// **The rule the removed tripwire really protected**: a peer-controlled header must never panic

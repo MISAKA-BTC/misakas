@@ -47,8 +47,8 @@
 //! recommended registered form.
 
 use crate::BlockHash;
-use crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
 use crate::dns_finality::StakeBondRecord;
+use crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
 use crate::palw_legs::{
     PALW_LEGS_OBJECT_VERSION_V1, PalwLegsBindingV1, PalwLegsOpeningAnswerV1, PalwLegsOpeningCallV1, PalwLegsRefutationV1,
     activation_leg_root_v1, canonical_decode_calls, checkpoint_leg_root_v1, execution_commitment_root_v1,
