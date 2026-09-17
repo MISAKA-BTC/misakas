@@ -240,7 +240,15 @@ const CLASS_REGISTRATION_RETRY_DAA: u64 = 200;
 /// Bounding the in-flight depth converts that silent loss into back-pressure. It also decides
 /// WHICH work gets the scarce slots, because court moves are built and submitted before receipt
 /// quorums: a rung has a deadline and a quorum does not.
-const MAX_INFLIGHT_CARRIERS: usize = 8;
+///
+/// **One, since ADR-0135's devnet drill (2026-09-17).** At eight, a chain of receipts took fifteen to
+/// twenty-five minutes to clear on an eight-node devnet — a child of an unconfirmed parent is dropped
+/// in relay, so only the origin's own blocks (one in eight) could mine the tail — and every
+/// possession proof queued at that tail; six of eight seats never got one out. A carrier that
+/// spends a confirmed output relays everywhere and is mined by anyone's next block: one at a time
+/// is the depth relay honours, and a seat's throughput becomes one carrier a block, which testnet-11's
+/// cadence never approaches.
+const MAX_INFLIGHT_CARRIERS: usize = 1;
 
 /// **How long a submitted court move is assumed to be in flight.**
 ///
