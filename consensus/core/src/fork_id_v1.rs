@@ -1413,6 +1413,14 @@ mod tests {
             at_6000.palw_overlay_carve.map(|carve| crate::config::params::PalwOverlayCarveV1 { activation: six_thousand, ..carve });
         at_6000.dns_bft_gate =
             at_6000.dns_bft_gate.map(|gate| crate::config::params::DnsBftGateV1 { activation: six_thousand, ..gate });
+        // ADR-0135 and ADR-0132 Upgrade C ride the same flag day.
+        at_6000.palw_model_registry = Some(six_thousand);
+        at_6000.palw_economic_payout = at_6000
+            .palw_economic_payout
+            .map(|payout| crate::config::params::PalwEconomicPayoutV1 { activation: six_thousand, ..payout });
+        // ADR-0137's work target rides it too — and it has to, or the registry's shares would be the
+        // only rule in force for the gap (ADR-0137 §3.5).
+        at_6000.palw_work_target = Some(six_thousand);
         assert_eq!(
             at_6000.fence_schedule_v1(),
             without_the_set.fence_schedule_v1(),

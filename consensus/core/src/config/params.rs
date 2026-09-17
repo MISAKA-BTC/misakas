@@ -11891,6 +11891,10 @@ pub(crate) fn palw_rc_clear_flag_day_6001_for_tests(params: &mut Params) {
     params.palw_execution_lane = None;
     params.palw_overlay_carve = None;
     params.dns_bft_gate = None;
+    // ADR-0135 Upgrade A, ADR-0132 Upgrade C and ADR-0137 ride the same flag day.
+    params.palw_model_registry = None;
+    params.palw_economic_payout = None;
+    params.palw_work_target = None;
 }
 
 /// **The fleet's release as deployed (`13520042`, fingerprint `ae1d6162…`)**: no flag-day set, no
@@ -12348,6 +12352,35 @@ pub fn palw_rc_base_params() -> Params {
     });
     params.palw_overlay_carve =
         Some(PalwOverlayCarveV1 { activation: flag_day_6001, subsidy_validator_bps: 2_000, worker_carve_permille: 720 });
+    // **ADR-0135 Protocol Upgrade A and ADR-0132 Protocol Upgrade C, on the same flag day** (the
+    // operator's decision, after the devnet drill): the permissionless model registry governs every
+    // class the node can describe from 6,001 (rows open at the first span boundary past it, the
+    // seats' proofs count after one readiness age), and a model-class claim accepted from 6,001 is
+    // paid `min(escrow, attempted × rate)` with its panel at the share its verification compute
+    // earns. The rate is calibrated from the shadow (ADR-0132 §7): the heaviest live class, the
+    // Qwen2.5 A16 row at 1.495 class draws × 2.0 network draws × 83.1 G MAC-eq, sits at ~70 % of the
+    // 3,200.85 MSK escrow — under the 80 % ceiling with room for a retarget — and the hybrid at
+    // ~10 %. `α = 0.1`: a five-seat full replay lands the panel share at 14 % (dense) and 20 % (hybrid).
+    params.palw_model_registry = Some(flag_day_6001);
+    params.palw_economic_payout = Some(PalwEconomicPayoutV1 {
+        activation: flag_day_6001,
+        rate_sompi_per_giga: 900_000_000,
+        panel_share_alpha_permille: 100,
+        panel_share_min_permille: 100,
+        panel_share_max_permille: 300,
+        cap_utilization_max_permille: 800,
+    });
+    // **ADR-0137 rides the SAME height, and it has to** (the simulation's fifth finding): the
+    // registry's shares-from-admission hand the model classes 980 ‰ of a cadence they cannot fill,
+    // the floor enters the competing census the first block a model produces, and its class DAA
+    // hardens the floor toward its 20 ‰ — a chain at a tenth of its cadence. Armed one height apart,
+    // the network would run that configuration for the gap. Armed together, no share, no model class
+    // target and no epoch budget is read from 6,001: a model class draws against
+    // `MAX · min(1, CCU / W₀)` with `W₀ = escrow / rate` off the block's own subsidy (306.25 G MAC-eq
+    // at the rate above), the registry keeps its rows, proofs and lifecycle gate, and one
+    // network-wide verification budget replaces the per-class in-flight cap. The reward is
+    // unchanged: the payout's `min(escrow, attempted × rate)` is what a block buys at `W₀`.
+    params.palw_work_target = Some(flag_day_6001);
     params.dns_bft_gate =
         Some(DnsBftGateV1 { activation: flag_day_6001, t_leak_daa: 5_040, reentry_final_depth_daa: 200, min_retained_validators: 4 });
     // **ADR-0134 — the compute overlay's committee beacon retires at its own height** (2026-09-17):
@@ -16820,7 +16853,12 @@ mod consensus_params_id_tests {
                 // height): the schedule gains a height, so the fork-id gate separates this build from the
                 // 7,001 union build (ab4e7b9c7e20d14cbadc0874312b8c6dff89ca66ed7e9be3af2f5523dc58b5f2, never
                 // deployed) as well as from the 7,000 release.
-                "135b6ee07ba0c5e5951c3cb765ba9dfec8b85af4c6edccc5a2246a52338e766b",
+                // **Re-pinned 2026-09-17 (night) for ADR-0135 Upgrade A and ADR-0132 Upgrade C on the same
+                // 6,001 flag day** (`palw_model_registry` and `palw_economic_payout`, both `Some`-only in
+                // the hash; the schedule's height set is unchanged, so the fork id does not move and a
+                // node on the 135b6ee0… build is told apart by the fingerprint alone). The previous pin
+                // (135b6ee0…) was not deployed.
+                "32c2e8e3e5c8296e985e0fbbe4cdf382191782b52a9a328c72f91b3183a87932",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -17597,10 +17635,16 @@ mod consensus_params_id_tests {
         //   that wants the regime MINTS it — `palw_held_context_mint_v1`, V4 and the tiled ids from
         //   genesis — and whether one does is a product decision no card has taken. (The regime's
         //   third fence, the retention pins, a card already states.)
+        // * `palw_model_registry` and `palw_economic_payout` (ADR-0135 Upgrade A, ADR-0132 Upgrade C)
+        //   ride testnet-11's 6,001 flag day; a card states the registry's globals and the payout's
+        //   rate from genesis once the operator has calibrated them on the testnet.
         assert_eq!(
             missing,
             vec![
                 "dns_bft_gate",
+                "palw_model_registry",
+                "palw_economic_payout",
+                "palw_work_target",
                 "palw_execution_lane",
                 "palw_overlay_carve",
                 "palw_model_market",
@@ -18568,6 +18612,10 @@ mod consensus_params_id_tests {
 
             let mut scheduled = rc.clone();
             field(&mut scheduled, Some(ForkActivation::new(9_000_000)));
+            // The registry and the payout ride the economy's height; a moved economy moves them off.
+            scheduled.palw_model_registry = None;
+            scheduled.palw_economic_payout = None;
+            scheduled.palw_work_target = None;
             assert_eq!(
                 scheduled.consensus_identity_id(),
                 rc.consensus_identity_id(),
@@ -18689,6 +18737,9 @@ mod consensus_params_id_tests {
         // `never()` is absence, and absence is refused by nothing — even where the economy is unset.
         let mut dormant = armed(ForkActivation::never(), 0);
         dormant.palw_panel_economy = None;
+        dormant.palw_model_registry = None;
+        dormant.palw_economic_payout = None;
+        dormant.palw_work_target = None;
         dormant.validate_palw_v2().expect("a never() floor is not a floor");
     }
 
@@ -19847,13 +19898,21 @@ mod palw_model_registry_fence_tests {
     /// **ADR-0135: dormant on every shipped preset; arming it moves the identity and the schedule.**
     #[test]
     fn adr0135_the_registry_fence_is_dormant_everywhere_and_arms_by_height() {
-        for (name, preset) in
-            [("testnet-11", palw_rc_shipped_params()), ("devnet", devnet_shipped_params()), ("mainnet", MAINNET_PARAMS.clone())]
-        {
+        for (name, preset) in [("devnet", devnet_shipped_params()), ("mainnet", MAINNET_PARAMS.clone())] {
             assert!(preset.palw_model_registry.is_none(), "{name}: the registry is not scheduled");
             assert!(!preset.palw_model_registry_at(u64::MAX - 1), "{name}: never active while dormant");
         }
-        let rc = palw_rc_shipped_params();
+        // testnet-11 arms it on the 6,001 flag day (the operator's decision after the devnet drill).
+        let shipped = palw_rc_shipped_params();
+        assert_eq!(shipped.palw_model_registry, Some(ForkActivation::new(PALW_RC_FLAG_DAY_6001_FENCE_DAA)));
+        assert!(
+            !shipped.palw_model_registry_at(PALW_RC_FLAG_DAY_6001_FENCE_DAA - 1)
+                && shipped.palw_model_registry_at(PALW_RC_FLAG_DAY_6001_FENCE_DAA)
+        );
+        let mut rc = shipped.clone();
+        rc.palw_model_registry = None;
+        rc.palw_economic_payout = None;
+        rc.palw_work_target = None;
         assert!(rc.palw_fences_v1().iter().any(|(name, fence)| *name == "palw_model_registry" && fence.is_none()));
         let mut never = rc.clone();
         never.palw_model_registry = Some(ForkActivation::never());
@@ -19887,14 +19946,27 @@ mod palw_model_registry_fence_tests {
     #[test]
     fn adr0137_the_work_target_fence_is_dormant_everywhere_arms_by_height_and_is_refused_alone() {
         use crate::palw_economic_payout_v1::PALW_ECONOMIC_PAYOUT_DEVNET_V1;
-        for (name, preset) in
-            [("testnet-11", palw_rc_shipped_params()), ("devnet", devnet_shipped_params()), ("mainnet", MAINNET_PARAMS.clone())]
-        {
+        for (name, preset) in [("devnet", devnet_shipped_params()), ("mainnet", MAINNET_PARAMS.clone())] {
             assert!(preset.palw_work_target.is_none(), "{name}: the work target is not scheduled");
             assert!(!preset.palw_work_target_at(u64::MAX - 1), "{name}: never active while dormant");
         }
-        let rc = palw_rc_shipped_params();
+        // testnet-11 arms it beside the registry and the payout on the 6,001 flag day: ADR-0137's
+        // fifth finding forbids a gap between the share rule and the rule that stops reading shares.
+        let shipped = palw_rc_shipped_params();
+        assert_eq!(shipped.palw_work_target, Some(ForkActivation::new(PALW_RC_FLAG_DAY_6001_FENCE_DAA)));
+        assert!(
+            !shipped.palw_work_target_at(PALW_RC_FLAG_DAY_6001_FENCE_DAA - 1)
+                && shipped.palw_work_target_at(PALW_RC_FLAG_DAY_6001_FENCE_DAA)
+        );
+        shipped.validate_palw_v2().expect("armed beside the registry and the payout it ships with");
+        let mut rc = shipped.clone();
+        rc.palw_work_target = None;
         assert!(rc.palw_fences_v1().iter().any(|(name, fence)| *name == "palw_work_target" && fence.is_none()));
+        // The counterfactuals below arm it above the flag day, so the base carries neither the
+        // registry nor the payout: with them at 6,001 every height above is "at or below" and the
+        // refusals this test is about could not fire.
+        rc.palw_model_registry = None;
+        rc.palw_economic_payout = None;
         let mut never = rc.clone();
         never.palw_work_target = Some(ForkActivation::never());
         assert!(!never.palw_work_target_at(u64::MAX - 1), "never is never active");
@@ -19937,13 +20009,26 @@ mod palw_model_registry_fence_tests {
     #[test]
     fn adr0132_the_economic_payout_fence_is_dormant_everywhere_arms_by_height_and_is_refused_alone() {
         use crate::palw_economic_payout_v1::PALW_ECONOMIC_PAYOUT_DEVNET_V1;
-        for (name, preset) in
-            [("testnet-11", palw_rc_shipped_params()), ("devnet", devnet_shipped_params()), ("mainnet", MAINNET_PARAMS.clone())]
-        {
+        for (name, preset) in [("devnet", devnet_shipped_params()), ("mainnet", MAINNET_PARAMS.clone())] {
             assert!(preset.palw_economic_payout.is_none(), "{name}: the payout is not scheduled");
             assert!(preset.palw_economic_payout_at(u64::MAX - 1).is_none(), "{name}: never active while dormant");
         }
-        let rc = palw_rc_shipped_params();
+        // testnet-11 arms it beside the registry on the 6,001 flag day, at the calibrated numbers.
+        let shipped = palw_rc_shipped_params();
+        let armed_t11 = shipped.palw_economic_payout.expect("testnet-11 schedules the payout");
+        assert_eq!(
+            (armed_t11.activation, armed_t11.rate_sompi_per_giga, armed_t11.panel_share_alpha_permille),
+            (ForkActivation::new(PALW_RC_FLAG_DAY_6001_FENCE_DAA), 900_000_000, 100)
+        );
+        assert_eq!(
+            (armed_t11.panel_share_min_permille, armed_t11.panel_share_max_permille, armed_t11.cap_utilization_max_permille),
+            (100, 300, 800)
+        );
+        shipped.validate_palw_v2().expect("the shipped card validates with both armed");
+        let mut rc = shipped.clone();
+        rc.palw_model_registry = None;
+        rc.palw_economic_payout = None;
+        rc.palw_work_target = None;
         assert!(rc.palw_fences_v1().iter().any(|(name, fence)| *name == "palw_economic_payout" && fence.is_none()));
         let mut never = rc.clone();
         never.palw_economic_payout =

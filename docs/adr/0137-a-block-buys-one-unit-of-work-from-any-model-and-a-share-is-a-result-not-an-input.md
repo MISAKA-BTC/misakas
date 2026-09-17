@@ -24,6 +24,20 @@ at all; find the positive feedback, the cold-start trap and the registration Syb
 least three designs with simulation; define "usage"; check the issuance identities; keep execution
 permits apart; say whether the `share` consensus parameter can be deleted.
 
+**Armed for testnet-11 (prepared 2026-09-18, on `wip/arm-6001-registry-payout`, merged only on the
+operator's go after the devnet drill):** `palw_work_target` at the 6,001 flag day — **the same height
+as `palw_model_registry` and `palw_economic_payout`, and it has to be**. §3.5 is the reason: the
+registry's shares-from-admission hand the model classes 980 ‰ of a cadence they cannot fill and the
+floor's class DAA hardens toward its 20 ‰, so a network that arms the registry one height and the
+work target a later one runs the cadence collapse for the gap. Armed together, from 6,001 a model
+class draws against `MAX · min(1, CCU / W₀)` with `W₀ = escrow / rate` off the block's own subsidy
+(306.25 G MAC-eq at the payout's 9 MSK a G MAC-eq, against forwards of 21–199 G), no share, model
+class target or epoch budget is read, the registry keeps its rows, proofs and lifecycle gate, and one
+network-wide verification budget replaces the per-class in-flight cap. The fingerprint moves from
+`135b6ee0…` to `32c2e8e3…`; the fork id's height set does not (6,001 was already scheduled), so the
+two builds are told apart by the fingerprint alone — and the fleet is refused from 6,000 by the held
+and deep fences the same release moves there.
+
 ## 0. The sentence this ADR is
 
 **Every block pays the same escrow for the same expected amount of work, from whichever model did
