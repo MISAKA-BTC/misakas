@@ -202,8 +202,11 @@ fn end_to_end(r: &GetPalwClassEconomicsResponse, measures: &[PalwClassMeasureV1]
             let by_rate = palw_rate_priced_reward_v1(escrow, attempted, rate);
             under.push(("EconomicRate (C)", by_rate, over_window(by_rate)));
             let uncapped_economic_reward = attempted.saturating_mul(rate) / PALW_LEDGER_RATE_SCALE_V1;
-            let cap_utilization_permille =
-                if escrow == 0 { 0 } else { (uncapped_economic_reward.saturating_mul(1_000) / escrow as u128).min(u32::MAX as u128) as u32 };
+            let cap_utilization_permille = if escrow == 0 {
+                0
+            } else {
+                (uncapped_economic_reward.saturating_mul(1_000) / escrow as u128).min(u32::MAX as u128) as u32
+            };
             ClassEndToEnd {
                 name: name_of(row),
                 class_id: row.class_id.clone(),
@@ -571,7 +574,11 @@ pub(crate) fn render(report: &Report) -> String {
                 msk(c.capped_reward as u128),
                 c.cap_utilization_permille,
                 if c.cap_saturated { " · SATURATED" } else { "" },
-                if c.cap_utilization_permille > PALW_CAP_UTILIZATION_ACTIVATION_LIMIT_PERMILLE { " · not activatable as paid" } else { "" }
+                if c.cap_utilization_permille > PALW_CAP_UTILIZATION_ACTIVATION_LIMIT_PERMILLE {
+                    " · not activatable as paid"
+                } else {
+                    ""
+                }
             ));
         }
     }
