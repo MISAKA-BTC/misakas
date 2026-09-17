@@ -197,11 +197,57 @@ panel that may hold nothing. Three cuts, each measured on this chain:
 
 ## 6. What is built (shadow, node-local)
 
-*Filled in by the implementation commits of this ADR; see §7 for the record.*
+Nothing consensus reads; the fingerprint does not move.
+
+* **The network draw, priced from `bits`** — `palw_network_expected_attempts_q32_v1(bits) = ⌊2²⁵⁶ · 2³² /
+  (target₂₅₆ + 1)⌋` (`consensus/core/src/palw_economic_compute_v1.rs`): the second lottery a winning forward
+  faces (2.0 at the difficulty floor). ADR-0131's attempted basis now reads `class draws × network draws × one
+  draw's job`, and the census carries the tip's `bits`.
+* **The end-to-end ledger** (`consensus/core/src/palw_economics_ledger_v1.rs`, pure): an observation of every
+  attempt-lane claim in the state (phase marks, escrow, the duty row's seats and credits); a row that keeps its
+  first sight (class draws, network draws of the accepted block, the draw's compute, leaves) and fills its
+  lifecycle marks once; the payout **as the rule in force at the claim's `Final`** derives it — the escrow
+  whole below the fences, past them the leaf price against the unit, 80/20, credited seats, reserve, and the
+  priced-away escrow burned (`palw_ledger_payout_v1`, the fold's own functions); per-class totals with the
+  three actual rates the operator named (`producer / attempted`, `panel / verification`, `total / attempted`),
+  `Final` and licence rates, mean waits (bind, licence, `Final`, void), mean draws (class and network); and
+  proposal C's `min(escrow, attempted × rate)`.
+* **The node's recorder** (`kaspad/src/palw_economics.rs`): rows in the meta database
+  (`PalwEconomicsLedgerV1`, kept past the chain's retention, a schema marker that drops rows of another
+  layout), refreshed every 60 s on its own thread and before every op 185 answer; the network draws of a row
+  from its accepted block's header; the payout rule from `Params` at the `Final`'s height.
+* **The node's telemetry**: per class, what THIS node did — the producer's draws, class wins, blocks, forward
+  milliseconds and the MiB the process read from storage during each draw (ADR-0112's number, now counted);
+  the seat's whole-job replays with their milliseconds and leaves, receipts by verdict, openings held.
+* **Op 185 `getPalwClassEconomics`**, extended (never shipped, so its layout may still change): the tip's
+  `bits` and network draws; per class a `ledger` block (counts, sompi paid to producers and seats, reserve,
+  burned, attempted / `Final` / verification compute, the three actual rates, licence and `Final` rates,
+  waits, mean draws) and a `telemetry` block. **`misaka palw economics`** prints the end-to-end table, the
+  actual gaps (an infinite gap names the class paid nothing), this node's own work, and each class's
+  `Final`s priced under every basis at the class's ACTUAL `Final` rate — `current` vs `EconomicJob` vs
+  `EconomicAttempted` vs `EconomicRate (C)` side by side; JSON schema `misaka.palw.economics.v2` with
+  `attempted_ccu`, `final_ccu`, `verification_ccu`, `actual_*_msk`, `msk_per_attempted_ccu`,
+  `msk_per_final_ccu`, `panel_msk_per_verification_ccu`, the counts and rates, `avg_expected_attempts_q32`,
+  `avg_claim_lifetime_*`, `avg_bind_wait_daa`, `artifact_bytes_fetched_mib`.
+* **Not built**: artifact cache hit rate and fetch latency as such (the MiB read from storage per draw is the
+  measured proxy; a resident artifact reads ~0 MiB, a non-resident one its working set); the paid amounts of
+  claims the recorder first saw after their `Final` are derived, not observed (the duty row is gone by then,
+  so their credited seats read as none); ADR-0091's buyback slice; a recorder that survives a node that
+  never ran it (the window starts when the node does).
 
 ## 7. Implementation record
 
-*Pending.*
+* 2026-09-17, `feat/palw-exec-lane-and-validator-retirement`: the read (§1–2) and the proposals (§4–5);
+  then §6 on the same day. Tests: `adr0132_*` in `palw_economic_compute_v1` (the network draw from `bits`:
+  the floor's coin flip, monotone in the target, saturation, the ratio invariant across `bits`),
+  `palw_economics_ledger_v1` (the payout by the rule at the `Final` with the emission identity; a row's
+  first sight and marks; the actual rates as a property of the class across the 100/0, 0/100, 50/50, 90/10
+  and 10/90 mixes; a `Final`-rate gap and a licence-rate gap read as pay, not price; targets and `bits`
+  move attempted compute, not pay; a class no panel can run pays nothing and verifies nothing, and one
+  operator down reads as the licence rate it costs; a heavier model moves the unit but not a rate),
+  `kaspad::palw_economics` (the store round-trips, upserts and drops a foreign layout; the telemetry counts
+  per class) and `misaka-cli::palw_economics` (the end-to-end reading is what was paid; the four-basis
+  table). The verification run is recorded in the commit that closes this section.
 
 ## 8. Number hygiene
 
