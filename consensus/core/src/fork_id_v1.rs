@@ -539,8 +539,10 @@ mod tests {
                 crate::config::params::PALW_RC_MODEL_SEED_V2_FENCE_DAA,
                 // One entry for 7,000: the held regime and the deep-audit fence share it (ADR-0118).
                 crate::config::params::PALW_RC_AUDIT_DEEP_FENCE_DAA,
+                // One for 7,001: ADR-0124, 0125, 0126 and 0128 share it.
+                crate::config::params::PALW_RC_FLAG_DAY_7001_FENCE_DAA,
             ],
-            "testnet-11's gate set is its flag days (ADR-0083, ADR-0062, ADR-0084 U-08, ADR-0095, ADR-0114, the audit's shallow fence, and the held regime with the audit's deep fence), and deriving the list must not widen it"
+            "testnet-11's gate set is its flag days (ADR-0083, ADR-0062, ADR-0084 U-08, ADR-0095, ADR-0114, the audit's shallow fence, the held regime with the audit's deep fence, and 7,001), and deriving the list must not widen it"
         );
     }
 
@@ -763,7 +765,12 @@ mod tests {
                 // operator's height of 2026-09-12): `palw_held_context`, `palw_shard_court`,
                 // `palw_fp_da_pins` and `palw_audit_2026_09_11_deep` fire together, so one release
                 // carries all four.
-                ("testnet-11", vec![1150, 1900, 2150, 2400, 3500, 4000, 6900, 7000, 2_125_000]),
+                //
+                // **And 7001, the operator's flag day of 2026-09-17** (ADR-0124's panel economy and work
+                // price, ADR-0125's execution lane at one block a second, ADR-0126's validator carve at a
+                // fifth, ADR-0128's BFT stake gate): one past 7000 because a fence at a height the
+                // schedule already names is invisible to the gate.
+                ("testnet-11", vec![1150, 1900, 2150, 2400, 3500, 4000, 6900, 7000, 7001, 2_125_000]),
                 ("devnet", vec![]),
                 ("simnet", vec![]),
             ],
@@ -802,13 +809,25 @@ mod tests {
         /// ADR-0118's height — the held regime, the one-move court and the retention pins — and the
         /// audit's DEEP findings' flag day (B-1/C-01/B-4/court cluster): one height, one release.
         const HELD_AND_AUDIT_DEEP: u64 = 7000;
+        /// The operator's flag day of 2026-09-17: ADR-0124, 0125, 0126 and 0128.
+        const FLAG_DAY_7001: u64 = 7001;
         const CRESCENDO_T11: u64 = 2_125_000;
         for (name, params) in shipped() {
             if name == "testnet-11" {
                 assert_eq!(
                     fork_id_gate_fences_v1(&params),
-                    vec![ADR_0083, ADR_0062, ADR_0084_U08, ADR_0095, ADR_0114, AUDIT_FENCE, ADR_0120, HELD_AND_AUDIT_DEEP],
-                    "{name}: armed by ADR-0083's fence, ADR-0062's, ADR-0084 U-08's, ADR-0095's, ADR-0114's, the audit's shallow one, ADR-0120's, and the held regime's with the audit's deep one, and nothing else"
+                    vec![
+                        ADR_0083,
+                        ADR_0062,
+                        ADR_0084_U08,
+                        ADR_0095,
+                        ADR_0114,
+                        AUDIT_FENCE,
+                        ADR_0120,
+                        HELD_AND_AUDIT_DEEP,
+                        FLAG_DAY_7001
+                    ],
+                    "{name}: armed by ADR-0083's fence, ADR-0062's, ADR-0084 U-08's, ADR-0095's, ADR-0114's, the audit's shallow one, ADR-0120's, the held regime's with the audit's deep one, and 7,001's, and nothing else"
                 );
                 assert!(fork_id_gate_armed_v1(&params));
                 continue;
@@ -827,7 +846,18 @@ mod tests {
         let t11 = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
         assert_eq!(
             t11.fence_schedule_v1(),
-            vec![ADR_0083, ADR_0062, ADR_0084_U08, ADR_0095, ADR_0114, AUDIT_FENCE, ADR_0120, HELD_AND_AUDIT_DEEP, CRESCENDO_T11]
+            vec![
+                ADR_0083,
+                ADR_0062,
+                ADR_0084_U08,
+                ADR_0095,
+                ADR_0114,
+                AUDIT_FENCE,
+                ADR_0120,
+                HELD_AND_AUDIT_DEEP,
+                FLAG_DAY_7001,
+                CRESCENDO_T11
+            ]
         );
         let genesis = t11.genesis.hash;
         // The un-upgraded build: same genesis, schedule [2_125_000] — it has crossed nothing and names
@@ -841,8 +871,7 @@ mod tests {
             (stale_fired, ADR_0083),
             "same empty prefix as the stale build; the next fence is what tells them apart"
         );
-        // A node on this build past every height it schedules (the held regime's and the deep
-        // audit's 7,000 the last of them).
+        // A node on this build past every height it schedules (7,001 the last of them).
         let past = fork_id_v1(&t11, 8_000);
         assert_eq!(past.next, CRESCENDO_T11);
         let stranger = &[0u8; 32][..];
@@ -1164,6 +1193,8 @@ mod tests {
         upgraded.palw_held_context = None;
         upgraded.palw_shard_court = None;
         upgraded.palw_fp_da_pins = None;
+        // …and the 7,001 flag day's, later again.
+        crate::config::params::palw_rc_clear_flag_day_7001_for_tests(&mut upgraded);
         let mut un_upgraded = upgraded.clone();
         un_upgraded.palw_model_benefits = None;
         assert_eq!(upgraded.fence_schedule_v1(), vec![1150, 1900, 2150, ADR_0095, CRESCENDO_T11]);
@@ -1252,6 +1283,8 @@ mod tests {
         upgraded.palw_held_context = None;
         upgraded.palw_shard_court = None;
         upgraded.palw_fp_da_pins = None;
+        // …and the 7,001 flag day's, later again.
+        crate::config::params::palw_rc_clear_flag_day_7001_for_tests(&mut upgraded);
         let mut current = upgraded.clone();
         current.palw_model_leg_v2 = None;
         assert_eq!(upgraded.fence_schedule_v1(), vec![1150, 1900, 2150, 2400, ADR_0114, CRESCENDO_T11]);
@@ -1278,6 +1311,78 @@ mod tests {
             assert!(
                 evaluate_fork_id_v1(&upgraded, local_daa, old_peer.fired.as_bytes().as_slice(), old_peer.next).refuses(),
                 "…both ways at {local_daa}"
+            );
+        }
+    }
+
+    /// **The 7,001 flag day, before it happens: the 7,000 release keeps this build until 7,001, and not
+    /// one score longer** — the same rolling restart ADR-0114's day was, and the reason the height is
+    /// not 7,000.
+    ///
+    /// The fleet's release (`13520042`, fingerprint `ae1d6162…`) schedules every height through 7,000;
+    /// this build adds 7,001. Between a restart below the height and the height itself the two agree
+    /// about every block either can produce and must stay peers; at 7,001 each refuses the other on it.
+    /// Had the set been scheduled at 7,000, the two builds would advertise one schedule and never be
+    /// told apart.
+    #[test]
+    fn the_7001_flag_day_keeps_the_7000_release_until_7001() {
+        const FLAG_DAY_7001: u64 = crate::config::params::PALW_RC_FLAG_DAY_7001_FENCE_DAA;
+        const CRESCENDO_T11: u64 = 2_125_000;
+        let upgraded = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
+        let mut release_7000 = upgraded.clone();
+        crate::config::params::palw_rc_clear_flag_day_7001_for_tests(&mut release_7000);
+        assert_eq!(release_7000.fence_schedule_v1(), vec![1150, 1900, 2150, 2400, 3500, 4000, 6900, 7000, CRESCENDO_T11]);
+        assert_eq!(upgraded.fence_schedule_v1(), vec![1150, 1900, 2150, 2400, 3500, 4000, 6900, 7000, FLAG_DAY_7001, CRESCENDO_T11]);
+
+        let new_peer = fork_id_v1(&upgraded, 6_950);
+        let old_peer = fork_id_v1(&release_7000, 6_950);
+        assert_eq!(new_peer.fired, old_peer.fired, "one history: both crossed every fence through 6,900");
+        assert_eq!((new_peer.next, old_peer.next), (7000, 7000));
+        for local_daa in [6_950, 7000, FLAG_DAY_7001 - 1] {
+            let (new_at, old_at) = (fork_id_v1(&upgraded, local_daa), fork_id_v1(&release_7000, local_daa));
+            assert!(
+                !evaluate_fork_id_v1(&release_7000, local_daa, new_at.fired.as_bytes().as_slice(), new_at.next).refuses(),
+                "the 7,000 release keeps this build at {local_daa}"
+            );
+            assert!(
+                !evaluate_fork_id_v1(&upgraded, local_daa, old_at.fired.as_bytes().as_slice(), old_at.next).refuses(),
+                "this build keeps the 7,000 release at {local_daa}"
+            );
+        }
+        for local_daa in [FLAG_DAY_7001, FLAG_DAY_7001 + 1] {
+            let (new_at, old_at) = (fork_id_v1(&upgraded, local_daa), fork_id_v1(&release_7000, local_daa));
+            assert!(
+                evaluate_fork_id_v1(&release_7000, local_daa, new_at.fired.as_bytes().as_slice(), new_at.next).refuses(),
+                "…and refuses it at {local_daa}"
+            );
+            assert!(
+                evaluate_fork_id_v1(&upgraded, local_daa, old_at.fired.as_bytes().as_slice(), old_at.next).refuses(),
+                "…both ways at {local_daa}"
+            );
+        }
+
+        // The counterfactual the height exists for: the same set at 7,000 is invisible.
+        let mut at_7000 = upgraded.clone();
+        let seven_thousand = crate::config::params::ForkActivation::new(7000);
+        at_7000.palw_panel_economy = Some(seven_thousand);
+        at_7000.palw_work_priced_reward = Some(seven_thousand);
+        at_7000.palw_execution_lane =
+            at_7000.palw_execution_lane.map(|lane| crate::config::params::PalwExecutionLaneV1 { activation: seven_thousand, ..lane });
+        at_7000.palw_overlay_carve =
+            at_7000.palw_overlay_carve.map(|carve| crate::config::params::PalwOverlayCarveV1 { activation: seven_thousand, ..carve });
+        at_7000.dns_bft_gate =
+            at_7000.dns_bft_gate.map(|gate| crate::config::params::DnsBftGateV1 { activation: seven_thousand, ..gate });
+        assert_eq!(
+            at_7000.fence_schedule_v1(),
+            release_7000.fence_schedule_v1(),
+            "at 7,000 the set would advertise the 7,000 release's schedule"
+        );
+        for local_daa in [7000, 7001, 8_000] {
+            let (hidden, old_at) = (fork_id_v1(&at_7000, local_daa), fork_id_v1(&release_7000, local_daa));
+            assert_eq!(
+                (hidden.fired, hidden.next),
+                (old_at.fired, old_at.next),
+                "and one fork id at {local_daa}: the gate could not tell them apart"
             );
         }
     }

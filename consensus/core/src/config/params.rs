@@ -11448,6 +11448,30 @@ pub const PALW_RC_AUDIT_DEEP_FENCE_DAA: u64 = 7_000;
 /// it so an operator upgrades once per height rather than once for two rules at one height.
 pub const PALW_RC_COURT_LADDER_FENCE_DAA: u64 = 2_150;
 
+/// **testnet-11's flag day of 2026-09-17: ADR-0124, ADR-0125, ADR-0126 (revised) and ADR-0128, at one
+/// height** (the operator's height and scope: "t11 で有効にする高さは DAA 7000で" → 7,001, with the
+/// execution lane at one block a second).
+///
+/// **One past 7,000, and that is the rule rather than a preference.** `fork_id_v1` digests the FIRED
+/// HEIGHTS, deduplicated: these fences at 7,000 would leave this build advertising the schedule the
+/// 7,000 release advertises, the two would peer, and they would disagree past it about what a panel is
+/// paid, which blocks the lane admits, what the validators' carve is and which reorgs the stake gate
+/// refuses. 7,001 is a height no released schedule names, so a node without the set is refused from
+/// it (`a-fence-at-a-scheduled-height-is-invisible-to-the-fork-id`, ADR-0120's 6,900 for the same
+/// reason). Every node must run a build carrying it before the height.
+pub const PALW_RC_FLAG_DAY_7001_FENCE_DAA: u64 = 7_001;
+
+/// **The build before the 7,001 flag day**, for the tests that reconstruct an earlier release: the
+/// five fences [`PALW_RC_FLAG_DAY_7001_FENCE_DAA`] schedules, cleared.
+#[cfg(test)]
+pub(crate) fn palw_rc_clear_flag_day_7001_for_tests(params: &mut Params) {
+    params.palw_panel_economy = None;
+    params.palw_work_priced_reward = None;
+    params.palw_execution_lane = None;
+    params.palw_overlay_carve = None;
+    params.dns_bft_gate = None;
+}
+
 /// Arm the ADR-0068 Phase 1 fences on an assembled PALW-RC ruleset: the heartbeat lane (with
 /// its width bound) and the attempt-work constant, both at [`PALW_RC_PHASE1_FENCE_DAA`]. The
 /// values are the binary's own constants by construction, so the `validate_palw_v2` locks hold
@@ -11866,6 +11890,33 @@ pub fn palw_rc_base_params() -> Params {
     // their own later height, distinct from the shallow fence so a deep build and a shallow build
     // diverge visibly at this height rather than silently at 4,000.
     params.palw_audit_2026_09_11_deep = Some(ForkActivation::new(PALW_RC_AUDIT_DEEP_FENCE_DAA));
+    // **The 7,001 flag day** ([`PALW_RC_FLAG_DAY_7001_FENCE_DAA`]), one release for all of it:
+    //
+    // * ADR-0124 — a panel is paid 20 % of its claim's escrow, a drawn seat holds three times the
+    //   claim's exposure, and a claim is paid for the compute it certifies;
+    // * ADR-0125 — the execution lane at one permit a round, one execution block a second, spans of 30
+    //   DAA, no widening scheduled (the next stage is its own height);
+    // * ADR-0126 (revised) — the validator pool falls from 30 % to 20 % of a block's subsidy and the
+    //   tenth is escrowed for the block's PALW claim (72 % instead of 62 %);
+    // * ADR-0128 — validators vote BFT by bonded stake and the DNS-final anchor decides the stake reorg
+    //   gate; a bond silent for 5,040 DAA (seven days at 120 s) leaks, re-entry waits for an attestation
+    //   buried 200 DAA, and no leak takes the set below four validators.
+    //
+    // ADR-0127 and ADR-0129 add reads and pins, no rule.
+    let flag_day_7001 = ForkActivation::new(PALW_RC_FLAG_DAY_7001_FENCE_DAA);
+    params.palw_panel_economy = Some(flag_day_7001);
+    params.palw_work_priced_reward = Some(flag_day_7001);
+    params.palw_execution_lane = Some(PalwExecutionLaneV1 {
+        activation: flag_day_7001,
+        permits_per_round: 1,
+        widenings: PalwExecutionLaneV1::NO_WIDENINGS,
+        max_per_mergeset: 600,
+        schedule_span_daa: 30,
+    });
+    params.palw_overlay_carve =
+        Some(PalwOverlayCarveV1 { activation: flag_day_7001, subsidy_validator_bps: 2_000, worker_carve_permille: 720 });
+    params.dns_bft_gate =
+        Some(DnsBftGateV1 { activation: flag_day_7001, t_leak_daa: 5_040, reentry_final_depth_daa: 200, min_retained_validators: 4 });
     params.palw_model_evm = Some(ForkActivation::new(PALW_RC_DA_COURT_FENCE_DAA));
     params.palw_court_ladder = Some(ForkActivation::new(PALW_RC_COURT_LADDER_FENCE_DAA));
     // **The EVM lane is ON from DAA 0, inherited from `TESTNET_PARAMS` and kept deliberately.**
@@ -12768,7 +12819,8 @@ mod consensus_params_id_tests {
         for net in nets {
             let shipped = Params::from(net);
             shipped.validate_palw_v2().unwrap_or_else(|e| panic!("{net}: the shipped preset starts: {e}"));
-            assert!(shipped.dns_bft_gate.is_none(), "{net}: a shipped preset armed the BFT gate");
+            let scheduled = (net == TESTNET11_PARAMS.net).then(|| gate(ForkActivation::new(PALW_RC_FLAG_DAY_7001_FENCE_DAA)));
+            assert_eq!(shipped.dns_bft_gate, scheduled, "{net}: only testnet-11 schedules the BFT gate, on its 7,001 flag day");
 
             let mut no_overlay = shipped.clone();
             no_overlay.dns_params = None;
@@ -14769,6 +14821,8 @@ mod consensus_params_id_tests {
         // Scheduled on the same flag day by the 2026-09-06 audit's H-4 (ADR-0084 U-08), so the
         // build the fleet is running does not carry it either.
         previous.palw_court_ladder = None;
+        // …and the 7,001 flag day (ADR-0124, 0125, 0126, 0128), later again.
+        palw_rc_clear_flag_day_7001_for_tests(&mut previous);
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &previous.palw_consensus_mode else { panic!("V2") };
         previous.blockrate.pruning_depth = palw_v2_pruning_depth_v1(&previous.blockrate, bundle, None);
 
@@ -16280,7 +16334,17 @@ mod consensus_params_id_tests {
                 // d6ebbcab7691aec574e983b2c8dd81a6bd1fc1d340e92a7efba2f7e305449bec, ADR-0120 alone
                 // 7fa26c269a2c007f077b687eb3ce5cdf5bbd6dbfe263980688fbec5e0ace99e8, held + deep
                 // 941300ddff87abfa0a85fb7e6f54d8a8e7fd5e0935c17b351e93e3a43c860bf9.
-                "ae1d61628da50c7becea62f0a8f08c8654d190c60b2e104df0010b121ba4d3d8",
+                // **Re-pinned 2026-09-17 for the 7,001 flag day** (`PALW_RC_FLAG_DAY_7001_FENCE_DAA`, the
+                // operator's height, chosen at DAA ≈5,773): ADR-0124's `palw_panel_economy` and
+                // `palw_work_priced_reward`, ADR-0125's `palw_execution_lane` (one permit a round, spans of
+                // 30 DAA, 600 a mergeset), ADR-0126's `palw_overlay_carve` (2,000 bps, 720 ‰) and
+                // ADR-0128's `dns_bft_gate` (5,040 / 200 / 4), all at 7,001 — schedule 1150/1900/2150/
+                // 2400/3500/4000/6900/7000/7001/2125000. The identity does not move, so builds with and
+                // without the set peer until 7,001 and refuse each other from it
+                // (`the_7001_flag_day_keeps_the_7000_release_until_7001`); every node must carry it
+                // before the height. Previous (the 7,000 release, 13520042):
+                // ae1d61628da50c7becea62f0a8f08c8654d190c60b2e104df0010b121ba4d3d8.
+                "4787b92a0e20065aac88f8258b581f415ace9f6093dfab35c345b48135269005",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -17047,6 +17111,11 @@ mod consensus_params_id_tests {
         // * `palw_prefill_draw` (ADR-0117) is armed on testnet-11 on the audit's flag day and stated
         //   by no card: which job a draw runs is a class decision a card makes with its classes,
         //   after the one-forward job has run on a live chain.
+        // * `dns_bft_gate`, `palw_execution_lane` and `palw_overlay_carve` are testnet-11's 7,001 flag
+        //   day (ADR-0128, ADR-0125, ADR-0126) and no card states them yet: a card's gate numbers (its
+        //   leak period at its own cadence), its lane's width and stage table, and its validators'
+        //   share are genesis decisions the operator has not taken — and a card that wants a fifth
+        //   for its validators mints that split rather than scheduling a carve.
         // * `palw_held_context` and the one-move court `palw_shard_court` (ADR-0103, ADR-0100) are
         //   testnet-11's held regime, scheduled at `PALW_RC_HELD_FENCE_DAA` by ADR-0118. A mainnet
         //   that wants the regime MINTS it — `palw_held_context_mint_v1`, V4 and the tiled ids from
@@ -17055,6 +17124,9 @@ mod consensus_params_id_tests {
         assert_eq!(
             missing,
             vec![
+                "dns_bft_gate",
+                "palw_execution_lane",
+                "palw_overlay_carve",
                 "palw_model_market",
                 "palw_model_lines",
                 "palw_model_benefits",
@@ -17813,6 +17885,8 @@ mod consensus_params_id_tests {
                 PALW_RC_MODEL_SEED_V2_FENCE_DAA,
                 // One entry for 7,000: the deep-audit fence and the held regime share it (ADR-0118).
                 PALW_RC_AUDIT_DEEP_FENCE_DAA,
+                // One entry for 7,001: ADR-0124, 0125, 0126 and 0128 share it.
+                PALW_RC_FLAG_DAY_7001_FENCE_DAA,
             ],
             "…and a schedule lists every scheduled gate fence's height"
         );
@@ -17963,12 +18037,13 @@ mod consensus_params_id_tests {
         assert_eq!(carded.palw_da_court, Some(ForkActivation::always()), "the court it makes meaningful is armed with it");
     }
 
-    /// **ADR-0124's two fences are dormant on every shipped preset, visible the moment they are not,
-    /// meaningless without a V2 bundle, and stated from genesis on a mainnet card.** A scheduled
-    /// height moves the fingerprint and the schedule and never the identity — an armed and an
-    /// un-armed build peer until the height fires — and arming from genesis moves the identity.
+    /// **ADR-0124's two fences are scheduled on testnet-11's 7,001 flag day and dormant on every other
+    /// shipped preset, visible the moment they are set, meaningless without a V2 bundle, and stated
+    /// from genesis on a mainnet card.** A scheduled height moves the fingerprint and the schedule and
+    /// never the identity — an armed and an un-armed build peer until the height fires — and arming
+    /// from genesis moves the identity.
     #[test]
-    fn adr0124_the_panel_economy_and_the_work_price_are_dormant_everywhere_and_stated_on_a_card() {
+    fn adr0124_the_panel_economy_and_the_work_price_are_scheduled_on_testnet_11_and_stated_on_a_card() {
         for p in [&MAINNET_PARAMS, &TESTNET_PARAMS, &SIMNET_PARAMS, &DEVNET_PARAMS] {
             assert!(
                 p.palw_panel_economy.is_none() && p.palw_work_priced_reward.is_none(),
@@ -17976,10 +18051,19 @@ mod consensus_params_id_tests {
                 p.net
             );
         }
-        let rc = palw_rc_shipped_params();
-        assert!(rc.palw_panel_economy.is_none(), "testnet-11 pays no seat until a flag day says otherwise");
-        assert!(rc.palw_work_priced_reward.is_none(), "and prices no claim's work until then");
-        assert!(rc.palw_panel_economy_fence().is_none() && rc.palw_work_priced_reward_fence().is_none());
+        let shipped = palw_rc_shipped_params();
+        let flag_day = Some(ForkActivation::new(PALW_RC_FLAG_DAY_7001_FENCE_DAA));
+        assert_eq!(
+            (shipped.palw_panel_economy_fence(), shipped.palw_work_priced_reward_fence()),
+            (flag_day, flag_day),
+            "testnet-11 pays seats and prices work from its 7,001 flag day"
+        );
+        assert!(shipped.palw_seat_economy_at(PALW_RC_FLAG_DAY_7001_FENCE_DAA - 1).is_none(), "no seat floor below the height");
+        assert!(shipped.palw_seat_economy_at(PALW_RC_FLAG_DAY_7001_FENCE_DAA).is_some(), "and one from it");
+        // The build before the flag day, which the scheduled and genesis variants below are compared with.
+        let mut rc = shipped.clone();
+        rc.palw_panel_economy = None;
+        rc.palw_work_priced_reward = None;
         assert!(rc.palw_seat_economy_at(u64::MAX).is_none(), "no seat floor while the fence is dormant");
         assert!(devnet_shipped_params().palw_panel_economy.is_none() && devnet_shipped_params().palw_work_priced_reward.is_none());
 
@@ -18927,6 +19011,8 @@ mod palw_overlay_carve_tests {
         // No overlay.
         let mut no_overlay = armed(t11_carve());
         no_overlay.dns_params = None;
+        // testnet-11 schedules ADR-0128's gate beside the carve, and the gate refuses the same absence.
+        no_overlay.dns_bft_gate = None;
         assert!(refusal(&no_overlay).contains("runs no validator overlay"), "{}", refusal(&no_overlay));
         assert_eq!(no_overlay.palw_overlay_carve_fence(), None, "and nothing would answer it");
 
@@ -19040,8 +19126,13 @@ mod palw_overlay_carve_tests {
     /// until the height is genesis, and the fork-id gate reads it by name.
     #[test]
     fn the_overlay_carve_is_hashed_some_only_and_scheduled_like_a_fence() {
-        let none = palw_rc_shipped_params();
-        assert_eq!(none.palw_overlay_carve, None, "no shipped preset arms it");
+        let shipped = palw_rc_shipped_params();
+        assert_eq!(shipped.palw_overlay_carve, Some(t11_carve()), "testnet-11 schedules it on its 7,001 flag day");
+        for other in [&MAINNET_PARAMS, &TESTNET_PARAMS, &SIMNET_PARAMS, &DEVNET_PARAMS] {
+            assert_eq!(other.palw_overlay_carve, None, "{}: no other shipped preset arms it", other.net);
+        }
+        let mut none = shipped.clone();
+        none.palw_overlay_carve = None;
         let base = armed(t11_carve());
         let later = armed(PalwOverlayCarveV1 { activation: ForkActivation::new(T11_HEIGHT + 1), ..t11_carve() });
         let share = armed(PalwOverlayCarveV1 { subsidy_validator_bps: 2_100, ..t11_carve() });
@@ -19067,8 +19158,14 @@ mod palw_overlay_carve_tests {
         assert_ne!(genesis.consensus_identity_id(), none.consensus_identity_id(), "a carve in force at genesis separates networks");
         assert_ne!(genesis.consensus_identity_id(), genesis_smaller.consensus_identity_id(), "and so does its number");
 
-        assert!(base.fence_schedule_v1().contains(&T11_HEIGHT), "the fork-id schedule names the height");
-        assert!(!none.fence_schedule_v1().contains(&T11_HEIGHT));
+        // The height reaches the schedule through the carve alone: the build before the flag day, with
+        // and without it.
+        let mut bare = none.clone();
+        palw_rc_clear_flag_day_7001_for_tests(&mut bare);
+        let mut carve_alone = bare.clone();
+        carve_alone.palw_overlay_carve = Some(t11_carve());
+        assert!(carve_alone.fence_schedule_v1().contains(&T11_HEIGHT), "the fork-id schedule names the height");
+        assert!(!bare.fence_schedule_v1().contains(&T11_HEIGHT));
         assert!(
             base.palw_fences_v1()
                 .iter()

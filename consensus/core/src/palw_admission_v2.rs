@@ -2029,6 +2029,14 @@ mod tests {
         // 1000‰ — the whole escrow, the largest value the constructor admits. If any setting can
         // halt the floor this one does, so a pass here covers every smaller arming.
         bundle.state = bundle.state.clone().with_min_slash_permille_of_escrow(1000).expect("1000 permille is legal");
+        // testnet-11 schedules ADR-0126's carve, and this gate sizes the escrow it backs at the bundle's
+        // carve: the pair is refused until admission reads the fence, so a network minted with the
+        // backing armed is minted without the carve.
+        assert!(
+            params.validate_palw_v2().is_err_and(|e| e.to_string().contains("min_slash_permille_of_escrow")),
+            "the backing beside the carve is refused"
+        );
+        params.palw_overlay_carve = None;
         params.validate_palw_v2().expect("a network may be minted with the backing fully armed");
 
         let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { unreachable!() };
