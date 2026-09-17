@@ -24,9 +24,17 @@
 # Build first:
 #   cargo build --release -p kaspad -p misaka-cli
 #
+# A step waits on CHAIN time, not wall time. A licensed claim is Final `window_challenge` DAA later (100
+# on the devnet) and the lane schedules a span from the Finals of the span before it, so step 1 needs
+# some 150 DAA — over an hour and a half at the pace four floor producers keep on one host (about 1.5 DAA
+# a minute). A step therefore gives up when node-1's virtual DAA stops moving for STALL_WAIT seconds;
+# STEP_WAIT only caps a chain that moves and never gets there.
+#
 # Env: KASPAD_BIN, CLI_BIN (defaults target/release/*), NODES (4, at least 4), WORK_DIR, LANE
-# (`activation,width,span[,daa:width…]`, default 0,2,30), STEP_WAIT (s, per step), SENDS (5 fee-paying
-# transactions, one every SEND_EVERY seconds), P2P_BASE / RPC_BASE (port bases).
+# (`activation,width,span[,daa:width…]`, default 0,2,30), STALL_WAIT (s, 900), STEP_WAIT (s, 14400),
+# SENDS (5 fee-paying transactions, one every SEND_EVERY seconds), P2P_BASE / RPC_BASE (port bases),
+# ATTACH (1: poll the nodes an earlier run left running in WORK_DIR instead of starting new ones — and
+# leave them running at exit).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -35,7 +43,9 @@ CLI_BIN="${CLI_BIN:-$REPO_ROOT/target/release/misaka}"
 NODES="${NODES:-4}"
 WORK_DIR="${WORK_DIR:-$REPO_ROOT/.misaka-palw-round-lane-devnet}"
 LANE="${LANE:-0,2,30}"
-STEP_WAIT="${STEP_WAIT:-3600}"
+STALL_WAIT="${STALL_WAIT:-900}"
+STEP_WAIT="${STEP_WAIT:-14400}"
+ATTACH="${ATTACH:-0}"
 SENDS="${SENDS:-5}"
 SEND_EVERY="${SEND_EVERY:-20}"
 P2P_BASE="${P2P_BASE:-16610}"
@@ -51,22 +61,6 @@ for b in "$KASPAD_BIN" "$CLI_BIN"; do [ -x "$b" ] || die "missing binary $b (car
 "$KASPAD_BIN" --help 2>/dev/null | grep -q -- "--palw-execution-lane-devnet" || die "this kaspad has no --palw-execution-lane-devnet (ADR-0125)"
 "$KASPAD_BIN" --help 2>/dev/null | grep -q -- "--palw-round-lane" || die "this kaspad has no --palw-round-lane (ADR-0125)"
 "$CLI_BIN" palw round-lane --help >/dev/null 2>&1 || die "this misaka has no \`palw round-lane\`"
-for ((i=0; i<NODES; i++)); do
-  for port in $((P2P_BASE + i)) $((RPC_BASE + i)); do
-    if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then die "port $port is in use — set P2P_BASE / RPC_BASE"; fi
-  done
-done
-
-rm -rf "$WORK_DIR"; mkdir -p "$WORK_DIR/keys" "$WORK_DIR/out"
-python3 - "$WORK_DIR/keys" "$NODES" <<'PY'
-import hashlib, os, sys
-d, n = sys.argv[1], int(sys.argv[2])
-h = lambda b: hashlib.blake2b(b, digest_size=32).hexdigest()
-for i in range(n):
-    p = f"{d}/bond-{i}.seed"; open(p, "w").write(h(b"misaka-devnet-genesis-bond-v1/" + str(i).encode())); os.chmod(p, 0o600)
-p = f"{d}/main.seed"; open(p, "w").write(h(b"misaka-testnet-premine-9b-claude-managed")); os.chmod(p, 0o600)
-p = f"{d}/recipient.seed"; open(p, "w").write(h(b"misaka-round-lane-drill/recipient")); os.chmod(p, 0o600)
-PY
 
 cli() { local i="$1"; shift; "$CLI_BIN" --network devnet --rpc "127.0.0.1:$((RPC_BASE + i))" "$@"; }
 # `lane <node> <python expression over the response dict v>` — prints the expression's value.
@@ -77,50 +71,94 @@ lane() {
 
 pids=()
 cleanup() { for p in "${pids[@]:-}"; do [ -n "$p" ] && kill "$p" 2>/dev/null || true; done; }
-trap cleanup EXIT
 
-for ((i=0; i<NODES; i++)); do
-  addr="$("$CLI_BIN" --network devnet key address --key-file "$WORK_DIR/keys/bond-$i.seed" | tail -1 | awk '{print $NF}')"
-  [ -n "$addr" ] || die "cannot derive bond $i's address"
-  echo "$addr" > "$WORK_DIR/keys/bond-$i.address"
-  args=(--devnet --appdir="$WORK_DIR/node-$i" --listen="127.0.0.1:$((P2P_BASE + i))" --rpclisten-borsh="127.0.0.1:$((RPC_BASE + i))"
-        --utxoindex --nodnsseed --disable-upnp --nogrpc --enable-unsynced-mining
-        --palw-devnet-floor-only --palw-execution-lane-devnet="$LANE"
-        --palw-produce --palw-panel --palw-round-lane
-        --palw-producer-key="$WORK_DIR/keys/bond-$i.seed" --palw-producer-bond="$PREMINE_TXID:$i"
-        --palw-producer-pay-address="$addr" --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1 + i))")
-  [ "$i" -gt 0 ] && args+=(--connect="127.0.0.1:$P2P_BASE")
-  MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >"$WORK_DIR/node-$i.log" 2>&1 &
-  node_pid=$!
-  pids+=("$node_pid")
-  log "node-$i pid $node_pid bond $PREMINE_TXID:$i (lane $LANE)"
-done
+# The nodes an earlier run left running in WORK_DIR (its keys, its logs), found by their RPC ports.
+attach_nodes() {
+  [ -f "$WORK_DIR/keys/main.seed" ] || die "ATTACH=1 polls the nodes an earlier run started, and $WORK_DIR has no keys"
+  for ((i=0; i<NODES; i++)); do
+    node_pid="$(lsof -nP -t -iTCP:"$((RPC_BASE + i))" -sTCP:LISTEN 2>/dev/null | head -1 || true)"
+    [ -n "$node_pid" ] || die "ATTACH=1: nothing listens on node-$i's RPC port $((RPC_BASE + i))"
+    pids+=("$node_pid")
+    log "node-$i pid $node_pid attached (left running at exit)"
+  done
+}
+
+start_nodes() {
+  for ((i=0; i<NODES; i++)); do
+    for port in $((P2P_BASE + i)) $((RPC_BASE + i)); do
+      if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then die "port $port is in use — set P2P_BASE / RPC_BASE"; fi
+    done
+  done
+
+  rm -rf "$WORK_DIR"; mkdir -p "$WORK_DIR/keys" "$WORK_DIR/out"
+  python3 - "$WORK_DIR/keys" "$NODES" <<'PY'
+import hashlib, os, sys
+d, n = sys.argv[1], int(sys.argv[2])
+h = lambda b: hashlib.blake2b(b, digest_size=32).hexdigest()
+for i in range(n):
+    p = f"{d}/bond-{i}.seed"; open(p, "w").write(h(b"misaka-devnet-genesis-bond-v1/" + str(i).encode())); os.chmod(p, 0o600)
+p = f"{d}/main.seed"; open(p, "w").write(h(b"misaka-testnet-premine-9b-claude-managed")); os.chmod(p, 0o600)
+p = f"{d}/recipient.seed"; open(p, "w").write(h(b"misaka-round-lane-drill/recipient")); os.chmod(p, 0o600)
+PY
+
+  trap cleanup EXIT
+  for ((i=0; i<NODES; i++)); do
+    addr="$("$CLI_BIN" --network devnet key address --key-file "$WORK_DIR/keys/bond-$i.seed" | tail -1 | awk '{print $NF}')"
+    [ -n "$addr" ] || die "cannot derive bond $i's address"
+    echo "$addr" > "$WORK_DIR/keys/bond-$i.address"
+    args=(--devnet --appdir="$WORK_DIR/node-$i" --listen="127.0.0.1:$((P2P_BASE + i))" --rpclisten-borsh="127.0.0.1:$((RPC_BASE + i))"
+          --utxoindex --nodnsseed --disable-upnp --nogrpc --enable-unsynced-mining
+          --palw-devnet-floor-only --palw-execution-lane-devnet="$LANE"
+          --palw-produce --palw-panel --palw-round-lane
+          --palw-producer-key="$WORK_DIR/keys/bond-$i.seed" --palw-producer-bond="$PREMINE_TXID:$i"
+          --palw-producer-pay-address="$addr" --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1 + i))")
+    [ "$i" -gt 0 ] && args+=(--connect="127.0.0.1:$P2P_BASE")
+    MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >"$WORK_DIR/node-$i.log" 2>&1 &
+    node_pid=$!
+    pids+=("$node_pid")
+    log "node-$i pid $node_pid bond $PREMINE_TXID:$i (lane $LANE)"
+  done
+}
+
+if [ "$ATTACH" = 1 ]; then attach_nodes; else start_nodes; fi
 
 alive() { for p in "${pids[@]}"; do kill -0 "$p" 2>/dev/null || die "a node exited (see $WORK_DIR/node-*.log)"; done; }
 
-# Poll until `pattern` appears in any node log (or the given files) after byte offset map `since`
-# (a file of "path offset" lines, or empty); echo the first matching line.
+# A step's clock (see the header): `step_start`, then `step_expired` on every poll — true once node-1's
+# virtual DAA has not moved for STALL_WAIT seconds, or the step has run STEP_WAIT seconds.
+step_start() { step_began=$SECONDS; last_daa=""; last_move=$SECONDS; }
+step_expired() {
+  local daa
+  daa="$(lane 1 "v.get('virtualDaa')")"
+  if [ -n "$daa" ] && [ "$daa" != "$last_daa" ]; then last_daa="$daa"; last_move=$SECONDS; fi
+  [ $((SECONDS - step_began)) -ge "$STEP_WAIT" ] || [ $((SECONDS - last_move)) -ge "$STALL_WAIT" ]
+}
+gave_up() { die "gave up waiting for: $1 (virtual DAA ${last_daa:-unanswered}, unmoved for $((SECONDS - last_move))s, $((SECONDS - step_began))s into the step)"; }
+
+# Poll until `pattern` appears in any node log (or the given files); echo the first matching line.
 wait_log() {
-  local pattern="$1" what="$2" files="${3:-$WORK_DIR/node-*.log}" deadline=$((SECONDS + STEP_WAIT)) line=""
-  while [ $SECONDS -lt $deadline ]; do
+  local pattern="$1" what="$2" files="${3:-$WORK_DIR/node-*.log}" line=""
+  step_start
+  while ! step_expired; do
     # shellcheck disable=SC2086
     line="$(grep -h -m1 -E "$pattern" $files 2>/dev/null | head -1 || true)"
     if [ -n "$line" ]; then echo "$line"; return 0; fi
     alive
     sleep 5
   done
-  die "timed out after ${STEP_WAIT}s waiting for: $what"
+  gave_up "$what"
 }
 
 # Poll until `lane <node> <expr>` prints True.
 wait_lane() {
-  local node="$1" expr="$2" what="$3" deadline=$((SECONDS + STEP_WAIT))
-  while [ $SECONDS -lt $deadline ]; do
+  local node="$1" expr="$2" what="$3"
+  step_start
+  while ! step_expired; do
     [ "$(lane "$node" "$expr")" = "True" ] && return 0
     alive
     sleep 10
   done
-  die "timed out after ${STEP_WAIT}s waiting for: $what"
+  gave_up "$what"
 }
 
 log "0/5 the lane is armed on the nodes' ruleset"
@@ -174,3 +212,5 @@ produced_blocks="$(grep -h -oE "\\[palw-round-producer\\] [0-9]+ round blocks pr
 log "    lane lines across the fleet: $granted_lines · round-block production reports (powers of two, summed): $produced_blocks"
 log "PASS — attempts reached Final, the next span was scheduled, round blocks were produced for held permits, chain blocks granted them, and a granted round block carried a fee-paying transaction"
 log "evidence: $WORK_DIR/node-*.log, $WORK_DIR/out/"
+[ "$ATTACH" = 1 ] && log "the attached nodes are still running: kill ${pids[*]}"
+exit 0
