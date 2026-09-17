@@ -222,7 +222,11 @@ under the opening cap inside the challenge's window, opened from the held artifa
 (`PalwExecutionBackendV1::artifact_row_opening`; a Qwen3.6-class artifact is rooted in one
 streaming pass and never held in memory), rooted locally against the class's registered root
 before it is signed by the bond's key. **Fail-closed**: a class this node holds no artifact for, or
-holds under a different root, gets no proof and is named once in the log. The producer reads the
+holds under a different root, gets no proof and is named once in the log; a node in IBD or not near
+the tip proves nothing; a bond that is inactive, below the floor or without the readiness multiple of
+free collateral (op 186's `bonds`) proves nothing and says why once. A reorg that drops a proof's
+block leaves no row, and the next span's duty re-proves against the current challenge — an old
+span's proof is never resent (the fold refuses it). The producer reads the
 same op before a draw and holds (a log line, no rule) for a class the registry holds or has at its
 inflight cap. `--palw-model-registry-devnet=<daa>` arms the registry on a private devnet (with the
 panel economy it reads, where the devnet has none). The registry's seat count is the network's
@@ -263,9 +267,12 @@ with a `Final`, PREFETCHING without) and are governed from the grace's end. A te
   computes no rows and no reasons — but it never gets there: the fork-id gate names the height, so
   it is refused as a peer from the fence; below the fence the new build refuses the object, so no
   block carries one.
-* *Observability*: op 186 prints each class's state, `since_span`, ready seats and claims in flight
-  now, utilization, admission, `no_capable_panel_voids`, and each proof's freshness with the reason
-  it does not count (`stale`, `bond inactive`, `below floor`, `collateral short`).
+* *Observability*: op 186 prints each class's state with its reason (`held: ready 3 < 5 for a
+  panel …`, `probing 4/10 …`, `base class …`), `since_span`, the derived profile, ready seats and
+  claims in flight now against the cap, utilization, admission, `no_capable_panel_voids`, the
+  counts of classes by state, the bonds with headroom for a seat, and each proof's freshness with
+  the reason it does not count (`stale`, `bond inactive`, `below floor`, `collateral short`) — so
+  a HELD by the rule and a stop by a fault read differently.
 
 **`artifact_bytes` is not consensus-critical.** It is an estimate from the graph's dense weights and
 feeds the prefetch allowance only; admission, the bond, the window and the inflight cap read the
