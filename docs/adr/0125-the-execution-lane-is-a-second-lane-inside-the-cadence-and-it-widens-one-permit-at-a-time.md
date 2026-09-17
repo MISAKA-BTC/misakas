@@ -22,12 +22,13 @@
 
 **Transactions get a fast lane without the PALW chain getting a fast clock. Every second is a round;
 a round's permits go to bonds whose attempts reached `Final` in the previous scheduler span, in
-quotas proportional to those credits and capped at 45 % per security domain, one permit an operator,
-no domain in two consecutive rounds. A permit is a round block: a light, fee-only block that is never
+quotas proportional to the compute those attempts certified and capped at 45 % per security domain,
+one permit an operator, no domain in two consecutive rounds. A permit is a round block: a light, fee-only block that is never
 a selected parent, never blue and never counted in the DAA score, so the chain's GHOSTDAG, windows,
 retargets and depths are exactly those of the DAG without it. A merging chain block accepts a round
 block's transactions when its parent state grants the permit, and pays the fees to the bond's
-payout. 1 BPS is one permit a round; 10 BPS is ten.**
+payout. 1 BPS is one permit a round; 10 BPS is ten, carried when enough security domains and
+operators fill them (SA-4).**
 
 ## 1. What the operator asked, in the operator's words
 
@@ -97,14 +98,17 @@ selected parent, which the next chain block can name beside the round tips.
 **Decision 3 — a round is a second, and its permits come from the previous span's finalized
 attempts.** `round(t) = (t − genesis_timestamp) / 1000`; a span is `schedule_span_daa` of DAA.
 When an attempt claim reaches `Final`, the fold records `(domain, bond, operator, claim id, execution
-root)` in the span of the finalizing block (`record_round_final`). At the first block of a later span
+root, credit)` in the span of the finalizing block (`record_round_final`). The credit is the compute
+the attempt certified — the operator's "Credit 量 = canonical compute": its exposure pwu (one canonical
+inference of its class, the number its exposure and its ADR-0124 price are read on), capped at
+ADR-0124 Decision 6's unit, the dearest weight-bearing model class's (`palw_execution_credit_v1`). At the first block of a later span
 those finals become the next span's schedule and leave (`rotate_round_lane`,
 `palw_execution_schedule_v1`):
 
 * the seed is `H(span ‖ count ‖ (claim id ‖ execution root)*)` over the finals in claim-id order —
   changing it costs an inference that reaches `Final`; no beacon and no header enters it;
-* a domain's credits are its finals, its quota is its share capped at `450 ‰`, water-filled in exact
-  integers (`palw_execution_quotas_v1`: one domain holds the lane, two split it evenly, three or more
+* a domain's credits are the sum of its finals' credits, its quota is its share capped at `450 ‰`,
+  water-filled in exact integers (`palw_execution_quotas_v1`: one domain holds the lane, two split it evenly, three or more
   are capped and re-divided), listing at most 32 domains and 64 bonds a domain;
 * the domains are split into two parity groups as evenly as a greedy split makes them
   (`palw_execution_parities_v1`); a domain holds permits only in rounds of its parity, so no domain
@@ -188,16 +192,20 @@ solves, signs and submits the round block.
   (`round_equivocations`, delta 48, carriage tail `0xA8`), the verdict's refusal of a burned permit,
   `protocol/flows/src/palw_round_relay.rs` (announce one block a permit, queue the evidence), the
   panel's filing, and the round producer's persist-before-sign record.
-* §7.4: `getPalwRoundLane` (op 181; wRPC and gRPC; `PalwExecLaneStatusV1` through the consensus API),
-  `misaka palw round-lane`, the lane line in `misaka mining status`, and one chain-walk log line per
-  chain block that merges the lane.
+* §7.4: `getPalwRoundLane` (op 181; wRPC and gRPC; `PalwExecLaneStatusV1` through the consensus API;
+  `nextRoundPermits`), `misaka palw round-lane`, the lane line in `misaka mining status` (the blocks a
+  second the schedule carries, beside the width), and one chain-walk log line per chain block that
+  merges the lane.
+* The compute credit: `palw_execution_credit_v1`, `PalwExecFinalV1::credit`, the fold's
+  `work_price_unit` (shared with ADR-0124's work price).
 * §7.1: `kaspad --palw-execution-lane-devnet=activation,width,span[,daa:width…]` and
   `scripts/misaka-palw-round-lane-devnet-drill.sh`.
 * Tests: the rules module (including the evidence's own proofs); the state (`adr0125_*` in
   `palw_state_v2.rs`: a finalized attempt schedules the next span, a permit is accepted once, spans
   are dropped, the delta and the carriage round-trip, nothing is written below the fence, a permit
   signed twice burns once and slashes the floor, a reorg across a span boundary reverts the schedule
-  and the ledger exactly); the stage table (`palw_execution_lane_stage_tests`); the pipeline
+  and the ledger exactly, a `Final` credits the compute it certified capped at the unit); a domain's
+  quota follows that compute and not the count of finals; the stage table (`palw_execution_lane_stage_tests`); the pipeline
   (`adr0125_*` in the virtual processor's tests: round blocks hang beside the chain and never move it;
   a chain block naming only round blocks, a permit twice and a forged envelope are refused; a merging
   block grants exactly the permits its parent state schedules; a widening holds for whole spans; two
@@ -223,8 +231,14 @@ solves, signs and submits the round block.
 * **SA-3 — the anchor rule is what makes the lane invisible to the chain** (Decision 2). Without it a
   round block could carry a chain block into a mergeset through a block that is never a selected
   parent.
-* **SA-4 — one domain halves the lane.** With one live domain every other round is empty: the parity
-  rule doing its job.
+* **SA-4 — the width is a ceiling, and the domains fill it.** A domain holds at most `⌈width / 3⌉`
+  permits of a round and only rounds of its parity, and an operator one permit a round, so a round
+  holds at most `⌈width / 3⌉` per domain of its parity group and one per operator. At width 10 one
+  domain carries at most 2 blocks a second, two carry 4, three 6; ten needs at least six domains that
+  the parity split puts three and three, and ten operators in each round. With one live domain every
+  other round is empty: the parity rule doing its job. `getPalwRoundLane` answers the permits of this
+  round and the next (`nextRoundPermits`), and the operator's lane line leads with the blocks a second
+  those two carry — never the width, which is a request and not a rate.
 * **SA-5 — a permit is earned per finalized attempt.** Only bonds with a `Final` attempt in the span
   are listed; `N` permits in one round need `N` operators.
 * **SA-6 — a round block is never a chain block,** so its UTXO commitment, accepted-id root, overlay
@@ -234,6 +248,11 @@ solves, signs and submits the round block.
   attempt lane keeps no per-class family row, so a class certified only by genesis is its own domain.
 * **SA-9 — no validator is involved.** Nothing in the lane reads a beacon, a bond view of the DNS
   overlay or a validator pool, and its fees are excluded from the ADR-0018 carve.
+* **SA-10 — compute, not frequency, earns the lane.** A class that finalizes more attempts of a
+  lighter inference earns no more of the lane than the compute they certified; a class that bears no
+  weight is credited at most the unit, so declaring a dear inference buys no lane share, as it buys no
+  pay (ADR-0124 Decision 6). A claim under `MaxPerAttempt` is credited the pwu it claimed, which is
+  also the exposure it is slashable for.
 
 ## 6. What does not change
 
@@ -264,6 +283,12 @@ every DAG parameter, depth and PALW window; every network until its fence is arm
 * **A round block first had to name exactly one chain parent.** Two round blocks of one anchor could
   then never be parent and child — naming the anchor beside a round tip that already hangs from it
   names an ancestor of a parent. A round block may now extend the lane from round parents alone.
+* **The schedule first credited every `Final` as one.** A light class that finalized more often
+  out-scheduled a heavy one — testnet-11's three classes in one span counted 183 / 367 / 450 with the
+  floor at the cap — the imbalance ADR-0124 corrected for pay. A `Final` now credits the compute it
+  certified (450 / 450 / 100 for the same span; `a_domains_quota_follows_the_compute_its_finals_certified_not_their_count`).
+* **The operator's status line first printed the width as the lane's BPS.** One domain at width 2
+  carries half a block a second; the line now reports what the schedule carries.
 * **The permit ledger first dropped rounds below the newest merged round.** A holder of a future
   round's permit could then publish early and make every honest round block of the rounds between
   stale. The ledger is keyed by `(span, round)` and kept for two spans instead.
