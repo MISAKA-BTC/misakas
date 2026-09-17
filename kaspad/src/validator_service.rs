@@ -37,7 +37,8 @@ use kaspa_hashes::Hash64;
 use kaspa_mining::{mempool::tx::Orphan, model::tx_query::TransactionQuery};
 use kaspa_p2p_flows::flow_context::FlowContext;
 use kaspa_pq_validator_core::{
-    ATTESTATION_TX_FEE_FLOOR_SOMPI, SignedEpochStore, ValidatorKey, load_validator_seed, parse_stake_bond_ref, select_funding,
+    ATTESTATION_TX_FEE_FLOOR_SOMPI, SignedEpochStore, SignedPrecommitRecord, SignedPrecommitStore, ValidatorKey, load_validator_seed,
+    parse_stake_bond_ref, select_funding,
 };
 use kaspa_rpc_core::model::GetValidatorStatusResponse;
 use kaspa_rpc_service::service::ValidatorStatusProvider;
@@ -258,6 +259,10 @@ pub struct ValidatorService {
     /// Persistent equivocation-safety log. `None` (signing disabled) unless a key, bond,
     /// and state path are all present and the on-disk log belongs to this validator.
     signed_epochs: Mutex<Option<SignedEpochStore>>,
+    /// ADR-0128 Decision 7: the precommits this validator released, beside the attestation log
+    /// (`<state>.precommits.json`). `None` disables precommitting, as a missing attestation log
+    /// disables attesting.
+    signed_precommits: Mutex<Option<SignedPrecommitStore>>,
     /// Address-indexed UTXO lookup for funding (when `--utxoindex` is enabled); falls back
     /// to a bounded virtual-UTXO-set scan otherwise.
     utxoindex: Option<UtxoIndexProxy>,
@@ -330,6 +335,26 @@ impl ValidatorService {
             },
             _ => None,
         };
+        let signed_precommits = match (&key, bond_outpoint, &config.state_path) {
+            (Some(key), Some(outpoint), Some(path)) => {
+                let precommit_path = path.with_extension("precommits.json");
+                match SignedPrecommitStore::load_or_empty(precommit_path.clone(), key.validator_id, outpoint) {
+                    Ok(store) => {
+                        info!(
+                            "[{VALIDATOR}] precommit safety log {} ({} prior precommit(s))",
+                            precommit_path.display(),
+                            store.record_count()
+                        );
+                        Some(store)
+                    }
+                    Err(err) => {
+                        warn!("[{VALIDATOR}] {err} — precommitting disabled until resolved");
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
         // The attestation-shard tx shape is fixed, so its mass-based fee is computed once.
         let attestation_fee_sompi = key
             .as_ref()
@@ -342,6 +367,7 @@ impl ValidatorService {
             key,
             bond_outpoint,
             signed_epochs: Mutex::new(signed_epochs),
+            signed_precommits: Mutex::new(signed_precommits),
             utxoindex,
             attestation_fee_sompi,
             coinbase_maturity,
@@ -809,6 +835,40 @@ impl ValidatorService {
             return;
         };
         let held = if duty.held == PrecommitLock::default() { None } else { Some(duty.held) };
+        // ADR-0128 Decision 7: never release a precommit this validator's own log contradicts. The
+        // duty is re-offered until the chain counts it, and a reorg between two offers can move the
+        // epoch's anchor or the held lock — signing the new one would be evidence against this bond.
+        // A new vote is made durable before it is signed.
+        let record = SignedPrecommitRecord {
+            epoch,
+            target_hash,
+            target_daa_score,
+            locked_epoch: duty.held.epoch,
+            locked_hash: duty.held.anchor,
+        };
+        {
+            let mut guard = self.signed_precommits.lock().unwrap();
+            let Some(store) = guard.as_mut() else {
+                warn!("[{VALIDATOR}] precommit: no precommit safety log (set a state path); refusing to sign epoch {epoch}");
+                return;
+            };
+            match store.check(&record) {
+                SignedEpochCheckOutcome::Block => {
+                    warn!(
+                        "[{VALIDATOR}] precommit: epoch {epoch} on anchor {target_hash} (lock epoch {}) contradicts a precommit this validator already released; refusing to sign",
+                        duty.held.epoch
+                    );
+                    return;
+                }
+                SignedEpochCheckOutcome::AllowRebroadcast => {}
+                SignedEpochCheckOutcome::Allow => {
+                    if let Err(err) = store.record_and_flush(record) {
+                        warn!("[{VALIDATOR}] precommit: cannot persist epoch {epoch} before signing ({err}); refusing to sign");
+                        return;
+                    }
+                }
+            }
+        }
         let precommit = match key.sign_precommit(
             &self.config.network_id,
             epoch,

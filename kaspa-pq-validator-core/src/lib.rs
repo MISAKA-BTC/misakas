@@ -1553,6 +1553,135 @@ impl SignedEpochStore {
     }
 }
 
+/// **One precommit this validator released for an epoch** (ADR-0128 Decision 7): exactly the fields
+/// `dns_finality::precommit_fault` compares — the vote and the lock it declared. The snapshot
+/// commitment and the signature bytes are not part of it: two precommits that differ only there are
+/// not a fault, and re-signing the same vote under a new commitment is how a validator follows a
+/// chain whose counted set moved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SignedPrecommitRecord {
+    pub epoch: u64,
+    pub target_hash: Hash64,
+    pub target_daa_score: u64,
+    pub locked_epoch: u64,
+    pub locked_hash: Hash64,
+}
+
+/// What signing `candidate` would prove against the precommits this validator already released.
+///
+/// * `Block` — an earlier precommit for the same epoch voted for another anchor or declared another
+///   lock (`PrecommitFault::Equivocation`); or an earlier precommit declared a different anchor at the
+///   same non-zero `locked_epoch` (`PrecommitFault::ContradictoryLock`); or this validator's own
+///   precommit for `locked_epoch` named a different anchor than the lock the candidate declares (a
+///   lock it never held — the chain it is reading is not the one it signed on).
+/// * `AllowRebroadcast` — the same vote was already released for this epoch.
+/// * `Allow` — nothing released contradicts it.
+pub fn check_signed_precommit_record(
+    records: &BTreeMap<u64, SignedPrecommitRecord>,
+    candidate: &SignedPrecommitRecord,
+) -> SignedEpochCheckOutcome {
+    let same_vote = |r: &SignedPrecommitRecord| {
+        r.target_hash == candidate.target_hash
+            && r.target_daa_score == candidate.target_daa_score
+            && r.locked_epoch == candidate.locked_epoch
+            && r.locked_hash == candidate.locked_hash
+    };
+    if let Some(previous) = records.get(&candidate.epoch) {
+        return if same_vote(previous) { SignedEpochCheckOutcome::AllowRebroadcast } else { SignedEpochCheckOutcome::Block };
+    }
+    if candidate.locked_epoch != 0 {
+        if records.values().any(|r| r.locked_epoch == candidate.locked_epoch && r.locked_hash != candidate.locked_hash) {
+            return SignedEpochCheckOutcome::Block;
+        }
+        if records.get(&candidate.locked_epoch).is_some_and(|own| own.target_hash != candidate.locked_hash) {
+            return SignedEpochCheckOutcome::Block;
+        }
+    }
+    SignedEpochCheckOutcome::Allow
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SignedPrecommitFile {
+    version: u16,
+    validator_id: Hash64,
+    bond_outpoint: TransactionOutpoint,
+    /// epoch -> the precommit released for it.
+    records: BTreeMap<u64, SignedPrecommitRecord>,
+}
+
+const SIGNED_PRECOMMIT_FILE_VERSION: u16 = 1;
+
+/// **The precommit counterpart of [`SignedEpochStore`]** (ADR-0128 Decision 7). The duty is read
+/// from the chain and a validator re-offers a due epoch until the chain counts it, so a reorg that
+/// moves an epoch's anchor between two offers would otherwise have an honest validator sign two
+/// different anchors for one epoch — `PrecommitFault::Equivocation`, its own bond burned. Consulted
+/// before signing; a new vote is recorded durably BEFORE the signature is released.
+pub struct SignedPrecommitStore {
+    path: PathBuf,
+    validator_id: Hash64,
+    bond_outpoint: TransactionOutpoint,
+    records: BTreeMap<u64, SignedPrecommitRecord>,
+}
+
+impl SignedPrecommitStore {
+    /// Load the log for `(validator_id, bond_outpoint)` from `path`, or start empty if the file is
+    /// absent. Errors if the file belongs to a different validator or bond.
+    pub fn load_or_empty(path: PathBuf, validator_id: Hash64, bond_outpoint: TransactionOutpoint) -> Result<Self, String> {
+        if !path.exists() {
+            return Ok(Self { path, validator_id, bond_outpoint, records: BTreeMap::new() });
+        }
+        let raw = fs::read_to_string(&path).map_err(|e| format!("cannot read precommit log {}: {e}", path.display()))?;
+        let file: SignedPrecommitFile =
+            serde_json::from_str(&raw).map_err(|e| format!("cannot parse precommit log {}: {e}", path.display()))?;
+        if file.validator_id != validator_id || file.bond_outpoint != bond_outpoint {
+            return Err(format!("precommit log {} belongs to a different validator/bond; refusing to use it", path.display()));
+        }
+        Ok(Self { path, validator_id, bond_outpoint, records: file.records })
+    }
+
+    /// See [`check_signed_precommit_record`].
+    pub fn check(&self, candidate: &SignedPrecommitRecord) -> SignedEpochCheckOutcome {
+        check_signed_precommit_record(&self.records, candidate)
+    }
+
+    /// Number of epochs with a released precommit.
+    pub fn record_count(&self) -> usize {
+        self.records.len()
+    }
+
+    /// Persist `record` and flush with [`SignedEpochStore::record_and_flush`]'s durability (temp
+    /// file, fsync, rename, directory fsync); the in-memory index learns the record only once it is
+    /// durable.
+    pub fn record_and_flush(&mut self, record: SignedPrecommitRecord) -> Result<(), String> {
+        let mut records = self.records.clone();
+        records.insert(record.epoch, record);
+        let file = SignedPrecommitFile {
+            version: SIGNED_PRECOMMIT_FILE_VERSION,
+            validator_id: self.validator_id,
+            bond_outpoint: self.bond_outpoint,
+            records: records.clone(),
+        };
+        let json = serde_json::to_string_pretty(&file).map_err(|e| format!("cannot serialize precommit log: {e}"))?;
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("cannot create precommit log dir {}: {e}", parent.display()))?;
+        }
+        let tmp = self.path.with_extension("json.tmp");
+        {
+            let mut f = fs::File::create(&tmp).map_err(|e| format!("cannot create precommit log tmp {}: {e}", tmp.display()))?;
+            f.write_all(json.as_bytes()).map_err(|e| format!("cannot write precommit log tmp {}: {e}", tmp.display()))?;
+            f.sync_all().map_err(|e| format!("cannot fsync precommit log tmp {}: {e}", tmp.display()))?;
+        }
+        fs::rename(&tmp, &self.path).map_err(|e| format!("cannot commit precommit log {}: {e}", self.path.display()))?;
+        if let Some(parent) = self.path.parent()
+            && let Ok(dir) = fs::File::open(parent)
+        {
+            let _ = dir.sync_all();
+        }
+        self.records = records;
+        Ok(())
+    }
+}
+
 /// On-disk shape of the per-validator PALW attempt journal (JSON). Records are a flat list —
 /// challenge keys live inside each record — so the file format owes nothing to how a map
 /// serializer renders keys; the in-memory index is rebuilt on load.
@@ -2496,6 +2625,51 @@ mod tests {
         assert_eq!(store.check(&rec), SignedEpochCheckOutcome::Allow, "a failed flush must not license a rebroadcast");
         assert_eq!(store.record_count(), 0);
         assert!(!path.exists());
+    }
+
+    /// **ADR-0128 Decision 7: an honest validator cannot sign its own precommit evidence.** A
+    /// reorg that moves an epoch's anchor between two duty offers must not produce a second anchor
+    /// for that epoch (`Equivocation`), a lock declared at an epoch must match every other lock
+    /// declared there (`ContradictoryLock`) and the anchor this validator actually precommitted for
+    /// it; the same vote re-offered — even under a different snapshot commitment, which is not part of
+    /// the record — is a rebroadcast; and the log survives a restart.
+    #[test]
+    fn signed_precommit_store_refuses_both_faults_and_survives_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("validator-precommits.json");
+        let vid = Hash64::from_bytes([0x01u8; 64]);
+        let outpoint = TransactionOutpoint::new(Hash64::from_bytes([0x02u8; 64]), 0);
+        let h = |b: u8| Hash64::from_bytes([b; 64]);
+        let vote = |epoch: u64, target: u8, locked_epoch: u64, locked: u8| SignedPrecommitRecord {
+            epoch,
+            target_hash: h(target),
+            target_daa_score: epoch * 100,
+            locked_epoch,
+            locked_hash: if locked_epoch == 0 { Hash64::default() } else { h(locked) },
+        };
+
+        let mut store = SignedPrecommitStore::load_or_empty(path.clone(), vid, outpoint).unwrap();
+        let first = vote(5, 0xa5, 0, 0);
+        assert_eq!(store.check(&first), SignedEpochCheckOutcome::Allow);
+        store.record_and_flush(first).unwrap();
+        assert_eq!(store.check(&first), SignedEpochCheckOutcome::AllowRebroadcast, "the same vote again");
+        assert_eq!(store.check(&vote(5, 0xb5, 0, 0)), SignedEpochCheckOutcome::Block, "another anchor for epoch 5");
+        assert_eq!(store.check(&vote(5, 0xa5, 4, 0xa4)), SignedEpochCheckOutcome::Block, "another lock for epoch 5");
+
+        let second = vote(6, 0xa6, 5, 0xa5);
+        assert_eq!(store.check(&second), SignedEpochCheckOutcome::Allow, "declares the lock it holds");
+        store.record_and_flush(second).unwrap();
+        assert_eq!(store.check(&vote(7, 0xa7, 5, 0xb5)), SignedEpochCheckOutcome::Block, "a different anchor at locked epoch 5");
+        assert_eq!(
+            store.check(&vote(7, 0xa7, 5, 0xa5)),
+            SignedEpochCheckOutcome::Allow,
+            "the same lock declared again is no contradiction"
+        );
+
+        let reloaded = SignedPrecommitStore::load_or_empty(path.clone(), vid, outpoint).unwrap();
+        assert_eq!(reloaded.record_count(), 2);
+        assert_eq!(reloaded.check(&vote(5, 0xb5, 0, 0)), SignedEpochCheckOutcome::Block, "the refusal survives a restart");
+        assert!(SignedPrecommitStore::load_or_empty(path, h(0x0b), outpoint).is_err(), "a foreign log is refused");
     }
 
     #[test]

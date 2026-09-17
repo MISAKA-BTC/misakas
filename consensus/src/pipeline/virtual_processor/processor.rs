@@ -1644,13 +1644,16 @@ impl VirtualStateProcessor {
                     if let Some(verdicts) = ctx.palw_round_verdicts.as_ref().filter(|v| !v.round_blocks.is_empty()) {
                         let mut carried = 0usize;
                         let mut native: Vec<kaspa_consensus_core::tx::TransactionId> = Vec::new();
-                        for entry in ctx.mergeset_acceptance_data.iter().filter(|entry| verdicts.permitted.contains(&entry.block_hash)) {
+                        for entry in ctx.mergeset_acceptance_data.iter().filter(|entry| verdicts.permitted.contains(&entry.block_hash))
+                        {
                             let txs = self.block_transactions_store.get(entry.block_hash).ok();
                             for accepted in entry.accepted_transactions.iter().filter(|tx| tx.index_within_block != 0) {
                                 carried += 1;
-                                if txs.as_ref().and_then(|txs| txs.get(accepted.index_within_block as usize)).is_some_and(|tx| {
-                                    tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE
-                                }) {
+                                if txs
+                                    .as_ref()
+                                    .and_then(|txs| txs.get(accepted.index_within_block as usize))
+                                    .is_some_and(|tx| tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE)
+                                {
                                     native.push(accepted.transaction_id);
                                 }
                             }
