@@ -1718,6 +1718,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     inflight_now: class.inflight_now,
                     share_permille: class.share_permille.unwrap_or(0),
                     no_capable_panel_voids: class.no_capable_panel_voids,
+                    reason: class.reason.clone(),
                 }
             })
             .collect();
@@ -1754,6 +1755,18 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             readiness_collateral_multiple: globals.map(|g| g.readiness_collateral_multiple).unwrap_or(0),
             classes,
             readiness,
+            classes_active: read.counts[0],
+            classes_active_limited: read.counts[1],
+            classes_probation: read.counts[2],
+            classes_prefetching: read.counts[3],
+            classes_registered: read.counts[4],
+            classes_held: read.counts[5],
+            bonds_active: read.bonds.iter().filter(|b| b.active).count() as u32,
+            bonds_with_headroom: read
+                .bonds
+                .iter()
+                .filter(|b| b.active && b.above_floor && b.free_collateral_sompi >= b.needed_collateral_sompi)
+                .count() as u32,
         })
     }
 

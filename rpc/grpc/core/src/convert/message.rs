@@ -997,6 +997,7 @@ from!(item: &kaspa_rpc_core::RpcPalwModelLifecycle, protowire::RpcPalwModelLifec
         class_id: item.class_id.clone(),
         artifact_root: item.artifact_root.clone(),
         no_capable_panel_voids: item.no_capable_panel_voids,
+        reason: item.reason.clone(),
         is_base_class: item.is_base_class,
         has_row: item.has_row,
         state: item.state.clone(),
@@ -1054,6 +1055,14 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelRegistryResponse>, protowire:
         readiness_collateral_multiple: item.readiness_collateral_multiple,
         classes: item.classes.iter().map(protowire::RpcPalwModelLifecycle::from).collect(),
         readiness: item.readiness.iter().map(protowire::RpcPalwSeatReadiness::from).collect(),
+        classes_active: item.classes_active,
+        classes_active_limited: item.classes_active_limited,
+        classes_probation: item.classes_probation,
+        classes_prefetching: item.classes_prefetching,
+        classes_registered: item.classes_registered,
+        classes_held: item.classes_held,
+        bonds_active: item.bonds_active,
+        bonds_with_headroom: item.bonds_with_headroom,
         error: None,
     }
 });
@@ -2372,6 +2381,7 @@ try_from!(item: &protowire::RpcPalwModelLifecycle, kaspa_rpc_core::RpcPalwModelL
         class_id: item.class_id.clone(),
         artifact_root: item.artifact_root.clone(),
         no_capable_panel_voids: item.no_capable_panel_voids,
+        reason: item.reason.clone(),
         is_base_class: item.is_base_class,
         has_row: item.has_row,
         state: item.state.clone(),
@@ -2429,6 +2439,14 @@ try_from!(item: &protowire::GetPalwModelRegistryResponseMessage, RpcResult<kaspa
         readiness_collateral_multiple: item.readiness_collateral_multiple,
         classes: item.classes.iter().map(kaspa_rpc_core::RpcPalwModelLifecycle::try_from).collect::<RpcResult<Vec<_>>>()?,
         readiness: item.readiness.iter().map(kaspa_rpc_core::RpcPalwSeatReadiness::try_from).collect::<RpcResult<Vec<_>>>()?,
+        classes_active: item.classes_active,
+        classes_active_limited: item.classes_active_limited,
+        classes_probation: item.classes_probation,
+        classes_prefetching: item.classes_prefetching,
+        classes_registered: item.classes_registered,
+        classes_held: item.classes_held,
+        bonds_active: item.bonds_active,
+        bonds_with_headroom: item.bonds_with_headroom,
     }
 });
 try_from!(&protowire::GetPalwRegistrationTermsRequestMessage, kaspa_rpc_core::GetPalwRegistrationTermsRequest);

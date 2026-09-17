@@ -5240,6 +5240,8 @@ pub struct RpcPalwModelLifecycle {
     pub inflight_now: u32,
     pub share_permille: u16,
     pub no_capable_panel_voids: u32,
+    /// Why the row is where it is, from its last reading — a HELD by the rule reads as one.
+    pub reason: String,
 }
 
 impl Serializer for RpcPalwModelLifecycle {
@@ -5271,6 +5273,7 @@ impl Serializer for RpcPalwModelLifecycle {
         store!(u32, &self.inflight_now, writer)?;
         store!(u16, &self.share_permille, writer)?;
         store!(u32, &self.no_capable_panel_voids, writer)?;
+        store!(String, &self.reason, writer)?;
         Ok(())
     }
 }
@@ -5305,6 +5308,7 @@ impl Deserializer for RpcPalwModelLifecycle {
             inflight_now: load!(u32, reader)?,
             share_permille: load!(u16, reader)?,
             no_capable_panel_voids: load!(u32, reader)?,
+            reason: load!(String, reader)?,
         })
     }
 }
@@ -5381,6 +5385,17 @@ pub struct GetPalwModelRegistryResponse {
     pub readiness_collateral_multiple: u32,
     pub classes: Vec<RpcPalwModelLifecycle>,
     pub readiness: Vec<RpcPalwSeatReadiness>,
+    /// Rowed classes by state.
+    pub classes_active: u32,
+    pub classes_active_limited: u32,
+    pub classes_probation: u32,
+    pub classes_prefetching: u32,
+    pub classes_registered: u32,
+    pub classes_held: u32,
+    /// Bonds that could count as ready seats with a fresh proof (active, above the floor, with the
+    /// collateral multiple free), and every active bond.
+    pub bonds_active: u32,
+    pub bonds_with_headroom: u32,
 }
 
 impl Serializer for GetPalwModelRegistryResponse {
@@ -5404,6 +5419,14 @@ impl Serializer for GetPalwModelRegistryResponse {
         store!(u32, &self.readiness_collateral_multiple, writer)?;
         serialize!(Vec<RpcPalwModelLifecycle>, &self.classes, writer)?;
         serialize!(Vec<RpcPalwSeatReadiness>, &self.readiness, writer)?;
+        store!(u32, &self.classes_active, writer)?;
+        store!(u32, &self.classes_active_limited, writer)?;
+        store!(u32, &self.classes_probation, writer)?;
+        store!(u32, &self.classes_prefetching, writer)?;
+        store!(u32, &self.classes_registered, writer)?;
+        store!(u32, &self.classes_held, writer)?;
+        store!(u32, &self.bonds_active, writer)?;
+        store!(u32, &self.bonds_with_headroom, writer)?;
         Ok(())
     }
 }
@@ -5430,6 +5453,14 @@ impl Deserializer for GetPalwModelRegistryResponse {
             readiness_collateral_multiple: load!(u32, reader)?,
             classes: deserialize!(Vec<RpcPalwModelLifecycle>, reader)?,
             readiness: deserialize!(Vec<RpcPalwSeatReadiness>, reader)?,
+            classes_active: load!(u32, reader)?,
+            classes_active_limited: load!(u32, reader)?,
+            classes_probation: load!(u32, reader)?,
+            classes_prefetching: load!(u32, reader)?,
+            classes_registered: load!(u32, reader)?,
+            classes_held: load!(u32, reader)?,
+            bonds_active: load!(u32, reader)?,
+            bonds_with_headroom: load!(u32, reader)?,
         })
     }
 }

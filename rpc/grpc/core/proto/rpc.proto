@@ -2085,6 +2085,7 @@ message RpcPalwModelLifecycle {
   uint32 sharePermille = 24;
   string artifactRoot = 25;
   uint32 noCapablePanelVoids = 26;
+  string reason = 27;
 }
 
 message RpcPalwSeatReadiness {
@@ -2117,5 +2118,13 @@ message GetPalwModelRegistryResponseMessage {
   repeated RpcPalwModelLifecycle classes = 16;
   repeated RpcPalwSeatReadiness readiness = 17;
   uint64 graceUntilDaa = 18;
+  uint32 classesActive = 19;
+  uint32 classesActiveLimited = 20;
+  uint32 classesProbation = 21;
+  uint32 classesPrefetching = 22;
+  uint32 classesRegistered = 23;
+  uint32 classesHeld = 24;
+  uint32 bondsActive = 25;
+  uint32 bondsWithHeadroom = 26;
   RPCError error = 1000;
 }

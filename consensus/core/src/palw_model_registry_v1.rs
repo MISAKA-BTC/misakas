@@ -281,9 +281,12 @@ impl PalwModelLifecycleV1 {
     }
     /// The fraction of the derived admission the state allows, in permille: probation runs the
     /// probe claims only, limited activation a tenth, `Active` all of it.
+    /// The cadence a state admits, in permille of the derived admission: probation at a twentieth
+    /// (a class must be able to produce the claims that probe it — at zero it could never leave
+    /// probation), limited activation at a tenth, activation in full, everything else nothing.
     pub fn admission_permille(&self) -> u32 {
         match self {
-            Self::Probation { .. } => 0,
+            Self::Probation { .. } => 50,
             Self::ActiveLimited { .. } => 100,
             Self::Active => 1_000,
             _ => 0,
@@ -588,6 +591,8 @@ pub fn palw_registry_shares_v1(
     let mut given = 0u32;
     for (id, a) in &others {
         let share = if total == 0 { 0 } else { ((*a as u128).saturating_mul(room as u128) / total).min(room as u128) as u32 };
+        // A class that admits anything holds at least one permille: a target exists only for a share.
+        let share = if *a > 0 && room > 0 { share.max(1) } else { share };
         given = given.saturating_add(share);
         out.insert(*id, share as u16);
     }
@@ -609,6 +614,40 @@ pub struct PalwModelRegistryReadV1 {
     pub globals: Option<PalwRegistryGlobalsV1>,
     pub classes: Vec<PalwModelRegistryClassReadV1>,
     pub readiness: Vec<PalwSeatReadinessReadV1>,
+    pub bonds: Vec<PalwRegistryBondReadV1>,
+    /// Rowed classes by state: (active, active_limited, probation, prefetching, registered, held).
+    pub counts: [u32; 6],
+}
+
+/// Why a row is where it is, from its last boundary's reading.
+pub fn palw_lifecycle_reason_v1(row: &PalwModelLifecycleRowV1, is_base_class: bool, g: &PalwRegistryGlobalsV1) -> String {
+    if is_base_class {
+        return "base class: always active, never gated".to_string();
+    }
+    let seats = g.seat_count as u32;
+    match row.state {
+        PalwModelLifecycleV1::Registered => "no work derived from the graph (the VM boundary): never admits".to_string(),
+        PalwModelLifecycleV1::Prefetching => {
+            format!("ready {} < {} required (seats prove possession to be counted)", row.ready_seats, row.profile.required_ready_seats)
+        }
+        PalwModelLifecycleV1::Probation { probes_passed } => {
+            format!("probing: {probes_passed}/{} finals passed, {} failed since entry", g.probation_claims, row.probes_failed)
+        }
+        PalwModelLifecycleV1::ActiveLimited { stable_epochs } => {
+            format!("stable {stable_epochs}/{} spans at a tenth", g.stable_epochs)
+        }
+        PalwModelLifecycleV1::Active => "admitting in full".to_string(),
+        PalwModelLifecycleV1::Held => {
+            if row.ready_seats < seats {
+                format!(
+                    "held: ready {} < {seats} for a panel (recovers through probation once {} are ready)",
+                    row.ready_seats, row.profile.required_ready_seats
+                )
+            } else {
+                format!("held: overloaded ({} ‰ utilization at {} in flight)", row.utilization_permille, row.inflight_claims)
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -623,6 +662,22 @@ pub struct PalwModelRegistryClassReadV1 {
     pub share_permille: Option<u16>,
     /// Claims of the class voided as `NoCapablePanel` (the capacity's failure, counted).
     pub no_capable_panel_voids: u32,
+    /// Why the row is where it is, from its last reading: `ready {n} < {seats} for a panel`,
+    /// `overloaded`, `ready {n} < {required} required`, `probing {passed}/{needed}`, `stable
+    /// {n}/{needed}`, `admitting`, `base class`, `no work (VM boundary)` — for an operator to tell
+    /// a HELD by the rule from a HELD by a fault.
+    pub reason: String,
+}
+
+/// A bond as the registry sees it now: whether it could count as a ready seat if it held a fresh
+/// proof — the seat's own pre-check before it spends a fee on one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwRegistryBondReadV1 {
+    pub bond: crate::palw_state_v2::PalwBondKeyV2,
+    pub active: bool,
+    pub above_floor: bool,
+    pub free_collateral_sompi: u128,
+    pub needed_collateral_sompi: u128,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -732,6 +787,11 @@ pub fn palw_model_registry_read_v1(
             ready_seats_now: fold.map(|f| palw_model_registry_ready_seats_v1(state, params, class_id, tip_daa, f)).unwrap_or(0),
             inflight_now: palw_model_registry_inflight_v1(state, class_id),
             share_permille: state.class_share_permille(class_id),
+            reason: match (state.model_lifecycle(class_id), fold) {
+                (Some(row), Some(f)) => palw_lifecycle_reason_v1(row, *class_id == base, &f.globals),
+                (Some(_), None) => "the registry is not in force".to_string(),
+                (None, _) => "no row (registered before the fence without a carriage): never gated".to_string(),
+            },
             no_capable_panel_voids: state
                 .claims_iter()
                 .filter(|(_, c)| {
@@ -762,6 +822,37 @@ pub fn palw_model_registry_read_v1(
                 .to_string(),
         })
         .collect();
+    let bonds = fold
+        .map(|f| {
+            let floor = params.min_collateral_sompi();
+            let needed = (floor as u128).saturating_mul(f.globals.readiness_collateral_multiple as u128);
+            state
+                .bonds_iter()
+                .map(|(key, bond)| {
+                    let held = state.reserved_exposure(key).saturating_add(state.registration_exposure(key));
+                    PalwRegistryBondReadV1 {
+                        bond: *key,
+                        active: matches!(bond.status, crate::palw_state_v2::PalwBondStatusV2::Active),
+                        above_floor: crate::palw_state_v2::palw_bond_may_take_work_v2(bond, floor),
+                        free_collateral_sompi: (bond.collateral as u128).saturating_sub(bond.slashed as u128).saturating_sub(held),
+                        needed_collateral_sompi: needed,
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut counts = [0u32; 6];
+    for (_, row) in state.model_lifecycles_iter() {
+        let slot = match row.state {
+            PalwModelLifecycleV1::Active => 0,
+            PalwModelLifecycleV1::ActiveLimited { .. } => 1,
+            PalwModelLifecycleV1::Probation { .. } => 2,
+            PalwModelLifecycleV1::Prefetching => 3,
+            PalwModelLifecycleV1::Registered => 4,
+            PalwModelLifecycleV1::Held => 5,
+        };
+        counts[slot] += 1;
+    }
     PalwModelRegistryReadV1 {
         tip_daa,
         fence_daa,
@@ -771,6 +862,8 @@ pub fn palw_model_registry_read_v1(
         globals: fold.map(|f| f.globals),
         classes,
         readiness,
+        bonds,
+        counts,
     }
 }
 
@@ -946,7 +1039,10 @@ mod tests {
         assert_eq!(s, Prefetching, "six ready seats are not the seven the profile needs");
         s = palw_lifecycle_step_v1(s, &calm(7), &k, &G);
         assert_eq!(s, Probation { probes_passed: 0 });
-        assert!(!s.admits_claims() || s.admission_permille() == 0, "probation runs probes, not admission");
+        assert!(
+            !s.admits_claims() || s.admission_permille() == 50,
+            "probation admits a twentieth: the claims that probe it must exist"
+        );
         s = palw_lifecycle_step_v1(s, &PalwLifecycleObservationV1 { probes_passed_this_span: 4, ..calm(7) }, &k, &G);
         s = palw_lifecycle_step_v1(
             s,

@@ -17518,7 +17518,10 @@ pub(crate) mod tests {
             let kimi = s6.model_lifecycle(&kimi_id()).unwrap();
             assert_eq!((kimi.state, kimi.ready_seats), (PalwModelLifecycleV1::Probation { probes_passed: 0 }, 7));
             assert_eq!(kimi.since_span, 12);
-            assert_eq!(s6.class_shares.get(&kimi_id()).copied(), Some(0), "probation admits at zero cadence: no share yet");
+            assert!(
+                s6.class_shares.get(&kimi_id()).copied().unwrap_or(0) >= 1,
+                "probation admits at a twentieth: at least the grant floor"
+            );
             // A proof for a span neither current nor just closed is refused.
             let stale = step(&s6, &p, &ctx(7, 121, 7), &[proof(&operands, bond_key(2), 9)], None, Some(f.clone()));
             assert!(matches!(stale, Err(PalwStateV2Error::ReadinessProofRefused(_))));
@@ -17658,8 +17661,8 @@ pub(crate) mod tests {
             let f = fold(kimi_work());
             let (s1, _) = step(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &network(root), None, Some(f.clone())).unwrap();
             let object = proof(&operands, bond_key(2), 10);
-            let (s2, d2) = step(&s1, &p, &ctx(2, 101, 2), &[object.clone()], None, Some(f.clone())).unwrap();
-            let (s3, _) = step(&s2, &p, &ctx(3, 102, 3), &[object.clone()], None, Some(f.clone())).unwrap();
+            let (s2, d2) = step(&s1, &p, &ctx(2, 101, 2), std::slice::from_ref(&object), None, Some(f.clone())).unwrap();
+            let (s3, _) = step(&s2, &p, &ctx(3, 102, 3), std::slice::from_ref(&object), None, Some(f.clone())).unwrap();
             assert_eq!(s3.seat_readiness_iter().count(), 1, "one row, however many times the span's proof lands");
             assert_eq!(s3.seat_readiness(&bond_key(2), &kimi_id()).unwrap().proved_daa, 102, "the latest landing is the row");
             let replayed = step(&s3, &p, &ctx(4, 125, 4), &[object], None, Some(f.clone()));
@@ -17699,6 +17702,157 @@ pub(crate) mod tests {
                 assert_eq!(shares.values().map(|s| *s as u32).sum::<u32>(), 1_000, "{rows:?}");
                 assert!(shares[&base] >= 300);
             }
+        }
+
+        /// **The inflight invariant** (ADR-0135 P3): the registry never counts — `inflight` is the
+        /// number of the class's attempt claims alive in the state at every reading — so a `Final`, a
+        /// void, a timeout and a revert need no decrement. A fixed-seed walk over accept / bind /
+        /// licence / final / bind-timeout / revert checks the reading against the claims after every
+        /// block, and a probation class's share is never below the grant floor.
+        #[test]
+        fn adr0135_inflight_is_read_off_the_claims_after_every_block_and_every_revert() {
+            use crate::palw_model_registry_v1::palw_model_registry_inflight_v1;
+            let p = params();
+            let (operands, root) = inventory();
+            let f = fold(kimi_work());
+            let s5 = kimi_with_a_final(&p, root);
+            let proofs: Vec<PalwConsensusObjectV2> = (2..=8).map(|n| proof(&operands, bond_key(n), 12)).collect();
+            let (s6, _) = step(&s5, &p, &ctx(6, 125, 6), &proofs, None, Some(f.clone())).unwrap();
+            let (mut state, _) = step(&s6, &p, &ctx(7, 130, 7), &[], None, Some(f.clone())).unwrap();
+            assert_eq!(state.model_lifecycle(&kimi_id()).unwrap().state, PalwModelLifecycleV1::Active);
+            let live = |s: &PalwChainStateV2| {
+                s.claims_iter()
+                    .filter(|(_, c)| {
+                        c.class_id == kimi_id() && matches!(c.source, PalwClaimSourceV2::Attempt) && !c.phase.is_terminal()
+                    })
+                    .count() as u32
+            };
+            let mut x: u64 = 0xD1B5_4A32_D192_ED03;
+            let mut daa = 130u64;
+            let mut block = 100u64;
+            let mut open: Vec<(Hash64, u8)> = Vec::new(); // (claim, stage 0 provisional, 1 bound, 2 licensed)
+            let mut nonce = 10u64;
+            for _ in 0..60 {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                daa += 1 + (x % 3);
+                block += 1;
+                let parent = state.clone();
+                let action = x % 5;
+                let result = match action {
+                    0 => {
+                        nonce += 1;
+                        let env = kimi_attempt(nonce, root);
+                        let r = step(&parent, &p, &ctx(block, daa, block), &[], Some(&env), Some(f.clone()));
+                        if r.is_ok() {
+                            open.push((attempt_id_v2(&env.attempt), 0));
+                        }
+                        r
+                    }
+                    1 if open.iter().any(|(_, st)| *st == 0) => {
+                        let (id, _) = *open.iter().find(|(_, st)| *st == 0).unwrap();
+                        let seats = vec![PalwPanelSeatV2 { bond: bond_key(2), operator_id: op_id(22) }];
+                        let r = step(
+                            &parent,
+                            &p,
+                            &ctx(block, daa, block),
+                            &[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h64(77), seats }],
+                            None,
+                            Some(f.clone()),
+                        );
+                        if r.is_ok() {
+                            for e in open.iter_mut().filter(|(c, _)| *c == id) {
+                                e.1 = 1;
+                            }
+                        }
+                        r
+                    }
+                    2 if open.iter().any(|(_, st)| *st == 1) => {
+                        let (id, _) = *open.iter().find(|(_, st)| *st == 1).unwrap();
+                        let r = step(
+                            &parent,
+                            &p,
+                            &ctx(block, daa, block),
+                            &[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts: seat_says(true) }],
+                            None,
+                            Some(f.clone()),
+                        );
+                        if r.is_ok() {
+                            for e in open.iter_mut().filter(|(c, _)| *c == id) {
+                                e.1 = 2;
+                            }
+                        }
+                        r
+                    }
+                    _ => step(&parent, &p, &ctx(block, daa, block), &[], None, Some(f.clone())),
+                };
+                let (next, delta) = match result {
+                    Ok(pair) => pair,
+                    Err(PalwStateV2Error::ClassInflightCapped { .. }) | Err(PalwStateV2Error::ClassNotAdmitting { .. }) => {
+                        // The gate held: the reading it read must be the live count.
+                        assert_eq!(palw_model_registry_inflight_v1(&parent, &kimi_id()), live(&parent));
+                        open.pop();
+                        continue;
+                    }
+                    Err(PalwStateV2Error::WrongPhase { .. }) | Err(PalwStateV2Error::MissingClaim(_)) => {
+                        // The claim the walk picked left flight in the same block's sweep (a bind
+                        // timeout): fold the block empty instead and let the reading follow.
+                        step(&parent, &p, &ctx(block, daa, block), &[], None, Some(f.clone())).unwrap()
+                    }
+                    Err(e) => panic!("{e:?}"),
+                };
+                assert_eq!(palw_model_registry_inflight_v1(&next, &kimi_id()), live(&next), "after block {block}");
+                // Every block reverts to its parent, and the reading follows the claims back.
+                let back = revert_delta_v2(&next, &delta, &p).expect("reverts");
+                assert_eq!(back.state_root(), parent.state_root(), "block {block} reverts");
+                assert_eq!(palw_model_registry_inflight_v1(&back, &kimi_id()), live(&parent));
+                open.retain(|(c, _)| next.claim(c).is_some_and(|cl| !cl.phase.is_terminal()));
+                state = next;
+            }
+            if let Some(share) = state.class_shares.get(&kimi_id()) {
+                let row = state.model_lifecycle(&kimi_id()).unwrap();
+                if row.admission_milli > 0 {
+                    assert!(*share >= 1, "a class that admits holds at least the grant floor");
+                }
+            }
+        }
+
+        /// Two classes step in one boundary each on its own facts (ADR-0135 P5): the one with seven
+        /// ready seats goes to probation, the one with none stays prefetching, and the base class
+        /// holds the table.
+        #[test]
+        fn adr0135_two_classes_step_in_one_boundary_each_on_its_own_facts() {
+            let p = params();
+            let (operands, root) = inventory();
+            let llama = h64(3);
+            let mut f = fold(kimi_work());
+            f.genesis_works.insert(llama, kimi_work());
+            let mut objects = network(root);
+            objects.push(PalwConsensusObjectV2::ClassRegistered {
+                class_id: llama,
+                artifact_root: h64(33),
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+                initial_target: u128::MAX / 2,
+                share_permille: 0,
+                activation_daa: 0,
+                admission: None,
+            });
+            let (s1, _) = step(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None, Some(f.clone())).unwrap();
+            let proofs: Vec<PalwConsensusObjectV2> = (2..=8).map(|n| proof(&operands, bond_key(n), 10)).collect();
+            let (s2, _) = step(&s1, &p, &ctx(2, 101, 2), &proofs, None, Some(f.clone())).unwrap();
+            // One boundary: Kimi (seven proofs before it) opens PREFETCHING and steps to PROBATION in the
+            // same reading; llama (no proofs) opens PREFETCHING and stays.
+            let (s3, _) = step(&s2, &p, &ctx(3, 110, 3), &[], None, Some(f.clone())).unwrap();
+            assert_eq!(s3.model_lifecycle(&kimi_id()).unwrap().state, PalwModelLifecycleV1::Probation { probes_passed: 0 });
+            assert_eq!(s3.model_lifecycle(&llama).unwrap().state, PalwModelLifecycleV1::Prefetching, "no proofs for llama");
+            let (s4, _) = step(&s3, &p, &ctx(4, 120, 4), &[], None, Some(f.clone())).unwrap();
+            assert_eq!(s4.model_lifecycle(&kimi_id()).unwrap().state, PalwModelLifecycleV1::Probation { probes_passed: 0 });
+            assert_eq!(s4.model_lifecycle(&llama).unwrap().state, PalwModelLifecycleV1::Prefetching);
+            assert_eq!(s4.class_shares.values().map(|s| *s as u32).sum::<u32>(), 1000);
+            assert!(s4.class_shares.get(&kimi_id()).copied().unwrap_or(0) >= 1, "probation admits at a twentieth: a share exists");
+            assert_eq!(s4.class_shares.get(&llama).copied(), Some(0), "prefetching admits nothing");
         }
 
         #[test]

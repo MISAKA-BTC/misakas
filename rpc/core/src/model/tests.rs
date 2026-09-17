@@ -1865,6 +1865,7 @@ mod mockery {
                 inflight_now: mock(),
                 share_permille: mock(),
                 no_capable_panel_voids: mock(),
+                reason: "admitting in full".to_string(),
             }
         }
     }
@@ -1909,6 +1910,14 @@ mod mockery {
                 readiness_collateral_multiple: mock(),
                 classes: mock(),
                 readiness: mock(),
+                classes_active: mock(),
+                classes_active_limited: mock(),
+                classes_probation: mock(),
+                classes_prefetching: mock(),
+                classes_registered: mock(),
+                classes_held: mock(),
+                bonds_active: mock(),
+                bonds_with_headroom: mock(),
             }
         }
     }

@@ -727,13 +727,24 @@ impl PalwPanelService {
     /// against the class's registered artifact locally before it is signed, and is signed by the
     /// bond's key. **Fail-closed**: a class this node holds no artifact for, or holds under a
     /// different root, gets no proof and is named once in the log — the node is not a seat for it.
-    fn readiness_duties(&self, session: &kaspa_consensusmanager::ConsensusProxy, current_daa: u64) -> Vec<PalwConsensusObjectV2> {
+    fn readiness_duties(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        current_daa: u64,
+        synced: bool,
+    ) -> Vec<PalwConsensusObjectV2> {
         use kaspa_consensus_core::palw_model_registry_v1::{
             PALW_READINESS_OPENING_MAX_BYTES_V1, PALW_SEAT_READINESS_V1_MLDSA87_CONTEXT, palw_readiness_challenge_seed_v1,
             palw_readiness_duty_due_v1, palw_readiness_window_v1, palw_seat_readiness_message_v1,
         };
         let Some(bond) = self.bond else { return Vec::new() };
         if self.keypair.is_none() {
+            return Vec::new();
+        }
+        // A seat that is not participating normally (IBD running, not near the tip) proves nothing:
+        // its proof would name a span it cannot see the end of, and a seat that cannot verify is not
+        // ready whatever it holds.
+        if self.flow_context.is_ibd_running() || !synced {
             return Vec::new();
         }
         {
@@ -750,6 +761,30 @@ impl PalwPanelService {
         }
         let span_now = current_daa / read.span_daa;
         let bond_key = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(bond);
+        // The bond's own standing first: inactive, below the floor or without the readiness
+        // multiple of free collateral, a proof would land and count for nothing — no fee is spent.
+        match read.bonds.iter().find(|b| b.bond == bond_key) {
+            Some(b) if b.active && b.above_floor && b.free_collateral_sompi >= b.needed_collateral_sompi => {}
+            Some(b) => {
+                self.readiness_note(
+                    Hash64::default(),
+                    format!(
+                        "no proofs — this bond {} (free {} sompi, {} needed)",
+                        if !b.active {
+                            "is not active"
+                        } else if !b.above_floor {
+                            "is below the floor"
+                        } else {
+                            "lacks the collateral multiple"
+                        },
+                        b.free_collateral_sompi,
+                        b.needed_collateral_sompi
+                    ),
+                );
+                return Vec::new();
+            }
+            None => return Vec::new(),
+        }
         let bond_bytes = borsh::to_vec(&bond_key).expect("a bond key is borsh-serializable");
         let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             self.consensus_config.params.net.to_string().as_bytes(),
@@ -4938,7 +4973,8 @@ impl PalwPanelService {
                     }
                 }
                 // ADR-0135: this seat's possession proofs, when the registry is in force and one is due.
-                for object in self.readiness_duties(&session, current_daa) {
+                let synced_for_proofs = self.flow_context.is_nearly_synced(&session).await;
+                for object in self.readiness_duties(&session, current_daa, synced_for_proofs) {
                     let PalwConsensusObjectV2::SeatReadinessProved { class_id, span, .. } = &object else { continue };
                     let (class_id, span) = (*class_id, *span);
                     let Some((funding_outpoint, funding_entry)) = funding.clone().filter(|_| inflight < MAX_INFLIGHT_CARRIERS) else {

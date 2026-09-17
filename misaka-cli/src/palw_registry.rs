@@ -24,7 +24,11 @@ pub(crate) fn render(r: &GetPalwModelRegistryResponse) -> String {
         if r.active { "ACTIVE" } else { "not in force" },
         r.tip_daa,
         r.span_daa,
-        if r.active && r.tip_daa < r.grace_until_daa { format!(" · activation grace until DAA {}", r.grace_until_daa) } else { String::new() }
+        if r.active && r.tip_daa < r.grace_until_daa {
+            format!(" · activation grace until DAA {}", r.grace_until_daa)
+        } else {
+            String::new()
+        }
     ));
     if r.active {
         out.push_str(&format!(
@@ -44,9 +48,18 @@ pub(crate) fn render(r: &GetPalwModelRegistryResponse) -> String {
         "  {:<14} {:<15} {:>6} {:>7} {:>8} {:>5} {:>6} {:>6} {:>8} {:>8} {:>8} {:>6}\n",
         "class", "state", "since", "window", "prefetch", "cap", "need", "ready", "inflight", "util‰", "adm‰", "share"
     ));
+    for c in r.classes.iter().filter(|c| c.has_row) {
+        out.push_str(&format!("    {} — {}\n", short(&c.class_id), c.reason));
+    }
     let voids: u32 = r.classes.iter().map(|c| c.no_capable_panel_voids).sum();
     if voids > 0 {
         out.push_str(&format!("  ({voids} claims voided as NoCapablePanel across the classes)\n"));
+    }
+    if r.active {
+        out.push_str(&format!(
+            "  classes: {} active · {} limited · {} probation · {} prefetching · {} registered · {} held · bonds: {} active, {} with headroom for a seat\n",
+            r.classes_active, r.classes_active_limited, r.classes_probation, r.classes_prefetching, r.classes_registered, r.classes_held, r.bonds_active, r.bonds_with_headroom
+        ));
     }
     for c in &r.classes {
         out.push_str(&format!(
@@ -133,6 +146,7 @@ mod tests {
                 max_inflight_claims: 9,
                 required_ready_seats: 7,
                 ready_seats_now: 3,
+                reason: "held: ready 3 < 5 for a panel (recovers through probation once 7 are ready)".to_string(),
                 ..Default::default()
             }],
             readiness: vec![RpcPalwSeatReadiness {
@@ -146,6 +160,12 @@ mod tests {
             ..Default::default()
         };
         let text = render(&live);
-        assert!(text.contains("scheduled at DAA 6500") && text.contains("Held") && text.contains("not ready: stale"), "{text}");
+        assert!(
+            text.contains("scheduled at DAA 6500")
+                && text.contains("Held")
+                && text.contains("not ready: stale")
+                && text.contains("recovers through probation"),
+            "{text}"
+        );
     }
 }
