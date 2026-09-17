@@ -1,7 +1,8 @@
 # ADR-0135 — A model is data: the permissionless registry derives its profile, proves its panel, and walks its lifecycle
 
-* Status: **PROPOSED 2026-09-17; the rule set built in shadow the same day** (`palw_model_registry_v1.rs`). No
-  consensus rule, parameter or fingerprint moves; this is the content of **Protocol Upgrade A** (§6).
+* Status: **PROPOSED 2026-09-17; the rule set built in shadow the same day, and Protocol Upgrade A built behind a
+  dormant fence the same evening** (`palw_model_registry_v1.rs`, `palw_state_v2.rs`; §7). No shipped preset arms
+  it: no parameter or fingerprint moves until the operator schedules `palw_model_registry` at a height.
 * Operator's direction, in the operator's words: "誰でもモデルを chain へ登録でき、検証時間・必要 Panel 数・claim 上限・
   報酬係数までプロトコルが自動計算し、条件を満たしたら自動 activate"; "モデルをコードではなくデータとして追加する";
   "実測値を consensus parameter にしない"; "Panel 側も permissionless — 自己申告だけではダメ"; "モデル登録から
@@ -152,16 +153,73 @@ now      ADR-0132 / 0133 / 0135 in shadow: the CLI prints each class's derived p
 after    Kimi, Llama, a new mixture, a 100B model: a manifest and a bond, no fork
 ```
 
-## 7. What is built (shadow)
+## 7. What is built — Protocol Upgrade A, behind a dormant fence (2026-09-17)
 
-`consensus/core/src/palw_model_registry_v1.rs`: the manifest and its verdict, the derived work, the globals, the
-six derivations, the readiness evidence and its predicate, the lifecycle and its step, the share-free admission
-and the single lottery's shares. Tests: the profile is derived from work alone (deterministic; the dense tier,
-the hybrid, a Kimi-class and a 10 T graph); the manifest verdict and the VM boundary; readiness is evidence, not
-a declaration (root, chunks, participation, collateral, a fresh probe); the lifecycle walks on facts and a held
-class stops only itself (with the real lane snapshot); shares follow admission and no one sets them. Not built:
-the on-chain manifest transaction and bond, the possession proof, the probe claim, the fold-side gate and the
-fence — Protocol Upgrade A's own work.
+**The fence.** `Params::palw_model_registry: Option<ForkActivation>` — `None` on every shipped preset
+(the t11 fingerprint `135b6ee0…` does not move); hashed `Some`-only; the fork-id gate names it when
+armed; `validate_palw_v2` refuses it without `palw_panel_economy` and `palw_execution_lane` at or
+below its height (it reads seat exposure and steps at the lane's span boundaries). Arming it is a
+height in one constant; the pins are `adr0135_the_registry_fence_is_dormant_everywhere_and_arms_by_height`.
+
+**On chain, past the fence** (`palw_state_v2.rs`, ADR-0135's rows in their own guarded root
+sub-block and carriage tail `0xAA`, delta entries 51/52):
+
+* `model_lifecycles: class → PalwModelLifecycleRowV1 { state, work, profile, since_span, probes, the
+  last boundary's reading, admission }` and `seat_readiness: (bond, class) → PalwSeatReadinessRowV1
+  { proved_daa, proved_span, leaf_index }`.
+* **Decision 1–3 — the profile from the graph.** `ClassRegistered` with its carriage opens the row:
+  `palw_model_work_from_carriage_v1(profile, canonical)` reads the verification compute and the
+  draw compute off the graph with ADR-0131's cost table (the artifact bytes are an estimate from the
+  dense weights until a manifest carries them — V2); the class starts `PREFETCHING`, or `REGISTERED`
+  where the graph derives no work (the VM boundary). The classes registered before the fence get
+  their work from the bundle's genesis registrations (`PalwModelRegistryFoldV1::genesis_works`, the
+  same on every node because the bundle is fingerprinted); a class registered before the fence
+  without a carriage keeps no row and is never gated. The profile is re-derived at every boundary
+  from the stored work and the class's live target (`palw_lifecycle_profile_v1`).
+* **Decision 4 — readiness is a possession proof.** `SeatReadinessProved { bond, class_id, span,
+  opening, signature }`: one leaf of the registered artifact root, at an index inside the window the
+  (class, bond, span) challenge names (`palw_readiness_challenge_seed_v1`, eight consecutive leaves),
+  the span current or just closed, signed by the bond's key (checked at acceptance like a
+  capability declaration; below the fence refused). A seat is ready for a class while its proof is
+  younger than 30 spans, it is active and above the floor, and its free collateral covers three
+  times the network's floor (`palw_model_registry_ready_seats_v1`). The probe half is the class's
+  own claims: a `Final` passes, a court fraud or a withholding fails (`note_model_probe`).
+* **Decision 6 — the lifecycle at the boundary.** `step_model_registry` at every span boundary
+  (before the lane's rotation): rows open, every row is observed (ready seats, claims in flight,
+  the span's probes, utilization = inflight × seats / (ready × window)) and stepped by
+  `palw_lifecycle_step_v1`; the base class is `ACTIVE` and never gated.
+* **The class-local gate** (ADR-0132 F1/F2). `apply_attempt` refuses a claim of a class whose row
+  does not admit (`ClassNotAdmitting`) or is at its inflight cap (`ClassInflightCapped`); a bind
+  window that closes with fewer ready seats than a panel voids as `NoCapablePanel` (void reason 4)
+  rather than `BindTimeout`; the draw and the fold's panel validation judge by evidence
+  (`palw_bond_may_judge_class_v4`, `PalwPanelDrawPolicyV1::readiness`): under the registry a seat
+  needs a fresh proof, not a declaration, and the base class stays open to every bond.
+* **Decision 5 — shares from admission.** At every boundary the shares of the rowed classes are
+  written from `admission_claims_per_span × admission_permille(state)` over the keys the table
+  already holds — the base class holding what is left and never below its floor, a class
+  registered before the fence without a row keeping the share it has. `PROBATION` admits at zero
+  cadence, `ACTIVE_LIMITED` at a tenth, `ACTIVE` in full.
+
+**Read.** Op 186 `getPalwModelRegistry` (`misaka palw registry`): the fence, the globals, every
+class's row and its reading now, every proof and whether it is fresh.
+
+**Tests** (`palw_state_v2::tests::adr0135`, `palw_model_registry_v1::tests`, the fence pin): the
+boundary opens rows from the genesis work and the base class is active (and the delta reverts, the
+carriage round-trips, the root moves only with rows, the fold without the fence is byte-identical);
+readiness is a possession proof — a wrong leaf, a forged leaf, a stale span and the dormant fence
+are refused, six ready seats leave a class prefetching and the seventh admits it to probation, a
+thin bond does not count; a held class takes no claims while the base class keeps producing; the
+inflight cap refuses the claim after the cap; `NoCapablePanel` names the void and the class recovers
+through probation, and an operator outage (every proof aged out) holds it alone; the discriminant
+pins (void reason 4, the object as the enum's last variant, delta entries 51 and 52).
+
+**Not built, stated.** The node's own proof submitter (a panel opening the challenged leaf from its
+loaded artifact every few spans) and the producer's pre-check of a class's state before drawing —
+node-side, no rule; the manifest's own `artifact_bytes` and a manifest transaction distinct from
+today's `ClassRegistered` (the carriage already carries the graph and the canonical job, which is
+what the profile reads); the possession proof's width (one leaf a proof, V1); a held class's
+existing claims run to their end untouched. The PALW state sync path (`PalwStateSyncV2`, unused by
+the live node) carries no lane and no registry.
 
 ## 8. Number hygiene
 
