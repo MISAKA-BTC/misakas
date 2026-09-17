@@ -7,6 +7,7 @@ use super::{
     errors::{TxResult, TxRuleError},
 };
 use crate::constants::LOCK_TIME_THRESHOLD;
+use kaspa_consensus_core::subnets::{SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER};
 use kaspa_consensus_core::tx::Transaction;
 
 pub(crate) enum LockTimeType {
@@ -55,15 +56,19 @@ impl TransactionValidator {
     }
 
     /// **ADR-0126: past the validator overlay's retirement no block carries an overlay transaction** —
-    /// a stake bond, an attestation, an unbond, slashing evidence, a precommit or a compute object.
-    /// Nothing past the fence would read one, and a transaction that pays a fee to do nothing is a
-    /// transaction nobody should be able to buy. Below the fence, and on every network that has not
-    /// scheduled it, this returns on its first line.
+    /// a stake bond, an attestation, an unbond, slashing evidence, a precommit or a compute object,
+    /// nor the removed token overlay's transfer (0x30) or burn (0x31). Nothing past the fence would
+    /// read one, and a transaction that pays a fee to do nothing is a transaction nobody should be
+    /// able to buy. Below the fence, and on every network that has not scheduled it, this returns on
+    /// its first line.
     fn check_retired_overlay_transaction_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
         if !self.palw_validator_overlay_retirement.is_some_and(|fence| fence.is_active(ctx_daa_score)) {
             return Ok(());
         }
-        if kaspa_consensus_core::dns_finality::dns_tx_kind(&tx.subnetwork_id).is_some() {
+        if kaspa_consensus_core::dns_finality::dns_tx_kind(&tx.subnetwork_id).is_some()
+            || tx.subnetwork_id == SUBNETWORK_ID_TOKEN_TRANSFER
+            || tx.subnetwork_id == SUBNETWORK_ID_TOKEN_BURN
+        {
             return Err(TxRuleError::SubnetworksDisabled(tx.subnetwork_id.clone()));
         }
         Ok(())
@@ -162,5 +167,116 @@ impl TransactionValidator {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        params::MAINNET_PARAMS,
+        processes::transaction_validator::{TransactionValidator, errors::TxRuleError},
+    };
+    use kaspa_consensus_core::{
+        config::params::ForkActivation,
+        dns_finality::{STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN},
+        subnets::{
+            SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_STAKE_BOND, SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER, SubnetworkId,
+        },
+        token::{TOK_ASSET_ID, TOKEN_PAYLOAD_VERSION_V1, TokenBurnPayload, TokenTransferPayload},
+        tx::{ScriptPublicKey, Transaction, TransactionId, TransactionInput, TransactionOutpoint, TransactionOutput, scriptvec},
+    };
+    use kaspa_core::assert_match;
+    use kaspa_hashes::Hash64;
+
+    /// **ADR-0126 retires the token subnetworks with the rest of the overlay.** Isolation admits a
+    /// well-formed transfer and burn on every network (the shape check is live everywhere), and
+    /// below the retirement the header-context door passes them exactly as it always did; at the
+    /// retirement's own height both are refused as disabled subnetworks, like a stake bond, while a
+    /// native transaction still passes.
+    #[test]
+    fn the_retirement_refuses_the_token_subnetworks_from_its_height() {
+        const RETIRE: u64 = 1_000;
+        let params = MAINNET_PARAMS.clone();
+        let tv = TransactionValidator::new_for_tests(
+            params.max_tx_inputs,
+            params.max_tx_outputs,
+            params.max_signature_script_len,
+            params.max_script_public_key_len,
+            params.coinbase_payload_script_public_key_max_len,
+            params.coinbase_maturity(),
+            params.mergeset_size_limit(),
+            Default::default(),
+        )
+        .with_validator_overlay_retirement(Some(ForkActivation::new(RETIRE)));
+        let carrier = |subnetwork_id: SubnetworkId, payload: Vec<u8>| {
+            Transaction::new(
+                0,
+                vec![TransactionInput {
+                    previous_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x11u8; 64]), index: 0 },
+                    signature_script: vec![0u8; 64],
+                    sequence: u64::MAX,
+                    sig_op_count: 0,
+                }],
+                vec![TransactionOutput {
+                    value: 0x2123e300,
+                    script_public_key: ScriptPublicKey::new(0, scriptvec!(0x76, 0xa9, 0x14)),
+                }],
+                0,
+                subnetwork_id,
+                0,
+                payload,
+            )
+        };
+        let transfer = carrier(
+            SUBNETWORK_ID_TOKEN_TRANSFER,
+            borsh::to_vec(&TokenTransferPayload {
+                version: TOKEN_PAYLOAD_VERSION_V1,
+                asset_id: TOK_ASSET_ID,
+                from_pubkey: vec![0x11u8; STAKE_VALIDATOR_PUBKEY_LEN],
+                to: Hash64::from_bytes([0x22u8; 64]),
+                amount: 1_000,
+                nonce: 1,
+                signature: vec![0x33u8; STAKE_ATTESTATION_SIG_LEN],
+            })
+            .unwrap(),
+        );
+        let burn = carrier(
+            SUBNETWORK_ID_TOKEN_BURN,
+            borsh::to_vec(&TokenBurnPayload {
+                version: TOKEN_PAYLOAD_VERSION_V1,
+                asset_id: TOK_ASSET_ID,
+                owner_pubkey: vec![0x11u8; STAKE_VALIDATOR_PUBKEY_LEN],
+                amount: 500,
+                nonce: 1,
+                signature: vec![0x33u8; STAKE_ATTESTATION_SIG_LEN],
+            })
+            .unwrap(),
+        );
+
+        for token_tx in [&transfer, &burn] {
+            assert_match!(tv.validate_tx_in_isolation(token_tx), Ok(()));
+            assert_match!(tv.validate_tx_in_header_context_with_args(token_tx, 0, 0), Ok(()));
+            assert_match!(tv.validate_tx_in_header_context_with_args(token_tx, RETIRE - 1, 0), Ok(()));
+            assert_match!(
+                tv.validate_tx_in_header_context_with_args(token_tx, RETIRE, 0),
+                Err(TxRuleError::SubnetworksDisabled(id)) if id == token_tx.subnetwork_id
+            );
+            assert_match!(
+                tv.validate_tx_in_header_context_with_args(token_tx, RETIRE + 1, 0),
+                Err(TxRuleError::SubnetworksDisabled(_))
+            );
+        }
+
+        // The token ids share the overlay's rule: a stake bond is refused from the same height, and a
+        // native transaction is not.
+        let bond = carrier(SUBNETWORK_ID_STAKE_BOND, vec![]);
+        assert_match!(tv.validate_tx_in_header_context_with_args(&bond, RETIRE - 1, 0), Ok(()));
+        assert_match!(tv.validate_tx_in_header_context_with_args(&bond, RETIRE, 0), Err(TxRuleError::SubnetworksDisabled(_)));
+        let native = carrier(SUBNETWORK_ID_NATIVE, vec![]);
+        assert_match!(tv.validate_tx_in_header_context_with_args(&native, RETIRE, 0), Ok(()));
+
+        // A network that has not scheduled the retirement admits the token ids at every height.
+        let unscheduled = tv.clone().with_validator_overlay_retirement(None);
+        assert_match!(unscheduled.validate_tx_in_header_context_with_args(&transfer, u64::MAX - 1, 0), Ok(()));
     }
 }

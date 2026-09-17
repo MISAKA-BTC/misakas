@@ -305,31 +305,22 @@ pub enum DatabaseStorePrefixes {
     /// payload.
     DnsFinalityCertificates = 244,
 
-    // ---- MISAKA Compute Token Program (design v0.1, Phase A) ----
-    /// Keyed by `(asset_id, owner)` (8 LE bytes + 64-byte overlay id): one
-    /// [`TokenAccount`] `{balance, nonce}` ledger row per holder (design §4.2). Inert (never
-    /// written) while every preset's token fence is `u64::MAX`; the acceptance-time application
-    /// and its reorg-rollback strategy land with the processor wiring (design §9.5).
+    // ---- MISAKA Compute Token Program (design v0.1, Phase A) — RESERVED ----
+    // The token overlay is removed and no code reads or writes these prefixes. They were never
+    // written on a shipped network (every preset's token fence is `u64::MAX`); an existing
+    // database may still hold the schema-version marker. The values stay reserved so no future
+    // store reuses a prefix an old database may carry.
+    /// Reserved: the removed token ledger rows (`(asset_id, owner)` → balance/nonce).
     TokenLedger = 245,
-    /// Keyed by `u64` asset id: the asset's [`TokenSupply`] `{minted, burned}` counters, the
-    /// anchors of the §4.2 conservation invariant `Σ balance == minted − burned`.
+    /// Reserved: the removed per-asset supply counters.
     TokenSupply = 246,
-    /// Keyed by `u64` epoch: the epoch's settled [`TokenEmissionSettlement`] (budget, X(E), paid
-    /// rewards). Write-once per epoch and derived from the **finalized** credit rows
-    /// ([`Self::VltCredits`]), so a row is branch-invariant for the same reason those are —
-    /// settlement never reads an epoch a challenge or reorg could still change (design §5.3).
+    /// Reserved: the removed per-epoch emission settlements.
     TokenEmissionSettlements = 247,
-    /// Singleton `u32`: the rules the three token stores' rows were written under, mirroring
-    /// [`Self::VltCreditsSchemaVersion`] — a derivation/layout change discards and rebuilds
-    /// rather than reading old rows as final.
+    /// Reserved: the removed token stores' schema-version marker.
     TokenLedgerSchemaVersion = 248,
-    /// Singleton `u64`: the next selected-chain **index** the token ledger fold will process
-    /// (design §9.2). The fold applies accepted 0x30/0x31 ops only from chain blocks buried past
-    /// the reorg horizon, in chain order, so the ledger is an append-only fold with no undo — the
-    /// cursor is where the fold resumes.
+    /// Reserved: the removed ledger fold's selected-chain cursor.
     TokenLedgerFoldCursor = 249,
-    /// Singleton `u64`: the next epoch emission settlement will consider (design §5.3). Advances
-    /// in epoch order; a settled (or deliberately skipped) epoch is never revisited.
+    /// Reserved: the removed emission settlement cursor.
     TokenSettlementCursor = 250,
 
     // ---- MISAKA PALW chain carriage (ADR-0029, Stage 1) ----

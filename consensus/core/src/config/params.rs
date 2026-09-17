@@ -2193,6 +2193,20 @@ impl Params {
                 "the overlay's bond spend gate must be in force from the overlay's activation (the own-body gate is gone)",
             ));
         }
+        // **The token overlay is removed** — no ledger fold, emission settlement or token store is
+        // left — so a network that arms one of its fences schedules rules no code enforces. The
+        // fields stay (`DnsParams` is hashed whole into `consensus_params_id`); arming them is
+        // refused here, before a peer is dialed.
+        if let Some(dns) = self.dns_params.as_ref()
+            && (dns.tkn.tkn_shadow_activation_daa_score != u64::MAX
+                || dns.tkn.tkn_activation_daa_score != u64::MAX
+                || dns.tkn.emission_activation_epoch != u64::MAX)
+        {
+            return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
+                "the token overlay is removed: dns_params.tkn's tkn_shadow_activation_daa_score, tkn_activation_daa_score and \
+                 emission_activation_epoch must stay u64::MAX, because no code enforces an armed token program",
+            ));
+        }
         // ADR-0089 Decision 9's two preconditions: an EVM face of a market that does not exist,
         // or on a lane that is inert, is a design that has not been armed.
         if let Some(evm) = self.palw_model_evm {
@@ -12369,6 +12383,41 @@ mod consensus_params_id_tests {
             different_rules.consensus_identity_id(),
             "a real rule change must still be refused at the handshake"
         );
+    }
+
+    /// **The token overlay is removed, so a network that arms it does not start.** Its fences stay in
+    /// `DnsParams` — the struct is hashed whole into `consensus_params_id` — but nothing folds a
+    /// ledger or settles emission any more, and a fence that schedules rules no code enforces is
+    /// refused at construction rather than shipped. Each of the three fences is refused on its own,
+    /// on every preset as the node materialises it; the shipped presets leave all three dormant and
+    /// start.
+    #[test]
+    fn arming_the_removed_token_overlay_is_refused_at_startup() {
+        let nets = [MAINNET_PARAMS.net, TESTNET_PARAMS.net, TESTNET11_PARAMS.net, SIMNET_PARAMS.net, DEVNET_PARAMS.net];
+        let mut refused = 0usize;
+        for net in nets {
+            let shipped = Params::from(net);
+            shipped.validate_palw_v2().unwrap_or_else(|e| panic!("{net}: the shipped preset starts: {e}"));
+            if shipped.dns_params.is_none() {
+                continue;
+            }
+            for fence in ["tkn_shadow_activation_daa_score", "tkn_activation_daa_score", "emission_activation_epoch"] {
+                let mut armed = shipped.clone();
+                let tkn = &mut armed.dns_params.as_mut().expect("checked above").tkn;
+                match fence {
+                    "tkn_shadow_activation_daa_score" => tkn.tkn_shadow_activation_daa_score = 9_000_000,
+                    "tkn_activation_daa_score" => tkn.tkn_activation_daa_score = 9_000_000,
+                    _ => tkn.emission_activation_epoch = 0,
+                }
+                let error = armed.validate_palw_v2().expect_err(&format!("{net}: arming {fence} must not start"));
+                assert!(
+                    error.to_string().contains("the token overlay is removed"),
+                    "{net}: {fence} refused for another reason: {error}"
+                );
+                refused += 1;
+            }
+        }
+        assert!(refused >= 3, "no preset carries an overlay, so the refusal was never exercised");
     }
 
     /// **A fence that is ACTIVE AT GENESIS is a rule, not a schedule** (re-audit R-1).

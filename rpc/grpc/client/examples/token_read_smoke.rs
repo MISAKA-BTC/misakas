@@ -1,8 +1,9 @@
-//! MISAKA Compute Token Program (design §9.3) — live read-surface smoke.
+//! MISAKA Compute Token Program (design §9.3) — read-surface wire smoke.
 //!
 //! Connects to a running kaspad's gRPC listener and exercises all three token
-//! read RPCs end-to-end (client → protowire → server → consensus → token store
-//! and back). Run against the TOK devnet the e2e harness leaves behind:
+//! read RPCs end-to-end (client → protowire → server and back). The token
+//! overlay is removed, so a node answers every one with `available: false`;
+//! the ops stay for wire compatibility, which is what this round-trips:
 //!
 //! ```text
 //! cargo run --example token_read_smoke -p kaspa-grpc-client -- \
