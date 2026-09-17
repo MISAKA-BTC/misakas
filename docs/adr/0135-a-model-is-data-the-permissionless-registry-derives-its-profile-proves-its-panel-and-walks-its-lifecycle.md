@@ -215,6 +215,14 @@ registry raises mid-epoch admitted nothing until the epoch turned. The boundary 
 re-derives the current epoch's budgets (the produced counters stay); the fold test asserts Kimi's budget
 follows its admission share in the same epoch.
 
+**The seventh finding, behind the sixth:** the class registered with a share of 1 ‰ and therefore an epoch
+budget of one block; in its first epoch its producer landed seven claims against that budget, and the
+class DAA (ADR-0076, ratio-following, clamped) cut its target three epochs running to a ticket of
+3.6 × 10⁻³ a draw — hours per claim on the devnet's forwards. With the budget following the admission share
+within two DAA of the registration (the sixth finding's fix) the over-production does not recur; a share the
+registry moves does not re-seed the target, which converges over epochs as the class DAA always did. The
+drill is repeated from a fresh genesis with every fix in place.
+
 **The fence.** `Params::palw_model_registry: Option<ForkActivation>` — `None` on every shipped preset
 (the t11 fingerprint `135b6ee0…` does not move); hashed `Some`-only; the fork-id gate names it when
 armed; `validate_palw_v2` refuses it without `palw_panel_economy` and `palw_execution_lane` at or
