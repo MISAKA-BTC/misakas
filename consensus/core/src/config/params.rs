@@ -12586,6 +12586,128 @@ mod consensus_params_id_tests {
         assert!(refused >= 3, "no preset carries an overlay, so the refusal was never exercised");
     }
 
+    /// **ADR-0128 Decision 8: the BFT gate starts only where it can be counted.** On every preset as
+    /// the node materialises it: the shipped gate is `None`; a well-formed gate starts wherever the
+    /// pruning depth holds the walk and is refused, naming the walk, wherever it does not; and each
+    /// malformed number, and a network with no overlay at all, is refused for its own reason.
+    #[test]
+    fn the_bft_gate_refuses_at_startup_what_it_could_not_count() {
+        let gate = |activation| DnsBftGateV1 { activation, t_leak_daa: 5_040, reentry_final_depth_daa: 200, min_retained_validators: 4 };
+        let refused_for = |params: &Params, why: &str, what: &str| {
+            let error = params.validate_palw_v2().expect_err(&format!("{what} must not start"));
+            assert!(error.to_string().contains(why), "{what}: refused for another reason: {error}");
+        };
+        let nets = [MAINNET_PARAMS.net, TESTNET_PARAMS.net, TESTNET11_PARAMS.net, SIMNET_PARAMS.net, DEVNET_PARAMS.net];
+        let mut started = 0usize;
+        for net in nets {
+            let shipped = Params::from(net);
+            shipped.validate_palw_v2().unwrap_or_else(|e| panic!("{net}: the shipped preset starts: {e}"));
+            assert!(shipped.dns_bft_gate.is_none(), "{net}: a shipped preset armed the BFT gate");
+
+            let mut no_overlay = shipped.clone();
+            no_overlay.dns_params = None;
+            no_overlay.dns_bft_gate = Some(gate(ForkActivation::new(9_000_000)));
+            assert!(no_overlay.dns_bft_gate_fence().is_none(), "{net}: answered only where the network runs an overlay");
+            refused_for(&no_overlay, "runs no DNS overlay", &format!("{net}: a gate without an overlay"));
+
+            let Some(dns) = shipped.dns_params.clone() else { continue };
+            let walk = crate::dns_bft_v1::dns_bft_walk_blue_score_v1(&gate(ForkActivation::always()), &dns).expect("fits");
+            assert_eq!(walk, dns.stake_score_window_blue_score + 5_040 + 200 + dns.attestation_epoch_length_blue_score + dns.attestation_lag_blue_score);
+            for activation in [ForkActivation::always(), ForkActivation::new(9_000_000), ForkActivation::never()] {
+                let mut armed = shipped.clone();
+                armed.dns_bft_gate = Some(gate(activation));
+                if shipped.blockrate.pruning_depth >= walk {
+                    armed.validate_palw_v2().unwrap_or_else(|e| panic!("{net}: a well-formed gate at {activation:?} starts: {e}"));
+                    assert_eq!(armed.dns_bft_gate_fence(), Some(gate(activation)));
+                    started += 1;
+                } else {
+                    refused_for(&armed, "the pruning point would pass the evidence", &format!("{net}: a walk of {walk}"));
+                }
+                for (why, malformed) in [
+                    ("t_leak_daa is zero", DnsBftGateV1 { t_leak_daa: 0, reentry_final_depth_daa: 0, ..gate(activation) }),
+                    ("reentry_final_depth_daa is not below t_leak_daa", DnsBftGateV1 { reentry_final_depth_daa: 5_040, ..gate(activation) }),
+                    ("min_retained_validators is below four", DnsBftGateV1 { min_retained_validators: 3, ..gate(activation) }),
+                ] {
+                    let mut armed = shipped.clone();
+                    armed.dns_bft_gate = Some(malformed);
+                    refused_for(&armed, why, &format!("{net}: {malformed:?}"));
+                }
+            }
+            // The pruning-depth refusal is exact at its boundary — on a lineage whose other rules do
+            // not read the depth.
+            if !matches!(shipped.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)) {
+                let mut at_the_walk = shipped.clone();
+                at_the_walk.dns_bft_gate = Some(gate(ForkActivation::new(9_000_000)));
+                at_the_walk.blockrate.pruning_depth = walk;
+                at_the_walk.validate_palw_v2().unwrap_or_else(|e| panic!("{net}: a pruning depth equal to the walk starts: {e}"));
+                let mut one_short = at_the_walk.clone();
+                one_short.blockrate.pruning_depth = walk - 1;
+                refused_for(&one_short, "the pruning point would pass the evidence", &format!("{net}: a pruning depth one short"));
+            }
+        }
+        assert!(started > 0, "no preset could arm a well-formed gate, so its acceptance was never exercised");
+        // testnet-11 with ADR-0128 §5's planned numbers, measured on the preset as it materialises:
+        // its overlay runs at the two-minute cadence (a 30 blue-score StakeScore window, epochs and a
+        // lag of 2), so the walk is 30 + 5,040 + 200 + 2 + 2 = 5,274 against a pruning depth of
+        // 12,002 — inside it. (The ADR's prose quotes 1,500 + 5,440 = 6,940 and 12,000, which
+        // assume 100-blue-score epochs this preset does not run; the refusal reads the preset.)
+        let rc = palw_rc_shipped_params();
+        let rc_walk = crate::dns_bft_v1::dns_bft_walk_blue_score_v1(&gate(ForkActivation::new(7_001)), rc.dns_params.as_ref().unwrap());
+        assert_eq!((rc_walk, rc.blockrate.pruning_depth), (Some(5_274), 12_002), "testnet-11's walk and horizon, measured");
+        let mut armed_rc = rc.clone();
+        armed_rc.dns_bft_gate = Some(gate(ForkActivation::new(7_001)));
+        armed_rc.validate_palw_v2().expect("testnet-11 may schedule the gate with the planned numbers");
+    }
+
+    /// **ADR-0128 Decision 8: the gate is hashed Some-only, and scheduling it is a schedule.** Its
+    /// height and each of its three numbers move `consensus_params_id` and `consensus_schedule_id`;
+    /// none of them moves `consensus_identity_id` while the height has not fired (the whole option
+    /// collapses out of it), and a gate in force from genesis does, because that is a rule about
+    /// block 1. The height is on the schedule the fork id is derived from. Every shipped preset
+    /// leaves the gate `None` and writes nothing, which `shipped_presets_have_pinned_fingerprints`
+    /// pins.
+    #[test]
+    fn the_bft_gate_is_hashed_some_only_and_a_scheduled_gate_stays_a_schedule() {
+        let gate = DnsBftGateV1 {
+            activation: ForkActivation::new(9_000_000),
+            t_leak_daa: 5_040,
+            reentry_final_depth_daa: 200,
+            min_retained_validators: 4,
+        };
+        for (name, base) in [("mainnet", MAINNET_PARAMS), ("testnet-11", palw_rc_shipped_params()), ("devnet", devnet_shipped_params())] {
+            let with = |g: Option<DnsBftGateV1>| {
+                let mut p = base.clone();
+                p.dns_bft_gate = g;
+                p
+            };
+            let unset = with(None);
+            let scheduled = with(Some(gate));
+            for (what, other) in [
+                ("scheduling it", with(None)),
+                ("its height", with(Some(DnsBftGateV1 { activation: ForkActivation::new(9_000_001), ..gate }))),
+                ("t_leak_daa", with(Some(DnsBftGateV1 { t_leak_daa: 5_041, ..gate }))),
+                ("the re-entry depth", with(Some(DnsBftGateV1 { reentry_final_depth_daa: 201, ..gate }))),
+                ("the validator floor", with(Some(DnsBftGateV1 { min_retained_validators: 5, ..gate }))),
+            ] {
+                assert_ne!(scheduled.consensus_params_id(), other.consensus_params_id(), "{name}: {what} must move the printed fingerprint");
+                assert_ne!(scheduled.consensus_schedule_id(), other.consensus_schedule_id(), "{name}: {what} must move the schedule id");
+                assert_eq!(
+                    scheduled.consensus_identity_id(),
+                    other.consensus_identity_id(),
+                    "{name}: {what} moved the identity — a gate that has not fired must not partition the fleet at deploy"
+                );
+            }
+            let dormant = with(Some(DnsBftGateV1 { activation: ForkActivation::never(), ..gate }));
+            assert_eq!(dormant.consensus_identity_id(), unset.consensus_identity_id(), "{name}: `never()` is absence to the identity");
+            let at_genesis = with(Some(DnsBftGateV1 { activation: ForkActivation::always(), ..gate }));
+            assert_ne!(at_genesis.consensus_identity_id(), unset.consensus_identity_id(), "{name}: a gate in force from block 1 is a rule");
+            assert!(scheduled.fence_schedule_v1().contains(&9_000_000), "{name}: the height is on the schedule");
+            assert!(crate::fork_id_v1::fork_id_gate_fences_v1(&scheduled).contains(&9_000_000), "{name}: and named to the fork-id gate");
+            assert!(scheduled.palw_fences_v1().contains(&("dns_bft_gate", Some(ForkActivation::new(9_000_000)))));
+            assert!(!unset.fence_schedule_v1().contains(&9_000_000));
+        }
+    }
+
     /// **The inactivity leak is removed, so a network that sets `palw_inactivity_leak` does not
     /// start.** The field stays (it is hashed only when set, so an unset preset's ids are what they
     /// were), but no code excludes a silent validator from a quorum denominator any more — a

@@ -686,3 +686,610 @@ pub fn dns_bft_precommit_duty_v1(
     duty.due = due.into_iter().map(|v| (v.epoch.epoch, v.epoch.anchor_hash, v.epoch.anchor_daa_score, v.snapshot_commitment)).collect();
     duty
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dns_finality::BondStatus;
+
+    // testnet-11's planned numbers (ADR-0128 §5) on a dense chain where blue score and DAA score
+    // advance together, one per block: epochs of 100, a lag of 100, a backoff of 1, so epoch E's
+    // anchor is block `100·E + 98` and the evidence window `L` is 5,040 + 200 + 100 + 100 = 5,440.
+    const T_LEAK: u64 = 5_040;
+    const REENTRY: u64 = 200;
+    const EPOCH_LEN: u64 = 100;
+    const LAG: u64 = 100;
+    const BACKOFF: u64 = 1;
+    const L: u64 = T_LEAK + REENTRY + EPOCH_LEN + LAG;
+
+    fn block_hash(n: u64) -> Hash64 {
+        Hash64::from_u64_word(n.wrapping_add(1))
+    }
+
+    fn rules_with_floor(min_retained_validators: u32) -> DnsBftRulesV1 {
+        DnsBftRulesV1 {
+            t_leak_daa: T_LEAK,
+            reentry_final_depth_daa: REENTRY,
+            min_retained_validators,
+            evidence_window_blue_score: L,
+            epoch_length_blue_score: EPOCH_LEN,
+            anchor_backoff_blue_score: BACKOFF,
+        }
+    }
+
+    fn rules() -> DnsBftRulesV1 {
+        rules_with_floor(4)
+    }
+
+    /// The dense chain from `tip` down to genesis, tip first.
+    fn dense_chain(tip: u64) -> Vec<DnsBftChainBlockV1> {
+        (0..=tip).rev().map(|n| DnsBftChainBlockV1 { hash: block_hash(n), blue_score: n, daa_score: n }).collect()
+    }
+
+    /// Epoch `e`'s canonical anchor on the dense chain.
+    fn epoch_at(e: u64) -> DnsBftEpochV1 {
+        let n = anchor_cutoff_blue_score(e, EPOCH_LEN, BACKOFF);
+        DnsBftEpochV1 { epoch: e, anchor_hash: block_hash(n), anchor_blue_score: n, anchor_daa_score: n }
+    }
+
+    fn outpoint(tag: u8) -> TransactionOutpoint {
+        TransactionOutpoint::new(Hash64::from_bytes([tag; 64]), u32::from(tag))
+    }
+
+    fn validator(tag: u8) -> Hash64 {
+        Hash64::from_bytes([tag.wrapping_add(0x80); 64])
+    }
+
+    /// Bond `tag`, of validator `tag` unless said otherwise, active from `activation`.
+    fn bond_of(tag: u8, validator_tag: u8, amount: u64, activation: u64) -> StakeBondRecord {
+        StakeBondRecord {
+            version: 1,
+            bond_outpoint: outpoint(tag),
+            owner_pubkey_hash: validator(validator_tag),
+            validator_pubkey_hash: validator(validator_tag),
+            validator_pubkey: Vec::new(),
+            amount,
+            activation_daa_score: activation,
+            created_daa_score: activation,
+            unbonding_period_blocks: 10_000,
+            owner_reward_spk_payload: [0u8; 64],
+            unbond_request_daa_score: None,
+            slashed_at_daa_score: None,
+            status: BondStatus::Active,
+        }
+    }
+
+    fn bond(tag: u8, amount: u64, activation: u64) -> StakeBondRecord {
+        bond_of(tag, tag, amount, activation)
+    }
+
+    /// An attestation by `b` for epoch `e`, accepted `delay` blocks after the anchor.
+    fn attest(b: &StakeBondRecord, e: u64, delay: u64) -> DnsBftAttestationV1 {
+        let anchor = epoch_at(e);
+        DnsBftAttestationV1 {
+            validator_id: b.validator_pubkey_hash,
+            bond_outpoint: b.bond_outpoint,
+            epoch: e,
+            anchor_hash: anchor.anchor_hash,
+            anchor_daa_score: anchor.anchor_daa_score,
+            accepted_blue_score: anchor.anchor_blue_score + delay,
+            accepted_daa_score: anchor.anchor_daa_score + delay,
+        }
+    }
+
+    /// A precommit by `b` for `epoch`, declaring `lock`, accepted at block `accepted`.
+    fn precommit(b: &StakeBondRecord, epoch: &DnsBftEpochV1, lock: PrecommitLock, commitment: Hash64, accepted: u64) -> PrecommitRecord {
+        PrecommitRecord {
+            validator_id: b.validator_pubkey_hash,
+            bond_outpoint: b.bond_outpoint,
+            epoch: epoch.epoch,
+            target_hash: epoch.anchor_hash,
+            target_daa_score: epoch.anchor_daa_score,
+            declared_lock: lock,
+            snapshot_commitment: commitment,
+            accepted_blue_score: accepted,
+            accepted_daa_score: accepted,
+        }
+    }
+
+    fn lock_of(epoch: &DnsBftEpochV1) -> PrecommitLock {
+        PrecommitLock { epoch: epoch.epoch, anchor: epoch.anchor_hash }
+    }
+
+    #[test]
+    fn the_walk_is_the_stake_score_window_plus_the_evidence_window() {
+        let mut dns = crate::config::params::DEVNET_PARAMS.dns_params.clone().expect("devnet runs an overlay");
+        dns.stake_score_window_blue_score = 1_500;
+        dns.attestation_epoch_length_blue_score = EPOCH_LEN;
+        dns.attestation_lag_blue_score = LAG;
+        let gate = DnsBftGateV1 {
+            activation: crate::config::params::ForkActivation::new(7_001),
+            t_leak_daa: T_LEAK,
+            reentry_final_depth_daa: REENTRY,
+            min_retained_validators: 4,
+        };
+        assert_eq!(dns_bft_evidence_window_blue_score_v1(&gate, &dns), Some(5_440), "ADR-0128 §5: 5,040 + 200 + 100 + 100");
+        assert_eq!(dns_bft_walk_blue_score_v1(&gate, &dns), Some(6_940), "Decision 3: 1,500 + 5,440");
+        let overflowing = DnsBftGateV1 { t_leak_daa: u64::MAX, ..gate };
+        assert_eq!(dns_bft_walk_blue_score_v1(&overflowing, &dns), None, "a walk that does not fit is not a number");
+        assert!(DnsBftRulesV1::new(&overflowing, &dns).is_none());
+    }
+
+    #[test]
+    fn the_quorum_is_strict_and_an_empty_denominator_is_never_a_quorum() {
+        assert!(!dns_bft_quorum_v1(2, 3), "exactly two thirds is not above two thirds");
+        assert!(!dns_bft_quorum_v1(6, 9));
+        assert!(!dns_bft_quorum_v1(66, 99));
+        assert!(dns_bft_quorum_v1(67, 100));
+        assert!(dns_bft_quorum_v1(3, 4));
+        assert!(dns_bft_quorum_v1(1, 1));
+        assert!(!dns_bft_quorum_v1(0, 1));
+        assert!(!dns_bft_quorum_v1(0, 0), "no stake is no quorum");
+        assert!(!dns_bft_quorum_v1(5, 0), "not even with a signed count");
+        assert!(dns_bft_quorum_v1(10, 4), "an over-count is clamped to the total, not wrapped");
+        // Near the top of the range the comparison still does not overflow.
+        let total = u128::MAX;
+        assert!(!dns_bft_quorum_v1(total / 3 * 2, total));
+        assert!(dns_bft_quorum_v1(total / 3 * 2 + 2, total));
+    }
+
+    /// Four validators of 100 at epoch 120, all attesting their epochs: the set every round test
+    /// below counts against.
+    fn four_attesting() -> (Vec<StakeBondRecord>, Vec<DnsBftChainBlockV1>, DnsBftEpochV1) {
+        let bonds: Vec<StakeBondRecord> = (1..=4).map(|t| bond(t, 100, 1_000)).collect();
+        let e = epoch_at(120);
+        (bonds, dense_chain(e.anchor_blue_score + 300), e)
+    }
+
+    #[test]
+    fn one_denominator_serves_both_rounds_and_round_one_alone_is_never_final() {
+        let (bonds, chain, e) = four_attesting();
+        // Every bond attested recently, so nobody leaks and W(E) = 400.
+        let mut atts: Vec<DnsBftAttestationV1> = bonds.iter().map(|b| attest(b, e.epoch - 5, 10)).collect();
+        // Round one: three of four (300 > 266.7).
+        atts.extend(bonds[..3].iter().map(|b| attest(b, e.epoch, 5)));
+        let without_precommits = dns_bft_evaluate_epoch_v1(&e, &chain, &bonds, &atts, &[], &rules());
+        assert_eq!(without_precommits.counted.total_stake, 400);
+        assert_eq!(without_precommits.attested_stake, 300);
+        assert!(without_precommits.round_one());
+        assert!(!without_precommits.dns_final(), "round one alone is never final");
+
+        let commitment = without_precommits.snapshot_commitment;
+        let two: Vec<PrecommitRecord> =
+            bonds[..2].iter().map(|b| precommit(b, &e, PrecommitLock::default(), commitment, e.anchor_blue_score + 20)).collect();
+        let short = dns_bft_evaluate_epoch_v1(&e, &chain, &bonds, &atts, &two, &rules());
+        assert_eq!(short.precommitted_stake, 200);
+        assert!(!short.dns_final(), "200 of 400 precommitted is not a quorum of the same W(E)");
+
+        let three: Vec<PrecommitRecord> =
+            bonds[..3].iter().map(|b| precommit(b, &e, PrecommitLock::default(), commitment, e.anchor_blue_score + 20)).collect();
+        let final_ = dns_bft_evaluate_epoch_v1(&e, &chain, &bonds, &atts, &three, &rules());
+        assert_eq!(final_.precommitted_stake, 300);
+        assert!(final_.dns_final(), "both rounds above two thirds of one W(E)");
+        assert_eq!(dns_final_epochs_v1(std::slice::from_ref(&final_)), BTreeSet::from([e.epoch]));
+
+        // A precommit counts only for an epoch whose round one reached quorum: with two attesters,
+        // three precommits count for nothing.
+        let two_attest: Vec<DnsBftAttestationV1> =
+            atts.iter().filter(|a| a.epoch != e.epoch || a.bond_outpoint != bonds[2].bond_outpoint).copied().collect();
+        let no_round_one = dns_bft_evaluate_epoch_v1(&e, &chain, &bonds, &two_attest, &three, &rules());
+        assert!(!no_round_one.round_one());
+        assert_eq!(no_round_one.precommitted_stake, 0, "round two waits for round one");
+        assert!(!no_round_one.dns_final());
+
+        // One vote per (validator, bond): the same attestation carried twice is still 100.
+        let mut doubled = atts.clone();
+        doubled.push(attest(&bonds[0], e.epoch, 7));
+        assert_eq!(dns_bft_evaluate_epoch_v1(&e, &chain, &bonds, &doubled, &[], &rules()).attested_stake, 300);
+    }
+
+    #[test]
+    fn a_vote_weighs_its_bond_once_per_validator_and_bond() {
+        // One validator holding two bonds votes with both amounts; a third bond it does not own does
+        // not lend it weight.
+        let e = epoch_at(120);
+        let chain = dense_chain(e.anchor_blue_score + 300);
+        let bonds = vec![bond_of(1, 1, 100, 1_000), bond_of(2, 1, 50, 1_000), bond(3, 100, 1_000), bond(4, 100, 1_000), bond(5, 100, 1_000)];
+        let mut atts: Vec<DnsBftAttestationV1> = bonds.iter().map(|b| attest(b, e.epoch - 5, 10)).collect();
+        atts.push(attest(&bonds[0], e.epoch, 5));
+        atts.push(attest(&bonds[1], e.epoch, 5));
+        // A vote under bond 3 that names validator 1 is not bond 3's vote.
+        let mut forged = attest(&bonds[2], e.epoch, 5);
+        forged.validator_id = bonds[0].validator_pubkey_hash;
+        atts.push(forged);
+        let verdict = dns_bft_evaluate_epoch_v1(&e, &chain, &bonds, &atts, &[], &rules());
+        assert_eq!(verdict.counted.total_stake, 450);
+        assert_eq!(verdict.attested_stake, 150);
+    }
+
+    #[test]
+    fn a_precommit_bound_to_another_snapshot_does_not_count() {
+        let (bonds, chain, e) = four_attesting();
+        let mut atts: Vec<DnsBftAttestationV1> = bonds.iter().map(|b| attest(b, e.epoch - 5, 10)).collect();
+        atts.extend(bonds.iter().map(|b| attest(b, e.epoch, 5)));
+        let verdict = dns_bft_evaluate_epoch_v1(&e, &chain, &bonds, &atts, &[], &rules());
+        let right = verdict.snapshot_commitment;
+
+        // The commitment another set would carry: one bond fewer, one amount different, one epoch
+        // later, one anchor different.
+        let mut fewer = verdict.counted.clone();
+        fewer.bonds.pop();
+        fewer.total_stake = 300;
+        let mut richer = verdict.counted.clone();
+        richer.bonds[0].amount = 101;
+        richer.total_stake = 401;
+        let later = DnsBftEpochV1 { epoch: e.epoch + 1, ..e };
+        let elsewhere = DnsBftEpochV1 { anchor_hash: block_hash(1), ..e };
+        let wrong = [
+            dns_bft_snapshot_commitment_v1(&e, &fewer),
+            dns_bft_snapshot_commitment_v1(&e, &richer),
+            dns_bft_snapshot_commitment_v1(&later, &verdict.counted),
+            dns_bft_snapshot_commitment_v1(&elsewhere, &verdict.counted),
+        ];
+        for w in wrong {
+            assert_ne!(w, right, "the commitment binds the epoch, the anchor and the counted set");
+        }
+        // The root is over the set, not the order a caller happened to list it in.
+        let mut reversed = verdict.counted.clone();
+        reversed.bonds.reverse();
+        assert_eq!(dns_bft_snapshot_root_v1(&reversed), dns_bft_snapshot_root_v1(&verdict.counted));
+
+        let at = e.anchor_blue_score + 20;
+        let mut pcs: Vec<PrecommitRecord> = bonds[..2].iter().map(|b| precommit(b, &e, PrecommitLock::default(), right, at)).collect();
+        pcs.push(precommit(&bonds[2], &e, PrecommitLock::default(), wrong[0], at));
+        let one_mismatched = dns_bft_evaluate_epoch_v1(&e, &chain, &bonds, &atts, &pcs, &rules());
+        assert_eq!(one_mismatched.precommitted_stake, 200, "the precommit bound to a smaller set is not counted against this one");
+        assert!(!one_mismatched.dns_final());
+        pcs[2].snapshot_commitment = right;
+        assert!(dns_bft_evaluate_epoch_v1(&e, &chain, &bonds, &atts, &pcs, &rules()).dns_final());
+    }
+
+    #[test]
+    fn lock_consistency_truncates_at_a_misdeclaration() {
+        let b = bond(1, 100, 1_000);
+        let (e1, e2, e3, e4) = (epoch_at(101), epoch_at(102), epoch_at(103), epoch_at(104));
+        let c = Hash64::from_bytes([9; 64]);
+        let p1 = precommit(&b, &e1, PrecommitLock::default(), c, e1.anchor_blue_score + 150);
+        let p2 = precommit(&b, &e2, lock_of(&e1), c, e2.anchor_blue_score + 150);
+        // p3 forgets the lock p2 took and restates p1's instead.
+        let p3 = precommit(&b, &e3, lock_of(&e1), c, e3.anchor_blue_score + 150);
+        // p4 declares p3 correctly — but p3 never counted, so neither does p4.
+        let p4 = precommit(&b, &e4, lock_of(&e3), c, e4.anchor_blue_score + 150);
+        let records = vec![p4.clone(), p2.clone(), p3.clone(), p1.clone()];
+        let whole = PrecommitLockHorizonV1::from_genesis(&rules());
+        let kept = lock_consistent_precommits(&records, &whole);
+        assert_eq!(kept, vec![&p1, &p2], "chain order, cut at the first misdeclared lock");
+        assert_eq!(held_precommit_lock(&records, b.validator_pubkey_hash, b.bond_outpoint, &whole), lock_of(&e2));
+
+        // A rebroadcast of a vote already counted is the same vote: kept, and it moves nothing.
+        let mut rebroadcast = p1.clone();
+        rebroadcast.accepted_blue_score = p2.accepted_blue_score + 10;
+        rebroadcast.accepted_daa_score = p2.accepted_daa_score + 10;
+        let p3_right = precommit(&b, &e3, lock_of(&e2), c, e3.anchor_blue_score + 150);
+        let with_rebroadcast = vec![p1.clone(), p2.clone(), rebroadcast.clone(), p3_right.clone()];
+        assert_eq!(lock_consistent_precommits(&with_rebroadcast, &whole), vec![&p1, &p2, &rebroadcast, &p3_right]);
+        assert_eq!(held_precommit_lock(&with_rebroadcast, b.validator_pubkey_hash, b.bond_outpoint, &whole), lock_of(&e3));
+
+        // The whole chain in view: the first precommit must declare no lock at all.
+        let invented = precommit(&b, &e2, lock_of(&e1), c, e2.anchor_blue_score + 150);
+        assert!(lock_consistent_precommits(std::slice::from_ref(&invented), &whole).is_empty());
+
+        // A horizon above p1: p2 is the first in view, and the lock it declares (p1's) could only
+        // have been accepted below the horizon, so it stands.
+        let above_p1 = PrecommitLockHorizonV1 { visible_from_blue_score: p1.accepted_blue_score + 1, ..whole };
+        assert_eq!(lock_consistent_precommits(&[p1.clone(), p2.clone()], &above_p1), vec![&p2]);
+        // But a first precommit in view may not declare a lock the horizon would show: e3's
+        // precommit could only be accepted above e3's cutoff, which is in view.
+        let claims_unseen = precommit(&b, &e4, lock_of(&e3), c, e4.anchor_blue_score + 150);
+        assert!(
+            lock_consistent_precommits(std::slice::from_ref(&claims_unseen), &above_p1).is_empty(),
+            "a lock at an epoch whose precommit would be in view, and is not, is a misdeclaration"
+        );
+
+        // The count follows the truncation: a precommit after the cut does not vote.
+        let bonds: Vec<StakeBondRecord> = (1..=4).map(|t| bond(t, 100, 1_000)).collect();
+        let chain = dense_chain(e4.anchor_blue_score + 300);
+        let mut atts: Vec<DnsBftAttestationV1> = bonds.iter().map(|x| attest(x, 95, 10)).collect();
+        atts.extend(bonds.iter().map(|x| attest(x, e4.epoch, 5)));
+        let commitment = dns_bft_evaluate_epoch_v1(&e4, &chain, &bonds, &atts, &[], &rules()).snapshot_commitment;
+        let mut pcs = vec![p1, p2, p3];
+        pcs.push(precommit(&bonds[0], &e4, lock_of(&e3), commitment, e4.anchor_blue_score + 150));
+        pcs.extend(bonds[1..3].iter().map(|x| precommit(x, &e4, PrecommitLock::default(), commitment, e4.anchor_blue_score + 150)));
+        let verdict = dns_bft_evaluate_epoch_v1(&e4, &chain, &bonds, &atts, &pcs, &rules());
+        assert_eq!(verdict.precommitted_stake, 200, "bond 1's precommit follows its misdeclaration and does not count");
+        assert!(!verdict.dns_final());
+    }
+
+    /// Everything the leak tests share: an epoch deep in a chain with a window longer than
+    /// `t_leak_daa`, and four validators who attest every so often and never leak — so the floor
+    /// never holds and each bond under test is judged on its own evidence.
+    fn leak_fixture() -> (DnsBftEpochV1, Vec<DnsBftChainBlockV1>, Vec<StakeBondRecord>, Vec<DnsBftAttestationV1>) {
+        let e = epoch_at(200); // anchor at 20,098
+        assert!(L > T_LEAK, "the window is longer than the silence it measures");
+        let chain = dense_chain(e.anchor_blue_score + 1_000);
+        let steady: Vec<StakeBondRecord> = (1..=4).map(|t| bond(t, 100, 100)).collect();
+        let atts = steady.iter().flat_map(|b| [attest(b, 170, 50), attest(b, 190, 50)]).collect();
+        (e, chain, steady, atts)
+    }
+
+    fn counted(
+        e: &DnsBftEpochV1,
+        chain: &[DnsBftChainBlockV1],
+        bonds: &[StakeBondRecord],
+        atts: &[DnsBftAttestationV1],
+        rules: &DnsBftRulesV1,
+    ) -> DnsBftCountedSetV1 {
+        let edge = dns_bft_window_lower_edge_daa_v1(chain, e, rules);
+        dns_bft_counted_set_v1(bonds, e.anchor_daa_score, edge, &dns_bft_last_final_attestation_daa_v1(e, atts, rules), rules)
+    }
+
+    #[test]
+    fn the_leak_measures_an_attester_from_its_youngest_final_attestation() {
+        let (e, chain, mut bonds, mut atts) = leak_fixture();
+        // Bond 10 attested epoch 148 (anchor 14,898: 5,200 below) and epoch 150 (anchor 15,098: 5,000
+        // below). Both are inside the window; the youngest decides, and 5,000 < 5,040.
+        let recent = bond(10, 100, 100);
+        atts.push(attest(&recent, 148, 30));
+        atts.push(attest(&recent, 150, 30));
+        // Bond 11 attested only epoch 148: 5,200 of silence.
+        let silent = bond(11, 100, 100);
+        atts.push(attest(&silent, 148, 30));
+        bonds.extend([recent.clone(), silent.clone()]);
+
+        let last = dns_bft_last_final_attestation_daa_v1(&e, &atts, &rules());
+        assert_eq!(last.get(&recent.bond_outpoint), Some(&epoch_at(150).anchor_daa_score));
+        assert_eq!(last.get(&silent.bond_outpoint), Some(&epoch_at(148).anchor_daa_score));
+        let set = counted(&e, &chain, &bonds, &atts, &rules());
+        assert_eq!(set.leaked, vec![silent.bond_outpoint], "5,200 of silence leaks, 5,000 does not");
+        assert!(set.get(&recent.bond_outpoint).is_some());
+        assert!(!set.floor_held);
+        assert_eq!(set.total_stake, 500);
+
+        // The boundary is `≥ t_leak`: an attestation exactly 5,040 below leaks, 5,039 does not.
+        let exact = DnsBftAttestationV1 { anchor_daa_score: e.anchor_daa_score - T_LEAK, ..attest(&silent, 149, 0) };
+        let mut at_the_boundary = atts.clone();
+        at_the_boundary.push(exact);
+        // Its "epoch 149" anchor is off the dense grid; the rules read only the numbers.
+        assert!(counted(&e, &chain, &bonds, &at_the_boundary, &rules()).leaked.contains(&silent.bond_outpoint));
+        let inside = DnsBftAttestationV1 { anchor_daa_score: e.anchor_daa_score - T_LEAK + 1, ..exact };
+        at_the_boundary.push(inside);
+        assert!(!counted(&e, &chain, &bonds, &at_the_boundary, &rules()).leaked.contains(&silent.bond_outpoint));
+    }
+
+    #[test]
+    fn an_absent_old_bond_is_measured_from_the_window_edge() {
+        let (e, chain, mut bonds, atts) = leak_fixture();
+        let edge = dns_bft_window_lower_edge_daa_v1(&chain, &e, &rules());
+        assert_eq!(edge, e.anchor_daa_score - L, "the oldest block inside the window, as a DAA score");
+        // Bond 12 has been bonded since block 100 and never attested inside the window: it is measured
+        // from the edge, 5,440 below the anchor, and leaks.
+        let absent = bond(12, 100, 100);
+        bonds.push(absent.clone());
+        let set = counted(&e, &chain, &bonds, &atts, &rules());
+        assert_eq!(set.leaked, vec![absent.bond_outpoint]);
+
+        // An attestation older than the window is not evidence, even when the walk holds it: the
+        // bond is measured from the edge all the same.
+        let mut with_ancient = atts.clone();
+        with_ancient.push(attest(&absent, 100, 10));
+        assert!(!dns_bft_last_final_attestation_daa_v1(&e, &with_ancient, &rules()).contains_key(&absent.bond_outpoint));
+        assert_eq!(counted(&e, &chain, &bonds, &with_ancient, &rules()).leaked, vec![absent.bond_outpoint]);
+
+        // On a chain younger than the window the edge is genesis, and an absent bond falls back to
+        // its own activation.
+        let young_epoch = epoch_at(30); // anchor at 3,098
+        let young_chain = dense_chain(young_epoch.anchor_blue_score + 300);
+        assert_eq!(dns_bft_window_lower_edge_daa_v1(&young_chain, &young_epoch, &rules()), 0);
+    }
+
+    #[test]
+    fn an_absent_young_bond_is_measured_from_its_activation() {
+        let (e, chain, mut bonds, atts) = leak_fixture();
+        // Bonded 3,000 before the anchor, after the window's edge: 3,000 < 5,040, never leaked for a
+        // silence it could not have broken.
+        let newcomer = bond(13, 100, e.anchor_daa_score - 3_000);
+        // Bonded 5,100 before the anchor — still after the edge (5,440) — and silent since: leaked,
+        // measured from its activation rather than from the edge.
+        let lapsed = bond(14, 100, e.anchor_daa_score - 5_100);
+        bonds.extend([newcomer.clone(), lapsed.clone()]);
+        let set = counted(&e, &chain, &bonds, &atts, &rules());
+        assert!(set.get(&newcomer.bond_outpoint).is_some(), "SA-4: a young bond is not silence");
+        assert_eq!(set.leaked, vec![lapsed.bond_outpoint]);
+    }
+
+    #[test]
+    fn re_entry_waits_for_an_attestation_that_is_itself_buried() {
+        let (e, chain, mut bonds, mut atts) = leak_fixture();
+        let returning = bond(15, 100, 100);
+        bonds.push(returning.clone());
+        // Silent for the whole window, then it attests epoch 199 — anchor 19,998, 100 below the
+        // anchor, which is less than the 200 re-entry depth: not yet evidence, still leaked.
+        atts.push(attest(&returning, 199, 50));
+        assert_eq!(counted(&e, &chain, &bonds, &atts, &rules()).leaked, vec![returning.bond_outpoint]);
+        // Epoch 197 — anchor 19,798, 300 below — is buried: it re-enters.
+        atts.push(attest(&returning, 197, 50));
+        let set = counted(&e, &chain, &bonds, &atts, &rules());
+        assert!(set.leaked.is_empty());
+        assert!(set.get(&returning.bond_outpoint).is_some());
+
+        // Evidence accepted by a block ABOVE the anchor is not in the prefix that ends there, however
+        // old the epoch it names.
+        let mut late = atts.clone();
+        late.retain(|a| a.bond_outpoint != returning.bond_outpoint);
+        late.push(attest(&returning, 197, 400)); // accepted at 20,198 > 20,098
+        assert_eq!(counted(&e, &chain, &bonds, &late, &rules()).leaked, vec![returning.bond_outpoint]);
+    }
+
+    #[test]
+    fn the_floor_halts_rather_than_leaks() {
+        let e = epoch_at(200);
+        let chain = dense_chain(e.anchor_blue_score + 1_000);
+        let bonds: Vec<StakeBondRecord> = (1..=5).map(|t| bond(t, 100, 100)).collect();
+        // Three attest; two are silent for the whole window.
+        let mut atts: Vec<DnsBftAttestationV1> = bonds[..3].iter().map(|b| attest(b, 190, 50)).collect();
+        atts.extend(bonds[..3].iter().map(|b| attest(b, e.epoch, 20)));
+
+        // Floor of four: leaking two would leave three validators, so nothing leaks, W(E) stays 500,
+        // and three of five is not a quorum — finality waits.
+        let held = dns_bft_evaluate_epoch_v1(&e, &chain, &bonds, &atts, &[], &rules_with_floor(4));
+        assert!(held.counted.floor_held);
+        assert!(held.counted.leaked.is_empty());
+        assert_eq!(held.counted.total_stake, 500);
+        assert!(!held.round_one(), "the floor is a halt, not a hole");
+
+        // A floor of three is not breached by the same leak: W(E) is 300 and the three have quorum.
+        let leaked = dns_bft_evaluate_epoch_v1(&e, &chain, &bonds, &atts, &[], &rules_with_floor(3));
+        assert!(!leaked.counted.floor_held);
+        assert_eq!(leaked.counted.leaked.len(), 2);
+        assert_eq!(leaked.counted.total_stake, 300);
+        assert!(leaked.round_one());
+
+        // A set that is small without any leak is not a held floor: there was nothing to leak.
+        let small: Vec<StakeBondRecord> = bonds[..3].to_vec();
+        let set = counted(&e, &chain, &small, &atts, &rules_with_floor(4));
+        assert!(!set.floor_held && set.leaked.is_empty());
+    }
+
+    #[test]
+    fn the_evidence_an_epoch_reads_does_not_depend_on_how_far_a_walk_reached() {
+        let r = rules();
+        let e = epoch_at(200);
+        let floor = r.evidence_floor_blue_score(&e);
+        assert_eq!(floor, e.anchor_blue_score - L);
+        // Epoch 146's previous cutoff (14,498) is below the floor (14,658): an attestation for it is
+        // not evidence for epoch 200, even accepted inside the window by a walk that could derive
+        // its anchor.
+        assert!(!r.anchor_decidable_within(146, &e));
+        assert!(r.anchor_decidable_within(148, &e));
+        let b = bond(1, 100, 100);
+        let inside_window_old_epoch = DnsBftAttestationV1 { accepted_blue_score: floor + 5, accepted_daa_score: floor + 5, ..attest(&b, 146, 0) };
+        assert!(dns_bft_last_final_attestation_daa_v1(&e, &[inside_window_old_epoch], &r).is_empty());
+        // A block below the floor does not accept evidence either.
+        let below = DnsBftAttestationV1 { accepted_blue_score: floor - 1, accepted_daa_score: floor - 1, ..attest(&b, 148, 0) };
+        assert!(dns_bft_last_final_attestation_daa_v1(&e, &[below], &r).is_empty());
+    }
+
+    #[test]
+    fn the_window_epochs_are_the_ones_the_credit_walk_evaluates() {
+        // Dense chain to 1,000: ready through epoch 8 (1,000 ≥ 899 + 100), and down while the
+        // previous epoch's cutoff (100·(E−1) + 98) is inside the window. A window of 300 holds
+        // blocks down to 700, so epoch 7 (previous cutoff 698) is out; 302 holds 698, so it is in.
+        let chain = dense_chain(1_000);
+        let epochs = dns_bft_window_epochs_v1(&chain, 1_000, 300, EPOCH_LEN, LAG, BACKOFF);
+        assert_eq!(epochs, vec![epoch_at(8)]);
+        let epochs = dns_bft_window_epochs_v1(&chain, 1_000, 302, EPOCH_LEN, LAG, BACKOFF);
+        assert_eq!(epochs, vec![epoch_at(7), epoch_at(8)]);
+
+        // A sparse chain whose blue score jumps over a whole epoch: the jumped epoch reuses the
+        // previous anchor and is skipped as a duplicate.
+        let sparse: Vec<DnsBftChainBlockV1> = [1_000u64, 980, 950, 890, 880, 650, 640, 600]
+            .iter()
+            .map(|&n| DnsBftChainBlockV1 { hash: block_hash(n), blue_score: n, daa_score: n })
+            .collect();
+        let epochs = dns_bft_window_epochs_v1(&sparse, 1_000, 400, EPOCH_LEN, LAG, BACKOFF);
+        // Epoch 7 (cutoff 798) anchors at 650; epoch 6 (cutoff 698) also at 650 — so 7 is a duplicate.
+        assert!(epochs.iter().all(|e| e.epoch != 7), "a duplicate anchor earns no evaluation: {epochs:?}");
+        assert!(epochs.iter().any(|e| e.epoch == 8 && e.anchor_blue_score == 890));
+        assert!(dns_bft_window_epochs_v1(&chain[..50], 1_000, 300, EPOCH_LEN, 2_000, BACKOFF).is_empty(), "nothing is ready");
+    }
+
+    #[test]
+    fn confirmation_advances_to_the_newest_final_anchor_and_never_moves_back() {
+        let (a, b) = ((block_hash(1), 100u64), (block_hash(2), 200u64));
+        assert_eq!(dns_bft_confirmed_anchor_v1(None, None), None);
+        assert_eq!(dns_bft_confirmed_anchor_v1(None, Some(a)), Some(a));
+        assert_eq!(dns_bft_confirmed_anchor_v1(Some(a), None), Some(a), "carried while nothing newer is final");
+        assert_eq!(dns_bft_confirmed_anchor_v1(Some(a), Some(b)), Some(b));
+        assert_eq!(dns_bft_confirmed_anchor_v1(Some(b), Some(a)), Some(b), "an older final anchor does not replace a newer one");
+        assert_eq!(dns_bft_confirmed_anchor_v1(Some(a), Some(a)), Some(a));
+
+        // The newest final epoch, not the newest epoch.
+        let (bonds, chain, e) = four_attesting();
+        let atts: Vec<DnsBftAttestationV1> = bonds.iter().map(|x| attest(x, e.epoch, 5)).collect();
+        let verdict = dns_bft_evaluate_epoch_v1(&e, &chain, &bonds, &atts, &[], &rules());
+        let pcs: Vec<PrecommitRecord> = bonds
+            .iter()
+            .map(|x| precommit(x, &e, PrecommitLock::default(), verdict.snapshot_commitment, e.anchor_blue_score + 30))
+            .collect();
+        let final_ = dns_bft_evaluate_epoch_v1(&e, &chain, &bonds, &atts, &pcs, &rules());
+        let newer_not_final = DnsBftEpochVerdictV1 { epoch: epoch_at(e.epoch + 1), ..verdict };
+        assert_eq!(newest_dns_final_v1(&[final_, newer_not_final]), Some(e));
+    }
+
+    #[test]
+    fn the_duty_answers_what_the_chain_shows() {
+        let bonds: Vec<StakeBondRecord> = (1..=4).map(|t| bond(t, 100, 1_000)).collect();
+        let (e1, e2, e3) = (epoch_at(120), epoch_at(121), epoch_at(122));
+        let chain = dense_chain(e3.anchor_blue_score + 300);
+        let mut atts: Vec<DnsBftAttestationV1> = Vec::new();
+        for e in [e1, e2] {
+            atts.extend(bonds.iter().map(|b| attest(b, e.epoch, 5)));
+        }
+        // Epoch 122 reached only two attesters: no round one, nothing due there.
+        atts.extend(bonds[..2].iter().map(|b| attest(b, e3.epoch, 5)));
+        let bare = dns_bft_evaluate_epochs_v1(&[e1, e2, e3], &chain, &bonds, &atts, &[], &rules());
+        let me = &bonds[0];
+        // Bond 1 precommitted epoch 120; it holds that lock.
+        let pcs = vec![precommit(me, &e1, PrecommitLock::default(), bare[0].snapshot_commitment, e1.anchor_blue_score + 150)];
+        let verdicts = dns_bft_evaluate_epochs_v1(&[e1, e2, e3], &chain, &bonds, &atts, &pcs, &rules());
+        let duty = dns_bft_precommit_duty_v1(true, 99, &verdicts, &pcs, me.validator_pubkey_hash, me.bond_outpoint, &rules());
+        assert!(duty.round_active);
+        assert_eq!(duty.sink_daa_score, 99);
+        assert_eq!(duty.held, lock_of(&e1));
+        assert_eq!(duty.due, vec![(e2.epoch, e2.anchor_hash, e2.anchor_daa_score, verdicts[1].snapshot_commitment)]);
+
+        // Bond 2 has precommitted nothing: both round-one epochs are due, ascending, each with its
+        // own commitment, and it holds no lock.
+        let other = &bonds[1];
+        let duty = dns_bft_precommit_duty_v1(true, 99, &verdicts, &pcs, other.validator_pubkey_hash, other.bond_outpoint, &rules());
+        assert_eq!(duty.held, PrecommitLock::default());
+        assert_eq!(
+            duty.due,
+            vec![
+                (e1.epoch, e1.anchor_hash, e1.anchor_daa_score, verdicts[0].snapshot_commitment),
+                (e2.epoch, e2.anchor_hash, e2.anchor_daa_score, verdicts[1].snapshot_commitment),
+            ]
+        );
+        assert_ne!(verdicts[0].snapshot_commitment, verdicts[1].snapshot_commitment);
+
+        // A precommit for epoch 121 the chain shows — even one that does not count (another anchor) —
+        // takes 121 off the list: a second, different precommit for one epoch is equivocation.
+        let mut elsewhere = precommit(other, &e2, PrecommitLock::default(), Hash64::default(), e2.anchor_blue_score + 150);
+        elsewhere.target_hash = block_hash(7);
+        let duty =
+            dns_bft_precommit_duty_v1(true, 99, &verdicts, &[elsewhere], other.validator_pubkey_hash, other.bond_outpoint, &rules());
+        assert_eq!(duty.due.iter().map(|d| d.0).collect::<Vec<_>>(), Vec::<u64>::new(), "121 is signed, and 120 is below its lock");
+
+        // A bond outside every counted set owes nothing; below the fence nothing is answered.
+        let stranger = bond(9, 100, 1_000);
+        assert!(
+            dns_bft_precommit_duty_v1(true, 99, &verdicts, &pcs, stranger.validator_pubkey_hash, stranger.bond_outpoint, &rules())
+                .due
+                .is_empty()
+        );
+        let dormant = dns_bft_precommit_duty_v1(false, 99, &verdicts, &pcs, me.validator_pubkey_hash, me.bond_outpoint, &rules());
+        assert_eq!(dormant, PrecommitDuty { round_active: false, sink_daa_score: 99, ..Default::default() });
+    }
+
+    #[test]
+    fn precommits_are_read_from_their_own_subnetwork_only() {
+        let p = StakePrecommitPayload {
+            version: crate::dns_finality::DNS_PAYLOAD_VERSION_V1,
+            validator_id: validator(1),
+            bond_outpoint: outpoint(1),
+            epoch: 5,
+            target_hash: block_hash(5),
+            target_daa_score: 5,
+            locked_epoch: 0,
+            locked_hash: Hash64::default(),
+            snapshot_commitment: Hash64::from_bytes([3; 64]),
+            signature: vec![0; 4],
+        };
+        let tx = crate::dns_finality::stake_precommit_tx(&p);
+        let mut garbage = tx.clone();
+        garbage.payload = vec![0xff];
+        let mut elsewhere = tx.clone();
+        elsewhere.subnetwork_id = crate::subnets::SUBNETWORK_ID_STAKE_ATTESTATION_SHARD;
+        assert_eq!(precommits_from_accepted_txs(&[tx, garbage, elsewhere]), vec![p]);
+    }
+}
