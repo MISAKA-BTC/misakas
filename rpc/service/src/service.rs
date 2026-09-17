@@ -1626,6 +1626,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     pwu_per_inference: row.pwu_per_inference,
                     class_target: row.class_target.to_string(),
                     expected_attempts: row.expected_attempts,
+                    expected_attempts_q32: row.expected_attempts_q32.to_string(),
                     economic_compute_job: job.to_string(),
                     economic_compute_canonical: canonical.to_string(),
                     economic_source: source.to_string(),

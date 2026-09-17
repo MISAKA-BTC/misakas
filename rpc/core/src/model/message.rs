@@ -4832,8 +4832,10 @@ pub struct RpcPalwClassEconomics {
     pub pwu_per_inference: u64,
     /// Decimal `u128`: the class target at the tip.
     pub class_target: String,
-    /// The draws one claim costs in expectation at that target.
+    /// The draws one claim costs in expectation at that target, as the fork-choice factor floors
+    /// them, and the same in Q32 fixed point as a decimal `u128` (`palw_expected_attempts_q32_v1`).
     pub expected_attempts: u64,
+    pub expected_attempts_q32: String,
     /// ADR-0131 `EconomicComputeV1`, in MAC-equivalents, decimal `u128`: the job an attempt runs at
     /// the tip's draw rule (`prefill_draw` on the response), and the canonical job. Both `"0"` and
     /// `economic_source` `unknown` when neither the chain's registration nor this build has the graph.
@@ -4865,6 +4867,7 @@ impl Serializer for RpcPalwClassEconomics {
         store!(u64, &self.pwu_per_inference, writer)?;
         store!(String, &self.class_target, writer)?;
         store!(u64, &self.expected_attempts, writer)?;
+        store!(String, &self.expected_attempts_q32, writer)?;
         store!(String, &self.economic_compute_job, writer)?;
         store!(String, &self.economic_compute_canonical, writer)?;
         store!(String, &self.economic_source, writer)?;
@@ -4893,6 +4896,7 @@ impl Deserializer for RpcPalwClassEconomics {
             pwu_per_inference: load!(u64, reader)?,
             class_target: load!(String, reader)?,
             expected_attempts: load!(u64, reader)?,
+            expected_attempts_q32: load!(String, reader)?,
             economic_compute_job: load!(String, reader)?,
             economic_compute_canonical: load!(String, reader)?,
             economic_source: load!(String, reader)?,

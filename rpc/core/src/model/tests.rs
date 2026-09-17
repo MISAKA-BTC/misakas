@@ -1719,6 +1719,7 @@ mod mockery {
                 pwu_per_inference: mock(),
                 class_target: u128::MAX.to_string(),
                 expected_attempts: mock(),
+                expected_attempts_q32: (1u128 << 32).to_string(),
                 economic_compute_job: "18055200736".to_string(),
                 economic_compute_canonical: "21070759296".to_string(),
                 economic_source: "build_ledger".to_string(),

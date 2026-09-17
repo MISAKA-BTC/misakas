@@ -505,6 +505,52 @@ pub fn palw_attempted_compute_per_claim_v1(expected_attempts: u64, draw_compute:
     draw_compute.saturating_mul(expected_attempts.max(1) as u128)
 }
 
+/// One draw, in the Q32 fixed point of [`palw_expected_attempts_q32_v1`].
+pub const PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1: u128 = 1u128 << 32;
+
+/// **The draws a claim costs in expectation at a target, in Q32 fixed point**: `⌊2¹⁶⁰ / (target + 1)⌋`.
+/// Its integer part is [`crate::palw_pwu::palw_expected_attempts_v1`] exactly; the fraction is what
+/// that consensus factor floors away. The fork-choice factor is an integer by design (`claim.pwu` is
+/// work in whole inferences), but a price of attempts cannot floor it: a class at 0.67 × MAX draws
+/// 1.5 forwards a claim in expectation and would be paid for one. Saturates at `u128::MAX` for
+/// targets under 2³² (some 2⁹⁶ draws a claim — no class mines there). Deterministic integer
+/// arithmetic; nothing on the block path reads it.
+pub fn palw_expected_attempts_q32_v1(class_target: u128) -> u128 {
+    if class_target == u128::MAX {
+        return PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1;
+    }
+    let d = class_target + 1;
+    // ⌊2¹²⁸ / d⌋ and 2¹²⁸ mod d, from `2¹²⁸ − d = u128::MAX − target` as `palw_expected_attempts_v1`
+    // derives its quotient.
+    let q = (u128::MAX - class_target) / d + 1;
+    let r = (u128::MAX - class_target) % d;
+    if q >= 1u128 << 96 {
+        return u128::MAX;
+    }
+    // ⌊r · 2³² / d⌋ by shift-subtract; the remainder stays below d ≤ 2¹²⁸, so a carry out of the
+    // shift means the doubled remainder is at least d.
+    let (mut rem, mut frac) = (r, 0u128);
+    for _ in 0..32 {
+        let carry = rem >> 127;
+        rem <<= 1;
+        frac <<= 1;
+        if carry == 1 || rem >= d {
+            rem = rem.wrapping_sub(d);
+            frac |= 1;
+        }
+    }
+    (q << 32) | frac
+}
+
+/// [`palw_attempted_compute_per_claim_v1`] with the draws in Q32: `⌊expected_attempts_q32 × draw / 2³²⌋`,
+/// never below one draw. Saturating.
+pub fn palw_attempted_compute_q32_per_claim_v1(expected_attempts_q32: u128, draw_compute: u128) -> u128 {
+    let ea = expected_attempts_q32.max(PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1);
+    let whole = (ea >> 32).saturating_mul(draw_compute);
+    let frac = (ea & (PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1 - 1)).saturating_mul(draw_compute) >> 32;
+    whole.saturating_add(frac)
+}
+
 /// **A price of work in `u128` measures** — [`crate::palw_panel_economy_v1::palw_work_priced_reward_v1`]'s
 /// rule over any compute measure: the escrow whole at or above the unit (or under a unit of zero),
 /// proportionally less below it, never more than the escrow.
@@ -541,8 +587,9 @@ pub struct PalwClassMeasureV1 {
     pub leaves: u64,
     /// The economic compute of the job an attempt runs (ADR-0117's rule at the height).
     pub draw_compute: u128,
-    /// `palw_expected_attempts_v1` of the class target.
-    pub expected_attempts: u64,
+    /// `palw_expected_attempts_q32_v1` of the class target: the draws a claim costs in expectation,
+    /// fraction included — not the integer fork-choice factor.
+    pub expected_attempts_q32: u128,
     /// Whether the class is a weight-bearing model class — the only classes that can set the unit.
     pub sets_unit: bool,
     /// Whether the class is priced at all: the liveness floor is not (ADR-0124 Decision 6, "the
@@ -555,7 +602,9 @@ impl PalwClassMeasureV1 {
         match basis {
             PalwRewardBasisV1::CurrentLeaves => self.leaves as u128,
             PalwRewardBasisV1::EconomicJob => self.draw_compute,
-            PalwRewardBasisV1::EconomicAttempted => palw_attempted_compute_per_claim_v1(self.expected_attempts, self.draw_compute),
+            PalwRewardBasisV1::EconomicAttempted => {
+                palw_attempted_compute_q32_per_claim_v1(self.expected_attempts_q32, self.draw_compute)
+            }
         }
     }
 }
@@ -581,8 +630,10 @@ pub struct PalwClassCensusV1 {
     /// The class's `pwu_per_inference`: its canonical job's leaves, the price basis today.
     pub pwu_per_inference: u64,
     pub class_target: u128,
-    /// `palw_expected_attempts_v1` of the target — the draws a claim costs in expectation.
+    /// `palw_expected_attempts_v1` of the target — the draws a claim costs in expectation, as the
+    /// fork-choice factor floors them — and `palw_expected_attempts_q32_v1`, the same with its fraction.
     pub expected_attempts: u64,
+    pub expected_attempts_q32: u128,
     /// Attempt-lane claims in the state, whatever their phase.
     pub claims_accepted: u64,
     pub claims_provisional: u64,
@@ -621,6 +672,7 @@ pub fn palw_class_census_v1(state: &PalwChainStateV2, params: &PalwStateParamsV2
                     pwu_per_inference: record.pwu_rule.canonical_leaves_v1(),
                     class_target,
                     expected_attempts: if class_target == 0 { 0 } else { crate::palw_pwu::palw_expected_attempts_v1(class_target) },
+                    expected_attempts_q32: if class_target == 0 { 0 } else { palw_expected_attempts_q32_v1(class_target) },
                     ..Default::default()
                 },
             )
@@ -758,7 +810,7 @@ pub fn palw_class_economics_v1(basis: PalwRewardBasisV1, input: &PalwClassEconom
         panel_pool_sompi: pool_total,
         burned_sompi: input.escrow_final_sompi - reward_total,
         final_compute: draw.saturating_mul(finals),
-        attempted_compute: palw_attempted_compute_per_claim_v1(input.measure.expected_attempts, draw)
+        attempted_compute: palw_attempted_compute_q32_per_claim_v1(input.measure.expected_attempts_q32, draw)
             .saturating_mul(input.claims_accepted as u128),
         panel_compute: draw.saturating_mul(input.seats_replaying as u128).saturating_mul(input.claims_accepted as u128),
     }
@@ -983,9 +1035,27 @@ mod tests {
         let huge = palw_priced_total_v1(u128::MAX / 4, 1, 2);
         assert!(huge <= u128::MAX / 8 && u128::MAX / 8 - huge < 1u128 << 62, "…to the bits the scale-down drops: {huge}");
         let classes = [
-            PalwClassMeasureV1 { leaves: 7_708, draw_compute: 100, expected_attempts: 26_404, sets_unit: false, priced: false },
-            PalwClassMeasureV1 { leaves: 2_685_360, draw_compute: 16_000, expected_attempts: 1, sets_unit: true, priced: true },
-            PalwClassMeasureV1 { leaves: 6_630_544, draw_compute: 80_000, expected_attempts: 1, sets_unit: true, priced: true },
+            PalwClassMeasureV1 {
+                leaves: 7_708,
+                draw_compute: 100,
+                expected_attempts_q32: 26_404 << 32,
+                sets_unit: false,
+                priced: false,
+            },
+            PalwClassMeasureV1 {
+                leaves: 2_685_360,
+                draw_compute: 16_000,
+                expected_attempts_q32: 1 << 32,
+                sets_unit: true,
+                priced: true,
+            },
+            PalwClassMeasureV1 {
+                leaves: 6_630_544,
+                draw_compute: 80_000,
+                expected_attempts_q32: 1 << 32,
+                sets_unit: true,
+                priced: true,
+            },
         ];
         assert_eq!(palw_basis_unit_v1(PalwRewardBasisV1::CurrentLeaves, &classes), 6_630_544);
         assert_eq!(palw_basis_unit_v1(PalwRewardBasisV1::EconomicJob, &classes), 80_000);
@@ -1000,10 +1070,24 @@ mod tests {
     const T11_ESCROW_7001: u64 = 320_084_650_080;
     const SEATS: u64 = 5;
     fn qwen36(expected_attempts: u64) -> PalwClassMeasureV1 {
-        PalwClassMeasureV1 { leaves: 2_685_360, draw_compute: PIN_QWEN36_DRAW_CCU, expected_attempts, sets_unit: true, priced: true }
+        let expected_attempts_q32 = (expected_attempts as u128) << 32;
+        PalwClassMeasureV1 {
+            leaves: 2_685_360,
+            draw_compute: PIN_QWEN36_DRAW_CCU,
+            expected_attempts_q32,
+            sets_unit: true,
+            priced: true,
+        }
     }
     fn qwen25(expected_attempts: u64) -> PalwClassMeasureV1 {
-        PalwClassMeasureV1 { leaves: 6_630_544, draw_compute: PIN_QWEN25_DRAW_CCU, expected_attempts, sets_unit: true, priced: true }
+        let expected_attempts_q32 = (expected_attempts as u128) << 32;
+        PalwClassMeasureV1 {
+            leaves: 6_630_544,
+            draw_compute: PIN_QWEN25_DRAW_CCU,
+            expected_attempts_q32,
+            sets_unit: true,
+            priced: true,
+        }
     }
     fn input(measure: PalwClassMeasureV1, accepted: u64, finals: u64) -> PalwClassEconomicsInputV1 {
         PalwClassEconomicsInputV1 {
@@ -1182,7 +1266,7 @@ mod tests {
             PalwClassMeasureV1 {
                 leaves: 9_000_776,
                 draw_compute: PIN_QWEN38_DRAW_CCU,
-                expected_attempts: 3_165,
+                expected_attempts_q32: 3_165 << 32,
                 sets_unit: true,
                 priced: true,
             },
@@ -1236,6 +1320,61 @@ mod tests {
         }
     }
 
+    /// **The draws a claim costs are read with their fraction.** The fork-choice factor floors
+    /// `2¹²⁸ / (target + 1)` to whole inferences; a price of attempts must not, or a class drawn at
+    /// two thirds of MAX (1.5 draws a claim) is priced as one. The Q32 reading's integer part is the
+    /// consensus factor at every target, its fraction is exact to 2⁻³², and on the attempted basis
+    /// the class drawn 1.5 times is measured 1.5 times — the job basis, which prices one execution,
+    /// under-reads it by half.
+    #[test]
+    fn adr0131_expected_attempts_keep_their_fraction_in_the_shadow() {
+        use crate::palw_pwu::palw_expected_attempts_v1;
+        let one = PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1;
+        assert_eq!(palw_expected_attempts_q32_v1(u128::MAX), one, "every ticket admits: one draw");
+        assert_eq!(palw_expected_attempts_q32_v1((1u128 << 127) - 1), 2 * one, "half of MAX: two draws exactly");
+        assert_eq!(palw_expected_attempts_q32_v1((1u128 << 100) - 1), one << 28, "a power-of-two divisor divides exactly");
+        assert_eq!(palw_expected_attempts_q32_v1(1u128 << 100), (one << 28) - 1, "…and one past it floors a bit below");
+        let two_thirds = u128::MAX / 3 * 2;
+        let q = palw_expected_attempts_q32_v1(two_thirds);
+        assert!(q.abs_diff(one * 3 / 2) <= 2, "1.5 draws a claim in Q32: {q}");
+        for target in [u128::MAX, u128::MAX / 2, two_thirds, u128::MAX / 12_665, u128::MAX / 1_000_000, 1u128 << 100, 1u128 << 40] {
+            let q = palw_expected_attempts_q32_v1(target);
+            // …to where the consensus factor saturates into u64 (a target of 2⁴⁰ is 2⁸⁸ draws).
+            assert_eq!(
+                (q >> 32).min(u64::MAX as u128),
+                palw_expected_attempts_v1(target) as u128,
+                "integer part is the consensus factor at {target}"
+            );
+        }
+        assert_eq!(palw_expected_attempts_q32_v1(5), u128::MAX, "a target under 2³² saturates");
+        assert_eq!(palw_attempted_compute_q32_per_claim_v1(q, 1_000_000), 1_499_999, "⌊1.5 × 10⁶⌋ to the bit the Q32 floor drops");
+        assert_eq!(palw_attempted_compute_q32_per_claim_v1(0, 7), 7, "never below one draw");
+        assert_eq!(palw_attempted_compute_q32_per_claim_v1(26_404 << 32, 100), 2_640_400);
+        // Two classes of equal draw compute, one drawn at MAX and one at two thirds of it, over one
+        // window: the attempted basis reads the second at 1.5 × the first (its A rates agree); the
+        // job basis reads both as one execution and its A rates differ by that half.
+        let at_max =
+            PalwClassMeasureV1 { leaves: 1, draw_compute: 1_000_000, expected_attempts_q32: one, sets_unit: true, priced: true };
+        let at_two_thirds = PalwClassMeasureV1 { expected_attempts_q32: q, ..at_max };
+        assert_eq!(at_two_thirds.measure(PalwRewardBasisV1::EconomicAttempted), 1_499_999);
+        assert_eq!(at_two_thirds.measure(PalwRewardBasisV1::EconomicJob), 1_000_000);
+        let classes = [at_max, at_two_thirds];
+        let window = |m: PalwClassMeasureV1| PalwClassEconomicsInputV1 {
+            measure: m,
+            escrow_final_sompi: 320_084_650_080u128 * 100,
+            claims_accepted: 100,
+            claims_final: 100,
+            seats_replaying: 5,
+        };
+        for (basis, expected_gap) in [(PalwRewardBasisV1::EconomicAttempted, 0..=1), (PalwRewardBasisV1::EconomicJob, 498..=502)] {
+            let unit = palw_basis_unit_v1(basis, &classes);
+            let a: Vec<u128> =
+                classes.iter().map(|c| palw_class_economics_v1(basis, &window(*c), unit).total_per_attempted_compute()).collect();
+            let gap = palw_gap_permille_v1(a[0], a[1]).expect("both paid");
+            assert!(expected_gap.contains(&gap), "{basis:?}: A rates {a:?}, gap {gap}‰");
+        }
+    }
+
     /// **The floor is paid whole on every basis** (ADR-0124 Decision 6: not a model, not priced),
     /// and never sets the unit.
     #[test]
@@ -1243,7 +1382,7 @@ mod tests {
         let floor = PalwClassMeasureV1 {
             leaves: 7_708,
             draw_compute: PIN_FLOOR_DRAW_CCU,
-            expected_attempts: 26_404,
+            expected_attempts_q32: 26_404 << 32,
             sets_unit: false,
             priced: false,
         };
