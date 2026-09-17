@@ -318,6 +318,8 @@ pub struct PalwPanelConfig {
     pub class_cache_bytes: u64,
     /// ADR-0112: how much of a mapped class's weights this node keeps in memory.
     pub class_residency: misaka_palw_sdk::PalwWeightResidencyV1,
+    /// ADR-0132: the node's per-class counters this seat reports its replays and receipts into.
+    pub telemetry: std::sync::Arc<crate::palw_economics::PalwNodeTelemetryV1>,
     /// **Re-run every licensed claim and dispute the ones this node cannot reproduce.**
     ///
     /// Off by default because it is not free: it costs one full inference per licensed claim, and
@@ -4440,6 +4442,11 @@ impl PalwPanelService {
                             match offload(resolved, move |b| b.execute_for_verdict(&ctx_for_blocking, &prompt_for_blocking)).await {
                                 Ok((backend, Ok(roots))) => {
                                     if replay_licenses_v1(&roots, duty.execution_root, duty.trace_root, duty.work_leaves) {
+                                        self.config.telemetry.panel_replay(
+                                            duty.class_id,
+                                            started.elapsed().as_millis() as u64,
+                                            roots.work_leaves.unwrap_or(duty.work_leaves),
+                                        );
                                         info!(
                                             "[{PALW_PANEL}] claim {}: licensed by replay — the anchor's job reproduces the claim's roots \
                                              ({} leaves replayed, priced {}, {:.0?}); no material moved (ADR-0084 D7)",
@@ -4557,6 +4564,7 @@ impl PalwPanelService {
                 let receipt = PalwSeatReceiptV2 { claim: duty.claim_id, verdict, seat_bond: bond_key, signed_daa, signature };
                 let bytes = borsh::to_vec(&receipt).expect("a receipt serializes");
                 info!("[{PALW_PANEL}] filed a {:?} receipt for claim {}", verdict_name(&verdict), duty.claim_id);
+                self.config.telemetry.panel_receipt(duty.class_id, verdict_name(&verdict));
                 // ADR-0124 Decision 2: a `Valid` receipt is the one this seat may have to carry itself.
                 if matches!(verdict, kaspa_consensus_core::palw_panel_v2::PalwReceiptVerdictV2::Valid) {
                     own_receipts.insert(duty.claim_id, (receipt.clone(), duty.receipt_deadline));
@@ -6213,6 +6221,7 @@ impl PalwPanelService {
             == Some(kaspa_consensus_core::palw_held_context_v1::PalwHeldSeatRouteV1::Resume);
         let mut unanswered: Vec<u32> = Vec::new();
         let held: usize = draw.intervals.iter().filter(|i| openings.contains_key(&(duty.claim_id, **i))).count();
+        self.config.telemetry.panel_openings_held(duty.class_id, held as u64);
         info!(
             "[{PALW_PANEL}] claim {}: interval seat — drew {:?} of {} interval(s), {held} opening(s) held",
             duty.claim_id, draw.intervals, draw.interval_count

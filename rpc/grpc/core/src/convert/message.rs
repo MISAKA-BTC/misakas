@@ -890,6 +890,59 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwClassContextsResponse>, protowire:
     }
 });
 from!(&kaspa_rpc_core::GetPalwClassEconomicsRequest, protowire::GetPalwClassEconomicsRequestMessage);
+from!(item: &kaspa_rpc_core::RpcPalwClassLedgerTotals, protowire::RpcPalwClassLedgerTotals, {
+    Self {
+        available: item.available,
+        claims: item.claims,
+        bound: item.bound,
+        licensed: item.licensed,
+        finals: item.finals,
+        voided: item.voided,
+        redrawn: item.redrawn,
+        paid_at_acceptance: item.paid_at_acceptance,
+        escrow_final_sompi: item.escrow_final_sompi.clone(),
+        producer_paid_sompi: item.producer_paid_sompi.clone(),
+        panel_paid_sompi: item.panel_paid_sompi.clone(),
+        reserve_sompi: item.reserve_sompi.clone(),
+        burned_sompi: item.burned_sompi.clone(),
+        attempted_compute: item.attempted_compute.clone(),
+        final_compute: item.final_compute.clone(),
+        verification_compute: item.verification_compute.clone(),
+        producer_per_attempted_compute: item.producer_per_attempted_compute.clone(),
+        panel_per_verification_compute: item.panel_per_verification_compute.clone(),
+        total_per_attempted_compute: item.total_per_attempted_compute.clone(),
+        total_per_final_compute: item.total_per_final_compute.clone(),
+        licence_rate_permille: item.licence_rate_permille,
+        final_of_licensed_permille: item.final_of_licensed_permille,
+        final_rate_permille: item.final_rate_permille,
+        avg_bind_wait_daa: item.avg_bind_wait_daa,
+        avg_licence_wait_daa: item.avg_licence_wait_daa,
+        avg_final_wait_daa: item.avg_final_wait_daa,
+        avg_void_wait_daa: item.avg_void_wait_daa,
+        avg_expected_attempts_q32: item.avg_expected_attempts_q32.clone(),
+        avg_network_expected_attempts_q32: item.avg_network_expected_attempts_q32.clone(),
+        first_accepted_daa: item.first_accepted_daa,
+        last_accepted_daa: item.last_accepted_daa,
+    }
+});
+from!(item: &kaspa_rpc_core::RpcPalwClassNodeTelemetry, protowire::RpcPalwClassNodeTelemetry, {
+    Self {
+        available: item.available,
+        draws: item.draws,
+        class_wins: item.class_wins,
+        produced: item.produced,
+        draw_millis: item.draw_millis,
+        storage_read_mib: item.storage_read_mib,
+        replays: item.replays,
+        replay_millis: item.replay_millis,
+        replay_leaves: item.replay_leaves,
+        receipts_valid: item.receipts_valid,
+        receipts_unavailable: item.receipts_unavailable,
+        receipts_incapable: item.receipts_incapable,
+        receipts_other: item.receipts_other,
+        openings_held: item.openings_held,
+    }
+});
 from!(item: &kaspa_rpc_core::RpcPalwClassEconomics, protowire::RpcPalwClassEconomics, {
     Self {
         class_id: item.class_id.clone(),
@@ -913,6 +966,8 @@ from!(item: &kaspa_rpc_core::RpcPalwClassEconomics, protowire::RpcPalwClassEcono
         claims_redrawn: item.claims_redrawn,
         escrow_accepted_sompi: item.escrow_accepted_sompi.clone(),
         escrow_final_sompi: item.escrow_final_sompi.clone(),
+        ledger: Some(protowire::RpcPalwClassLedgerTotals::from(&item.ledger)),
+        telemetry: Some(protowire::RpcPalwClassNodeTelemetry::from(&item.telemetry)),
     }
 });
 from!(item: RpcResult<&kaspa_rpc_core::GetPalwClassEconomicsResponse>, protowire::GetPalwClassEconomicsResponseMessage, {
@@ -923,6 +978,12 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwClassEconomicsResponse>, protowire
         seat_count: item.seat_count as u32,
         prefill_draw: item.prefill_draw,
         classes: item.classes.iter().map(protowire::RpcPalwClassEconomics::from).collect(),
+        network_bits: item.network_bits,
+        network_expected_attempts_q32: item.network_expected_attempts_q32.clone(),
+        ledger_available: item.ledger_available,
+        ledger_claims: item.ledger_claims,
+        ledger_first_daa: item.ledger_first_daa,
+        ledger_last_daa: item.ledger_last_daa,
         error: None,
     }
 });
@@ -2134,6 +2195,59 @@ try_from!(item: &protowire::GetPalwClassContextsResponseMessage, RpcResult<kaspa
     }
 });
 try_from!(&protowire::GetPalwClassEconomicsRequestMessage, kaspa_rpc_core::GetPalwClassEconomicsRequest);
+try_from!(item: &protowire::RpcPalwClassLedgerTotals, kaspa_rpc_core::RpcPalwClassLedgerTotals, {
+    Self {
+        available: item.available,
+        claims: item.claims,
+        bound: item.bound,
+        licensed: item.licensed,
+        finals: item.finals,
+        voided: item.voided,
+        redrawn: item.redrawn,
+        paid_at_acceptance: item.paid_at_acceptance,
+        escrow_final_sompi: item.escrow_final_sompi.clone(),
+        producer_paid_sompi: item.producer_paid_sompi.clone(),
+        panel_paid_sompi: item.panel_paid_sompi.clone(),
+        reserve_sompi: item.reserve_sompi.clone(),
+        burned_sompi: item.burned_sompi.clone(),
+        attempted_compute: item.attempted_compute.clone(),
+        final_compute: item.final_compute.clone(),
+        verification_compute: item.verification_compute.clone(),
+        producer_per_attempted_compute: item.producer_per_attempted_compute.clone(),
+        panel_per_verification_compute: item.panel_per_verification_compute.clone(),
+        total_per_attempted_compute: item.total_per_attempted_compute.clone(),
+        total_per_final_compute: item.total_per_final_compute.clone(),
+        licence_rate_permille: item.licence_rate_permille,
+        final_of_licensed_permille: item.final_of_licensed_permille,
+        final_rate_permille: item.final_rate_permille,
+        avg_bind_wait_daa: item.avg_bind_wait_daa,
+        avg_licence_wait_daa: item.avg_licence_wait_daa,
+        avg_final_wait_daa: item.avg_final_wait_daa,
+        avg_void_wait_daa: item.avg_void_wait_daa,
+        avg_expected_attempts_q32: item.avg_expected_attempts_q32.clone(),
+        avg_network_expected_attempts_q32: item.avg_network_expected_attempts_q32.clone(),
+        first_accepted_daa: item.first_accepted_daa,
+        last_accepted_daa: item.last_accepted_daa,
+    }
+});
+try_from!(item: &protowire::RpcPalwClassNodeTelemetry, kaspa_rpc_core::RpcPalwClassNodeTelemetry, {
+    Self {
+        available: item.available,
+        draws: item.draws,
+        class_wins: item.class_wins,
+        produced: item.produced,
+        draw_millis: item.draw_millis,
+        storage_read_mib: item.storage_read_mib,
+        replays: item.replays,
+        replay_millis: item.replay_millis,
+        replay_leaves: item.replay_leaves,
+        receipts_valid: item.receipts_valid,
+        receipts_unavailable: item.receipts_unavailable,
+        receipts_incapable: item.receipts_incapable,
+        receipts_other: item.receipts_other,
+        openings_held: item.openings_held,
+    }
+});
 try_from!(item: &protowire::RpcPalwClassEconomics, kaspa_rpc_core::RpcPalwClassEconomics, {
     Self {
         class_id: item.class_id.clone(),
@@ -2157,6 +2271,8 @@ try_from!(item: &protowire::RpcPalwClassEconomics, kaspa_rpc_core::RpcPalwClassE
         claims_redrawn: item.claims_redrawn,
         escrow_accepted_sompi: item.escrow_accepted_sompi.clone(),
         escrow_final_sompi: item.escrow_final_sompi.clone(),
+        ledger: item.ledger.as_ref().map(kaspa_rpc_core::RpcPalwClassLedgerTotals::try_from).transpose()?.unwrap_or_default(),
+        telemetry: item.telemetry.as_ref().map(kaspa_rpc_core::RpcPalwClassNodeTelemetry::try_from).transpose()?.unwrap_or_default(),
     }
 });
 try_from!(item: &protowire::GetPalwClassEconomicsResponseMessage, RpcResult<kaspa_rpc_core::GetPalwClassEconomicsResponse>, {
@@ -2168,6 +2284,12 @@ try_from!(item: &protowire::GetPalwClassEconomicsResponseMessage, RpcResult<kasp
         seat_count: u16::try_from(item.seat_count).map_err(|_| RpcError::General("seatCount is not a u16".to_string()))?,
         prefill_draw: item.prefill_draw,
         classes: item.classes.iter().map(kaspa_rpc_core::RpcPalwClassEconomics::try_from).collect::<RpcResult<Vec<_>>>()?,
+        network_bits: item.network_bits,
+        network_expected_attempts_q32: item.network_expected_attempts_q32.clone(),
+        ledger_available: item.ledger_available,
+        ledger_claims: item.ledger_claims,
+        ledger_first_daa: item.ledger_first_daa,
+        ledger_last_daa: item.ledger_last_daa,
     }
 });
 try_from!(&protowire::GetPalwRegistrationTermsRequestMessage, kaspa_rpc_core::GetPalwRegistrationTermsRequest);

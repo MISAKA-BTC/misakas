@@ -614,16 +614,21 @@ pub fn storage_snapshot_v1(holdings: &[PalwLoadedArtifactV1]) -> PalwStorageSnap
 /// the draw, and what the class loader read of it — with the loader's hit rate and what it holds.
 /// The number the fleet lacked: 12.8 GiB through 3 million page faults a draw was found with a
 /// sampler, not a log.
-pub fn log_draw_storage_v1(role: &str, before: &PalwStorageSnapshotV1, holdings: &[PalwLoadedArtifactV1]) {
+pub fn log_draw_storage_v1(role: &str, before: &PalwStorageSnapshotV1, holdings: &[PalwLoadedArtifactV1]) -> Option<u64> {
     let after = storage_snapshot_v1(holdings);
     let mib = |bytes: u64| bytes as f64 / (1u64 << 20) as f64;
+    // ADR-0132: the number the telemetry keeps, in whole MiB, where the platform counts it.
+    let process_mib = match (before.process_read_bytes, after.process_read_bytes) {
+        (Some(a), Some(b)) => Some(b.saturating_sub(a) >> 20),
+        _ => None,
+    };
     let process = match (before.process_read_bytes, after.process_read_bytes) {
         (Some(a), Some(b)) => format!("{:.1} MiB", mib(b.saturating_sub(a))),
         _ => "an amount this platform does not count".to_string(),
     };
     if after.holdings.is_empty() {
         info!("[{role}] this draw read {process} from storage (no mapped class holds a residency: the page cache decides)");
-        return;
+        return process_mib;
     }
     for (name, now) in &after.holdings {
         let then = before.holdings.iter().find(|(n, _)| n == name).map(|(_, s)| *s).unwrap_or_default();
@@ -640,6 +645,7 @@ pub fn log_draw_storage_v1(role: &str, before: &PalwStorageSnapshotV1, holdings:
             gib(now.pinned_bytes)
         );
     }
+    process_mib
 }
 
 /// One path's half of [`load_class_holdings_v1`], under a lock the caller already holds.

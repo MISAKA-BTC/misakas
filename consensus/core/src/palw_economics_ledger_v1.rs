@@ -13,9 +13,7 @@
 //! Every number is an integer; the rates are scaled by [`PALW_LEDGER_RATE_SCALE_V1`] (MSK-sompi per
 //! 10⁹ MAC-equivalents), and `avg_*` fields are integer means.
 
-use crate::palw_economic_compute_v1::{
-    PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1, palw_attempted_compute_q32_per_claim_v1, palw_gap_permille_v1, palw_priced_reward_u128_v1,
-};
+use crate::palw_economic_compute_v1::{palw_attempted_compute_q32_per_claim_v1, palw_gap_permille_v1, palw_priced_reward_u128_v1};
 use crate::palw_panel_economy_v1::palw_panel_split_v1;
 use crate::palw_state_v2::{PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwClaimSourceV2, PalwVoidReasonV2};
 use crate::{BlockHash, Hash64};
@@ -93,12 +91,14 @@ pub fn palw_claim_ledger_observations_v1(state: &PalwChainStateV2) -> Vec<PalwCl
 /// facts (the class's draws and compute at the time, the network draws of the accepted block) stay;
 /// lifecycle marks fill in as they are observed; the payout is derived once, at the first read that
 /// sees the `Final`.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
 pub struct PalwClaimLedgerRowV1 {
     pub version: u32,
     pub claim_id: Hash64,
     pub class_id: Hash64,
-    pub producer_bond: PalwBondKeyV2,
+    /// The producer's bond outpoint (`PalwBondKeyV2`'s inner outpoint, which the node's database
+    /// can encode).
+    pub producer_bond: crate::tx::TransactionOutpoint,
     pub accepted_daa: u64,
     pub accepted_block: BlockHash,
     pub escrow_sompi: u64,
@@ -133,6 +133,8 @@ pub struct PalwClaimLedgerRowV1 {
     /// fence, ADR-0058 B-1) — nothing is named at its `Final`.
     pub paid_at_acceptance: bool,
 }
+
+impl kaspa_utils::mem_size::MemSizeEstimator for PalwClaimLedgerRowV1 {}
 
 /// The class facts a row snapshots at first sight.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -211,7 +213,7 @@ pub fn palw_ledger_merge_v1(
             version: PALW_ECONOMICS_LEDGER_VERSION_V1,
             claim_id: obs.claim_id,
             class_id: obs.class_id,
-            producer_bond: obs.producer_bond,
+            producer_bond: obs.producer_bond.0,
             accepted_daa: obs.accepted_daa,
             accepted_block: obs.accepted_block,
             escrow_sompi: obs.escrow_sompi,
@@ -460,7 +462,9 @@ pub fn palw_ledger_gap_permille_v1(a: u128, b: u128) -> Option<u128> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::palw_economic_compute_v1::{palw_expected_attempts_q32_v1, palw_network_expected_attempts_q32_v1};
+    use crate::palw_economic_compute_v1::{
+        PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1, palw_expected_attempts_q32_v1, palw_network_expected_attempts_q32_v1,
+    };
     use crate::tx::TransactionOutpoint;
 
     const ESCROW_PRE: u64 = 275_628_448_680;

@@ -7,6 +7,7 @@ pub mod palw_agent;
 pub mod palw_backends;
 pub mod palw_class_context;
 pub mod palw_dump;
+pub mod palw_economics;
 /// ADR-0077 Decision 8's seat: the interval draw, the signed opening request, the exact replay,
 /// and Decision 16's `PanelDa` gate. See the module's own header.
 pub mod palw_fp_seat;

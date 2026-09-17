@@ -786,6 +786,12 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// ADR-0132: every attempt-lane claim in the tip state, as the end-to-end ledger observes it
+    /// (phase marks, escrow, the duty row's seats). `None` off `ConsensusV2`.
+    fn palw_claim_ledger_observations_v1(&self) -> Option<Vec<crate::palw_economics_ledger_v1::PalwClaimLedgerObservationV1>> {
+        None
+    }
+
     fn palw_v2_class_table(&self) -> Vec<crate::palw_state_v2::PalwClassRowV2> {
         Vec::new()
     }

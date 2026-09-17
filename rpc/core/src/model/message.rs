@@ -4817,6 +4817,191 @@ impl Deserializer for GetPalwClassEconomicsRequest {
     }
 }
 
+/// ADR-0132: what this node's ledger holds for one class — the attempt-lane claims it followed from
+/// acceptance to their terminal phase, the sompi their `Final`s named (by the rule in force then),
+/// and the compute they cost: `attempted` = Σ class draws × network draws × one draw's job over
+/// every claim, `final` = Σ one draw's job over the `Final`s, `verification` = Σ seats × one draw's
+/// job over the claims that bound. Rates are sompi per 10⁹ MAC-eq, decimal `u128`; waits are mean
+/// DAA; `available` is false on a node without a recorder. Node-local: two nodes hold two windows.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwClassLedgerTotals {
+    pub available: bool,
+    pub claims: u64,
+    pub bound: u64,
+    pub licensed: u64,
+    pub finals: u64,
+    pub voided: u64,
+    pub redrawn: u64,
+    pub paid_at_acceptance: u64,
+    pub escrow_final_sompi: String,
+    pub producer_paid_sompi: String,
+    pub panel_paid_sompi: String,
+    pub reserve_sompi: String,
+    pub burned_sompi: String,
+    pub attempted_compute: String,
+    pub final_compute: String,
+    pub verification_compute: String,
+    pub producer_per_attempted_compute: String,
+    pub panel_per_verification_compute: String,
+    pub total_per_attempted_compute: String,
+    pub total_per_final_compute: String,
+    pub licence_rate_permille: u32,
+    pub final_of_licensed_permille: u32,
+    pub final_rate_permille: u32,
+    pub avg_bind_wait_daa: u64,
+    pub avg_licence_wait_daa: u64,
+    pub avg_final_wait_daa: u64,
+    pub avg_void_wait_daa: u64,
+    pub avg_expected_attempts_q32: String,
+    pub avg_network_expected_attempts_q32: String,
+    pub first_accepted_daa: u64,
+    pub last_accepted_daa: u64,
+}
+
+impl Serializer for RpcPalwClassLedgerTotals {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u64, &self.claims, writer)?;
+        store!(u64, &self.bound, writer)?;
+        store!(u64, &self.licensed, writer)?;
+        store!(u64, &self.finals, writer)?;
+        store!(u64, &self.voided, writer)?;
+        store!(u64, &self.redrawn, writer)?;
+        store!(u64, &self.paid_at_acceptance, writer)?;
+        store!(String, &self.escrow_final_sompi, writer)?;
+        store!(String, &self.producer_paid_sompi, writer)?;
+        store!(String, &self.panel_paid_sompi, writer)?;
+        store!(String, &self.reserve_sompi, writer)?;
+        store!(String, &self.burned_sompi, writer)?;
+        store!(String, &self.attempted_compute, writer)?;
+        store!(String, &self.final_compute, writer)?;
+        store!(String, &self.verification_compute, writer)?;
+        store!(String, &self.producer_per_attempted_compute, writer)?;
+        store!(String, &self.panel_per_verification_compute, writer)?;
+        store!(String, &self.total_per_attempted_compute, writer)?;
+        store!(String, &self.total_per_final_compute, writer)?;
+        store!(u32, &self.licence_rate_permille, writer)?;
+        store!(u32, &self.final_of_licensed_permille, writer)?;
+        store!(u32, &self.final_rate_permille, writer)?;
+        store!(u64, &self.avg_bind_wait_daa, writer)?;
+        store!(u64, &self.avg_licence_wait_daa, writer)?;
+        store!(u64, &self.avg_final_wait_daa, writer)?;
+        store!(u64, &self.avg_void_wait_daa, writer)?;
+        store!(String, &self.avg_expected_attempts_q32, writer)?;
+        store!(String, &self.avg_network_expected_attempts_q32, writer)?;
+        store!(u64, &self.first_accepted_daa, writer)?;
+        store!(u64, &self.last_accepted_daa, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwClassLedgerTotals {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            claims: load!(u64, reader)?,
+            bound: load!(u64, reader)?,
+            licensed: load!(u64, reader)?,
+            finals: load!(u64, reader)?,
+            voided: load!(u64, reader)?,
+            redrawn: load!(u64, reader)?,
+            paid_at_acceptance: load!(u64, reader)?,
+            escrow_final_sompi: load!(String, reader)?,
+            producer_paid_sompi: load!(String, reader)?,
+            panel_paid_sompi: load!(String, reader)?,
+            reserve_sompi: load!(String, reader)?,
+            burned_sompi: load!(String, reader)?,
+            attempted_compute: load!(String, reader)?,
+            final_compute: load!(String, reader)?,
+            verification_compute: load!(String, reader)?,
+            producer_per_attempted_compute: load!(String, reader)?,
+            panel_per_verification_compute: load!(String, reader)?,
+            total_per_attempted_compute: load!(String, reader)?,
+            total_per_final_compute: load!(String, reader)?,
+            licence_rate_permille: load!(u32, reader)?,
+            final_of_licensed_permille: load!(u32, reader)?,
+            final_rate_permille: load!(u32, reader)?,
+            avg_bind_wait_daa: load!(u64, reader)?,
+            avg_licence_wait_daa: load!(u64, reader)?,
+            avg_final_wait_daa: load!(u64, reader)?,
+            avg_void_wait_daa: load!(u64, reader)?,
+            avg_expected_attempts_q32: load!(String, reader)?,
+            avg_network_expected_attempts_q32: load!(String, reader)?,
+            first_accepted_daa: load!(u64, reader)?,
+            last_accepted_daa: load!(u64, reader)?,
+        })
+    }
+}
+
+/// ADR-0132: what THIS node did for the class — its producer's draws (class wins, blocks, the
+/// milliseconds a forward took, the MiB read from storage during the draws, ADR-0112) and its
+/// seat's replays and receipts. Counters since the process started; `available` is false where the
+/// node neither produces nor seats the class.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwClassNodeTelemetry {
+    pub available: bool,
+    pub draws: u64,
+    pub class_wins: u64,
+    pub produced: u64,
+    pub draw_millis: u64,
+    pub storage_read_mib: u64,
+    pub replays: u64,
+    pub replay_millis: u64,
+    pub replay_leaves: u64,
+    pub receipts_valid: u64,
+    pub receipts_unavailable: u64,
+    pub receipts_incapable: u64,
+    pub receipts_other: u64,
+    pub openings_held: u64,
+}
+
+impl Serializer for RpcPalwClassNodeTelemetry {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u64, &self.draws, writer)?;
+        store!(u64, &self.class_wins, writer)?;
+        store!(u64, &self.produced, writer)?;
+        store!(u64, &self.draw_millis, writer)?;
+        store!(u64, &self.storage_read_mib, writer)?;
+        store!(u64, &self.replays, writer)?;
+        store!(u64, &self.replay_millis, writer)?;
+        store!(u64, &self.replay_leaves, writer)?;
+        store!(u64, &self.receipts_valid, writer)?;
+        store!(u64, &self.receipts_unavailable, writer)?;
+        store!(u64, &self.receipts_incapable, writer)?;
+        store!(u64, &self.receipts_other, writer)?;
+        store!(u64, &self.openings_held, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwClassNodeTelemetry {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            draws: load!(u64, reader)?,
+            class_wins: load!(u64, reader)?,
+            produced: load!(u64, reader)?,
+            draw_millis: load!(u64, reader)?,
+            storage_read_mib: load!(u64, reader)?,
+            replays: load!(u64, reader)?,
+            replay_millis: load!(u64, reader)?,
+            replay_leaves: load!(u64, reader)?,
+            receipts_valid: load!(u64, reader)?,
+            receipts_unavailable: load!(u64, reader)?,
+            receipts_incapable: load!(u64, reader)?,
+            receipts_other: load!(u64, reader)?,
+            openings_held: load!(u64, reader)?,
+        })
+    }
+}
+
 /// One class: its registration numbers, its target, its job's economic compute, and a census of the
 /// attempt-lane claims the node's state still holds.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -4856,6 +5041,9 @@ pub struct RpcPalwClassEconomics {
     /// Decimal `u128`: Σ escrow over every accepted claim, and over the `Final` ones.
     pub escrow_accepted_sompi: String,
     pub escrow_final_sompi: String,
+    /// ADR-0132: the node's end-to-end ledger for the class, and what this node itself did for it.
+    pub ledger: RpcPalwClassLedgerTotals,
+    pub telemetry: RpcPalwClassNodeTelemetry,
 }
 
 impl Serializer for RpcPalwClassEconomics {
@@ -4882,6 +5070,8 @@ impl Serializer for RpcPalwClassEconomics {
         store!(u64, &self.claims_redrawn, writer)?;
         store!(String, &self.escrow_accepted_sompi, writer)?;
         store!(String, &self.escrow_final_sompi, writer)?;
+        serialize!(RpcPalwClassLedgerTotals, &self.ledger, writer)?;
+        serialize!(RpcPalwClassNodeTelemetry, &self.telemetry, writer)?;
         Ok(())
     }
 }
@@ -4911,6 +5101,8 @@ impl Deserializer for RpcPalwClassEconomics {
             claims_redrawn: load!(u64, reader)?,
             escrow_accepted_sompi: load!(String, reader)?,
             escrow_final_sompi: load!(String, reader)?,
+            ledger: deserialize!(RpcPalwClassLedgerTotals, reader)?,
+            telemetry: deserialize!(RpcPalwClassNodeTelemetry, reader)?,
         })
     }
 }
@@ -4928,6 +5120,16 @@ pub struct GetPalwClassEconomicsResponse {
     pub seat_count: u16,
     /// Whether an attempt at the tip runs its class's job without decode calls (ADR-0117).
     pub prefill_draw: bool,
+    /// ADR-0132: the tip's compact `bits` and the network draws a class win costs at it, Q32 as a
+    /// decimal `u128` (2.0 at the difficulty floor).
+    pub network_bits: u32,
+    pub network_expected_attempts_q32: String,
+    /// ADR-0132: whether this node keeps an end-to-end ledger, how many claims it holds, and the
+    /// accepted-DAA span they cover.
+    pub ledger_available: bool,
+    pub ledger_claims: u64,
+    pub ledger_first_daa: u64,
+    pub ledger_last_daa: u64,
     pub classes: Vec<RpcPalwClassEconomics>,
 }
 
@@ -4939,6 +5141,12 @@ impl Serializer for GetPalwClassEconomicsResponse {
         store!(u16, &self.economic_compute_version, writer)?;
         store!(u16, &self.seat_count, writer)?;
         store!(bool, &self.prefill_draw, writer)?;
+        store!(u32, &self.network_bits, writer)?;
+        store!(String, &self.network_expected_attempts_q32, writer)?;
+        store!(bool, &self.ledger_available, writer)?;
+        store!(u64, &self.ledger_claims, writer)?;
+        store!(u64, &self.ledger_first_daa, writer)?;
+        store!(u64, &self.ledger_last_daa, writer)?;
         serialize!(Vec<RpcPalwClassEconomics>, &self.classes, writer)?;
         Ok(())
     }
@@ -4953,6 +5161,12 @@ impl Deserializer for GetPalwClassEconomicsResponse {
             economic_compute_version: load!(u16, reader)?,
             seat_count: load!(u16, reader)?,
             prefill_draw: load!(bool, reader)?,
+            network_bits: load!(u32, reader)?,
+            network_expected_attempts_q32: load!(String, reader)?,
+            ledger_available: load!(bool, reader)?,
+            ledger_claims: load!(u64, reader)?,
+            ledger_first_daa: load!(u64, reader)?,
+            ledger_last_daa: load!(u64, reader)?,
             classes: deserialize!(Vec<RpcPalwClassEconomics>, reader)?,
         })
     }

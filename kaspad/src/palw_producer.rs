@@ -117,6 +117,8 @@ pub struct PalwProducerConfig {
     pub class_cache_bytes: u64,
     /// ADR-0112: how much of a mapped class's weights this node keeps in memory.
     pub class_residency: misaka_palw_sdk::PalwWeightResidencyV1,
+    /// ADR-0132: the node's per-class counters this producer reports its draws into.
+    pub telemetry: std::sync::Arc<crate::palw_economics::PalwNodeTelemetryV1>,
 }
 
 pub struct PalwProducerService {
@@ -874,6 +876,7 @@ impl PalwProducerService {
         // ADR-0112 Decision 8: what one draw reads from storage, printed beside the draw. The
         // number that said the fleet's draws were page faults, made a line an operator can watch.
         let storage_before = crate::palw_backends::storage_snapshot_v1(&self.class_holdings);
+        let draw_started = std::time::Instant::now();
         let (run, answer_ids) = tokio::task::spawn_blocking(move || {
             let run = match tamper {
                 None => backend.execute(&job_for_blocking, &prompt_for_blocking),
@@ -886,7 +889,8 @@ impl PalwProducerService {
         })
         .await
         .map_err(|e| format!("the execution task did not finish: {e}"))??;
-        crate::palw_backends::log_draw_storage_v1(PALW_PRODUCER, &storage_before, &self.class_holdings);
+        let storage_read_mib = crate::palw_backends::log_draw_storage_v1(PALW_PRODUCER, &storage_before, &self.class_holdings);
+        let draw_millis = draw_started.elapsed().as_millis() as u64;
 
         // Every field is fixed now: the roots are the execution's, the six chain facts are
         // `facts`', and the challenge binds the position — this template, this timestamp, this
@@ -941,12 +945,14 @@ impl PalwProducerService {
         // **The draw.** The class lottery first, then the network's against `bits` — both are
         // functions of the one execution, so both are decided here, once, with no search and no
         // blocking task: two hashes, not a loop.
+        let mut class_won = false;
         let search: Option<(u64, PalwAttemptUnsignedV2)> = {
             let ticket = class_ticket_v3(&attempt, anchor);
             if ticket > facts.class_target {
                 trace!("[{PALW_PRODUCER}] bucket {nonce_bucket}: the class draw lost");
                 None
             } else {
+                class_won = true;
                 let mut header = template.block.header.clone();
                 header.nonce = nonce;
                 header.palw_commitment =
@@ -961,6 +967,9 @@ impl PalwProducerService {
                 }
             }
         };
+        // ADR-0132: one draw, both lotteries, into the node's counters — what the chain credits
+        // (a class win) against what the forward cost (every draw, its time, its storage reads).
+        self.config.telemetry.producer_draw(facts.class_id, class_won, search.is_some(), draw_millis, storage_read_mib.unwrap_or(0));
         if let Some((nonce, won)) = search {
             attempt = won;
             // Both under target. Sign the attempt id ONCE and publish.

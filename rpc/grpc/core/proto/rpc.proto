@@ -1959,6 +1959,57 @@ message GetPalwClassContextsResponseMessage {
 // ADR-0131 Decision 1: each class's registration numbers, target, economic compute and claim census.
 message GetPalwClassEconomicsRequestMessage {}
 
+message RpcPalwClassLedgerTotals {
+  bool available = 1;
+  uint64 claims = 2;
+  uint64 bound = 3;
+  uint64 licensed = 4;
+  uint64 finals = 5;
+  uint64 voided = 6;
+  uint64 redrawn = 7;
+  uint64 paidAtAcceptance = 8;
+  string escrowFinalSompi = 9;
+  string producerPaidSompi = 10;
+  string panelPaidSompi = 11;
+  string reserveSompi = 12;
+  string burnedSompi = 13;
+  string attemptedCompute = 14;
+  string finalCompute = 15;
+  string verificationCompute = 16;
+  string producerPerAttemptedCompute = 17;
+  string panelPerVerificationCompute = 18;
+  string totalPerAttemptedCompute = 19;
+  string totalPerFinalCompute = 20;
+  uint32 licenceRatePermille = 21;
+  uint32 finalOfLicensedPermille = 22;
+  uint32 finalRatePermille = 23;
+  uint64 avgBindWaitDaa = 24;
+  uint64 avgLicenceWaitDaa = 25;
+  uint64 avgFinalWaitDaa = 26;
+  uint64 avgVoidWaitDaa = 27;
+  string avgExpectedAttemptsQ32 = 28;
+  string avgNetworkExpectedAttemptsQ32 = 29;
+  uint64 firstAcceptedDaa = 30;
+  uint64 lastAcceptedDaa = 31;
+}
+
+message RpcPalwClassNodeTelemetry {
+  bool available = 1;
+  uint64 draws = 2;
+  uint64 classWins = 3;
+  uint64 produced = 4;
+  uint64 drawMillis = 5;
+  uint64 storageReadMib = 6;
+  uint64 replays = 7;
+  uint64 replayMillis = 8;
+  uint64 replayLeaves = 9;
+  uint64 receiptsValid = 10;
+  uint64 receiptsUnavailable = 11;
+  uint64 receiptsIncapable = 12;
+  uint64 receiptsOther = 13;
+  uint64 openingsHeld = 14;
+}
+
 message RpcPalwClassEconomics {
   string classId = 1;
   string modelId = 2;
@@ -1981,6 +2032,8 @@ message RpcPalwClassEconomics {
   string escrowAcceptedSompi = 19;
   string escrowFinalSompi = 20;
   string expectedAttemptsQ32 = 21;
+  RpcPalwClassLedgerTotals ledger = 22;
+  RpcPalwClassNodeTelemetry telemetry = 23;
 }
 
 message GetPalwClassEconomicsResponseMessage {
@@ -1990,5 +2043,11 @@ message GetPalwClassEconomicsResponseMessage {
   uint32 seatCount = 4;
   bool prefillDraw = 5;
   repeated RpcPalwClassEconomics classes = 6;
+  uint32 networkBits = 7;
+  string networkExpectedAttemptsQ32 = 8;
+  bool ledgerAvailable = 9;
+  uint64 ledgerClaims = 10;
+  uint64 ledgerFirstDaa = 11;
+  uint64 ledgerLastDaa = 12;
   RPCError error = 1000;
 }

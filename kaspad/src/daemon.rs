@@ -1042,6 +1042,9 @@ Do you confirm? (y/n)";
         cache_budget,
     ));
     let consensus_manager = Arc::new(ConsensusManager::new(consensus_factory));
+    // ADR-0132: the node's per-class counters — the producer and the panel report into them, op 185
+    // reads them.
+    let palw_telemetry = Arc::new(crate::palw_economics::PalwNodeTelemetryV1::default());
     let consensus_monitor = Arc::new(ConsensusMonitor::new(processing_counters.clone(), tick_service.clone()));
 
     let perf_monitor_builder = PerfMonitorBuilder::new()
@@ -1348,6 +1351,7 @@ Do you confirm? (y/n)";
             (Some(class_id), Some(key_path), Some(bond), Some(pay_address)) => {
                 Some(Arc::new(crate::palw_producer::PalwProducerService::new(
                     crate::palw_producer::PalwProducerConfig {
+                        telemetry: palw_telemetry.clone(),
                         key_path: key_path.clone(),
                         bond: bond.clone(),
                         pay_address: pay_address.clone(),
@@ -1516,8 +1520,27 @@ Do you confirm? (y/n)";
     let palw_class_ledger =
         matches!(config.params.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_))
             .then(|| crate::palw_class_context::PalwClassLedgerCellV1::spawn(config.params.clone()));
-    let palw_class_ledger_provider: Option<Arc<dyn PalwClassLedgerProvider>> =
-        palw_class_ledger.clone().map(|cell| Arc::new(cell) as Arc<dyn PalwClassLedgerProvider>);
+    // ADR-0132: the end-to-end economics recorder (rows in the meta database, refreshed on its own
+    // thread and before every op 185 answer) and the node's per-class telemetry, handed to the RPC
+    // service through the one provider.
+    let palw_economics_recorder = palw_class_ledger.clone().map(|cell| {
+        Arc::new(crate::palw_economics::PalwEconomicsRecorderV1::new(
+            crate::palw_economics::DbPalwEconomicsLedgerStoreV1::new(meta_db.clone()),
+            consensus_manager.clone(),
+            config.clone(),
+            cell,
+        ))
+    });
+    if let Some(recorder) = &palw_economics_recorder {
+        crate::palw_economics::spawn_recorder_thread(recorder.clone());
+    }
+    let palw_class_ledger_provider: Option<Arc<dyn PalwClassLedgerProvider>> = palw_class_ledger.clone().map(|cell| {
+        Arc::new(crate::palw_economics::PalwEconomicsNodeProviderV1 {
+            cell,
+            recorder: palw_economics_recorder.clone(),
+            telemetry: palw_telemetry.clone(),
+        }) as Arc<dyn PalwClassLedgerProvider>
+    });
     let rpc_core_service = Arc::new(
         RpcCoreService::new(
             consensus_manager.clone(),
@@ -1623,6 +1646,7 @@ Do you confirm? (y/n)";
             (true, Some(key_path), bond) if bond.is_some() || args.palw_register_bond => {
                 Some(Arc::new(crate::palw_panel::PalwPanelService::new(
                     crate::palw_panel::PalwPanelConfig {
+                        telemetry: palw_telemetry.clone(),
                         register_class: args.palw_register_class.clone(),
                         chain_classes: args.palw_chain_classes,
                         register_bond: args.palw_register_bond,

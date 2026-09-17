@@ -4150,6 +4150,15 @@ impl VirtualStateProcessor {
         Some(kaspa_consensus_core::palw_economic_compute_v1::palw_class_census_v1(&state, state_params, network_bits))
     }
 
+    /// ADR-0132: the attempt-lane claims of the tip state as the end-to-end ledger observes them.
+    pub fn palw_claim_ledger_observations_v1_impl(
+        &self,
+    ) -> Option<Vec<kaspa_consensus_core::palw_economics_ledger_v1::PalwClaimLedgerObservationV1>> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        Some(kaspa_consensus_core::palw_economics_ledger_v1::palw_claim_ledger_observations_v1(&state))
+    }
+
     pub fn palw_bond_of_pubkey_v2_impl(
         &self,
         pubkey: &[u8],

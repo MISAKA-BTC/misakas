@@ -123,6 +123,115 @@ pub trait PalwClassLedgerProvider: Send + Sync {
         let _ = class_id;
         None
     }
+
+    /// ADR-0132: bring the node's end-to-end ledger up to the chain before a read. Blocking (it
+    /// reads consensus and writes the node's database); a node without a recorder does nothing.
+    fn refresh_economics_ledger(&self) {}
+
+    /// ADR-0132: how many claims the ledger holds and the accepted-DAA span they cover.
+    fn economics_ledger_summary(&self) -> Option<PalwEconomicsLedgerSummary> {
+        None
+    }
+
+    /// ADR-0132: the ledger's totals for one class.
+    fn class_ledger_totals(
+        &self,
+        class_id: kaspa_hashes::Hash64,
+    ) -> Option<kaspa_consensus_core::palw_economics_ledger_v1::PalwClassLedgerTotalsV1> {
+        let _ = class_id;
+        None
+    }
+
+    /// ADR-0132: what this node itself did for the class since the process started.
+    fn class_node_telemetry(&self, class_id: kaspa_hashes::Hash64) -> Option<PalwClassNodeTelemetry> {
+        let _ = class_id;
+        None
+    }
+}
+
+/// ADR-0132: the ledger's own span.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwEconomicsLedgerSummary {
+    pub claims: u64,
+    pub first_daa: u64,
+    pub last_daa: u64,
+}
+
+/// ADR-0132: what one node did for one class — its producer's draws and its seat's replays and
+/// receipts, counted since the process started.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwClassNodeTelemetry {
+    pub draws: u64,
+    pub class_wins: u64,
+    pub produced: u64,
+    pub draw_millis: u64,
+    pub storage_read_mib: u64,
+    pub replays: u64,
+    pub replay_millis: u64,
+    pub replay_leaves: u64,
+    pub receipts_valid: u64,
+    pub receipts_unavailable: u64,
+    pub receipts_incapable: u64,
+    pub receipts_other: u64,
+    pub openings_held: u64,
+}
+
+/// [`RpcPalwClassLedgerTotals`] of a class's ledger totals, every `u128` as a decimal string.
+fn rpc_palw_class_ledger_totals(
+    t: &kaspa_consensus_core::palw_economics_ledger_v1::PalwClassLedgerTotalsV1,
+) -> RpcPalwClassLedgerTotals {
+    RpcPalwClassLedgerTotals {
+        available: true,
+        claims: t.claims,
+        bound: t.bound,
+        licensed: t.licensed,
+        finals: t.finals,
+        voided: t.voided,
+        redrawn: t.redrawn,
+        paid_at_acceptance: t.paid_at_acceptance,
+        escrow_final_sompi: t.escrow_final_sompi.to_string(),
+        producer_paid_sompi: t.producer_paid_sompi.to_string(),
+        panel_paid_sompi: t.panel_paid_sompi.to_string(),
+        reserve_sompi: t.reserve_sompi.to_string(),
+        burned_sompi: t.burned_sompi.to_string(),
+        attempted_compute: t.attempted_compute.to_string(),
+        final_compute: t.final_compute.to_string(),
+        verification_compute: t.verification_compute.to_string(),
+        producer_per_attempted_compute: t.producer_per_attempted_compute().to_string(),
+        panel_per_verification_compute: t.panel_per_verification_compute().to_string(),
+        total_per_attempted_compute: t.total_per_attempted_compute().to_string(),
+        total_per_final_compute: t.total_per_final_compute().to_string(),
+        licence_rate_permille: t.licence_rate_permille(),
+        final_of_licensed_permille: t.final_of_licensed_permille(),
+        final_rate_permille: t.final_rate_permille(),
+        avg_bind_wait_daa: t.avg_bind_wait_daa(),
+        avg_licence_wait_daa: t.avg_licence_wait_daa(),
+        avg_final_wait_daa: t.avg_final_wait_daa(),
+        avg_void_wait_daa: t.avg_void_wait_daa(),
+        avg_expected_attempts_q32: t.avg_expected_attempts_q32().to_string(),
+        avg_network_expected_attempts_q32: t.avg_network_expected_attempts_q32().to_string(),
+        first_accepted_daa: t.first_accepted_daa,
+        last_accepted_daa: t.last_accepted_daa,
+    }
+}
+
+fn rpc_palw_class_node_telemetry(t: PalwClassNodeTelemetry) -> RpcPalwClassNodeTelemetry {
+    RpcPalwClassNodeTelemetry {
+        available: true,
+        draws: t.draws,
+        class_wins: t.class_wins,
+        produced: t.produced,
+        draw_millis: t.draw_millis,
+        storage_read_mib: t.storage_read_mib,
+        replays: t.replays,
+        replay_millis: t.replay_millis,
+        replay_leaves: t.replay_leaves,
+        receipts_valid: t.receipts_valid,
+        receipts_unavailable: t.receipts_unavailable,
+        receipts_incapable: t.receipts_incapable,
+        receipts_other: t.receipts_other,
+        openings_held: t.openings_held,
+    }
 }
 
 /// A class's economic compute as a build ledger derives it (ADR-0131 `EconomicComputeV1`).
@@ -1582,6 +1691,12 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             _ => 0,
         };
         let session = self.consensus_manager.consensus().unguarded_session();
+        // ADR-0132: the ledger is brought up to the chain first, off the async runtime — it reads
+        // consensus and writes the node's database.
+        if let Some(provider) = self.palw_class_ledger_provider.clone() {
+            let refresh_session = self.consensus_manager.consensus().unguarded_session();
+            refresh_session.spawn_blocking(move |_| provider.refresh_economics_ledger()).await;
+        }
         let read = session
             .spawn_blocking(|c| {
                 c.palw_class_census_v1().map(|census| {
@@ -1639,15 +1754,30 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     claims_redrawn: row.claims_redrawn,
                     escrow_accepted_sompi: row.escrow_accepted_sompi.to_string(),
                     escrow_final_sompi: row.escrow_final_sompi.to_string(),
+                    ledger: ledger
+                        .and_then(|l| l.class_ledger_totals(row.class_id))
+                        .map(|t| rpc_palw_class_ledger_totals(&t))
+                        .unwrap_or_default(),
+                    telemetry: ledger
+                        .and_then(|l| l.class_node_telemetry(row.class_id))
+                        .map(rpc_palw_class_node_telemetry)
+                        .unwrap_or_default(),
                 }
             })
             .collect();
+        let summary = ledger.and_then(|l| l.economics_ledger_summary());
         Ok(GetPalwClassEconomicsResponse {
             available: !classes.is_empty(),
             tip_daa: census.tip_daa,
             economic_compute_version: PALW_ECONOMIC_COMPUTE_VERSION_V1,
             seat_count,
             prefill_draw,
+            network_bits: census.network_bits,
+            network_expected_attempts_q32: census.network_expected_attempts_q32.to_string(),
+            ledger_available: summary.is_some(),
+            ledger_claims: summary.map(|s| s.claims).unwrap_or(0),
+            ledger_first_daa: summary.map(|s| s.first_daa).unwrap_or(0),
+            ledger_last_daa: summary.map(|s| s.last_daa).unwrap_or(0),
             classes,
         })
     }

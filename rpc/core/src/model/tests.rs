@@ -1708,6 +1708,69 @@ mod mockery {
 
     test!(GetPalwClassEconomicsRequest);
 
+    impl Mock for RpcPalwClassLedgerTotals {
+        fn mock() -> Self {
+            RpcPalwClassLedgerTotals {
+                available: mock(),
+                claims: mock(),
+                bound: mock(),
+                licensed: mock(),
+                finals: mock(),
+                voided: mock(),
+                redrawn: mock(),
+                paid_at_acceptance: mock(),
+                escrow_final_sompi: "1".to_string(),
+                producer_paid_sompi: "1".to_string(),
+                panel_paid_sompi: "1".to_string(),
+                reserve_sompi: "1".to_string(),
+                burned_sompi: "1".to_string(),
+                attempted_compute: "1".to_string(),
+                final_compute: "1".to_string(),
+                verification_compute: "1".to_string(),
+                producer_per_attempted_compute: "1".to_string(),
+                panel_per_verification_compute: "1".to_string(),
+                total_per_attempted_compute: "1".to_string(),
+                total_per_final_compute: "1".to_string(),
+                licence_rate_permille: mock(),
+                final_of_licensed_permille: mock(),
+                final_rate_permille: mock(),
+                avg_bind_wait_daa: mock(),
+                avg_licence_wait_daa: mock(),
+                avg_final_wait_daa: mock(),
+                avg_void_wait_daa: mock(),
+                avg_expected_attempts_q32: "1".to_string(),
+                avg_network_expected_attempts_q32: "1".to_string(),
+                first_accepted_daa: mock(),
+                last_accepted_daa: mock(),
+            }
+        }
+    }
+
+    test!(RpcPalwClassLedgerTotals);
+
+    impl Mock for RpcPalwClassNodeTelemetry {
+        fn mock() -> Self {
+            RpcPalwClassNodeTelemetry {
+                available: mock(),
+                draws: mock(),
+                class_wins: mock(),
+                produced: mock(),
+                draw_millis: mock(),
+                storage_read_mib: mock(),
+                replays: mock(),
+                replay_millis: mock(),
+                replay_leaves: mock(),
+                receipts_valid: mock(),
+                receipts_unavailable: mock(),
+                receipts_incapable: mock(),
+                receipts_other: mock(),
+                openings_held: mock(),
+            }
+        }
+    }
+
+    test!(RpcPalwClassNodeTelemetry);
+
     impl Mock for RpcPalwClassEconomics {
         fn mock() -> Self {
             RpcPalwClassEconomics {
@@ -1732,6 +1795,8 @@ mod mockery {
                 claims_redrawn: mock(),
                 escrow_accepted_sompi: "320084650080".to_string(),
                 escrow_final_sompi: "0".to_string(),
+                ledger: mock(),
+                telemetry: mock(),
             }
         }
     }
@@ -1746,6 +1811,12 @@ mod mockery {
                 economic_compute_version: mock(),
                 seat_count: mock(),
                 prefill_draw: mock(),
+                network_bits: mock(),
+                network_expected_attempts_q32: "8589934592".to_string(),
+                ledger_available: mock(),
+                ledger_claims: mock(),
+                ledger_first_daa: mock(),
+                ledger_last_daa: mock(),
                 classes: mock(),
             }
         }

@@ -2216,6 +2216,12 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_class_census_v1_impl()
     }
 
+    fn palw_claim_ledger_observations_v1(
+        &self,
+    ) -> Option<Vec<kaspa_consensus_core::palw_economics_ledger_v1::PalwClaimLedgerObservationV1>> {
+        self.virtual_processor.palw_claim_ledger_observations_v1_impl()
+    }
+
     fn palw_certified_families_v1(
         &self,
     ) -> Vec<(

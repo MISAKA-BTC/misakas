@@ -369,6 +369,14 @@ pub enum DatabaseStorePrefixes {
     /// fail-closed, but a whole store silently absent after a layout change would read as "no
     /// class was ever registered", so the version forces a re-derivation instead.
     PalwClassCarriagesSchema = 227,
+    /// ADR-0132, node-local: the end-to-end economics ledger — one row per attempt-lane claim id
+    /// (`PalwClaimLedgerRowV1`, Borsh), kept past the chain's retention so a node can read what a
+    /// class was actually paid over a window. Nothing consensus reads; a node without the recorder
+    /// never writes it.
+    PalwEconomicsLedgerV1 = 230,
+    /// Singleton `u32`: the layout [`Self::PalwEconomicsLedgerV1`] rows were written under; a
+    /// mismatch drops the rows (they are a measurement, re-accumulated from the chain).
+    PalwEconomicsLedgerSchemaV1 = 233,
 
     // ---- Separator ----
     /// Reserved as a separator
