@@ -225,7 +225,13 @@ before it is signed by the bond's key. **Fail-closed**: a class this node holds 
 holds under a different root, gets no proof and is named once in the log. The producer reads the
 same op before a draw and holds (a log line, no rule) for a class the registry holds or has at its
 inflight cap. `--palw-model-registry-devnet=<daa>` arms the registry on a private devnet (with the
-panel economy it reads, where the devnet has none).
+panel economy it reads, where the devnet has none). The registry's seat count is the network's
+panel size (the bundle's panel params: five on testnet-11, so seven ready seats; the global
+constant is the fallback), never a number of its own. The drill is
+`scripts/misaka-palw-model-registry-devnet-drill.sh`: eight fixture nodes, the lane at 2-DAA spans,
+the registry armed at DAA 20, an artifact every node holds (`CLASS_ARTIFACT=`) so the seats prove
+for its genesis class; it waits for the fence, the rows, the proofs, the grace's end with the base
+class ACTIVE and the chain producing, and a restarted node's rows — the record is §7's last entry.
 
 **The activation grace.** Proofs are refused below the fence, so at the fence no seat is ready and
 every live class would be HELD at the first boundary. The fold therefore opens rows and takes
