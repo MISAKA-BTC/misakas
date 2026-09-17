@@ -1567,12 +1567,10 @@ mod tests {
             .collect();
         let class_panel =
             select_replay_panel_v1(&h64(0x01), &h64(EXECUTOR), &h64(0x03), &binding.runtime_class_id, &class_candidates, 8);
-        let vlt_pairs: Vec<(Hash64, Hash64)> = (1u8..=8).map(|i| (h64(i), binding.runtime_class_id)).collect();
-        let vlt_panel = crate::vlt::select_verifiers(h64(0x01), h64(EXECUTOR), h64(0x03), binding.runtime_class_id, &vlt_pairs, 8);
+        // ADR-0134: the VLT's verifier sortition is gone; the routed draw and the class draw still
+        // must not predict each other (the domain keys are pinned apart below).
         assert_eq!(routed_full.len(), 8);
         assert_ne!(routed_full, class_panel, "the routed draw predicts the class draw");
-        assert_ne!(routed_full, vlt_panel, "the routed draw predicts the VLT draw");
-        assert_ne!(class_panel, vlt_panel);
     }
 
     #[test]

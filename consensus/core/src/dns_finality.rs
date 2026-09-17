@@ -129,7 +129,7 @@ use crate::{
     tx::{Transaction, TransactionOutpoint, TransactionOutput},
     vlt::{
         ComputeCapabilityPayload, ComputeCertificatePayload, ComputeChallengePayload, ComputeCommitmentPayload, ComputeFraudKind,
-        ComputeVerdictPayload, MAX_JOB_INPUT_BYTES, MAX_VERIFIER_ATTESTATIONS, VerifierAttestation, VltParams,
+        ComputeVerdictPayload, MAX_JOB_INPUT_BYTES, VltParams,
     },
 };
 
@@ -5695,40 +5695,6 @@ pub fn slashing_evidence_from_accepted_txs(txs: &[Transaction]) -> Vec<SlashingE
 // derivation stays deterministic and unit-testable.
 // =====================================================================
 
-/// Every decodable [`ComputeCertificatePayload`] among `txs`, paired with its transaction id (the
-/// id a [`ComputeChallengePayload`] names when challenging it).
-pub fn compute_certificates_from_accepted_txs(txs: &[Transaction]) -> Vec<(TransactionId, ComputeCertificatePayload)> {
-    let mut out = Vec::new();
-    for tx in txs {
-        if dns_tx_kind(&tx.subnetwork_id) == Some(DnsTxKind::ComputeCertificate)
-            && let Ok(cert) = borsh::from_slice::<ComputeCertificatePayload>(&tx.payload)
-        {
-            out.push((tx.id(), cert));
-        }
-    }
-    out
-}
-
-/// Every decodable [`ComputeChallengePayload`] among `txs`.
-pub fn compute_challenges_from_accepted_txs(txs: &[Transaction]) -> Vec<ComputeChallengePayload> {
-    compute_challenges_with_ids(txs).into_iter().map(|(_, c)| c).collect()
-}
-
-/// As [`compute_challenges_from_accepted_txs`], but paired with each challenge's own transaction
-/// id — what the block-validity rule needs in order to name the offending transaction when it
-/// rejects a block.
-pub fn compute_challenges_with_ids(txs: &[Transaction]) -> Vec<(TransactionId, ComputeChallengePayload)> {
-    let mut out = Vec::new();
-    for tx in txs {
-        if dns_tx_kind(&tx.subnetwork_id) == Some(DnsTxKind::ComputeChallenge)
-            && let Ok(c) = borsh::from_slice::<ComputeChallengePayload>(&tx.payload)
-        {
-            out.push((tx.id(), c));
-        }
-    }
-    out
-}
-
 /// Stateless validation of a [`ComputeCertificatePayload`]'s bytes.
 ///
 /// Structure only — the caller still checks signatures, sortition membership, and the model table.
@@ -5879,84 +5845,6 @@ pub fn precommit_evidence_tx(ev: &PrecommitEvidencePayload) -> Transaction {
     Transaction::new(crate::constants::TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_PRECOMMIT_EVIDENCE, 0, payload)
 }
 
-/// Every decodable [`ComputeVerdictPayload`] among `txs`.
-pub fn compute_verdicts_from_accepted_txs(txs: &[Transaction]) -> Vec<ComputeVerdictPayload> {
-    let mut out = Vec::new();
-    for tx in txs {
-        if dns_tx_kind(&tx.subnetwork_id) == Some(DnsTxKind::ComputeVerdict)
-            && let Ok(v) = borsh::from_slice::<ComputeVerdictPayload>(&tx.payload)
-        {
-            out.push(v);
-        }
-    }
-    out
-}
-
-/// A signature- and bond-verified verdict, as the credit walk collects it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ComputeVerdictRecord {
-    pub certificate_tx_id: TransactionId,
-    pub payload: ComputeVerdictPayload,
-    /// DAA score of the chain block that accepted the verdict. A verdict accepted BEFORE its
-    /// certificate is nonsense and is dropped.
-    pub accepted_daa_score: u64,
-}
-
-/// Reduce the verdicts collected for one certificate to the attestation set
-/// [`crate::vlt::verify_compute_certificate`] consumes.
-///
-/// Enforces, in order:
-/// * the verdict was accepted at or after its certificate (a verdict cannot precede the claim it
-///   judges);
-/// * it agrees with the executor's claimed receipt hash as the thing being judged;
-/// * one verdict per verifier — the FIRST by acceptance order wins, so a verifier cannot flood
-///   the chain with verdicts and have consensus pick the convenient one. A later disagreeing
-///   verdict is left for the `ContradictoryVerification` challenge to slash, not silently used;
-/// * the verifier is in the sortitioned committee;
-/// * it names this certificate's job, so a verdict cannot be lifted between jobs that happen to
-///   share a receipt hash;
-/// * its [`crate::vlt::ReplayProof`] attests — both verdicts must show an execution that actually
-///   produces the hash they report. See [`crate::vlt::ReplayProof`] for why a refutation needs
-///   this every bit as much as a confirmation.
-///
-/// Bounded by [`MAX_VERIFIER_ATTESTATIONS`]: beyond that the extra verdicts are ignored rather
-/// than growing the per-certificate verification cost without limit.
-pub fn verdicts_for_certificate(
-    records: &[ComputeVerdictRecord],
-    certificate_tx_id: TransactionId,
-    job_id: Hash64,
-    executor_receipt_hash: Hash64,
-    certificate_daa_score: u64,
-    committee: &HashSet<Hash64>,
-) -> Vec<VerifierAttestation> {
-    let mut ordered: Vec<&ComputeVerdictRecord> = records
-        .iter()
-        .filter(|r| {
-            r.certificate_tx_id == certificate_tx_id
-                && r.accepted_daa_score >= certificate_daa_score
-                && r.payload.job_id == job_id
-                && r.payload.executor_receipt_hash == executor_receipt_hash
-                && committee.contains(&r.payload.verifier_id)
-                && r.payload.replay_proof.attests(r.payload.job_id, r.payload.replay_receipt_hash)
-        })
-        .collect();
-    // Deterministic order: acceptance depth first, then verifier id as the tie-break within a
-    // block, so every node picks the same "first" verdict per verifier.
-    ordered.sort_by(|a, b| a.accepted_daa_score.cmp(&b.accepted_daa_score).then(a.payload.verifier_id.cmp(&b.payload.verifier_id)));
-    let mut seen: HashSet<Hash64> = HashSet::new();
-    let mut out = Vec::new();
-    for r in ordered {
-        if !seen.insert(r.payload.verifier_id) {
-            continue;
-        }
-        out.push(r.payload.as_attestation());
-        if out.len() == MAX_VERIFIER_ATTESTATIONS {
-            break;
-        }
-    }
-    out
-}
-
 /// Stateless validation of a [`ComputeChallengePayload`]'s bytes.
 ///
 /// A [`ComputeFraudKind::ContradictoryVerification`] challenge must carry exactly the two
@@ -6024,60 +5912,6 @@ pub fn validate_compute_commitment_payload(payload: &[u8]) -> Result<(), DnsTxEr
     Ok(())
 }
 
-/// A signature- and bond-verified phase-1 commitment, as the credit walk collects it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ComputeCommitmentRecord {
-    pub job_id: Hash64,
-    pub executor_id: Hash64,
-    pub bond_outpoint: TransactionOutpoint,
-    /// The job's published input. Carried through so a node that was sortitioned onto this job's
-    /// committee can replay it from chain data alone, and so the walk can check the certificate's
-    /// spec commits to exactly these bytes.
-    pub input: Vec<u8>,
-    /// blue_score of the chain block that accepted the commitment — this is what fixes the
-    /// beacon epoch, and therefore the verifier committee.
-    pub accepted_blue_score: u64,
-    pub accepted_daa_score: u64,
-}
-
-/// The epoch whose canonical anchor is a commitment's sortition beacon: the epoch **after** the
-/// one that accepted the commitment.
-///
-/// `+1` is the whole security property. The anchor of the commitment's own epoch may already be
-/// determined when the commitment is published (epochs are lagged and backed off, so the anchor
-/// is an older block), which would let an executor grind `sampling_seed` against a beacon it can
-/// already see. The next epoch's anchor cannot exist yet.
-pub fn commitment_beacon_epoch(accepted_blue_score: u64, epoch_len_blue_score: u64) -> u64 {
-    accepted_blue_score / epoch_len_blue_score.max(1) + 1
-}
-
-/// Every decodable [`ComputeCommitmentPayload`] among `txs`.
-pub fn compute_commitments_from_accepted_txs(txs: &[Transaction]) -> Vec<(TransactionId, ComputeCommitmentPayload)> {
-    let mut out = Vec::new();
-    for tx in txs {
-        if dns_tx_kind(&tx.subnetwork_id) == Some(DnsTxKind::ComputeCommitment)
-            && let Ok(c) = borsh::from_slice::<ComputeCommitmentPayload>(&tx.payload)
-        {
-            out.push((tx.id(), c));
-        }
-    }
-    out
-}
-
-/// Accepted capability declarations with the transaction that carried each, so a store can key by
-/// it and a reorg can delete exactly what it added.
-pub fn compute_capabilities_with_ids_from_accepted_txs(txs: &[Transaction]) -> Vec<(TransactionId, ComputeCapabilityPayload)> {
-    let mut out = Vec::new();
-    for tx in txs {
-        if dns_tx_kind(&tx.subnetwork_id) == Some(DnsTxKind::ComputeCapability)
-            && let Ok(c) = borsh::from_slice::<ComputeCapabilityPayload>(&tx.payload)
-        {
-            out.push((tx.id(), c));
-        }
-    }
-    out
-}
-
 /// Stateless validation of a [`ComputeCapabilityPayload`]'s bytes. The signature, the bond
 /// binding, the model-table membership and the expiry cap are stateful and are checked by the
 /// credit walk when it builds a job's candidate pool.
@@ -6090,93 +5924,6 @@ pub fn validate_compute_capability_payload(payload: &[u8]) -> Result<(), DnsTxEr
         return Err(DnsTxError::InvalidSignatureLen(c.signature.len()));
     }
     Ok(())
-}
-
-/// Every decodable [`ComputeCapabilityPayload`] among `txs`.
-pub fn compute_capabilities_from_accepted_txs(txs: &[Transaction]) -> Vec<ComputeCapabilityPayload> {
-    let mut out = Vec::new();
-    for tx in txs {
-        if dns_tx_kind(&tx.subnetwork_id) == Some(DnsTxKind::ComputeCapability)
-            && let Ok(c) = borsh::from_slice::<ComputeCapabilityPayload>(&tx.payload)
-        {
-            out.push(c);
-        }
-    }
-    out
-}
-
-/// A signature- and bond-verified capability declaration.
-///
-/// Persisted (`DatabaseStorePrefixes::ComputeCapabilities`) rather than re-collected per walk: it
-/// outlives the credit window by orders of magnitude, so a walk-scoped copy disappears while the
-/// declaration is still perfectly valid.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
-pub struct ComputeCapabilityRecord {
-    /// The chain block that accepted the declaration.
-    ///
-    /// DAA is a number like a clock, not a proof of ancestry: two branches can carry blocks at the
-    /// same score, so `accepted_daa_score <= pov` admits a declaration that the point of view's own
-    /// history does not contain. A candidate branch scored against the selected chain's store would
-    /// then borrow the other branch's committee. This field is what the ancestry check uses.
-    pub declaration_block: BlockHash,
-    pub validator_id: Hash64,
-    pub bond_outpoint: TransactionOutpoint,
-    pub model_weights_hash: Hash64,
-    pub runtime_hash: Hash64,
-    pub runtime_class_id: Hash64,
-    /// DAA score of the chain block that accepted the declaration.
-    ///
-    /// Without it a declaration has no beginning, only an end, and `is_live_at` would answer "yes"
-    /// for every point of view before it existed. A validator could then watch a certificate land
-    /// and declare afterwards to insert itself into that certificate's already-drawn committee —
-    /// or merely to enlarge the candidate pool and re-roll somebody else out of it, which silently
-    /// invalidates the verdicts the real committee already published.
-    pub accepted_daa_score: u64,
-    /// Effective expiry: `min(declared, accepted + max_capability_validity_blocks)`.
-    pub expiry_daa_score: u64,
-}
-
-impl ComputeCapabilityRecord {
-    /// Whether this declaration stands at `pov_daa_score` — bounded at **both** ends, so a
-    /// point of view before the declaration existed does not see it.
-    pub fn is_live_at(&self, pov_daa_score: u64) -> bool {
-        self.accepted_daa_score <= pov_daa_score && pov_daa_score < self.expiry_daa_score
-    }
-
-    /// Whether it covers the `(model, runtime)` profile a job names.
-    pub fn covers(&self, model_weights_hash: Hash64, runtime_hash: Hash64) -> bool {
-        self.model_weights_hash == model_weights_hash && self.runtime_hash == runtime_hash
-    }
-}
-
-/// Fixed-size: six 64-byte digests and two scores, no owned collections, so the derived estimate
-/// is exact and the store may be size-tracked.
-impl MemSizeEstimator for ComputeCapabilityRecord {}
-
-/// Reduce collected declarations to the `(validator_id, runtime_class_id)` candidate pool
-/// [`crate::vlt::select_verifiers`] draws from for one job profile.
-///
-/// Keeps only declarations that are live at `pov_daa_score` and cover the job's exact
-/// `(h_M, h_R)`. Deduplicated by `validator_id` keeping the **latest** expiry, so a validator
-/// that renewed its declaration appears once — otherwise one operator would occupy several
-/// committee slots and a k-of-n audit would degrade to k-of-1.
-pub fn capability_candidate_pool(
-    records: &[ComputeCapabilityRecord],
-    model_weights_hash: Hash64,
-    runtime_hash: Hash64,
-    pov_daa_score: u64,
-) -> Vec<(Hash64, Hash64)> {
-    let mut best: BTreeMap<Hash64, (u64, Hash64)> = BTreeMap::new();
-    for r in records {
-        if !r.covers(model_weights_hash, runtime_hash) || !r.is_live_at(pov_daa_score) {
-            continue;
-        }
-        let slot = best.entry(r.validator_id).or_insert((0, r.runtime_class_id));
-        if r.expiry_daa_score >= slot.0 {
-            *slot = (r.expiry_daa_score, r.runtime_class_id);
-        }
-    }
-    best.into_iter().map(|(id, (_, class))| (id, class)).collect()
 }
 
 /// ADR-0013 Addendum C.2 shape rule, applied to compute challenges: like a
@@ -7846,67 +7593,6 @@ mod tests {
         assert_eq!(derive_dns_health(&[below, below, below], rule, 1000, 3, true), DnsHealth::DegradedStakeQualityLow);
     }
 
-    /// The whole point of phase 1 is that the beacon epoch is one the executor cannot see when
-    /// it commits. Pin that: the beacon epoch is always strictly greater than the commitment's
-    /// own epoch, at every position within an epoch including its exact boundaries.
-    #[test]
-    fn commitment_beacon_epoch_is_always_in_the_future() {
-        let l = 100u64;
-        for blue in [0u64, 1, 99, 100, 101, 199, 200, 12_345, 999_999] {
-            let own = blue / l;
-            let beacon = commitment_beacon_epoch(blue, l);
-            assert_eq!(beacon, own + 1, "beacon epoch must be exactly the epoch after the commitment's (blue={blue})");
-            assert!(beacon > own, "a beacon in the commitment's own epoch could already be determined at commit time");
-        }
-        // A zero epoch length must not divide by zero.
-        assert_eq!(commitment_beacon_epoch(5, 0), 6);
-    }
-
-    /// The candidate pool is what makes class-matched sortition reachable at all, so its
-    /// filtering has to be exact: wrong profile, lapsed, or duplicated declarations must not
-    /// produce committee slots.
-    #[test]
-    fn capability_pool_filters_by_profile_liveness_and_identity() {
-        let model = Hash64::from_u64_word(1);
-        let runtime = Hash64::from_u64_word(2);
-        let metal = Hash64::from_u64_word(3);
-        let cuda = Hash64::from_u64_word(4);
-        let rec = |v: u64, m: Hash64, r: Hash64, class: Hash64, expiry: u64| ComputeCapabilityRecord {
-            declaration_block: BlockHash::from_u64_word(v),
-            accepted_daa_score: 0,
-            validator_id: Hash64::from_u64_word(v),
-            bond_outpoint: TransactionOutpoint::new(Hash64::from_u64_word(v + 900), 0),
-            model_weights_hash: m,
-            runtime_hash: r,
-            runtime_class_id: class,
-            expiry_daa_score: expiry,
-        };
-
-        let records = vec![
-            rec(10, model, runtime, metal, 1_000),                     // live, matching
-            rec(11, model, runtime, cuda, 1_000),                      // live, other class
-            rec(12, model, Hash64::from_u64_word(99), metal, 1_000),   // different runtime
-            rec(13, Hash64::from_u64_word(98), runtime, metal, 1_000), // different model
-            rec(14, model, runtime, metal, 500),                       // lapsed at pov 600
-        ];
-        let pool = capability_candidate_pool(&records, model, runtime, 600);
-        assert_eq!(pool.len(), 2, "only the two live declarations for this exact profile");
-        assert!(pool.contains(&(Hash64::from_u64_word(10), metal)));
-        // The other-class validator IS in the pool — it is `select_verifiers` that refuses to
-        // draw it. Keeping it here means a cross-class declaration is visible rather than
-        // silently erased, and the class check lives in exactly one place.
-        assert!(pool.contains(&(Hash64::from_u64_word(11), cuda)));
-
-        // A renewed declaration must not give one operator two committee slots — that would
-        // quietly turn a k-of-n audit into k-of-1.
-        let renewed = vec![rec(10, model, runtime, metal, 1_000), rec(10, model, runtime, metal, 2_000)];
-        let pool = capability_candidate_pool(&renewed, model, runtime, 600);
-        assert_eq!(pool, vec![(Hash64::from_u64_word(10), metal)]);
-
-        // Everything lapsed => no pool => no committee => the job cannot mint.
-        assert!(capability_candidate_pool(&records, model, runtime, 5_000).is_empty());
-    }
-
     fn fixture_verdict(id: u64, verdict: crate::vlt::VerificationVerdict, replay: Hash64) -> crate::vlt::VerifierAttestation {
         crate::vlt::VerifierAttestation {
             version: DNS_PAYLOAD_VERSION_V1,
@@ -8066,40 +7752,6 @@ mod tests {
         assert_eq!(validate_compute_verdict_payload(b"not borsh"), Err(DnsTxError::Decode));
     }
 
-    /// A capability declaration has a beginning as well as an end. Without the lower bound, a
-    /// validator could watch a certificate land and declare afterwards — inserting itself into an
-    /// already-drawn committee, or merely enlarging the candidate pool so the sortition re-rolls
-    /// somebody else out of it and the verdicts the real committee already published stop counting.
-    #[test]
-    fn a_capability_does_not_exist_before_it_was_accepted() {
-        let model = Hash64::from_u64_word(1);
-        let runtime = Hash64::from_u64_word(2);
-        let class = Hash64::from_u64_word(3);
-        let cap = |validator: u64, accepted: u64, expiry: u64| ComputeCapabilityRecord {
-            declaration_block: BlockHash::from_u64_word(validator),
-            validator_id: Hash64::from_u64_word(validator),
-            bond_outpoint: TransactionOutpoint::new(Hash64::from_u64_word(validator + 100), 0),
-            model_weights_hash: model,
-            runtime_hash: runtime,
-            runtime_class_id: class,
-            accepted_daa_score: accepted,
-            expiry_daa_score: expiry,
-        };
-
-        let early = cap(21, 1_000, 9_000);
-        let late = cap(22, 5_000, 9_000);
-        assert!(!early.is_live_at(999), "not yet declared");
-        assert!(early.is_live_at(1_000), "live from the block that accepted it");
-        assert!(early.is_live_at(8_999));
-        assert!(!early.is_live_at(9_000), "expired");
-
-        // A beacon at 2_000 draws from whoever had declared by then — and only them.
-        let pool = capability_candidate_pool(&[early.clone(), late.clone()], model, runtime, 2_000);
-        assert_eq!(pool, vec![(Hash64::from_u64_word(21), class)], "a later declaration cannot join a past draw");
-        // By 6_000 both are in.
-        assert_eq!(capability_candidate_pool(&[early, late], model, runtime, 6_000).len(), 2);
-    }
-
     /// The job input rides the commitment so a sortitioned verifier can replay from chain data
     /// alone. It is the only unbounded field in the compute overlay, so its size is the only
     /// thing the stateless layer can — and must — decide about it.
@@ -8134,113 +7786,6 @@ mod tests {
         short_sig.signature = vec![0u8; 7];
         assert_eq!(validate_compute_commitment_payload(&borsh::to_vec(&short_sig).unwrap()), Err(DnsTxError::InvalidSignatureLen(7)));
         assert_eq!(validate_compute_commitment_payload(b"not borsh"), Err(DnsTxError::Decode));
-    }
-
-    /// Verdict collection is where a certificate's audit is actually assembled, so its filtering
-    /// carries the role separation the certificate no longer can.
-    #[test]
-    fn verdict_collection_enforces_ordering_committee_and_one_vote_per_verifier() {
-        use crate::vlt::VerificationVerdict::{Confirmed, Refuted};
-        let cert_tx = Hash64::from_u64_word(500);
-        let job_id = Hash64::from_u64_word(FIXTURE_JOB_ID);
-        let executor_hash = fixture_hash(FIXTURE_EXECUTOR_SEED);
-        let cert_daa = 1_000u64;
-        let rec = |v: u64, verdict, seed: u64, daa: u64, tx: Hash64| ComputeVerdictRecord {
-            certificate_tx_id: tx,
-            payload: ComputeVerdictPayload { certificate_tx_id: tx, ..fixture_verdict_payload(v, verdict, seed) },
-            accepted_daa_score: daa,
-        };
-        let collect = |records: &[ComputeVerdictRecord], committee: &HashSet<Hash64>| {
-            verdicts_for_certificate(records, cert_tx, job_id, executor_hash, cert_daa, committee)
-        };
-        let committee: HashSet<Hash64> = [21u64, 22, 23].into_iter().map(Hash64::from_u64_word).collect();
-        const OK: u64 = FIXTURE_EXECUTOR_SEED;
-        const DIVERGENT: u64 = 98;
-
-        let records = vec![
-            rec(21, Confirmed, OK, 1_010, cert_tx),
-            // Not in the sortitioned committee — an uninvited auditor cannot vote.
-            rec(99, Confirmed, OK, 1_010, cert_tx),
-            // Accepted BEFORE the certificate: cannot have judged a claim that did not exist.
-            rec(22, Confirmed, OK, 999, cert_tx),
-            // Belongs to a different certificate.
-            rec(23, Confirmed, OK, 1_010, Hash64::from_u64_word(777)),
-        ];
-        let got = collect(&records, &committee);
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].verifier_id, Hash64::from_u64_word(21));
-
-        // One verifier, two verdicts: the FIRST by acceptance order counts. Otherwise a verifier
-        // could publish both answers and let consensus pick whichever suits it; the later
-        // conflicting one is evidence for a ContradictoryVerification challenge, not a vote.
-        let flip_flop = vec![rec(21, Refuted, DIVERGENT, 1_020, cert_tx), rec(21, Confirmed, OK, 1_005, cert_tx)];
-        let got = collect(&flip_flop, &committee);
-        assert_eq!(got.len(), 1, "one vote per verifier");
-        assert_eq!(got[0].verdict, Confirmed, "the earliest verdict is the one that counts");
-
-        // A verdict judging a different receipt hash is not about this claim at all.
-        let wrong_claim = vec![rec(21, Confirmed, OK, 1_010, cert_tx)];
-        assert!(verdicts_for_certificate(&wrong_claim, cert_tx, job_id, Hash64::from_u64_word(1), cert_daa, &committee).is_empty());
-        // …nor is one naming another job that happens to share a receipt hash.
-        assert!(
-            verdicts_for_certificate(&wrong_claim, cert_tx, Hash64::from_u64_word(4_242), executor_hash, cert_daa, &committee)
-                .is_empty()
-        );
-
-        // A verdict whose proof does not produce the hash it reports never ran the job. Counting a
-        // confirmation like that would be paying for a rubber stamp; counting a refutation like
-        // that would let one griefer destroy an honest certificate for the price of a transaction.
-        let mut copied = rec(21, Confirmed, OK, 1_010, cert_tx);
-        copied.payload.replay_proof = fixture_proof(DIVERGENT);
-        assert!(collect(&[copied], &committee).is_empty(), "a confirmation that cannot produce the preimage must not count");
-        let mut baseless = rec(22, Refuted, DIVERGENT, 1_010, cert_tx);
-        baseless.payload.replay_proof = fixture_proof(FIXTURE_EXECUTOR_SEED);
-        assert!(collect(&[baseless], &committee).is_empty(), "a refutation must exhibit the execution it claims");
-
-        // An honest refutation — a real, divergent execution — is counted.
-        let refutes = vec![rec(22, Refuted, DIVERGENT, 1_010, cert_tx)];
-        assert_eq!(collect(&refutes, &committee).len(), 1);
-    }
-
-    /// Refutation dominates acceptance, so the bar in front of it has to be a quorum. At one voice
-    /// a single drawn verifier destroys an honest executor's credit — and under the §6 audit fee is
-    /// paid to. Confirming and refuting must take the same collusion.
-    #[test]
-    fn one_refuter_cannot_destroy_a_certificate() {
-        use crate::vlt::VerificationVerdict::{Confirmed, Refuted};
-        let executor_hash = fixture_hash(FIXTURE_EXECUTOR_SEED);
-        let att = |v: u64, verdict, seed: u64| fixture_verdict_payload(v, verdict, seed).as_attestation();
-        let verify = |atts: &[crate::vlt::VerifierAttestation]| crate::vlt::verify_compute_certificate(executor_hash, atts, 3, 3);
-
-        // Three honest confirmations out of five: verified.
-        assert!(verify(&[
-            att(21, Confirmed, FIXTURE_EXECUTOR_SEED),
-            att(22, Confirmed, FIXTURE_EXECUTOR_SEED),
-            att(23, Confirmed, FIXTURE_EXECUTOR_SEED)
-        ]));
-        // One dissenter among them no longer decides the job.
-        let with_griefer = [
-            att(21, Confirmed, FIXTURE_EXECUTOR_SEED),
-            att(22, Confirmed, FIXTURE_EXECUTOR_SEED),
-            att(23, Confirmed, FIXTURE_EXECUTOR_SEED),
-            att(24, Refuted, 98),
-        ];
-        assert!(verify(&with_griefer), "one refuter must not overturn a confirmed job");
-        assert!(!crate::vlt::refutation_quorum_reached(&with_griefer, 3));
-        // A refutation quorum still dominates, whatever the confirmations say.
-        let refuted = [
-            att(21, Confirmed, FIXTURE_EXECUTOR_SEED),
-            att(22, Confirmed, FIXTURE_EXECUTOR_SEED),
-            att(23, Confirmed, FIXTURE_EXECUTOR_SEED),
-            att(24, Refuted, 98),
-            att(25, Refuted, 97),
-            att(26, Refuted, 96),
-        ];
-        assert!(crate::vlt::refutation_quorum_reached(&refuted, 3));
-        assert!(!verify(&refuted), "refutation still dominates — it just takes a quorum");
-        // An empty set is not a refutation.
-        assert!(!crate::vlt::refutation_quorum_reached(&[], 3));
-        assert!(!crate::vlt::refutation_quorum_reached(&[], 0), "a zero threshold must not invert the rule");
     }
 
     #[test]

@@ -18,7 +18,6 @@ use crate::{
             acceptance_data::{AcceptanceDataStoreReader, DbAcceptanceDataStore},
             block_transactions::{BlockTransactionsStoreReader, DbBlockTransactionsStore},
             block_window_cache::{BlockWindowCacheStore, BlockWindowCacheWriter},
-            compute_capabilities::DbComputeCapabilityStore,
             daa::DbDaaStore,
             depth::{DbDepthStore, DepthStoreReader},
             dns_state::{DbDnsStateStore, DnsStateStoreReader},
@@ -73,18 +72,15 @@ use kaspa_consensus_core::{
     config::genesis::GenesisBlock,
     dns_finality::{
         ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, AttestationContribution, BlockEpochContribution, BlockOverlayContribution,
-        BondMutation, CanonicalLaggedEpochAnchor, ComputeCapabilityRecord, ComputeCommitmentRecord, ComputeVerdictRecord,
-        DnsCoinbaseSettlement, DnsParams, DnsReorgMode, DnsReorgOutcome, DnsRolloutStage, OverlaySnapshot,
+        BondMutation, CanonicalLaggedEpochAnchor, DnsCoinbaseSettlement, DnsParams, DnsReorgMode, DnsReorgOutcome, DnsRolloutStage, OverlaySnapshot,
         PruningPointOverlaySnapshot, StakeBondRecord, StakePreferenceInputs, StakeScore, UNBOND_REQUEST_CONTEXT,
         advance_dns_confirmation, aggregate_epoch_tallies, anchor_cutoff_blue_score, apply_bond_stamp, attestations_from_accepted_txs,
-        bond_mutations_from_accepted_txs, canonical_lagged_epoch_anchor, capability_candidate_pool, check_dns_reorg_rule,
-        commitment_beacon_epoch, compute_capabilities_from_accepted_txs, compute_capabilities_with_ids_from_accepted_txs,
-        compute_certificates_from_accepted_txs, compute_challenges_from_accepted_txs, compute_commitments_from_accepted_txs,
-        compute_stake_score, compute_verdicts_from_accepted_txs, derive_dns_health, dns_finality_fresh_for_bridge,
-        effective_bond_status, is_bond_active_at, is_dns_confirmed, p2pkh_mldsa87_spk, ready_epoch_from_tip_blue_score,
+        bond_mutations_from_accepted_txs, canonical_lagged_epoch_anchor, check_dns_reorg_rule,
+        compute_stake_score, derive_dns_health, dns_finality_fresh_for_bridge,
+        effective_bond_status, is_bond_active_at, is_dns_confirmed, ready_epoch_from_tip_blue_score,
         recompute_epoch_tallies, reorg_inputs_since_common_ancestor, revert_bond_stamp, stake_attestation_message,
         stake_preference_verdict, total_active_stake_by_epoch, unbond_request_message, unbond_requests_from_accepted_txs,
-        validator_id_from_pubkey, verdicts_for_certificate,
+        validator_id_from_pubkey,
     },
     header::Header,
     merkle::calc_hash_merkle_root,
@@ -94,13 +90,6 @@ use kaspa_consensus_core::{
     utxo::{
         utxo_diff::{ImmutableUtxoDiff, UtxoDiff},
         utxo_view::{UtxoView, UtxoViewComposition},
-    },
-    vlt::{
-        COMPUTE_CAPABILITY_MLDSA87_CONTEXT, COMPUTE_CERT_MLDSA87_CONTEXT, COMPUTE_COMMITMENT_MLDSA87_CONTEXT, ChallengeOutcome,
-        ComputeCertificatePayload, ComputeChallengePayload, VERIFIER_VERDICT_MLDSA87_CONTEXT, VltCreditSkipReason,
-        adjudicate_compute_challenge, commitment_dependency_horizon, compute_capability_message, compute_certificate_message,
-        compute_commitment_message, compute_receipt_hash, job_input_commitment, job_spec_id, select_verifiers,
-        verifier_verdict_message,
     },
 };
 use kaspa_consensus_notify::{
@@ -216,49 +205,6 @@ pub(crate) enum PalwWeighFaultV2 {
     StoreUnreadable,
 }
 
-/// Everything the compute overlay contributed on one chain segment, from a single backward walk
-/// ([`VirtualStateProcessor::walk_compute_overlay`]).
-///
-/// Held as one struct because the records are mutually dependent — a certificate is only
-/// resolvable against the commitments, capabilities and verdicts collected in the same pass — and
-/// passing them as five separate arguments to every consumer invites a caller to walk one of them
-/// over a different range than the others.
-pub(crate) struct ComputeOverlayWalk {
-    /// Fraud proofs accepted on this chain, with the certificate each names. Kept whole rather
-    /// than reduced to a set of accused certificates because a challenge is a claim that has to be
-    /// *adjudicated* against that certificate's verdicts before it does anything — see
-    /// [`adjudicate_compute_challenge`].
-    challenges: Vec<ComputeChallengePayload>,
-    capabilities: Vec<ComputeCapabilityRecord>,
-    commitments: HashMap<TransactionId, ComputeCommitmentRecord>,
-    verdicts: Vec<ComputeVerdictRecord>,
-    /// `(certificate_tx_id, payload, accepted_daa_score)` for certificates whose declared epoch is
-    /// their own accepting block's epoch.
-    certificates: Vec<(TransactionId, ComputeCertificatePayload, u64)>,
-    /// Whether the dependency search below the certificate floor covered its whole range.
-    ///
-    /// `true` ⇒ a commitment still missing from [`Self::commitments`] is genuinely absent from the
-    /// canonical history under the pin. `false` ⇒ the search stopped early (a header would not
-    /// read), so a missing commitment says nothing about the chain and everything about this
-    /// node's storage. The two lead to `CommitmentAbsentFromCanonicalHistory` and
-    /// `CommitmentNotLoaded` respectively, and only the first may be cached as a permanent zero.
-    dependency_scan_complete: bool,
-}
-
-/// A certificate whose verifier committee has been drawn — the output of
-/// [`VirtualStateProcessor::resolve_certificate`].
-///
-/// What remains after this is only the verdicts: whether enough of `committee` published, and
-/// whether any of them refuted.
-pub(crate) struct ResolvedCertificate {
-    job_id: Hash64,
-    /// `R_j` as the executor claimed it — what a verdict must judge, and what a verifier's own
-    /// replay has to reproduce.
-    receipt_hash: Hash64,
-    /// The sortitioned verifiers, already restricted to bonds Active at the epoch anchor.
-    committee: HashSet<Hash64>,
-}
-
 pub struct VirtualStateProcessor {
     // Channels
     receiver: CrossbeamReceiver<VirtualStateProcessingMessage>,
@@ -319,7 +265,6 @@ pub struct VirtualStateProcessor {
     /// Accepted capability declarations. A store rather than a walk product: a declaration
     /// outlives the credit window by three orders of magnitude, so a walk-scoped copy vanishes
     /// while it is still in force and takes the certificate's whole committee with it.
-    pub(super) compute_capability_store: Arc<RwLock<DbComputeCapabilityStore>>,
     /// ADR-0067: accepted registrations' declarations, for the serve-from-chain arm.
     pub(super) palw_class_carriage_store: Arc<RwLock<crate::model::stores::palw_class_carriage::DbPalwClassCarriageStore>>,
     /// ADR-0042 Decision 5 / ADR-0044 Unit C: per-chain-block `PalwStateDeltaV2` rows and the
@@ -464,6 +409,9 @@ pub struct VirtualStateProcessor {
     /// reward multiple. Resolved at the claim's ANCHOR for the draw and at the BLOCK's DAA for the
     /// fold's reservation, which the duty row stores.
     pub(super) palw_panel_exposure_floor: Option<kaspa_consensus_core::config::params::PalwPanelExposureFloorV1>,
+    /// ADR-0134: `Params::palw_compute_overlay_retired` — past it the compute overlay's five
+    /// subnetworks are refused, in blocks and in the mempool.
+    pub(super) palw_compute_overlay_retired: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **ADR-0089 Decision 9's fence, `None` on every shipped preset.** Past it the EVM's
     /// window and hand exist and the block's EVM actions reach its transition. Resolved at the
     /// BLOCK's DAA.
@@ -843,7 +791,6 @@ impl VirtualStateProcessor {
             pruning_samples_store: storage.pruning_samples_store.clone(),
             headers_selected_tip_store: storage.headers_selected_tip_store.clone(),
             stake_bonds_store: storage.stake_bonds_store.clone(),
-            compute_capability_store: storage.compute_capability_store.clone(),
             palw_class_carriage_store: storage.palw_class_carriage_store.clone(),
             palw_state_v2_store: storage.palw_state_v2_store.clone(),
             palw_state_params_v2: match &params.palw_consensus_mode {
@@ -939,6 +886,7 @@ impl VirtualStateProcessor {
             palw_execution_lane: params.palw_execution_lane_fence(),
             palw_overlay_carve: params.palw_overlay_carve_fence(),
             palw_panel_exposure_floor: params.palw_panel_exposure_floor_fence(),
+            palw_compute_overlay_retired: params.palw_compute_overlay_retired,
             palw_model_evm: params.palw_model_evm_fence(),
             palw_context_ladder: params.palw_context_ladder,
             palw_epoch_boundary_budget: params.palw_epoch_boundary_budget,
@@ -3124,12 +3072,6 @@ impl VirtualStateProcessor {
         // changes into the same batch so they commit atomically with the
         // virtual state. Inert unless the overlay is configured.
         self.stage_dns_bond_mutations(&mut batch, chain_path);
-        // Capability declarations, staged into the same batch so the pool a committee is drawn
-        // from commits atomically with the bonds it is filtered against.
-        if let Some(dns_params) = self.dns_params.as_ref() {
-            let sink_daa = self.headers_store.get_header(dns_sink).map(|h| h.daa_score).unwrap_or_default();
-            self.stage_compute_capabilities(&mut batch, chain_path, dns_params, sink_daa);
-        }
 
         // kaspa-pq Phase 10 (ADR-0009 A.5): recompute the DNS StakeScore over
         // the bounded recent epoch window and stage the updated DnsState into
@@ -3267,156 +3209,6 @@ impl VirtualStateProcessor {
         )
     }
 
-    /// Persist the capability declarations a selected-chain change adds, and drop those it
-    /// removes.
-    ///
-    /// Same discipline as the bond mutations beside it, and simpler: a declaration has no state
-    /// machine — it cannot be slashed or unbonded — so reverting one is deleting it. Both
-    /// directions re-derive from retained acceptance data, so apply and revert cannot disagree.
-    fn stage_compute_capabilities(&self, batch: &mut WriteBatch, chain_path: &ChainPath, dns_params: &DnsParams, sink_daa: u64) {
-        if !dns_params.vlt_shadow_active_at(sink_daa) {
-            return; // the whole compute overlay is dormant; write nothing
-        }
-        // The bond set as-of BEFORE this chain path (the WriteBatch is not yet applied, so the
-        // store read excludes it). It is a set of stamped RECORDS, not a point-in-time view:
-        // `verified_capability` judges activity against each record's own created/slashed/unbond
-        // stamps, so for any block already durable this set answers as-of-that-block exactly.
-        //
-        // What it cannot answer is this path's OWN blocks — and reading the live snapshot here
-        // was a consensus split in waiting: a node PRESENT at the time processed the bond and the
-        // declaration that rides on it in separate commits, so its snapshot had the bond; a node
-        // REPLAYING the same chain (IBD from genesis) carries both in one batch, the snapshot
-        // misses the bond, `verified_capability` rejects the declaration, and the capability
-        // store — hence the committee draw, the audit-fee outputs, and every certificate's
-        // verified/unverified verdict — permanently diverges. Found live: a from-genesis node
-        // disqualified 86 chain blocks on `[coinbase-mismatch] act=3 exp=2` (the two audit-fee
-        // outputs it refused to expect), froze `capability_root=bee4c439…` against the mesh's
-        // `578636b0…`, and credited zero weight forever.
-        //
-        // So the apply loop below advances this set block by block — verify a block's
-        // declarations against the strict PREFIX, then fold in that block's own bond mutations —
-        // which is exactly the order a present node experienced them in.
-        let mut bonds: Vec<StakeBondRecord> =
-            self.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
-        let net_id = self.genesis.hash;
-
-        // Derive every added block's bond mutations BEFORE the write guard, for exactly the reason
-        // `stage_dns_bond_mutations` derives its own up front: the derivation reaches
-        // `compute_challenge_adjudication_slashes` → `resolve_certificate`, which READS this very
-        // store to draw a committee, and `parking_lot::RwLock` is not reentrant. Deriving inside
-        // the guard parks the virtual processor against itself the first time a challenge crosses
-        // its window under an active shadow fence — no thread visibly holding anything, the chain
-        // simply stops. (The apply loop below still folds them in block by block: the ORDER is
-        // what the strict-prefix rule needs, not the moment of derivation.)
-        // Advanced across the path for the same reason `stage_dns_bond_mutations` advances its
-        // copy: block N's evidence must be judged against the bonds blocks 0..N created.
-        let mut evidence_view = self.initial_active_bond_view();
-        let mut added_muts: Vec<Vec<BondMutation>> = Vec::with_capacity(chain_path.added.len());
-        for h in chain_path.added.iter().copied() {
-            let muts = self.dns_bond_mutations_for_chain_block(h, &evidence_view);
-            evidence_view.apply(&muts);
-            added_muts.push(muts);
-        }
-
-        let mut store = self.compute_capability_store.write();
-
-        // A database whose chain predates this store has declarations accepted and no rows for
-        // them, and an empty pool reads exactly like "nobody declared". Sweep history once, bounded
-        // by the furthest back a declaration could still be live at any beacon this walk will ask
-        // about: `max_capability_validity_blocks` before the oldest anchor in the credit window.
-        //
-        // The sweep starts at the PRE-PATH tip, never inside this path: its `bonds` answers
-        // as-of-block only for already-durable blocks (see above), and every block of this path
-        // is the apply loop's job anyway.
-        if !store.is_backfilled() {
-            // The sweep judges each historical block's declarations at THAT block's DAA, and it
-            // never walks above the pre-path tip — so the live `bonds` above is the right input
-            // even though its stamps are current: `effective_bond_status` is strictly DAA-monotone
-            // (a stamp at `s` only answers differently for `pov >= s`), and bond records are never
-            // deleted, only stamped. A bond slashed after a block was produced is therefore still
-            // Active at that block's score, which is what a node present at the time saw. Flagged
-            // by the 2026-08-11 audit as a live-store read; it is one, and it is sound for this
-            // query — do not "fix" it into an as-of view that would answer the same and cost a
-            // walk per historical block.
-            let sweep_tip = chain_path
-                .added
-                .first()
-                .and_then(|first| self.ghostdag_store.get_selected_parent(*first).ok())
-                .unwrap_or_else(|| chain_path.added.last().copied().unwrap_or(self.genesis.hash));
-            let horizon = dns_params.vlt.max_capability_validity_blocks.saturating_add(dns_params.vlt_credit_window_blue_score);
-            let mut swept = 0usize;
-            if let Ok(sink_blue) = self.headers_store.get_blue_score(sweep_tip) {
-                for block in std::iter::once(sweep_tip).chain(self.reachability_service.default_backward_chain_iterator(sweep_tip)) {
-                    let Ok(bs) = self.headers_store.get_blue_score(block) else { break };
-                    if sink_blue.saturating_sub(bs) > horizon {
-                        break;
-                    }
-                    let Ok(header) = self.headers_store.get_header(block) else { break };
-                    for (tx_id, cap) in compute_capabilities_with_ids_from_accepted_txs(&self.accepted_txs_of_chain_block(block)) {
-                        if let Some(record) =
-                            verified_capability(cap, &bonds, net_id.as_byte_slice(), block, header.daa_score, &dns_params.vlt)
-                        {
-                            store.insert_batch(batch, tx_id, Arc::new(record)).unwrap();
-                            swept += 1;
-                        }
-                    }
-                }
-            }
-            info!("[vlt-credit] swept {swept} capability declaration(s) out of history into the capability store");
-            // The marker goes into the SAME batch as the inserts, so it becomes durable with them
-            // or not at all. A crash before the batch is written leaves the marker unset and the
-            // next start sweeps again — idempotently, since a declaration keyed by its own
-            // transaction id rewrites to the same value.
-            store.mark_backfilled(batch).unwrap();
-        }
-
-        let mut reverted = 0usize;
-        for removed in chain_path.removed.iter().rev() {
-            for (tx_id, _) in compute_capabilities_with_ids_from_accepted_txs(&self.accepted_txs_of_chain_block(*removed)) {
-                store.delete_batch(batch, tx_id).unwrap();
-                reverted += 1;
-            }
-        }
-        // The revert path is the half of a new consensus store that never runs until it matters,
-        // and then runs during a reorg. Say so when it does: a declaration silently surviving a
-        // branch it is not in would put that branch's verifiers on another branch's committee.
-        if reverted > 0 {
-            info!("[capability-store] reverted {reverted} declaration(s) that left the selected chain");
-        }
-        for (i, added) in chain_path.added.iter().enumerate() {
-            let Ok(header) = self.headers_store.get_header(*added) else { continue };
-            for (tx_id, cap) in compute_capabilities_with_ids_from_accepted_txs(&self.accepted_txs_of_chain_block(*added)) {
-                // The same bond-binding and signature checks the walk applied, so a row can only
-                // hold a declaration the credit walk would itself have accepted. `bonds` is the
-                // strict prefix — earlier paths plus the added blocks already folded in below —
-                // so a batch spanning a bond and its declaration verifies the declaration exactly
-                // as a node that processed them in separate commits did.
-                if let Some(record) =
-                    verified_capability(cap, &bonds, net_id.as_byte_slice(), *added, header.daa_score, &dns_params.vlt)
-                {
-                    store.insert_batch(batch, tx_id, Arc::new(record)).unwrap();
-                }
-            }
-            // THIS block's bond mutations join the set only after its own declarations were
-            // judged: a same-block bond must not validate a same-block declaration on a replayer
-            // when it could not on a present node.
-            for mutation in added_muts.get(i).map(Vec::as_slice).unwrap_or_default() {
-                match mutation {
-                    BondMutation::Insert(outpoint, record) => {
-                        if !bonds.iter().any(|b| b.bond_outpoint == *outpoint) {
-                            bonds.push(record.clone());
-                        }
-                    }
-                    BondMutation::Slash(outpoint, _) | BondMutation::Unbond(outpoint, _, _) => {
-                        if let Some(existing) = bonds.iter_mut().find(|b| b.bond_outpoint == *outpoint) {
-                            apply_bond_stamp(existing, mutation);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     /// Re-derives the [`BondMutation`]s a chain block contributed, from its
     /// retained acceptance data (ADR-0009 Addendum A.4). Deterministic, so it
     /// serves both apply (added) and revert (removed).
@@ -3424,121 +3216,7 @@ impl VirtualStateProcessor {
         let accepted_daa_score = self.headers_store.get_header(chain_block).unwrap().daa_score;
         let (min_bond, unbonding_floor) = self.dns_bond_floors();
         let txs = self.accepted_txs_of_chain_block(chain_block);
-        let mut muts = self.dns_bond_mutations_from_txs(&txs, bond_view, accepted_daa_score, min_bond, unbonding_floor);
-        // §7(b)/(c): the mutations a challenge ADJUDICATION implies at this block. Appended after
-        // the transaction-derived ones so the order is deterministic, and derived from the same
-        // chain data on both apply and revert.
-        muts.extend(self.compute_challenge_adjudication_slashes(chain_block, bond_view, accepted_daa_score));
-        muts
-    }
-
-    /// §7(b)/(c): the bonds a settled challenge slashes, for the chain block where its certificate
-    /// leaves the challenge window.
-    ///
-    /// A compute fraud proof is a claim about a computation, and consensus cannot re-run the job to
-    /// test it. What it can do is wait for the certificate's own sortitioned committee, whose
-    /// confirmations each carry a [`ReplayResiduals`](kaspa_consensus_core::vlt::ReplayResiduals)
-    /// proof of independent execution, and read the answer off that:
-    ///
-    /// * a drawn verifier refuted ⇒ the challenge stands ⇒ the **executor** loses its bond (§7(b));
-    /// * the certificate cleared verification ⇒ the challenge is disproved ⇒ the **challenger**
-    ///   loses its bond (§7(c) — "Challenge に失敗した実行を正しいものとして claim すること");
-    /// * anything less ⇒ undecided, and nobody is slashed. A quiet committee is a reason to wait.
-    ///
-    /// The window crossing is the trigger because it happens exactly once per certificate per
-    /// chain, so the mutation applies once and reverts cleanly, with no dedup state.
-    ///
-    /// Inert below the **shadow** fence — every shipped network — where no verdict is ever counted.
-    /// Above it this walks the compute overlay per chain block, the same cost noted on
-    /// [`Self::compute_audit_fee_outputs`] and fixable the same way.
-    ///
-    /// Shadow, not weight: a credit table accumulated without slashing is a table nobody was
-    /// policed for producing, and switching the vote onto it later would weight exactly that. The
-    /// overlay's enforcement has to be live for the whole soak, not switched on with the vote.
-    fn compute_challenge_adjudication_slashes(
-        &self,
-        chain_block: BlockHash,
-        bond_view: &ActiveBondView,
-        daa_score: u64,
-    ) -> Vec<BondMutation> {
-        let Some(dns_params) = self.dns_params.as_ref() else {
-            return Vec::new();
-        };
-        if !dns_params.vlt_shadow_active_at(daa_score) {
-            return Vec::new();
-        }
-        let Ok(parent) = self.ghostdag_store.get_selected_parent(chain_block) else {
-            return Vec::new();
-        };
-        let (Ok(parent_daa), Ok(parent_blue)) = (self.headers_store.get_daa_score(parent), self.headers_store.get_blue_score(parent))
-        else {
-            return Vec::new();
-        };
-        let net_id_hash = self.genesis.hash;
-        let net_id = net_id_hash.as_byte_slice();
-        // The bond set as the CALLER's chain view holds it, never the live store: a replayer
-        // batches many blocks into one virtual advance, so its store lacks every bond created
-        // earlier in that batch, and an adjudication that cannot resolve a bond silently reaches
-        // a different verdict than a node that lived the blocks one at a time. That is the same
-        // IBD/live divergence class the capability staging fix closed (86 disqualified blocks).
-        let bonds: Vec<StakeBondRecord> = bond_view.records();
-        let window = dns_params.vlt.challenge_window_blocks;
-        let anchors = self.canonical_anchors_in_window(parent, dns_params, dns_params.vlt_credit_window_blue_score);
-        let oldest_blue = parent_blue.saturating_sub(dns_params.vlt_credit_window_blue_score);
-        let walk = self.walk_compute_overlay(parent, &bonds, net_id, dns_params, oldest_blue, parent_blue);
-
-        let mut crossing: Vec<&(TransactionId, ComputeCertificatePayload, u64)> = walk
-            .certificates
-            .iter()
-            .filter(|(_, _, accepted)| parent_daa.saturating_sub(*accepted) <= window && daa_score.saturating_sub(*accepted) > window)
-            .collect();
-        crossing.sort_by_key(|(tx_id, _, accepted)| (*accepted, *tx_id));
-
-        let mut muts = Vec::new();
-        for (cert_tx_id, cert, accepted) in crossing {
-            let mut challenges: Vec<&ComputeChallengePayload> =
-                walk.challenges.iter().filter(|c| c.certificate_tx_id == *cert_tx_id).collect();
-            if challenges.is_empty() {
-                continue;
-            }
-            challenges.sort_by_key(|c| (c.challenger_bond_outpoint.transaction_id, c.challenger_bond_outpoint.index, c.kind as u8));
-
-            let resolution = anchors.get(&cert.epoch).and_then(|anchor| {
-                self.resolve_certificate(cert, *accepted, anchor, &bonds, &walk, dns_params, net_id, &anchors).ok().map(|resolved| {
-                    let attestations = verdicts_for_certificate(
-                        &walk.verdicts,
-                        *cert_tx_id,
-                        resolved.job_id,
-                        resolved.receipt_hash,
-                        *accepted,
-                        &resolved.committee,
-                    );
-                    (resolved.receipt_hash, attestations)
-                })
-            });
-            let (receipt_hash, attestations) = match &resolution {
-                Some((h, a)) => (*h, a.as_slice()),
-                None => (Hash64::default(), [].as_slice()),
-            };
-            for c in challenges {
-                match adjudicate_compute_challenge(
-                    c.kind,
-                    resolution.is_some(),
-                    receipt_hash,
-                    attestations,
-                    dns_params.vlt.min_verifier_confirmations,
-                    dns_params.vlt.min_verifier_refutations,
-                ) {
-                    // The challenge stands: the bond it named — the executor's, pinned to this
-                    // certificate by the walk — is the one that loses.
-                    ChallengeOutcome::Succeeded => muts.push(BondMutation::Slash(cert.executor_bond_outpoint, daa_score)),
-                    // The challenge is disproved: the challenger staked its own collateral on the
-                    // claim, and that is what §7(c) takes.
-                    ChallengeOutcome::Failed => muts.push(BondMutation::Slash(c.challenger_bond_outpoint, daa_score)),
-                    ChallengeOutcome::Undecided => {}
-                }
-            }
-        }
+        let muts = self.dns_bond_mutations_from_txs(&txs, bond_view, accepted_daa_score, min_bond, unbonding_floor);
         muts
     }
 
@@ -8749,18 +8427,14 @@ impl VirtualStateProcessor {
     /// txs from the provided acceptance data instead of the store.
     fn dns_bond_mutations_from_acceptance(
         &self,
-        chain_block: BlockHash,
+        _chain_block: BlockHash,
         acceptance_data: &AcceptanceData,
         bond_view: &ActiveBondView,
         accepted_daa_score: u64,
     ) -> Vec<BondMutation> {
         let (min_bond, unbonding_floor) = self.dns_bond_floors();
         let txs = self.accepted_txs_from_acceptance_data(acceptance_data);
-        let mut muts = self.dns_bond_mutations_from_txs(&txs, bond_view, accepted_daa_score, min_bond, unbonding_floor);
-        // The adjudication reads only the SELECTED PARENT's chain, never this block's own
-        // acceptance data, so it produces the same mutations here as it does from the store — which
-        // it must, or the in-memory bond view and the persisted one would drift apart.
-        muts.extend(self.compute_challenge_adjudication_slashes(chain_block, bond_view, accepted_daa_score));
+        let muts = self.dns_bond_mutations_from_txs(&txs, bond_view, accepted_daa_score, min_bond, unbonding_floor);
         muts
     }
 
@@ -9228,461 +8902,6 @@ impl VirtualStateProcessor {
         let totals = total_active_stake_by_epoch(bonds, &epoch_anchor_daa);
         let per_epoch = aggregate_epoch_tallies(&contributions, &totals);
         compute_stake_score(&per_epoch, dns_params.epoch_credit_rule())
-    }
-
-    /// ONE backward walk over `[oldest_blue, tip]` collecting every compute-overlay contribution;
-    /// certificates are resolved afterwards by [`Self::resolve_certificate`].
-    ///
-    /// The two-pass shape is forced by the direction of the walk: a certificate is audited by
-    /// validators whose capability declarations sit DEEPER in the chain than it does, and a
-    /// backward walk has not seen those yet when it reaches the certificate. Only the small,
-    /// bounded overlay records are buffered, never the block bodies.
-    ///
-    /// Signature and bond checks that do not depend on a certificate are applied here; anything
-    /// that needs a certificate's beacon (committee membership above all) belongs to the second
-    /// pass, since the committee is not known until the beacon epoch is resolved.
-    fn walk_compute_overlay(
-        &self,
-        tip: BlockHash,
-        bonds: &[StakeBondRecord],
-        net_id: &[u8],
-        dns_params: &DnsParams,
-        oldest_blue: u64,
-        tip_blue: u64,
-    ) -> ComputeOverlayWalk {
-        let mut challenges: Vec<ComputeChallengePayload> = Vec::new();
-        let mut capabilities: Vec<ComputeCapabilityRecord> = Vec::new();
-        let mut commitments: HashMap<TransactionId, ComputeCommitmentRecord> = HashMap::new();
-        let mut verdicts: Vec<ComputeVerdictRecord> = Vec::new();
-        let mut pending: Vec<(TransactionId, ComputeCertificatePayload, u64)> = Vec::new();
-        for chain_block in self.reachability_service.default_backward_chain_iterator(tip) {
-            let Ok(bs) = self.headers_store.get_blue_score(chain_block) else {
-                break;
-            };
-            // Stop at the oldest epoch the caller still needs. For the credit walk everything
-            // below it is finalized AND cached, so re-deriving it would recompute an identical
-            // answer.
-            if bs < oldest_blue || tip_blue.saturating_sub(bs) > dns_params.vlt_credit_window_blue_score {
-                break;
-            }
-            let Ok(block_daa) = self.headers_store.get_daa_score(chain_block) else {
-                break;
-            };
-            let txs = self.accepted_txs_of_chain_block(chain_block);
-
-            challenges.extend(compute_challenges_from_accepted_txs(&txs));
-
-            // Standalone verdicts. Signature-checked here against the verifier's own bond; the
-            // committee-membership and ordering rules are applied per certificate below, since
-            // the committee is not known until the certificate's beacon is resolved.
-            for v in compute_verdicts_from_accepted_txs(&txs) {
-                if !v.is_self_consistent() {
-                    continue;
-                }
-                let Some(vb) = bonds.iter().find(|b| b.bond_outpoint == v.bond_outpoint) else {
-                    continue;
-                };
-                if v.verifier_id != vb.validator_pubkey_hash {
-                    continue;
-                }
-                let digest = verifier_verdict_message(
-                    net_id,
-                    v.certificate_tx_id,
-                    v.job_id,
-                    v.executor_receipt_hash,
-                    v.verdict,
-                    v.replay_receipt_hash,
-                    v.bond_outpoint,
-                )
-                .as_bytes();
-                if !matches!(
-                    verify_mldsa87_with_context(&vb.validator_pubkey, &digest, &v.signature, VERIFIER_VERDICT_MLDSA87_CONTEXT),
-                    Ok(true)
-                ) {
-                    continue;
-                }
-                verdicts.push(ComputeVerdictRecord {
-                    certificate_tx_id: v.certificate_tx_id,
-                    payload: v,
-                    accepted_daa_score: block_daa,
-                });
-            }
-
-            // Phase-1 commitments. Recorded with the blue_score that accepted them, because that
-            // is what fixes the beacon epoch and hence the committee.
-            for (commit_tx_id, commit) in compute_commitments_from_accepted_txs(&txs) {
-                if let Some(record) = verified_commitment(commit, bonds, net_id, bs, block_daa) {
-                    commitments.insert(commit_tx_id, record);
-                }
-            }
-
-            // Capability declarations: bond-bound, signature-verified, expiry capped at
-            // `max_capability_validity_blocks` past THIS block so a stale declaration cannot
-            // name a far-future expiry and squat in committees.
-            for cap in compute_capabilities_from_accepted_txs(&txs) {
-                let Some(bond) = bonds.iter().find(|b| b.bond_outpoint == cap.bond_outpoint) else {
-                    continue;
-                };
-                if cap.validator_id != bond.validator_pubkey_hash {
-                    continue;
-                }
-                // The declared profile must be one consensus actually registered, declared under
-                // its registered class — otherwise a validator could self-assign a class and
-                // join committees it cannot reproduce.
-                let Some(entry) = dns_params.vlt.model_cost_table.lookup(cap.model_weights_hash, cap.runtime_hash) else {
-                    continue;
-                };
-                if cap.runtime_class_id != entry.runtime_class_id {
-                    continue;
-                }
-                let digest = compute_capability_message(
-                    net_id,
-                    cap.validator_id,
-                    cap.bond_outpoint,
-                    cap.model_weights_hash,
-                    cap.runtime_hash,
-                    cap.runtime_class_id,
-                    cap.expiry_daa_score,
-                )
-                .as_bytes();
-                if !matches!(
-                    verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &cap.signature, COMPUTE_CAPABILITY_MLDSA87_CONTEXT),
-                    Ok(true)
-                ) {
-                    continue;
-                }
-                capabilities.push(ComputeCapabilityRecord {
-                    declaration_block: chain_block,
-                    accepted_daa_score: block_daa,
-                    validator_id: cap.validator_id,
-                    bond_outpoint: cap.bond_outpoint,
-                    model_weights_hash: cap.model_weights_hash,
-                    runtime_hash: cap.runtime_hash,
-                    runtime_class_id: cap.runtime_class_id,
-                    expiry_daa_score: cap
-                        .expiry_daa_score
-                        .min(block_daa.saturating_add(dns_params.vlt.max_capability_validity_blocks)),
-                });
-            }
-
-            let block_epoch = bs / dns_params.attestation_epoch_length_blue_score.max(1);
-            for (cert_tx_id, cert) in compute_certificates_from_accepted_txs(&txs) {
-                // (1) The credited epoch must be this block's own epoch (no back-dating into an
-                // epoch that is already weighting votes).
-                if cert.epoch == block_epoch {
-                    pending.push((cert_tx_id, cert, block_daa));
-                }
-            }
-        }
-
-        // ---- dependency horizon -------------------------------------------------------------
-        //
-        // A certificate's phase-1 commitment legitimately sits BELOW the floor that bounds
-        // certificates: by at least one full epoch, because the certificate cannot be built until
-        // the beacon — the anchor of the epoch AFTER the commitment's — exists, and by up to
-        // `max_commitment_age_blocks` in general. `oldest_blue` is raised to the oldest epoch the
-        // caller still needs re-derived, which in the steady state is one epoch back, so bounding
-        // dependencies by it made every certificate unresolvable. That is the 2026-08-09 failure:
-        // twenty jobs executed, certified and confirmed, and not one credited.
-        //
-        // So the floor applies to certificates and the horizon applies to their dependencies. The
-        // second pass is conditional and stops the moment the last wanted commitment is found, so
-        // a healthy chain — where commitments are a couple of epochs down and inside the first
-        // pass anyway — pays nothing for it.
-        let mut wanted: HashSet<TransactionId> =
-            pending.iter().map(|(_, cert, _)| cert.commitment_tx_id).filter(|id| !commitments.contains_key(id)).collect();
-        let mut dependency_scan_complete = true;
-        if !wanted.is_empty() {
-            // Blue score here against a DAA-denominated parameter: `resolve_certificate` applies
-            // the authoritative DAA test, so this only has to be no *shallower* than the real
-            // bound. Blue score advances no faster than DAA, which makes the budget generous in
-            // the safe direction.
-            let horizon = commitment_dependency_horizon(oldest_blue, dns_params.vlt.max_commitment_age_blocks);
-            for chain_block in self.reachability_service.default_backward_chain_iterator(tip) {
-                if wanted.is_empty() {
-                    break;
-                }
-                let Ok(bs) = self.headers_store.get_blue_score(chain_block) else {
-                    dependency_scan_complete = false;
-                    break;
-                };
-                if bs >= oldest_blue {
-                    continue; // the first pass already read this block
-                }
-                if bs < horizon {
-                    break; // searched the whole range a commitment could legally occupy
-                }
-                let Ok(block_daa) = self.headers_store.get_daa_score(chain_block) else {
-                    dependency_scan_complete = false;
-                    break;
-                };
-                // Dependencies only. Certificates, verdicts, challenges and capabilities down here
-                // are outside the credit window and must NOT re-enter the tally through this pass.
-                for (commit_tx_id, commit) in compute_commitments_from_accepted_txs(&self.accepted_txs_of_chain_block(chain_block)) {
-                    if !wanted.contains(&commit_tx_id) {
-                        continue;
-                    }
-                    // Same verification as the first pass, and the walk is along the selected chain
-                    // from the pin, so anything found here is an ancestor of the pin by
-                    // construction. A commitment with a matching id on a competing branch is not
-                    // reachable from this iterator at all.
-                    if let Some(record) = verified_commitment(commit, bonds, net_id, bs, block_daa) {
-                        commitments.insert(commit_tx_id, record);
-                        wanted.remove(&commit_tx_id);
-                    }
-                }
-            }
-        }
-
-        ComputeOverlayWalk { challenges, capabilities, commitments, verdicts, certificates: pending, dependency_scan_complete }
-    }
-
-    /// Resolve one accepted certificate against the chain: check the executor's claim, find its
-    /// phase-1 commitment, derive the sortition beacon, and draw the verifier committee.
-    ///
-    /// `Err` means the certificate does not resolve *at this point of view*. That covers both the
-    /// permanently invalid (a bad signature, an unregistered profile) and the merely early (a
-    /// beacon epoch that has not formed yet) — the walk re-runs, so there is no need to tell them
-    /// apart here.
-    ///
-    /// Shared by the audit fee and the challenge adjudication, so both draw the same committee.
-    #[allow(clippy::too_many_arguments)]
-    fn resolve_certificate(
-        &self,
-        cert: &ComputeCertificatePayload,
-        block_daa: u64,
-        anchor: &CanonicalLaggedEpochAnchor,
-        bonds: &[StakeBondRecord],
-        walk: &ComputeOverlayWalk,
-        dns_params: &DnsParams,
-        net_id: &[u8],
-        anchors: &BTreeMap<u64, CanonicalLaggedEpochAnchor>,
-    ) -> Result<ResolvedCertificate, VltCreditSkipReason> {
-        // (2) Executor bond: exists, bound to the declared id, Active at the anchor.
-        let Some(bond) = bonds.iter().find(|b| b.bond_outpoint == cert.executor_bond_outpoint) else {
-            return Err(VltCreditSkipReason::BondMissing);
-        };
-        if cert.executor_id != bond.validator_pubkey_hash || !is_bond_active_at(bond, anchor.anchor_daa_score) {
-            return Err(VltCreditSkipReason::BondInactive);
-        }
-        // (3) Executor signature over the receipt it is claiming.
-        let job_id = job_spec_id(&cert.spec);
-        let receipt_hash = compute_receipt_hash(&cert.spec, &cert.receipt);
-        let digest = compute_certificate_message(net_id, cert.epoch, job_id, receipt_hash, cert.executor_bond_outpoint).as_bytes();
-        if !matches!(
-            verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &cert.executor_signature, COMPUTE_CERT_MLDSA87_CONTEXT),
-            Ok(true)
-        ) {
-            return Err(VltCreditSkipReason::ExecutorSignatureInvalid);
-        }
-        // (4a) Phase-1 commitment: must exist on THIS chain, name the same executor and the
-        // same job, and lie within `max_commitment_age_blocks` behind the certificate.
-        let Some(commitment) = walk.commitments.get(&cert.commitment_tx_id) else {
-            // Absent only if the dependency pass actually searched the whole range it could
-            // occupy. Otherwise this node simply has not loaded it, which is not a fact about the
-            // chain and must never be cached as one.
-            return Err(if walk.dependency_scan_complete {
-                VltCreditSkipReason::CommitmentAbsentFromCanonicalHistory
-            } else {
-                VltCreditSkipReason::CommitmentNotLoaded
-            });
-        };
-        if commitment.job_id != job_id
-            || commitment.executor_id != cert.executor_id
-            || commitment.bond_outpoint != cert.executor_bond_outpoint
-        {
-            return Err(VltCreditSkipReason::CommitmentMismatch);
-        }
-        // The published input must be the one this spec commits to. `job_id` already covers
-        // `p_j`, so this is what ties the *bytes* on chain to the digest in the spec — without
-        // it an executor could commit to an input nobody can use and certify against a
-        // different one, leaving its committee unable to replay the job it is auditing.
-        if job_input_commitment(&commitment.input) != cert.spec.input_commitment {
-            return Err(VltCreditSkipReason::CommitmentMismatch);
-        }
-        if block_daa < commitment.accepted_daa_score
-            || block_daa.saturating_sub(commitment.accepted_daa_score) > dns_params.vlt.max_commitment_age_blocks
-        {
-            return Err(VltCreditSkipReason::CommitmentOutOfRange);
-        }
-
-        // (4b) The sortition BEACON is the canonical anchor of the epoch AFTER the one that
-        // accepted the commitment — a block that did not exist when the executor fixed
-        // `job_id`. This is what makes the committee unguessable: grinding `sampling_seed` at
-        // commitment time is grinding against randomness that has not been drawn yet.
-        let beacon_epoch = commitment_beacon_epoch(commitment.accepted_blue_score, dns_params.attestation_epoch_length_blue_score);
-        // Beacon epoch not ready yet ⇒ not creditable YET, rather than invalid.
-        let Some(beacon_anchor) = anchors.get(&beacon_epoch) else {
-            return Err(VltCreditSkipReason::BeaconNotReady);
-        };
-        // A certificate may not predate its own beacon, or the executor would have revealed
-        // before the randomness that picks its auditors was fixed.
-        if block_daa < beacon_anchor.anchor_daa_score {
-            return Err(VltCreditSkipReason::CertificatePredatesBeacon);
-        }
-
-        // (4c) Verifier committee: sortitioned from validators that declared THIS job's
-        // profile and are Active-bonded at the anchor. Class matching is inside
-        // `select_verifiers` and is a correctness requirement, not a filter — see its
-        // doc comment on PALW's fp-per-vendor determinism.
-        //
-        // Unregistered profile ⇒ mints nothing anyway.
-        let Some(entry) = dns_params.vlt.model_cost_table.lookup(cert.spec.model_weights_hash, cert.spec.runtime_hash) else {
-            return Err(VltCreditSkipReason::UnregisteredProfile);
-        };
-        // The pool is taken AT THE BEACON, not at the certificate. The beacon is the moment the
-        // randomness is fixed, so measuring the candidates there is what makes the committee a
-        // function of that draw alone. Measured at the certificate instead, the executor picks the
-        // pool by choosing when to publish — and anyone can change a drawn committee after the fact
-        // by declaring a capability, invalidating verdicts the real committee already gave.
-        // From the STORE, not the walk. A declaration is valid for `max_capability_validity_blocks`
-        // and the walk spans `vlt_credit_window_blue_score` — three orders of magnitude less — so
-        // drawing the pool from whatever the walk happened to collect empties it the moment the
-        // walk floor rises past a declaration that is still perfectly in force. Every honest
-        // verdict then belongs to no committee and the certificate reads as unverified for good.
-        // Ancestry, not DAA. The store follows the SELECTED chain, and this resolution also runs
-        // while scoring a candidate branch (pinned at the two branches' shared ancestor). Without
-        // this filter that scoring would draw committee candidates from declarations the branch
-        // under evaluation does not contain — one branch borrowing another's verifiers, which is a
-        // consensus split rather than a slow path. `accepted_daa_score <= pov` does not substitute:
-        // a DAA score is a number like a clock, and two branches can carry blocks at the same one.
-        //
-        // UNION of the store and this walk (2026-08-11 audit, IBD/live divergence class). The
-        // store is written by `stage_compute_capabilities` at commit time, so during a virtual
-        // advance it holds only what was committed BEFORE this batch. A node that lived the
-        // chain commits every block separately and therefore sees block N-1's declarations while
-        // resolving block N; a replayer batches many blocks and sees none of them — a different
-        // committee, hence a different verified/unverified verdict, hence divergent credit and
-        // audit-fee outputs. The walk covers exactly the segment the store is missing, and the
-        // ancestry filter below is what keeps the union honest: a declaration from a branch this
-        // beacon does not contain is dropped whichever source it came from.
-        // Keyed on (declaration block, validator, bond, profile): one declaration is one row, and
-        // the same declaration reached from both sources must collapse to one candidate.
-        let mut seen_caps: HashSet<(BlockHash, Hash64, TransactionOutpoint, Hash64, Hash64)> = HashSet::new();
-        let stored_capabilities: Vec<ComputeCapabilityRecord> = self
-            .compute_capability_store
-            .read()
-            .all()
-            .into_iter()
-            .chain(walk.capabilities.iter().cloned())
-            .filter(|r| seen_caps.insert((r.declaration_block, r.validator_id, r.bond_outpoint, r.model_weights_hash, r.runtime_hash)))
-            .filter(|r| {
-                r.declaration_block == beacon_anchor.anchor_hash
-                    || self.reachability_service.is_chain_ancestor_of(r.declaration_block, beacon_anchor.anchor_hash)
-            })
-            .collect();
-        let declared = capability_candidate_pool(
-            &stored_capabilities,
-            cert.spec.model_weights_hash,
-            cert.spec.runtime_hash,
-            beacon_anchor.anchor_daa_score,
-        );
-        let candidates: Vec<(Hash64, Hash64)> = declared
-            .into_iter()
-            .filter(|(id, _)| bonds.iter().any(|b| b.validator_pubkey_hash == *id && is_bond_active_at(b, anchor.anchor_daa_score)))
-            .collect();
-        let committee: HashSet<Hash64> = select_verifiers(
-            job_id,
-            cert.executor_id,
-            beacon_anchor.anchor_hash,
-            entry.runtime_class_id,
-            &candidates,
-            dns_params.vlt.verifier_committee_size as usize,
-        )
-        .into_iter()
-        .collect();
-        Ok(ResolvedCertificate { job_id, receipt_hash, committee })
-    }
-
-    /// §6 audit fee: the coinbase outputs paying each verifier whose verdict was counted for a
-    /// certificate that leaves its challenge window **at this block**, and their total.
-    ///
-    /// # Why the challenge-window crossing is the trigger
-    ///
-    /// It is the one moment in a certificate's life that happens exactly once per chain, is
-    /// determined by data every node already has, and is late enough that the verdict set is
-    /// settled. Paying at verdict-inclusion time is not an option: the verdict names a certificate
-    /// the coinbase path cannot resolve, so a fabricated verdict against a fabricated certificate
-    /// would be indistinguishable from real work and the fee would fund spam. Paying up front, on
-    /// the certificate, is worse still — a committee member paid before it audits is paid *not* to,
-    /// since publishing then only costs it a transaction fee.
-    ///
-    /// Both verdicts are paid. A refutation is the same work as a confirmation and reports it
-    /// honestly; charging for it would make the fraud-detection role the expensive one.
-    ///
-    /// # Cost
-    ///
-    /// This runs the full compute-overlay walk on every block at and above the shadow fence,
-    /// because committee membership is only decidable against the capability declarations in the
-    /// credit window. Below the fence it returns immediately and costs nothing.
-    pub(super) fn compute_audit_fee_outputs(
-        &self,
-        dns_params: &DnsParams,
-        daa_score: u64,
-        selected_parent: BlockHash,
-        bonds: &[StakeBondRecord],
-        net_id: &[u8],
-        budget: u64,
-    ) -> (Vec<TransactionOutput>, u64) {
-        let fee = dns_params.vlt.audit_fee_sompi;
-        if fee == 0 || budget < fee || !dns_params.vlt_shadow_active_at(daa_score) {
-            return (Vec::new(), 0);
-        }
-        let Ok(parent_daa) = self.headers_store.get_daa_score(selected_parent) else {
-            return (Vec::new(), 0);
-        };
-        let Ok(parent_blue) = self.headers_store.get_blue_score(selected_parent) else {
-            return (Vec::new(), 0);
-        };
-        let window = dns_params.vlt.challenge_window_blocks;
-        let anchors = self.canonical_anchors_in_window(selected_parent, dns_params, dns_params.vlt_credit_window_blue_score);
-        let oldest_blue = parent_blue.saturating_sub(dns_params.vlt_credit_window_blue_score);
-        let walk = self.walk_compute_overlay(selected_parent, bonds, net_id, dns_params, oldest_blue, parent_blue);
-
-        // A certificate crosses its window at this block iff the parent had not yet passed it and
-        // this block has. Each certificate therefore pays out exactly once per chain, with no
-        // cross-block dedup state to keep.
-        let mut crossing: Vec<&(TransactionId, ComputeCertificatePayload, u64)> = walk
-            .certificates
-            .iter()
-            .filter(|(_, _, accepted)| parent_daa.saturating_sub(*accepted) <= window && daa_score.saturating_sub(*accepted) > window)
-            .collect();
-        // The walk yields newest-first; pin a total order so construction and validation build
-        // byte-identical outputs when the budget truncates the tail.
-        crossing.sort_by_key(|(tx_id, _, accepted)| (*accepted, *tx_id));
-
-        let mut outputs = Vec::new();
-        let mut spent = 0u64;
-        for (cert_tx_id, cert, accepted) in crossing {
-            let Some(anchor) = anchors.get(&cert.epoch) else {
-                continue;
-            };
-            let Ok(resolved) = self.resolve_certificate(cert, *accepted, anchor, bonds, &walk, dns_params, net_id, &anchors) else {
-                continue;
-            };
-            for att in verdicts_for_certificate(
-                &walk.verdicts,
-                *cert_tx_id,
-                resolved.job_id,
-                resolved.receipt_hash,
-                *accepted,
-                &resolved.committee,
-            ) {
-                // Pay the verifier's bond owner, the same payee the attestation rewards use.
-                let Some(bond) = bonds.iter().find(|b| b.bond_outpoint == att.bond_outpoint) else {
-                    continue;
-                };
-                // Whole-output budget cap, value-conserving: stop at the first payment that would
-                // overrun the validator pool and leave the ordered tail unpaid rather than mint
-                // past it.
-                if spent.saturating_add(fee) > budget {
-                    return (outputs, spent);
-                }
-                spent = spent.saturating_add(fee);
-                outputs.push(TransactionOutput::new(fee, p2pkh_mldsa87_spk(&bond.owner_reward_spk_payload)));
-            }
-        }
-        (outputs, spent)
     }
 
     /// kaspa-pq Phase 13 (ADR-0018 §H): the selected-chain common ancestor of `candidate` and
@@ -11813,17 +11032,6 @@ impl VirtualStateProcessor {
         // committed reserve balance (= the template's selected parent). Inert below the v2 fence.
         let mut validator_reward_outputs = validator_reward_outputs;
         if let Some(dns_params) = self.dns_params.as_ref() {
-            // MISAKA VLT §6 audit fee, from the unspent remainder of the §E validator pool. Placed
-            // before the drip so both paths append in one order. Inert below the VLT fence.
-            let (audit_outputs, _) = self.compute_audit_fee_outputs(
-                dns_params,
-                virtual_state.daa_score,
-                virtual_state.ghostdag_data.selected_parent,
-                &template_bond_view.records(),
-                self.genesis.hash.as_byte_slice(),
-                validator_pool.saturating_sub(validator_reward_outputs.iter().fold(0u64, |a, o| a.saturating_add(o.value))),
-            );
-            validator_reward_outputs.extend(audit_outputs);
             let parent_balance = self.reserve_balance_store.get(virtual_state.ghostdag_data.selected_parent).unwrap_or(0);
             let (drip_outputs, _) = self.reserve_drip_outputs(
                 dns_params,
@@ -12861,93 +12069,6 @@ enum MergesetIncreaseResult {
     Rejected {
         new_candidate: BlockHash,
     },
-}
-
-/// One capability declaration, accepted only if it is bond-bound, names a registered profile under
-/// its registered class, and its validator's ML-DSA-87 signature verifies.
-///
-/// The same checks `walk_compute_overlay` applies, so a stored row can only hold a declaration the
-/// credit walk would itself have accepted. Expiry is capped at `max_capability_validity_blocks`
-/// past the accepting block, so a stale declaration cannot name a far-future expiry and squat in
-/// committees.
-fn verified_capability(
-    cap: kaspa_consensus_core::vlt::ComputeCapabilityPayload,
-    bonds: &[StakeBondRecord],
-    net_id: &[u8],
-    declaration_block: BlockHash,
-    accepted_daa_score: u64,
-    vlt: &kaspa_consensus_core::vlt::VltParams,
-) -> Option<ComputeCapabilityRecord> {
-    let bond = bonds.iter().find(|b| b.bond_outpoint == cap.bond_outpoint)?;
-    if cap.validator_id != bond.validator_pubkey_hash {
-        return None;
-    }
-    let entry = vlt.model_cost_table.lookup(cap.model_weights_hash, cap.runtime_hash)?;
-    if cap.runtime_class_id != entry.runtime_class_id {
-        return None;
-    }
-    let digest = compute_capability_message(
-        net_id,
-        cap.validator_id,
-        cap.bond_outpoint,
-        cap.model_weights_hash,
-        cap.runtime_hash,
-        cap.runtime_class_id,
-        cap.expiry_daa_score,
-    )
-    .as_bytes();
-    if !matches!(
-        verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &cap.signature, COMPUTE_CAPABILITY_MLDSA87_CONTEXT),
-        Ok(true)
-    ) {
-        return None;
-    }
-    Some(ComputeCapabilityRecord {
-        declaration_block,
-        accepted_daa_score,
-        validator_id: cap.validator_id,
-        bond_outpoint: cap.bond_outpoint,
-        model_weights_hash: cap.model_weights_hash,
-        runtime_hash: cap.runtime_hash,
-        runtime_class_id: cap.runtime_class_id,
-        expiry_daa_score: cap.expiry_daa_score.min(accepted_daa_score.saturating_add(vlt.max_capability_validity_blocks)),
-    })
-}
-
-/// One phase-1 commitment, accepted only if it is bond-bound and its executor's ML-DSA-87 signature
-/// verifies.
-///
-/// Shared by both passes of `walk_compute_overlay`. Two copies of these checks would eventually
-/// differ, and the direction that matters is the lenient one: a commitment admitted by the
-/// dependency pass but rejected by the primary pass would let a certificate resolve against
-/// evidence the main walk does not accept.
-fn verified_commitment(
-    commit: kaspa_consensus_core::vlt::ComputeCommitmentPayload,
-    bonds: &[StakeBondRecord],
-    net_id: &[u8],
-    accepted_blue_score: u64,
-    accepted_daa_score: u64,
-) -> Option<ComputeCommitmentRecord> {
-    let bond = bonds.iter().find(|b| b.bond_outpoint == commit.executor_bond_outpoint)?;
-    if commit.executor_id != bond.validator_pubkey_hash {
-        return None;
-    }
-    let input_commitment = job_input_commitment(&commit.input);
-    let digest = compute_commitment_message(net_id, commit.job_id, input_commitment, commit.executor_bond_outpoint).as_bytes();
-    if !matches!(
-        verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &commit.signature, COMPUTE_COMMITMENT_MLDSA87_CONTEXT),
-        Ok(true)
-    ) {
-        return None;
-    }
-    Some(ComputeCommitmentRecord {
-        job_id: commit.job_id,
-        executor_id: commit.executor_id,
-        bond_outpoint: commit.executor_bond_outpoint,
-        input: commit.input,
-        accepted_blue_score,
-        accepted_daa_score,
-    })
 }
 
 /// The name of a lifecycle object's kind, for logging what a block carried.

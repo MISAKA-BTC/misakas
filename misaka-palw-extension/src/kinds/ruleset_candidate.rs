@@ -54,6 +54,7 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         }
         "palw_beacon_fold" => companion(&mut params.palw_beacon_fold, name, "k", at, |f, at| f.activation = at)?,
         "palw_capability_bound" => params.palw_capability_bound = Some(at),
+        "palw_compute_overlay_retired" => params.palw_compute_overlay_retired = Some(at),
         "palw_context_ladder" => params.palw_context_ladder = Some(at),
         "palw_panel_da" => params.palw_panel_da = Some(at),
         "palw_certification_rent" => params.palw_certification_rent = Some(at),

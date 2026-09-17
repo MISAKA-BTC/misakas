@@ -39,7 +39,7 @@
 //! PALW's production determinism class is "fp per-vendor": byte-identical results hold within one
 //! microarchitecture and toolchain, not across vendors. The registered profile is Apple Silicon +
 //! Metal. Consensus enforces the matching half of this by drawing verifiers only from validators
-//! declaring the same `runtime_class_id` (see `vlt::select_verifiers`); this crate enforces its
+//! declaring the same `runtime_class_id` (the VLT's verifier sortition, retired by ADR-0134); this crate enforces its
 //! half by refusing to run against a runtime whose identity is not the registered one
 //! ([`ComputeRuntime::probe`]).
 

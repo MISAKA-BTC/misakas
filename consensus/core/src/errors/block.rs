@@ -283,8 +283,10 @@ pub enum RuleError {
     // challenge would deny any certificate its credit, and slash any bond, for
     // the price of one transaction. Arg: the challenge transaction's id. Inert
     // below dns_activation_daa_score.
-    #[error("block includes an unverifiable compute fraud proof in transaction {0}")]
-    UnverifiableComputeChallengeInBlock(TransactionId),
+    /// ADR-0134: past `Params::palw_compute_overlay_retired` no compute-overlay transaction (the
+    /// VLT's certificate, challenge, capability, commitment or verdict subnetworks) enters a block.
+    #[error("block includes a compute-overlay transaction {0} past the overlay's retirement")]
+    ComputeOverlayRetired(TransactionId),
 
     // MISAKA §5 round 2: a block carrying precommit evidence whose bond is unknown, whose
     // precommits are not bound to that bond's validator key, whose bond held no slashable stake

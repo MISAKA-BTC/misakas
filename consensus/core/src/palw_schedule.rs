@@ -999,14 +999,29 @@ mod tests {
 
     #[test]
     fn the_twin_lotteries_share_a_shape_but_never_a_draw() {
-        // Same job, same executor, same beacon, same candidate set — the VLT sortition and the
-        // PALW assignment must still order differently, or one lottery would predict the other.
+        // ADR-0134: the VLT's verifier sortition is gone. Domain separation from it is kept by
+        // the key itself (`VERIFIER_SORTITION_KEY` stays pinned apart in the domain-uniqueness
+        // test below); here the PALW assignment is checked against a draw under the VLT's key.
         let cands = candidates();
-        let vlt_pairs: Vec<(Hash64, Hash64)> = cands.iter().map(|c| (c.validator_id, c.runtime_class_id)).collect();
-        let vlt_panel = crate::vlt::select_verifiers(h64(0x01), h64(0x02), h64(0x03), h64(0xC1), &vlt_pairs, 8);
         let palw_panel = select_replay_panel_v1(&h64(0x01), &h64(0x02), &h64(0x03), &h64(0xC1), &cands, 8);
-        assert_eq!(vlt_panel.len(), palw_panel.len());
-        assert_ne!(vlt_panel, palw_panel, "domain separation failed: the two lotteries drew identically");
+        assert_eq!(palw_panel.len(), 8);
+        let under_vlt_key: Vec<Hash64> = {
+            let mut scored: Vec<(Hash64, Hash64)> = cands
+                .iter()
+                .filter(|c| c.validator_id != h64(0x02))
+                .map(|c| {
+                    let mut state = blake2b_simd::Params::new().hash_length(64).key(VERIFIER_SORTITION_KEY).to_state();
+                    state.update(h64(0x01).as_byte_slice());
+                    state.update(h64(0x02).as_byte_slice());
+                    state.update(h64(0x03).as_byte_slice());
+                    state.update(c.validator_id.as_byte_slice());
+                    (Hash64::from_bytes(state.finalize().as_bytes().try_into().unwrap()), c.validator_id)
+                })
+                .collect();
+            scored.sort();
+            scored.into_iter().take(8).map(|(_, id)| id).collect()
+        };
+        assert_ne!(under_vlt_key, palw_panel, "domain separation failed: the PALW draw equals a draw under the VLT key");
     }
 
     #[test]

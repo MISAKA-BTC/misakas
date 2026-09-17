@@ -41,7 +41,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::{Hash, Hash64};
 
 use crate::tx::TransactionOutpoint;
-use crate::{BlockHash, TransactionId};
+use crate::TransactionId;
 
 // ---------------------------------------------------------------------
 // Scale constants.
@@ -397,78 +397,6 @@ pub enum ComputeFraudKind {
     /// verdicts when the challenge window closes, and slashes the losing side automatically. A
     /// challenge of this kind decides nothing and slashes nobody.
     FailedChallenge = 3,
-}
-
-/// How a challenge resolved once its certificate's verdicts settled (§7(b)/(c)).
-///
-/// A challenge is a *claim* about a computation, and nothing in its own payload can settle it —
-/// consensus cannot re-run the job. What can settle it is the evidence the protocol already
-/// gathers: the sortitioned committee's verdicts over that same certificate, each confirmation
-/// carrying a [`ReplayResiduals`] proof that its author actually executed it.
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-pub enum ChallengeOutcome {
-    /// The committee has not said enough yet — too few verdicts to decide either way. Neither
-    /// party is slashed, and the certificate mints nothing meanwhile.
-    #[default]
-    Undecided,
-    /// The challenge stands: the certificate's own committee refuted it, or it was structurally
-    /// invalid. Slashes the executor (§7(b)) and denies the credit.
-    Succeeded,
-    /// The challenge is disproved: enough sortitioned verifiers independently reproduced the
-    /// executor's projection, each proving it. Slashes the **challenger** (§7(c)) and leaves the
-    /// credit intact.
-    Failed,
-}
-
-/// Decide a challenge from its certificate's settled verdict set (§7(c)).
-///
-/// `resolved` is whether the certificate resolved against the chain at all (executor bond and
-/// signature good, commitment present, beacon drawn); `attestations` are the verdicts consensus
-/// counted for it, already filtered to committee members with valid replay proofs.
-///
-/// The asymmetry is deliberate. Slashing an executor needs a positive refutation by a drawn
-/// verifier; slashing a challenger needs the certificate to have actually cleared verification.
-/// Anything short of either is [`ChallengeOutcome::Undecided`] — a committee that has not
-/// published enough is a reason to wait, never a reason to burn somebody's bond.
-pub fn adjudicate_compute_challenge(
-    kind: ComputeFraudKind,
-    resolved: bool,
-    executor_receipt_hash: Hash64,
-    attestations: &[VerifierAttestation],
-    min_confirmations: u8,
-    min_refutations: u8,
-) -> ChallengeOutcome {
-    match kind {
-        // Objectively decided from the payload alone at acceptance; nothing to re-decide here.
-        ComputeFraudKind::ContradictoryVerification => ChallengeOutcome::Undecided,
-        ComputeFraudKind::InvalidCertificate => {
-            if !resolved {
-                ChallengeOutcome::Succeeded
-            } else if verify_compute_certificate(executor_receipt_hash, attestations, min_confirmations, min_refutations) {
-                ChallengeOutcome::Failed
-            } else {
-                ChallengeOutcome::Undecided
-            }
-        }
-        ComputeFraudKind::ForgedReceipt => {
-            if !resolved {
-                // The certificate credits nothing regardless, and its committee was never drawn, so
-                // there is no evidence either way. Not an occasion to slash anyone.
-                ChallengeOutcome::Undecided
-            } else if refutation_quorum_reached(attestations, min_refutations) {
-                // A quorum of drawn verifiers, each having paid for an execution to say so. One
-                // dissenting voice is not a fraud proof — it is exactly what a griefer produces.
-                ChallengeOutcome::Succeeded
-            } else if verify_compute_certificate(executor_receipt_hash, attestations, min_confirmations, min_refutations) {
-                ChallengeOutcome::Failed
-            } else {
-                ChallengeOutcome::Undecided
-            }
-        }
-        // Superseded: adjudication is automatic, so a failed challenge no longer has to be reported
-        // by anyone. Retained for borsh stability; it decides nothing.
-        ComputeFraudKind::FailedChallenge => ChallengeOutcome::Undecided,
-    }
 }
 
 /// A fraud proof against an accepted certificate, on
@@ -1234,78 +1162,6 @@ pub fn derive_runtime_class_id(class_tag: &str) -> Hash64 {
 // Verifier sortition (§6).
 // ---------------------------------------------------------------------
 
-/// Deterministically select the verifier committee for a job (§6).
-///
-/// The paper's requirement is that verifiers are chosen **after** the executor has
-/// committed, using randomness from the finalized chain, so "Executor が事前に協力者
-/// だけを選ぶことを防ぐ". Both halves matter and both are enforced here:
-///
-/// * `beacon` must be a block hash from history the executor could not influence when
-///   it built the receipt — the caller supplies the DNS-confirmed anchor at the
-///   certificate's acceptance height. Passing an executor-chosen value would hand the
-///   committee back to the executor.
-/// * `executor_id` is excluded from the result, so an executor can never verify its
-///   own job (§6 "Executor と Verifier を分離").
-///
-/// Selection is a keyed-hash sort — each candidate's ticket is
-/// `BLAKE2b-512(VERIFIER_SORTITION_KEY, job_id ‖ executor_id ‖ beacon ‖ candidate)`
-/// and the `k` lowest tickets win, ties broken by `validator_id`. Deterministic and
-/// independent of candidate ordering, so every node derives the same committee.
-///
-/// This is **weight-blind on purpose**: verification is an audit role, not a voting
-/// role, so sampling it uniformly keeps a high-`W_i` validator from also dominating
-/// the audit of its competitors' compute.
-///
-/// # Determinism class matching (not optional)
-///
-/// `candidates` is `(validator_id, runtime_class_id)` and only candidates whose class equals
-/// `runtime_class_id` are drawable. This is a **correctness requirement**, not a policy
-/// preference, and it follows from what the runtime actually guarantees.
-///
-/// PALW's production determinism class is *fp per-vendor*: byte-identical results hold only
-/// within one microarchitecture and toolchain (its integration spec: "k=2 pairs must be from
-/// same vendor class"; the cross-vendor integer-canonical class is still under development).
-/// A verifier in a different class re-executing an honest executor's job would legitimately
-/// compute a different `R_j` and sign `Refuted`. Because acceptance is refutation-dominant
-/// ([`verify_compute_certificate`]), a single such verifier would zero an honest validator's
-/// VLT — and a `ForgedReceipt` challenge built on that divergence would slash an honest
-/// executor's bond. Cross-class sampling would therefore not merely be noisy, it would make
-/// the honest strategy unprofitable and the slashing conditions unsound.
-///
-/// A job whose class has fewer than `k` other members simply draws a smaller committee; the
-/// caller's `min_verifier_confirmations` then decides whether that is enough to mint.
-pub fn select_verifiers(
-    job_id: Hash64,
-    executor_id: Hash64,
-    beacon: BlockHash,
-    runtime_class_id: Hash64,
-    candidates: &[(Hash64, Hash64)],
-    k: usize,
-) -> Vec<Hash64> {
-    if k == 0 {
-        return Vec::new();
-    }
-    let mut ticketed: Vec<(Hash64, Hash64)> = candidates
-        .iter()
-        .filter(|(id, class)| *id != executor_id && *class == runtime_class_id)
-        .map(|(c, _)| {
-            let mut hasher = Blake2bParams::new().hash_length(64).key(VERIFIER_SORTITION_KEY).to_state();
-            hasher.update(job_id.as_byte_slice());
-            hasher.update(executor_id.as_byte_slice());
-            hasher.update(beacon.as_bytes().as_slice());
-            hasher.update(c.as_byte_slice());
-            let mut out = [0u8; 64];
-            out.copy_from_slice(hasher.finalize().as_bytes());
-            (Hash64::from_bytes(out), *c)
-        })
-        .collect();
-    // Ticket first, `validator_id` as the tie-break: a pair of candidates whose
-    // tickets collide must still order identically on every node.
-    ticketed.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
-    ticketed.truncate(k);
-    ticketed.into_iter().map(|(_, id)| id).collect()
-}
-
 // ---------------------------------------------------------------------
 // Model cost table + params.
 // ---------------------------------------------------------------------
@@ -1734,109 +1590,6 @@ impl VltParams {
 // Certificate resolution and verification (§6).
 // ---------------------------------------------------------------------
 
-/// Why a certificate did not resolve against the chain — the error of the virtual processor's
-/// `resolve_certificate`, which the audit fee and the challenge adjudication share.
-///
-/// The variants are the *code paths*, not a tidy taxonomy: a reason that lumps two branches
-/// together sends the reader to the wrong half of the resolution.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum VltCreditSkipReason {
-    /// No bond record for the outpoint the certificate names.
-    BondMissing,
-    /// The bond exists but is not this executor's, or was not Active at the epoch anchor.
-    BondInactive,
-    /// The executor's ML-DSA-87 signature over its own receipt does not verify.
-    ExecutorSignatureInvalid,
-    /// The phase-1 commitment was not loaded — the walk did not reach it, an index lookup came
-    /// back empty, or a header could not be read. **Incomplete, not invalid**: it says nothing
-    /// about whether the commitment exists, only that this node has not got it yet.
-    CommitmentNotLoaded,
-    /// The commitment is genuinely absent from the canonical history under the pin: the walk read
-    /// every block down to the dependency horizon and it is not there. Permanent, and a certificate
-    /// naming it is invalid rather than early.
-    CommitmentAbsentFromCanonicalHistory,
-    /// The commitment is there but names a different job, executor, bond, or input.
-    CommitmentMismatch,
-    /// The certificate predates its commitment, or the commitment is older than
-    /// `max_commitment_age_blocks`.
-    CommitmentOutOfRange,
-    /// The sortition beacon's epoch has not anchored yet. Transient: not resolvable *yet*.
-    BeaconNotReady,
-    /// The certificate was accepted before its own beacon — it revealed before the randomness that
-    /// picks its auditors was fixed.
-    CertificatePredatesBeacon,
-    /// `(h_M, h_R)` is not in the network's model cost table, so the job normalizes to zero.
-    UnregisteredProfile,
-}
-
-/// How far below the certificate floor a credit walk must search before it may call a phase-1
-/// commitment absent.
-///
-/// The two floors are **not** the same number, and conflating them is what made twenty executed,
-/// certified and verifier-confirmed jobs worth nothing on 2026-08-09. The certificate floor is
-/// raised to the oldest epoch the caller still needs re-derived — in the steady state, one epoch
-/// back. A commitment sits below its certificate by at least one full epoch, because the
-/// certificate cannot exist until the beacon (the anchor of the epoch *after* the commitment's)
-/// does, and legally by up to `max_commitment_age_blocks`. Bound the dependency by the certificate
-/// floor and every certificate becomes unresolvable in the steady state.
-pub fn commitment_dependency_horizon(certificate_floor_blue: u64, max_commitment_age_blocks: u64) -> u64 {
-    certificate_floor_blue.saturating_sub(max_commitment_age_blocks)
-}
-
-/// Whether a commitment accepted at `commitment_blue` is one a certificate accepted at
-/// `certificate_blue` may legally reference: at or below it, and no older than the age bound.
-///
-/// The DAA-denominated test in the credit walk is the authoritative one; this is the blue-score
-/// bound the *search* uses, and blue score advances no faster than DAA, so it errs by searching
-/// slightly too far rather than too little.
-pub fn commitment_within_dependency_horizon(commitment_blue: u64, certificate_blue: u64, max_commitment_age_blocks: u64) -> bool {
-    commitment_blue <= certificate_blue && certificate_blue.saturating_sub(commitment_blue) <= max_commitment_age_blocks
-}
-
-/// `Verify(S_j, R_j, C_j) = 1` (§3.1 eq. 3) for
-/// [`VerificationScheme::CanonicalFullReplay`], given the verdicts already
-/// signature-checked and sortition-checked by the caller.
-///
-/// Refutation still dominates — a job with a refutation quorum mints nothing whatever its
-/// confirmations say — but it takes a **quorum**, not one voice.
-///
-/// A single refuter used to be decisive, which made griefing an honest executor cost one
-/// transaction and a made-up hash: one of three drawn verifiers could zero anybody's credit, and
-/// under the §6 audit fee be paid for it. Requiring `min_refutations` puts the same collusion bar
-/// in front of destroying a job as in front of confirming one, and [`ReplayProof`] makes each
-/// refuter pay for an execution to cast its vote. Below both thresholds the job is simply
-/// undecided: it mints nothing yet, and will once the committee finishes speaking.
-///
-/// A confirming verdict must also carry a `replay_receipt_hash` equal to the executor's; a
-/// "confirmation" of a different hash is self-contradictory and counts for nothing rather than
-/// being silently ignored.
-pub fn verify_compute_certificate(
-    executor_receipt_hash: Hash64,
-    verdicts: &[VerifierAttestation],
-    min_confirmations: u8,
-    min_refutations: u8,
-) -> bool {
-    if refutation_quorum_reached(verdicts, min_refutations) {
-        return false;
-    }
-    let confirmations = verdicts
-        .iter()
-        .filter(|v| v.verdict == VerificationVerdict::Confirmed && v.replay_receipt_hash == executor_receipt_hash)
-        .count();
-    confirmations >= min_confirmations as usize
-}
-
-/// Whether enough drawn verifiers refuted for the refutation to be the committee's answer rather
-/// than one member's.
-///
-/// `min_refutations == 0` would make an empty verdict set a refutation, so it is read as 1 — the
-/// coherence check refuses 0 in a preset, and this keeps a hand-built params value from inverting
-/// the rule.
-pub fn refutation_quorum_reached(verdicts: &[VerifierAttestation], min_refutations: u8) -> bool {
-    let refutations = verdicts.iter().filter(|v| v.verdict == VerificationVerdict::Refuted).count();
-    refutations > 0 && refutations >= (min_refutations as usize).max(1)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1869,17 +1622,6 @@ mod tests {
             prefill_tokens: prefill,
             decode_tokens: decode,
             trace_commitment: h64(5),
-        }
-    }
-
-    fn verdict(id: u8, verdict: VerificationVerdict, replay: Hash64) -> VerifierAttestation {
-        VerifierAttestation {
-            version: VLT_PAYLOAD_VERSION_V1,
-            verifier_id: h64(id),
-            bond_outpoint: outpoint(id),
-            verdict,
-            replay_receipt_hash: replay,
-            signature: vec![0u8; 4],
         }
     }
 
@@ -2026,40 +1768,6 @@ mod tests {
         }
     }
 
-    /// A commitment below the cached-epoch floor but legal from its certificate must still be
-    /// searched for. This is the 2026-08-09 failure reduced to arithmetic: the walk stopped at the
-    /// certificate floor, every certificate resolved to "commitment missing", and the empty rows
-    /// were then sealed write-once.
-    #[test]
-    fn the_dependency_horizon_reaches_below_the_certificate_floor() {
-        const MAX_AGE: u64 = 6_000;
-        // The case the devnet actually hit: the certificate floor is the oldest uncached epoch, and
-        // the commitment is 4000 blue score below it — far outside the certificate range, and well
-        // inside what its own certificate may legally reference.
-        let certificate_floor = 10_000;
-        let horizon = commitment_dependency_horizon(certificate_floor, MAX_AGE);
-        assert_eq!(horizon, 4_000);
-        assert!(horizon < 6_000, "a commitment at 6000 must be inside the searched range");
-        assert!(commitment_within_dependency_horizon(6_000, 10_500, MAX_AGE));
-
-        // Exactly at the age bound is legal; one beyond it is not. `resolve_certificate` applies
-        // the same bound in DAA, and the two must agree about the boundary itself.
-        assert!(commitment_within_dependency_horizon(4_500, 10_500, MAX_AGE));
-        assert!(!commitment_within_dependency_horizon(4_499, 10_500, MAX_AGE));
-
-        // A commitment cannot come after the certificate that names it.
-        assert!(!commitment_within_dependency_horizon(10_501, 10_500, MAX_AGE));
-        assert!(commitment_within_dependency_horizon(10_500, 10_500, MAX_AGE));
-
-        // The horizon must never be *above* the certificate floor, or the search would skip the
-        // range the first pass already covers and call present commitments absent.
-        for floor in [0u64, 1, MAX_AGE - 1, MAX_AGE, MAX_AGE + 1, u64::MAX] {
-            assert!(commitment_dependency_horizon(floor, MAX_AGE) <= floor);
-        }
-        // And it saturates rather than wrapping under a shallow chain.
-        assert_eq!(commitment_dependency_horizon(100, MAX_AGE), 0);
-    }
-
     #[test]
     fn inert_params_are_dormant_but_coherent() {
         assert_eq!(VltParams::INERT.vlt_activation_daa_score, u64::MAX);
@@ -2070,55 +1778,6 @@ mod tests {
         // No registered model => every job mints zero, so a fence moved by accident
         // cannot silently start crediting.
         assert!(VltParams::INERT.model_cost_table.live().is_empty());
-    }
-
-    /// §6 pays the auditor, and the calibration has one job: beat the cost of auditing. A fee at
-    /// or below the verdict transaction's own relay fee would leave the GPU time unpaid, which is
-    /// the same as not paying at all — and once a fee exists at all, the thing it must not do is
-    /// pay more for one verdict than the other, or the fraud-detection role becomes the costly one.
-    /// §7(c): a challenge is a claim, and the certificate's own committee is what settles it.
-    ///
-    /// The two failure modes this rule has to avoid pull in opposite directions. Slashing on a
-    /// mere accusation lets one bonded party burn any executor's stake for a transaction fee.
-    /// Never slashing the accuser makes a baseless challenge free, and a free challenge denies
-    /// credit. The resolution is that both sides need positive evidence, and silence buys neither.
-    #[test]
-    fn a_challenge_is_settled_by_the_certificates_own_verdicts() {
-        use ComputeFraudKind::{ContradictoryVerification, FailedChallenge, ForgedReceipt, InvalidCertificate};
-        let r = h64(50);
-        let confirm = |id| verdict(id, VerificationVerdict::Confirmed, r);
-        let refute = |id| verdict(id, VerificationVerdict::Refuted, h64(51));
-        let judge = |kind, resolved, atts: &[VerifierAttestation]| adjudicate_compute_challenge(kind, resolved, r, atts, 2, 2);
-
-        // A QUORUM of drawn verifiers refuted, each having paid for an execution to say so: the
-        // accusation is corroborated.
-        assert_eq!(judge(ForgedReceipt, true, &[refute(1), refute(2)]), ChallengeOutcome::Succeeded);
-        // One dissenting voice is not a fraud proof — it is exactly what a griefer produces, and
-        // slashing an executor on it would make griefing the profitable strategy.
-        assert_eq!(judge(ForgedReceipt, true, &[confirm(1), refute(2)]), ChallengeOutcome::Undecided);
-        // The certificate cleared verification: the accusation is disproved, and §7(c) takes the
-        // accuser's bond.
-        assert_eq!(judge(ForgedReceipt, true, &[confirm(1), confirm(2)]), ChallengeOutcome::Failed);
-        // One confirmation is not the threshold. A committee that has not finished speaking is a
-        // reason to wait, never a reason to slash either side.
-        assert_eq!(judge(ForgedReceipt, true, &[confirm(1)]), ChallengeOutcome::Undecided);
-        assert_eq!(judge(ForgedReceipt, true, &[]), ChallengeOutcome::Undecided);
-        // A certificate that never resolved has no committee and credits nothing; a forgery claim
-        // against it is neither proved nor disproved.
-        assert_eq!(judge(ForgedReceipt, false, &[]), ChallengeOutcome::Undecided);
-
-        // `InvalidCertificate` is about the certificate's structure, so failing to resolve IS the
-        // proof — and resolving plus verifying is the disproof.
-        assert_eq!(judge(InvalidCertificate, false, &[]), ChallengeOutcome::Succeeded);
-        assert_eq!(judge(InvalidCertificate, true, &[confirm(1), confirm(2)]), ChallengeOutcome::Failed);
-        assert_eq!(judge(InvalidCertificate, true, &[confirm(1)]), ChallengeOutcome::Undecided);
-
-        // A contradiction proof was already decided from its own payload at acceptance, and a
-        // failed-challenge report is superseded by this rule existing. Neither is re-decided.
-        for superseded in [ContradictoryVerification, FailedChallenge] {
-            assert_eq!(judge(superseded, true, &[confirm(1), confirm(2)]), ChallengeOutcome::Undecided);
-            assert_eq!(judge(superseded, false, &[]), ChallengeOutcome::Undecided);
-        }
     }
 
     #[test]
@@ -2146,99 +1805,6 @@ mod tests {
         assert!(no_conf.is_coherent().is_err(), "0 confirmations would mint unverified VLT");
         let over = VltParams { min_verifier_confirmations: 4, verifier_committee_size: 3, ..VltParams::INERT };
         assert!(over.is_coherent().is_err(), "unsatisfiable confirmation threshold");
-    }
-
-    /// Refutation still dominates — but by quorum, not by one voice. At one voice, a single drawn
-    /// verifier could destroy an honest executor's credit with a hash it made up, and under the §6
-    /// audit fee be paid for it; confirming and refuting have to take the same collusion.
-    #[test]
-    fn refutation_dominates_but_only_as_a_quorum() {
-        let r = h64(9);
-        let other = h64(10);
-        let confirm = |id| verdict(id, VerificationVerdict::Confirmed, r);
-        let refute = |id| verdict(id, VerificationVerdict::Refuted, other);
-        let verify = |atts: &[VerifierAttestation]| verify_compute_certificate(r, atts, 2, 2);
-
-        // Threshold met, and one dissenter. The job stands.
-        let mixed = [confirm(1), confirm(2), refute(3)];
-        assert!(verify(&mixed), "one refuter must not overturn a confirmed job");
-        assert!(!refutation_quorum_reached(&mixed, 2));
-
-        // A refutation QUORUM dominates, whatever the confirmations say.
-        let refuted = [confirm(1), confirm(2), refute(3), refute(4)];
-        assert!(refutation_quorum_reached(&refuted, 2));
-        assert!(!verify(&refuted));
-
-        let clean = [confirm(1), confirm(2)];
-        assert!(verify(&clean));
-        assert!(!verify(&clean[..1]), "below the confirmation threshold");
-
-        // "Confirms" while reporting a different replay hash — counts for nothing.
-        let liar = [confirm(1), verdict(2, VerificationVerdict::Confirmed, other)];
-        assert!(!verify(&liar));
-
-        // An empty set is neither a confirmation nor a refutation.
-        assert!(!verify(&[]));
-        assert!(!refutation_quorum_reached(&[], 2));
-    }
-
-    /// The one class every candidate in the simple fixtures belongs to.
-    fn metal() -> Hash64 {
-        derive_runtime_class_id(palw_pins::METAL_RUNTIME_CLASS)
-    }
-
-    fn same_class(ids: &[Hash64]) -> Vec<(Hash64, Hash64)> {
-        ids.iter().map(|i| (*i, metal())).collect()
-    }
-
-    #[test]
-    fn verifier_sortition_excludes_the_executor_and_is_deterministic() {
-        let ids: Vec<Hash64> = (0u8..10).map(h64).collect();
-        let candidates = same_class(&ids);
-        let executor = h64(3);
-        let a = select_verifiers(h64(100), executor, BlockHash::from_bytes([1u8; 64]), metal(), &candidates, 3);
-        assert_eq!(a.len(), 3);
-        assert!(!a.contains(&executor), "§6: an executor must never verify its own job");
-
-        // Same inputs => same committee, regardless of candidate ordering.
-        let mut shuffled = candidates.clone();
-        shuffled.reverse();
-        let b = select_verifiers(h64(100), executor, BlockHash::from_bytes([1u8; 64]), metal(), &shuffled, 3);
-        assert_eq!(a, b, "sortition must not depend on candidate order");
-
-        // A different beacon draws a different committee (the executor cannot pre-pick).
-        let c = select_verifiers(h64(100), executor, BlockHash::from_bytes([2u8; 64]), metal(), &candidates, 3);
-        assert_ne!(a, c);
-    }
-
-    #[test]
-    fn sortition_handles_undersized_candidate_sets() {
-        let candidates = same_class(&[h64(1), h64(2)]);
-        let picked = select_verifiers(h64(100), h64(1), BlockHash::from_bytes([1u8; 64]), metal(), &candidates, 3);
-        assert_eq!(picked, vec![h64(2)], "only non-executor candidates are drawable");
-        assert!(select_verifiers(h64(100), h64(1), BlockHash::from_bytes([1u8; 64]), metal(), &candidates, 0).is_empty());
-    }
-
-    /// Cross-class sampling is not merely noisy — under PALW's fp-per-vendor determinism it
-    /// would let an honest verifier legitimately refute an honest executor, zeroing its VLT and
-    /// arming a `ForgedReceipt` slash against it. Consensus must never draw such a verifier.
-    #[test]
-    fn sortition_never_draws_a_verifier_from_another_determinism_class() {
-        let cuda = derive_runtime_class_id("palw-fp-per-vendor/nvidia-sm89/v1");
-        assert_ne!(metal(), cuda);
-        let mixed: Vec<(Hash64, Hash64)> = (1u8..=8).map(|i| (h64(i), if i % 2 == 0 { metal() } else { cuda })).collect();
-
-        let picked = select_verifiers(h64(100), h64(99), BlockHash::from_bytes([1u8; 64]), metal(), &mixed, 4);
-        assert!(!picked.is_empty());
-        for id in &picked {
-            let class = mixed.iter().find(|(i, _)| i == id).unwrap().1;
-            assert_eq!(class, metal(), "drew a verifier from the wrong determinism class");
-        }
-
-        // A class with no other members yields no committee at all — the job then simply fails
-        // to reach `min_verifier_confirmations` and mints nothing, which is the safe outcome.
-        let lonely = derive_runtime_class_id("palw-fp-per-vendor/rocm-gfx1100/v1");
-        assert!(select_verifiers(h64(100), h64(99), BlockHash::from_bytes([1u8; 64]), lonely, &mixed, 4).is_empty());
     }
 
     /// The registered identities must be re-derivable from the published `runtime-pins.sh`

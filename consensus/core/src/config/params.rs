@@ -1119,6 +1119,13 @@ pub struct Params {
     /// `the_shipped_registry_still_draws_a_full_panel_with_the_capability_fence_armed` is the
     /// assertion, not a deployment note.
     pub palw_capability_bound: Option<ForkActivation>,
+    /// **ADR-0134 — the compute overlay retires at a height.** Past it a block carrying a
+    /// compute-certificate, -challenge, -capability, -commitment or -verdict transaction (the VLT's
+    /// five subnetworks, ADR-0024) is refused; below it those transactions are accepted and do
+    /// nothing, as they always have — their stateful machinery (the committee beacon, the credit
+    /// walk, the audit fee, the challenge slash) is gone, and no shipped chain ever carried one.
+    /// `None` = never. Hashed `Some`-only; the fork-id gate names it.
+    pub palw_compute_overlay_retired: Option<ForkActivation>,
     /// **ADR-0077 Phase B — the court prices the checkpoint, not the context.** `None` on every
     /// shipped preset, so the behaviour is byte-identical to not having the field at all.
     ///
@@ -3736,6 +3743,10 @@ impl Params {
         if self.palw_capability_bound == Some(ForkActivation::never()) {
             self.palw_capability_bound = None;
         }
+        // ADR-0134, a bare fence: same collapse, same reason.
+        if self.palw_compute_overlay_retired == Some(ForkActivation::never()) {
+            self.palw_compute_overlay_retired = None;
+        }
         // ADR-0077 Phase B, a bare fence: same collapse, same reason.
         if self.palw_context_ladder == Some(ForkActivation::never()) {
             self.palw_context_ladder = None;
@@ -4022,6 +4033,11 @@ impl Params {
     /// **Is ADR-0071's capability bound in force at `daa_score`?** (SA-1..SA-4.)
     pub fn palw_capability_bound_at(&self, daa_score: u64) -> bool {
         self.palw_capability_bound_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// ADR-0134: whether the compute overlay's five subnetworks are refused at `daa_score`.
+    pub fn palw_compute_overlay_retired_at(&self, daa_score: u64) -> bool {
+        self.palw_compute_overlay_retired.is_some_and(|f| f.is_active(daa_score))
     }
 
     /// The capability-bound fence **with the mode condition already folded in** — `Some` only on a
@@ -4630,6 +4646,7 @@ impl Params {
             palw_inactivity_leak,
             palw_beacon_fold,
             palw_capability_bound,
+            palw_compute_overlay_retired,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -4697,6 +4714,7 @@ impl Params {
             ("palw_inactivity_leak", palw_inactivity_leak.map(|f| f.activation)),
             ("palw_beacon_fold", palw_beacon_fold.map(|f| f.activation)),
             ("palw_capability_bound", *palw_capability_bound),
+            ("palw_compute_overlay_retired", *palw_compute_overlay_retired),
             ("palw_context_ladder", *palw_context_ladder),
             ("palw_panel_da", *palw_panel_da),
             ("palw_certification_rent", *palw_certification_rent),
@@ -5176,6 +5194,7 @@ impl Params {
             palw_inactivity_leak,
             palw_beacon_fold,
             palw_capability_bound,
+            palw_compute_overlay_retired,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -5358,6 +5377,14 @@ impl Params {
         // ADR-0071 SA-1..SA-4. A pure fence with no duration beside it, so visiting it is safe:
         // the identity visitor normalises a height, and a height is all this field carries.
         match palw_capability_bound.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // ADR-0134, a bare fence: the same treatment.
+        match palw_compute_overlay_retired.as_mut() {
             Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
@@ -5819,6 +5846,7 @@ impl Params {
             palw_inactivity_leak,
             palw_beacon_fold,
             palw_capability_bound,
+            palw_compute_overlay_retired,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -6009,6 +6037,11 @@ impl Params {
         // there is no companion value to drag into the identity (the D1 hazard).
         if let Some(activation) = palw_capability_bound {
             h.write(b"palw_capability_bound");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0134, Some-only for the same reason.
+        if let Some(activation) = palw_compute_overlay_retired {
+            h.write(b"palw_compute_overlay_retired");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0077 Decision 16, Some-only for the same reason: every shipped preset leaves it
@@ -6652,6 +6685,7 @@ impl Params {
             palw_inactivity_leak: self.palw_inactivity_leak,
             palw_beacon_fold: self.palw_beacon_fold,
             palw_capability_bound: self.palw_capability_bound,
+            palw_compute_overlay_retired: self.palw_compute_overlay_retired,
             palw_context_ladder: self.palw_context_ladder,
             palw_panel_da: self.palw_panel_da,
             palw_certification_rent: self.palw_certification_rent,
@@ -7586,6 +7620,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_inactivity_leak: None,
     palw_beacon_fold: None,
     palw_capability_bound: None,
+    palw_compute_overlay_retired: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -7773,6 +7808,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_inactivity_leak: None,
     palw_beacon_fold: None,
     palw_capability_bound: None,
+    palw_compute_overlay_retired: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -7942,6 +7978,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_inactivity_leak: None,
     palw_beacon_fold: None,
     palw_capability_bound: None,
+    palw_compute_overlay_retired: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -11321,6 +11358,8 @@ fn mainnet_card_base_v1(mut base: Params, dense_tier_pinned: bool) -> Params {
         base.palw_attn_anchored_root = Some(ForkActivation::always());
     }
     base.palw_capability_bound = Some(ForkActivation::always());
+    // ADR-0134: a card never carries the VLT compute overlay — its five subnetworks are refused from genesis.
+    base.palw_compute_overlay_retired = Some(ForkActivation::always());
     base.palw_context_ladder = Some(ForkActivation::always());
     base.palw_court_ladder = Some(ForkActivation::always());
     // **The future-time tolerance the median-time window actually models** (mainnet audit
@@ -11607,10 +11646,18 @@ pub const PALW_RC_COURT_LADDER_FENCE_DAA: u64 = 2_150;
 /// reason). Every node must run a build carrying it before the height.
 pub const PALW_RC_FLAG_DAY_7001_FENCE_DAA: u64 = 7_001;
 
+/// **ADR-0134's height on testnet-11: the compute overlay retires at DAA 7,201** — its own height,
+/// two hundred past the 7,001 flag day, so the fork-id gate separates a build that carries the
+/// retirement from one that does not, and a failure at either height names its cause (the operator:
+/// the beacon retirement is a different failure domain from the liveness and economics fences).
+pub const PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA: u64 = 7_201;
+
 /// **The build before the 7,001 flag day**, for the tests that reconstruct an earlier release: the
 /// five fences [`PALW_RC_FLAG_DAY_7001_FENCE_DAA`] schedules, cleared.
 #[cfg(test)]
 pub(crate) fn palw_rc_clear_flag_day_7001_for_tests(params: &mut Params) {
+    // ADR-0134's retirement at 7,201 came after the flag day: the 7,000 release carries neither.
+    params.palw_compute_overlay_retired = None;
     params.palw_panel_economy = None;
     params.palw_work_priced_reward = None;
     params.palw_execution_lane = None;
@@ -12065,6 +12112,12 @@ pub fn palw_rc_base_params() -> Params {
         Some(PalwOverlayCarveV1 { activation: flag_day_7001, subsidy_validator_bps: 2_000, worker_carve_permille: 720 });
     params.dns_bft_gate =
         Some(DnsBftGateV1 { activation: flag_day_7001, t_leak_daa: 5_040, reentry_final_depth_daa: 200, min_retained_validators: 4 });
+    // **ADR-0134 — the compute overlay's committee beacon retires at its own height** (2026-09-17):
+    // past `PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA` the VLT's five compute subnetworks are refused;
+    // below it they are accepted and do nothing, as on every block this chain has carried (none
+    // carried one). Its own height, not the flag day's, so the two builds and the two failures are
+    // told apart.
+    params.palw_compute_overlay_retired = Some(ForkActivation::new(PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA));
     params.palw_model_evm = Some(ForkActivation::new(PALW_RC_DA_COURT_FENCE_DAA));
     params.palw_court_ladder = Some(ForkActivation::new(PALW_RC_COURT_LADDER_FENCE_DAA));
     // **The EVM lane is ON from DAA 0, inherited from `TESTNET_PARAMS` and kept deliberately.**
@@ -12431,6 +12484,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_inactivity_leak: None,
     palw_beacon_fold: None,
     palw_capability_bound: None,
+    palw_compute_overlay_retired: None,
     // **ARMED on devnet at genesis** — the testnet-11 5f genesis card §1's set, rehearsed here
     // first. Without the ladder the registered class cannot price a wide row, and the ladder is
     // the whole point of registering the graph-v5 512 row (`misaka_palw_base0::classes`).
@@ -16512,7 +16566,11 @@ mod consensus_params_id_tests {
                 // panels and run a different lane past the height, so the fleet must carry one of them.
                 // Previous (the first 7,001 build, never deployed):
                 // 4787b92a0e20065aac88f8258b581f415ace9f6093dfab35c345b48135269005.
-                "ab4e7b9c7e20d14cbadc0874312b8c6dff89ca66ed7e9be3af2f5523dc58b5f2",
+                // **Re-pinned 2026-09-17 for ADR-0134** (`palw_compute_overlay_retired` at 7,201, its own
+                // height): the schedule gains a height, so the fork-id gate separates this build from the
+                // 7,001 union build (ab4e7b9c7e20d14cbadc0874312b8c6dff89ca66ed7e9be3af2f5523dc58b5f2, never
+                // deployed) as well as from the 7,000 release.
+                "dd805c9f2c4e9db3c0d6ffa2d87fa6ffb4263078ab8b7eb857f8fb11f8aa010c",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -17345,6 +17403,7 @@ mod consensus_params_id_tests {
             "palw_capability_bound",
             "palw_certification_rent",
             "palw_chunk_cap_charge",
+            "palw_compute_overlay_retired",
             "palw_context_ladder",
             "palw_court_ladder",
             "palw_da_court",
@@ -18066,6 +18125,8 @@ mod consensus_params_id_tests {
                 PALW_RC_AUDIT_DEEP_FENCE_DAA,
                 // One entry for 7,001: ADR-0124, 0125, 0126 and 0128 share it.
                 PALW_RC_FLAG_DAY_7001_FENCE_DAA,
+                // ADR-0134's retirement, after the flag day.
+                PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
             ],
             "…and a schedule lists every scheduled gate fence's height"
         );

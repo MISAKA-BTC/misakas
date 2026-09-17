@@ -2,7 +2,6 @@ pub mod acceptance_data;
 pub mod block_transactions;
 pub mod block_window_cache;
 pub mod children;
-pub mod compute_capabilities;
 pub mod daa;
 pub mod depth;
 pub mod dns_state;

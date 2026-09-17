@@ -329,7 +329,9 @@ free-prompt lane (escrow 0, nothing to split or price); every network below the 
 carve and ADR-0128's gate. Schedule 1150/1900/2150/2400/3500/4000/6900/7000/7001/2125000; fingerprint
 `4787b92a0e20065aac88f8258b581f415ace9f6093dfab35c345b48135269005` (from `ae1d6162…`), re-pinned the same day to
 `ab4e7b9c7e20d14cbadc0874312b8c6dff89ca66ed7e9be3af2f5523dc58b5f2` when ADR-0130's operator lottery and 5-DAA spans
-joined the height (no build under the first pin was deployed); the identity
+joined the height, and to
+`dd805c9f2c4e9db3c0d6ffa2d87fa6ffb4263078ab8b7eb857f8fb11f8aa010c` when ADR-0134 scheduled the compute overlay's
+retirement at 7,201 (no build under an earlier pin was deployed); the identity
 does not move, so the 7,000 release and this build peer until 7,001 and refuse each other from it
 (`the_7001_flag_day_keeps_the_7000_release_until_7001`). Deployment is the operator's.
 

@@ -97,6 +97,10 @@ pub enum TxRuleError {
     #[error("transaction subnetwork id {0} is neither native nor coinbase")]
     SubnetworksDisabled(SubnetworkId),
 
+    /// ADR-0134: the compute overlay's subnetworks are retired at this height.
+    #[error("transaction subnetwork id {0} is the retired compute overlay's")]
+    ComputeOverlayRetired(SubnetworkId),
+
     /// kaspa-pq Phase 10 (ADR-0009): a transaction routed by a DNS finality
     /// overlay subnetwork carried a payload that failed stateless validation
     /// (see [`crate::dns_finality::dns_tx_kind`] + `validate_*_payload`).

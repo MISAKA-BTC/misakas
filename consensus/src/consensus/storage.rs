@@ -5,7 +5,6 @@ use crate::{
         acceptance_data::DbAcceptanceDataStore,
         block_transactions::DbBlockTransactionsStore,
         block_window_cache::BlockWindowCacheStore,
-        compute_capabilities::DbComputeCapabilityStore,
         daa::DbDaaStore,
         depth::DbDepthStore,
         dns_state::DbDnsStateStore,
@@ -68,7 +67,6 @@ pub struct ConsensusStorage {
     pub pruning_overlay_snapshot_store: Arc<RwLock<DbPruningPointOverlaySnapshotStore>>,
     pub stake_bonds_store: Arc<RwLock<DbStakeBondsStore>>,
     /// MISAKA VLT: accepted capability declarations, the pool a verifier committee is drawn from.
-    pub compute_capability_store: Arc<RwLock<DbComputeCapabilityStore>>,
     /// ADR-0044 Unit C: per-chain-block PALW state deltas and the materialized anchor. Empty on
     /// every shipped network — the writer is gated on a `ConsensusV2` bundle, which no preset
     /// carries.
@@ -302,16 +300,6 @@ impl ConsensusStorage {
         // MISAKA VLT: capability declarations. Bounded by the validator count rather than by chain
         // length — `capability_candidate_pool` keeps one entry per validator — so it is sized like
         // the bond set beside it.
-        let compute_capability_store = {
-            let mut store = DbComputeCapabilityStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build());
-            // Before any read. A row written under a superseded layout cannot be decoded, and the
-            // iterator drops what it cannot decode without a word — so the store would read as
-            // empty, and an empty capability store is indistinguishable from "nobody declared".
-            if let Err(err) = store.reindex_if_stale() {
-                kaspa_core::warn!("[capability-store] could not check the record layout version: {err}; leaving existing rows");
-            }
-            Arc::new(RwLock::new(store))
-        };
         // ADR-0044 Unit C. `untracked` like its neighbours: the row's own `estimate_mem_bytes`
         // exists for readers, but a tracked-bytes policy on a store whose rows vary by orders of
         // magnitude is how the validator-attestation crash happened.
@@ -458,7 +446,6 @@ impl ConsensusStorage {
             pruning_overlay_snapshot_store,
             stake_bonds_store,
             palw_class_carriage_store,
-            compute_capability_store,
             palw_state_v2_store,
             evm_header_store,
             evm_state_store,

@@ -541,8 +541,10 @@ mod tests {
                 crate::config::params::PALW_RC_AUDIT_DEEP_FENCE_DAA,
                 // One for 7,001: ADR-0124, 0125, 0126 and 0128 share it.
                 crate::config::params::PALW_RC_FLAG_DAY_7001_FENCE_DAA,
+                // ADR-0134's retirement of the compute overlay: its own height, after the flag day.
+                crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
             ],
-            "testnet-11's gate set is its flag days (ADR-0083, ADR-0062, ADR-0084 U-08, ADR-0095, ADR-0114, the audit's shallow fence, the held regime with the audit's deep fence, and 7,001), and deriving the list must not widen it"
+            "testnet-11's gate set is its flag days (ADR-0083, ADR-0062, ADR-0084 U-08, ADR-0095, ADR-0114, the audit's shallow fence, the held regime with the audit's deep fence, 7,001, and ADR-0134's 7,201), and deriving the list must not widen it"
         );
     }
 
@@ -588,6 +590,7 @@ mod tests {
                 })
             }
             "palw_capability_bound" => params.palw_capability_bound = Some(at),
+            "palw_compute_overlay_retired" => params.palw_compute_overlay_retired = Some(at),
             "palw_context_ladder" => params.palw_context_ladder = Some(at),
             "palw_panel_da" => params.palw_panel_da = Some(at),
             "palw_certification_rent" => params.palw_certification_rent = Some(at),
@@ -774,7 +777,7 @@ mod tests {
                 // price, ADR-0125's execution lane at one block a second, ADR-0126's validator carve at a
                 // fifth, ADR-0128's BFT stake gate): one past 7000 because a fence at a height the
                 // schedule already names is invisible to the gate.
-                ("testnet-11", vec![1150, 1900, 2150, 2400, 3500, 4000, 6900, 7000, 7001, 2_125_000]),
+                ("testnet-11", vec![1150, 1900, 2150, 2400, 3500, 4000, 6900, 7000, 7001, 7201, 2_125_000]),
                 ("devnet", vec![]),
                 ("simnet", vec![]),
             ],
@@ -815,6 +818,8 @@ mod tests {
         const HELD_AND_AUDIT_DEEP: u64 = 7000;
         /// The operator's flag day of 2026-09-17: ADR-0124, 0125, 0126 and 0128.
         const FLAG_DAY_7001: u64 = 7001;
+        /// ADR-0134's retirement of the compute overlay, its own height after the flag day.
+        const RETIRED_7201: u64 = 7201;
         const CRESCENDO_T11: u64 = 2_125_000;
         for (name, params) in shipped() {
             if name == "testnet-11" {
@@ -829,9 +834,10 @@ mod tests {
                         AUDIT_FENCE,
                         ADR_0120,
                         HELD_AND_AUDIT_DEEP,
-                        FLAG_DAY_7001
+                        FLAG_DAY_7001,
+                        RETIRED_7201
                     ],
-                    "{name}: armed by ADR-0083's fence, ADR-0062's, ADR-0084 U-08's, ADR-0095's, ADR-0114's, the audit's shallow one, ADR-0120's, the held regime's with the audit's deep one, and 7,001's, and nothing else"
+                    "{name}: armed by ADR-0083's fence, ADR-0062's, ADR-0084 U-08's, ADR-0095's, ADR-0114's, the audit's shallow one, ADR-0120's, the held regime's with the audit's deep one, 7,001's, and ADR-0134's 7,201, and nothing else"
                 );
                 assert!(fork_id_gate_armed_v1(&params));
                 continue;
@@ -860,6 +866,7 @@ mod tests {
                 ADR_0120,
                 HELD_AND_AUDIT_DEEP,
                 FLAG_DAY_7001,
+                RETIRED_7201,
                 CRESCENDO_T11
             ]
         );
@@ -1331,12 +1338,17 @@ mod tests {
     #[test]
     fn the_7001_flag_day_keeps_the_7000_release_until_7001() {
         const FLAG_DAY_7001: u64 = crate::config::params::PALW_RC_FLAG_DAY_7001_FENCE_DAA;
+        const RETIRED_7201: u64 = crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA;
         const CRESCENDO_T11: u64 = 2_125_000;
         let upgraded = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
         let mut release_7000 = upgraded.clone();
         crate::config::params::palw_rc_clear_flag_day_7001_for_tests(&mut release_7000);
         assert_eq!(release_7000.fence_schedule_v1(), vec![1150, 1900, 2150, 2400, 3500, 4000, 6900, 7000, CRESCENDO_T11]);
-        assert_eq!(upgraded.fence_schedule_v1(), vec![1150, 1900, 2150, 2400, 3500, 4000, 6900, 7000, FLAG_DAY_7001, CRESCENDO_T11]);
+        assert_eq!(
+            upgraded.fence_schedule_v1(),
+            vec![1150, 1900, 2150, 2400, 3500, 4000, 6900, 7000, FLAG_DAY_7001, RETIRED_7201, CRESCENDO_T11],
+            "ADR-0134's retirement at 7,201 follows the flag day"
+        );
 
         let new_peer = fork_id_v1(&upgraded, 6_950);
         let old_peer = fork_id_v1(&release_7000, 6_950);
@@ -1367,6 +1379,8 @@ mod tests {
 
         // The counterfactual the height exists for: the same set at 7,000 is invisible.
         let mut at_7000 = upgraded.clone();
+        // The counterfactual is about the flag day's height; ADR-0134's later retirement is not part of it.
+        at_7000.palw_compute_overlay_retired = None;
         let seven_thousand = crate::config::params::ForkActivation::new(7000);
         at_7000.palw_panel_economy = Some(seven_thousand);
         at_7000.palw_work_priced_reward = Some(seven_thousand);

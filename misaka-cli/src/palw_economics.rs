@@ -54,7 +54,17 @@ pub(crate) struct ClassEndToEnd {
     pub(crate) attempted_compute: u128,
     /// `(basis name, reward per Final, sompi per 10⁹ MAC-eq attempted over the ledger's window)`.
     pub(crate) under: Vec<(&'static str, u64, u128)>,
+    /// ADR-0133 §9a: proposal C's reward before the escrow cap, after it, how much of the cap it
+    /// uses (permille), and whether it saturates — a class above 80 % cap utilization is not
+    /// activatable as a paid class.
+    pub(crate) uncapped_economic_reward: u128,
+    pub(crate) capped_reward: u64,
+    pub(crate) cap_utilization_permille: u32,
+    pub(crate) cap_saturated: bool,
 }
+
+/// The cap utilization above which a class is not activatable as a paid class (ADR-0133 §9a).
+pub(crate) const PALW_CAP_UTILIZATION_ACTIVATION_LIMIT_PERMILLE: u32 = 800;
 
 /// The whole report: per basis, every class and the gaps between the model classes.
 pub(crate) struct Report {
@@ -191,6 +201,9 @@ fn end_to_end(r: &GetPalwClassEconomicsResponse, measures: &[PalwClassMeasureV1]
             }
             let by_rate = palw_rate_priced_reward_v1(escrow, attempted, rate);
             under.push(("EconomicRate (C)", by_rate, over_window(by_rate)));
+            let uncapped_economic_reward = attempted.saturating_mul(rate) / PALW_LEDGER_RATE_SCALE_V1;
+            let cap_utilization_permille =
+                if escrow == 0 { 0 } else { (uncapped_economic_reward.saturating_mul(1_000) / escrow as u128).min(u32::MAX as u128) as u32 };
             ClassEndToEnd {
                 name: name_of(row),
                 class_id: row.class_id.clone(),
@@ -199,6 +212,10 @@ fn end_to_end(r: &GetPalwClassEconomicsResponse, measures: &[PalwClassMeasureV1]
                 finals,
                 attempted_compute,
                 under,
+                uncapped_economic_reward,
+                capped_reward: by_rate,
+                cap_utilization_permille,
+                cap_saturated: uncapped_economic_reward > escrow as u128,
             }
         })
         .collect();
@@ -544,6 +561,20 @@ pub(crate) fn render(report: &Report) -> String {
         out.push('\n');
     }
     out.push_str("A class whose Finals are zero is paid nothing under every basis: that is liveness, not price (ADR-0132 §2).\n");
+    if !report.end_to_end.is_empty() {
+        out.push_str("Escrow cap under the rate (ADR-0133 §9a; a class above 80 % is not activatable as a paid class):\n");
+        for c in &report.end_to_end {
+            out.push_str(&format!(
+                "  {:<28} uncapped {} · capped {} · cap utilization {}‰{}{}\n",
+                c.name,
+                msk(c.uncapped_economic_reward),
+                msk(c.capped_reward as u128),
+                c.cap_utilization_permille,
+                if c.cap_saturated { " · SATURATED" } else { "" },
+                if c.cap_utilization_permille > PALW_CAP_UTILIZATION_ACTIVATION_LIMIT_PERMILLE { " · not activatable as paid" } else { "" }
+            ));
+        }
+    }
     if !report.capacity.is_empty() {
         out.push_str(
             "\nPanel capacity (ADR-0133; profile from the graph's compute and this node's replays, rate from the ledger's window):\n",
@@ -680,6 +711,9 @@ pub(crate) fn json_report(report: &Report) -> serde_json::Value {
             "class_id": c.class_id, "name": c.name, "escrow_per_claim_sompi": c.escrow_per_claim, "attempted_ccu_per_claim": c.attempted_per_claim.to_string(),
             "finals": c.finals, "attempted_ccu": c.attempted_compute.to_string(),
             "under": c.under.iter().map(|(b, reward, over)| json!({ "basis": b, "reward_per_final_sompi": reward, "msk_per_attempted_ccu": over.to_string() })).collect::<Vec<_>>(),
+            "uncapped_economic_reward_sompi": c.uncapped_economic_reward.to_string(), "capped_reward_sompi": c.capped_reward,
+            "cap_utilization_permille": c.cap_utilization_permille, "cap_saturated": c.cap_saturated,
+            "activatable_as_paid": c.cap_utilization_permille <= PALW_CAP_UTILIZATION_ACTIVATION_LIMIT_PERMILLE,
         })).collect::<Vec<_>>(),
         "rate_sompi_per_giga": report.rate_sompi_per_giga.to_string(),
         "panel_capacity": report.capacity.iter().map(|c| json!({
@@ -923,7 +957,16 @@ mod tests {
         assert!(by_rate.1 as u128 >= escrow - heaviest / 1_000_000_000 - 1, "{}", by_rate.1);
         let hybrid_by_rate = hybrid.under.iter().find(|(b, _, _)| b.starts_with("EconomicRate")).unwrap();
         assert_eq!(hybrid_by_rate.1 as u128 * 1_000 / escrow, 217, "18.06 G × 2 draws against 83.10 G × 2: 21.7 % of the escrow");
+        // The cap is each class's OWN escrow per claim: the dense tier sets the rate, so it sits at
+        // its cap; the hybrid's rate-priced reward is 21.7 % of the dense tier's 2,756 MSK Final
+        // escrow and 18.7 % of its own 3,200 MSK per accepted claim (no Final yet, so the census's
+        // escrow per accepted claim) — both far under the 80 % activation limit. A Kimi-class at 7×
+        // the dense tier's compute would read 7,000 ‰ and be refused as a paid class.
+        assert_eq!(hybrid.cap_utilization_permille, 187);
+        assert!(!hybrid.cap_saturated);
+        assert!((999..=1_000).contains(&dense.cap_utilization_permille), "{}", dense.cap_utilization_permille);
         let text = render(&report);
+        assert!(text.contains("Escrow cap under the rate"));
         assert!(text.contains("End to end — this node's ledger: 1419 claims, accepted DAA 3542–5774"));
         assert!(text.contains("actual gap, producer MSK / attempted CCU: ∞ (Qwen3.6-35B-A3B/graph-v3 paid nothing)"));
         assert!(text.contains("draws 979 · class wins 977 · blocks 202 · 120 s/draw · 9700 MiB/draw"));
@@ -933,5 +976,7 @@ mod tests {
         assert_eq!(doc["census"][2]["ledger"]["finals"], 48);
         assert_eq!(doc["census"][1]["telemetry"]["artifact_bytes_fetched_mib"], 979 * 9_700);
         assert_eq!(doc["end_to_end"][1]["under"][0]["basis"], "leaves");
+        assert_eq!(doc["end_to_end"][0]["cap_utilization_permille"], 187);
+        assert_eq!(doc["end_to_end"][0]["activatable_as_paid"], true);
     }
 }

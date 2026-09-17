@@ -90,6 +90,18 @@ impl SubnetworkId {
             || *self == SUBNETWORK_ID_PRECOMMIT_EVIDENCE
     }
 
+    /// ADR-0134: the compute overlay's five subnetworks (the VLT's certificate, challenge,
+    /// capability, commitment and verdict) — refused as a block rule past
+    /// `Params::palw_compute_overlay_retired`.
+    #[inline]
+    pub fn is_compute_overlay(&self) -> bool {
+        *self == SUBNETWORK_ID_COMPUTE_CERTIFICATE
+            || *self == SUBNETWORK_ID_COMPUTE_CHALLENGE
+            || *self == SUBNETWORK_ID_COMPUTE_CAPABILITY
+            || *self == SUBNETWORK_ID_COMPUTE_COMMITMENT
+            || *self == SUBNETWORK_ID_COMPUTE_VERDICT
+    }
+
     /// kaspa-pq Selected-Parent EVM Lane (ADR-0020): true for the EVM bridge
     /// subnetworks (UTXO→EVM deposit, plus the reserved withdraw-claim / admin
     /// ids). Like the DNS overlay these are full-node-validated but are **not**

@@ -187,7 +187,7 @@ Merged into `feat/palw-exec-lane-and-validator-retirement` as M1 (`fc4325d9`, th
 operator lottery) and M2 (`da837d62`, the scheduler). testnet-11's fingerprint is the union pin
 `ab4e7b9c7e20d14cbadc0874312b8c6dff89ca66ed7e9be3af2f5523dc58b5f2`; M1 alone measured `236cdb56…`, M2 alone
 `a4df92df…`, and the first 7,001 build `4787b92a…` — none of the three was deployed. The identity and the fence
-schedule (…, 7000, 7001, 2125000) did not move, so the fork-id gate cannot tell these builds apart: the fleet
+schedule (…, 7000, 7001, 2125000) did not move between them, so the fork-id gate cannot tell these builds apart: the fleet
 carries one pin or it forks silently at 7,001.
 
 * **Decision 1 — built, dormant.** `Params::palw_panel_exposure_floor: Option<PalwPanelExposureFloorV1
