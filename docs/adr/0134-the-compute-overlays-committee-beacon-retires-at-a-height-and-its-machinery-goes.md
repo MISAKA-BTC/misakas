@@ -1,7 +1,7 @@
 # ADR-0134 — The compute overlay's committee beacon retires at a height, and its machinery goes
 
 * Status: **ACCEPTED and IMPLEMENTED 2026-09-17** on `feat/palw-exec-lane-and-validator-retirement`. testnet-11
-  schedules the retirement at DAA 7,201 — its own height, not the 7,001 flag day's (§4). The stateful machinery
+  schedules the retirement at DAA 6,201 — its own height, not the 6,001 flag day's (§4). The stateful machinery
   is deleted in the same change (§3), on the evidence of §2.
 * Operator's direction, in the operator's words: "DNS/VLT の committee beacon の使用されてない経路 コードの削除も追加で
   完了して — これはバリデータに依存してる — PALW はバリデーターを巻き込まないように進めて — 現在の PoW を LLM に置き換える
@@ -54,8 +54,8 @@ no chain. The VLT worker that would have produced these transactions was deleted
 `Some`-only, named to the fork-id gate. Past it a block carrying a transaction on any of the five compute
 subnetworks is invalid (`RuleError::ComputeOverlayRetired`) and the mempool refuses one
 (`TxRuleError::ComputeOverlayRetired`); `SubnetworkId::is_compute_overlay` names the five. Below it the
-transactions are accepted and do nothing, as they always did. testnet-11: **DAA 7,201**
-(`PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA`), two hundred past the 7,001 flag day, so the two builds and the
+transactions are accepted and do nothing, as they always did. testnet-11: **DAA 6,201**
+(`PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA`), two hundred past the 6,001 flag day, so the two builds and the
 two failure domains are told apart (the operator's order of work, ADR-0133 §9a). Every other preset: `None`
 (a card decides for mainnet). The fingerprint moves; the identity does not.
 
@@ -86,15 +86,15 @@ stays pinned apart in the domain-uniqueness tests.
 
 ## 4. Security amendments
 
-* **SA-1 — a flag day, stated as one.** A node without the fence accepts a compute transaction past 7,201; a
-  node with it refuses the block. Every testnet-11 node runs a build that schedules it before 7,201 — the same
-  discipline as the 7,001 flag day, and the fork-id gate names the height, so a build without it is refused past
+* **SA-1 — a flag day, stated as one.** A node without the fence accepts a compute transaction past 6,201; a
+  node with it refuses the block. Every testnet-11 node runs a build that schedules it before 6,201 — the same
+  discipline as the 6,001 flag day, and the fork-id gate names the height, so a build without it is refused past
   it rather than forked silently.
 * **SA-2 — the deletion is history-safe by measurement, not by argument.** §2 is a census of every block; a
   chain that had carried a compute challenge would have needed the deleted rules to validate it, and this ADR
   would have had to keep them until the height was pruned.
 * **SA-3 — the tenth of the validator pool the audit fee could have spent** stays in the pool's remainder: no
-  new issuance, no output that a block before 7,201 could have carried and now cannot.
+  new issuance, no output that a block before 6,201 could have carried and now cannot.
 
 ## 5. What this does not do
 
@@ -107,11 +107,14 @@ ADR-0133 §9a.
 
 * 2026-09-17, `feat/palw-exec-lane-and-validator-retirement` (`4e1757af` and the closing commit): the fence,
   the block and mempool rules, the deletions and the test rewrites; testnet-11's fingerprint re-pinned
-  `ab4e7b9c…` → **`dd805c9f2c4e9db3c0d6ffa2d87fa6ffb4263078ab8b7eb857f8fb11f8aa010c`** (the schedule gains 7,201, so
-  the fork-id gate separates this build from the 7,001 union build and the 7,000 release); the fork-id and
+  `ab4e7b9c…` → `dd805c9f2c4e9db3c0d6ffa2d87fa6ffb4263078ab8b7eb857f8fb11f8aa010c` (the schedule gained 7,201, so
+  the fork-id gate separates this build from the 7,001 union build and the 7,000 release), and the same evening
+  → **`135b6ee07ba0c5e5951c3cb765ba9dfec8b85af4c6edccc5a2246a52338e766b`** when the operator moved the heights
+  (held regime and deep audit 7,000 → 6,000, the flag day 7,001 → 6,001, this retirement 7,201 → 6,201, the two
+  hundred kept; the tip was 5,798); the fork-id and
   fence-set pins extended (`the_shipped_schedules_are_measured_not_assumed`, the gate sets, the flag-day
   counterfactual, the carded-mainnet comparison — a card arms the retirement from genesis); the operator docs'
-  schedule lines print `…, 7001, 7201, 2125000`. New pins: `adr0134_the_compute_overlay_retires_at_its_own_height`,
+  schedule lines print `…, 6000, 6001, 6201, 6900, 2125000`. New pins: `adr0134_the_compute_overlay_retires_at_its_own_height`,
   `adr0134_the_five_compute_subnetworks_are_the_overlays`. Verification (this branch, the closing run):
   consensus-core 2,140 (nine VLT/DNS committee tests deleted with their subject), consensus (evm) 296 (nine
   compute-challenge tests deleted likewise), kaspad 98, misaka-cli 176, rpc-core 148, rpc-service 1, misaka-palw

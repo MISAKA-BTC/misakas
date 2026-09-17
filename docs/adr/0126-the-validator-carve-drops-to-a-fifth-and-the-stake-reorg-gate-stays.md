@@ -1,7 +1,7 @@
 # ADR-0126 — The validator carve drops to a fifth, and the stake reorg gate stays
 
 * Status: **REVISED and IMPLEMENTED 2026-09-17** on `feat/palw-exec-lane-and-validator-retirement`.
-  testnet-11 schedules it at DAA 7,001 (§6). The first version of this ADR (same day, never armed anywhere)
+  testnet-11 schedules it at DAA 6,001 (§6). The first version of this ADR (same day, never armed anywhere)
   retired the whole validator overlay at a height; the operator reversed that before any network
   scheduled it, and this text replaces it (§8).
 * Operator's direction, in the operator's words: "DNS/VLT の committee beacon の使用されてない経路 コードの
@@ -112,7 +112,7 @@ without the compute worker, compute declarations or verdicts, and without VLT st
 
 * **SA-1 — a flag day, stated as one.** A node without the fence pays validators 30 % past the height
   and refuses every coinbase that pays 20 %; every node must run a build that schedules it. The height
-  is its own (7,001 beside 7,000's flag day) so the fork-id gate separates the builds.
+  is its own (6,001 beside 6,000's flag day) so the fork-id gate separates the builds.
 * **SA-2 — no new issuance.** The tenth moves from one line of the split to another and is paid, like
   the rest of the escrow, only if the claim reaches `Final`; a voided claim's escrow is never minted.
 * **SA-3 — construction equals validation** because every split reader and both escrow sites resolve
@@ -124,7 +124,7 @@ without the compute worker, compute declarations or verdicts, and without VLT st
 
 ## 6. testnet-11
 
-`palw_overlay_carve` = `{ activation: 7,001, subsidy_validator_bps: 2,000, worker_carve_permille: 720 }`:
+`palw_overlay_carve` = `{ activation: 6,001, subsidy_validator_bps: 2,000, worker_carve_permille: 720 }`:
 worker base 72 %, inclusion 8 %, validator 20 %, service 0. At testnet-11's 4,445.62 MSK block the
 escrow grows from 2,756.28 to 3,200.85 MSK. Scheduled in the preset on 2026-09-17 (`d6c46f25`, at DAA
 ≈5,773) with ADR-0124, ADR-0125 and ADR-0128 at the same height; fingerprint `4787b92a…`, re-pinned to

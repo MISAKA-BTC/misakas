@@ -767,7 +767,7 @@ pub(crate) async fn run(ctx: &Ctx) -> CliResult {
 mod tests {
     use super::*;
 
-    /// testnet-11 past 7,001 as the node would answer it, with the live targets of 2026-09-17 and
+    /// testnet-11 past 6,001 as the node would answer it, with the live targets of 2026-09-17 and
     /// the hybrid's panels licensing nothing.
     fn t11() -> GetPalwClassEconomicsResponse {
         let row = |name: &str,
@@ -937,7 +937,7 @@ mod tests {
         assert_eq!(report.actual_gaps[0].paid_nothing, vec!["Qwen3.6-35B-A3B/graph-v3".to_string()]);
         assert!(
             report.actual_gaps[1].paid_nothing.contains(&"Qwen2.5-1.5B/graph-v5@512".to_string()),
-            "no seat was paid below 7,001 either"
+            "no seat was paid below 6,001 either"
         );
         // The four bases, at the actual Final rates.
         let dense = report.end_to_end.iter().find(|c| c.name.starts_with("Qwen2.5")).unwrap();

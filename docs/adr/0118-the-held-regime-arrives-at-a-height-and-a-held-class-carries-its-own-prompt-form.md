@@ -4,8 +4,10 @@
   instruction ("held方式の実装完了をgoalとする"). The operator decided the same day that the
   regime takes a flag day of its own on testnet-11, at a height they will choose, and not the
   audit's 4,000 — and, asked again on 2026-09-12, chose **DAA 7,000**, the deep-audit fence's
-  height, so one release carries both. testnet-11 therefore arms the regime at 7,000
-  (`PALW_RC_HELD_FENCE_DAA = Some(7_000)`; its fingerprint on this branch alone was `80524c3b…`,
+  height, so one release carries both; **moved to DAA 6,000 on 2026-09-17** (the operator: the wait was
+  too long; the tip was 5,798, and the deployed 7,000 release never reaches its height — it is refused
+  from 6,000). testnet-11 therefore arms the regime at 6,000
+  (`PALW_RC_HELD_FENCE_DAA = Some(6_000)`; its fingerprint on this branch alone was `80524c3b…`,
   merged with the 4,000 release that carries `palw_prefill_draw` it is `c2e5ffbe…`, and the release
   that also carries the deep-audit fence is re-pinned when it is assembled). Every other preset leaves the regime dormant.
 * Builds on: [0081](0081-long-context-the-input-is-a-state-chain.md) (Decision 3: the prompt-ids
@@ -120,14 +122,14 @@ the sign gate now binds a result's ids under either form (the two digests are do
 no list binds one job under both), and which form the class commits in is the chain's and the
 seats' to hold the claim to.
 
-**Decision 6 — testnet-11's flag day is one line, and it is the operator's: DAA 7,000.**
+**Decision 6 — testnet-11's flag day is one line, and it is the operator's: DAA 6,000.**
 `PALW_RC_HELD_FENCE_DAA: Option<u64> = Some(7_000)`, and `palw_arm_held_regime_at_v1` arms the three
 fences the regime takes together on testnet-11: `palw_held_context`, the one-move court and the
 retention pins (the k-ary court, `PanelDa` and the DA court are already armed there, from genesis
 and at 1,900). Every fence at one height ships in one build — `fork_id_v1` digests the fired
 heights, not the fence set — so the height is one no other schedule entry uses, or one whose other
 fences ship in the same release: not 3,500, and not 4,000, which releases the audit and
-`palw_prefill_draw` without the regime. 7,000 is shared with the deep-audit fence
+`palw_prefill_draw` without the regime. 6,000 is shared with the deep-audit fence
 (`palw_audit_2026_09_11_deep`), so no build may carry one of the two without the other.
 
 **Decision 7 — a chain-registered class is served at the ruleset's ladder.** Every tabled lineage
@@ -144,7 +146,7 @@ ruleset's ladder, as the tables do. Node policy; no rule moves.
 or the advertised prompt cap, and both are testnet-11's genesis's: the ladder is `2^26` because a
 bisection opened before any fence must still be playable inside the court window (ADR-0103,
 `a_ladder_past_the_clock_needs_the_regime_from_genesis`), and the free-prompt cap is 512. With the
-regime armed at 7,000, the admission gate reads the dense lineage's held row (graph-v7) as:
+regime armed at 6,000, the admission gate reads the dense lineage's held row (graph-v7) as:
 
 | context | at testnet-11's ladder (`2^26`) | at the regime's ladder (`2^48`, not mintable on a live chain) |
 |---|---|---|
@@ -165,14 +167,14 @@ binds a held class. That is §7's first question, not a decision taken here.
 
 ## 5. Invariants the tests hold
 
-1. **I-1, testnet-11 takes the regime at its 7,000 flag day** — a height no released build schedules,
+1. **I-1, testnet-11 takes the regime at its 6,000 flag day** — a height no released build schedules,
    shared only with the audit's deep fence, which ships in the same release: the preset is the
-   helper at 7,000 beside that fence; it validates with the network's ids still flat, gains its
+   helper at 6,000 beside that fence; it validates with the network's ids still flat, gains its
    schedule entry and moves the identity from the build before it; armed from genesis over the same
    bundle it is refused (`testnet_11_takes_the_held_regime_at_its_7000_flag_day`), and armed at a
    scheduled height it is invisible to the fork-id gate
    (`a_held_fence_at_a_scheduled_height_is_invisible_to_the_fork_id_gate`).
-   The fork-id gate, the schedule and the fingerprint pins name 7,000 (`fork_id_v1`'s measured
+   The fork-id gate, the schedule and the fingerprint pins name 6,000 (`fork_id_v1`'s measured
    schedules, `shipped_presets_have_pinned_fingerprints`).
 2. **I-2, the form is the class's**: the held row is priced Merkle and admitted under a court
    reading the flat form, and the shipped row keeps the flat form byte for byte
@@ -227,7 +229,7 @@ binds a held class. That is §7's first question, not a decision taken here.
   - the fused dissection's bottom and root claim open rows under the structural
     `PALW_STEP_MAX_LEAVES` (`2^22`), not the ruleset's ladder — a bound testnet-11's own fused rows
     meet today, since the court's ladder there is `2^26` (reported to the deep-audit session, whose
-    court findings ride 7,000; not decided here).
+    court findings ride 6,000; not decided here).
 * **The dense-court fences on testnet-11.** `palw_fused_dissectable` and `palw_attn_anchored_root`
   (the audit's AC-D8) stay dormant there, so a held class with fused attention is dissected under
   the same rules testnet-11's shipped fused row is. The regime does not require them, and arming

@@ -25,8 +25,9 @@ use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
 use kaspa_hashes::Hash64;
 
-/// A height no testnet-11 schedule entry uses — the proposed deep-audit flag day's.
-const HELD_AT: u64 = 7_000;
+/// The held regime.s height on testnet-11 — shared with the deep-audit fence (7,000 until the operator moved it
+/// on 2026-09-17, unreached).
+const HELD_AT: u64 = 6_000;
 
 fn bundle(params: &Params) -> &PalwConsensusParamsV2 {
     match &params.palw_consensus_mode {
@@ -35,7 +36,7 @@ fn bundle(params: &Params) -> &PalwConsensusParamsV2 {
     }
 }
 
-/// testnet-11 as it was before its 7,000 flag day was scheduled: the shipped preset with the
+/// testnet-11 as it was before its 6,000 flag day was scheduled: the shipped preset with the
 /// regime's three fences cleared, and the audit's deep fence the same release carries at the same
 /// height (`palw_audit_2026_09_11_deep`) — the two ship together or not at all.
 fn t11_without_the_regime() -> Params {
@@ -114,7 +115,7 @@ fn gate_at(params: &Params, profile: &PalwShapeProfileV3, daa: u64) -> Result<()
     .map(|_| ())
 }
 
-/// **Decision 6: testnet-11 takes the regime at its 7,000 flag day — a height no released build
+/// **Decision 6: testnet-11 takes the regime at its 6,000 flag day — a height no released build
 /// schedules, shared only with the audit's deep fence, which ships in the same release.** The
 /// shipped preset IS the helper at that height (one spelling) beside that fence, the ruleset
 /// validates with the network's prompt ids still flat, the schedule gains the height the fork-id
@@ -147,8 +148,8 @@ fn testnet_11_takes_the_held_regime_at_its_7000_flag_day() {
 /// **Why the height must be fresh, or its other fences released together.** `fork_id_v1` digests
 /// the FIRED HEIGHTS: arming the regime at the audit's 4,000 adds no schedule entry, so a node
 /// carrying 4,000's other fences and not this one would advertise the same fork id and diverge
-/// silently past it. The same regime at 7,000 adds the entry the gate refuses a stale node at —
-/// against the 4,000 release, which carries neither of 7,000's fences.
+/// silently past it. The same regime at 6,000 adds the entry the gate refuses a stale node at —
+/// against the 4,000 release, which carries neither of 6,000's fences.
 #[test]
 fn a_held_fence_at_a_scheduled_height_is_invisible_to_the_fork_id_gate() {
     let before = t11_without_the_regime().fence_schedule_v1();

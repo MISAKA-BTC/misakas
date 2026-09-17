@@ -1,8 +1,8 @@
 # ADR-0130 — BPS 1 is hardened before it is widened
 
 * Status: **ACCEPTED 2026-09-17; Decisions 2–6 IMPLEMENTED the same day, Decision 1 built dormant, Decisions 7–8 not built** — on `feat/palw-exec-lane-and-validator-retirement` (§7).
-  Decisions 2–5 ride testnet-11's DAA 7,001 flag day with ADR-0124/0125/0126/0128. Decision 1 is built
-  dormant and computed in shadow (Decision 8); the operator decided (2026-09-17) that λ is off at 7,001 and
+  Decisions 2–5 ride testnet-11's DAA 6,001 flag day with ADR-0124/0125/0126/0128. Decision 1 is built
+  dormant and computed in shadow (Decision 8); the operator decided (2026-09-17) that λ is off at 6,001 and
   gets a height only once the shadow shows the capacity and a shorter liability lifetime exists (§3).
 * Operator's direction, in the operator's words: "BPSは当分1で固定するなら、今は高速化ではなく『BPS1でも壊れ
   ない経済性・選出・settlement』を固める段階"; "一番大きい変更を1つだけ選ぶなら、まず
@@ -24,7 +24,7 @@ chosen from was fixed — with a missed round, never a relaxed rule, where nobod
 ## 1. What exists, and where it fails at width 1
 
 * **A seat earns one to five orders of magnitude more than it risks, and a producer more still.** Past DAA
-  7,001 a testnet-11 claim escrows 3,200.85 MSK before ADR-0124's work price; the pool is a fifth, 128.03 MSK
+  6,001 a testnet-11 claim escrows 3,200.85 MSK before ADR-0124's work price; the pool is a fifth, 128.03 MSK
   a seat at full price. A claim reserves one inference's worth at the network's slash value, 5 sompi a pwu
   (read from the live node's registration terms), and a seat three times that. A model class is priced by
   its pwu against the heaviest weight-bearing model class (the unit), so its reward-to-exposure ratio does
@@ -60,7 +60,7 @@ anchor with the rest of the draw policy, used by the eligibility headroom and by
 stored on the seat's duty so release and the dissent slash move exactly what was reserved. The panel floor
 (ten producer floors: 100,000 MSK on a mainnet card) stays a separate participation floor. `None` on every
 preset; not stated on a mainnet card (λ = 5–10 is under consideration there). §3 is why testnet-11 does not
-arm it at 7,001.
+arm it at 6,001.
 
 **Decision 2 — one entry per operator.** Past `palw_panel_economy` the draw groups the eligible bonds by
 operator; an operator's candidate is its eligible bond with the lowest bond ticket, and the operator draws
@@ -122,7 +122,7 @@ bonds, the draw would find too few operators with headroom, `PanelBound` could n
 stop reaching `Final` — and the lane, whose schedule is made of finals, would stop with them. Arming it on
 testnet-11 therefore needs one of: collateral scaled to the concurrency (new bonds of ~300,000 MSK, or more
 operators), a shorter claim life (the receipt window drives the concurrency), or both; it is not armed at
-7,001 (the operator's decision).
+6,001 (the operator's decision).
 
 **Why the concurrency is 500: the liability lifetime, measured** (1,311 distinct claims read from four bonds,
 newest first, at DAA 5,774):
@@ -132,7 +132,7 @@ newest first, at DAA 5,774):
 | accepted → bound | 641 | 642 | 646 — 739 of 1,292 were redrawn: the first panel did not license in 600 DAA |
 | bound → licensed (the 91 licensed) | 75 | 252 | 562 |
 | age of the 824 still `panel_bound` | 257 | 471 | 590 |
-| accepted → `Final` (48) | 2,016 | 2,121 | 2,200 — the challenge window is 1,200 DAA before 7,000 |
+| accepted → `Final` (48) | 2,016 | 2,121 | 2,200 — the challenge window is 1,200 DAA before 6,000 |
 | accepted → voided (320, all `receipt_timeout`) | 1,242 | 1,244 | 1,245 — two receipt windows |
 
 By class: the 2,685,360-pwu class (Qwen3.6, 488 ‰) had 500 claims sampled and none licensed; the
@@ -140,10 +140,10 @@ By class: the 2,685,360-pwu class (Qwen3.6, 488 ‰) had 500 claims sampled and 
 licensed at a median 6 DAA. **The window is not the root cause — licensing is.** A 30-DAA receipt window
 today would void nearly every model-class claim (licence p50 75–82 DAA, and never for Qwen3.6). The order is
 therefore: find why model-class panels do not reach quorum in time; then shorten the receipt window and the
-challenge window to what licensing actually takes (7,000 already cuts the challenge window to 120 DAA); then
+challenge window to what licensing actually takes (6,000 already cuts the challenge window to 120 DAA); then
 size bonds to the concurrency that remains (the operator's first trial: ~30 DAA with 20,000 MSK panel bonds
 → ~39 seats of capacity against ~25 in use); then arm λ. The lane is exposed to the same cause: its schedule
-is made of finals, so past 7,001 spans in which only the floor and the 6,630,544-pwu class finalize schedule
+is made of finals, so past 6,001 spans in which only the floor and the 6,630,544-pwu class finalize schedule
 only their domains, and spans with no final idle.
 
 ## 4. Security amendments and residuals
@@ -187,8 +187,8 @@ Merged into `feat/palw-exec-lane-and-validator-retirement` as M1 (`fc4325d9`, th
 operator lottery) and M2 (`da837d62`, the scheduler). testnet-11's fingerprint is the union pin
 `ab4e7b9c7e20d14cbadc0874312b8c6dff89ca66ed7e9be3af2f5523dc58b5f2`; M1 alone measured `236cdb56…`, M2 alone
 `a4df92df…`, and the first 7,001 build `4787b92a…` — none of the three was deployed. The identity and the fence
-schedule (…, 7000, 7001, 2125000) did not move between them, so the fork-id gate cannot tell these builds apart: the fleet
-carries one pin or it forks silently at 7,001.
+schedule (…, 6000, 6001, 6201, 6900, 2125000) did not move between them, so the fork-id gate cannot tell these builds apart: the fleet
+carries one pin or it forks silently at 6,001.
 
 * **Decision 1 — built, dormant.** `Params::palw_panel_exposure_floor: Option<PalwPanelExposureFloorV1
   { activation, reward_multiple_permille }>`, hashed `Some`-only, `None` on every preset and card, refused where
@@ -200,14 +200,14 @@ carries one pin or it forks silently at 7,001.
   `adr0130_the_dissent_slash_takes_the_stored_exposure`,
   `adr0130_no_floor_is_the_shipped_reservation_and_the_shadow_ledger_prices_another`). The seat exposure, the
   eligibility, the lottery and the stored/hypothetical seat ledgers are pure public functions for a shadow read.
-* **Decision 2 — at 7,001.** Past `palw_panel_economy` the draw groups the eligible bonds by operator, an
+* **Decision 2 — at 6,001.** Past `palw_panel_economy` the draw groups the eligible bonds by operator, an
   operator's candidate is its bond with the lowest bond ticket, and each operator draws one ticket under its own
   domain; the rule is named in the fingerprint as `palw_panel_draw/operator_ticket_v1` beside the fence's height
   (`palw_panel_v2.rs`, `palw_panel_economy_v1.rs`, `palw_state_v2.rs`, `palw_state_v2_sync.rs`, the virtual
   processor). Where it does not reach (`51330459`): the stratified shard draw takes no economy, so neither
   ADR-0124's floor and headroom nor this lottery and exposure floor ride it; the operator counter the maturity
   warning prints is the lottery's unit; the seat economy carries three numbers, not two.
-* **Decisions 3, 4, 5 — at 7,001.** `palw_execution_lane_v1.rs` scheduler v2: the snapshot/seed split, one
+* **Decisions 3, 4, 5 — at 6,001.** `palw_execution_lane_v1.rs` scheduler v2: the snapshot/seed split, one
   parity an operator (`adr0130_an_operator_spread_over_both_parities_misses_one_paritys_rounds`,
   `adr0130_no_operator_holds_permits_in_two_consecutive_rounds_of_a_span`), the pending-snapshot and
   seed-anchor rows in `palw_state_v2.rs` (`adr0130_a_snapshot_is_seeded_only_by_an_anchor_recorded_after_it_was_taken`,
@@ -234,7 +234,7 @@ carries one pin or it forks silently at 7,001.
   2,133 / consensus (evm) 305 / kaspad 96 / mining 92 / misaka-cli 175 / pq-validator-core 12 + pq-validator 42 /
   rpc-core 146 / rpc-service 1 / palw-extension 2 / integration `rpc_tests::sanity_test` 1 — all green; clippy
   `-D warnings` over the twelve crates clean; `shipped_presets_have_pinned_fingerprints` and
-  `the_7001_flag_day_keeps_the_7000_release_until_7001` green on the union pin.
+  `the_moved_heights_refuse_the_deployed_7000_release_from_6000_and_keep_it_below` green on the union pin.
 
 ## 8. Number hygiene
 

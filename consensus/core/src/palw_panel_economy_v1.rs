@@ -334,7 +334,7 @@ mod tests {
         assert_eq!(palw_panel_collateral_floor_v1(u64::MAX), u64::MAX);
     }
 
-    /// **ADR-0130 on testnet-11's numbers.** Past DAA 7,001 an attempt escrows 72 % of the 4,445.62 MSK
+    /// **ADR-0130 on testnet-11's numbers.** Past DAA 6,001 an attempt escrows 72 % of the 4,445.62 MSK
     /// block — 3,200.85 MSK — and a QWEN36 claim reserves 5 sompi/pwu × 2,685,360 pwu = 0.134 MSK, so a
     /// seat of a five-seat panel is paid up to 128.03 MSK while it risks 3 × 0.134 = 0.40 MSK. At
     /// `λ = 2` the seat reserves twice its most, 256.07 MSK, and the claim-priced stake no longer binds.
@@ -345,45 +345,45 @@ mod tests {
     /// row is where the brief's figures come from — and the five-seat row is testnet-11's.
     #[test]
     fn adr0130_the_seat_exposure_floor_on_testnet_11s_numbers() {
-        const T11_ESCROW_7001: u64 = 320_084_650_080;
+        const T11_ESCROW_6001: u64 = 320_084_650_080;
         const T11_QWEN36_RESERVED: u128 = 13_426_800;
         assert_eq!(T11_QWEN36_RESERVED, 5 * T11_QWEN36_PWU as u128, "5 sompi a pwu × one QWEN36 inference");
         assert_eq!(palw_seat_exposure_v1(T11_QWEN36_RESERVED), 40_280_400, "3 × 13,426,800: the 0.40 MSK a seat risks today");
 
         // The brief's figures: the pool, and λ = 2 of it — a one-seat panel.
-        assert_eq!(palw_panel_split_v1(T11_ESCROW_7001, 1, 0).per_seat, 64_016_930_016);
-        assert_eq!(palw_panel_seat_exposure_v1(T11_QWEN36_RESERVED, T11_ESCROW_7001, 1, 2_000), 128_033_860_032);
+        assert_eq!(palw_panel_split_v1(T11_ESCROW_6001, 1, 0).per_seat, 64_016_930_016);
+        assert_eq!(palw_panel_seat_exposure_v1(T11_QWEN36_RESERVED, T11_ESCROW_6001, 1, 2_000), 128_033_860_032);
 
         // testnet-11's five-seat panel: 128.03 MSK a seat, 256.07 MSK reserved at λ = 2.
-        assert_eq!(palw_panel_split_v1(T11_ESCROW_7001, 5, 0).per_seat, 12_803_386_003);
-        let t11 = palw_panel_seat_exposure_v1(T11_QWEN36_RESERVED, T11_ESCROW_7001, 5, 2_000);
+        assert_eq!(palw_panel_split_v1(T11_ESCROW_6001, 5, 0).per_seat, 12_803_386_003);
+        let t11 = palw_panel_seat_exposure_v1(T11_QWEN36_RESERVED, T11_ESCROW_6001, 5, 2_000);
         assert_eq!(t11, 25_606_772_006);
         assert!(t11 > palw_seat_exposure_v1(T11_QWEN36_RESERVED), "the floor binds: 256.07 MSK against 0.40 MSK");
         // The mainnet range the operator is considering: 5× and 10× the seat's most.
-        assert_eq!(palw_panel_seat_exposure_v1(T11_QWEN36_RESERVED, T11_ESCROW_7001, 5, 5_000), 64_016_930_015);
-        assert_eq!(palw_panel_seat_exposure_v1(T11_QWEN36_RESERVED, T11_ESCROW_7001, 5, 10_000), 128_033_860_030);
+        assert_eq!(palw_panel_seat_exposure_v1(T11_QWEN36_RESERVED, T11_ESCROW_6001, 5, 5_000), 64_016_930_015);
+        assert_eq!(palw_panel_seat_exposure_v1(T11_QWEN36_RESERVED, T11_ESCROW_6001, 5, 10_000), 128_033_860_030);
 
         // No floor is today's stake exactly, whatever the escrow.
-        for escrow in [0, 1, T11_ESCROW, T11_ESCROW_7001, u64::MAX] {
+        for escrow in [0, 1, T11_ESCROW, T11_ESCROW_6001, u64::MAX] {
             for seats in [0usize, 1, 5] {
                 assert_eq!(palw_panel_seat_exposure_v1(T11_QWEN36_RESERVED, escrow, seats, 0), 40_280_400);
             }
         }
         // A claim-priced stake above the floor is kept: the floor only raises a reservation.
-        assert_eq!(palw_panel_seat_exposure_v1(10_000_000_000_000, T11_ESCROW_7001, 5, 2_000), 30_000_000_000_000);
+        assert_eq!(palw_panel_seat_exposure_v1(10_000_000_000_000, T11_ESCROW_6001, 5, 2_000), 30_000_000_000_000);
         // A panel of no seats has no seat reward to floor.
-        assert_eq!(palw_panel_seat_exposure_v1(T11_QWEN36_RESERVED, T11_ESCROW_7001, 0, 2_000), 40_280_400);
+        assert_eq!(palw_panel_seat_exposure_v1(T11_QWEN36_RESERVED, T11_ESCROW_6001, 0, 2_000), 40_280_400);
         // Monotone in λ, and saturating rather than wrapping.
         let mut last = 0;
         for lambda in (0..=PALW_PANEL_REWARD_MULTIPLE_MAX_PERMILLE_V1).step_by(2_500) {
-            let e = palw_panel_seat_exposure_v1(T11_QWEN36_RESERVED, T11_ESCROW_7001, 5, lambda);
+            let e = palw_panel_seat_exposure_v1(T11_QWEN36_RESERVED, T11_ESCROW_6001, 5, lambda);
             assert!(e >= last);
             last = e;
         }
         assert_eq!(palw_panel_seat_exposure_v1(u128::MAX, u64::MAX, 1, u32::MAX), u128::MAX);
         // The economy value carries λ to the same function.
         let economy = PalwSeatEconomyV1 { panel_floor_sompi: 0, max_exposure_ratio_permille: 500, reward_multiple_permille: 2_000 };
-        assert_eq!(economy.seat_exposure(T11_QWEN36_RESERVED, T11_ESCROW_7001, 5), t11);
+        assert_eq!(economy.seat_exposure(T11_QWEN36_RESERVED, T11_ESCROW_6001, 5), t11);
     }
 
     #[test]

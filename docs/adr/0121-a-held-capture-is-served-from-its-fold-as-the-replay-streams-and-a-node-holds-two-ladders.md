@@ -7,7 +7,7 @@
   whose §7 mapped it. **Consensus-inert:** no consensus object, rule, parameter or fingerprint
   moves; every object a node now builds by streaming is byte for byte the object the whole-capture
   path built, and every class that is not held is served, checked and named exactly as before. Rides
-  testnet-11's held build (DAA 7,000) because that is the build in which a held class first exists.
+  testnet-11's held build (DAA 6,000) because that is the build in which a held class first exists.
 * Builds on: [0103](0103-the-context-is-held-off-the-chain-and-the-chain-carries-a-root-an-opening-and-a-logarithm.md)
   (the regime; Decision 2's intervals of `P` positions), [0119](0119-a-held-class-is-walked-at-the-regimes-ladder-and-the-chain-records-which-classes-those-are.md)
   (a held class's ladder is the regime's `2^40`), [0086](0086-the-opening-carries-the-fold-not-the-leaves.md)

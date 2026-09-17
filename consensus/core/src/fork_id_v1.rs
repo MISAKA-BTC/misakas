@@ -536,15 +536,16 @@ mod tests {
                 crate::config::params::PALW_RC_MODEL_BENEFITS_FENCE_DAA,
                 crate::config::params::PALW_RC_MODEL_LEG_V2_FENCE_DAA,
                 crate::config::params::PALW_RC_AUDIT_FENCE_DAA,
-                crate::config::params::PALW_RC_MODEL_SEED_V2_FENCE_DAA,
-                // One entry for 7,000: the held regime and the deep-audit fence share it (ADR-0118).
+                // One entry for 6,000: the held regime and the deep-audit fence share it (ADR-0118; 7,000 until 2026-09-17).
                 crate::config::params::PALW_RC_AUDIT_DEEP_FENCE_DAA,
-                // One for 7,001: ADR-0124, 0125, 0126 and 0128 share it.
-                crate::config::params::PALW_RC_FLAG_DAY_7001_FENCE_DAA,
+                // One for 6,001: ADR-0124, 0125, 0126, 0128 and 0130 share it.
+                crate::config::params::PALW_RC_FLAG_DAY_6001_FENCE_DAA,
                 // ADR-0134's retirement of the compute overlay: its own height, after the flag day.
                 crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
+                // ADR-0120's 6,900, where the deployed release put it — now after the moved heights.
+                crate::config::params::PALW_RC_MODEL_SEED_V2_FENCE_DAA,
             ],
-            "testnet-11's gate set is its flag days (ADR-0083, ADR-0062, ADR-0084 U-08, ADR-0095, ADR-0114, the audit's shallow fence, the held regime with the audit's deep fence, 7,001, and ADR-0134's 7,201), and deriving the list must not widen it"
+            "testnet-11's gate set is its flag days (ADR-0083, ADR-0062, ADR-0084 U-08, ADR-0095, ADR-0114, the audit's shallow fence, the held regime with the audit's deep fence, 6,001, and ADR-0134's 6,201), and deriving the list must not widen it"
         );
     }
 
@@ -765,19 +766,24 @@ mod tests {
                 // not move, and a build with only one of the two is invisible to the gate
                 // (`PALW_RC_AUDIT_FENCE_DAA`'s doc).
                 //
-                // **And 6900, ADR-0120's one-million-MSK least seed** (scheduled 2026-09-12 to ship with
-                // the 7,000 release at a height of its own, so the gate can see a build without it).
+                // **And 6000, the held regime's flag day and the audit's deep one** (ADR-0118, the
+                // operator's height: 7,000 on 2026-09-12, moved to 6,000 on 2026-09-17 with the tip at
+                // 5,798 because the wait was too long — the deployed 7,000 release never reaches its
+                // height): `palw_held_context`, `palw_shard_court`, `palw_fp_da_pins` and
+                // `palw_audit_2026_09_11_deep` fire together, so one release carries all four.
                 //
-                // **And 7000, the held regime's flag day and the audit's deep one** (ADR-0118, the
-                // operator's height of 2026-09-12): `palw_held_context`, `palw_shard_court`,
-                // `palw_fp_da_pins` and `palw_audit_2026_09_11_deep` fire together, so one release
-                // carries all four.
-                //
-                // **And 7001, the operator's flag day of 2026-09-17** (ADR-0124's panel economy and work
+                // **And 6001, the operator's flag day of 2026-09-17** (ADR-0124's panel economy and work
                 // price, ADR-0125's execution lane at one block a second, ADR-0126's validator carve at a
-                // fifth, ADR-0128's BFT stake gate): one past 7000 because a fence at a height the
-                // schedule already names is invisible to the gate.
-                ("testnet-11", vec![1150, 1900, 2150, 2400, 3500, 4000, 6900, 7000, 7001, 7201, 2_125_000]),
+                // fifth, ADR-0128's BFT stake gate, ADR-0130's operator lottery and spans): one past
+                // 6000 because a fence at a height the schedule already names is invisible to the gate.
+                //
+                // **And 6201, ADR-0134's retirement of the compute overlay** — its own height, two hundred
+                // past the flag day, so a failure at either height names its cause.
+                //
+                // **And 6900, ADR-0120's one-million-MSK least seed** (scheduled 2026-09-12 to ship with
+                // the 7,000 release at a height of its own, so the gate can see a build without it; it
+                // stays where the deployed release put it, so it now follows the moved heights).
+                ("testnet-11", vec![1150, 1900, 2150, 2400, 3500, 4000, 6000, 6001, 6201, 6900, 2_125_000]),
                 ("devnet", vec![]),
                 ("simnet", vec![]),
             ],
@@ -811,15 +817,17 @@ mod tests {
         /// The pre-mainnet audit's flag day — the audit's state-transition/acceptance fixes and the
         /// dense-court and share-census fences that carry audit corrections all arm here.
         const AUDIT_FENCE: u64 = 4000;
-        /// ADR-0120's own height — the least seed becomes 1,000,000 MSK.
-        const ADR_0120: u64 = 6900;
         /// ADR-0118's height — the held regime, the one-move court and the retention pins — and the
-        /// audit's DEEP findings' flag day (B-1/C-01/B-4/court cluster): one height, one release.
-        const HELD_AND_AUDIT_DEEP: u64 = 7000;
-        /// The operator's flag day of 2026-09-17: ADR-0124, 0125, 0126 and 0128.
-        const FLAG_DAY_7001: u64 = 7001;
+        /// audit's DEEP findings' flag day (B-1/C-01/B-4/court cluster): one height, one release
+        /// (7,000 until the operator moved it on 2026-09-17).
+        const HELD_AND_AUDIT_DEEP: u64 = 6000;
+        /// The operator's flag day of 2026-09-17: ADR-0124, 0125, 0126, 0128 and 0130.
+        const FLAG_DAY_6001: u64 = 6001;
         /// ADR-0134's retirement of the compute overlay, its own height after the flag day.
-        const RETIRED_7201: u64 = 7201;
+        const RETIRED_6201: u64 = 6201;
+        /// ADR-0120's own height — the least seed becomes 1,000,000 MSK; scheduled by the deployed
+        /// release and left there, so it now follows the moved heights.
+        const ADR_0120: u64 = 6900;
         const CRESCENDO_T11: u64 = 2_125_000;
         for (name, params) in shipped() {
             if name == "testnet-11" {
@@ -832,12 +840,12 @@ mod tests {
                         ADR_0095,
                         ADR_0114,
                         AUDIT_FENCE,
-                        ADR_0120,
                         HELD_AND_AUDIT_DEEP,
-                        FLAG_DAY_7001,
-                        RETIRED_7201
+                        FLAG_DAY_6001,
+                        RETIRED_6201,
+                        ADR_0120
                     ],
-                    "{name}: armed by ADR-0083's fence, ADR-0062's, ADR-0084 U-08's, ADR-0095's, ADR-0114's, the audit's shallow one, ADR-0120's, the held regime's with the audit's deep one, 7,001's, and ADR-0134's 7,201, and nothing else"
+                    "{name}: armed by ADR-0083's fence, ADR-0062's, ADR-0084 U-08's, ADR-0095's, ADR-0114's, the audit's shallow one, ADR-0120's, the held regime's with the audit's deep one, 6,001's, and ADR-0134's 6,201, and nothing else"
                 );
                 assert!(fork_id_gate_armed_v1(&params));
                 continue;
@@ -863,10 +871,10 @@ mod tests {
                 ADR_0095,
                 ADR_0114,
                 AUDIT_FENCE,
-                ADR_0120,
                 HELD_AND_AUDIT_DEEP,
-                FLAG_DAY_7001,
-                RETIRED_7201,
+                FLAG_DAY_6001,
+                RETIRED_6201,
+                ADR_0120,
                 CRESCENDO_T11
             ]
         );
@@ -882,7 +890,7 @@ mod tests {
             (stale_fired, ADR_0083),
             "same empty prefix as the stale build; the next fence is what tells them apart"
         );
-        // A node on this build past every height it schedules (7,001 the last of them).
+        // A node on this build past every height it schedules (6,900 the last of them below crescendo).
         let past = fork_id_v1(&t11, 8_000);
         assert_eq!(past.next, CRESCENDO_T11);
         let stranger = &[0u8; 32][..];
@@ -1199,13 +1207,13 @@ mod tests {
         upgraded.palw_share_growth_final = None;
         upgraded.palw_fused_dissectable = None;
         upgraded.palw_attn_anchored_root = None;
-        // …and the held regime's (7000: `palw_held_context` with the one-move court and the
+        // …and the held regime's (6000: `palw_held_context` with the one-move court and the
         // retention pins, ADR-0118), scheduled after that.
         upgraded.palw_held_context = None;
         upgraded.palw_shard_court = None;
         upgraded.palw_fp_da_pins = None;
-        // …and the 7,001 flag day's, later again.
-        crate::config::params::palw_rc_clear_flag_day_7001_for_tests(&mut upgraded);
+        // …and the 6,001 flag day's, later again.
+        crate::config::params::palw_rc_clear_flag_day_6001_for_tests(&mut upgraded);
         let mut un_upgraded = upgraded.clone();
         un_upgraded.palw_model_benefits = None;
         assert_eq!(upgraded.fence_schedule_v1(), vec![1150, 1900, 2150, ADR_0095, CRESCENDO_T11]);
@@ -1289,13 +1297,13 @@ mod tests {
         upgraded.palw_share_growth_final = None;
         upgraded.palw_fused_dissectable = None;
         upgraded.palw_attn_anchored_root = None;
-        // …and the held regime's (7000: `palw_held_context` with the one-move court and the
+        // …and the held regime's (6000: `palw_held_context` with the one-move court and the
         // retention pins, ADR-0118), scheduled after that.
         upgraded.palw_held_context = None;
         upgraded.palw_shard_court = None;
         upgraded.palw_fp_da_pins = None;
-        // …and the 7,001 flag day's, later again.
-        crate::config::params::palw_rc_clear_flag_day_7001_for_tests(&mut upgraded);
+        // …and the 6,001 flag day's, later again.
+        crate::config::params::palw_rc_clear_flag_day_6001_for_tests(&mut upgraded);
         let mut current = upgraded.clone();
         current.palw_model_leg_v2 = None;
         assert_eq!(upgraded.fence_schedule_v1(), vec![1150, 1900, 2150, 2400, ADR_0114, CRESCENDO_T11]);
@@ -1326,35 +1334,39 @@ mod tests {
         }
     }
 
-    /// **The 7,001 flag day, before it happens: the 7,000 release keeps this build until 7,001, and not
-    /// one score longer** — the same rolling restart ADR-0114's day was, and the reason the height is
-    /// not 7,000.
+    /// **The moved heights, before they happen: the deployed 7,000 release keeps this build below
+    /// 6,000, and each refuses the other from 6,000** — the same rolling restart ADR-0114's day was.
     ///
-    /// The fleet's release (`13520042`, fingerprint `ae1d6162…`) schedules every height through 7,000;
-    /// this build adds 7,001. Between a restart below the height and the height itself the two agree
-    /// about every block either can produce and must stay peers; at 7,001 each refuses the other on it.
-    /// Had the set been scheduled at 7,000, the two builds would advertise one schedule and never be
-    /// told apart.
+    /// The fleet's release (`13520042`, fingerprint `ae1d6162…`) schedules 6,900 and 6,000; this build
+    /// carries the held regime and the audit's deep fence at 6,000 (the operator, 2026-09-17: the wait
+    /// to 7,000 was too long), the flag-day set at 6,001 and ADR-0134's retirement at 6,201, and leaves
+    /// 6,900 where it was. Below 6,000 the two agree about every block either can produce and must stay
+    /// peers; 6,000 is a height the deployed schedule does not name, so from it each refuses the other
+    /// — before either reaches a height where their rules differ. And the flag-day set is at 6,001 and
+    /// not 6,000 for the reason 7,001 was not 7,000: at 6,000 it would share the held regime's height
+    /// and be invisible beside a build carrying the regime without the set.
     #[test]
-    fn the_7001_flag_day_keeps_the_7000_release_until_7001() {
-        const FLAG_DAY_7001: u64 = crate::config::params::PALW_RC_FLAG_DAY_7001_FENCE_DAA;
-        const RETIRED_7201: u64 = crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA;
+    fn the_moved_heights_refuse_the_deployed_7000_release_from_6000_and_keep_it_below() {
+        const HELD_AND_DEEP: u64 = 6_000;
+        const FLAG_DAY_6001: u64 = crate::config::params::PALW_RC_FLAG_DAY_6001_FENCE_DAA;
+        const RETIRED_6201: u64 = crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA;
         const CRESCENDO_T11: u64 = 2_125_000;
         let upgraded = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
         let mut release_7000 = upgraded.clone();
-        crate::config::params::palw_rc_clear_flag_day_7001_for_tests(&mut release_7000);
+        crate::config::params::palw_rc_deployed_7000_release_for_tests(&mut release_7000);
         assert_eq!(release_7000.fence_schedule_v1(), vec![1150, 1900, 2150, 2400, 3500, 4000, 6900, 7000, CRESCENDO_T11]);
         assert_eq!(
             upgraded.fence_schedule_v1(),
-            vec![1150, 1900, 2150, 2400, 3500, 4000, 6900, 7000, FLAG_DAY_7001, RETIRED_7201, CRESCENDO_T11],
-            "ADR-0134's retirement at 7,201 follows the flag day"
+            vec![1150, 1900, 2150, 2400, 3500, 4000, HELD_AND_DEEP, FLAG_DAY_6001, RETIRED_6201, 6900, CRESCENDO_T11],
+            "the held regime and the deep audit at 6,000, the flag day one past, ADR-0134 two hundred past, ADR-0120 where it was"
         );
 
-        let new_peer = fork_id_v1(&upgraded, 6_950);
-        let old_peer = fork_id_v1(&release_7000, 6_950);
-        assert_eq!(new_peer.fired, old_peer.fired, "one history: both crossed every fence through 6,900");
-        assert_eq!((new_peer.next, old_peer.next), (7000, 7000));
-        for local_daa in [6_950, 7000, FLAG_DAY_7001 - 1] {
+        // The tip when the heights moved (5,798) and the last score below the moved height.
+        let new_peer = fork_id_v1(&upgraded, 5_798);
+        let old_peer = fork_id_v1(&release_7000, 5_798);
+        assert_eq!(new_peer.fired, old_peer.fired, "one history: both crossed every fence through 4,000");
+        assert_eq!((new_peer.next, old_peer.next), (HELD_AND_DEEP, 6_900), "and they announce different next fences");
+        for local_daa in [5_798, 5_900, HELD_AND_DEEP - 1] {
             let (new_at, old_at) = (fork_id_v1(&upgraded, local_daa), fork_id_v1(&release_7000, local_daa));
             assert!(
                 !evaluate_fork_id_v1(&release_7000, local_daa, new_at.fired.as_bytes().as_slice(), new_at.next).refuses(),
@@ -1365,7 +1377,7 @@ mod tests {
                 "this build keeps the 7,000 release at {local_daa}"
             );
         }
-        for local_daa in [FLAG_DAY_7001, FLAG_DAY_7001 + 1] {
+        for local_daa in [HELD_AND_DEEP, FLAG_DAY_6001, FLAG_DAY_6001 + 1, RETIRED_6201, 6_900, 7_000, 7_001] {
             let (new_at, old_at) = (fork_id_v1(&upgraded, local_daa), fork_id_v1(&release_7000, local_daa));
             assert!(
                 evaluate_fork_id_v1(&release_7000, local_daa, new_at.fired.as_bytes().as_slice(), new_at.next).refuses(),
@@ -1377,29 +1389,32 @@ mod tests {
             );
         }
 
-        // The counterfactual the height exists for: the same set at 7,000 is invisible.
-        let mut at_7000 = upgraded.clone();
+        // The counterfactual the flag day's own height exists for: the same set at 6,000 is invisible
+        // beside a build that carries the held regime at 6,000 without it.
+        let mut without_the_set = upgraded.clone();
+        crate::config::params::palw_rc_clear_flag_day_6001_for_tests(&mut without_the_set);
+        let mut at_6000 = upgraded.clone();
         // The counterfactual is about the flag day's height; ADR-0134's later retirement is not part of it.
-        at_7000.palw_compute_overlay_retired = None;
-        let seven_thousand = crate::config::params::ForkActivation::new(7000);
-        at_7000.palw_panel_economy = Some(seven_thousand);
-        at_7000.palw_work_priced_reward = Some(seven_thousand);
-        at_7000.palw_execution_lane =
-            at_7000.palw_execution_lane.map(|lane| crate::config::params::PalwExecutionLaneV1 { activation: seven_thousand, ..lane });
-        at_7000.palw_overlay_carve =
-            at_7000.palw_overlay_carve.map(|carve| crate::config::params::PalwOverlayCarveV1 { activation: seven_thousand, ..carve });
-        at_7000.dns_bft_gate =
-            at_7000.dns_bft_gate.map(|gate| crate::config::params::DnsBftGateV1 { activation: seven_thousand, ..gate });
+        at_6000.palw_compute_overlay_retired = None;
+        let six_thousand = crate::config::params::ForkActivation::new(HELD_AND_DEEP);
+        at_6000.palw_panel_economy = Some(six_thousand);
+        at_6000.palw_work_priced_reward = Some(six_thousand);
+        at_6000.palw_execution_lane =
+            at_6000.palw_execution_lane.map(|lane| crate::config::params::PalwExecutionLaneV1 { activation: six_thousand, ..lane });
+        at_6000.palw_overlay_carve =
+            at_6000.palw_overlay_carve.map(|carve| crate::config::params::PalwOverlayCarveV1 { activation: six_thousand, ..carve });
+        at_6000.dns_bft_gate =
+            at_6000.dns_bft_gate.map(|gate| crate::config::params::DnsBftGateV1 { activation: six_thousand, ..gate });
         assert_eq!(
-            at_7000.fence_schedule_v1(),
-            release_7000.fence_schedule_v1(),
-            "at 7,000 the set would advertise the 7,000 release's schedule"
+            at_6000.fence_schedule_v1(),
+            without_the_set.fence_schedule_v1(),
+            "at 6,000 the set would advertise the schedule of a build without it"
         );
-        for local_daa in [7000, 7001, 8_000] {
-            let (hidden, old_at) = (fork_id_v1(&at_7000, local_daa), fork_id_v1(&release_7000, local_daa));
+        for local_daa in [HELD_AND_DEEP, FLAG_DAY_6001, 8_000] {
+            let (hidden, bare) = (fork_id_v1(&at_6000, local_daa), fork_id_v1(&without_the_set, local_daa));
             assert_eq!(
                 (hidden.fired, hidden.next),
-                (old_at.fired, old_at.next),
+                (bare.fired, bare.next),
                 "and one fork id at {local_daa}: the gate could not tell them apart"
             );
         }

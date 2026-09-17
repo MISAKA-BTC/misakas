@@ -1,7 +1,7 @@
 # ADR-0128 — DNS validators vote BFT by bonded stake, and that vote decides the stake reorg gate
 
 * Status: **ACCEPTED and IMPLEMENTED 2026-09-17** on `feat/palw-exec-lane-and-validator-retirement`
-  (§8). testnet-11 arms it at DAA 7,001 with ADR-0124, ADR-0125, ADR-0126 (revised) and ADR-0127 (the
+  (§8). testnet-11 arms it at DAA 6,001 with ADR-0124, ADR-0125, ADR-0126 (revised) and ADR-0127 (the
   operator's choice, §5).
 * Operator's direction, in the operator's words: "DNS validator の投票力を単純な bond 額に戻して
   inactivity leak は再実装して — 必要な過去 attestation 履歴を正しく取得できず『実装されたままでは有効化
@@ -176,7 +176,7 @@ quorum. ADR-0127 states the PALW side and pins it.
 
 ## 5. testnet-11's numbers (§8 arms them)
 
-* `activation` = DAA 7,001 — its own height beside 7,000, so the fork-id gate separates builds.
+* `activation` = DAA 6,001 — its own height beside 6,000, so the fork-id gate separates builds.
   Scheduled in the preset on 2026-09-17 (`d6c46f25`, at DAA ≈5,773) with ADR-0124, ADR-0125 and
   ADR-0126; fingerprint `4787b92a…`, re-pinned to `ab4e7b9c…` when ADR-0130 joined the height the same day.
 * `t_leak_daa` = 5,040 — seven days at the chain's 120-second cadence. The 1-BPS execution lane does

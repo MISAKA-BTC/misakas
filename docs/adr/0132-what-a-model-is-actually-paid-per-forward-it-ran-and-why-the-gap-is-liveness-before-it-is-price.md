@@ -54,12 +54,12 @@ per-model multiplier.**
    sampled-interval path (ADR-0098) never verified anything: **every licence on testnet-11 is a full replay by
    every live seat**, so a claim's verification compute is `live seats × the attempt's job`, not the four
    intervals the design prices.
-7. **Final → MSK.** Below DAA 7,001 every `Final` names its producer the whole escrow — coinbase outputs of exactly
+7. **Final → MSK.** Below DAA 6,001 every `Final` names its producer the whole escrow — coinbase outputs of exactly
    `275,628,448,680` sompi (2,756.28 MSK) at DAA 5,758 (×2), 5,763, 5,765 and 5,766 on the selected chain — and
-   no seat is paid. From 7,001: escrow 3,200.85 MSK × the class's leaf price (dense tier 73.7 %, hybrid 29.8 %,
+   no seat is paid. From 6,001: escrow 3,200.85 MSK × the class's leaf price (dense tier 73.7 %, hybrid 29.8 %,
    unit = the 1 ‰ 27B) → 80 % producer / 20 % panel pool (unused seats' shares → reserve; the priced-away
    remainder never minted). Claims whose attempt block was merged below the deep fence hold `escrow 0` (paid at
-   acceptance, ADR-0058 B-1 before 7,000): 111 dense, 81 hybrid in the window.
+   acceptance, ADR-0058 B-1 before 6,000): 111 dense, 81 hybrid in the window.
 
 **The live window** (1,464 distinct attempt-lane claims from the eight genesis bonds' executor and seat views,
 DAA 5,774 → 5,785):
@@ -74,7 +74,7 @@ DAA 5,774 → 5,785):
 | seats drawn (bond index : panels) | 0–7 + 4 external, uniform | `1–7` uniform, **never `:0`** | |
 | licence rate (licensed + Final) / accepted | 18.0 % | **0 %** | 60 % |
 | Final rate, terminal claims | 48 / 368 = **13.0 %** | — | — |
-| paid so far (pre-7,001 rule) | 48 × 2,756.28 = **132,301 MSK**, producers only | **0** | 0 |
+| paid so far (pre-6,001 rule) | 48 × 2,756.28 = **132,301 MSK**, producers only | **0** | 0 |
 
 **Why the hybrid never licenses — three facts, none a price.** The only host holding its artifact (`:0`) is its
 only producer and is excluded from its own panels; bond `:1` (same host, no hybrid artifact) is drawn on 344 of
@@ -97,10 +97,10 @@ in 20 s; the rest of the fleet does not keep up, and 87 % of terminal dense clai
 | data moved per forward | not measured (A16, resident) | ~9.7 GiB | host property |
 | panel verification CCU per bound claim (today: full replay × live seats) | ≤ 5 × 83.1 G = 415 G | ≤ 5 × 18.06 G (never run) | design: 4 intervals a seat |
 | P(Final) per terminal claim | 0.130 | 0 | |
-| **producer actual MSK / attempted 10⁹ CCU, pre-7,001** | 0.130 × 2,756.28 / 601.6 = **0.598** | **0** | gap ∞ |
-| producer actual, 7,001 leaf basis (× 0.737 × 0.8) | 0.130 × 1,886.36 / 601.6 = **0.408** | 0 (would be **1.134** at the dense tier's Final rate) | price gap 178 % |
-| producer actual, 7,001 economic-attempted basis, dense-tier unit | 0.130 × 2,560.68 / 601.6 = 0.553 | (0.553 at equal Final rate) | price gap 0 % |
-| panel actual MSK / verification CCU, pre-7,001 | 0 | 0 | seats unpaid below 7,001 |
+| **producer actual MSK / attempted 10⁹ CCU, pre-6,001** | 0.130 × 2,756.28 / 601.6 = **0.598** | **0** | gap ∞ |
+| producer actual, 6,001 leaf basis (× 0.737 × 0.8) | 0.130 × 1,886.36 / 601.6 = **0.408** | 0 (would be **1.134** at the dense tier's Final rate) | price gap 178 % |
+| producer actual, 6,001 economic-attempted basis, dense-tier unit | 0.130 × 2,560.68 / 601.6 = 0.553 | (0.553 at equal Final rate) | price gap 0 % |
+| panel actual MSK / verification CCU, pre-6,001 | 0 | 0 | seats unpaid below 6,001 |
 
 **Decomposition of the realized gap** (`actual_A₃₆ / actual_A₂₅`):
 `= [price per claim ratio 954.96 / 2,357.95 = 0.405] × [attempted CCU ratio 601.6 / 87.8 = 6.85] × [Final-rate
@@ -126,7 +126,7 @@ hybrid licenses, and it flips the sign: the hybrid would be over-paid per forwar
 * **H8 — the 600-DAA window turns every dead panel into 41 h of held collateral**, so a class with weak panels
   loses claims before any price applies (ADR-0130's next ADR: a shorter liability lifetime).
 * **H9 — merged blocks below the deep fence were paid at acceptance** without licensing (`escrow 0`): a
-  class-neutral leak that ended at 7,000.
+  class-neutral leak that ended at 6,000.
 
 ## 4. Proposals, compared
 

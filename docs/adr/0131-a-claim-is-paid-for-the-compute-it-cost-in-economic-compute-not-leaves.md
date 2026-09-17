@@ -22,7 +22,7 @@ in the open, how many MSK each class earns per unit of compute it finalized and 
 
 ## 1. What testnet-11 pays today (read from its genesis objects and live node, 2026-09-17)
 
-| class | canonical job | `pwu_per_inference` (leaves) | initial target | price at 7,001 |
+| class | canonical job | `pwu_per_inference` (leaves) | initial target | price at 6,001 |
 |---|---|---|---|---|
 | `PALW-BASE-0/rc` (floor) | 8 + 4 tokens, n_ctx 12 | 7,708 | MAX / 12,665 | unpriced (100 %) |
 | `Qwen3.6-35B-A3B/graph-v3` | 7 + 2 tokens, n_ctx 8 | 2,685,360 | 0.6115 × MAX | 29.8 % |
@@ -128,7 +128,7 @@ expected attempt, while the dense tier draws **1.495** forwards a claim in expec
 target; the 27B 3,165.96, the floor 26,403.64). The shadow's attempted basis reads the fraction
 (`palw_attempted_compute_q32_per_claim_v1`); the census and op 185 carry both numbers.
 
-**Per claim, at testnet-11's 7,001 escrow (3,200.85 MSK), the live targets and the live unit (the 27B),
+**Per claim, at testnet-11's 6,001 escrow (3,200.85 MSK), the live targets and the live unit (the 27B),
 producer 80 / panel pool 20; `F` per MAC-eq the `Final` claim's job cost, `A` per MAC-eq its draws cost in
 expectation (MSK per 10⁹ MAC-eq):**
 
@@ -152,7 +152,7 @@ per attempted unit and the attempted basis pays it three times per `Final` unit,
 verification compute follows the job on the job basis only (Decision 4) — each pinned in `adr0131_*`. On every basis and every mix `producer + pool + burned == escrow`: no basis
 changes what the schedule withheld. The floor is paid whole on every basis.
 
-**The live window** (1,311 distinct claims read from four bonds at DAA 5,774, before 7,001, when every
+**The live window** (1,311 distinct claims read from four bonds at DAA 5,774, before 6,001, when every
 `Final` paid its whole 2,756.28 MSK escrow to the producer and no panel was paid): the dense tier's
 `F` = 29,021 MSK per 10¹² MAC-eq and `A` = 1,748 (48 `Final` of 797 accepted; 320 voided at
 `receipt_timeout`, 451 redrawn); the hybrid's `A` = 0 (500 accepted, none licensed, 282 redrawn); the floor's

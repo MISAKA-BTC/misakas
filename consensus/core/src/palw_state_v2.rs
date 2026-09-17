@@ -840,10 +840,11 @@ pub struct PalwStateParamsV2 {
 
 impl PalwStateParamsV2 {
     /// DAA-fenced rollout kept outside the serialized ruleset so the existing fingerprint remains
-    /// unchanged. Claims licensed before DAA 7,000 retain the 1,200-DAA window; later claims use
+    /// unchanged. Claims licensed before DAA 6,000 (7,000 until the operator moved the height on
+    /// 2026-09-17; never reached) retain the 1,200-DAA window; later claims use
     /// 120 DAA.
     pub fn window_challenge_at(&self, daa_score: u64) -> u64 {
-        if daa_score >= 7_000 { 120 } else { self.window_challenge }
+        if daa_score >= 6_000 { 120 } else { self.window_challenge }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -10266,7 +10267,7 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
                     // so `step_opening_root_capped_v1` refused the very move the responder owed. So a
                     // guilty fused responder could reach the terminal, file nothing, and have its
                     // forged claim final unconvicted — the withholding the finding names. e8's
-                    // ADR-0119, on this SAME 7,000 fence, raises that cap to the class's own ladder
+                    // ADR-0119, on this SAME 6,000 fence, raises that cap to the class's own ladder
                     // (2^26 for dense v5) and ships the responder that builds the root claim, so past
                     // the fence the move IS constructible and withholding it is a genuine default.
                     // The mercy therefore stops applying to the fused terminal past the fence, and the
@@ -29107,7 +29108,7 @@ pub(crate) mod tests {
         /// fence (the test directly above) made a fused-terminal silence convict nobody, because no
         /// binary could construct the root claim: a dense-v5 class's canonical leaf count exceeds the
         /// `PALW_STEP_MAX_LEAVES` (2^22) opening cap, so the very move the responder owed was refused.
-        /// e8's ADR-0119, on this SAME 7,000 fence, raises that cap to the class's own ladder and
+        /// e8's ADR-0119, on this SAME 6,000 fence, raises that cap to the class's own ladder and
         /// ships the responder that builds the root claim — so past the fence the move IS
         /// constructible, withholding it is a genuine default, and the claim voids `CourtFraud` on the
         /// responder's own side. That closes the "responder holding evidence can withhold" the finding

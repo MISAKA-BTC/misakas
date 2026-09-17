@@ -1162,10 +1162,10 @@ mod tests {
         assert_eq!(palw_basis_unit_v1(PalwRewardBasisV1::CurrentLeaves, &classes[..1]), 0, "no unit without a model class");
     }
 
-    /// testnet-11 past DAA 7,001: the escrow a claim holds (72 % of the 4,445.62 MSK block) and the
+    /// testnet-11 past DAA 6,001: the escrow a claim holds (72 % of the 4,445.62 MSK block) and the
     /// two model classes as this table measures them at the live targets (both at one expected
     /// attempt, `getPalwProducerFacts` 2026-09-17).
-    const T11_ESCROW_7001: u64 = 320_084_650_080;
+    const T11_ESCROW_6001: u64 = 320_084_650_080;
     /// One network draw a class win: the factor the measures below hold fixed, so every pin above
     /// reads as it did before ADR-0132 added the factor.
     const NET_ONE: u128 = PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1;
@@ -1195,7 +1195,7 @@ mod tests {
     fn input(measure: PalwClassMeasureV1, accepted: u64, finals: u64) -> PalwClassEconomicsInputV1 {
         PalwClassEconomicsInputV1 {
             measure,
-            escrow_final_sompi: T11_ESCROW_7001 as u128 * finals as u128,
+            escrow_final_sompi: T11_ESCROW_6001 as u128 * finals as u128,
             claims_accepted: accepted,
             claims_final: finals,
             seats_replaying: SEATS,
@@ -1306,7 +1306,7 @@ mod tests {
             let unit = palw_basis_unit_v1(basis, &classes);
             let e36 = palw_class_economics_v1(basis, &input(classes[0], 100, 100), unit);
             let e25 = palw_class_economics_v1(basis, &input(classes[1], 100, 100), unit);
-            assert!(e36.reward_per_final_sompi <= T11_ESCROW_7001 && e25.reward_per_final_sompi <= T11_ESCROW_7001);
+            assert!(e36.reward_per_final_sompi <= T11_ESCROW_6001 && e25.reward_per_final_sompi <= T11_ESCROW_6001);
             let gap_attempted = gap(e36.total_per_attempted_compute(), e25.total_per_attempted_compute());
             let gap_final = gap(e36.total_per_final_compute(), e25.total_per_final_compute());
             match basis {
@@ -1381,10 +1381,10 @@ mod tests {
                     let unit = palw_basis_unit_v1(basis, classes);
                     for (class, accepted, finals) in [(classes[0], n36, n36 / 2), (classes[1], n25, n25 * 4 / 5)] {
                         let e = palw_class_economics_v1(basis, &input(class, accepted, finals), unit);
-                        assert!(e.reward_per_final_sompi <= T11_ESCROW_7001);
+                        assert!(e.reward_per_final_sompi <= T11_ESCROW_6001);
                         assert_eq!(
                             e.producer_paid_sompi + e.panel_pool_sompi + e.burned_sompi,
-                            T11_ESCROW_7001 as u128 * finals as u128,
+                            T11_ESCROW_6001 as u128 * finals as u128,
                             "{basis:?} with {} classes at ({n36}, {n25})",
                             classes.len()
                         );
@@ -1399,7 +1399,7 @@ mod tests {
                     }
                     // Whoever sets the unit is paid whole.
                     let top = classes.iter().filter(|c| c.sets_unit).max_by_key(|c| c.measure(basis)).unwrap();
-                    assert_eq!(palw_class_economics_v1(basis, &input(*top, 1, 1), unit).reward_per_final_sompi, T11_ESCROW_7001);
+                    assert_eq!(palw_class_economics_v1(basis, &input(*top, 1, 1), unit).reward_per_final_sompi, T11_ESCROW_6001);
                 }
             }
         }
@@ -1501,7 +1501,7 @@ mod tests {
         for basis in ALL_BASES {
             let unit = palw_basis_unit_v1(basis, &classes);
             let e = palw_class_economics_v1(basis, &input(floor, 14, 6), unit);
-            assert_eq!((e.price_permille, e.reward_per_final_sompi), (1000, T11_ESCROW_7001), "{basis:?}");
+            assert_eq!((e.price_permille, e.reward_per_final_sompi), (1000, T11_ESCROW_6001), "{basis:?}");
             assert_eq!(e.burned_sompi, 0);
         }
     }

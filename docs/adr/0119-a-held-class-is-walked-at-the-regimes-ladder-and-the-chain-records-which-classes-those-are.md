@@ -3,7 +3,7 @@
 * Status: PROPOSED and, for its consensus half, IMPLEMENTED 2026-09-12 on
   `feat/adr-0103-held-context`, at the operator's instruction ("ADR-0119 に進める"), after ADR-0118
   §4 measured that testnet-11's frozen ladder admits a held dense class to about 512 positions.
-  Rides testnet-11's held flag day, DAA 7,000 (ADR-0118 Decision 6). **Inert wherever the held
+  Rides testnet-11's held flag day, DAA 6,000 (ADR-0118 Decision 6). **Inert wherever the held
   regime is not in force:** the new state collection is empty until a held class registers, which
   nothing below the fence can do; the transaction door keeps its validity below the fence; every
   class that is not held is walked, priced and bounded exactly as before.
@@ -52,7 +52,7 @@ that decide:
   job of 6,630,544 leaves, and every job of it past about 36 prompt tokens is above `2^22`
   (measured: 32 tokens and 4 decode 3,681,344 leaves; 40 and 4, 4,505,408). Its fused leaves could
   not be dissected at all — on testnet-11 today, not only under the regime. (Reported to the
-  deep-audit session, whose C-01 binds the canonical count at 7,000 and so exposes exactly this.)
+  deep-audit session, whose C-01 binds the canonical count at 6,000 and so exposes exactly this.)
 * **testnet-11's 512-token prompt cap is not enforced at runtime** (`palw_fp_ruleset_caps` is dormant
   there), so it was never the binding wall there; the ladder was.
 * **On the node side**, the free-prompt worker refused every PanelDa job ("a mode the panel cannot
@@ -97,7 +97,7 @@ acceptance layer and in the fold alike. A fused site's rows open under `palw_att
 the structural `2^22` before the held regime, as always; under it, the claim's ladder — a held
 class's `2^40`, every other class's the network's step ladder. The acceptance layer asks it at the
 block's DAA (`adjudicate_court_close_v3`), the fold through its extras. On testnet-11 this makes the
-shipped dense row's fused leaves dissectable from 7,000 — a consensus change for that row's claims
+shipped dense row's fused leaves dissectable from 6,000 — a consensus change for that row's claims
 past the fence, and the one the deep-audit session's C-01 needs beside it. On the node, a party
 derives the site at its backend's ladder (`base0_attn_site_evidence_v1`; it derived at `2^22` and
 refused its own first opening past it), and the panel files a root claim — the one move filed
@@ -131,7 +131,7 @@ from the worker's result.
 
 ## 4. What it costs
 
-* **A consensus change at 7,000 for the shipped dense row:** its fused leaves' rows open at `2^26`
+* **A consensus change at 6,000 for the shipped dense row:** its fused leaves' rows open at `2^26`
   instead of `2^22`. Before the fence, byte-identical.
 * **A state collection** that roots and encodes nothing until the first held registration.
 * **A header-context check** on every free-prompt commitment on a ruleset that declares the regime:
@@ -149,7 +149,7 @@ from the worker's result.
 1. **I-1, the ladder is the class's**: a held class records `2^40` at registration and a floor class
    nothing; the row is rooted, carried, imported and reverted
    (`a_held_class_records_its_ladder_at_registration_and_nothing_else_does`).
-2. **I-2, admission**: on testnet-11 past 7,000 the held dense row is admitted at 512, 1,024, 32,768
+2. **I-2, admission**: on testnet-11 past 6,000 the held dense row is admitted at 512, 1,024, 32,768
    and `2^21`, not before the fence, and a graph-v5 row at 1,024 keeps the network's `2^26`
    (`a_held_class_on_testnet_11_is_admitted_to_2_21_at_its_own_ladder`); a held mint or network past
    `2^40` is refused; ADR-0103's 2M suite runs at `2^40`.

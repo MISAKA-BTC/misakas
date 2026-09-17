@@ -468,7 +468,7 @@ mod tests {
     use crate::tx::TransactionOutpoint;
 
     const ESCROW_PRE: u64 = 275_628_448_680;
-    const ESCROW_7001: u64 = 320_084_650_080;
+    const ESCROW_6001: u64 = 320_084_650_080;
     const DENSE_DRAW: u128 = 83_102_171_136;
     const HYBRID_DRAW: u128 = 18_055_200_736;
     const DENSE_LEAVES: u64 = 6_630_544;
@@ -520,7 +520,7 @@ mod tests {
     fn rule_pre() -> PalwLedgerPayoutRuleV1 {
         PalwLedgerPayoutRuleV1 { work_priced: false, leaves: 0, unit_leaves: 0, panel_economy: false }
     }
-    fn rule_7001(leaves: u64) -> PalwLedgerPayoutRuleV1 {
+    fn rule_6001(leaves: u64) -> PalwLedgerPayoutRuleV1 {
         PalwLedgerPayoutRuleV1 { work_priced: true, leaves, unit_leaves: UNIT_27B, panel_economy: true }
     }
 
@@ -581,24 +581,24 @@ mod tests {
     fn adr0132_the_payout_is_the_rule_in_force_at_the_final() {
         let pre = palw_ledger_payout_v1(ESCROW_PRE, rule_pre(), 5, 3);
         assert_eq!(pre, PalwLedgerPayoutV1 { producer_sompi: ESCROW_PRE, ..Default::default() });
-        let dense = palw_ledger_payout_v1(ESCROW_7001, rule_7001(DENSE_LEAVES), 5, 3);
-        let reward = palw_priced_reward_u128_v1(ESCROW_7001, DENSE_LEAVES as u128, UNIT_27B as u128);
+        let dense = palw_ledger_payout_v1(ESCROW_6001, rule_6001(DENSE_LEAVES), 5, 3);
+        let reward = palw_priced_reward_u128_v1(ESCROW_6001, DENSE_LEAVES as u128, UNIT_27B as u128);
         let split = palw_panel_split_v1(reward, 5, 3);
         assert_eq!(dense.producer_sompi, split.producer);
         assert_eq!(dense.panel_sompi, split.per_seat * 3);
         assert_eq!(dense.reserve_sompi, split.per_seat * 2 + (reward / 5 - split.per_seat * 5));
-        assert_eq!(dense.burned_sompi, ESCROW_7001 - reward);
-        assert_eq!(dense.total(), ESCROW_7001);
-        assert!(dense.producer_sompi * 100 / ESCROW_7001 >= 58 && dense.producer_sompi * 100 / ESCROW_7001 <= 59, "73.7 % × 80 %");
+        assert_eq!(dense.burned_sompi, ESCROW_6001 - reward);
+        assert_eq!(dense.total(), ESCROW_6001);
+        assert!(dense.producer_sompi * 100 / ESCROW_6001 >= 58 && dense.producer_sompi * 100 / ESCROW_6001 <= 59, "73.7 % × 80 %");
         let floor = palw_ledger_payout_v1(
-            ESCROW_7001,
-            PalwLedgerPayoutRuleV1 { work_priced: false, panel_economy: true, ..rule_7001(7_708) },
+            ESCROW_6001,
+            PalwLedgerPayoutRuleV1 { work_priced: false, panel_economy: true, ..rule_6001(7_708) },
             5,
             5,
         );
         assert_eq!(floor.burned_sompi, 0);
-        assert_eq!(floor.total(), ESCROW_7001);
-        assert_eq!(floor.reserve_sompi, ESCROW_7001 / 5 - (ESCROW_7001 / 5 / 5) * 5, "five credited seats: only the dust is reserve");
+        assert_eq!(floor.total(), ESCROW_6001);
+        assert_eq!(floor.reserve_sompi, ESCROW_6001 / 5 - (ESCROW_6001 / 5 / 5) * 5, "five credited seats: only the dust is reserve");
     }
 
     /// **A row keeps what it first saw and fills what it later sees, once.** The class facts and
@@ -609,20 +609,20 @@ mod tests {
     #[test]
     fn adr0132_a_row_keeps_first_sight_and_fills_marks_once() {
         let facts = dense_facts(0x207f_ffff);
-        let mut o = obs(7, 1, 4_500, ESCROW_7001);
-        let row = palw_ledger_merge_v1(None, &o, 4_501, facts, |_| rule_7001(DENSE_LEAVES));
+        let mut o = obs(7, 1, 4_500, ESCROW_6001);
+        let row = palw_ledger_merge_v1(None, &o, 4_501, facts, |_| rule_6001(DENSE_LEAVES));
         assert_eq!((row.first_seen_daa, row.bound_daa, row.producer_paid_sompi), (4_501, None, 0));
         o.bound_daa = Some(4_520);
         o.seats = 5;
         o.credited_seats = 2;
         let other_facts = PalwLedgerClassFactsV1 { draw_compute: 1, ..facts };
-        let row = palw_ledger_merge_v1(Some(&row), &o, 4_530, other_facts, |_| rule_7001(DENSE_LEAVES));
+        let row = palw_ledger_merge_v1(Some(&row), &o, 4_530, other_facts, |_| rule_6001(DENSE_LEAVES));
         assert_eq!(row.draw_compute, DENSE_DRAW, "first sight's facts stay");
         assert_eq!(row.bound_daa, Some(4_520));
         o.bound_daa = None;
         o.licensed_daa = Some(4_560);
         o.credited_seats = 3;
-        let row = palw_ledger_merge_v1(Some(&row), &o, 4_561, facts, |_| rule_7001(DENSE_LEAVES));
+        let row = palw_ledger_merge_v1(Some(&row), &o, 4_561, facts, |_| rule_6001(DENSE_LEAVES));
         assert_eq!((row.bound_daa, row.licensed_daa, row.credited_seats), (Some(4_520), Some(4_560), 3));
         o.licensed_daa = None;
         o.final_daa = Some(6_500);
@@ -630,9 +630,9 @@ mod tests {
         o.credited_seats = 0;
         let row = palw_ledger_merge_v1(Some(&row), &o, 6_501, facts, |at| {
             assert_eq!(at, 6_500, "the rule is read at the Final's height");
-            rule_7001(DENSE_LEAVES)
+            rule_6001(DENSE_LEAVES)
         });
-        let expected = palw_ledger_payout_v1(ESCROW_7001, rule_7001(DENSE_LEAVES), 5, 3);
+        let expected = palw_ledger_payout_v1(ESCROW_6001, rule_6001(DENSE_LEAVES), 5, 3);
         assert_eq!((row.producer_paid_sompi, row.panel_paid_sompi), (expected.producer_sompi, expected.panel_sompi));
         assert_eq!(row.seats, 5, "the duty row's size survives the Final that dropped it");
         let again = palw_ledger_merge_v1(Some(&row), &o, 6_600, facts, |_| panic!("derived once"));
@@ -640,7 +640,7 @@ mod tests {
         assert_eq!(again.last_seen_daa, 6_600);
         let merged = palw_ledger_merge_v1(None, &obs(8, 1, 4_500, 0), 4_501, facts, |_| rule_pre());
         assert!(merged.paid_at_acceptance);
-        let mut voided = obs(9, 1, 4_500, ESCROW_7001);
+        let mut voided = obs(9, 1, 4_500, ESCROW_6001);
         voided.voided_daa = Some(5_742);
         voided.void_reason = Some(PalwVoidReasonV2::ReceiptTimeout);
         voided.rebound_daa = Some(5_121);
@@ -650,7 +650,7 @@ mod tests {
 
     /// **The actual rates are a property of each class, not of the mix, and the emission identity
     /// holds in every mix.** Dense 100/0, 0/100, 50/50, 90/10 and 10/90 against the hybrid at the
-    /// live Final rates (13 % of terminal claims; 0 for the hybrid) under the 7,001 rule: the dense
+    /// live Final rates (13 % of terminal claims; 0 for the hybrid) under the 6,001 rule: the dense
     /// tier's `producer / attempted` is the same number in every mix, the hybrid's is zero in every
     /// mix, and `producer + panel + reserve + burned == Σ escrow of the Finals` for each class.
     #[test]
@@ -659,8 +659,8 @@ mod tests {
         let mut dense_rate = None;
         for (n25, n36) in [(1_000u64, 0u64), (0, 1_000), (500, 500), (900, 100), (100, 900)] {
             let dense =
-                window(1, 1, n25, n25 * 13 / 100, n25 * 87 / 100, ESCROW_7001, dense_facts(bits), rule_7001(DENSE_LEAVES), 5, 3);
-            let hybrid = window(2, 10_000, n36, 0, 0, ESCROW_7001, hybrid_facts(bits), rule_7001(HYBRID_LEAVES), 5, 0);
+                window(1, 1, n25, n25 * 13 / 100, n25 * 87 / 100, ESCROW_6001, dense_facts(bits), rule_6001(DENSE_LEAVES), 5, 3);
+            let hybrid = window(2, 10_000, n36, 0, 0, ESCROW_6001, hybrid_facts(bits), rule_6001(HYBRID_LEAVES), 5, 0);
             let rows: Vec<_> = dense.into_iter().chain(hybrid).collect();
             let t25 = palw_class_ledger_totals_v1(&rows, h(1));
             let t36 = palw_class_ledger_totals_v1(&rows, h(2));
@@ -684,9 +684,9 @@ mod tests {
             }
         }
         // The rate itself: 13 % × 73.7 % × 80 % of the escrow, over 1.495 × 2.0 × 83.1 G.
-        let paid_per_claim = 130 * (ESCROW_7001 as u128 * DENSE_LEAVES as u128 / UNIT_27B as u128) * 8 / 10 / 1000;
+        let paid_per_claim = 130 * (ESCROW_6001 as u128 * DENSE_LEAVES as u128 / UNIT_27B as u128) * 8 / 10 / 1000;
         let attempted = palw_ledger_row_attempted_compute_v1(
-            &window(1, 1, 1, 0, 0, ESCROW_7001, dense_facts(bits), rule_7001(DENSE_LEAVES), 5, 3)[0],
+            &window(1, 1, 1, 0, 0, ESCROW_6001, dense_facts(bits), rule_6001(DENSE_LEAVES), 5, 3)[0],
         );
         let expected = paid_per_claim * PALW_LEDGER_RATE_SCALE_V1 / attempted;
         let got = dense_rate.unwrap();
@@ -700,15 +700,15 @@ mod tests {
     #[test]
     fn adr0132_a_final_rate_gap_is_read_as_pay_not_price() {
         let facts = dense_facts(0x207f_ffff);
-        let a = window(1, 1, 200, 26, 174, ESCROW_7001, facts, rule_7001(DENSE_LEAVES), 5, 3);
-        let b = window(2, 1_000, 200, 52, 148, ESCROW_7001, facts, rule_7001(DENSE_LEAVES), 5, 3);
+        let a = window(1, 1, 200, 26, 174, ESCROW_6001, facts, rule_6001(DENSE_LEAVES), 5, 3);
+        let b = window(2, 1_000, 200, 52, 148, ESCROW_6001, facts, rule_6001(DENSE_LEAVES), 5, 3);
         let (ta, tb) = (palw_class_ledger_totals_v1(&a, h(1)), palw_class_ledger_totals_v1(&b, h(2)));
         assert_eq!(ta.attempted_compute, tb.attempted_compute, "the same forwards were run");
         assert_eq!(tb.producer_paid_sompi, 2 * ta.producer_paid_sompi);
         assert_eq!(palw_ledger_gap_permille_v1(ta.producer_per_attempted_compute(), tb.producer_per_attempted_compute()), Some(1_000));
         assert_eq!((ta.final_rate_permille(), tb.final_rate_permille()), (130, 260));
         // Licensed but never Final: a licence rate without a Final rate, and no pay.
-        let mut licensed_only = window(3, 2_000, 100, 0, 0, ESCROW_7001, facts, rule_7001(DENSE_LEAVES), 5, 3);
+        let mut licensed_only = window(3, 2_000, 100, 0, 0, ESCROW_6001, facts, rule_6001(DENSE_LEAVES), 5, 3);
         for row in licensed_only.iter_mut().take(60) {
             row.licensed_daa = Some(row.accepted_daa + 40);
         }
@@ -723,8 +723,8 @@ mod tests {
     #[test]
     fn adr0132_targets_and_bits_move_attempted_compute_not_pay() {
         let at_max = PalwLedgerClassFactsV1 { expected_attempts_q32: ONE, ..dense_facts(0x207f_ffff) };
-        let a = window(1, 1, 100, 13, 87, ESCROW_7001, dense_facts(0x207f_ffff), rule_7001(DENSE_LEAVES), 5, 3);
-        let b = window(1, 1_000, 100, 13, 87, ESCROW_7001, at_max, rule_7001(DENSE_LEAVES), 5, 3);
+        let a = window(1, 1, 100, 13, 87, ESCROW_6001, dense_facts(0x207f_ffff), rule_6001(DENSE_LEAVES), 5, 3);
+        let b = window(1, 1_000, 100, 13, 87, ESCROW_6001, at_max, rule_6001(DENSE_LEAVES), 5, 3);
         let (ta, tb) = (palw_class_ledger_totals_v1(&a, h(1)), palw_class_ledger_totals_v1(&b, h(1)));
         assert_eq!(ta.producer_paid_sompi, tb.producer_paid_sompi);
         assert!(
@@ -733,7 +733,7 @@ mod tests {
         assert!(tb.producer_per_attempted_compute() > ta.producer_per_attempted_compute());
         assert_eq!(ta.avg_expected_attempts_q32() * 1000 / ONE, 1_495);
         let tight =
-            window(1, 2_000, 100, 13, 87, ESCROW_7001, dense_facts(0x207f_ffff / 4 * 4 - 0x0100_0000), rule_7001(DENSE_LEAVES), 5, 3);
+            window(1, 2_000, 100, 13, 87, ESCROW_6001, dense_facts(0x207f_ffff / 4 * 4 - 0x0100_0000), rule_6001(DENSE_LEAVES), 5, 3);
         let tt = palw_class_ledger_totals_v1(&tight, h(1));
         assert_eq!(tt.producer_paid_sompi, ta.producer_paid_sompi);
         assert!(tt.attempted_compute > ta.attempted_compute, "a tighter network target costs more forwards");
@@ -749,17 +749,17 @@ mod tests {
     fn adr0132_no_capable_panel_pays_nothing_and_an_outage_is_a_licence_rate() {
         let facts = hybrid_facts(0x207f_ffff);
         let never_bound: Vec<_> = (0..50)
-            .map(|i| palw_ledger_merge_v1(None, &obs(i, 2, 4_000 + i, ESCROW_7001), 4_001 + i, facts, |_| rule_pre()))
+            .map(|i| palw_ledger_merge_v1(None, &obs(i, 2, 4_000 + i, ESCROW_6001), 4_001 + i, facts, |_| rule_pre()))
             .collect();
         let t = palw_class_ledger_totals_v1(&never_bound, h(2));
         assert_eq!((t.bound, t.verification_compute, t.producer_paid_sompi, t.licence_rate_permille()), (0, 0, 0, 0));
         assert!(t.attempted_compute > 0, "the producer still ran the forwards");
-        let bound_incapable = window(2, 100, 50, 0, 0, ESCROW_7001, facts, rule_7001(HYBRID_LEAVES), 5, 0);
+        let bound_incapable = window(2, 100, 50, 0, 0, ESCROW_6001, facts, rule_6001(HYBRID_LEAVES), 5, 0);
         let t = palw_class_ledger_totals_v1(&bound_incapable, h(2));
         assert_eq!(t.verification_compute, 50 * 5 * HYBRID_DRAW, "five seats each replay — if they can");
         assert_eq!((t.licensed, t.producer_paid_sompi), (0, 0));
-        let healthy = window(1, 200, 100, 60, 40, ESCROW_7001, dense_facts(0x207f_ffff), rule_7001(DENSE_LEAVES), 5, 3);
-        let outage = window(1, 400, 100, 36, 64, ESCROW_7001, dense_facts(0x207f_ffff), rule_7001(DENSE_LEAVES), 5, 2);
+        let healthy = window(1, 200, 100, 60, 40, ESCROW_6001, dense_facts(0x207f_ffff), rule_6001(DENSE_LEAVES), 5, 3);
+        let outage = window(1, 400, 100, 36, 64, ESCROW_6001, dense_facts(0x207f_ffff), rule_6001(DENSE_LEAVES), 5, 2);
         let (th, to) = (palw_class_ledger_totals_v1(&healthy, h(1)), palw_class_ledger_totals_v1(&outage, h(1)));
         assert_eq!((th.licence_rate_permille(), to.licence_rate_permille()), (600, 360));
         assert!(to.producer_per_attempted_compute() * 1000 / th.producer_per_attempted_compute() == 600);
@@ -774,29 +774,29 @@ mod tests {
     /// not tax its neighbours. A model lighter than both is priced proportionally under either.
     #[test]
     fn adr0132_a_heavier_model_moves_the_unit_but_not_a_rate() {
-        let dense_unit_before = palw_priced_reward_u128_v1(ESCROW_7001, DENSE_LEAVES as u128, DENSE_LEAVES as u128);
-        let dense_unit_after = palw_priced_reward_u128_v1(ESCROW_7001, DENSE_LEAVES as u128, UNIT_27B as u128);
-        assert_eq!(dense_unit_before, ESCROW_7001);
-        assert!(dense_unit_after * 1000 / ESCROW_7001 == 736, "the 1 ‰ registration cut the dense tier to 73.7 %");
+        let dense_unit_before = palw_priced_reward_u128_v1(ESCROW_6001, DENSE_LEAVES as u128, DENSE_LEAVES as u128);
+        let dense_unit_after = palw_priced_reward_u128_v1(ESCROW_6001, DENSE_LEAVES as u128, UNIT_27B as u128);
+        assert_eq!(dense_unit_before, ESCROW_6001);
+        assert!(dense_unit_after * 1000 / ESCROW_6001 == 736, "the 1 ‰ registration cut the dense tier to 73.7 %");
         let dense_attempted = palw_ledger_row_attempted_compute_v1(
-            &window(1, 1, 1, 0, 0, ESCROW_7001, dense_facts(0x207f_ffff), rule_7001(DENSE_LEAVES), 5, 3)[0],
+            &window(1, 1, 1, 0, 0, ESCROW_6001, dense_facts(0x207f_ffff), rule_6001(DENSE_LEAVES), 5, 3)[0],
         );
-        let rate = ESCROW_7001 as u128 * PALW_LEDGER_RATE_SCALE_V1 / dense_attempted;
-        let dense_rate_before = palw_rate_priced_reward_v1(ESCROW_7001, dense_attempted, rate);
+        let rate = ESCROW_6001 as u128 * PALW_LEDGER_RATE_SCALE_V1 / dense_attempted;
+        let dense_rate_before = palw_rate_priced_reward_v1(ESCROW_6001, dense_attempted, rate);
         let heavy_attempted = dense_attempted * 7;
-        let heavy = palw_rate_priced_reward_v1(ESCROW_7001, heavy_attempted, rate);
-        let dense_rate_after = palw_rate_priced_reward_v1(ESCROW_7001, dense_attempted, rate);
+        let heavy = palw_rate_priced_reward_v1(ESCROW_6001, heavy_attempted, rate);
+        let dense_rate_after = palw_rate_priced_reward_v1(ESCROW_6001, dense_attempted, rate);
         assert_eq!(dense_rate_before, dense_rate_after, "a rate is a constant: the neighbour's pay does not move");
-        assert_eq!(heavy, ESCROW_7001, "the heavy model is capped at the escrow, paid whole");
+        assert_eq!(heavy, ESCROW_6001, "the heavy model is capped at the escrow, paid whole");
         // The rate is floored to a sompi per 10⁹ MAC-eq, so the priced escrow is short by at most
         // `attempted / 10⁹` sompi — some 250 on a 2.5 × 10¹¹ MAC-eq claim.
-        assert!(dense_rate_before >= ESCROW_7001 - (dense_attempted / PALW_LEDGER_RATE_SCALE_V1) as u64 - 1, "{dense_rate_before}");
-        let light = palw_rate_priced_reward_v1(ESCROW_7001, dense_attempted / 4, rate);
+        assert!(dense_rate_before >= ESCROW_6001 - (dense_attempted / PALW_LEDGER_RATE_SCALE_V1) as u64 - 1, "{dense_rate_before}");
+        let light = palw_rate_priced_reward_v1(ESCROW_6001, dense_attempted / 4, rate);
         assert!(
-            light * 1000 / ESCROW_7001 >= 249 && light * 1000 / ESCROW_7001 <= 250,
+            light * 1000 / ESCROW_6001 >= 249 && light * 1000 / ESCROW_6001 <= 250,
             "a quarter of the compute, a quarter of the escrow"
         );
-        assert_eq!(palw_rate_priced_reward_v1(ESCROW_7001, 0, rate), 0);
+        assert_eq!(palw_rate_priced_reward_v1(ESCROW_6001, 0, rate), 0);
     }
 
     /// The void reasons print under the `getPalwClaims` spelling.

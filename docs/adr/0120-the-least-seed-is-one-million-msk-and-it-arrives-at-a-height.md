@@ -3,7 +3,8 @@
 * Status: PROPOSED 2026-09-12 at the operator's request ("misaka position のモデル追加の際に流動性として
   ロックして引き出せないようにする misaka の数を 1M として　今の 100000 枚から引き上げて"). **IMPLEMENTED
   the same day** on `feat/adr-0120-seed-min-1m`, and **scheduled on testnet-11 at DAA 6,900** by the
-  operator the same day, to ship with the 7,000 release at a height of its own:
+  operator the same day, to ship with the 7,000 release at a height of its own (unchanged on 2026-09-17,
+  when the operator moved the 7,000 heights to 6,000: 6,900 now follows them):
   `PALW_RC_MODEL_SEED_V2_FENCE_DAA`. Every other preset keeps `palw_model_seed_v2 = None`.
   **6,900 is a flag day: every node must run a build carrying the fence before it.**
 * Amends: [0090](0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md)
@@ -45,7 +46,7 @@ differently on every node that re-validates it — so, like ADR-0114, the new fl
    unseeded line as well (it answered 0 there before), so the CLI's `model-market`, the site and the
    Studio print what the fold will open the pair at.
 6. **The fork id sees it.** 6,900 is a height no other fence uses: `fork_id_v1` digests fired heights,
-   not fence sets, so a fence sharing 7,000 with held context and the audit's deep fixes would let a
+   not fence sets, so a fence sharing 6,000 with held context and the audit's deep fixes would let a
    build without it peer through the gate and part silently there.
 
 ## 3. Consequences
@@ -60,5 +61,5 @@ differently on every node that re-validates it — so, like ADR-0114, the new fl
 
 * **A policy floor in the tools only** (site, CLI, Studio refuse less than 1,000,000 MSK): the chain
   would still open any pair at 100,000 MSK paid by any other client, so the rule would be a suggestion.
-* **Sharing 7,000**: one height for four fences, and a build missing one of them invisible to the gate
+* **Sharing 6,000**: one height for four fences, and a build missing one of them invisible to the gate
   (see Decision 6).

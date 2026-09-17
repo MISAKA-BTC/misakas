@@ -8,15 +8,19 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 > **Current status (2026-09-17).** The live public network is **`testnet-11`**, Relaunch 5f.
 > Build current `main`, select it explicitly with `--testnet --netsuffix=11` or
 > `misaka --network testnet-11`, and verify fingerprint
-> **`dd805c9f2c4e9db3c0d6ffa2d87fa6ffb4263078ab8b7eb857f8fb11f8aa010c`** (the build that schedules the
-> DAA 7,001 flag day with ADR-0130's operator lottery and 5-DAA spans, and ADR-0134's compute-overlay
-> retirement at 7,201; the 7,000 release prints `ae1d6162…`; the earlier 7,001 builds, `4787b92a…` and
-> `ab4e7b9c…`, were never deployed).
+> **`135b6ee07ba0c5e5951c3cb765ba9dfec8b85af4c6edccc5a2246a52338e766b`** (the build that moves the held
+> regime and the audit's deep fixes to DAA 6,000 — from the 7,000 the deployed release scheduled; the
+> operator, 2026-09-17: the wait was too long — and schedules the DAA 6,001 flag day with ADR-0130's
+> operator lottery and 5-DAA spans, and ADR-0134's compute-overlay retirement at 6,201; the 7,000
+> release prints `ae1d6162…`; the earlier builds `4787b92a…`, `ab4e7b9c…` and `dd805c9f…`, which
+> scheduled 7,001, were never deployed).
 > The network produces PALW blocks at a frozen 120-second cadence. Testnet-10 and older relaunches
 > are not supported entry points. ADR-0123's epoch-budget release is implemented but remains
 > dormant on every shipped preset (`palw_epoch_budget_release: None`).
 >
-> **Rebuild before DAA 7,001.** From DAA 7,001, together:
+> **Rebuild before DAA 6,000.** At DAA 6,000 the held regime and the audit's deep fixes arrive (the
+> deployed release scheduled them at 7,000 and is refused from 6,000, a height it does not name);
+> from DAA 6,001, together:
 > * **Panels are paid** (ADR-0124): 20 % of a `Final` claim's reward goes to the seats whose `Valid`
 >   receipts the chain credited, a drawn seat holds three times the claim's exposure, and a claim is
 >   paid for the compute it certifies.
@@ -32,8 +36,8 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 >   ([docs/validator-runbook.md](docs/validator-runbook.md)). PALW production and settlement do not
 >   depend on validators; the gate is a veto layered on top.
 >
-> These are consensus rules: a node on the 7,000 release keeps peering until 7,001 and is refused from
-> it.
+> These are consensus rules: a node on the 7,000 release keeps peering below 6,000 and is refused
+> from 6,000; its own 6,900 and 7,000 are never reached by it.
 
 <details>
 <summary>Historical Relaunch 5f rollout log and crossed fences</summary>
@@ -42,12 +46,14 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 > Relaunch 5f. Explorer at **[misakascan.com](https://misakascan.com)**, web wallet at
 > **[wallet.misakascan.com](https://wallet.misakascan.com)**. Current network identity: consensus
 > fingerprint **`ae1d6162…`** (the release that schedules ADR-0120's fence at DAA 6,900 and held
-> context's and the audit's deep fixes at DAA 7,000, on top of 3,500 and 4,000; the 3,500 + 4,000
+> context's and the audit's deep fixes at DAA 7,000 — both moved to 6,000 on 2026-09-17, see above — on
+> top of 3,500 and 4,000; the 3,500 + 4,000
 > build prints `4300409b…`, a build with 3,500 alone `02c7282b…`, the builds before it `ecbdbc22…`,
 > and `891a1a14`…`a5f1bdf7` print `060e3597…`) — and genesis
 > **`ad30b5cb…`** (three execution classes and the 347M MSK community allocation in genesis).
 >
-> **Rebuild before DAA 6,900 — one build covers 6,900 and 7,000.** From DAA 6,900 a model's store opens
+> **Rebuild before DAA 6,900 — one build covers 6,900 and 7,000.** (As recorded on 2026-09-12; the
+> 7,000 heights moved to 6,000 on 2026-09-17.) From DAA 6,900 a model's store opens
 > only once 1,000,000 MSK is locked into it instead of 100,000 (ADR-0120; pledges made before stay and
 > count toward it, and a store already open stays open). From DAA 7,000 classes that hold their context
 > off the chain become usable (held context, ADR-0118/0119/0121), and the rest of the pre-mainnet
@@ -173,8 +179,8 @@ The log must show this fingerprint and, on the next line, this fence schedule, o
 wrong ruleset:
 
 ```
-Consensus params fingerprint: dd805c9f2c4e9db3c0d6ffa2d87fa6ffb4263078ab8b7eb857f8fb11f8aa010c (network testnet-11)
-Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 4000, 6900, 7000, 7001, 7201, 2125000 (schedule id …)
+Consensus params fingerprint: 135b6ee07ba0c5e5951c3cb765ba9dfec8b85af4c6edccc5a2246a52338e766b (network testnet-11)
+Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 4000, 6000, 6001, 6201, 6900, 2125000 (schedule id …)
 ```
 
 A build from `891a1a14` up to `a5f1bdf7` prints `060e3597cd2950bc…` on the first line and the same
@@ -183,8 +189,9 @@ out (the build that added it never wrote it), and writing it moved the value wit
 The two stay peers — the handshake logs `schedules a FUTURE fence differently` between them rather
 than refusing — but rebuilding is how the first line becomes a check again. The second line is the
 one that names heights: a build without `3500` in it forks off at 3,500, one without `4000` at 4,000,
-one without `6900` at 6,900, one without `7000` at 7,000, one without `7001` at 7,001 (the 7,000
-release, `ae1d6162…`). One case the second line cannot show: `4000`, `7000` and `7001` each carry more
+one without `6000` at 6,000 (the 7,000 release, `ae1d6162…`, which names 6,900 and 7,000 instead),
+one without `6001` at 6,001, one without `6201` at 6,201. One case the second line cannot show:
+`4000`, `6000` and `6001` each carry more
 than one fence, and a build with only some of them (at 4,000, the audit's
 alone prints `09efd285…`) shows the same line and parts silently at that height — the first
 line is the check.
@@ -476,7 +483,7 @@ kaspa-pq-validator keygen --out val.seed --network testnet
 kaspa-pq-validator bond --node-rpc 127.0.0.1:27210 --validator-key val.seed \
   --amount 1000000000 --network testnet-11
 # 4. run the validator daemon (attests every epoch while the bond is active, and precommits
-#    where the network schedules ADR-0128's BFT gate — testnet-11 from DAA 7,001)
+#    where the network schedules ADR-0128's BFT gate — testnet-11 from DAA 6,001)
 kaspa-pq-validator run --node-rpc 127.0.0.1:27210 --validator-key val.seed \
   --stake-bond <txid:index> --signed-epoch-db val.state --network testnet-11 --attest-poll-secs 3
 ```
@@ -490,15 +497,15 @@ current validator runbook and `--help` say otherwise.
 
 Once enough active stake has attested across the recent epochs, `getDnsConfirmation` reports
 `dnsConfirmed: true` plus a `lastDnsConfirmedAnchor` (the stake-confirmed finality point — treat
-this as DNS-final, not the pov-dependent `blockHash` sink). Below DAA 7,001, confirmation on
+this as DNS-final, not the pov-dependent `blockHash` sink). Below DAA 6,001, confirmation on
 Testnet-11 is two-dimensional: it requires both anchor-relative `WorkDepth` and `StakeDepth` under the
-live network parameters. **From DAA 7,001 it is a vote** (ADR-0128): the confirmed anchor is the newest
+live network parameters. **From DAA 6,001 it is a vote** (ADR-0128): the confirmed anchor is the newest
 epoch anchor that validators holding more than two thirds of the counted bonded stake have attested
 and precommitted to, voting power is the bond amount, a bond silent for 5,040 DAA (about seven days)
 stops counting until it attests again, and the DNS stake reorg gate refuses chains that abandon the
 confirmed anchor until it goes stale. The sidecar and the in-node validator precommit by themselves
 from `getPrecommitDuty` and keep a second safety log, `<signed-epoch-db>.precommits.json` — back it up
-with the seed. Validators are paid 20 % of each block's subsidy from DAA 7,001 (30 % before). PALW does
+with the seed. Validators are paid 20 % of each block's subsidy from DAA 6,001 (30 % before). PALW does
 not wait for any of this: its payments settle on PALW anchors (`misaka palw settlement`). The current experimental mesh permits one active validator, but the 10 MSK minimum
 does not bypass the work-depth, anchor-attester or freshness checks. Per-block finality is queryable:
 `getDnsConfirmation` accepts an optional `blockHash` and answers whether that block is DNS-final

@@ -5,7 +5,7 @@
   モデルで同じ 1 claim 1 ブロックだと圧倒的に小さいモデルが有利な点を改善する … ADR を作成し実装を行なって";
   the design the operator brought is quoted in §1). Behind two bare fences,
   `Params::palw_panel_economy` (Decisions 1–5) and `Params::palw_work_priced_reward` (Decision 6).
-  **testnet-11 schedules both at DAA 7,001** (the operator's flag day of 2026-09-17, with ADR-0125,
+  **testnet-11 schedules both at DAA 6,001** (the operator's flag day of 2026-09-17, with ADR-0125,
   ADR-0126 and ADR-0128; §8); `None` on every other shipped preset. **A mainnet card states both from
   genesis** (Decision 7).
 * Builds on: [0042](0042-palw-mainnet-candidate-ruleset.md) Decision 10 (the worker reward is a
@@ -324,16 +324,20 @@ free-prompt lane (escrow 0, nothing to split or price); every network below the 
 ## 8. Arming it on testnet-11
 
 **Armed 2026-09-17** on `feat/palw-exec-lane-and-validator-retirement` (`d6c46f25`): both fences at
-`PALW_RC_FLAG_DAY_7001_FENCE_DAA` = 7,001, the operator's height, chosen at DAA ≈5,773 — one past the
-7,000 release's height, which a fence of its own must not share — beside ADR-0125's lane, ADR-0126's
-carve and ADR-0128's gate. Schedule 1150/1900/2150/2400/3500/4000/6900/7000/7001/2125000; fingerprint
+`PALW_RC_FLAG_DAY_6001_FENCE_DAA` = 6,001 — 7,001 when armed that morning at DAA ≈5,773, one past the
+7,000 release's height, which a fence of its own must not share; moved to 6,001 the same evening at DAA
+5,798 when the operator moved the held regime's and the deep audit's height from 7,000 to 6,000 ("時間が
+かかりすぎる"), keeping this flag day one past it — beside ADR-0125's lane, ADR-0126's carve, ADR-0128's
+gate and ADR-0130's M1/M2. Schedule 1150/1900/2150/2400/3500/4000/6000/6001/6201/6900/2125000; fingerprint
 `4787b92a0e20065aac88f8258b581f415ace9f6093dfab35c345b48135269005` (from `ae1d6162…`), re-pinned the same day to
 `ab4e7b9c7e20d14cbadc0874312b8c6dff89ca66ed7e9be3af2f5523dc58b5f2` when ADR-0130's operator lottery and 5-DAA spans
-joined the height, and to
-`dd805c9f2c4e9db3c0d6ffa2d87fa6ffb4263078ab8b7eb857f8fb11f8aa010c` when ADR-0134 scheduled the compute overlay's
-retirement at 7,201 (no build under an earlier pin was deployed); the identity
-does not move, so the 7,000 release and this build peer until 7,001 and refuse each other from it
-(`the_7001_flag_day_keeps_the_7000_release_until_7001`). Deployment is the operator's.
+joined the height, to `dd805c9f2c4e9db3c0d6ffa2d87fa6ffb4263078ab8b7eb857f8fb11f8aa010c` when ADR-0134 scheduled
+the compute overlay's retirement (then at 7,201), and to
+**`135b6ee07ba0c5e5951c3cb765ba9dfec8b85af4c6edccc5a2246a52338e766b`** when the heights moved (no build under an
+earlier pin was deployed); the identity does not move, so the 7,000 release and this build peer below 6,000 and
+refuse each other from it, the moved height that release does not name
+(`the_moved_heights_refuse_the_deployed_7000_release_from_6000_and_keep_it_below`). Deployment is the operator's,
+**before DAA 6,000**.
 
 The procedure this section prescribed, as it was followed (the constant it named became the shared
 flag day's): (1) set the constant and arm both in `palw_rc_base_params`; (2) add the
@@ -406,7 +410,7 @@ both floors). Mainnet has not launched, so its ruleset id may move.
   genesis objects). testnet-11 registers `Qwen/Qwen2.5-1.5B/graph-v5@512` at 6,630,544 pwu per inference (its
   canonical job is 63 + 2 tokens at n_ctx 512) and `Qwen3.6-35B-A3B/graph-v3` at 2,685,360 (7 + 2 tokens at
   n_ctx 8), and `Qwen/Qwen3.8-27B/graph-v3` (registered at DAA 1,165, share 1 ‰) at 9,000,776 is the heaviest
-  weight-bearing model class — so past 7,001 the unit is 9,000,776, Qwen2.5 is priced at 73.7 % and Qwen3.6 at
+  weight-bearing model class — so past 6,001 the unit is 9,000,776, Qwen2.5 is priced at 73.7 % and Qwen3.6 at
   29.8 %, not QWEN36 at 100 % and QWEN25-A16 at 59.19 %. Two consequences are ADR-0131's: a leaf count prices jobs
   of different sizes and kernels as if a leaf were one unit of compute, and the unit is set by whichever
   weight-bearing class is heaviest — a class registered with a 1 ‰ share lowers every other class's pay.

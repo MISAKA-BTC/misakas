@@ -2,7 +2,7 @@
 
 * Status: **ACCEPTED and IMPLEMENTED 2026-09-17** on `feat/palw-exec-lane-and-validator-retirement`.
   No consensus rule and no fence of its own: it states which existing rules defend a payment, pins each
-  with a test, and adds the read that counts confirmations in anchors. testnet-11 runs it from DAA 7,001
+  with a test, and adds the read that counts confirmations in anchors. testnet-11 runs it from DAA 6,001
   with the execution lane at one block a second (ADR-0125 §7.5) and the seat exposure (ADR-0124) armed at
   the same height.
 * Operator's direction, in the operator's words: "『モデルを交互にする』だけを二重支払い防止の主役にしない
@@ -96,7 +96,7 @@ settles a payment (Decisions 2–5), and a model alternation would bind nothing 
 model could not satisfy.
 
 **Decision 9 — large payments wait for more anchors.** The depth a payment needs is its receiver's
-policy, read from Decision 2. On testnet-11 past DAA 7,000 an anchor's claim settles a challenge window
+policy, read from Decision 2. On testnet-11 past DAA 6,000 an anchor's claim settles a challenge window
 (120 DAA) after its licence, so a payment's first settled anchor arrives some four hours after
 acceptance at the 120-second cadence, and each later anchor adds one. A receiver of a large sum waits
 for a depth whose anchors it would cost more to produce and license on a private branch than the sum is
@@ -105,7 +105,7 @@ worth; `--min-depth` is the switch a script or an exchange waits on.
 ## 3. What does not change
 
 Every consensus rule, fingerprint and block; the lane's width (one permit a round on testnet-11 from DAA
-7,001; nothing here depends on it); the DNS overlay, whose stake reorg gate (ADR-0128) can add a veto on
+6,001; nothing here depends on it); the DNS overlay, whose stake reorg gate (ADR-0128) can add a veto on
 a network that runs it and is not needed for anything above.
 
 ## 4. Security amendments
