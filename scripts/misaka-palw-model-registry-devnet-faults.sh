@@ -20,6 +20,9 @@ STEP_WAIT="${STEP_WAIT:-14400}"
 STALL_WAIT="${STALL_WAIT:-1800}"
 P2P_BASE="${P2P_BASE:-16710}"
 RPC_BASE="${RPC_BASE:-18010}"
+# FLOOR_ONLY=1 when the first phase ran on the floor-only ruleset (the class registered by node-1): the
+# restarted nodes must name the same ruleset their datadirs hold.
+FLOOR_ONLY="${FLOOR_ONLY:-0}"
 PREMINE_TXID="6d6973616b612d7072656d696e65$(printf '0%.0s' $(seq 1 100))"
 MAIN_PREMINE_INDEX=40
 STOPPED="${STOPPED:-4 5 6}"
@@ -55,6 +58,7 @@ start_node() {
         --palw-produce --palw-panel --palw-round-lane
         --palw-producer-key="$WORK_DIR/keys/bond-$i.seed" --palw-producer-bond="$PREMINE_TXID:$i"
         --palw-producer-pay-address="$addr" --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1 + i))")
+  [ "$FLOOR_ONLY" = 1 ] && args+=(--palw-devnet-floor-only)
   [ "$with_artifact" = 1 ] && args+=(--palw-class-artifact="$CLASS_ARTIFACT")
   args+=(--connect="127.0.0.1:$P2P_BASE")
   MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >>"$WORK_DIR/node-$i.log" 2>&1 &
