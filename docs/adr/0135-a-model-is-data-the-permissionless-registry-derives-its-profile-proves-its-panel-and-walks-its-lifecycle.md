@@ -197,6 +197,16 @@ ready seats for its five-seat panels. The devnet now mints eight bonds and eight
 commitment and fingerprint move; a rehearsal network of public seeds, not a regenesis of anything
 deployed), the drills run eight nodes, and phase 1 is repeated on the eight-bond genesis before phase 2.
 
+**Phase 1 on the eight-bond genesis — PASS (2026-09-17 17:11Z, eight nodes):** the same six steps; the class
+`Prefetching` with two ready seats at the verdict, because — the fifth finding — the per-node carrier chain
+(eight in flight) took fifteen to twenty-five minutes to clear on an eight-node devnet: a child of an
+unconfirmed parent is dropped in relay, so only the origin's own blocks (one in eight) mine the tail, and
+every proof queued there (six of eight seats never got one out; `waits for a carrier slot` thirteen times
+each). `MAX_INFLIGHT_CARRIERS` is now one: a carrier that spends a confirmed output relays everywhere and is
+mined by anyone's next block, and a seat's throughput becomes one carrier a block, which testnet-11's
+cadence never approaches. Memory: 1.75 GiB of file-backed pages once, `MemAvailable` 9.7–10.4 GiB of 12
+with eight nodes.
+
 **The fence.** `Params::palw_model_registry: Option<ForkActivation>` — `None` on every shipped preset
 (the t11 fingerprint `135b6ee0…` does not move); hashed `Some`-only; the fork-id gate names it when
 armed; `validate_palw_v2` refuses it without `palw_panel_economy` and `palw_execution_lane` at or
