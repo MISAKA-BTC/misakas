@@ -423,13 +423,13 @@ pub fn convert_qwen25(blob: &[u8], plan: &Qwen25ConvertPlan) -> Result<Base0Arti
         let attn_logit_scale = amplification_for(s.d_head, &wq, activation_scale);
         let ffn_gate_scale = amplification_for(d, &w_gate, activation_scale);
         layers.push(Base0LayerWeightsV1 {
-            wq,
-            wk,
-            wv,
-            wo,
-            w_gate,
-            w_up,
-            w_down,
+            wq: wq.into(),
+            wk: wk.into(),
+            wv: wv.into(),
+            wo: wo.into(),
+            w_gate: w_gate.into(),
+            w_up: w_up.into(),
+            w_down: w_down.into(),
             qkv_channel_requant: Some([triples(&bq, sq, d), triples(&bk, sk, d), triples(&bv, sv, d)]),
             requant: [
                 QuantParams { multiplier: i32::MAX, shift: shift_for(d), zero: 0 },
@@ -650,13 +650,13 @@ pub fn convert_qwen25_a16(
 
         let benign = QuantParams { multiplier: i32::MAX, shift: 0, zero: 0 };
         layers.push(Base0LayerWeightsV1 {
-            wq,
-            wk,
-            wv,
-            wo,
-            w_gate,
-            w_up,
-            w_down,
+            wq: wq.into(),
+            wk: wk.into(),
+            wv: wv.into(),
+            wo: wo.into(),
+            w_gate: w_gate.into(),
+            w_up: w_up.into(),
+            w_down: w_down.into(),
             qkv_channel_requant: None,
             requant: [benign; 7],
             attn_logit_scale: ScaleParams::unity(),

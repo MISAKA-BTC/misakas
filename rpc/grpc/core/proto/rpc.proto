@@ -2085,6 +2085,8 @@ message RpcPalwModelLifecycle {
   uint32 sharePermille = 24;
   string artifactRoot = 25;
   uint32 noCapablePanelVoids = 26;
+  // ADR-0132 Upgrade C: cap utilization at the last boundary, permille of the escrow (0 = unpriced).
+  uint32 capUtilizationPermille = 28;
   string reason = 27;
 }
 

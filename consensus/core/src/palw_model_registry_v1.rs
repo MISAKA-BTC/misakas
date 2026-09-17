@@ -303,6 +303,10 @@ pub struct PalwLifecycleObservationV1 {
     pub probes_failed_this_span: u32,
     pub utilization_permille: u32,
     pub collateral_ok: bool,
+    /// ADR-0132 Upgrade C: the class's cap utilization is at or under the fence's ceiling (`true`
+    /// where the economic payout is dormant: nothing prices it). A class over it is not stepped to
+    /// `Active` and an `Active` one falls back to a tenth — "not activatable", as a rule.
+    pub cap_ok: bool,
     /// Whether this span ran at or under the target utilization with no held claim.
     pub span_stable: bool,
 }
@@ -360,7 +364,9 @@ pub fn palw_lifecycle_step_v1(
                 Held
             } else if obs.span_stable {
                 let stable = stable_epochs.saturating_add(1);
-                if stable >= g.stable_epochs { Active } else { ActiveLimited { stable_epochs: stable } }
+                // ADR-0132 Upgrade C: a cap-saturated class keeps its stable count but is not
+                // activated — it admits at a tenth until the rate, the target or the escrow moves.
+                if stable >= g.stable_epochs && obs.cap_ok { Active } else { ActiveLimited { stable_epochs: stable } }
             } else {
                 ActiveLimited { stable_epochs: 0 }
             }
@@ -368,6 +374,8 @@ pub fn palw_lifecycle_step_v1(
         Active => {
             if !panel_drawable || overloaded {
                 Held
+            } else if !obs.cap_ok {
+                ActiveLimited { stable_epochs: 0 }
             } else {
                 Active
             }
@@ -464,6 +472,10 @@ pub struct PalwModelLifecycleRowV1 {
     pub inflight_claims: u32,
     pub utilization_permille: u32,
     pub admission_milli: u64,
+    /// ADR-0132 Upgrade C: the class's cap utilization at the last boundary, in permille of the
+    /// escrow (`attempted × rate / escrow`); `0` where nothing priced it (the payout fence dormant,
+    /// or no subsidy at the boundary block). Over the fence's ceiling the class is not activatable.
+    pub cap_utilization_permille: u32,
 }
 
 /// **A seat's readiness for a class**: the last possession proof this bond opened for the class
@@ -634,7 +646,14 @@ pub fn palw_lifecycle_reason_v1(row: &PalwModelLifecycleRowV1, is_base_class: bo
             format!("probing: {probes_passed}/{} finals passed, {} failed since entry", g.probation_claims, row.probes_failed)
         }
         PalwModelLifecycleV1::ActiveLimited { stable_epochs } => {
-            format!("stable {stable_epochs}/{} spans at a tenth", g.stable_epochs)
+            if stable_epochs >= g.stable_epochs {
+                format!(
+                    "at a tenth: cap-saturated ({} ‰ of the escrow at the rate; not activatable above the ceiling)",
+                    row.cap_utilization_permille
+                )
+            } else {
+                format!("stable {stable_epochs}/{} spans at a tenth", g.stable_epochs)
+            }
         }
         PalwModelLifecycleV1::Active => "admitting in full".to_string(),
         PalwModelLifecycleV1::Held => {
@@ -1028,6 +1047,7 @@ mod tests {
             probes_failed_this_span: 0,
             utilization_permille: 300,
             collateral_ok: true,
+            cap_ok: true,
             span_stable: true,
         };
         let mut s = Registered;

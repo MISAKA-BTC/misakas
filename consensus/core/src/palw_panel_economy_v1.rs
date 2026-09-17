@@ -234,7 +234,14 @@ pub struct PalwPanelSplitV1 {
 /// `seat_count` is clamped: the fold credits a seat once and only a drawn seat, so this is a
 /// belt over braces, never a path.
 pub fn palw_panel_split_v1(reward: u64, seat_count: usize, credited: usize) -> PalwPanelSplitV1 {
-    let pool = ((reward as u128) * (PALW_PANEL_POOL_PERMILLE_V1 as u128) / 1000) as u64;
+    palw_panel_split_permille_v1(reward, PALW_PANEL_POOL_PERMILLE_V1 as u16, seat_count, credited)
+}
+
+/// [`palw_panel_split_v1`] at any pool share (ADR-0132 Upgrade C: the share a claim's snapshot
+/// derived from its verification compute), capped at the whole reward. The identity
+/// `producer + paid + reserve == reward` holds at every share.
+pub fn palw_panel_split_permille_v1(reward: u64, pool_permille: u16, seat_count: usize, credited: usize) -> PalwPanelSplitV1 {
+    let pool = ((reward as u128) * (pool_permille.min(1_000) as u128) / 1000) as u64;
     let producer = reward - pool;
     let per_seat = if seat_count == 0 { 0 } else { pool / seat_count as u64 };
     let credited = credited.min(seat_count) as u64;

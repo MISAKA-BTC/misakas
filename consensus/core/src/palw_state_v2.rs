@@ -3431,6 +3431,9 @@ pub struct PalwMergedWorkV1<'a> {
     /// own `worker_carve_permille`). Read from the same record the coinbase's withhold is sized from
     /// (`palw_v2_merged_escrow_withheld`), so the two stay one number. `None` for non-attempt work.
     pub escrow_carve: Option<crate::palw_reward_v2::PalwRewardParamsV2>,
+    /// ADR-0132 Upgrade C: the merged block's own compact `bits`, for its claim's snapshot. `0` for
+    /// non-attempt work and where no header was at hand.
+    pub bits: u32,
 }
 
 /// Where an attempt entered the chain — its own chain block, or a merged blue (ADR-0058).
@@ -3461,6 +3464,9 @@ struct PalwAttemptOriginV1 {
     /// (own work from this block's header, merged work from the merged block's). `apply_attempt`
     /// dedups on it against the builder's `seen_exec` past `palw_audit_2026_09_11_deep`.
     execution_key: Hash64,
+    /// ADR-0132 Upgrade C: the compact `bits` of the block that carried the attempt — the network
+    /// lottery the forward faced — for the claim's snapshot. `0` where no header was at hand.
+    carrying_bits: u32,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -4949,6 +4955,11 @@ pub struct PalwChainStateV2 {
     /// a state without them is byte-identical to a state before the field.
     model_lifecycles: BTreeMap<Hash64, crate::palw_model_registry_v1::PalwModelLifecycleRowV1>,
     seat_readiness: BTreeMap<(PalwBondKeyV2, Hash64), crate::palw_model_registry_v1::PalwSeatReadinessRowV1>,
+    /// ADR-0132 Upgrade C: what each live model-class claim snapshotted at acceptance (claim → row),
+    /// written past `Params::palw_economic_payout` and dropped with the claim's terminal write.
+    /// Rooted and carried in its own guarded tail once any exists, so a state without them is
+    /// byte-identical to a state before the field.
+    claim_economics: BTreeMap<Hash64, crate::palw_economic_payout_v1::PalwClaimEconomicsV1>,
     /// **ADR-0056 Decision 3: the registry's own exposure ledger, kept SEPARATE from the claims'.**
     ///
     /// `reserved_exposure` is an accumulator over live claims, and
@@ -5086,6 +5097,7 @@ impl PalwChainStateV2 {
             round_seed_anchor: None,
             model_lifecycles: BTreeMap::new(),
             seat_readiness: BTreeMap::new(),
+            claim_economics: BTreeMap::new(),
             registration_exposure: BTreeMap::new(),
             class_walks: BTreeMap::new(),
             certified_families: BTreeMap::new(),
@@ -5702,6 +5714,15 @@ impl PalwChainStateV2 {
         self.seat_readiness.iter()
     }
 
+    /// ADR-0132 Upgrade C: a live claim's economics snapshot, where the payout fence wrote one.
+    pub fn claim_economics_of(&self, claim_id: &Hash64) -> Option<&crate::palw_economic_payout_v1::PalwClaimEconomicsV1> {
+        self.claim_economics.get(claim_id)
+    }
+
+    pub fn claim_economics_iter(&self) -> impl Iterator<Item = (&Hash64, &crate::palw_economic_payout_v1::PalwClaimEconomicsV1)> {
+        self.claim_economics.iter()
+    }
+
     /// **ADR-0119 Decision 2: the step ladder of a class, given the network's** — the ladder this
     /// state recorded when the class registered (a held class's, the regime's `2^40`), or the
     /// network's for every class it recorded none for. The one question every consensus reader of
@@ -6147,6 +6168,11 @@ impl PalwChainStateV2 {
             state.update(collection_root(b"model_lifecycles", &self.model_lifecycles).as_byte_slice());
             state.update(collection_root(b"seat_readiness", &self.seat_readiness).as_byte_slice());
         }
+        // ADR-0132 Upgrade C: the claims' economics rows, named, once any exists.
+        if !self.claim_economics.is_empty() {
+            state.update(b"claim_economics/v1");
+            state.update(collection_root(b"claim_economics", &self.claim_economics).as_byte_slice());
+        }
         state.update(&self.safe_weight.to_le_bytes());
         state.update(&self.retired_safe_weight.to_le_bytes());
         state.update(&self.bounded_immature.to_le_bytes());
@@ -6205,6 +6231,26 @@ impl PalwChainStateV2 {
                 Some(claim) if claim.phase.is_terminal() => {
                     return Err(PalwStateV2Error::CarriageInconsistent(format!(
                         "terminal claim {claim_id} still holds a panel duty row"
+                    )));
+                }
+                Some(_) => {}
+            }
+        }
+        // ADR-0132 Upgrade C: an economics snapshot names a live attempt claim of a model class and
+        // nothing else — dropped on every terminal write, never written for the floor.
+        for claim_id in self.claim_economics.keys() {
+            match self.claims.get(claim_id) {
+                None => {
+                    return Err(PalwStateV2Error::CarriageInconsistent(format!("economics snapshot {claim_id} names no claim")));
+                }
+                Some(claim) if claim.phase.is_terminal() => {
+                    return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                        "terminal claim {claim_id} still holds an economics snapshot"
+                    )));
+                }
+                Some(claim) if !matches!(claim.source, PalwClaimSourceV2::Attempt) || claim.class_id == params.base_class_id() => {
+                    return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                        "economics snapshot {claim_id} names a claim the payout never prices"
                     )));
                 }
                 Some(_) => {}
@@ -7070,11 +7116,17 @@ pub enum PalwDeltaEntryV2 {
         old: Option<crate::palw_model_registry_v1::PalwModelLifecycleRowV1>,
         new: Option<crate::palw_model_registry_v1::PalwModelLifecycleRowV1>,
     },
-    /// ADR-0135: a seat's possession proof for a class was written or dropped (52). Appended last.
+    /// ADR-0135: a seat's possession proof for a class was written or dropped (52).
     SeatReadiness {
         key: (PalwBondKeyV2, Hash64),
         old: Option<crate::palw_model_registry_v1::PalwSeatReadinessRowV1>,
         new: Option<crate::palw_model_registry_v1::PalwSeatReadinessRowV1>,
+    },
+    /// ADR-0132 Upgrade C: a claim's economics snapshot was written or dropped (53). Appended last.
+    ClaimEconomics {
+        key: Hash64,
+        old: Option<crate::palw_economic_payout_v1::PalwClaimEconomicsV1>,
+        new: Option<crate::palw_economic_payout_v1::PalwClaimEconomicsV1>,
     },
 }
 
@@ -7779,6 +7831,65 @@ impl<'a> TransitionBuilder<'a> {
         }
     }
 
+    fn write_claim_economics(&mut self, key: Hash64, new: Option<crate::palw_economic_payout_v1::PalwClaimEconomicsV1>) {
+        let old = match new {
+            Some(row) => self.state.claim_economics.insert(key, row),
+            None => self.state.claim_economics.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::ClaimEconomics { key, old, new });
+        }
+    }
+
+    // ---- ADR-0132 Upgrade C: the economic payout in the fold ----------------------------------
+
+    /// The registry's work for a class: its lifecycle row's, or the genesis registration's.
+    fn model_class_work(&self, class_id: &Hash64) -> Option<crate::palw_model_registry_v1::PalwModelWorkV1> {
+        if let Some(row) = self.state.model_lifecycles.get(class_id) {
+            return Some(row.work);
+        }
+        self.model_registry_fold().and_then(|fold| fold.genesis_works.get(class_id).copied())
+    }
+
+    /// **The claim snapshots its economics at acceptance** (ADR-0132 proposal B): the registry's
+    /// work for its class, the class target now and the carrying block's network draw, priced at
+    /// the rate now, with the panel's share derived once. Nothing for the liveness floor, nothing
+    /// below the fence, nothing for a class the registry holds no work for (it is paid as before).
+    fn snapshot_claim_economics(&mut self, claim_id: Hash64, class_id: &Hash64, carrying_bits: u32) {
+        let Some(fold) = self.extras.economic_payout else { return };
+        if *class_id == self.params.base_class_id() {
+            return;
+        }
+        let Some(work) = self.model_class_work(class_id) else { return };
+        let seat_count = self.model_registry_fold().map(|registry| registry.globals.seat_count).unwrap_or(0);
+        let target = self.state.class_targets.get(class_id).map(|t| t.target).unwrap_or(u128::MAX);
+        let snapshot =
+            crate::palw_economic_payout_v1::palw_claim_economics_snapshot_v1(&fold, &work, seat_count, target, carrying_bits);
+        self.write_claim_economics(claim_id, Some(snapshot));
+    }
+
+    /// **A class's cap utilization at a boundary** (ADR-0133 Fence 3): `attempted × rate` against
+    /// the escrow a claim of this block holds, in permille; `0` where the payout is dormant or the
+    /// block funds no escrow — no verdict, never a false "fine".
+    fn class_cap_utilization_permille(
+        &self,
+        work: &crate::palw_model_registry_v1::PalwModelWorkV1,
+        expected_attempts_q32: u128,
+        ctx: &PalwBlockContextV2,
+    ) -> u32 {
+        let Some(fold) = self.extras.economic_payout else { return 0 };
+        let escrow = worker_carve_v2(self.params, ctx.subsidy, self.extras.escrow_carve);
+        if escrow == 0 {
+            return 0;
+        }
+        let attempted = crate::palw_economic_payout_v1::palw_attempted_ccu_v1(
+            expected_attempts_q32,
+            crate::palw_economic_payout_v1::palw_network_draws_q32_from_bits_v1(fold.block_bits),
+            work.economic_ccu_per_claim,
+        );
+        crate::palw_economic_payout_v1::palw_cap_utilization_permille_v1(attempted, fold.rate_sompi_per_giga, escrow)
+    }
+
     // ---- ADR-0135: the model registry in the fold --------------------------------------------
 
     /// The registry's fold input, where the fence is active at this block.
@@ -7872,6 +7983,7 @@ impl<'a> TransitionBuilder<'a> {
                 inflight_claims: 0,
                 utilization_permille: 0,
                 admission_milli: 0,
+                cap_utilization_permille: 0,
             }),
         );
     }
@@ -8015,6 +8127,7 @@ impl<'a> TransitionBuilder<'a> {
                     inflight_claims: 0,
                     utilization_permille: 0,
                     admission_milli: 0,
+                    cap_utilization_permille: 0,
                 }),
             );
         }
@@ -8032,6 +8145,10 @@ impl<'a> TransitionBuilder<'a> {
             let profile = palw_lifecycle_profile_v1(&row.work, expected, &fold.globals);
             let ready = self.model_registry_ready_seats(class_id, ctx.daa_score, &fold);
             let inflight = self.model_registry_inflight(class_id);
+            // ADR-0132 Upgrade C / ADR-0133 Fence 3: the class's cap utilization at this boundary,
+            // and whether it is under the fence's ceiling (always, where nothing prices it).
+            let cap = if *class_id == base { 0 } else { self.class_cap_utilization_permille(&row.work, expected, ctx) };
+            let cap_ok = cap == 0 || self.extras.economic_payout.is_none_or(|fold| cap <= fold.cap_utilization_max_permille as u32);
             let (state, utilization) = if *class_id == base {
                 (PalwModelLifecycleV1::Active, 0)
             } else {
@@ -8054,6 +8171,7 @@ impl<'a> TransitionBuilder<'a> {
                     probes_failed_this_span: row.probes_failed_this_span,
                     utilization_permille: utilization,
                     collateral_ok: ready >= profile.required_ready_seats,
+                    cap_ok,
                     span_stable: utilization < 1_000 && row.probes_failed_this_span == 0 && ready >= profile.required_ready_seats,
                 };
                 (palw_lifecycle_step_v1(row.state, &obs, &profile, &fold.globals), utilization)
@@ -8073,6 +8191,7 @@ impl<'a> TransitionBuilder<'a> {
                 inflight_claims: inflight,
                 utilization_permille: utilization,
                 admission_milli,
+                cap_utilization_permille: cap,
             };
             if next != row {
                 self.write_model_lifecycle(*class_id, Some(next));
@@ -9077,7 +9196,19 @@ impl<'a> TransitionBuilder<'a> {
             // heaviest weight-bearing model class's; the rest is never named — never minted, as a
             // voided escrow is. Below the fence, and for the liveness floor, the escrow whole. The
             // buyback is a slice of what is paid, so a lighter class's pair buys proportionally.
-            let escrow = if self.extras.work_priced_reward_active { self.work_priced_escrow(claim) } else { claim.escrowed_reward };
+            // **ADR-0132 Upgrade C: the price of compute at one rate.** A claim that snapshotted its
+            // economics when it was accepted (`Params::palw_economic_payout` was active there, and
+            // its class is a model the registry holds work for) is paid `min(escrow, attempted × rate)`
+            // — the class draws, the network draws and one draw's job it ran in expectation, at the
+            // rate then — and its panel the share the snapshot derived from the verification compute
+            // against the producer's. The rest is never named, as under Decision 6. A claim without
+            // a snapshot (the floor, a claim accepted below the fence) is priced exactly as before.
+            let economics = self.state.claim_economics.get(&id).copied();
+            let escrow = match economics {
+                Some(snapshot) => snapshot.priced_reward(claim.escrowed_reward),
+                None if self.extras.work_priced_reward_active => self.work_priced_escrow(claim),
+                None => claim.escrowed_reward,
+            };
             let slice = self.model_buyback_at_final(&id, claim, escrow);
             let reward = escrow - slice;
             // **ADR-0124 Decisions 1 and 2: the panel's share.** A claim whose panel holds a duty
@@ -9089,7 +9220,15 @@ impl<'a> TransitionBuilder<'a> {
             match self.state.panel_duties.get(&id).map(|row| row.seats.clone()) {
                 Some(duties) => {
                     let credited: Vec<PalwBondKeyV2> = duties.iter().filter(|(_, at)| **at != 0).map(|(seat, _)| *seat).collect();
-                    let split = crate::palw_panel_economy_v1::palw_panel_split_v1(reward, duties.len(), credited.len());
+                    let pool_permille = economics
+                        .map(|snapshot| snapshot.panel_share_permille)
+                        .unwrap_or(crate::palw_panel_economy_v1::PALW_PANEL_POOL_PERMILLE_V1 as u16);
+                    let split = crate::palw_panel_economy_v1::palw_panel_split_permille_v1(
+                        reward,
+                        pool_permille,
+                        duties.len(),
+                        credited.len(),
+                    );
                     if split.producer > 0 {
                         self.write_payout(id, Some(PalwPayoutV2 { payload: payout_payload, amount: split.producer }));
                     }
@@ -9113,6 +9252,8 @@ impl<'a> TransitionBuilder<'a> {
                 }
             }
         }
+        // ADR-0132 Upgrade C: the snapshot leaves with the claim — it was read above, once.
+        self.write_claim_economics(id, None);
         // ADR-0124 Decision 3: the seats leave duty with their exposure — before the phase write
         // below drops the row this reads.
         self.release_seat_duties(&id)?;
@@ -9140,6 +9281,8 @@ impl<'a> TransitionBuilder<'a> {
         if matches!(reason, PalwVoidReasonV2::CourtFraud | PalwVoidReasonV2::ProducerWithholding) {
             self.note_model_probe(claim, false);
         }
+        // ADR-0132 Upgrade C: a voided claim is paid nothing, so its snapshot leaves with it.
+        self.write_claim_economics(id, None);
         // ADR-0088 Decision 4: a voided claim is subtracted where it was counted.
         self.uncount_claim_usage(&id, claim);
         // ADR-0124 Decision 3: every seat on duty leaves it with its exposure, whatever voided the
@@ -9779,6 +9922,8 @@ pub fn apply_palw_transition_v7(
             // ADR-0126: this block carried the attempt, so the carve resolved at its own DAA is the
             // attempt block's. Read before the &mut borrow of `builder`.
             let escrow_carve = builder.extras.escrow_carve;
+            // ADR-0132 Upgrade C: this block's own `bits`, the lottery its own forward faced.
+            let carrying_bits = builder.extras.economic_payout.map(|fold| fold.block_bits).unwrap_or(0);
             apply_attempt(
                 &mut builder,
                 ctx,
@@ -9790,6 +9935,7 @@ pub fn apply_palw_transition_v7(
                     escrow_subsidy: ctx.subsidy,
                     escrow_carve,
                     execution_key: own_execution_key,
+                    carrying_bits,
                 },
             )?;
             // ADR-0130: the attempt was admitted, so this chain block is the open span's seed anchor
@@ -9857,6 +10003,7 @@ pub fn apply_palw_transition_v7(
                                     // ADR-0126: resolved at the MERGED block's DAA, never this block's.
                                     escrow_carve: merged.escrow_carve,
                                     execution_key: merged.execution_key,
+                                    carrying_bits: merged.bits,
                                 },
                             ) {
                                 Ok(()) => None,
@@ -14145,6 +14292,10 @@ pub struct PalwTransitionExtrasV1 {
     /// ADR-0135: `Some` where `Params::palw_model_registry` is active at the block — the globals,
     /// the span clock and the genesis classes' work; `None` leaves the fold byte-identical.
     pub model_registry: Option<crate::palw_model_registry_v1::PalwModelRegistryFoldV1>,
+    /// ADR-0132 Upgrade C: `Some` where `Params::palw_economic_payout` is active at the block — the
+    /// rate, the panel-share constants, the cap ceiling and this block's `bits`; `None` leaves the
+    /// fold byte-identical.
+    pub economic_payout: Option<crate::palw_economic_payout_v1::PalwEconomicPayoutFoldV1>,
 }
 
 impl PalwTransitionExtrasV1 {
@@ -15124,6 +15275,10 @@ fn apply_attempt(
     };
     builder.reserve_for_claim(&claim)?;
     builder.write_claim(claim_id, Some(claim));
+    // ADR-0132 Upgrade C: the claim snapshots its economics at acceptance (proposal B) — the
+    // registry's work for its class, the class target and the carrying block's network draw — so
+    // its `Final` is priced on what was true when it was accepted. Never for the liveness floor.
+    builder.snapshot_claim_economics(claim_id, &attempt.class_id, origin.carrying_bits);
     // ADR-0088 Decision 4: the claim is paid work on the version whose root it named.
     builder.note_claim_usage(claim_id, &attempt.class_id, attempt.artifact_root, attempt.pwu, true, ctx.daa_score);
     let deadline = ctx.daa_score.checked_add(builder.params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))?;
@@ -15352,6 +15507,7 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         }
         PalwDeltaEntryV2::ModelLifecycle { key, old, new } => swap_write!(state.model_lifecycles, key, old, new),
         PalwDeltaEntryV2::SeatReadiness { key, old, new } => swap_write!(state.seat_readiness, key, old, new),
+        PalwDeltaEntryV2::ClaimEconomics { key, old, new } => swap_write!(state.claim_economics, key, old, new),
     }
     Ok(())
 }
@@ -15566,6 +15722,8 @@ pub struct PalwStateCarriageV2 {
     pub round_seed_anchor: Option<crate::palw_execution_lane_v1::PalwExecSeedAnchorV1>,
     pub model_lifecycles: BTreeMap<Hash64, crate::palw_model_registry_v1::PalwModelLifecycleRowV1>,
     pub seat_readiness: BTreeMap<(PalwBondKeyV2, Hash64), crate::palw_model_registry_v1::PalwSeatReadinessRowV1>,
+    /// ADR-0132 Upgrade C. A fourteenth tagged tail (`0xAB`), encoded only when non-empty.
+    pub claim_economics: BTreeMap<Hash64, crate::palw_economic_payout_v1::PalwClaimEconomicsV1>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -15636,6 +15794,8 @@ const PALW_CARRIAGE_ROUND_EQUIVOCATIONS_TAIL_V1: u8 = 0xA8;
 const PALW_CARRIAGE_ROUND_SCHEDULER_TAIL_V1: u8 = 0xA9;
 /// ADR-0135: the registry's lifecycle rows and seat readiness proofs, once either exists.
 const PALW_CARRIAGE_MODEL_REGISTRY_TAIL_V1: u8 = 0xAA;
+/// ADR-0132 Upgrade C: the claims' economics snapshots, once any exists.
+const PALW_CARRIAGE_CLAIM_ECONOMICS_TAIL_V1: u8 = 0xAB;
 
 impl borsh::BorshSerialize for PalwStateCarriageV2 {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
@@ -15742,6 +15902,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             self.model_lifecycles.serialize(writer)?;
             self.seat_readiness.serialize(writer)?;
         }
+        if !self.claim_economics.is_empty() {
+            PALW_CARRIAGE_CLAIM_ECONOMICS_TAIL_V1.serialize(writer)?;
+            self.claim_economics.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -15799,7 +15963,9 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut round_seed_anchor = None;
         let mut model_lifecycles = BTreeMap::new();
         let mut seat_readiness = BTreeMap::new();
+        let mut claim_economics = BTreeMap::new();
         let mut seen_model_registry = false;
+        let mut seen_claim_economics = false;
         let mut seen_round_scheduler = false;
         loop {
             let mut tail = [0u8; 1];
@@ -15869,6 +16035,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     model_lifecycles = BTreeMap::deserialize_reader(reader)?;
                     seat_readiness = BTreeMap::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_CLAIM_ECONOMICS_TAIL_V1 if !seen_claim_economics => {
+                    seen_claim_economics = true;
+                    claim_economics = BTreeMap::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_SHARDS_TAIL_V1 if !seen_shards && !seen_held && !seen_demands && !seen_class_ladders => {
                     seen_shards = true;
                     class_shard_plans = BTreeMap::deserialize_reader(reader)?;
@@ -15935,6 +16105,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             round_seed_anchor,
             model_lifecycles,
             seat_readiness,
+            claim_economics,
         })
     }
 }
@@ -15987,6 +16158,7 @@ impl PalwStateCarriageV2 {
             round_seed_anchor: state.round_seed_anchor,
             model_lifecycles: state.model_lifecycles.clone(),
             seat_readiness: state.seat_readiness.clone(),
+            claim_economics: state.claim_economics.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -16087,6 +16259,7 @@ impl PalwStateCarriageV2 {
             round_seed_anchor: self.round_seed_anchor,
             model_lifecycles: self.model_lifecycles,
             seat_readiness: self.seat_readiness,
+            claim_economics: self.claim_economics,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -23549,6 +23722,7 @@ pub(crate) mod tests {
             execution_key: Hash64::default(),
             subsidy: 0,
             escrow_carve: None,
+            bits: 0,
         }];
         let (with_skip, delta_with, skips) =
             apply_palw_transition_v4(&s1, &p, None, &ctx(2, 101, 2), &[], PalwBlockWorkV3::None, &merged)
@@ -23578,6 +23752,7 @@ pub(crate) mod tests {
             execution_key: Hash64::default(),
             subsidy: 0,
             escrow_carve: None,
+            bits: 0,
         }];
         let (s2, _, skips) = apply_palw_transition_v4(&s1, &p, None, &ctx(2, 101, 2), &[], PalwBlockWorkV3::None, &merged)
             .expect("the accepting block stands");
@@ -23624,6 +23799,7 @@ pub(crate) mod tests {
                 execution_key: shared,
                 subsidy: 0,
                 escrow_carve: None,
+                bits: 0,
             },
             PalwMergedWorkV1 {
                 carrying_block: h64(0xB2),
@@ -23631,6 +23807,7 @@ pub(crate) mod tests {
                 execution_key: shared,
                 subsidy: 0,
                 escrow_carve: None,
+                bits: 0,
             },
         ];
 
@@ -23710,6 +23887,7 @@ pub(crate) mod tests {
             execution_key: Hash64::default(),
             subsidy: MB_SUBSIDY,
             escrow_carve: None,
+            bits: 0,
         }];
         let carve = p.worker_carve(MB_SUBSIDY);
         assert!(carve > 0, "62 % of 50 G sompi is a real carve");
@@ -23826,6 +24004,7 @@ pub(crate) mod tests {
                 execution_key: Hash64::default(),
                 subsidy: T11_SUBSIDY,
                 escrow_carve,
+                bits: 0,
             }]
         };
         for (record, extras, expected, why) in [
@@ -25923,6 +26102,7 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::RoundSeedAnchor { .. } => "round_seed_anchor",
                     PalwDeltaEntryV2::ModelLifecycle { .. } => "model_lifecycle",
                     PalwDeltaEntryV2::SeatReadiness { .. } => "seat_readiness",
+                    PalwDeltaEntryV2::ClaimEconomics { .. } => "claim_economics",
                 });
             }
         }
@@ -25976,6 +26156,8 @@ pub(crate) mod tests {
             // ADR-0135, appended last.
             (51, PalwDeltaEntryV2::ModelLifecycle { key, old: None, new: None }),
             (52, PalwDeltaEntryV2::SeatReadiness { key: (bond_key(1), key), old: None, new: None }),
+            // ADR-0132 Upgrade C, appended last.
+            (53, PalwDeltaEntryV2::ClaimEconomics { key, old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -26513,6 +26695,8 @@ pub(crate) mod tests {
             // ADR-0135: rooted in their own guarded block.
             model_lifecycles: _,
             seat_readiness: _,
+            // ADR-0132 Upgrade C: rooted in its own guarded block.
+            claim_economics: _,
             safe_weight: _,
             retired_safe_weight: _,
             bounded_immature: _,
@@ -32167,6 +32351,7 @@ pub(crate) mod tests {
                 model_seed_v2_active: false,
                 evm_actions: actions,
                 model_registry: None,
+                economic_payout: None,
                 court_responder_coverage_active: false,
                 fp_da_pins_active: false,
                 shard_court_ladder: None,
@@ -32390,6 +32575,7 @@ pub(crate) mod tests {
                 model_seed_v2_active: false,
                 evm_actions: vec![buy(0, 1, class, MSK, 0)],
                 model_registry: None,
+                economic_payout: None,
                 court_responder_coverage_active: false,
                 fp_da_pins_active: false,
                 shard_court_ladder: None,

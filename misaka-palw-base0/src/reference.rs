@@ -101,17 +101,17 @@ fn read_layer(blob: &[u8], index: &SafetensorsIndex, cfg: &RefConfigV1, li: usiz
     let r = |name: String, want: Vec<usize>| read_bf16_tensor(blob, index, &name, &want);
     let mut layer = LayerRef {
         in_ln: r(at("input_layernorm.weight"), vec![d])?,
-        wq: r(at("self_attn.q_proj.weight"), vec![d, d])?,
+        wq: (r(at("self_attn.q_proj.weight"), vec![d, d])?).into(),
         bq: r(at("self_attn.q_proj.bias"), vec![d])?,
-        wk: r(at("self_attn.k_proj.weight"), vec![kv, d])?,
+        wk: (r(at("self_attn.k_proj.weight"), vec![kv, d])?).into(),
         bk: r(at("self_attn.k_proj.bias"), vec![kv])?,
-        wv: r(at("self_attn.v_proj.weight"), vec![kv, d])?,
+        wv: (r(at("self_attn.v_proj.weight"), vec![kv, d])?).into(),
         bv: r(at("self_attn.v_proj.bias"), vec![kv])?,
-        wo: r(at("self_attn.o_proj.weight"), vec![d, d])?,
+        wo: (r(at("self_attn.o_proj.weight"), vec![d, d])?).into(),
         post_ln: r(at("post_attention_layernorm.weight"), vec![d])?,
-        w_gate: r(at("mlp.gate_proj.weight"), vec![cfg.d_ff, d])?,
-        w_up: r(at("mlp.up_proj.weight"), vec![cfg.d_ff, d])?,
-        w_down: r(at("mlp.down_proj.weight"), vec![d, cfg.d_ff])?,
+        w_gate: (r(at("mlp.gate_proj.weight"), vec![cfg.d_ff, d])?).into(),
+        w_up: (r(at("mlp.up_proj.weight"), vec![cfg.d_ff, d])?).into(),
+        w_down: (r(at("mlp.down_proj.weight"), vec![d, cfg.d_ff])?).into(),
     };
     if let Some(levels) = fake_weight_levels() {
         fake_quant_rows(&mut layer.wq, d, levels);

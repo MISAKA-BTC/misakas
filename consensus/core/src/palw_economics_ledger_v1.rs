@@ -14,13 +14,12 @@
 //! 10⁹ MAC-equivalents), and `avg_*` fields are integer means.
 
 use crate::palw_economic_compute_v1::{palw_attempted_compute_q32_per_claim_v1, palw_gap_permille_v1, palw_priced_reward_u128_v1};
-use crate::palw_panel_economy_v1::palw_panel_split_v1;
 use crate::palw_state_v2::{PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwClaimSourceV2, PalwVoidReasonV2};
 use crate::{BlockHash, Hash64};
 use borsh::{BorshDeserialize, BorshSerialize};
 
 /// The row layout. A recorder that finds another version drops its rows and starts over.
-pub const PALW_ECONOMICS_LEDGER_VERSION_V1: u32 = 1;
+pub const PALW_ECONOMICS_LEDGER_VERSION_V1: u32 = 2;
 
 /// Rates are sompi per 10⁹ MAC-equivalents.
 pub const PALW_LEDGER_RATE_SCALE_V1: u128 = 1_000_000_000;
@@ -45,6 +44,9 @@ pub struct PalwClaimLedgerObservationV1 {
     /// (bound past `palw_panel_economy`, until `Final`).
     pub seats: u16,
     pub credited_seats: u16,
+    /// ADR-0132 Upgrade C: the economics the claim snapshotted at acceptance, while it is live and
+    /// the payout fence wrote one.
+    pub economics: Option<crate::palw_economic_payout_v1::PalwClaimEconomicsV1>,
 }
 
 /// Every attempt-lane claim in the state, as the ledger reads it. Free-prompt claims are the
@@ -82,6 +84,7 @@ pub fn palw_claim_ledger_observations_v1(state: &PalwChainStateV2) -> Vec<PalwCl
                 void_reason,
                 seats,
                 credited_seats,
+                economics: state.claim_economics_of(id).copied(),
             }
         })
         .collect()
@@ -132,6 +135,12 @@ pub struct PalwClaimLedgerRowV1 {
     /// A claim that holds no escrow was paid its carve at acceptance (a merged block below the deep
     /// fence, ADR-0058 B-1) — nothing is named at its `Final`.
     pub paid_at_acceptance: bool,
+    /// ADR-0132 Upgrade C: the claim snapshotted its economics at acceptance (the payout fence was
+    /// active there); its `Final` is then priced at `rate` with the panel at `share`, and the three
+    /// first-sight facts above are the snapshot's own.
+    pub economic_snapshotted: bool,
+    pub economic_rate_sompi_per_giga: u64,
+    pub economic_panel_share_permille: u16,
 }
 
 impl kaspa_utils::mem_size::MemSizeEstimator for PalwClaimLedgerRowV1 {}
@@ -156,6 +165,17 @@ pub struct PalwLedgerPayoutRuleV1 {
     pub unit_leaves: u64,
     /// `palw_panel_economy` active when the panel bound: a duty row exists and the split applies.
     pub panel_economy: bool,
+    /// ADR-0132 Upgrade C: the claim snapshotted its economics — priced `min(escrow, attempted ×
+    /// rate)` with the panel at the snapshot's share, in place of the work price and the fifth.
+    pub economic: Option<PalwLedgerEconomicRuleV1>,
+}
+
+/// The rate rule a snapshotted claim's `Final` applies (ADR-0132 Upgrade C).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwLedgerEconomicRuleV1 {
+    pub attempted_ccu: u128,
+    pub rate_sompi_per_giga: u64,
+    pub panel_share_permille: u16,
 }
 
 /// What a `Final` named.
@@ -179,14 +199,18 @@ impl PalwLedgerPayoutV1 {
 /// not modelled: no line on testnet-11 has a pair, and where one does the slice is a fraction of the
 /// producer's share, not of the emission.
 pub fn palw_ledger_payout_v1(escrow_sompi: u64, rule: PalwLedgerPayoutRuleV1, seats: u16, credited: u16) -> PalwLedgerPayoutV1 {
-    let reward = if rule.work_priced {
-        palw_priced_reward_u128_v1(escrow_sompi, rule.leaves as u128, rule.unit_leaves as u128)
-    } else {
-        escrow_sompi
+    let reward = match rule.economic {
+        Some(economic) => palw_rate_priced_reward_v1(escrow_sompi, economic.attempted_ccu, economic.rate_sompi_per_giga as u128),
+        None if rule.work_priced => palw_priced_reward_u128_v1(escrow_sompi, rule.leaves as u128, rule.unit_leaves as u128),
+        None => escrow_sompi,
     };
     let burned_sompi = escrow_sompi - reward;
     if rule.panel_economy && seats > 0 {
-        let split = palw_panel_split_v1(reward, seats as usize, credited as usize);
+        let pool_permille = rule
+            .economic
+            .map(|economic| economic.panel_share_permille)
+            .unwrap_or(crate::palw_panel_economy_v1::PALW_PANEL_POOL_PERMILLE_V1 as u16);
+        let split = crate::palw_panel_economy_v1::palw_panel_split_permille_v1(reward, pool_permille, seats as usize, credited as usize);
         PalwLedgerPayoutV1 { producer_sompi: split.producer, panel_sompi: split.paid, reserve_sompi: split.reserve, burned_sompi }
     } else {
         PalwLedgerPayoutV1 { producer_sompi: reward, panel_sompi: 0, reserve_sompi: 0, burned_sompi }
@@ -218,9 +242,14 @@ pub fn palw_ledger_merge_v1(
             accepted_block: obs.accepted_block,
             escrow_sompi: obs.escrow_sompi,
             pwu: obs.pwu,
-            expected_attempts_q32: facts.expected_attempts_q32,
-            network_expected_attempts_q32: facts.network_expected_attempts_q32,
-            draw_compute: facts.draw_compute,
+            // ADR-0132 Upgrade C: where the chain snapshotted the claim's economics, the row keeps
+            // the chain's numbers, not the recorder's reading of the class now.
+            expected_attempts_q32: obs.economics.map(|e| e.expected_attempts_q32).unwrap_or(facts.expected_attempts_q32),
+            network_expected_attempts_q32: obs
+                .economics
+                .map(|e| e.network_expected_attempts_q32)
+                .unwrap_or(facts.network_expected_attempts_q32),
+            draw_compute: obs.economics.map(|e| e.draw_ccu).unwrap_or(facts.draw_compute),
             leaves: facts.leaves,
             first_seen_daa: seen_daa,
             last_seen_daa: seen_daa,
@@ -237,8 +266,23 @@ pub fn palw_ledger_merge_v1(
             reserve_sompi: 0,
             burned_sompi: 0,
             paid_at_acceptance: obs.escrow_sompi == 0,
+            economic_snapshotted: obs.economics.is_some(),
+            economic_rate_sompi_per_giga: obs.economics.map(|e| e.rate_sompi_per_giga).unwrap_or(0),
+            economic_panel_share_permille: obs.economics.map(|e| e.panel_share_permille).unwrap_or(0),
         },
     };
+    // A snapshot seen later than the first sight (a recorder that started after the acceptance)
+    // still names the chain's numbers.
+    if !row.economic_snapshotted
+        && let Some(economics) = obs.economics
+    {
+        row.economic_snapshotted = true;
+        row.economic_rate_sompi_per_giga = economics.rate_sompi_per_giga;
+        row.economic_panel_share_permille = economics.panel_share_permille;
+        row.expected_attempts_q32 = economics.expected_attempts_q32;
+        row.network_expected_attempts_q32 = economics.network_expected_attempts_q32;
+        row.draw_compute = economics.draw_ccu;
+    }
     row.last_seen_daa = row.last_seen_daa.max(seen_daa);
     if row.bound_daa.is_none() {
         row.bound_daa = obs.bound_daa;
@@ -262,7 +306,17 @@ pub fn palw_ledger_merge_v1(
     {
         row.final_daa = Some(final_daa);
         if row.escrow_sompi > 0 {
-            let paid = palw_ledger_payout_v1(row.escrow_sompi, rule_at_final(final_daa), row.seats, row.credited_seats);
+            let mut rule = rule_at_final(final_daa);
+            // ADR-0132 Upgrade C: a snapshotted claim's `Final` is priced by its snapshot — the
+            // fold's rule — whatever the fences say at the `Final`'s height.
+            if row.economic_snapshotted {
+                rule.economic = Some(PalwLedgerEconomicRuleV1 {
+                    attempted_ccu: palw_ledger_row_attempted_compute_v1(&row),
+                    rate_sompi_per_giga: row.economic_rate_sompi_per_giga,
+                    panel_share_permille: row.economic_panel_share_permille,
+                });
+            }
+            let paid = palw_ledger_payout_v1(row.escrow_sompi, rule, row.seats, row.credited_seats);
             row.producer_paid_sompi = paid.producer_sompi;
             row.panel_paid_sompi = paid.panel_sompi;
             row.reserve_sompi = paid.reserve_sompi;
@@ -500,6 +554,7 @@ mod tests {
             void_reason: None,
             seats: 0,
             credited_seats: 0,
+            economics: None,
         }
     }
     fn dense_facts(net_bits: u32) -> PalwLedgerClassFactsV1 {
@@ -519,10 +574,10 @@ mod tests {
         }
     }
     fn rule_pre() -> PalwLedgerPayoutRuleV1 {
-        PalwLedgerPayoutRuleV1 { work_priced: false, leaves: 0, unit_leaves: 0, panel_economy: false }
+        PalwLedgerPayoutRuleV1 { work_priced: false, leaves: 0, unit_leaves: 0, panel_economy: false, economic: None }
     }
     fn rule_6001(leaves: u64) -> PalwLedgerPayoutRuleV1 {
-        PalwLedgerPayoutRuleV1 { work_priced: true, leaves, unit_leaves: UNIT_27B, panel_economy: true }
+        PalwLedgerPayoutRuleV1 { work_priced: true, leaves, unit_leaves: UNIT_27B, panel_economy: true, economic: None }
     }
 
     /// A window of `n` claims for one class: `finals` reach `Final` (bound at +20, licensed at

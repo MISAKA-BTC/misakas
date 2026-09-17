@@ -21,7 +21,7 @@ use std::sync::Arc;
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
 use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
 use kaspa_hashes::Hash64;
-use misaka_palw_base0::artifact::{Base0ArtifactV1, decode_artifact_file_v1};
+use misaka_palw_base0::artifact::{Base0ArtifactV1, decode_artifact_file_mapped_v1, decode_artifact_file_v1};
 use misaka_palw_base0::classes::{ArtifactSourceV1, CanonicalClassV1, canonical_classes_v1, resolve_class_v1};
 
 use crate::lineage::{PalwClassEntryV1, PalwLoadedArtifactV1, PalwModelLineageV1};
@@ -146,10 +146,20 @@ impl PalwModelLineageV1 for DenseLineageV1 {
         true
     }
 
-    // An owned container: the whole file is read, and the residency policy has nothing to decide.
+    // **Mapped, not read.** The container's int8 slabs point into a read-only mapping of the file,
+    // so every process on the host that holds the same artifact shares its pages through the page
+    // cache and keeps only its own scratch (measured before this: 1.8 GiB anonymous per seat at
+    // rest, seven seats into a 12 GiB host's OOM killer). The residency policy has nothing to
+    // decide: a dense replay touches every weight, and the kernel's page cache is the cache. Where
+    // the platform cannot map (not POSIX), the file is read whole as before — a private copy.
     fn load(&self, path: &Path, _residency: crate::lineage::PalwWeightResidencyV1) -> Result<PalwLoadedArtifactV1, String> {
-        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let artifact = decode_artifact_file_v1(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        let artifact = match misaka_palw_base0::mmap::ReadOnlyMap::open(path) {
+            Ok(map) => decode_artifact_file_mapped_v1(Arc::new(map)).map_err(|e| format!("{}: {e}", path.display()))?,
+            Err(_) => {
+                let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+                decode_artifact_file_v1(&bytes).map_err(|e| format!("{}: {e}", path.display()))?
+            }
+        };
         Ok(holding_from_artifact(Arc::new(artifact), Some(path.to_path_buf())))
     }
 

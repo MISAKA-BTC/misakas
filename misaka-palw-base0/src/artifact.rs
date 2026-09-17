@@ -258,18 +258,83 @@ impl Base0ShapeV1 {
 }
 
 /// One transformer block's weights, row-major `[out][in]` `i8`.
+/// **A slab of int8 weights that may live in a read-only file mapping** — shared by every process
+/// on the host through the kernel's page cache — or in this process's own memory. It derefs to
+/// `[i8]`, so every reader keeps its slice; only the loader decides where the bytes live.
+///
+/// Why: an artifact read into a `Vec` is a private copy per process. Seven seats on one host held
+/// seven copies of the same 1.7 GiB file (measured: 1.8 GiB anonymous per node at rest, 2.7 GiB
+/// under replay, and a 12 GiB host into the OOM killer). Mapped, the file's pages are counted
+/// once for the host and each process keeps only its own scratch.
+#[derive(Clone)]
+pub enum Int8SlabV1 {
+    Owned(std::sync::Arc<[i8]>),
+    Mapped { map: std::sync::Arc<crate::mmap::ReadOnlyMap>, offset: usize, len: usize },
+}
+
+impl Int8SlabV1 {
+    pub fn as_slice(&self) -> &[i8] {
+        match self {
+            Int8SlabV1::Owned(v) => v,
+            Int8SlabV1::Mapped { map, offset, len } => {
+                let bytes = &map.as_slice()[*offset..*offset + *len];
+                // `i8` and `u8` share size, alignment and validity; the mapping is read-only.
+                unsafe { std::slice::from_raw_parts(bytes.as_ptr() as *const i8, bytes.len()) }
+            }
+        }
+    }
+
+    /// Whether the bytes are the file's own pages (shared on the host) rather than a private copy.
+    pub fn is_mapped(&self) -> bool {
+        matches!(self, Int8SlabV1::Mapped { .. })
+    }
+}
+
+impl std::ops::Deref for Int8SlabV1 {
+    type Target = [i8];
+    fn deref(&self) -> &[i8] {
+        self.as_slice()
+    }
+}
+
+impl From<Vec<i8>> for Int8SlabV1 {
+    fn from(v: Vec<i8>) -> Self {
+        Int8SlabV1::Owned(std::sync::Arc::from(v))
+    }
+}
+
+impl From<&[i8]> for Int8SlabV1 {
+    fn from(v: &[i8]) -> Self {
+        Int8SlabV1::Owned(std::sync::Arc::from(v))
+    }
+}
+
+impl PartialEq for Int8SlabV1 {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+
+impl Eq for Int8SlabV1 {}
+
+impl std::fmt::Debug for Int8SlabV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Int8SlabV1({} bytes, {})", self.len(), if self.is_mapped() { "mapped" } else { "owned" })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Base0LayerWeightsV1 {
-    pub wq: Vec<i8>,
-    pub wk: Vec<i8>,
-    pub wv: Vec<i8>,
-    pub wo: Vec<i8>,
+    pub wq: Int8SlabV1,
+    pub wk: Int8SlabV1,
+    pub wv: Int8SlabV1,
+    pub wo: Int8SlabV1,
     /// SwiGLU gate projection, `[d_ff][d_model]`.
-    pub w_gate: Vec<i8>,
+    pub w_gate: Int8SlabV1,
     /// SwiGLU up projection, `[d_ff][d_model]`.
-    pub w_up: Vec<i8>,
+    pub w_up: Int8SlabV1,
     /// Down projection, `[d_model][d_ff]`.
-    pub w_down: Vec<i8>,
+    pub w_down: Int8SlabV1,
     /// Requantisation applied after each projection, in the order the engine applies them:
     /// q, k, v, o, gate, up, down. Index 4 is unused — the gate path amplifies through
     /// [`Base0LayerWeightsV1::ffn_gate_scale`] instead of narrowing — and is kept so the array
@@ -300,10 +365,10 @@ pub struct Base0LayerWeightsV1 {
 pub struct Base0ArtifactV1 {
     pub shape: Base0ShapeV1,
     /// `[vocab][d_model]`.
-    pub embed: Vec<i8>,
+    pub embed: Int8SlabV1,
     /// `[vocab][d_model]`, the output projection. Kept separate from `embed` rather than tied,
     /// so an artifact that ties them does so by carrying equal bytes and the digest still sees it.
-    pub unembed: Vec<i8>,
+    pub unembed: Int8SlabV1,
     pub layers: Vec<Base0LayerWeightsV1>,
     pub rope: RopeTableV1,
     /// **What the token ids MEAN (condition 6's tokenizer/vocab commitment).**
@@ -421,12 +486,13 @@ impl Base0ArtifactV1 {
     /// engine indexes with arithmetic that would otherwise read a plausible wrong row.
     pub fn from_parts(
         shape: Base0ShapeV1,
-        embed: Vec<i8>,
-        unembed: Vec<i8>,
+        embed: impl Into<Int8SlabV1>,
+        unembed: impl Into<Int8SlabV1>,
         layers: Vec<Base0LayerWeightsV1>,
         norm_requant: QuantParams,
         residual_requant: QuantParams,
     ) -> Result<Self, ArtifactError> {
+        let (embed, unembed): (Int8SlabV1, Int8SlabV1) = (embed.into(), unembed.into());
         shape.validate()?;
         let d = shape.d_model();
         let checks: [(&'static str, usize, usize); 2] =
@@ -499,13 +565,13 @@ impl Base0ArtifactV1 {
         let shift_for = |n: usize| -> u8 { 5 + ((usize::BITS - 1 - n.leading_zeros()) / 2) as u8 };
         let layers = (0..shape.n_layers)
             .map(|_| Base0LayerWeightsV1 {
-                wq: fill(d * d),
-                wk: fill(shape.kv_dim() * d),
-                wv: fill(shape.kv_dim() * d),
-                wo: fill(d * d),
-                w_gate: fill(shape.d_ff * d),
-                w_up: fill(shape.d_ff * d),
-                w_down: fill(d * shape.d_ff),
+                wq: (fill(d * d)).into(),
+                wk: (fill(shape.kv_dim() * d)).into(),
+                wv: (fill(shape.kv_dim() * d)).into(),
+                wo: (fill(d * d)).into(),
+                w_gate: (fill(shape.d_ff * d)).into(),
+                w_up: (fill(shape.d_ff * d)).into(),
+                w_down: (fill(d * shape.d_ff)).into(),
                 // Tensor-wide: a derived artifact has no biases to carry, so there is nothing
                 // per-channel to say. A converted one supplies `Some`.
                 qkv_channel_requant: None,
@@ -992,6 +1058,9 @@ impl W {
 struct R<'a> {
     b: &'a [u8],
     i: usize,
+    /// The mapping `b` is a view of, when the file is mapped: int8 slabs then point INTO it
+    /// instead of being copied out of it.
+    map: Option<&'a std::sync::Arc<crate::mmap::ReadOnlyMap>>,
 }
 impl<'a> R<'a> {
     fn take(&mut self, n: usize, what: &'static str) -> Result<&'a [u8], ArtifactFileError> {
@@ -1027,9 +1096,14 @@ impl<'a> R<'a> {
     fn usize(&mut self, w: &'static str) -> Result<usize, ArtifactFileError> {
         usize::try_from(self.u64(w)?).map_err(|_| ArtifactFileError::Length(w))
     }
-    fn i8s(&mut self, w: &'static str) -> Result<Vec<i8>, ArtifactFileError> {
+    fn i8s(&mut self, w: &'static str) -> Result<Int8SlabV1, ArtifactFileError> {
         let n = self.usize(w)?;
-        Ok(self.take(n, w)?.iter().map(|b| *b as i8).collect())
+        let offset = self.i;
+        let bytes = self.take(n, w)?;
+        Ok(match self.map {
+            Some(map) => Int8SlabV1::Mapped { map: map.clone(), offset, len: n },
+            None => Int8SlabV1::Owned(bytes.iter().map(|b| *b as i8).collect()),
+        })
     }
     fn i32s(&mut self, w: &'static str) -> Result<Vec<i32>, ArtifactFileError> {
         let n = self.usize(w)?;
@@ -1158,7 +1232,23 @@ pub fn encode_artifact_file_v1(a: &Base0ArtifactV1) -> Vec<u8> {
 /// refused, because the digest is the class id the chain registered — accepting a mismatch would
 /// run one class under another's name.
 pub fn decode_artifact_file_v1(bytes: &[u8]) -> Result<Base0ArtifactV1, ArtifactFileError> {
-    let mut r = R { b: bytes, i: 0 };
+    decode_artifact_file_from_v1(bytes, None)
+}
+
+/// [`decode_artifact_file_v1`] over a read-only mapping of the file: the int8 slabs point into the
+/// mapping (shared on the host) and only the small tables are copied. The digest is still
+/// recomputed over the whole file — one pass, which is what pages it in.
+pub fn decode_artifact_file_mapped_v1(
+    map: std::sync::Arc<crate::mmap::ReadOnlyMap>,
+) -> Result<Base0ArtifactV1, ArtifactFileError> {
+    decode_artifact_file_from_v1(map.as_slice(), Some(&map))
+}
+
+fn decode_artifact_file_from_v1(
+    bytes: &[u8],
+    map: Option<&std::sync::Arc<crate::mmap::ReadOnlyMap>>,
+) -> Result<Base0ArtifactV1, ArtifactFileError> {
+    let mut r = R { b: bytes, i: 0, map };
     let magic = r.take(8, "magic")?;
     let has_a16_section = if magic == BASE0_ARTIFACT_FILE_MAGIC.as_slice() {
         true
@@ -1215,13 +1305,13 @@ pub fn decode_artifact_file_v1(bytes: &[u8]) -> Result<Base0ArtifactV1, Artifact
         let attn_logit_scale = r.scale("attn scale")?;
         let ffn_gate_scale = r.scale("gate scale")?;
         layers.push(Base0LayerWeightsV1 {
-            wq,
-            wk,
-            wv,
-            wo,
-            w_gate,
-            w_up,
-            w_down,
+            wq: wq.into(),
+            wk: wk.into(),
+            wv: wv.into(),
+            wo: wo.into(),
+            w_gate: w_gate.into(),
+            w_up: w_up.into(),
+            w_down: w_down.into(),
             requant,
             qkv_channel_requant,
             attn_logit_scale,
@@ -1830,10 +1920,10 @@ mod tests {
             v
         };
         let mut a = base.clone();
-        a.embed = flip(&a.embed);
+        a.embed = flip(&a.embed).into();
         assert_ne!(id, a.artifact_digest(), "embed is outside the digest");
         let mut a = base.clone();
-        a.unembed = flip(&a.unembed);
+        a.unembed = flip(&a.unembed).into();
         assert_ne!(id, a.artifact_digest(), "unembed is outside the digest");
         for li in 0..base.shape.n_layers {
             for (name, pick) in [("wq", 0usize), ("wk", 1), ("wv", 2), ("wo", 3), ("w_gate", 4), ("w_up", 5), ("w_down", 6)] {

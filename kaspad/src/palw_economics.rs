@@ -233,6 +233,8 @@ impl PalwEconomicsRecorderV1 {
                 leaves,
                 unit_leaves,
                 panel_economy: params.palw_panel_economy_active_at(final_daa),
+                // ADR-0132 Upgrade C: the merge fills this from the row's own snapshot.
+                economic: None,
             });
             if previous != Some(&row) {
                 changed.push(row);
@@ -351,6 +353,9 @@ mod tests {
             reserve_sompi: 0,
             burned_sompi: 0,
             paid_at_acceptance: false,
+            economic_snapshotted: false,
+            economic_rate_sompi_per_giga: 0,
+            economic_panel_share_permille: 0,
         }
     }
 

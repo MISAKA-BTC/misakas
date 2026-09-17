@@ -414,6 +414,9 @@ pub struct VirtualStateProcessor {
     /// ADR-0135: `Params::palw_model_registry` — past it the fold walks every class's lifecycle,
     /// seats judge by possession proofs, and the class shares come from admission.
     pub(super) palw_model_registry: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0132 Upgrade C: `Params::palw_economic_payout` — past it a claim snapshots its economics
+    /// at acceptance and is paid at the rate; the registry reads the cap ceiling.
+    pub(super) palw_economic_payout: Option<kaspa_consensus_core::config::params::PalwEconomicPayoutV1>,
     /// ADR-0135: the genesis classes' work, derived once from the bundle's registrations (every
     /// node derives the same map from `Params`), handed to the fold where the registry is active.
     pub(super) palw_genesis_model_works:
@@ -694,6 +697,8 @@ pub(super) enum PalwMergedOwnedWorkV1 {
         kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2,
         u64,
         Option<kaspa_consensus_core::palw_reward_v2::PalwRewardParamsV2>,
+        /// ADR-0132 Upgrade C: the block's own compact `bits`, for its claim's snapshot.
+        u32,
     ),
     Spend(BlockHash, kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3),
 }
@@ -894,6 +899,7 @@ impl VirtualStateProcessor {
             palw_panel_exposure_floor: params.palw_panel_exposure_floor_fence(),
             palw_compute_overlay_retired: params.palw_compute_overlay_retired,
             palw_model_registry: params.palw_model_registry,
+            palw_economic_payout: params.palw_economic_payout_fence(),
             palw_genesis_model_works: match &params.palw_consensus_mode {
                 kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
                     kaspa_consensus_core::palw_model_registry_v1::palw_genesis_model_works_v1(&bundle.genesis_objects)
@@ -1840,7 +1846,7 @@ impl VirtualStateProcessor {
                                 let merged_refs: Vec<kaspa_consensus_core::palw_state_v2::PalwMergedWorkV1<'_>> = merged_owned
                                     .iter()
                                     .map(|owned| match owned {
-                                        PalwMergedOwnedWorkV1::Attempt(blue, envelope, subsidy, carve) => {
+                                        PalwMergedOwnedWorkV1::Attempt(blue, envelope, subsidy, carve, bits) => {
                                             kaspa_consensus_core::palw_state_v2::PalwMergedWorkV1 {
                                                 carrying_block: *blue,
                                                 work: kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::Attempt(envelope),
@@ -1862,6 +1868,7 @@ impl VirtualStateProcessor {
                                                 // ADR-0126: the carve resolved at the merged block's DAA, read from the
                                                 // same record for the same reason.
                                                 escrow_carve: *carve,
+                                                bits: *bits,
                                             }
                                         }
                                         PalwMergedOwnedWorkV1::Spend(blue, envelope) => {
@@ -1877,6 +1884,7 @@ impl VirtualStateProcessor {
                                                 // subsidy and the carve are unread.
                                                 subsidy: 0,
                                                 escrow_carve: None,
+                                                bits: 0,
                                             }
                                         }
                                     })
@@ -1910,7 +1918,7 @@ impl VirtualStateProcessor {
                                     // ADR-0088 Decision 11 and ADR-0089 Decision 6, at this BLOCK's
                                     // DAA: the fences, and the actions this block's EVM step queued.
                                     &{
-                                        let mut extras = self.palw_transition_extras_at(point.daa_score);
+                                        let mut extras = self.palw_transition_extras_for(&point);
                                         if let Some(staged) = evm_staged.as_ref() {
                                             extras.evm_actions = staged.result.market_actions.clone();
                                         }
@@ -4329,7 +4337,7 @@ impl VirtualStateProcessor {
         }
         let (works, _skips) = self.palw_v2_merged_works(ghostdag_data, state, state_params, mergeset_non_daa, point);
         for work in &works {
-            if let PalwMergedOwnedWorkV1::Attempt(blue, _, subsidy, carve) = work {
+            if let PalwMergedOwnedWorkV1::Attempt(blue, _, subsidy, carve, _) = work {
                 withheld.insert(*blue, state_params.worker_carve_at(*subsidy, *carve));
             }
         }
@@ -4685,7 +4693,7 @@ impl VirtualStateProcessor {
             self.palw_capability_bound_at(point.daa_score),
             self.palw_uncertified_weightless_at(point.daa_score),
             self.palw_da_court_at(point.daa_score),
-            &self.palw_transition_extras_at(point.daa_score),
+            &self.palw_transition_extras_for(point),
         )
         .map(|(state, _delta)| state)
     }
@@ -4798,7 +4806,7 @@ impl VirtualStateProcessor {
                 self.palw_capability_bound_at(point.daa_score),
                 self.palw_uncertified_weightless_at(point.daa_score),
                 self.palw_da_court_at(point.daa_score),
-                &self.palw_transition_extras_at(point.daa_score),
+                &self.palw_transition_extras_for(point),
             ) {
                 Ok(base) => base,
                 // The pre-object steps are what the real fold runs before any object; if they error
@@ -5177,7 +5185,7 @@ impl VirtualStateProcessor {
                             self.palw_capability_bound_at(point.daa_score),
                             self.palw_uncertified_weightless_at(point.daa_score),
                             self.palw_da_court_at(point.daa_score),
-                            &self.palw_transition_extras_at(point.daa_score),
+                            &self.palw_transition_extras_for(point),
                         )
                     } else {
                         // The pre-audit path: rehearse the object through a whole-block transition
@@ -5193,7 +5201,7 @@ impl VirtualStateProcessor {
                             self.palw_capability_bound_at(point.daa_score),
                             self.palw_uncertified_weightless_at(point.daa_score),
                             self.palw_da_court_at(point.daa_score),
-                            &self.palw_transition_extras_at(point.daa_score),
+                            &self.palw_transition_extras_for(point),
                         )
                         .map(|(next, _)| next)
                     };
@@ -7398,7 +7406,13 @@ impl VirtualStateProcessor {
 
     /// The extras every production fold and every acceptance rehearsal carry (ADR-0088 D11,
     /// ADR-0089 D9). The action list is the EVM step's and is added by the caller that has it.
-    fn palw_transition_extras_at(&self, daa_score: u64) -> kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+    /// The fold's extras for the block `point` names — every fence resolved at its DAA score, and
+    /// (ADR-0132 Upgrade C) its own `bits`, read from its header where the store holds one.
+    fn palw_transition_extras_for(
+        &self,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+    ) -> kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+        let daa_score = point.daa_score;
         kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
             model_lines_active: self.palw_model_lines_active_at(daa_score),
             model_benefits_active: self.palw_model_benefits_active_at(daa_score),
@@ -7440,6 +7454,10 @@ impl VirtualStateProcessor {
             // gives: it decides how much of the subsidy a claim holds.
             escrow_carve: self.palw_escrow_carve_at(daa_score, daa_score),
             model_registry: self.palw_model_registry_fold_at(daa_score),
+            // ADR-0132 Upgrade C: the rate, the shares, the ceiling and this block's `bits`. The
+            // same reading at every site that folds this block, because it is derived from the
+            // point and the header store alone.
+            economic_payout: self.palw_economic_payout_fold_for(point),
             evm_actions: Vec::new(),
             // ADR-0093 Decision 8: which form of move 1 opens a phase. Written explicitly for the
             // reason the lines above give — an unwritten default here would refuse, or admit, a
@@ -7732,6 +7750,18 @@ impl VirtualStateProcessor {
                 &globals,
             ),
         })
+    }
+
+    /// ADR-0132 Upgrade C: the fold's payout input at the block `point` names — the fence's numbers
+    /// where it is active at the block's DAA, with the block's compact `bits` (`0` where the store
+    /// holds no header for it, which prices the network draw at one).
+    pub(super) fn palw_economic_payout_fold_for(
+        &self,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+    ) -> Option<kaspa_consensus_core::palw_economic_payout_v1::PalwEconomicPayoutFoldV1> {
+        let payout = self.palw_economic_payout.filter(|payout| payout.activation.is_active(point.daa_score))?;
+        let bits = self.headers_store.get_header(point.block).map(|header| header.bits).unwrap_or(0);
+        Some(payout.fold_v1(bits))
     }
 
     /// ADR-0135: the draw's readiness policy at an anchor — a seat judges a non-base class only
@@ -8120,6 +8150,8 @@ impl VirtualStateProcessor {
                     // ADR-0126: and the carve, at the lower of the attempt block's score and the
                     // accepting block's — the block whose coinbase pays and withholds it.
                     self.palw_escrow_carve_at(header.daa_score, point.daa_score),
+                    // ADR-0132 Upgrade C: the merged block's own `bits`, the lottery its forward faced.
+                    header.bits,
                 )),
                 Ok(None) => match self.palw_v2_check_receipt_spend(&header, state, state_params, point) {
                     Ok(Some(envelope)) => works.push(PalwMergedOwnedWorkV1::Spend(*blue, envelope)),
@@ -11431,7 +11463,7 @@ impl VirtualStateProcessor {
                 // The genesis block opens no court session, so this cannot change what it folds —
                 // and "cannot change anything" is exactly how a fence resolved differently in one
                 // face survives until the block where it matters.
-                &self.palw_transition_extras_at(self.genesis.daa_score),
+                &self.palw_transition_extras_for(&point),
             )
             .expect("the bundle's genesis registrations must apply — `validate_palw_v2` ran them at construction");
             let mut batch = WriteBatch::default();

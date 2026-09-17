@@ -151,6 +151,14 @@ impl ReadOnlyMap {
     /// Tell the kernel the access pattern is random, which is what a router that picks eight of
     /// two hundred and fifty-six experts produces. Advisory: a failure is not an error, because
     /// the mapping is correct either way.
+    /// The whole mapping as a slice. Empty for an empty file. The pages behind it are the kernel's
+    /// page cache: every process that maps the same file shares them, which is the point of
+    /// mapping an artifact instead of reading it (an artifact read into a `Vec` is a private copy
+    /// per process, and seven seats on one host were seven copies).
+    pub fn as_slice(&self) -> &[u8] {
+        if self.len == 0 { &[] } else { unsafe { std::slice::from_raw_parts(self.ptr, self.len) } }
+    }
+
     pub fn advise_random(&self) {
         if self.len == 0 {
             return;

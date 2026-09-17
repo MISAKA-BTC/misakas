@@ -520,6 +520,39 @@ pub struct PalwOverlayCarveV1 {
     pub worker_carve_permille: u16,
 }
 
+/// **ADR-0132 Protocol Upgrade C: the economic payout** — a `Final` claim of a model class is paid
+/// `min(escrow, attempted × rate)` on the economics it snapshotted at acceptance, its panel the share
+/// derived from verification against producer compute, and a class over the cap-utilization ceiling
+/// is not activatable (see `palw_economic_payout_v1`). Every number is the network's, the same for
+/// every class; `Some`-only in the fingerprint; `None` on every shipped preset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwEconomicPayoutV1 {
+    pub activation: ForkActivation,
+    /// Sompi paid per 10⁹ MAC-equivalents of attempted compute. Non-zero.
+    pub rate_sompi_per_giga: u64,
+    /// `α` in permille: how a unit of verification compute is valued against the producer's.
+    pub panel_share_alpha_permille: u32,
+    /// The panel share's bounds, in permille of the priced reward: `min ≤ max ≤ 1000`.
+    pub panel_share_min_permille: u16,
+    pub panel_share_max_permille: u16,
+    /// A class whose uncapped reward exceeds this fraction of the escrow is not activatable. `≤ 1000`.
+    pub cap_utilization_max_permille: u16,
+}
+
+impl PalwEconomicPayoutV1 {
+    /// The fold's reading of this fence at a block whose compact `bits` are `block_bits`.
+    pub fn fold_v1(&self, block_bits: u32) -> crate::palw_economic_payout_v1::PalwEconomicPayoutFoldV1 {
+        crate::palw_economic_payout_v1::PalwEconomicPayoutFoldV1 {
+            rate_sompi_per_giga: self.rate_sompi_per_giga,
+            panel_share_alpha_permille: self.panel_share_alpha_permille,
+            panel_share_min_permille: self.panel_share_min_permille,
+            panel_share_max_permille: self.panel_share_max_permille,
+            cap_utilization_max_permille: self.cap_utilization_max_permille,
+            block_bits,
+        }
+    }
+}
+
 impl PalwOverlayCarveV1 {
     /// `split` with this fence's validator share. The worker base is the primary and is
     /// documentary — [`crate::dns_finality::split_block_subsidy`] hands it the remainder whatever
@@ -1134,6 +1167,12 @@ pub struct Params {
     /// preset. Hashed `Some`-only; the fork-id gate names it. Needs `palw_panel_economy` and
     /// `palw_execution_lane` at or below its height (`validate_palw_v2`).
     pub palw_model_registry: Option<ForkActivation>,
+
+    /// **ADR-0132 Protocol Upgrade C: the economic payout** — see [`PalwEconomicPayoutV1`]. Resolved
+    /// at each block's own DAA score: a claim accepted past it snapshots its economics and is paid
+    /// at the rate; the registry reads the cap ceiling at its boundaries. `None` on every shipped
+    /// preset.
+    pub palw_economic_payout: Option<PalwEconomicPayoutV1>,
     /// **ADR-0077 Phase B — the court prices the checkpoint, not the context.** `None` on every
     /// shipped preset, so the behaviour is byte-identical to not having the field at all.
     ///
@@ -2479,6 +2518,34 @@ impl Params {
                 ));
             }
         }
+        // ADR-0132 Upgrade C: the payout prices a claim on the registry's work for its class and
+        // splits it with a panel the economy put on duty, so both must be in force by its height;
+        // and its numbers must be a price (a zero rate pays nothing to everyone) and shares.
+        if let Some(payout) = self.palw_economic_payout
+            && payout.activation != ForkActivation::never()
+        {
+            let registry_below = self
+                .palw_model_registry
+                .is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= payout.activation.daa_score());
+            let economy_below = self
+                .palw_panel_economy
+                .is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= payout.activation.daa_score());
+            if !registry_below || !economy_below {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_economic_payout is armed without palw_model_registry and palw_panel_economy armed at or below its height: \
+                     the payout prices the registry's work and splits with the economy's panel",
+                ));
+            }
+            if payout.rate_sompi_per_giga == 0
+                || payout.panel_share_min_permille > payout.panel_share_max_permille
+                || payout.panel_share_max_permille > 1_000
+                || payout.cap_utilization_max_permille > 1_000
+            {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_economic_payout carries a zero rate, an inverted or over-unity panel share, or an over-unity cap ceiling",
+                ));
+            }
+        }
         // **ADR-0128 Decision 8: the BFT gate's refusals**, ahead of the V2 gate below because the
         // overlay is any lineage's. Every `Some` is judged, a `never()` height included: the values
         // reach the fingerprint whether or not the height does.
@@ -3776,6 +3843,9 @@ impl Params {
         if self.palw_model_registry == Some(ForkActivation::never()) {
             self.palw_model_registry = None;
         }
+        if self.palw_economic_payout.is_some_and(|payout| payout.activation == ForkActivation::never()) {
+            self.palw_economic_payout = None;
+        }
         // ADR-0077 Phase B, a bare fence: same collapse, same reason.
         if self.palw_context_ladder == Some(ForkActivation::never()) {
             self.palw_context_ladder = None;
@@ -4072,6 +4142,20 @@ impl Params {
     /// ADR-0135: whether the permissionless model registry governs classes at `daa_score`.
     pub fn palw_model_registry_at(&self, daa_score: u64) -> bool {
         self.palw_model_registry.is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// ADR-0132 Upgrade C: the economic payout where it can mean something — a `ConsensusV2`
+    /// network (the claims it prices are V2 claims). What the processors store.
+    pub fn palw_economic_payout_fence(&self) -> Option<PalwEconomicPayoutV1> {
+        match (&self.palw_consensus_mode, self.palw_economic_payout) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(payout)) => Some(payout),
+            _ => None,
+        }
+    }
+
+    /// ADR-0132 Upgrade C: the payout in force at `daa_score`, or `None`.
+    pub fn palw_economic_payout_at(&self, daa_score: u64) -> Option<PalwEconomicPayoutV1> {
+        self.palw_economic_payout_fence().filter(|payout| payout.activation.is_active(daa_score))
     }
 
     /// The capability-bound fence **with the mode condition already folded in** — `Some` only on a
@@ -4682,6 +4766,7 @@ impl Params {
             palw_capability_bound,
             palw_compute_overlay_retired,
             palw_model_registry,
+            palw_economic_payout,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -4751,6 +4836,7 @@ impl Params {
             ("palw_capability_bound", *palw_capability_bound),
             ("palw_compute_overlay_retired", *palw_compute_overlay_retired),
             ("palw_model_registry", *palw_model_registry),
+            ("palw_economic_payout", palw_economic_payout.map(|payout| payout.activation)),
             ("palw_context_ladder", *palw_context_ladder),
             ("palw_panel_da", *palw_panel_da),
             ("palw_certification_rent", *palw_certification_rent),
@@ -5232,6 +5318,7 @@ impl Params {
             palw_capability_bound,
             palw_compute_overlay_retired,
             palw_model_registry,
+            palw_economic_payout,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -5435,6 +5522,10 @@ impl Params {
                 absent = u64::MAX;
                 visit(&mut absent);
             }
+        }
+        // ADR-0132 Upgrade C: the height only, Some-only — the rate and the shares are values beside it.
+        if let Some(payout) = palw_economic_payout.as_mut() {
+            fork(&mut payout.activation, visit);
         }
         // ADR-0062. A pure fence with no payload beside it, so visiting it is safe — the identity
         // visitor normalises a height, and a height is all this field carries.
@@ -5893,6 +5984,7 @@ impl Params {
             palw_capability_bound,
             palw_compute_overlay_retired,
             palw_model_registry,
+            palw_economic_payout,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -6091,6 +6183,17 @@ impl Params {
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0135, Some-only for the same reason.
+        // ADR-0132 Upgrade C: the height, and beside it the five numbers it fixes. Some-only, like
+        // its siblings; reported here and never gated, for the SA-4 reason the carve's numbers are.
+        if let Some(payout) = palw_economic_payout {
+            h.write(b"palw_economic_payout");
+            h.write(payout.activation.daa_score().to_le_bytes());
+            h.write(payout.rate_sompi_per_giga.to_le_bytes());
+            h.write(payout.panel_share_alpha_permille.to_le_bytes());
+            h.write(payout.panel_share_min_permille.to_le_bytes());
+            h.write(payout.panel_share_max_permille.to_le_bytes());
+            h.write(payout.cap_utilization_max_permille.to_le_bytes());
+        }
         if let Some(activation) = palw_model_registry {
             h.write(b"palw_model_registry");
             h.write(activation.daa_score().to_le_bytes());
@@ -6738,6 +6841,7 @@ impl Params {
             palw_capability_bound: self.palw_capability_bound,
             palw_compute_overlay_retired: self.palw_compute_overlay_retired,
             palw_model_registry: self.palw_model_registry,
+            palw_economic_payout: self.palw_economic_payout,
             palw_context_ladder: self.palw_context_ladder,
             palw_panel_da: self.palw_panel_da,
             palw_certification_rent: self.palw_certification_rent,
@@ -7674,6 +7778,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_capability_bound: None,
     palw_compute_overlay_retired: None,
     palw_model_registry: None,
+    palw_economic_payout: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -7863,6 +7968,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_capability_bound: None,
     palw_compute_overlay_retired: None,
     palw_model_registry: None,
+    palw_economic_payout: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -8034,6 +8140,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_capability_bound: None,
     palw_compute_overlay_retired: None,
     palw_model_registry: None,
+    palw_economic_payout: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -12563,6 +12670,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_capability_bound: None,
     palw_compute_overlay_retired: None,
     palw_model_registry: None,
+    palw_economic_payout: None,
     // **ARMED on devnet at genesis** — the testnet-11 5f genesis card §1's set, rehearsed here
     // first. Without the ladder the registered class cannot price a wide row, and the ladder is
     // the whole point of registering the graph-v5 512 row (`misaka_palw_base0::classes`).

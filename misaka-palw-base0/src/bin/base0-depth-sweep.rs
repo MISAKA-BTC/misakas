@@ -151,8 +151,8 @@ fn run(artifact: &Base0ArtifactV1) -> (Vec<i32>, ForwardProbe) {
 /// arithmetic identical. Anything that still moves in the output moved because of that layer.
 fn ablate(artifact: &Base0ArtifactV1, victim: usize) -> Base0ArtifactV1 {
     let mut a = artifact.clone();
-    a.layers[victim].wo.iter_mut().for_each(|w| *w = 0);
-    a.layers[victim].w_down.iter_mut().for_each(|w| *w = 0);
+    a.layers[victim].wo = vec![0i8; a.layers[victim].wo.len()].into();
+    a.layers[victim].w_down = vec![0i8; a.layers[victim].w_down.len()].into();
     a
 }
 

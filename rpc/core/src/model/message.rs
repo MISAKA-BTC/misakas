@@ -5236,6 +5236,9 @@ pub struct RpcPalwModelLifecycle {
     pub inflight_claims: u32,
     pub utilization_permille: u32,
     pub admission_milli: u64,
+    /// ADR-0132 Upgrade C: the class's cap utilization at the last boundary, in permille of the
+    /// escrow; `0` where nothing priced it.
+    pub cap_utilization_permille: u32,
     pub ready_seats_now: u32,
     pub inflight_now: u32,
     pub share_permille: u16,
@@ -5269,6 +5272,7 @@ impl Serializer for RpcPalwModelLifecycle {
         store!(u32, &self.inflight_claims, writer)?;
         store!(u32, &self.utilization_permille, writer)?;
         store!(u64, &self.admission_milli, writer)?;
+        store!(u32, &self.cap_utilization_permille, writer)?;
         store!(u32, &self.ready_seats_now, writer)?;
         store!(u32, &self.inflight_now, writer)?;
         store!(u16, &self.share_permille, writer)?;
@@ -5304,6 +5308,7 @@ impl Deserializer for RpcPalwModelLifecycle {
             inflight_claims: load!(u32, reader)?,
             utilization_permille: load!(u32, reader)?,
             admission_milli: load!(u64, reader)?,
+            cap_utilization_permille: load!(u32, reader)?,
             ready_seats_now: load!(u32, reader)?,
             inflight_now: load!(u32, reader)?,
             share_permille: load!(u16, reader)?,
