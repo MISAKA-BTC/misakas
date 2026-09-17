@@ -617,11 +617,62 @@ pub struct PalwAttemptWorkV1 {
     pub ticket_bucket_log2: u32,
 }
 
+/// **ADR-0128 Decision 8: DNS validators vote BFT by bonded stake, and that vote decides the stake
+/// reorg gate.**
+///
+/// Past `activation` (resolved at the sink's DAA score) an epoch's canonical lagged anchor is
+/// DNS-final when bonded stake above two thirds of the epoch's counted set has both attested it
+/// and precommitted it under a lock the chain can check, the precommit binding the counted set
+/// through its snapshot commitment ([`crate::dns_bft_v1`]). `DnsState.last_dns_confirmed_anchor`
+/// then follows the newest DNS-final anchor instead of the StakeScore depth rule, and
+/// `dns_reorg_outcome` refuses every candidate that abandons it — before the PALW comparator,
+/// for a reorg and an extension alike — until it goes stale under `dns_veto_ttl_daa_score`.
+/// Below the fence, and on every network that leaves it `None` (every shipped preset), nothing
+/// changes.
+///
+/// The three numbers beside the height are the counted set's leak (ADR-0128 Decision 3), which
+/// is this fence's own and replaces [`PalwInactivityLeakV1`]:
+///
+/// * a bond is leaked at an epoch whose anchor is at DAA `a` when `a − last ≥ t_leak_daa`, `last`
+///   being the anchor DAA of its youngest attestation accepted at or below `a` with an anchor at
+///   least `reentry_final_depth_daa` below `a`, or — with no such attestation in the evidence
+///   window — the later of the bond's activation and the window's lower edge;
+/// * nothing is leaked where leaking would leave fewer than `min_retained_validators` distinct
+///   validators.
+///
+/// **Values beside a height, so the height is visited and the values are not** — the
+/// [`PalwBondMaturityV1::window_daa`] rule for the D1 reason: the identity visitor normalises
+/// what it visits, and a normalised duration would let two builds leaking at different silences
+/// fingerprint identically. All four reach `consensus_params_id` and `consensus_schedule_id`
+/// Some-only; a scheduled height collapses out of the identity with its values.
+///
+/// Refused at start by [`Params::validate_palw_v2`] where the network runs no overlay, where
+/// `t_leak_daa` is zero, where the re-entry depth is not below it, where the floor is under four
+/// validators, and where the pruning depth is shorter than the walk a sink's evaluation reads
+/// ([`crate::dns_bft_v1::dns_bft_walk_blue_score_v1`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DnsBftGateV1 {
+    /// When the BFT confirmation and the gate that follows it come into force, judged at the
+    /// sink's DAA score (and, in the gate, at the incumbent sink's).
+    pub activation: ForkActivation,
+    /// How long a bond must have been silent before the counted set leaks it, in DAA. testnet-11's
+    /// planned value is 5,040: seven days at the chain's 120-second cadence.
+    pub t_leak_daa: u64,
+    /// How deep an attestation's anchor must be buried below an epoch's anchor before it counts as
+    /// that epoch's re-entry evidence, in DAA (ADR-0066 SA-2's hysteresis). Strictly below
+    /// `t_leak_daa`, or nobody who leaks ever comes back.
+    pub reentry_final_depth_daa: u64,
+    /// The fewest distinct validators leaking may leave in a counted set; below it nothing is
+    /// leaked and finality waits. At least four — the smallest set in which one fault is tolerated.
+    pub min_retained_validators: u32,
+}
+
 /// **ADR-0066 Decision 4's parameter: the inactivity leak, and how long silence must last.**
 ///
 /// **The leak is removed.** No code reads this value any more and [`Params::validate_palw_v2`]
 /// refuses a network that sets it; the type stays because `Params::palw_inactivity_leak` does
-/// (hashed only when set, so an unset preset's ids are what they were).
+/// (hashed only when set, so an unset preset's ids are what they were). The leak that exists is
+/// [`DnsBftGateV1`]'s (ADR-0128), which reads an evidence window every synced node holds.
 ///
 /// It replaced `DnsParams.inactivity_leak_daa`, which could not be armed at all. That field is
 /// inside `DnsParams`, which `consensus_params_id` hashes as one raw borsh blob while
@@ -974,10 +1025,18 @@ pub struct Params {
     /// handshake says anything is wrong.
     pub palw_attempt_activation: Option<ForkActivation>,
 
+    /// **ADR-0128 — the DNS validators' BFT vote by bonded stake, and the stake reorg gate that
+    /// follows it.** `None` on every shipped preset.
+    ///
+    /// A top-level fence with three values beside it; see [`DnsBftGateV1`]. Read through
+    /// [`Self::dns_bft_gate_fence`], which answers only where the network runs an overlay.
+    pub dns_bft_gate: Option<DnsBftGateV1>,
+
     /// **ADR-0066 Decision 4 — the inactivity leak.** `None` on every shipped preset.
     ///
     /// **Removed:** nothing reads it, and [`Self::validate_palw_v2`] refuses `Some`. The field
-    /// stays for its Some-only hashing into the consensus fingerprints.
+    /// stays for its Some-only hashing into the consensus fingerprints; the leak lives in
+    /// [`Self::dns_bft_gate`] (ADR-0128).
     ///
     /// Replaces `DnsParams.inactivity_leak_daa`, which is retired at `u64::MAX` permanently rather
     /// than reused: see [`PalwInactivityLeakV1`] for why editing that constant could not be an
@@ -2350,15 +2409,55 @@ impl Params {
                  claim is a move of a dissection the network does not run (ADR-0093 Decision 8)",
             ));
         }
-        // **The inactivity leak is removed** (ADR-0060 Decision 4 / ADR-0066 Decision 4): nothing
-        // builds a leak view or excludes a silent validator from a quorum denominator any more.
+        // **ADR-0128 Decision 8: the BFT gate's refusals**, ahead of the V2 gate below because the
+        // overlay is any lineage's. Every `Some` is judged, a `never()` height included: the values
+        // reach the fingerprint whether or not the height does.
+        if let Some(gate) = self.dns_bft_gate {
+            let Some(dns) = self.dns_params.as_ref() else {
+                return Err(PalwModeV2Error::Invalid(
+                    "dns_bft_gate is set on a network that runs no DNS overlay: there are no validators to vote and no \
+                     stake reorg gate to decide (ADR-0128 Decision 8)",
+                ));
+            };
+            if gate.t_leak_daa == 0 {
+                return Err(PalwModeV2Error::Invalid(
+                    "dns_bft_gate.t_leak_daa is zero: every bond would be leaked the moment its epoch closed, and no counted \
+                     set could keep a validator (ADR-0128 Decision 8)",
+                ));
+            }
+            if gate.reentry_final_depth_daa >= gate.t_leak_daa {
+                return Err(PalwModeV2Error::Invalid(
+                    "dns_bft_gate.reentry_final_depth_daa is not below t_leak_daa: the re-entry window is empty, so a leaked \
+                     validator could never be counted again (ADR-0066 SA-2, ADR-0128 Decision 8)",
+                ));
+            }
+            if gate.min_retained_validators < crate::dns_bft_v1::DNS_BFT_MIN_RETAINED_VALIDATORS_FLOOR_V1 {
+                return Err(PalwModeV2Error::Invalid(
+                    "dns_bft_gate.min_retained_validators is below four: a counted set smaller than that tolerates no fault, so \
+                     leaking down to it would let a handful of validators finalize for the network (ADR-0128 Decision 3)",
+                ));
+            }
+            let walk = crate::dns_bft_v1::dns_bft_walk_blue_score_v1(&gate, dns);
+            if walk.is_none_or(|walk| self.blockrate.pruning_depth < walk) {
+                return Err(PalwModeV2Error::InvalidOwned(format!(
+                    "dns_bft_gate reads a walk of {} blue score from the sink (the StakeScore window plus the leak's evidence \
+                     window) and the pruning depth is {}: the pruning point would pass the evidence a sink's leak reads, and \
+                     two synced nodes could count different sets (ADR-0128 Decision 3, SA-3)",
+                    walk.map_or_else(|| "more than u64::MAX".to_owned(), |w| w.to_string()),
+                    self.blockrate.pruning_depth
+                )));
+            }
+        }
+        // **The inactivity leak is removed** (ADR-0060 Decision 4 / ADR-0066 Decision 4): the
+        // window-bound leak this field armed is gone, and the leak that exists is `dns_bft_gate`'s
+        // (ADR-0128 Decision 3), with its own numbers and its own evidence window.
         // `palw_inactivity_leak` stays a field — hashed only when set, so an unset preset's ids are
         // what they were — and a network that sets it is refused before a peer is dialed. Checked
         // ahead of the V2 gate below, because the leak was a DNS-overlay rule any lineage could set.
         if self.palw_inactivity_leak.is_some() {
             return Err(PalwModeV2Error::Invalid(
-                "the inactivity leak is removed: palw_inactivity_leak must stay unset, because no code excludes a silent \
-                 validator from the quorum denominator",
+                "the inactivity leak is removed: palw_inactivity_leak must stay unset, because no code implements its rule — \
+                 the counted set's leak is dns_bft_gate's (ADR-0128)",
             ));
         }
         // **ADR-0069 Decision 7 is armable AT GENESIS or not at all, and a scheduled height is
@@ -3540,6 +3639,12 @@ impl Params {
         if self.palw_attempt_activation == Some(ForkActivation::never()) {
             self.palw_attempt_activation = None;
         }
+        // ADR-0128: the WHOLE option collapses, the D1 rule for the D1 reason — a present `never()`
+        // would carry the three leak numbers into `consensus_params_id` that an unset build never
+        // writes, and scheduling the gate would partition the fleet at deploy.
+        if self.dns_bft_gate.is_some_and(|g| g.activation == ForkActivation::never()) {
+            self.dns_bft_gate = None;
+        }
         if self.palw_inactivity_leak.is_some_and(|l| l.activation == ForkActivation::never()) {
             self.palw_inactivity_leak = None;
         }
@@ -4347,6 +4452,18 @@ impl Params {
         crate::pow_layer0::PalwAttemptLaneV1::from_fence(self.palw_attempt_activation.map(|fence| fence.is_active(daa_score)))
     }
 
+    /// ADR-0128: the BFT gate, where the network runs an overlay at all — a vote of no validators
+    /// decides nothing. What the processors store.
+    pub fn dns_bft_gate_fence(&self) -> Option<DnsBftGateV1> {
+        self.dns_params.as_ref().and(self.dns_bft_gate)
+    }
+
+    /// ADR-0128: the BFT gate where it is in force at `daa_score` — the sink's, when a sink's
+    /// confirmation is evaluated, and the incumbent sink's, when the reorg gate is.
+    pub fn dns_bft_gate_at(&self, daa_score: u64) -> Option<DnsBftGateV1> {
+        self.dns_bft_gate_fence().filter(|gate| gate.activation.is_active(daa_score))
+    }
+
     /// **Every top-level PALW activation fence, named, in ONE compiler-forced spelling.**
     ///
     /// The destructure below is exhaustive, for [`Self::for_each_fence`]'s reason: a fence added to
@@ -4356,7 +4473,7 @@ impl Params {
     /// which the merge grew four fences without touching either.
     ///
     /// Some-only fences that carry a companion value (`palw_heartbeat`, `palw_attempt_work`,
-    /// `palw_bond_maturity`, `palw_inactivity_leak`, `palw_beacon_fold`) contribute their
+    /// `palw_bond_maturity`, `dns_bft_gate`, `palw_inactivity_leak`, `palw_beacon_fold`) contribute their
     /// `activation` and nothing else: a duration beside a fence is deliberately not a fence, for
     /// the reason `for_each_fence` gives about normalisation.
     ///
@@ -4405,6 +4522,7 @@ impl Params {
             palw_heartbeat,
             palw_attempt_work,
             palw_attempt_activation,
+            dns_bft_gate,
             palw_inactivity_leak,
             palw_beacon_fold,
             palw_capability_bound,
@@ -4470,6 +4588,7 @@ impl Params {
             ("palw_heartbeat", palw_heartbeat.map(|f| f.activation)),
             ("palw_attempt_work", palw_attempt_work.map(|f| f.activation)),
             ("palw_attempt_activation", *palw_attempt_activation),
+            ("dns_bft_gate", dns_bft_gate.map(|f| f.activation)),
             ("palw_inactivity_leak", palw_inactivity_leak.map(|f| f.activation)),
             ("palw_beacon_fold", palw_beacon_fold.map(|f| f.activation)),
             ("palw_capability_bound", *palw_capability_bound),
@@ -4666,6 +4785,17 @@ impl Params {
             h.write(b"palw_attempt_work_price");
             h.write(attempt.work_log2.to_le_bytes());
             h.write(attempt.ticket_bucket_log2.to_le_bytes());
+        }
+        // ADR-0128: NAMED, with its height, because its `for_each_fence` arm is Some-only (the
+        // `palw_certification_rent` reason below); and the three leak numbers beside it, by the SA-4
+        // rule above — two operators scheduling the gate at one height with different silences
+        // leak different validators the moment it fires, and this is where the log can say so.
+        if let Some(gate) = self.dns_bft_gate {
+            h.write(b"dns_bft_gate");
+            h.write(gate.activation.daa_score().to_le_bytes());
+            h.write(gate.t_leak_daa.to_le_bytes());
+            h.write(gate.reentry_final_depth_daa.to_le_bytes());
+            h.write(gate.min_retained_validators.to_le_bytes());
         }
         if let Some(leak) = self.palw_inactivity_leak {
             h.write(b"palw_inactivity_leak_grace");
@@ -4924,6 +5054,7 @@ impl Params {
             palw_heartbeat,
             palw_attempt_work,
             palw_attempt_activation,
+            dns_bft_gate,
             palw_inactivity_leak,
             palw_beacon_fold,
             palw_capability_bound,
@@ -5080,6 +5211,12 @@ impl Params {
                 absent = u64::MAX;
                 visit(&mut absent);
             }
+        }
+        // ADR-0128: the height only, and Some-only — the three leak numbers are values beside it (the
+        // D1 rule), and a `u64::MAX`-for-absence arm would put eight bytes into every preset that
+        // leaves the gate `None`. The schedule id names it, which keeps absence from aliasing.
+        if let Some(gate) = dns_bft_gate.as_mut() {
+            fork(&mut gate.activation, visit);
         }
         match palw_inactivity_leak.as_mut() {
             Some(leak) => fork(&mut leak.activation, visit),
@@ -5553,6 +5690,7 @@ impl Params {
             palw_heartbeat,
             palw_attempt_work,
             palw_attempt_activation,
+            dns_bft_gate,
             palw_inactivity_leak,
             palw_beacon_fold,
             palw_capability_bound,
@@ -5783,6 +5921,16 @@ impl Params {
         if let Some(activation) = palw_attempt_activation {
             h.write(b"palw_attempt_activation");
             h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0128: the height and all three leak numbers, Some-only — they decide which bonds an
+        // epoch counts and therefore which anchors are DNS-final and vetoed, and every shipped
+        // preset leaves the gate `None` and fingerprints byte-identically to a build without it.
+        if let Some(gate) = dns_bft_gate {
+            h.write(b"dns_bft_gate");
+            h.write(gate.activation.daa_score().to_le_bytes());
+            h.write(gate.t_leak_daa.to_le_bytes());
+            h.write(gate.reentry_final_depth_daa.to_le_bytes());
+            h.write(gate.min_retained_validators.to_le_bytes());
         }
         if let Some(leak) = palw_inactivity_leak {
             // The label carries the RULE's semantic version: ADR-0066 SA-2 added the re-entry
@@ -6358,6 +6506,7 @@ impl Params {
             palw_heartbeat: self.palw_heartbeat,
             palw_attempt_work: self.palw_attempt_work,
             palw_attempt_activation: self.palw_attempt_activation,
+            dns_bft_gate: self.dns_bft_gate,
             palw_inactivity_leak: self.palw_inactivity_leak,
             palw_beacon_fold: self.palw_beacon_fold,
             palw_capability_bound: self.palw_capability_bound,
@@ -7290,6 +7439,7 @@ pub const MAINNET_PARAMS: Params = Params {
     // every height on algo-6, exactly as it does today, and arming the fence is the only thing
     // that would change a block.
     palw_attempt_activation: None,
+    dns_bft_gate: None,
     palw_inactivity_leak: None,
     palw_beacon_fold: None,
     palw_capability_bound: None,
@@ -7475,6 +7625,7 @@ pub const TESTNET_PARAMS: Params = Params {
     // every height on algo-6, exactly as it does today, and arming the fence is the only thing
     // that would change a block.
     palw_attempt_activation: None,
+    dns_bft_gate: None,
     palw_inactivity_leak: None,
     palw_beacon_fold: None,
     palw_capability_bound: None,
@@ -7642,6 +7793,7 @@ pub const SIMNET_PARAMS: Params = Params {
     // every height on algo-6, exactly as it does today, and arming the fence is the only thing
     // that would change a block.
     palw_attempt_activation: None,
+    dns_bft_gate: None,
     palw_inactivity_leak: None,
     palw_beacon_fold: None,
     palw_capability_bound: None,
@@ -12076,6 +12228,7 @@ pub const DEVNET_PARAMS: Params = Params {
     // ADR-0072 ships dormant here too: the drill devnet was re-minted onto the execution-priced
     // rule, so it has no pre-ADR-0072 history for a fence to protect.
     palw_attempt_activation: None,
+    dns_bft_gate: None,
     palw_inactivity_leak: None,
     palw_beacon_fold: None,
     palw_capability_bound: None,
@@ -12596,6 +12749,157 @@ mod consensus_params_id_tests {
             }
         }
         assert!(refused >= 3, "no preset carries an overlay, so the refusal was never exercised");
+    }
+
+    /// **ADR-0128 Decision 8: the BFT gate starts only where it can be counted.** On every preset as
+    /// the node materialises it: the shipped gate is `None`; a well-formed gate starts wherever the
+    /// pruning depth holds the walk and is refused, naming the walk, wherever it does not; and each
+    /// malformed number, and a network with no overlay at all, is refused for its own reason.
+    #[test]
+    fn the_bft_gate_refuses_at_startup_what_it_could_not_count() {
+        let gate =
+            |activation| DnsBftGateV1 { activation, t_leak_daa: 5_040, reentry_final_depth_daa: 200, min_retained_validators: 4 };
+        let refused_for = |params: &Params, why: &str, what: &str| {
+            let error = params.validate_palw_v2().expect_err(&format!("{what} must not start"));
+            assert!(error.to_string().contains(why), "{what}: refused for another reason: {error}");
+        };
+        let nets = [MAINNET_PARAMS.net, TESTNET_PARAMS.net, TESTNET11_PARAMS.net, SIMNET_PARAMS.net, DEVNET_PARAMS.net];
+        let mut started = 0usize;
+        for net in nets {
+            let shipped = Params::from(net);
+            shipped.validate_palw_v2().unwrap_or_else(|e| panic!("{net}: the shipped preset starts: {e}"));
+            assert!(shipped.dns_bft_gate.is_none(), "{net}: a shipped preset armed the BFT gate");
+
+            let mut no_overlay = shipped.clone();
+            no_overlay.dns_params = None;
+            no_overlay.dns_bft_gate = Some(gate(ForkActivation::new(9_000_000)));
+            assert!(no_overlay.dns_bft_gate_fence().is_none(), "{net}: answered only where the network runs an overlay");
+            refused_for(&no_overlay, "runs no DNS overlay", &format!("{net}: a gate without an overlay"));
+
+            let Some(dns) = shipped.dns_params.clone() else { continue };
+            let walk = crate::dns_bft_v1::dns_bft_walk_blue_score_v1(&gate(ForkActivation::always()), &dns).expect("fits");
+            assert_eq!(
+                walk,
+                dns.stake_score_window_blue_score
+                    + 5_040
+                    + 200
+                    + dns.attestation_epoch_length_blue_score
+                    + dns.attestation_lag_blue_score
+            );
+            for activation in [ForkActivation::always(), ForkActivation::new(9_000_000), ForkActivation::never()] {
+                let mut armed = shipped.clone();
+                armed.dns_bft_gate = Some(gate(activation));
+                if shipped.blockrate.pruning_depth >= walk {
+                    armed.validate_palw_v2().unwrap_or_else(|e| panic!("{net}: a well-formed gate at {activation:?} starts: {e}"));
+                    assert_eq!(armed.dns_bft_gate_fence(), Some(gate(activation)));
+                    started += 1;
+                } else {
+                    refused_for(&armed, "the pruning point would pass the evidence", &format!("{net}: a walk of {walk}"));
+                }
+                for (why, malformed) in [
+                    ("t_leak_daa is zero", DnsBftGateV1 { t_leak_daa: 0, reentry_final_depth_daa: 0, ..gate(activation) }),
+                    (
+                        "reentry_final_depth_daa is not below t_leak_daa",
+                        DnsBftGateV1 { reentry_final_depth_daa: 5_040, ..gate(activation) },
+                    ),
+                    ("min_retained_validators is below four", DnsBftGateV1 { min_retained_validators: 3, ..gate(activation) }),
+                ] {
+                    let mut armed = shipped.clone();
+                    armed.dns_bft_gate = Some(malformed);
+                    refused_for(&armed, why, &format!("{net}: {malformed:?}"));
+                }
+            }
+            // The pruning-depth refusal is exact at its boundary — on a lineage whose other rules do
+            // not read the depth.
+            if !matches!(shipped.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)) {
+                let mut at_the_walk = shipped.clone();
+                at_the_walk.dns_bft_gate = Some(gate(ForkActivation::new(9_000_000)));
+                at_the_walk.blockrate.pruning_depth = walk;
+                at_the_walk.validate_palw_v2().unwrap_or_else(|e| panic!("{net}: a pruning depth equal to the walk starts: {e}"));
+                let mut one_short = at_the_walk.clone();
+                one_short.blockrate.pruning_depth = walk - 1;
+                refused_for(&one_short, "the pruning point would pass the evidence", &format!("{net}: a pruning depth one short"));
+            }
+        }
+        assert!(started > 0, "no preset could arm a well-formed gate, so its acceptance was never exercised");
+        // testnet-11 with ADR-0128 §5's planned numbers, measured on the preset as it materialises:
+        // its overlay runs at the two-minute cadence (a 30 blue-score StakeScore window, epochs and a
+        // lag of 2), so the walk is 30 + 5,040 + 200 + 2 + 2 = 5,274 against a pruning depth of
+        // 12,002 — inside it. (The ADR's prose quotes 1,500 + 5,440 = 6,940 and 12,000, which
+        // assume 100-blue-score epochs this preset does not run; the refusal reads the preset.)
+        let rc = palw_rc_shipped_params();
+        let rc_walk =
+            crate::dns_bft_v1::dns_bft_walk_blue_score_v1(&gate(ForkActivation::new(7_001)), rc.dns_params.as_ref().unwrap());
+        assert_eq!((rc_walk, rc.blockrate.pruning_depth), (Some(5_274), 12_002), "testnet-11's walk and horizon, measured");
+        let mut armed_rc = rc.clone();
+        armed_rc.dns_bft_gate = Some(gate(ForkActivation::new(7_001)));
+        armed_rc.validate_palw_v2().expect("testnet-11 may schedule the gate with the planned numbers");
+    }
+
+    /// **ADR-0128 Decision 8: the gate is hashed Some-only, and scheduling it is a schedule.** Its
+    /// height and each of its three numbers move `consensus_params_id` and `consensus_schedule_id`;
+    /// none of them moves `consensus_identity_id` while the height has not fired (the whole option
+    /// collapses out of it), and a gate in force from genesis does, because that is a rule about
+    /// block 1. The height is on the schedule the fork id is derived from. Every shipped preset
+    /// leaves the gate `None` and writes nothing, which `shipped_presets_have_pinned_fingerprints`
+    /// pins.
+    #[test]
+    fn the_bft_gate_is_hashed_some_only_and_a_scheduled_gate_stays_a_schedule() {
+        let gate = DnsBftGateV1 {
+            activation: ForkActivation::new(9_000_000),
+            t_leak_daa: 5_040,
+            reentry_final_depth_daa: 200,
+            min_retained_validators: 4,
+        };
+        for (name, base) in
+            [("mainnet", MAINNET_PARAMS), ("testnet-11", palw_rc_shipped_params()), ("devnet", devnet_shipped_params())]
+        {
+            let with = |g: Option<DnsBftGateV1>| {
+                let mut p = base.clone();
+                p.dns_bft_gate = g;
+                p
+            };
+            let unset = with(None);
+            let scheduled = with(Some(gate));
+            for (what, other) in [
+                ("scheduling it", with(None)),
+                ("its height", with(Some(DnsBftGateV1 { activation: ForkActivation::new(9_000_001), ..gate }))),
+                ("t_leak_daa", with(Some(DnsBftGateV1 { t_leak_daa: 5_041, ..gate }))),
+                ("the re-entry depth", with(Some(DnsBftGateV1 { reentry_final_depth_daa: 201, ..gate }))),
+                ("the validator floor", with(Some(DnsBftGateV1 { min_retained_validators: 5, ..gate }))),
+            ] {
+                assert_ne!(
+                    scheduled.consensus_params_id(),
+                    other.consensus_params_id(),
+                    "{name}: {what} must move the printed fingerprint"
+                );
+                assert_ne!(
+                    scheduled.consensus_schedule_id(),
+                    other.consensus_schedule_id(),
+                    "{name}: {what} must move the schedule id"
+                );
+                assert_eq!(
+                    scheduled.consensus_identity_id(),
+                    other.consensus_identity_id(),
+                    "{name}: {what} moved the identity — a gate that has not fired must not partition the fleet at deploy"
+                );
+            }
+            let dormant = with(Some(DnsBftGateV1 { activation: ForkActivation::never(), ..gate }));
+            assert_eq!(dormant.consensus_identity_id(), unset.consensus_identity_id(), "{name}: `never()` is absence to the identity");
+            let at_genesis = with(Some(DnsBftGateV1 { activation: ForkActivation::always(), ..gate }));
+            assert_ne!(
+                at_genesis.consensus_identity_id(),
+                unset.consensus_identity_id(),
+                "{name}: a gate in force from block 1 is a rule"
+            );
+            assert!(scheduled.fence_schedule_v1().contains(&9_000_000), "{name}: the height is on the schedule");
+            assert!(
+                crate::fork_id_v1::fork_id_gate_fences_v1(&scheduled).contains(&9_000_000),
+                "{name}: and named to the fork-id gate"
+            );
+            assert!(scheduled.palw_fences_v1().contains(&("dns_bft_gate", Some(ForkActivation::new(9_000_000)))));
+            assert!(!unset.fence_schedule_v1().contains(&9_000_000));
+        }
     }
 
     /// **The inactivity leak is removed, so a network that sets `palw_inactivity_leak` does not

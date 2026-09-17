@@ -501,8 +501,8 @@ pub trait ConsensusApi: Send + Sync {
     /// MISAKA §5 round 2: the lock this validator is carrying on the selected chain and the epochs
     /// it still owes a precommit for.
     ///
-    /// `None` when the DNS overlay is not configured; `round_active: false` below the VLT weight
-    /// fence, which is where every shipped preset sits.
+    /// `None` when the DNS overlay is not configured; `round_active: false` below
+    /// `Params::dns_bft_gate` (ADR-0128), which is where every shipped preset sits.
     fn get_precommit_duty(&self, _validator_id: Hash64, _bond_outpoint: TransactionOutpoint) -> Option<PrecommitDuty> {
         None
     }

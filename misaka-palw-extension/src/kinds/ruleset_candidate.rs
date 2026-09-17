@@ -44,6 +44,11 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
             companion(&mut params.palw_attempt_work, name, "work_log2 and the nonce budget", at, |f, at| f.activation = at)?
         }
         "palw_attempt_activation" => params.palw_attempt_activation = Some(at),
+        "dns_bft_gate" => {
+            companion(&mut params.dns_bft_gate, name, "t_leak_daa, the re-entry depth and the validator floor", at, |f, at| {
+                f.activation = at
+            })?
+        }
         "palw_inactivity_leak" => {
             companion(&mut params.palw_inactivity_leak, name, "t_leak_daa and the re-entry depth", at, |f, at| f.activation = at)?
         }
