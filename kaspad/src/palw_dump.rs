@@ -58,7 +58,7 @@ impl PalwDumpService {
                 // this class needs, and what nothing printed before.
                 let context = self.ledger.class_context(row.class_id, session.palw_registered_class_carriage_v1(row.class_id));
                 info!(
-                    "[{PALW_DUMP}]   class={} base={} status={} share={} budget={} leaves={} n_ctx={} canonical={}+{} model={} context_source={}",
+                    "[{PALW_DUMP}]   class={} base={} status={} share={} budget={} leaves={} n_ctx={} canonical={}+{} footprint={} model={} context_source={}",
                     row.class_id,
                     row.is_base_class,
                     row.status,
@@ -72,6 +72,7 @@ impl PalwDumpService {
                     context.n_ctx,
                     context.canonical_prefill_tokens,
                     context.canonical_decode_tokens,
+                    context.canonical_footprint_positions,
                     if context.model_id.is_empty() { "-" } else { context.model_id.as_str() },
                     context.source
                 );
