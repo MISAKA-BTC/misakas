@@ -1797,6 +1797,10 @@ mod mockery {
                 escrow_final_sompi: "0".to_string(),
                 ledger: mock(),
                 telemetry: mock(),
+                eligible_seats: mock(),
+                duty_seats_inflight: mock(),
+                seat_exposure_inflight_sompi: "0".to_string(),
+                free_collateral_sompi: "1000000000000".to_string(),
             }
         }
     }

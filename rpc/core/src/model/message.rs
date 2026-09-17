@@ -5044,6 +5044,13 @@ pub struct RpcPalwClassEconomics {
     /// ADR-0132: the node's end-to-end ledger for the class, and what this node itself did for it.
     pub ledger: RpcPalwClassLedgerTotals,
     pub telemetry: RpcPalwClassNodeTelemetry,
+    /// ADR-0133: the panel's capacity facts — `Active` bonds that may judge the class, seats on duty
+    /// over its bound claims, the seat exposure those duties hold and the eligible bonds' free
+    /// collateral (decimal `u128`s).
+    pub eligible_seats: u32,
+    pub duty_seats_inflight: u64,
+    pub seat_exposure_inflight_sompi: String,
+    pub free_collateral_sompi: String,
 }
 
 impl Serializer for RpcPalwClassEconomics {
@@ -5072,6 +5079,10 @@ impl Serializer for RpcPalwClassEconomics {
         store!(String, &self.escrow_final_sompi, writer)?;
         serialize!(RpcPalwClassLedgerTotals, &self.ledger, writer)?;
         serialize!(RpcPalwClassNodeTelemetry, &self.telemetry, writer)?;
+        store!(u32, &self.eligible_seats, writer)?;
+        store!(u64, &self.duty_seats_inflight, writer)?;
+        store!(String, &self.seat_exposure_inflight_sompi, writer)?;
+        store!(String, &self.free_collateral_sompi, writer)?;
         Ok(())
     }
 }
@@ -5103,6 +5114,10 @@ impl Deserializer for RpcPalwClassEconomics {
             escrow_final_sompi: load!(String, reader)?,
             ledger: deserialize!(RpcPalwClassLedgerTotals, reader)?,
             telemetry: deserialize!(RpcPalwClassNodeTelemetry, reader)?,
+            eligible_seats: load!(u32, reader)?,
+            duty_seats_inflight: load!(u64, reader)?,
+            seat_exposure_inflight_sompi: load!(String, reader)?,
+            free_collateral_sompi: load!(String, reader)?,
         })
     }
 }

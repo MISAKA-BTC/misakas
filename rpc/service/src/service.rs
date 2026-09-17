@@ -1762,6 +1762,10 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                         .and_then(|l| l.class_node_telemetry(row.class_id))
                         .map(rpc_palw_class_node_telemetry)
                         .unwrap_or_default(),
+                    eligible_seats: row.eligible_seats,
+                    duty_seats_inflight: row.duty_seats_inflight,
+                    seat_exposure_inflight_sompi: row.seat_exposure_inflight_sompi.to_string(),
+                    free_collateral_sompi: row.free_collateral_sompi.to_string(),
                 }
             })
             .collect();

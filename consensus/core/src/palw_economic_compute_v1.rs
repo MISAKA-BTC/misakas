@@ -690,6 +690,14 @@ pub struct PalwClassCensusV1 {
     /// Σ `escrowed_reward` over every accepted claim, and over the `Final` ones.
     pub escrow_accepted_sompi: u128,
     pub escrow_final_sompi: u128,
+    /// ADR-0133: the panel's capacity facts — `Active` bonds that may judge the class (the draw's
+    /// own rule, capability by declaration), the seats on duty over the class's bound claims, the
+    /// seat exposure those duties hold, and the free collateral the eligible bonds have left after
+    /// every duty and reservation they hold.
+    pub eligible_seats: u32,
+    pub duty_seats_inflight: u64,
+    pub seat_exposure_inflight_sompi: u128,
+    pub free_collateral_sompi: u128,
 }
 
 /// The census of every class, with the DAA the state was read at.
@@ -725,6 +733,37 @@ pub fn palw_class_census_v1(state: &PalwChainStateV2, params: &PalwStateParamsV2
             )
         })
         .collect();
+    // ADR-0133: what every bond holds — its seat exposure over the duty rows, and its producer
+    // reservations over its live claims — for the free collateral of a class's eligible seats.
+    let seat_exposure = crate::palw_panel_economy_v1::palw_seat_exposure_ledger_v1(state);
+    let mut producer_reserved: std::collections::BTreeMap<crate::palw_state_v2::PalwBondKeyV2, u128> =
+        std::collections::BTreeMap::new();
+    for (_, claim) in state.claims_iter() {
+        if !matches!(claim.phase, PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. }) {
+            let held = producer_reserved.entry(claim.bond).or_insert(0);
+            *held = held.saturating_add(claim.reserved);
+        }
+    }
+    for (class_id, row) in rows.iter_mut() {
+        for (key, bond) in state.bonds_iter() {
+            if !matches!(bond.status, crate::palw_state_v2::PalwBondStatusV2::Active)
+                || !crate::palw_state_v2::palw_bond_may_judge_class_v2(bond, class_id)
+            {
+                continue;
+            }
+            row.eligible_seats += 1;
+            let held = seat_exposure.get(key).copied().unwrap_or(0).saturating_add(producer_reserved.get(key).copied().unwrap_or(0));
+            let free = (bond.collateral as u128).saturating_sub(bond.slashed as u128).saturating_sub(held);
+            row.free_collateral_sompi = row.free_collateral_sompi.saturating_add(free);
+        }
+    }
+    for (claim_id, duty) in state.panel_duty_rows_iter() {
+        let Some(claim) = state.claim(claim_id) else { continue };
+        let Some(row) = rows.get_mut(&claim.class_id) else { continue };
+        row.duty_seats_inflight += duty.seats.len() as u64;
+        row.seat_exposure_inflight_sompi =
+            row.seat_exposure_inflight_sompi.saturating_add(duty.seat_exposure.saturating_mul(duty.seats.len() as u128));
+    }
     for (_, claim) in state.claims_iter() {
         if !matches!(claim.source, PalwClaimSourceV2::Attempt) {
             continue;

@@ -2034,6 +2034,10 @@ message RpcPalwClassEconomics {
   string expectedAttemptsQ32 = 21;
   RpcPalwClassLedgerTotals ledger = 22;
   RpcPalwClassNodeTelemetry telemetry = 23;
+  uint32 eligibleSeats = 24;
+  uint64 dutySeatsInflight = 25;
+  string seatExposureInflightSompi = 26;
+  string freeCollateralSompi = 27;
 }
 
 message GetPalwClassEconomicsResponseMessage {

@@ -186,17 +186,17 @@ one operator's loss keeps it under one: `u ≤ (n − s)/n` for `n` eligible sea
 
 | warm p99 | artifact | cold p99 | window spans | prefetch spans | inflight cap | utilization | seats at 70 % (+1, +2) | live |
 |---|---|---|---|---|---|---|---|---|
-| 60 s | 30 GiB | 92 s | 2 | 1 | 46 | 16 % | 5 (6, 7) | yes |
-| 60 s | 100 GiB | 167 s | 2 | 1 | 46 | 16 % | 5 | yes |
-| 60 s | 300 GiB | 382 s | 3 | 2 | 70 | 16 % | 5 | yes |
-| 120 s | 30 / 100 / 300 GiB | 152 / 227 / 442 s | 2 / 2 / 3 | 1 / 1 / 2 | 23 / 23 / 35 | 31 % | 5 (6, 7) | yes |
-| 240 s | 30 / 100 / 300 GiB | 272 / 347 / 562 s | 2 / 2 / 3 | 1 / 1 / 2 | 11 / 11 / 17 | 63 % | 7 (8, 9) | yes, no margin |
-| 480 s | 30 / 100 / 300 GiB | 512 / 587 / 802 s | 3 / 3 / 4 | 1 / 1 / 2 | 8 / 8 / 11 | 126 % | 13 (14, 15) | **no** |
-| 900 s | 30 / 100 / 300 GiB | 932 / 1,007 / 1,222 s | 4 / 5 / 5 | 1 / 1 / 2 | 6 / 7 / 7 | 236 % | 24 (25, 26) | **no** |
+| 60 s | 30 GiB | 92 s | 2 | 1 | 19 | 16 % | 5 (6, 7) | yes |
+| 60 s | 100 GiB | 167 s | 2 | 1 | 19 | 16 % | 5 | yes |
+| 60 s | 300 GiB | 382 s | 3 | 2 | 29 | 16 % | 5 | yes |
+| 120 s | 30 / 100 / 300 GiB | 152 / 227 / 442 s | 2 / 2 / 3 | 1 / 1 / 2 | 9 / 9 / 14 | 31 % | 5 (6, 7) | yes |
+| 240 s | 30 / 100 / 300 GiB | 272 / 347 / 562 s | 2 / 2 / 3 | 1 / 1 / 2 | 4 / 4 / 7 | 63 % | 7 (8, 9) | yes (73 % with one seat down) |
+| 480 s | 30 / 100 / 300 GiB | 512 / 587 / 802 s | 3 / 3 / 4 | 1 / 1 / 2 | 3 / 3 / 4 | 126 % | 13 (14, 15) | **no** |
+| 900 s | 30 / 100 / 300 GiB | 932 / 1,007 / 1,222 s | 4 / 5 / 5 | 1 / 1 / 2 | 2 / 3 / 3 | 236 % | 24 (25, 26) | **no** |
 
 `Final` latency is the window plus 240 spans of challenge for every row — the challenge window, not
-verification, is the latency. Throughput at 70 % of seven seats: 60 s → 9.8 claims a span; 240 s → 2.45;
-900 s → 0.65. **Full replay carries a 240-second class on seven seats at the live rate and no more; a 900-second
+verification, is the latency. Throughput at 70 % of seven seats: 60 s → 9.8 claims a span; 120 s → 4.9; 240 s → 2.45; 480 s → 1.22;
+900 s → 0.65. The inflight cap is `⌊0.98 × window / warm⌋` at seven seats and 70 %. **Full replay carries a 240-second class on seven seats at the live rate and no more; a 900-second
 class needs 24 seats or a fifth of the rate.** With residency (prefetch) the cold column disappears from the
 capacity but not from the window.
 

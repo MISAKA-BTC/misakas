@@ -968,6 +968,10 @@ from!(item: &kaspa_rpc_core::RpcPalwClassEconomics, protowire::RpcPalwClassEcono
         escrow_final_sompi: item.escrow_final_sompi.clone(),
         ledger: Some(protowire::RpcPalwClassLedgerTotals::from(&item.ledger)),
         telemetry: Some(protowire::RpcPalwClassNodeTelemetry::from(&item.telemetry)),
+        eligible_seats: item.eligible_seats,
+        duty_seats_inflight: item.duty_seats_inflight,
+        seat_exposure_inflight_sompi: item.seat_exposure_inflight_sompi.clone(),
+        free_collateral_sompi: item.free_collateral_sompi.clone(),
     }
 });
 from!(item: RpcResult<&kaspa_rpc_core::GetPalwClassEconomicsResponse>, protowire::GetPalwClassEconomicsResponseMessage, {
@@ -2273,6 +2277,10 @@ try_from!(item: &protowire::RpcPalwClassEconomics, kaspa_rpc_core::RpcPalwClassE
         escrow_final_sompi: item.escrow_final_sompi.clone(),
         ledger: item.ledger.as_ref().map(kaspa_rpc_core::RpcPalwClassLedgerTotals::try_from).transpose()?.unwrap_or_default(),
         telemetry: item.telemetry.as_ref().map(kaspa_rpc_core::RpcPalwClassNodeTelemetry::try_from).transpose()?.unwrap_or_default(),
+        eligible_seats: item.eligible_seats,
+        duty_seats_inflight: item.duty_seats_inflight,
+        seat_exposure_inflight_sompi: item.seat_exposure_inflight_sompi.clone(),
+        free_collateral_sompi: item.free_collateral_sompi.clone(),
     }
 });
 try_from!(item: &protowire::GetPalwClassEconomicsResponseMessage, RpcResult<kaspa_rpc_core::GetPalwClassEconomicsResponse>, {

@@ -16,6 +16,10 @@ use kaspa_consensus_core::palw_economic_compute_v1::{
     palw_priced_reward_u128_v1,
 };
 use kaspa_consensus_core::palw_economics_ledger_v1::{PALW_LEDGER_RATE_SCALE_V1, palw_rate_priced_reward_v1};
+use kaspa_consensus_core::palw_verification_profile_v1::{
+    PALW_SPAN_ANCHORS_V1, PALW_VERIFICATION_REFERENCE_V1, PalwClassTimingFactsV1, PalwPanelCapacityInputV1, PalwPanelCapacityV1,
+    PalwVerificationProfileV1, palw_panel_capacity_v1, palw_verification_profile_v1,
+};
 use kaspa_rpc_core::api::rpc::RpcApi;
 use kaspa_rpc_core::{GetPalwClassEconomicsResponse, RpcPalwClassEconomics};
 use serde_json::json;
@@ -73,6 +77,9 @@ pub(crate) struct Report {
     /// The rate proposal C prices with here: the constant that pays the heaviest live model class's
     /// attempted compute its escrow whole (sompi per 10⁹ MAC-eq).
     pub(crate) rate_sompi_per_giga: u128,
+    /// ADR-0133: each model class's verification profile as the reference derives it from its
+    /// compute and this node's measured replays, and its panel's capacity at the ledger's rate.
+    pub(crate) capacity: Vec<ClassCapacity>,
     pub(crate) rows: Vec<RpcPalwClassEconomics>,
     /// `(basis name, unit, classes, gap_final, gap_attempted, gap_panel)` — the gaps between the
     /// model classes' `F_m`, `A_m` and panel rates, `None` where a class was paid nothing per unit.
@@ -198,6 +205,74 @@ fn end_to_end(r: &GetPalwClassEconomicsResponse, measures: &[PalwClassMeasureV1]
     (classes, rate)
 }
 
+/// ADR-0133: one model class's profile and panel arithmetic, from the node's answer.
+pub(crate) struct ClassCapacity {
+    pub(crate) name: String,
+    pub(crate) class_id: String,
+    pub(crate) profile: PalwVerificationProfileV1,
+    pub(crate) accepted_per_span_milli: u64,
+    pub(crate) capacity: PalwPanelCapacityV1,
+    pub(crate) eligible_seats: u32,
+    pub(crate) bound_inflight: u64,
+    pub(crate) duty_seats_inflight: u64,
+    pub(crate) seat_exposure_inflight_sompi: u128,
+    pub(crate) free_collateral_sompi: u128,
+}
+
+/// The profile from the class's compute (the reference's estimate) and this node's replays where it
+/// has any (their mean as the warm p99 stand-in; a replay that read storage is not separated yet), the
+/// accepted rate from the ledger's window (claims over its accepted-DAA span, per execution span), the
+/// panel's capacity from the census's eligible seats.
+fn capacity_of(r: &GetPalwClassEconomicsResponse, seat_count: u16) -> Vec<ClassCapacity> {
+    let reference = PALW_VERIFICATION_REFERENCE_V1;
+    r.classes
+        .iter()
+        .filter(|row| !row.is_base_class)
+        .map(|row| {
+            let t = &row.telemetry;
+            let measured_ms = if t.available && t.replays > 0 { t.replay_millis / t.replays } else { 0 };
+            let facts = PalwClassTimingFactsV1 {
+                draw_compute: parse_u128(&row.economic_compute_job),
+                artifact_bytes: 0,
+                warm_p99_ms: measured_ms,
+                cold_p99_ms: 0,
+            };
+            let profile = palw_verification_profile_v1(&facts, &reference, seat_count.max(1));
+            let l = &row.ledger;
+            let span_daa = l.last_accepted_daa.saturating_sub(l.first_accepted_daa).max(1);
+            let accepted_per_span_milli =
+                if l.available && l.claims > 1 { l.claims * 1_000 * PALW_SPAN_ANCHORS_V1 / span_daa } else { 0 };
+            let seat_exposure = if row.duty_seats_inflight > 0 {
+                parse_u128(&row.seat_exposure_inflight_sompi) / row.duty_seats_inflight as u128
+            } else {
+                0
+            };
+            let capacity = palw_panel_capacity_v1(
+                &PalwPanelCapacityInputV1 {
+                    accepted_per_span_milli,
+                    profile,
+                    eligible_seats: row.eligible_seats,
+                    cold_fraction_permille: 0,
+                    seat_exposure_sompi: seat_exposure,
+                },
+                &reference,
+            );
+            ClassCapacity {
+                name: name_of(row),
+                class_id: row.class_id.clone(),
+                profile,
+                accepted_per_span_milli,
+                capacity,
+                eligible_seats: row.eligible_seats,
+                bound_inflight: row.claims_panel_bound,
+                duty_seats_inflight: row.duty_seats_inflight,
+                seat_exposure_inflight_sompi: parse_u128(&row.seat_exposure_inflight_sompi),
+                free_collateral_sompi: parse_u128(&row.free_collateral_sompi),
+            }
+        })
+        .collect()
+}
+
 pub(crate) fn report(r: &GetPalwClassEconomicsResponse) -> Report {
     let network_expected_attempts_q32 = parse_u128(&r.network_expected_attempts_q32).max(PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1);
     let measures: Vec<PalwClassMeasureV1> = r.classes.iter().map(|row| measure_of(row, network_expected_attempts_q32)).collect();
@@ -207,6 +282,7 @@ pub(crate) fn report(r: &GetPalwClassEconomicsResponse) -> Report {
         actual_gap("total MSK / attempted CCU", &r.classes, |row| parse_u128(&row.ledger.total_per_attempted_compute)),
     ];
     let (end_to_end, rate_sompi_per_giga) = end_to_end(r, &measures);
+    let capacity = capacity_of(r, r.seat_count);
     let bases = BASES
         .iter()
         .map(|(basis, name)| {
@@ -251,6 +327,7 @@ pub(crate) fn report(r: &GetPalwClassEconomicsResponse) -> Report {
         actual_gaps,
         end_to_end,
         rate_sompi_per_giga,
+        capacity,
         rows: r.classes.clone(),
         bases,
     }
@@ -467,6 +544,46 @@ pub(crate) fn render(report: &Report) -> String {
         out.push('\n');
     }
     out.push_str("A class whose Finals are zero is paid nothing under every basis: that is liveness, not price (ADR-0132 §2).\n");
+    if !report.capacity.is_empty() {
+        out.push_str(
+            "\nPanel capacity (ADR-0133; profile from the graph's compute and this node's replays, rate from the ledger's window):\n",
+        );
+        out.push_str(&format!(
+            "  {:<28} {:>7} {:>7} {:>7} {:>8} {:>8} {:>9} {:>7} {:>7} {:>8} {:>12} {:>12} {:>5}\n",
+            "class",
+            "window",
+            "prefch",
+            "cap",
+            "warm s",
+            "clm/span",
+            "eligible",
+            "bound",
+            "duties",
+            "util‰",
+            "exposure MSK",
+            "free MSK",
+            "live"
+        ));
+        for c in &report.capacity {
+            out.push_str(&format!(
+                "  {:<28} {:>7} {:>7} {:>7} {:>8} {:>8} {:>9} {:>7} {:>7} {:>8} {:>12} {:>12} {:>5}\n",
+                c.name,
+                c.profile.verification_window_spans,
+                c.profile.artifact_prefetch_spans,
+                c.profile.max_inflight_claims,
+                c.profile.warm_p99_ms / 1_000,
+                format!("{}.{:03}", c.accepted_per_span_milli / 1_000, c.accepted_per_span_milli % 1_000),
+                c.eligible_seats,
+                c.bound_inflight,
+                c.duty_seats_inflight,
+                c.capacity.utilization_permille,
+                msk(c.seat_exposure_inflight_sompi),
+                msk(c.free_collateral_sompi),
+                if c.capacity.live { "yes" } else { "no" }
+            ));
+        }
+        out.push_str("  window/prefetch in execution spans (5 anchors); cap = inflight claims Little's law allows at 70 % over seven seats; util = seat-time demanded / offered a span.\n");
+    }
     out
 }
 
@@ -565,6 +682,18 @@ pub(crate) fn json_report(report: &Report) -> serde_json::Value {
             "under": c.under.iter().map(|(b, reward, over)| json!({ "basis": b, "reward_per_final_sompi": reward, "msk_per_attempted_ccu": over.to_string() })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
         "rate_sompi_per_giga": report.rate_sompi_per_giga.to_string(),
+        "panel_capacity": report.capacity.iter().map(|c| json!({
+            "class_id": c.class_id, "name": c.name,
+            "profile": { "verification_window_spans": c.profile.verification_window_spans, "artifact_prefetch_spans": c.profile.artifact_prefetch_spans,
+                         "max_inflight_claims": c.profile.max_inflight_claims, "warm_p99_ms": c.profile.warm_p99_ms, "cold_p99_ms": c.profile.cold_p99_ms },
+            "accepted_per_span_milli": c.accepted_per_span_milli, "eligible_seats": c.eligible_seats, "bound_inflight": c.bound_inflight,
+            "duty_seats_inflight": c.duty_seats_inflight, "seat_exposure_inflight_sompi": c.seat_exposure_inflight_sompi.to_string(),
+            "free_collateral_sompi": c.free_collateral_sompi.to_string(),
+            "utilization_permille": c.capacity.utilization_permille, "inflight_claims_milli": c.capacity.inflight_claims_milli,
+            "max_accepted_per_span_milli": c.capacity.max_accepted_per_span_milli, "seats_required": c.capacity.seats_required,
+            "seats_required_n1": c.capacity.seats_required_n1, "seats_required_n2": c.capacity.seats_required_n2,
+            "final_latency_spans": c.capacity.final_latency_spans, "live": c.capacity.live, "outage_margin_seats": c.capacity.outage_margin_seats,
+        })).collect::<Vec<_>>(),
         "census": report.rows.iter().map(|row| json!({
             "class_id": row.class_id, "name": name_of(row), "base": row.is_base_class, "status": row.status,
             "share_permille": row.share_permille, "pwu_per_inference": row.pwu_per_inference,
