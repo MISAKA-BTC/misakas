@@ -253,8 +253,17 @@ PALW comparator and ADR-0065 D2, or the old DNS half off V2; `dns_stake_preferre
 * **Bond-set timing.** Bonds are read from the store as of the previous commit, as the credit walk
   reads them; a reorg that removes a bond can shift `S(E)` for one evaluation, which only delays
   finality (the commitments stop matching).
-* **Cost.** Every evaluation re-reads the walk; signature verdicts and the duty are cached, so the
-  first evaluation after a restart verifies about a week of votes.
+* **Cost.** An evaluation runs once per attestation epoch and walks about a week of chain blocks. The
+  walk first re-read every block's acceptance data and every merged block's transactions each time —
+  some 5,300 chain blocks per evaluation on testnet-11, and past ADR-0125's height each of them merges
+  about 120 execution blocks, so some 630,000 block reads every four minutes on the virtual processor.
+  Found at integration and fixed before any network armed the fence: a node-local memo keeps, per chain
+  block, the votes it accepted — a block's acceptance data is a function of the block — with each
+  signature judged when its bond is known and its bytes dropped, bounded to the blocks the latest
+  covered walk visited. A later evaluation reads only the chain blocks new since the last one; the
+  pipeline tests pin that a second walk reads nothing and that a walk from the memo decides exactly
+  what a walk from the stores decides. The first evaluation after a restart still reads and verifies
+  the week.
 * **SA-1's cross-branch edge.** `precommit_fault` cannot convict a precommit on another branch that
   declares a lock OLDER than one the bond already precommitted: such a precommit does not count on the
   chain that knows the newer lock, but it is not evidence either.

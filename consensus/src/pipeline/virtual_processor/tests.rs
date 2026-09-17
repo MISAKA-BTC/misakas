@@ -9566,6 +9566,8 @@ async fn run_the_bft_gate(script: BftGateScript) -> BftGateRun {
     }
     if script.punch_a_hole {
         ctx.consensus.virtual_processor().acceptance_data_store.delete(bond_block.header.hash).unwrap();
+        // A node that comes up with the hole: nothing an earlier walk read is in its memory either.
+        ctx.consensus.virtual_processor().dns_bft_runtime.forget_accepted_votes();
     }
     for _ in 0..script.age_blocks {
         ctx.mine_block(new_miner_data(), vec![]).await;
@@ -9575,7 +9577,30 @@ async fn run_the_bft_gate(script: BftGateScript) -> BftGateRun {
         let vp = ctx.consensus.virtual_processor();
         let sink = ctx.consensus.get_sink();
         let bonds: Vec<_> = vp.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
-        let covered = vp.dns_bft_evaluate(sink, &bonds, &dns, &gate_numbers(ForkActivation::always())).is_ok();
+        let evaluate = || vp.dns_bft_evaluate(sink, &bonds, &dns, &gate_numbers(ForkActivation::always()));
+        let covered = match evaluate() {
+            Ok(first) => {
+                // The walk's memo: a second walk over the same chain reads no block from the stores, and
+                // what it decides is what a walk reading every block from the stores decides.
+                let from_memo = evaluate().expect("covered once, covered again");
+                assert_eq!(
+                    (from_memo.read, from_memo.walked),
+                    (0, first.walked),
+                    "a second walk over one chain reads every block from the memo"
+                );
+                vp.dns_bft_runtime.forget_accepted_votes();
+                let from_stores = evaluate().expect("the stores still cover the walk");
+                assert!(
+                    from_stores.read > 0 && from_stores.read <= from_stores.walked,
+                    "with the memo gone the walk reads the stores again"
+                );
+                for evaluation in [&from_memo, &from_stores] {
+                    assert_eq!((&evaluation.verdicts, &evaluation.precommits), (&first.verdicts, &first.precommits));
+                }
+                true
+            }
+            Err(_) => false,
+        };
         (
             vp.dns_state_store.read().get().expect("DnsState"),
             vp.ghostdag_store.get_blue_work(sink).unwrap(),
