@@ -25,7 +25,7 @@ use kaspa_grpc_server::service::GrpcService;
 use kaspa_notify::{address::tracker::Tracker, subscription::context::SubscriptionContext};
 use kaspa_p2p_lib::Hub;
 use kaspa_p2p_mining::rule_engine::MiningRuleEngine;
-use kaspa_rpc_service::service::RpcCoreService;
+use kaspa_rpc_service::service::{RpcCoreService, ValidatorStatusProvider};
 use kaspa_txscript::caches::TxScriptCacheCounters;
 use kaspa_utils::git;
 use kaspa_utils::networking::ContextualNetAddress;
@@ -70,6 +70,7 @@ const MINIMUM_RETENTION_PERIOD_DAYS: f64 = 2.0;
 const ONE_GIGABYTE: f64 = 1_000_000_000.0;
 
 use crate::args::{Args, NodeProfile, VPS_8GB_MIN_SYSTEM_MEMORY_BYTES};
+use crate::validator_service::{ValidatorConfig, ValidatorMode, ValidatorService};
 
 const DEFAULT_DATA_DIR: &str = "datadir";
 const CONSENSUS_DB: &str = "consensus";
@@ -148,6 +149,9 @@ pub fn validate_args(args: &Args) -> ConfigResult<()> {
         }
         if args.utxoindex {
             return Err(ConfigError::NodeProfileIncompatible(profile, "--utxoindex"));
+        }
+        if args.enable_validator {
+            return Err(ConfigError::NodeProfileIncompatible(profile, "--enable-validator"));
         }
         if args.evm_rpc_listen.is_some() {
             return Err(ConfigError::NodeProfileIncompatible(profile, "--evm-rpc-listen"));
@@ -1121,7 +1125,7 @@ Do you confirm? (y/n)";
         Arc::new(MiningMonitor::new(mining_manager.clone(), mining_counters, tx_script_cache_counters.clone(), tick_service.clone()));
 
     let hub = Hub::new();
-    // One gate, consulted through the mining rule engine by everything that mines or signs. Scoped to
+    // One gate, consulted by mining and by the validator service (attestations and precommits). Scoped to
     // the networks that have peers to be wrong about, mirroring `has_sufficient_peer_connectivity`: a
     // peerless devnet/simnet node has no competing branch to overlook, so holding it back only stalls tests.
     // Restored from the meta DB before anyone can consult it: a quarantine that a restart clears is
@@ -1182,12 +1186,53 @@ Do you confirm? (y/n)";
     // MISAKA PALW v2 (Land stage): monitor a palw-agent when one is configured. Observation
     // and a capability handle only — an absent or quarantined agent withdraws v2 compute
     // capability (which nothing consensus-visible consumes yet) and the node continues
-    // without it, exactly as the VPS design's failure policy requires.
+    // validator-only, exactly as the VPS design's failure policy requires. Independent of
+    // `--enable-validator`: watching a runtime is not a validator role.
     let _palw_agent_capability = args.compute_endpoint.as_ref().map(|endpoint| {
         // Accept both the bare socket path and the design docs' `unix://` URI spelling.
         let path = endpoint.strip_prefix("unix://").unwrap_or(endpoint);
         crate::palw_agent::spawn_palw_agent_monitor(PathBuf::from(path))
     });
+
+    // kaspa-pq Phase 11 (ADR-0010): in-process DNS-overlay validator service. Built only
+    // when `--enable-validator` is set (so default node behavior is unchanged) and after
+    // `flow_context`, which it uses to submit attestation-shard transactions.
+    let validator_service = if args.enable_validator {
+        let mode = match args.validator_mode.as_deref() {
+            Some(s) => s.parse::<ValidatorMode>().unwrap_or_else(|err| {
+                warn!("{err}; falling back to observer mode");
+                ValidatorMode::default()
+            }),
+            None => ValidatorMode::default(),
+        };
+        // Equivocation-safety log lives beside the per-network data dir (NOT inside it),
+        // so it survives a `--reset-db` and still binds the validator to its network.
+        let state_path = app_dir.join(network.to_prefixed()).join("validator-state.json");
+        let validator_config = ValidatorConfig {
+            mode,
+            key_path: args.validator_key.clone(),
+            stake_bond: args.stake_bond.clone(),
+            state_path: Some(state_path),
+            address_prefix: config.prefix(),
+            // ADR-0009 Addendum A.3: the network discriminator is the per-network genesis hash,
+            // the same value consensus binds into every overlay message it verifies.
+            network_id: config.params.genesis.hash.as_byte_slice().to_vec(),
+        };
+        let validator_mass_calculator = kaspa_consensus_core::mass::MassCalculator::new_with_consensus_params(&config.params);
+        Some(Arc::new(ValidatorService::new(
+            validator_config,
+            consensus_manager.clone(),
+            tick_service.clone(),
+            flow_context.clone(),
+            validator_mass_calculator,
+            index_service.as_ref().map(|x| x.utxoindex().unwrap()),
+            // Effective spend maturity (floor ∨ settlement): the floor alone selects coinbases
+            // the node refuses (issue #81).
+            config.params.coinbase_spend_maturity(),
+        )))
+    } else {
+        None
+    };
 
     let p2p_service = Arc::new(P2pService::new(
         flow_context.clone(),
@@ -1448,6 +1493,12 @@ Do you confirm? (y/n)";
         None
     };
 
+    // kaspa-pq Phase 11 (ADR-0010): expose the in-process validator service's status via
+    // the `getValidatorStatus` RPC (None when `--enable-validator` is off).
+    let validator_status_provider: Option<Arc<dyn ValidatorStatusProvider>> = match &validator_service {
+        Some(v) => Some(v.clone()),
+        None => None,
+    };
     // kaspa-pq EVM Lane (ADR-0020 §16): keep a mining-manager handle for the
     // Ethereum JSON-RPC adapter (`eth_sendRawTransaction`). Routed through the
     // `flow_context` (admit + P2P-broadcast to EVM-relay peers, like the UTXO RPC
@@ -1476,9 +1527,7 @@ Do you confirm? (y/n)";
         grpc_tower_counters.clone(),
         system_info,
         mining_rule_engine.clone(),
-        // The in-process DNS-overlay validator is retired, so nothing provides `getValidatorStatus`
-        // here; the RPC op stays for wire compatibility and answers `enabled: false`.
-        None,
+        validator_status_provider,
     ));
     let grpc_service_broadcasters: usize = 3; // TODO: add a command line argument or derive from other arg/config/host-related fields
     let grpc_service = if !args.disable_grpc {
@@ -1510,6 +1559,9 @@ Do you confirm? (y/n)";
     }
     async_runtime.register(p2p_service);
     async_runtime.register(consensus_monitor);
+    if let Some(validator_service) = validator_service {
+        async_runtime.register(validator_service)
+    };
     // ADR-0042: the PALW-RC block producer. Registered only when it was asked for AND the network
     // actually has a ConsensusV2 lane — a producer on a hash-only chain would build templates for
     // an algo nobody declares and log a refusal every few hundred milliseconds.
@@ -1815,7 +1867,7 @@ Do you confirm? (y/n)";
         info!("MISAKA node endpoints (network {network}):");
         info!("  P2P:             {p2p_server_addr}   node-to-node only (not RPC)");
         info!("  node-grpc:       {grpc_server_addr}   miner / low-level node RPC");
-        info!("  node-wrpc-borsh: {}   wallet / operator", show(&borsh));
+        info!("  node-wrpc-borsh: {}   validator / wallet / operator", show(&borsh));
         info!("  node-wrpc-json:  {}   explorer / browser", show(&json));
         info!("  evm-rpc-http:    {}   Ethereum JSON-RPC (EVM lane)", show(&evm));
 
@@ -1846,7 +1898,7 @@ Do you confirm? (y/n)";
         }
 
         // Endpoint registry (design §7): record the loopback RPC endpoints this node
-        // bound to `~/.misaka/<network-id>/endpoints.json`, so the miner /
+        // bound to `~/.misaka/<network-id>/endpoints.json`, so the miner / validator /
         // unified CLI can auto-discover them and the operator never types a port. The
         // host is normalized to 127.0.0.1 (a co-located reader connects over loopback);
         // a registry write failure is non-fatal (just a missing convenience).
@@ -1928,19 +1980,40 @@ mod tests {
         assert!(matches!(validate_args(&args), Err(ConfigError::NodeProfileIncompatible(_, "--archival"))));
     }
 
-    /// **The DNS-overlay validator and its VLT compute role are retired, flags included.** PALW does
-    /// not involve validators, so kaspad has no in-process validator service to configure: a unit
-    /// file still carrying one of these flags is refused at parse time rather than started into a
-    /// node that silently ignores what its operator asked for. The private-devnet switches that armed
-    /// the overlay's VLT and token fences went with them: with no validator left to attest or compute,
-    /// a devnet started with one had nothing to exercise.
     #[test]
-    fn the_retired_validator_and_compute_flags_are_refused() {
-        for flag in [
+    fn bootstrap_pruned_rejects_enable_validator() {
+        let args = parse(&["--node-profile=bootstrap-pruned", "--enable-validator"]);
+        assert!(matches!(validate_args(&args), Err(ConfigError::NodeProfileIncompatible(_, "--enable-validator"))));
+    }
+
+    /// **The DNS-overlay validator is an operator role again.** Validators attest for the stake reorg
+    /// gate, so every node operator who upgrades can run one: the service's flags parse into the
+    /// fields `ValidatorConfig` is built from, and `--node-profile=validator` is a label again.
+    #[test]
+    fn the_validator_flags_parse() {
+        let args = parse(&[
             "--enable-validator",
             "--validator-key=/tmp/validator.seed",
             "--stake-bond=00:0",
             "--validator-mode=active",
+            "--node-profile=validator",
+        ]);
+        assert!(args.enable_validator);
+        assert_eq!(args.validator_key.as_deref(), Some("/tmp/validator.seed"));
+        assert_eq!(args.stake_bond.as_deref(), Some("00:0"));
+        assert_eq!(args.validator_mode.as_deref(), Some("active"));
+        assert!(matches!(args.node_profile, NodeProfile::Validator));
+        assert!(validate_args(&args).is_ok());
+    }
+
+    /// **The VLT compute role and the overlay's devnet switches stay retired, flags included.** The
+    /// validator attests and precommits; nothing in kaspad executes or audits LLM jobs for the VLT
+    /// overlay, submits token fixture ops, or arms the VLT and token fences on a devnet. A unit file
+    /// still carrying one of these flags is refused at parse time rather than started into a node
+    /// that silently ignores what its operator asked for.
+    #[test]
+    fn the_retired_compute_and_overlay_devnet_flags_are_refused() {
+        for flag in [
             "--enable-compute",
             "--compute-worker=/tmp/palw-worker",
             "--compute-work-dir=/tmp",
@@ -1958,7 +2031,6 @@ mod tests {
             "--tkn-devnet=400",
             "--tkn-devnet-shadow-span=300",
             "--tkn-devnet-epoch-budget-tok=1000",
-            "--node-profile=validator",
         ] {
             assert!(Args::parse(vec!["kaspad", flag]).is_err(), "{flag} is accepted again, but nothing in kaspad reads it");
         }
@@ -2002,7 +2074,7 @@ mod tests {
 
     #[test]
     fn full_profile_allows_heavy_flags() {
-        let args = parse(&["--utxoindex", "--archival", "--evm-rpc-listen=127.0.0.1:8545"]);
+        let args = parse(&["--utxoindex", "--archival", "--enable-validator", "--evm-rpc-listen=127.0.0.1:8545"]);
         assert!(validate_args(&args).is_ok());
     }
 }
