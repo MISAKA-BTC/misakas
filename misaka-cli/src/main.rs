@@ -901,7 +901,7 @@ enum PalwCmd {
     #[command(subcommand)]
     Extension(ExtensionCmd),
     /// ADR-0125: the execution lane as the node holds it — the stage table, the round's permits,
-    /// the span's schedule and accepted permits, and the finals toward the next span.
+    /// the span's schedule and accepted permits, and the finals toward the schedule two spans on.
     RoundLane {
         /// Only the permits of this bond (`txid:index`) in the human view.
         #[arg(long)]

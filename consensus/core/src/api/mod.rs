@@ -180,7 +180,8 @@ pub trait ConsensusApi: Send + Sync {
     }
 
     /// ADR-0125 §7.4: the view of `round` with the span's schedule, its accepted permits and the
-    /// finals recorded toward the next span — `getPalwRoundLane`'s read. `None` where the view is.
+    /// finals recorded toward the schedule two spans on — `getPalwRoundLane`'s read. `None` where
+    /// the view is.
     fn palw_round_lane_status_v1(&self, round: u64) -> Option<crate::palw_execution_lane_v1::PalwExecLaneStatusV1> {
         let _ = round;
         unimplemented!()

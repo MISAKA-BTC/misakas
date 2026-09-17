@@ -127,7 +127,8 @@ without the compute worker, compute declarations or verdicts, and without VLT st
 `palw_overlay_carve` = `{ activation: 7,001, subsidy_validator_bps: 2,000, worker_carve_permille: 720 }`:
 worker base 72 %, inclusion 8 %, validator 20 %, service 0. At testnet-11's 4,445.62 MSK block the
 escrow grows from 2,756.28 to 3,200.85 MSK. Scheduled in the preset on 2026-09-17 (`d6c46f25`, at DAA
-≈5,773) with ADR-0124, ADR-0125 and ADR-0128 at the same height; fingerprint `4787b92a…`.
+≈5,773) with ADR-0124, ADR-0125 and ADR-0128 at the same height; fingerprint `4787b92a…`, re-pinned to
+`ab4e7b9c…` when ADR-0130 joined the height the same day.
 
 ## 7. Tests
 

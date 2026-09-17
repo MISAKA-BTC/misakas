@@ -12,7 +12,12 @@
 #                   bond holds a permit for).
 #
 # What it asserts, in order — each a poll against the chain and the logs, never a fixed sleep:
-#   1. an attempt reaches Final and the span after it is scheduled (getPalwRoundLane lists a domain);
+#   1. an attempt reaches Final and the lane schedules a span from it (getPalwRoundLane lists a domain).
+#      ADR-0130 makes that TWO span boundaries, not one: the finals of span s become span s+2's
+#      participants at the first chain block of s+1, and that snapshot is seeded into a schedule at the
+#      first chain block of s+2 — by the latest chain block of s+1 that carried an attempt. A span with
+#      no attempt-carrying chain block in the span before it stays idle and the lane waits for the next
+#      one, which on this floor-only devnet (every PALW block carries an attempt) does not happen;
 #   2. a node produces a round block for a permit its bond holds;
 #   3. a chain block merges round blocks and grants their permits (the chain walk's lane line);
 #   4. payments are sent and a granted round block carries one of THEM: a lane line written after
@@ -26,13 +31,16 @@
 #   cargo build --release -p kaspad -p misaka-cli
 #
 # A step waits on CHAIN time, not wall time. A licensed claim is Final `window_challenge` DAA later (100
-# on the devnet) and the lane schedules a span from the Finals of the span before it, so step 1 needs
-# some 150 DAA — over an hour and a half at the pace four floor producers keep on one host (about 1.5 DAA
-# a minute). A step therefore gives up when node-1's virtual DAA stops moving for STALL_WAIT seconds;
-# STEP_WAIT only caps a chain that moves and never gets there.
+# on the devnet) and the lane then needs two span boundaries (ADR-0130), so step 1 needs some 150 DAA
+# plus up to two spans — at the default 10-DAA span, some 170 DAA, over an hour and a half at the pace
+# four floor producers keep on one host (about 1.5 DAA a minute). The span was 30 DAA while a schedule
+# followed its finals directly; with the extra boundary a 30-DAA span would add another forty minutes to
+# every run, so the default span is 10 and the flag still takes any value. A step gives up when node-1's
+# virtual DAA stops moving for STALL_WAIT seconds; STEP_WAIT only caps a chain that moves and never gets
+# there.
 #
 # Env: KASPAD_BIN, CLI_BIN (defaults target/release/*), NODES (4, at least 4), WORK_DIR, LANE
-# (`activation,width,span[,daa:width…]`, default 0,2,30), STALL_WAIT (s, 900), STEP_WAIT (s, 14400),
+# (`activation,width,span[,daa:width…]`, default 0,2,10), STALL_WAIT (s, 900), STEP_WAIT (s, 14400),
 # SENDS (5 fee-paying transactions, one every SEND_EVERY seconds), P2P_BASE / RPC_BASE (port bases),
 # ATTACH (1: poll the nodes an earlier run left running in WORK_DIR instead of starting new ones — and
 # leave them running at exit).
@@ -43,7 +51,7 @@ KASPAD_BIN="${KASPAD_BIN:-$REPO_ROOT/target/release/kaspad}"
 CLI_BIN="${CLI_BIN:-$REPO_ROOT/target/release/misaka}"
 NODES="${NODES:-4}"
 WORK_DIR="${WORK_DIR:-$REPO_ROOT/.misaka-palw-round-lane-devnet}"
-LANE="${LANE:-0,2,30}"
+LANE="${LANE:-0,2,10}"
 STALL_WAIT="${STALL_WAIT:-900}"
 STEP_WAIT="${STEP_WAIT:-14400}"
 ATTACH="${ATTACH:-0}"
@@ -166,8 +174,8 @@ log "0/5 the lane is armed on the nodes' ruleset"
 wait_lane 1 "v.get('armed') == True" "getPalwRoundLane to answer armed"
 log "    $(cli 1 palw round-lane 2>/dev/null | head -1)"
 
-log "1/5 waiting for an attempt to reach Final and the span after it to be scheduled"
-wait_lane 1 "len(v.get('domains', [])) > 0" "a scheduled span (an attempt reached Final a span earlier)"
+log "1/5 waiting for an attempt to reach Final and a span to be scheduled from it (two boundaries: ADR-0130)"
+wait_lane 1 "len(v.get('domains', [])) > 0" "a scheduled span (an attempt reached Final two spans earlier)"
 log "    $(cli 1 palw round-lane 2>/dev/null | head -3 | tr '\n' ' ')"
 
 log "2/5 waiting for a round block for a held permit"
@@ -234,7 +242,7 @@ for n in 1 $((NODES - 1)); do cli "$n" palw round-lane --output json > "$WORK_DI
 granted_lines="$(cat "$WORK_DIR"/node-*.log | grep -c "\\[palw-round-lane\\] chain block" || true)"
 produced_blocks="$(grep -h -oE "\\[palw-round-producer\\] [0-9]+ round blocks produced" "$WORK_DIR"/node-*.log | awk '{s+=$2} END {print s+0}' || true)"
 log "    lane lines across the fleet: $granted_lines · round-block production reports (powers of two, summed): $produced_blocks"
-log "PASS — attempts reached Final, the next span was scheduled, round blocks were produced for held permits, chain blocks granted them, and a granted round block carried a sent payment"
+log "PASS — attempts reached Final, a later span was scheduled from them, round blocks were produced for held permits, chain blocks granted them, and a granted round block carried a sent payment"
 log "evidence: $WORK_DIR/node-*.log, $WORK_DIR/out/"
 [ "$ATTACH" = 1 ] && log "the attached nodes are still running: kill ${pids[*]}"
 exit 0

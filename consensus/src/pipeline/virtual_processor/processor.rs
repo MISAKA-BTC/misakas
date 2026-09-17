@@ -11164,6 +11164,11 @@ impl VirtualStateProcessor {
     }
 
     /// **ADR-0125 §7.4: the round's view, and the span it belongs to as the sink's state holds it.**
+    ///
+    /// The schedule reported is the one in force for the view's span — the state's `round_schedule`,
+    /// written at the span's first chain block. A pending snapshot (ADR-0130: the next span's
+    /// participants, waiting for their seed) is not a schedule and is never reported as one, and a
+    /// span whose snapshot found no seed anchor answers with no schedule and no permits.
     pub fn palw_round_lane_status_v1(&self, round: u64) -> Option<kaspa_consensus_core::palw_execution_lane_v1::PalwExecLaneStatusV1> {
         let lane = self.palw_execution_lane?;
         let virtual_state = self.virtual_stores.read().state.get().unwrap();

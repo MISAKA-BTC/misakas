@@ -9,16 +9,24 @@
 //! is here:
 //!
 //! * a **round** is one second from the genesis timestamp ([`palw_execution_round_v1`]);
-//! * a **schedule** is derived once per scheduler span from the attempt claims that reached `Final`
-//!   in the closed span ([`palw_execution_schedule_v1`]): each security domain's credits — the
-//!   canonical compute its attempts certified ([`palw_execution_credit_v1`]) — its quota
-//!   (credits, capped at [`PALW_EXEC_DOMAIN_CAP_PERMILLE`], water-filled in integers —
-//!   [`palw_execution_quotas_v1`]), its parity group ([`palw_execution_parities_v1`]), the bonds
-//!   that earned it, and the span's seed — a hash of the finalized executions' roots, so no
-//!   beacon, no header hash and no producer's choice enters it;
+//! * a **schedule** is derived in two steps, participants first and randomness after (ADR-0130).
+//!   At the first chain block of span `s + 1` the attempt claims that reached `Final` in span `s`
+//!   become a **snapshot** for span `s + 2` ([`palw_execution_schedule_snapshot_v1`]): each
+//!   security domain's credits — the canonical compute its attempts certified
+//!   ([`palw_execution_credit_v1`]) — its quota (credits, capped at
+//!   [`PALW_EXEC_DOMAIN_CAP_PERMILLE`], water-filled in integers — [`palw_execution_quotas_v1`]),
+//!   its parity group ([`palw_execution_parities_v1`]), and the bonds that earned it, each
+//!   operator's bonds listed only in domains of that operator's one parity
+//!   ([`palw_execution_operator_parities_v1`]). At the first chain block of span `s + 2` the
+//!   snapshot is **seeded** ([`palw_execution_schedule_seeded_v1`]) from an anchor that did not
+//!   exist when the participants were fixed — the execution of the latest attempt-carrying chain
+//!   block of span `s + 1` ([`PalwExecSeedAnchorV1`]) — and the state's safe frontier
+//!   ([`palw_execution_span_seed_v1`]). No beacon and no header hash enters it; without an
+//!   anchor the span has no schedule;
 //! * a round's **permits** are drawn from the schedule alone ([`palw_execution_permits_v1`]): only
-//!   domains of the round's parity may hold one, so no domain holds permits in two consecutive
-//!   rounds; at most `⌈width / 3⌉` go to one domain and one to one operator;
+//!   domains of the round's parity may hold one, so no domain — and, since an operator is listed
+//!   in one parity only, no operator — holds permits in two consecutive rounds of a span; at most
+//!   `⌈width / 3⌉` go to one domain and one to one operator;
 //! * an execution block carries a **signed envelope** ([`PalwExecEnvelopeV1`]) naming its round,
 //!   its permit and its bond; the header stage checks its shape, its round and its signature, and
 //!   a merging block checks the permit against its own parent state;
@@ -98,8 +106,10 @@ pub const PALW_EXEC_MLDSA87_PUBKEY_LEN: usize = 2592;
 /// ML-DSA-87 signature length (FIPS 204).
 pub const PALW_EXEC_MLDSA87_SIGNATURE_LEN: usize = 4627;
 
-/// The domain of a span's seed.
-pub const PALW_EXEC_SEED_DOMAIN: &[u8] = b"misaka-palw/exec-lane/span-seed/v1";
+/// The domain of a span's seed (ADR-0130). `span-seed/v1` hashed the finalized executions' own
+/// claim ids and roots, which a producer choosing among its executions could grind; it is retired
+/// with that rule and never reused.
+pub const PALW_EXEC_SEED_DOMAIN: &[u8] = b"misaka-palw/exec-lane/span-seed/v2";
 /// The domain of a permit's domain pick.
 pub const PALW_EXEC_DOMAIN_PICK_DOMAIN: &[u8] = b"misaka-palw/exec-lane/domain-pick/v1";
 /// The domain of a permit's bond pick.
@@ -288,21 +298,26 @@ pub struct PalwExecBondV1 {
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwExecDomainV1 {
     pub domain: Hash64,
+    /// The compute every final of the domain credited — the quota's input, whether or not each
+    /// earner is still listed below.
     pub credits: u64,
     pub quota_permille: u16,
     pub parity: u8,
-    /// Sorted by bond key.
+    /// Sorted by bond key. Only bonds whose operator's parity is this domain's
+    /// ([`palw_execution_operator_parities_v1`]), so a domain can be listed with none: it keeps its
+    /// quota and parity and holds no permits.
     pub bonds: Vec<PalwExecBondV1>,
 }
 
-/// **A scheduler span's schedule** — everything a round's draw reads, derived at the boundary
-/// that opens the span and constant for it.
+/// **A scheduler span's schedule** — everything a round's draw reads: a snapshot fixed a span
+/// earlier and the seed its span opened with. Constant for the span.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwExecScheduleV1 {
     /// The span this schedule governs (`daa_score / span_daa`).
     pub span_index: u64,
-    /// `H(domain ‖ span ‖ count ‖ (claim id ‖ execution root)*)` over the closed span's finalized
-    /// attempts in claim-id order. Changing it costs an inference that reaches `Final`.
+    /// [`palw_execution_span_seed_v1`]: the seed anchor's execution, the span and the safe frontier
+    /// at the block that opened the span — none of which existed, or could be chosen, when the
+    /// participants below were fixed.
     pub seed: Hash64,
     /// Sorted by domain id.
     pub domains: Vec<PalwExecDomainV1>,
@@ -314,23 +329,79 @@ impl PalwExecScheduleV1 {
     }
 }
 
-/// **Derive a span's schedule from the attempt claims finalized in the span before it.**
-pub fn palw_execution_schedule_v1(span_index: u64, finals: &[PalwExecFinalV1]) -> PalwExecScheduleV1 {
-    // The seed, over every final in claim-id order (the listing caps below do not reach it).
+/// **ADR-0130: a schedule's participants, fixed before its seed exists** — everything a
+/// [`PalwExecScheduleV1`] holds but the seed. Taken at the first chain block of the span after the
+/// one whose finals it lists, and seeded (or dropped) at the first chain block of `target_span`.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwExecSnapshotV1 {
+    /// The span whose schedule this snapshot becomes: two after the span its finals were gathered in.
+    pub target_span: u64,
+    /// Sorted by domain id, exactly as the schedule will list them.
+    pub domains: Vec<PalwExecDomainV1>,
+}
+
+/// **ADR-0130: what seeds the span two after the one that recorded it** — the latest chain block of
+/// a span that carried an admitted attempt, and that attempt's execution.
+///
+/// Only [`Self::execution_key`] enters the seed. It is the attempt's `execution_commitment_v3`
+/// under its header's anchor — what the attempt's lottery tickets are drawn from (ADR-0072) — so a
+/// producer that wants another value needs another execution that wins its draw. The block's hash
+/// is recorded to name the anchor and never hashed into the seed: every nonce of the header's bucket
+/// and every timestamp yields the same ticket and a different hash, so the hash is a value its
+/// producer re-rolls for free once it holds a winning draw (ADR-0125 §2: a header hash is not seed
+/// material). A heartbeat or receipt block carries no attempt and is never an anchor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwExecSeedAnchorV1 {
+    /// The span of the chain block that recorded it.
+    pub span: u64,
+    /// That chain block.
+    pub block: Hash64,
+    /// Its attempt's execution commitment.
+    pub execution_key: Hash64,
+}
+
+/// **ADR-0130: one parity per operator.** Each operator listed in `domains` takes the parity of the
+/// domain where its bonds' credits sum highest, ties to the lower domain id. Listing an operator's
+/// bonds only in domains of that parity is what keeps it out of two consecutive rounds of a span,
+/// whatever the width: a round's permits come only from domains of the round's parity. Not
+/// recursive — quotas and domain parities are read as given and never recomputed for what leaves.
+/// Returned by operator id.
+///
+/// **An operator here is the registry's `operator_id`**, so a party that bonds under two operator
+/// keys is two operators and takes a parity each — the same residual ADR-0125's "one permit an
+/// operator a round" already carries, and the same place to close it if it ever needs closing.
+pub fn palw_execution_operator_parities_v1(domains: &[PalwExecDomainV1]) -> BTreeMap<Hash64, u8> {
+    let mut credit_by_operator: BTreeMap<Hash64, BTreeMap<Hash64, (u64, u8)>> = BTreeMap::new();
+    for domain in domains {
+        for bond in &domain.bonds {
+            let row = credit_by_operator.entry(bond.operator_id).or_default().entry(domain.domain).or_insert((0, domain.parity));
+            row.0 = row.0.saturating_add(bond.credits);
+        }
+    }
+    credit_by_operator
+        .into_iter()
+        .filter_map(|(operator, by_domain)| {
+            // The most credit; among equals the lower domain id compares greater, so `max_by` takes it.
+            by_domain.iter().max_by(|a, b| a.1.0.cmp(&b.1.0).then(b.0.cmp(a.0))).map(|(_, (_, parity))| (operator, *parity))
+        })
+        .collect()
+}
+
+/// **ADR-0130: a span's participants from the attempt claims finalized two spans before it.**
+///
+/// Credits and bonds per domain are the compute each final certified, summed; a domain whose finals
+/// credited nothing earns no quota and is not listed; at most [`PALW_EXEC_MAX_DOMAINS_V1`] domains
+/// are listed, those with the most credits (ties to the lower id). Quotas and domain parities follow
+/// from the listed domains' credits. Then each operator is given one parity over every bond it has
+/// in a listed domain ([`palw_execution_operator_parities_v1`]), its bonds leave the domains of the
+/// other parity, and each domain lists at most [`PALW_EXEC_MAX_BONDS_PER_DOMAIN_V1`] of those that
+/// remain — the most productive, ties to the lower bond key. Nothing here reads a claim id or an
+/// execution root beyond de-duplicating finals: the seed is not the finals' to choose.
+pub fn palw_execution_schedule_snapshot_v1(target_span: u64, finals: &[PalwExecFinalV1]) -> PalwExecSnapshotV1 {
     let mut ordered: Vec<&PalwExecFinalV1> = finals.iter().collect();
     ordered.sort_by(|a, b| a.claim_id.cmp(&b.claim_id));
     ordered.dedup_by(|a, b| a.claim_id == b.claim_id);
-    let mut seed = keyed(PALW_EXEC_SEED_DOMAIN);
-    seed.update(&span_index.to_le_bytes());
-    seed.update(&(ordered.len() as u64).to_le_bytes());
-    for f in &ordered {
-        seed.update(f.claim_id.as_byte_slice());
-        seed.update(f.execution_root.as_byte_slice());
-    }
-    let seed = finish(seed);
 
-    // Credits and bonds per domain: the compute each certified, summed. A domain whose finals
-    // credited nothing earns no quota, so it is not listed and none of its bonds can be drawn.
     let mut per_domain: BTreeMap<Hash64, (u64, BTreeMap<PalwBondKeyV2, (Hash64, u64)>)> = BTreeMap::new();
     for f in &ordered {
         let entry = per_domain.entry(f.domain).or_default();
@@ -338,34 +409,67 @@ pub fn palw_execution_schedule_v1(span_index: u64, finals: &[PalwExecFinalV1]) -
         let bond = entry.1.entry(f.bond).or_insert((f.operator_id, 0));
         bond.1 = bond.1.saturating_add(f.credit);
     }
-    let mut domains: Vec<(Hash64, u64, Vec<PalwExecBondV1>)> = per_domain
+    let mut listed: Vec<(Hash64, u64, BTreeMap<PalwBondKeyV2, (Hash64, u64)>)> = per_domain
         .into_iter()
         .filter(|(_, (credits, _))| *credits > 0)
-        .map(|(domain, (credits, bonds))| {
-            let mut bonds: Vec<PalwExecBondV1> =
-                bonds.into_iter().map(|(bond, (operator_id, credits))| PalwExecBondV1 { bond, operator_id, credits }).collect();
-            bonds.sort_by(|a, b| b.credits.cmp(&a.credits).then(a.bond.cmp(&b.bond)));
-            bonds.truncate(PALW_EXEC_MAX_BONDS_PER_DOMAIN_V1);
-            bonds.sort_by(|a, b| a.bond.cmp(&b.bond));
-            (domain, credits, bonds)
-        })
+        .map(|(domain, (credits, bonds))| (domain, credits, bonds))
         .collect();
-    domains.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    domains.truncate(PALW_EXEC_MAX_DOMAINS_V1);
-    domains.sort_by(|a, b| a.0.cmp(&b.0));
+    listed.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    listed.truncate(PALW_EXEC_MAX_DOMAINS_V1);
+    listed.sort_by(|a, b| a.0.cmp(&b.0));
 
-    let credits: Vec<(Hash64, u64)> = domains.iter().map(|(d, c, _)| (*d, *c)).collect();
+    let credits: Vec<(Hash64, u64)> = listed.iter().map(|(d, c, _)| (*d, *c)).collect();
     let quotas = palw_execution_quotas_v1(&credits);
     let parities = palw_execution_parities_v1(&quotas);
-    let domains = domains
+    let mut domains: Vec<PalwExecDomainV1> = listed
         .into_iter()
         .map(|(domain, credits, bonds)| {
             let quota_permille = quotas.iter().find(|(d, _)| *d == domain).map(|(_, q)| *q).unwrap_or(0);
             let parity = parities.iter().find(|(d, _)| *d == domain).map(|(_, p)| *p).unwrap_or(0);
+            let bonds =
+                bonds.into_iter().map(|(bond, (operator_id, credits))| PalwExecBondV1 { bond, operator_id, credits }).collect();
             PalwExecDomainV1 { domain, credits, quota_permille, parity, bonds }
         })
         .collect();
-    PalwExecScheduleV1 { span_index, seed, domains }
+    // Every earner is still listed here, so an operator's parity is read over all of its compute.
+    let operator_parities = palw_execution_operator_parities_v1(&domains);
+    for domain in &mut domains {
+        let parity = domain.parity;
+        domain.bonds.retain(|b| operator_parities.get(&b.operator_id) == Some(&parity));
+        domain.bonds.sort_by(|a, b| b.credits.cmp(&a.credits).then(a.bond.cmp(&b.bond)));
+        domain.bonds.truncate(PALW_EXEC_MAX_BONDS_PER_DOMAIN_V1);
+        domain.bonds.sort_by(|a, b| a.bond.cmp(&b.bond));
+    }
+    PalwExecSnapshotV1 { target_span, domains }
+}
+
+/// **ADR-0130: a span's seed** — `H(domain ‖ anchor's execution key ‖ span ‖ frontier blue score ‖
+/// frontier)`, the frontier being the state's safe frontier at the block that opens the span. The
+/// anchor was recorded after the span's participants were fixed, and moving it costs an execution
+/// that wins its draw ([`PalwExecSeedAnchorV1`]); the frontier moves only as claims reach `Final`.
+/// No claim id, execution root or bond of the snapshot enters it.
+pub fn palw_execution_span_seed_v1(anchor: &PalwExecSeedAnchorV1, span: u64, frontier_blue_score: u64, frontier: Hash64) -> Hash64 {
+    let mut seed = keyed(PALW_EXEC_SEED_DOMAIN);
+    seed.update(anchor.execution_key.as_byte_slice());
+    seed.update(&span.to_le_bytes());
+    seed.update(&frontier_blue_score.to_le_bytes());
+    seed.update(frontier.as_byte_slice());
+    finish(seed)
+}
+
+/// **ADR-0130: a snapshot becomes its span's schedule** under the anchor recorded in the span before
+/// and the frontier the span opens with.
+pub fn palw_execution_schedule_seeded_v1(
+    snapshot: &PalwExecSnapshotV1,
+    anchor: &PalwExecSeedAnchorV1,
+    frontier_blue_score: u64,
+    frontier: Hash64,
+) -> PalwExecScheduleV1 {
+    PalwExecScheduleV1 {
+        span_index: snapshot.target_span,
+        seed: palw_execution_span_seed_v1(anchor, snapshot.target_span, frontier_blue_score, frontier),
+        domains: snapshot.domains.clone(),
+    }
 }
 
 /// The most permits one domain may hold in a round of `width`: a third, rounded up.
@@ -391,6 +495,14 @@ pub struct PalwExecPermitV1 {
 /// `H(seed ‖ round ‖ bond)` among those whose operator is free takes the permit. When no domain has
 /// room the round's remaining permits do not exist. No bond state is read: whether the chosen bond
 /// is still able to produce is the merging block's question.
+///
+/// A schedule lists each operator's bonds in domains of one parity only
+/// ([`palw_execution_schedule_snapshot_v1`]), so no operator holds permits in two consecutive rounds
+/// of one span, and a round whose parity lists no bond has no permits — the round is missed, never
+/// handed to the operator of the round before. **The residual:** a round block is judged by the
+/// schedule of its anchor's span, so consecutive rounds around a span boundary can be judged by two
+/// schedules, and nothing relates one span's operator parities to the next's — an operator can hold
+/// the last round under one span and the next round under the other.
 pub fn palw_execution_permits_v1(schedule: &PalwExecScheduleV1, round: u64, width: u16) -> Vec<PalwExecPermitV1> {
     let width = width.min(PALW_EXEC_MAX_PERMITS_PER_ROUND_V1);
     let parity = (round % 2) as u8;
@@ -471,7 +583,8 @@ pub struct PalwExecRoundViewV1 {
 
 /// **ADR-0125 §7.4: the lane as the sink's state holds it** — what an operator or an explorer asks
 /// of a node: the round's permits, the span's schedule, how many permits the span has accepted, and
-/// the finals recorded toward the next span's schedule.
+/// the finals recorded toward the schedule two spans on (ADR-0130). A pending snapshot is not a
+/// schedule and is not reported as one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwExecLaneStatusV1 {
     pub view: PalwExecRoundViewV1,
@@ -479,7 +592,9 @@ pub struct PalwExecLaneStatusV1 {
     pub schedule: Option<PalwExecScheduleV1>,
     /// Permits accepted on the sink's chain in the view's span.
     pub accepted_in_span: u64,
-    /// The span whose finals are being recorded, and how many it holds.
+    /// The span whose finals are being recorded, and how many it holds. They become the snapshot of
+    /// span `finals_span + 2` at the first chain block of the next span, and its schedule only if a
+    /// seed anchor is recorded in between (ADR-0130).
     pub finals_span: u64,
     pub finals: u64,
 }
@@ -970,8 +1085,18 @@ mod tests {
         assert_eq!(palw_execution_parities_v1(&[(h(1), 400), (h(2), 350), (h(3), 250)]), vec![(h(1), 0), (h(2), 1), (h(3), 1)]);
     }
 
+    /// A fixed anchor: a test's schedule is then a function of its finals and its span.
+    fn anchor(key: u64) -> PalwExecSeedAnchorV1 {
+        PalwExecSeedAnchorV1 { span: 0, block: h(key.wrapping_add(7_000_000)), execution_key: h(key) }
+    }
+
+    /// The schedule `finals` earn for `span`, seeded under a fixed anchor and frontier.
+    fn schedule_of(span: u64, finals: &[PalwExecFinalV1]) -> PalwExecScheduleV1 {
+        palw_execution_schedule_seeded_v1(&palw_execution_schedule_snapshot_v1(span, finals), &anchor(1), 0, h(0))
+    }
+
     #[test]
-    fn the_schedule_counts_credits_lists_earners_and_seeds_from_the_executions() {
+    fn the_schedule_counts_credits_and_lists_earners() {
         let finals = vec![
             final_of(1, 10, 100, 1),
             final_of(1, 10, 100, 2),
@@ -979,7 +1104,7 @@ mod tests {
             final_of(2, 20, 200, 4),
             final_of(3, 30, 300, 5),
         ];
-        let schedule = palw_execution_schedule_v1(7, &finals);
+        let schedule = schedule_of(7, &finals);
         assert_eq!(schedule.span_index, 7);
         assert_eq!(schedule.domains.iter().map(|d| d.domain).collect::<Vec<_>>(), vec![h(1), h(2), h(3)], "sorted by domain id");
         let d1 = schedule.domain(&h(1)).unwrap();
@@ -987,19 +1112,200 @@ mod tests {
         assert_eq!(d1.bonds.iter().map(|b| (b.bond, b.credits)).collect::<Vec<_>>(), vec![(bond(10), 2), (bond(11), 1)]);
         assert_eq!(schedule.domains.iter().map(|d| d.quota_permille as u32).sum::<u32>(), 1000);
         assert!(schedule.domains.iter().all(|d| (d.quota_permille as u64) <= PALW_EXEC_DOMAIN_CAP_PERMILLE));
-        // Order-independent, duplicate-proof, and the seed moves with any execution root.
+        // Order-independent and duplicate-proof.
         let mut shuffled = finals.clone();
         shuffled.reverse();
         shuffled.push(finals[0]);
-        assert_eq!(palw_execution_schedule_v1(7, &shuffled), schedule);
-        let mut forged = finals.clone();
-        forged[4].execution_root = h(42);
-        assert_ne!(palw_execution_schedule_v1(7, &forged).seed, schedule.seed);
-        assert_ne!(palw_execution_schedule_v1(8, &finals).seed, schedule.seed, "the span is in the seed");
+        assert_eq!(schedule_of(7, &shuffled), schedule);
         // An empty span has no domains, and so no permits.
-        let empty = palw_execution_schedule_v1(7, &[]);
+        let empty = schedule_of(7, &[]);
         assert!(empty.domains.is_empty());
         assert!(palw_execution_permits_v1(&empty, 3, 10).is_empty());
+    }
+
+    /// **ADR-0130: the seed is the anchor's execution, the span and the frontier — and nothing the
+    /// finals choose.** Each of the four inputs moves it; the anchor block's hash (which its producer
+    /// re-rolls for free inside one winning draw) and the span that recorded the anchor do not. Finals
+    /// recast under other claim ids and execution roots, with the same participants, give the same
+    /// snapshot and so the same schedule; and the draw follows the seed.
+    #[test]
+    fn adr0130_the_seed_moves_with_the_anchor_span_and_frontier_and_nothing_the_finals_choose() {
+        let finals = vec![final_of(1, 10, 100, 1), final_of(2, 20, 200, 2), final_of(2, 21, 201, 3)];
+        let snapshot = palw_execution_schedule_snapshot_v1(9, &finals);
+        let a = PalwExecSeedAnchorV1 { span: 8, block: h(500), execution_key: h(600) };
+        let seed = palw_execution_span_seed_v1(&a, 9, 40, h(700));
+        assert_eq!(palw_execution_span_seed_v1(&a, 9, 40, h(700)), seed, "deterministic");
+        for (moved, what) in [
+            (
+                palw_execution_span_seed_v1(&PalwExecSeedAnchorV1 { execution_key: h(601), ..a }, 9, 40, h(700)),
+                "the anchor's execution",
+            ),
+            (palw_execution_span_seed_v1(&a, 10, 40, h(700)), "the span"),
+            (palw_execution_span_seed_v1(&a, 9, 41, h(700)), "the frontier's blue score"),
+            (palw_execution_span_seed_v1(&a, 9, 40, h(701)), "the frontier"),
+        ] {
+            assert_ne!(moved, seed, "{what} is in the seed");
+        }
+        assert_eq!(
+            palw_execution_span_seed_v1(&PalwExecSeedAnchorV1 { span: 3, block: h(501), ..a }, 9, 40, h(700)),
+            seed,
+            "the anchor block's hash and its span are not"
+        );
+
+        let schedule = palw_execution_schedule_seeded_v1(&snapshot, &a, 40, h(700));
+        assert_eq!((schedule.span_index, schedule.seed), (9, seed));
+        assert_eq!(schedule.domains, snapshot.domains, "a schedule is its snapshot and a seed");
+        let recast: Vec<PalwExecFinalV1> = finals
+            .iter()
+            .enumerate()
+            .map(|(i, f)| PalwExecFinalV1 { claim_id: h(9_000 + i as u64), execution_root: h(42), ..*f })
+            .collect();
+        assert_eq!(palw_execution_schedule_snapshot_v1(9, &recast), snapshot, "claim ids and roots do not reach the participants");
+        assert_eq!(palw_execution_schedule_seeded_v1(&palw_execution_schedule_snapshot_v1(9, &recast), &a, 40, h(700)), schedule);
+
+        // Domain 2 holds the odd rounds with two operators, so which bond takes a round is the seed's.
+        let other = palw_execution_schedule_seeded_v1(&snapshot, &PalwExecSeedAnchorV1 { execution_key: h(601), ..a }, 40, h(700));
+        assert!(
+            (0..200u64).any(|round| palw_execution_permits_v1(&schedule, round, 1) != palw_execution_permits_v1(&other, round, 1)),
+            "the draw follows the seed"
+        );
+    }
+
+    /// **ADR-0130: one operator, one parity.** An operator that earned in two domains of different
+    /// parities is listed only in the domain where it earned more; the other keeps its row, its quota
+    /// and its parity and holds no permits — so every round of that parity is missed, explicitly,
+    /// rather than handed to the operator that held the round before. A tie goes to the lower domain
+    /// id, one bond certified in both domains is one operator, and another operator in the other
+    /// domain holds that parity's rounds alone.
+    #[test]
+    fn adr0130_an_operator_spread_over_both_parities_misses_one_paritys_rounds() {
+        let finals = vec![final_credited(1, 10, 100, 1, 5), final_credited(2, 11, 100, 2, 3)];
+        let schedule = schedule_of(4, &finals);
+        let (d1, d2) = (schedule.domain(&h(1)).unwrap(), schedule.domain(&h(2)).unwrap());
+        assert_eq!((d1.quota_permille, d2.quota_permille), (500, 500), "two domains split the lane");
+        assert_ne!(d1.parity, d2.parity);
+        let every_earner = [(h(1), d1.parity, bond(10), 5u64), (h(2), d2.parity, bond(11), 3)]
+            .map(|(domain, parity, bond, credits)| PalwExecDomainV1 {
+                domain,
+                credits,
+                quota_permille: 500,
+                parity,
+                bonds: vec![PalwExecBondV1 { bond, operator_id: h(100), credits }],
+            })
+            .to_vec();
+        assert_eq!(palw_execution_operator_parities_v1(&every_earner), BTreeMap::from([(h(100), d1.parity)]), "where it earned more");
+        assert_eq!(d1.bonds.iter().map(|b| b.bond).collect::<Vec<_>>(), vec![bond(10)]);
+        assert!(d2.bonds.is_empty(), "the operator's bond left the domain of the other parity");
+        for width in [1u16, 2, 5, 10] {
+            for round in 0..60u64 {
+                let permits = palw_execution_permits_v1(&schedule, round, width);
+                if round % 2 == d1.parity as u64 {
+                    assert_eq!(permits.iter().map(|p| p.bond).collect::<Vec<_>>(), vec![bond(10)], "width {width}, round {round}");
+                } else {
+                    assert!(permits.is_empty(), "width {width}, round {round}: a round of the other parity is missed");
+                }
+            }
+        }
+
+        let tied = vec![final_credited(1, 10, 100, 1, 2), final_credited(2, 11, 100, 2, 2)];
+        let schedule = schedule_of(4, &tied);
+        assert_eq!(schedule.domain(&h(1)).unwrap().bonds.len(), 1);
+        assert!(schedule.domain(&h(2)).unwrap().bonds.is_empty(), "a tie goes to the lower domain id");
+
+        let one_bond_two_classes = vec![final_credited(1, 10, 100, 1, 1), final_credited(2, 10, 100, 2, 4)];
+        let schedule = schedule_of(4, &one_bond_two_classes);
+        assert!(schedule.domain(&h(1)).unwrap().bonds.is_empty());
+        assert_eq!(schedule.domain(&h(2)).unwrap().bonds.len(), 1, "one bond in two domains is listed where it earned more");
+
+        let mut shared = finals.clone();
+        shared.push(final_credited(2, 20, 200, 3, 1));
+        let schedule = schedule_of(4, &shared);
+        let (d1, d2) = (schedule.domain(&h(1)).unwrap(), schedule.domain(&h(2)).unwrap());
+        assert_eq!(d2.bonds.iter().map(|b| b.operator_id).collect::<Vec<_>>(), vec![h(200)]);
+        for round in 0..60u64 {
+            let holders: Vec<Hash64> = palw_execution_permits_v1(&schedule, round, 1).iter().map(|p| p.operator_id).collect();
+            let expected = if round % 2 == d1.parity as u64 { h(100) } else { h(200) };
+            assert_eq!(holders, vec![expected], "round {round}");
+        }
+    }
+
+    /// splitmix64 — a fixed stream for the randomized censuses below.
+    fn mix(state: &mut u64) -> u64 {
+        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = *state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// **ADR-0130 over randomized censuses: no operator holds permits in two consecutive rounds of a
+    /// span, at any width.** Sixty censuses of up to seven domains and twelve operators; every third
+    /// operator earns in every domain, every fifth certifies one bond in all of its domains, the rest
+    /// earn in a random few. In each, every operator is listed in one parity only, and over 200
+    /// rounds at widths 1, 2, 5 and 10 no operator and no domain holds permits in two rounds running
+    /// and no operator holds two permits of one round.
+    #[test]
+    fn adr0130_no_operator_holds_permits_in_two_consecutive_rounds_of_a_span() {
+        let mut rng = 0x0130_u64;
+        let mut permits_seen = 0usize;
+        for census in 0..60u64 {
+            let domain_count = 1 + mix(&mut rng) % 7;
+            let operator_count = 1 + mix(&mut rng) % 12;
+            let mut finals = Vec::new();
+            let mut claim = 0u64;
+            for operator in 1..=operator_count {
+                let everywhere = operator % 3 == 0;
+                let one_bond = operator % 5 == 0;
+                for domain in 1..=domain_count {
+                    if !everywhere && mix(&mut rng).is_multiple_of(2) {
+                        continue;
+                    }
+                    for b in 0..(1 + mix(&mut rng) % 2) {
+                        let bond_word = if one_bond { operator * 1_000 } else { operator * 1_000 + domain * 10 + b };
+                        for _ in 0..(1 + mix(&mut rng) % 3) {
+                            claim += 1;
+                            finals.push(final_credited(domain, bond_word, operator, claim, 1 + mix(&mut rng) % 50));
+                        }
+                    }
+                }
+            }
+            let snapshot = palw_execution_schedule_snapshot_v1(census, &finals);
+            let schedule = palw_execution_schedule_seeded_v1(&snapshot, &anchor(mix(&mut rng)), census, h(census));
+            let mut parity_of: BTreeMap<Hash64, u8> = BTreeMap::new();
+            for d in &schedule.domains {
+                for b in &d.bonds {
+                    assert_eq!(
+                        *parity_of.entry(b.operator_id).or_insert(d.parity),
+                        d.parity,
+                        "census {census}: an operator in both parities"
+                    );
+                }
+            }
+            for width in [1u16, 2, 5, 10] {
+                let (mut previous_operators, mut previous_domains) = (BTreeSet::new(), BTreeSet::new());
+                for round in 0..200u64 {
+                    let permits = palw_execution_permits_v1(&schedule, round, width);
+                    permits_seen += permits.len();
+                    let operators: BTreeSet<Hash64> = permits.iter().map(|p| p.operator_id).collect();
+                    let domains: BTreeSet<Hash64> = permits.iter().map(|p| p.domain).collect();
+                    assert_eq!(
+                        operators.len(),
+                        permits.len(),
+                        "census {census}, width {width}, round {round}: one permit an operator"
+                    );
+                    assert!(
+                        operators.is_disjoint(&previous_operators),
+                        "census {census}, width {width}, round {round}: an operator held permits in two rounds running"
+                    );
+                    assert!(
+                        domains.is_disjoint(&previous_domains),
+                        "census {census}, width {width}, round {round}: a domain held permits in two rounds running"
+                    );
+                    (previous_operators, previous_domains) = (operators, domains);
+                }
+            }
+        }
+        assert!(permits_seen > 10_000, "the censuses exercised the draw ({permits_seen} permits)");
     }
 
     #[test]
@@ -1010,7 +1316,7 @@ mod tests {
                 finals.push(final_of(1, 1_000 + b, 5_000 + b, 10_000 * (b + 1) + c));
             }
         }
-        let schedule = palw_execution_schedule_v1(0, &finals);
+        let schedule = schedule_of(0, &finals);
         let d = schedule.domain(&h(1)).unwrap();
         assert_eq!(d.bonds.len(), PALW_EXEC_MAX_BONDS_PER_DOMAIN_V1);
         assert!(d.bonds.windows(2).all(|w| w[0].bond < w[1].bond), "stored in bond order");
@@ -1042,7 +1348,7 @@ mod tests {
                     finals.push(final_credited(domain, domain * 1_000 + i, domain * 10_000 + i, claim, credit_of(pwu)));
                 }
             }
-            palw_execution_schedule_v1(3, &finals)
+            schedule_of(3, &finals)
         };
         let quotas = |schedule: &PalwExecScheduleV1| schedule.domains.iter().map(|d| (d.domain, d.quota_permille)).collect::<Vec<_>>();
         assert_eq!(quotas(&span(&|_| 1)), vec![(h(1), 183), (h(2), 367), (h(3), 450)], "counted, the floor out-schedules both models");
@@ -1057,7 +1363,7 @@ mod tests {
         assert_eq!(palw_execution_credit_v1(9_000_000, 0), 9_000_000, "no weight-bearing class, no cap");
 
         // A domain whose finals credited nothing is not listed, and none of its bonds is drawn.
-        let schedule = palw_execution_schedule_v1(3, &[final_credited(1, 10, 100, 1, 5), final_credited(2, 20, 200, 2, 0)]);
+        let schedule = schedule_of(3, &[final_credited(1, 10, 100, 1, 5), final_credited(2, 20, 200, 2, 0)]);
         assert_eq!(schedule.domains.iter().map(|d| d.domain).collect::<Vec<_>>(), vec![h(1)]);
         assert!((0..8).flat_map(|round| palw_execution_permits_v1(&schedule, round, 10)).all(|permit| permit.bond == bond(10)));
     }
@@ -1073,7 +1379,7 @@ mod tests {
                 }
             }
         }
-        palw_execution_schedule_v1(3, &finals)
+        schedule_of(3, &finals)
     }
 
     #[test]
@@ -1147,7 +1453,7 @@ mod tests {
     #[test]
     fn one_live_domain_runs_at_half_the_rounds() {
         let finals: Vec<PalwExecFinalV1> = (0..3).map(|b| final_of(1, 10 + b, 100 + b, b + 1)).collect();
-        let schedule = palw_execution_schedule_v1(0, &finals);
+        let schedule = schedule_of(0, &finals);
         let produced = (0..100u64).filter(|r| !palw_execution_permits_v1(&schedule, *r, 1).is_empty()).count();
         assert_eq!(produced, 50, "exactly the even rounds");
     }

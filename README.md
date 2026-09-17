@@ -8,8 +8,9 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 > **Current status (2026-09-17).** The live public network is **`testnet-11`**, Relaunch 5f.
 > Build current `main`, select it explicitly with `--testnet --netsuffix=11` or
 > `misaka --network testnet-11`, and verify fingerprint
-> **`4787b92a0e20065aac88f8258b581f415ace9f6093dfab35c345b48135269005`** (the build that schedules the
-> DAA 7,001 flag day; the 7,000 release prints `ae1d6162…`).
+> **`ab4e7b9c7e20d14cbadc0874312b8c6dff89ca66ed7e9be3af2f5523dc58b5f2`** (the build that schedules the
+> DAA 7,001 flag day with ADR-0130's operator lottery and 5-DAA spans; the 7,000 release prints
+> `ae1d6162…`; the first 7,001 build, `4787b92a…`, was never deployed).
 > The network produces PALW blocks at a frozen 120-second cadence. Testnet-10 and older relaunches
 > are not supported entry points. ADR-0123's epoch-budget release is implemented but remains
 > dormant on every shipped preset (`palw_epoch_budget_release: None`).
@@ -171,7 +172,7 @@ The log must show this fingerprint and, on the next line, this fence schedule, o
 wrong ruleset:
 
 ```
-Consensus params fingerprint: 4787b92a0e20065aac88f8258b581f415ace9f6093dfab35c345b48135269005 (network testnet-11)
+Consensus params fingerprint: ab4e7b9c7e20d14cbadc0874312b8c6dff89ca66ed7e9be3af2f5523dc58b5f2 (network testnet-11)
 Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 4000, 6900, 7000, 7001, 2125000 (schedule id …)
 ```
 

@@ -427,9 +427,12 @@ pub struct PalwExecutionLaneV1 {
     /// The most round blocks one mergeset may hold. Counted apart from `mergeset_size_limit`,
     /// which keeps bounding the chain's own blocks exactly as before.
     pub max_per_mergeset: u64,
-    /// The DAA span of one schedule: the attempts finalized in span `s` decide the permits of span
-    /// `s + 1`. A round block is judged by the schedule of its anchor's span, and a merging block
-    /// accepts round blocks anchored in its own span or the one before.
+    /// The DAA span of one schedule. The attempts finalized in span `s` become span `s + 2`'s
+    /// participants at the first chain block of `s + 1`, and span `s + 2`'s schedule at its own first
+    /// chain block, seeded by the latest attempt-carrying chain block of `s + 1` (ADR-0130) — so a
+    /// span's producers are public for one span, not before. A round block is judged by the schedule
+    /// of its anchor's span, and a merging block accepts round blocks anchored in its own span or the
+    /// one before.
     pub schedule_span_daa: u64,
 }
 
@@ -4875,6 +4878,10 @@ impl Params {
         // ADR-0125: the lane's shape beside its height — Some-only, like the heartbeat's price.
         if let Some(lane) = self.palw_execution_lane {
             h.write(b"palw_execution_lane_shape");
+            // ADR-0130: and the scheduler's rule set, by the SA-4 rule above — two builds that schedule
+            // the lane at one height under two scheduler rules fold different schedules the moment it
+            // fires, and this id is where the operator log can name that disagreement.
+            h.write(b"scheduler_v2");
             h.write(lane.permits_per_round.to_le_bytes());
             h.write(lane.max_per_mergeset.to_le_bytes());
             h.write(lane.schedule_span_daa.to_le_bytes());
@@ -6303,6 +6310,10 @@ impl Params {
         // build without the field.
         if let Some(lane) = palw_execution_lane {
             h.write(b"palw_execution_lane/v1");
+            // ADR-0130: the scheduler's rule set is named, so a build that derives schedules by
+            // ADR-0125's first rule (a span's own finals, seeded by their claim ids and roots) and
+            // one on this rule print different fingerprints for the same lane shape.
+            h.write(b"palw_execution_lane/scheduler_v2");
             h.write(lane.activation.daa_score().to_le_bytes());
             h.write(lane.permits_per_round.to_le_bytes());
             h.write(lane.max_per_mergeset.to_le_bytes());
@@ -12029,8 +12040,10 @@ pub fn palw_rc_base_params() -> Params {
     //
     // * ADR-0124 — a panel is paid 20 % of its claim's escrow, a drawn seat holds three times the
     //   claim's exposure, and a claim is paid for the compute it certifies;
-    // * ADR-0125 — the execution lane at one permit a round, one execution block a second, spans of 30
-    //   DAA, no widening scheduled (the next stage is its own height);
+    // * ADR-0125 — the execution lane at one permit a round, one execution block a second, no widening
+    //   scheduled (the next stage is its own height); with ADR-0130's scheduler (one parity an
+    //   operator, participants fixed a span before a future anchor seeds them) and spans of 5 DAA, ten
+    //   minutes at 120 s, so a span's producers are public ten minutes ahead rather than an hour;
     // * ADR-0126 (revised) — the validator pool falls from 30 % to 20 % of a block's subsidy and the
     //   tenth is escrowed for the block's PALW claim (72 % instead of 62 %);
     // * ADR-0128 — validators vote BFT by bonded stake and the DNS-final anchor decides the stake reorg
@@ -12046,7 +12059,7 @@ pub fn palw_rc_base_params() -> Params {
         permits_per_round: 1,
         widenings: PalwExecutionLaneV1::NO_WIDENINGS,
         max_per_mergeset: 600,
-        schedule_span_daa: 30,
+        schedule_span_daa: 5,
     });
     params.palw_overlay_carve =
         Some(PalwOverlayCarveV1 { activation: flag_day_7001, subsidy_validator_bps: 2_000, worker_carve_permille: 720 });
@@ -16480,16 +16493,26 @@ mod consensus_params_id_tests {
                 // (`the_7001_flag_day_keeps_the_7000_release_until_7001`); every node must carry it
                 // before the height. Previous (the 7,000 release, 13520042):
                 // ae1d61628da50c7becea62f0a8f08c8654d190c60b2e104df0010b121ba4d3d8.
-                // **Re-pinned 2026-09-17 for ADR-0130's operator lottery.** Past `palw_panel_economy`
-                // the draw is one lottery entry per OPERATOR, not one ticket per bond, so the fence
-                // now writes `palw_panel_draw/operator_ticket_v1` beside its height and this build and
-                // the one above it deal different panels for the same claim at the same 7,001. **The
-                // SCHEDULE is unchanged, so the fork-id gate cannot tell them apart** (a rule added at
-                // a height the schedule already names is invisible to it): the 7,001 build below must
-                // not be deployed beside this one. ADR-0130's own fence, `palw_panel_exposure_floor`,
-                // is `None` here and writes nothing. Previous (the 7,001 build, never deployed):
+                // **Re-pinned 2026-09-17 for ADR-0130, on the same 7,001 flag day — one re-pin for the
+                // union of its two halves**, neither of which is the value below on its own:
+                //
+                // * the panel draw is one lottery entry per OPERATOR past `palw_panel_economy`, named
+                //   in the hash as `palw_panel_draw/operator_ticket_v1` beside the fence's height
+                //   (alone: 236cdb562c8945bd55089f1674c5817a19022ec8baf44535984af57a848605e7);
+                //   ADR-0130's own fence, `palw_panel_exposure_floor`, is `None` here and writes nothing;
+                // * the lane's spans drop from 30 DAA to 5 (a span's producers are public ten minutes
+                //   ahead, not an hour) and the scheduler's rule set is named in the hash
+                //   (`palw_execution_lane/scheduler_v2`: one parity an operator, participants fixed a
+                //   span before a future anchor seeds them)
+                //   (alone: a4df92dfa4b353e68310426710a24d58bff9628b2e52500077523adccae0387b).
+                //
+                // The identity is unmoved, as it is for every scheduled fence, so the rollout is still
+                // host by host — but the fork id digests HEIGHTS, and both builds fire 7,001: a node on
+                // the previous pin and one on this build advertise one fork id and would deal different
+                // panels and run a different lane past the height, so the fleet must carry one of them.
+                // Previous (the first 7,001 build, never deployed):
                 // 4787b92a0e20065aac88f8258b581f415ace9f6093dfab35c345b48135269005.
-                "236cdb562c8945bd55089f1674c5817a19022ec8baf44535984af57a848605e7",
+                "ab4e7b9c7e20d14cbadc0874312b8c6dff89ca66ed7e9be3af2f5523dc58b5f2",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the

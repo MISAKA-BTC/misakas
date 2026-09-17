@@ -13671,6 +13671,30 @@ fn adr0125_harness_bond() -> kaspa_consensus_core::palw_state_v2::PalwBondKeyV2 
     ))
 }
 
+/// **A schedule a test installs, as ADR-0130 derives one**: the participants its finals earn, seeded
+/// by an anchor and a frontier. A unit-test chain cannot finalize an attempt, so these are installed
+/// through the carriage; on a live chain the finals are span `s`'s, the snapshot is taken at the first
+/// chain block of `s + 1` and this seeding happens at the first chain block of `s + 2`.
+fn adr0125_schedule_of(
+    span: u64,
+    finals: &[kaspa_consensus_core::palw_execution_lane_v1::PalwExecFinalV1],
+) -> kaspa_consensus_core::palw_execution_lane_v1::PalwExecScheduleV1 {
+    use kaspa_consensus_core::palw_execution_lane_v1::{
+        PalwExecSeedAnchorV1, palw_execution_schedule_seeded_v1, palw_execution_schedule_snapshot_v1,
+    };
+    let anchor = PalwExecSeedAnchorV1 {
+        span: span.saturating_sub(1),
+        block: kaspa_hashes::Hash64::from_u64_word(0xA0C0),
+        execution_key: kaspa_hashes::Hash64::from_u64_word(0xE0E1),
+    };
+    palw_execution_schedule_seeded_v1(
+        &palw_execution_schedule_snapshot_v1(span, finals),
+        &anchor,
+        7,
+        kaspa_hashes::Hash64::from_u64_word(0xF0),
+    )
+}
+
 /// Solve (the fixture skips PoW, so nonce 0 stands) and sign a round block the way a permit holder
 /// does: the envelope names the round, the permit and the bond, and its signature covers the
 /// pre-PoW hash, the timestamp and the nonce.
@@ -13852,7 +13876,7 @@ async fn adr0125_round_blocks_hang_beside_the_chain_and_never_move_it() {
 #[tokio::test]
 async fn adr0125_a_merging_block_grants_exactly_the_permits_its_parent_state_schedules() {
     use crate::model::stores::virtual_state::VirtualStateStoreReader;
-    use kaspa_consensus_core::palw_execution_lane_v1::{PalwExecFinalV1, palw_execution_schedule_v1};
+    use kaspa_consensus_core::palw_execution_lane_v1::PalwExecFinalV1;
     use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
     let (config, bundle) = adr0125_config();
     let mut ctx = TestContext::new(TestConsensus::new(&config));
@@ -13895,7 +13919,7 @@ async fn adr0125_a_merging_block_grants_exactly_the_permits_its_parent_state_sch
     assert_eq!(none.round_blocks.len(), 3);
     assert!(none.permitted.is_empty(), "no schedule, no permit");
 
-    let schedule = palw_execution_schedule_v1(
+    let schedule = adr0125_schedule_of(
         0,
         &[PalwExecFinalV1 {
             domain: bundle.base_class_id,
@@ -13944,7 +13968,7 @@ async fn adr0125_a_merging_block_grants_exactly_the_permits_its_parent_state_sch
 async fn adr0125_a_permit_signed_twice_is_evidence_the_chain_accepts_once() {
     use crate::model::stores::virtual_state::VirtualStateStoreReader;
     use kaspa_consensus_core::palw_execution_lane_v1::{
-        PALW_EXEC_EQUIVOCATION_VERSION_V1, PalwExecEnvelopeV1, PalwExecEquivocationV1, PalwExecFinalV1, palw_execution_schedule_v1,
+        PALW_EXEC_EQUIVOCATION_VERSION_V1, PalwExecEnvelopeV1, PalwExecEquivocationV1, PalwExecFinalV1,
     };
     use kaspa_consensus_core::palw_state_v2::{PalwBlockContextV2, PalwConsensusObjectV2, PalwStateCarriageV2};
     let (config, bundle) = adr0125_config();
@@ -13993,7 +14017,7 @@ async fn adr0125_a_permit_signed_twice_is_evidence_the_chain_accepts_once() {
         blue_score: virtual_state.ghostdag_data.blue_score,
         subsidy: 0,
     };
-    let schedule = palw_execution_schedule_v1(
+    let schedule = adr0125_schedule_of(
         0,
         &[PalwExecFinalV1 {
             domain: bundle.base_class_id,
@@ -14130,6 +14154,205 @@ async fn adr0125_a_widening_holds_for_whole_spans() {
     assert_eq!(ctx.consensus.get_sink(), template.block.header.hash);
 }
 
+/// **ADR-0130 through the pipeline: a span's schedule is written at the span's first chain block,
+/// from participants fixed a span earlier and the attempt-carrying chain block that anchored them.**
+///
+/// The lane runs 4-DAA spans. The tip's state is given span `s + 1`'s participants — a snapshot, not
+/// a schedule, installed as a pruned sync installs a state, because a unit-test chain cannot take one
+/// from finalized attempts — and the chain is built on. Every chain block of this harness carries an
+/// attempt, so the last chain block of span `s` is the anchor the fold records; the first chain block
+/// of `s + 1` seeds exactly that anchor and the frontier its parent left into the span's schedule,
+/// and a round block anchored in the new span holds the permit that schedule grants: the merging
+/// block accepts it and records the permit as used.
+#[tokio::test]
+async fn adr0130_a_span_is_seeded_at_its_first_block_from_the_anchor_of_the_span_before() {
+    use kaspa_consensus_core::config::params::PalwExecutionLaneV1;
+    use kaspa_consensus_core::palw_execution_lane_v1::{
+        PalwExecFinalV1, palw_execution_permits_v1, palw_execution_schedule_seeded_v1, palw_execution_schedule_snapshot_v1,
+        palw_execution_span_v1,
+    };
+    use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
+    const SPAN: u64 = 4;
+    let (mut config, bundle) = adr0125_config_funded_for(24);
+    {
+        let lane = config.params.palw_execution_lane.as_mut().expect("the fixture arms the lane");
+        *lane = PalwExecutionLaneV1 { schedule_span_daa: SPAN, ..*lane };
+    }
+    config.params.validate_palw_v2().expect("a lane with short spans is runnable");
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..4 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let vp = ctx.consensus.virtual_processor().clone();
+    let genesis_ts = config.params.genesis.timestamp;
+    let sink0 = ctx.consensus.get_sink();
+    let (tip, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    assert_eq!(tip, sink0);
+    let bond = state.bond(&adr0125_harness_bond()).expect("row 0").clone();
+    let payout = p2pkh_mldsa87_spk(bond.payout_payload.as_byte_slice());
+    let span = palw_execution_span_v1(vp.headers_store.get_daa_score(sink0).unwrap(), SPAN);
+    let snapshot = palw_execution_schedule_snapshot_v1(
+        span + 1,
+        &[PalwExecFinalV1 {
+            domain: bundle.base_class_id,
+            bond: adr0125_harness_bond(),
+            operator_id: bond.operator_id,
+            claim_id: kaspa_hashes::Hash64::from_u64_word(0xC1A1),
+            execution_root: kaspa_hashes::Hash64::from_u64_word(0xE0),
+            credit: 1,
+        }],
+    );
+    let planted = {
+        let mut carriage = PalwStateCarriageV2::from_state(&state);
+        carriage.round_pending.insert(span + 1, snapshot.clone());
+        carriage.into_state(&bundle.state, None).expect("a carriage with a pending snapshot rebuilds")
+    };
+    vp.palw_state_v2_store.write().set_tip_for_tests(sink0, &planted).unwrap();
+
+    // Chain blocks until one opens the next span. The state each leaves carries that block as the
+    // span's anchor, and no schedule until the span turns.
+    let (mut last_in_span, mut parent_state) = (sink0, planted);
+    let (opening, state_after) = loop {
+        ctx.simulated_time += config.params.target_time_per_block();
+        let block = ctx.build_block_template(60, ctx.simulated_time);
+        ctx.validate_and_insert_block(block.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+        let hash = block.block.header.hash;
+        let (_, next) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+        if palw_execution_span_v1(vp.headers_store.get_daa_score(hash).unwrap(), SPAN) > span {
+            break (hash, next);
+        }
+        assert!(next.round_schedule(span + 1).is_none(), "the span is not scheduled before its first block");
+        assert!(next.round_pending_snapshot().is_some_and(|s| s.target_span == span + 1), "the participants wait");
+        (last_in_span, parent_state) = (hash, next);
+    };
+    let anchor = *parent_state.round_seed_anchor().expect("every chain block here carries an attempt");
+    assert_eq!((anchor.span, anchor.block), (span, last_in_span), "the latest attempt-carrying chain block of the span");
+    assert_ne!(anchor.execution_key, kaspa_hashes::Hash64::default(), "and its own execution, as the processor derives it");
+
+    let (frontier_blue_score, frontier) = parent_state.safe_frontier();
+    let schedule = state_after.round_schedule(span + 1).expect("the span's first block schedules it").clone();
+    assert_eq!(schedule, palw_execution_schedule_seeded_v1(&snapshot, &anchor, frontier_blue_score, frontier));
+    assert!(state_after.round_pending_snapshot().is_none(), "the snapshot is spent");
+    assert_eq!(
+        state_after.round_seed_anchor().map(|a| (a.span, a.block)),
+        Some((span + 1, opening)),
+        "and the opening block, which carries an attempt of its own, anchors the next target"
+    );
+
+    // A round block anchored in the new span holds the permit that schedule grants.
+    ctx.simulated_time += config.params.target_time_per_block();
+    let after = ctx.build_block_template(61, ctx.simulated_time);
+    ctx.validate_and_insert_block(after.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+    let round = {
+        let r = (vp.headers_store.get_timestamp(ctx.consensus.get_sink()).unwrap() - genesis_ts) / 1_000 + 2;
+        r + r % 2
+    };
+    assert_eq!(
+        palw_execution_permits_v1(&schedule, round, config.params.palw_execution_lane.unwrap().width_of_span(span + 1))
+            .iter()
+            .map(|p| p.bond)
+            .collect::<Vec<_>>(),
+        vec![adr0125_harness_bond()],
+        "the harness bond holds this round"
+    );
+    let e1 = adr0125_round_block(&ctx, &config, round, 0, payout.clone(), 0);
+    let e1_hash = e1.header.hash;
+    ctx.consensus.validate_and_insert_block(e1.to_immutable()).virtual_state_task.await.expect("a signed round block is valid");
+    ctx.simulated_time = ctx.simulated_time.max(genesis_ts + round * 1_000) + config.params.target_time_per_block();
+    let merging = ctx.build_block_template(62, ctx.simulated_time);
+    assert!(merging.block.header.direct_parents().contains(&e1_hash), "virtual offers the round tip");
+    ctx.validate_and_insert_block(merging.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+    let (_, merged) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    assert!(merged.round_permit_used(span + 1, round, 0), "the merging block granted the permit the seeded schedule wrote");
+}
+
+/// **ADR-0130 through the pipeline: an operator does not hold two consecutive rounds, and the round
+/// it cannot hold is missed rather than handed back to it.**
+///
+/// One operator — the harness bond — earned in two security domains, which split the lane and take
+/// one parity each. Under ADR-0125's first rule the bond was listed in both and held every round;
+/// under this one it is listed only in the domain where it earned more, so the other parity's rounds
+/// have no permit at all. Two round blocks, consecutive rounds and one of each parity, are valid at
+/// the header; the merging block's verdict grants the one whose parity the operator holds and refuses
+/// the other — while the schedule the rule replaced, hand-built here with the bond in both domains,
+/// grants both.
+#[tokio::test]
+async fn adr0130_a_round_block_whose_permit_the_previous_round_held_is_not_granted() {
+    use crate::model::stores::virtual_state::VirtualStateStoreReader;
+    use kaspa_consensus_core::palw_execution_lane_v1::{PalwExecFinalV1, palw_execution_permits_v1};
+    use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
+    let (config, bundle) = adr0125_config();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..4 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let vp = ctx.consensus.virtual_processor().clone();
+    let sink0 = ctx.consensus.get_sink();
+    let genesis_ts = config.params.genesis.timestamp;
+    let first_round = {
+        let r = (vp.headers_store.get_timestamp(sink0).unwrap() - genesis_ts) / 1_000 + 2;
+        r + r % 2
+    };
+    let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    let bond = state.bond(&adr0125_harness_bond()).expect("row 0").clone();
+    let payout = p2pkh_mldsa87_spk(bond.payout_payload.as_byte_slice());
+
+    // One operator, two domains: five credits in the class's own domain and one in another.
+    let other_domain = kaspa_hashes::Hash64::from_u64_word(0xD0D0);
+    let earned = |domain, claim: u64, credit| PalwExecFinalV1 {
+        domain,
+        bond: adr0125_harness_bond(),
+        operator_id: bond.operator_id,
+        claim_id: kaspa_hashes::Hash64::from_u64_word(claim),
+        execution_root: kaspa_hashes::Hash64::from_u64_word(0xE0),
+        credit,
+    };
+    let schedule = adr0125_schedule_of(0, &[earned(bundle.base_class_id, 0xC1A1, 5), earned(other_domain, 0xC1A2, 1)]);
+    assert_eq!(schedule.domains.len(), 2, "two domains");
+    assert_ne!(schedule.domains[0].parity, schedule.domains[1].parity, "one parity each");
+    let held = schedule.domain(&bundle.base_class_id).expect("the class's own domain");
+    assert_eq!(held.bonds.len(), 1, "the operator is listed where it earned more");
+    assert!(schedule.domain(&other_domain).expect("listed").bonds.is_empty(), "and nowhere else");
+    let (held_round, missed_round) =
+        if first_round % 2 == held.parity as u64 { (first_round, first_round + 1) } else { (first_round + 1, first_round + 2) };
+    assert!(palw_execution_permits_v1(&schedule, missed_round, 2).is_empty(), "the other parity's round has no permit at all");
+
+    // What the rule replaced: the same schedule with the operator listed in both parities.
+    let both_parities = {
+        let mut relaxed = schedule.clone();
+        let row = held.bonds[0];
+        relaxed.domains.iter_mut().for_each(|d| d.bonds = vec![row]);
+        relaxed
+    };
+    assert_eq!(palw_execution_permits_v1(&both_parities, missed_round, 2).len(), 1, "under which the missed round was held");
+
+    let e_held = adr0125_round_block(&ctx, &config, held_round, 0, payout.clone(), 1);
+    let e_held_hash = e_held.header.hash;
+    ctx.consensus.validate_and_insert_block(e_held.to_immutable()).virtual_state_task.await.expect("valid at the header");
+    let e_missed = adr0125_round_block(&ctx, &config, missed_round, 0, payout.clone(), 2);
+    let e_missed_hash = e_missed.header.hash;
+    ctx.consensus.validate_and_insert_block(e_missed.to_immutable()).virtual_state_task.await.expect("valid at the header");
+
+    let virtual_state = vp.virtual_stores.read().state.get().unwrap();
+    let daa = virtual_state.daa_score;
+    let with = |schedule: &kaspa_consensus_core::palw_execution_lane_v1::PalwExecScheduleV1| {
+        let mut carriage = PalwStateCarriageV2::from_state(&state);
+        carriage.round_schedules.insert(0, schedule.clone());
+        carriage.into_state(&bundle.state, None).expect("a carriage with a schedule rebuilds")
+    };
+    let verdicts = vp.palw_round_verdicts_v1(&with(&schedule), &virtual_state.ghostdag_data, daa).expect("the lane is open");
+    assert!(verdicts.permitted.contains(&e_held_hash), "the round its parity holds is granted");
+    assert!(
+        !verdicts.permitted.contains(&e_missed_hash),
+        "and the round before or after it is not — the operator does not hold two in a row"
+    );
+    let relaxed = vp.palw_round_verdicts_v1(&with(&both_parities), &virtual_state.ghostdag_data, daa).expect("open");
+    assert!(
+        relaxed.permitted.contains(&e_held_hash) && relaxed.permitted.contains(&e_missed_hash),
+        "the schedule the rule replaced grants both"
+    );
+}
+
 // ---- ADR-0127: conflicting spends in the execution lane, and what a burst of it confirms -------
 
 /// What one [`adr0127_round_burst`] run leaves at the chain block that merged the burst.
@@ -14160,8 +14383,8 @@ struct Adr0127BurstOutcome {
 
 /// **One chain, built twice**: a key is funded and matures, the sink's state is given a span-0 schedule
 /// that grants the harness bond permit 0 of every even round (installed at the tip, as a pruned sync
-/// installs a state — on a live chain the schedule is earned by attempts that reached `Final` in the
-/// span before, which a unit-test chain cannot finalize), and then the next chain block is built —
+/// installs a state — on a live chain the schedule is earned by attempts that reached `Final` two spans
+/// earlier, which a unit-test chain cannot finalize), and then the next chain block is built —
 /// `with_round_blocks` merging three permitted round blocks, e1 and e2 each carrying a spend of the
 /// one funded output and e3 carrying none, and otherwise merging nothing. Every other step, time and
 /// nonce is the same in both runs, so the two merging blocks differ by the burst alone.
@@ -14170,7 +14393,7 @@ async fn adr0127_round_burst(with_round_blocks: bool) -> Adr0127BurstOutcome {
     use kaspa_consensus_core::hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash};
     use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
     use kaspa_consensus_core::mass::MassCalculator;
-    use kaspa_consensus_core::palw_execution_lane_v1::{PalwExecFinalV1, palw_execution_schedule_v1};
+    use kaspa_consensus_core::palw_execution_lane_v1::PalwExecFinalV1;
     use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
     use kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE;
     use kaspa_consensus_core::tx::{PopulatedTransaction, TransactionInput, TransactionOutput, UtxoEntry};
@@ -14252,7 +14475,7 @@ async fn adr0127_round_burst(with_round_blocks: bool) -> Adr0127BurstOutcome {
     assert_eq!(tip, sink0);
     let bond = state.bond(&adr0125_harness_bond()).expect("row 0").clone();
     let payout = p2pkh_mldsa87_spk(bond.payout_payload.as_byte_slice());
-    let schedule = palw_execution_schedule_v1(
+    let schedule = adr0125_schedule_of(
         0,
         &[PalwExecFinalV1 {
             domain: bundle.base_class_id,

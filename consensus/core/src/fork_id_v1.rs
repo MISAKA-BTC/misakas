@@ -645,7 +645,7 @@ mod tests {
                     permits_per_round: 1,
                     widenings: crate::config::params::PalwExecutionLaneV1::NO_WIDENINGS,
                     max_per_mergeset: 600,
-                    schedule_span_daa: 30,
+                    schedule_span_daa: 5,
                 })
             }
             widening if widening.starts_with("palw_execution_lane_widening_") => {
@@ -657,7 +657,7 @@ mod tests {
                     permits_per_round: 1,
                     widenings: crate::config::params::PalwExecutionLaneV1::NO_WIDENINGS,
                     max_per_mergeset: 600,
-                    schedule_span_daa: 30,
+                    schedule_span_daa: 5,
                 });
                 lane.widenings[slot - 1] =
                     crate::config::params::PalwExecWideningV1 { activation: at, permits_per_round: 1 + slot as u16 };

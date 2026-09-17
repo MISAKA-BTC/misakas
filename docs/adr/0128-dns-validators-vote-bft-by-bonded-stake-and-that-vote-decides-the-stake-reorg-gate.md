@@ -178,7 +178,7 @@ quorum. ADR-0127 states the PALW side and pins it.
 
 * `activation` = DAA 7,001 — its own height beside 7,000, so the fork-id gate separates builds.
   Scheduled in the preset on 2026-09-17 (`d6c46f25`, at DAA ≈5,773) with ADR-0124, ADR-0125 and
-  ADR-0126; fingerprint `4787b92a…`.
+  ADR-0126; fingerprint `4787b92a…`, re-pinned to `ab4e7b9c…` when ADR-0130 joined the height the same day.
 * `t_leak_daa` = 5,040 — seven days at the chain's 120-second cadence. The 1-BPS execution lane does
   not change it: round blocks are outside the DAA set and advance no DAA score (ADR-0125 Decision 1).
 * `reentry_final_depth_daa` = 200 — about 6.7 hours at the 120-second cadence (a hundred of testnet-11's
