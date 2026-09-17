@@ -366,6 +366,10 @@ pub struct PalwExecSeedAnchorV1 {
 /// whatever the width: a round's permits come only from domains of the round's parity. Not
 /// recursive — quotas and domain parities are read as given and never recomputed for what leaves.
 /// Returned by operator id.
+///
+/// **An operator here is the registry's `operator_id`**, so a party that bonds under two operator
+/// keys is two operators and takes a parity each — the same residual ADR-0125's "one permit an
+/// operator a round" already carries, and the same place to close it if it ever needs closing.
 pub fn palw_execution_operator_parities_v1(domains: &[PalwExecDomainV1]) -> BTreeMap<Hash64, u8> {
     let mut credit_by_operator: BTreeMap<Hash64, BTreeMap<Hash64, (u64, u8)>> = BTreeMap::new();
     for domain in domains {
