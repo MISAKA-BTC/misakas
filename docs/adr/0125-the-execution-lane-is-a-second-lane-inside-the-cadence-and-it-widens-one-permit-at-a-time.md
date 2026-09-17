@@ -3,7 +3,7 @@
 * Status: **IMPLEMENTED 2026-09-17** on `feat/palw-exec-lane-and-validator-retirement` (from `main` at
   `6fdf6ba7`, after ADR-0124), including the stage table (§7.2), equivocation evidence and relay
   de-duplication (§7.3), the RPC read and the operator's status line (§7.4), and the devnet drill
-  (§7.1). **testnet-11 schedules it at DAA 7,001 at one permit a round** (the operator's flag day, §7
+  (§7.1). **testnet-11 schedules it at DAA 6,001 at one permit a round** (the operator's flag day, §7
   item 5); `None` on every other shipped preset.
 * Operator's request: "testnet では BPS 1 から実装して最終目標を BPS 10 とする", with the design
   quoted in §1.
@@ -269,7 +269,7 @@ every DAG parameter, depth and PALW window; every network until its fence is arm
 3. **Built** — relay de-duplication and the equivocation slash (SA-2).
 4. **Built** — `getPalwRoundLane`, `misaka palw round-lane` and `misaka mining status`'s lane line.
    An explorer reads op 181; misakascan lives in its own repository.
-5. **Scheduled** — testnet-11 at `PALW_RC_FLAG_DAY_7001_FENCE_DAA` = 7,001 (the operator's height,
+5. **Scheduled** — testnet-11 at `PALW_RC_FLAG_DAY_6001_FENCE_DAA` = 6,001 (the operator's height,
    2026-09-17, at DAA ≈5,773): `{ width 1, no widening, max_per_mergeset 600, schedule_span_daa 5 }` (30 when first pinned as
    `4787b92a…`; ADR-0130 shortened the span and named the scheduler rule set the same day, re-pinning to
    `ab4e7b9c…`), one execution block a second, with ADR-0124, ADR-0126, ADR-0128 and ADR-0130 at the same
@@ -321,3 +321,26 @@ payments. Fixed the same day: the chain walk's lane line now counts native trans
 carriers and names the first four, and step 4 requires one of the sent transaction ids in a lane line
 written after the sends. That run belongs to the release build that carries ADR-0126 (revised),
 ADR-0127 and ADR-0128, and its result is appended here when it is taken.
+
+**Run 2 — 2026-09-17, 15:48–16:58 JST, release binaries built from `f4ea3ed2`** (ADR-0124–0128,
+ADR-0130 M1/M2 with its two-boundary span delay, the ADR-0131/0132/0133 shadows; before ADR-0134's
+deletions and ADR-0135, which the unit and integration suites cover, and before the heights moved —
+devnet schedules no fence, so the move does not reach this drill). Same host, four fixture nodes,
+`--palw-execution-lane-devnet` at width 2 and 10-DAA spans, `STEP_WAIT` 4 h / `STALL_WAIT` 15 min.
+
+| step | result | evidence |
+|---|---|---|
+| 0 | the lane armed on the nodes' ruleset | `armed, opens at DAA 0`, 06:48Z |
+| 1 | attempts reached `Final` and span 12 was scheduled from them two boundaries later (ADR-0130) | `0.5 BPS scheduled (width 2) · span 12 · … · 2 finals toward span 14`, 16:55 JST; 67 minutes at ≈1.7 DAA a minute (the devnet challenge window is 100 DAA) |
+| 2 | a node produced a round block for a permit its bond held | `[palw-round-producer] 1 round blocks produced (latest round 41241332)`, 16:55:32 |
+| 3 | chain blocks merged round blocks and granted their permits | 16:56:56: chain block `e617a77e…` merged 43 round blocks, 43 permits granted, 5 transactions accepted from them (0 native) |
+| 4 | **established** — a granted round block carried a sent payment | five payments sent (`d7b978c9…`, `e0745580…`, `eb2ee4ea…`, `31fd64aa…`, `b8cddeaf…`); 16:57:19, after the sends: chain block `570284ce…` merged 11 round blocks, 1 transaction accepted, **1 native: `d7b978c9…`**, the first sent id, named by the chain walk's lane line; recipient balance 0 → 400,000,009 sompi |
+| 5 | two nodes reported one lane | node-1 and node-3: span 12, width 2, one domain; 16 lane lines across the fleet, 127 round-block production reports |
+
+`PASS` at 07:58:37Z (`scripts/misaka-palw-round-lane-devnet-drill.sh`, exit 0). What the first run
+could not show — that the lane carried *the* payments rather than only carriers — is now shown by the
+rule §8 added: the lane line counts native transactions apart from carriers and names them, and the
+step accepts only a line written after the sends that names a sent id. One observation, not a defect
+of the lane: the per-draw storage line (ADR-0112 Decision 8) prints once a draw, and a fixture draw
+takes 240 ms, so a node log grew by 12,460 such lines in 50 minutes; on the fleet a draw takes seconds
+to minutes and the line is rare. Left as is.
