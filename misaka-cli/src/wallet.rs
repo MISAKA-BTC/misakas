@@ -139,11 +139,7 @@ impl NodeView {
 async fn locked_bond_outpoints(nv: &NodeView) -> Result<std::collections::HashSet<TransactionOutpoint>, CliError> {
     let mut out = std::collections::HashSet::new();
     let mut cursor: Option<String> = None;
-    // **ADR-0126: past the overlay's retirement no overlay bond is locked** — consensus reads the
-    // overlay as absent there, so the collateral is an ordinary output and the wallet must offer it.
-    // The PALW half below is not the overlay's and still applies.
-    let overlay_retired = nv.params.palw_validator_overlay_retirement_fence().is_some_and(|fence| fence.is_active(nv.virtual_daa));
-    while !overlay_retired {
+    loop {
         let resp = nv
             .client
             .get_stake_bonds(kaspa_rpc_core::GetStakeBondsRequest {
