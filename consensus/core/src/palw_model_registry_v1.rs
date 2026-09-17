@@ -217,6 +217,14 @@ pub fn palw_derive_profile_v1(work: &PalwModelWorkV1, g: &PalwRegistryGlobalsV1)
     }
 }
 
+/// **How many spans late a possession proof may land** (ADR-0135 §7, found by the devnet drill):
+/// a proof names the span it was made for; the carrier that brings it waits in mempools and for a
+/// block, and on a devnet with two-DAA spans that wait was several spans. A proof up to this many
+/// spans old is taken, and the row it writes is dated at the NAMED span's first DAA — so a late
+/// proof is exactly as fresh as when it was made, a replayed one renews nothing, and the readiness
+/// age (thirty spans) bounds the rest.
+pub const PALW_READINESS_LANDING_SPANS_V1: u64 = 8;
+
 /// **The single lottery's class targets, from admission alone** (ADR-0132 S, ADR-0133 §9a Fence 2):
 /// each class's share of draws is its admitted claims a span over every class's, in permille —
 /// no share is set by anyone, and a class whose admission is zero holds no share.

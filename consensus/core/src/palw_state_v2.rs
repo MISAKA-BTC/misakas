@@ -7919,8 +7919,13 @@ impl<'a> TransitionBuilder<'a> {
         crate::palw_artifact::verify_artifact_opening_v1(opening, class.artifact_root)
             .map_err(|e| PalwStateV2Error::ReadinessProofRefused(format!("{e}")))?;
         let span_now = crate::palw_execution_lane_v1::palw_execution_span_v1(ctx.daa_score, span_daa);
-        if span != span_now && span.saturating_add(1) != span_now {
-            return Err(PalwStateV2Error::ReadinessProofRefused(format!("the proof names span {span} at span {span_now}")));
+        // A proof for a span not yet opened is refused; one older than the landing allowance is
+        // refused (the seat proves again for a current span rather than replaying an old one).
+        if span > span_now || span_now - span > registry::PALW_READINESS_LANDING_SPANS_V1 {
+            return Err(PalwStateV2Error::ReadinessProofRefused(format!(
+                "the proof names span {span} at span {span_now} (a proof lands within {} spans)",
+                registry::PALW_READINESS_LANDING_SPANS_V1
+            )));
         }
         let bond_bytes = borsh::to_vec(bond).expect("a bond key is borsh-serializable");
         let seed = registry::palw_readiness_challenge_seed_v1(class_id, &bond_bytes, span);
@@ -7934,8 +7939,8 @@ impl<'a> TransitionBuilder<'a> {
         self.write_seat_readiness(
             (*bond, *class_id),
             Some(registry::PalwSeatReadinessRowV1 {
-                proved_daa: ctx.daa_score,
-                proved_span: span_now,
+                proved_daa: span.saturating_mul(span_daa.max(1)),
+                proved_span: span,
                 leaf_index: opening.leaf_index,
             }),
         );
@@ -17695,9 +17700,16 @@ pub(crate) mod tests {
                 s6.class_shares.get(&kimi_id()).copied().unwrap_or(0) >= 1,
                 "probation admits at a twentieth: at least the grant floor"
             );
-            // A proof for a span neither current nor just closed is refused.
-            let stale = step(&s6, &p, &ctx(7, 121, 7), &[proof(&operands, bond_key(2), 9)], None, Some(f.clone()));
-            assert!(matches!(stale, Err(PalwStateV2Error::ReadinessProofRefused(_))));
+            // A proof older than the landing allowance is refused, and so is one for a span not yet
+            // opened; one a few spans late (the carrier waited) is taken.
+            let stale = step(&s6, &p, &ctx(7, 121, 7), &[proof(&operands, bond_key(2), 3)], None, Some(f.clone()));
+            assert!(matches!(stale, Err(PalwStateV2Error::ReadinessProofRefused(_))), "{stale:?}");
+            let early = step(&s6, &p, &ctx(7, 121, 7), &[proof(&operands, bond_key(2), 13)], None, Some(f.clone()));
+            assert!(matches!(early, Err(PalwStateV2Error::ReadinessProofRefused(_))), "{early:?}");
+            let (late, _) = step(&s6, &p, &ctx(7, 121, 7), &[proof(&operands, bond_key(2), 9)], None, Some(f.clone()))
+                .expect("three spans late lands");
+            let row = late.seat_readiness(&bond_key(2), &kimi_id()).unwrap();
+            assert_eq!((row.proved_span, row.proved_daa), (9, 90), "and is dated at the span it names, not the span it landed in");
         }
 
         #[test]
@@ -17837,9 +17849,18 @@ pub(crate) mod tests {
             let (s2, d2) = step(&s1, &p, &ctx(2, 101, 2), std::slice::from_ref(&object), None, Some(f.clone())).unwrap();
             let (s3, _) = step(&s2, &p, &ctx(3, 102, 3), std::slice::from_ref(&object), None, Some(f.clone())).unwrap();
             assert_eq!(s3.seat_readiness_iter().count(), 1, "one row, however many times the span's proof lands");
-            assert_eq!(s3.seat_readiness(&bond_key(2), &kimi_id()).unwrap().proved_daa, 102, "the latest landing is the row");
-            let replayed = step(&s3, &p, &ctx(4, 125, 4), &[object], None, Some(f.clone()));
-            assert!(matches!(replayed, Err(PalwStateV2Error::ReadinessProofRefused(_))), "span 10's proof at span 12: {replayed:?}");
+            assert_eq!(
+                s3.seat_readiness(&bond_key(2), &kimi_id()).unwrap().proved_daa,
+                100,
+                "the row is dated at the named span's first DAA, however many times the proof lands"
+            );
+            // Replayed two spans later the proof still lands (a carrier may be that late) but renews
+            // nothing: the row is the named span's, so the seat gains no freshness it did not prove.
+            let (replayed, _) =
+                step(&s3, &p, &ctx(4, 125, 4), &[object], None, Some(f.clone())).expect("span 10's proof at span 12 lands");
+            let row = replayed.seat_readiness(&bond_key(2), &kimi_id()).unwrap();
+            assert_eq!((row.proved_daa, row.proved_span), (100, 10), "a replay renews nothing");
+            assert_eq!(replayed.seat_readiness_iter().count(), 1);
             let back = revert_delta_v2(&s2, &d2, &p).unwrap();
             assert!(back.seat_readiness_iter().next().is_none() && back.state_root() == s1.state_root());
         }

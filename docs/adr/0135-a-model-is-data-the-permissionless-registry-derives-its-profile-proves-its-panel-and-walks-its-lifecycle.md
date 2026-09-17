@@ -167,6 +167,14 @@ registered class through the carriage the chain carried — before or after the 
 carriage store and adopted by a syncing node before the block that needs it. A class the node cannot
 describe stays a legacy row. The fold itself is unchanged: it opens rows from the works it is handed.
 
+**Amended the same evening, the second drill finding:** a possession proof names the span it was made for
+and the fold took it only in that span or the next; on the devnet's two-DAA spans the carrier that brings it
+waited longer than that in mempools and for a block (every proof refused as "names span 11 at span 21").
+A proof now lands within `PALW_READINESS_LANDING_SPANS_V1 = 8` spans of the span it names (a future span
+is still refused), and the row it writes is dated at the named span's first DAA: a late proof is exactly as
+fresh as when it was made, a replayed one renews nothing, and the thirty-span readiness age bounds the rest; on testnet-11 (five-DAA spans, ~5 DAA an
+hour) the allowance is about eight hours of carrier latency.
+
 **The fence.** `Params::palw_model_registry: Option<ForkActivation>` — `None` on every shipped preset
 (the t11 fingerprint `135b6ee0…` does not move); hashed `Some`-only; the fork-id gate names it when
 armed; `validate_palw_v2` refuses it without `palw_panel_economy` and `palw_execution_lane` at or
