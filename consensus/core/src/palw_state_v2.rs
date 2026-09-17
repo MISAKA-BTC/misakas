@@ -8228,11 +8228,9 @@ impl<'a> TransitionBuilder<'a> {
             writes.push((*id, share as u16));
         }
         writes.push((base, (1_000u32.saturating_sub(legacy_sum).saturating_sub(given)).max(floor) as u16));
-        let mut moved = false;
         for (id, share) in writes {
             if self.state.class_shares.get(&id).copied() != Some(share) {
                 self.write_share(id, Some(share));
-                moved = true;
             }
         }
         // **A share the registry moves is a budget the epoch must follow** (found by the devnet
@@ -8242,11 +8240,14 @@ impl<'a> TransitionBuilder<'a> {
         // ("holding: this class's epoch budget is already spent"). The budgets of the epoch this
         // boundary falls in are re-derived from the shares it wrote; the produced counters are
         // untouched, so a class that already spent its blocks gains only what its new share adds.
-        if moved {
-            let epoch_index = ctx.daa_score / self.params.epoch_length;
-            if let Some(budgets) = palw_epoch_budgets_for_v2(&self.state, self.params, epoch_index) {
-                self.write_epoch_budgets(Some(budgets));
-            }
+        // Re-derived at every governed boundary and written only when it differs — so a state
+        // whose shares moved before this rule existed (a restarted datadir) catches up at its
+        // next boundary, and a boundary that moves nothing writes nothing.
+        let epoch_index = ctx.daa_score / self.params.epoch_length;
+        if let Some(budgets) = palw_epoch_budgets_for_v2(&self.state, self.params, epoch_index)
+            && self.state.epoch_budgets.as_ref() != Some(&budgets)
+        {
+            self.write_epoch_budgets(Some(budgets));
         }
     }
 
