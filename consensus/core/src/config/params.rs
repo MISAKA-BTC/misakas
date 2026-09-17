@@ -12592,7 +12592,8 @@ mod consensus_params_id_tests {
     /// malformed number, and a network with no overlay at all, is refused for its own reason.
     #[test]
     fn the_bft_gate_refuses_at_startup_what_it_could_not_count() {
-        let gate = |activation| DnsBftGateV1 { activation, t_leak_daa: 5_040, reentry_final_depth_daa: 200, min_retained_validators: 4 };
+        let gate =
+            |activation| DnsBftGateV1 { activation, t_leak_daa: 5_040, reentry_final_depth_daa: 200, min_retained_validators: 4 };
         let refused_for = |params: &Params, why: &str, what: &str| {
             let error = params.validate_palw_v2().expect_err(&format!("{what} must not start"));
             assert!(error.to_string().contains(why), "{what}: refused for another reason: {error}");
@@ -12612,7 +12613,14 @@ mod consensus_params_id_tests {
 
             let Some(dns) = shipped.dns_params.clone() else { continue };
             let walk = crate::dns_bft_v1::dns_bft_walk_blue_score_v1(&gate(ForkActivation::always()), &dns).expect("fits");
-            assert_eq!(walk, dns.stake_score_window_blue_score + 5_040 + 200 + dns.attestation_epoch_length_blue_score + dns.attestation_lag_blue_score);
+            assert_eq!(
+                walk,
+                dns.stake_score_window_blue_score
+                    + 5_040
+                    + 200
+                    + dns.attestation_epoch_length_blue_score
+                    + dns.attestation_lag_blue_score
+            );
             for activation in [ForkActivation::always(), ForkActivation::new(9_000_000), ForkActivation::never()] {
                 let mut armed = shipped.clone();
                 armed.dns_bft_gate = Some(gate(activation));
@@ -12625,7 +12633,10 @@ mod consensus_params_id_tests {
                 }
                 for (why, malformed) in [
                     ("t_leak_daa is zero", DnsBftGateV1 { t_leak_daa: 0, reentry_final_depth_daa: 0, ..gate(activation) }),
-                    ("reentry_final_depth_daa is not below t_leak_daa", DnsBftGateV1 { reentry_final_depth_daa: 5_040, ..gate(activation) }),
+                    (
+                        "reentry_final_depth_daa is not below t_leak_daa",
+                        DnsBftGateV1 { reentry_final_depth_daa: 5_040, ..gate(activation) },
+                    ),
                     ("min_retained_validators is below four", DnsBftGateV1 { min_retained_validators: 3, ..gate(activation) }),
                 ] {
                     let mut armed = shipped.clone();
@@ -12652,7 +12663,8 @@ mod consensus_params_id_tests {
         // 12,002 — inside it. (The ADR's prose quotes 1,500 + 5,440 = 6,940 and 12,000, which
         // assume 100-blue-score epochs this preset does not run; the refusal reads the preset.)
         let rc = palw_rc_shipped_params();
-        let rc_walk = crate::dns_bft_v1::dns_bft_walk_blue_score_v1(&gate(ForkActivation::new(7_001)), rc.dns_params.as_ref().unwrap());
+        let rc_walk =
+            crate::dns_bft_v1::dns_bft_walk_blue_score_v1(&gate(ForkActivation::new(7_001)), rc.dns_params.as_ref().unwrap());
         assert_eq!((rc_walk, rc.blockrate.pruning_depth), (Some(5_274), 12_002), "testnet-11's walk and horizon, measured");
         let mut armed_rc = rc.clone();
         armed_rc.dns_bft_gate = Some(gate(ForkActivation::new(7_001)));
@@ -12674,7 +12686,9 @@ mod consensus_params_id_tests {
             reentry_final_depth_daa: 200,
             min_retained_validators: 4,
         };
-        for (name, base) in [("mainnet", MAINNET_PARAMS), ("testnet-11", palw_rc_shipped_params()), ("devnet", devnet_shipped_params())] {
+        for (name, base) in
+            [("mainnet", MAINNET_PARAMS), ("testnet-11", palw_rc_shipped_params()), ("devnet", devnet_shipped_params())]
+        {
             let with = |g: Option<DnsBftGateV1>| {
                 let mut p = base.clone();
                 p.dns_bft_gate = g;
@@ -12689,8 +12703,16 @@ mod consensus_params_id_tests {
                 ("the re-entry depth", with(Some(DnsBftGateV1 { reentry_final_depth_daa: 201, ..gate }))),
                 ("the validator floor", with(Some(DnsBftGateV1 { min_retained_validators: 5, ..gate }))),
             ] {
-                assert_ne!(scheduled.consensus_params_id(), other.consensus_params_id(), "{name}: {what} must move the printed fingerprint");
-                assert_ne!(scheduled.consensus_schedule_id(), other.consensus_schedule_id(), "{name}: {what} must move the schedule id");
+                assert_ne!(
+                    scheduled.consensus_params_id(),
+                    other.consensus_params_id(),
+                    "{name}: {what} must move the printed fingerprint"
+                );
+                assert_ne!(
+                    scheduled.consensus_schedule_id(),
+                    other.consensus_schedule_id(),
+                    "{name}: {what} must move the schedule id"
+                );
                 assert_eq!(
                     scheduled.consensus_identity_id(),
                     other.consensus_identity_id(),
@@ -12700,9 +12722,16 @@ mod consensus_params_id_tests {
             let dormant = with(Some(DnsBftGateV1 { activation: ForkActivation::never(), ..gate }));
             assert_eq!(dormant.consensus_identity_id(), unset.consensus_identity_id(), "{name}: `never()` is absence to the identity");
             let at_genesis = with(Some(DnsBftGateV1 { activation: ForkActivation::always(), ..gate }));
-            assert_ne!(at_genesis.consensus_identity_id(), unset.consensus_identity_id(), "{name}: a gate in force from block 1 is a rule");
+            assert_ne!(
+                at_genesis.consensus_identity_id(),
+                unset.consensus_identity_id(),
+                "{name}: a gate in force from block 1 is a rule"
+            );
             assert!(scheduled.fence_schedule_v1().contains(&9_000_000), "{name}: the height is on the schedule");
-            assert!(crate::fork_id_v1::fork_id_gate_fences_v1(&scheduled).contains(&9_000_000), "{name}: and named to the fork-id gate");
+            assert!(
+                crate::fork_id_v1::fork_id_gate_fences_v1(&scheduled).contains(&9_000_000),
+                "{name}: and named to the fork-id gate"
+            );
             assert!(scheduled.palw_fences_v1().contains(&("dns_bft_gate", Some(ForkActivation::new(9_000_000)))));
             assert!(!unset.fence_schedule_v1().contains(&9_000_000));
         }

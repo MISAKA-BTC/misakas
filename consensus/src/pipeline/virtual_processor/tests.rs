@@ -9469,8 +9469,15 @@ async fn run_the_bft_gate(script: BftGateScript) -> BftGateRun {
         ctx.mine_block(new_miner_data(), vec![]).await;
     }
     let storage_mass_parameter = ctx.consensus.params().storage_mass_parameter;
-    let (bond_tx, _vid, _rp) =
-        dns_harness::funded_signed_bond_tx(seed, funding[0].0, funding[0].1, funding[0].2, funding[0].1 - 100_000, 0, storage_mass_parameter);
+    let (bond_tx, _vid, _rp) = dns_harness::funded_signed_bond_tx(
+        seed,
+        funding[0].0,
+        funding[0].1,
+        funding[0].2,
+        funding[0].1 - 100_000,
+        0,
+        storage_mass_parameter,
+    );
     let bond_outpoint = TransactionOutpoint::new(bond_tx.id(), 0);
     let bond_block = ctx.mine_block(new_miner_data(), vec![bond_tx]).await;
     assert_eq!(ctx.consensus.block_status(bond_block.header.hash), BlockStatus::StatusUTXOValid);
@@ -9485,8 +9492,9 @@ async fn run_the_bft_gate(script: BftGateScript) -> BftGateRun {
         let vp = ctx.consensus.virtual_processor();
         let sink = ctx.consensus.get_sink();
         let sink_blue = vp.headers_store.get_blue_score(sink).unwrap();
-        let ready = ready_epoch_from_tip_blue_score(sink_blue, dns.attestation_epoch_length_blue_score, dns.attestation_lag_blue_score)
-            .expect("an epoch is ready");
+        let ready =
+            ready_epoch_from_tip_blue_score(sink_blue, dns.attestation_epoch_length_blue_score, dns.attestation_lag_blue_score)
+                .expect("an epoch is ready");
         vp.canonical_anchor_by_blue_score(ready, sink, &dns).expect("canonical anchor")
     };
     let att = dns_harness::build_signed_attestation(
@@ -9514,11 +9522,17 @@ async fn run_the_bft_gate(script: BftGateScript) -> BftGateRun {
             None => {
                 use crate::model::stores::stake_bonds::StakeBondsStoreReader;
                 let vp = ctx.consensus.virtual_processor();
-                let bonds: Vec<_> = vp.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
+                let bonds: Vec<_> =
+                    vp.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
                 let evaluation = vp
                     .dns_bft_evaluate(ctx.consensus.get_sink(), &bonds, &dns, &gate_numbers(ForkActivation::always()))
                     .expect("the walk covers a chain shorter than its bound");
-                evaluation.verdicts.iter().find(|verdict| verdict.epoch.epoch == attested.epoch).expect("the epoch is evaluated").snapshot_commitment
+                evaluation
+                    .verdicts
+                    .iter()
+                    .find(|verdict| verdict.epoch.epoch == attested.epoch)
+                    .expect("the epoch is evaluated")
+                    .snapshot_commitment
             }
         };
         let precommit = dns_harness::build_signed_precommit(
@@ -9531,8 +9545,14 @@ async fn run_the_bft_gate(script: BftGateScript) -> BftGateRun {
             PrecommitLock::default(),
             commitment,
         );
-        let precommit_tx =
-            dns_harness::funded_signed_precommit_tx(seed, funding[2].0, funding[2].1, funding[2].2, &precommit, storage_mass_parameter);
+        let precommit_tx = dns_harness::funded_signed_precommit_tx(
+            seed,
+            funding[2].0,
+            funding[2].1,
+            funding[2].2,
+            &precommit,
+            storage_mass_parameter,
+        );
         let precommit_block = ctx.mine_block(new_miner_data(), vec![precommit_tx]).await;
         assert_eq!(ctx.consensus.block_status(precommit_block.header.hash), BlockStatus::StatusUTXOValid);
     }
@@ -9603,7 +9623,8 @@ async fn run_the_bft_gate(script: BftGateScript) -> BftGateRun {
 async fn adr0128_a_reorg_abandoning_a_dns_final_anchor_is_refused_past_the_fence_and_follows_the_old_rule_below_it() {
     use kaspa_consensus_core::{config::params::ForkActivation, dns_finality::PrecommitLock};
     kaspa_core::log::try_init_logger("info");
-    let script = BftGateScript { fence: Some(ForkActivation::always()), precommit: true, ttl: u64::MAX, age_blocks: 0, punch_a_hole: false };
+    let script =
+        BftGateScript { fence: Some(ForkActivation::always()), precommit: true, ttl: u64::MAX, age_blocks: 0, punch_a_hole: false };
 
     let past = run_the_bft_gate(script).await;
     let epoch = past.attested.epoch;
@@ -9623,7 +9644,11 @@ async fn adr0128_a_reorg_abandoning_a_dns_final_anchor_is_refused_past_the_fence
     assert!(!below.duty_after_attesting.round_active, "below the fence round two is not live");
     assert!(below.duty_after_attesting.due.is_empty());
     assert!(below.depth_rule_clears, "the depth rule's threshold is cleared");
-    assert_ne!(below.state_before_attack.last_dns_confirmed_anchor, kaspa_consensus_core::Hash64::default(), "and it confirms as before");
+    assert_ne!(
+        below.state_before_attack.last_dns_confirmed_anchor,
+        kaspa_consensus_core::Hash64::default(),
+        "and it confirms as before"
+    );
     assert!(
         below.sink_is_attacker && !below.anchor_survived,
         "below the fence the depth rule's gate abstains on a fork beyond its reach and the heavier branch wins"
@@ -9638,10 +9663,18 @@ async fn adr0128_a_reorg_abandoning_a_dns_final_anchor_is_refused_past_the_fence
 async fn adr0128_a_stale_dns_final_anchor_releases_the_veto() {
     use kaspa_consensus_core::config::params::ForkActivation;
     kaspa_core::log::try_init_logger("info");
-    let run =
-        run_the_bft_gate(BftGateScript { fence: Some(ForkActivation::always()), precommit: true, ttl: 20, age_blocks: 40, punch_a_hole: false })
-            .await;
-    assert_eq!(run.state_before_attack.last_dns_confirmed_anchor, run.attested.anchor_hash, "carried forward while nothing newer is final");
+    let run = run_the_bft_gate(BftGateScript {
+        fence: Some(ForkActivation::always()),
+        precommit: true,
+        ttl: 20,
+        age_blocks: 40,
+        punch_a_hole: false,
+    })
+    .await;
+    assert_eq!(
+        run.state_before_attack.last_dns_confirmed_anchor, run.attested.anchor_hash,
+        "carried forward while nothing newer is final"
+    );
     let age = run.state_before_attack.anchor_daa_score.saturating_sub(run.state_before_attack.last_dns_confirmed_anchor_daa_score);
     assert!(age > 20, "the anchor aged past the TTL on the node's own chain (age {age})");
     assert!(run.sink_is_attacker && !run.anchor_survived, "a stale anchor is no veto");
@@ -9656,7 +9689,8 @@ async fn adr0128_a_stale_dns_final_anchor_releases_the_veto() {
 async fn adr0128_validators_that_never_reach_precommit_quorum_advance_no_anchor() {
     use kaspa_consensus_core::{Hash64, config::params::ForkActivation};
     kaspa_core::log::try_init_logger("info");
-    let script = BftGateScript { fence: Some(ForkActivation::always()), precommit: false, ttl: u64::MAX, age_blocks: 0, punch_a_hole: false };
+    let script =
+        BftGateScript { fence: Some(ForkActivation::always()), precommit: false, ttl: u64::MAX, age_blocks: 0, punch_a_hole: false };
     let silent = run_the_bft_gate(script).await;
     assert!(silent.duty_after_attesting.round_active);
     assert!(silent.duty_after_attesting.due.iter().any(|d| d.0 == silent.attested.epoch), "round one is met and round two is owed");
@@ -9678,9 +9712,14 @@ async fn adr0128_validators_that_never_reach_precommit_quorum_advance_no_anchor(
 async fn adr0128_an_evaluation_that_cannot_cover_its_walk_confirms_nothing_and_the_gate_abstains() {
     use kaspa_consensus_core::{Hash64, config::params::ForkActivation};
     kaspa_core::log::try_init_logger("info");
-    let run =
-        run_the_bft_gate(BftGateScript { fence: Some(ForkActivation::always()), precommit: true, ttl: u64::MAX, age_blocks: 6, punch_a_hole: true })
-            .await;
+    let run = run_the_bft_gate(BftGateScript {
+        fence: Some(ForkActivation::always()),
+        precommit: true,
+        ttl: u64::MAX,
+        age_blocks: 6,
+        punch_a_hole: true,
+    })
+    .await;
     assert!(!run.evaluation_covered, "the hole is inside the walk");
     assert_eq!(run.state_before_attack.last_dns_confirmed_anchor, Hash64::default(), "an uncovered evaluation confirms nothing");
     assert!(run.sink_is_attacker, "the gate abstains");

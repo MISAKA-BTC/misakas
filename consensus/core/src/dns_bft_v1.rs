@@ -418,7 +418,9 @@ pub fn dns_bft_attested_stake_v1(epoch: &DnsBftEpochV1, counted: &DnsBftCountedS
     attestations
         .iter()
         .filter(|a| a.epoch == epoch.epoch && a.anchor_hash == epoch.anchor_hash && a.anchor_daa_score == epoch.anchor_daa_score)
-        .filter_map(|a| counted.vote_weight(&a.validator_id, &a.bond_outpoint).filter(|_| seen.insert((a.validator_id, a.bond_outpoint))))
+        .filter_map(|a| {
+            counted.vote_weight(&a.validator_id, &a.bond_outpoint).filter(|_| seen.insert((a.validator_id, a.bond_outpoint)))
+        })
         .fold(0u128, |acc, w| acc.saturating_add(w))
 }
 
@@ -474,7 +476,10 @@ impl PrecommitLockHorizonV1 {
 /// Two precommits that cast the same vote — a rebroadcast, which `precommit_fault` does not convict
 /// and the lock chain does not count twice or read as a misdeclaration.
 fn same_vote(a: &PrecommitRecord, b: &PrecommitRecord) -> bool {
-    a.epoch == b.epoch && a.target_hash == b.target_hash && a.target_daa_score == b.target_daa_score && a.declared_lock == b.declared_lock
+    a.epoch == b.epoch
+        && a.target_hash == b.target_hash
+        && a.target_daa_score == b.target_daa_score
+        && a.declared_lock == b.declared_lock
 }
 
 /// One bond's precommits in view, in chain order, truncated at the first misdeclared lock; plus the
@@ -497,8 +502,11 @@ fn lock_consistent_prefix<'a>(
             kept.push(r);
             continue;
         }
-        let consistent =
-            if kept.is_empty() { r.declared_lock == PrecommitLock::default() || horizon.hides(&r.declared_lock) } else { r.declared_lock == held };
+        let consistent = if kept.is_empty() {
+            r.declared_lock == PrecommitLock::default() || horizon.hides(&r.declared_lock)
+        } else {
+            r.declared_lock == held
+        };
         if !consistent {
             break; // misdeclared: this one and everything after it are uncountable
         }
@@ -559,7 +567,9 @@ pub fn dns_bft_precommitted_stake_v1(
                 && p.target_daa_score == epoch.anchor_daa_score
                 && p.snapshot_commitment == snapshot_commitment
         })
-        .filter_map(|p| counted.vote_weight(&p.validator_id, &p.bond_outpoint).filter(|_| seen.insert((p.validator_id, p.bond_outpoint))))
+        .filter_map(|p| {
+            counted.vote_weight(&p.validator_id, &p.bond_outpoint).filter(|_| seen.insert((p.validator_id, p.bond_outpoint)))
+        })
         .fold(0u128, |acc, w| acc.saturating_add(w))
 }
 
@@ -670,8 +680,9 @@ pub fn dns_bft_precommit_duty_v1(
     if !round_active {
         return duty;
     }
-    let horizon =
-        verdicts.last().map_or_else(|| PrecommitLockHorizonV1::from_genesis(rules), |v| PrecommitLockHorizonV1::for_epoch(&v.epoch, rules));
+    let horizon = verdicts
+        .last()
+        .map_or_else(|| PrecommitLockHorizonV1::from_genesis(rules), |v| PrecommitLockHorizonV1::for_epoch(&v.epoch, rules));
     duty.held = held_precommit_lock(precommits, validator_id, bond_outpoint, &horizon);
     let signed: BTreeSet<u64> =
         precommits.iter().filter(|p| p.validator_id == validator_id && p.bond_outpoint == bond_outpoint).map(|p| p.epoch).collect();
@@ -683,7 +694,8 @@ pub fn dns_bft_precommit_duty_v1(
         .filter(|v| !signed.contains(&v.epoch.epoch))
         .collect();
     due.sort_by_key(|v| v.epoch.epoch);
-    duty.due = due.into_iter().map(|v| (v.epoch.epoch, v.epoch.anchor_hash, v.epoch.anchor_daa_score, v.snapshot_commitment)).collect();
+    duty.due =
+        due.into_iter().map(|v| (v.epoch.epoch, v.epoch.anchor_hash, v.epoch.anchor_daa_score, v.snapshot_commitment)).collect();
     duty
 }
 
@@ -778,7 +790,13 @@ mod tests {
     }
 
     /// A precommit by `b` for `epoch`, declaring `lock`, accepted at block `accepted`.
-    fn precommit(b: &StakeBondRecord, epoch: &DnsBftEpochV1, lock: PrecommitLock, commitment: Hash64, accepted: u64) -> PrecommitRecord {
+    fn precommit(
+        b: &StakeBondRecord,
+        epoch: &DnsBftEpochV1,
+        lock: PrecommitLock,
+        commitment: Hash64,
+        accepted: u64,
+    ) -> PrecommitRecord {
         PrecommitRecord {
             validator_id: b.validator_pubkey_hash,
             bond_outpoint: b.bond_outpoint,
@@ -889,7 +907,8 @@ mod tests {
         // not lend it weight.
         let e = epoch_at(120);
         let chain = dense_chain(e.anchor_blue_score + 300);
-        let bonds = vec![bond_of(1, 1, 100, 1_000), bond_of(2, 1, 50, 1_000), bond(3, 100, 1_000), bond(4, 100, 1_000), bond(5, 100, 1_000)];
+        let bonds =
+            vec![bond_of(1, 1, 100, 1_000), bond_of(2, 1, 50, 1_000), bond(3, 100, 1_000), bond(4, 100, 1_000), bond(5, 100, 1_000)];
         let mut atts: Vec<DnsBftAttestationV1> = bonds.iter().map(|b| attest(b, e.epoch - 5, 10)).collect();
         atts.push(attest(&bonds[0], e.epoch, 5));
         atts.push(attest(&bonds[1], e.epoch, 5));
@@ -1162,7 +1181,8 @@ mod tests {
         assert!(!r.anchor_decidable_within(146, &e));
         assert!(r.anchor_decidable_within(148, &e));
         let b = bond(1, 100, 100);
-        let inside_window_old_epoch = DnsBftAttestationV1 { accepted_blue_score: floor + 5, accepted_daa_score: floor + 5, ..attest(&b, 146, 0) };
+        let inside_window_old_epoch =
+            DnsBftAttestationV1 { accepted_blue_score: floor + 5, accepted_daa_score: floor + 5, ..attest(&b, 146, 0) };
         assert!(dns_bft_last_final_attestation_daa_v1(&e, &[inside_window_old_epoch], &r).is_empty());
         // A block below the floor does not accept evidence either.
         let below = DnsBftAttestationV1 { accepted_blue_score: floor - 1, accepted_daa_score: floor - 1, ..attest(&b, 148, 0) };

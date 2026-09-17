@@ -30,9 +30,9 @@ use kaspa_consensus_core::{
     },
     dns_finality::{
         ATTESTATION_MLDSA87_CONTEXT, DnsParams, DnsReorgOutcome, DnsRolloutStage, DnsState, PRECOMMIT_MLDSA87_CONTEXT, PrecommitDuty,
-        PrecommitLock, StakeAttestation, StakeBondRecord, StakePrecommitPayload, anchor_cutoff_blue_score, attestations_from_accepted_txs,
-        canonical_lagged_epoch_anchor, is_bond_active_at, ready_epoch_from_tip_blue_score, stake_attestation_message,
-        stake_precommit_message,
+        PrecommitLock, StakeAttestation, StakeBondRecord, StakePrecommitPayload, anchor_cutoff_blue_score,
+        attestations_from_accepted_txs, canonical_lagged_epoch_anchor, is_bond_active_at, ready_epoch_from_tip_blue_score,
+        stake_attestation_message, stake_precommit_message,
     },
     tx::TransactionOutpoint,
 };
@@ -83,7 +83,8 @@ impl VirtualStateProcessor {
         gate: &DnsBftGateV1,
     ) -> Result<DnsBftEvaluation, String> {
         let rules = DnsBftRulesV1::new(gate, dns_params).ok_or_else(|| "the evidence window does not fit in a u64".to_owned())?;
-        let sink_blue = self.headers_store.get_blue_score(sink).map_err(|e| format!("the sink {sink}'s header does not read ({e})"))?;
+        let sink_blue =
+            self.headers_store.get_blue_score(sink).map_err(|e| format!("the sink {sink}'s header does not read ({e})"))?;
         let window = dns_params.stake_score_window_blue_score;
         let epoch_len = rules.epoch_length_blue_score;
         let lag = dns_params.attestation_lag_blue_score;
@@ -103,7 +104,11 @@ impl VirtualStateProcessor {
             if epochs.is_none() && sink_blue.saturating_sub(compact.blue_score) > window {
                 let evaluated = dns_bft_window_epochs_v1(&chain, sink_blue, window, epoch_len, lag, backoff);
                 floor = Some(
-                    evaluated.iter().map(|e| rules.evidence_floor_blue_score(e)).min().unwrap_or_else(|| sink_blue.saturating_sub(window)),
+                    evaluated
+                        .iter()
+                        .map(|e| rules.evidence_floor_blue_score(e))
+                        .min()
+                        .unwrap_or_else(|| sink_blue.saturating_sub(window)),
                 );
                 epochs = Some(evaluated);
             }
@@ -119,7 +124,8 @@ impl VirtualStateProcessor {
                 .get(block)
                 .map_err(|e| format!("chain block {block}'s acceptance data does not read before the walk's bound ({e})"))?;
             let txs = self.accepted_txs_from_acceptance_data(&acceptance);
-            raw_attestations.extend(attestations_from_accepted_txs(&txs).into_iter().map(|a| (a, compact.blue_score, compact.daa_score)));
+            raw_attestations
+                .extend(attestations_from_accepted_txs(&txs).into_iter().map(|a| (a, compact.blue_score, compact.daa_score)));
             raw_precommits.extend(precommits_from_accepted_txs(&txs).into_iter().map(|p| (p, compact.blue_score, compact.daa_score)));
             chain.push(block_point);
         }
@@ -226,7 +232,10 @@ impl VirtualStateProcessor {
                 p.bond_outpoint,
             )
             .as_bytes();
-            if !matches!(verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &p.signature, PRECOMMIT_MLDSA87_CONTEXT), Ok(true)) {
+            if !matches!(
+                verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &p.signature, PRECOMMIT_MLDSA87_CONTEXT),
+                Ok(true)
+            ) {
                 continue;
             }
             precommits.push(PrecommitRecord {
@@ -300,7 +309,11 @@ impl VirtualStateProcessor {
                         debug!("{line}");
                     }
                 }
-                debug!("[dns-bft] sink={sink}: walked {} chain blocks, {} epochs evaluated", evaluation.walked, evaluation.verdicts.len());
+                debug!(
+                    "[dns-bft] sink={sink}: walked {} chain blocks, {} epochs evaluated",
+                    evaluation.walked,
+                    evaluation.verdicts.len()
+                );
                 let carried = prev
                     .filter(|p| gate.activation.is_active(p.anchor_daa_score))
                     .map(|p| (p.last_dns_confirmed_anchor, p.last_dns_confirmed_anchor_daa_score))
@@ -355,7 +368,9 @@ impl VirtualStateProcessor {
         match self.reachability_service.try_is_chain_ancestor_of(anchor, candidate) {
             Ok(true) => None,
             Err(_) => {
-                debug!("[dns-bft] gate: confirmed anchor {anchor} has no reachability (behind the pruning point); the gate does not refuse");
+                debug!(
+                    "[dns-bft] gate: confirmed anchor {anchor} has no reachability (behind the pruning point); the gate does not refuse"
+                );
                 None
             }
             Ok(false) if dns_params.confirmed_anchor_is_stale(incumbent_daa, state.last_dns_confirmed_anchor_daa_score) => {
