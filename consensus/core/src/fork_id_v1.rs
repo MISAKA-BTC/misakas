@@ -635,6 +635,10 @@ mod tests {
                     worker_carve_permille: 720,
                 })
             }
+            "palw_panel_exposure_floor" => {
+                params.palw_panel_exposure_floor =
+                    Some(crate::config::params::PalwPanelExposureFloorV1 { activation: at, reward_multiple_permille: 2_000 })
+            }
             "palw_execution_lane" => {
                 params.palw_execution_lane = Some(crate::config::params::PalwExecutionLaneV1 {
                     activation: at,

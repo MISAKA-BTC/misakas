@@ -2069,6 +2069,25 @@ pub struct PalwPanelStateV2 {
     pub bound_daa: u64,
 }
 
+/// **ADR-0124 Decisions 2 and 3 with ADR-0130's stored reservation: one live claim's seats on duty,
+/// and what each of them reserved.**
+///
+/// `seats` is one entry per drawn seat bond, `0` until the chain credits that seat's `Valid` receipt
+/// and then the DAA it credited it at. `seat_exposure` is what EACH seat reserved on its bond when the
+/// panel bound — [`crate::palw_panel_economy_v1::palw_panel_seat_exposure_v1`] of the claim, over
+/// `seats.len()`, under the reward multiple in force at the binding block — and it is the ONLY number
+/// the release and the dissent slash read. Recomputing it at release would read the fence at the
+/// releasing block, and a floor that armed between bind and release would release more than was
+/// reserved.
+///
+/// The row gained `seat_exposure` before any chain wrote one: a row exists only past
+/// `Params::palw_panel_economy`, which no network had reached.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwPanelDutyRowV1 {
+    pub seats: BTreeMap<PalwBondKeyV2, u64>,
+    pub seat_exposure: u128,
+}
+
 /// An open court session, keyed by its session id (Decision 8: the id binds the attempt and both
 /// bonds; the binding itself is validated where sessions are accepted, PR-07).
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -4843,11 +4862,11 @@ pub struct PalwChainStateV2 {
     /// one entry per drawn seat at `0`; an entry becomes the DAA at which the chain credited that
     /// seat's `Valid` receipt (in the licensing object or a supplementary one, inside the receipt
     /// window). The row's presence is what says the seats hold exposure (`reserved_exposure`
-    /// carries `palw_seat_exposure_v1(claim.reserved)` per seat while it exists), and the credited
-    /// entries are exactly the seats `finalize_claim` pays. Dropped when the claim goes terminal
-    /// (`write_claim`), the same moment the seats' exposure is released. Enters the root and the
-    /// carriage only once written, which nothing below the fence can do.
-    panel_duties: BTreeMap<Hash64, BTreeMap<PalwBondKeyV2, u64>>,
+    /// carries the row's stored `seat_exposure` per seat while it exists — ADR-0130), and the
+    /// credited entries are exactly the seats `finalize_claim` pays. Dropped when the claim goes
+    /// terminal (`write_claim`), the same moment the seats' exposure is released. Enters the root and
+    /// the carriage only once written, which nothing below the fence can do.
+    panel_duties: BTreeMap<Hash64, PalwPanelDutyRowV1>,
     /// **ADR-0124 Decision 2: the panel reserve** — every share of a panel pool that no seat was
     /// credited for, and the dust of the pool's division, cumulative. Never a payout to anyone in
     /// this ruleset (it is supply that was withheld and not named, exactly as a voided escrow is),
@@ -5516,7 +5535,18 @@ impl PalwChainStateV2 {
     /// the DAA the chain credited its `Valid` receipt at (`0` = not yet). `None` for a claim whose
     /// panel was bound below the fence, or that has gone terminal.
     pub fn panel_duties_of(&self, claim_id: &Hash64) -> Option<&BTreeMap<PalwBondKeyV2, u64>> {
+        self.panel_duties.get(claim_id).map(|row| &row.seats)
+    }
+
+    /// ADR-0130: a live claim's whole duty row — the seats and what each reserved when it bound.
+    pub fn panel_duty_row_of(&self, claim_id: &Hash64) -> Option<&PalwPanelDutyRowV1> {
         self.panel_duties.get(claim_id)
+    }
+
+    /// ADR-0130: every live duty row, in claim-id order — the ledger a shadow reader rebuilds
+    /// seat exposure from (`palw_panel_economy_v1::palw_shadow_seat_exposure_ledger_v1`).
+    pub fn panel_duty_rows_iter(&self) -> impl Iterator<Item = (&Hash64, &PalwPanelDutyRowV1)> {
+        self.panel_duties.iter()
     }
 
     /// ADR-0124 Decision 2: the panel reserve, cumulative — pool shares no seat was credited for.
@@ -6116,12 +6146,14 @@ impl PalwChainStateV2 {
                     let entry = exposure.entry(claim.bond).or_insert(0);
                     *entry = entry.checked_add(claim.reserved).ok_or(PalwStateV2Error::Overflow("consistency exposure"))?;
                     // **ADR-0124 Decision 3: every seat on duty holds its exposure**, rebuilt from the
-                    // duty row so the ledger and the row cannot drift apart about who holds what.
-                    if let Some(duties) = self.panel_duties.get(id) {
-                        let stake = crate::palw_panel_economy_v1::palw_seat_exposure_v1(claim.reserved);
-                        for seat in duties.keys() {
+                    // duty row so the ledger and the row cannot drift apart about who holds what —
+                    // and at the amount the row STORES (ADR-0130), which is what binding reserved
+                    // and what release will return, whatever the fences say at this point.
+                    if let Some(row) = self.panel_duties.get(id) {
+                        for seat in row.seats.keys() {
                             let held = exposure.entry(*seat).or_insert(0);
-                            *held = held.checked_add(stake).ok_or(PalwStateV2Error::Overflow("consistency seat exposure"))?;
+                            *held =
+                                held.checked_add(row.seat_exposure).ok_or(PalwStateV2Error::Overflow("consistency seat exposure"))?;
                         }
                     }
                     // **ADR-0062 SA-1: a disputed claim also holds the ACCUSER's stake**, exactly
@@ -6852,11 +6884,12 @@ pub enum PalwDeltaEntryV2 {
         old: Option<u64>,
         new: Option<u64>,
     },
-    /// ADR-0124 Decisions 2 and 3: a claim's seats-on-duty row moved (42).
+    /// ADR-0124 Decisions 2 and 3: a claim's seats-on-duty row moved (42). The row carries what each
+    /// seat reserved (ADR-0130), so a revert restores the reservation it undoes.
     PanelDuties {
         key: Hash64,
-        old: Option<BTreeMap<PalwBondKeyV2, u64>>,
-        new: Option<BTreeMap<PalwBondKeyV2, u64>>,
+        old: Option<PalwPanelDutyRowV1>,
+        new: Option<PalwPanelDutyRowV1>,
     },
     /// ADR-0124 Decision 2: the panel reserve moved (43).
     PanelReserve {
@@ -7487,7 +7520,7 @@ impl<'a> TransitionBuilder<'a> {
         }
     }
 
-    fn write_panel_duties(&mut self, key: Hash64, new: Option<BTreeMap<PalwBondKeyV2, u64>>) {
+    fn write_panel_duties(&mut self, key: Hash64, new: Option<PalwPanelDutyRowV1>) {
         let old = match new.clone() {
             Some(row) => self.state.panel_duties.insert(key, row),
             None => self.state.panel_duties.remove(&key),
@@ -7693,40 +7726,60 @@ impl<'a> TransitionBuilder<'a> {
     // ---- ADR-0124: the panel economy ----
 
     /// **ADR-0124 Decision 3: put every drawn seat on duty** — one duty entry at `0`, and the
-    /// seat's exposure (`palw_seat_exposure_v1(claim.reserved)`) reserved on its bond for the
-    /// claim's whole life. The draw only seats a bond whose free collateral covers this
-    /// (`palw_seat_has_headroom_v1`), so the reservation here is the one the draw priced.
+    /// seat's exposure reserved on its bond for the claim's whole life. The draw only seats a bond
+    /// whose free collateral covers this (`palw_seat_has_headroom_v1`), so the reservation here is
+    /// the one the draw priced.
+    ///
+    /// **ADR-0130: the amount is [`crate::palw_panel_economy_v1::palw_panel_seat_exposure_v1`]** of the
+    /// claim over the seats put on duty, under `extras.panel_reward_multiple_permille` — the floor in
+    /// force at THIS block, which for a binding the chain derives at its claim's anchor block is the
+    /// floor the draw priced at the anchor. A binding that lands later than its anchor, across the
+    /// floor's height, reserves the floor its draw did not price; nothing unbalances, because the
+    /// amount is written into the row and the release and the dissent slash read the row.
     fn reserve_seat_duties(
         &mut self,
         claim_id: Hash64,
         claim: &PalwClaimStateV2,
         seats: &[PalwPanelSeatV2],
     ) -> Result<(), PalwStateV2Error> {
-        let stake = crate::palw_panel_economy_v1::palw_seat_exposure_v1(claim.reserved);
-        let mut duties: BTreeMap<PalwBondKeyV2, u64> = BTreeMap::new();
+        // A bond sits once on a panel (the draw dedups by operator); a duplicate is not put on duty
+        // twice, so the row holds each seat bond once and the release returns exactly what this took.
+        let on_duty: BTreeMap<PalwBondKeyV2, u64> = seats.iter().map(|seat| (seat.bond, 0)).collect();
+        // Over the seats ON DUTY — the number `finalize_claim` divides the pool by — so the floor
+        // bounds the share a seat can actually be paid.
+        let seat_exposure = crate::palw_panel_economy_v1::palw_panel_seat_exposure_v1(
+            claim.reserved,
+            claim.escrowed_reward,
+            on_duty.len(),
+            self.extras.panel_reward_multiple_permille,
+        );
+        // Reserved in the panel's own order, each bond once — the journal order the row was always
+        // reserved in.
+        let mut reserved: Vec<PalwBondKeyV2> = Vec::with_capacity(on_duty.len());
         for seat in seats {
-            // A bond sits once on a panel (the draw dedups by operator); a duplicate is not
-            // reserved twice, so the release below returns exactly what this took.
-            if duties.insert(seat.bond, 0).is_some() {
+            if reserved.contains(&seat.bond) {
                 continue;
             }
+            reserved.push(seat.bond);
             let current = self.state.reserved_exposure.get(&seat.bond).copied().unwrap_or(0);
-            let next = current.checked_add(stake).ok_or(PalwStateV2Error::Overflow("seat exposure"))?;
+            let next = current.checked_add(seat_exposure).ok_or(PalwStateV2Error::Overflow("seat exposure"))?;
             self.write_exposure(seat.bond, Some(next));
         }
-        self.write_panel_duties(claim_id, Some(duties));
+        self.write_panel_duties(claim_id, Some(PalwPanelDutyRowV1 { seats: on_duty, seat_exposure }));
         Ok(())
     }
 
     /// **Release every seat's exposure and drop the duty row** — on `Final`, on every void and on
     /// the receipt-timeout redraw, which deals a different panel. A no-op for a claim whose panel
     /// was bound below the fence (no row), so every existing path is byte-identical there.
-    fn release_seat_duties(&mut self, claim_id: &Hash64, claim: &PalwClaimStateV2) -> Result<(), PalwStateV2Error> {
-        let Some(duties) = self.state.panel_duties.get(claim_id).cloned() else { return Ok(()) };
-        let stake = crate::palw_panel_economy_v1::palw_seat_exposure_v1(claim.reserved);
-        for seat in duties.keys() {
+    ///
+    /// ADR-0130: what is released is the row's stored `seat_exposure`, never a recomputation — a
+    /// floor armed between the binding and this block cannot release more than binding reserved.
+    fn release_seat_duties(&mut self, claim_id: &Hash64) -> Result<(), PalwStateV2Error> {
+        let Some(row) = self.state.panel_duties.get(claim_id).cloned() else { return Ok(()) };
+        for seat in row.seats.keys() {
             let current = self.state.reserved_exposure.get(seat).copied().unwrap_or(0);
-            let next = current.checked_sub(stake).ok_or(PalwStateV2Error::Overflow("seat exposure underflow"))?;
+            let next = current.checked_sub(row.seat_exposure).ok_or(PalwStateV2Error::Overflow("seat exposure underflow"))?;
             self.write_exposure(*seat, if next == 0 { None } else { Some(next) });
         }
         self.write_panel_duties(*claim_id, None);
@@ -7738,13 +7791,13 @@ impl<'a> TransitionBuilder<'a> {
     /// already credited; a receipt from a bond that is not on duty cannot reach here (the
     /// acceptance layer refuses it as `NotASeat`), and is ignored rather than trusted if it did.
     fn credit_seat_receipts(&mut self, claim_id: Hash64, receipts: &[crate::palw_panel_v2::PalwSeatReceiptV2], daa_score: u64) {
-        let Some(mut duties) = self.state.panel_duties.get(&claim_id).cloned() else { return };
+        let Some(mut row) = self.state.panel_duties.get(&claim_id).cloned() else { return };
         let mut moved = false;
         for receipt in receipts {
             if !matches!(receipt.verdict, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid) {
                 continue;
             }
-            if let Some(at) = duties.get_mut(&receipt.seat_bond)
+            if let Some(at) = row.seats.get_mut(&receipt.seat_bond)
                 && *at == 0
             {
                 *at = daa_score.max(1);
@@ -7752,7 +7805,7 @@ impl<'a> TransitionBuilder<'a> {
             }
         }
         if moved {
-            self.write_panel_duties(claim_id, Some(duties));
+            self.write_panel_duties(claim_id, Some(row));
         }
     }
 
@@ -7769,8 +7822,12 @@ impl<'a> TransitionBuilder<'a> {
         ctx: &PalwBlockContextV2,
     ) -> Result<(), PalwStateV2Error> {
         let refused = |why: String| PalwStateV2Error::SupplementaryReceiptsRefused { claim: claim_id, why };
-        let duties =
-            self.state.panel_duties.get(&claim_id).cloned().ok_or_else(|| refused("the claim's panel holds no duty row".into()))?;
+        let duties = self
+            .state
+            .panel_duties
+            .get(&claim_id)
+            .map(|row| row.seats.clone())
+            .ok_or_else(|| refused("the claim's panel holds no duty row".into()))?;
         let bound_daa =
             self.state.panels.get(&claim_id).map(|panel| panel.bound_daa).ok_or_else(|| refused("no bound panel".into()))?;
         let deadline = bound_daa.checked_add(self.params.window_receipt).ok_or(PalwStateV2Error::Overflow("receipt deadline"))?;
@@ -8292,14 +8349,11 @@ impl<'a> TransitionBuilder<'a> {
         served_won: bool,
     ) -> Result<(), PalwStateV2Error> {
         let seat_cap = self.params.min_collateral_sompi();
-        // **ADR-0124 Decision 3: a seat on duty loses what it RESERVED** — the claim's exposure
-        // times the seat multiple — and nothing else: what is reserved is what is slashable. A
-        // panel bound below the fence holds no duty row and is charged as before.
-        let duty_stake = self
-            .state
-            .panel_duties
-            .contains_key(claim_id)
-            .then(|| crate::palw_panel_economy_v1::palw_seat_exposure_v1(claim.reserved));
+        // **ADR-0124 Decision 3: a seat on duty loses what it RESERVED** — and nothing else: what is
+        // reserved is what is slashable. ADR-0130: the amount is the one the duty row STORED when
+        // the panel bound (the claim-priced stake, or the reward floor where it was in force), never
+        // recomputed here. A panel bound below the fence holds no duty row and is charged as before.
+        let duty_stake = self.state.panel_duties.get(claim_id).map(|row| row.seat_exposure);
         for receipt in receipts {
             // Only a seat that took a SIDE can have contradicted the quorum. `Incapable` is not a
             // side — it is the seat saying it had no standing to judge — so it is never charged.
@@ -8447,7 +8501,7 @@ impl<'a> TransitionBuilder<'a> {
             // reward; what no seat was credited for, and the division's dust, is the reserve's and
             // never the producer's. A claim bound below the fence names its producer the whole
             // reward, as before.
-            match self.state.panel_duties.get(&id).cloned() {
+            match self.state.panel_duties.get(&id).map(|row| row.seats.clone()) {
                 Some(duties) => {
                     let credited: Vec<PalwBondKeyV2> = duties.iter().filter(|(_, at)| **at != 0).map(|(seat, _)| *seat).collect();
                     let split = crate::palw_panel_economy_v1::palw_panel_split_v1(reward, duties.len(), credited.len());
@@ -8476,7 +8530,7 @@ impl<'a> TransitionBuilder<'a> {
         }
         // ADR-0124 Decision 3: the seats leave duty with their exposure — before the phase write
         // below drops the row this reads.
-        self.release_seat_duties(&id, claim)?;
+        self.release_seat_duties(&id)?;
         // ADR-0125: past the lane's fence a finalized attempt is a credit in its span's schedule.
         if let Some(lane) = self.extras.round_lane {
             self.record_round_final(id, claim, final_daa, lane.schedule_span_daa)?;
@@ -8503,7 +8557,7 @@ impl<'a> TransitionBuilder<'a> {
         // ADR-0124 Decision 3: every seat on duty leaves it with its exposure, whatever voided the
         // claim — before the phase write drops the row this reads. A seat's fault is the court's
         // and the quorum's business, charged where it is proven, never here.
-        self.release_seat_duties(&id, claim)?;
+        self.release_seat_duties(&id)?;
         // Audit C5, free-prompt half: an abandoned commitment holds its reservation for the
         // configured span instead of releasing it here, so a redraw costs collateral rather than
         // a transaction fee. The hold is a DELAY, never a confiscation — `release_abandon_hold`
@@ -11097,7 +11151,7 @@ fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
                 if claim.rebound_daa.is_none() {
                     // ADR-0124 Decision 3: the first panel's seats leave duty with their exposure
                     // — the redraw deals different seats, who go on duty when it binds.
-                    builder.release_seat_duties(&claim_id, &claim)?;
+                    builder.release_seat_duties(&claim_id)?;
                     let mut revived = claim.clone();
                     revived.phase = PalwClaimPhaseV2::Provisional;
                     revived.rebound_daa = Some(ctx.daa_score);
@@ -13464,6 +13518,13 @@ pub struct PalwTransitionExtrasV1 {
     /// canonical inference is of the heaviest weight-bearing model class's, and the rest is never
     /// named. `false` by `Default`, for the reason every field above gives.
     pub work_priced_reward_active: bool,
+    /// **ADR-0130: `Params::palw_panel_exposure_floor`'s reward multiple, in permille, where it is
+    /// active at the block's DAA; `0` where it is not.** A panel bound past `panel_economy_active`
+    /// puts its seats on duty at `palw_panel_seat_exposure_v1(claim.reserved, claim.escrowed_reward,
+    /// seats, this)`, and the duty row stores the amount so the release and the dissent slash never
+    /// read this again. `0` by `Default` — the claim-priced stake alone, exactly what every network
+    /// that has not armed the floor reserves.
+    pub panel_reward_multiple_permille: u32,
     /// **ADR-0125: the execution lane, where it is open at this block** — the span a schedule covers.
     /// `None` below the fence and on every network that has not armed it, which leaves the fold, the
     /// root and the carriage byte-identical.
@@ -14869,8 +14930,9 @@ pub struct PalwStateCarriageV2 {
     /// ADR-0119 Decision 2. An eighth tagged tail (`0xA5`), encoded only when non-empty.
     pub class_step_ladders: BTreeMap<Hash64, u64>,
     /// ADR-0124 Decisions 2 and 3. A ninth tagged tail (`0xA6`) carrying both, encoded only when
-    /// the duties are non-empty or the reserve is non-zero.
-    pub panel_duties: BTreeMap<Hash64, BTreeMap<PalwBondKeyV2, u64>>,
+    /// the duties are non-empty or the reserve is non-zero. Each row carries the exposure its seats
+    /// reserved (ADR-0130, [`PalwPanelDutyRowV1`]); the tail gained it before any chain wrote one.
+    pub panel_duties: BTreeMap<Hash64, PalwPanelDutyRowV1>,
     pub panel_reserve_sompi: u64,
     /// ADR-0125. A tenth tagged tail (`0xA7`) carrying all four, encoded only when the lane has
     /// written anything.
@@ -18030,6 +18092,213 @@ pub(crate) mod tests {
         (s3, claim_id)
     }
 
+    // ---- ADR-0130: the seat exposure floor, stored in the duty row ----
+
+    /// `economy_extras` with ADR-0130's reward multiple in force at this block.
+    fn floored_extras(reward_multiple_permille: u32) -> PalwTransitionExtrasV1 {
+        PalwTransitionExtrasV1 { panel_reward_multiple_permille: reward_multiple_permille, ..economy_extras() }
+    }
+
+    /// `apply_economy` with the extras the caller names — the same consistency, delta round-trip and
+    /// carriage checks after every block.
+    fn apply_extras(
+        parent: &PalwChainStateV2,
+        p: &PalwStateParamsV2,
+        c: &PalwBlockContextV2,
+        objects: &[PalwConsensusObjectV2],
+        att: Option<&PalwAttemptEnvelopeV2>,
+        extras: &PalwTransitionExtrasV1,
+    ) -> PalwChainStateV2 {
+        let (state, delta) = apply_palw_transition_v2_with_extras(parent, p, c, objects, att, false, false, false, false, extras)
+            .expect("transition applies");
+        state.assert_internal_consistency(p).expect("internal consistency after apply");
+        state.assert_deadline_consistency(p).expect("deadline consistency after apply");
+        assert_eq!(apply_delta_v2(parent, &delta, p).unwrap().state_root(), state.state_root(), "the delta reproduces the transition");
+        assert_eq!(revert_delta_v2(&state, &delta, p).unwrap().state_root(), parent.state_root(), "and reverts to the parent");
+        let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&state)).unwrap();
+        let back: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(back.into_state(p, Some(state.state_root())).unwrap().state_root(), state.state_root(), "the carriage round-trips");
+        state
+    }
+
+    /// `economy_bound`'s shape with money in it: three bonds of 1,000,000 sompi, an attempt in a
+    /// 1,000,000-sompi block (escrow 620,000, `reserved` 200), and its three-seat panel bound under a
+    /// reward multiple of `lambda` — so a seat is paid at most 620,000 × 200 ‰ / 3 = 41,333 and the
+    /// floor at λ = 2 is 82,666 against the claim-priced 3 × 200 = 600.
+    fn economy_bound_floored(p: &PalwStateParamsV2, lambda: u32) -> (PalwChainStateV2, Hash64) {
+        let mut objects = register_class_and_bond();
+        if let Some(PalwConsensusObjectV2::BondRegistered { collateral, .. }) = objects.last_mut() {
+            *collateral = 1_000_000;
+        }
+        for n in 2..=3u64 {
+            objects.push(PalwConsensusObjectV2::BondRegistered {
+                bond: bond_key(n),
+                pubkey: vec![7, n as u8],
+                operator_pubkey: op_key(20 + n),
+                collateral: 1_000_000,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A00 + n),
+                capable_classes: Default::default(),
+                signature: Vec::new(),
+            });
+        }
+        let extras = floored_extras(lambda);
+        let s1 = apply_extras(&PalwChainStateV2::genesis(), p, &ctx(1, 100, 1), &objects, None, &extras);
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let s2 = apply_extras(&s1, p, &PalwBlockContextV2 { subsidy: 1_000_000, ..ctx(2, 101, 2) }, &[], Some(&env), &extras);
+        let claim = s2.claim(&claim_id).unwrap();
+        assert_eq!((claim.escrowed_reward, claim.reserved), (620_000, 200));
+        let seats = vec![seat_n(1), seat_n(2), seat_n(3)];
+        let bound = apply_extras(
+            &s2,
+            p,
+            &ctx(3, 102, 3),
+            &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }],
+            None,
+            &extras,
+        );
+        (bound, claim_id)
+    }
+
+    /// **ADR-0130: the duty row stores what binding reserved, and every release returns exactly
+    /// that — whichever side of the floor's height the release happens on.**
+    ///
+    /// Bound under λ = 2 a seat reserves 82,666 (twice the 41,333 it can be paid) instead of the
+    /// claim-priced 600; the claim then licenses and finalizes in blocks where the floor is gone, and
+    /// the seats leave duty with 82,666. Bound below the floor and released past it, 600 goes back —
+    /// not the 82,666 a recomputation at the releasing block would have subtracted, which would
+    /// underflow `reserved_exposure` or strand exposure on every bond.
+    #[test]
+    fn adr0130_what_a_release_returns_is_what_binding_reserved_across_the_fence() {
+        let p = params().with_worker_carve_permille(620).unwrap();
+        let floored = crate::palw_panel_economy_v1::palw_panel_seat_exposure_v1(200, 620_000, 3, 2_000);
+        assert_eq!(floored, 82_666, "λ = 2 × (620,000 × 200 ‰ / 3)");
+
+        // Bound past the floor, released below it.
+        let (s3, claim_id) = economy_bound_floored(&p, 2_000);
+        let row = s3.panel_duty_row_of(&claim_id).expect("a duty row past the fence");
+        assert_eq!(row.seat_exposure, floored, "the row stores the floored reservation");
+        assert_eq!(row.seats.len(), 3);
+        assert_eq!(s3.reserved_exposure(&bond_key(1)), 200 + floored, "the producer's own claim, plus its seat");
+        assert_eq!(s3.reserved_exposure(&bond_key(2)), floored);
+        let receipts = vec![receipt_at(claim_id, bond_key(1), true, 103), receipt_at(claim_id, bond_key(2), true, 103)];
+        let gone = floored_extras(0);
+        let s4 = apply_extras(
+            &s3,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts }],
+            None,
+            &gone,
+        );
+        assert_eq!(s4.panel_duty_row_of(&claim_id).unwrap().seat_exposure, floored, "the row is not repriced by a later block");
+        let s5 = apply_extras(&s4, &p, &ctx(5, 124, 5), &[], None, &gone);
+        assert!(matches!(s5.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
+        assert!(s5.panel_duty_row_of(&claim_id).is_none());
+        for n in 1..=3 {
+            assert_eq!(s5.reserved_exposure(&bond_key(n)), 0, "bond {n} leaves duty with exactly what it reserved");
+        }
+
+        // Bound below the floor, released past it — on every door out: a void, and the redraw.
+        let (t3, claim_id) = economy_bound_floored(&p, 0);
+        assert_eq!(t3.panel_duty_row_of(&claim_id).unwrap().seat_exposure, 600, "no floor: 3 × the claim's exposure");
+        let armed = floored_extras(2_000);
+        let defaulted = vec![receipt_at(claim_id, bond_key(2), false, 103), receipt_at(claim_id, bond_key(3), false, 103)];
+        let t4 = apply_extras(
+            &t3,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id, receipts: defaulted }],
+            None,
+            &armed,
+        );
+        assert!(matches!(t4.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { .. }));
+        assert_eq!(t4.reserved_exposure(&bond_key(2)), 0, "600 out, 600 back");
+        assert_eq!(t4.reserved_exposure(&bond_key(3)), 0);
+        // The receipt-timeout redraw, with the floor armed at the sweep: the first panel's 600 goes
+        // back, and the second panel — bound past the floor — holds the floored amount.
+        let u4 = apply_extras(&t3, &p, &ctx(4, 113, 4), &[], None, &armed);
+        assert!(u4.panel_duty_row_of(&claim_id).is_none(), "the first panel's row is gone");
+        assert_eq!(u4.reserved_exposure(&bond_key(2)), 0);
+        assert_eq!(u4.reserved_exposure(&bond_key(1)), 200, "only the producer's own claim remains");
+        let second = vec![seat_n(2), seat_n(3)];
+        let u5 = apply_extras(
+            &u4,
+            &p,
+            &ctx(5, 118, 5),
+            &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(78), seats: second }],
+            None,
+            &armed,
+        );
+        // Two seats now, so a seat's most is 620,000 × 200 ‰ / 2 = 62,000 and the floor is 124,000.
+        let redrawn = crate::palw_panel_economy_v1::palw_panel_seat_exposure_v1(200, 620_000, 2, 2_000);
+        assert_eq!(redrawn, 124_000);
+        assert_eq!(u5.panel_duty_row_of(&claim_id).unwrap().seat_exposure, redrawn, "the second panel is priced on its own size");
+        assert_eq!(u5.reserved_exposure(&bond_key(2)), redrawn);
+    }
+
+    /// **ADR-0130: the dissent slash takes the row's stored exposure**, on both sides of the floor's
+    /// height — what is reserved is what is slashable, and the fence at the licensing block decides
+    /// nothing about a reservation that was already made.
+    #[test]
+    fn adr0130_the_dissent_slash_takes_the_stored_exposure() {
+        let p = params().with_worker_carve_permille(620).unwrap();
+        let dissent = |bound_lambda: u32, licensing_lambda: u32| {
+            let (s3, claim_id) = economy_bound_floored(&p, bound_lambda);
+            let stored = s3.panel_duty_row_of(&claim_id).unwrap().seat_exposure;
+            let receipts = vec![
+                receipt_at(claim_id, bond_key(1), true, 103),
+                receipt_at(claim_id, bond_key(2), true, 103),
+                receipt_at(claim_id, bond_key(3), false, 103),
+            ];
+            let s4 = apply_extras(
+                &s3,
+                &p,
+                &ctx(4, 103, 4),
+                &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts }],
+                None,
+                &floored_extras(licensing_lambda),
+            );
+            let dissenter = s4.bond(&bond_key(3)).unwrap();
+            (stored, dissenter.slashed, dissenter.collateral, s4.bond(&bond_key(2)).unwrap().slashed)
+        };
+        // Bound past the floor, licensed below it: the floored 82,666 is what it loses.
+        assert_eq!(dissent(2_000, 0), (82_666, 82_666, 1_000_000 - 82_666, 0));
+        // Bound below the floor, licensed past it: the claim-priced 600, and no more.
+        assert_eq!(dissent(0, 2_000), (600, 600, 1_000_000 - 600, 0));
+    }
+
+    /// **ADR-0130: λ = 0 is the reservation ADR-0124 shipped, byte for byte**, and the shadow ledger
+    /// answers what another λ WOULD have reserved without anything being written.
+    #[test]
+    fn adr0130_no_floor_is_the_shipped_reservation_and_the_shadow_ledger_prices_another() {
+        use crate::palw_panel_economy_v1::{palw_seat_exposure_ledger_v1, palw_shadow_backed_v1, palw_shadow_seat_exposure_ledger_v1};
+        let p = params().with_worker_carve_permille(620).unwrap();
+        let (zero, claim_id) = economy_bound_floored(&p, 0);
+        // A dormant floor is the extras value ADR-0124 already carried, field for field — so every
+        // block folded below the fence is the block that build folded.
+        assert_eq!(floored_extras(0), economy_extras(), "λ = 0 is the extras value the economy already carried");
+        let row = zero.panel_duty_row_of(&claim_id).unwrap();
+        assert_eq!(row.seat_exposure, crate::palw_panel_economy_v1::palw_seat_exposure_v1(200), "3 × the claim's exposure");
+
+        // The stored ledger is the seat half of `reserved_exposure`; the shadow ledger is what λ = 2
+        // would have put there.
+        let stored = palw_seat_exposure_ledger_v1(&zero);
+        assert_eq!(stored[&bond_key(2)], 600);
+        assert_eq!(stored[&bond_key(1)], 600, "the producer's SEAT, not its claim");
+        assert_eq!(palw_shadow_seat_exposure_ledger_v1(&zero, 0), stored, "no floor reads back the stored ledger");
+        let shadow = palw_shadow_seat_exposure_ledger_v1(&zero, 2_000);
+        assert_eq!(shadow[&bond_key(2)], 82_666);
+        // What a bond would back — the draw's `backed` — under each λ, and the capacity that leaves.
+        assert_eq!(palw_shadow_backed_v1(&zero, &bond_key(2), 0), zero.reserved_exposure(&bond_key(2)));
+        assert_eq!(palw_shadow_backed_v1(&zero, &bond_key(2), 2_000), 82_666);
+        assert_eq!(palw_shadow_backed_v1(&zero, &bond_key(1), 2_000), 200 + 82_666, "the producer's own claim rides with it");
+        let ceiling = 1_000_000u128 * p.fp_max_exposure_ratio_permille() as u128 / 1000;
+        assert_eq!(ceiling - palw_shadow_backed_v1(&zero, &bond_key(2), 2_000), 1_000_000 - 82_666, "capacity = ceiling − backed");
+        // A bond nobody seated backs nothing in either ledger.
+        assert_eq!(palw_shadow_backed_v1(&zero, &bond_key(9), 2_000), 0);
+    }
+
     // ---- ADR-0125: the execution lane's scheduler and permit ledger ----
 
     fn round_extras(span_daa: u64, uses: Vec<crate::palw_execution_lane_v1::PalwExecPermitUseV1>) -> PalwTransitionExtrasV1 {
@@ -18599,7 +18868,7 @@ pub(crate) mod tests {
         let (s3, claim_id) = economy_bound(&p);
         let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s3)).unwrap();
         let back: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
-        assert_eq!(back.panel_duties.get(&claim_id).map(|d| d.len()), Some(3));
+        assert_eq!(back.panel_duties.get(&claim_id).map(|row| (row.seats.len(), row.seat_exposure)), Some((3, 600)));
         let restored =
             back.into_state(&p, Some(s3.state_root())).expect("a restored state rebuilds the seats' exposure from the rows");
         assert_eq!(restored.state_root(), s3.state_root());
@@ -30419,6 +30688,7 @@ pub(crate) mod tests {
                 epoch_budget_release_active: false,
                 panel_economy_active: false,
                 work_priced_reward_active: false,
+                panel_reward_multiple_permille: 0,
                 prompt_ids_merkle: false,
                 round_lane: None,
                 round_permit_uses: Vec::new(),
@@ -30640,6 +30910,7 @@ pub(crate) mod tests {
                 epoch_budget_release_active: false,
                 panel_economy_active: false,
                 work_priced_reward_active: false,
+                panel_reward_multiple_permille: 0,
                 prompt_ids_merkle: false,
                 round_lane: None,
                 round_permit_uses: Vec::new(),
