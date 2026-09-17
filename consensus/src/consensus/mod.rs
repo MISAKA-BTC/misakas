@@ -2212,6 +2212,10 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_v2_class_table_impl()
     }
 
+    fn palw_class_census_v1(&self) -> Option<kaspa_consensus_core::palw_economic_compute_v1::PalwClassCensusReadV1> {
+        self.virtual_processor.palw_class_census_v1_impl()
+    }
+
     fn palw_certified_families_v1(
         &self,
     ) -> Vec<(

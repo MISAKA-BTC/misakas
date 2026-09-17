@@ -780,6 +780,12 @@ pub trait ConsensusApi: Send + Sync {
     /// budget but not the share, so "budget 0" could mean the class was never granted share or
     /// that the table simply has no row for it, and those are different faults. A node that holds
     /// forever should be able to say which.
+    /// ADR-0131 Decision 1: what the chain holds for each PALW class — registration numbers, target,
+    /// and a census of the claims in the state — for the shadow economics. `None` off `ConsensusV2`.
+    fn palw_class_census_v1(&self) -> Option<crate::palw_economic_compute_v1::PalwClassCensusReadV1> {
+        None
+    }
+
     fn palw_v2_class_table(&self) -> Vec<crate::palw_state_v2::PalwClassRowV2> {
         Vec::new()
     }

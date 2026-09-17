@@ -889,6 +889,42 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwClassContextsResponse>, protowire:
         error: None,
     }
 });
+from!(&kaspa_rpc_core::GetPalwClassEconomicsRequest, protowire::GetPalwClassEconomicsRequestMessage);
+from!(item: &kaspa_rpc_core::RpcPalwClassEconomics, protowire::RpcPalwClassEconomics, {
+    Self {
+        class_id: item.class_id.clone(),
+        model_id: item.model_id.clone(),
+        is_base_class: item.is_base_class,
+        status: item.status.clone(),
+        share_permille: item.share_permille as u32,
+        pwu_per_inference: item.pwu_per_inference,
+        class_target: item.class_target.clone(),
+        expected_attempts: item.expected_attempts,
+        economic_compute_job: item.economic_compute_job.clone(),
+        economic_compute_canonical: item.economic_compute_canonical.clone(),
+        economic_source: item.economic_source.clone(),
+        claims_accepted: item.claims_accepted,
+        claims_provisional: item.claims_provisional,
+        claims_panel_bound: item.claims_panel_bound,
+        claims_licensed: item.claims_licensed,
+        claims_final: item.claims_final,
+        claims_voided: item.claims_voided,
+        claims_redrawn: item.claims_redrawn,
+        escrow_accepted_sompi: item.escrow_accepted_sompi.clone(),
+        escrow_final_sompi: item.escrow_final_sompi.clone(),
+    }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwClassEconomicsResponse>, protowire::GetPalwClassEconomicsResponseMessage, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        economic_compute_version: item.economic_compute_version as u32,
+        seat_count: item.seat_count as u32,
+        prefill_draw: item.prefill_draw,
+        classes: item.classes.iter().map(protowire::RpcPalwClassEconomics::from).collect(),
+        error: None,
+    }
+});
 from!(&kaspa_rpc_core::GetPalwRegistrationTermsRequest, protowire::GetPalwRegistrationTermsRequestMessage);
 from!(item: &kaspa_rpc_core::RpcPalwCertifiedFamily, protowire::RpcPalwCertifiedFamily, {
     Self { lane: item.lane.clone(), digest: item.digest.clone(), certified_daa: item.certified_daa, family_hex: item.family_hex.clone() }
@@ -2094,6 +2130,42 @@ try_from!(item: &protowire::GetPalwClassContextsResponseMessage, RpcResult<kaspa
         fp_max_prompt_tokens: item.fp_max_prompt_tokens,
         fp_max_decode_tokens: item.fp_max_decode_tokens,
         classes: item.classes.iter().map(kaspa_rpc_core::RpcPalwClassContext::try_from).collect::<RpcResult<Vec<_>>>()?,
+    }
+});
+try_from!(&protowire::GetPalwClassEconomicsRequestMessage, kaspa_rpc_core::GetPalwClassEconomicsRequest);
+try_from!(item: &protowire::RpcPalwClassEconomics, kaspa_rpc_core::RpcPalwClassEconomics, {
+    Self {
+        class_id: item.class_id.clone(),
+        model_id: item.model_id.clone(),
+        is_base_class: item.is_base_class,
+        status: item.status.clone(),
+        share_permille: u16::try_from(item.share_permille).map_err(|_| RpcError::General("sharePermille is not a u16".to_string()))?,
+        pwu_per_inference: item.pwu_per_inference,
+        class_target: item.class_target.clone(),
+        expected_attempts: item.expected_attempts,
+        economic_compute_job: item.economic_compute_job.clone(),
+        economic_compute_canonical: item.economic_compute_canonical.clone(),
+        economic_source: item.economic_source.clone(),
+        claims_accepted: item.claims_accepted,
+        claims_provisional: item.claims_provisional,
+        claims_panel_bound: item.claims_panel_bound,
+        claims_licensed: item.claims_licensed,
+        claims_final: item.claims_final,
+        claims_voided: item.claims_voided,
+        claims_redrawn: item.claims_redrawn,
+        escrow_accepted_sompi: item.escrow_accepted_sompi.clone(),
+        escrow_final_sompi: item.escrow_final_sompi.clone(),
+    }
+});
+try_from!(item: &protowire::GetPalwClassEconomicsResponseMessage, RpcResult<kaspa_rpc_core::GetPalwClassEconomicsResponse>, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        economic_compute_version: u16::try_from(item.economic_compute_version)
+            .map_err(|_| RpcError::General("economicComputeVersion is not a u16".to_string()))?,
+        seat_count: u16::try_from(item.seat_count).map_err(|_| RpcError::General("seatCount is not a u16".to_string()))?,
+        prefill_draw: item.prefill_draw,
+        classes: item.classes.iter().map(kaspa_rpc_core::RpcPalwClassEconomics::try_from).collect::<RpcResult<Vec<_>>>()?,
     }
 });
 try_from!(&protowire::GetPalwRegistrationTermsRequestMessage, kaspa_rpc_core::GetPalwRegistrationTermsRequest);

@@ -77,6 +77,10 @@ struct LedgerRow {
     canonical_prefill_tokens: u32,
     canonical_decode_tokens: u32,
     max_context_tokens: u32,
+    /// ADR-0131 `EconomicComputeV1` of the draw job and of the canonical job, from the class's own
+    /// graph; zero where the profile does not price (never on a registrable graph).
+    economic_draw: u128,
+    economic_canonical: u128,
 }
 
 /// **This build's class ledger, indexed by class id** — built once from the network's own court and
@@ -100,7 +104,11 @@ impl PalwBuildClassLedgerV1 {
             .ledger()
             .into_iter()
             .map(|entry| {
+                use kaspa_consensus_core::palw_economic_compute_v1::{
+                    PALW_ECONOMIC_COST_TABLE_V1, palw_attempt_economic_compute_v1, palw_job_economic_compute_v1,
+                };
                 let canonical = entry.canonical_context();
+                let table = &PALW_ECONOMIC_COST_TABLE_V1;
                 (
                     entry.class_id(),
                     LedgerRow {
@@ -109,6 +117,8 @@ impl PalwBuildClassLedgerV1 {
                         canonical_prefill_tokens: canonical.declared_prefill_tokens,
                         canonical_decode_tokens: canonical.exact_decode_tokens,
                         max_context_tokens: canonical.max_context_tokens,
+                        economic_draw: palw_attempt_economic_compute_v1(&entry.profile, &canonical, true, table).unwrap_or(0),
+                        economic_canonical: palw_job_economic_compute_v1(&entry.profile, &canonical, table).unwrap_or(0),
                     },
                 )
             })
@@ -133,6 +143,14 @@ impl PalwBuildClassLedgerV1 {
             canonical_prefill_tokens: row.canonical_prefill_tokens,
             canonical_decode_tokens: row.canonical_decode_tokens,
             max_context_tokens: row.max_context_tokens,
+        })
+    }
+
+    /// ADR-0131: the class's economic compute as this build derives it, for `getPalwClassEconomics`.
+    pub fn ledger_compute(&self, class_id: Hash64) -> Option<kaspa_rpc_service::service::PalwClassLedgerCompute> {
+        self.rows.get(&class_id).map(|row| kaspa_rpc_service::service::PalwClassLedgerCompute {
+            draw: row.economic_draw,
+            canonical: row.economic_canonical,
         })
     }
 
@@ -182,6 +200,10 @@ impl kaspa_rpc_service::service::PalwClassLedgerProvider for PalwBuildClassLedge
     fn class_context(&self, class_id: Hash64) -> Option<kaspa_rpc_service::service::PalwClassLedgerContext> {
         self.ledger_context(class_id)
     }
+
+    fn class_economic_compute(&self, class_id: Hash64) -> Option<kaspa_rpc_service::service::PalwClassLedgerCompute> {
+        self.ledger_compute(class_id)
+    }
 }
 
 /// **The build's class ledger, built off the startup path.** The first build in a process derives
@@ -225,6 +247,10 @@ impl PalwClassLedgerCellV1 {
 impl kaspa_rpc_service::service::PalwClassLedgerProvider for PalwClassLedgerCellV1 {
     fn class_context(&self, class_id: Hash64) -> Option<kaspa_rpc_service::service::PalwClassLedgerContext> {
         self.get().ledger_context(class_id)
+    }
+
+    fn class_economic_compute(&self, class_id: Hash64) -> Option<kaspa_rpc_service::service::PalwClassLedgerCompute> {
+        self.get().ledger_compute(class_id)
     }
 }
 
@@ -306,6 +332,21 @@ mod tests {
             ),
         );
         assert_eq!(provider.class_context(Hash64::from_u64_word(0xDEAD)), None, "and has no row for a class it does not supply");
+        // ADR-0131: the compute op 185 reads for a class the chain registered without a carriage is
+        // the consensus derivation over the ledger's own profile — the hybrid's, pinned in
+        // consensus-core, and every row's draw job under its canonical job.
+        // The graph-v3 row is the class testnet-11 registered (`5bd9ae3d…`); the build also
+        // supplies the v1 graph under the bare model id, a different class with a different count.
+        let hybrid_id =
+            ledger.rows.iter().find(|(_, row)| row.model_id == "Qwen3.6-35B-A3B/graph-v3").map(|(id, _)| *id).expect("the hybrid");
+        assert!(hybrid_id.to_string().starts_with("5bd9ae3d91df8065"));
+        let compute = provider.class_economic_compute(hybrid_id).expect("the build prices the hybrid");
+        assert_eq!((compute.draw, compute.canonical), (18_055_200_736, 21_070_759_296));
+        for (id, _) in ledger.rows.iter() {
+            let compute = provider.class_economic_compute(*id).unwrap();
+            assert!(0 < compute.draw && compute.draw <= compute.canonical, "{id}: {compute:?}");
+        }
+        assert_eq!(provider.class_economic_compute(Hash64::from_u64_word(0xDEAD)), None);
         // The cell a node hands over answers the same once its build lands, and a reader waits for it.
         let cell = PalwClassLedgerCellV1::spawn(params.clone());
         let provider: &dyn kaspa_rpc_service::service::PalwClassLedgerProvider = &cell;

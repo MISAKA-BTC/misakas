@@ -4796,6 +4796,164 @@ impl Deserializer for GetPalwClassContextsResponse {
     }
 }
 
+/// ADR-0131 Decision 1: `getPalwClassEconomics` — what the chain holds for each class and what its
+/// job costs in economic compute, so a client can price every class on every reward basis and read
+/// `MSK / compute` per class. Nothing here is a rule: the numbers a client derives are the shadow's.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwClassEconomicsRequest {}
+
+impl Serializer for GetPalwClassEconomicsRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwClassEconomicsRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {})
+    }
+}
+
+/// One class: its registration numbers, its target, its job's economic compute, and a census of the
+/// attempt-lane claims the node's state still holds.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwClassEconomics {
+    /// 128 hex, as `getPalwClasses` spells it.
+    pub class_id: String,
+    /// The model this node's build names for the class; empty when it names none.
+    pub model_id: String,
+    pub is_base_class: bool,
+    pub status: String,
+    /// The class's cadence share; 0 for a class holding none.
+    pub share_permille: u16,
+    /// The class's `pwu_per_inference`: its canonical job's step leaves, today's price basis.
+    pub pwu_per_inference: u64,
+    /// Decimal `u128`: the class target at the tip.
+    pub class_target: String,
+    /// The draws one claim costs in expectation at that target.
+    pub expected_attempts: u64,
+    /// ADR-0131 `EconomicComputeV1`, in MAC-equivalents, decimal `u128`: the job an attempt runs at
+    /// the tip's draw rule (`prefill_draw` on the response), and the canonical job. Both `"0"` and
+    /// `economic_source` `unknown` when neither the chain's registration nor this build has the graph.
+    pub economic_compute_job: String,
+    pub economic_compute_canonical: String,
+    /// `chain_registration`, `build_ledger` or `unknown`.
+    pub economic_source: String,
+    /// Attempt-lane claims in the state, by phase; `claims_redrawn` are those drawn a second panel.
+    pub claims_accepted: u64,
+    pub claims_provisional: u64,
+    pub claims_panel_bound: u64,
+    pub claims_licensed: u64,
+    pub claims_final: u64,
+    pub claims_voided: u64,
+    pub claims_redrawn: u64,
+    /// Decimal `u128`: Σ escrow over every accepted claim, and over the `Final` ones.
+    pub escrow_accepted_sompi: String,
+    pub escrow_final_sompi: String,
+}
+
+impl Serializer for RpcPalwClassEconomics {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(String, &self.model_id, writer)?;
+        store!(bool, &self.is_base_class, writer)?;
+        store!(String, &self.status, writer)?;
+        store!(u16, &self.share_permille, writer)?;
+        store!(u64, &self.pwu_per_inference, writer)?;
+        store!(String, &self.class_target, writer)?;
+        store!(u64, &self.expected_attempts, writer)?;
+        store!(String, &self.economic_compute_job, writer)?;
+        store!(String, &self.economic_compute_canonical, writer)?;
+        store!(String, &self.economic_source, writer)?;
+        store!(u64, &self.claims_accepted, writer)?;
+        store!(u64, &self.claims_provisional, writer)?;
+        store!(u64, &self.claims_panel_bound, writer)?;
+        store!(u64, &self.claims_licensed, writer)?;
+        store!(u64, &self.claims_final, writer)?;
+        store!(u64, &self.claims_voided, writer)?;
+        store!(u64, &self.claims_redrawn, writer)?;
+        store!(String, &self.escrow_accepted_sompi, writer)?;
+        store!(String, &self.escrow_final_sompi, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwClassEconomics {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            class_id: load!(String, reader)?,
+            model_id: load!(String, reader)?,
+            is_base_class: load!(bool, reader)?,
+            status: load!(String, reader)?,
+            share_permille: load!(u16, reader)?,
+            pwu_per_inference: load!(u64, reader)?,
+            class_target: load!(String, reader)?,
+            expected_attempts: load!(u64, reader)?,
+            economic_compute_job: load!(String, reader)?,
+            economic_compute_canonical: load!(String, reader)?,
+            economic_source: load!(String, reader)?,
+            claims_accepted: load!(u64, reader)?,
+            claims_provisional: load!(u64, reader)?,
+            claims_panel_bound: load!(u64, reader)?,
+            claims_licensed: load!(u64, reader)?,
+            claims_final: load!(u64, reader)?,
+            claims_voided: load!(u64, reader)?,
+            claims_redrawn: load!(u64, reader)?,
+            escrow_accepted_sompi: load!(String, reader)?,
+            escrow_final_sompi: load!(String, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwClassEconomicsResponse {
+    /// False off `ConsensusV2`.
+    pub available: bool,
+    /// The DAA the state was read at.
+    pub tip_daa: u64,
+    /// `PALW_ECONOMIC_COMPUTE_VERSION_V1`: the cost table the compute numbers were derived with.
+    pub economic_compute_version: u16,
+    /// The panel's seats — how many replays license one claim.
+    pub seat_count: u16,
+    /// Whether an attempt at the tip runs its class's job without decode calls (ADR-0117).
+    pub prefill_draw: bool,
+    pub classes: Vec<RpcPalwClassEconomics>,
+}
+
+impl Serializer for GetPalwClassEconomicsResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        store!(u16, &self.economic_compute_version, writer)?;
+        store!(u16, &self.seat_count, writer)?;
+        store!(bool, &self.prefill_draw, writer)?;
+        serialize!(Vec<RpcPalwClassEconomics>, &self.classes, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwClassEconomicsResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            tip_daa: load!(u64, reader)?,
+            economic_compute_version: load!(u16, reader)?,
+            seat_count: load!(u16, reader)?,
+            prefill_draw: load!(bool, reader)?,
+            classes: deserialize!(Vec<RpcPalwClassEconomics>, reader)?,
+        })
+    }
+}
+
 /// ADR-0122: `getPalwNodeStatus` — what this node is doing, which until now only its log said.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

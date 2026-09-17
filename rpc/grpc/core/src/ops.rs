@@ -125,6 +125,7 @@ pub enum KaspadPayloadOps {
     GetPalwSettlement,
     GetPrecommitDuty,
     GetPalwClassContexts,
+    GetPalwClassEconomics,
     GetTokenSupply,
     GetTokenEmissionInfo,
 

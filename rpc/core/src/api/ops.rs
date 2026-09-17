@@ -220,6 +220,10 @@ pub enum RpcApiOps {
     /// Each registered PALW class's context — `n_ctx` and its canonical job's token counts — with
     /// where the numbers came from, and the free-prompt lane's token limits.
     GetPalwClassContexts = 184,
+    /// ADR-0131 Decision 1: what the chain holds for each PALW class (its registration numbers,
+    /// its target, a census of its claims) and what its job costs in economic compute — the shadow
+    /// economics a client prices every class on, on every basis.
+    GetPalwClassEconomics = 185,
 }
 
 impl RpcApiOps {

@@ -1160,6 +1160,21 @@ async fn sanity_test() {
                     );
                 })
             }
+            KaspadPayloadOps::GetPalwClassEconomics => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client.get_palw_class_economics_call(None, GetPalwClassEconomicsRequest {}).await.unwrap();
+                    assert_eq!(response.available, !response.classes.is_empty(), "available is whether the census has rows");
+                    for class in &response.classes {
+                        assert!(
+                            ["chain_registration", "build_ledger", "unknown"].contains(&class.economic_source.as_str()),
+                            "{}",
+                            class.economic_source
+                        );
+                        assert!(class.claims_final <= class.claims_accepted && class.claims_voided <= class.claims_accepted);
+                    }
+                })
+            }
             KaspadPayloadOps::GetPalwClassContexts => {
                 let rpc_client = client.clone();
                 tst!(op, {
