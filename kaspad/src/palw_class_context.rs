@@ -30,6 +30,7 @@
 //! client's arithmetic on `n_ctx`.
 
 use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 
 use kaspa_consensus_core::{
     config::params::Params, palw_context_ladder::palw_job_footprint_v1, palw_mode_v2::PalwConsensusMode,
@@ -123,6 +124,18 @@ impl PalwBuildClassLedgerV1 {
         self.rows.is_empty()
     }
 
+    /// This ledger's row for `class_id` as `getPalwClassContexts` (op 184) reads it, or `None` for a
+    /// class this build does not supply.
+    pub fn ledger_context(&self, class_id: Hash64) -> Option<kaspa_rpc_service::service::PalwClassLedgerContext> {
+        self.rows.get(&class_id).map(|row| kaspa_rpc_service::service::PalwClassLedgerContext {
+            model_id: row.model_id.clone(),
+            n_ctx: row.n_ctx,
+            canonical_prefill_tokens: row.canonical_prefill_tokens,
+            canonical_decode_tokens: row.canonical_decode_tokens,
+            max_context_tokens: row.max_context_tokens,
+        })
+    }
+
     /// The context of `class_id`: the chain's registration when the node holds one (`chain`, from
     /// `palw_registered_class_carriage_v1`), else this ledger's entry, else unknown.
     pub fn class_context(&self, class_id: Hash64, chain: Option<(PalwShapeProfileV3, PalwJobContextV2)>) -> PalwClassContextV1 {
@@ -160,6 +173,58 @@ impl PalwBuildClassLedgerV1 {
                 source: PALW_CLASS_CONTEXT_SOURCE_UNKNOWN,
             },
         }
+    }
+}
+
+/// **Op 184 reads the same ledger `--palw-dump-classes` prints**, so a class a genesis registered
+/// without a carriage has a window over RPC as it does in the dump.
+impl kaspa_rpc_service::service::PalwClassLedgerProvider for PalwBuildClassLedgerV1 {
+    fn class_context(&self, class_id: Hash64) -> Option<kaspa_rpc_service::service::PalwClassLedgerContext> {
+        self.ledger_context(class_id)
+    }
+}
+
+/// **The build's class ledger, built off the startup path.** The first build in a process derives
+/// every lineage's graph — tens of seconds in a debug build, and every later build reads the
+/// process's caches — which a node that neither produces nor seats should not wait for before it
+/// serves. [`Self::spawn`] starts it on its own thread; a reader waits for it, so an early reader is
+/// late rather than told a class has no window.
+#[derive(Clone, Default)]
+pub struct PalwClassLedgerCellV1(Arc<OnceLock<PalwBuildClassLedgerV1>>);
+
+impl PalwClassLedgerCellV1 {
+    /// Build `params`' ledger on a thread of its own. A build that panics, or a thread that cannot be
+    /// started, leaves the empty ledger — readers then answer from the chain alone — rather than a
+    /// cell nobody ever fills.
+    pub fn spawn(params: Params) -> Self {
+        let cell = Self::default();
+        let target = cell.0.clone();
+        let spawned = std::thread::Builder::new().name("palw-class-ledger".to_string()).spawn(move || {
+            let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| PalwBuildClassLedgerV1::from_params(&params)));
+            let _ = target.set(built.ok().flatten().unwrap_or_default());
+        });
+        if spawned.is_err() {
+            let _ = cell.0.set(PalwBuildClassLedgerV1::default());
+        }
+        cell
+    }
+
+    /// A cell already holding `ledger`.
+    pub fn ready(ledger: PalwBuildClassLedgerV1) -> Self {
+        let cell = Self::default();
+        let _ = cell.0.set(ledger);
+        cell
+    }
+
+    /// The ledger, waiting for the build while it runs.
+    pub fn get(&self) -> &PalwBuildClassLedgerV1 {
+        self.0.wait()
+    }
+}
+
+impl kaspa_rpc_service::service::PalwClassLedgerProvider for PalwClassLedgerCellV1 {
+    fn class_context(&self, class_id: Hash64) -> Option<kaspa_rpc_service::service::PalwClassLedgerContext> {
+        self.get().ledger_context(class_id)
     }
 }
 
@@ -226,6 +291,27 @@ mod tests {
             (entry.profile.n_ctx, canonical.declared_prefill_tokens, canonical.exact_decode_tokens)
         );
         assert_eq!(from_chain.model_id, entry.model_id, "the ledger still names a class the chain answered for");
+
+        // What op 184 is handed: the same row, through the provider the RPC service holds.
+        let provider: &dyn kaspa_rpc_service::service::PalwClassLedgerProvider = &ledger;
+        let row = provider.class_context(bundle.base_class_id).expect("the provider answers for the floor");
+        assert_eq!(
+            (row.n_ctx, row.canonical_prefill_tokens, row.canonical_decode_tokens, row.max_context_tokens, row.model_id.as_str()),
+            (
+                floor.n_ctx,
+                floor.canonical_prefill_tokens,
+                floor.canonical_decode_tokens,
+                floor.max_context_tokens,
+                floor.model_id.as_str()
+            ),
+        );
+        assert_eq!(provider.class_context(Hash64::from_u64_word(0xDEAD)), None, "and has no row for a class it does not supply");
+        // The cell a node hands over answers the same once its build lands, and a reader waits for it.
+        let cell = PalwClassLedgerCellV1::spawn(params.clone());
+        let provider: &dyn kaspa_rpc_service::service::PalwClassLedgerProvider = &cell;
+        assert_eq!(provider.class_context(bundle.base_class_id), Some(row.clone()), "the spawned build answers like the ledger");
+        assert_eq!(cell.get().len(), ledger.len());
+        assert!(PalwClassLedgerCellV1::ready(PalwBuildClassLedgerV1::default()).get().is_empty());
 
         let unknown = ledger.class_context(Hash64::from_u64_word(0xDEAD), None);
         assert_eq!(

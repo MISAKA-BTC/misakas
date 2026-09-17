@@ -20,12 +20,13 @@ const PALW_DUMP: &str = "palw-dump";
 
 pub struct PalwDumpService {
     consensus_manager: Arc<ConsensusManager>,
-    /// The build's class ledger, for the context of a class the chain holds no carriage for.
-    ledger: crate::palw_class_context::PalwBuildClassLedgerV1,
+    /// The build's class ledger, for the context of a class the chain holds no carriage for — the one
+    /// `getPalwClassContexts` answers from.
+    ledger: crate::palw_class_context::PalwClassLedgerCellV1,
 }
 
 impl PalwDumpService {
-    pub fn new(consensus_manager: Arc<ConsensusManager>, ledger: crate::palw_class_context::PalwBuildClassLedgerV1) -> Self {
+    pub fn new(consensus_manager: Arc<ConsensusManager>, ledger: crate::palw_class_context::PalwClassLedgerCellV1) -> Self {
         Self { consensus_manager, ledger }
     }
 
@@ -56,7 +57,7 @@ impl PalwDumpService {
             for row in rows {
                 // The class's window (and where it was read from): what a client sizing a prompt for
                 // this class needs, and what nothing printed before.
-                let context = self.ledger.class_context(row.class_id, session.palw_registered_class_carriage_v1(row.class_id));
+                let context = self.ledger.get().class_context(row.class_id, session.palw_registered_class_carriage_v1(row.class_id));
                 info!(
                     "[{PALW_DUMP}]   class={} base={} status={} share={} budget={} leaves={} n_ctx={} canonical={}+{} footprint={} model={} context_source={}",
                     row.class_id,

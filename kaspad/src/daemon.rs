@@ -25,7 +25,7 @@ use kaspa_grpc_server::service::GrpcService;
 use kaspa_notify::{address::tracker::Tracker, subscription::context::SubscriptionContext};
 use kaspa_p2p_lib::Hub;
 use kaspa_p2p_mining::rule_engine::MiningRuleEngine;
-use kaspa_rpc_service::service::{RpcCoreService, ValidatorStatusProvider};
+use kaspa_rpc_service::service::{PalwClassLedgerProvider, RpcCoreService, ValidatorStatusProvider};
 use kaspa_txscript::caches::TxScriptCacheCounters;
 use kaspa_utils::git;
 use kaspa_utils::networking::ContextualNetAddress;
@@ -1509,26 +1509,38 @@ Do you confirm? (y/n)";
     // Kept for the PALW panel service below — `rpc_core_service` consumes the originals.
     let flow_context_for_palw_panel = flow_context.clone();
     let config_for_palw_panel = config.clone();
-    let rpc_core_service = Arc::new(RpcCoreService::new(
-        consensus_manager.clone(),
-        notify_service.notifier(),
-        index_service.as_ref().map(|x| x.notifier()),
-        mining_manager,
-        flow_context,
-        subscription_context,
-        index_service.as_ref().map(|x| x.utxoindex().unwrap()),
-        config.clone(),
-        core.clone(),
-        processing_counters,
-        wrpc_borsh_counters.clone(),
-        wrpc_json_counters.clone(),
-        perf_monitor.clone(),
-        p2p_tower_counters.clone(),
-        grpc_tower_counters.clone(),
-        system_info,
-        mining_rule_engine.clone(),
-        validator_status_provider,
-    ));
+    // The build's class ledger, built once and off the startup path: `getPalwClassContexts` (op 184)
+    // answers from it for a class the chain holds no declaration for, and `--palw-dump-classes` prints
+    // the same rows. A network without a V2 bundle has no PALW classes, builds nothing and hands the
+    // RPC service none.
+    let palw_class_ledger =
+        matches!(config.params.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_))
+            .then(|| crate::palw_class_context::PalwClassLedgerCellV1::spawn(config.params.clone()));
+    let palw_class_ledger_provider: Option<Arc<dyn PalwClassLedgerProvider>> =
+        palw_class_ledger.clone().map(|cell| Arc::new(cell) as Arc<dyn PalwClassLedgerProvider>);
+    let rpc_core_service = Arc::new(
+        RpcCoreService::new(
+            consensus_manager.clone(),
+            notify_service.notifier(),
+            index_service.as_ref().map(|x| x.notifier()),
+            mining_manager,
+            flow_context,
+            subscription_context,
+            index_service.as_ref().map(|x| x.utxoindex().unwrap()),
+            config.clone(),
+            core.clone(),
+            processing_counters,
+            wrpc_borsh_counters.clone(),
+            wrpc_json_counters.clone(),
+            perf_monitor.clone(),
+            p2p_tower_counters.clone(),
+            grpc_tower_counters.clone(),
+            system_info,
+            mining_rule_engine.clone(),
+            validator_status_provider,
+        )
+        .with_palw_class_ledger_provider(palw_class_ledger_provider),
+    );
     let grpc_service_broadcasters: usize = 3; // TODO: add a command line argument or derive from other arg/config/host-related fields
     let grpc_service = if !args.disable_grpc {
         Some(Arc::new(GrpcService::new(
@@ -1740,7 +1752,9 @@ Do you confirm? (y/n)";
     if args.palw_dump_classes {
         async_runtime.register(Arc::new(crate::palw_dump::PalwDumpService::new(
             consensus_manager.clone(),
-            crate::palw_class_context::PalwBuildClassLedgerV1::from_params(&config_for_palw_panel.params).unwrap_or_default(),
+            palw_class_ledger.clone().unwrap_or_else(|| {
+                crate::palw_class_context::PalwClassLedgerCellV1::ready(crate::palw_class_context::PalwBuildClassLedgerV1::default())
+            }),
         )));
     }
     // **The retention janitor runs on every PALW node, whatever it was started as** — producer,
