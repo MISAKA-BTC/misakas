@@ -2711,6 +2711,11 @@ impl PalwPanelService {
         // Carriers submitted whose change is not yet on chain. Reset the moment the chain's tip
         // appears in the virtual UTXO set, which is the only honest signal that it was mined.
         let mut inflight: usize = 0;
+        // ADR-0135: a possession proof that found no carrier slot waits for the next one, and the
+        // receipts yield until it lands — a seat whose proofs starve behind its own receipt traffic
+        // counts as no seat at all (measured on the devnet: receipts filled the eight-carrier chain
+        // for fifteen minutes at a time and four of seven seats never proved).
+        let mut readiness_waiting = false;
         let mut held_before = false;
         // ADR-0074 Decision 1: the DAA the last canonical claim was committed at (0: never).
         let mut canonical_last_daa: u64 = 0;
@@ -5009,11 +5014,23 @@ impl PalwPanelService {
                     }
                 }
                 // ADR-0135: this seat's possession proofs, when the registry is in force and one is due.
+                // A proof left waiting last tick is asked for again at once (the thirty-second read
+                // throttle would otherwise hand the freed slot to a receipt).
                 let synced_for_proofs = self.flow_context.is_nearly_synced(&session).await;
+                if readiness_waiting {
+                    *self.readiness_read_at.lock().unwrap() = None;
+                }
                 for object in self.readiness_duties(&session, current_daa, synced_for_proofs) {
                     let PalwConsensusObjectV2::SeatReadinessProved { class_id, span, .. } = &object else { continue };
                     let (class_id, span) = (*class_id, *span);
                     let Some((funding_outpoint, funding_entry)) = funding.clone().filter(|_| inflight < MAX_INFLIGHT_CARRIERS) else {
+                        readiness_waiting = true;
+                        crate::palw_backends::note_throttled_v1("panel-proof-waits", || {
+                            format!(
+                                "[{PALW_PANEL}] a possession proof for class {class_id} waits for a carrier slot ({inflight} of ours \
+                                 unconfirmed, cap {MAX_INFLIGHT_CARRIERS}); receipts yield until it lands"
+                            )
+                        });
                         break;
                     };
                     match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
@@ -5025,6 +5042,7 @@ impl PalwPanelService {
                                     info!(
                                         "[{PALW_PANEL}] submitted a readiness proof for class {class_id} (span {span}) in tx {txid}"
                                     );
+                                    readiness_waiting = false;
                                     self.readiness_submitted.lock().unwrap().insert(class_id, span);
                                     let next = TransactionOutpoint::new(txid, 0);
                                     self.persist_fee_outpoint(next);
@@ -5148,7 +5166,7 @@ impl PalwPanelService {
                 }
                 let claims: Vec<Hash64> = receipts.keys().copied().collect();
                 for claim in claims {
-                    if inflight >= MAX_INFLIGHT_CARRIERS {
+                    if inflight >= MAX_INFLIGHT_CARRIERS || readiness_waiting {
                         break;
                     }
                     let Some((funding_outpoint, funding_entry)) = funding.clone() else { break };
@@ -5221,7 +5239,7 @@ impl PalwPanelService {
                     own_receipts.iter().map(|(claim, (receipt, _))| (*claim, receipt.clone())).collect();
                 own.sort_by_key(|(claim, _)| *claim);
                 for (claim, receipt) in own {
-                    if inflight >= MAX_INFLIGHT_CARRIERS {
+                    if inflight >= MAX_INFLIGHT_CARRIERS || readiness_waiting {
                         break;
                     }
                     let Some((funding_outpoint, funding_entry)) = funding.clone() else { break };

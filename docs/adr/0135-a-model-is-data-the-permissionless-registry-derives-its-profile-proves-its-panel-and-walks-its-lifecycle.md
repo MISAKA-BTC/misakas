@@ -175,6 +175,19 @@ is still refused), and the row it writes is dated at the named span's first DAA:
 fresh as when it was made, a replayed one renews nothing, and the thirty-span readiness age bounds the rest; on testnet-11 (five-DAA spans, ~5 DAA an
 hour) the allowance is about eight hours of carrier latency.
 
+**Devnet drill, phase 1 — PASS (2026-09-17 14:45Z, VPS 95.111.236.186, seven mapped-artifact nodes, `LANE=0,2,2`,
+registry at DAA 20, node-1 registering `Qwen/Qwen2.5-1.5B/graph-v5@512`):** the fence crossed and the rows
+opened at the first boundary (floor `Active`, the registered class `Prefetching`), the class registered and
+its row opened, possession proofs landed, the grace passed with the floor `Active` and the chain producing
+(tip 82), node-2 restarted and re-read the same rows. The class-local verdict at the first governed boundary
+was `Prefetching` with two ready seats of seven required — the third drill finding: **a seat's proofs starve
+behind its own receipt traffic.** Every lifecycle carrier of a node chains on one rolling fee outpoint with
+eight unconfirmed at most, receipts for the floor's claims filled the chain for fifteen minutes at a time,
+and four of seven seats never got a proof out (three submitted once). The node now lets a proof that found
+no slot take the next one and holds its receipts until it lands (`readiness_waiting`), and asks for the
+proof again at once instead of after the thirty-second read throttle. Memory on the host: 1.75 GiB of
+file-backed pages once, 50–560 MiB anonymous per node, `MemAvailable` 9.8–10.8 GiB of 12 throughout.
+
 **The fence.** `Params::palw_model_registry: Option<ForkActivation>` — `None` on every shipped preset
 (the t11 fingerprint `135b6ee0…` does not move); hashed `Some`-only; the fork-id gate names it when
 armed; `validate_palw_v2` refuses it without `palw_panel_economy` and `palw_execution_lane` at or
