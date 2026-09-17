@@ -1740,7 +1740,7 @@ Do you confirm? (y/n)";
     if args.palw_dump_classes {
         async_runtime.register(Arc::new(crate::palw_dump::PalwDumpService::new(
             consensus_manager.clone(),
-            crate::palw_class_context::PalwBuildClassLedgerV1::from_params(&config.params).unwrap_or_default(),
+            crate::palw_class_context::PalwBuildClassLedgerV1::from_params(&config_for_palw_panel.params).unwrap_or_default(),
         )));
     }
     // **The retention janitor runs on every PALW node, whatever it was started as** — producer,
