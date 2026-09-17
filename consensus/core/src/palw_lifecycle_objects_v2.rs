@@ -383,6 +383,15 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
             }
             Ok(())
         }
+        PalwConsensusObjectV2::SeatReadinessProved { signature, opening, .. } => {
+            if signature.is_empty() {
+                Err("a readiness proof must carry the seat's signature — unsigned, a relayer could volunteer another bond's collateral")
+            } else if opening.operand.bytes.len() > crate::palw_model_registry_v1::PALW_READINESS_OPENING_MAX_BYTES_V1 {
+                Err("a readiness proof opens one leaf within the opening cap")
+            } else {
+                Ok(())
+            }
+        }
         PalwConsensusObjectV2::MaterialDisclosed { .. } => Err(
             "a data-availability disclosure must carry the producer's signature — unsigned, a third party could bind a producer to material it never published",
         ),

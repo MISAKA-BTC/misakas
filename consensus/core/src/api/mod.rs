@@ -792,6 +792,12 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// ADR-0135: the model registry as the tip state holds it (lifecycle rows, ready seats, claims in
+    /// flight, possession proofs). `None` off `ConsensusV2`.
+    fn palw_model_registry_v1(&self) -> Option<crate::palw_model_registry_v1::PalwModelRegistryReadV1> {
+        None
+    }
+
     fn palw_v2_class_table(&self) -> Vec<crate::palw_state_v2::PalwClassRowV2> {
         Vec::new()
     }

@@ -279,6 +279,7 @@ pub fn palw_void_reason_name_v1(reason: &PalwVoidReasonV2) -> &'static str {
         PalwVoidReasonV2::ReceiptTimeout => "receipt_timeout",
         PalwVoidReasonV2::CourtFraud => "court_fraud",
         PalwVoidReasonV2::ProducerWithholding => "producer_withholding",
+        PalwVoidReasonV2::NoCapablePanel => "no_capable_panel",
     }
 }
 

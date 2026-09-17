@@ -224,6 +224,10 @@ pub enum RpcApiOps {
     /// its target, a census of its claims) and what its job costs in economic compute — the shadow
     /// economics a client prices every class on, on every basis.
     GetPalwClassEconomics = 185,
+    /// ADR-0135: the permissionless model registry as the tip state holds it — each class's
+    /// lifecycle row and derived profile, the seats ready for it, the claims in flight, and every
+    /// seat's last possession proof.
+    GetPalwModelRegistry = 186,
 }
 
 impl RpcApiOps {

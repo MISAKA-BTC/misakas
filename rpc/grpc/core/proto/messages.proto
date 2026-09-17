@@ -101,6 +101,7 @@ message KaspadRequest {
     GetPrecommitDutyRequestMessage getPrecommitDutyRequest = 1168;
     GetPalwClassContextsRequestMessage getPalwClassContextsRequest = 1170;
     GetPalwClassEconomicsRequestMessage getPalwClassEconomicsRequest = 1172;
+    GetPalwModelRegistryRequestMessage getPalwModelRegistryRequest = 1174;
   }
 }
 
@@ -197,6 +198,7 @@ message KaspadResponse {
     GetPrecommitDutyResponseMessage getPrecommitDutyResponse = 1169;
     GetPalwClassContextsResponseMessage getPalwClassContextsResponse = 1171;
     GetPalwClassEconomicsResponseMessage getPalwClassEconomicsResponse = 1173;
+    GetPalwModelRegistryResponseMessage getPalwModelRegistryResponse = 1175;
   }
 }
 

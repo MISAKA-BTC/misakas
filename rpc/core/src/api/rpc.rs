@@ -788,6 +788,19 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwClassEconomicsResponse::default())
     }
 
+    /// ADR-0135: the model registry — lifecycle rows, derived profiles, ready seats, possession proofs.
+    async fn get_palw_model_registry(&self) -> RpcResult<GetPalwModelRegistryResponse> {
+        self.get_palw_model_registry_call(None, GetPalwModelRegistryRequest {}).await
+    }
+    async fn get_palw_model_registry_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelRegistryRequest,
+    ) -> RpcResult<GetPalwModelRegistryResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelRegistryResponse::default())
+    }
+
     /// MISAKA Compute Token Program (design §9.3): an asset's supply counters.
     async fn get_token_supply(&self, asset_id: u64) -> RpcResult<GetTokenSupplyResponse> {
         self.get_token_supply_call(None, GetTokenSupplyRequest { asset_id }).await

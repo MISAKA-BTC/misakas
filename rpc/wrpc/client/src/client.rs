@@ -685,6 +685,7 @@ impl RpcApi for KaspaRpcClient {
             GetPrecommitDuty,
             GetPalwClassContexts,
             GetPalwClassEconomics,
+            GetPalwModelRegistry,
             GetTokenSupply,
             GetTokenEmissionInfo,
             GetStakeBond,

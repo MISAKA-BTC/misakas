@@ -5188,6 +5188,237 @@ impl Deserializer for GetPalwClassEconomicsResponse {
 }
 
 /// ADR-0122: `getPalwNodeStatus` — what this node is doing, which until now only its log said.
+/// ADR-0135: the model registry as the tip state holds it. Nothing here is set by a human: the
+/// profile is derived from the class's graph, the state from chain-visible facts.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelRegistryRequest {}
+
+impl Serializer for GetPalwModelRegistryRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelRegistryRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {})
+    }
+}
+
+/// One class in the registry: its lifecycle row (`has_row` false for a class registered before the
+/// fence without a carriage — never gated), the work read off its graph, the profile derived from
+/// it, the last boundary's reading, and the reading now.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwModelLifecycle {
+    pub class_id: String,
+    pub is_base_class: bool,
+    pub has_row: bool,
+    pub state: String,
+    pub since_span: u64,
+    pub verification_ccu: String,
+    pub economic_ccu_per_claim: String,
+    pub artifact_bytes: u64,
+    pub ops_supported: bool,
+    pub verification_window_spans: u32,
+    pub artifact_prefetch_spans: u32,
+    pub max_inflight_claims: u32,
+    pub required_ready_seats: u32,
+    pub registration_bond_sompi: u64,
+    pub admission_claims_per_span_milli: u64,
+    pub probes_passed: u32,
+    pub probes_failed: u32,
+    pub ready_seats: u32,
+    pub inflight_claims: u32,
+    pub utilization_permille: u32,
+    pub admission_milli: u64,
+    pub ready_seats_now: u32,
+    pub inflight_now: u32,
+    pub share_permille: u16,
+}
+
+impl Serializer for RpcPalwModelLifecycle {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(bool, &self.is_base_class, writer)?;
+        store!(bool, &self.has_row, writer)?;
+        store!(String, &self.state, writer)?;
+        store!(u64, &self.since_span, writer)?;
+        store!(String, &self.verification_ccu, writer)?;
+        store!(String, &self.economic_ccu_per_claim, writer)?;
+        store!(u64, &self.artifact_bytes, writer)?;
+        store!(bool, &self.ops_supported, writer)?;
+        store!(u32, &self.verification_window_spans, writer)?;
+        store!(u32, &self.artifact_prefetch_spans, writer)?;
+        store!(u32, &self.max_inflight_claims, writer)?;
+        store!(u32, &self.required_ready_seats, writer)?;
+        store!(u64, &self.registration_bond_sompi, writer)?;
+        store!(u64, &self.admission_claims_per_span_milli, writer)?;
+        store!(u32, &self.probes_passed, writer)?;
+        store!(u32, &self.probes_failed, writer)?;
+        store!(u32, &self.ready_seats, writer)?;
+        store!(u32, &self.inflight_claims, writer)?;
+        store!(u32, &self.utilization_permille, writer)?;
+        store!(u64, &self.admission_milli, writer)?;
+        store!(u32, &self.ready_seats_now, writer)?;
+        store!(u32, &self.inflight_now, writer)?;
+        store!(u16, &self.share_permille, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwModelLifecycle {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            class_id: load!(String, reader)?,
+            is_base_class: load!(bool, reader)?,
+            has_row: load!(bool, reader)?,
+            state: load!(String, reader)?,
+            since_span: load!(u64, reader)?,
+            verification_ccu: load!(String, reader)?,
+            economic_ccu_per_claim: load!(String, reader)?,
+            artifact_bytes: load!(u64, reader)?,
+            ops_supported: load!(bool, reader)?,
+            verification_window_spans: load!(u32, reader)?,
+            artifact_prefetch_spans: load!(u32, reader)?,
+            max_inflight_claims: load!(u32, reader)?,
+            required_ready_seats: load!(u32, reader)?,
+            registration_bond_sompi: load!(u64, reader)?,
+            admission_claims_per_span_milli: load!(u64, reader)?,
+            probes_passed: load!(u32, reader)?,
+            probes_failed: load!(u32, reader)?,
+            ready_seats: load!(u32, reader)?,
+            inflight_claims: load!(u32, reader)?,
+            utilization_permille: load!(u32, reader)?,
+            admission_milli: load!(u64, reader)?,
+            ready_seats_now: load!(u32, reader)?,
+            inflight_now: load!(u32, reader)?,
+            share_permille: load!(u16, reader)?,
+        })
+    }
+}
+
+/// A seat's last possession proof for a class, and whether it is still fresh at the tip.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwSeatReadiness {
+    pub bond_txid: String,
+    pub bond_index: u32,
+    pub class_id: String,
+    pub proved_daa: u64,
+    pub proved_span: u64,
+    pub leaf_index: u32,
+    pub fresh: bool,
+}
+
+impl Serializer for RpcPalwSeatReadiness {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.bond_txid, writer)?;
+        store!(u32, &self.bond_index, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(u64, &self.proved_daa, writer)?;
+        store!(u64, &self.proved_span, writer)?;
+        store!(u32, &self.leaf_index, writer)?;
+        store!(bool, &self.fresh, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwSeatReadiness {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            bond_txid: load!(String, reader)?,
+            bond_index: load!(u32, reader)?,
+            class_id: load!(String, reader)?,
+            proved_daa: load!(u64, reader)?,
+            proved_span: load!(u64, reader)?,
+            leaf_index: load!(u32, reader)?,
+            fresh: load!(bool, reader)?,
+        })
+    }
+}
+
+/// `fence_daa` is 0 where no registry is scheduled (`scheduled` false); `active` is whether the
+/// fence is in force at the tip; the reference constants are the globals every class is derived
+/// against.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelRegistryResponse {
+    pub available: bool,
+    pub tip_daa: u64,
+    pub scheduled: bool,
+    pub fence_daa: u64,
+    pub active: bool,
+    pub span_daa: u64,
+    pub reference_work_per_span: String,
+    pub reference_bytes_per_span: u64,
+    pub seat_count: u16,
+    pub spare_seats: u16,
+    pub utilization_permille: u32,
+    pub probation_claims: u32,
+    pub stable_epochs: u32,
+    pub readiness_probe_max_age_spans: u32,
+    pub readiness_collateral_multiple: u32,
+    pub classes: Vec<RpcPalwModelLifecycle>,
+    pub readiness: Vec<RpcPalwSeatReadiness>,
+}
+
+impl Serializer for GetPalwModelRegistryResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        store!(bool, &self.scheduled, writer)?;
+        store!(u64, &self.fence_daa, writer)?;
+        store!(bool, &self.active, writer)?;
+        store!(u64, &self.span_daa, writer)?;
+        store!(String, &self.reference_work_per_span, writer)?;
+        store!(u64, &self.reference_bytes_per_span, writer)?;
+        store!(u16, &self.seat_count, writer)?;
+        store!(u16, &self.spare_seats, writer)?;
+        store!(u32, &self.utilization_permille, writer)?;
+        store!(u32, &self.probation_claims, writer)?;
+        store!(u32, &self.stable_epochs, writer)?;
+        store!(u32, &self.readiness_probe_max_age_spans, writer)?;
+        store!(u32, &self.readiness_collateral_multiple, writer)?;
+        serialize!(Vec<RpcPalwModelLifecycle>, &self.classes, writer)?;
+        serialize!(Vec<RpcPalwSeatReadiness>, &self.readiness, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelRegistryResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            tip_daa: load!(u64, reader)?,
+            scheduled: load!(bool, reader)?,
+            fence_daa: load!(u64, reader)?,
+            active: load!(bool, reader)?,
+            span_daa: load!(u64, reader)?,
+            reference_work_per_span: load!(String, reader)?,
+            reference_bytes_per_span: load!(u64, reader)?,
+            seat_count: load!(u16, reader)?,
+            spare_seats: load!(u16, reader)?,
+            utilization_permille: load!(u32, reader)?,
+            probation_claims: load!(u32, reader)?,
+            stable_epochs: load!(u32, reader)?,
+            readiness_probe_max_age_spans: load!(u32, reader)?,
+            readiness_collateral_multiple: load!(u32, reader)?,
+            classes: deserialize!(Vec<RpcPalwModelLifecycle>, reader)?,
+            readiness: deserialize!(Vec<RpcPalwSeatReadiness>, reader)?,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetPalwNodeStatusRequest {}

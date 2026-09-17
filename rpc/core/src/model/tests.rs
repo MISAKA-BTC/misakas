@@ -1828,6 +1828,89 @@ mod mockery {
 
     test!(GetPalwClassEconomicsResponse);
 
+    impl Mock for GetPalwModelRegistryRequest {
+        fn mock() -> Self {
+            GetPalwModelRegistryRequest {}
+        }
+    }
+
+    test!(GetPalwModelRegistryRequest);
+
+    impl Mock for RpcPalwModelLifecycle {
+        fn mock() -> Self {
+            RpcPalwModelLifecycle {
+                class_id: mock_hex(),
+                is_base_class: mock(),
+                has_row: mock(),
+                state: "Active".to_string(),
+                since_span: mock(),
+                verification_ccu: "21070759296".to_string(),
+                economic_ccu_per_claim: "18055200736".to_string(),
+                artifact_bytes: mock(),
+                ops_supported: mock(),
+                verification_window_spans: mock(),
+                artifact_prefetch_spans: mock(),
+                max_inflight_claims: mock(),
+                required_ready_seats: mock(),
+                registration_bond_sompi: mock(),
+                admission_claims_per_span_milli: mock(),
+                probes_passed: mock(),
+                probes_failed: mock(),
+                ready_seats: mock(),
+                inflight_claims: mock(),
+                utilization_permille: mock(),
+                admission_milli: mock(),
+                ready_seats_now: mock(),
+                inflight_now: mock(),
+                share_permille: mock(),
+            }
+        }
+    }
+
+    test!(RpcPalwModelLifecycle);
+
+    impl Mock for RpcPalwSeatReadiness {
+        fn mock() -> Self {
+            RpcPalwSeatReadiness {
+                bond_txid: mock_hex(),
+                bond_index: mock(),
+                class_id: mock_hex(),
+                proved_daa: mock(),
+                proved_span: mock(),
+                leaf_index: mock(),
+                fresh: mock(),
+            }
+        }
+    }
+
+    test!(RpcPalwSeatReadiness);
+
+    impl Mock for GetPalwModelRegistryResponse {
+        fn mock() -> Self {
+            GetPalwModelRegistryResponse {
+                available: mock(),
+                tip_daa: mock(),
+                scheduled: mock(),
+                fence_daa: mock(),
+                active: mock(),
+                span_daa: mock(),
+                reference_work_per_span: "2400000000000".to_string(),
+                reference_bytes_per_span: mock(),
+                seat_count: mock(),
+                spare_seats: mock(),
+                utilization_permille: mock(),
+                probation_claims: mock(),
+                stable_epochs: mock(),
+                readiness_probe_max_age_spans: mock(),
+                readiness_collateral_multiple: mock(),
+                classes: mock(),
+                readiness: mock(),
+            }
+        }
+    }
+
+    test!(GetPalwModelRegistryResponse);
+
     struct Misalign;
 
     impl Mock for Misalign {

@@ -365,6 +365,7 @@ fn palw_claim_phase_named(phase: &kaspa_consensus_core::palw_state_v2::PalwClaim
                 R::ReceiptTimeout => "receipt_timeout",
                 R::CourtFraud => "court_fraud",
                 R::ProducerWithholding => "producer_withholding",
+                R::NoCapablePanel => "no_capable_panel",
             };
             ("voided".to_string(), reason.to_string(), *voided_daa)
         }
@@ -1673,6 +1674,83 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             .map(|(class_id, declared)| palw_class_context_row(class_id, declared, ledger.and_then(|l| l.class_context(class_id))))
             .collect();
         Ok(GetPalwClassContextsResponse { available: !classes.is_empty(), fp_max_prompt_tokens, fp_max_decode_tokens, classes })
+    }
+
+    async fn get_palw_model_registry_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        _request: GetPalwModelRegistryRequest,
+    ) -> RpcResult<GetPalwModelRegistryResponse> {
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let Some(read) = session.spawn_blocking(|c| c.palw_model_registry_v1()).await else {
+            return Ok(GetPalwModelRegistryResponse::default());
+        };
+        let globals = read.globals;
+        let classes = read
+            .classes
+            .iter()
+            .map(|class| {
+                let row = class.row.as_ref();
+                RpcPalwModelLifecycle {
+                    class_id: class.class_id.to_string(),
+                    is_base_class: class.is_base_class,
+                    has_row: row.is_some(),
+                    state: row.map(|r| format!("{:?}", r.state)).unwrap_or_else(|| "Legacy".to_string()),
+                    since_span: row.map(|r| r.since_span).unwrap_or(0),
+                    verification_ccu: row.map(|r| r.work.verification_ccu.to_string()).unwrap_or_else(|| "0".to_string()),
+                    economic_ccu_per_claim: row.map(|r| r.work.economic_ccu_per_claim.to_string()).unwrap_or_else(|| "0".to_string()),
+                    artifact_bytes: row.map(|r| r.work.artifact_bytes).unwrap_or(0),
+                    ops_supported: row.map(|r| r.work.ops_supported).unwrap_or(false),
+                    verification_window_spans: row.map(|r| r.profile.verification_window_spans).unwrap_or(0),
+                    artifact_prefetch_spans: row.map(|r| r.profile.artifact_prefetch_spans).unwrap_or(0),
+                    max_inflight_claims: row.map(|r| r.profile.max_inflight_claims).unwrap_or(0),
+                    required_ready_seats: row.map(|r| r.profile.required_ready_seats).unwrap_or(0),
+                    registration_bond_sompi: row.map(|r| r.profile.registration_bond_sompi).unwrap_or(0),
+                    admission_claims_per_span_milli: row.map(|r| r.profile.admission_claims_per_span_milli).unwrap_or(0),
+                    probes_passed: row.map(|r| r.probes_passed).unwrap_or(0),
+                    probes_failed: row.map(|r| r.probes_failed).unwrap_or(0),
+                    ready_seats: row.map(|r| r.ready_seats).unwrap_or(0),
+                    inflight_claims: row.map(|r| r.inflight_claims).unwrap_or(0),
+                    utilization_permille: row.map(|r| r.utilization_permille).unwrap_or(0),
+                    admission_milli: row.map(|r| r.admission_milli).unwrap_or(0),
+                    ready_seats_now: class.ready_seats_now,
+                    inflight_now: class.inflight_now,
+                    share_permille: class.share_permille.unwrap_or(0),
+                }
+            })
+            .collect();
+        let readiness = read
+            .readiness
+            .iter()
+            .map(|r| RpcPalwSeatReadiness {
+                bond_txid: r.bond.0.transaction_id.to_string(),
+                bond_index: r.bond.0.index,
+                class_id: r.class_id.to_string(),
+                proved_daa: r.row.proved_daa,
+                proved_span: r.row.proved_span,
+                leaf_index: r.row.leaf_index,
+                fresh: r.fresh,
+            })
+            .collect();
+        Ok(GetPalwModelRegistryResponse {
+            available: true,
+            tip_daa: read.tip_daa,
+            scheduled: read.fence_daa.is_some(),
+            fence_daa: read.fence_daa.unwrap_or(0),
+            active: read.active,
+            span_daa: read.span_daa,
+            reference_work_per_span: globals.map(|g| g.reference_work_per_span.to_string()).unwrap_or_else(|| "0".to_string()),
+            reference_bytes_per_span: globals.map(|g| g.reference_bytes_per_span).unwrap_or(0),
+            seat_count: globals.map(|g| g.seat_count).unwrap_or(0),
+            spare_seats: globals.map(|g| g.spare_seats).unwrap_or(0),
+            utilization_permille: globals.map(|g| g.utilization_permille).unwrap_or(0),
+            probation_claims: globals.map(|g| g.probation_claims).unwrap_or(0),
+            stable_epochs: globals.map(|g| g.stable_epochs).unwrap_or(0),
+            readiness_probe_max_age_spans: globals.map(|g| g.readiness_probe_max_age_spans).unwrap_or(0),
+            readiness_collateral_multiple: globals.map(|g| g.readiness_collateral_multiple).unwrap_or(0),
+            classes,
+            readiness,
+        })
     }
 
     async fn get_palw_class_economics_call(

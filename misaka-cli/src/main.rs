@@ -39,6 +39,7 @@ mod palw_da;
 mod palw_derived;
 /// ADR-0127 Decision 3: `palw settlement` — settled, and how deep in settled PALW anchors.
 mod palw_economics;
+mod palw_registry;
 /// ADR-0108: `palw extension inspect|verify|preflight|submit|receipt-verify`.
 mod palw_extension;
 mod palw_fp;
@@ -916,6 +917,10 @@ enum PalwCmd {
     /// draws and voided claims included), the panel's rate per verification, and the gap between the
     /// model classes. Read from the node's state (`getPalwClassEconomics`); a shadow, not a rule.
     Economics {},
+    /// ADR-0135: the permissionless model registry — each class's lifecycle state, the profile
+    /// derived from its graph, the seats ready for it and every seat's possession proof. Read from
+    /// the node's state (`getPalwModelRegistry`); dormant until the registry fence is scheduled.
+    Registry {},
     Settlement {
         /// The DAA score of the block that accepted the transaction (an output's block DAA score, as
         /// `misaka wallet utxo list` prints it).
@@ -2328,6 +2333,7 @@ async fn main() -> std::process::ExitCode {
         Command::Palw(PalwCmd::RoundLane { bond }) => palw_round_lane(&ctx, bond.as_deref()).await,
         Command::Palw(PalwCmd::Settlement { daa, min_depth }) => palw_settlement::run(&ctx, daa, min_depth).await,
         Command::Palw(PalwCmd::Economics {}) => palw_economics::run(&ctx).await,
+        Command::Palw(PalwCmd::Registry {}) => palw_registry::run(&ctx).await,
         Command::Palw(PalwCmd::FpSubmit { tx, yes, material_out, capture, dsl_payload }) => {
             palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
         }

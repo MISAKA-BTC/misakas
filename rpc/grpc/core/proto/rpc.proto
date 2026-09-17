@@ -2055,3 +2055,63 @@ message GetPalwClassEconomicsResponseMessage {
   uint64 ledgerLastDaa = 12;
   RPCError error = 1000;
 }
+
+message GetPalwModelRegistryRequestMessage {}
+
+message RpcPalwModelLifecycle {
+  string classId = 1;
+  bool isBaseClass = 2;
+  bool hasRow = 3;
+  string state = 4;
+  uint64 sinceSpan = 5;
+  string verificationCcu = 6;
+  string economicCcuPerClaim = 7;
+  uint64 artifactBytes = 8;
+  bool opsSupported = 9;
+  uint32 verificationWindowSpans = 10;
+  uint32 artifactPrefetchSpans = 11;
+  uint32 maxInflightClaims = 12;
+  uint32 requiredReadySeats = 13;
+  uint64 registrationBondSompi = 14;
+  uint64 admissionClaimsPerSpanMilli = 15;
+  uint32 probesPassed = 16;
+  uint32 probesFailed = 17;
+  uint32 readySeats = 18;
+  uint32 inflightClaims = 19;
+  uint32 utilizationPermille = 20;
+  uint64 admissionMilli = 21;
+  uint32 readySeatsNow = 22;
+  uint32 inflightNow = 23;
+  uint32 sharePermille = 24;
+}
+
+message RpcPalwSeatReadiness {
+  string bondTxid = 1;
+  uint32 bondIndex = 2;
+  string classId = 3;
+  uint64 provedDaa = 4;
+  uint64 provedSpan = 5;
+  uint32 leafIndex = 6;
+  bool fresh = 7;
+}
+
+message GetPalwModelRegistryResponseMessage {
+  bool available = 1;
+  uint64 tipDaa = 2;
+  bool scheduled = 3;
+  uint64 fenceDaa = 4;
+  bool active = 5;
+  uint64 spanDaa = 6;
+  string referenceWorkPerSpan = 7;
+  uint64 referenceBytesPerSpan = 8;
+  uint32 seatCount = 9;
+  uint32 spareSeats = 10;
+  uint32 utilizationPermille = 11;
+  uint32 probationClaims = 12;
+  uint32 stableEpochs = 13;
+  uint32 readinessProbeMaxAgeSpans = 14;
+  uint32 readinessCollateralMultiple = 15;
+  repeated RpcPalwModelLifecycle classes = 16;
+  repeated RpcPalwSeatReadiness readiness = 17;
+  RPCError error = 1000;
+}

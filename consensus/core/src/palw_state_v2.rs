@@ -551,6 +551,25 @@ pub fn palw_bond_may_judge_class_v3(
     genesis_class || palw_bond_produced_on_class_v1(state, bond_key, class_id)
 }
 
+/// **ADR-0135: under the registry a seat judges a class by evidence** — a fresh possession proof —
+/// rather than by its declaration; the base class stays open to every bond as before, because
+/// every node runs it. Without a readiness policy this is exactly [`palw_bond_may_judge_class_v3`].
+pub fn palw_bond_may_judge_class_v4(
+    state: &PalwChainStateV2,
+    bond_key: &PalwBondKeyV2,
+    bond: &PalwBondStateV2,
+    class_id: &Hash64,
+    require_production: bool,
+    readiness: Option<crate::palw_model_registry_v1::PalwReadinessPolicyV1>,
+) -> bool {
+    match readiness {
+        Some(policy) if *class_id != policy.base_class_id => state
+            .seat_readiness(bond_key, class_id)
+            .is_some_and(|row| policy.now_daa.saturating_sub(row.proved_daa) <= policy.max_age_daa),
+        _ => palw_bond_may_judge_class_v3(state, bond_key, bond, class_id, require_production),
+    }
+}
+
 pub fn palw_operator_id_v2(operator_pubkey: &[u8]) -> Hash64 {
     let mut state = keyed(PALW_STATE_V2_DOMAIN_OPERATOR_ID);
     state.update(&(operator_pubkey.len() as u64).to_le_bytes());
@@ -1798,6 +1817,9 @@ pub enum PalwVoidReasonV2 {
     /// The producer failed a data-availability obligation (Decision 7): claim void, and silence
     /// can never pin a block at `Provisional` forever.
     ProducerWithholding,
+    /// ADR-0135: the bind window closed with fewer ready seats than a panel needs — the class's
+    /// capacity failed, not the producer. Appended last (borsh discriminant 4).
+    NoCapablePanel,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -3358,6 +3380,18 @@ pub enum PalwConsensusObjectV2 {
     RoundPermitEquivocated {
         evidence: Box<crate::palw_execution_lane_v1::PalwExecEquivocationV1>,
     },
+    /// **ADR-0135 Decision 4: a seat proves it holds a class's artifact.** One leaf of the
+    /// registered artifact root, at an index the chain's challenge for (class, bond, span) names,
+    /// signed by the bond's key over `palw_seat_readiness_message_v1` (checked at acceptance like a
+    /// capability declaration). Refused while the registry is dormant; a fresh proof is what makes
+    /// the bond a ready seat for the class. Appended last.
+    SeatReadinessProved {
+        bond: PalwBondKeyV2,
+        class_id: Hash64,
+        span: u64,
+        opening: crate::palw_artifact::PalwArtifactOpeningV1,
+        signature: Vec<u8>,
+    },
 }
 
 /// The block's own work slot, as the V3 transition consumes it (ADR-0044): a chain-challenge
@@ -4746,6 +4780,15 @@ pub enum PalwStateV2Error {
     /// chain no longer keeps, or a permit already burned.
     #[error("round equivocation refused: {0}")]
     RoundEquivocationRefused(String),
+    /// ADR-0135: the registry's objects and gates exist only past `Params::palw_model_registry`.
+    #[error("the model registry is dormant at this height")]
+    ModelRegistryDormant,
+    #[error("readiness proof refused: {0}")]
+    ReadinessProofRefused(String),
+    #[error("class {class} is {state} under the model registry and admits no new claims")]
+    ClassNotAdmitting { class: Hash64, state: String },
+    #[error("class {class} has {inflight} claims in flight against the registry's cap of {cap}")]
+    ClassInflightCapped { class: Hash64, inflight: u32, cap: u32 },
     // There is deliberately NO size error here. A disclosure's ceiling is a wire bound, and it is
     // already applied on the only path into this fold: `palw_lifecycle_objects_from_accepted_txs_v2`
     // runs `palw_lifecycle_object_may_ride_v2` on every extracted object and SKIPS the ones that
@@ -4901,6 +4944,11 @@ pub struct PalwChainStateV2 {
     /// chain block of every span, then recorded by every chain block of that span that carries an
     /// admitted attempt; it seeds the pending snapshot whose target is the next span.
     round_seed_anchor: Option<crate::palw_execution_lane_v1::PalwExecSeedAnchorV1>,
+    /// ADR-0135: the registry's lifecycle rows (class → row) and the seats' possession proofs
+    /// ((bond, class) → row). Rooted and carried in their own guarded tail once either exists, so
+    /// a state without them is byte-identical to a state before the field.
+    model_lifecycles: BTreeMap<Hash64, crate::palw_model_registry_v1::PalwModelLifecycleRowV1>,
+    seat_readiness: BTreeMap<(PalwBondKeyV2, Hash64), crate::palw_model_registry_v1::PalwSeatReadinessRowV1>,
     /// **ADR-0056 Decision 3: the registry's own exposure ledger, kept SEPARATE from the claims'.**
     ///
     /// `reserved_exposure` is an accumulator over live claims, and
@@ -5036,6 +5084,8 @@ impl PalwChainStateV2 {
             round_permits_used: BTreeMap::new(),
             round_equivocations: BTreeMap::new(),
             round_seed_anchor: None,
+            model_lifecycles: BTreeMap::new(),
+            seat_readiness: BTreeMap::new(),
             registration_exposure: BTreeMap::new(),
             class_walks: BTreeMap::new(),
             certified_families: BTreeMap::new(),
@@ -5623,6 +5673,29 @@ impl PalwChainStateV2 {
         !self.round_pending.is_empty() || self.round_seed_anchor.is_some()
     }
 
+    /// ADR-0135's rows: the gate their own sub-block of the root and their carriage tail share.
+    fn model_registry_is_written(&self) -> bool {
+        !self.model_lifecycles.is_empty() || !self.seat_readiness.is_empty()
+    }
+
+    /// ADR-0135: a class's lifecycle row, once the registry has stepped it.
+    pub fn model_lifecycle(&self, class_id: &Hash64) -> Option<&crate::palw_model_registry_v1::PalwModelLifecycleRowV1> {
+        self.model_lifecycles.get(class_id)
+    }
+
+    pub fn model_lifecycles_iter(&self) -> impl Iterator<Item = (&Hash64, &crate::palw_model_registry_v1::PalwModelLifecycleRowV1)> {
+        self.model_lifecycles.iter()
+    }
+
+    /// ADR-0135: a seat's last possession proof for a class.
+    pub fn seat_readiness(&self, bond: &PalwBondKeyV2, class_id: &Hash64) -> Option<&crate::palw_model_registry_v1::PalwSeatReadinessRowV1> {
+        self.seat_readiness.get(&(*bond, *class_id))
+    }
+
+    pub fn seat_readiness_iter(&self) -> impl Iterator<Item = (&(PalwBondKeyV2, Hash64), &crate::palw_model_registry_v1::PalwSeatReadinessRowV1)> {
+        self.seat_readiness.iter()
+    }
+
     /// **ADR-0119 Decision 2: the step ladder of a class, given the network's** — the ladder this
     /// state recorded when the class registered (a held class's, the regime's `2^40`), or the
     /// network's for every class it recorded none for. The one question every consensus reader of
@@ -6060,6 +6133,13 @@ impl PalwChainStateV2 {
                     }
                 };
             }
+        }
+        // ADR-0135: the registry's rows, named, once either exists — a state without them is
+        // byte-identical to a state before the field.
+        if self.model_registry_is_written() {
+            state.update(b"model_registry/v1");
+            state.update(collection_root(b"model_lifecycles", &self.model_lifecycles).as_byte_slice());
+            state.update(collection_root(b"seat_readiness", &self.seat_readiness).as_byte_slice());
         }
         state.update(&self.safe_weight.to_le_bytes());
         state.update(&self.retired_safe_weight.to_le_bytes());
@@ -6973,10 +7053,22 @@ pub enum PalwDeltaEntryV2 {
         old: Option<crate::palw_execution_lane_v1::PalwExecSnapshotV1>,
         new: Option<crate::palw_execution_lane_v1::PalwExecSnapshotV1>,
     },
-    /// ADR-0130: the span's seed anchor was recorded or reset (50). Appended last.
+    /// ADR-0130: the span's seed anchor was recorded or reset (50).
     RoundSeedAnchor {
         old: Option<crate::palw_execution_lane_v1::PalwExecSeedAnchorV1>,
         new: Option<crate::palw_execution_lane_v1::PalwExecSeedAnchorV1>,
+    },
+    /// ADR-0135: a class's lifecycle row was written or dropped (51).
+    ModelLifecycle {
+        key: Hash64,
+        old: Option<crate::palw_model_registry_v1::PalwModelLifecycleRowV1>,
+        new: Option<crate::palw_model_registry_v1::PalwModelLifecycleRowV1>,
+    },
+    /// ADR-0135: a seat's possession proof for a class was written or dropped (52). Appended last.
+    SeatReadiness {
+        key: (PalwBondKeyV2, Hash64),
+        old: Option<crate::palw_model_registry_v1::PalwSeatReadinessRowV1>,
+        new: Option<crate::palw_model_registry_v1::PalwSeatReadinessRowV1>,
     },
 }
 
@@ -7657,6 +7749,343 @@ impl<'a> TransitionBuilder<'a> {
         }
     }
 
+    fn write_model_lifecycle(&mut self, key: Hash64, new: Option<crate::palw_model_registry_v1::PalwModelLifecycleRowV1>) {
+        let old = match new.clone() {
+            Some(row) => self.state.model_lifecycles.insert(key, row),
+            None => self.state.model_lifecycles.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::ModelLifecycle { key, old, new });
+        }
+    }
+
+    fn write_seat_readiness(&mut self, key: (PalwBondKeyV2, Hash64), new: Option<crate::palw_model_registry_v1::PalwSeatReadinessRowV1>) {
+        let old = match new {
+            Some(row) => self.state.seat_readiness.insert(key, row),
+            None => self.state.seat_readiness.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::SeatReadiness { key, old, new });
+        }
+    }
+
+    // ---- ADR-0135: the model registry in the fold --------------------------------------------
+
+    /// The registry's fold input, where the fence is active at this block.
+    fn model_registry_fold(&self) -> Option<&crate::palw_model_registry_v1::PalwModelRegistryFoldV1> {
+        self.extras.model_registry.as_ref()
+    }
+
+    /// **A seat's possession proof** (`SeatReadinessProved`): the opening reconstructs the class's
+    /// registered artifact root, the leaf is one the (class, bond, span) challenge names, and the
+    /// span is this one or the one just closed. The row it writes is what the draw reads.
+    fn apply_seat_readiness(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        bond: &PalwBondKeyV2,
+        class_id: &Hash64,
+        span: u64,
+        opening: &crate::palw_artifact::PalwArtifactOpeningV1,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_model_registry_v1 as registry;
+        let Some(fold) = self.model_registry_fold() else { return Err(PalwStateV2Error::ModelRegistryDormant) };
+        let span_daa = fold.span_daa;
+        let record = self.state.bonds.get(bond).ok_or(PalwStateV2Error::MissingBond(*bond))?;
+        if !matches!(record.status, PalwBondStatusV2::Active) {
+            return Err(PalwStateV2Error::BondNotActive(*bond));
+        }
+        let class = self.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?;
+        crate::palw_artifact::verify_artifact_opening_v1(opening, class.artifact_root)
+            .map_err(|e| PalwStateV2Error::ReadinessProofRefused(format!("{e}")))?;
+        let span_now = crate::palw_execution_lane_v1::palw_execution_span_v1(ctx.daa_score, span_daa);
+        if span != span_now && span.saturating_add(1) != span_now {
+            return Err(PalwStateV2Error::ReadinessProofRefused(format!("the proof names span {span} at span {span_now}")));
+        }
+        let bond_bytes = borsh::to_vec(bond).expect("a bond key is borsh-serializable");
+        let seed = registry::palw_readiness_challenge_seed_v1(class_id, &bond_bytes, span);
+        let (start, width) = registry::palw_readiness_window_v1(&seed, opening.leaf_count);
+        if !registry::palw_readiness_window_contains_v1(start, width, opening.leaf_count, opening.leaf_index) {
+            return Err(PalwStateV2Error::ReadinessProofRefused(format!(
+                "the opened leaf {} is not one the challenge names ({start}..+{width} of {})",
+                opening.leaf_index, opening.leaf_count
+            )));
+        }
+        self.write_seat_readiness(
+            (*bond, *class_id),
+            Some(registry::PalwSeatReadinessRowV1 { proved_daa: ctx.daa_score, proved_span: span_now, leaf_index: opening.leaf_index }),
+        );
+        Ok(())
+    }
+
+    /// **A registered class's row, opened from its carriage** (ADR-0135 Decisions 2 and 3): the
+    /// work is read off the graph, the profile derived from it, and the class starts PREFETCHING
+    /// (or REGISTERED, never admitting, where the graph derives no work — the VM boundary).
+    fn open_model_lifecycle(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        class_id: Hash64,
+        profile: &crate::palw_step::PalwShapeProfileV3,
+        canonical: &crate::palw_v2::PalwJobContextV2,
+        initial_target: u128,
+    ) {
+        use crate::palw_model_registry_v1 as registry;
+        let Some(fold) = self.model_registry_fold().cloned() else { return };
+        if self.state.model_lifecycles.contains_key(&class_id) {
+            return;
+        }
+        let span_now = crate::palw_execution_lane_v1::palw_execution_span_v1(ctx.daa_score, fold.span_daa);
+        let work = registry::palw_model_work_from_carriage_v1(profile, canonical);
+        let state = if work.is_some_and(|w| w.ops_supported) {
+            registry::PalwModelLifecycleV1::Prefetching
+        } else {
+            registry::PalwModelLifecycleV1::Registered
+        };
+        let work = work.unwrap_or_default();
+        let expected = crate::palw_economic_compute_v1::palw_expected_attempts_q32_v1(initial_target.max(1));
+        let profile = registry::palw_lifecycle_profile_v1(&work, expected, &fold.globals);
+        self.write_model_lifecycle(
+            class_id,
+            Some(registry::PalwModelLifecycleRowV1 {
+                state,
+                work,
+                profile,
+                since_span: span_now,
+                probes_passed: 0,
+                probes_failed: 0,
+                probes_passed_this_span: 0,
+                probes_failed_this_span: 0,
+                ready_seats: 0,
+                inflight_claims: 0,
+                utilization_permille: 0,
+                admission_milli: 0,
+            }),
+        );
+    }
+
+    /// The seats ready for a class now (ADR-0135 Decision 4): active, above the floor, with a fresh
+    /// possession proof, and free collateral for the readiness multiple of the network's floor.
+    fn model_registry_ready_seats(
+        &self,
+        class_id: &Hash64,
+        now_daa: u64,
+        fold: &crate::palw_model_registry_v1::PalwModelRegistryFoldV1,
+    ) -> u32 {
+        let max_age_daa = (fold.globals.readiness_probe_max_age_spans as u64).saturating_mul(fold.span_daa.max(1));
+        let floor = self.params.min_collateral_sompi();
+        let needed = (floor as u128).saturating_mul(fold.globals.readiness_collateral_multiple as u128);
+        let mut ready = 0u32;
+        for (bond_key, bond) in self.state.bonds.iter() {
+            if !matches!(bond.status, PalwBondStatusV2::Active) || !palw_bond_may_take_work_v2(bond, floor) {
+                continue;
+            }
+            let Some(row) = self.state.seat_readiness.get(&(*bond_key, *class_id)) else { continue };
+            if now_daa.saturating_sub(row.proved_daa) > max_age_daa {
+                continue;
+            }
+            let held = self.state.reserved_exposure(bond_key).saturating_add(self.state.registration_exposure(bond_key));
+            let free = (bond.collateral as u128).saturating_sub(bond.slashed as u128).saturating_sub(held);
+            if free < needed {
+                continue;
+            }
+            ready = ready.saturating_add(1);
+        }
+        ready
+    }
+
+    /// Attempt claims of a class still in flight (accepted and not terminal).
+    fn model_registry_inflight(&self, class_id: &Hash64) -> u32 {
+        self.state
+            .claims
+            .values()
+            .filter(|claim| {
+                claim.class_id == *class_id && matches!(claim.source, PalwClaimSourceV2::Attempt) && !claim.phase.is_terminal()
+            })
+            .count()
+            .min(u32::MAX as usize) as u32
+    }
+
+    /// **The class-local gate at acceptance** (ADR-0135 Decision 6 and ADR-0132 F1): the base class
+    /// is never gated (every node runs it, the chain lives on it); a class without a row (registered
+    /// before the fence without its carriage) is not gated either; a rowed class must admit claims
+    /// and be under its inflight cap.
+    fn check_class_admits_claim(&self, class_id: &Hash64) -> Result<(), PalwStateV2Error> {
+        if self.model_registry_fold().is_none() || *class_id == self.params.base_class_id() {
+            return Ok(());
+        }
+        let Some(row) = self.state.model_lifecycles.get(class_id) else { return Ok(()) };
+        if !row.state.admits_claims() {
+            return Err(PalwStateV2Error::ClassNotAdmitting { class: *class_id, state: format!("{:?}", row.state) });
+        }
+        let inflight = self.model_registry_inflight(class_id);
+        if inflight >= row.profile.max_inflight_claims {
+            return Err(PalwStateV2Error::ClassInflightCapped { class: *class_id, inflight, cap: row.profile.max_inflight_claims });
+        }
+        Ok(())
+    }
+
+    /// Why a bind window closed: under the registry, a rowed class whose ready seats cannot fill a
+    /// panel voids as `NoCapablePanel` — the capacity's failure, named — otherwise `BindTimeout`.
+    fn bind_timeout_reason(&self, claim: &PalwClaimStateV2, ctx: &PalwBlockContextV2) -> PalwVoidReasonV2 {
+        if let Some(fold) = self.model_registry_fold()
+            && claim.class_id != self.params.base_class_id()
+            && self.state.model_lifecycles.contains_key(&claim.class_id)
+            && self.model_registry_ready_seats(&claim.class_id, ctx.daa_score, fold) < fold.globals.seat_count as u32
+        {
+            return PalwVoidReasonV2::NoCapablePanel;
+        }
+        PalwVoidReasonV2::BindTimeout
+    }
+
+    /// A probe of a class under the registry: a `Final` passes, a fault fails; counted for the span.
+    fn note_model_probe(&mut self, claim: &PalwClaimStateV2, passed: bool) {
+        if self.model_registry_fold().is_none() || !matches!(claim.source, PalwClaimSourceV2::Attempt) {
+            return;
+        }
+        let Some(row) = self.state.model_lifecycles.get(&claim.class_id).cloned() else { return };
+        let mut next = row;
+        if passed {
+            next.probes_passed_this_span = next.probes_passed_this_span.saturating_add(1);
+            next.probes_passed = next.probes_passed.saturating_add(1);
+        } else {
+            next.probes_failed_this_span = next.probes_failed_this_span.saturating_add(1);
+            next.probes_failed = next.probes_failed.saturating_add(1);
+        }
+        self.write_model_lifecycle(claim.class_id, Some(next));
+    }
+
+    /// **The registry's span step** (ADR-0135 Decisions 5 and 6), at every span boundary: rows are
+    /// opened for the genesis classes from the fold's work (the base class ACTIVE and never
+    /// gated), every row is observed (ready seats, claims in flight, the span's probes) and
+    /// stepped, the profile is re-derived from the class's live target, and the shares of every
+    /// rowed class are written from admission — the base class holding what is left, never below
+    /// its floor, and a class registered before the fence without a row keeping the share it has.
+    fn step_model_registry(&mut self, ctx: &PalwBlockContextV2, span_now: u64) {
+        use crate::palw_model_registry_v1::{
+            PalwLifecycleObservationV1, PalwManifestVerdictV1Flag, PalwModelLifecycleRowV1, PalwModelLifecycleV1,
+            palw_lifecycle_profile_v1, palw_lifecycle_step_v1,
+        };
+        let Some(fold) = self.model_registry_fold().cloned() else { return };
+        let base = self.params.base_class_id();
+        let class_ids: Vec<Hash64> = self.state.classes.keys().copied().collect();
+        for class_id in &class_ids {
+            if self.state.model_lifecycles.contains_key(class_id) {
+                continue;
+            }
+            let Some(work) = fold.genesis_works.get(class_id).copied() else { continue };
+            let has_final =
+                self.state.claims.values().any(|c| c.class_id == *class_id && matches!(c.phase, PalwClaimPhaseV2::Final { .. }));
+            let state = if *class_id == base || has_final {
+                PalwModelLifecycleV1::Active
+            } else if work.ops_supported {
+                PalwModelLifecycleV1::Prefetching
+            } else {
+                PalwModelLifecycleV1::Registered
+            };
+            let target = self.state.class_targets.get(class_id).map(|t| t.target).unwrap_or(u128::MAX);
+            let expected = crate::palw_economic_compute_v1::palw_expected_attempts_q32_v1(target);
+            let profile = palw_lifecycle_profile_v1(&work, expected, &fold.globals);
+            self.write_model_lifecycle(
+                *class_id,
+                Some(PalwModelLifecycleRowV1 {
+                    state,
+                    work,
+                    profile,
+                    since_span: span_now,
+                    probes_passed: 0,
+                    probes_failed: 0,
+                    probes_passed_this_span: 0,
+                    probes_failed_this_span: 0,
+                    ready_seats: 0,
+                    inflight_claims: 0,
+                    utilization_permille: 0,
+                    admission_milli: 0,
+                }),
+            );
+        }
+        let mut admissions: Vec<(Hash64, u64)> = Vec::new();
+        let rowed: Vec<Hash64> = self.state.model_lifecycles.keys().copied().collect();
+        for class_id in &rowed {
+            let row = self.state.model_lifecycles.get(class_id).cloned().expect("just listed");
+            let target = self.state.class_targets.get(class_id).map(|t| t.target).unwrap_or(u128::MAX);
+            let expected = crate::palw_economic_compute_v1::palw_expected_attempts_q32_v1(target);
+            let profile = palw_lifecycle_profile_v1(&row.work, expected, &fold.globals);
+            let ready = self.model_registry_ready_seats(class_id, ctx.daa_score, &fold);
+            let inflight = self.model_registry_inflight(class_id);
+            let (state, utilization) = if *class_id == base {
+                (PalwModelLifecycleV1::Active, 0)
+            } else {
+                let window = profile.verification_window_spans.max(1) as u128;
+                let utilization = if ready == 0 {
+                    1_000
+                } else {
+                    ((inflight as u128).saturating_mul(fold.globals.seat_count as u128).saturating_mul(1_000)
+                        / (ready as u128).saturating_mul(window))
+                    .min(u32::MAX as u128) as u32
+                };
+                let obs = PalwLifecycleObservationV1 {
+                    manifest: if row.work.ops_supported { PalwManifestVerdictV1Flag::Valid } else { PalwManifestVerdictV1Flag::Invalid },
+                    ready_seats: ready,
+                    probes_passed_this_span: row.probes_passed_this_span,
+                    probes_failed_this_span: row.probes_failed_this_span,
+                    utilization_permille: utilization,
+                    collateral_ok: ready >= profile.required_ready_seats,
+                    span_stable: utilization < 1_000 && row.probes_failed_this_span == 0 && ready >= profile.required_ready_seats,
+                };
+                (palw_lifecycle_step_v1(row.state, &obs, &profile, &fold.globals), utilization)
+            };
+            let admission_milli = profile.admission_claims_per_span_milli.saturating_mul(state.admission_permille() as u64) / 1_000;
+            let changed = state != row.state;
+            let next = PalwModelLifecycleRowV1 {
+                state,
+                work: row.work,
+                profile,
+                since_span: if changed { span_now } else { row.since_span },
+                probes_passed: if changed { 0 } else { row.probes_passed },
+                probes_failed: if changed { 0 } else { row.probes_failed },
+                probes_passed_this_span: 0,
+                probes_failed_this_span: 0,
+                ready_seats: ready,
+                inflight_claims: inflight,
+                utilization_permille: utilization,
+                admission_milli,
+            };
+            if next != row {
+                self.write_model_lifecycle(*class_id, Some(next));
+            }
+            if *class_id != base {
+                admissions.push((*class_id, admission_milli));
+            }
+        }
+        if !self.state.class_shares.contains_key(&base) {
+            return;
+        }
+        let legacy_sum: u32 = self
+            .state
+            .class_shares
+            .iter()
+            .filter(|(id, _)| **id != base && !self.state.model_lifecycles.contains_key(id))
+            .map(|(_, s)| *s as u32)
+            .sum();
+        let floor = self.params.min_base_class_share_permille().min(1_000) as u32;
+        let room = 1_000u32.saturating_sub(legacy_sum).saturating_sub(floor);
+        let sharing: Vec<(Hash64, u64)> =
+            admissions.iter().copied().filter(|(id, _)| self.state.class_shares.contains_key(id)).collect();
+        let total: u128 = sharing.iter().map(|(_, a)| *a as u128).sum();
+        let mut given = 0u32;
+        let mut writes: Vec<(Hash64, u16)> = Vec::new();
+        for (id, a) in &sharing {
+            let share = if total == 0 { 0 } else { ((*a as u128).saturating_mul(room as u128) / total).min(room as u128) as u32 };
+            given = given.saturating_add(share);
+            writes.push((*id, share as u16));
+        }
+        writes.push((base, (1_000u32.saturating_sub(legacy_sum).saturating_sub(given)).max(floor) as u16));
+        for (id, share) in writes {
+            if self.state.class_shares.get(&id).copied() != Some(share) {
+                self.write_share(id, Some(share));
+            }
+        }
+    }
+
     // ---- ADR-0125: the execution lane ----
 
     /// **ADR-0125 / ADR-0130: the span boundary — participants first, randomness after.**
@@ -7688,6 +8117,8 @@ impl<'a> TransitionBuilder<'a> {
         let span_now = palw_execution_span_v1(ctx.daa_score, span_daa);
         let opens_span = self.state.last_point.is_none_or(|last| palw_execution_span_v1(last.daa_score, span_daa) < span_now);
         if opens_span {
+            // ADR-0135: the registry steps every class at the boundary, before the lane's own rotation.
+            self.step_model_registry(ctx, span_now);
             for target in self.state.round_pending.keys().copied().collect::<Vec<_>>() {
                 if target > span_now {
                     // Unreachable: a snapshot targets the span after the one whose first block took it.
@@ -8587,6 +9018,7 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     fn finalize_claim(&mut self, id: Hash64, claim: &PalwClaimStateV2, final_daa: u64) -> Result<(), PalwStateV2Error> {
+        self.note_model_probe(claim, true);
         self.release_for_claim(claim)?;
         // The weight divergence between the lanes (ADR-0044): an attempt's Final IS its block's
         // certified work; a free-prompt Final only LICENSES — its weight arrives per spent
@@ -8680,6 +9112,9 @@ impl<'a> TransitionBuilder<'a> {
     ) -> Result<(), PalwStateV2Error> {
         let mut voided = claim.clone();
         voided.phase = PalwClaimPhaseV2::Voided { voided_daa, reason };
+        if matches!(reason, PalwVoidReasonV2::CourtFraud | PalwVoidReasonV2::ProducerWithholding) {
+            self.note_model_probe(claim, false);
+        }
         // ADR-0088 Decision 4: a voided claim is subtracted where it was counted.
         self.uncount_claim_usage(&id, claim);
         // ADR-0124 Decision 3: every seat on duty leaves it with its exposure, whatever voided the
@@ -11254,7 +11689,8 @@ fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
         let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
         match claim.phase {
             PalwClaimPhaseV2::Provisional => {
-                builder.void_claim(claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::BindTimeout)?;
+                let reason = builder.bind_timeout_reason(&claim, ctx);
+                builder.void_claim(claim_id, &claim, ctx.daa_score, reason)?;
             }
             PalwClaimPhaseV2::PanelBound { .. } => {
                 // The receipt window closed with no concluding object. Nothing here can tell WHY:
@@ -12231,6 +12667,12 @@ fn apply_object(
             // epochs the receipt retarget needs to crawl back. The two retargets separate the
             // lanes from here, against their own censuses.
             builder.write_receipt_target(*class_id, Some(PalwClassTargetV2 { target: PALW_RECEIPT_TARGET_SEED_V1 }));
+            // ADR-0135: a class registered with its carriage gets its lifecycle row from the graph.
+            if builder.extras.model_registry.is_some()
+                && let Some(carriage) = admission.as_ref()
+            {
+                builder.open_model_lifecycle(ctx, *class_id, &carriage.profile, &carriage.canonical, *initial_target);
+            }
         }
         // **ADR-0078 Decision 4: a derivation is committed beside its claim; the thing never
         // rides.** The chain checks what it can check — the claim exists on this chain (any phase
@@ -12892,6 +13334,9 @@ fn apply_object(
                     chunks: BTreeMap::new(),
                 }),
             );
+        }
+        PalwConsensusObjectV2::SeatReadinessProved { bond, class_id, span, opening, signature: _ } => {
+            builder.apply_seat_readiness(ctx, bond, class_id, *span, opening)?;
         }
         PalwConsensusObjectV2::CourtCloseChunk { session_id, side, index, bytes } => {
             let mut group = builder
@@ -13672,6 +14117,9 @@ pub struct PalwTransitionExtrasV1 {
     /// fence — the bundle's own `worker_carve_permille` — by `Default`, so every existing caller and
     /// every network that has not armed it folds byte-identically.
     pub escrow_carve: Option<crate::palw_reward_v2::PalwRewardParamsV2>,
+    /// ADR-0135: `Some` where `Params::palw_model_registry` is active at the block — the globals,
+    /// the span clock and the genesis classes' work; `None` leaves the fold byte-identical.
+    pub model_registry: Option<crate::palw_model_registry_v1::PalwModelRegistryFoldV1>,
 }
 
 impl PalwTransitionExtrasV1 {
@@ -14586,6 +15034,9 @@ fn apply_attempt(
     if let PalwClassStatusV2::Frozen { .. } = class.status {
         return Err(PalwStateV2Error::FrozenClass(attempt.class_id));
     }
+    // ADR-0135: a class the registry does not admit (REGISTERED, PREFETCHING, HELD) takes no new
+    // claim, and one at its inflight cap takes none until a claim leaves flight.
+    builder.check_class_admits_claim(&attempt.class_id)?;
     let reserved = (palw_exposure_pwu_v1(class, attempt.pwu) as u128)
         .checked_mul(class.slash_value_per_pwu as u128)
         .ok_or(PalwStateV2Error::Overflow("reserve"))?;
@@ -14874,6 +15325,8 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
             }
             state.round_seed_anchor = *install;
         }
+        PalwDeltaEntryV2::ModelLifecycle { key, old, new } => swap_write!(state.model_lifecycles, key, old, new),
+        PalwDeltaEntryV2::SeatReadiness { key, old, new } => swap_write!(state.seat_readiness, key, old, new),
     }
     Ok(())
 }
@@ -15086,6 +15539,8 @@ pub struct PalwStateCarriageV2 {
     /// ADR-0130. A twelfth tagged tail (`0xA9`) carrying both, encoded only when either is written.
     pub round_pending: BTreeMap<u64, crate::palw_execution_lane_v1::PalwExecSnapshotV1>,
     pub round_seed_anchor: Option<crate::palw_execution_lane_v1::PalwExecSeedAnchorV1>,
+    pub model_lifecycles: BTreeMap<Hash64, crate::palw_model_registry_v1::PalwModelLifecycleRowV1>,
+    pub seat_readiness: BTreeMap<(PalwBondKeyV2, Hash64), crate::palw_model_registry_v1::PalwSeatReadinessRowV1>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -15154,6 +15609,8 @@ const PALW_CARRIAGE_ROUND_LANE_TAIL_V1: u8 = 0xA7;
 const PALW_CARRIAGE_ROUND_EQUIVOCATIONS_TAIL_V1: u8 = 0xA8;
 /// ADR-0130: the snapshot waiting for its seed and the seed anchor, one tail after the burned permits'.
 const PALW_CARRIAGE_ROUND_SCHEDULER_TAIL_V1: u8 = 0xA9;
+/// ADR-0135: the registry's lifecycle rows and seat readiness proofs, once either exists.
+const PALW_CARRIAGE_MODEL_REGISTRY_TAIL_V1: u8 = 0xAA;
 
 impl borsh::BorshSerialize for PalwStateCarriageV2 {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
@@ -15255,6 +15712,11 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             self.round_pending.serialize(writer)?;
             self.round_seed_anchor.serialize(writer)?;
         }
+        if !self.model_lifecycles.is_empty() || !self.seat_readiness.is_empty() {
+            PALW_CARRIAGE_MODEL_REGISTRY_TAIL_V1.serialize(writer)?;
+            self.model_lifecycles.serialize(writer)?;
+            self.seat_readiness.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -15310,6 +15772,9 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_round_equivocations = false;
         let mut round_pending = BTreeMap::new();
         let mut round_seed_anchor = None;
+        let mut model_lifecycles = BTreeMap::new();
+        let mut seat_readiness = BTreeMap::new();
+        let mut seen_model_registry = false;
         let mut seen_round_scheduler = false;
         loop {
             let mut tail = [0u8; 1];
@@ -15373,6 +15838,11 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_round_scheduler = true;
                     round_pending = BTreeMap::deserialize_reader(reader)?;
                     round_seed_anchor = Option::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_MODEL_REGISTRY_TAIL_V1 if !seen_model_registry => {
+                    seen_model_registry = true;
+                    model_lifecycles = BTreeMap::deserialize_reader(reader)?;
+                    seat_readiness = BTreeMap::deserialize_reader(reader)?;
                 }
                 PALW_CARRIAGE_SHARDS_TAIL_V1 if !seen_shards && !seen_held && !seen_demands && !seen_class_ladders => {
                     seen_shards = true;
@@ -15438,6 +15908,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             round_equivocations,
             round_pending,
             round_seed_anchor,
+            model_lifecycles,
+            seat_readiness,
         })
     }
 }
@@ -15488,6 +15960,8 @@ impl PalwStateCarriageV2 {
             round_equivocations: state.round_equivocations.clone(),
             round_pending: state.round_pending.clone(),
             round_seed_anchor: state.round_seed_anchor,
+            model_lifecycles: state.model_lifecycles.clone(),
+            seat_readiness: state.seat_readiness.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -15586,6 +16060,8 @@ impl PalwStateCarriageV2 {
             round_equivocations: self.round_equivocations,
             round_pending: self.round_pending,
             round_seed_anchor: self.round_seed_anchor,
+            model_lifecycles: self.model_lifecycles,
+            seat_readiness: self.seat_readiness,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -24823,6 +25299,8 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::RoundEquivocations { .. } => "round_equivocations",
                     PalwDeltaEntryV2::RoundPending { .. } => "round_pending",
                     PalwDeltaEntryV2::RoundSeedAnchor { .. } => "round_seed_anchor",
+                    PalwDeltaEntryV2::ModelLifecycle { .. } => "model_lifecycle",
+                    PalwDeltaEntryV2::SeatReadiness { .. } => "seat_readiness",
                 });
             }
         }
@@ -24873,6 +25351,9 @@ pub(crate) mod tests {
             // ADR-0130, appended last.
             (49, PalwDeltaEntryV2::RoundPending { key: 3, old: None, new: None }),
             (50, PalwDeltaEntryV2::RoundSeedAnchor { old: None, new: None }),
+            // ADR-0135, appended last.
+            (51, PalwDeltaEntryV2::ModelLifecycle { key, old: None, new: None }),
+            (52, PalwDeltaEntryV2::SeatReadiness { key: (bond_key(1), key), old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -25407,6 +25888,9 @@ pub(crate) mod tests {
             // ADR-0130: rooted in their own guarded sub-block of the lane's.
             round_pending: _,
             round_seed_anchor: _,
+            // ADR-0135: rooted in their own guarded block.
+            model_lifecycles: _,
+            seat_readiness: _,
             safe_weight: _,
             retired_safe_weight: _,
             bounded_immature: _,
@@ -31060,6 +31544,7 @@ pub(crate) mod tests {
                 model_leg_v2_active: false,
                 model_seed_v2_active: false,
                 evm_actions: actions,
+                model_registry: None,
                 court_responder_coverage_active: false,
                 fp_da_pins_active: false,
                 shard_court_ladder: None,
@@ -31282,6 +31767,7 @@ pub(crate) mod tests {
                 model_leg_v2_active: false,
                 model_seed_v2_active: false,
                 evm_actions: vec![buy(0, 1, class, MSK, 0)],
+                model_registry: None,
                 court_responder_coverage_active: false,
                 fp_da_pins_active: false,
                 shard_court_ladder: None,

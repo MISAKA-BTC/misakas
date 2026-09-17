@@ -1126,6 +1126,14 @@ pub struct Params {
     /// walk, the audit fee, the challenge slash) is gone, and no shipped chain ever carried one.
     /// `None` = never. Hashed `Some`-only; the fork-id gate names it.
     pub palw_compute_overlay_retired: Option<ForkActivation>,
+    /// **ADR-0135 Protocol Upgrade A — the permissionless model registry.** Past it a class walks
+    /// the lifecycle (`PalwModelLifecycleV1`) on chain-visible facts, its profile is derived from its
+    /// registration's graph (`palw_model_registry_v1`), seats judge a class only with a possession
+    /// proof (`SeatReadinessProved`), a class the panel cannot serve is `HELD` alone, and the class
+    /// shares are written from admission at every span boundary. `None` = never, on every shipped
+    /// preset. Hashed `Some`-only; the fork-id gate names it. Needs `palw_panel_economy` and
+    /// `palw_execution_lane` at or below its height (`validate_palw_v2`).
+    pub palw_model_registry: Option<ForkActivation>,
     /// **ADR-0077 Phase B — the court prices the checkpoint, not the context.** `None` on every
     /// shipped preset, so the behaviour is byte-identical to not having the field at all.
     ///
@@ -2454,6 +2462,24 @@ impl Params {
                  claim is a move of a dissection the network does not run (ADR-0093 Decision 8)",
             ));
         }
+        // ADR-0135: the registry reads seat exposure (the panel economy) and steps at the execution
+        // lane's span boundaries, so both must be in force by its height.
+        if let Some(registry) = self.palw_model_registry
+            && registry != ForkActivation::never()
+        {
+            let economy_below = self
+                .palw_panel_economy
+                .is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= registry.daa_score());
+            let lane_below = self
+                .palw_execution_lane
+                .is_some_and(|lane| lane.activation != ForkActivation::never() && lane.activation.daa_score() <= registry.daa_score());
+            if !economy_below || !lane_below {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_model_registry is armed without palw_panel_economy and palw_execution_lane armed at or below its height: \
+                     the registry reads seat exposure and steps at span boundaries",
+                ));
+            }
+        }
         // **ADR-0128 Decision 8: the BFT gate's refusals**, ahead of the V2 gate below because the
         // overlay is any lineage's. Every `Some` is judged, a `never()` height included: the values
         // reach the fingerprint whether or not the height does.
@@ -3747,6 +3773,10 @@ impl Params {
         if self.palw_compute_overlay_retired == Some(ForkActivation::never()) {
             self.palw_compute_overlay_retired = None;
         }
+        // ADR-0135, a bare fence: same collapse, same reason.
+        if self.palw_model_registry == Some(ForkActivation::never()) {
+            self.palw_model_registry = None;
+        }
         // ADR-0077 Phase B, a bare fence: same collapse, same reason.
         if self.palw_context_ladder == Some(ForkActivation::never()) {
             self.palw_context_ladder = None;
@@ -4038,6 +4068,11 @@ impl Params {
     /// ADR-0134: whether the compute overlay's five subnetworks are refused at `daa_score`.
     pub fn palw_compute_overlay_retired_at(&self, daa_score: u64) -> bool {
         self.palw_compute_overlay_retired.is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// ADR-0135: whether the permissionless model registry governs classes at `daa_score`.
+    pub fn palw_model_registry_at(&self, daa_score: u64) -> bool {
+        self.palw_model_registry.is_some_and(|f| f.is_active(daa_score))
     }
 
     /// The capability-bound fence **with the mode condition already folded in** — `Some` only on a
@@ -4647,6 +4682,7 @@ impl Params {
             palw_beacon_fold,
             palw_capability_bound,
             palw_compute_overlay_retired,
+            palw_model_registry,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -4715,6 +4751,7 @@ impl Params {
             ("palw_beacon_fold", palw_beacon_fold.map(|f| f.activation)),
             ("palw_capability_bound", *palw_capability_bound),
             ("palw_compute_overlay_retired", *palw_compute_overlay_retired),
+            ("palw_model_registry", *palw_model_registry),
             ("palw_context_ladder", *palw_context_ladder),
             ("palw_panel_da", *palw_panel_da),
             ("palw_certification_rent", *palw_certification_rent),
@@ -5195,6 +5232,7 @@ impl Params {
             palw_beacon_fold,
             palw_capability_bound,
             palw_compute_overlay_retired,
+            palw_model_registry,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -5385,6 +5423,14 @@ impl Params {
         }
         // ADR-0134, a bare fence: the same treatment.
         match palw_compute_overlay_retired.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // ADR-0135, a bare fence: the same treatment.
+        match palw_model_registry.as_mut() {
             Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
@@ -5847,6 +5893,7 @@ impl Params {
             palw_beacon_fold,
             palw_capability_bound,
             palw_compute_overlay_retired,
+            palw_model_registry,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -6042,6 +6089,11 @@ impl Params {
         // ADR-0134, Some-only for the same reason.
         if let Some(activation) = palw_compute_overlay_retired {
             h.write(b"palw_compute_overlay_retired");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0135, Some-only for the same reason.
+        if let Some(activation) = palw_model_registry {
+            h.write(b"palw_model_registry");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0077 Decision 16, Some-only for the same reason: every shipped preset leaves it
@@ -6686,6 +6738,7 @@ impl Params {
             palw_beacon_fold: self.palw_beacon_fold,
             palw_capability_bound: self.palw_capability_bound,
             palw_compute_overlay_retired: self.palw_compute_overlay_retired,
+            palw_model_registry: self.palw_model_registry,
             palw_context_ladder: self.palw_context_ladder,
             palw_panel_da: self.palw_panel_da,
             palw_certification_rent: self.palw_certification_rent,
@@ -7621,6 +7674,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_beacon_fold: None,
     palw_capability_bound: None,
     palw_compute_overlay_retired: None,
+    palw_model_registry: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -7809,6 +7863,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_beacon_fold: None,
     palw_capability_bound: None,
     palw_compute_overlay_retired: None,
+    palw_model_registry: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -7979,6 +8034,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_beacon_fold: None,
     palw_capability_bound: None,
     palw_compute_overlay_retired: None,
+    palw_model_registry: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -12507,6 +12563,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_beacon_fold: None,
     palw_capability_bound: None,
     palw_compute_overlay_retired: None,
+    palw_model_registry: None,
     // **ARMED on devnet at genesis** — the testnet-11 5f genesis card §1's set, rehearsed here
     // first. Without the ladder the registered class cannot price a wide row, and the ladder is
     // the whole point of registering the graph-v5 512 row (`misaka_palw_base0::classes`).
@@ -19618,5 +19675,41 @@ mod palw_overlay_carve_tests {
         let mut never = rc.clone();
         never.palw_compute_overlay_retired = Some(ForkActivation::never());
         assert!(!never.palw_compute_overlay_retired_at(u64::MAX - 1), "never is never active");
+    }
+}
+
+#[cfg(test)]
+mod palw_model_registry_fence_tests {
+    use super::*;
+
+    /// **ADR-0135: dormant on every shipped preset; arming it moves the identity and the schedule.**
+    #[test]
+    fn adr0135_the_registry_fence_is_dormant_everywhere_and_arms_by_height() {
+        for (name, preset) in [("testnet-11", palw_rc_shipped_params()), ("devnet", devnet_shipped_params()), ("mainnet", MAINNET_PARAMS.clone())] {
+            assert!(preset.palw_model_registry.is_none(), "{name}: the registry is not scheduled");
+            assert!(!preset.palw_model_registry_at(u64::MAX - 1), "{name}: never active while dormant");
+        }
+        let rc = palw_rc_shipped_params();
+        assert!(rc.palw_fences_v1().iter().any(|(name, fence)| *name == "palw_model_registry" && fence.is_none()));
+        let mut never = rc.clone();
+        never.palw_model_registry = Some(ForkActivation::never());
+        assert!(!never.palw_model_registry_at(u64::MAX - 1), "never is never active");
+        assert_eq!(never.consensus_identity_id(), rc.consensus_identity_id(), "and a never-armed registry is one identity with dormant");
+
+        // Armed above the flag day (the economy and the lane are in force by then): identity and
+        // schedule move, and the fork-id gate names the height.
+        let mut armed = rc.clone();
+        let height = PALW_RC_FLAG_DAY_6001_FENCE_DAA + 1_000;
+        armed.palw_model_registry = Some(ForkActivation::new(height));
+        armed.validate_palw_v2().expect("armed above the economy and the lane");
+        assert_ne!(armed.consensus_params_id(), rc.consensus_params_id(), "arming moves the identity");
+        assert!(armed.fence_schedule_v1().contains(&height), "and the schedule names the height");
+        assert!(!armed.palw_model_registry_at(height - 1) && armed.palw_model_registry_at(height));
+
+        // Below the economy's height the registry has nothing to read: refused.
+        let mut early = rc.clone();
+        early.palw_model_registry = Some(ForkActivation::new(PALW_RC_FLAG_DAY_6001_FENCE_DAA - 1));
+        let refusal = early.validate_palw_v2().expect_err("the registry cannot precede the panel economy");
+        assert!(format!("{refusal:?}").contains("palw_model_registry"), "{refusal:?}");
     }
 }

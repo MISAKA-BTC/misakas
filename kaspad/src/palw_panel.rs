@@ -88,6 +88,7 @@ pub(crate) fn own_claim_events_v1(
                     R::ReceiptTimeout => "receipt_timeout",
                     R::CourtFraud => "court_fraud",
                     R::ProducerWithholding => "producer_withholding",
+                    R::NoCapablePanel => "no_capable_panel",
                 };
                 ("VOIDED", *voided_daa, format!(" reason={why}"))
             }
@@ -5236,6 +5237,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::ReceiptLicensed { .. } => "ReceiptLicensed",
         PalwConsensusObjectV2::ProducerDefaulted { .. } => "ProducerDefaulted",
         PalwConsensusObjectV2::BondRegistered { .. } => "BondRegistered",
+        PalwConsensusObjectV2::SeatReadinessProved { .. } => "SeatReadinessProved",
         PalwConsensusObjectV2::ModelLineBenefitsDeclared { .. } => "ModelLineBenefitsDeclared",
         PalwConsensusObjectV2::ModelBuy { .. } => "ModelBuy",
         PalwConsensusObjectV2::ModelSell { .. } => "ModelSell",

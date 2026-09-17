@@ -20,6 +20,7 @@
 
 use crate::Hash64;
 use crate::palw_verification_profile_v1::{PALW_SEAT_COUNT_V1, PALW_SPAN_MS_V1};
+use std::collections::BTreeMap;
 
 pub const PALW_MODEL_REGISTRY_VERSION_V1: u16 = 1;
 
@@ -38,7 +39,7 @@ pub struct PalwModelManifestV1 {
 /// **What the graph costs, derived by every node from the manifest's graph** (ADR-0131's economic
 /// compute): the compute of the job a seat replays to verify one claim, and the working set the
 /// replay touches (the artifact whole for a dense model, the resident experts for a mixture).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwModelWorkV1 {
     pub verification_ccu: u128,
     pub economic_ccu_per_claim: u128,
@@ -127,7 +128,7 @@ pub fn palw_manifest_verdict_v1(manifest: &PalwModelManifestV1, work: &PalwModel
 
 /// **The derived profile.** Every field a function of the manifest's work and the globals; no
 /// field a registrant states, no field a human measures.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwDerivedProfileV1 {
     pub version: u16,
     pub verification_window_spans: u32,
@@ -257,7 +258,7 @@ impl PalwReadinessEvidenceV1 {
 }
 
 /// **The lifecycle.** Every transition a function of chain-visible facts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum PalwModelLifecycleV1 {
     Registered,
     Prefetching,
@@ -375,6 +376,316 @@ pub fn palw_lifecycle_step_v1(
                 Held
             }
         }
+    }
+}
+
+// ---- Protocol Upgrade A: what the fold stores and reads ---------------------------------------
+
+/// **The work of a registered class, read off the carriage its registration rode** (ADR-0067: a
+/// class is chain data; the `admission` carriage holds the graph profile and the canonical job).
+/// `verification_ccu` is the economic compute of the canonical job a seat replays to verify one
+/// claim (ADR-0131's cost table over the graph); `economic_ccu_per_claim` is the compute of ONE
+/// draw (the prefill draw job) — the cadence step multiplies it by the class's expected draws a
+/// claim (Q32, from its live target), so the profile follows the target and the graph, never a
+/// declaration. `artifact_bytes` is an estimate from the graph's dense weights (two bytes a weight
+/// at the per-token dense MAC count), used only for the prefetch allowance; a manifest that carries
+/// the bytes is V2's.
+pub fn palw_model_work_from_carriage_v1(
+    profile: &crate::palw_step::PalwShapeProfileV3,
+    canonical: &crate::palw_v2::PalwJobContextV2,
+) -> Option<PalwModelWorkV1> {
+    use crate::palw_economic_compute_v1::{
+        PALW_ECONOMIC_COST_TABLE_V1, palw_attempt_economic_compute_v1, palw_economic_shape_v1, palw_job_economic_compute_v1,
+    };
+    let table = &PALW_ECONOMIC_COST_TABLE_V1;
+    let verification_ccu = palw_job_economic_compute_v1(profile, canonical, table).ok()?;
+    let draw = palw_attempt_economic_compute_v1(profile, canonical, true, table).ok()?;
+    let shape = palw_economic_shape_v1(profile, table).ok()?;
+    let body = shape.body_at(0);
+    let artifact_bytes = body.dense_matmul.saturating_add(body.routed_experts).saturating_mul(2).min(u64::MAX as u128) as u64;
+    Some(PalwModelWorkV1 {
+        verification_ccu,
+        economic_ccu_per_claim: draw,
+        artifact_bytes,
+        working_set_bytes: artifact_bytes,
+        ops_supported: verification_ccu > 0,
+    })
+}
+
+/// **The genesis classes' work**, from the registrations the bundle's genesis carries — every node
+/// derives the bundle from `Params`, so this map is a function of the ruleset, not of a store.
+pub fn palw_genesis_model_works_v1(objects: &[crate::palw_state_v2::PalwConsensusObjectV2]) -> BTreeMap<Hash64, PalwModelWorkV1> {
+    let mut out = BTreeMap::new();
+    for object in objects {
+        if let crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { class_id, admission: Some(carriage), .. } = object
+            && let Some(work) = palw_model_work_from_carriage_v1(&carriage.profile, &carriage.canonical)
+        {
+            out.insert(*class_id, work);
+        }
+    }
+    out
+}
+
+/// **The profile a lifecycle row carries this span**: the stored work with the class's expected
+/// draws a claim (Q32) folded into the economic compute a claim costs.
+pub fn palw_lifecycle_profile_v1(work: &PalwModelWorkV1, expected_attempts_q32: u128, g: &PalwRegistryGlobalsV1) -> PalwDerivedProfileV1 {
+    let per_claim = crate::palw_economic_compute_v1::palw_attempted_compute_q32_per_claim_v1(
+        expected_attempts_q32.max(crate::palw_economic_compute_v1::PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1),
+        work.economic_ccu_per_claim,
+    );
+    palw_derive_profile_v1(&PalwModelWorkV1 { economic_ccu_per_claim: per_claim, ..*work }, g)
+}
+
+/// **A class's row in the registry** — the state machine's position, the work its registration
+/// derived, the profile of the last span, and the counters the lifecycle reads.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwModelLifecycleRowV1 {
+    pub state: PalwModelLifecycleV1,
+    pub work: PalwModelWorkV1,
+    pub profile: PalwDerivedProfileV1,
+    /// The span the current state was entered at.
+    pub since_span: u64,
+    /// Finals and faults of the class's claims since the state was entered (probation reads them).
+    pub probes_passed: u32,
+    pub probes_failed: u32,
+    /// Finals and faults of the span being stepped, cleared at every boundary.
+    pub probes_passed_this_span: u32,
+    pub probes_failed_this_span: u32,
+    /// The last boundary's reading, kept so a reader (op 186) sees what the step saw.
+    pub ready_seats: u32,
+    pub inflight_claims: u32,
+    pub utilization_permille: u32,
+    pub admission_milli: u64,
+}
+
+/// **A seat's readiness for a class**: the last possession proof this bond opened for the class
+/// (ADR-0135 Decision 4). Fresh while `proved_daa` is within the readiness age; the probe half of
+/// readiness is the seat's last `Valid` receipt on the class, read off the claims.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwSeatReadinessRowV1 {
+    pub proved_daa: u64,
+    pub proved_span: u64,
+    pub leaf_index: u32,
+}
+
+/// **What the fold is handed when the registry is active at a block** (`PalwTransitionExtrasV1`):
+/// the globals, the span clock, and the genesis classes' work (the classes registered before the
+/// fence, whose carriages the state never stored).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwModelRegistryFoldV1 {
+    pub globals: PalwRegistryGlobalsV1,
+    pub span_daa: u64,
+    pub genesis_works: BTreeMap<Hash64, PalwModelWorkV1>,
+}
+
+/// **The draw's readiness policy** under the registry: a seat may judge a class only with a
+/// possession proof no older than `max_age_daa` at `now_daa` (the base class stays open to every
+/// bond, as before — every node runs it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwReadinessPolicyV1 {
+    pub now_daa: u64,
+    pub max_age_daa: u64,
+    pub base_class_id: Hash64,
+}
+
+/// One opening per proof, capped: an artifact leaf is a tensor row range and rides the object
+/// chunk carriage above a block's payload, so the cap bounds what a proof may ask the chain to carry.
+pub const PALW_READINESS_OPENING_MAX_BYTES_V1: usize = 8 << 20;
+/// The challenge names `width` consecutive leaves from a seeded start; the prover opens ONE of
+/// them (V1: a leaf may be large, so the prover picks the one it can carry). A holder of the whole
+/// artifact answers every span; a holder of a fraction fails a span with the fraction it lacks.
+pub const PALW_READINESS_CHALLENGE_WIDTH_V1: u32 = 8;
+pub const PALW_SEAT_READINESS_V1_DOMAIN: &[u8] = b"misaka-palw/seat-readiness-v1/message/v1";
+pub const PALW_SEAT_READINESS_V1_CHALLENGE_DOMAIN: &[u8] = b"misaka-palw/seat-readiness-v1/challenge/v1";
+pub const PALW_SEAT_READINESS_V1_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/seat-readiness-v1/mldsa87/v1";
+
+fn keyed64(domain: &[u8]) -> blake2b_simd::State {
+    blake2b_simd::Params::new().hash_length(64).key(domain).to_state()
+}
+fn finish64(state: blake2b_simd::State) -> Hash64 {
+    let mut out = [0u8; 64];
+    out.copy_from_slice(state.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+/// **The challenge seed of (class, bond, span)**: every node derives it, the prover cannot choose it.
+pub fn palw_readiness_challenge_seed_v1(class_id: &Hash64, bond: &[u8], span: u64) -> Hash64 {
+    let mut state = keyed64(PALW_SEAT_READINESS_V1_CHALLENGE_DOMAIN);
+    state.update(class_id.as_byte_slice());
+    state.update(&(bond.len() as u64).to_le_bytes());
+    state.update(bond);
+    state.update(&span.to_le_bytes());
+    finish64(state)
+}
+
+/// **The leaves the challenge names**: `(start, width)` over `leaf_count`, wrapping.
+pub fn palw_readiness_window_v1(seed: &Hash64, leaf_count: u32) -> (u32, u32) {
+    if leaf_count == 0 {
+        return (0, 0);
+    }
+    let bytes = seed.as_bytes();
+    let word = u64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]]);
+    ((word % leaf_count as u64) as u32, PALW_READINESS_CHALLENGE_WIDTH_V1.min(leaf_count))
+}
+
+/// Whether `leaf_index` is inside the window `(start, width)` of a `leaf_count`-leaf inventory.
+pub fn palw_readiness_window_contains_v1(start: u32, width: u32, leaf_count: u32, leaf_index: u32) -> bool {
+    if leaf_count == 0 || width == 0 || leaf_index >= leaf_count {
+        return false;
+    }
+    let offset = (leaf_index as u64 + leaf_count as u64 - start as u64) % leaf_count as u64;
+    offset < width as u64
+}
+
+/// **What a seat signs** to prove readiness: the network, its bond, the class, the span and the
+/// leaf it opened — so a relayer cannot volunteer another bond's collateral for a class.
+pub fn palw_seat_readiness_message_v1(network_domain: Hash64, bond: &[u8], class_id: &Hash64, span: u64, leaf_index: u32) -> Hash64 {
+    let mut state = keyed64(PALW_SEAT_READINESS_V1_DOMAIN);
+    state.update(network_domain.as_byte_slice());
+    state.update(&(bond.len() as u64).to_le_bytes());
+    state.update(bond);
+    state.update(class_id.as_byte_slice());
+    state.update(&span.to_le_bytes());
+    state.update(&leaf_index.to_le_bytes());
+    finish64(state)
+}
+
+/// **The shares the registry writes** (ADR-0135 Decision 5): each class's admission over every
+/// class's, in permille, with the base class holding the remainder and never less than its floor.
+/// A class with zero admission holds zero; the table always sums to 1,000.
+pub fn palw_registry_shares_v1(admissions_milli: &[(Hash64, u64)], base_class: Hash64, base_floor_permille: u16) -> BTreeMap<Hash64, u16> {
+    let floor = base_floor_permille.min(1_000) as u32;
+    let room = 1_000u32 - floor;
+    let others: Vec<(Hash64, u64)> = admissions_milli.iter().copied().filter(|(id, _)| *id != base_class).collect();
+    let total: u128 = others.iter().map(|(_, a)| *a as u128).sum();
+    let mut out = BTreeMap::new();
+    let mut given = 0u32;
+    for (id, a) in &others {
+        let share = if total == 0 { 0 } else { ((*a as u128).saturating_mul(room as u128) / total).min(room as u128) as u32 };
+        given = given.saturating_add(share);
+        out.insert(*id, share as u16);
+    }
+    out.insert(base_class, (1_000u32.saturating_sub(given)).max(floor) as u16);
+    out
+}
+
+/// **What op 186 answers**: the registry as the tip state holds it.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct PalwModelRegistryReadV1 {
+    pub tip_daa: u64,
+    /// The fence's height, if scheduled, and whether it is in force at the tip.
+    pub fence_daa: Option<u64>,
+    pub active: bool,
+    pub span_daa: u64,
+    pub globals: Option<PalwRegistryGlobalsV1>,
+    pub classes: Vec<PalwModelRegistryClassReadV1>,
+    pub readiness: Vec<PalwSeatReadinessReadV1>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwModelRegistryClassReadV1 {
+    pub class_id: Hash64,
+    pub is_base_class: bool,
+    pub row: Option<PalwModelLifecycleRowV1>,
+    /// Ready seats and claims in flight read NOW (the row keeps the last boundary's reading).
+    pub ready_seats_now: u32,
+    pub inflight_now: u32,
+    pub share_permille: Option<u16>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwSeatReadinessReadV1 {
+    pub bond: crate::palw_state_v2::PalwBondKeyV2,
+    pub class_id: Hash64,
+    pub row: PalwSeatReadinessRowV1,
+    pub fresh: bool,
+}
+
+/// The seats ready for a class now (ADR-0135 Decision 4), as the fold counts them: active, above
+/// the floor, with a possession proof no older than the readiness age, and free collateral for
+/// the readiness multiple of the network's floor.
+pub fn palw_model_registry_ready_seats_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    params: &crate::palw_state_v2::PalwStateParamsV2,
+    class_id: &Hash64,
+    now_daa: u64,
+    fold: &PalwModelRegistryFoldV1,
+) -> u32 {
+    let max_age_daa = (fold.globals.readiness_probe_max_age_spans as u64).saturating_mul(fold.span_daa.max(1));
+    let floor = params.min_collateral_sompi();
+    let needed = (floor as u128).saturating_mul(fold.globals.readiness_collateral_multiple as u128);
+    let mut ready = 0u32;
+    for (bond_key, bond) in state.bonds_iter() {
+        if !matches!(bond.status, crate::palw_state_v2::PalwBondStatusV2::Active)
+            || !crate::palw_state_v2::palw_bond_may_take_work_v2(bond, floor)
+        {
+            continue;
+        }
+        let Some(row) = state.seat_readiness(bond_key, class_id) else { continue };
+        if now_daa.saturating_sub(row.proved_daa) > max_age_daa {
+            continue;
+        }
+        let held = state.reserved_exposure(bond_key).saturating_add(state.registration_exposure(bond_key));
+        let free = (bond.collateral as u128).saturating_sub(bond.slashed as u128).saturating_sub(held);
+        if free < needed {
+            continue;
+        }
+        ready = ready.saturating_add(1);
+    }
+    ready
+}
+
+/// Attempt claims of a class still in flight (accepted and not terminal).
+pub fn palw_model_registry_inflight_v1(state: &crate::palw_state_v2::PalwChainStateV2, class_id: &Hash64) -> u32 {
+    state
+        .claims_iter()
+        .filter(|(_, claim)| {
+            claim.class_id == *class_id
+                && matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::Attempt)
+                && !claim.phase.is_terminal()
+        })
+        .count()
+        .min(u32::MAX as usize) as u32
+}
+
+/// The registry read of a tip state.
+pub fn palw_model_registry_read_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    params: &crate::palw_state_v2::PalwStateParamsV2,
+    tip_daa: u64,
+    fence_daa: Option<u64>,
+    fold: Option<&PalwModelRegistryFoldV1>,
+) -> PalwModelRegistryReadV1 {
+    let base = params.base_class_id();
+    let classes = state
+        .classes_iter()
+        .map(|(class_id, _)| PalwModelRegistryClassReadV1 {
+            class_id: *class_id,
+            is_base_class: *class_id == base,
+            row: state.model_lifecycle(class_id).cloned(),
+            ready_seats_now: fold.map(|f| palw_model_registry_ready_seats_v1(state, params, class_id, tip_daa, f)).unwrap_or(0),
+            inflight_now: palw_model_registry_inflight_v1(state, class_id),
+            share_permille: state.class_share_permille(class_id),
+        })
+        .collect();
+    let max_age_daa = fold.map(|f| (f.globals.readiness_probe_max_age_spans as u64).saturating_mul(f.span_daa.max(1)));
+    let readiness = state
+        .seat_readiness_iter()
+        .map(|((bond, class_id), row)| PalwSeatReadinessReadV1 {
+            bond: *bond,
+            class_id: *class_id,
+            row: *row,
+            fresh: max_age_daa.is_some_and(|age| tip_daa.saturating_sub(row.proved_daa) <= age),
+        })
+        .collect();
+    PalwModelRegistryReadV1 {
+        tip_daa,
+        fence_daa,
+        active: fold.is_some(),
+        span_daa: fold.map(|f| f.span_daa).unwrap_or(0),
+        globals: fold.map(|f| f.globals),
+        classes,
+        readiness,
     }
 }
 

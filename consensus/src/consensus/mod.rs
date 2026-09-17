@@ -2222,6 +2222,10 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_claim_ledger_observations_v1_impl()
     }
 
+    fn palw_model_registry_v1(&self) -> Option<kaspa_consensus_core::palw_model_registry_v1::PalwModelRegistryReadV1> {
+        self.virtual_processor.palw_model_registry_v1_impl()
+    }
+
     fn palw_certified_families_v1(
         &self,
     ) -> Vec<(

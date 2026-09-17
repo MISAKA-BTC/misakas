@@ -991,6 +991,68 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwClassEconomicsResponse>, protowire
         error: None,
     }
 });
+from!(&kaspa_rpc_core::GetPalwModelRegistryRequest, protowire::GetPalwModelRegistryRequestMessage);
+from!(item: &kaspa_rpc_core::RpcPalwModelLifecycle, protowire::RpcPalwModelLifecycle, {
+    Self {
+        class_id: item.class_id.clone(),
+        is_base_class: item.is_base_class,
+        has_row: item.has_row,
+        state: item.state.clone(),
+        since_span: item.since_span,
+        verification_ccu: item.verification_ccu.clone(),
+        economic_ccu_per_claim: item.economic_ccu_per_claim.clone(),
+        artifact_bytes: item.artifact_bytes,
+        ops_supported: item.ops_supported,
+        verification_window_spans: item.verification_window_spans,
+        artifact_prefetch_spans: item.artifact_prefetch_spans,
+        max_inflight_claims: item.max_inflight_claims,
+        required_ready_seats: item.required_ready_seats,
+        registration_bond_sompi: item.registration_bond_sompi,
+        admission_claims_per_span_milli: item.admission_claims_per_span_milli,
+        probes_passed: item.probes_passed,
+        probes_failed: item.probes_failed,
+        ready_seats: item.ready_seats,
+        inflight_claims: item.inflight_claims,
+        utilization_permille: item.utilization_permille,
+        admission_milli: item.admission_milli,
+        ready_seats_now: item.ready_seats_now,
+        inflight_now: item.inflight_now,
+        share_permille: item.share_permille as u32,
+    }
+});
+from!(item: &kaspa_rpc_core::RpcPalwSeatReadiness, protowire::RpcPalwSeatReadiness, {
+    Self {
+        bond_txid: item.bond_txid.clone(),
+        bond_index: item.bond_index,
+        class_id: item.class_id.clone(),
+        proved_daa: item.proved_daa,
+        proved_span: item.proved_span,
+        leaf_index: item.leaf_index,
+        fresh: item.fresh,
+    }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelRegistryResponse>, protowire::GetPalwModelRegistryResponseMessage, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        scheduled: item.scheduled,
+        fence_daa: item.fence_daa,
+        active: item.active,
+        span_daa: item.span_daa,
+        reference_work_per_span: item.reference_work_per_span.clone(),
+        reference_bytes_per_span: item.reference_bytes_per_span,
+        seat_count: item.seat_count as u32,
+        spare_seats: item.spare_seats as u32,
+        utilization_permille: item.utilization_permille,
+        probation_claims: item.probation_claims,
+        stable_epochs: item.stable_epochs,
+        readiness_probe_max_age_spans: item.readiness_probe_max_age_spans,
+        readiness_collateral_multiple: item.readiness_collateral_multiple,
+        classes: item.classes.iter().map(protowire::RpcPalwModelLifecycle::from).collect(),
+        readiness: item.readiness.iter().map(protowire::RpcPalwSeatReadiness::from).collect(),
+        error: None,
+    }
+});
 from!(&kaspa_rpc_core::GetPalwRegistrationTermsRequest, protowire::GetPalwRegistrationTermsRequestMessage);
 from!(item: &kaspa_rpc_core::RpcPalwCertifiedFamily, protowire::RpcPalwCertifiedFamily, {
     Self { lane: item.lane.clone(), digest: item.digest.clone(), certified_daa: item.certified_daa, family_hex: item.family_hex.clone() }
@@ -2298,6 +2360,67 @@ try_from!(item: &protowire::GetPalwClassEconomicsResponseMessage, RpcResult<kasp
         ledger_claims: item.ledger_claims,
         ledger_first_daa: item.ledger_first_daa,
         ledger_last_daa: item.ledger_last_daa,
+    }
+});
+try_from!(&protowire::GetPalwModelRegistryRequestMessage, kaspa_rpc_core::GetPalwModelRegistryRequest);
+try_from!(item: &protowire::RpcPalwModelLifecycle, kaspa_rpc_core::RpcPalwModelLifecycle, {
+    Self {
+        class_id: item.class_id.clone(),
+        is_base_class: item.is_base_class,
+        has_row: item.has_row,
+        state: item.state.clone(),
+        since_span: item.since_span,
+        verification_ccu: item.verification_ccu.clone(),
+        economic_ccu_per_claim: item.economic_ccu_per_claim.clone(),
+        artifact_bytes: item.artifact_bytes,
+        ops_supported: item.ops_supported,
+        verification_window_spans: item.verification_window_spans,
+        artifact_prefetch_spans: item.artifact_prefetch_spans,
+        max_inflight_claims: item.max_inflight_claims,
+        required_ready_seats: item.required_ready_seats,
+        registration_bond_sompi: item.registration_bond_sompi,
+        admission_claims_per_span_milli: item.admission_claims_per_span_milli,
+        probes_passed: item.probes_passed,
+        probes_failed: item.probes_failed,
+        ready_seats: item.ready_seats,
+        inflight_claims: item.inflight_claims,
+        utilization_permille: item.utilization_permille,
+        admission_milli: item.admission_milli,
+        ready_seats_now: item.ready_seats_now,
+        inflight_now: item.inflight_now,
+        share_permille: u16::try_from(item.share_permille).map_err(|_| RpcError::General("sharePermille is not a u16".to_string()))?,
+    }
+});
+try_from!(item: &protowire::RpcPalwSeatReadiness, kaspa_rpc_core::RpcPalwSeatReadiness, {
+    Self {
+        bond_txid: item.bond_txid.clone(),
+        bond_index: item.bond_index,
+        class_id: item.class_id.clone(),
+        proved_daa: item.proved_daa,
+        proved_span: item.proved_span,
+        leaf_index: item.leaf_index,
+        fresh: item.fresh,
+    }
+});
+try_from!(item: &protowire::GetPalwModelRegistryResponseMessage, RpcResult<kaspa_rpc_core::GetPalwModelRegistryResponse>, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        scheduled: item.scheduled,
+        fence_daa: item.fence_daa,
+        active: item.active,
+        span_daa: item.span_daa,
+        reference_work_per_span: item.reference_work_per_span.clone(),
+        reference_bytes_per_span: item.reference_bytes_per_span,
+        seat_count: u16::try_from(item.seat_count).map_err(|_| RpcError::General("seatCount is not a u16".to_string()))?,
+        spare_seats: u16::try_from(item.spare_seats).map_err(|_| RpcError::General("spareSeats is not a u16".to_string()))?,
+        utilization_permille: item.utilization_permille,
+        probation_claims: item.probation_claims,
+        stable_epochs: item.stable_epochs,
+        readiness_probe_max_age_spans: item.readiness_probe_max_age_spans,
+        readiness_collateral_multiple: item.readiness_collateral_multiple,
+        classes: item.classes.iter().map(kaspa_rpc_core::RpcPalwModelLifecycle::try_from).collect::<RpcResult<Vec<_>>>()?,
+        readiness: item.readiness.iter().map(kaspa_rpc_core::RpcPalwSeatReadiness::try_from).collect::<RpcResult<Vec<_>>>()?,
     }
 });
 try_from!(&protowire::GetPalwRegistrationTermsRequestMessage, kaspa_rpc_core::GetPalwRegistrationTermsRequest);

@@ -86,6 +86,9 @@ pub const PALW_V2_MAX_SEAT_TICKETS_PER_BOND: u64 = 4096;
 pub struct PalwPanelDrawPolicyV1 {
     pub weighted: bool,
     pub economy: Option<crate::palw_panel_economy_v1::PalwSeatEconomyV1>,
+    /// ADR-0135: under the registry a seat judges a class by a fresh possession proof, not by its
+    /// declaration (`palw_bond_may_judge_class_v4`); `None` below the fence.
+    pub readiness: Option<crate::palw_model_registry_v1::PalwReadinessPolicyV1>,
 }
 pub const PALW_RECEIPT_V2_DOMAIN_MESSAGE: &[u8] = b"misaka-palw/receipt-v2/message/v1";
 /// ML-DSA-87 signing context for a V2 seat receipt — its own family domain (audit P0-6).
@@ -259,7 +262,7 @@ pub fn derive_stratified_panel_v2(
         // flat draw below; when the shard fence is armed, this draw needs the same floor and
         // headroom — and ADR-0130's exposure floor and one-entry-per-operator lottery with them,
         // per shard — a follow-up gated behind the shard fence, not this one (C-02's precedent).
-        palw_panel_eligible_bonds_v2(state, claim_id, min_collateral_sompi, registered_by_daa, capability_proof, None, params.seat_count)?
+        palw_panel_eligible_bonds_v2(state, claim_id, min_collateral_sompi, registered_by_daa, capability_proof, None, None, params.seat_count)?
             .into_iter()
             .filter_map(|(bond_key, bond)| {
                 state.shards_of_bond(bond_key, &class_id).map(|shards| crate::palw_shard_panel_v1::PalwShardCandidateV1 {
@@ -480,6 +483,7 @@ pub fn palw_panel_eligible_bonds_v2<'a>(
     min_collateral_sompi: u64,
     registered_by_daa: Option<u64>,
     capability_proof: bool,
+    readiness: Option<crate::palw_model_registry_v1::PalwReadinessPolicyV1>,
     economy: Option<crate::palw_panel_economy_v1::PalwSeatEconomyV1>,
     seat_count: u16,
 ) -> Result<Vec<(&'a PalwBondKeyV2, &'a PalwBondStateV2)>, PalwPanelV2Error> {
@@ -542,7 +546,7 @@ pub fn palw_panel_eligible_bonds_v2<'a>(
         // or free-prompt claim on the class is the chain having seen this bond actually run it.
         // Silence stays unjudged — a bond that declared and never produced is simply not drawn,
         // never charged for the omission and never convicted of it (ADR-0065 D4).
-        if !crate::palw_state_v2::palw_bond_may_judge_class_v3(state, bond_key, bond, &claim.class_id, capability_proof) {
+        if !crate::palw_state_v2::palw_bond_may_judge_class_v4(state, bond_key, bond, &claim.class_id, capability_proof, readiness) {
             continue;
         }
         eligible.push((bond_key, bond));
@@ -569,7 +573,7 @@ pub fn derive_panel_v2_with_capability_proof(
         min_collateral_sompi,
         registered_by_daa,
         capability_proof,
-        PalwPanelDrawPolicyV1 { weighted, economy: None },
+        PalwPanelDrawPolicyV1 { weighted, economy: None, readiness: None },
     )
 }
 
@@ -599,6 +603,7 @@ pub fn derive_panel_v2_with_policy(
         min_collateral_sompi,
         registered_by_daa,
         capability_proof,
+        policy.readiness,
         policy.economy,
         params.seat_count,
     )?;
@@ -871,7 +876,7 @@ pub fn validate_panel_bound_v2_with_shards(
         proposed_seats,
         bond_maturity_daa,
         capability_proof,
-        PalwPanelDrawPolicyV1 { weighted, economy: None },
+        PalwPanelDrawPolicyV1 { weighted, economy: None, readiness: None },
         stratified,
     )
 }
@@ -1736,7 +1741,7 @@ mod tests {
             reward_multiple_permille: 0,
         };
         assert_eq!(economy.panel_floor_sompi, 1_000);
-        let policy = PalwPanelDrawPolicyV1 { weighted: true, economy: Some(economy) };
+        let policy = PalwPanelDrawPolicyV1 { weighted: true, economy: Some(economy), readiness: None };
 
         for i in 0..40u64 {
             let anchor = BlockHash::from_u64_word(0xB000 + i);
@@ -1752,7 +1757,7 @@ mod tests {
             }
             // One ticket a bond: the draw past the economy equals the legacy unweighted draw over the
             // same eligible set, whatever `weighted` says.
-            let unweighted = PalwPanelDrawPolicyV1 { weighted: false, economy: Some(economy) };
+            let unweighted = PalwPanelDrawPolicyV1 { weighted: false, economy: Some(economy), readiness: None };
             assert_eq!(
                 derive_panel_v2_with_policy(&state, &params, &claim_id, anchor, mc, None, false, unweighted).unwrap(),
                 seats,
@@ -1850,6 +1855,7 @@ mod tests {
     fn adr0130_economy(reward_multiple_permille: u32) -> PalwPanelDrawPolicyV1 {
         PalwPanelDrawPolicyV1 {
             weighted: false,
+            readiness: None,
             economy: Some(crate::palw_panel_economy_v1::PalwSeatEconomyV1 {
                 panel_floor_sompi: crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(100),
                 max_exposure_ratio_permille: 500,
@@ -1932,7 +1938,7 @@ mod tests {
         );
 
         // Over many CLAIM ids, straight through the lottery over one eligible list.
-        let eligible = palw_panel_eligible_bonds_v2(&state, &claim_id, 100, None, false, policy.economy, params.seat_count).unwrap();
+        let eligible = palw_panel_eligible_bonds_v2(&state, &claim_id, 100, None, false, None, policy.economy, params.seat_count).unwrap();
         assert_eq!(eligible.len(), 13, "ten of A's bonds and one each of B, C and D");
         let anchor = BlockHash::from_u64_word(0xD00D);
         let (mut by_claim_a, mut by_claim_b) = (0usize, 0usize);
@@ -1982,7 +1988,7 @@ mod tests {
         for i in 0..40u64 {
             let anchor = BlockHash::from_u64_word(0xF000 + i);
             let legacy = derive_panel_v2(&state, &params, &claim_id, anchor, mc).unwrap();
-            let eligible = palw_panel_eligible_bonds_v2(&state, &claim_id, mc, None, false, None, params.seat_count).unwrap();
+            let eligible = palw_panel_eligible_bonds_v2(&state, &claim_id, mc, None, false, None, None, params.seat_count).unwrap();
             let mut ranked: Vec<(Hash64, PalwBondKeyV2, Hash64)> =
                 eligible.iter().map(|(k, b)| (palw_panel_seat_ticket_v1(anchor, &claim_id, k), **k, b.operator_id)).collect();
             ranked.sort();
@@ -1997,6 +2003,7 @@ mod tests {
             // Past the economy (no floor), the same registry and anchor.
             let economy = PalwPanelDrawPolicyV1 {
                 weighted: false,
+                readiness: None,
                 economy: Some(crate::palw_panel_economy_v1::PalwSeatEconomyV1 {
                     panel_floor_sompi: mc,
                     max_exposure_ratio_permille: 1000,
@@ -2060,7 +2067,7 @@ mod tests {
 
         let eligible = |lambda| -> Vec<u64> {
             let mut out: Vec<u64> =
-                palw_panel_eligible_bonds_v2(&state, &claim_id, 100, None, false, adr0130_economy(lambda).economy, params.seat_count)
+                palw_panel_eligible_bonds_v2(&state, &claim_id, 100, None, false, None, adr0130_economy(lambda).economy, params.seat_count)
                     .unwrap()
                     .into_iter()
                     .map(|(key, _)| (2..=6u64).find(|n| *key == PalwBondKeyV2(bond_outpoint(*n))).unwrap())

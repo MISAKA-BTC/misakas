@@ -411,6 +411,15 @@ pub struct VirtualStateProcessor {
     /// ADR-0134: `Params::palw_compute_overlay_retired` — past it the compute overlay's five
     /// subnetworks are refused, in blocks and in the mempool.
     pub(super) palw_compute_overlay_retired: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0135: `Params::palw_model_registry` — past it the fold walks every class's lifecycle,
+    /// seats judge by possession proofs, and the class shares come from admission.
+    pub(super) palw_model_registry: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0135: the genesis classes' work, derived once from the bundle's registrations (every
+    /// node derives the same map from `Params`), handed to the fold where the registry is active.
+    pub(super) palw_genesis_model_works: std::collections::BTreeMap<
+        kaspa_hashes::Hash64,
+        kaspa_consensus_core::palw_model_registry_v1::PalwModelWorkV1,
+    >,
     /// **ADR-0089 Decision 9's fence, `None` on every shipped preset.** Past it the EVM's
     /// window and hand exist and the block's EVM actions reach its transition. Resolved at the
     /// BLOCK's DAA.
@@ -886,6 +895,13 @@ impl VirtualStateProcessor {
             palw_overlay_carve: params.palw_overlay_carve_fence(),
             palw_panel_exposure_floor: params.palw_panel_exposure_floor_fence(),
             palw_compute_overlay_retired: params.palw_compute_overlay_retired,
+            palw_model_registry: params.palw_model_registry,
+            palw_genesis_model_works: match &params.palw_consensus_mode {
+                kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
+                    kaspa_consensus_core::palw_model_registry_v1::palw_genesis_model_works_v1(&bundle.genesis_objects)
+                }
+                _ => Default::default(),
+            },
             palw_model_evm: params.palw_model_evm_fence(),
             palw_context_ladder: params.palw_context_ladder,
             palw_epoch_boundary_budget: params.palw_epoch_boundary_budget,
@@ -3826,6 +3842,22 @@ impl VirtualStateProcessor {
         Some(kaspa_consensus_core::palw_economic_compute_v1::palw_class_census_v1(&state, state_params, network_bits))
     }
 
+    /// ADR-0135: the model registry as the tip state holds it — every class's lifecycle row, the
+    /// seats ready for it now, the claims in flight, and every seat's last possession proof.
+    pub fn palw_model_registry_v1_impl(&self) -> Option<kaspa_consensus_core::palw_model_registry_v1::PalwModelRegistryReadV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (tip, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let tip_daa = self.headers_store.get_header(tip).map(|h| h.daa_score).unwrap_or(0);
+        let fold = self.palw_model_registry_fold_at(tip_daa);
+        Some(kaspa_consensus_core::palw_model_registry_v1::palw_model_registry_read_v1(
+            &state,
+            state_params,
+            tip_daa,
+            self.palw_model_registry.map(|f| f.daa_score()),
+            fold.as_ref(),
+        ))
+    }
+
     /// ADR-0132: the attempt-lane claims of the tip state as the end-to-end ledger observes them.
     pub fn palw_claim_ledger_observations_v1_impl(
         &self,
@@ -6491,6 +6523,34 @@ impl VirtualStateProcessor {
                 // The FENCE is checked here as well as in the fold. The fold refusing it is what
                 // makes it a rule; this refusing it is what stops a block from being folded at all
                 // on a network where the rule is dormant.
+                Obj::SeatReadinessProved { bond, class_id, span, opening, signature } => {
+                    // ADR-0135: below the fence the object does not exist; above it the seat's own
+                    // key must sign the proof, or a relayer could volunteer another bond's collateral.
+                    if !self.palw_model_registry_at(point.daa_score) {
+                        return Err(format!("a readiness proof for class {class_id} below the model registry's fence"));
+                    }
+                    let record = state
+                        .bond(bond)
+                        .ok_or_else(|| format!("a readiness proof names bond {bond:?} this chain does not have"))?;
+                    let message = kaspa_consensus_core::palw_model_registry_v1::palw_seat_readiness_message_v1(
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        &borsh::to_vec(bond).expect("a bond key is borsh-serializable"),
+                        class_id,
+                        *span,
+                        opening.leaf_index,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &record.pubkey,
+                        message.as_byte_slice(),
+                        signature,
+                        kaspa_consensus_core::palw_model_registry_v1::PALW_SEAT_READINESS_V1_MLDSA87_CONTEXT,
+                    ) {
+                        return Err(format!("bond {bond:?}'s readiness proof is not signed by the key it registered"));
+                    }
+                }
                 Obj::DefaultAccused { claim, missing_event_index, accuser, signature } => {
                     if !self.palw_da_court_at(point.daa_score) {
                         return Err(format!("claim {claim}: the data-availability court is not armed on this network (ADR-0062)"));
@@ -7318,6 +7378,7 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_panel_v2::PalwPanelDrawPolicyV1 {
             weighted: self.palw_audit_2026_09_11_deep_at(anchor_daa),
             economy,
+            readiness: self.palw_readiness_policy_at(anchor_daa),
         }
     }
 
@@ -7381,6 +7442,7 @@ impl VirtualStateProcessor {
             // later, so the lower score is this one's. Explicit for the reason every line above
             // gives: it decides how much of the subsidy a claim holds.
             escrow_carve: self.palw_escrow_carve_at(daa_score, daa_score),
+            model_registry: self.palw_model_registry_fold_at(daa_score),
             evm_actions: Vec::new(),
             // ADR-0093 Decision 8: which form of move 1 opens a phase. Written explicitly for the
             // reason the lines above give — an unwritten default here would refuse, or admit, a
@@ -7638,6 +7700,44 @@ impl VirtualStateProcessor {
     /// panels its peers refuse and compute a state root its peers do not.
     fn palw_capability_bound_at(&self, daa_score: u64) -> bool {
         self.palw_capability_bound.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// ADR-0135: whether the model registry governs classes at `daa_score`.
+    pub(super) fn palw_model_registry_at(&self, daa_score: u64) -> bool {
+        self.palw_model_registry.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// ADR-0135: the fold's registry input at `daa_score` — the globals, the lane's span clock and
+    /// the genesis classes' work — or `None` below the fence (and where no lane is scheduled: the
+    /// registry steps at span boundaries, and `validate_palw_v2` refuses a registry without a lane).
+    pub(super) fn palw_model_registry_fold_at(
+        &self,
+        daa_score: u64,
+    ) -> Option<kaspa_consensus_core::palw_model_registry_v1::PalwModelRegistryFoldV1> {
+        if !self.palw_model_registry_at(daa_score) {
+            return None;
+        }
+        let lane = self.palw_execution_lane_at(daa_score)?;
+        Some(kaspa_consensus_core::palw_model_registry_v1::PalwModelRegistryFoldV1 {
+            globals: kaspa_consensus_core::palw_model_registry_v1::PALW_REGISTRY_GLOBALS_V1,
+            span_daa: lane.schedule_span_daa,
+            genesis_works: self.palw_genesis_model_works.clone(),
+        })
+    }
+
+    /// ADR-0135: the draw's readiness policy at an anchor — a seat judges a non-base class only
+    /// with a possession proof no older than the readiness age.
+    pub(super) fn palw_readiness_policy_at(
+        &self,
+        anchor_daa: u64,
+    ) -> Option<kaspa_consensus_core::palw_model_registry_v1::PalwReadinessPolicyV1> {
+        let fold = self.palw_model_registry_fold_at(anchor_daa)?;
+        let state = self.palw_state_params_v2.as_ref()?;
+        Some(kaspa_consensus_core::palw_model_registry_v1::PalwReadinessPolicyV1 {
+            now_daa: anchor_daa,
+            max_age_daa: (fold.globals.readiness_probe_max_age_spans as u64).saturating_mul(fold.span_daa.max(1)),
+            base_class_id: state.base_class_id(),
+        })
     }
 
     /// **ADR-0075 SA-1/SA-2, resolved in exactly one place.** `false` on every shipped preset.
@@ -12077,6 +12177,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
     use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as O;
     match object {
         O::BondRegistered { .. } => "BondRegistered",
+        O::SeatReadinessProved { .. } => "SeatReadinessProved",
         O::ModelBuy { .. } => "ModelBuy",
         O::ModelSeed { .. } => "ModelSeed",
         O::ShardCourtAccused { .. } => "ShardCourtAccused",
