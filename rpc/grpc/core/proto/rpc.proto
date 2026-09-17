@@ -2083,6 +2083,8 @@ message RpcPalwModelLifecycle {
   uint32 readySeatsNow = 22;
   uint32 inflightNow = 23;
   uint32 sharePermille = 24;
+  string artifactRoot = 25;
+  uint32 noCapablePanelVoids = 26;
 }
 
 message RpcPalwSeatReadiness {
@@ -2093,6 +2095,7 @@ message RpcPalwSeatReadiness {
   uint64 provedSpan = 5;
   uint32 leafIndex = 6;
   bool fresh = 7;
+  string notReadyReason = 8;
 }
 
 message GetPalwModelRegistryResponseMessage {
@@ -2113,5 +2116,6 @@ message GetPalwModelRegistryResponseMessage {
   uint32 readinessCollateralMultiple = 15;
   repeated RpcPalwModelLifecycle classes = 16;
   repeated RpcPalwSeatReadiness readiness = 17;
+  uint64 graceUntilDaa = 18;
   RPCError error = 1000;
 }

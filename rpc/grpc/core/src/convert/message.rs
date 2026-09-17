@@ -995,6 +995,8 @@ from!(&kaspa_rpc_core::GetPalwModelRegistryRequest, protowire::GetPalwModelRegis
 from!(item: &kaspa_rpc_core::RpcPalwModelLifecycle, protowire::RpcPalwModelLifecycle, {
     Self {
         class_id: item.class_id.clone(),
+        artifact_root: item.artifact_root.clone(),
+        no_capable_panel_voids: item.no_capable_panel_voids,
         is_base_class: item.is_base_class,
         has_row: item.has_row,
         state: item.state.clone(),
@@ -1029,6 +1031,7 @@ from!(item: &kaspa_rpc_core::RpcPalwSeatReadiness, protowire::RpcPalwSeatReadine
         proved_span: item.proved_span,
         leaf_index: item.leaf_index,
         fresh: item.fresh,
+        not_ready_reason: item.not_ready_reason.clone(),
     }
 });
 from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelRegistryResponse>, protowire::GetPalwModelRegistryResponseMessage, {
@@ -1038,6 +1041,7 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelRegistryResponse>, protowire:
         scheduled: item.scheduled,
         fence_daa: item.fence_daa,
         active: item.active,
+        grace_until_daa: item.grace_until_daa,
         span_daa: item.span_daa,
         reference_work_per_span: item.reference_work_per_span.clone(),
         reference_bytes_per_span: item.reference_bytes_per_span,
@@ -2366,6 +2370,8 @@ try_from!(&protowire::GetPalwModelRegistryRequestMessage, kaspa_rpc_core::GetPal
 try_from!(item: &protowire::RpcPalwModelLifecycle, kaspa_rpc_core::RpcPalwModelLifecycle, {
     Self {
         class_id: item.class_id.clone(),
+        artifact_root: item.artifact_root.clone(),
+        no_capable_panel_voids: item.no_capable_panel_voids,
         is_base_class: item.is_base_class,
         has_row: item.has_row,
         state: item.state.clone(),
@@ -2400,6 +2406,7 @@ try_from!(item: &protowire::RpcPalwSeatReadiness, kaspa_rpc_core::RpcPalwSeatRea
         proved_span: item.proved_span,
         leaf_index: item.leaf_index,
         fresh: item.fresh,
+        not_ready_reason: item.not_ready_reason.clone(),
     }
 });
 try_from!(item: &protowire::GetPalwModelRegistryResponseMessage, RpcResult<kaspa_rpc_core::GetPalwModelRegistryResponse>, {
@@ -2409,6 +2416,7 @@ try_from!(item: &protowire::GetPalwModelRegistryResponseMessage, RpcResult<kaspa
         scheduled: item.scheduled,
         fence_daa: item.fence_daa,
         active: item.active,
+        grace_until_daa: item.grace_until_daa,
         span_daa: item.span_daa,
         reference_work_per_span: item.reference_work_per_span.clone(),
         reference_bytes_per_span: item.reference_bytes_per_span,

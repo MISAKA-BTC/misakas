@@ -5215,6 +5215,7 @@ impl Deserializer for GetPalwModelRegistryRequest {
 #[serde(rename_all = "camelCase")]
 pub struct RpcPalwModelLifecycle {
     pub class_id: String,
+    pub artifact_root: String,
     pub is_base_class: bool,
     pub has_row: bool,
     pub state: String,
@@ -5238,12 +5239,14 @@ pub struct RpcPalwModelLifecycle {
     pub ready_seats_now: u32,
     pub inflight_now: u32,
     pub share_permille: u16,
+    pub no_capable_panel_voids: u32,
 }
 
 impl Serializer for RpcPalwModelLifecycle {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
         store!(u16, &1, writer)?;
         store!(String, &self.class_id, writer)?;
+        store!(String, &self.artifact_root, writer)?;
         store!(bool, &self.is_base_class, writer)?;
         store!(bool, &self.has_row, writer)?;
         store!(String, &self.state, writer)?;
@@ -5267,6 +5270,7 @@ impl Serializer for RpcPalwModelLifecycle {
         store!(u32, &self.ready_seats_now, writer)?;
         store!(u32, &self.inflight_now, writer)?;
         store!(u16, &self.share_permille, writer)?;
+        store!(u32, &self.no_capable_panel_voids, writer)?;
         Ok(())
     }
 }
@@ -5276,6 +5280,7 @@ impl Deserializer for RpcPalwModelLifecycle {
         let _version = load!(u16, reader)?;
         Ok(Self {
             class_id: load!(String, reader)?,
+            artifact_root: load!(String, reader)?,
             is_base_class: load!(bool, reader)?,
             has_row: load!(bool, reader)?,
             state: load!(String, reader)?,
@@ -5299,6 +5304,7 @@ impl Deserializer for RpcPalwModelLifecycle {
             ready_seats_now: load!(u32, reader)?,
             inflight_now: load!(u32, reader)?,
             share_permille: load!(u16, reader)?,
+            no_capable_panel_voids: load!(u32, reader)?,
         })
     }
 }
@@ -5314,6 +5320,9 @@ pub struct RpcPalwSeatReadiness {
     pub proved_span: u64,
     pub leaf_index: u32,
     pub fresh: bool,
+    /// Why the seat does not count as ready now (`stale`, `bond inactive`, `below floor`,
+    /// `collateral short`); empty while it counts.
+    pub not_ready_reason: String,
 }
 
 impl Serializer for RpcPalwSeatReadiness {
@@ -5326,6 +5335,7 @@ impl Serializer for RpcPalwSeatReadiness {
         store!(u64, &self.proved_span, writer)?;
         store!(u32, &self.leaf_index, writer)?;
         store!(bool, &self.fresh, writer)?;
+        store!(String, &self.not_ready_reason, writer)?;
         Ok(())
     }
 }
@@ -5341,6 +5351,7 @@ impl Deserializer for RpcPalwSeatReadiness {
             proved_span: load!(u64, reader)?,
             leaf_index: load!(u32, reader)?,
             fresh: load!(bool, reader)?,
+            not_ready_reason: load!(String, reader)?,
         })
     }
 }
@@ -5356,6 +5367,8 @@ pub struct GetPalwModelRegistryResponse {
     pub scheduled: bool,
     pub fence_daa: u64,
     pub active: bool,
+    /// The registry governs from here (the fence plus one readiness age).
+    pub grace_until_daa: u64,
     pub span_daa: u64,
     pub reference_work_per_span: String,
     pub reference_bytes_per_span: u64,
@@ -5378,6 +5391,7 @@ impl Serializer for GetPalwModelRegistryResponse {
         store!(bool, &self.scheduled, writer)?;
         store!(u64, &self.fence_daa, writer)?;
         store!(bool, &self.active, writer)?;
+        store!(u64, &self.grace_until_daa, writer)?;
         store!(u64, &self.span_daa, writer)?;
         store!(String, &self.reference_work_per_span, writer)?;
         store!(u64, &self.reference_bytes_per_span, writer)?;
@@ -5403,6 +5417,7 @@ impl Deserializer for GetPalwModelRegistryResponse {
             scheduled: load!(bool, reader)?,
             fence_daa: load!(u64, reader)?,
             active: load!(bool, reader)?,
+            grace_until_daa: load!(u64, reader)?,
             span_daa: load!(u64, reader)?,
             reference_work_per_span: load!(String, reader)?,
             reference_bytes_per_span: load!(u64, reader)?,

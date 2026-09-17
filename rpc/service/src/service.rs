@@ -1693,6 +1693,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 let row = class.row.as_ref();
                 RpcPalwModelLifecycle {
                     class_id: class.class_id.to_string(),
+                    artifact_root: class.artifact_root.to_string(),
                     is_base_class: class.is_base_class,
                     has_row: row.is_some(),
                     state: row.map(|r| format!("{:?}", r.state)).unwrap_or_else(|| "Legacy".to_string()),
@@ -1716,6 +1717,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     ready_seats_now: class.ready_seats_now,
                     inflight_now: class.inflight_now,
                     share_permille: class.share_permille.unwrap_or(0),
+                    no_capable_panel_voids: class.no_capable_panel_voids,
                 }
             })
             .collect();
@@ -1730,6 +1732,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 proved_span: r.row.proved_span,
                 leaf_index: r.row.leaf_index,
                 fresh: r.fresh,
+                not_ready_reason: r.not_ready_reason.clone(),
             })
             .collect();
         Ok(GetPalwModelRegistryResponse {
@@ -1738,6 +1741,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             scheduled: read.fence_daa.is_some(),
             fence_daa: read.fence_daa.unwrap_or(0),
             active: read.active,
+            grace_until_daa: read.grace_until_daa,
             span_daa: read.span_daa,
             reference_work_per_span: globals.map(|g| g.reference_work_per_span.to_string()).unwrap_or_else(|| "0".to_string()),
             reference_bytes_per_span: globals.map(|g| g.reference_bytes_per_span).unwrap_or(0),

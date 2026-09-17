@@ -20,10 +20,11 @@ pub(crate) fn render(r: &GetPalwModelRegistryResponse) -> String {
     let mut out = String::new();
     let fence = if r.scheduled { format!("scheduled at DAA {}", r.fence_daa) } else { "dormant (no fence scheduled)".to_string() };
     out.push_str(&format!(
-        "Model registry (ADR-0135): {fence} · {} at the tip (DAA {}) · span {} DAA\n",
+        "Model registry (ADR-0135): {fence} · {} at the tip (DAA {}) · span {} DAA{}\n",
         if r.active { "ACTIVE" } else { "not in force" },
         r.tip_daa,
-        r.span_daa
+        r.span_daa,
+        if r.active && r.tip_daa < r.grace_until_daa { format!(" · activation grace until DAA {}", r.grace_until_daa) } else { String::new() }
     ));
     if r.active {
         out.push_str(&format!(
@@ -43,6 +44,10 @@ pub(crate) fn render(r: &GetPalwModelRegistryResponse) -> String {
         "  {:<14} {:<15} {:>6} {:>7} {:>8} {:>5} {:>6} {:>6} {:>8} {:>8} {:>8} {:>6}\n",
         "class", "state", "since", "window", "prefetch", "cap", "need", "ready", "inflight", "util‰", "adm‰", "share"
     ));
+    let voids: u32 = r.classes.iter().map(|c| c.no_capable_panel_voids).sum();
+    if voids > 0 {
+        out.push_str(&format!("  ({voids} claims voided as NoCapablePanel across the classes)\n"));
+    }
     for c in &r.classes {
         out.push_str(&format!(
             "  {:<14} {:<15} {:>6} {:>7} {:>8} {:>5} {:>6} {:>6} {:>8} {:>8} {:>8} {:>6}\n",
@@ -73,7 +78,7 @@ pub(crate) fn render(r: &GetPalwModelRegistryResponse) -> String {
                 p.leaf_index,
                 p.proved_daa,
                 p.proved_span,
-                if p.fresh { "" } else { " · stale" }
+                if p.not_ready_reason.is_empty() { String::new() } else { format!(" · not ready: {}", p.not_ready_reason) }
             ));
         }
     }
@@ -135,11 +140,12 @@ mod tests {
                 class_id: "ab".repeat(32),
                 proved_daa: 6_990,
                 fresh: false,
+                not_ready_reason: "stale".to_string(),
                 ..Default::default()
             }],
             ..Default::default()
         };
         let text = render(&live);
-        assert!(text.contains("scheduled at DAA 6500") && text.contains("Held") && text.contains("· stale"), "{text}");
+        assert!(text.contains("scheduled at DAA 6500") && text.contains("Held") && text.contains("not ready: stale"), "{text}");
     }
 }

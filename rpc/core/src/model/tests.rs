@@ -1840,6 +1840,7 @@ mod mockery {
         fn mock() -> Self {
             RpcPalwModelLifecycle {
                 class_id: mock_hex(),
+                artifact_root: mock_hex(),
                 is_base_class: mock(),
                 has_row: mock(),
                 state: "Active".to_string(),
@@ -1863,6 +1864,7 @@ mod mockery {
                 ready_seats_now: mock(),
                 inflight_now: mock(),
                 share_permille: mock(),
+                no_capable_panel_voids: mock(),
             }
         }
     }
@@ -1879,6 +1881,7 @@ mod mockery {
                 proved_span: mock(),
                 leaf_index: mock(),
                 fresh: mock(),
+                not_ready_reason: "stale".to_string(),
             }
         }
     }
@@ -1893,6 +1896,7 @@ mod mockery {
                 scheduled: mock(),
                 fence_daa: mock(),
                 active: mock(),
+                grace_until_daa: mock(),
                 span_daa: mock(),
                 reference_work_per_span: "2400000000000".to_string(),
                 reference_bytes_per_span: mock(),
