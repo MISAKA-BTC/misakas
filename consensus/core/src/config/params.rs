@@ -4775,6 +4775,10 @@ impl Params {
         // ADR-0125: the lane's shape beside its height — Some-only, like the heartbeat's price.
         if let Some(lane) = self.palw_execution_lane {
             h.write(b"palw_execution_lane_shape");
+            // ADR-0130: and the scheduler's rule set, by the SA-4 rule above — two builds that schedule
+            // the lane at one height under two scheduler rules fold different schedules the moment it
+            // fires, and this id is where the operator log can name that disagreement.
+            h.write(b"scheduler_v2");
             h.write(lane.permits_per_round.to_le_bytes());
             h.write(lane.max_per_mergeset.to_le_bytes());
             h.write(lane.schedule_span_daa.to_le_bytes());

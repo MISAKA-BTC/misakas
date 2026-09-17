@@ -1253,7 +1253,7 @@ mod tests {
                 let everywhere = operator % 3 == 0;
                 let one_bond = operator % 5 == 0;
                 for domain in 1..=domain_count {
-                    if !everywhere && mix(&mut rng) % 2 == 0 {
+                    if !everywhere && mix(&mut rng).is_multiple_of(2) {
                         continue;
                     }
                     for b in 0..(1 + mix(&mut rng) % 2) {

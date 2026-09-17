@@ -7654,11 +7654,12 @@ impl<'a> TransitionBuilder<'a> {
         let span_now = palw_execution_span_v1(ctx.daa_score, span_daa);
         let opens_span = self.state.last_point.is_none_or(|last| palw_execution_span_v1(last.daa_score, span_daa) < span_now);
         if opens_span {
-            for (target, snapshot) in self.state.round_pending.clone() {
+            for target in self.state.round_pending.keys().copied().collect::<Vec<_>>() {
                 if target > span_now {
                     // Unreachable: a snapshot targets the span after the one whose first block took it.
                     continue;
                 }
+                let snapshot = self.state.round_pending.get(&target).cloned().expect("the key was just listed");
                 self.write_round_pending(target, None);
                 if target == span_now
                     && let Some(anchor) = self.state.round_seed_anchor
