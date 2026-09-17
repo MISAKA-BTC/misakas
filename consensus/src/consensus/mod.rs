@@ -1142,6 +1142,20 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_round_lane_status_v1(round)
     }
 
+    /// ADR-0127 Decision 3, on the node: the tip state every `palw_*` read takes, the rules it was
+    /// folded under, and the frontier's carrying header — read only for a frontier whose claim has
+    /// retired from that state.
+    fn palw_settlement_v1(&self, daa_score: u64) -> Option<kaspa_consensus_core::palw_settlement_v1::PalwSettlementV1> {
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.config.params.palw_consensus_mode
+        else {
+            return None;
+        };
+        let state = self.palw_state_v2_tip()?;
+        let (_, frontier) = state.safe_frontier();
+        let frontier_header_daa = self.headers_store.get_daa_score(frontier).ok();
+        kaspa_consensus_core::palw_settlement_v1::palw_settlement_v1(&state, &bundle.state, frontier_header_daa, daa_score)
+    }
+
     fn round_adapt_block_template(
         &self,
         template: BlockTemplate,

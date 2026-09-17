@@ -496,6 +496,14 @@ impl ConsensusSessionOwned {
         self.clone().spawn_blocking(move |c| c.palw_round_lane_status_v1(round)).await
     }
 
+    /// ADR-0127 Decision 3: the settlement read at `daa_score`, off the async runtime.
+    pub async fn async_palw_settlement_v1(
+        &self,
+        daa_score: u64,
+    ) -> Option<kaspa_consensus_core::palw_settlement_v1::PalwSettlementV1> {
+        self.clone().spawn_blocking(move |c| c.palw_settlement_v1(daa_score)).await
+    }
+
     /// ADR-0125: re-shape a standard template into a round block — the template build's call profile.
     pub fn round_adapt_block_template(
         &self,

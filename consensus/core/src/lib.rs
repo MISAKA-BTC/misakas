@@ -299,6 +299,10 @@ pub mod palw_seat_coverage_v1;
 /// ADR-0101 — a membership is proven by the chain and served by anyone: the signed service
 /// descriptor and the check a client runs against chain facts. Consensus-inert.
 pub mod palw_service_descriptor_v1;
+/// ADR-0127 Decision 3 — the settlement read: whether the transactions accepted at a DAA score are
+/// settled, and their settlement depth in `Final` anchors, from the sink's PALW state alone. Also
+/// home to Decision 7's guard over the settlement path's sources. A read; no rule.
+pub mod palw_settlement_v1;
 /// ADR-0099 Decision 5, built by ADR-0100 — the one-move court: the accusation a shard seat files
 /// at a named leaf, its session id, its verdict. A consensus object behind
 /// `Params::palw_shard_court`, `None` on every shipped preset.
