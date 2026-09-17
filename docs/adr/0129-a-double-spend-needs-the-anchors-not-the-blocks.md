@@ -84,8 +84,10 @@ Two blocks carrying spends of one output produce one accepted spend. Pinned.
 and slashes the bond's floor (ADR-0125 SA-2). A producer cannot sign one execution into two blocks: each
 block is its own challenge and its own draw. A seat's receipts license one claim, which is one block
 (Decision 4), so they cannot license two histories; contradicting verdicts are refused within one object
-and unusable across objects (ADR-0124 SA-3) and are not slashed by name, because an honest seat may
-answer `Unavailable` before the material arrives and `Valid` after it.
+and unusable across objects (ADR-0124 SA-3) and are not slashed by name, because an honest seat can
+sign both: the panel service answers a `(claim, bound_daa)` once but keeps that record in memory, so a
+seat that answered `Unavailable` and restarted after the material arrived answers `Valid`, and a seat
+redrawn onto a claim's second panel answers that panel afresh.
 
 **Decision 8 — shares are capped, as auxiliaries.** A security domain holds at most 45 % of a span's
 lane, a third of a round and never two consecutive rounds; an operator holds at most one permit a round
