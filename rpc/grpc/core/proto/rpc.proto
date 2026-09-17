@@ -1980,6 +1980,7 @@ message RpcPalwClassEconomics {
   uint64 claimsRedrawn = 18;
   string escrowAcceptedSompi = 19;
   string escrowFinalSompi = 20;
+  string expectedAttemptsQ32 = 21;
 }
 
 message GetPalwClassEconomicsResponseMessage {

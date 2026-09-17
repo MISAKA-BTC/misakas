@@ -50,11 +50,17 @@ fn parse_u128(s: &str) -> u128 {
     s.parse().unwrap_or(0)
 }
 
+/// A Q32 count as a decimal with three places, in integers.
+fn q32_decimal(s: &str) -> String {
+    let v = parse_u128(s);
+    format!("{}.{:03}", v >> 32, ((v & 0xFFFF_FFFF) * 1000) >> 32)
+}
+
 fn measure_of(row: &RpcPalwClassEconomics) -> PalwClassMeasureV1 {
     PalwClassMeasureV1 {
         leaves: row.pwu_per_inference,
         draw_compute: parse_u128(&row.economic_compute_job),
-        expected_attempts: row.expected_attempts,
+        expected_attempts_q32: parse_u128(&row.expected_attempts_q32),
         // ADR-0124 Decision 6's unit: an `Active`, weight-bearing (share above zero) model class.
         sets_unit: !row.is_base_class && row.share_permille > 0 && row.status == "Active" && row.economic_source != "unknown",
         // …and the floor is not priced at all.
@@ -169,7 +175,7 @@ pub(crate) fn render(report: &Report) -> String {
             row.share_permille,
             row.pwu_per_inference,
             if row.economic_source == "unknown" { "?".to_string() } else { row.economic_compute_job.clone() },
-            row.expected_attempts,
+            q32_decimal(&row.expected_attempts_q32),
             row.claims_accepted,
             row.claims_final,
             row.claims_voided,
@@ -268,6 +274,7 @@ pub(crate) fn json_report(report: &Report) -> serde_json::Value {
             "class_id": row.class_id, "name": name_of(row), "base": row.is_base_class, "status": row.status,
             "share_permille": row.share_permille, "pwu_per_inference": row.pwu_per_inference,
             "class_target": row.class_target, "expected_attempts": row.expected_attempts,
+            "expected_attempts_q32": row.expected_attempts_q32, "expected_attempts_decimal": q32_decimal(&row.expected_attempts_q32),
             "economic_compute_job": row.economic_compute_job, "economic_compute_canonical": row.economic_compute_canonical,
             "economic_source": row.economic_source,
             "claims": { "accepted": row.claims_accepted, "provisional": row.claims_provisional, "panel_bound": row.claims_panel_bound,
@@ -323,6 +330,7 @@ mod tests {
                 pwu_per_inference: leaves,
                 class_target: "0".to_string(),
                 expected_attempts: ea,
+                expected_attempts_q32: ((ea as u128) << 32).to_string(),
                 economic_compute_job: job.to_string(),
                 economic_compute_canonical: canonical.to_string(),
                 economic_source: "build_ledger".to_string(),
