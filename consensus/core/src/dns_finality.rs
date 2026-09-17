@@ -580,6 +580,16 @@ impl StakePrecommitPayload {
     }
 }
 
+/// The lock a validator is carrying, as the chain shows it.
+///
+/// `None` for a validator with no counted precommit yet; that is the `(0, default)` a first
+/// precommit must declare.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct PrecommitLock {
+    pub epoch: u64,
+    pub anchor: Hash64,
+}
+
 /// What two precommits from one validator prove, when they cannot both be honest.
 ///
 /// Both are decided from the two payloads **alone** — no chain, no reachability, no access to the
@@ -642,6 +652,33 @@ pub struct PrecommitEvidencePayload {
     /// [`SlashingEvidencePayload::reporter_reward_spk_payload`]. A malformed value only misdirects
     /// the reporter's own reward, so consensus checks nothing beyond the fixed width.
     pub reporter_reward_spk_payload: [u8; 64],
+}
+
+/// What round 2 asks of one validator at the current sink.
+///
+/// Read from the chain rather than remembered locally, and that is the point: `held` is what the
+/// **network** can see this validator has locked, so a node that restarted, resynced or was
+/// restored from a backup restates the lock everyone else already has a signature for. A node
+/// trusting its own memory here would eventually declare a lock the chain contradicts — which
+/// stops its precommits counting — or, worse, one that contradicts a lock it published on another
+/// branch, which is the equivocation the round exists to make provable.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PrecommitDuty {
+    /// Whether the precommit round is live at the sink (the VLT weight fence).
+    pub round_active: bool,
+    pub sink_daa_score: u64,
+    /// The lock this validator is carrying on this chain, as counted.
+    pub held: PrecommitLock,
+    /// Epochs whose prevote quorum is met and which this validator has not precommitted yet:
+    /// `(epoch, anchor_hash, anchor_daa, snapshot_commitment)`, ascending.
+    ///
+    /// Ascending because a lock must name a STRICTLY EARLIER epoch, so a validator's own
+    /// precommits can only ever move forward — it may skip entries (and should, when it is far
+    /// behind: see the frontier jump in the validator service) but must never go back. The
+    /// commitment is per entry (§5.1, PR 4):
+    /// each precommit binds ITS target epoch's frozen denominator, so a late signature for an
+    /// old due epoch carries that epoch's commitment, not whichever happens to be current.
+    pub due: Vec<(u64, Hash64, u64, Hash64)>,
 }
 
 /// Phase 10 transaction payload that burns a validator's bond by
