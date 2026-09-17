@@ -3,11 +3,11 @@
 * Status: PROPOSED and IMPLEMENTED 2026-09-17 on `feat/adr-0124-panel-reward-and-compute-weight`
   (from `main` at `6fdf6ba7`), at the operator's request ("現在 PANEL に報酬がないのと小さいモデルと大きい
   モデルで同じ 1 claim 1 ブロックだと圧倒的に小さいモデルが有利な点を改善する … ADR を作成し実装を行なって";
-  the design the operator brought is quoted in §1). **Dormant on every shipped preset** behind two
-  bare fences, `Params::palw_panel_economy` (Decisions 1–5) and `Params::palw_work_priced_reward`
-  (Decision 6), both `None` — no fingerprint, identity, schedule or fork id moves on any network.
-  **A mainnet card states both from genesis** (Decision 7). Arming either on testnet-11 is a flag
-  day at a height the operator names (§8); the constant is prepared, the height is not chosen here.
+  the design the operator brought is quoted in §1). Behind two bare fences,
+  `Params::palw_panel_economy` (Decisions 1–5) and `Params::palw_work_priced_reward` (Decision 6).
+  **testnet-11 schedules both at DAA 7,001** (the operator's flag day of 2026-09-17, with ADR-0125,
+  ADR-0126 and ADR-0128; §8); `None` on every other shipped preset. **A mainnet card states both from
+  genesis** (Decision 7).
 * Builds on: [0042](0042-palw-mainnet-candidate-ruleset.md) Decision 10 (the worker reward is a
   carve of the subsidy, escrowed at the accepting block and named at `Final`, never minted before),
   [0045](0045-palw-class-economy-on-chain.md) Decision 1 (`pwu` has one legal value) and Decision 3
@@ -321,10 +321,18 @@ redraw; ADR-0065 D4 (`Unavailable` abstains) and the court; the epoch budget, th
 the retarget and fork choice (no pwu crosses a class boundary there); the fee-only lanes; the
 free-prompt lane (escrow 0, nothing to split or price); every network below the fences.
 
-## 8. Arming it on testnet-11 — not done here
+## 8. Arming it on testnet-11
 
-Both fences ride one height, `PALW_RC_PANEL_ECONOMY_FENCE_DAA`, chosen by the operator above the
-live tip with a roll window: (1) set the constant and arm both in `palw_rc_base_params`; (2) add the
+**Armed 2026-09-17** on `feat/palw-exec-lane-and-validator-retirement` (`d6c46f25`): both fences at
+`PALW_RC_FLAG_DAY_7001_FENCE_DAA` = 7,001, the operator's height, chosen at DAA ≈5,773 — one past the
+7,000 release's height, which a fence of its own must not share — beside ADR-0125's lane, ADR-0126's
+carve and ADR-0128's gate. Schedule 1150/1900/2150/2400/3500/4000/6900/7000/7001/2125000; fingerprint
+`4787b92a0e20065aac88f8258b581f415ace9f6093dfab35c345b48135269005` (from `ae1d6162…`); the identity
+does not move, so the 7,000 release and this build peer until 7,001 and refuse each other from it
+(`the_7001_flag_day_keeps_the_7000_release_until_7001`). Deployment is the operator's.
+
+The procedure this section prescribed, as it was followed (the constant it named became the shared
+flag day's): (1) set the constant and arm both in `palw_rc_base_params`; (2) add the
 height to `fork_id_gate_fences_v1`'s pinned testnet-11 list — a fence at a height an earlier build
 already schedules is invisible to the fork-id gate; (3) re-pin `shipped_presets_have_pinned_fingerprints`'s
 testnet-11 value in the same commit (the identity does not move, so builds with and without the

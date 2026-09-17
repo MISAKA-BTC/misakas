@@ -1,11 +1,10 @@
 # ADR-0125 — The execution lane is a second lane inside the cadence, and it widens one permit at a time
 
-* Status: **IMPLEMENTED 2026-09-17, dormant** on `feat/palw-exec-lane-and-validator-retirement`
-  (from `main` at `6fdf6ba7`, after ADR-0124), including the stage table (§7.2), equivocation
-  evidence and relay de-duplication (§7.3), the RPC read and the operator's status line (§7.4), and
-  the devnet drill (§7.1). `Params::palw_execution_lane` is `None` on every shipped preset, so every
-  fingerprint, every root and every block of testnet-11 is what it was; the lane runs where a
-  network arms it. What remains is the operator's: testnet-11's height (§7).
+* Status: **IMPLEMENTED 2026-09-17** on `feat/palw-exec-lane-and-validator-retirement` (from `main` at
+  `6fdf6ba7`, after ADR-0124), including the stage table (§7.2), equivocation evidence and relay
+  de-duplication (§7.3), the RPC read and the operator's status line (§7.4), and the devnet drill
+  (§7.1). **testnet-11 schedules it at DAA 7,001 at one permit a round** (the operator's flag day, §7
+  item 5); `None` on every other shipped preset.
 * Operator's request: "testnet では BPS 1 から実装して最終目標を BPS 10 とする", with the design
   quoted in §1.
 * Builds on: [0060](0060-the-liveness-doctrine.md) / [0066](0066-the-heartbeat-lane-out-of-header-bits-and-a-committed-liveness-table.md)
@@ -270,8 +269,10 @@ every DAG parameter, depth and PALW window; every network until its fence is arm
 3. **Built** — relay de-duplication and the equivocation slash (SA-2).
 4. **Built** — `getPalwRoundLane`, `misaka palw round-lane` and `misaka mining status`'s lane line.
    An explorer reads op 181; misakascan lives in its own repository.
-5. **The operator's** — testnet-11's height and its first stage table, at a NEW height with a roll
-   window. Nothing is scheduled by this branch.
+5. **Scheduled** — testnet-11 at `PALW_RC_FLAG_DAY_7001_FENCE_DAA` = 7,001 (the operator's height,
+   2026-09-17, at DAA ≈5,773): `{ width 1, no widening, max_per_mergeset 600, schedule_span_daa 30 }`,
+   one execution block a second, with ADR-0124, ADR-0126 and ADR-0128 at the same height (fingerprint
+   `4787b92a…`). The first widening is its own height when the operator names it.
 
 ## 8. Corrections
 

@@ -1,6 +1,6 @@
 # ADR-0127 — PALW settles on its own, and its terms are not DNS terms
 
-* Status: **ACCEPTED 2026-09-17, implementation in progress** on `feat/palw-exec-lane-and-validator-retirement`.
+* Status: **ACCEPTED and IMPLEMENTED 2026-09-17** on `feat/palw-exec-lane-and-validator-retirement`.
   No consensus rule changes and no fence: this ADR names things, states a property the code already has,
   and makes CI keep it.
 * Operator's direction, in the operator's words: "PALW は DNS finality や BFT バリデーター依存ではないことを

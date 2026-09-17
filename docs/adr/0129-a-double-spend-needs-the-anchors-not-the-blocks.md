@@ -1,6 +1,6 @@
 # ADR-0129 — A double spend needs the anchors, not the blocks
 
-* Status: **ACCEPTED 2026-09-17, implementation in progress** on `feat/palw-exec-lane-and-validator-retirement`.
+* Status: **ACCEPTED and IMPLEMENTED 2026-09-17** on `feat/palw-exec-lane-and-validator-retirement`.
   No consensus rule and no fence of its own: it states which existing rules defend a payment, pins each
   with a test, and adds the read that counts confirmations in anchors. testnet-11 runs it from DAA 7,001
   with the execution lane at one block a second (ADR-0125 §7.5) and the seat exposure (ADR-0124) armed at
