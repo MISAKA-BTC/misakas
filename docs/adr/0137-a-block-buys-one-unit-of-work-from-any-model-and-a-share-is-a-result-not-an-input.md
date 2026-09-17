@@ -270,13 +270,25 @@ work this claim stood for". Fence 3's cap rule is retired (under D its utilizati
 the class is in an admitted lifecycle state and
 
 ```text
-room_m = ( ready_seats · reference_work · utilization · window_m  −  Σ_k inflight_k · CCU_k · seats ) / (CCU_m · seats)  >  0
+room_m = ( ready_seats · reference_work · utilization · H  −  Σ_k inflight_k · CCU_k · seats ) / (CCU_m · seats)  >  0
+H = the SHORTEST window among the admitted classes
 ```
 
-— one network-wide replay budget less what every class already holds in flight, in units of this
-class's claims. Per-class in-flight caps do not sum to the panel (§3.2, and the simulation at ten
-times capacity shows the cheaper class starving while both are "under their cap"); the budget does.
-The producer pre-checks it (no forward is wasted); `NoCapablePanel` and the window void as today.
+— one network-wide replay budget over one common, conservative horizon `H`, less what every class
+already holds in flight, in units of this class's claims. Per-class in-flight caps do not sum to
+the panel (§3.2, and the simulation at ten times capacity shows the cheaper class starving while
+both are "under their cap"); the budget does. The horizon must be common (with each class's own
+window as its horizon a long-window class — Kimi, 31 spans — holds a budget the 4- and 10-span
+classes never see, and the simulation locked both Qwens out) and it must be the shortest window: a
+budget sized to the longest window admits claims the panel cannot finish inside the shorter
+windows, and those void — at ten times capacity that alone spread the pay per CCU 1.7–4.3 ×
+between classes; at the shortest window the spread is 1.26–1.31 with the panel at 63 % (§20.1).
+What remains under saturation is a scheduling residue of the void rule, not a share: it is the
+same for a hundred classes as for two, and the cure for saturation is seats (ADR-0133's grid), not
+a table. Under saturation the free budget is taken in proportion to arrivals — no per-class
+allocation, because an allocation is a share. The producer pre-checks the room (no forward is
+wasted; without the pre-check the capacity-bound class's pay per CCU falls to 2.6–5.2, the
+`--no-hold` run); `NoCapablePanel` and the window void as today.
 
 **D6 — the lifecycle is a gate, not a price.** REGISTERED / PREFETCHING / HELD: claims refused at
 acceptance (a new error, the gate §4 found missing). PROBATION: one claim in flight, ten Finals to
@@ -500,8 +512,33 @@ Headline rows at supply = the panel's capacity (the full table is the script's o
 | Q25 panel outage 60–70 | **D** | Q25 | 7.20 | 1.00 | 0.50 | 5.00 | claims refused during, back at once |
 | supply × 0.1 at 60 | **D** | both | 7.20 | 1.00 | 0.50 / 0.50 | 5.00 | issuance 4,032 → 403; `W` at `W₀` |
 
-§20.1 (appended when the run completes) gives the ten-times-capacity table: the regime where the
-panel binds, where D's producers hold at the budget and E under-pays the capacity-bound class.
+### 20.1 Ten times the panel's capacity — the regime where verification binds
+
+`--supply-x 10`: the models' producers offer ten times the compute the eight seats can replay. The
+lottery is unchanged; what binds is D5's budget and the window's void rule.
+
+| scenario | design | model | MSK/G-CCU | ρ spread | Final work share | claims a span | Finals a span | supply used | note |
+|---|---|---|---|---|---|---|---|---|---|
+| Q25/Q36 = 50/50 | A′ | Q25 / Q36 | 1.12 / 0.67 | 1.67 | 0.64 / 0.36 | | | | HELD 70 % / 72 % of the time (§3.2), cadence 3.65 of 5 |
+| | D, `H` = longest | Q25 / Q36 | 4.94 / 2.95 | 1.68 | 0.63 / 0.37 | 0.34 / 0.34 | 0.23 / 0.14 | 0.92 | Q36's 4-span claims void behind Q25's 10-span ones |
+| | **D, `H` = shortest** | Q25 / Q36 | 6.90 / 5.49 | **1.26** | 0.56 / 0.44 | 0.23 / 0.23 | 0.22 / 0.18 | 0.63 | producers hold at the budget; no HELD |
+| | E | Q25 / Q36 | 4.19 / 4.09 | 1.02 | 0.51 / 0.49 | | | 1.00 | equal, but both at 58 % of D's pay: the scaled ticket wastes forwards |
+| | D, `--no-hold` | Q25 / Q36 | 5.21 / 0 | | 1.00 / 0 | | | 1.00 | without the pre-check the refused forwards are the loss |
+| Q25/Q36/Kimi = 20/30/50 | A′ | ×3 | 0.82 / 0.43 / 1.00 | 2.30 | 0.29 / 0.25 / 0.45 | | | | Q36 and Kimi HELD 40–72 % of the time |
+| | D, `H` = longest | ×3 | 2.18 / 1.09 / 4.68 | 4.30 | 0.14 / 0.11 / 0.75 | | | 0.30 | Kimi's 31-span window survives the drain, the Qwens' claims void |
+| | **D, `H` = shortest** | ×3 | 6.90 / 5.49 / 7.20 | **1.31** | 0.21 / 0.25 / 0.54 | 0.026 / 0.039 / 0.065 | | 0.18 | |
+| Q36 supply × 10 at 60 | A′ | Q25 / Q36 | 4.39 / 0.55 | 7.93 | 0.82 / 0.19 | | | | Q36 HELD 80 % of the time |
+| | **D, `H` = shortest** | Q25 / Q36 | 6.90 / 5.49 | 1.26 | 0.11 / 0.89 | 0.09 / 0.93 | 0.09 / 0.71 | 0.25 / 2.53 | Q36's producers hold nine tenths of the time: the panel is the limit, and it says so |
+| 1000 tiny classes | D, `H` = longest | Q25 / Q36 / S#* | 6.00 / 4.01 / 2.78 | 2.16 | 0.56 / 0.19 / 0.26 | | | 1.00 | identical to the one-class row (below): class count does nothing |
+| | D, `H` = longest | Q25 / Q36 / S | 6.00 / 4.01 / 2.78 | 2.16 | 0.56 / 0.19 / 0.26 | | | 1.00 | |
+
+Read: (i) under D the *lottery* stays fair at any load; the residual spread under saturation is the
+void rule acting on claims the panel cannot finish inside their window, bounded at 1.3 × with the
+conservative horizon and zero at or below capacity; (ii) the shipped rule at the same load is HELD
+half to four fifths of the time with the pay per CCU spread 1.7–7.9 ×; (iii) E buys equality by
+under-paying everyone; (iv) the pre-check is load-bearing; (v) a thousand classes behave as one.
+The regime itself — supply ten times what the panel verifies — is testnet-11 today (ADR-0132: Final
+13 %, 87 % `receipt_timeout`), and its cure is seats, which no share table supplies.
 
 ## 21. Number hygiene
 

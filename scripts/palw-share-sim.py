@@ -53,6 +53,7 @@ FLOOR_P_T11 = 3.8e-5  # the floor's ticket on testnet-11 (26,403 expected attemp
 RATE_MAX_MSK_PER_G = 9.0  # Upgrade C rate on the arming branch: 9 MSK per 1e9 CCU
 W0 = ESCROW / RATE_MAX_MSK_PER_G * 1e9  # the least work a block buys under D: 306 G MAC-eq
 READY_SEATS = 8
+HORIZON = "longest"  # the verification budget's horizon: the longest or the shortest admitted window
 
 CCU = {"Q25": 84.65e9, "Q36": 21.07e9, "Kimi": 300e9, "S": 0.5e9}
 PWU = {"Q25": 1_589_424, "Q36": 2_685_360, "Kimi": 6_000_000, "S": 20_000}
@@ -245,6 +246,18 @@ class Sim:
         model_blocks = 0.0
         per_model_attempted = {}
         load = sum(k.inflight * k.ccu * PANEL_SEATS for k in self.models)
+        admitted_windows = [k.window for k in self.models if k.registered_at <= span] or [1]
+        horizon = min(admitted_windows) if HORIZON == "shortest" else max(admitted_windows)
+        # D/E: what every admitted class WOULD win this span, so the free replay budget is shared in
+        # proportion to arrivals (claims interleave by production rate; the loop has no arrival order)
+        budget_free = max(0.0, self.panel_per_span * horizon - load)
+        demand = 0.0
+        if design not in ("A0", "A1"):
+            for k in self.models:
+                if k.registered_at <= span and k.state in ("Probation", "ActiveLimited", "Active"):
+                    pk = min(1.0, k.ccu / self.W)
+                    demand += k.supply * supply_scale.get(k.name, 1.0) * SPAN_S * pk * k.ccu * PANEL_SEATS
+        fair = min(1.0, budget_free / demand) if demand > 0 else 1.0
         for m in self.models:
             if m.registered_at > span:
                 for k in ("msk", "ccu", "final_ccu", "blocks", "claims", "p", "finals"):
@@ -263,10 +276,14 @@ class Sim:
                 room = max(0.0, budget - m.budget_used) + release
                 attempted = m.ccu / max(p * p_net, 1e-30) if p > 0 else 0.0
             else:
-                # the verification budget: the panel's replay over m's window, less what every class
-                # already holds in flight — one network-wide number, not a per-class share
+                # the verification budget: the panel's replay over ONE common horizon (the longest
+                # admitted window), less what every class already holds in flight — one network-wide
+                # number, not a per-class share; a per-class horizon lets a long-window class lock the
+                # others out (measured: Kimi's 31 spans against the Qwens' 4 and 10)
                 cost = m.ccu * PANEL_SEATS
-                cap = max(0.0, (self.panel_per_span * m.window - load) / cost) + m.inflight
+                # this class's slice of the free budget, in its own claims, plus what it already holds
+                own_demand = draws * min(1.0, m.ccu / self.W) * cost
+                cap = (fair * own_demand) / cost + m.inflight
                 if m.state == "Probation":
                     cap = min(cap, 1.0)
                 headroom = max(0.0, 1.0 - m.inflight / max(cap, 1e-9)) if design == "E" else 1.0
@@ -298,8 +315,12 @@ class Sim:
             m.hist["msk"].append(0.0)
             m.hist["final_ccu"].append(0.0)
             m.hist["finals"].append(0.0)
-        # the shared panel drains the queue, oldest first; a claim past its window voids
+        # the shared panel drains every in-flight claim in proportion to its replay demand (seats
+        # replay claims in parallel — processor sharing, not a single oldest-first queue); a claim
+        # past its window voids
         capacity = self.panel_per_span
+        total_demand = sum(c * m.ccu * PANEL_SEATS for _, m, c in self.queue if panel_ok.get(m.name, True))
+        share_of = min(1.0, capacity / total_demand) if total_demand > 0 else 1.0
         kept = []
         for item in self.queue:
             accepted_span, m, claims = item
@@ -310,9 +331,8 @@ class Sim:
                     kept.append(item)
                 continue
             cost = m.ccu * PANEL_SEATS
-            can = min(claims, capacity / cost) if cost > 0 else claims
+            can = claims * share_of
             if can > 0:
-                capacity -= can * cost
                 claims -= can
                 m.inflight -= can
                 if design == "A1":
@@ -550,7 +570,10 @@ def main():
     ap.add_argument("--no-hold", action="store_true")
     ap.add_argument("--scenario", default=None)
     ap.add_argument("--events", action="store_true")
+    ap.add_argument("--horizon", default="longest", choices=["longest", "shortest"])
     args = ap.parse_args()
+    global HORIZON
+    HORIZON = args.horizon
     designs = args.designs.split(",")
     names = [args.scenario] if args.scenario else list(SCENARIOS)
     print(f"supply = {args.supply_x} x panel capacity ({PANEL_CCU_PER_S:.2e} MAC-eq/s verifiable with {args.ready_seats} seats); W0 = {W0:.3e}; escrow {ESCROW} MSK; epoch {EPOCH_BLOCKS:.0f} blocks")
