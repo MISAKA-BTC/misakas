@@ -12762,12 +12762,14 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
             work: PalwBlockWorkV3::ReceiptSpend(&spend_a),
             execution_key: Default::default(),
             subsidy: 0,
+            escrow_carve: None,
         },
         PalwMergedWorkV1 {
             carrying_block: r2,
             work: PalwBlockWorkV3::ReceiptSpend(&spend_b),
             execution_key: Default::default(),
             subsidy: 0,
+            escrow_carve: None,
         },
     ];
     let fold_point = PalwBlockContextV2 { block: h64(0xF01D), daa_score: 7, blue_score: 6, subsidy: 0 };

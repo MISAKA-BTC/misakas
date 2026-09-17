@@ -255,7 +255,9 @@ impl PalwStateSyncV2 {
                     // pre-existing behaviour rather than a decision taken with this patch: this
                     // walk passed `PalwTransitionExtrasV1::default()` before it, and it is a REAL
                     // gap the moment `palw_model_lines` or `palw_model_evm` is armed — the same
-                    // shape, and the same words, as the `palw_capability_bound` note above.
+                    // shape, and the same words, as the `palw_capability_bound` note above. So is
+                    // ADR-0126's escrow carve: `None` here escrows at the bundle's carve, which
+                    // differs from the processor's fold past `palw_overlay_carve`.
                     ..Default::default()
                 },
             )

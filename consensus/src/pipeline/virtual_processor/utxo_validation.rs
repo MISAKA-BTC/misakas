@@ -920,9 +920,10 @@ impl VirtualStateProcessor {
         // `(bond, epoch)` keys are stashed for `commit_utxo_state` (§B.3(c)).
         let mergeset_non_daa = self.daa_excluded_store.get_mergeset_non_daa(header.hash).unwrap();
         // ADR-0018 §F staged rollout: None (Stage 1) / bootstrap (Stage 2) / full
-        // (Stage 3) selected by DAA, identically to the construction path.
-        let carve = self.dns_params.as_ref().and_then(|p| p.reward_fee_split(header.daa_score));
-        let validator_pool = carve.map_or(0, |fs| {
+        // (Stage 3) selected by DAA, identically to the construction path — and past ADR-0126's
+        // fence the full split lowered, through the one reader both paths call.
+        let carve = self.fee_split_at(header.daa_score);
+        let validator_pool = carve.as_ref().map_or(0, |fs| {
             self.coinbase_manager.coinbase_validator_pool(
                 &ctx.ghostdag_data,
                 &ctx.mergeset_rewards,
@@ -1010,7 +1011,7 @@ impl VirtualStateProcessor {
             &ctx.mergeset_rewards,
             &mergeset_non_daa,
             &validator_reward_outputs,
-            carve,
+            carve.as_ref(),
             (newly_included_stake, expected_stake),
             ctx.palw_v2_escrow_withheld,
             &ctx.palw_v2_unentitled_blues,
