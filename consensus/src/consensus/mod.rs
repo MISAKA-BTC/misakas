@@ -1143,8 +1143,8 @@ impl ConsensusApi for Consensus {
     }
 
     /// ADR-0127 Decision 3, on the node: the tip state every `palw_*` read takes, the rules it was
-    /// folded under, and the frontier's carrying header — read only for a frontier whose claim has
-    /// retired from that state.
+    /// folded under, and the DAA score of the frontier's carrying header — which the read dates the
+    /// frontier by only once the frontier's claim has retired from that state.
     fn palw_settlement_v1(&self, daa_score: u64) -> Option<kaspa_consensus_core::palw_settlement_v1::PalwSettlementV1> {
         let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.config.params.palw_consensus_mode
         else {

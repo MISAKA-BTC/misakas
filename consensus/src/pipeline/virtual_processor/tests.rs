@@ -13795,6 +13795,21 @@ async fn adr0127_a_burst_of_permitted_round_blocks_moves_no_fork_choice_input() 
     assert_eq!(with.permits_used, [true; 3], "the burst held its permits");
     assert!(without.round_blocks.is_empty() && without.permits_used == [false; 3]);
     assert_ne!(with.merging, without.merging, "two different merging blocks");
+    eprintln!(
+        "ADR-0127 burst: with {} permitted round blocks / without — (frontier blue score, safe weight, live total) {:?} / {:?}; \
+         blue work {} / {}; blue score {} / {}; DAA {} / {}; settlement at the block {:?} / {:?}",
+        with.round_blocks.len(),
+        with.fork_choice,
+        without.fork_choice,
+        with.blue_work,
+        without.blue_work,
+        with.blue_score,
+        without.blue_score,
+        with.daa_score,
+        without.daa_score,
+        with.settlement[1],
+        without.settlement[1]
+    );
     assert_eq!(with.fork_choice, without.fork_choice, "frontier, safe weight and live total");
     assert_eq!(with.blue_work, without.blue_work, "blue work");
     assert_eq!((with.blue_score, with.daa_score), (without.blue_score, without.daa_score), "blue score and DAA score");
