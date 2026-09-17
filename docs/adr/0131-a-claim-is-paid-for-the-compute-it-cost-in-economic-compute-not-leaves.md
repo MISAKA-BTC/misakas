@@ -120,19 +120,36 @@ By kind, the hybrid's canonical job is 11.4 G dense projections, 8.1 G routed ex
 attention at kv ≤ 8; the dense tier's is 83.9 G dense (28 layers of 1536 × 8960 SwiGLU over 64 positions),
 0.18 G attention, 0.47 G logits. The 27B is a one-expert mixture of 5120 × 17,408 over 64 layers.
 
-**Per claim, at testnet-11's 7,001 escrow (3,200.85 MSK), the live targets (one expected attempt each) and
-the live unit (the 27B):**
+**The draws a claim costs are not whole.** The fork-choice factor `palw_expected_attempts_v1` floors
+`2¹²⁸ / (target + 1)` to whole inferences — right for `claim.pwu`, wrong for a price of attempts. At the live
+targets (DAA 5,784: the dense tier at `2.276 × 10³⁸`, the hybrid at `3.396 × 10³⁸`) both classes read as one
+expected attempt, while the dense tier draws **1.495** forwards a claim in expectation and the hybrid
+**1.002** (`palw_expected_attempts_q32_v1`, Q32 fixed point, integer part the consensus factor at every
+target; the 27B 3,165.96, the floor 26,403.64). The shadow's attempted basis reads the fraction
+(`palw_attempted_compute_q32_per_claim_v1`); the census and op 185 carry both numbers.
 
-| basis | unit | Qwen3.6 price | Qwen2.5 price | `F₃₆ / F₂₅` = `A₃₆ / A₂₅` | gap |
-|---|---|---|---|---|---|
-| leaves (in force) | 9,000,776 | 29.8 % (954.96 MSK) | 73.7 % (2,357.95 MSK) | 1.864 | **86.4 %** |
-| economic job | 172.9 G | 10.4 % (334.21 MSK) | 48.1 % (1,538.28 MSK) | 1.000 | 0.0 % |
-| economic attempted | 547 T | 0 % | 0 % | 1.000 | 0.0 % (nothing paid) |
+**Per claim, at testnet-11's 7,001 escrow (3,200.85 MSK), the live targets and the live unit (the 27B),
+producer 80 / panel pool 20; `F` per MAC-eq the `Final` claim's job cost, `A` per MAC-eq its draws cost in
+expectation (MSK per 10⁹ MAC-eq):**
 
-`F` and `A` coincide while both classes are at one expected attempt; at three expected attempts the job
-basis pays the hybrid a third per attempted unit and the attempted basis pays it three times per `Final`
-unit, and the panel's rate per verification compute follows the job on the job basis only (Decision 4) —
-each pinned in `adr0131_*`. On every basis and every mix `producer + pool + burned == escrow`: no basis
+| basis | unit | Qwen3.6 price · MSK (producer / pool) | Qwen2.5 price · MSK (producer / pool) | `F₃₆` / `F₂₅` | gap `F` | `A₃₆` / `A₂₅` | gap `A` |
+|---|---|---|---|---|---|---|---|
+| leaves (in force) | 9,000,776 | 29.8 % · 954.96 (763.97 / 190.99) | 73.7 % · 2,357.95 (1,886.36 / 471.59) | 52.89 / 28.37 | **86.4 %** | 52.78 / 18.98 | **178 %** |
+| economic job | 172.9 G | 10.4 % · 334.21 (267.37 / 66.84) | 48.1 % · 1,538.28 (1,230.62 / 307.66) | 18.51 / 18.51 | 0.0 % | 18.47 / 12.38 | **49.2 %** |
+| economic attempted | 547 T | 0 % · 0.11 | 0 % · 0.73 | 0.01 / 0.01 | 49.2 % | 0.01 / 0.01 | 0.0 % |
+
+Producer and pool rates are the total's 80 % and 20 % on every basis (the split is after the price), so
+their gaps are the total's. With the 27B retired from the unit (the two live classes alone): leaves 100 % /
+40.4 %, `F` gap 86.4 %, `A` gap 178 %; job 100 % / 21.7 %, `F` 0 %, `A` 49.2 %; attempted 100 % / 14.6 %
+(3,200.85 / 466.09 MSK), `F` 49.2 %, `A` 0 %. **The job basis and the attempted basis cannot both close:**
+a class drawn 1.495 times a claim is paid 1.495 × per `Final` on the attempted basis and 1 × on the job
+basis, and which is right is Decision 3's — the producer pays for every draw, so the attempted basis is the
+one under which MSK per compute actually spent is equal, and the 49.2 % `F` gap it leaves is the price of
+the dense tier's tighter target, not a distortion. The attempted basis with the heaviest class as its unit
+pays the live classes nothing (the 27B's 3,166 draws set a unit of 547 T MAC-eq): Decision 5's rate is a
+precondition of Decision 3, not an option. At three expected attempts the job basis pays the hybrid a third
+per attempted unit and the attempted basis pays it three times per `Final` unit, and the panel's rate per
+verification compute follows the job on the job basis only (Decision 4) — each pinned in `adr0131_*`. On every basis and every mix `producer + pool + burned == escrow`: no basis
 changes what the schedule withheld. The floor is paid whole on every basis.
 
 **The live window** (1,311 distinct claims read from four bonds at DAA 5,774, before 7,001, when every
