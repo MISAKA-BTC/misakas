@@ -1357,6 +1357,18 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         response.accepted_in_span = status.accepted_in_span;
         response.finals_span = status.finals_span;
         response.finals = status.finals;
+        response.next_round_permits = status
+            .schedule
+            .as_ref()
+            .map(|schedule| {
+                kaspa_consensus_core::palw_execution_lane_v1::palw_execution_permits_v1(
+                    schedule,
+                    status.view.round + 1,
+                    status.view.width,
+                )
+                .len() as u16
+            })
+            .unwrap_or(0);
         Ok(response)
     }
 

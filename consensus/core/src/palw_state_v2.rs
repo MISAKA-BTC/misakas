@@ -7604,9 +7604,11 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
-    /// **ADR-0125: an attempt that reaches `Final` earns its security domain a credit** in the span
-    /// the finalizing block belongs to. Only the attempt lane: a free-prompt claim's `Final` licenses
-    /// quanta rather than certifying a block's work, and the lane's quota is the attempt census.
+    /// **ADR-0125: an attempt that reaches `Final` earns its security domain a credit** — the compute
+    /// it certified (`palw_execution_credit_v1`: its exposure pwu, capped at the work price's unit) —
+    /// in the span the finalizing block belongs to. Only the attempt lane: a free-prompt claim's
+    /// `Final` licenses quanta rather than certifying a block's work, and the lane's quota is the
+    /// attempt census.
     fn record_round_final(
         &mut self,
         id: Hash64,
@@ -7618,6 +7620,15 @@ impl<'a> TransitionBuilder<'a> {
             return Ok(());
         }
         let operator_id = self.state.bonds.get(&claim.bond).ok_or(PalwStateV2Error::MissingBond(claim.bond))?.operator_id;
+        // A claim names a registered class, and a class row leaves the state only when a delta that
+        // registered it is reverted; an attempt whose class is gone, or that certified no compute,
+        // earns nothing rather than a guessed credit.
+        let Some(class) = self.state.classes.get(&claim.class_id) else { return Ok(()) };
+        let credit =
+            crate::palw_execution_lane_v1::palw_execution_credit_v1(palw_exposure_pwu_v1(class, claim.pwu), self.work_price_unit());
+        if credit == 0 {
+            return Ok(());
+        }
         let family = self.state.fp_certified_classes.get(&claim.class_id).map(|row| row.family_digest);
         let span = crate::palw_execution_lane_v1::palw_execution_span_v1(final_daa, span_daa);
         if self.state.round_finals.is_empty() {
@@ -7631,6 +7642,7 @@ impl<'a> TransitionBuilder<'a> {
                 operator_id,
                 claim_id: id,
                 execution_root: claim.execution_root,
+                credit,
             }),
         );
         Ok(())
@@ -7790,8 +7802,18 @@ impl<'a> TransitionBuilder<'a> {
             return claim.escrowed_reward;
         }
         let Some(class) = self.state.classes.get(&claim.class_id) else { return claim.escrowed_reward };
-        let unit = self
-            .state
+        crate::palw_panel_economy_v1::palw_work_priced_reward_v1(
+            claim.escrowed_reward,
+            palw_exposure_pwu_v1(class, claim.pwu),
+            self.work_price_unit(),
+        )
+    }
+
+    /// **ADR-0124 Decision 6's unit**: the dearest exposure pwu among the `Active`, weight-bearing
+    /// model classes at this block — never the liveness floor's — and zero where no model class
+    /// bears weight. The work price and the execution lane's credit (ADR-0125) read this one number.
+    fn work_price_unit(&self) -> u64 {
+        self.state
             .classes
             .iter()
             .filter(|(id, record)| {
@@ -7801,8 +7823,7 @@ impl<'a> TransitionBuilder<'a> {
             })
             .map(|(_, record)| palw_max_exposure_pwu_of_rule_v1(&record.pwu_rule))
             .max()
-            .unwrap_or(0);
-        crate::palw_panel_economy_v1::palw_work_priced_reward_v1(claim.escrowed_reward, palw_exposure_pwu_v1(class, claim.pwu), unit)
+            .unwrap_or(0)
     }
 
     /// **A seat's pay, keyed by its payee and accumulated.** One row per payee rather than one per
@@ -18028,6 +18049,7 @@ pub(crate) mod tests {
         assert_eq!(final_row.bond, bond_key(1));
         assert_eq!(final_row.operator_id, s5.bond(&bond_key(1)).unwrap().operator_id);
         assert_eq!(final_row.execution_root, claim.execution_root);
+        assert_eq!(final_row.credit, 40, "the floor's 40-pwu attempt, with no model class to set a unit");
         assert!(s5.round_schedules().is_empty(), "span 1's finals schedule span 2, not span 1");
 
         // The first block of span 2.
@@ -18036,6 +18058,7 @@ pub(crate) mod tests {
         let schedule = s6.round_schedule(2).expect("span 2 is scheduled").clone();
         assert_eq!(schedule.domains.len(), 1);
         assert_eq!((schedule.domains[0].domain, schedule.domains[0].quota_permille, schedule.domains[0].parity), (h64(1), 1000, 0));
+        assert_eq!(schedule.domains[0].credits, 40, "the domain holds the compute its finals certified");
         assert_eq!(schedule.domains[0].bonds.len(), 1);
         assert_eq!(schedule.domains[0].bonds[0].bond, bond_key(1));
         let even = palw_execution_permits_v1(&schedule, 10, 1);
@@ -18074,8 +18097,78 @@ pub(crate) mod tests {
         assert!(!s9.round_lane_is_written(), "with nothing left, the lane's block leaves the root again");
     }
 
-    /// **Below the fence the lane writes nothing**: the same claim finalizes without a credit, and the
-    /// root is the one a build without the fields computes.
+    /// **ADR-0125: a `Final` credits its domain the compute it certified, capped at ADR-0124's unit.**
+    /// Class 2 bears weight at 30 pwu an attempt, so the unit is 30: class 2's 20-pwu attempt credits
+    /// 20, and the floor's 40-pwu attempt — the floor never sets the unit — credits 30. The next
+    /// span's schedule sums exactly those.
+    #[test]
+    fn adr0125_a_final_credits_the_compute_it_certified_capped_at_the_unit() {
+        let p = params().with_worker_carve_permille(620).unwrap();
+        let genesis = PalwChainStateV2::genesis();
+        let mut objects = register_class_and_bond();
+        objects.push(PalwConsensusObjectV2::BondRegistered {
+            bond: bond_key(2),
+            pubkey: vec![7, 2],
+            operator_pubkey: op_key(22),
+            collateral: 1_000,
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A02),
+            capable_classes: Default::default(),
+            signature: Vec::new(),
+        });
+        objects.push(PalwConsensusObjectV2::ClassRegistered {
+            class_id: h64(2),
+            artifact_root: h64(12),
+            slash_value_per_pwu: 5,
+            pwu_rule: PalwPwuRuleV2::MaxPerAttempt(30),
+            initial_target: u128::MAX / 2,
+            share_permille: 300,
+            activation_daa: 0,
+            admission: None,
+        });
+        let (s1, _) = apply_economy(&genesis, &p, &ctx(1, 100, 1), &objects, None);
+
+        let on_floor = attempt(40, 1);
+        let on_model = attempt_for_class(20, 2, h64(2), bond_key(1), vec![7; 4], op_id(21), h64(12));
+        let floor_id = attempt_id_v2(&on_floor.attempt);
+        let model_id = attempt_id_v2(&on_model.attempt);
+        let (s2, _) = apply_economy(&s1, &p, &PalwBlockContextV2 { subsidy: 1_000, ..ctx(2, 101, 2) }, &[], Some(&on_floor));
+        let (s3, _) = apply_economy(&s2, &p, &PalwBlockContextV2 { subsidy: 1_000, ..ctx(3, 102, 3) }, &[], Some(&on_model));
+
+        let mut s = s3;
+        for (n, claim_id) in [(4u64, floor_id), (5, model_id)] {
+            let (bound, _) = apply_economy(
+                &s,
+                &p,
+                &ctx(n * 10, 100 + n, n * 10),
+                &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(70 + n), seats: vec![seat_n(2)] }],
+                None,
+            );
+            let receipts = vec![receipt_at(claim_id, bond_key(2), true, 101 + n)];
+            let (licensed, _) = apply_economy(
+                &bound,
+                &p,
+                &ctx(n * 10 + 1, 101 + n, n * 10 + 1),
+                &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts }],
+                None,
+            );
+            s = licensed;
+        }
+        let lane = round_extras(100, Vec::new());
+        let fin = apply_round(&s, &p, &ctx(90, 140, 90), &[], &lane).expect("both finalize in span 1");
+        let (span, finals) = fin.round_finals();
+        assert_eq!(span, 1);
+        assert_eq!(finals.get(&model_id).expect("the model's attempt is a credit").credit, 20, "its own 20 pwu, under the unit");
+        assert_eq!(finals.get(&floor_id).expect("the floor's attempt is a credit").credit, 30, "40 pwu, credited the unit of 30");
+
+        let next = apply_round(&fin, &p, &ctx(91, 200, 91), &[], &lane).expect("span 2 opens");
+        let schedule = next.round_schedule(2).expect("span 2 is scheduled");
+        assert_eq!(
+            schedule.domains.iter().map(|d| (d.domain, d.credits)).collect::<Vec<_>>(),
+            vec![(h64(1), 30), (h64(2), 20)],
+            "each domain holds the compute its finals certified"
+        );
+    }
+
     /// **ADR-0125 §7.1's reorg across a span boundary, at the state layer.** One branch finalizes an
     /// attempt in span 1, opens span 2 (the finals become its schedule) and accepts a permit there;
     /// its deltas, reverted newest first, return the state to the fork point exactly; a competing
@@ -18192,6 +18285,8 @@ pub(crate) mod tests {
         assert!(!s5.round_lane_is_written());
     }
 
+    /// **Below the fence the lane writes nothing**: the same claim finalizes without a credit, and the
+    /// root is the one a build without the fields computes.
     #[test]
     fn adr0125_below_the_fence_a_finalized_attempt_is_no_credit() {
         let p = params().with_worker_carve_permille(620).unwrap();

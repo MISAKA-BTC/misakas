@@ -13323,6 +13323,7 @@ async fn adr0125_a_merging_block_grants_exactly_the_permits_its_parent_state_sch
             operator_id: bond.operator_id,
             claim_id: kaspa_hashes::Hash64::from_u64_word(0xC1A1),
             execution_root: kaspa_hashes::Hash64::from_u64_word(0xE0),
+            credit: 1,
         }],
     );
     let with_schedule = |used: &[(u64, u64)]| {
@@ -13420,6 +13421,7 @@ async fn adr0125_a_permit_signed_twice_is_evidence_the_chain_accepts_once() {
             operator_id: bond.operator_id,
             claim_id: kaspa_hashes::Hash64::from_u64_word(0xC1A1),
             execution_root: kaspa_hashes::Hash64::from_u64_word(0xE0),
+            credit: 1,
         }],
     );
     let scheduled = {

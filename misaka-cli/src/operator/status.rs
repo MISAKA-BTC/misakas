@@ -432,9 +432,12 @@ fn fork_marks(snap: &Snapshot) -> (String, String) {
     (f, s)
 }
 
-/// **ADR-0125 §7.4: the execution lane in one line** — its blocks per second (the span's width), the
-/// round's permits and whether this miner's bond holds one, what the span has accepted, and the
-/// finals gathering toward the next span's schedule. `None` where the network does not arm it.
+/// **ADR-0125 §7.4: the execution lane in one line** — the blocks per second the span's schedule
+/// actually carries (this round's permits and the next round's, over their two seconds) beside the
+/// width a round could hold, the round's permits and whether this miner's bond holds one, what the
+/// span has accepted, and the finals gathering toward the next span's schedule. The width is a
+/// ceiling, not a rate: a domain holds at most a third of a round and only rounds of its parity, so
+/// one domain alone fills a third of every other round. `None` where the network does not arm it.
 pub(crate) fn round_lane_line(
     lane: Option<&Result<kaspa_rpc_core::GetPalwRoundLaneResponse, String>>,
     bond: Option<&str>,
@@ -457,13 +460,16 @@ pub(crate) fn round_lane_line(
         None if bond.is_some() => " · none yours this round".to_string(),
         None => String::new(),
     };
+    let two_rounds = lane.permits.len() + lane.next_round_permits as usize;
+    let scheduled = if two_rounds % 2 == 0 { format!("{}", two_rounds / 2) } else { format!("{}.5", two_rounds / 2) };
     Some(format!(
-        "{} BPS · span {} · round {}: {} permit{}{yours} · {} accepted this span · {} finals toward the next",
+        "{scheduled} BPS scheduled (width {}) · span {} · round {}: {} permit{}{yours} · next round {} · {} accepted this span · {} finals toward the next",
         lane.permits_per_round,
         group(lane.span),
         group(lane.round),
         lane.permits.len(),
         if lane.permits.len() == 1 { "" } else { "s" },
+        lane.next_round_permits,
         group(lane.accepted_in_span),
         group(lane.finals)
     ))
@@ -773,7 +779,9 @@ pub(crate) fn document(snap: &Snapshot, view: &MinerView) -> serde_json::Value {
             Ok(lane) => json!({
                 "armed": lane.armed,
                 "open": lane.open,
-                "bps": lane.permits_per_round,
+                "width": lane.permits_per_round,
+                "next_round_permits": lane.next_round_permits,
+                "scheduled_bps": (lane.permits.len() as f64 + lane.next_round_permits as f64) / 2.0,
                 "span": lane.span,
                 "round": lane.round,
                 "stages": lane.stages.iter().map(|s| json!({ "activation_daa": s.activation_daa, "permits_per_round": s.permits_per_round })).collect::<Vec<_>>(),
@@ -879,7 +887,8 @@ mod tests {
         }
     }
 
-    /// ADR-0125 §7.4: the lane's line names the BPS, the round's permits and the miner's own.
+    /// ADR-0125 §7.4: the lane's line names the BPS the schedule carries, the width, the round's
+    /// permits and the miner's own.
     #[test]
     fn the_lane_line_names_the_width_the_round_and_the_miners_permit() {
         use kaspa_rpc_core::{GetPalwRoundLaneResponse, RpcPalwRoundLaneStage, RpcPalwRoundPermit};
@@ -897,12 +906,19 @@ mod tests {
             ],
             accepted_in_span: 33,
             finals: 5,
+            next_round_permits: 1,
             ..Default::default()
         };
         let line = round_lane_line(Some(&Ok(open.clone())), Some("aa:0")).unwrap();
-        assert!(line.starts_with("2 BPS · span 12 · round 4,321: 2 permits · yours: permit 1 ·"), "{line}");
+        assert!(
+            line.starts_with("1.5 BPS scheduled (width 2) · span 12 · round 4,321: 2 permits · yours: permit 1 · next round 1 ·"),
+            "{line}"
+        );
         assert!(line.contains("33 accepted this span") && line.contains("5 finals toward the next"), "{line}");
         assert!(round_lane_line(Some(&Ok(open.clone())), Some("cc:0")).unwrap().contains("none yours this round"));
+        // One domain at width 2: a permit in every other round is half a block a second, not two.
+        let one_domain = GetPalwRoundLaneResponse { permits: open.permits[..1].to_vec(), next_round_permits: 0, ..open.clone() };
+        assert!(round_lane_line(Some(&Ok(one_domain)), None).unwrap().starts_with("0.5 BPS scheduled (width 2) ·"));
         let closed = GetPalwRoundLaneResponse { open: false, ..open };
         assert_eq!(round_lane_line(Some(&Ok(closed)), None).unwrap(), "armed, opens at DAA 100");
     }

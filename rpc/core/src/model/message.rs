@@ -4384,7 +4384,8 @@ impl Deserializer for RpcPalwRoundPermit {
 #[serde(rename_all = "camelCase")]
 pub struct RpcPalwRoundLaneDomain {
     pub domain: String,
-    /// Finalized attempts of the span before.
+    /// The canonical compute (pwu) its attempts finalized in the span before: each `Final` credits
+    /// its class's inference, capped at the heaviest weight-bearing model class's.
     pub credits: u64,
     pub quota_permille: u16,
     /// The rounds it holds permits in: even (0) or odd (1).
@@ -4430,20 +4431,25 @@ pub struct GetPalwRoundLaneResponse {
     pub stages: Vec<RpcPalwRoundLaneStage>,
     pub virtual_daa: u64,
     pub round: u64,
-    /// The span a round block built now hangs in, and its width — the lane's blocks per second.
+    /// The span a round block built now hangs in, and its width: the most permits a round can hold.
     pub span: u64,
     pub permits_per_round: u16,
+    /// This round's permits. A domain holds at most a third of a round's width and only rounds of
+    /// its parity, and one operator one permit, so a round can hold fewer than the width.
     pub permits: Vec<RpcPalwRoundPermit>,
     pub domains: Vec<RpcPalwRoundLaneDomain>,
     pub accepted_in_span: u64,
     /// The span whose finalized attempts are being recorded for the next schedule, and their count.
     pub finals_span: u64,
     pub finals: u64,
+    /// The permits the schedule grants the round after this one — the other parity — so this
+    /// round's and the next's together are the blocks per second the span can actually carry.
+    pub next_round_permits: u16,
 }
 
 impl Serializer for GetPalwRoundLaneResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &2, writer)?;
         store!(bool, &self.armed, writer)?;
         store!(bool, &self.open, writer)?;
         store!(u64, &self.schedule_span_daa, writer)?;
@@ -4458,13 +4464,14 @@ impl Serializer for GetPalwRoundLaneResponse {
         store!(u64, &self.accepted_in_span, writer)?;
         store!(u64, &self.finals_span, writer)?;
         store!(u64, &self.finals, writer)?;
+        store!(u16, &self.next_round_permits, writer)?;
         Ok(())
     }
 }
 
 impl Deserializer for GetPalwRoundLaneResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
+        let version = load!(u16, reader)?;
         Ok(Self {
             armed: load!(bool, reader)?,
             open: load!(bool, reader)?,
@@ -4480,6 +4487,7 @@ impl Deserializer for GetPalwRoundLaneResponse {
             accepted_in_span: load!(u64, reader)?,
             finals_span: load!(u64, reader)?,
             finals: load!(u64, reader)?,
+            next_round_permits: if version >= 2 { load!(u16, reader)? } else { 0 },
         })
     }
 }

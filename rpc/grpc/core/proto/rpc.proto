@@ -1887,5 +1887,6 @@ message GetPalwRoundLaneResponseMessage {
   uint64 acceptedInSpan = 12;
   uint64 finalsSpan = 13;
   uint64 finals = 14;
+  uint32 nextRoundPermits = 15;
   RPCError error = 1000;
 }

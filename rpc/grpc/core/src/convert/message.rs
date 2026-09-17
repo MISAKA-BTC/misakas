@@ -824,6 +824,7 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwRoundLaneResponse>, protowire::Get
         accepted_in_span: item.accepted_in_span,
         finals_span: item.finals_span,
         finals: item.finals,
+        next_round_permits: item.next_round_permits.into(),
         error: None,
     }
 });
@@ -1972,6 +1973,8 @@ try_from!(item: &protowire::GetPalwRoundLaneResponseMessage, RpcResult<kaspa_rpc
         accepted_in_span: item.accepted_in_span,
         finals_span: item.finals_span,
         finals: item.finals,
+        next_round_permits: u16::try_from(item.next_round_permits)
+            .map_err(|_| RpcError::General(format!("next_round_permits {} is not a width", item.next_round_permits)))?,
     }
 });
 try_from!(&protowire::GetPalwRegistrationTermsRequestMessage, kaspa_rpc_core::GetPalwRegistrationTermsRequest);

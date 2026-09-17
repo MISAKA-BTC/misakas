@@ -10,7 +10,8 @@
 //!
 //! * a **round** is one second from the genesis timestamp ([`palw_execution_round_v1`]);
 //! * a **schedule** is derived once per scheduler span from the attempt claims that reached `Final`
-//!   in the closed span ([`palw_execution_schedule_v1`]): each security domain's credits, its quota
+//!   in the closed span ([`palw_execution_schedule_v1`]): each security domain's credits — the
+//!   canonical compute its attempts certified ([`palw_execution_credit_v1`]) — its quota
 //!   (credits, capped at [`PALW_EXEC_DOMAIN_CAP_PERMILLE`], water-filled in integers —
 //!   [`palw_execution_quotas_v1`]), its parity group ([`palw_execution_parities_v1`]), the bonds
 //!   that earned it, and the span's seed — a hash of the finalized executions' roots, so no
@@ -53,7 +54,7 @@ pub const PALW_EXEC_DOMAIN_CAP_PERMILLE: u64 = 450;
 /// The most domains one schedule lists — the ones with the most credits, ties to the lower id.
 pub const PALW_EXEC_MAX_DOMAINS_V1: usize = 32;
 
-/// The most bonds one domain lists — the ones with the most finalized attempts, ties to the lower
+/// The most bonds one domain lists — the ones with the most finalized compute, ties to the lower
 /// bond key. Bounds the schedule's bytes in the state root and a draw's work.
 pub const PALW_EXEC_MAX_BONDS_PER_DOMAIN_V1: usize = 64;
 
@@ -157,8 +158,8 @@ pub fn palw_execution_domain_of_class_v1(fp_family_digest: Option<Hash64>, class
 
 /// **Quotas from credits: proportional, capped at 45 %, renormalised — in integers.**
 ///
-/// `credits` is each domain's count of attempt claims finalized in the closed span. A domain with
-/// no credits has no quota and is not listed. Among the rest:
+/// `credits` is each domain's finalized compute in the closed span ([`palw_execution_credit_v1`],
+/// summed). A domain with no credits has no quota and is not listed. Among the rest:
 ///
 /// * one domain holds the whole lane (there is nobody to cap it against);
 /// * two domains split it evenly — no split of 1000‰ between two keeps both under 450‰, and the
@@ -247,6 +248,21 @@ pub fn palw_execution_parities_v1(quotas: &[(Hash64, u16)]) -> Vec<(Hash64, u8)>
     quotas.iter().zip(parity).map(|((domain, _), p)| (*domain, p)).collect()
 }
 
+/// **A finalized attempt's credit: the canonical compute it certified** — the operator's
+/// "Credit 量 = canonical compute", so a class whose inference costs more earns its domain more of
+/// the lane per `Final`, and a light class cannot out-schedule a heavy one by finalizing more often.
+///
+/// `exposure_pwu` is the claim's `palw_exposure_pwu_v1` — one canonical inference of its class, the
+/// number its exposure and its ADR-0124 price are read on — and `unit` is ADR-0124 Decision 6's: the
+/// dearest exposure among the `Active`, weight-bearing model classes, zero where none bears weight.
+/// Capped at the unit, so a class that bears no weight cannot buy lane share by declaring a dear
+/// inference, as it cannot buy pay; uncapped where no class sets a unit, so a span's credits are
+/// always pwu and never a mixture of pwu and counts. The liveness floor is not special-cased: its
+/// credit is its own inference, which is what a floor attempt certified.
+pub fn palw_execution_credit_v1(exposure_pwu: u64, unit: u64) -> u64 {
+    if unit == 0 { exposure_pwu } else { exposure_pwu.min(unit) }
+}
+
 /// One attempt claim that reached `Final` inside a closed scheduler span, as the schedule reads it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwExecFinalV1 {
@@ -255,6 +271,8 @@ pub struct PalwExecFinalV1 {
     pub operator_id: Hash64,
     pub claim_id: Hash64,
     pub execution_root: Hash64,
+    /// [`palw_execution_credit_v1`], fixed by the block that finalized the claim.
+    pub credit: u64,
 }
 
 /// A bond that may hold a permit in a span, and how many finalized attempts earned it the place.
@@ -262,7 +280,8 @@ pub struct PalwExecFinalV1 {
 pub struct PalwExecBondV1 {
     pub bond: PalwBondKeyV2,
     pub operator_id: Hash64,
-    pub finals: u64,
+    /// The compute its finalized attempts credited in the closed span.
+    pub credits: u64,
 }
 
 /// One security domain of a span's schedule.
@@ -310,20 +329,22 @@ pub fn palw_execution_schedule_v1(span_index: u64, finals: &[PalwExecFinalV1]) -
     }
     let seed = finish(seed);
 
-    // Credits and bonds per domain.
+    // Credits and bonds per domain: the compute each certified, summed. A domain whose finals
+    // credited nothing earns no quota, so it is not listed and none of its bonds can be drawn.
     let mut per_domain: BTreeMap<Hash64, (u64, BTreeMap<PalwBondKeyV2, (Hash64, u64)>)> = BTreeMap::new();
     for f in &ordered {
         let entry = per_domain.entry(f.domain).or_default();
-        entry.0 += 1;
+        entry.0 = entry.0.saturating_add(f.credit);
         let bond = entry.1.entry(f.bond).or_insert((f.operator_id, 0));
-        bond.1 += 1;
+        bond.1 = bond.1.saturating_add(f.credit);
     }
     let mut domains: Vec<(Hash64, u64, Vec<PalwExecBondV1>)> = per_domain
         .into_iter()
+        .filter(|(_, (credits, _))| *credits > 0)
         .map(|(domain, (credits, bonds))| {
             let mut bonds: Vec<PalwExecBondV1> =
-                bonds.into_iter().map(|(bond, (operator_id, finals))| PalwExecBondV1 { bond, operator_id, finals }).collect();
-            bonds.sort_by(|a, b| b.finals.cmp(&a.finals).then(a.bond.cmp(&b.bond)));
+                bonds.into_iter().map(|(bond, (operator_id, credits))| PalwExecBondV1 { bond, operator_id, credits }).collect();
+            bonds.sort_by(|a, b| b.credits.cmp(&a.credits).then(a.bond.cmp(&b.bond)));
             bonds.truncate(PALW_EXEC_MAX_BONDS_PER_DOMAIN_V1);
             bonds.sort_by(|a, b| a.bond.cmp(&b.bond));
             (domain, credits, bonds)
@@ -794,13 +815,19 @@ mod tests {
         PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_u64_word(v), 0))
     }
 
+    /// A final crediting one unit of compute, so a domain's credits are its count of finals.
     fn final_of(domain: u64, bond_word: u64, operator: u64, claim: u64) -> PalwExecFinalV1 {
+        final_credited(domain, bond_word, operator, claim, 1)
+    }
+
+    fn final_credited(domain: u64, bond_word: u64, operator: u64, claim: u64, credit: u64) -> PalwExecFinalV1 {
         PalwExecFinalV1 {
             domain: h(domain),
             bond: bond(bond_word),
             operator_id: h(operator),
             claim_id: h(claim),
             execution_root: h(claim + 1_000_000),
+            credit,
         }
     }
 
@@ -957,7 +984,7 @@ mod tests {
         assert_eq!(schedule.domains.iter().map(|d| d.domain).collect::<Vec<_>>(), vec![h(1), h(2), h(3)], "sorted by domain id");
         let d1 = schedule.domain(&h(1)).unwrap();
         assert_eq!(d1.credits, 3);
-        assert_eq!(d1.bonds.iter().map(|b| (b.bond, b.finals)).collect::<Vec<_>>(), vec![(bond(10), 2), (bond(11), 1)]);
+        assert_eq!(d1.bonds.iter().map(|b| (b.bond, b.credits)).collect::<Vec<_>>(), vec![(bond(10), 2), (bond(11), 1)]);
         assert_eq!(schedule.domains.iter().map(|d| d.quota_permille as u32).sum::<u32>(), 1000);
         assert!(schedule.domains.iter().all(|d| (d.quota_permille as u64) <= PALW_EXEC_DOMAIN_CAP_PERMILLE));
         // Order-independent, duplicate-proof, and the seed moves with any execution root.
@@ -989,10 +1016,50 @@ mod tests {
         assert!(d.bonds.windows(2).all(|w| w[0].bond < w[1].bond), "stored in bond order");
         let productive = (0..(PALW_EXEC_MAX_BONDS_PER_DOMAIN_V1 as u64 + 5)).filter(|b| b % 3 != 0).count();
         assert_eq!(
-            d.bonds.iter().filter(|b| b.finals >= 2).count(),
+            d.bonds.iter().filter(|b| b.credits >= 2).count(),
             productive,
             "every bond with more than one final is listed; only one-final bonds are dropped"
         );
+    }
+
+    /// **The operator's "Credit 量 = canonical compute": a domain's quota follows the compute its
+    /// finals certified, not how many there were.** testnet-11's three classes in one span — ten
+    /// finals of `PALW-QWEN36` (2,685,360 pwu an inference, the unit), twenty of `PALW-QWEN25-A16`
+    /// (1,589,424) and a hundred of the floor (7,708). Counted, the floor would take the cap and the
+    /// heaviest model the least (183 / 367 / 450); credited by compute, the two models hold the cap
+    /// and the floor what is left (450 / 450 / 100).
+    #[test]
+    fn a_domains_quota_follows_the_compute_its_finals_certified_not_their_count() {
+        const QWEN36: u64 = 2_685_360;
+        const A16: u64 = 1_589_424;
+        const FLOOR: u64 = 7_708;
+        let span = |credit_of: &dyn Fn(u64) -> u64| {
+            let mut finals = Vec::new();
+            let mut claim = 0;
+            for (domain, count, pwu) in [(1u64, 10u64, QWEN36), (2, 20, A16), (3, 100, FLOOR)] {
+                for i in 0..count {
+                    claim += 1;
+                    finals.push(final_credited(domain, domain * 1_000 + i, domain * 10_000 + i, claim, credit_of(pwu)));
+                }
+            }
+            palw_execution_schedule_v1(3, &finals)
+        };
+        let quotas = |schedule: &PalwExecScheduleV1| schedule.domains.iter().map(|d| (d.domain, d.quota_permille)).collect::<Vec<_>>();
+        assert_eq!(quotas(&span(&|_| 1)), vec![(h(1), 183), (h(2), 367), (h(3), 450)], "counted, the floor out-schedules both models");
+        let computed = span(&|pwu| palw_execution_credit_v1(pwu, QWEN36));
+        assert_eq!(quotas(&computed), vec![(h(1), 450), (h(2), 450), (h(3), 100)], "credited by compute, the models hold the cap");
+        assert_eq!(computed.domain(&h(1)).unwrap().credits, 10 * QWEN36);
+        assert_eq!(computed.domain(&h(3)).unwrap().credits, 100 * FLOOR);
+
+        // The unit caps a class that bears no weight, and where no class sets one nothing is capped.
+        assert_eq!(palw_execution_credit_v1(9_000_000, QWEN36), QWEN36, "a class above the unit is credited the unit");
+        assert_eq!(palw_execution_credit_v1(FLOOR, QWEN36), FLOOR, "the floor is credited its own inference");
+        assert_eq!(palw_execution_credit_v1(9_000_000, 0), 9_000_000, "no weight-bearing class, no cap");
+
+        // A domain whose finals credited nothing is not listed, and none of its bonds is drawn.
+        let schedule = palw_execution_schedule_v1(3, &[final_credited(1, 10, 100, 1, 5), final_credited(2, 20, 200, 2, 0)]);
+        assert_eq!(schedule.domains.iter().map(|d| d.domain).collect::<Vec<_>>(), vec![h(1)]);
+        assert!((0..8).flat_map(|round| palw_execution_permits_v1(&schedule, round, 10)).all(|permit| permit.bond == bond(10)));
     }
 
     fn three_domain_schedule() -> PalwExecScheduleV1 {

@@ -2567,7 +2567,7 @@ async fn palw_round_lane(ctx: &node::Ctx, bond: Option<&str>) -> CliResult {
             println!("{}", operator::status::round_lane_line(Some(&Ok(lane.clone())), bond).unwrap_or_default());
             if lane.armed {
                 let stages: Vec<String> =
-                    lane.stages.iter().map(|s| format!("{} BPS from DAA {}", s.permits_per_round, s.activation_daa)).collect();
+                    lane.stages.iter().map(|s| format!("width {} from DAA {}", s.permits_per_round, s.activation_daa)).collect();
                 println!("stages  : {}", stages.join(" · "));
                 println!(
                     "span    : {} DAA a span · at most {} round blocks a mergeset",
@@ -2575,7 +2575,7 @@ async fn palw_round_lane(ctx: &node::Ctx, bond: Option<&str>) -> CliResult {
                 );
                 for domain in &lane.domains {
                     println!(
-                        "domain  : {}… credits {} · quota {}‰ · parity {} · {} bond(s)",
+                        "domain  : {}… compute {} pwu · quota {}‰ · parity {} · {} bond(s)",
                         &domain.domain[..16.min(domain.domain.len())],
                         domain.credits,
                         domain.quota_permille,
