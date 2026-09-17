@@ -44,8 +44,8 @@ pub(crate) struct Funding {
     /// retired in-node validator called it "a validator self-wedge", and the retired sidecar threaded
     /// an exclusion through bond, unbond and equivocate. The wallet, which wraps the SAME signing
     /// path a validator bonded with, did not (audit M1-3): the bond is typically the largest UTXO at
-    /// that address, and selection is largest-first. The overlay is retired, but bonds already on a
-    /// chain keep their lock, so the exclusion stays.
+    /// that address, and selection is largest-first. The overlay keeps running and consensus keeps
+    /// locking its bonds, so the exclusion stays.
     pub(crate) bonded: bool,
 }
 
