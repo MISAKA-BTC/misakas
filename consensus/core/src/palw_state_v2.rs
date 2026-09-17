@@ -8228,9 +8228,24 @@ impl<'a> TransitionBuilder<'a> {
             writes.push((*id, share as u16));
         }
         writes.push((base, (1_000u32.saturating_sub(legacy_sum).saturating_sub(given)).max(floor) as u16));
+        let mut moved = false;
         for (id, share) in writes {
             if self.state.class_shares.get(&id).copied() != Some(share) {
                 self.write_share(id, Some(share));
+                moved = true;
+            }
+        }
+        // **A share the registry moves is a budget the epoch must follow** (found by the devnet
+        // drill): the epoch budget (ADR-0039 D5) is derived from the shares at the epoch's first
+        // block and read by every producer until the next, so a class admitted mid-epoch — its
+        // share raised from nothing at a boundary — produced nothing until the epoch turned
+        // ("holding: this class's epoch budget is already spent"). The budgets of the epoch this
+        // boundary falls in are re-derived from the shares it wrote; the produced counters are
+        // untouched, so a class that already spent its blocks gains only what its new share adds.
+        if moved {
+            let epoch_index = ctx.daa_score / self.params.epoch_length;
+            if let Some(budgets) = palw_epoch_budgets_for_v2(&self.state, self.params, epoch_index) {
+                self.write_epoch_budgets(Some(budgets));
             }
         }
     }
@@ -17699,6 +17714,15 @@ pub(crate) mod tests {
             assert!(
                 s6.class_shares.get(&kimi_id()).copied().unwrap_or(0) >= 1,
                 "probation admits at a twentieth: at least the grant floor"
+            );
+            // …and the epoch's budget follows the share at once, so the class can produce before
+            // the epoch turns (the devnet drill's producer held on "epoch budget already spent").
+            let budgets = s6.epoch_budgets.as_ref().expect("the boundary re-derived the epoch's budgets");
+            assert_eq!(budgets.epoch_index, 120 / p.epoch_length, "the budgets are this epoch's");
+            assert!(
+                budgets.budget_blocks.get(&kimi_id()).copied().unwrap_or(0) > 0,
+                "Kimi's budget follows its admission share: {:?}",
+                budgets.budget_blocks
             );
             // A proof older than the landing allowance is refused, and so is one for a span not yet
             // opened; one a few spans late (the carrier waited) is taken.
