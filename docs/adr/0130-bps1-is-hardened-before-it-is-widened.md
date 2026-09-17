@@ -230,8 +230,11 @@ carries one pin or it forks silently at 7,001.
   second entry and a second parity). SA-3 stands: two schedules meet at a span boundary. The seed anchor is the
   execution key of the latest attempt-carrying chain block of the span before, chosen among that producer's own
   winning draws (SA-4). The fork-id gate does not see the rule change (above).
-* **Verification of the union branch (M1 + M2 + ADR-0131's shadow):** recorded in the merge commits
-  `da837d62` / `ffadce3b` and below once the full run completes.
+* **Verification of the union branch (M1 + M2 + ADR-0131's shadow, `1b0bc958`), 2026-09-17:** consensus-core
+  2,133 / consensus (evm) 305 / kaspad 96 / mining 92 / misaka-cli 175 / pq-validator-core 12 + pq-validator 42 /
+  rpc-core 146 / rpc-service 1 / palw-extension 2 / integration `rpc_tests::sanity_test` 1 — all green; clippy
+  `-D warnings` over the twelve crates clean; `shipped_presets_have_pinned_fingerprints` and
+  `the_7001_flag_day_keeps_the_7000_release_until_7001` green on the union pin.
 
 ## 8. Number hygiene
 
