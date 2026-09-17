@@ -76,7 +76,11 @@ PREDICTED_T11_FP=71b35c250d01598ee8925146e66e8200945503ce2de1030bfd167e799b2498e
 # The new value comes ONLY from a table whose `extracted_from` is a tip at or after e4f97110.
 # NAMED MOVE resolved 2026-09-04 01:20 from the same table: the family root is in devnet's bundle (e4f97110),
 # the third named move of this value ((a) -> 24d55f6d…, T1 -> 34c7e482…, family root -> below).
-PREDICTED_DEVNET_FP=b40976b27c3bfbd3d6c590b33824f15c4959d6bcfba3676630919b964e94ad34
+# NAMED MOVE 2026-09-17 (d5ab5f0f, ADR-0135's drill): the devnet mints eight genesis bonds instead of six
+# (`PALW_DEVNET_GENESIS_BONDS`), so its premine commitment, genesis hash and fingerprint move — named here
+# by the person moving it, with the cause, before the value below was taken from `shipped_presets_have_pinned_fingerprints`:
+#   b40976b2… -> 61286b15588eb253b9a7f64997935c919b604b07d1973d4d2366084f06f524f5
+PREDICTED_DEVNET_FP=61286b15588eb253b9a7f64997935c919b604b07d1973d4d2366084f06f524f5
 PREDICTED_FP_GOLDEN=c940b5c36ee40846087e6c5927d6e6b5
 PREDICTED_PREMINE_BUILDS=ba2612417e7e0817
 # The genesis hash the re-pin will write: PALW_RC_GENESIS.hash recomputed over the NEW utxo_commitment by
