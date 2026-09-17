@@ -354,7 +354,7 @@ impl<'a> A16Engine<'a> {
                 softmax_up: up_bits[0],
                 probs: one("blk.{layer}.attn_probs.a16", l, "probs")?,
                 values: one("blk.{layer}.attn_values.a16", l, "values")?,
-                wo: (many("blk.{layer}.attn_output.weight.a16", l, d, "wo")?).into(),
+                wo: many("blk.{layer}.attn_output.weight.a16", l, d, "wo")?,
                 wo_sink: many("blk.{layer}.attn_output.weight.a16.sink0", l, d, "wo sink")?,
                 attn_align: one("blk.{layer}.attn_align.a16", l, "attn_align")?,
                 attn_align_sink: one("blk.{layer}.attn_align.a16.sink0", l, "attn_align sink")?,

@@ -1303,13 +1303,13 @@ fn decode_artifact_file_from_v1(
         let attn_logit_scale = r.scale("attn scale")?;
         let ffn_gate_scale = r.scale("gate scale")?;
         layers.push(Base0LayerWeightsV1 {
-            wq: wq.into(),
-            wk: wk.into(),
-            wv: wv.into(),
-            wo: wo.into(),
-            w_gate: w_gate.into(),
-            w_up: w_up.into(),
-            w_down: w_down.into(),
+            wq,
+            wk,
+            wv,
+            wo,
+            w_gate,
+            w_up,
+            w_down,
             requant,
             qkv_channel_requant,
             attn_logit_scale,

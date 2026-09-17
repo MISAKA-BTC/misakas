@@ -71,7 +71,11 @@ Four nodes at rest, the same artifact, before and after D1 (`smaps_rollup`, MiB)
 | host, summed | 11,255 + 8,300 swapped (7 nodes) | — | 2,923 | 1,752 = the file, once |
 
 Seven nodes at rest after D1: anonymous 52–66 MiB per non-registering node, the file 1,752 MiB once for the
-host, `MemAvailable` 9.3 GiB of 12 (before: 0.3 GiB and the OOM killer). The completion condition the operator
+host, `MemAvailable` 9.3 GiB of 12 (before: 0.3 GiB and the OOM killer). **D2 matters to every node, not only
+the registrant**: on the D1-only binary, the moment the class registration landed, each node that resolved the
+new class derived its operand-inventory root by materializing the rows — four nodes at 2.0–2.1 GiB anonymous
+within a minute, 9.2 GiB on the host, swap in use — because the resolve runs on every producer tick and the
+allocator keeps the freed arenas. With D2 the root is streamed on that path too. The completion condition the operator
 set — four concurrent jobs do not multiply the artifact's physical memory by four — holds at rest by
 construction (one file, one page cache); the reading under four concurrent replays is taken from the same drill
 as its claims license (§7 records it).
