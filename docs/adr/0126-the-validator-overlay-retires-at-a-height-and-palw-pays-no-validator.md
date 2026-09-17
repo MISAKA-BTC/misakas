@@ -85,16 +85,37 @@ payouts; fork choice among PALW chains; testnet-11 until its height is set.
 
 ## 4. What is deleted, and what waits
 
-* **Deleted with this ADR** (no shipped network runs them): the in-node validator service and the VLT
-  compute worker, the validator binary and its CLI wiring, the operator scripts and runbooks for
-  running validators; and the ML-DSA-87 primitives PALW shares (key and signature lengths, the P2PKH
-  script, the key id) move out of the overlay module into `mldsa87_primitives`, so PALW imports nothing
-  from the overlay.
-* **Waits for the height to be buried:** the rules below the height — the overlay carve and its
-  payouts, attestation and evidence validation, the bond set, the overlay root, the stake reorg gate —
-  and the stores they read. Once a network's pruning point is past its retirement height nothing a
-  node validates reaches them; deleting them then is a code change with no consensus effect on that
-  network, and a mainnet that retires the overlay from genesis never needed them.
+**Deleted, because no shipped network runs it** (probed on mainnet, testnet-10, testnet-11, devnet and
+simnet: every fence below is unset or `u64::MAX` there). A `DnsParams` field is never removed — the
+struct is hashed whole into the fingerprint — so where a field armed deleted code, node start refuses a
+network that sets it (`validate_palw_v1` / `validate_palw_v2`), rather than running a rule nothing
+enforces.
+
+* **The validator's operational code**: the in-node validator service and the VLT compute worker, their
+  flags and the devnet switches that armed the VLT and token fences; the `kaspa-pq-validator` sidecar
+  binary; `misaka validator`, its status reader and the setup purpose; the validator-only builders in
+  `kaspa-pq-validator-core`; the operator scripts, kits and runbooks. The sidecar's EVM bridge deposit —
+  not a validator function — moved to `misaka evm deposit-lock` / `misaka evm claim`.
+* **PALW's dependence on validators**: the V1 fork choice (tip weights over the overlay's bond view), the
+  V1 credit gate and its audit-call bond gate, the V1 equivocation and step-conviction slashes of overlay
+  bonds, and their write-only indexes (the PALW carriage store, the class state store). The four V1
+  fences (`palw_credit`, `palw_fork_choice`, `palw_schedule`, `palw_ramp`) are refused at start. The
+  ML-DSA-87 primitives PALW shares moved to `mldsa87_primitives`; no PALW crate imports the overlay.
+* **Hard mandatory attestation inclusion**: the block rule, the template snapshot, the mining lane that
+  covered deficits, and the miner's wait; an overlay whose inclusion fence is set is refused.
+* **The legacy own-body bond spend gate** (the mergeset gate runs from every overlay's activation); an
+  overlay whose mergeset gate starts later is refused.
+* **The token overlay** (fold, ledger store, emission settlement, reads) — §4a.
+* **VLT voting weight and the inactivity leak** — §4a.
+
+**Waits for the height to be buried**, because testnet-10 and testnet-11 ran it and a node that
+validates their history needs it: the overlay carve and its payouts, attestation and evidence
+validation, the bond set and its spend skip, the overlay root, the stake reorg gate, the VLT shadow's
+consensus half (capability declarations, certificate resolution and committee draws, the audit-fee
+outputs, challenge slashes), precommit-evidence slashing, token transaction payload validation (refused
+past the height), and the stores they read. Once a network's pruning point is past its retirement height
+nothing a node validates reaches them; deleting them then is a code change with no consensus effect on
+that network, and a mainnet that retires the overlay from genesis never needed them.
 
 ## 5. Security amendments
 
