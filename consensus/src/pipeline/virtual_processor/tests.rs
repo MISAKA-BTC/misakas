@@ -12280,18 +12280,6 @@ async fn palw_v2_an_ungradeable_certification_does_not_starve_the_block_cap() {
     assert!(MAINNET_PARAMS.palw_chunk_cap_charge.is_none(), "and every shipped preset leaves it dormant");
 }
 
-/// **The processor's refutation ladder comes from `palw_court_ladder`, and from nothing else**
-/// (ADR-0084 §7.5; mainnet audit 2026-09-06, M-15).
-///
-/// The merge of the DA-court and model-market branches left two ladder fences on `Params` —
-/// `palw_context_ladder` (ADR-0077 Phase B) and `palw_court_ladder` (ADR-0084 U-08) — arming the
-/// same idea at the same call sites on two branches. Nothing in the tree bound either to the
-/// processor that reads one of them, so a carded mainnet armed the wrong one and its court walked
-/// at `2^22` while its classes were admitted at `2^26`.
-///
-/// Three arms, and the middle one is the whole test: arming the OTHER ladder must not move this
-/// answer.
-
 /// **ADR-0135: every genesis class the binary can describe has a work for the registry** — the
 /// devnet's shipped ruleset registers its classes with no admission carriage (their profiles are
 /// the catalog's), so the works come from the canonical class table, base class included, and a
@@ -12327,6 +12315,18 @@ fn adr0135_the_registry_describes_the_genesis_classes_from_the_canonical_table()
     }
     assert_eq!(consensus.virtual_processor().palw_known_model_works_v1(), works, "derived once, answered the same again");
 }
+
+/// **The processor's refutation ladder comes from `palw_court_ladder`, and from nothing else**
+/// (ADR-0084 §7.5; mainnet audit 2026-09-06, M-15).
+///
+/// The merge of the DA-court and model-market branches left two ladder fences on `Params` —
+/// `palw_context_ladder` (ADR-0077 Phase B) and `palw_court_ladder` (ADR-0084 U-08) — arming the
+/// same idea at the same call sites on two branches. Nothing in the tree bound either to the
+/// processor that reads one of them, so a carded mainnet armed the wrong one and its court walked
+/// at `2^22` while its classes were admitted at `2^26`.
+///
+/// Three arms, and the middle one is the whole test: arming the OTHER ladder must not move this
+/// answer.
 #[test]
 fn the_processor_resolves_the_refutation_ladder_from_palw_court_ladder_alone() {
     use kaspa_consensus_core::config::params::{ForkActivation, devnet_shipped_params};
