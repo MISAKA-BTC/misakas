@@ -1453,3 +1453,126 @@ mod attempt_answer_tests {
         assert!(bytes.len() < 256, "{} bytes: the anchor plus the ids", bytes.len());
     }
 }
+
+/// **ADR-0127 Decision 2: a licensing quorum signs the anchor block's transactions and resulting
+/// state — pinned as the chain of bindings it already is, not restated as a field.**
+///
+/// A seat signs `palw_receipt_message_v2(network ‖ claim ‖ verdict ‖ signed_daa)`; the claim is
+/// [`attempt_id_v2`], which hashes the whole unsigned attempt and so its `challenge`; the challenge
+/// is [`challenge_v2`] over the carrying header's `pre_pow_hash_64`; stateless admission refuses an
+/// attempt whose challenge is not its header's (`ChallengeMismatch`); and the pre-PoW hash covers the
+/// header's transaction merkle root, accepted-id merkle root, UTXO commitment and PALW state root.
+/// Each link is exercised: a header that differs in any of those refuses the attempt, the attempt
+/// such a header could carry has another id, and a receipt for that id is another message — so no
+/// receipt licenses a block with other contents, and none can be replayed onto a branch that orders
+/// a spend differently.
+#[cfg(test)]
+mod adr0127_the_quorum_signs_the_anchor_state {
+    use super::*;
+    use crate::hashing::header::pre_pow_hash_64;
+    use crate::header::Header;
+    use crate::palw_panel_v2::{PalwReceiptVerdictV2, palw_receipt_message_v2};
+
+    /// An attempt-lane anchor header: the four state commitments are the variables under test.
+    fn anchor() -> Header {
+        Header::new_finalized(
+            crate::constants::BLOCK_VERSION,
+            vec![vec![Hash64::from_u64_word(0xA0)]].try_into().expect("one parent level"),
+            Hash64::from_u64_word(0x7E),
+            Hash64::from_u64_word(0xAC),
+            Hash64::from_u64_word(0x07),
+            1_700_000_000_000,
+            0x1e7f_ffff,
+            7,
+            crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2,
+            4_242,
+            4_000u64.into(),
+            4_100,
+            Hash64::from_u64_word(0x99),
+        )
+        .with_palw_state_root(Hash64::from_u64_word(0x57))
+    }
+
+    /// The attempt a producer mounts on a header whose pre-PoW hash is `pre_pow`.
+    fn attempt_on(network: Hash64, header: &Header, pre_pow: Hash64) -> PalwAttemptEnvelopeV2 {
+        let class_id = Hash64::from_u64_word(0xC1);
+        let executor_bond = TransactionOutpoint::new(Hash64::from_u64_word(0xB0), 0);
+        let trace_root = Hash64::from_u64_word(0x7A);
+        PalwAttemptEnvelopeV2 {
+            attempt: PalwAttemptUnsignedV2 {
+                version: PALW_ATTEMPT_V2_VERSION,
+                network_domain: network,
+                challenge: challenge_v2(network, pre_pow, header.timestamp, header.nonce, class_id, &executor_bond),
+                class_id,
+                executor_bond,
+                executor_pubkey: vec![7u8; 32],
+                operator_id: Hash64::from_u64_word(0xE0),
+                artifact_root: Hash64::from_u64_word(0xA7),
+                trace_root,
+                output_root: Hash64::from_u64_word(0x0F),
+                pwu: 4_242,
+                trace_manifest_root: attempt_trace_manifest_root_v1(trace_root, PALW_ATTEMPT_V2_TRACE_CHUNKS),
+                trace_chunk_count: PALW_ATTEMPT_V2_TRACE_CHUNKS,
+                trace_retention_daa: 999_999,
+                execution_root: Hash64::from_u64_word(0x41),
+            },
+            signature: vec![0x5A; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+        }
+    }
+
+    #[test]
+    fn a_licensing_quorum_signs_the_anchor_blocks_transactions_and_resulting_state() {
+        let network = palw_network_domain_v2(b"testnet-11");
+        let header = anchor();
+        let pre_pow = pre_pow_hash_64(&header);
+        let carried = attempt_on(network, &header, pre_pow);
+        assert_eq!(
+            carried.validate_stateless_v2(network, pre_pow, header.timestamp, header.nonce),
+            Ok(()),
+            "the attempt is admissible on the header it was mounted on"
+        );
+        let claim = attempt_id_v2(&carried.attempt);
+        let signed_daa = 4_300;
+        let receipt = palw_receipt_message_v2(network, claim, PalwReceiptVerdictV2::Valid, signed_daa);
+
+        // The claim covers the challenge, and a receipt covers the claim.
+        let mut rechallenged = carried.attempt.clone();
+        rechallenged.challenge = Hash64::from_u64_word(0x1234);
+        assert_ne!(attempt_id_v2(&rechallenged), claim, "attempt_id_v2 hashes the challenge");
+        assert_ne!(
+            palw_receipt_message_v2(network, attempt_id_v2(&rechallenged), PalwReceiptVerdictV2::Valid, signed_daa),
+            receipt,
+            "a receipt names its claim"
+        );
+
+        let differing: [(&str, fn(&mut Header)); 4] = [
+            ("utxo_commitment", |h| h.utxo_commitment = Hash64::from_u64_word(0x08)),
+            ("hash_merkle_root", |h| h.hash_merkle_root = Hash64::from_u64_word(0x7F)),
+            ("accepted_id_merkle_root", |h| h.accepted_id_merkle_root = Hash64::from_u64_word(0xAD)),
+            ("palw_state_root", |h| h.palw_state_root = Hash64::from_u64_word(0x58)),
+        ];
+        for (field, differ) in differing {
+            let mut other = header.clone();
+            differ(&mut other);
+            other.finalize();
+            let other_pre_pow = pre_pow_hash_64(&other);
+            assert_ne!(other_pre_pow, pre_pow, "{field} is inside the pre-PoW hash");
+            assert_eq!(
+                carried.validate_stateless_v2(network, other_pre_pow, other.timestamp, other.nonce),
+                Err(PalwAttemptV2Error::ChallengeMismatch),
+                "an attempt licensed for one {field} is refused on a header with another"
+            );
+            // What the other header can carry is another claim, and its receipts are other messages.
+            let remounted = attempt_on(network, &other, other_pre_pow);
+            assert_eq!(remounted.validate_stateless_v2(network, other_pre_pow, other.timestamp, other.nonce), Ok(()));
+            assert_ne!(remounted.attempt.challenge, carried.attempt.challenge, "{field}: another challenge");
+            let other_claim = attempt_id_v2(&remounted.attempt);
+            assert_ne!(other_claim, claim, "{field}: another claim id");
+            assert_ne!(
+                palw_receipt_message_v2(network, other_claim, PalwReceiptVerdictV2::Valid, signed_daa),
+                receipt,
+                "{field}: no receipt for the anchor licenses the other block"
+            );
+        }
+    }
+}

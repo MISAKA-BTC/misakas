@@ -186,6 +186,14 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// ADR-0127 Decision 3: whether the transactions the selected chain accepted at `daa_score` are
+    /// settled, and their settlement depth in `Final` anchors, from the sink's PALW V2 state —
+    /// `getPalwSettlement`'s read. `None` where the node keeps no V2 state or cannot date its frontier.
+    fn palw_settlement_v1(&self, daa_score: u64) -> Option<crate::palw_settlement_v1::PalwSettlementV1> {
+        let _ = daa_score;
+        None
+    }
+
     /// ADR-0125: re-shape a standard template into a round block of `round` whose fees pay `payout`
     /// — the round lane's parents, algo 10, a zero-subsidy coinbase with no outputs, an empty EVM
     /// payload and an empty `palw_commitment` for the caller to fill with its signed envelope once

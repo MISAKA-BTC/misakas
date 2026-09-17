@@ -211,6 +211,15 @@ pub enum RpcApiOps {
     /// ADR-0125 §7.4: the execution lane — its stage table, the current round's permits, the span's
     /// schedule and ledger, and the finals recorded toward the next span.
     GetPalwRoundLane = 181,
+    /// ADR-0127 Decision 3: whether what the selected chain accepted at a DAA score is settled, and
+    /// its settlement depth in `Final` PALW anchors — never a count of blocks.
+    GetPalwSettlement = 182,
+    /// MISAKA §5 round 2: the lock a validator carries on the selected chain and the epochs whose
+    /// prevote quorum is met and which it has not precommitted yet.
+    GetPrecommitDuty = 183,
+    /// Each registered PALW class's context — `n_ctx` and its canonical job's token counts — with
+    /// where the numbers came from, and the free-prompt lane's token limits.
+    GetPalwClassContexts = 184,
 }
 
 impl RpcApiOps {

@@ -97,6 +97,9 @@ message KaspadRequest {
     GetPalwNodeStatusRequestMessage getPalwNodeStatusRequest = 1160;
     GetPalwRegistrationTermsRequestMessage getPalwRegistrationTermsRequest = 1162;
     GetPalwRoundLaneRequestMessage getPalwRoundLaneRequest = 1164;
+    GetPalwSettlementRequestMessage getPalwSettlementRequest = 1166;
+    GetPrecommitDutyRequestMessage getPrecommitDutyRequest = 1168;
+    GetPalwClassContextsRequestMessage getPalwClassContextsRequest = 1170;
   }
 }
 
@@ -189,6 +192,9 @@ message KaspadResponse {
     GetPalwNodeStatusResponseMessage getPalwNodeStatusResponse = 1161;
     GetPalwRegistrationTermsResponseMessage getPalwRegistrationTermsResponse = 1163;
     GetPalwRoundLaneResponseMessage getPalwRoundLaneResponse = 1165;
+    GetPalwSettlementResponseMessage getPalwSettlementResponse = 1167;
+    GetPrecommitDutyResponseMessage getPrecommitDutyResponse = 1169;
+    GetPalwClassContextsResponseMessage getPalwClassContextsResponse = 1171;
   }
 }
 

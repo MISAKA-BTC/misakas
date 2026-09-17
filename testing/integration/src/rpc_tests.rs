@@ -1127,6 +1127,53 @@ async fn sanity_test() {
                     }
                 })
             }
+            KaspadPayloadOps::GetPalwSettlement => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client.get_palw_settlement_call(None, GetPalwSettlementRequest { daa_score: 0 }).await.unwrap();
+                    assert_eq!(response.daa_score, 0, "the answer names the DAA score it is about");
+                    // The sanity daemon may keep no PALW V2 state; an unavailable answer settles nothing.
+                    if !response.available {
+                        assert!(
+                            !response.settled
+                                && response.depth == 0
+                                && response.pending_anchors == 0
+                                && !response.depth_is_lower_bound
+                        );
+                    }
+                })
+            }
+            KaspadPayloadOps::GetPrecommitDuty => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let bond_outpoint = format!("{}:0", "22".repeat(64));
+                    let request = GetPrecommitDutyRequest { validator_id: "11".repeat(64), bond_outpoint: bond_outpoint.clone() };
+                    let response = rpc_client.get_precommit_duty_call(None, request).await.unwrap();
+                    // No duty view on the sanity daemon: an unavailable answer says nothing else.
+                    if !response.available {
+                        assert!(!response.round_active && response.due.is_empty() && response.held_anchor.is_empty());
+                    }
+                    let malformed = GetPrecommitDutyRequest { validator_id: "not-a-hash".to_string(), bond_outpoint };
+                    assert!(
+                        rpc_client.get_precommit_duty_call(None, malformed).await.is_err(),
+                        "a malformed validator id is a request error"
+                    );
+                })
+            }
+            KaspadPayloadOps::GetPalwClassContexts => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client.get_palw_class_contexts_call(None, GetPalwClassContextsRequest {}).await.unwrap();
+                    assert_eq!(response.available, !response.classes.is_empty(), "available is whether the class table has rows");
+                    for class in &response.classes {
+                        assert!(
+                            ["chain_registration", "build_ledger", "unknown"].contains(&class.source.as_str()),
+                            "{}",
+                            class.source
+                        );
+                    }
+                })
+            }
             KaspadPayloadOps::GetTokenSupply => {
                 tst!(op, "TOK supply read — inert preset answers available:false by design")
             }

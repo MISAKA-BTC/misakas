@@ -4492,6 +4492,308 @@ impl Deserializer for GetPalwRoundLaneResponse {
     }
 }
 
+/// ADR-0127 Decision 3: `getPalwSettlement` — whether what the selected chain accepted at
+/// `daa_score` (a UTXO entry's `block_daa_score`) is settled, and its settlement depth, read from
+/// the sink's PALW state.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwSettlementRequest {
+    pub daa_score: u64,
+}
+
+impl Serializer for GetPalwSettlementRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(u64, &self.daa_score, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwSettlementRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { daa_score: load!(u64, reader)? })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwSettlementResponse {
+    /// The node keeps PALW V2 state and can date its safe frontier. When false, every field but
+    /// `daa_score` and `sink_daa` is a default and says nothing.
+    pub available: bool,
+    /// The DAA score of the chain block the answer stands at.
+    pub sink_daa: u64,
+    /// The accepting DAA score this answer is about.
+    pub daa_score: u64,
+    /// The safe frontier stands at or past `daa_score`: what the chain accepted there is settled.
+    pub settled: bool,
+    /// `Final` PALW anchors at or after `daa_score` — anchors, never blocks.
+    pub depth: u64,
+    /// Anchors at or after `daa_score` whose claims are still on their way to `Final`.
+    pub pending_anchors: u64,
+    /// Anchors at or after `daa_score` may have retired from the state: the depth is at least `depth`.
+    pub depth_is_lower_bound: bool,
+    pub safe_frontier_blue_score: u64,
+    pub safe_frontier_daa: u64,
+}
+
+impl Serializer for GetPalwSettlementResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u64, &self.sink_daa, writer)?;
+        store!(u64, &self.daa_score, writer)?;
+        store!(bool, &self.settled, writer)?;
+        store!(u64, &self.depth, writer)?;
+        store!(u64, &self.pending_anchors, writer)?;
+        store!(bool, &self.depth_is_lower_bound, writer)?;
+        store!(u64, &self.safe_frontier_blue_score, writer)?;
+        store!(u64, &self.safe_frontier_daa, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwSettlementResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            sink_daa: load!(u64, reader)?,
+            daa_score: load!(u64, reader)?,
+            settled: load!(bool, reader)?,
+            depth: load!(u64, reader)?,
+            pending_anchors: load!(u64, reader)?,
+            depth_is_lower_bound: load!(bool, reader)?,
+            safe_frontier_blue_score: load!(u64, reader)?,
+            safe_frontier_daa: load!(u64, reader)?,
+        })
+    }
+}
+
+/// MISAKA §5 round 2: `getPrecommitDuty` — what the precommit round asks of one validator at the
+/// node's sink.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPrecommitDutyRequest {
+    /// 64-byte validator id (`validator_pubkey_hash`, Hash64 hex).
+    pub validator_id: String,
+    /// Stake-bond outpoint, "txid_hex:index" (txid is a 64-byte Hash64 = 128 hex chars).
+    pub bond_outpoint: String,
+}
+
+impl Serializer for GetPrecommitDutyRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.validator_id, writer)?;
+        store!(String, &self.bond_outpoint, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPrecommitDutyRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { validator_id: load!(String, reader)?, bond_outpoint: load!(String, reader)? })
+    }
+}
+
+/// One epoch a validator still owes a precommit for.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPrecommitDue {
+    pub epoch: u64,
+    /// The epoch's anchor (Hash64 hex).
+    pub anchor_hash: String,
+    pub anchor_daa_score: u64,
+    /// The epoch's frozen snapshot commitment the precommit binds (Hash64 hex).
+    pub snapshot_commitment: String,
+}
+
+impl Serializer for RpcPrecommitDue {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(u64, &self.epoch, writer)?;
+        store!(String, &self.anchor_hash, writer)?;
+        store!(u64, &self.anchor_daa_score, writer)?;
+        store!(String, &self.snapshot_commitment, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPrecommitDue {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            epoch: load!(u64, reader)?,
+            anchor_hash: load!(String, reader)?,
+            anchor_daa_score: load!(u64, reader)?,
+            snapshot_commitment: load!(String, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPrecommitDutyResponse {
+    /// False when the node has no duty view for this validator (no overlay, or the read is not
+    /// implemented on this node); every other field is then a default. A malformed id or outpoint
+    /// is a request error.
+    pub available: bool,
+    /// The precommit round is live at the sink.
+    pub round_active: bool,
+    pub sink_daa_score: u64,
+    /// The lock this validator carries on the selected chain, as counted: its epoch and anchor
+    /// (Hash64 hex). `0` and the zero hash before its first counted precommit.
+    pub held_epoch: u64,
+    pub held_anchor: String,
+    /// Epochs whose prevote quorum is met and which this validator has not precommitted, ascending.
+    pub due: Vec<RpcPrecommitDue>,
+}
+
+impl Serializer for GetPrecommitDutyResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(bool, &self.round_active, writer)?;
+        store!(u64, &self.sink_daa_score, writer)?;
+        store!(u64, &self.held_epoch, writer)?;
+        store!(String, &self.held_anchor, writer)?;
+        serialize!(Vec<RpcPrecommitDue>, &self.due, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPrecommitDutyResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            round_active: load!(bool, reader)?,
+            sink_daa_score: load!(u64, reader)?,
+            held_epoch: load!(u64, reader)?,
+            held_anchor: load!(String, reader)?,
+            due: deserialize!(Vec<RpcPrecommitDue>, reader)?,
+        })
+    }
+}
+
+/// `getPalwClassContexts` — the context each registered PALW class runs at, and where the numbers
+/// came from. Its own op rather than new fields on `RpcPalwClassRow`, whose rows are versioned per
+/// element: a field added there breaks every old client reading a new node.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwClassContextsRequest {}
+
+impl Serializer for GetPalwClassContextsRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwClassContextsRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {})
+    }
+}
+
+/// One class's context.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwClassContext {
+    /// 128 hex, as `getPalwClasses` spells it.
+    pub class_id: String,
+    /// The model the node's build ledger names for the class; empty when it names none.
+    pub model_id: String,
+    /// The class's window in cached positions. Every job of the class has a footprint at most this.
+    pub n_ctx: u32,
+    /// The canonical job's prefill and decode token counts.
+    pub canonical_prefill_tokens: u32,
+    pub canonical_decode_tokens: u32,
+    /// **The canonical job's footprint**: the cached positions it occupies,
+    /// `prefill + max(1, decode) − 1` (`palw_context_ladder::palw_job_footprint_v1`) — the first
+    /// generated token is sampled from the prefill's last logits, so a job makes `decode − 1` decode
+    /// calls. At most `n_ctx`, and equal to it when the job is sized to the window: a (7, 2) job at
+    /// `n_ctx` 8 is a footprint of 8 and valid. Adding prefill and decode and comparing that with
+    /// `n_ctx` overstates the job by one position and reports an overflow that is not there.
+    pub canonical_footprint_positions: u32,
+    /// The canonical job's declared context bound.
+    pub max_context_tokens: u32,
+    /// Where the numbers came from: `chain_registration` (the declaration the chain registered),
+    /// `build_ledger` (this node's build knows the class) or `unknown` (the numbers are zeros).
+    pub source: String,
+}
+
+impl Serializer for RpcPalwClassContext {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(String, &self.model_id, writer)?;
+        store!(u32, &self.n_ctx, writer)?;
+        store!(u32, &self.canonical_prefill_tokens, writer)?;
+        store!(u32, &self.canonical_decode_tokens, writer)?;
+        store!(u32, &self.canonical_footprint_positions, writer)?;
+        store!(u32, &self.max_context_tokens, writer)?;
+        store!(String, &self.source, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwClassContext {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            class_id: load!(String, reader)?,
+            model_id: load!(String, reader)?,
+            n_ctx: load!(u32, reader)?,
+            canonical_prefill_tokens: load!(u32, reader)?,
+            canonical_decode_tokens: load!(u32, reader)?,
+            canonical_footprint_positions: load!(u32, reader)?,
+            max_context_tokens: load!(u32, reader)?,
+            source: load!(String, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwClassContextsResponse {
+    /// The node's class table is non-empty.
+    pub available: bool,
+    /// The free-prompt lane's token limits from the network's V2 bundle; 0 with no bundle. That lane
+    /// admits a job with `prompt_tokens + decode_token_limit <= max_context_tokens <= n_ctx`
+    /// (`palw_freeprompt_v3`) — one position stricter than the footprint rule — so a client sizing
+    /// its own prompt for the lane gets at most `n_ctx − prompt` tokens back.
+    pub fp_max_prompt_tokens: u32,
+    pub fp_max_decode_tokens: u32,
+    pub classes: Vec<RpcPalwClassContext>,
+}
+
+impl Serializer for GetPalwClassContextsResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u32, &self.fp_max_prompt_tokens, writer)?;
+        store!(u32, &self.fp_max_decode_tokens, writer)?;
+        serialize!(Vec<RpcPalwClassContext>, &self.classes, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwClassContextsResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            fp_max_prompt_tokens: load!(u32, reader)?,
+            fp_max_decode_tokens: load!(u32, reader)?,
+            classes: deserialize!(Vec<RpcPalwClassContext>, reader)?,
+        })
+    }
+}
+
 /// ADR-0122: `getPalwNodeStatus` — what this node is doing, which until now only its log said.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

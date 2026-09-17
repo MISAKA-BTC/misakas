@@ -828,6 +828,67 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwRoundLaneResponse>, protowire::Get
         error: None,
     }
 });
+from!(item: &kaspa_rpc_core::GetPalwSettlementRequest, protowire::GetPalwSettlementRequestMessage, {
+    Self { daa_score: item.daa_score }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwSettlementResponse>, protowire::GetPalwSettlementResponseMessage, {
+    Self {
+        available: item.available,
+        sink_daa: item.sink_daa,
+        daa_score: item.daa_score,
+        settled: item.settled,
+        depth: item.depth,
+        pending_anchors: item.pending_anchors,
+        depth_is_lower_bound: item.depth_is_lower_bound,
+        safe_frontier_blue_score: item.safe_frontier_blue_score,
+        safe_frontier_daa: item.safe_frontier_daa,
+        error: None,
+    }
+});
+from!(item: &kaspa_rpc_core::GetPrecommitDutyRequest, protowire::GetPrecommitDutyRequestMessage, {
+    Self { validator_id: item.validator_id.clone(), bond_outpoint: item.bond_outpoint.clone() }
+});
+from!(item: &kaspa_rpc_core::RpcPrecommitDue, protowire::RpcPrecommitDue, {
+    Self {
+        epoch: item.epoch,
+        anchor_hash: item.anchor_hash.clone(),
+        anchor_daa_score: item.anchor_daa_score,
+        snapshot_commitment: item.snapshot_commitment.clone(),
+    }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPrecommitDutyResponse>, protowire::GetPrecommitDutyResponseMessage, {
+    Self {
+        available: item.available,
+        round_active: item.round_active,
+        sink_daa_score: item.sink_daa_score,
+        held_epoch: item.held_epoch,
+        held_anchor: item.held_anchor.clone(),
+        due: item.due.iter().map(protowire::RpcPrecommitDue::from).collect(),
+        error: None,
+    }
+});
+from!(&kaspa_rpc_core::GetPalwClassContextsRequest, protowire::GetPalwClassContextsRequestMessage);
+from!(item: &kaspa_rpc_core::RpcPalwClassContext, protowire::RpcPalwClassContext, {
+    Self {
+        class_id: item.class_id.clone(),
+        model_id: item.model_id.clone(),
+        n_ctx: item.n_ctx,
+        canonical_prefill_tokens: item.canonical_prefill_tokens,
+        canonical_decode_tokens: item.canonical_decode_tokens,
+        canonical_footprint_positions: item.canonical_footprint_positions,
+        max_context_tokens: item.max_context_tokens,
+        source: item.source.clone(),
+    }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwClassContextsResponse>, protowire::GetPalwClassContextsResponseMessage, {
+    Self {
+        available: item.available,
+        fp_max_prompt_tokens: item.fp_max_prompt_tokens,
+        fp_max_decode_tokens: item.fp_max_decode_tokens,
+        classes: item.classes.iter().map(protowire::RpcPalwClassContext::from).collect(),
+        error: None,
+    }
+});
 from!(&kaspa_rpc_core::GetPalwRegistrationTermsRequest, protowire::GetPalwRegistrationTermsRequestMessage);
 from!(item: &kaspa_rpc_core::RpcPalwCertifiedFamily, protowire::RpcPalwCertifiedFamily, {
     Self { lane: item.lane.clone(), digest: item.digest.clone(), certified_daa: item.certified_daa, family_hex: item.family_hex.clone() }
@@ -1975,6 +2036,64 @@ try_from!(item: &protowire::GetPalwRoundLaneResponseMessage, RpcResult<kaspa_rpc
         finals: item.finals,
         next_round_permits: u16::try_from(item.next_round_permits)
             .map_err(|_| RpcError::General(format!("next_round_permits {} is not a width", item.next_round_permits)))?,
+    }
+});
+try_from!(item: &protowire::GetPalwSettlementRequestMessage, kaspa_rpc_core::GetPalwSettlementRequest, {
+    Self { daa_score: item.daa_score }
+});
+try_from!(item: &protowire::GetPalwSettlementResponseMessage, RpcResult<kaspa_rpc_core::GetPalwSettlementResponse>, {
+    Self {
+        available: item.available,
+        sink_daa: item.sink_daa,
+        daa_score: item.daa_score,
+        settled: item.settled,
+        depth: item.depth,
+        pending_anchors: item.pending_anchors,
+        depth_is_lower_bound: item.depth_is_lower_bound,
+        safe_frontier_blue_score: item.safe_frontier_blue_score,
+        safe_frontier_daa: item.safe_frontier_daa,
+    }
+});
+try_from!(item: &protowire::GetPrecommitDutyRequestMessage, kaspa_rpc_core::GetPrecommitDutyRequest, {
+    Self { validator_id: item.validator_id.clone(), bond_outpoint: item.bond_outpoint.clone() }
+});
+try_from!(item: &protowire::RpcPrecommitDue, kaspa_rpc_core::RpcPrecommitDue, {
+    Self {
+        epoch: item.epoch,
+        anchor_hash: item.anchor_hash.clone(),
+        anchor_daa_score: item.anchor_daa_score,
+        snapshot_commitment: item.snapshot_commitment.clone(),
+    }
+});
+try_from!(item: &protowire::GetPrecommitDutyResponseMessage, RpcResult<kaspa_rpc_core::GetPrecommitDutyResponse>, {
+    Self {
+        available: item.available,
+        round_active: item.round_active,
+        sink_daa_score: item.sink_daa_score,
+        held_epoch: item.held_epoch,
+        held_anchor: item.held_anchor.clone(),
+        due: item.due.iter().map(kaspa_rpc_core::RpcPrecommitDue::try_from).collect::<RpcResult<Vec<_>>>()?,
+    }
+});
+try_from!(&protowire::GetPalwClassContextsRequestMessage, kaspa_rpc_core::GetPalwClassContextsRequest);
+try_from!(item: &protowire::RpcPalwClassContext, kaspa_rpc_core::RpcPalwClassContext, {
+    Self {
+        class_id: item.class_id.clone(),
+        model_id: item.model_id.clone(),
+        n_ctx: item.n_ctx,
+        canonical_prefill_tokens: item.canonical_prefill_tokens,
+        canonical_decode_tokens: item.canonical_decode_tokens,
+        canonical_footprint_positions: item.canonical_footprint_positions,
+        max_context_tokens: item.max_context_tokens,
+        source: item.source.clone(),
+    }
+});
+try_from!(item: &protowire::GetPalwClassContextsResponseMessage, RpcResult<kaspa_rpc_core::GetPalwClassContextsResponse>, {
+    Self {
+        available: item.available,
+        fp_max_prompt_tokens: item.fp_max_prompt_tokens,
+        fp_max_decode_tokens: item.fp_max_decode_tokens,
+        classes: item.classes.iter().map(kaspa_rpc_core::RpcPalwClassContext::try_from).collect::<RpcResult<Vec<_>>>()?,
     }
 });
 try_from!(&protowire::GetPalwRegistrationTermsRequestMessage, kaspa_rpc_core::GetPalwRegistrationTermsRequest);

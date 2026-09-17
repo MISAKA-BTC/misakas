@@ -325,10 +325,19 @@ pub(crate) fn sompi_to_msk(s: u64) -> String {
 // wallet utxo list — read-only
 // ---------------------------------------------------------------------------
 
-pub async fn utxo_list(ctx: &Ctx, address: Option<&str>, ks: &KeySource) -> CliResult {
+pub async fn utxo_list(ctx: &Ctx, address: Option<&str>, ks: &KeySource, recent: usize) -> CliResult {
     let nv = connect(ctx).await?;
     let addr = resolve_address(ctx, address, ks, &nv)?;
     let utxos = page_all(&nv, &addr).await?;
+    // ADR-0127 Decision 3: the newest outputs and their settlement depth, one read per distinct DAA
+    // score — the connection's LAST reads, because a node built before getPalwSettlement closes the
+    // WebSocket on it, and then the rows print without the column.
+    let newest = newest_outputs(&utxos, recent);
+    let depths = if newest.is_empty() {
+        None
+    } else {
+        crate::palw_settlement::settlement_by_daa(&nv.client, newest.iter().map(|u| u.entry.block_daa_score)).await
+    };
     let (mut mature_n, mut mature_sum, mut imm_n, mut imm_sum) = (0u64, 0u64, 0u64, 0u64);
     // **Bonded collateral is reported as bonded, not as spendable** (audit3, the wallet's low).
     //
@@ -363,7 +372,9 @@ pub async fn utxo_list(ctx: &Ctx, address: Option<&str>, ks: &KeySource) -> CliR
             json!({ "ok": true, "address": addr.to_string(), "total": utxos.len(),
                     "mature": { "count": mature_n, "sompi": mature_sum },
                     "immature": { "count": imm_n, "sompi": imm_sum },
-                    "bonded": { "count": bonded_n, "sompi": bonded_sum } })
+                    "bonded": { "count": bonded_n, "sompi": bonded_sum },
+                    "settlementAvailable": depths.is_some(),
+                    "recent": newest.iter().map(|u| recent_output_json(u, depths.as_ref())).collect::<Vec<_>>() })
         ),
         OutputFormat::Human => {
             println!("Address      : {addr}");
@@ -390,6 +401,23 @@ pub async fn utxo_list(ctx: &Ctx, address: Option<&str>, ks: &KeySource) -> CliR
                     sompi_to_msk(bonded_sum)
                 );
             }
+            if !newest.is_empty() {
+                println!();
+                println!(
+                    "Newest {} of {} outputs{}:",
+                    newest.len(),
+                    utxos.len(),
+                    if depths.is_some() { " (settlement depth in PALW anchors)" } else { "" }
+                );
+                for u in &newest {
+                    println!("  {}", recent_output_line(u, depths.as_ref()));
+                }
+                if depths.is_none() {
+                    println!(
+                        "  (no settlement depth: this node does not answer getPalwSettlement, or keeps no PALW state it can date)"
+                    );
+                }
+            }
             if utxos.len() > MAX_INPUTS_PER_TX {
                 println!();
                 println!(
@@ -401,6 +429,74 @@ pub async fn utxo_list(ctx: &Ctx, address: Option<&str>, ks: &KeySource) -> CliR
     }
     let _ = nv.client.disconnect().await;
     Ok(())
+}
+
+/// The `n` newest outputs — highest block DAA score first, ties by outpoint — the ones whose
+/// settlement a receiver is still waiting on.
+fn newest_outputs(utxos: &[Funding], n: usize) -> Vec<&Funding> {
+    let mut newest: Vec<&Funding> = utxos.iter().collect();
+    newest.sort_by(|a, b| {
+        b.entry
+            .block_daa_score
+            .cmp(&a.entry.block_daa_score)
+            .then_with(|| (a.outpoint.transaction_id, a.outpoint.index).cmp(&(b.outpoint.transaction_id, b.outpoint.index)))
+    });
+    newest.truncate(n);
+    newest
+}
+
+/// What an output is besides its amount: coinbase, not yet spendable, locked collateral.
+fn output_marks(u: &Funding) -> Vec<&'static str> {
+    let mut marks = Vec::new();
+    if u.entry.is_coinbase {
+        marks.push("coinbase");
+    }
+    if u.bonded {
+        marks.push("bonded");
+    } else if !u.mature {
+        marks.push("immature");
+    }
+    marks
+}
+
+/// One row of `utxo list`'s newest outputs; the settlement column only where the node answered.
+fn recent_output_line(
+    u: &Funding,
+    depths: Option<&std::collections::BTreeMap<u64, kaspa_rpc_core::GetPalwSettlementResponse>>,
+) -> String {
+    let marks = output_marks(u);
+    let mut line =
+        format!("{}:{}  {} MSK  daa {}", u.outpoint.transaction_id, u.outpoint.index, sompi_to_msk(u.amount), u.entry.block_daa_score);
+    if !marks.is_empty() {
+        line.push_str(&format!("  [{}]", marks.join(", ")));
+    }
+    if let Some(answer) = depths.and_then(|d| d.get(&u.entry.block_daa_score)) {
+        line.push_str(&format!("  {}", crate::palw_settlement::settlement_cell(answer)));
+    }
+    line
+}
+
+fn recent_output_json(
+    u: &Funding,
+    depths: Option<&std::collections::BTreeMap<u64, kaspa_rpc_core::GetPalwSettlementResponse>>,
+) -> serde_json::Value {
+    let mut row = json!({
+        "outpoint": format!("{}:{}", u.outpoint.transaction_id, u.outpoint.index),
+        "sompi": u.amount,
+        "blockDaaScore": u.entry.block_daa_score,
+        "coinbase": u.entry.is_coinbase,
+        "mature": u.mature,
+        "bonded": u.bonded,
+    });
+    if let Some(answer) = depths.and_then(|d| d.get(&u.entry.block_daa_score)) {
+        row["settlement"] = json!({
+            "settled": answer.settled,
+            "depth": answer.depth,
+            "pendingAnchors": answer.pending_anchors,
+            "depthIsLowerBound": answer.depth_is_lower_bound,
+        });
+    }
+    row
 }
 
 // ---------------------------------------------------------------------------
@@ -685,5 +781,56 @@ mod bond_lock_tests {
         assert!(!bond_is_releasable(&bond("unbonding", None, 100), u64::MAX));
         // And an overflowing period cannot wrap into "releasable".
         assert!(!bond_is_releasable(&bond("unbonding", Some(u64::MAX), 1), u64::MAX));
+    }
+}
+
+#[cfg(test)]
+mod recent_output_tests {
+    use super::*;
+
+    fn funding(txid_word: u64, index: u32, daa: u64, coinbase: bool, mature: bool, bonded: bool) -> Funding {
+        use kaspa_consensus_core::tx::ScriptPublicKey;
+        Funding {
+            outpoint: TransactionOutpoint::new(kaspa_consensus_core::Hash64::from_u64_word(txid_word), index),
+            entry: UtxoEntry::new(1_000 + daa, ScriptPublicKey::default(), daa, coinbase),
+            mature,
+            amount: 1_000 + daa,
+            bonded,
+        }
+    }
+
+    fn settled_at(depth: u64) -> kaspa_rpc_core::GetPalwSettlementResponse {
+        kaspa_rpc_core::GetPalwSettlementResponse { available: true, settled: true, depth, ..Default::default() }
+    }
+
+    /// **ADR-0127: the newest outputs, newest first, each with the depth of the DAA score it was
+    /// accepted at** — and without the column where the node did not answer.
+    #[test]
+    fn utxo_list_shows_the_newest_outputs_with_their_settlement_depth() {
+        let utxos = vec![
+            funding(1, 0, 100, true, true, false),
+            funding(2, 1, 300, false, true, false),
+            funding(3, 0, 200, true, false, false),
+            funding(4, 0, 300, false, true, true),
+        ];
+        let newest = newest_outputs(&utxos, 3);
+        let order: Vec<(u64, u32)> = newest.iter().map(|u| (u.entry.block_daa_score, u.outpoint.index)).collect();
+        assert_eq!(order, vec![(300, 1), (300, 0), (200, 0)], "highest DAA first, ties by outpoint");
+        assert!(newest_outputs(&utxos, 0).is_empty(), "--recent 0 lists none");
+        assert_eq!(newest_outputs(&utxos, 99).len(), 4);
+
+        let depths: std::collections::BTreeMap<u64, kaspa_rpc_core::GetPalwSettlementResponse> =
+            [(300, settled_at(2)), (200, settled_at(9))].into_iter().collect();
+        let row = recent_output_line(newest[2], Some(&depths));
+        assert!(row.ends_with("daa 200  [coinbase, immature]  depth 9"), "{row}");
+        let bonded = recent_output_line(newest[1], Some(&depths));
+        assert!(bonded.ends_with("[bonded]  depth 2"), "{bonded}");
+        let without = recent_output_line(newest[2], None);
+        assert!(without.ends_with("daa 200  [coinbase, immature]"), "an old node: the row without the column: {without}");
+
+        let json = recent_output_json(newest[0], Some(&depths));
+        assert_eq!(json["blockDaaScore"], 300);
+        assert_eq!(json["settlement"]["depth"], 2);
+        assert!(recent_output_json(newest[0], None).get("settlement").is_none());
     }
 }

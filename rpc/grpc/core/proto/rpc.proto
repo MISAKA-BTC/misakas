@@ -1890,3 +1890,68 @@ message GetPalwRoundLaneResponseMessage {
   uint32 nextRoundPermits = 15;
   RPCError error = 1000;
 }
+
+// ADR-0127 Decision 3: whether what the selected chain accepted at a DAA score is settled, and its
+// settlement depth in Final PALW anchors, from the sink's state.
+message GetPalwSettlementRequestMessage {
+  uint64 daaScore = 1;
+}
+
+message GetPalwSettlementResponseMessage {
+  bool available = 1;
+  uint64 sinkDaa = 2;
+  uint64 daaScore = 3;
+  bool settled = 4;
+  uint64 depth = 5;
+  uint64 pendingAnchors = 6;
+  bool depthIsLowerBound = 7;
+  uint64 safeFrontierBlueScore = 8;
+  uint64 safeFrontierDaa = 9;
+  RPCError error = 1000;
+}
+
+// MISAKA §5 round 2: the lock a validator carries on the selected chain and the epochs it still owes
+// a precommit for.
+message GetPrecommitDutyRequestMessage {
+  string validatorId = 1;
+  string bondOutpoint = 2;
+}
+
+message RpcPrecommitDue {
+  uint64 epoch = 1;
+  string anchorHash = 2;
+  uint64 anchorDaaScore = 3;
+  string snapshotCommitment = 4;
+}
+
+message GetPrecommitDutyResponseMessage {
+  bool available = 1;
+  bool roundActive = 2;
+  uint64 sinkDaaScore = 3;
+  uint64 heldEpoch = 4;
+  string heldAnchor = 5;
+  repeated RpcPrecommitDue due = 6;
+  RPCError error = 1000;
+}
+
+// The context each registered PALW class runs at, and the free-prompt lane's token limits.
+message GetPalwClassContextsRequestMessage {}
+
+message RpcPalwClassContext {
+  string classId = 1;
+  string modelId = 2;
+  uint32 nCtx = 3;
+  uint32 canonicalPrefillTokens = 4;
+  uint32 canonicalDecodeTokens = 5;
+  uint32 maxContextTokens = 6;
+  string source = 7;
+  uint32 canonicalFootprintPositions = 8;
+}
+
+message GetPalwClassContextsResponseMessage {
+  bool available = 1;
+  uint32 fpMaxPromptTokens = 2;
+  uint32 fpMaxDecodeTokens = 3;
+  repeated RpcPalwClassContext classes = 4;
+  RPCError error = 1000;
+}
