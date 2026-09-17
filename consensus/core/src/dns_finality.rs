@@ -1335,7 +1335,8 @@ pub struct DnsParams {
     /// **The inactivity leak is removed.** No code reads this field and `u64::MAX` is its value on
     /// every preset; it stays so that the preset shape and its borsh encoding (hashed into
     /// `consensus_params_id`) are unchanged. `Params::palw_inactivity_leak`, the fence that
-    /// replaced it (ADR-0066 Decision 4), is refused by `Params::validate_palw_v2`.
+    /// replaced it (ADR-0066 Decision 4), is refused by `Params::validate_palw_v2`; the leak that
+    /// exists is `Params::dns_bft_gate`'s (ADR-0128 Decision 3).
     ///
     /// Why it could not be the switch: `DnsParams` is hashed into `consensus_params_id` as one raw
     /// borsh blob, and `for_each_fence` deliberately does not visit inside it. Both halves are

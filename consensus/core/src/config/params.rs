@@ -578,7 +578,8 @@ pub struct DnsBftGateV1 {
 ///
 /// **The leak is removed.** No code reads this value any more and [`Params::validate_palw_v2`]
 /// refuses a network that sets it; the type stays because `Params::palw_inactivity_leak` does
-/// (hashed only when set, so an unset preset's ids are what they were).
+/// (hashed only when set, so an unset preset's ids are what they were). The leak that exists is
+/// [`DnsBftGateV1`]'s (ADR-0128), which reads an evidence window every synced node holds.
 ///
 /// It replaced `DnsParams.inactivity_leak_daa`, which could not be armed at all. That field is
 /// inside `DnsParams`, which `consensus_params_id` hashes as one raw borsh blob while
@@ -941,7 +942,8 @@ pub struct Params {
     /// **ADR-0066 Decision 4 — the inactivity leak.** `None` on every shipped preset.
     ///
     /// **Removed:** nothing reads it, and [`Self::validate_palw_v2`] refuses `Some`. The field
-    /// stays for its Some-only hashing into the consensus fingerprints.
+    /// stays for its Some-only hashing into the consensus fingerprints; the leak lives in
+    /// [`Self::dns_bft_gate`] (ADR-0128).
     ///
     /// Replaces `DnsParams.inactivity_leak_daa`, which is retired at `u64::MAX` permanently rather
     /// than reused: see [`PalwInactivityLeakV1`] for why editing that constant could not be an
@@ -2356,15 +2358,16 @@ impl Params {
                 )));
             }
         }
-        // **The inactivity leak is removed** (ADR-0060 Decision 4 / ADR-0066 Decision 4): nothing
-        // builds a leak view or excludes a silent validator from a quorum denominator any more.
+        // **The inactivity leak is removed** (ADR-0060 Decision 4 / ADR-0066 Decision 4): the
+        // window-bound leak this field armed is gone, and the leak that exists is `dns_bft_gate`'s
+        // (ADR-0128 Decision 3), with its own numbers and its own evidence window.
         // `palw_inactivity_leak` stays a field — hashed only when set, so an unset preset's ids are
         // what they were — and a network that sets it is refused before a peer is dialed. Checked
         // ahead of the V2 gate below, because the leak was a DNS-overlay rule any lineage could set.
         if self.palw_inactivity_leak.is_some() {
             return Err(PalwModeV2Error::Invalid(
-                "the inactivity leak is removed: palw_inactivity_leak must stay unset, because no code excludes a silent \
-                 validator from the quorum denominator",
+                "the inactivity leak is removed: palw_inactivity_leak must stay unset, because no code implements its rule — \
+                 the counted set's leak is dns_bft_gate's (ADR-0128)",
             ));
         }
         // **ADR-0069 Decision 7 is armable AT GENESIS or not at all, and a scheduled height is
