@@ -1938,7 +1938,8 @@ mod tests {
         );
 
         // Over many CLAIM ids, straight through the lottery over one eligible list.
-        let eligible = palw_panel_eligible_bonds_v2(&state, &claim_id, 100, None, false, None, policy.economy, params.seat_count).unwrap();
+        let eligible =
+            palw_panel_eligible_bonds_v2(&state, &claim_id, 100, None, false, None, policy.economy, params.seat_count).unwrap();
         assert_eq!(eligible.len(), 13, "ten of A's bonds and one each of B, C and D");
         let anchor = BlockHash::from_u64_word(0xD00D);
         let (mut by_claim_a, mut by_claim_b) = (0usize, 0usize);
@@ -2066,12 +2067,20 @@ mod tests {
         assert_eq!((seat(0), seat(1_000), seat(1_100), seat(2_000)), (600, 4_133, 4_546, 8_266));
 
         let eligible = |lambda| -> Vec<u64> {
-            let mut out: Vec<u64> =
-                palw_panel_eligible_bonds_v2(&state, &claim_id, 100, None, false, None, adr0130_economy(lambda).economy, params.seat_count)
-                    .unwrap()
-                    .into_iter()
-                    .map(|(key, _)| (2..=6u64).find(|n| *key == PalwBondKeyV2(bond_outpoint(*n))).unwrap())
-                    .collect();
+            let mut out: Vec<u64> = palw_panel_eligible_bonds_v2(
+                &state,
+                &claim_id,
+                100,
+                None,
+                false,
+                None,
+                adr0130_economy(lambda).economy,
+                params.seat_count,
+            )
+            .unwrap()
+            .into_iter()
+            .map(|(key, _)| (2..=6u64).find(|n| *key == PalwBondKeyV2(bond_outpoint(*n))).unwrap())
+            .collect();
             out.sort();
             out
         };

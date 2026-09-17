@@ -428,7 +428,11 @@ pub fn palw_genesis_model_works_v1(objects: &[crate::palw_state_v2::PalwConsensu
 
 /// **The profile a lifecycle row carries this span**: the stored work with the class's expected
 /// draws a claim (Q32) folded into the economic compute a claim costs.
-pub fn palw_lifecycle_profile_v1(work: &PalwModelWorkV1, expected_attempts_q32: u128, g: &PalwRegistryGlobalsV1) -> PalwDerivedProfileV1 {
+pub fn palw_lifecycle_profile_v1(
+    work: &PalwModelWorkV1,
+    expected_attempts_q32: u128,
+    g: &PalwRegistryGlobalsV1,
+) -> PalwDerivedProfileV1 {
     let per_claim = crate::palw_economic_compute_v1::palw_attempted_compute_q32_per_claim_v1(
         expected_attempts_q32.max(crate::palw_economic_compute_v1::PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1),
         work.economic_ccu_per_claim,
@@ -553,7 +557,11 @@ pub fn palw_seat_readiness_message_v1(network_domain: Hash64, bond: &[u8], class
 /// **The shares the registry writes** (ADR-0135 Decision 5): each class's admission over every
 /// class's, in permille, with the base class holding the remainder and never less than its floor.
 /// A class with zero admission holds zero; the table always sums to 1,000.
-pub fn palw_registry_shares_v1(admissions_milli: &[(Hash64, u64)], base_class: Hash64, base_floor_permille: u16) -> BTreeMap<Hash64, u16> {
+pub fn palw_registry_shares_v1(
+    admissions_milli: &[(Hash64, u64)],
+    base_class: Hash64,
+    base_floor_permille: u16,
+) -> BTreeMap<Hash64, u16> {
     let floor = base_floor_permille.min(1_000) as u32;
     let room = 1_000u32 - floor;
     let others: Vec<(Hash64, u64)> = admissions_milli.iter().copied().filter(|(id, _)| *id != base_class).collect();

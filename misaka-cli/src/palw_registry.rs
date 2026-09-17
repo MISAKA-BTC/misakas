@@ -91,7 +91,10 @@ pub(crate) async fn run(ctx: &Ctx) -> CliResult {
         return Err(CliError::new(exit::GENERIC, "the node keeps no PALW class state (not a ConsensusV2 network)"));
     }
     match ctx.output {
-        OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&json!({ "schema": "misaka.palw.registry.v1", "registry": response })).expect("serializable")),
+        OutputFormat::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({ "schema": "misaka.palw.registry.v1", "registry": response })).expect("serializable")
+        ),
         OutputFormat::Human => print!("{}", render(&response)),
     }
     Ok(())
@@ -127,7 +130,13 @@ mod tests {
                 ready_seats_now: 3,
                 ..Default::default()
             }],
-            readiness: vec![RpcPalwSeatReadiness { bond_txid: "cd".repeat(32), class_id: "ab".repeat(32), proved_daa: 6_990, fresh: false, ..Default::default() }],
+            readiness: vec![RpcPalwSeatReadiness {
+                bond_txid: "cd".repeat(32),
+                class_id: "ab".repeat(32),
+                proved_daa: 6_990,
+                fresh: false,
+                ..Default::default()
+            }],
             ..Default::default()
         };
         let text = render(&live);

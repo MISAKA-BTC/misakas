@@ -5688,11 +5688,17 @@ impl PalwChainStateV2 {
     }
 
     /// ADR-0135: a seat's last possession proof for a class.
-    pub fn seat_readiness(&self, bond: &PalwBondKeyV2, class_id: &Hash64) -> Option<&crate::palw_model_registry_v1::PalwSeatReadinessRowV1> {
+    pub fn seat_readiness(
+        &self,
+        bond: &PalwBondKeyV2,
+        class_id: &Hash64,
+    ) -> Option<&crate::palw_model_registry_v1::PalwSeatReadinessRowV1> {
         self.seat_readiness.get(&(*bond, *class_id))
     }
 
-    pub fn seat_readiness_iter(&self) -> impl Iterator<Item = (&(PalwBondKeyV2, Hash64), &crate::palw_model_registry_v1::PalwSeatReadinessRowV1)> {
+    pub fn seat_readiness_iter(
+        &self,
+    ) -> impl Iterator<Item = (&(PalwBondKeyV2, Hash64), &crate::palw_model_registry_v1::PalwSeatReadinessRowV1)> {
         self.seat_readiness.iter()
     }
 
@@ -7759,7 +7765,11 @@ impl<'a> TransitionBuilder<'a> {
         }
     }
 
-    fn write_seat_readiness(&mut self, key: (PalwBondKeyV2, Hash64), new: Option<crate::palw_model_registry_v1::PalwSeatReadinessRowV1>) {
+    fn write_seat_readiness(
+        &mut self,
+        key: (PalwBondKeyV2, Hash64),
+        new: Option<crate::palw_model_registry_v1::PalwSeatReadinessRowV1>,
+    ) {
         let old = match new {
             Some(row) => self.state.seat_readiness.insert(key, row),
             None => self.state.seat_readiness.remove(&key),
@@ -7812,7 +7822,11 @@ impl<'a> TransitionBuilder<'a> {
         }
         self.write_seat_readiness(
             (*bond, *class_id),
-            Some(registry::PalwSeatReadinessRowV1 { proved_daa: ctx.daa_score, proved_span: span_now, leaf_index: opening.leaf_index }),
+            Some(registry::PalwSeatReadinessRowV1 {
+                proved_daa: ctx.daa_score,
+                proved_span: span_now,
+                leaf_index: opening.leaf_index,
+            }),
         );
         Ok(())
     }
@@ -8023,7 +8037,11 @@ impl<'a> TransitionBuilder<'a> {
                     .min(u32::MAX as u128) as u32
                 };
                 let obs = PalwLifecycleObservationV1 {
-                    manifest: if row.work.ops_supported { PalwManifestVerdictV1Flag::Valid } else { PalwManifestVerdictV1Flag::Invalid },
+                    manifest: if row.work.ops_supported {
+                        PalwManifestVerdictV1Flag::Valid
+                    } else {
+                        PalwManifestVerdictV1Flag::Invalid
+                    },
                     ready_seats: ready,
                     probes_passed_this_span: row.probes_passed_this_span,
                     probes_failed_this_span: row.probes_failed_this_span,
@@ -17243,6 +17261,361 @@ pub(crate) mod tests {
         state.assert_internal_consistency(p).expect("internal consistency after apply");
         state.assert_deadline_consistency(p).expect("deadline consistency after apply");
         (state, delta)
+    }
+
+    // ---- ADR-0135: the model registry in the fold --------------------------------------------
+
+    mod adr0135 {
+        use super::*;
+        /// Measured: the number of `PalwConsensusObjectV2` variants before this one.
+        const PALW_SEAT_READINESS_PROVED_DISCRIMINANT: u8 = 47;
+        use crate::palw_artifact::{PalwArtifactInventoryV1, PalwArtifactOperandV1, open_artifact_leaf_v1};
+        use crate::palw_execution_lane_v1::PalwExecLaneFoldV1;
+        use crate::palw_model_registry_v1::{
+            PALW_REGISTRY_GLOBALS_V1, PalwModelLifecycleV1, PalwModelRegistryFoldV1, PalwModelWorkV1,
+            palw_readiness_challenge_seed_v1, palw_readiness_window_v1,
+        };
+
+        const SPAN: u64 = 10;
+        fn kimi_id() -> Hash64 {
+            h64(2)
+        }
+
+        fn fold(kimi_work: PalwModelWorkV1) -> PalwModelRegistryFoldV1 {
+            let mut genesis_works = BTreeMap::new();
+            genesis_works.insert(
+                h64(1),
+                PalwModelWorkV1 { verification_ccu: 1_000, economic_ccu_per_claim: 500, ops_supported: true, ..Default::default() },
+            );
+            genesis_works.insert(kimi_id(), kimi_work);
+            PalwModelRegistryFoldV1 { globals: PALW_REGISTRY_GLOBALS_V1, span_daa: SPAN, genesis_works }
+        }
+
+        /// A Kimi-class work the floor's globals derive a small profile from: window 2, 7 ready seats.
+        fn kimi_work() -> PalwModelWorkV1 {
+            PalwModelWorkV1 {
+                verification_ccu: 1_000_000,
+                economic_ccu_per_claim: 800_000,
+                artifact_bytes: 1 << 30,
+                working_set_bytes: 1 << 30,
+                ops_supported: true,
+            }
+        }
+
+        fn extras(fold: Option<PalwModelRegistryFoldV1>) -> PalwTransitionExtrasV1 {
+            PalwTransitionExtrasV1 {
+                round_lane: Some(PalwExecLaneFoldV1 { schedule_span_daa: SPAN }),
+                model_registry: fold,
+                ..Default::default()
+            }
+        }
+
+        fn step(
+            parent: &PalwChainStateV2,
+            p: &PalwStateParamsV2,
+            c: &PalwBlockContextV2,
+            objects: &[PalwConsensusObjectV2],
+            att: Option<&PalwAttemptEnvelopeV2>,
+            fold: Option<PalwModelRegistryFoldV1>,
+        ) -> Result<(PalwChainStateV2, PalwStateDeltaV2), PalwStateV2Error> {
+            let out = apply_palw_transition_v2_with_extras(parent, p, c, objects, att, false, false, false, false, &extras(fold))?;
+            out.0.assert_internal_consistency(p).expect("internal consistency after apply");
+            Ok(out)
+        }
+
+        fn inventory() -> (Vec<PalwArtifactOperandV1>, Hash64) {
+            let operands: Vec<PalwArtifactOperandV1> = (0..16u32)
+                .map(|i| PalwArtifactOperandV1 {
+                    tensor_name: "w".to_string(),
+                    layer: None,
+                    row_start: i * 8,
+                    bytes: vec![i as u8; 8],
+                })
+                .collect();
+            let root = PalwArtifactInventoryV1::new(operands.clone()).expect("a well-formed inventory").root();
+            (operands, root)
+        }
+
+        fn bond(n: u64, collateral: u64) -> PalwConsensusObjectV2 {
+            PalwConsensusObjectV2::BondRegistered {
+                bond: bond_key(n),
+                // Bond 1's key is `[7; 4]` (`register_class_and_bond`); ours start at 0x41.
+                pubkey: vec![0x40 + n as u8; 4],
+                operator_pubkey: op_key(20 + n),
+                collateral,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A00 + n),
+                capable_classes: Default::default(),
+                signature: Vec::new(),
+            }
+        }
+
+        fn kimi_registered(artifact_root: Hash64) -> PalwConsensusObjectV2 {
+            PalwConsensusObjectV2::ClassRegistered {
+                class_id: kimi_id(),
+                artifact_root,
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+                initial_target: u128::MAX / 2,
+                share_permille: 0,
+                activation_daa: 0,
+                admission: None,
+            }
+        }
+
+        /// The base class and bond 1 (`register_class_and_bond`), Kimi with `root`, and bonds 2..=8.
+        fn network(root: Hash64) -> Vec<PalwConsensusObjectV2> {
+            let mut objects = register_class_and_bond();
+            objects.push(kimi_registered(root));
+            objects.extend((2..=8).map(|n| bond(n, 1_000)));
+            objects
+        }
+
+        fn proof(operands: &[PalwArtifactOperandV1], seat: PalwBondKeyV2, span: u64) -> PalwConsensusObjectV2 {
+            let seed = palw_readiness_challenge_seed_v1(&kimi_id(), &borsh::to_vec(&seat).unwrap(), span);
+            let (start, _) = palw_readiness_window_v1(&seed, operands.len() as u32);
+            PalwConsensusObjectV2::SeatReadinessProved {
+                bond: seat,
+                class_id: kimi_id(),
+                span,
+                opening: open_artifact_leaf_v1(operands, start).expect("the challenged leaf opens"),
+                signature: vec![1],
+            }
+        }
+
+        fn kimi_attempt(nonce: u64, root: Hash64) -> PalwAttemptEnvelopeV2 {
+            attempt_for_class(40, nonce, kimi_id(), bond_key(1), vec![7; 4], op_id(21), root)
+        }
+
+        /// Kimi walked to a `Final` before the registry sees it: attempt, panel, licence, window.
+        fn kimi_with_a_final(p: &PalwStateParamsV2, root: Hash64) -> PalwChainStateV2 {
+            let (s1, _) = step(&PalwChainStateV2::genesis(), p, &ctx(1, 100, 1), &network(root), None, None).unwrap();
+            let env = kimi_attempt(1, root);
+            let claim_id = attempt_id_v2(&env.attempt);
+            let (s2, _) = step(&s1, p, &ctx(2, 101, 2), &[], Some(&env), None).unwrap();
+            let seats = vec![PalwPanelSeatV2 { bond: bond_key(2), operator_id: op_id(22) }];
+            let (s3, _) = step(
+                &s2,
+                p,
+                &ctx(3, 102, 3),
+                &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }],
+                None,
+                None,
+            )
+            .unwrap();
+            let (s4, _) = step(
+                &s3,
+                p,
+                &ctx(4, 103, 4),
+                &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
+                None,
+                None,
+            )
+            .unwrap();
+            let (s5, _) = step(&s4, p, &ctx(5, 124, 5), &[], None, None).unwrap();
+            assert!(matches!(s5.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "the premise: one Kimi Final");
+            s5
+        }
+
+        #[test]
+        fn adr0135_the_boundary_opens_rows_from_the_genesis_work_and_the_base_class_is_active() {
+            let p = params();
+            let (_, root) = inventory();
+            let (s1, _) =
+                step(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &network(root), None, Some(fold(kimi_work()))).unwrap();
+            assert!(s1.model_lifecycles_iter().next().is_none(), "rows open at a span boundary, not at registration");
+            let (s2, d2) = step(&s1, &p, &ctx(2, 110, 2), &[], None, Some(fold(kimi_work()))).unwrap();
+            let base = s2.model_lifecycle(&h64(1)).expect("the base class has a row");
+            assert_eq!(base.state, PalwModelLifecycleV1::Active, "the base class is ACTIVE and never gated");
+            let kimi = s2.model_lifecycle(&kimi_id()).expect("Kimi has a row");
+            assert_eq!(kimi.state, PalwModelLifecycleV1::Prefetching, "a class with work and no finals starts PREFETCHING");
+            assert_eq!(kimi.since_span, 11);
+            assert_eq!(
+                (kimi.profile.verification_window_spans, kimi.profile.required_ready_seats),
+                (2, 7),
+                "derived from the work alone"
+            );
+            assert_eq!(s2.class_shares.get(&h64(1)).copied(), Some(1000), "no admission yet: the base holds the table");
+            assert_eq!(s2.class_shares.values().map(|s| *s as u32).sum::<u32>(), 1000);
+            // The delta carries the rows and reverts to the parent.
+            assert!(d2.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::ModelLifecycle { .. })));
+            let back = revert_delta_v2(&s2, &d2, &p).expect("reverts");
+            assert_eq!(back.state_root(), s1.state_root(), "a reverted boundary is the parent");
+            assert_eq!(
+                apply_delta_v2(&s1, &d2, &p).expect("re-applies").state_root(),
+                s2.state_root(),
+                "and re-applying it is the child"
+            );
+            assert_ne!(s2.state_root(), s1.state_root(), "rows enter the root once they exist");
+            // …and ride the carriage.
+            let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s2)).unwrap();
+            let carriage: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
+            assert_eq!(carriage.model_lifecycles.len(), 2);
+            // Without the fold the fold is byte-identical to before: no rows, no reasons.
+            let (plain, _) = step(&s1, &p, &ctx(2, 110, 2), &[], None, None).unwrap();
+            assert!(plain.model_lifecycles_iter().next().is_none());
+        }
+
+        #[test]
+        fn adr0135_readiness_is_a_possession_proof_and_seven_proofs_move_kimi_to_probation() {
+            let p = params();
+            let (operands, root) = inventory();
+            let f = fold(kimi_work());
+            let (s1, _) = step(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &network(root), None, Some(f.clone())).unwrap();
+            // Below the fence the object does not exist.
+            let dormant = step(&s1, &p, &ctx(2, 101, 2), &[proof(&operands, bond_key(2), 10)], None, None);
+            assert!(matches!(dormant, Err(PalwStateV2Error::ModelRegistryDormant)), "{dormant:?}");
+            // A leaf the challenge did not name is refused, as is one that does not open the root.
+            let seed = palw_readiness_challenge_seed_v1(&kimi_id(), &borsh::to_vec(&bond_key(2)).unwrap(), 10);
+            let (start, width) = palw_readiness_window_v1(&seed, 16);
+            let wrong_index = (start + width) % 16;
+            let wrong = PalwConsensusObjectV2::SeatReadinessProved {
+                bond: bond_key(2),
+                class_id: kimi_id(),
+                span: 10,
+                opening: open_artifact_leaf_v1(&operands, wrong_index).unwrap(),
+                signature: vec![1],
+            };
+            assert!(matches!(
+                step(&s1, &p, &ctx(2, 101, 2), &[wrong], None, Some(f.clone())),
+                Err(PalwStateV2Error::ReadinessProofRefused(_))
+            ));
+            let mut forged = open_artifact_leaf_v1(&operands, start).unwrap();
+            forged.operand.bytes[0] ^= 1;
+            let forged = PalwConsensusObjectV2::SeatReadinessProved {
+                bond: bond_key(2),
+                class_id: kimi_id(),
+                span: 10,
+                opening: forged,
+                signature: vec![1],
+            };
+            assert!(matches!(
+                step(&s1, &p, &ctx(2, 101, 2), &[forged], None, Some(f.clone())),
+                Err(PalwStateV2Error::ReadinessProofRefused(_))
+            ));
+            // Six honest proofs and a thin bond's: six ready (the thin one lacks the collateral multiple).
+            let (s2, _) = step(&s1, &p, &ctx(2, 101, 2), &[bond(9, 200)], None, Some(f.clone())).unwrap();
+            let proofs: Vec<PalwConsensusObjectV2> =
+                (2..=7).chain(std::iter::once(9)).map(|n| proof(&operands, bond_key(n), 10)).collect();
+            let (s3, _) = step(&s2, &p, &ctx(3, 102, 3), &proofs, None, Some(f.clone())).unwrap();
+            assert_eq!(s3.seat_readiness_iter().count(), 7, "every proof is a row");
+            let (s4, _) = step(&s3, &p, &ctx(4, 110, 4), &[], None, Some(f.clone())).unwrap();
+            let kimi = s4.model_lifecycle(&kimi_id()).unwrap();
+            assert_eq!(
+                (kimi.state, kimi.ready_seats),
+                (PalwModelLifecycleV1::Prefetching, 6),
+                "six ready seats are one short of the seven required"
+            );
+            // The seventh honest proof, and the next boundary admits Kimi to PROBATION.
+            let (s5, _) = step(&s4, &p, &ctx(5, 111, 5), &[proof(&operands, bond_key(8), 11)], None, Some(f.clone())).unwrap();
+            let (s6, _) = step(&s5, &p, &ctx(6, 120, 6), &[], None, Some(f.clone())).unwrap();
+            let kimi = s6.model_lifecycle(&kimi_id()).unwrap();
+            assert_eq!((kimi.state, kimi.ready_seats), (PalwModelLifecycleV1::Probation { probes_passed: 0 }, 7));
+            assert_eq!(kimi.since_span, 12);
+            assert_eq!(s6.class_shares.get(&kimi_id()).copied(), Some(0), "probation admits at zero cadence: no share yet");
+            // A proof for a span neither current nor just closed is refused.
+            let stale = step(&s6, &p, &ctx(7, 121, 7), &[proof(&operands, bond_key(2), 9)], None, Some(f.clone()));
+            assert!(matches!(stale, Err(PalwStateV2Error::ReadinessProofRefused(_))));
+        }
+
+        #[test]
+        fn adr0135_a_held_class_takes_no_claims_and_the_base_class_and_the_lane_go_on() {
+            let p = params();
+            let (_, root) = inventory();
+            let f = fold(kimi_work());
+            let s5 = kimi_with_a_final(&p, root);
+            // The first boundary opens Kimi ACTIVE (it has a Final) and, with no ready seat, HOLDS it.
+            let (s6, _) = step(&s5, &p, &ctx(6, 130, 6), &[], None, Some(f.clone())).unwrap();
+            let kimi = s6.model_lifecycle(&kimi_id()).unwrap();
+            assert_eq!(kimi.state, PalwModelLifecycleV1::Held, "no ready seat: HELD, class-local");
+            assert_eq!(s6.model_lifecycle(&h64(1)).unwrap().state, PalwModelLifecycleV1::Active);
+            // A Kimi attempt is refused; a base-class attempt in the same span is accepted.
+            let refused = step(&s6, &p, &ctx(7, 131, 7), &[], Some(&kimi_attempt(2, root)), Some(f.clone()));
+            assert!(matches!(refused, Err(PalwStateV2Error::ClassNotAdmitting { class, .. }) if class == kimi_id()), "{refused:?}");
+            let base_env = attempt(40, 3);
+            let (s7, _) = step(&s6, &p, &ctx(7, 131, 7), &[], Some(&base_env), Some(f.clone())).unwrap();
+            assert!(matches!(s7.claim(&attempt_id_v2(&base_env.attempt)).unwrap().phase, PalwClaimPhaseV2::Provisional));
+            assert_eq!(s7.class_shares.get(&h64(1)).copied(), Some(1000), "the base class holds the table while Kimi is held");
+        }
+
+        #[test]
+        fn adr0135_the_inflight_cap_refuses_the_claim_after_the_cap() {
+            let p = params();
+            let (operands, root) = inventory();
+            // A graph so heavy the globals derive a cap of one claim in flight.
+            let heavy = PalwModelWorkV1 {
+                verification_ccu: u128::MAX / 1_000_000,
+                economic_ccu_per_claim: 1,
+                ops_supported: true,
+                ..Default::default()
+            };
+            let f = fold(heavy);
+            let s5 = kimi_with_a_final(&p, root);
+            // Seven ready seats before the boundary, so Kimi stays ACTIVE rather than HELD.
+            let proofs: Vec<PalwConsensusObjectV2> = (2..=8).map(|n| proof(&operands, bond_key(n), 12)).collect();
+            let (s6, _) = step(&s5, &p, &ctx(6, 125, 6), &proofs, None, Some(f.clone())).unwrap();
+            let (s7, _) = step(&s6, &p, &ctx(7, 130, 7), &[], None, Some(f.clone())).unwrap();
+            let kimi = s7.model_lifecycle(&kimi_id()).unwrap();
+            assert_eq!(kimi.profile.max_inflight_claims, 1, "the heavy graph's cap");
+            assert_eq!(kimi.state, PalwModelLifecycleV1::Active, "seven ready seats keep it active at the boundary");
+            let first = kimi_attempt(2, root);
+            let (s8, _) = step(&s7, &p, &ctx(8, 131, 8), &[], Some(&first), Some(f.clone())).unwrap();
+            let second = kimi_attempt(3, root);
+            let capped = step(&s8, &p, &ctx(9, 132, 9), &[], Some(&second), Some(f.clone()));
+            assert!(
+                matches!(capped, Err(PalwStateV2Error::ClassInflightCapped { class, inflight: 1, cap: 1 }) if class == kimi_id()),
+                "{capped:?}"
+            );
+        }
+
+        #[test]
+        fn adr0135_no_capable_panel_names_the_void_and_kimi_recovers_through_probation() {
+            let p = params();
+            let (operands, root) = inventory();
+            let f = fold(kimi_work());
+            let s5 = kimi_with_a_final(&p, root);
+            // An attempt accepted before the registry's first boundary, then no panel binds it.
+            let env = kimi_attempt(2, root);
+            let claim_id = attempt_id_v2(&env.attempt);
+            let (s6, _) = step(&s5, &p, &ctx(6, 125, 6), &[], Some(&env), Some(f.clone())).unwrap();
+            let (s7, _) = step(&s6, &p, &ctx(7, 130, 7), &[], None, Some(f.clone())).unwrap();
+            assert_eq!(s7.model_lifecycle(&kimi_id()).unwrap().state, PalwModelLifecycleV1::Held);
+            let (s8, _) = step(&s7, &p, &ctx(8, 136, 8), &[], None, Some(f.clone())).unwrap();
+            assert!(
+                matches!(
+                    s8.claim(&claim_id).unwrap().phase,
+                    PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::NoCapablePanel, .. }
+                ),
+                "the bind window closed on a class without a panel: the capacity's failure, named"
+            );
+            // Seven proofs in span 13, and the boundary at 140 lifts HELD to PROBATION (never straight to ACTIVE).
+            let proofs: Vec<PalwConsensusObjectV2> = (2..=8).map(|n| proof(&operands, bond_key(n), 13)).collect();
+            let (s9, _) = step(&s8, &p, &ctx(9, 137, 9), &proofs, None, Some(f.clone())).unwrap();
+            let (s10, _) = step(&s9, &p, &ctx(10, 140, 10), &[], None, Some(f.clone())).unwrap();
+            assert_eq!(s10.model_lifecycle(&kimi_id()).unwrap().state, PalwModelLifecycleV1::Probation { probes_passed: 0 });
+            // An operator outage: every proof ages past the readiness window, and Kimi alone is HELD again.
+            let age = PALW_REGISTRY_GLOBALS_V1.readiness_probe_max_age_spans as u64 * SPAN;
+            let (s11, _) = step(&s10, &p, &ctx(11, 140 + age + SPAN, 11), &[], None, Some(f.clone())).unwrap();
+            assert_eq!(s11.model_lifecycle(&kimi_id()).unwrap().state, PalwModelLifecycleV1::Held);
+            assert_eq!(
+                s11.model_lifecycle(&h64(1)).unwrap().state,
+                PalwModelLifecycleV1::Active,
+                "the base class never leaves ACTIVE"
+            );
+            let base_env = attempt(40, 9);
+            step(&s11, &p, &ctx(12, 140 + age + SPAN + 1, 12), &[], Some(&base_env), Some(f.clone()))
+                .expect("the base class keeps producing");
+        }
+
+        #[test]
+        fn adr0135_the_new_rows_and_reasons_pin_their_discriminants() {
+            assert_eq!(borsh::to_vec(&PalwVoidReasonV2::NoCapablePanel).unwrap()[0], 4, "appended last");
+            let (operands, _) = inventory();
+            let object = proof(&operands, bond_key(2), 1);
+            let bytes = borsh::to_vec(&object).unwrap();
+            let back: PalwConsensusObjectV2 = borsh::from_slice(&bytes).unwrap();
+            assert_eq!(back, object, "the readiness proof round-trips");
+            assert_eq!(bytes[0], PALW_SEAT_READINESS_PROVED_DISCRIMINANT, "the object is the enum's last variant");
+        }
     }
 
     // ---- lattice ----

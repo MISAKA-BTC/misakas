@@ -2467,9 +2467,8 @@ impl Params {
         if let Some(registry) = self.palw_model_registry
             && registry != ForkActivation::never()
         {
-            let economy_below = self
-                .palw_panel_economy
-                .is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= registry.daa_score());
+            let economy_below =
+                self.palw_panel_economy.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= registry.daa_score());
             let lane_below = self
                 .palw_execution_lane
                 .is_some_and(|lane| lane.activation != ForkActivation::never() && lane.activation.daa_score() <= registry.daa_score());
@@ -19685,7 +19684,9 @@ mod palw_model_registry_fence_tests {
     /// **ADR-0135: dormant on every shipped preset; arming it moves the identity and the schedule.**
     #[test]
     fn adr0135_the_registry_fence_is_dormant_everywhere_and_arms_by_height() {
-        for (name, preset) in [("testnet-11", palw_rc_shipped_params()), ("devnet", devnet_shipped_params()), ("mainnet", MAINNET_PARAMS.clone())] {
+        for (name, preset) in
+            [("testnet-11", palw_rc_shipped_params()), ("devnet", devnet_shipped_params()), ("mainnet", MAINNET_PARAMS.clone())]
+        {
             assert!(preset.palw_model_registry.is_none(), "{name}: the registry is not scheduled");
             assert!(!preset.palw_model_registry_at(u64::MAX - 1), "{name}: never active while dormant");
         }
@@ -19694,7 +19695,11 @@ mod palw_model_registry_fence_tests {
         let mut never = rc.clone();
         never.palw_model_registry = Some(ForkActivation::never());
         assert!(!never.palw_model_registry_at(u64::MAX - 1), "never is never active");
-        assert_eq!(never.consensus_identity_id(), rc.consensus_identity_id(), "and a never-armed registry is one identity with dormant");
+        assert_eq!(
+            never.consensus_identity_id(),
+            rc.consensus_identity_id(),
+            "and a never-armed registry is one identity with dormant"
+        );
 
         // Armed above the flag day (the economy and the lane are in force by then): identity and
         // schedule move, and the fork-id gate names the height.

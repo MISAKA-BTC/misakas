@@ -416,10 +416,8 @@ pub struct VirtualStateProcessor {
     pub(super) palw_model_registry: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0135: the genesis classes' work, derived once from the bundle's registrations (every
     /// node derives the same map from `Params`), handed to the fold where the registry is active.
-    pub(super) palw_genesis_model_works: std::collections::BTreeMap<
-        kaspa_hashes::Hash64,
-        kaspa_consensus_core::palw_model_registry_v1::PalwModelWorkV1,
-    >,
+    pub(super) palw_genesis_model_works:
+        std::collections::BTreeMap<kaspa_hashes::Hash64, kaspa_consensus_core::palw_model_registry_v1::PalwModelWorkV1>,
     /// **ADR-0089 Decision 9's fence, `None` on every shipped preset.** Past it the EVM's
     /// window and hand exist and the block's EVM actions reach its transition. Resolved at the
     /// BLOCK's DAA.
@@ -6529,9 +6527,8 @@ impl VirtualStateProcessor {
                     if !self.palw_model_registry_at(point.daa_score) {
                         return Err(format!("a readiness proof for class {class_id} below the model registry's fence"));
                     }
-                    let record = state
-                        .bond(bond)
-                        .ok_or_else(|| format!("a readiness proof names bond {bond:?} this chain does not have"))?;
+                    let record =
+                        state.bond(bond).ok_or_else(|| format!("a readiness proof names bond {bond:?} this chain does not have"))?;
                     let message = kaspa_consensus_core::palw_model_registry_v1::palw_seat_readiness_message_v1(
                         kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
                             self.network_id_bytes.as_slice(),

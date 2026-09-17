@@ -39,13 +39,13 @@ mod palw_da;
 mod palw_derived;
 /// ADR-0127 Decision 3: `palw settlement` — settled, and how deep in settled PALW anchors.
 mod palw_economics;
-mod palw_registry;
 /// ADR-0108: `palw extension inspect|verify|preflight|submit|receipt-verify`.
 mod palw_extension;
 mod palw_fp;
 /// ADR-0088 Decision 12: `palw line-… / version-… / proposal-… / evaluate` — the model registry.
 mod palw_line;
 mod palw_model;
+mod palw_registry;
 mod palw_settlement;
 mod palw_shard_court;
 mod palw_shard_licensing;
