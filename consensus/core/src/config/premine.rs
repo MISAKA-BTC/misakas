@@ -316,7 +316,11 @@ fn bond_money_rows(cards: &[crate::config::params::PalwRcGenesisBondCard]) -> Ve
 /// developer can run a bonded, block-producing PALW devnet — the chain a certification object is
 /// rehearsed on before it goes near mainnet — without a card of real keys. Value-less by
 /// construction, like `TESTNET_MAIN_SEED`.
-pub const PALW_DEVNET_GENESIS_BONDS: u32 = 6;
+///
+/// Eight since ADR-0135's drill (2026-09-17): the registry wants `seat_count + spare_seats` ready
+/// seats — seven with the devnet's five-seat panels — and a producer beside them, and a devnet
+/// with six bonds (and six fee floats) could never open a class past PREFETCHING.
+pub const PALW_DEVNET_GENESIS_BONDS: u32 = 8;
 
 pub fn palw_devnet_genesis_bond_seed_v1(n: u32) -> [u8; 32] {
     let mut h = blake2b_simd::Params::new().hash_length(32).to_state();

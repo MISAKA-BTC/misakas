@@ -16791,7 +16791,7 @@ mod consensus_params_id_tests {
             // is a deliberate no-op there and the interval is `bits`' job — so what this buys is
             // the ROOM above the floor that a model tier registering later needs, which is the
             // same reason mainnet's floor-only mint is seeded rather than left at half the space.
-            ("devnet", DEVNET_PARAMS, "b40976b27c3bfbd3d6c590b33824f15c4959d6bcfba3676630919b964e94ad34"),
+            ("devnet", DEVNET_PARAMS, "61286b15588eb253b9a7f64997935c919b604b07d1973d4d2366084f06f524f5"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {

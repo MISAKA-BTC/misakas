@@ -189,6 +189,14 @@ no slot take the next one and holds its receipts until it lands (`readiness_wait
 proof again at once instead of after the thirty-second read throttle. Memory on the host: 1.75 GiB of
 file-backed pages once, 50–560 MiB anonymous per node, `MemAvailable` 9.8–10.8 GiB of 12 throughout.
 
+**Phase 2, first attempt — the fourth finding:** with proofs given precedence and the landing allowance in
+DAA, six of seven seats proved within a span of the restart and the seventh never could: the devnet mints
+six genesis bonds (`PALW_DEVNET_GENESIS_BONDS`) with six fee floats, so node-6 held a key the chain never
+bonded and no float to carry anything, while the registry's requirement is `seat_count + spare_seats = 7`
+ready seats for its five-seat panels. The devnet now mints eight bonds and eight floats (its genesis
+commitment and fingerprint move; a rehearsal network of public seeds, not a regenesis of anything
+deployed), the drills run eight nodes, and phase 1 is repeated on the eight-bond genesis before phase 2.
+
 **The fence.** `Params::palw_model_registry: Option<ForkActivation>` — `None` on every shipped preset
 (the t11 fingerprint `135b6ee0…` does not move); hashed `Some`-only; the fork-id gate names it when
 armed; `validate_palw_v2` refuses it without `palw_panel_economy` and `palw_execution_lane` at or
