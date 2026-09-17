@@ -67,6 +67,36 @@ fn parse_line(s: &str) -> Result<kaspa_consensus_core::Hash64, CliError> {
     })
 }
 
+/// `getPalwClassContexts`' rows by class id.
+fn class_contexts_by_id(
+    classes: Vec<kaspa_rpc_core::RpcPalwClassContext>,
+) -> std::collections::HashMap<String, kaspa_rpc_core::RpcPalwClassContext> {
+    classes.into_iter().map(|context| (context.class_id.clone(), context)).collect()
+}
+
+/// `ctx 8`, or `—` for a class whose context neither the chain nor this node's build knows.
+fn context_cell(context: Option<&kaspa_rpc_core::RpcPalwClassContext>) -> String {
+    match context {
+        Some(context) if context.source != "unknown" => format!("ctx {}", context.n_ctx),
+        _ => "—".to_string(),
+    }
+}
+
+/// A class's context in `model list --output json`. `footprint` is the canonical job's cached
+/// positions, `prefill + max(1, decode) − 1`, which the class's `n_ctx` bounds — not
+/// `prefill + decode`.
+fn context_json(context: &kaspa_rpc_core::RpcPalwClassContext) -> serde_json::Value {
+    json!({
+        "n_ctx": context.n_ctx,
+        "footprint": context.canonical_footprint_positions,
+        "prefill_tokens": context.canonical_prefill_tokens,
+        "decode_tokens": context.canonical_decode_tokens,
+        "max_context_tokens": context.max_context_tokens,
+        "model_id": context.model_id,
+        "source": context.source,
+    })
+}
+
 /// `misaka model list`: every class with what an operator or a holder asks of it.
 pub(crate) async fn model_list(ctx: &crate::node::Ctx, profile: Profile) -> CliResult {
     let ctx = ctx_for(ctx, &profile);
@@ -82,6 +112,9 @@ pub(crate) async fn model_list(ctx: &crate::node::Ctx, profile: Profile) -> CliR
         let market = reader.client.get_palw_model_market(c.class_id.clone()).await.ok().filter(|m| m.found);
         rows.push((c, founding.map(|l| l.name.clone()).unwrap_or_default(), lines.map(|l| l.lines.len()).unwrap_or(0), market));
     }
+    // The context each class runs at (`getPalwClassContexts`), as this connection's LAST read: a node
+    // built before the op closes the WebSocket on it, and then the list prints without the column.
+    let contexts = reader.client.get_palw_class_contexts().await.ok().map(|r| class_contexts_by_id(r.classes));
     if ctx.output == OutputFormat::Json {
         let doc: Vec<serde_json::Value> = rows
             .iter()
@@ -92,6 +125,7 @@ pub(crate) async fn model_list(ctx: &crate::node::Ctx, profile: Profile) -> CliR
                     "held": c.held, "artifact_root": c.artifact_root, "canonical_leaves": c.canonical_leaves,
                     "market_open": m.as_ref().map(|m| market_from_response(m).is_open()), "seed_pledged_sompi": m.as_ref().map(|m| m.seed_pledged_sompi), "price_sompi_per_position": m.as_ref().map(|m| m.price_sompi_per_position),
                     "reserve_sompi": m.as_ref().map(|m| m.msk_reserve),
+                    "context": contexts.as_ref().and_then(|all| all.get(&c.class_id)).map(context_json),
                 })
             })
             .collect();
@@ -103,10 +137,11 @@ pub(crate) async fn model_list(ctx: &crate::node::Ctx, profile: Profile) -> CliR
         return Ok(());
     }
     println!("{}", paint::bold(&format!("MODELS · {} · {} classes at DAA {}", profile.network, rows.len(), classes.tip_daa)));
+    let context_header = if contexts.is_some() { format!("{:<11}", "CONTEXT") } else { String::new() };
     println!(
         "{}",
         paint::dim(&format!(
-            "  {:<11}{:<22}{:<10}{:<8}{:<10}{:<8}{}",
+            "  {:<11}{:<22}{:<10}{:<8}{:<10}{:<8}{context_header}{}",
             "CLASS", "NAME", "STATUS", "SHARE", "BUDGET", "PROMPT", "MARKET"
         ))
     );
@@ -126,8 +161,9 @@ pub(crate) async fn model_list(ctx: &crate::node::Ctx, profile: Profile) -> CliR
             label.push_str(" (held)");
         }
         let status = c.status.split([' ', '{']).next().unwrap_or(&c.status).to_string();
+        let context = contexts.as_ref().map(|all| format!("{:<11}", context_cell(all.get(&c.class_id)))).unwrap_or_default();
         println!(
-            "  {}{:<22}{:<10}{:<8}{:<10}{:<8}{market}",
+            "  {}{:<22}{:<10}{:<8}{:<10}{:<8}{context}{market}",
             paint::cyan(&format!("{:<11}", format!("{}…", &c.class_id[..8.min(c.class_id.len())]))),
             label.chars().take(21).collect::<String>(),
             status,
@@ -920,5 +956,45 @@ mod tests {
         assert_eq!(floor_after(44_612, 10), 44_165);
         assert_eq!(floor_after(1_000, 0), 1_000);
         assert_eq!(floor_after(u64::MAX, 10), ((u64::MAX as u128) * 990 / 1000) as u64, "no overflow");
+    }
+}
+
+#[cfg(test)]
+mod class_context_tests {
+    use super::*;
+
+    fn row(n_ctx: u32, prefill: u32, decode: u32, footprint: u32, source: &str) -> kaspa_rpc_core::RpcPalwClassContext {
+        kaspa_rpc_core::RpcPalwClassContext {
+            class_id: "ab".repeat(64),
+            model_id: "qwen3.6-35b-a3b".to_string(),
+            n_ctx,
+            canonical_prefill_tokens: prefill,
+            canonical_decode_tokens: decode,
+            canonical_footprint_positions: footprint,
+            max_context_tokens: n_ctx,
+            source: source.to_string(),
+        }
+    }
+
+    /// **The context column: `ctx n` where the chain or the build knows it, `—` where neither does,
+    /// and the JSON carries the footprint and where the numbers came from.** A (7, 2) job at `n_ctx` 8
+    /// is a footprint of 8, and that is what the JSON says — never `prefill + decode`.
+    #[test]
+    fn the_context_column_and_its_json() {
+        let registered = row(8, 7, 2, 8, "chain_registration");
+        let by_id = class_contexts_by_id(vec![registered.clone(), row(0, 0, 0, 0, "unknown")]);
+        assert_eq!(by_id.len(), 1, "one class id, one row (the last wins)");
+        assert_eq!(context_cell(Some(&registered)), "ctx 8");
+        assert_eq!(context_cell(Some(&row(4_096, 60, 3, 62, "build_ledger"))), "ctx 4096");
+        assert_eq!(context_cell(Some(&row(0, 0, 0, 0, "unknown"))), "—");
+        assert_eq!(context_cell(None), "—", "a class the answer did not list");
+        let doc = context_json(&registered);
+        assert_eq!((doc["n_ctx"].as_u64(), doc["footprint"].as_u64()), (Some(8), Some(8)));
+        assert_eq!(doc["source"], "chain_registration");
+        assert_eq!(
+            doc["prefill_tokens"].as_u64().unwrap() + doc["decode_tokens"].as_u64().unwrap(),
+            9,
+            "the sum the footprint is not"
+        );
     }
 }

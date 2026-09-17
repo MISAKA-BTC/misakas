@@ -43,6 +43,8 @@ mod palw_fp;
 /// ADR-0088 Decision 12: `palw line-… / version-… / proposal-… / evaluate` — the model registry.
 mod palw_line;
 mod palw_model;
+/// ADR-0127 Decision 3: `palw settlement` — settled, and how deep in settled PALW anchors.
+mod palw_settlement;
 mod palw_shard_court;
 mod palw_shard_licensing;
 mod palw_verify_context;
@@ -875,6 +877,20 @@ enum PalwCmd {
         #[arg(long)]
         bond: Option<String>,
     },
+    /// ADR-0127: whether what the chain accepted at a DAA score is settled, and its settlement depth
+    /// — counted in settled PALW anchors (blocks whose PALW claim reached Final), never in blocks.
+    /// Execution and heartbeat blocks add no anchor, however many there are.
+    Settlement {
+        /// The DAA score of the block that accepted the transaction (an output's block DAA score, as
+        /// `misaka wallet utxo list` prints it).
+        #[arg(long, value_name = "DAA")]
+        daa: u64,
+        /// Exit 0 only once settled at least this many anchors deep, and 7 (pending) until then —
+        /// for scripts and exchanges that wait on a payment. The depth counts settled PALW anchors,
+        /// not blocks; larger payments should wait for more anchors.
+        #[arg(long, value_name = "N")]
+        min_depth: Option<u64>,
+    },
     /// Submit a free-prompt commitment built by `misaka-palw-fp-rail` (dry-run unless --yes).
     FpSubmit {
         /// The rail's `*.commitment-tx.borsh`.
@@ -1594,6 +1610,10 @@ enum UtxoCmd {
         /// Address to inspect; defaults to the key's funding address.
         #[arg(long)]
         address: Option<String>,
+        /// Also list the newest N outputs, each with its settlement depth in settled PALW anchors
+        /// (ADR-0127); 0 lists none. The summary always covers every output.
+        #[arg(long, value_name = "N", default_value_t = 10)]
+        recent: usize,
         #[command(flatten)]
         key: KeyArgs,
     },
@@ -2266,6 +2286,7 @@ async fn main() -> std::process::ExitCode {
         Command::Evm(EvmCmd::Tx(EvmTxCmd::Status { hash })) => eth::tx_status(&ctx, &hash),
         Command::Evm(EvmCmd::Tx(EvmTxCmd::Wait { hash, timeout, poll })) => eth::tx_wait(&ctx, &hash, timeout, poll),
         Command::Palw(PalwCmd::RoundLane { bond }) => palw_round_lane(&ctx, bond.as_deref()).await,
+        Command::Palw(PalwCmd::Settlement { daa, min_depth }) => palw_settlement::run(&ctx, daa, min_depth).await,
         Command::Palw(PalwCmd::FpSubmit { tx, yes, material_out, capture, dsl_payload }) => {
             palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
         }
@@ -2436,8 +2457,8 @@ async fn main() -> std::process::ExitCode {
             )
             .await
         }
-        Command::Wallet(WalletCmd::Utxo(UtxoCmd::List { address, key })) => {
-            wallet::utxo_list(&ctx, address.as_deref(), &key.source()).await
+        Command::Wallet(WalletCmd::Utxo(UtxoCmd::List { address, recent, key })) => {
+            wallet::utxo_list(&ctx, address.as_deref(), &key.source(), recent).await
         }
         Command::Wallet(WalletCmd::Utxo(UtxoCmd::Consolidate { max_inputs, max_txs_per_run, sleep_ms, yes, key })) => {
             wallet::consolidate(&ctx, &key.source(), max_inputs, !yes, yes, max_txs_per_run, sleep_ms).await
@@ -2698,5 +2719,32 @@ mod cli_surface_tests {
         assert!(Cli::try_parse_from(["misaka", "mining", "setup", "--amount", "10"]).is_err());
         // The sibling forwarder that remains starts the node, which this tree does build.
         assert!(Cli::command().find_subcommand("node").is_some_and(|n| n.find_subcommand("start").is_some()));
+    }
+
+    /// **ADR-0127: `palw settlement` takes the accepting DAA score and an optional depth to wait
+    /// for, and its help says the depth is anchors, not blocks.**
+    #[test]
+    fn palw_settlement_parses_and_says_the_depth_is_anchors() {
+        let parsed = Cli::try_parse_from(["misaka", "palw", "settlement", "--daa", "4242", "--min-depth", "6"]).expect("parses");
+        assert!(matches!(parsed.command, Command::Palw(PalwCmd::Settlement { daa: 4242, min_depth: Some(6) })));
+        let bare = Cli::try_parse_from(["misaka", "--output", "json", "palw", "settlement", "--daa", "0"]).expect("parses");
+        assert!(matches!(bare.command, Command::Palw(PalwCmd::Settlement { daa: 0, min_depth: None })));
+        assert!(Cli::try_parse_from(["misaka", "palw", "settlement"]).is_err(), "the DAA score is required");
+        assert!(Cli::try_parse_from(["misaka", "palw", "settlement", "--daa", "-1"]).is_err());
+
+        let command = Cli::command();
+        let settlement = command.find_subcommand("palw").and_then(|p| p.find_subcommand("settlement")).expect("the subcommand");
+        let help = settlement
+            .get_arguments()
+            .find(|a| a.get_id() == "min_depth")
+            .and_then(|a| a.get_help())
+            .map(|h| h.to_string())
+            .expect("--min-depth documents itself");
+        assert!(help.contains("anchors, not blocks"), "{help}");
+        assert!(help.contains("larger payments should wait for more anchors"), "{help}");
+
+        let listed =
+            Cli::try_parse_from(["misaka", "wallet", "utxo", "list", "--address", "misakatest:q", "--recent", "3"]).expect("parses");
+        assert!(matches!(listed.command, Command::Wallet(WalletCmd::Utxo(UtxoCmd::List { recent: 3, .. }))));
     }
 }
