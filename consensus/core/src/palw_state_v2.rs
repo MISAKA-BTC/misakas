@@ -4857,7 +4857,8 @@ pub struct PalwChainStateV2 {
     panel_reserve_sompi: u64,
     /// **ADR-0125: the execution lane's scheduler.** The attempt claims finalized in the open span,
     /// keyed by claim id; `round_span` names that span and is meaningful only while the map is
-    /// non-empty. At the first block of a later span they become the next span's schedule and leave.
+    /// non-empty. At the first chain block of the next span they become the snapshot of the span
+    /// after it (`round_pending`, ADR-0130) and leave; at a later span's they are stale and leave.
     /// Empty on every network that has not armed `Params::palw_execution_lane`, and entering the root
     /// and the carriage only once written.
     round_span: u64,
@@ -4865,12 +4866,21 @@ pub struct PalwChainStateV2 {
     /// ADR-0125: the schedules a merging block may still judge a round block by — the current span's
     /// and the one before it, and only those that list a domain.
     round_schedules: BTreeMap<u64, crate::palw_execution_lane_v1::PalwExecScheduleV1>,
+    /// **ADR-0130: the participants of a span that has no seed yet**, by the span they are for — at
+    /// most one row, taken at the first chain block of the span before its target and, at the first
+    /// chain block of the target, seeded into its schedule or dropped. Enters the root and the
+    /// carriage only once written, which nothing below the lane's fence can do.
+    round_pending: BTreeMap<u64, crate::palw_execution_lane_v1::PalwExecSnapshotV1>,
     /// ADR-0125: the permits already accepted, as `(span, round) → one bit per permit index`, for the
     /// two spans a schedule is kept for. A permit is accepted once.
     round_permits_used: BTreeMap<(u64, u64), u16>,
     /// ADR-0125 §7.3: the permits proven signed twice, in the ledger's shape and kept for the same
     /// two spans. A burned permit is granted to no block and slashes its bond once.
     round_equivocations: BTreeMap<(u64, u64), u16>,
+    /// **ADR-0130: the latest attempt-carrying chain block of the open span** — reset at the first
+    /// chain block of every span, then recorded by every chain block of that span that carries an
+    /// admitted attempt; it seeds the pending snapshot whose target is the next span.
+    round_seed_anchor: Option<crate::palw_execution_lane_v1::PalwExecSeedAnchorV1>,
     /// **ADR-0056 Decision 3: the registry's own exposure ledger, kept SEPARATE from the claims'.**
     ///
     /// `reserved_exposure` is an accumulator over live claims, and
@@ -5002,8 +5012,10 @@ impl PalwChainStateV2 {
             round_span: 0,
             round_finals: BTreeMap::new(),
             round_schedules: BTreeMap::new(),
+            round_pending: BTreeMap::new(),
             round_permits_used: BTreeMap::new(),
             round_equivocations: BTreeMap::new(),
+            round_seed_anchor: None,
             registration_exposure: BTreeMap::new(),
             class_walks: BTreeMap::new(),
             certified_families: BTreeMap::new(),
@@ -5554,6 +5566,17 @@ impl PalwChainStateV2 {
         (self.round_span, &self.round_finals)
     }
 
+    /// ADR-0130: the snapshot waiting for its seed, if any — participants, not a schedule: no round
+    /// block is judged by it.
+    pub fn round_pending_snapshot(&self) -> Option<&crate::palw_execution_lane_v1::PalwExecSnapshotV1> {
+        self.round_pending.values().next()
+    }
+
+    /// ADR-0130: the latest attempt-carrying chain block of the open span, if one has been recorded.
+    pub fn round_seed_anchor(&self) -> Option<&crate::palw_execution_lane_v1::PalwExecSeedAnchorV1> {
+        self.round_seed_anchor.as_ref()
+    }
+
     /// Whether the execution lane has written anything: the gate the root and the carriage share.
     fn round_lane_is_written(&self) -> bool {
         self.round_span != 0
@@ -5561,6 +5584,12 @@ impl PalwChainStateV2 {
             || !self.round_schedules.is_empty()
             || !self.round_permits_used.is_empty()
             || !self.round_equivocations.is_empty()
+            || self.round_scheduler_is_written()
+    }
+
+    /// ADR-0130's rows: the gate their own sub-block of the root and their carriage tail share.
+    fn round_scheduler_is_written(&self) -> bool {
+        !self.round_pending.is_empty() || self.round_seed_anchor.is_some()
     }
 
     /// **ADR-0119 Decision 2: the step ladder of a class, given the network's** — the ladder this
@@ -5987,6 +6016,18 @@ impl PalwChainStateV2 {
             // §7.3: only once a permit was burned, so a lane without an equivocation roots as before.
             if !self.round_equivocations.is_empty() {
                 state.update(collection_root(b"round_equivocations", &self.round_equivocations).as_byte_slice());
+            }
+            // ADR-0130: the snapshot waiting for its seed and the seed anchor, named, once either exists.
+            if self.round_scheduler_is_written() {
+                state.update(b"round_scheduler/v2");
+                state.update(collection_root(b"round_pending", &self.round_pending).as_byte_slice());
+                match &self.round_seed_anchor {
+                    None => state.update(&[0u8]),
+                    Some(anchor) => {
+                        state.update(&[1u8]);
+                        state.update(&borsh::to_vec(anchor).expect("PalwExecSeedAnchorV1 is borsh-serializable"))
+                    }
+                };
             }
         }
         state.update(&self.safe_weight.to_le_bytes());
@@ -6886,11 +6927,22 @@ pub enum PalwDeltaEntryV2 {
         old: Option<u16>,
         new: Option<u16>,
     },
-    /// ADR-0125 §7.3: a round's burned-permit bits moved (48). Appended last.
+    /// ADR-0125 §7.3: a round's burned-permit bits moved (48).
     RoundEquivocations {
         key: (u64, u64),
         old: Option<u16>,
         new: Option<u16>,
+    },
+    /// ADR-0130: a snapshot was taken, seeded into its schedule or dropped (49).
+    RoundPending {
+        key: u64,
+        old: Option<crate::palw_execution_lane_v1::PalwExecSnapshotV1>,
+        new: Option<crate::palw_execution_lane_v1::PalwExecSnapshotV1>,
+    },
+    /// ADR-0130: the span's seed anchor was recorded or reset (50). Appended last.
+    RoundSeedAnchor {
+        old: Option<crate::palw_execution_lane_v1::PalwExecSeedAnchorV1>,
+        new: Option<crate::palw_execution_lane_v1::PalwExecSeedAnchorV1>,
     },
 }
 
@@ -7553,27 +7605,84 @@ impl<'a> TransitionBuilder<'a> {
         }
     }
 
+    fn write_round_pending(&mut self, key: u64, new: Option<crate::palw_execution_lane_v1::PalwExecSnapshotV1>) {
+        let old = match new.clone() {
+            Some(row) => self.state.round_pending.insert(key, row),
+            None => self.state.round_pending.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::RoundPending { key, old, new });
+        }
+    }
+
+    fn write_round_seed_anchor(&mut self, new: Option<crate::palw_execution_lane_v1::PalwExecSeedAnchorV1>) {
+        let old = self.state.round_seed_anchor;
+        if old != new {
+            self.state.round_seed_anchor = new;
+            self.entries.push(PalwDeltaEntryV2::RoundSeedAnchor { old, new });
+        }
+    }
+
     // ---- ADR-0125: the execution lane ----
 
-    /// **ADR-0125: the span boundary.** At the first block of a span later than the one the finals
-    /// were gathered in, the finals become the NEXT span's schedule (written only when it lists a
-    /// domain) and leave; then every schedule and permit row older than the span before this block's
-    /// is dropped. A round block anchored two spans back can no longer be accepted, so nothing it
-    /// could collide with needs keeping.
+    /// **ADR-0125 / ADR-0130: the span boundary — participants first, randomness after.**
+    ///
+    /// At the first chain block `B` of span `n` — the block whose parent chain block (`last_point`)
+    /// lies in an earlier span, or the first block the state folds — in this order:
+    ///
+    /// 1. **Promote.** A pending snapshot whose target is `n` becomes span `n`'s schedule when a seed
+    ///    anchor was recorded in span `n − 1`, which is after the snapshot was taken (at the first
+    ///    chain block of `n − 1`, whose own anchor is recorded after its rotation). The seed is the
+    ///    anchor's execution, `n` and the safe frontier as the parent left it
+    ///    (`palw_execution_schedule_seeded_v1`). Without such an anchor the snapshot is dropped and
+    ///    span `n` has no schedule: the lane is idle for the span, explicitly. A snapshot for a span
+    ///    below `n` — a span no chain block opened — is stale and dropped.
+    /// 2. **Snapshot.** Finals gathered in span `n − 1` become the pending snapshot for `n + 1`
+    ///    (written only when it lists a domain) and leave; finals of an older span are stale and
+    ///    leave with nothing taken from them.
+    /// 3. **Reset** the seed anchor. `B`'s own attempt, if it carries one, records the next anchor
+    ///    after this ([`Self::record_round_seed_anchor`]).
+    ///
+    /// So credits earned in span `f` are spendable in span `f + 2`, and a span's producers are known
+    /// only once the block that opens it exists. Then, at every block, every schedule and permit row
+    /// older than the span before this block's is dropped: a round block anchored two spans back can
+    /// no longer be accepted, so nothing it could collide with needs keeping.
     fn rotate_round_lane(&mut self, ctx: &PalwBlockContextV2, span_daa: u64) {
-        let span_now = crate::palw_execution_lane_v1::palw_execution_span_v1(ctx.daa_score, span_daa);
-        if !self.state.round_finals.is_empty() && self.state.round_span < span_now {
-            let next = self.state.round_span + 1;
-            let finals: Vec<crate::palw_execution_lane_v1::PalwExecFinalV1> = self.state.round_finals.values().copied().collect();
-            let schedule = crate::palw_execution_lane_v1::palw_execution_schedule_v1(next, &finals);
-            if !schedule.domains.is_empty() {
-                self.write_round_schedule(next, Some(schedule));
+        use crate::palw_execution_lane_v1::{
+            PalwExecFinalV1, palw_execution_schedule_seeded_v1, palw_execution_schedule_snapshot_v1, palw_execution_span_v1,
+        };
+        let span_now = palw_execution_span_v1(ctx.daa_score, span_daa);
+        let opens_span = self.state.last_point.is_none_or(|last| palw_execution_span_v1(last.daa_score, span_daa) < span_now);
+        if opens_span {
+            for (target, snapshot) in self.state.round_pending.clone() {
+                if target > span_now {
+                    // Unreachable: a snapshot targets the span after the one whose first block took it.
+                    continue;
+                }
+                self.write_round_pending(target, None);
+                if target == span_now
+                    && let Some(anchor) = self.state.round_seed_anchor
+                    && anchor.span + 1 == span_now
+                {
+                    let (frontier_blue_score, frontier) = self.state.safe_frontier();
+                    self.write_round_schedule(span_now, Some(palw_execution_schedule_seeded_v1(&snapshot, &anchor, frontier_blue_score, frontier)));
+                }
             }
-            for key in self.state.round_finals.keys().copied().collect::<Vec<_>>() {
-                self.write_round_final(key, None);
+            if !self.state.round_finals.is_empty() {
+                if self.state.round_span + 1 == span_now {
+                    let finals: Vec<PalwExecFinalV1> = self.state.round_finals.values().copied().collect();
+                    let snapshot = palw_execution_schedule_snapshot_v1(span_now + 1, &finals);
+                    if !snapshot.domains.is_empty() {
+                        self.write_round_pending(span_now + 1, Some(snapshot));
+                    }
+                }
+                for key in self.state.round_finals.keys().copied().collect::<Vec<_>>() {
+                    self.write_round_final(key, None);
+                }
+                // The span marker names the finals' span and means nothing without them.
+                self.write_round_span(0);
             }
-            // The span marker names the finals' span and means nothing without them.
-            self.write_round_span(0);
+            self.write_round_seed_anchor(None);
         }
         let keep_from = span_now.saturating_sub(1);
         for key in self.state.round_schedules.range(..keep_from).map(|(k, _)| *k).collect::<Vec<_>>() {
@@ -7663,6 +7772,16 @@ impl<'a> TransitionBuilder<'a> {
             }),
         );
         Ok(())
+    }
+
+    /// **ADR-0130: a chain block that carries an admitted attempt is the open span's seed anchor**
+    /// until a later chain block of the span carries one. Recorded after the span's rotation, so the
+    /// block that opens a span can anchor the snapshot that block took. `execution_key` is the
+    /// attempt's execution commitment under its own header's anchor — the processor derives it from
+    /// the header (`palw_execution_key_v1`) and passes it as the fold's `own_execution_key`.
+    fn record_round_seed_anchor(&mut self, ctx: &PalwBlockContextV2, span_daa: u64, execution_key: Hash64) {
+        let span = crate::palw_execution_lane_v1::palw_execution_span_v1(ctx.daa_score, span_daa);
+        self.write_round_seed_anchor(Some(crate::palw_execution_lane_v1::PalwExecSeedAnchorV1 { span, block: ctx.block, execution_key }));
     }
 
     /// **ADR-0125: the permits this block accepted.** The processor decided them against the parent
@@ -9149,7 +9268,12 @@ pub fn apply_palw_transition_v7(
                     escrow_carve,
                     execution_key: own_execution_key,
                 },
-            )?
+            )?;
+            // ADR-0130: the attempt was admitted, so this chain block is the open span's seed anchor
+            // — after step 1d's rotation, so a block that opens a span anchors the next target.
+            if let Some(lane) = extras.round_lane {
+                builder.record_round_seed_anchor(ctx, lane.schedule_span_daa, own_execution_key);
+            }
         }
         PalwBlockWorkV3::ReceiptSpend(spend) => apply_receipt_spend(&mut builder, ctx, spend)?,
     }
@@ -14672,6 +14796,14 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::RoundSchedule { key, old, new } => swap_write!(state.round_schedules, key, old, new),
         PalwDeltaEntryV2::RoundPermitsUsed { key, old, new } => swap_write!(state.round_permits_used, key, old, new),
         PalwDeltaEntryV2::RoundEquivocations { key, old, new } => swap_write!(state.round_equivocations, key, old, new),
+        PalwDeltaEntryV2::RoundPending { key, old, new } => swap_write!(state.round_pending, key, old, new),
+        PalwDeltaEntryV2::RoundSeedAnchor { old, new } => {
+            let (expected, install) = if revert { (new, old) } else { (old, new) };
+            if state.round_seed_anchor != *expected {
+                return Err(PalwStateV2Error::DeltaMismatch("the round lane's seed anchor does not match the delta's expectation"));
+            }
+            state.round_seed_anchor = *install;
+        }
     }
     Ok(())
 }
@@ -14880,6 +15012,9 @@ pub struct PalwStateCarriageV2 {
     pub round_permits_used: BTreeMap<(u64, u64), u16>,
     /// ADR-0125 §7.3. An eleventh tagged tail (`0xA8`), encoded only when a permit was burned.
     pub round_equivocations: BTreeMap<(u64, u64), u16>,
+    /// ADR-0130. A twelfth tagged tail (`0xA9`) carrying both, encoded only when either is written.
+    pub round_pending: BTreeMap<u64, crate::palw_execution_lane_v1::PalwExecSnapshotV1>,
+    pub round_seed_anchor: Option<crate::palw_execution_lane_v1::PalwExecSeedAnchorV1>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -14946,6 +15081,8 @@ const PALW_CARRIAGE_PANEL_ECONOMY_TAIL_V1: u8 = 0xA6;
 const PALW_CARRIAGE_ROUND_LANE_TAIL_V1: u8 = 0xA7;
 /// ADR-0125 §7.3: the burned permits, their own tail after the lane's.
 const PALW_CARRIAGE_ROUND_EQUIVOCATIONS_TAIL_V1: u8 = 0xA8;
+/// ADR-0130: the snapshot waiting for its seed and the seed anchor, one tail after the burned permits'.
+const PALW_CARRIAGE_ROUND_SCHEDULER_TAIL_V1: u8 = 0xA9;
 
 impl borsh::BorshSerialize for PalwStateCarriageV2 {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
@@ -15042,6 +15179,11 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_ROUND_EQUIVOCATIONS_TAIL_V1.serialize(writer)?;
             self.round_equivocations.serialize(writer)?;
         }
+        if !self.round_pending.is_empty() || self.round_seed_anchor.is_some() {
+            PALW_CARRIAGE_ROUND_SCHEDULER_TAIL_V1.serialize(writer)?;
+            self.round_pending.serialize(writer)?;
+            self.round_seed_anchor.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -15095,6 +15237,9 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_round_lane = false;
         let mut round_equivocations = BTreeMap::new();
         let mut seen_round_equivocations = false;
+        let mut round_pending = BTreeMap::new();
+        let mut round_seed_anchor = None;
+        let mut seen_round_scheduler = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -15135,21 +15280,28 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_class_ladders = true;
                     class_step_ladders = BTreeMap::deserialize_reader(reader)?;
                 }
-                PALW_CARRIAGE_PANEL_ECONOMY_TAIL_V1 if !seen_panel_economy && !seen_round_lane && !seen_round_equivocations => {
+                PALW_CARRIAGE_PANEL_ECONOMY_TAIL_V1
+                    if !seen_panel_economy && !seen_round_lane && !seen_round_equivocations && !seen_round_scheduler =>
+                {
                     seen_panel_economy = true;
                     panel_duties = BTreeMap::deserialize_reader(reader)?;
                     panel_reserve_sompi = u64::deserialize_reader(reader)?;
                 }
-                PALW_CARRIAGE_ROUND_LANE_TAIL_V1 if !seen_round_lane && !seen_round_equivocations => {
+                PALW_CARRIAGE_ROUND_LANE_TAIL_V1 if !seen_round_lane && !seen_round_equivocations && !seen_round_scheduler => {
                     seen_round_lane = true;
                     round_span = u64::deserialize_reader(reader)?;
                     round_finals = BTreeMap::deserialize_reader(reader)?;
                     round_schedules = BTreeMap::deserialize_reader(reader)?;
                     round_permits_used = BTreeMap::deserialize_reader(reader)?;
                 }
-                PALW_CARRIAGE_ROUND_EQUIVOCATIONS_TAIL_V1 if !seen_round_equivocations => {
+                PALW_CARRIAGE_ROUND_EQUIVOCATIONS_TAIL_V1 if !seen_round_equivocations && !seen_round_scheduler => {
                     seen_round_equivocations = true;
                     round_equivocations = BTreeMap::deserialize_reader(reader)?;
+                }
+                PALW_CARRIAGE_ROUND_SCHEDULER_TAIL_V1 if !seen_round_scheduler => {
+                    seen_round_scheduler = true;
+                    round_pending = BTreeMap::deserialize_reader(reader)?;
+                    round_seed_anchor = Option::deserialize_reader(reader)?;
                 }
                 PALW_CARRIAGE_SHARDS_TAIL_V1 if !seen_shards && !seen_held && !seen_demands && !seen_class_ladders => {
                     seen_shards = true;
@@ -15213,6 +15365,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             round_schedules,
             round_permits_used,
             round_equivocations,
+            round_pending,
+            round_seed_anchor,
         })
     }
 }
@@ -15261,6 +15415,8 @@ impl PalwStateCarriageV2 {
             round_schedules: state.round_schedules.clone(),
             round_permits_used: state.round_permits_used.clone(),
             round_equivocations: state.round_equivocations.clone(),
+            round_pending: state.round_pending.clone(),
+            round_seed_anchor: state.round_seed_anchor,
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -15357,6 +15513,8 @@ impl PalwStateCarriageV2 {
             round_schedules: self.round_schedules,
             round_permits_used: self.round_permits_used,
             round_equivocations: self.round_equivocations,
+            round_pending: self.round_pending,
+            round_seed_anchor: self.round_seed_anchor,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -24182,6 +24340,8 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::RoundSchedule { .. } => "round_schedule",
                     PalwDeltaEntryV2::RoundPermitsUsed { .. } => "round_permits_used",
                     PalwDeltaEntryV2::RoundEquivocations { .. } => "round_equivocations",
+                    PalwDeltaEntryV2::RoundPending { .. } => "round_pending",
+                    PalwDeltaEntryV2::RoundSeedAnchor { .. } => "round_seed_anchor",
                 });
             }
         }
@@ -24220,9 +24380,18 @@ pub(crate) mod tests {
             (40, PalwDeltaEntryV2::HeldLeafDemands { key, old: None, new: None }),
             // ADR-0119 Decision 2.
             (41, PalwDeltaEntryV2::ClassStepLadder { key, old: None, new: Some(1 << 40) }),
-            // ADR-0124 Decisions 2 and 3, appended last.
+            // ADR-0124 Decisions 2 and 3.
             (42, PalwDeltaEntryV2::PanelDuties { key, old: None, new: None }),
             (43, PalwDeltaEntryV2::PanelReserve { old: 0, new: 7 }),
+            // ADR-0125.
+            (44, PalwDeltaEntryV2::RoundSpan { old: 0, new: 1 }),
+            (45, PalwDeltaEntryV2::RoundFinal { key, old: None, new: None }),
+            (46, PalwDeltaEntryV2::RoundSchedule { key: 1, old: None, new: None }),
+            (47, PalwDeltaEntryV2::RoundPermitsUsed { key: (1, 2), old: None, new: Some(1) }),
+            (48, PalwDeltaEntryV2::RoundEquivocations { key: (1, 2), old: None, new: Some(1) }),
+            // ADR-0130, appended last.
+            (49, PalwDeltaEntryV2::RoundPending { key: 3, old: None, new: None }),
+            (50, PalwDeltaEntryV2::RoundSeedAnchor { old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -24754,6 +24923,9 @@ pub(crate) mod tests {
             round_schedules: _,
             round_permits_used: _,
             round_equivocations: _,
+            // ADR-0130: rooted in their own guarded sub-block of the lane's.
+            round_pending: _,
+            round_seed_anchor: _,
             safe_weight: _,
             retired_safe_weight: _,
             bounded_immature: _,
