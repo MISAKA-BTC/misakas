@@ -45,8 +45,8 @@ pub(crate) fn render(r: &GetPalwModelRegistryResponse) -> String {
         ));
     }
     out.push_str(&format!(
-        "  {:<14} {:<15} {:>6} {:>7} {:>8} {:>5} {:>6} {:>6} {:>8} {:>8} {:>8} {:>6}\n",
-        "class", "state", "since", "window", "prefetch", "cap", "need", "ready", "inflight", "util‰", "adm‰", "share"
+        "  {:<14} {:<15} {:>6} {:>7} {:>8} {:>5} {:>6} {:>6} {:>8} {:>8} {:>8} {:>6} {:>6}\n",
+        "class", "state", "since", "window", "prefetch", "cap", "need", "ready", "inflight", "util‰", "adm‰", "share", "priced"
     ));
     for c in r.classes.iter().filter(|c| c.has_row) {
         out.push_str(&format!("    {} — {}\n", short(&c.class_id), c.reason));
@@ -63,7 +63,7 @@ pub(crate) fn render(r: &GetPalwModelRegistryResponse) -> String {
     }
     for c in &r.classes {
         out.push_str(&format!(
-            "  {:<14} {:<15} {:>6} {:>7} {:>8} {:>5} {:>6} {:>6} {:>8} {:>8} {:>8} {:>6}\n",
+            "  {:<14} {:<15} {:>6} {:>7} {:>8} {:>5} {:>6} {:>6} {:>8} {:>8} {:>8} {:>6} {:>6}\n",
             format!("{}{}", short(&c.class_id), if c.is_base_class { "*" } else { "" }),
             if c.has_row { c.state.clone() } else { "legacy".to_string() },
             c.since_span,
@@ -75,7 +75,8 @@ pub(crate) fn render(r: &GetPalwModelRegistryResponse) -> String {
             c.inflight_now,
             c.utilization_permille,
             c.admission_milli,
-            c.share_permille
+            c.share_permille,
+            if c.priced_share_permille == 0 { "-".to_string() } else { c.priced_share_permille.to_string() }
         ));
     }
     if r.readiness.is_empty() {

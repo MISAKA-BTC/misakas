@@ -215,13 +215,27 @@ registry raises mid-epoch admitted nothing until the epoch turned. The boundary 
 re-derives the current epoch's budgets (the produced counters stay); the fold test asserts Kimi's budget
 follows its admission share in the same epoch.
 
-**The seventh finding, behind the sixth:** the class registered with a share of 1 ‰ and therefore an epoch
-budget of one block; in its first epoch its producer landed seven claims against that budget, and the
-class DAA (ADR-0076, ratio-following, clamped) cut its target three epochs running to a ticket of
-3.6 × 10⁻³ a draw — hours per claim on the devnet's forwards. With the budget following the admission share
-within two DAA of the registration (the sixth finding's fix) the over-production does not recur; a share the
-registry moves does not re-seed the target, which converges over epochs as the class DAA always did. The
-drill is repeated from a fresh genesis with every fix in place.
+**The seventh finding, behind the sixth:** with the budget following the admission share, the class in
+PROBATION still drew at a ticket of 3.6 × 10⁻³ — hours per claim on the devnet's forwards — and nothing
+moved it. The ticket was the floor's, exactly: op 180's terms seed a registration with the floor's current
+target, a price converged to the floor's microsecond draws, and a model whose draw is a whole forward sits
+hundreds of times too hard at it. The registry then holds the class weightless while it is REGISTERED or
+PREFETCHING and grants it 980 ‰ at admission, and no rule re-prices it: the retarget skips a class that
+produced nothing, and the idle convergence (ADR-0071) moves an idle class only toward the incumbent's
+price, which it already had. (The earlier reading — the class DAA cutting the target after a first
+epoch's over-production — was not the cause: the fresh-genesis run with the budget fix showed the same
+ticket, and the floor producer printed the same number.) ADR-0076 already answers this at the activation
+edge, for a weightless class seated at its activation DAA: *a class being seated is a class being
+priced*, from the share the table just wrote and the class's own counted work. The registry's admission
+is the same event, so at the first governed boundary a non-floor class holds a nonzero share in an
+admitted state its target becomes `attempt_target_seed_v1(share, pwu)` and the row records
+`priced_share_permille` — once; the class DAA owns the target from there, and every later share move is
+measured by the retarget against the history the class then has. The floor is never priced here (its
+target is the class DAA's, and it has history by definition). Op 186 prints the priced share. The
+boundary that seats a class reads the cap utilization at the price it walked in with; the next reads
+the seat's. The Upgrade C fixtures (ADR-0132 §7) now walk at the seated price — `MAX / 14 913` for the
+toy at 900 ‰ × 160 pwu, 14 913 forwards a claim, the panel share at its floor — and their numbers were
+re-derived. The drill is repeated from a fresh genesis with every fix in place.
 
 **The fence.** `Params::palw_model_registry: Option<ForkActivation>` — `None` on every shipped preset
 (the t11 fingerprint `135b6ee0…` does not move); hashed `Some`-only; the fork-id gate names it when

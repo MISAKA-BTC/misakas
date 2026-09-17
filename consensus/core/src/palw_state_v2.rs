@@ -7989,6 +7989,7 @@ impl<'a> TransitionBuilder<'a> {
                 utilization_permille: 0,
                 admission_milli: 0,
                 cap_utilization_permille: 0,
+                priced_share_permille: 0,
             }),
         );
     }
@@ -8133,6 +8134,7 @@ impl<'a> TransitionBuilder<'a> {
                     utilization_permille: 0,
                     admission_milli: 0,
                     cap_utilization_permille: 0,
+                    priced_share_permille: 0,
                 }),
             );
         }
@@ -8197,6 +8199,7 @@ impl<'a> TransitionBuilder<'a> {
                 utilization_permille: utilization,
                 admission_milli,
                 cap_utilization_permille: cap,
+                priced_share_permille: row.priced_share_permille,
             };
             if next != row {
                 self.write_model_lifecycle(*class_id, Some(next));
@@ -8248,6 +8251,40 @@ impl<'a> TransitionBuilder<'a> {
             && self.state.epoch_budgets.as_ref() != Some(&budgets)
         {
             self.write_epoch_budgets(Some(budgets));
+        }
+        // **A class the registry seats is a class the registry prices** (the seventh finding, by
+        // ADR-0076's rule and no second one): a registration copies the floor's target — op 180's
+        // terms — which is the floor's price for the floor's draw rate, and a model whose draw is
+        // a whole forward sits thousands of times too hard at it. Admitted at 980 ‰ it produced
+        // nothing for the drill's whole second phase, skipped by the retarget for producing nothing
+        // and left by the idle convergence for not being behind the incumbent's price. The
+        // activation edge already prices a weightless class from the share it is granted and its
+        // counted work; this is the same event at the registry's boundary, and it happens once —
+        // the class DAA owns the target from there, and every later share move is measured by the
+        // retarget against the history the class then has. The floor is not priced here: its
+        // target is the class DAA's, and it has history by definition.
+        let seated: Vec<Hash64> = self
+            .state
+            .model_lifecycles
+            .iter()
+            .filter(|(id, row)| {
+                **id != base
+                    && row.priced_share_permille == 0
+                    && !matches!(row.state, PalwModelLifecycleV1::Registered | PalwModelLifecycleV1::Prefetching)
+                    && self.state.class_shares.get(*id).copied().unwrap_or(0) > 0
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for id in seated {
+            let share = self.state.class_shares.get(&id).copied().unwrap_or(0);
+            let pwu = self.state.classes.get(&id).map(|record| palw_max_exposure_pwu_of_rule_v1(&record.pwu_rule)).unwrap_or(0);
+            let priced = crate::palw_class_daa::attempt_target_seed_v1(share, pwu);
+            if self.state.class_targets.get(&id).map(|t| t.target) != Some(priced) {
+                self.write_target(id, Some(PalwClassTargetV2 { target: priced }));
+            }
+            let mut row = self.state.model_lifecycles.get(&id).cloned().expect("listed from the map");
+            row.priced_share_permille = share;
+            self.write_model_lifecycle(id, Some(row));
         }
     }
 
@@ -18146,7 +18183,10 @@ pub(crate) mod tests {
         }
 
         /// Kimi ACTIVE under the registry with seven ready seats and the payout in force at `rate`:
-        /// the chain every Upgrade C test starts from, at DAA 130 (the first block of span 13).
+        /// the chain every Upgrade C test starts from, at DAA 130 (the first block of span 13). That
+        /// boundary opens Kimi's row (ACTIVE: it has a `Final`) and seats it at 900 ‰, so it leaves
+        /// priced at `attempt_target_seed_v1(900, 160)` — `MAX / 14 913` — and its row's cap reading
+        /// is the one the boundary took before the seating, at the registration's `MAX / 2`.
         fn kimi_active_and_priced(p: &PalwStateParamsV2, rate: u64) -> (PalwChainStateV2, Hash64) {
             let (operands, root) = inventory();
             let s5 = kimi_with_a_final(p, root);
@@ -18172,30 +18212,95 @@ pub(crate) mod tests {
             paid_to(state, &palw_panel_payout_key_v1(&payload))
         }
 
+        /// **A class the registry seats is a class the registry prices** (the seventh drill finding,
+        /// by ADR-0076's rule): Kimi registers at 1 ‰ with the floor's target copied (`MAX / 2`); the
+        /// registry takes its share to nothing while it is REGISTERED and prices nothing; admitted to
+        /// probation at its admission share its target becomes `attempt_target_seed_v1(share, pwu)` and
+        /// the row records the share it was priced for; the floor's target does not move; the next
+        /// boundary prices nothing again (the class DAA owns the target from here).
+        #[test]
+        fn adr0135_a_class_the_registry_seats_is_priced_once_from_its_share_and_its_work() {
+            let p = params();
+            let (operands, root) = inventory();
+            let f = fold(kimi_work());
+            let mut objects = register_class_and_bond();
+            objects.push(PalwConsensusObjectV2::ClassRegistered {
+                class_id: kimi_id(),
+                artifact_root: root,
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+                initial_target: u128::MAX / 2,
+                share_permille: 1,
+                activation_daa: 0,
+                admission: None,
+            });
+            objects.extend((2..=8).map(|n| bond(n, 1_000)));
+            let (s1, _) = step(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None, Some(f.clone())).unwrap();
+            assert_eq!(s1.class_shares.get(&kimi_id()).copied(), Some(1), "registered at one permille");
+            let floor_target = s1.class_target(&h64(1)).unwrap().target;
+            let (s2, _) = step(&s1, &p, &ctx(2, 110, 2), &[], None, Some(f.clone())).unwrap();
+            let kimi = s2.model_lifecycle(&kimi_id()).unwrap();
+            assert_eq!(kimi.state, PalwModelLifecycleV1::Prefetching, "rowed, not admitted");
+            assert_eq!(s2.class_shares.get(&kimi_id()).copied(), Some(0), "the registry holds it weightless until it is admitted");
+            assert_eq!(
+                (kimi.priced_share_permille, s2.class_target(&kimi_id()).unwrap().target),
+                (0, u128::MAX / 2),
+                "nothing priced yet"
+            );
+            let proofs: Vec<PalwConsensusObjectV2> = (2..=8).map(|n| proof(&operands, bond_key(n), 11)).collect();
+            let (s3, _) = step(&s2, &p, &ctx(3, 111, 3), &proofs, None, Some(f.clone())).unwrap();
+            let (s4, d4) = step(&s3, &p, &ctx(4, 120, 4), &[], None, Some(f.clone())).unwrap();
+            let kimi = s4.model_lifecycle(&kimi_id()).unwrap();
+            assert_eq!(kimi.state, PalwModelLifecycleV1::Probation { probes_passed: 0 });
+            let share = s4.class_shares.get(&kimi_id()).copied().unwrap();
+            assert!(share > 1, "admission moved the share: {share}");
+            let priced = crate::palw_class_daa::attempt_target_seed_v1(share, 160);
+            assert_ne!(priced, u128::MAX / 2, "the price is not the copied floor target");
+            assert_eq!(s4.class_target(&kimi_id()).unwrap().target, priced, "seated: priced from its share and its work");
+            assert_eq!(kimi.priced_share_permille, share, "and the row records the share it was priced for");
+            assert!(
+                d4.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::Target { key, .. } if *key == kimi_id())),
+                "the price rides the delta"
+            );
+            assert_eq!(s4.class_target(&h64(1)).unwrap().target, floor_target, "the floor's target is the class DAA's");
+            // The next boundary prices nothing: the class is priced, and the class DAA owns it now.
+            let (s5, d5) = step(&s4, &p, &ctx(5, 130, 5), &[], None, Some(f.clone())).unwrap();
+            assert!(!d5.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::Target { .. })), "priced once: no target moves");
+            assert_eq!(s5.class_target(&kimi_id()).unwrap().target, priced);
+            assert_eq!(s5.model_lifecycle(&kimi_id()).unwrap().priced_share_permille, share);
+        }
+
         /// **A claim accepted past the fence snapshots its economics and its `Final` is paid at the
-        /// rate**: `min(620 000, 1.6 M MAC-eq × 0.1 sompi) = 160 000`, the panel's 30 % to its one
-        /// credited seat, 460 000 never named. The snapshot rides the delta, the root and the carriage,
+        /// rate**: Kimi is priced at its seat (900 ‰ × 160 pwu against 2³¹: `MAX / 14 913`, so
+        /// 14 913.08 forwards a claim), `min(620 000, 11.93 G MAC-eq × 10 000 sompi per G) = 119 304`,
+        /// the panel's 10 % (5 M of verification against 11.9 G of production: the floor) to its one
+        /// credited seat, 500 696 never named. The snapshot rides the delta, the root and the carriage,
         /// reverts with its block and leaves with the `Final`. The same chain with the payout dormant
         /// pays the escrow whole at 80 / 20 and holds no snapshot.
         #[test]
         fn adr0132_a_claim_past_the_fence_snapshots_its_economics_and_its_final_is_priced_at_the_rate() {
             use crate::palw_economic_compute_v1::PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1 as ONE;
             let p = params().with_worker_carve_permille(620).expect("a legal carve");
-            let (s7, root) = kimi_active_and_priced(&p, 100_000_000);
-            let priced = priced_extras(Some(payout_fold(100_000_000, 0)));
+            let (s7, root) = kimi_active_and_priced(&p, 10_000);
+            let priced = priced_extras(Some(payout_fold(10_000, 0)));
             let env = kimi_attempt(2, root);
             let claim_id = attempt_id_v2(&env.attempt);
             let (s8, d8) = step_with(&s7, &p, &funded(8, 131, 8), &[], Some(&env), &priced);
             assert_eq!(s8.claim(&claim_id).expect("accepted").escrowed_reward, 620_000, "62 % of the subsidy is the escrow");
             let snap = s8.claim_economics_of(&claim_id).copied().expect("a model-class claim past the fence snapshots its economics");
             assert_eq!((snap.draw_ccu, snap.verification_ccu, snap.seat_count), (800_000, 1_000_000, 5));
-            assert_eq!(snap.expected_attempts_q32, 2 * ONE, "Kimi at half of MAX draws two forwards a claim");
+            assert_eq!(
+                s8.class_target(&kimi_id()).unwrap().target,
+                crate::palw_class_daa::attempt_target_seed_v1(900, 160),
+                "Kimi draws at the price the registry seated it at"
+            );
+            assert_eq!(snap.expected_attempts_q32, 64_051_194_700_380, "MAX / 14 913: 14 913.08 forwards a claim");
             assert_eq!(snap.network_expected_attempts_q32, ONE, "no bits at hand: one network draw, never a refusal");
-            assert_eq!(snap.attempted_ccu(), 1_600_000);
+            assert_eq!(snap.attempted_ccu(), 11_930_464_711, "14 913.08 forwards of 800 000 MAC-eq");
             assert_eq!(
                 (snap.rate_sompi_per_giga, snap.panel_share_permille),
-                (100_000_000, 300),
-                "5 M of verification against 1.6 M of production is a share at its ceiling"
+                (10_000, 100),
+                "5 M of verification against 11.9 G of production is a share at its floor"
             );
             assert!(d8.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::ClaimEconomics { new: Some(_), .. })));
             let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s8)).unwrap();
@@ -18215,8 +18320,8 @@ pub(crate) mod tests {
             assert!(s11.claim_economics_of(&claim_id).is_none(), "the snapshot leaves with the Final");
             assert_eq!(
                 (paid_to(&s11, &claim_id), seat_row(&s11, 2), s11.panel_reserve_sompi),
-                (112_000, 48_000, 0),
-                "160 000 priced: 112 000 to the producer, 48 000 to the one credited seat, nothing to the reserve"
+                (107_374, 11_930, 0),
+                "119 304 priced: 107 374 to the producer, 11 930 to the one credited seat, nothing to the reserve"
             );
             assert_eq!(
                 revert_delta_v2(&s11, &d11, &p).unwrap().state_root(),
@@ -18244,8 +18349,8 @@ pub(crate) mod tests {
         #[test]
         fn adr0132_the_snapshot_fixes_the_price_and_a_claim_without_one_is_paid_as_before() {
             let p = params().with_worker_carve_permille(620).expect("a legal carve");
-            let (s7, root) = kimi_active_and_priced(&p, 100_000_000);
-            let low = priced_extras(Some(payout_fold(100_000_000, 0)));
+            let (s7, root) = kimi_active_and_priced(&p, 10_000);
+            let low = priced_extras(Some(payout_fold(10_000, 0)));
             let high = priced_extras(Some(payout_fold(1_000_000_000_000, 0)));
             let env_a = kimi_attempt(2, root);
             let env_b = kimi_attempt(3, root);
@@ -18263,9 +18368,9 @@ pub(crate) mod tests {
                 assert!(matches!(s12.claim(&id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
                 assert!(s12.claim_economics_of(&id).is_none());
             }
-            assert_eq!(paid_to(&s12, &a), 112_000, "A is paid at the rate it was accepted under, not the rate at its Final");
+            assert_eq!(paid_to(&s12, &a), 107_374, "A is paid at the rate it was accepted under, not the rate at its Final");
             assert_eq!(paid_to(&s12, &b), 496_000, "B holds no snapshot: the escrow whole at 80 / 20, whatever the fence says now");
-            assert_eq!((seat_row(&s12, 2), seat_row(&s12, 3), s12.panel_reserve_sompi), (48_000, 124_000, 0));
+            assert_eq!((seat_row(&s12, 2), seat_row(&s12, 3), s12.panel_reserve_sompi), (11_930, 124_000, 0));
         }
 
         /// **The liveness floor takes no snapshot and folds byte-identically; a voided claim drops
@@ -18297,24 +18402,34 @@ pub(crate) mod tests {
         /// (`attempted × rate` against the escrow a claim holds), and a class over the ceiling is not
         /// activatable — an ACTIVE one falls back to a tenth and stays there however many stable
         /// spans pass. Nothing is priced while the payout is dormant or where the boundary block
-        /// funds no escrow.
+        /// funds no escrow. The boundary that seats a class reads the price it had walked in with
+        /// (the registration's `MAX / 2`: 16 sompi against the escrow, nothing); the next reads the
+        /// seat's price.
         #[test]
         fn adr0132_the_boundary_records_cap_utilization_and_a_saturated_class_is_not_activated() {
             let p = params().with_worker_carve_permille(620).expect("a legal carve");
-            let (s7, _) = kimi_active_and_priced(&p, 100_000_000);
+            let (s7, _) = kimi_active_and_priced(&p, 10_000);
             let kimi = s7.model_lifecycle(&kimi_id()).unwrap();
             assert_eq!(
-                (kimi.state, kimi.cap_utilization_permille),
-                (PalwModelLifecycleV1::Active, 258),
-                "160 000 of a 620 000 escrow: 258 ‰, under the ceiling"
+                (kimi.state, kimi.priced_share_permille, kimi.cap_utilization_permille),
+                (PalwModelLifecycleV1::Active, 900, 0),
+                "the seating boundary read the registration's price: 16 sompi of a 620 000 escrow"
             );
-            let saturating = priced_extras(Some(payout_fold(1_000_000_000_000, 0)));
-            let (s8, _) = step_with(&s7, &p, &funded(8, 140, 8), &[], None, &saturating);
+            let low = priced_extras(Some(payout_fold(10_000, 0)));
+            let (s8, _) = step_with(&s7, &p, &funded(8, 140, 8), &[], None, &low);
             let kimi = s8.model_lifecycle(&kimi_id()).unwrap();
+            assert_eq!(
+                (kimi.state, kimi.cap_utilization_permille),
+                (PalwModelLifecycleV1::Active, 192),
+                "119 304 of a 620 000 escrow: 192 ‰, under the ceiling"
+            );
+            let saturating = priced_extras(Some(payout_fold(100_000_000, 0)));
+            let (s9, _) = step_with(&s8, &p, &funded(9, 150, 9), &[], None, &saturating);
+            let kimi = s9.model_lifecycle(&kimi_id()).unwrap();
             assert_eq!(kimi.state, PalwModelLifecycleV1::ActiveLimited { stable_epochs: 0 }, "saturated: back to a tenth");
-            assert_eq!(kimi.cap_utilization_permille, 2_580_645, "1.6 G sompi against 620 000");
-            let mut s = s8;
-            for (word, daa) in [(9u64, 150u64), (10, 160), (11, 170), (12, 180)] {
+            assert_eq!(kimi.cap_utilization_permille, 1_924_268, "1.19 G sompi against 620 000");
+            let mut s = s9;
+            for (word, daa) in [(10u64, 160u64), (11, 170), (12, 180), (13, 190)] {
                 s = step_with(&s, &p, &funded(word, daa, word), &[], None, &saturating).0;
             }
             assert_eq!(
@@ -18322,10 +18437,10 @@ pub(crate) mod tests {
                 PalwModelLifecycleV1::ActiveLimited { stable_epochs: 4 },
                 "four stable spans on, still a tenth: not activatable above the ceiling"
             );
-            let (dormant, _) = step_with(&s7, &p, &funded(8, 140, 8), &[], None, &priced_extras(None));
+            let (dormant, _) = step_with(&s8, &p, &funded(9, 150, 9), &[], None, &priced_extras(None));
             let kimi = dormant.model_lifecycle(&kimi_id()).unwrap();
             assert_eq!((kimi.state, kimi.cap_utilization_permille), (PalwModelLifecycleV1::Active, 0), "dormant: nothing priced");
-            let (unfunded, _) = step_with(&s7, &p, &ctx(8, 140, 8), &[], None, &saturating);
+            let (unfunded, _) = step_with(&s8, &p, &ctx(9, 150, 9), &[], None, &saturating);
             let kimi = unfunded.model_lifecycle(&kimi_id()).unwrap();
             assert_eq!(
                 (kimi.state, kimi.cap_utilization_permille),

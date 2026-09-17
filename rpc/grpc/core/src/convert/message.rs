@@ -1019,6 +1019,7 @@ from!(item: &kaspa_rpc_core::RpcPalwModelLifecycle, protowire::RpcPalwModelLifec
         utilization_permille: item.utilization_permille,
         admission_milli: item.admission_milli,
         cap_utilization_permille: item.cap_utilization_permille,
+        priced_share_permille: item.priced_share_permille as u32,
         ready_seats_now: item.ready_seats_now,
         inflight_now: item.inflight_now,
         share_permille: item.share_permille as u32,
@@ -2404,6 +2405,8 @@ try_from!(item: &protowire::RpcPalwModelLifecycle, kaspa_rpc_core::RpcPalwModelL
         utilization_permille: item.utilization_permille,
         admission_milli: item.admission_milli,
         cap_utilization_permille: item.cap_utilization_permille,
+        priced_share_permille: u16::try_from(item.priced_share_permille)
+            .map_err(|_| RpcError::General("pricedSharePermille is not a u16".to_string()))?,
         ready_seats_now: item.ready_seats_now,
         inflight_now: item.inflight_now,
         share_permille: u16::try_from(item.share_permille).map_err(|_| RpcError::General("sharePermille is not a u16".to_string()))?,

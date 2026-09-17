@@ -2087,6 +2087,8 @@ message RpcPalwModelLifecycle {
   uint32 noCapablePanelVoids = 26;
   // ADR-0132 Upgrade C: cap utilization at the last boundary, permille of the escrow (0 = unpriced).
   uint32 capUtilizationPermille = 28;
+  // ADR-0135 §7: the share the registry priced the class's target for at its seating (0 = not seated).
+  uint32 pricedSharePermille = 29;
   string reason = 27;
 }
 

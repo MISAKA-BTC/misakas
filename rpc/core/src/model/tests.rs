@@ -1862,6 +1862,7 @@ mod mockery {
                 utilization_permille: mock(),
                 admission_milli: mock(),
                 cap_utilization_permille: mock(),
+                priced_share_permille: mock(),
                 ready_seats_now: mock(),
                 inflight_now: mock(),
                 share_permille: mock(),

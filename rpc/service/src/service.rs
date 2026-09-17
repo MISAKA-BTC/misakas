@@ -1715,6 +1715,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     utilization_permille: row.map(|r| r.utilization_permille).unwrap_or(0),
                     admission_milli: row.map(|r| r.admission_milli).unwrap_or(0),
                     cap_utilization_permille: row.map(|r| r.cap_utilization_permille).unwrap_or(0),
+                    priced_share_permille: row.map(|r| r.priced_share_permille).unwrap_or(0),
                     ready_seats_now: class.ready_seats_now,
                     inflight_now: class.inflight_now,
                     share_permille: class.share_permille.unwrap_or(0),

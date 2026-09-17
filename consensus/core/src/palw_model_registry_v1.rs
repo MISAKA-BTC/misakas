@@ -528,6 +528,16 @@ pub struct PalwModelLifecycleRowV1 {
     /// escrow (`attempted × rate / escrow`); `0` where nothing priced it (the payout fence dormant,
     /// or no subsidy at the boundary block). Over the fence's ceiling the class is not activatable.
     pub cap_utilization_permille: u32,
+    /// **The share the registry priced the class's target for** (ADR-0135 §7, the devnet drill's
+    /// seventh finding), `0` until the registry has seated it. A registration copies the floor's
+    /// target (op 180's terms), a price for the floor's draw rate and not the class's; ADR-0076
+    /// says a class being seated is a class being priced, and the activation edge already prices a
+    /// weightless class from its share and its counted work. The registry's admission is the same
+    /// event: at the first governed boundary a class holds a nonzero share in an admitted state, its
+    /// target is `attempt_target_seed_v1(share, pwu)` and this records the share. Once — from there
+    /// the class DAA owns the target, and a share the registry moves later is measured by the
+    /// retarget against the history the class then has. The floor is never priced here.
+    pub priced_share_permille: u16,
 }
 
 /// **A seat's readiness for a class**: the last possession proof this bond opened for the class
