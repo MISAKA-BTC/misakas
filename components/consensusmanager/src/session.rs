@@ -10,8 +10,8 @@ use kaspa_consensus_core::{
     blockstatus::BlockStatus,
     daa_score_timestamp::DaaScoreTimestamp,
     dns_finality::{
-        ActiveValidatorSet, AttestationQualityDeficit, ComputeStatusView, DnsConfirmation, PendingComputeVerdict, PrecommitDuty,
-        StakeBondPage, StakeBondQuery, StakeBondRecord, ValidatorAttestationTarget, VltStatusView,
+        ActiveValidatorSet, AttestationQualityDeficit, DnsConfirmation, StakeBondPage, StakeBondQuery, StakeBondRecord,
+        ValidatorAttestationTarget,
     },
     errors::consensus::ConsensusResult,
     header::Header,
@@ -602,33 +602,6 @@ impl ConsensusSessionOwned {
         limit: usize,
     ) -> Vec<ValidatorAttestationTarget> {
         self.clone().spawn_blocking(move |c| c.get_validator_attestation_targets(bond_outpoint, from_epoch, limit)).await
-    }
-
-    /// MISAKA Verified LLM Token-Weighted BFT: accepted compute certificates this validator was
-    /// sortitioned to audit and has not yet judged (empty below the VLT fence).
-    pub async fn async_get_pending_compute_verdicts(&self, validator_id: Hash64, limit: usize) -> Vec<PendingComputeVerdict> {
-        self.clone().spawn_blocking(move |c| c.get_pending_compute_verdicts(validator_id, limit)).await
-    }
-
-    /// MISAKA Verified LLM Token-Weighted BFT: this validator's compute-overlay standing —
-    /// capability expiry, in-class peers, and its own uncertified commitments.
-    pub async fn async_get_compute_status(
-        &self,
-        validator_id: Hash64,
-        bond_outpoint: TransactionOutpoint,
-    ) -> Option<ComputeStatusView> {
-        self.clone().spawn_blocking(move |c| c.get_compute_status(validator_id, bond_outpoint)).await
-    }
-
-    /// MISAKA: the node's VLT activation/finality state and the gauges behind it.
-    pub async fn async_get_vlt_status(&self) -> Option<VltStatusView> {
-        self.clone().spawn_blocking(|c| c.get_vlt_status()).await
-    }
-
-    /// MISAKA §5 round 2: the lock this validator carries on the selected chain, and the epochs it
-    /// still owes a precommit for.
-    pub async fn async_get_precommit_duty(&self, validator_id: Hash64, bond_outpoint: TransactionOutpoint) -> Option<PrecommitDuty> {
-        self.clone().spawn_blocking(move |c| c.get_precommit_duty(validator_id, bond_outpoint)).await
     }
 
     pub async fn async_get_sink_daa_score_timestamp(&self) -> DaaScoreTimestamp {
