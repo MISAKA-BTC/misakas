@@ -238,6 +238,59 @@ step because its routes exist (checkpoints, resume, the interval draw) and its c
 5. **Watch** the census: utilization under 70 %, held claims zero, free collateral above the inflight exposure;
    raise the share only while that holds.
 
+## 9a. The order of work (the operator's, 2026-09-17)
+
+Four axes that never fork together: **Execution** (1 BPS, the fast UX), **PALW anchor** (~120 s, settlement
+cadence), **Verification** (a class profile: short for the dense tier, long for a Kimi-class), **Economics**
+(`EconomicAttempted` CCU, MSK per compute). And the absolute condition: a Kimi class stopping ≠ the dense tier
+stopping ≠ execution stopping ≠ the anchor stopping.
+
+* **Phase 0 — operations, before any fence:** the hybrid's artifact on three seat hosts that are not its
+  producer; the `.t11b` node out of IBD; the `not-held` openings diagnosed. Goal: the hybrid `licensed > 0`,
+  `Final > 0`. `actual MSK / attempted CCU = 0` is not a pricing bug and no rate is decided while it is zero.
+  ADR-0132's and this ADR's shadow observability merge as they are.
+* **Fence 1 — panel liveness + verification profile** (ADR-0132 F1/F2 with this ADR's profile, gate and
+  capacity): `PalwVerificationProfileV1 { verification_window_spans, artifact_prefetch_spans,
+  max_inflight_claims, required_ready_seats, warm_p99_ms, cold_p99_ms }` frozen at activation from the shadow
+  benchmark (never recomputed in consensus from live measurements); **readiness by evidence, not by
+  declaration** — a seat is `ready(class)` only with the artifact root matched, the manifest/chunks held, chain
+  participation normal, free collateral, and a recent successful verification on the class; a seat that says
+  `Incapable` does not get to say it again and again for free; class-local inflight cap; eligible-seat capacity
+  gate; free-collateral gate; early redraw on `Incapable`/`Unavailable`; `NoCapablePanel`; a class-specific
+  receipt/verification window; no compute credit before `Final` (already the rule, pinned).
+* **Measure after Fence 1**, per model: actual MSK / attempted CCU, licence and `Final` rates, warm/cold
+  verification p95/p99, artifact cache hits and bytes fetched, panel utilization, eligible seats, inflight
+  duties, free collateral, reserved exposure. Targets: p95 utilization < 70 %, cap hits ≈ 0, `NoCapablePanel`
+  ≈ 0, the protocol-caused difference between the two tiers' `Final` rates small, spare eligible seats ≥ 2.
+  Not "identical `Final` rates" — but never a zero because an artifact is missing.
+* **Fence 2 — decide the single lottery** (§5, ADR-0132 S): a separate ADR compares on devnet
+  `EA_class × EA_network` against the class target carrying the cadence alone (`EA_network = 1`); decided
+  **before** the economic payout forks, because the payout's `W = CCU_draw × EA_class × EA_network` loses the
+  last factor under the single lottery, and a payout forked first would be re-forked at once.
+* **Fence 3 — `EconomicAttempted` payout**, once liveness is normal and the lottery is decided: snapshot at
+  acceptance (`draw_ccu`, `EA_class_q32`, `EA_network_q32` unless single-lottery, `economic_rate`); producer
+  `actual MSK / attempted CCU ≈ constant`; panel `panel MSK / verification CCU ≈ constant`, the two CCUs never
+  mixed. **`min(escrow, CCU × rate)` is not the mainnet design as it stands:** a Kimi-class whose economic
+  payout is 7,000 MSK against a 3,200 MSK escrow cap is capped and its MSK / CCU falls again. Before any class
+  is activated as paid, the shadow shows `uncapped_economic_reward`, `capped_reward`, `cap_utilization` and
+  `cap_saturation_rate`; a class above 80 % cap utilization is not activatable. Long term the three cannot all
+  hold unconditionally — MSK / CCU constant, total issuance constant, any model claiming at any frequency —
+  so a heavy class is a high reward per claim at a low claim frequency: economic CCU (a claim's value), class
+  DAA / admission (its frequency), a global issuance budget (the total).
+* **A Kimi-class, step by step:** register (share 0, artifact root, bytes, graph) → artifact prefetch on
+  3–N operators, readiness confirmed → shadow (warm/cold p99, verification CCU, utilization, collateral,
+  `EconomicAttempted`, capped/uncapped reward) → profile freeze (window, cap, `required_ready_seats`,
+  prefetch) → devnet (operator outage, cache miss, the heavy class at 90 %, collateral exhaustion, recovery)
+  → tiny activation (a small share) → ramp only while utilization < 70 %, `NoCapablePanel` ≈ 0, `Final` rate
+  normal, no cap saturation. A class holds no share the moment it registers.
+* **Full replay stays to a warm p99 of ~240 s** (seven seats); 480 s is a 13-seat class, 900 s a 24-seat one —
+  past that the verification architecture changes rather than the seat count. **Segment replay is
+  "PALW Verification V2"**, its own ADR: V1 = full replay + multi-span + prefetch + readiness + capacity
+  gate; V2 = segment commitments + random segment assignment + one full-replay seat + court/fraud proof. A
+  Kimi-class that runs under V1 does not need V2.
+* **Not in this fence:** the DNS/VLT committee-beacon retirement and the ADR-0125 drill — a different failure
+  domain, their own ADR and their own fence (ADR-0134), so a failure at either height names its cause.
+
 ## 10. What is built (shadow)
 
 `consensus/core/src/palw_verification_profile_v1.rs`: the facts, the reference, the profile derivation, the
