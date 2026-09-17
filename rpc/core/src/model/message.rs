@@ -4707,11 +4707,19 @@ pub struct RpcPalwClassContext {
     pub class_id: String,
     /// The model the node's build ledger names for the class; empty when it names none.
     pub model_id: String,
-    /// The class graph's context window.
+    /// The class's window in cached positions. Every job of the class has a footprint at most this.
     pub n_ctx: u32,
-    /// The canonical job's prefill and decode token counts, and its context bound.
+    /// The canonical job's prefill and decode token counts.
     pub canonical_prefill_tokens: u32,
     pub canonical_decode_tokens: u32,
+    /// **The canonical job's footprint**: the cached positions it occupies,
+    /// `prefill + max(1, decode) − 1` (`palw_context_ladder::palw_job_footprint_v1`) — the first
+    /// generated token is sampled from the prefill's last logits, so a job makes `decode − 1` decode
+    /// calls. At most `n_ctx`, and equal to it when the job is sized to the window: a (7, 2) job at
+    /// `n_ctx` 8 is a footprint of 8 and valid. Adding prefill and decode and comparing that with
+    /// `n_ctx` overstates the job by one position and reports an overflow that is not there.
+    pub canonical_footprint_positions: u32,
+    /// The canonical job's declared context bound.
     pub max_context_tokens: u32,
     /// Where the numbers came from: `chain_registration` (the declaration the chain registered),
     /// `build_ledger` (this node's build knows the class) or `unknown` (the numbers are zeros).
@@ -4726,6 +4734,7 @@ impl Serializer for RpcPalwClassContext {
         store!(u32, &self.n_ctx, writer)?;
         store!(u32, &self.canonical_prefill_tokens, writer)?;
         store!(u32, &self.canonical_decode_tokens, writer)?;
+        store!(u32, &self.canonical_footprint_positions, writer)?;
         store!(u32, &self.max_context_tokens, writer)?;
         store!(String, &self.source, writer)?;
         Ok(())
@@ -4741,6 +4750,7 @@ impl Deserializer for RpcPalwClassContext {
             n_ctx: load!(u32, reader)?,
             canonical_prefill_tokens: load!(u32, reader)?,
             canonical_decode_tokens: load!(u32, reader)?,
+            canonical_footprint_positions: load!(u32, reader)?,
             max_context_tokens: load!(u32, reader)?,
             source: load!(String, reader)?,
         })
@@ -4752,7 +4762,10 @@ impl Deserializer for RpcPalwClassContext {
 pub struct GetPalwClassContextsResponse {
     /// The node's class table is non-empty.
     pub available: bool,
-    /// The free-prompt lane's token limits from the network's V2 bundle; 0 with no bundle.
+    /// The free-prompt lane's token limits from the network's V2 bundle; 0 with no bundle. That lane
+    /// admits a job with `prompt_tokens + decode_token_limit <= max_context_tokens <= n_ctx`
+    /// (`palw_freeprompt_v3`) — one position stricter than the footprint rule — so a client sizing
+    /// its own prompt for the lane gets at most `n_ctx − prompt` tokens back.
     pub fp_max_prompt_tokens: u32,
     pub fp_max_decode_tokens: u32,
     pub classes: Vec<RpcPalwClassContext>,

@@ -1648,6 +1648,7 @@ mod mockery {
                 n_ctx: mock(),
                 canonical_prefill_tokens: mock(),
                 canonical_decode_tokens: mock(),
+                canonical_footprint_positions: mock(),
                 max_context_tokens: mock(),
                 source: "chain_registration".to_string(),
             }
@@ -1655,6 +1656,36 @@ mod mockery {
     }
 
     test!(RpcPalwClassContext);
+
+    /// The row a client reads for this build's Qwen3.6-35B-A3B class — a (7, 2) canonical job at
+    /// `n_ctx` 8, whose footprint is 8 — survives the wire field for field.
+    #[test]
+    fn a_class_context_row_round_trips_with_its_footprint() {
+        let row = RpcPalwClassContext {
+            class_id: "11".repeat(64),
+            model_id: "qwen3.6-35b-a3b".to_string(),
+            n_ctx: 8,
+            canonical_prefill_tokens: 7,
+            canonical_decode_tokens: 2,
+            canonical_footprint_positions: 8,
+            max_context_tokens: 8,
+            source: "chain_registration".to_string(),
+        };
+        let mut bytes = Vec::new();
+        serialize!(RpcPalwClassContext, &row, &mut bytes).unwrap();
+        let back = deserialize!(RpcPalwClassContext, &mut bytes.as_slice()).unwrap();
+        assert_eq!((back.class_id, back.model_id, back.source), (row.class_id.clone(), row.model_id.clone(), row.source.clone()));
+        assert_eq!(
+            (
+                back.n_ctx,
+                back.canonical_prefill_tokens,
+                back.canonical_decode_tokens,
+                back.canonical_footprint_positions,
+                back.max_context_tokens
+            ),
+            (8, 7, 2, 8, 8)
+        );
+    }
 
     impl Mock for GetPalwClassContextsResponse {
         fn mock() -> Self {

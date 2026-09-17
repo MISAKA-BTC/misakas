@@ -1945,6 +1945,7 @@ message RpcPalwClassContext {
   uint32 canonicalDecodeTokens = 5;
   uint32 maxContextTokens = 6;
   string source = 7;
+  uint32 canonicalFootprintPositions = 8;
 }
 
 message GetPalwClassContextsResponseMessage {

@@ -875,6 +875,7 @@ from!(item: &kaspa_rpc_core::RpcPalwClassContext, protowire::RpcPalwClassContext
         n_ctx: item.n_ctx,
         canonical_prefill_tokens: item.canonical_prefill_tokens,
         canonical_decode_tokens: item.canonical_decode_tokens,
+        canonical_footprint_positions: item.canonical_footprint_positions,
         max_context_tokens: item.max_context_tokens,
         source: item.source.clone(),
     }
@@ -2082,6 +2083,7 @@ try_from!(item: &protowire::RpcPalwClassContext, kaspa_rpc_core::RpcPalwClassCon
         n_ctx: item.n_ctx,
         canonical_prefill_tokens: item.canonical_prefill_tokens,
         canonical_decode_tokens: item.canonical_decode_tokens,
+        canonical_footprint_positions: item.canonical_footprint_positions,
         max_context_tokens: item.max_context_tokens,
         source: item.source.clone(),
     }

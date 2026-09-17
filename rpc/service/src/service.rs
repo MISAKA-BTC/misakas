@@ -117,7 +117,8 @@ pub trait PalwClassLedgerProvider: Send + Sync {
     fn class_context(&self, class_id: kaspa_hashes::Hash64) -> Option<PalwClassLedgerContext>;
 }
 
-/// One class as a build ledger records it.
+/// One class as a build ledger records it. No footprint: the service derives it from the prefill and
+/// the decode, by the rule consensus applies, for the ledger's rows and the chain's alike.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PalwClassLedgerContext {
     pub model_id: String,
@@ -139,11 +140,18 @@ struct PalwRegisteredClassContext {
 /// **One `getPalwClassContexts` row**: the registered declaration first — with the ledger's model id
 /// when the ledger knows the class — the build ledger second, and zeros named `unknown` last, so a
 /// reader can tell a context the chain fixed from one this build supplied and from none at all.
+///
+/// The canonical footprint is computed here, from the row's own prefill and decode and through the
+/// consensus spelling of the rule, for both sources — so a ledger cannot state one the chain would
+/// compute differently.
 fn palw_class_context_row(
     class_id: kaspa_hashes::Hash64,
     declared: Option<PalwRegisteredClassContext>,
     ledger: Option<PalwClassLedgerContext>,
 ) -> RpcPalwClassContext {
+    let footprint = |prefill: u32, decode: u32| {
+        u32::try_from(kaspa_consensus_core::palw_context_ladder::palw_job_footprint_v1(prefill, decode)).unwrap_or(u32::MAX)
+    };
     match (declared, ledger) {
         (Some(declared), ledger) => RpcPalwClassContext {
             class_id: class_id.to_string(),
@@ -151,6 +159,7 @@ fn palw_class_context_row(
             n_ctx: declared.n_ctx,
             canonical_prefill_tokens: declared.canonical_prefill_tokens,
             canonical_decode_tokens: declared.canonical_decode_tokens,
+            canonical_footprint_positions: footprint(declared.canonical_prefill_tokens, declared.canonical_decode_tokens),
             max_context_tokens: declared.max_context_tokens,
             source: "chain_registration".to_string(),
         },
@@ -160,6 +169,7 @@ fn palw_class_context_row(
             n_ctx: ledger.n_ctx,
             canonical_prefill_tokens: ledger.canonical_prefill_tokens,
             canonical_decode_tokens: ledger.canonical_decode_tokens,
+            canonical_footprint_positions: footprint(ledger.canonical_prefill_tokens, ledger.canonical_decode_tokens),
             max_context_tokens: ledger.max_context_tokens,
             source: "build_ledger".to_string(),
         },
@@ -3193,8 +3203,9 @@ mod palw_class_context_tests {
         }
     }
 
+    /// This build's Qwen3.6-35B-A3B row: a (7, 2) canonical job at `n_ctx` 8 — a footprint of 8, valid.
     fn declared() -> PalwRegisteredClassContext {
-        PalwRegisteredClassContext { n_ctx: 512, canonical_prefill_tokens: 7, canonical_decode_tokens: 2, max_context_tokens: 64 }
+        PalwRegisteredClassContext { n_ctx: 8, canonical_prefill_tokens: 7, canonical_decode_tokens: 2, max_context_tokens: 8 }
     }
 
     /// **The chain's declaration outranks the build's ledger, the ledger names the model, and a class
@@ -3210,16 +3221,21 @@ mod palw_class_context_tests {
         assert_eq!(registered.source, "chain_registration");
         assert_eq!(
             (registered.n_ctx, registered.canonical_prefill_tokens, registered.canonical_decode_tokens, registered.max_context_tokens),
-            (512, 7, 2, 64),
+            (8, 7, 2, 8),
             "the registered declaration's numbers, not the ledger's"
         );
+        assert_eq!(
+            registered.canonical_footprint_positions, 8,
+            "(7, 2) caches 7 + 2 - 1 = 8 positions: the first token comes from the prefill's last logits, so it fits n_ctx 8"
+        );
+        assert!(registered.canonical_footprint_positions <= registered.n_ctx);
         assert_eq!(registered.model_id, ledger.class_context(one).unwrap().model_id, "the ledger names the model");
         assert_eq!(registered.class_id, one.to_string());
 
         let registered_unnamed = palw_class_context_row(three, Some(declared()), ledger.class_context(three));
         assert_eq!(
             (registered_unnamed.source.as_str(), registered_unnamed.model_id.as_str(), registered_unnamed.n_ctx),
-            ("chain_registration", "", 512)
+            ("chain_registration", "", 8)
         );
 
         let built = palw_class_context_row(two, None, ledger.class_context(two));
@@ -3228,11 +3244,22 @@ mod palw_class_context_tests {
             (built.n_ctx, built.canonical_prefill_tokens, built.canonical_decode_tokens, built.max_context_tokens),
             (4_096, 60, 3, 512)
         );
+        assert_eq!(built.canonical_footprint_positions, 62, "the ledger's row is footprinted by the same rule");
         assert!(!built.model_id.is_empty());
 
         let unknown = palw_class_context_row(three, None, ledger.class_context(three));
         assert_eq!(unknown.source, "unknown");
-        assert_eq!((unknown.n_ctx, unknown.max_context_tokens, unknown.model_id.as_str()), (0, 0, ""));
+        assert_eq!(
+            (unknown.n_ctx, unknown.canonical_footprint_positions, unknown.max_context_tokens, unknown.model_id.as_str()),
+            (0, 0, 0, "")
+        );
+        let decode_free =
+            PalwRegisteredClassContext { n_ctx: 8, canonical_prefill_tokens: 8, canonical_decode_tokens: 0, max_context_tokens: 8 };
+        assert_eq!(
+            palw_class_context_row(one, Some(decode_free), None).canonical_footprint_positions,
+            8,
+            "decode counts at least one"
+        );
         let no_ledger = palw_class_context_row(two, None, None);
         assert_eq!(no_ledger.source, "unknown", "a node built without a ledger answers from the chain alone");
     }
