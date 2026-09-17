@@ -9957,7 +9957,7 @@ impl VirtualStateProcessor {
     /// and wrongly accept a confirmed-history-abandoning reorg. Both branches' acceptance
     /// data is committed by the time the gate runs (the candidate's by
     /// `calculate_utxo_state_relatively`), so the per-branch walks are deterministic.
-    fn dns_reorg_outcome(&self, candidate: BlockHash, prev_sink: BlockHash, candidate_bond_view: &ActiveBondView) -> DnsReorgOutcome {
+    pub(super) fn dns_reorg_outcome(&self, candidate: BlockHash, prev_sink: BlockHash, candidate_bond_view: &ActiveBondView) -> DnsReorgOutcome {
         // **ADR-0128 Decision 5: the stake reorg gate follows the BFT vote, and it is asked FIRST.**
         //
         // Past the fence at the incumbent sink, a candidate that abandons the DNS-final anchor is

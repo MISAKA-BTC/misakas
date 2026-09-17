@@ -9686,6 +9686,112 @@ async fn adr0128_an_evaluation_that_cannot_cover_its_walk_confirms_nothing_and_t
     assert!(run.sink_is_attacker, "the gate abstains");
 }
 
+/// **ADR-0128 Decision 5 on a ConsensusV2 network: the BFT gate is asked before the PALW comparator,
+/// and only refuses.**
+///
+/// On a V2 chain `dns_reorg_outcome` used to answer a reorg candidate with the PALW comparator and
+/// return before the DNS half ran. Built over a real V2 chain with the overlay state written by hand
+/// (no validator economy is needed to ask the gate a question): a candidate that abandons a DNS-final
+/// anchor the BFT rule confirmed is refused before the comparator is consulted; the incumbent itself
+/// passes; and wherever the gate does not refuse — the anchor stale on this node's own chain, the
+/// state written before the fence, an incumbent below the fence — the outcome is exactly the
+/// comparator's.
+#[tokio::test]
+async fn adr0128_on_a_v2_network_the_bft_gate_refuses_before_the_palw_comparator_runs() {
+    use crate::model::stores::dns_state::DnsStateStore;
+    use kaspa_consensus_core::{
+        Hash64,
+        config::params::{DnsBftGateV1, ForkActivation},
+        dns_finality::{ActiveBondView, DnsHealth, DnsReorgOutcome, DnsRolloutStage, DnsState, StakeScore},
+        palw_mode_v2::PalwConsensusMode,
+    };
+    const FENCE: u64 = 5;
+    // A V2 network runs the overlay's two-minute windows exactly (`validate_palw_v2`), so the TTL is
+    // the cadence's own 120 and the chain is mined past it.
+    const TTL: u64 = 120;
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle(&catalog);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            p.dns_params = DEVNET_PARAMS.dns_params.clone();
+            *p = p.clone().with_palw_v2_cadence();
+            assert_eq!(p.dns_params.as_ref().unwrap().dns_veto_ttl_daa_score, TTL);
+            p.dns_bft_gate = Some(DnsBftGateV1 {
+                activation: ForkActivation::new(FENCE),
+                t_leak_daa: 50,
+                reentry_final_depth_daa: 10,
+                min_retained_validators: 4,
+            });
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..(TTL + 16) {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let vp = ctx.consensus.virtual_processor();
+    let sink = ctx.consensus.get_sink();
+    let chain: Vec<(BlockHash, u64)> = vp
+        .reachability_service
+        .default_backward_chain_iterator(sink)
+        .map(|block| (block, vp.headers_store.get_daa_score(block).unwrap()))
+        .collect();
+    let sink_daa = chain[0].1;
+    assert!(sink_daa >= FENCE + TTL + 4, "the chain crosses the fence with room for a stale anchor (sink DAA {sink_daa})");
+    // The newest chain block at or below each DAA the cases need.
+    let at_or_below = |daa: u64| chain.iter().copied().find(|(_, d)| *d <= daa).expect("the chain reaches genesis");
+    let fresh_anchor = at_or_below(sink_daa - 2);
+    let stale_anchor = at_or_below(sink_daa - TTL - 4);
+    // A chain ancestor of both anchors: it abandons each of them.
+    let candidate = at_or_below(stale_anchor.1 - 2).0;
+    let below_the_fence = at_or_below(FENCE - 1);
+    assert!(below_the_fence.1 < FENCE && stale_anchor.1 > FENCE, "the cases sit on the sides of the fence they claim");
+    let bonds = ActiveBondView::default();
+    let write_state = |anchor: (BlockHash, u64), written_at_daa: u64| {
+        vp.dns_state_store
+            .write()
+            .set(DnsState {
+                selected_chain_anchor: sink,
+                anchor_daa_score: written_at_daa,
+                work_depth: Default::default(),
+                stake_depth: StakeScore(0),
+                last_dns_confirmed_anchor: anchor.0,
+                last_dns_confirmed_anchor_daa_score: anchor.1,
+                rollout_stage: DnsRolloutStage::Active,
+                validator_set_commitment: Hash64::default(),
+                health: DnsHealth::Active,
+            })
+            .unwrap();
+    };
+
+    // The comparator's own answer, with nothing confirmed.
+    write_state((Hash64::default(), 0), sink_daa);
+    let comparator = vp.dns_reorg_outcome(candidate, sink, &bonds);
+    assert_ne!(comparator, DnsReorgOutcome::HardCheckpointReject, "the PALW comparator never answers with the stake gate's refusal");
+
+    // A DNS-final anchor the BFT rule confirmed: the abandoning candidate is refused first.
+    write_state(fresh_anchor, sink_daa);
+    assert_eq!(vp.dns_bft_gate_refusal(candidate, sink), Some(DnsReorgOutcome::HardCheckpointReject));
+    assert_eq!(vp.dns_reorg_outcome(candidate, sink, &bonds), DnsReorgOutcome::HardCheckpointReject, "refused before the comparator");
+    assert!(vp.dns_reorg_outcome(sink, sink, &bonds).is_accept(), "a candidate that contains the anchor goes on as before");
+    assert_eq!(vp.dns_bft_gate_refusal(sink, sink), None);
+
+    // Stale on this node's own chain: released, and the comparator decides.
+    write_state(stale_anchor, sink_daa);
+    assert_eq!(vp.dns_bft_gate_refusal(candidate, sink), None, "a stale anchor is no veto");
+    assert_eq!(vp.dns_reorg_outcome(candidate, sink, &bonds), comparator, "released to exactly the comparator's answer");
+
+    // The same anchor in a state the depth rule wrote below the fence: not the vote's to protect.
+    write_state(fresh_anchor, FENCE - 1);
+    assert_eq!(vp.dns_bft_gate_refusal(candidate, sink), None);
+    assert_eq!(vp.dns_reorg_outcome(candidate, sink, &bonds), comparator);
+
+    // An incumbent below the fence: the gate is not in force.
+    write_state(fresh_anchor, sink_daa);
+    assert_eq!(vp.dns_bft_gate_refusal(candidate, below_the_fence.0), None, "resolved at the incumbent sink's DAA");
+}
+
 /// **Qwen3.6's own three series, per epoch, on a two-class chain: expected, observed, target.**
 ///
 /// The live testnet cannot answer this — testnet-11 registered no second class (its 2026-08-24

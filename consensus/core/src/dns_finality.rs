@@ -518,17 +518,19 @@ pub fn stake_attestation_shard_tx(shard: &StakeAttestationShardPayload) -> Trans
 /// is visible, and it carries [`Self::locked_epoch`] / [`Self::locked_hash`] — the lock the signer
 /// held when it signed. Two consequences:
 ///
-/// * **On chain**, the round was to count a precommit only if its declared lock matched what this
-///   chain shows as that validator's previous precommit, so a validator could not quietly forget a
-///   lock it published.
+/// * **On chain**, a precommit counts only if its declared lock matches what this chain shows as
+///   that validator's previous precommit, so a validator cannot quietly forget a lock it published
+///   ([`crate::dns_bft_v1::lock_consistent_precommits`]).
 /// * **Across branches**, that restatement is self-contained evidence. Two precommits naming the
 ///   same `locked_epoch` with different `locked_hash` prove the signer held two different locks at
 ///   one height, and proving it needs only the two payloads — no reachability, no access to the
 ///   losing branch's blocks. That is the accountability a single round cannot produce.
 ///
-/// **The round never ran.** It was to count above the VLT weight fence, which is removed; the
-/// payload stays admissible and its equivocation evidence slashable ([`precommit_fault`]), and
-/// nothing counts a precommit toward confirmation.
+/// **ADR-0128: the round counts past `Params::dns_bft_gate`.** An anchor is DNS-final when more
+/// than two thirds of the epoch's counted bonded stake has attested it and precommitted it with a
+/// lock-consistent precommit bound to the epoch's snapshot commitment ([`crate::dns_bft_v1`]). Below
+/// the fence, and on every network that leaves it unset, the payload stays admissible and its
+/// equivocation evidence slashable ([`precommit_fault`]), and nothing counts it toward confirmation.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct StakePrecommitPayload {
     pub version: u16,
@@ -554,9 +556,10 @@ pub struct StakePrecommitPayload {
     /// `locked_epoch` on two branches is provable equivocation.
     pub locked_hash: Hash64,
 
-    /// §5.1: the commitment to the frozen voting snapshot this precommit was to be weighed under.
-    /// In the signed digest. The voting snapshots are removed with the weight fence, so no
-    /// value is checked against anything; [`Hash64::default`] is what a signer supplies.
+    /// ADR-0128 Decision 4: the commitment to the counted set this precommit is weighed against —
+    /// [`crate::dns_bft_v1::dns_bft_snapshot_commitment_v1`] of `(epoch, anchor, anchor DAA, W(E),
+    /// root(S(E)))`. In the signed digest; a precommit whose commitment is not the one this chain
+    /// computes for its epoch counts for nothing. A signer reads it from the precommit duty.
     pub snapshot_commitment: Hash64,
 
     /// ML-DSA-87 over [`stake_precommit_message`] under [`PRECOMMIT_MLDSA87_CONTEXT`].
@@ -664,7 +667,7 @@ pub struct PrecommitEvidencePayload {
 /// branch, which is the equivocation the round exists to make provable.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PrecommitDuty {
-    /// Whether the precommit round is live at the sink (the VLT weight fence).
+    /// Whether the precommit round is live at the sink (`Params::dns_bft_gate`, ADR-0128).
     pub round_active: bool,
     pub sink_daa_score: u64,
     /// The lock this validator is carrying on this chain, as counted.
@@ -675,9 +678,9 @@ pub struct PrecommitDuty {
     /// Ascending because a lock must name a STRICTLY EARLIER epoch, so a validator's own
     /// precommits can only ever move forward — it may skip entries (and should, when it is far
     /// behind: see the frontier jump in the validator service) but must never go back. The
-    /// commitment is per entry (§5.1, PR 4):
-    /// each precommit binds ITS target epoch's frozen denominator, so a late signature for an
-    /// old due epoch carries that epoch's commitment, not whichever happens to be current.
+    /// commitment is per entry (ADR-0128 Decision 4): each precommit binds ITS target epoch's
+    /// counted set, so a late signature for an old due epoch carries that epoch's commitment, not
+    /// whichever happens to be current.
     pub due: Vec<(u64, Hash64, u64, Hash64)>,
 }
 
@@ -843,6 +846,11 @@ pub struct DnsState {
     /// required_work_depth` and `stake_depth >= required_stake_depth`.
     /// Equal to `selected_chain_anchor` when the anchor itself is
     /// DNS-confirmed.
+    ///
+    /// **Past `Params::dns_bft_gate` (ADR-0128 Decision 5)** it is instead the newest DNS-final
+    /// anchor — both BFT rounds above two thirds of the epoch's counted bonded stake — carried
+    /// forward while it stays a chain ancestor of the sink, and the default (nothing confirmed)
+    /// where the evaluation could not cover its walk. The layout is unchanged.
     pub last_dns_confirmed_anchor: Hash64,
     pub last_dns_confirmed_anchor_daa_score: u64,
 
@@ -1975,9 +1983,9 @@ pub fn stake_attestation_message(
 ///
 /// The **snapshot commitment is inside the digest** for the same shape of reason, at the
 /// denominator instead of the lock (§5.1): a precommit whose signature did not cover which
-/// `W(E)` it was weighed under could be counted against a different one, and `Q(E)` would
-/// silently stop meaning two thirds of anything. The round and its snapshots are removed with the
-/// VLT weight fence, so the commitment a signer supplies is zero.
+/// `W(E)` it was weighed under could be counted against a different one, and the quorum would
+/// silently stop meaning two thirds of anything. ADR-0128 Decision 4 names the commitment:
+/// [`crate::dns_bft_v1::dns_bft_snapshot_commitment_v1`].
 ///
 /// `network_id` and `bond_outpoint` bind the precommit to a network and to the specific bond whose
 /// weight it pledges, exactly as in [`stake_attestation_message`].
@@ -5775,8 +5783,8 @@ pub fn validate_compute_verdict_payload(payload: &[u8]) -> Result<(), DnsTxError
 /// Stateless shape of a [`StakePrecommitPayload`] (subnetwork `SUBNETWORK_ID_STAKE_PRECOMMIT`).
 ///
 /// Everything checkable without a chain: version, signature width, and the lock's internal
-/// consistency. Whether the declared lock is the *true* one was a question for the precommit
-/// round, which is removed; nothing counts a precommit toward confirmation.
+/// consistency. Whether the declared lock is the *true* one — the one the chain shows — is the
+/// counting rule's question past `Params::dns_bft_gate` ([`crate::dns_bft_v1::lock_consistent_precommits`]).
 pub fn validate_stake_precommit_payload(payload: &[u8]) -> Result<(), DnsTxError> {
     let p: StakePrecommitPayload = borsh::from_slice(payload).map_err(|_| DnsTxError::Decode)?;
     if p.version != DNS_PAYLOAD_VERSION_V1 {

@@ -276,8 +276,10 @@ impl VirtualStateProcessor {
                 None
             }
             Ok(evaluation) => {
-                for verdict in evaluation.verdicts.iter().rev().take(3).rev() {
-                    info!(
+                // The newest epoch at info, once per evaluation (once per blue-score epoch); the rest
+                // of the window at debug.
+                for (i, verdict) in evaluation.verdicts.iter().rev().enumerate() {
+                    let line = format!(
                         "[dns-bft] sink={} epoch={} anchor={} counted={} validators={} W={} leaked={}{} attested={} precommitted={} round1={} final={}",
                         sink,
                         verdict.epoch.epoch,
@@ -292,6 +294,11 @@ impl VirtualStateProcessor {
                         if verdict.round_one() { "met" } else { "no" },
                         if verdict.dns_final() { "yes" } else { "no" },
                     );
+                    if i == 0 {
+                        info!("{line}");
+                    } else {
+                        debug!("{line}");
+                    }
                 }
                 debug!("[dns-bft] sink={sink}: walked {} chain blocks, {} epochs evaluated", evaluation.walked, evaluation.verdicts.len());
                 let carried = prev

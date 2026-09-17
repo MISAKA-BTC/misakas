@@ -1545,7 +1545,7 @@ impl VirtualStateProcessor {
     ///
     /// Gated on `dns_activation_daa_score`, not on the VLT fences, for the same reason the round-1
     /// rule is: it guards a transaction that is *accepted* now. A precommit only counts toward
-    /// finality above the weight fence, but the payload is relayable and includable from the day
+    /// finality past `Params::dns_bft_gate` (ADR-0128), but the payload is relayable and includable from the day
     /// the subnet exists, so the rule that stops a forged one burning a bond has to exist from the
     /// same day.
     fn check_precommit_evidence_genuine(
