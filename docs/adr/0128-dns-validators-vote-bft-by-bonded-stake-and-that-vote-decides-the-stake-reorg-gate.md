@@ -46,8 +46,8 @@ PALW claim `Final`, never moves a safe frontier, and never decides whether a blo
   consensus.
 * **The leak could not be armed**, and its own test said why
   (`the_leak_cannot_be_fed_the_evidence_its_meaning_needs`, deleted with it): its evidence — each
-  validator's last attestation — was read from the StakeScore window (1,500 blue score on
-  testnet-11), so a validator seen once inside the window looked at most a window stale however long
+  validator's last attestation — was read from the StakeScore window (30 blue score on
+  testnet-11, fifteen of its two-block epochs), so a validator seen once inside the window looked at most a window stale however long
   it had really been silent, and a validator absent from the window looked infinitely stale however
   recently it had attested. The provenance probe that followed made a node that could not cover the
   window leak nobody, which kept the rule inert and still left two nodes able to disagree.
@@ -91,8 +91,9 @@ bonds `Active` at `a_E`, less those leaked at `E`:
   evaluates the epochs of its StakeScore window, so its walk spans that window plus the leak window.
 * **Every synced node holds that walk.** `validate_palw_v2` refuses a network whose pruning depth is
   below `stake_score_window_blue_score` plus the leak window, so the pruning point never passes the
-  evidence a sink's leak reads. On testnet-11 the walk is 1,500 + 5,440 = 6,940 blue score and the
-  pruning depth is 12,000 (the claim lattice with the DA court). A node whose walk nonetheless cannot
+  evidence a sink's leak reads. On testnet-11 (two-block epochs, lag 2, StakeScore window 30) the walk
+  is 30 + 5,040 + 200 + 2 + 2 = 5,274 blue score and the pruning depth is 12,000 (the claim lattice with
+  the DA court). A node whose walk nonetheless cannot
   cover it (a store that will not read, a sync still in progress) does not compute a different
   quorum: the gate abstains for that evaluation (`GateInactive`) and says so in the log.
 * **The floor is a halt, not a hole.** If leaking would leave fewer than `min_retained_validators`
@@ -178,7 +179,9 @@ quorum. ADR-0127 states the PALW side and pins it.
 * `activation` = DAA 7,001 — its own height beside 7,000, so the fork-id gate separates builds.
 * `t_leak_daa` = 5,040 — seven days at the chain's 120-second cadence. The 1-BPS execution lane does
   not change it: round blocks are outside the DAA set and advance no DAA score (ADR-0125 Decision 1).
-* `reentry_final_depth_daa` = 200 — two attestation epochs.
+* `reentry_final_depth_daa` = 200 — about 6.7 hours at the 120-second cadence (a hundred of testnet-11's
+  two-block attestation epochs): deeper than the gate's 120-DAA veto TTL and the 120-DAA PALW challenge
+  window, so re-entry rests on an attestation no reorg the gate or PALW would still weigh can remove.
 * `min_retained_validators` = 4 — the smallest set in which one fault is tolerated.
 
 ## 6. Tests
