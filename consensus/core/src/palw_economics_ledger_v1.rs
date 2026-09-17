@@ -59,7 +59,7 @@ pub fn palw_claim_ledger_observations_v1(state: &PalwChainStateV2) -> Vec<PalwCl
                 PalwClaimPhaseV2::PanelBound { bound_daa } => (Some(*bound_daa), None, None, None, None),
                 PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } => (None, Some(*licensed_daa), None, None, None),
                 PalwClaimPhaseV2::Final { final_daa } => (None, None, Some(*final_daa), None, None),
-                PalwClaimPhaseV2::Voided { voided_daa, reason } => (None, None, None, Some(*voided_daa), Some(reason.clone())),
+                PalwClaimPhaseV2::Voided { voided_daa, reason } => (None, None, None, Some(*voided_daa), Some(*reason)),
                 _ => (None, None, None, None, None),
             };
             let (seats, credited_seats) = state

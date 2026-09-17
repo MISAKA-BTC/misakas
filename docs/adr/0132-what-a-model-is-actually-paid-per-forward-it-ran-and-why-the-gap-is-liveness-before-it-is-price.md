@@ -247,7 +247,10 @@ Nothing consensus reads; the fingerprint does not move.
   operator down reads as the licence rate it costs; a heavier model moves the unit but not a rate),
   `kaspad::palw_economics` (the store round-trips, upserts and drops a foreign layout; the telemetry counts
   per class) and `misaka-cli::palw_economics` (the end-to-end reading is what was paid; the four-basis
-  table). The verification run is recorded in the commit that closes this section.
+  table). Verification on `feat/palw-exec-lane-and-validator-retirement` (2026-09-17): consensus-core 2,142 /
+  consensus (evm) 305 / kaspad 98 / misaka-cli 176 / rpc-core 148 / rpc-service 1 / database 8 / integration
+  `rpc_tests::sanity_test` 1 — all green; clippy `-D warnings` over the eleven crates clean;
+  `shipped_presets_have_pinned_fingerprints` unmoved (`ab4e7b9c…`).
 
 ## 8. Number hygiene
 

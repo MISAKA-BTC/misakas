@@ -786,11 +786,14 @@ mod tests {
         let leaf = dense.under.iter().find(|(b, _, _)| *b == "leaves").unwrap();
         assert_eq!(leaf.1, (escrow * 6_630_544 / 9_000_776) as u64);
         let by_rate = dense.under.iter().find(|(b, _, _)| b.starts_with("EconomicRate")).unwrap();
-        // The 27B is the heaviest live class (3,165 draws), so the rate pays it whole and the dense
-        // tier a fraction of the escrow: its attempted compute against the 27B's.
-        let heaviest = 172_919_123_392u128 * 3_165 * 2;
+        // The 27B has no claims, so it is not live and does not set the rate; the dense tier is the
+        // heaviest live class and the rate pays its attempted compute the escrow whole (to the sompi
+        // the rate's floor drops), while the hybrid would be paid its share of it.
+        let heaviest = 83_102_171_136u128 * 2;
         assert_eq!(report.rate_sompi_per_giga, escrow * 1_000_000_000 / heaviest);
-        assert!(by_rate.1 as u128 * 1_000 / escrow <= 1 && by_rate.1 > 0, "≈ 0.03 % of the escrow at that rate");
+        assert!(by_rate.1 as u128 >= escrow - heaviest / 1_000_000_000 - 1, "{}", by_rate.1);
+        let hybrid_by_rate = hybrid.under.iter().find(|(b, _, _)| b.starts_with("EconomicRate")).unwrap();
+        assert_eq!(hybrid_by_rate.1 as u128 * 1_000 / escrow, 217, "18.06 G × 2 draws against 83.10 G × 2: 21.7 % of the escrow");
         let text = render(&report);
         assert!(text.contains("End to end — this node's ledger: 1419 claims, accepted DAA 3542–5774"));
         assert!(text.contains("actual gap, producer MSK / attempted CCU: ∞ (Qwen3.6-35B-A3B/graph-v3 paid nothing)"));
