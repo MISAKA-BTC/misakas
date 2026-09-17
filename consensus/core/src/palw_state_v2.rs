@@ -1066,7 +1066,15 @@ impl PalwStateParamsV2 {
     /// merged block's own subsidy, so the carve the fold records and the carve the coinbase withholds
     /// are one value computed by one function — the matched pair the coinbase-hash rule requires.
     pub fn worker_carve(&self, subsidy: u64) -> u64 {
-        worker_carve_v2(self, subsidy)
+        worker_carve_v2(self, subsidy, None)
+    }
+
+    /// **The worker carve of one subsidy at the carve its attempt block resolved** (ADR-0126
+    /// Decision 3) — [`Self::worker_carve`] where `escrow_carve` is `None`, the fence's carve where it
+    /// is `Some`. The one function both sides of the matched pair call: the fold escrows with it and
+    /// the processor sizes the merged withhold with it, from the same record.
+    pub fn worker_carve_at(&self, subsidy: u64, escrow_carve: Option<crate::palw_reward_v2::PalwRewardParamsV2>) -> u64 {
+        worker_carve_v2(self, subsidy, escrow_carve)
     }
 
     /// **Require a claim's collateral to be a fraction of the reward it escrows** (2026-08-30).
@@ -3364,6 +3372,11 @@ pub struct PalwMergedWorkV1<'a> {
     /// coinbase pays that block from — so the escrow the fold records and the carve the coinbase
     /// withholds are one value. `0` below the fence (unread there) and for non-attempt work.
     pub subsidy: u64,
+    /// **ADR-0126 Decision 3: the carve `subsidy` is escrowed at, resolved at the MERGED block's own
+    /// DAA** — `Params::palw_overlay_carve`'s where it is active there, `None` below it (the bundle's
+    /// own `worker_carve_permille`). Read from the same record the coinbase's withhold is sized from
+    /// (`palw_v2_merged_escrow_withheld`), so the two stay one number. `None` for non-attempt work.
+    pub escrow_carve: Option<crate::palw_reward_v2::PalwRewardParamsV2>,
 }
 
 /// Where an attempt entered the chain — its own chain block, or a merged blue (ADR-0058).
@@ -3386,6 +3399,10 @@ struct PalwAttemptOriginV1 {
     /// own subsidy for own work, the merged block's own subsidy for merged work (B-1). Unread when
     /// `escrows_reward` is false.
     escrow_subsidy: u64,
+    /// ADR-0126 Decision 3: the carve `escrow_subsidy` is escrowed at, resolved at the DAA of the block
+    /// that carried the attempt — `PalwTransitionExtrasV1::escrow_carve` for own work,
+    /// `PalwMergedWorkV1::escrow_carve` for merged work. `None` is the bundle's own carve.
+    escrow_carve: Option<crate::palw_reward_v2::PalwRewardParamsV2>,
     /// **B-4: this attempt's pre_pow-inclusive execution commitment**, threaded from the processor
     /// (own work from this block's header, merged work from the merged block's). `apply_attempt`
     /// dedups on it against the builder's `seen_exec` past `palw_audit_2026_09_11_deep`.
@@ -9117,6 +9134,9 @@ pub fn apply_palw_transition_v7(
     match block_work {
         PalwBlockWorkV3::None => {}
         PalwBlockWorkV3::Attempt(envelope) => {
+            // ADR-0126: this block carried the attempt, so the carve resolved at its own DAA is the
+            // attempt block's. Read before the &mut borrow of `builder`.
+            let escrow_carve = builder.extras.escrow_carve;
             apply_attempt(
                 &mut builder,
                 ctx,
@@ -9126,6 +9146,7 @@ pub fn apply_palw_transition_v7(
                     escrows_reward: true,
                     // Own work always escrows, carved from this block's own subsidy (unchanged).
                     escrow_subsidy: ctx.subsidy,
+                    escrow_carve,
                     execution_key: own_execution_key,
                 },
             )?
@@ -9186,6 +9207,8 @@ pub fn apply_palw_transition_v7(
                                     carrying_block: merged.carrying_block,
                                     escrows_reward,
                                     escrow_subsidy: merged.subsidy,
+                                    // ADR-0126: resolved at the MERGED block's DAA, never this block's.
+                                    escrow_carve: merged.escrow_carve,
                                     execution_key: merged.execution_key,
                                 },
                             ) {
@@ -13318,17 +13341,18 @@ fn apply_receipt_spend(
 ///
 /// Floor on the producer side for the reason [`crate::palw_reward_v2::palw_reward_carve_v2`]
 /// floors: rounding must never mint a sompi the emission schedule does not contain. The two agree
-/// by construction because this IS that function, called with the state's own carve — a second
-/// arithmetic here is a second answer waiting to disagree.
-fn worker_carve_v2(params: &PalwStateParamsV2, subsidy: u64) -> u64 {
-    crate::palw_reward_v2::palw_reward_carve_v2(
-        subsidy,
+/// by construction because this IS that function, called with the state's own carve — or, past
+/// ADR-0126's fence at the attempt block's DAA, with `escrow_carve` — so a second arithmetic here
+/// is never a second answer waiting to disagree.
+fn worker_carve_v2(params: &PalwStateParamsV2, subsidy: u64, escrow_carve: Option<crate::palw_reward_v2::PalwRewardParamsV2>) -> u64 {
+    let carve = match escrow_carve {
+        Some(carve) => carve,
         // Infallible: the field is fenced at `with_worker_carve_permille`, which is the only way
         // to set it, so it is always a legal permille.
-        &crate::palw_reward_v2::PalwRewardParamsV2::new(params.worker_carve_permille)
+        None => crate::palw_reward_v2::PalwRewardParamsV2::new(params.worker_carve_permille)
             .expect("worker_carve_permille is fenced at construction"),
-    )
-    .worker
+    };
+    crate::palw_reward_v2::palw_reward_carve_v2(subsidy, &carve).worker
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -13447,6 +13471,13 @@ pub struct PalwTransitionExtrasV1 {
     /// ADR-0125: the round permits this block accepted, as the processor decided them against the
     /// parent state. Empty unless `round_lane` is `Some`.
     pub round_permit_uses: Vec<crate::palw_execution_lane_v1::PalwExecPermitUseV1>,
+    /// **ADR-0126 Decision 3: `Params::palw_overlay_carve` resolved at the block's DAA** — the carve
+    /// the claim of this block's OWN attempt escrows at, since the block that carried the attempt is
+    /// this block. A merged attempt's carve rides its own record
+    /// ([`PalwMergedWorkV1::escrow_carve`]), resolved at the merged block's DAA. `None` below the
+    /// fence — the bundle's own `worker_carve_permille` — by `Default`, so every existing caller and
+    /// every network that has not armed it folds byte-identically.
+    pub escrow_carve: Option<crate::palw_reward_v2::PalwRewardParamsV2>,
 }
 
 impl PalwTransitionExtrasV1 {
@@ -14411,7 +14442,12 @@ fn apply_attempt(
         // which the coinbase withholds from that same block's worker output instead of paying — the
         // matched pair. Each block's carve is a permille of its OWN subsidy, so N merged escrows in
         // one accepting block never exceed Σ of the merged blocks' subsidies.
-        escrowed_reward: if origin.escrows_reward { worker_carve_v2(builder.params, origin.escrow_subsidy) } else { 0 },
+        // ADR-0126 Decision 3: at the carve resolved at the attempt block's own DAA.
+        escrowed_reward: if origin.escrows_reward {
+            worker_carve_v2(builder.params, origin.escrow_subsidy, origin.escrow_carve)
+        } else {
+            0
+        },
         work_leaves: 0,
         work_id: None,
         phase: PalwClaimPhaseV2::Provisional,
@@ -16907,7 +16943,7 @@ pub(crate) mod tests {
         let (s2, create) =
             apply(&s1, &p, &PalwBlockContextV2 { block: block(2), daa_score: 101, blue_score: 2, subsidy }, &[], Some(&env));
         let escrowed = s2.claim(&claim_id).unwrap().escrowed_reward;
-        assert_eq!(escrowed, worker_carve_v2(&p, subsidy), "the claim escrowed this block's worker carve");
+        assert_eq!(escrowed, worker_carve_v2(&p, subsidy, None), "the claim escrowed this block's worker carve");
         assert!(escrowed > 0, "the fixture must escrow something for the count to mean anything");
         assert_eq!(palw_escrow_destroyed_by_delta_v2(&create), 0, "creating a claim destroys nothing");
 
@@ -21775,6 +21811,7 @@ pub(crate) mod tests {
             work: PalwBlockWorkV3::ReceiptSpend(&ghost),
             execution_key: Hash64::default(),
             subsidy: 0,
+            escrow_carve: None,
         }];
         let (with_skip, delta_with, skips) =
             apply_palw_transition_v4(&s1, &p, None, &ctx(2, 101, 2), &[], PalwBlockWorkV3::None, &merged)
@@ -21803,6 +21840,7 @@ pub(crate) mod tests {
             work: PalwBlockWorkV3::Attempt(&env),
             execution_key: Hash64::default(),
             subsidy: 0,
+            escrow_carve: None,
         }];
         let (s2, _, skips) = apply_palw_transition_v4(&s1, &p, None, &ctx(2, 101, 2), &[], PalwBlockWorkV3::None, &merged)
             .expect("the accepting block stands");
@@ -21843,8 +21881,20 @@ pub(crate) mod tests {
         // fold has no header, so it is handed the value the processor would derive.
         let shared = h64(0x5EED);
         let merged = [
-            PalwMergedWorkV1 { carrying_block: h64(0xB1), work: PalwBlockWorkV3::Attempt(&a), execution_key: shared, subsidy: 0 },
-            PalwMergedWorkV1 { carrying_block: h64(0xB2), work: PalwBlockWorkV3::Attempt(&b), execution_key: shared, subsidy: 0 },
+            PalwMergedWorkV1 {
+                carrying_block: h64(0xB1),
+                work: PalwBlockWorkV3::Attempt(&a),
+                execution_key: shared,
+                subsidy: 0,
+                escrow_carve: None,
+            },
+            PalwMergedWorkV1 {
+                carrying_block: h64(0xB2),
+                work: PalwBlockWorkV3::Attempt(&b),
+                execution_key: shared,
+                subsidy: 0,
+                escrow_carve: None,
+            },
         ];
 
         // --- Past the deep fence: the second is refused; exactly one claim is minted. ---
@@ -21922,6 +21972,7 @@ pub(crate) mod tests {
             work: PalwBlockWorkV3::Attempt(&env),
             execution_key: Hash64::default(),
             subsidy: MB_SUBSIDY,
+            escrow_carve: None,
         }];
         let carve = p.worker_carve(MB_SUBSIDY);
         assert!(carve > 0, "62 % of 50 G sompi is a real carve");
@@ -21976,6 +22027,84 @@ pub(crate) mod tests {
             0,
             "below the fence a merged claim escrows nothing — the coinbase paid it in full"
         );
+    }
+
+    /// **ADR-0126 Decision 3: a claim escrows at the carve its ATTEMPT block resolved.** The fold holds
+    /// no fence and no DAA of a merged block, so the processor resolves `palw_overlay_carve` once per
+    /// attempt block and hands the result in: through the block's extras for its own attempt (the
+    /// block that carried it is the block being folded), and on each merged record for merged work.
+    /// testnet-11's block: 720 ‰ past the height escrows 3,200.85 MSK, `None` keeps the bundle's
+    /// 620 ‰ and 2,756.28 MSK — and a merged claim's carve is its own record's, whatever the accepting
+    /// block resolved for itself, so the withhold sized from that record and the escrow agree.
+    #[test]
+    fn adr0126_a_claim_escrows_at_the_carve_its_attempt_block_resolved() {
+        const T11_SUBSIDY: u64 = 444_562_014_000;
+        let p = params().with_worker_carve_permille(620).unwrap();
+        let lowered = crate::palw_reward_v2::PalwRewardParamsV2::new(720).unwrap();
+        assert_eq!(p.worker_carve_at(T11_SUBSIDY, None), p.worker_carve(T11_SUBSIDY), "`None` is the bundle's carve");
+        assert_eq!(p.worker_carve_at(T11_SUBSIDY, None), 275_628_448_680, "2,756.28 MSK");
+        assert_eq!(p.worker_carve_at(T11_SUBSIDY, Some(lowered)), 320_084_650_080, "3,200.85 MSK");
+        let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let point = PalwBlockContextV2 { block: block(2), daa_score: 101, blue_score: 2, subsidy: T11_SUBSIDY };
+        let fold = |work: PalwBlockWorkV3<'_>, merged: &[PalwMergedWorkV1<'_>], extras: &PalwTransitionExtrasV1| {
+            let (next, _, skips) = apply_palw_transition_v7(
+                &s1,
+                &p,
+                Some(&admission),
+                &point,
+                &[],
+                work,
+                merged,
+                Hash64::default(),
+                false,
+                false,
+                false,
+                false,
+                extras,
+            )
+            .expect("the block stands");
+            next.assert_internal_consistency(&p).expect("internal consistency");
+            assert!(skips.is_empty(), "nothing is skipped");
+            next
+        };
+        let below = PalwTransitionExtrasV1 { audit_2026_09_11_deep_active: true, ..Default::default() };
+        let past = PalwTransitionExtrasV1 { escrow_carve: Some(lowered), ..below.clone() };
+
+        // Own work: the block's extras decide.
+        let env = attempt(40, 1);
+        let own = attempt_id_v2(&env.attempt);
+        let escrow = |state: &PalwChainStateV2, id: &Hash64| state.claim(id).expect("the claim exists").escrowed_reward;
+        assert_eq!(escrow(&fold(PalwBlockWorkV3::Attempt(&env), &[], &below), &own), 275_628_448_680, "below: the bundle's carve");
+        assert_eq!(escrow(&fold(PalwBlockWorkV3::Attempt(&env), &[], &past), &own), 320_084_650_080, "past: the fence's");
+
+        // Merged work: the record decides, not the accepting block.
+        let merged_env = attempt(40, 2);
+        let merged_id = attempt_id_v2(&merged_env.attempt);
+        let merged = |escrow_carve| {
+            [PalwMergedWorkV1 {
+                carrying_block: h64(0xB1),
+                work: PalwBlockWorkV3::Attempt(&merged_env),
+                execution_key: Hash64::default(),
+                subsidy: T11_SUBSIDY,
+                escrow_carve,
+            }]
+        };
+        for (record, extras, expected, why) in [
+            (Some(lowered), &below, 320_084_650_080, "a merged block past the height, accepted by a block the fence has not reached"),
+            (None, &past, 275_628_448_680, "a merged block below the height, accepted by a block past it"),
+            (Some(lowered), &past, 320_084_650_080, "both past"),
+            (None, &below, 275_628_448_680, "both below"),
+        ] {
+            let folded = fold(PalwBlockWorkV3::None, &merged(record), extras);
+            assert_eq!(escrow(&folded, &merged_id), expected, "{why}");
+            assert_eq!(
+                escrow(&folded, &merged_id),
+                p.worker_carve_at(T11_SUBSIDY, record),
+                "{why}: the withhold's function, the record's inputs"
+            );
+        }
     }
 
     /// A spend licenses only what is certified: wrong phase, wrong source, absent claim — each
@@ -30293,6 +30422,7 @@ pub(crate) mod tests {
                 prompt_ids_merkle: false,
                 round_lane: None,
                 round_permit_uses: Vec::new(),
+                escrow_carve: None,
             }
         }
 
@@ -30513,6 +30643,7 @@ pub(crate) mod tests {
                 prompt_ids_merkle: false,
                 round_lane: None,
                 round_permit_uses: Vec::new(),
+                escrow_carve: None,
             };
             let (s_off, _) =
                 apply_palw_transition_v2_with_extras(&s, &p, &ctx(3, 251, 3), &[], None, false, false, false, false, &dormant)

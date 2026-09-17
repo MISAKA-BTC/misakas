@@ -450,9 +450,9 @@ pub struct VirtualStateProcessor {
     pub(super) palw_work_priced_reward: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0125: `Params::palw_execution_lane_fence` — the execution lane's activation and shape.
     pub(super) palw_execution_lane: Option<kaspa_consensus_core::config::params::PalwExecutionLaneV1>,
-    /// ADR-0126: `Params::palw_validator_overlay_retirement_fence` — where the validator overlay stops
-    /// being consensus.
-    pub(super) palw_validator_overlay_retirement: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0126: `Params::palw_overlay_carve_fence` — the height from which the overlay's full split
+    /// pays validators a fifth and a claim escrows the tenth they gave up.
+    pub(super) palw_overlay_carve: Option<kaspa_consensus_core::config::params::PalwOverlayCarveV1>,
     /// **ADR-0089 Decision 9's fence, `None` on every shipped preset.** Past it the EVM's
     /// window and hand exist and the block's EVM actions reach its transition. Resolved at the
     /// BLOCK's DAA.
@@ -717,12 +717,19 @@ pub(super) struct PalwCarriedObjectV1 {
 /// the walk state) and the transition call (which borrows it). Two arms because a header
 /// declares exactly one lane by its algorithm id.
 pub(super) enum PalwMergedOwnedWorkV1 {
-    /// `(carrying block, attempt, the block's own subsidy)`. The subsidy is
-    /// `calc_block_subsidy(the block's DAA)` — for an attempt block it equals the coinbase-declared
-    /// `mergeset_rewards` subsidy (body validation pins it, and an attempt block is never a heartbeat)
-    /// — and is the pool B-1's escrow is carved from past the deep fence: one value the fold escrows
-    /// and the coinbase withholds, computed once here from the header this function already read.
-    Attempt(BlockHash, kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2, u64),
+    /// `(carrying block, attempt, the block's own subsidy, the carve resolved at the block's own DAA)`.
+    /// The subsidy is `calc_block_subsidy(the block's DAA)` — for an attempt block it equals the
+    /// coinbase-declared `mergeset_rewards` subsidy (body validation pins it, and an attempt block is
+    /// never a heartbeat) — and is the pool B-1's escrow is carved from past the deep fence. The carve
+    /// is ADR-0126's where it is active at the block's DAA and `None` (the bundle's) below. Both are
+    /// one value the fold escrows and the coinbase withholds, computed once here from the header this
+    /// function already read.
+    Attempt(
+        BlockHash,
+        kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2,
+        u64,
+        Option<kaspa_consensus_core::palw_reward_v2::PalwRewardParamsV2>,
+    ),
     Spend(BlockHash, kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3),
 }
 
@@ -917,7 +924,7 @@ impl VirtualStateProcessor {
             palw_panel_economy: params.palw_panel_economy_fence(),
             palw_work_priced_reward: params.palw_work_priced_reward_fence(),
             palw_execution_lane: params.palw_execution_lane_fence(),
-            palw_validator_overlay_retirement: params.palw_validator_overlay_retirement_fence(),
+            palw_overlay_carve: params.palw_overlay_carve_fence(),
             palw_model_evm: params.palw_model_evm_fence(),
             palw_context_ladder: params.palw_context_ladder,
             palw_epoch_boundary_budget: params.palw_epoch_boundary_budget,
@@ -974,11 +981,6 @@ impl VirtualStateProcessor {
     /// [`dns_finality_fresh_for_bridge`] — and read the same way the deposit-claim RPC reads it,
     /// so the RPC never accepts a claim the template would then leave out, or the reverse.
     fn bridge_finality_is_fresh(&self, sink: BlockHash) -> bool {
-        // ADR-0126: past the retirement there is no overlay finality to wait for, and the bridge
-        // must not pause on a clock that has stopped.
-        if self.headers_store.get_daa_score(sink).is_ok_and(|daa| self.validator_overlay_retired_at(daa)) {
-            return true;
-        }
         let Some(dns_params) = self.dns_params.as_ref() else {
             return false;
         };
@@ -1863,7 +1865,7 @@ impl VirtualStateProcessor {
                                 let merged_refs: Vec<kaspa_consensus_core::palw_state_v2::PalwMergedWorkV1<'_>> = merged_owned
                                     .iter()
                                     .map(|owned| match owned {
-                                        PalwMergedOwnedWorkV1::Attempt(blue, envelope, subsidy) => {
+                                        PalwMergedOwnedWorkV1::Attempt(blue, envelope, subsidy, carve) => {
                                             kaspa_consensus_core::palw_state_v2::PalwMergedWorkV1 {
                                                 carrying_block: *blue,
                                                 work: kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::Attempt(envelope),
@@ -1882,6 +1884,9 @@ impl VirtualStateProcessor {
                                                 // from past the deep fence, the SAME value `palw_v2_merged_escrow_withheld`
                                                 // hands the coinbase to withhold (both read it from this one field).
                                                 subsidy: *subsidy,
+                                                // ADR-0126: the carve resolved at the merged block's DAA, read from the
+                                                // same record for the same reason.
+                                                escrow_carve: *carve,
                                             }
                                         }
                                         PalwMergedOwnedWorkV1::Spend(blue, envelope) => {
@@ -1894,8 +1899,9 @@ impl VirtualStateProcessor {
                                                 // quantum)); B-4's attempt-execution dedup does not apply, so the key is unread.
                                                 execution_key: kaspa_hashes::Hash64::default(),
                                                 // A receipt spend escrows nothing (it is not an attempt claim), so the
-                                                // subsidy is unread — 0.
+                                                // subsidy and the carve are unread.
                                                 subsidy: 0,
+                                                escrow_carve: None,
                                             }
                                         }
                                     })
@@ -3441,7 +3447,7 @@ impl VirtualStateProcessor {
         bond_view: &ActiveBondView,
         daa_score: u64,
     ) -> Vec<BondMutation> {
-        let Some(dns_params) = self.dns_params_at(daa_score) else {
+        let Some(dns_params) = self.dns_params.as_ref() else {
             return Vec::new();
         };
         if !dns_params.vlt_shadow_active_at(daa_score) {
@@ -3540,10 +3546,6 @@ impl VirtualStateProcessor {
         min_bond: u64,
         unbonding_floor: u64,
     ) -> Vec<BondMutation> {
-        // ADR-0126: past the retirement the overlay's bond set does not move.
-        if self.validator_overlay_retired_at(accepted_daa_score) {
-            return Vec::new();
-        }
         let enforce = self.dns_params.as_ref().is_some_and(|p| accepted_daa_score >= p.unbond_authz_mergeset_activation_daa_score);
         let mut muts = bond_mutations_from_accepted_txs(txs, accepted_daa_score, min_bond, unbonding_floor, enforce);
 
@@ -4557,13 +4559,16 @@ impl VirtualStateProcessor {
     /// folds — so the coinbase withholds for precisely the set the fold will try to escrow. The fold
     /// may still refuse one in its LIVE state (a budget race, a B-4 execution duplicate); then the
     /// withheld carve is simply not minted (burned), never released, so the withhold set is a safe
-    /// SUPERSET of the escrow set. The amount is `PalwStateParamsV2::worker_carve` of the merged
-    /// block's own subsidy — read from the SAME `PalwMergedOwnedWorkV1::Attempt` field the fold
-    /// escrows from — so the carve withheld and the carve recorded are one number on both the build
-    /// and validate paths. That subsidy is `calc_block_subsidy(the block's DAA)`, which for an
-    /// attempt block equals the coinbase-declared subsidy the block is actually paid from (body
-    /// validation pins it; an attempt block is never a heartbeat), so the withheld carve never
-    /// exceeds the worker share the coinbase would otherwise pay (`validate_palw_v2`'s carve bound).
+    /// SUPERSET of the escrow set. The amount is `PalwStateParamsV2::worker_carve_at` of the merged
+    /// block's own subsidy at the carve resolved at the merged block's own DAA (ADR-0126) — both read
+    /// from the SAME `PalwMergedOwnedWorkV1::Attempt` fields the fold escrows from — so the carve
+    /// withheld and the carve recorded are one number on both the build and validate paths. That
+    /// subsidy is `calc_block_subsidy(the block's DAA)`, which for an attempt block equals the
+    /// coinbase-declared subsidy the block is actually paid from (body validation pins it; an attempt
+    /// block is never a heartbeat), so the withheld carve never exceeds the worker share the coinbase
+    /// would otherwise pay (`validate_palw_v2`'s carve bounds: the bundle's against the network's
+    /// split, and ADR-0126's against the split it lowers — which the paying block carves with
+    /// whenever its own DAA is at or past the merged block's).
     ///
     /// **Empty below `palw_audit_2026_09_11_deep`** and on every network without a V2 bundle, where
     /// merged carves are paid in full at acceptance (ADR-0058 Decision 5) — byte-identical to before.
@@ -4585,8 +4590,8 @@ impl VirtualStateProcessor {
         }
         let (works, _skips) = self.palw_v2_merged_works(ghostdag_data, state, state_params, mergeset_non_daa, point);
         for work in &works {
-            if let PalwMergedOwnedWorkV1::Attempt(blue, _, subsidy) = work {
-                withheld.insert(*blue, state_params.worker_carve(*subsidy));
+            if let PalwMergedOwnedWorkV1::Attempt(blue, _, subsidy, carve) = work {
+                withheld.insert(*blue, state_params.worker_carve_at(*subsidy, *carve));
             }
         }
         withheld
@@ -7432,33 +7437,27 @@ impl VirtualStateProcessor {
         self.palw_work_priced_reward.is_some_and(|fence| fence.is_active(daa_score))
     }
 
-    /// **ADR-0126: has the validator overlay retired at `daa_score`?**
-    pub(super) fn validator_overlay_retired_at(&self, daa_score: u64) -> bool {
-        self.palw_validator_overlay_retirement.is_some_and(|fence| fence.is_active(daa_score))
+    /// **ADR-0126 Decision 2: the overlay's reward split for the block at `daa_score` — the one
+    /// reader.** The coinbase carve and `coinbase_validator_pool`, on the template path and the
+    /// validation path, read it here, and so do the quality sub-pool and the audit fee through the
+    /// pool they are cut from; so a template and the block it becomes cannot disagree about it
+    /// (SA-3). `None` where no overlay runs or below its activation; past `palw_overlay_carve`, where
+    /// the full split is in force, the validator share is the fence's and the worker base takes the
+    /// remainder.
+    pub(super) fn fee_split_at(&self, daa_score: u64) -> Option<kaspa_consensus_core::dns_finality::FeeSplitParams> {
+        kaspa_consensus_core::config::params::palw_overlay_fee_split_at_v1(
+            self.dns_params.as_ref()?,
+            self.palw_overlay_carve,
+            daa_score,
+        )
     }
 
-    /// **ADR-0126: the overlay's params where the overlay is still consensus at `daa_score`.** Past the
-    /// retirement every overlay rule reads `None` — the path a network without an overlay has always
-    /// taken — so the retirement is that path, height-indexed, rather than a second set of branches.
-    pub(super) fn dns_params_at(&self, daa_score: u64) -> Option<&DnsParams> {
-        self.dns_params.as_ref().filter(|_| !self.validator_overlay_retired_at(daa_score))
-    }
-
-    /// **The coinbase carve at `daa_score`**: the overlay's split while it is consensus, PALW's worker
-    /// carve once it has retired (on a PALW network; the whole reward on any other), and the whole
-    /// reward where no overlay ever ran.
-    pub(super) fn coinbase_carve_at(&self, daa_score: u64) -> crate::processes::coinbase::CoinbaseCarve<'_> {
-        use crate::processes::coinbase::CoinbaseCarve;
-        if self.validator_overlay_retired_at(daa_score) {
-            return match self.palw_state_params_v2.as_ref() {
-                Some(state_params) => CoinbaseCarve::Palw(state_params),
-                None => CoinbaseCarve::Full,
-            };
-        }
-        match self.dns_params.as_ref().and_then(|p| p.reward_fee_split(daa_score)) {
-            Some(split) => CoinbaseCarve::Overlay(split),
-            None => CoinbaseCarve::Full,
-        }
+    /// **ADR-0126 Decision 3: the carve a claim escrows for the attempt block at `daa_score`** — the
+    /// DAA score of the block that CARRIED the attempt: the chain block's own for its own work, the
+    /// merged block's for merged work, so the fold's escrow and the coinbase's withhold are resolved
+    /// at one score. `None` below the fence, where the bundle's own `worker_carve_permille` applies.
+    pub(super) fn palw_escrow_carve_at(&self, daa_score: u64) -> Option<kaspa_consensus_core::palw_reward_v2::PalwRewardParamsV2> {
+        self.palw_overlay_carve.filter(|carve| carve.activation.is_active(daa_score)).and_then(|carve| carve.escrow_carve())
     }
 
     /// ADR-0125: the execution lane's shape where it is open at `daa_score`.
@@ -7642,6 +7641,10 @@ impl VirtualStateProcessor {
                 kaspa_consensus_core::palw_execution_lane_v1::PalwExecLaneFoldV1 { schedule_span_daa: lane.schedule_span_daa }
             }),
             round_permit_uses: Vec::new(),
+            // ADR-0126 Decision 3: the carve this block's own attempt escrows at — the block that
+            // carried it is this one. Explicit for the reason every line above gives: it decides how
+            // much of the subsidy a claim holds.
+            escrow_carve: self.palw_escrow_carve_at(daa_score),
             evm_actions: Vec::new(),
             // ADR-0093 Decision 8: which form of move 1 opens a phase. Written explicitly for the
             // reason the lines above give — an unwritten default here would refuse, or admit, a
@@ -8266,6 +8269,8 @@ impl VirtualStateProcessor {
                     // the deep fence. An attempt block is never a heartbeat, so this equals the
                     // coinbase-declared subsidy body validation pinned.
                     self.coinbase_manager.calc_block_subsidy(header.daa_score),
+                    // ADR-0126: and the carve, at the same header's DAA — the attempt block's.
+                    self.palw_escrow_carve_at(header.daa_score),
                 )),
                 Ok(None) => match self.palw_v2_check_receipt_spend(&header, state, state_params, point) {
                     Ok(Some(envelope)) => works.push(PalwMergedOwnedWorkV1::Spend(*blue, envelope)),
@@ -8713,10 +8718,6 @@ impl VirtualStateProcessor {
         let Some(dns_params) = self.dns_params.as_ref() else {
             return;
         };
-        // ADR-0126: past the retirement the overlay's state is frozen where the overlay stopped.
-        if self.headers_store.get_daa_score(sink).is_ok_and(|daa| self.validator_overlay_retired_at(daa)) {
-            return;
-        }
         // The StakeScore recompute below walks the selected chain reading each chain block's
         // acceptance data (`collect_stake_contributions_v2` -> `accepted_txs_of_chain_block`). During
         // pruning-point UTXO import (IBD), the sink IS the imported pruning point, whose acceptance
@@ -8971,10 +8972,6 @@ impl VirtualStateProcessor {
             return;
         };
         let sink_daa = self.headers_store.get_daa_score(sink).unwrap();
-        // ADR-0126: nothing past the retirement is accumulated for a validator.
-        if self.validator_overlay_retired_at(sink_daa) {
-            return;
-        }
         // The v2 master fence: inert (no walk, no write) on devnet/simnet (`u64::MAX`);
         // the walk runs from block 1 on mainnet/testnet (`PRODUCTION_DNS_PARAMS`, fence `0`).
         if sink_daa < dns_params.pos_v2_activation_daa_score {
@@ -10018,10 +10015,7 @@ impl VirtualStateProcessor {
                 }
             };
         }
-        // ADR-0126: a candidate past the retirement faces no stake gate. The PALW authority above is
-        // not the overlay's and keeps deciding deep reorgs.
-        let candidate_daa = self.headers_store.get_daa_score(candidate).unwrap_or_default();
-        let Some(dns_params) = self.dns_params_at(candidate_daa) else {
+        let Some(dns_params) = self.dns_params.as_ref() else {
             return DnsReorgOutcome::GateInactive;
         };
         let Ok(state) = self.dns_state_store.read().get() else {
@@ -10268,9 +10262,8 @@ impl VirtualStateProcessor {
     /// differs across nodes by their resolve batching — safe for admission (a policy disagreement
     /// keeps a tx out of a mempool, never out of a block's acceptance), disqualifying for
     /// validity. The consensus call site passes `None` and says why.
-    pub(super) fn dns_coinbase_settlement(&self, daa_score: u64) -> Option<DnsCoinbaseSettlement> {
-        // ADR-0126: past the retirement no coinbase waits on an overlay confirmation.
-        let dns_params = self.dns_params_at(daa_score)?;
+    pub(super) fn dns_coinbase_settlement(&self) -> Option<DnsCoinbaseSettlement> {
+        let dns_params = self.dns_params.as_ref()?;
         let long_maturity_daa = dns_params.coinbase_settlement_long_maturity_daa;
         if long_maturity_daa == 0 {
             return None;
@@ -10290,8 +10283,7 @@ impl VirtualStateProcessor {
     /// note on the reorg gate (§5-5) does not apply: this path is entered only in the dead-anchor
     /// state, which the cheap staleness check settles first on every healthy resolve.
     fn dns_stake_preferred_tip(&self, prev_sink: BlockHash, tips: &[BlockHash], finality_point: BlockHash) -> Option<BlockHash> {
-        // ADR-0126: past the retirement no stake prefers a tip.
-        let dns_params = self.dns_params_at(self.headers_store.get_daa_score(prev_sink).unwrap_or_default())?;
+        let dns_params = self.dns_params.as_ref()?;
         let mult = dns_params.stake_preference_max_work_deficit_multiplier;
         if mult == 0 || tips.len() < 2 {
             return None;
@@ -11002,7 +10994,7 @@ impl VirtualStateProcessor {
     }
 
     fn latest_ready_epoch_for_template_snapshot(&self, virtual_state: &VirtualState) -> Option<u64> {
-        let dns_params = self.dns_params_at(virtual_state.daa_score)?;
+        let dns_params = self.dns_params.as_ref()?;
         ready_epoch_from_tip_blue_score(
             virtual_state.ghostdag_data.blue_score,
             dns_params.attestation_epoch_length_blue_score,
@@ -11683,15 +11675,15 @@ impl VirtualStateProcessor {
         // mined from this template reproduces the coinbase byte-for-byte. `None`/0
         // on every current network (overlay dormant).
         // ADR-0018 §F staged rollout: None (Stage 1) / bootstrap (Stage 2) / full
-        // (Stage 3) selected by DAA, identically to the validation path.
-        // ADR-0126: past the retirement the carve is PALW's and there is no validator pool.
-        let carve = self.coinbase_carve_at(virtual_state.daa_score);
+        // (Stage 3) selected by DAA, identically to the validation path — and past ADR-0126's fence
+        // the full split lowered, through the one reader both paths call.
+        let carve = self.fee_split_at(virtual_state.daa_score);
         // **A template build is six PALW-state materializations, and `getBlockTemplate` is an
         // unauthenticated wRPC method miners poll** (mainnet audit H-1's sibling sweep). The five
         // reads below and the existence probe at the header assembly all ask about the SAME tip
         // row; through the shared materialization they cost one, and the answers cannot differ
         // from each other any more than they could before.
-        let validator_pool = carve.overlay_split().map_or(0, |fs| {
+        let validator_pool = carve.as_ref().map_or(0, |fs| {
             // The template computes the SAME set the validator will, from the same state it is
             // building on — a template whose pool disagreed with validation would build a coinbase
             // its own node then refuses.
@@ -11732,7 +11724,7 @@ impl VirtualStateProcessor {
         // mined from this template reproduces the validated coinbase byte-for-byte. Reads the sink's
         // committed reserve balance (= the template's selected parent). Inert below the v2 fence.
         let mut validator_reward_outputs = validator_reward_outputs;
-        if let Some(dns_params) = self.dns_params_at(virtual_state.daa_score) {
+        if let Some(dns_params) = self.dns_params.as_ref() {
             // MISAKA VLT §6 audit fee, from the unspent remainder of the §E validator pool. Placed
             // before the drip so both paths append in one order. Inert below the VLT fence.
             let (audit_outputs, _) = self.compute_audit_fee_outputs(
@@ -11827,7 +11819,7 @@ impl VirtualStateProcessor {
                 &virtual_state.mergeset_rewards,
                 &virtual_state.mergeset_non_daa,
                 &validator_reward_outputs,
-                carve,
+                carve.as_ref(),
                 (newly_included_stake, expected_stake),
                 palw_escrow_withheld,
                 &palw_unentitled_blues,
@@ -11903,8 +11895,7 @@ impl VirtualStateProcessor {
         // `overlay_commitment_root` byte-for-byte (construction == validation). Inert
         // (header unchanged) when the overlay is dormant. Appended after the EVM fields;
         // `with_overlay_commitment` re-finalizes over the full preimage.
-        // ADR-0126: past the retirement the overlay root is zero, as validation requires.
-        let header = if self.dns_params_at(virtual_state.daa_score).is_some() {
+        let header = if self.dns_params.is_some() {
             let overlay_root =
                 self.compute_overlay_snapshot(virtual_state.ghostdag_data.selected_parent, &template_bond_view).commitment_root();
             header.with_overlay_commitment(overlay_root)
@@ -12580,13 +12571,6 @@ impl VirtualStateProcessor {
         // Pinned by `the_pruning_point_witness_is_the_selected_chain_child_not_a_side_block`, which
         // fails against the heaviest-child rule with the attacker's planted root demanded.
         let verified_against = self.pruning_point_witness_child(pruning_point);
-        // ADR-0126: a witness past the retirement commits no overlay (its root is zero), and nothing
-        // after it reads one — so there is nothing to verify and nothing to install.
-        if let Some(child) = verified_against
-            && self.headers_store.get_daa_score(child).is_ok_and(|daa| self.validator_overlay_retired_at(daa))
-        {
-            return Ok(());
-        }
         if let Some(child) = verified_against {
             let committed = self.headers_store.get_header(child).map(|h| h.overlay_commitment_root).unwrap_or_default();
             if committed != got {
@@ -12727,10 +12711,6 @@ impl VirtualStateProcessor {
             return;
         }
         let pp_daa = self.headers_store.get_daa_score(pruning_point).unwrap();
-        // ADR-0126: a pruning point past the retirement has no overlay to serve.
-        if self.validator_overlay_retired_at(pp_daa) {
-            return;
-        }
         let view = ActiveBondView::from_records(self.bonds_as_of(pp_daa).into_iter().map(|r| (r.bond_outpoint, r)));
         let snapshot = self.compute_overlay_snapshot(pruning_point, &view);
         let mut batch = WriteBatch::default();

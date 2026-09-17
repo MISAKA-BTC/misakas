@@ -89,7 +89,9 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         "palw_share_growth_final" => params.palw_share_growth_final = Some(at),
         "palw_panel_economy" => params.palw_panel_economy = Some(at),
         "palw_work_priced_reward" => params.palw_work_priced_reward = Some(at),
-        "palw_validator_overlay_retirement" => params.palw_validator_overlay_retirement = Some(at),
+        "palw_overlay_carve" => {
+            companion(&mut params.palw_overlay_carve, name, "the validator share and the escrow carve", at, |f, at| f.activation = at)?
+        }
         "palw_execution_lane" => companion(&mut params.palw_execution_lane, name, "the lane's shape", at, |f, at| f.activation = at)?,
         widening if widening.starts_with("palw_execution_lane_widening_") => {
             let slot: usize = widening["palw_execution_lane_widening_".len()..]

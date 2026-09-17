@@ -44,8 +44,8 @@ pub(crate) struct Funding {
     /// retired in-node validator called it "a validator self-wedge", and the retired sidecar threaded
     /// an exclusion through bond, unbond and equivocate. The wallet, which wraps the SAME signing
     /// path a validator bonded with, did not (audit M1-3): the bond is typically the largest UTXO at
-    /// that address, and selection is largest-first. The overlay is retired, but bonds already on a
-    /// chain keep their lock, so the exclusion stays.
+    /// that address, and selection is largest-first. The overlay keeps running and consensus keeps
+    /// locking its bonds, so the exclusion stays.
     pub(crate) bonded: bool,
 }
 
@@ -139,11 +139,7 @@ impl NodeView {
 async fn locked_bond_outpoints(nv: &NodeView) -> Result<std::collections::HashSet<TransactionOutpoint>, CliError> {
     let mut out = std::collections::HashSet::new();
     let mut cursor: Option<String> = None;
-    // **ADR-0126: past the overlay's retirement no overlay bond is locked** — consensus reads the
-    // overlay as absent there, so the collateral is an ordinary output and the wallet must offer it.
-    // The PALW half below is not the overlay's and still applies.
-    let overlay_retired = nv.params.palw_validator_overlay_retirement_fence().is_some_and(|fence| fence.is_active(nv.virtual_daa));
-    while !overlay_retired {
+    loop {
         let resp = nv
             .client
             .get_stake_bonds(kaspa_rpc_core::GetStakeBondsRequest {

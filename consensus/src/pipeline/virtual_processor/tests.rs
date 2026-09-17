@@ -12762,12 +12762,14 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
             work: PalwBlockWorkV3::ReceiptSpend(&spend_a),
             execution_key: Default::default(),
             subsidy: 0,
+            escrow_carve: None,
         },
         PalwMergedWorkV1 {
             carrying_block: r2,
             work: PalwBlockWorkV3::ReceiptSpend(&spend_b),
             execution_key: Default::default(),
             subsidy: 0,
+            escrow_carve: None,
         },
     ];
     let fold_point = PalwBlockContextV2 { block: h64(0xF01D), daa_score: 7, blue_score: 6, subsidy: 0 };
@@ -13541,147 +13543,38 @@ async fn adr0125_a_widening_holds_for_whole_spans() {
     assert_eq!(ctx.consensus.get_sink(), template.block.header.hash);
 }
 
-// ---- ADR-0126: the validator overlay retires at a height --------------------------------------
+// ---- ADR-0126: the validator carve drops to a fifth -------------------------------------------
 
-/// **ADR-0126 through the pipeline.** On a network whose overlay is live from genesis (mainnet's
-/// production overlay: Stage-3 carve, v2 economics) with the retirement at DAA 12:
+/// **ADR-0126 through the pipeline.** A `ConsensusV2` chain over mainnet's production overlay —
+/// testnet-11's shape: the Stage-3 split from genesis with validators at 30 % and the worker base at
+/// 62 %, a bundle escrowing 620 ‰ — with `palw_overlay_carve` at DAA 9 = { 2,000 bps, 720 ‰ } and
+/// B-1's merged escrow live from genesis. The chain crosses the height on single blocks, with one
+/// two-block row whose merging block lands exactly on the height (so it pays two blocks from below)
+/// and one row past it, and every block inserting UTXO-valid is the template and the validator
+/// agreeing on its coinbase, on both sides. Then, for every chain block down to the first, against
+/// the PALW state it was validated on:
 ///
-/// * below the fence a merged block's miner is paid the overlay's worker share of its subsidy, the
-///   header commits the overlay, and the mempool admits a funded stake bond;
-/// * at and past it the miner is paid the whole subsidy (a hash network has no PALW carve to fall
-///   to), the overlay root is zero, the mempool refuses the same bond as a disabled subnetwork, a
-///   block carrying it is refused in context, and a block committing a non-zero overlay root is
-///   disqualified — while the chain keeps validating.
+/// * the split its coinbase carves with is lowered exactly from its own DAA — the validator pool,
+///   read back through the quality sub-pool the node persisted, is 20 % of what it merges from the
+///   height and 30 % below;
+/// * every attempt block's claim escrows 72 % of its subsidy from the height and 62 % below —
+///   resolved at the ATTEMPT block's DAA, for the selected parent (read from the state its own
+///   transition wrote) and for a merged block (the withhold the coinbase sized is the escrow the
+///   fold recorded);
+/// * the coinbase pays each merged block its worker base under the PAYING block's split less that
+///   escrow — so a block from below that is paid past the height keeps the tenth.
 #[tokio::test]
-async fn adr0126_the_validator_overlay_retires_at_a_height() {
-    use kaspa_consensus_core::api::args::TransactionValidationArgs;
-    use kaspa_consensus_core::config::params::ForkActivation;
+async fn adr0126_a_palw_chain_crosses_the_overlay_carve() {
+    use crate::model::stores::daa::DaaStoreReader;
+    use crate::model::stores::ghostdag::GhostdagStoreReader;
+    use crate::model::stores::headers::HeaderStoreReader;
+    use kaspa_consensus_core::config::params::{ForkActivation, PalwOverlayCarveV1};
     use kaspa_consensus_core::dns_finality::split_block_subsidy;
-    use kaspa_consensus_core::errors::{block::RuleError, tx::TxRuleError};
-    use kaspa_consensus_core::merkle::calc_hash_merkle_root;
-    use kaspa_consensus_core::tx::MutableTransaction;
-    const RETIRE: u64 = 12;
-    kaspa_core::log::try_init_logger("info");
-    let config = ConfigBuilder::new(MAINNET_PARAMS)
-        .skip_proof_of_work()
-        .edit_consensus_params(|p| {
-            p.max_block_parents = 4;
-            p.mergeset_size_limit = 10;
-            p.coinbase_maturity = 2;
-            p.palw_validator_overlay_retirement = Some(ForkActivation::new(RETIRE));
-        })
-        .build();
-    assert!(config.params.dns_params.as_ref().is_some_and(|d| d.dns_activation_daa_score == 0), "the overlay is live from genesis");
-    let mut ctx = TestContext::new(TestConsensus::new(&config));
-
-    let seed = [0x42u8; 32];
-    let validator = dns_harness::harness_validator(seed);
-    let k_payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&validator.pubkey).as_bytes();
-    let k_spk = p2pkh_mldsa87_spk(&k_payload);
-    let k_miner = MinerData::new(k_spk.clone(), vec![]);
-    let paid_to_k = |block: &Block| block.transactions[0].outputs.iter().find(|o| o.script_public_key == k_spk).map(|o| o.value);
-
-    // Below the fence: the overlay's carve, and the overlay committed.
-    let funding = ctx.mine_block(k_miner.clone(), vec![]).await;
-    let harvest = ctx.mine_block(new_miner_data(), vec![]).await;
-    assert!(harvest.header.daa_score < RETIRE);
-    let subsidy = ctx.consensus.services.coinbase_manager.calc_block_subsidy(funding.header.daa_score);
-    let split = config.params.dns_params.as_ref().unwrap().reward_fee_split(harvest.header.daa_score).expect("Stage 3");
-    let paid_below = paid_to_k(&harvest).expect("the merging block pays the funding block's miner");
-    assert_eq!(paid_below, split_block_subsidy(subsidy, split).worker_base_sompi, "below the fence: the overlay's worker share");
-    assert!(paid_below < subsidy);
-    assert_ne!(harvest.header.overlay_commitment_root, kaspa_hashes::ZERO_HASH64, "and the header commits the overlay");
-
-    // A funded stake bond, admitted below the fence.
-    for _ in 0..3 {
-        ctx.mine_block(new_miner_data(), vec![]).await;
-    }
-    let (index, output) = harvest.transactions[0]
-        .outputs
-        .iter()
-        .enumerate()
-        .find(|(_, o)| o.script_public_key == k_spk)
-        .map(|(i, o)| (i, o.clone()))
-        .unwrap();
-    let outpoint = TransactionOutpoint::new(harvest.transactions[0].id(), index as u32);
-    let storage_mass_parameter = ctx.consensus.params().storage_mass_parameter;
-    let (bond_tx, _, _) = dns_harness::funded_signed_bond_tx(
-        seed,
-        outpoint,
-        output.value,
-        harvest.header.daa_score,
-        output.value - 100_000,
-        0,
-        storage_mass_parameter,
-    );
-    assert!(ctx.consensus.get_virtual_daa_score() < RETIRE);
-    let mut admitted = MutableTransaction::from_tx(bond_tx.clone());
-    ctx.consensus
-        .validate_mempool_transaction(&mut admitted, &TransactionValidationArgs::new(None))
-        .expect("below the fence a stake bond is an ordinary overlay transaction");
-
-    // Cross the fence with blocks mined to K, then one more to pay the last of them.
-    let mut last_k = funding.clone();
-    while ctx.consensus.get_virtual_daa_score() <= RETIRE {
-        last_k = ctx.mine_block(k_miner.clone(), vec![]).await;
-    }
-    let payer = ctx.mine_block(new_miner_data(), vec![]).await;
-    assert!(payer.header.daa_score >= RETIRE && last_k.header.daa_score >= RETIRE - 1);
-    let subsidy = ctx.consensus.services.coinbase_manager.calc_block_subsidy(last_k.header.daa_score);
-    assert_eq!(paid_to_k(&payer), Some(subsidy), "past the fence nothing is carved for validators");
-    assert_eq!(payer.header.overlay_commitment_root, kaspa_hashes::ZERO_HASH64, "and the overlay commits nothing");
-
-    // The same bond is refused past the fence, by the mempool and in a block.
-    let mut refused = MutableTransaction::from_tx(bond_tx.clone());
-    match ctx.consensus.validate_mempool_transaction(&mut refused, &TransactionValidationArgs::new(None)) {
-        Err(TxRuleError::SubnetworksDisabled(_)) => {}
-        other => panic!("past the fence an overlay transaction must be a disabled subnetwork, got {other:?}"),
-    }
-    let mut carrying = ctx
-        .consensus
-        .build_block_template(new_miner_data(), Box::new(OnetimeTxSelector::new(Default::default())), TemplateBuildMode::Standard)
-        .unwrap()
-        .block;
-    carrying.transactions.push(bond_tx);
-    carrying.header.hash_merkle_root = calc_hash_merkle_root(carrying.transactions.iter());
-    carrying.header.timestamp = ctx.simulated_time + 1_000;
-    carrying.header.finalize();
-    match ctx.consensus.validate_and_insert_block(carrying.to_immutable()).virtual_state_task.await {
-        Err(RuleError::TxInContextFailed(_, TxRuleError::SubnetworksDisabled(_))) => {}
-        other => panic!("a block past the fence carrying an overlay transaction must be refused in context, got {other:?}"),
-    }
-
-    // A block past the fence that commits an overlay is disqualified from the chain.
-    let mut committing = ctx
-        .consensus
-        .build_block_template(new_miner_data(), Box::new(OnetimeTxSelector::new(Default::default())), TemplateBuildMode::Standard)
-        .unwrap()
-        .block;
-    committing.header.overlay_commitment_root = kaspa_hashes::Hash64::from_u64_word(0x0E);
-    committing.header.timestamp = ctx.simulated_time + 2_000;
-    committing.header.finalize();
-    let committing_hash = committing.header.hash;
-    let _ = ctx.consensus.validate_and_insert_block(committing.to_immutable()).virtual_state_task.await;
-    assert_eq!(ctx.consensus.block_status(committing_hash), BlockStatus::StatusDisqualifiedFromChain);
-
-    // And the chain goes on.
-    for _ in 0..3 {
-        ctx.mine_block(new_miner_data(), vec![]).await;
-    }
-    ctx.assert_valid_utxo_tip();
-}
-
-/// **ADR-0126 on a PALW network: past the retirement the coinbase carves PALW's worker share.** The
-/// ConsensusV2 fixture runs mainnet's production overlay underneath, exactly as testnet-11 does; with
-/// the retirement at DAA 3 the chain keeps producing and validating attempt blocks across the fence —
-/// the escrow withheld from each is the carve the coinbase now pays, so construction and validation
-/// agree — every header past the fence commits a zero overlay root, and no coinbase past it carries
-/// anything but PALW's own outputs.
-#[tokio::test]
-async fn adr0126_a_palw_chain_crosses_the_retirement() {
-    use kaspa_consensus_core::config::params::ForkActivation;
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
-    const RETIRE: u64 = 3;
+    use kaspa_consensus_core::palw_state_v2::{PalwBlockContextV2, revert_delta_v2};
+    const CARVE_AT: u64 = 9;
+    let validator_bps_at = |daa: u64| if daa >= CARVE_AT { 2_000u128 } else { 3_000 };
+    let carve_permille_at = |daa: u64| if daa >= CARVE_AT { 720u128 } else { 620 };
     let catalog = palw_v2_test_catalog();
     let bundle = palw_v2_test_bundle_funded_for(&catalog, 16);
     let config = ConfigBuilder::new(MAINNET_PARAMS)
@@ -13689,39 +13582,137 @@ async fn adr0126_a_palw_chain_crosses_the_retirement() {
         .edit_consensus_params(|p| {
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
             *p = p.clone().with_palw_v2_cadence();
-            p.palw_validator_overlay_retirement = Some(ForkActivation::new(RETIRE));
+            p.palw_audit_2026_09_11_deep = Some(ForkActivation::always());
+            p.palw_overlay_carve = Some(PalwOverlayCarveV1 {
+                activation: ForkActivation::new(CARVE_AT),
+                subsidy_validator_bps: 2_000,
+                worker_carve_permille: 720,
+            });
         })
         .build();
+    config.params.validate_palw_v2().expect("the carve fits the overlay it lowers");
+    let dns = config.params.dns_params.clone().expect("the fixture runs mainnet's overlay");
+    assert_eq!(dns.reward_params.fee_split.subsidy_validator_bps, 3_000, "validators take 30 % below the height");
+    assert_eq!(bundle.state.worker_carve_permille(), 620, "and a claim escrows 62 %");
+    assert_eq!(dns.pos_v2_activation_daa_score, 0, "the quality sub-pool is persisted from genesis, so the pool can be read back");
+
     let mut ctx = TestContext::new(TestConsensus::new(&config));
-    for _ in 0..10 {
+    let vp = ctx.consensus.virtual_processor().clone();
+    while vp.headers_store.get_daa_score(ctx.consensus.get_sink()).unwrap() + 3 < CARVE_AT {
         ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
     }
-    let vp = ctx.consensus.virtual_processor().clone();
-    let mut crossed = 0;
-    let mut block = ctx.consensus.get_sink();
-    while block != config.params.genesis.hash {
-        let header = vp.headers_store.get_header(block).unwrap();
-        if header.daa_score >= RETIRE {
-            crossed += 1;
-            assert_eq!(
-                header.overlay_commitment_root,
-                kaspa_hashes::ZERO_HASH64,
-                "block at DAA {} commits no overlay",
-                header.daa_score
-            );
-        } else {
-            assert_ne!(
-                header.overlay_commitment_root,
-                kaspa_hashes::ZERO_HASH64,
-                "block at DAA {} commits the overlay",
-                header.daa_score
-            );
-        }
-        block = {
-            use crate::model::stores::ghostdag::GhostdagStoreReader;
-            vp.ghostdag_store.get_selected_parent(block).unwrap()
-        };
+    ctx.build_block_template_row(0..2).validate_and_insert_row().await.assert_valid_utxo_tip();
+    assert!(
+        ctx.current_tips.iter().all(|block| vp.headers_store.get_daa_score(*block).unwrap() == CARVE_AT - 2),
+        "the pair sits below the height, and the block that merges both lands on it"
+    );
+    for width in [1, 1, 1, 2, 1, 1] {
+        ctx.build_block_template_row(0..width).validate_and_insert_row().await.assert_valid_utxo_tip();
     }
-    assert!(crossed >= 6, "the chain produced past the fence ({crossed} chain blocks)");
-    assert_eq!(ctx.consensus.block_status(ctx.consensus.get_sink()), BlockStatus::StatusUTXOValid);
+
+    let genesis = config.params.genesis.hash;
+    let sink = ctx.consensus.get_sink();
+    let (tip, mut state_after) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    assert_eq!(tip, sink, "the walk left the tip at the sink");
+    let (mut below, mut at_height, mut past, mut straddles, mut merged_below, mut merged_past) = (0, 0, 0, 0, 0, 0);
+    let mut block = sink;
+    loop {
+        let header = vp.headers_store.get_header(block).unwrap();
+        let ghostdag = vp.ghostdag_store.get_data(block).unwrap();
+        // The first block merges genesis, which pays and escrows nothing: the walk ends above it.
+        if ghostdag.selected_parent == genesis {
+            break;
+        }
+        let non_daa = vp.daa_excluded_store.get_mergeset_non_daa(block).unwrap();
+        let state_before = {
+            let (_, delta) = vp.palw_state_v2_store.read().delta_of(block).expect("every chain block has a delta");
+            revert_delta_v2(&state_after, &delta, &bundle.state).expect("the delta reverts")
+        };
+        let point = PalwBlockContextV2 {
+            block,
+            daa_score: header.daa_score,
+            blue_score: header.blue_score,
+            subsidy: vp.coinbase_manager.calc_block_subsidy(header.daa_score),
+        };
+        match header.daa_score.cmp(&CARVE_AT) {
+            std::cmp::Ordering::Less => below += 1,
+            std::cmp::Ordering::Equal => at_height += 1,
+            std::cmp::Ordering::Greater => past += 1,
+        }
+
+        // The one split, at this block's own DAA.
+        let split = vp.fee_split_at(header.daa_score).expect("Stage 3 from genesis");
+        assert_eq!(split.subsidy_validator_bps as u128, validator_bps_at(header.daa_score), "block at DAA {}", header.daa_score);
+
+        // The escrows its coinbase withholds for the merged blocks it did not select, sized from the
+        // record its fold escrowed from.
+        let merged_withheld = vp.palw_v2_merged_escrow_withheld(&state_before, &ghostdag, &non_daa, &point);
+        for (merged, carve) in &merged_withheld {
+            let merged_daa = vp.headers_store.get_daa_score(*merged).unwrap();
+            let subsidy = vp.coinbase_manager.calc_block_subsidy(merged_daa) as u128;
+            assert_eq!(*carve as u128, subsidy * carve_permille_at(merged_daa) / 1_000, "merged block at DAA {merged_daa}");
+            assert_eq!(
+                vp.palw_v2_escrow_withheld_at(&state_after, *merged),
+                *carve,
+                "the carve withheld for the merged block at DAA {merged_daa} is the carve its claim escrowed"
+            );
+            if merged_daa >= CARVE_AT {
+                merged_past += 1;
+            } else {
+                merged_below += 1;
+            }
+        }
+
+        // What the coinbase paid each merged block, and what it carved for the validator pool.
+        let (mut expected_paid, mut pool) = (0u64, 0u64);
+        for merged in ghostdag.mergeset_blues.iter().chain(ghostdag.mergeset_reds.iter()).filter(|m| !non_daa.contains(*m)) {
+            let merged_daa = vp.headers_store.get_daa_score(*merged).unwrap();
+            let subsidy = vp.coinbase_manager.calc_block_subsidy(merged_daa);
+            let parts = split_block_subsidy(subsidy, &split);
+            assert_eq!(parts.validator_sompi as u128, subsidy as u128 * validator_bps_at(header.daa_score) / 10_000);
+            let escrow = if *merged == ghostdag.selected_parent {
+                // The selected parent's claim, from the state its own transition wrote.
+                let escrow = vp.palw_v2_escrow_withheld_at(&state_before, *merged);
+                assert_eq!(
+                    escrow as u128,
+                    subsidy as u128 * carve_permille_at(merged_daa) / 1_000,
+                    "the selected parent at DAA {merged_daa} escrowed at its own DAA's carve"
+                );
+                escrow
+            } else {
+                merged_withheld.get(merged).copied().unwrap_or(0)
+            };
+            let kept = parts.worker_base_sompi - escrow;
+            if merged_daa < CARVE_AT && header.daa_score >= CARVE_AT {
+                straddles += 1;
+                assert!(
+                    kept.abs_diff(subsidy / 10) <= 3,
+                    "a block from DAA {merged_daa} paid at DAA {} keeps the tenth: {kept} of {subsidy}",
+                    header.daa_score
+                );
+            } else {
+                assert!(kept <= 3, "a block paid under its own side's split escrows its whole worker base: {kept} kept");
+            }
+            expected_paid += kept;
+            pool += parts.validator_sompi;
+        }
+        let paid: u64 = ctx.consensus.get_block(block).unwrap().transactions[0].outputs.iter().map(|o| o.value).sum();
+        assert_eq!(paid, expected_paid, "the coinbase at DAA {} pays each merged block its base less its escrow", header.daa_score);
+        let quality = pool - pool * dns.reward_params.validator_participation_bps as u64 / 10_000;
+        assert_eq!(
+            vp.block_quality_pool_store.get(block).unwrap_or(0),
+            quality,
+            "the validator pool the block at DAA {} carved is its split's share of what it merged",
+            header.daa_score
+        );
+
+        state_after = state_before;
+        block = ghostdag.selected_parent;
+    }
+    assert!(
+        below >= 4 && at_height == 1 && past >= 5,
+        "the chain ran on both sides of the height ({below} below, {at_height} at, {past} past)"
+    );
+    assert_eq!(straddles, 2, "the block on the height merged the pair from below, and only it straddles");
+    assert!(merged_below >= 1 && merged_past >= 1, "a merged escrow on each side ({merged_below} below, {merged_past} past)");
 }

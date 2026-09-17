@@ -486,6 +486,77 @@ impl PalwExecutionLaneV1 {
     }
 }
 
+/// **ADR-0126: the validator carve drops to a fifth, and the tenth it gives up is escrowed for PALW.**
+///
+/// Past `activation`, wherever the overlay's FULL split is in force ([`DnsParams::reward_fee_split`]
+/// at the block's DAA returns `reward_params.fee_split`), the split's `subsidy_validator_bps` is
+/// this fence's. The worker base — the split's primary — takes the remainder, as
+/// [`crate::dns_finality::split_block_subsidy`] always has it, so the four parts still sum to the
+/// subsidy exactly. The bootstrap split and both fee splits are untouched, and so is every block
+/// below the height. [`palw_overlay_fee_split_at_v1`] is the one reader of the lowered split.
+///
+/// A PALW claim escrows `⌊subsidy × worker_carve_permille / 1000⌋` of the block that carried its
+/// attempt, and the coinbase withholds exactly that for the block — both resolved at **the attempt
+/// block's own DAA score**, so the carve the fold records and the carve the coinbase withholds stay
+/// one number (ADR-0042 Decision 10, B-1).
+///
+/// The two numbers are companion values: hashed into `consensus_params_id`, reported beside the
+/// height in `consensus_schedule_id`, and invisible to the fence visitor, like the execution lane's
+/// shape. Answered only on a `ConsensusV2` network that runs an overlay
+/// ([`Params::palw_overlay_carve_fence`]); [`Params::validate_palw_v2`] refuses one that cannot fit
+/// (Decision 4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwOverlayCarveV1 {
+    /// When the lowered split and the grown escrow take effect.
+    pub activation: ForkActivation,
+    /// The validator pool's share of a block subsidy past the fence, in basis points. At most the
+    /// network's full-split share: the fence only lowers it.
+    pub subsidy_validator_bps: u16,
+    /// A claim's escrow past the fence, in permille of the subsidy of the block that carried its
+    /// attempt. At most the worker base the lowered split leaves.
+    pub worker_carve_permille: u16,
+}
+
+impl PalwOverlayCarveV1 {
+    /// `split` with this fence's validator share. The worker base is the primary and is
+    /// documentary — [`crate::dns_finality::split_block_subsidy`] hands it the remainder whatever
+    /// it says — so it is restated as that remainder, the number `validate_palw_v2` fits the carve
+    /// against.
+    pub fn lowered(&self, split: &FeeSplitParams) -> FeeSplitParams {
+        FeeSplitParams {
+            subsidy_worker_base_bps: 10_000u16
+                .saturating_sub(split.subsidy_worker_inclusion_bps)
+                .saturating_sub(self.subsidy_validator_bps)
+                .saturating_sub(split.subsidy_service_bps),
+            subsidy_validator_bps: self.subsidy_validator_bps,
+            ..split.clone()
+        }
+    }
+
+    /// The escrow carve as the reward module's checked type. `None` only for a permille past the
+    /// whole subsidy, which `validate_palw_v2` refuses before a node starts.
+    pub fn escrow_carve(&self) -> Option<crate::palw_reward_v2::PalwRewardParamsV2> {
+        crate::palw_reward_v2::PalwRewardParamsV2::new(self.worker_carve_permille).ok()
+    }
+}
+
+/// **The overlay's reward split at `daa_score`** (ADR-0126 Decision 2): `reward_fee_split`, with the
+/// full split lowered where `carve` is active. `None` wherever `reward_fee_split` is `None` (below
+/// the overlay's activation). Every reader of the split — the coinbase carve and
+/// `coinbase_validator_pool` on the build and the validation path, and through the pool the quality
+/// sub-pool and the audit fee — reads this, so a template and the block it becomes cannot disagree
+/// about it (SA-3).
+pub fn palw_overlay_fee_split_at_v1(dns: &DnsParams, carve: Option<PalwOverlayCarveV1>, daa_score: u64) -> Option<FeeSplitParams> {
+    let split = dns.reward_fee_split(daa_score)?;
+    // `reward_fee_split` answers with a reference into `dns`, so identity with the full split is
+    // exactly "Stage 3 is in force at this score" — without a second copy of the staging rule.
+    let full = std::ptr::eq(split, &dns.reward_params.fee_split);
+    Some(match carve.filter(|carve| full && carve.activation.is_active(daa_score)) {
+        Some(carve) => carve.lowered(split),
+        None => split.clone(),
+    })
+}
+
 /// **ADR-0066 Decision 3's parameter (finding F2), closed by ADR-0068 Phase 1: the attempt lane's
 /// fork-choice work leaves `calc_work(header.bits)`.**
 ///
@@ -1302,14 +1373,10 @@ pub struct Params {
     /// with it. `None` on every shipped preset.
     pub palw_execution_lane: Option<PalwExecutionLaneV1>,
 
-    /// **ADR-0126: the validator overlay retires at a height.** Past this fence the DNS-finality /
-    /// VLT overlay stops being consensus: no block pays validators (the coinbase carves the PALW
-    /// worker share and pays every fee to its producer, and the validator and inclusion shares are
-    /// not minted), no block may carry an overlay transaction, the overlay commitment root is zero,
-    /// no bond is locked or slashed by the overlay, and fork choice consults no stake. Below it every
-    /// rule is byte-identical, so a chain that ran the overlay keeps validating its own history.
-    /// Resolved at each block's own DAA score. `None` on every shipped preset.
-    pub palw_validator_overlay_retirement: Option<ForkActivation>,
+    /// **ADR-0126: the validator carve drops to a fifth** — see [`PalwOverlayCarveV1`]. The split is
+    /// resolved at each block's own DAA score, the escrow at the DAA score of the block that carried
+    /// the attempt. `None` on every shipped preset.
+    pub palw_overlay_carve: Option<PalwOverlayCarveV1>,
 
     /// **ADR-0044 Decision 9's two advertised caps, enforced** (mainnet audit 2026-09-06, L-2).
     /// `None` on every shipped preset, so the behaviour is byte-identical to not having the field.
@@ -2407,6 +2474,53 @@ impl Params {
                     "palw_share_growth_final is armed where claims retire within an epoch (claim_retirement_daa <= \
                      epoch_length): a claim finalized early in the closed epoch would be gone before the boundary counts \
                      it, and the class would be refused growth it earned (ADR-0107)",
+                ));
+            }
+        }
+        // **ADR-0126 Decision 4: the overlay carve lowers a split this network runs, and the escrow it
+        // grows must fit the worker base that lower split leaves** — the invariant the bundle's own
+        // carve is refused on below, at the fence's numbers. A fence that hashes and cannot fire, or
+        // fires into an escrow the block that earned it cannot fund, is refused before a peer is
+        // dialed.
+        if let Some(carve) = self.palw_overlay_carve
+            && carve.activation != ForkActivation::never()
+        {
+            let Some(dns) = self.dns_params.as_ref() else {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_overlay_carve is armed on a network that runs no validator overlay: the split it lowers is the \
+                     overlay's (ADR-0126 Decision 4)",
+                ));
+            };
+            if !matches!(self.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_)) {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_overlay_carve is armed on a network that is not ConsensusV2: the escrow it grows is a V2 claim's \
+                     (ADR-0126 Decision 4)",
+                ));
+            }
+            if carve.activation.daa_score() < dns.full_reward_split_daa_score {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_overlay_carve activates below the overlay's full reward split: it lowers the full split, and below \
+                     full_reward_split_daa_score the bootstrap split is in force (ADR-0126 Decision 4)",
+                ));
+            }
+            let full = &dns.reward_params.fee_split;
+            if carve.subsidy_validator_bps > full.subsidy_validator_bps {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_overlay_carve raises the validator share above the network's full split: the fence only lowers it \
+                     (ADR-0126 Decision 4)",
+                ));
+            }
+            if carve.worker_carve_permille > 1000 {
+                return Err(PalwModeV2Error::Invalid("palw_overlay_carve escrows more than the whole subsidy (ADR-0126 Decision 4)"));
+            }
+            let worker_base_bps = 10_000u32
+                .saturating_sub(u32::from(full.subsidy_worker_inclusion_bps))
+                .saturating_sub(u32::from(carve.subsidy_validator_bps))
+                .saturating_sub(u32::from(full.subsidy_service_bps));
+            if u32::from(carve.worker_carve_permille) * 10 > worker_base_bps {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_overlay_carve's worker carve exceeds the worker base its lowered split leaves: the escrow could not \
+                     be funded from the block it is carved from (ADR-0126 Decision 4)",
                 ));
             }
         }
@@ -3568,8 +3682,10 @@ impl Params {
                 }
             }
         }
-        if self.palw_validator_overlay_retirement == Some(ForkActivation::never()) {
-            self.palw_validator_overlay_retirement = None;
+        // ADR-0126, the lane's shape again: the whole option collapses, so the two numbers beside a
+        // scheduled height leave the identity with it (the schedule id reports them).
+        if self.palw_overlay_carve.is_some_and(|carve| carve.activation == ForkActivation::never()) {
+            self.palw_overlay_carve = None;
         }
         if self.palw_fp_ruleset_caps == Some(ForkActivation::never()) {
             self.palw_fp_ruleset_caps = None;
@@ -4049,10 +4165,13 @@ impl Params {
         self.palw_execution_lane_fence().filter(|lane| lane.activation.is_active(daa_score))
     }
 
-    /// ADR-0126: the validator overlay's retirement, where the network runs an overlay at all — a
-    /// retirement of nothing is nothing.
-    pub fn palw_validator_overlay_retirement_fence(&self) -> Option<ForkActivation> {
-        self.dns_params.as_ref().and(self.palw_validator_overlay_retirement)
+    /// ADR-0126: the overlay carve where it can mean something — a `ConsensusV2` network (the escrow
+    /// it grows is a V2 claim's) that runs an overlay (the split it lowers is the overlay's).
+    pub fn palw_overlay_carve_fence(&self) -> Option<PalwOverlayCarveV1> {
+        match (&self.palw_consensus_mode, &self.dns_params, self.palw_overlay_carve) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(_), Some(carve)) => Some(carve),
+            _ => None,
+        }
     }
 
     /// **ADR-0124's two numbers the draw needs past the panel-economy fence**, from the bundle's
@@ -4267,7 +4386,7 @@ impl Params {
             palw_panel_economy,
             palw_work_priced_reward,
             palw_execution_lane,
-            palw_validator_overlay_retirement,
+            palw_overlay_carve,
             palw_fp_ruleset_caps,
             palw_model_market,
             palw_model_lines,
@@ -4368,7 +4487,7 @@ impl Params {
                 "palw_execution_lane_widening_9",
                 palw_execution_lane.and_then(|lane| lane.widenings[8].is_used().then_some(lane.widenings[8].activation)),
             ),
-            ("palw_validator_overlay_retirement", *palw_validator_overlay_retirement),
+            ("palw_overlay_carve", palw_overlay_carve.map(|carve| carve.activation)),
             ("palw_fp_ruleset_caps", *palw_fp_ruleset_caps),
             ("palw_model_market", *palw_model_market),
             ("palw_model_lines", *palw_model_lines),
@@ -4660,9 +4779,13 @@ impl Params {
                 h.write(stage.activation.daa_score().to_le_bytes());
             }
         }
-        if let Some(activation) = self.palw_validator_overlay_retirement {
-            h.write(b"palw_validator_overlay_retirement");
-            h.write(activation.daa_score().to_le_bytes());
+        // ADR-0126: the height, and beside it the two numbers it moves. Some-only, like its siblings;
+        // reported here and never gated, for the SA-4 reason the lane's shape is.
+        if let Some(carve) = self.palw_overlay_carve {
+            h.write(b"palw_overlay_carve");
+            h.write(carve.activation.daa_score().to_le_bytes());
+            h.write(carve.subsidy_validator_bps.to_le_bytes());
+            h.write(carve.worker_carve_permille.to_le_bytes());
         }
         if let Some(activation) = self.palw_fp_ruleset_caps {
             h.write(b"palw_fp_ruleset_caps");
@@ -4807,7 +4930,7 @@ impl Params {
             palw_panel_economy,
             palw_work_priced_reward,
             palw_execution_lane,
-            palw_validator_overlay_retirement,
+            palw_overlay_carve,
             palw_fp_ruleset_caps,
             palw_heartbeat_transparent,
             palw_share_growth_final,
@@ -5187,8 +5310,9 @@ impl Params {
                 fork(&mut stage.activation, visit);
             }
         }
-        if let Some(activation) = palw_validator_overlay_retirement.as_mut() {
-            fork(activation, visit);
+        // ADR-0126: the height only — the validator share and the escrow carve are values beside it.
+        if let Some(carve) = palw_overlay_carve.as_mut() {
+            fork(&mut carve.activation, visit);
         }
         if let Some(activation) = palw_fp_ruleset_caps.as_mut() {
             fork(activation, visit);
@@ -5435,7 +5559,7 @@ impl Params {
             palw_panel_economy,
             palw_work_priced_reward,
             palw_execution_lane,
-            palw_validator_overlay_retirement,
+            palw_overlay_carve,
             palw_fp_ruleset_caps,
             palw_heartbeat_transparent,
             palw_share_growth_final,
@@ -5870,11 +5994,6 @@ impl Params {
         }
         // ADR-0125: Some-only, so every preset that leaves the lane closed fingerprints exactly as a
         // build without the field.
-        // ADR-0126: Some-only, like its siblings.
-        if let Some(activation) = palw_validator_overlay_retirement {
-            h.write(b"palw_validator_overlay_retirement");
-            h.write(activation.daa_score().to_le_bytes());
-        }
         if let Some(lane) = palw_execution_lane {
             h.write(b"palw_execution_lane/v1");
             h.write(lane.activation.daa_score().to_le_bytes());
@@ -5887,6 +6006,14 @@ impl Params {
                 h.write(stage.activation.daa_score().to_le_bytes());
                 h.write(stage.permits_per_round.to_le_bytes());
             }
+        }
+        // ADR-0126: Some-only, so every preset that leaves the carve unset fingerprints exactly as a
+        // build without the field; the two numbers ride with the height.
+        if let Some(carve) = palw_overlay_carve {
+            h.write(b"palw_overlay_carve/v1");
+            h.write(carve.activation.daa_score().to_le_bytes());
+            h.write(carve.subsidy_validator_bps.to_le_bytes());
+            h.write(carve.worker_carve_permille.to_le_bytes());
         }
         if let Some(activation) = palw_fp_ruleset_caps {
             h.write(b"palw_fp_ruleset_caps");
@@ -6237,7 +6364,7 @@ impl Params {
             palw_panel_economy: self.palw_panel_economy,
             palw_work_priced_reward: self.palw_work_priced_reward,
             palw_execution_lane: self.palw_execution_lane,
-            palw_validator_overlay_retirement: self.palw_validator_overlay_retirement,
+            palw_overlay_carve: self.palw_overlay_carve,
             palw_fp_ruleset_caps: self.palw_fp_ruleset_caps,
             palw_heartbeat_transparent: self.palw_heartbeat_transparent,
             palw_share_growth_final: self.palw_share_growth_final,
@@ -7172,7 +7299,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_panel_economy: None,
     palw_work_priced_reward: None,
     palw_execution_lane: None,
-    palw_validator_overlay_retirement: None,
+    palw_overlay_carve: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
@@ -7357,7 +7484,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_panel_economy: None,
     palw_work_priced_reward: None,
     palw_execution_lane: None,
-    palw_validator_overlay_retirement: None,
+    palw_overlay_carve: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
@@ -7524,7 +7651,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_panel_economy: None,
     palw_work_priced_reward: None,
     palw_execution_lane: None,
-    palw_validator_overlay_retirement: None,
+    palw_overlay_carve: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
@@ -11995,7 +12122,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_panel_economy: None,
     palw_work_priced_reward: None,
     palw_execution_lane: None,
-    palw_validator_overlay_retirement: None,
+    palw_overlay_carve: None,
     palw_fp_ruleset_caps: None,
     // ADR-0105: dormant on every shipped preset (see the field's doc).
     palw_heartbeat_transparent: None,
@@ -18327,5 +18454,227 @@ mod palw_execution_lane_stage_tests {
             none.palw_fences_v1().iter().any(|(name, fence)| *name == "palw_execution_lane_widening_1" && fence.is_none()),
             "an unused slot names no height"
         );
+    }
+}
+
+/// **ADR-0126: the validator carve drops to a fifth.** The split one reader resolves, testnet-11's
+/// own numbers through it, the four refusals and the fence's place in the three ids.
+#[cfg(test)]
+mod palw_overlay_carve_tests {
+    use super::*;
+    use crate::dns_finality::split_block_subsidy;
+    use crate::palw_reward_v2::{PalwRewardParamsV2, palw_reward_carve_v2};
+
+    /// testnet-11's block: `YEAR1_PER_BLOCK_TWO_MINUTE`, 4,445.62 MSK.
+    const T11_SUBSIDY: u64 = 444_562_014_000;
+    const T11_HEIGHT: u64 = 7_001;
+
+    fn t11_carve() -> PalwOverlayCarveV1 {
+        PalwOverlayCarveV1 { activation: ForkActivation::new(T11_HEIGHT), subsidy_validator_bps: 2_000, worker_carve_permille: 720 }
+    }
+
+    fn armed(carve: PalwOverlayCarveV1) -> Params {
+        let mut params = palw_rc_shipped_params();
+        params.palw_overlay_carve = Some(carve);
+        params
+    }
+
+    fn refusal(params: &Params) -> String {
+        match params.validate_palw_v2() {
+            Err(why) => why.to_string(),
+            Ok(()) => panic!("expected validate_palw_v2 to refuse {:?}", params.palw_overlay_carve),
+        }
+    }
+
+    /// The four parts of one subsidy under `split`: (worker base, inclusion, validator, service).
+    fn parts(subsidy: u64, split: &FeeSplitParams) -> (u64, u64, u64, u64) {
+        let s = split_block_subsidy(subsidy, split);
+        (s.worker_base_sompi, s.worker_inclusion_sompi, s.validator_sompi, s.service_sompi)
+    }
+
+    /// **Below the height the split is the network's; from it, the validator pool is a fifth and the
+    /// worker base takes the tenth — on testnet-11's block, to the sompi, summing to the subsidy.**
+    /// The escrow the tenth funds is 72 % of the block, 3,200.85 MSK, up from the 2,756.28 MSK the
+    /// bundle's own 620 ‰ escrows; both are the whole worker base, as they are below.
+    #[test]
+    fn the_split_is_lowered_from_the_height_and_still_sums_to_the_subsidy() {
+        let t11 = palw_rc_shipped_params();
+        let dns = t11.dns_params.clone().expect("testnet-11 runs the overlay");
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &t11.palw_consensus_mode else {
+            panic!("testnet-11 is ConsensusV2")
+        };
+        let full = dns.reward_params.fee_split.clone();
+        assert_eq!(
+            (full.subsidy_worker_base_bps, full.subsidy_worker_inclusion_bps, full.subsidy_validator_bps, full.subsidy_service_bps),
+            (6_200, 800, 3_000, 0),
+            "the fixture is testnet-11's full split"
+        );
+        assert_eq!(dns.full_reward_split_daa_score, 0, "and it is in force from genesis");
+        assert_eq!(bundle.state.worker_carve_permille(), 620, "and its bundle escrows 62 %");
+        let carve = t11_carve();
+        let at = |daa: u64| palw_overlay_fee_split_at_v1(&dns, Some(carve), daa).expect("Stage 3 from genesis");
+
+        // Below the height: the network's split, byte for byte.
+        for daa in [0, 1, T11_HEIGHT - 1] {
+            assert_eq!(at(daa), full, "DAA {daa} is below the height");
+        }
+        assert_eq!(parts(T11_SUBSIDY, &full), (275_628_448_680, 35_564_961_120, 133_368_604_200, 0));
+
+        // At and past it: validator 20 %, worker base 72 %, inclusion and service and both fee splits untouched.
+        for daa in [T11_HEIGHT, T11_HEIGHT + 1, u64::MAX] {
+            let lowered = at(daa);
+            assert_eq!(lowered.subsidy_validator_bps, 2_000, "DAA {daa}: the validator share is the fence's");
+            assert_eq!(lowered.subsidy_worker_base_bps, 7_200, "DAA {daa}: the worker base is the remainder");
+            assert_eq!(
+                FeeSplitParams {
+                    subsidy_worker_base_bps: full.subsidy_worker_base_bps,
+                    subsidy_validator_bps: full.subsidy_validator_bps,
+                    ..lowered.clone()
+                },
+                full,
+                "DAA {daa}: nothing but the subsidy's validator share and its primary moves"
+            );
+            assert_eq!(parts(T11_SUBSIDY, &lowered), (320_084_650_080, 35_564_961_120, 88_912_402_800, 0));
+        }
+
+        // The escrow: 72 % of the block past the height, 62 % below — each the whole worker base.
+        let past = palw_reward_carve_v2(T11_SUBSIDY, &carve.escrow_carve().expect("720 is a legal permille")).worker;
+        let below = palw_reward_carve_v2(T11_SUBSIDY, &PalwRewardParamsV2::new(bundle.state.worker_carve_permille()).unwrap()).worker;
+        assert_eq!((past, below), (320_084_650_080, 275_628_448_680), "3,200.85 MSK from the height, 2,756.28 MSK below it");
+        assert_eq!(past - below, 44_456_201_400, "the tenth the validators gave up, escrowed");
+        assert_eq!(past, parts(T11_SUBSIDY, &at(T11_HEIGHT)).0, "past the height the escrow is the whole worker base");
+        assert_eq!(below, parts(T11_SUBSIDY, &full).0, "as it is below");
+
+        // Every subsidy sums exactly under the lowered split, and the escrow always fits its base.
+        for subsidy in [0, 1, 7, 9_999, 10_001, 370_468_345, T11_SUBSIDY, u64::MAX / 3, u64::MAX] {
+            let (base, inclusion, validator, service) = parts(subsidy, &at(T11_HEIGHT));
+            assert_eq!(base as u128 + inclusion as u128 + validator as u128 + service as u128, subsidy as u128, "subsidy {subsidy}");
+            assert!(palw_reward_carve_v2(subsidy, &carve.escrow_carve().unwrap()).worker <= base, "subsidy {subsidy}: the carve fits");
+        }
+
+        // No fence: the network's split at every height.
+        for daa in [0, T11_HEIGHT, u64::MAX] {
+            assert_eq!(palw_overlay_fee_split_at_v1(&dns, None, daa), Some(full.clone()));
+        }
+
+        // Only the FULL split is lowered: below the overlay there is no split, and the bootstrap
+        // split is never touched, even by a fence that is active there.
+        let mut staged = dns.clone();
+        staged.dns_activation_daa_score = 10;
+        staged.full_reward_split_daa_score = 8_000;
+        let from_genesis = PalwOverlayCarveV1 { activation: ForkActivation::always(), ..carve };
+        assert_eq!(palw_overlay_fee_split_at_v1(&staged, Some(from_genesis), 9), None, "Stage 1: no split to lower");
+        assert_eq!(
+            palw_overlay_fee_split_at_v1(&staged, Some(from_genesis), 7_999),
+            Some(staged.reward_params.fee_split_bootstrap.clone()),
+            "Stage 2: the bootstrap split is never lowered"
+        );
+        assert_eq!(palw_overlay_fee_split_at_v1(&staged, Some(from_genesis), 8_000).unwrap().subsidy_validator_bps, 2_000, "Stage 3");
+    }
+
+    /// **Decision 4: refused at start** — a fence without an overlay or a V2 bundle, below the full
+    /// split, raising the validator share, past the whole subsidy, or wider than the worker base its
+    /// lowered split leaves. The exact fit is accepted, and `never()` is absence everywhere.
+    #[test]
+    fn an_overlay_carve_that_cannot_fit_refuses_to_start() {
+        armed(t11_carve()).validate_palw_v2().expect("testnet-11's carve fits exactly: 720 ‰ into a 7,200 bps base");
+        armed(PalwOverlayCarveV1 { worker_carve_permille: 620, ..t11_carve() })
+            .validate_palw_v2()
+            .expect("a carve below the base fits too");
+        armed(PalwOverlayCarveV1 { subsidy_validator_bps: 3_000, worker_carve_permille: 620, ..t11_carve() })
+            .validate_palw_v2()
+            .expect("the network's own share is not a raise");
+
+        // No overlay.
+        let mut no_overlay = armed(t11_carve());
+        no_overlay.dns_params = None;
+        assert!(refusal(&no_overlay).contains("runs no validator overlay"), "{}", refusal(&no_overlay));
+        assert_eq!(no_overlay.palw_overlay_carve_fence(), None, "and nothing would answer it");
+
+        // No V2 bundle: mainnet's hash lineage runs the overlay and no PALW claims.
+        let mut hash = MAINNET_PARAMS.clone();
+        assert!(
+            hash.dns_params.is_some() && !matches!(hash.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_))
+        );
+        hash.validate_palw_v2().expect("the unarmed preset starts");
+        hash.palw_overlay_carve = Some(t11_carve());
+        assert!(refusal(&hash).contains("not ConsensusV2"), "{}", refusal(&hash));
+        assert_eq!(hash.palw_overlay_carve_fence(), None, "and nothing would answer it");
+
+        // Below the full split.
+        let mut staged = armed(PalwOverlayCarveV1 { activation: ForkActivation::new(4_999), ..t11_carve() });
+        staged.dns_params.as_mut().unwrap().full_reward_split_daa_score = 5_000;
+        assert!(refusal(&staged).contains("below the overlay's full reward split"), "{}", refusal(&staged));
+
+        // A raise.
+        let raised = armed(PalwOverlayCarveV1 { subsidy_validator_bps: 3_001, worker_carve_permille: 600, ..t11_carve() });
+        assert!(refusal(&raised).contains("raises the validator share"), "{}", refusal(&raised));
+
+        // Past the whole subsidy.
+        let whole = armed(PalwOverlayCarveV1 { subsidy_validator_bps: 0, worker_carve_permille: 1_001, ..t11_carve() });
+        assert!(refusal(&whole).contains("more than the whole subsidy"), "{}", refusal(&whole));
+
+        // Wider than the base: one permille over, and a carve that fit the old split but not the new.
+        let over = armed(PalwOverlayCarveV1 { worker_carve_permille: 721, ..t11_carve() });
+        assert!(refusal(&over).contains("exceeds the worker base"), "{}", refusal(&over));
+        let unlowered = armed(PalwOverlayCarveV1 { subsidy_validator_bps: 3_000, ..t11_carve() });
+        assert!(refusal(&unlowered).contains("exceeds the worker base"), "{}", refusal(&unlowered));
+        // The base is what the network's inclusion and service shares leave, not a constant.
+        let mut serviced = armed(t11_carve());
+        serviced.dns_params.as_mut().unwrap().reward_params.fee_split.subsidy_service_bps = 1;
+        assert!(refusal(&serviced).contains("exceeds the worker base"), "{}", refusal(&serviced));
+
+        // `never()` is absence: no refusal on any network.
+        let never =
+            PalwOverlayCarveV1 { activation: ForkActivation::never(), subsidy_validator_bps: 9_999, worker_carve_permille: 9_999 };
+        let mut dormant_hash = MAINNET_PARAMS.clone();
+        dormant_hash.palw_overlay_carve = Some(never);
+        dormant_hash.validate_palw_v2().expect("a never() fence is no fence");
+    }
+
+    /// **Some-only, and a scheduled height is reported, never gated.** An unset fence writes nothing,
+    /// so every shipped preset keeps its pinned fingerprint (`shipped_presets_have_pinned_fingerprints`);
+    /// set, its height and both numbers move the params id and the schedule id and leave the identity
+    /// until the height is genesis, and the fork-id gate reads it by name.
+    #[test]
+    fn the_overlay_carve_is_hashed_some_only_and_scheduled_like_a_fence() {
+        let none = palw_rc_shipped_params();
+        assert_eq!(none.palw_overlay_carve, None, "no shipped preset arms it");
+        let base = armed(t11_carve());
+        let later = armed(PalwOverlayCarveV1 { activation: ForkActivation::new(T11_HEIGHT + 1), ..t11_carve() });
+        let share = armed(PalwOverlayCarveV1 { subsidy_validator_bps: 2_100, ..t11_carve() });
+        let smaller = armed(PalwOverlayCarveV1 { worker_carve_permille: 700, ..t11_carve() });
+        for (what, other) in
+            [("the height", &later), ("the validator share", &share), ("the escrow carve", &smaller), ("the fence", &none)]
+        {
+            assert_ne!(base.consensus_params_id(), other.consensus_params_id(), "{what} reaches the fingerprint");
+            assert_ne!(base.consensus_schedule_id(), other.consensus_schedule_id(), "{what} is reported in the schedule id");
+            assert_eq!(
+                base.consensus_identity_id(),
+                other.consensus_identity_id(),
+                "{what} of a height that has not fired leaves the identity"
+            );
+        }
+        // `never()` is absence in the identity.
+        let never = armed(PalwOverlayCarveV1 { activation: ForkActivation::never(), ..t11_carve() });
+        assert_eq!(never.consensus_identity_id(), none.consensus_identity_id());
+        // Armed at genesis it is a rule about block one, and its numbers with it.
+        let genesis = armed(PalwOverlayCarveV1 { activation: ForkActivation::always(), ..t11_carve() });
+        let genesis_smaller =
+            armed(PalwOverlayCarveV1 { activation: ForkActivation::always(), worker_carve_permille: 700, ..t11_carve() });
+        assert_ne!(genesis.consensus_identity_id(), none.consensus_identity_id(), "a carve in force at genesis separates networks");
+        assert_ne!(genesis.consensus_identity_id(), genesis_smaller.consensus_identity_id(), "and so does its number");
+
+        assert!(base.fence_schedule_v1().contains(&T11_HEIGHT), "the fork-id schedule names the height");
+        assert!(!none.fence_schedule_v1().contains(&T11_HEIGHT));
+        assert!(
+            base.palw_fences_v1()
+                .iter()
+                .any(|(name, fence)| *name == "palw_overlay_carve" && *fence == Some(ForkActivation::new(T11_HEIGHT))),
+            "the named fence list the gate reads carries it"
+        );
+        assert!(none.palw_fences_v1().iter().any(|(name, fence)| *name == "palw_overlay_carve" && fence.is_none()));
+        assert_eq!(base.palw_overlay_carve_fence(), Some(t11_carve()), "a ConsensusV2 network with an overlay answers it");
+        assert_eq!(none.palw_overlay_carve_fence(), None);
     }
 }
