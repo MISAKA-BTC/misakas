@@ -207,6 +207,14 @@ mined by anyone's next block, and a seat's throughput becomes one carrier a bloc
 cadence never approaches. Memory: 1.75 GiB of file-backed pages once, `MemAvailable` 9.7–10.4 GiB of 12
 with eight nodes.
 
+**Phase 2 on the eight-bond genesis, second attempt — the sixth finding:** with one carrier in flight every
+seat proved within a span (eight fresh proofs), the class entered PROBATION with an admission share of
+980 ‰ — and its producer held on "this class's epoch budget is already spent": the epoch budget (ADR-0039
+D5) is derived from the shares at the epoch's first block and read until the next, so a share the
+registry raises mid-epoch admitted nothing until the epoch turned. The boundary that moves a share now
+re-derives the current epoch's budgets (the produced counters stay); the fold test asserts Kimi's budget
+follows its admission share in the same epoch.
+
 **The fence.** `Params::palw_model_registry: Option<ForkActivation>` — `None` on every shipped preset
 (the t11 fingerprint `135b6ee0…` does not move); hashed `Some`-only; the fork-id gate names it when
 armed; `validate_palw_v2` refuses it without `palw_panel_economy` and `palw_execution_lane` at or
