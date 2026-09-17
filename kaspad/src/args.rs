@@ -708,7 +708,9 @@ impl Args {
             }
             let at = kaspa_consensus_core::config::params::ForkActivation::new(daa);
             if config.params.palw_model_registry.is_none() {
-                panic!("--palw-economic-payout-devnet={daa} needs --palw-model-registry-devnet at or below it: the payout prices the registry's work");
+                panic!(
+                    "--palw-economic-payout-devnet={daa} needs --palw-model-registry-devnet at or below it: the payout prices the registry's work"
+                );
             }
             config.params.palw_economic_payout = Some(kaspa_consensus_core::config::params::PalwEconomicPayoutV1 {
                 activation: at,

@@ -18161,14 +18161,22 @@ pub(crate) mod tests {
             assert!(s9.panel_duties_of(&claim_id).is_some(), "the economy put the seat on duty");
             let (s10, _) = step_with(&s9, &p, &funded(10, 133, 10), &[licensed_by(claim_id, 2, 133)], None, &priced);
             let (s11, d11) = step_with(&s10, &p, &funded(11, 154, 11), &[], None, &priced);
-            assert!(matches!(s11.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "{:?}", s11.claim(&claim_id).unwrap().phase);
+            assert!(
+                matches!(s11.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }),
+                "{:?}",
+                s11.claim(&claim_id).unwrap().phase
+            );
             assert!(s11.claim_economics_of(&claim_id).is_none(), "the snapshot leaves with the Final");
             assert_eq!(
                 (paid_to(&s11, &claim_id), seat_row(&s11, 2), s11.panel_reserve_sompi),
                 (112_000, 48_000, 0),
                 "160 000 priced: 112 000 to the producer, 48 000 to the one credited seat, nothing to the reserve"
             );
-            assert_eq!(revert_delta_v2(&s11, &d11, &p).unwrap().state_root(), s10.state_root(), "the Final reverts, snapshot and payouts alike");
+            assert_eq!(
+                revert_delta_v2(&s11, &d11, &p).unwrap().state_root(),
+                s10.state_root(),
+                "the Final reverts, snapshot and payouts alike"
+            );
 
             let plain = priced_extras(None);
             let (u8, _) = step_with(&s7, &p, &funded(8, 131, 8), &[], Some(&env), &plain);
@@ -18198,10 +18206,12 @@ pub(crate) mod tests {
             let (a, b) = (attempt_id_v2(&env_a.attempt), attempt_id_v2(&env_b.attempt));
             let (s8, _) = step_with(&s7, &p, &funded(8, 131, 8), &[], Some(&env_a), &low);
             let (s9, _) = step_with(&s8, &p, &funded(9, 132, 9), &[], Some(&env_b), &priced_extras(None));
-            assert!(s8.claim_economics_of(&a).is_some() && s9.claim_economics_of(&b).is_none(), "A snapshotted, B accepted while dormant");
+            assert!(
+                s8.claim_economics_of(&a).is_some() && s9.claim_economics_of(&b).is_none(),
+                "A snapshotted, B accepted while dormant"
+            );
             let (s10, _) = step_with(&s9, &p, &funded(10, 133, 10), &[bound_to(a, 81, 2), bound_to(b, 82, 3)], None, &high);
-            let (s11, _) =
-                step_with(&s10, &p, &funded(11, 134, 11), &[licensed_by(a, 2, 134), licensed_by(b, 3, 134)], None, &high);
+            let (s11, _) = step_with(&s10, &p, &funded(11, 134, 11), &[licensed_by(a, 2, 134), licensed_by(b, 3, 134)], None, &high);
             let (s12, _) = step_with(&s11, &p, &funded(12, 155, 12), &[], None, &high);
             for id in [a, b] {
                 assert!(matches!(s12.claim(&id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
@@ -18271,7 +18281,11 @@ pub(crate) mod tests {
             assert_eq!((kimi.state, kimi.cap_utilization_permille), (PalwModelLifecycleV1::Active, 0), "dormant: nothing priced");
             let (unfunded, _) = step_with(&s7, &p, &ctx(8, 140, 8), &[], None, &saturating);
             let kimi = unfunded.model_lifecycle(&kimi_id()).unwrap();
-            assert_eq!((kimi.state, kimi.cap_utilization_permille), (PalwModelLifecycleV1::Active, 0), "no escrow at the boundary: no verdict");
+            assert_eq!(
+                (kimi.state, kimi.cap_utilization_permille),
+                (PalwModelLifecycleV1::Active, 0),
+                "no escrow at the boundary: no verdict"
+            );
         }
     }
 

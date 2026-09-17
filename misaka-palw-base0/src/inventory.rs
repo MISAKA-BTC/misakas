@@ -318,9 +318,10 @@ pub fn a16_visit_inventory_rows_v1(
     let matmul_codes = |name: &str, layer: Option<u16>| -> Result<&[i8], InventoryBuildError> {
         let suffix = name.strip_prefix("blk.{layer}.").unwrap_or(name);
         let l = layer.map(|l| l as usize).unwrap_or(0);
-        let layer_of = |f: fn(&crate::artifact::Base0LayerWeightsV1) -> &crate::artifact::Int8SlabV1| -> Result<&[i8], InventoryBuildError> {
-            artifact.layers.get(l).map(|lw| f(lw).as_slice()).ok_or_else(|| missing(name))
-        };
+        let layer_of =
+            |f: fn(&crate::artifact::Base0LayerWeightsV1) -> &crate::artifact::Int8SlabV1| -> Result<&[i8], InventoryBuildError> {
+                artifact.layers.get(l).map(|lw| f(lw).as_slice()).ok_or_else(|| missing(name))
+            };
         match suffix {
             "attn_q.weight" => layer_of(|lw| &lw.wq),
             "attn_k.weight" => layer_of(|lw| &lw.wk),

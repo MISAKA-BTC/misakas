@@ -1180,13 +1180,20 @@ mod tests {
             cap_ok,
             span_stable: true,
         };
-        assert_eq!(palw_lifecycle_step_v1(ActiveLimited { stable_epochs: 2 }, &obs(true), &k, &G), Active, "three stable spans activate");
+        assert_eq!(
+            palw_lifecycle_step_v1(ActiveLimited { stable_epochs: 2 }, &obs(true), &k, &G),
+            Active,
+            "three stable spans activate"
+        );
         assert_eq!(
             palw_lifecycle_step_v1(ActiveLimited { stable_epochs: 2 }, &obs(false), &k, &G),
             ActiveLimited { stable_epochs: 3 },
             "…unless the class is cap-saturated: it keeps counting and stays at a tenth"
         );
-        assert_eq!(palw_lifecycle_step_v1(ActiveLimited { stable_epochs: 9 }, &obs(false), &k, &G), ActiveLimited { stable_epochs: 10 });
+        assert_eq!(
+            palw_lifecycle_step_v1(ActiveLimited { stable_epochs: 9 }, &obs(false), &k, &G),
+            ActiveLimited { stable_epochs: 10 }
+        );
         assert_eq!(
             palw_lifecycle_step_v1(Active, &obs(false), &k, &G),
             ActiveLimited { stable_epochs: 0 },

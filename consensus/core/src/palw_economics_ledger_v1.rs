@@ -210,7 +210,8 @@ pub fn palw_ledger_payout_v1(escrow_sompi: u64, rule: PalwLedgerPayoutRuleV1, se
             .economic
             .map(|economic| economic.panel_share_permille)
             .unwrap_or(crate::palw_panel_economy_v1::PALW_PANEL_POOL_PERMILLE_V1 as u16);
-        let split = crate::palw_panel_economy_v1::palw_panel_split_permille_v1(reward, pool_permille, seats as usize, credited as usize);
+        let split =
+            crate::palw_panel_economy_v1::palw_panel_split_permille_v1(reward, pool_permille, seats as usize, credited as usize);
         PalwLedgerPayoutV1 { producer_sompi: split.producer, panel_sompi: split.paid, reserve_sompi: split.reserve, burned_sompi }
     } else {
         PalwLedgerPayoutV1 { producer_sompi: reward, panel_sompi: 0, reserve_sompi: 0, burned_sompi }
@@ -517,10 +518,10 @@ pub fn palw_ledger_gap_permille_v1(a: u128, b: u128) -> Option<u128> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::palw_panel_economy_v1::palw_panel_split_v1;
     use crate::palw_economic_compute_v1::{
         PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1, palw_expected_attempts_q32_v1, palw_network_expected_attempts_q32_v1,
     };
+    use crate::palw_panel_economy_v1::palw_panel_split_v1;
     use crate::tx::TransactionOutpoint;
 
     const ESCROW_PRE: u64 = 275_628_448_680;
@@ -884,7 +885,12 @@ mod tests {
         o.economics = Some(snapshot);
         o.seats = 1;
         o.credited_seats = 1;
-        let facts = PalwLedgerClassFactsV1 { expected_attempts_q32: 7 * ONE, network_expected_attempts_q32: 3 * ONE, draw_compute: 1, leaves: 5 };
+        let facts = PalwLedgerClassFactsV1 {
+            expected_attempts_q32: 7 * ONE,
+            network_expected_attempts_q32: 3 * ONE,
+            draw_compute: 1,
+            leaves: 5,
+        };
         let row = palw_ledger_merge_v1(None, &o, 4_001, facts, |_| rule_6001(5));
         assert!(row.economic_snapshotted);
         assert_eq!((row.expected_attempts_q32, row.network_expected_attempts_q32, row.draw_compute), (2 * ONE, ONE, 800_000));
@@ -908,7 +914,11 @@ mod tests {
         assert_eq!((plain.producer_paid_sompi, plain.panel_paid_sompi), (expected.producer_sompi, expected.panel_sompi));
         // The rule itself, over a five-seat panel with three credited: the pool is 48 000, a seat 9 600.
         let rule = PalwLedgerPayoutRuleV1 {
-            economic: Some(PalwLedgerEconomicRuleV1 { attempted_ccu: 1_600_000, rate_sompi_per_giga: 100_000_000, panel_share_permille: 300 }),
+            economic: Some(PalwLedgerEconomicRuleV1 {
+                attempted_ccu: 1_600_000,
+                rate_sompi_per_giga: 100_000_000,
+                panel_share_permille: 300,
+            }),
             ..rule_6001(5)
         };
         let out = palw_ledger_payout_v1(620_000, rule, 5, 3);

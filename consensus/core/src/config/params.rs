@@ -19849,7 +19849,8 @@ mod palw_model_registry_fence_tests {
         let height = PALW_RC_FLAG_DAY_6001_FENCE_DAA + 1_000;
         let mut armed = rc.clone();
         armed.palw_model_registry = Some(ForkActivation::new(height));
-        armed.palw_economic_payout = Some(PalwEconomicPayoutV1 { activation: ForkActivation::new(height), ..PALW_ECONOMIC_PAYOUT_DEVNET_V1 });
+        armed.palw_economic_payout =
+            Some(PalwEconomicPayoutV1 { activation: ForkActivation::new(height), ..PALW_ECONOMIC_PAYOUT_DEVNET_V1 });
         armed.validate_palw_v2().expect("armed beside the registry, above the economy");
         assert_ne!(armed.consensus_params_id(), rc.consensus_params_id(), "arming moves the identity");
         assert!(armed.fence_schedule_v1().contains(&height), "and the schedule names the height");

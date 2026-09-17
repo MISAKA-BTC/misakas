@@ -1238,9 +1238,7 @@ pub fn decode_artifact_file_v1(bytes: &[u8]) -> Result<Base0ArtifactV1, Artifact
 /// [`decode_artifact_file_v1`] over a read-only mapping of the file: the int8 slabs point into the
 /// mapping (shared on the host) and only the small tables are copied. The digest is still
 /// recomputed over the whole file — one pass, which is what pages it in.
-pub fn decode_artifact_file_mapped_v1(
-    map: std::sync::Arc<crate::mmap::ReadOnlyMap>,
-) -> Result<Base0ArtifactV1, ArtifactFileError> {
+pub fn decode_artifact_file_mapped_v1(map: std::sync::Arc<crate::mmap::ReadOnlyMap>) -> Result<Base0ArtifactV1, ArtifactFileError> {
     decode_artifact_file_from_v1(map.as_slice(), Some(&map))
 }
 
