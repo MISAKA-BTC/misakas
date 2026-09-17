@@ -304,7 +304,7 @@ from this branch before the compute credit (§8) and before the chain walk named
 | step | result | evidence |
 |---|---|---|
 | 0 | the lane armed on the nodes' ruleset | `getPalwRoundLane` `armed: true` at DAA 0, 08:53 JST |
-| 1 | attempts reached `Final` in span 3 and span 4 was scheduled from them | DAA 120 at 10:09; the step took 76 minutes of chain time at 1.2–2.4 DAA a minute, which is why a step now waits on chain progress (`STALL_WAIT`) and a stalled run can `ATTACH=1` |
+| 1 | attempts reached `Final` in span 3 and span 4 was scheduled from them | DAA 120 at 10:09; the step took 76 minutes at 1.2–2.4 DAA a minute, which is why a step now waits on chain progress (`STALL_WAIT`) and a stalled run can `ATTACH=1` |
 | 2 | a node produced a round block for a permit its bond held | `[palw-round-producer] 1 round blocks produced (latest round 41216982)`, 10:09:42 |
 | 3 | chain blocks merged round blocks and granted their permits | 10:09:48: 3 round blocks, 3 permits, 4 transactions accepted from them; later merges of 6, 1, 51 and 3 |
 | 4 | **partly established** — see below | 16 transactions accepted from permitted round blocks after the first payment (8 at 10:09:59, 7 in the 51-block merge at 10:11:44, 1 at 10:11:50); the recipient's balance went 0 → 3.00000003 MSK (three of five payments applied when read) |
