@@ -14,16 +14,13 @@ use std::str::FromStr;
 /// Values a `~/.misaka/config.toml` may set. Every field is optional — an absent key
 /// falls through to the built-in default. The schema matches the design's §11.1
 /// example; fields not yet consumed by `misaka` (`node.grpc`/`node.wrpc_json`,
-/// `evm.chain_id`) are accepted for forward-compatibility.
+/// `evm.chain_id`, the `[validator]` section) are accepted for forward-compatibility.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub network_id: Option<String>,
     pub node: NodeConfig,
     pub evm: EvmConfig,
-    /// The retired DNS-finality validator's section. Nothing reads it and `config init` no longer
-    /// writes it, but the scaffold earlier builds wrote carries an (empty) `[validator]` table, and
-    /// with `deny_unknown_fields` dropping the field would make every such file a hard parse error.
     pub validator: ValidatorConfig,
 }
 
@@ -42,7 +39,6 @@ pub struct EvmConfig {
     pub chain_id: Option<u64>,
 }
 
-/// Accepted, never read — see [`Config::validator`].
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ValidatorConfig {
@@ -96,13 +92,16 @@ pub fn init(network_id: &str, force: bool) -> CliResult {
          [node]\n\
          # node gRPC (miner / low-level RPC)\n\
          grpc = \"127.0.0.1:{grpc}\"\n\
-         # node wRPC Borsh (wallet / operator) — what `misaka` connects to\n\
+         # node wRPC Borsh (validator / wallet / operator) — what `misaka` connects to\n\
          wrpc_borsh = \"127.0.0.1:{borsh}\"\n\
          # node wRPC JSON (explorer / browser)\n\
          wrpc_json = \"127.0.0.1:{json}\"\n\n\
          [evm]\n\
          rpc_url = \"http://127.0.0.1:{evm}\"\n\
-         # chain_id = 5067595\n",
+         # chain_id = 5067595\n\n\
+         [validator]\n\
+         # key = \"validator.seed\"\n\
+         # signed_epoch_db = \"validator.{network_id}.state\"\n",
     );
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| CliError::new(exit::GENERIC, format!("mkdir {}: {e}", parent.display())))?;
@@ -197,17 +196,6 @@ mod tests {
         assert_eq!(c.evm.rpc_url.as_deref(), Some("http://127.0.0.1:8545"));
         assert_eq!(c.evm.chain_id, Some(5067595));
         assert_eq!(c.validator.key.as_deref(), Some("validator.seed"));
-    }
-
-    /// The scaffold `config init` wrote before the validator was retired ends in an empty
-    /// `[validator]` table. Such a file must keep parsing: a config error stops every command.
-    #[test]
-    fn a_scaffold_with_the_retired_validator_table_still_parses() {
-        let old =
-            "network_id = \"testnet-11\"\n\n[evm]\nrpc_url = \"http://127.0.0.1:8545\"\n\n[validator]\n# key = \"validator.seed\"\n";
-        let c: Config = toml::from_str(old).unwrap();
-        assert_eq!(c.network_id.as_deref(), Some("testnet-11"));
-        assert!(c.validator.key.is_none());
     }
 
     #[test]

@@ -18,7 +18,9 @@
 
 use crate::operator::finding::{Finding, Severity, paint};
 use crate::operator::nodelog::{self, RegistrationNote};
-use crate::operator::profile::{ArtifactList, MiningToml, Overrides, Profile};
+use crate::operator::profile::{
+    AdvancedSection, ArtifactList, MiningSection, MiningToml, Overrides, Profile, ValidatorSection, ValidatorToml,
+};
 use crate::operator::snapshot::{self, KeyFacts, NodeRead};
 use crate::operator::supervisor::{self, Cmd, Role};
 use crate::operator::tty::{Answer, Halt, Row, Step, Ui};
@@ -48,6 +50,8 @@ const DOCS_SETUP: &str = "docs/adr/0122-mining-is-a-purpose-an-operator-runs-one
 pub(crate) enum Purpose {
     Mine,
     Verify,
+    /// The DNS-finality validator (ADR-0010's overlay): a stake bond and attestations, not PALW.
+    Validate,
 }
 
 impl Purpose {
@@ -55,24 +59,27 @@ impl Purpose {
         match self {
             Purpose::Mine => "mining setup",
             Purpose::Verify => "verifier setup",
+            Purpose::Validate => "validator setup",
         }
     }
     fn start(self) -> &'static str {
         match self {
             Purpose::Mine => "misaka mining start",
             Purpose::Verify => "misaka verifier start",
+            Purpose::Validate => "misaka validator status",
         }
     }
     fn role(self) -> Role {
         match self {
             Purpose::Mine => Role::Miner,
-            Purpose::Verify => Role::Verifier,
+            Purpose::Verify | Purpose::Validate => Role::Verifier,
         }
     }
     fn noun(self) -> &'static str {
         match self {
             Purpose::Mine => "mining",
             Purpose::Verify => "verifier",
+            Purpose::Validate => "validator",
         }
     }
 }
@@ -92,6 +99,8 @@ pub(crate) struct SetupArgs {
     /// `auto`, or `<txid>:<index>`.
     pub(crate) fee_outpoint: Option<String>,
     pub(crate) verify_artifact: bool,
+    /// The validator's stake, in sompi (default: the network's minimum bond).
+    pub(crate) amount: Option<u64>,
     pub(crate) yes: bool,
     pub(crate) no_wait: bool,
 }
@@ -447,6 +456,71 @@ pub(crate) fn render_toml(file: &MiningToml, purpose: Purpose, today: &str) -> S
     out
 }
 
+/// **The one command that runs a validator**: `kaspad` beside this `misaka`, the file's node
+/// settings, and the overlay's validator in-process (`--enable-validator`), which keeps its own
+/// equivocation guard in the appdir. Printed by `validator setup` and `validator status` alike.
+pub(crate) fn validator_command(network: &str, file: &ValidatorToml) -> String {
+    let a = &file.advanced;
+    let program = supervisor::binary("kaspad", a.kaspad.as_deref().map(|k| PathBuf::from(procs::expand_home(k))).as_deref())
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "kaspad".to_string());
+    let mut args = supervisor::network_flags(network).unwrap_or_default();
+    let home = dirs::home_dir().unwrap_or_default();
+    let appdir = a.appdir.as_deref().map(procs::expand_home).unwrap_or_else(|| default_appdir(network, &home).display().to_string());
+    args.push(format!("--appdir={appdir}"));
+    if let Some(listen) = &a.listen {
+        args.push(format!("--listen={listen}"));
+    }
+    args.push(format!("--rpclisten-borsh={}", a.rpc_borsh.clone().unwrap_or_else(|| "default".into())));
+    args.push("--utxoindex".into());
+    args.extend(a.peers.iter().map(|p| format!("--addpeer={p}")));
+    args.push("--enable-validator".into());
+    if let Some(key) = &file.validator.key {
+        args.push(format!("--validator-key={}", procs::expand_home(key)));
+    }
+    if let Some(bond) = &file.validator.bond {
+        args.push(format!("--stake-bond={bond}"));
+    }
+    args.push("--validator-mode=active".into());
+    args.extend(
+        a.extra_kaspad_args
+            .iter()
+            .filter(|x| !matches!(x.split('=').next().unwrap_or_default(), "--palw-produce" | "--palw-panel"))
+            .cloned(),
+    );
+    Cmd { name: "kaspad", program: PathBuf::from(program), args, env: Vec::new() }.shell_line()
+}
+
+/// **`validator.toml` as setup writes it** — the validator's section, then the node settings.
+pub(crate) fn render_validator_toml(file: &ValidatorToml, today: &str) -> String {
+    let v = &file.validator;
+    let mut out = format!(
+        "# MISAKA validator — written by `misaka validator setup` on {today} (ADR-0122 §8.2).\n\
+         # The node runs the DNS-finality validator in-process; `misaka validator status` shows it.\n\n[validator]\n"
+    );
+    let kv = |out: &mut String, k: &str, v: String| out.push_str(&format!("{k:<13} = {v}\n"));
+    if let Some(x) = &v.network {
+        kv(&mut out, "network", q(x));
+    }
+    if let Some(x) = &v.key {
+        kv(&mut out, "key", q(x));
+    }
+    if let Some(x) = &v.bond {
+        kv(&mut out, "bond", q(x));
+    }
+    if let Some(x) = v.amount_sompi {
+        kv(&mut out, "amount_sompi", x.to_string());
+    }
+    // The node settings, in mining.toml's own spelling.
+    let node = MiningToml { mining: MiningSection::default(), advanced: file.advanced.clone() };
+    let rendered = render_toml(&node, Purpose::Mine, today);
+    if let Some((_, advanced)) = rendered.split_once("\n[advanced]\n") {
+        out.push_str("\n[advanced]\n");
+        out.push_str(advanced);
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------------------------
 // the wizard
 // ---------------------------------------------------------------------------------------------
@@ -474,6 +548,8 @@ struct Wizard<'a> {
     classes: Vec<ClassChoice>,
     class: Option<ClassChoice>,
     bond: Option<BondSeen>,
+    /// `validator setup`'s own fields (the stake bond and its amount).
+    validator: ValidatorSection,
 }
 
 /// `misaka mining setup` / `misaka verifier setup`.
@@ -487,14 +563,28 @@ pub(crate) async fn run(ctx: &crate::node::Ctx, purpose: Purpose, args: SetupArg
 impl<'a> Wizard<'a> {
     fn new(ctx: &'a crate::node::Ctx, purpose: Purpose, args: SetupArgs) -> Result<Wizard<'a>, CliError> {
         let ui = Ui::new(ctx.output, args.yes);
+        let default_path = if purpose == Purpose::Validate { ValidatorToml::default_path() } else { MiningToml::default_path() };
         let path = args
             .config
             .clone()
-            .or(MiningToml::default_path())
+            .or(default_path)
             .ok_or_else(|| CliError::new(exit::HOST, "no home directory to keep ~/.misaka's configuration in"))?;
         let existing = std::fs::read_to_string(&path).ok();
         let bad = |e: toml::de::Error| CliError::new(exit::CONFIG, format!("{}: {e}", path.display()));
-        let parsed = existing.as_deref().map(toml::from_str::<MiningToml>).transpose().map_err(bad)?;
+        // The validator's file carries its own section and the same `[advanced]` node settings; the
+        // node steps read them through the mining shape, and the file is written back as its own.
+        let (parsed, validator) = match (&existing, purpose) {
+            (Some(text), Purpose::Validate) => {
+                let v = toml::from_str::<ValidatorToml>(text).map_err(bad)?;
+                let as_mining = MiningToml {
+                    mining: MiningSection { network: v.validator.network.clone(), key: v.validator.key.clone(), ..Default::default() },
+                    advanced: v.advanced.clone(),
+                };
+                (Some(as_mining), v.validator)
+            }
+            (Some(text), _) => (Some(toml::from_str::<MiningToml>(text).map_err(bad)?), ValidatorSection::default()),
+            (None, _) => (None, ValidatorSection::default()),
+        };
         // The network: the one named, else the file's, else the one node running here, else the
         // public mining testnet — said on the first line either way.
         let running = procs::find(procs::Component::Kaspad);
@@ -517,7 +607,8 @@ impl<'a> Wizard<'a> {
             file,
             rows: Vec::new(),
             network_guessed,
-            key_path: home.join(".misaka").join("miner.seed"),
+            // A validator signs with a key of its own: roles do not share a seed.
+            key_path: home.join(".misaka").join(if purpose == Purpose::Validate { "validator.seed" } else { "miner.seed" }),
             key: None,
             appdir: default_appdir(&network, &home),
             rpc,
@@ -527,6 +618,7 @@ impl<'a> Wizard<'a> {
             classes: Vec::new(),
             class: None,
             bond: None,
+            validator,
             network,
             args,
         })
@@ -581,12 +673,29 @@ impl<'a> Wizard<'a> {
                     .fix("misaka --network testnet-11 mining setup"),
             ));
         };
-        if !matches!(params.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)) {
-            return Err(Halt::Blocked(
-                Finding::error("E-SETUP-NO-PALW", exit::CONFIG, format!("{} has no PALW mining in this build", self.network))
-                    .reason("mining and verifying are PALW roles, and only a ConsensusV2 network has them")
-                    .fix("misaka --network testnet-11 mining setup"),
-            ));
+        let dns = params.dns_params.clone();
+        match (self.purpose, &dns) {
+            (Purpose::Validate, None) => {
+                return Err(Halt::Blocked(
+                    Finding::error(
+                        "E-SETUP-NO-DNS",
+                        exit::CONFIG,
+                        format!("{} has no DNS-finality overlay in this build", self.network),
+                    )
+                    .reason("a validator stakes a bond and attests finality epochs, and only a network with the overlay has them")
+                    .fix("misaka --network testnet-10 validator setup")
+                    .docs("docs/validator-runbook.md"),
+                ));
+            }
+            (Purpose::Validate, Some(_)) => {}
+            _ if !matches!(params.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)) => {
+                return Err(Halt::Blocked(
+                    Finding::error("E-SETUP-NO-PALW", exit::CONFIG, format!("{} has no PALW mining in this build", self.network))
+                        .reason("mining and verifying are PALW roles, and only a ConsensusV2 network has them")
+                        .fix("misaka --network testnet-11 mining setup"),
+                ));
+            }
+            _ => {}
         }
         if let Err(f) = supervisor::network_flags(&self.network) {
             return Err(Halt::Blocked(f));
@@ -606,6 +715,10 @@ impl<'a> Wizard<'a> {
         }
         self.step_key(&params).await?;
         self.step_node(&params).await?;
+        if let (Purpose::Validate, Some(dns)) = (self.purpose, dns) {
+            self.step_stake_bond(&params, &dns).await?;
+            return self.step_write_validator().await;
+        }
         self.step_model(&params).await?;
         self.step_bond().await?;
         if self.bond.is_none() {
@@ -622,9 +735,11 @@ impl<'a> Wizard<'a> {
     // -- key ------------------------------------------------------------------------------------
 
     async fn step_key(&mut self, params: &kaspa_consensus_core::config::params::Params) -> Step {
-        // A running node's `--palw-producer-key` is the key it mines and judges with.
-        let external_key = procs::the_kaspad(&self.network, self.args.appdir.as_deref().or(self.file.advanced.appdir.as_deref()))
-            .ok()
+        // A running node's `--palw-producer-key` is the miner's key, never the validator's.
+        let external_key = (self.purpose != Purpose::Validate)
+            .then(|| {
+                procs::the_kaspad(&self.network, self.args.appdir.as_deref().or(self.file.advanced.appdir.as_deref())).ok().flatten()
+            })
             .flatten()
             .and_then(|(_, a)| a.key);
         if let Some(named) = self.args.key_file.clone().or_else(|| self.file.mining.key.clone()).or(external_key) {
@@ -814,7 +929,10 @@ impl<'a> Wizard<'a> {
                 self.spawn_own(None)?;
                 let pid = self.own.as_ref().map(|o| o.pid).unwrap_or_default();
                 self.row(Severity::Ok, "node", format!("started kaspad for setup: pid {pid} · {}", host::tilde(&self.appdir)));
-                let after = format!("{} runs the node after that", self.purpose.start());
+                let after = match self.purpose {
+                    Purpose::Validate => "the command setup prints at the end runs the node after that".to_string(),
+                    other => format!("{} runs the node after that", other.start()),
+                };
                 self.ui.sub(&paint::dim(&format!(
                     "output {} · setup stops it when it ends; {after}",
                     host::tilde(&supervisor::run_dir(&self.network).join("setup-kaspad.out")),
@@ -983,7 +1101,7 @@ impl<'a> Wizard<'a> {
                 self.print_classes();
                 let question = match self.purpose {
                     Purpose::Mine => "Which model will this node mine?",
-                    Purpose::Verify => "Which model will this seat judge (besides the floor)?",
+                    Purpose::Verify | Purpose::Validate => "Which model will this seat judge (besides the floor)?",
                 };
                 let i = self.ui.choose(question, self.classes.len(), 0).await.ok_or(Halt::Interrupted)?;
                 self.classes[i].clone()
@@ -1469,6 +1587,290 @@ impl<'a> Wizard<'a> {
         }
     }
 
+    // -- the validator's stake bond (Purpose::Validate) -------------------------------------------
+
+    /// Every stake bond this validator key holds, from the registry (paged, all statuses).
+    async fn stake_bonds_of_key(&self, validator_id: &str) -> Result<Vec<kaspa_rpc_core::RpcStakeBondEntry>, String> {
+        let mut out = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let resp = self
+                .node()
+                .client()
+                .get_stake_bonds(kaspa_rpc_core::GetStakeBondsRequest {
+                    owner_pubkey_hash: None,
+                    status_in: None,
+                    cursor: cursor.clone(),
+                    limit: 1000,
+                    pov_daa_score: None,
+                })
+                .await
+                .map_err(|e| format!("getStakeBonds: {e}"))?;
+            out.extend(resp.bonds.into_iter().filter(|b| b.validator_id.eq_ignore_ascii_case(validator_id)));
+            match resp.next_cursor {
+                Some(next) if !next.is_empty() && Some(&next) != cursor.as_ref() => cursor = Some(next),
+                _ => break,
+            }
+        }
+        Ok(out)
+    }
+
+    async fn step_stake_bond(
+        &mut self,
+        params: &kaspa_consensus_core::config::params::Params,
+        dns: &kaspa_consensus_core::dns_finality::DnsParams,
+    ) -> Step {
+        let key = self
+            .key_source()
+            .load_key()
+            .map_err(|e| Halt::Blocked(catalog::key_unreadable(&self.key_path.display().to_string(), &e.msg)))?;
+        let validator_id = key.validator_id.to_string();
+        let accept = |me: &mut Self, op: &str, amount: u64, status: &str, how: &str| {
+            me.row(Severity::Ok, "stake bond", format!("{} · {how} · {} · {status}", short_op(op), catalog::msk(amount as u128)));
+            me.validator.bond = Some(op.to_string());
+            me.validator.amount_sompi = Some(amount);
+        };
+        // A bond named (a flag, or the file), or found by the key's validator id.
+        if let Some(op) = self.args.bond.clone().or_else(|| self.validator.bond.clone()) {
+            let b =
+                self.node().client().get_stake_bond(kaspa_rpc_core::GetStakeBondRequest { bond_outpoint: op.clone() }).await.map_err(
+                    |e| {
+                        Halt::Blocked(
+                            Finding::error("E-SETUP-BOND-UNREAD", exit::COMPONENT_DOWN, "The stake bond could not be read")
+                                .current(e.to_string()),
+                        )
+                    },
+                )?;
+            if !b.available {
+                return Err(Halt::Blocked(
+                    Finding::error(
+                        "E-VALIDATOR-BOND-UNKNOWN",
+                        exit::IDENTITY,
+                        "The chain knows no stake bond at the configured outpoint",
+                    )
+                    .current(op)
+                    .fix("remove it (--bond, or [validator] bond) and re-run: setup finds this key's bond, or makes one"),
+                ));
+            }
+            if !b.validator_id.eq_ignore_ascii_case(&validator_id) {
+                return Err(Halt::Blocked(
+                    Finding::error("E-VALIDATOR-BOND-OTHER-KEY", exit::IDENTITY, "That stake bond belongs to another validator key")
+                        .current(format!(
+                            "{op} · validator {} · this key {}",
+                            &b.validator_id[..16.min(b.validator_id.len())],
+                            &validator_id[..16.min(validator_id.len())]
+                        ))
+                        .fix("name this key's own bond, or the key that made that one (--key-file)"),
+                ));
+            }
+            accept(self, &op, b.amount, &b.effective_status, "registered to this key");
+            return Ok(());
+        }
+        let found = self.stake_bonds_of_key(&validator_id).await.map_err(|e| {
+            Halt::Blocked(Finding::error("E-SETUP-BOND-UNREAD", exit::COMPONENT_DOWN, "The stake bonds could not be read").current(e))
+        })?;
+        if let Some(b) = found.iter().find(|b| b.effective_status == "active").or(found.first()) {
+            let (op, amount, status) = (b.bond_outpoint.clone(), b.amount, b.effective_status.clone());
+            accept(self, &op, amount, &status, "found, registered to this key");
+            return Ok(());
+        }
+        self.row(Severity::Info, "stake bond", "none registered to this validator key yet");
+
+        // Stake one. The amount: the flag, else the network's minimum (1 MSK where it has none).
+        let min = dns.min_bond_amount_sompi;
+        let amount = self.args.amount.or(self.validator.amount_sompi).unwrap_or(min.max(100_000_000));
+        if amount < min {
+            return Err(Halt::Blocked(
+                Finding::error("E-VALIDATOR-BOND-BELOW-MIN", exit::FUNDS, "The stake is below this network's minimum bond")
+                    .current(catalog::msk(amount as u128))
+                    .required(format!("≥ {} on {}", catalog::msk(min as u128), self.network))
+                    .fix("misaka validator setup --amount <MSK>"),
+            ));
+        }
+        let prefix = params.prefix();
+        let address = key.funding_address(prefix);
+        let mass = kaspa_consensus_core::mass::MassCalculator::new(
+            params.mass_per_tx_byte,
+            params.mass_per_script_pub_key_byte,
+            params.mass_per_sig_op,
+            params.storage_mass_parameter,
+        );
+        // At most 20 inputs, largest first — a bond's inputs each carry a ~7 KB ML-DSA-87 signature
+        // and the transaction has to fit a block. Coinbase outputs count once mature, and bonded
+        // collateral never does.
+        const MAX_BOND_INPUTS: usize = 20;
+        let mut told = false;
+        let (fundings, fee) = loop {
+            let all = crate::wallet::page_all(&self.node().nv, &address).await.map_err(|e| {
+                Halt::Blocked(
+                    Finding::error("E-SETUP-FUNDS-UNREAD", exit::COMPONENT_DOWN, "The key's outputs could not be read").current(e.msg),
+                )
+            })?;
+            let mut spendable: Vec<&crate::wallet::Funding> = all.iter().filter(|u| u.mature && !u.bonded).collect();
+            spendable.sort_by(|a, b| b.amount.cmp(&a.amount));
+            let (mut sum, mut picked, mut fee) = (0u64, Vec::new(), key.estimate_bond_fee_for_inputs(&mass, prefix, 1));
+            for u in spendable.iter().take(MAX_BOND_INPUTS) {
+                sum = sum.saturating_add(u.amount);
+                picked.push((u.outpoint, u.entry.clone()));
+                fee = key.estimate_bond_fee_for_inputs(&mass, prefix, picked.len());
+                if sum >= amount.saturating_add(fee) {
+                    break;
+                }
+            }
+            if sum >= amount.saturating_add(fee) {
+                self.row(
+                    Severity::Ok,
+                    "funds",
+                    format!(
+                        "{} in {} output(s) — the stake {} and a {} sompi fee",
+                        catalog::msk(sum as u128),
+                        picked.len(),
+                        catalog::msk(amount as u128),
+                        status::group(fee)
+                    ),
+                );
+                break (picked, fee);
+            }
+            let maturing: u64 = all.iter().filter(|u| !u.mature && !u.bonded).map(|u| u.amount).sum();
+            if !told {
+                self.ui.mark(
+                    Severity::Info,
+                    "funds",
+                    &format!(
+                        "{} spendable — a stake of {} needs that plus a fee of about {} sompi",
+                        catalog::msk(sum as u128),
+                        catalog::msk(amount as u128),
+                        status::group(fee)
+                    ),
+                );
+                self.ui.sub(&format!("send it to   {}", paint::bold(&address.to_string())));
+                self.ui.sub(&paint::dim("mining rewards count here once mature; the bond gathers up to 20 outputs"));
+                told = true;
+            }
+            if self.args.no_wait {
+                return Err(Halt::Waiting(
+                    format!("{} plus a {} sompi fee at {address}", catalog::msk(amount as u128), status::group(fee)),
+                    exit::FUNDS,
+                ));
+            }
+            if maturing > 0 {
+                self.ui.sub(&paint::dim(&format!("{} is still maturing", catalog::msk(maturing as u128))));
+            }
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => return Err(Halt::Interrupted),
+                _ = tokio::time::sleep(Duration::from_secs(10)) => {}
+            }
+        };
+        self.ui.say("");
+        self.ui.say(&paint::bold("  Stake a validator bond with this key:"));
+        self.ui.sub(&format!("stake     {} locked in the bond's output 0", catalog::msk(amount as u128)));
+        self.ui.sub(&format!("validator {}…", &validator_id[..16.min(validator_id.len())]));
+        self.ui.sub(&format!("rewards   {address} — a stake-proportional share of the validator pool"));
+        // Consensus clamps a bond's unbonding period up to the network's floor: sign the period
+        // that will be enforced, and say it.
+        let unbonding = dns.unbonding_period_blocks.max(700);
+        self.ui
+            .sub(&format!("release   {} blocks after an unbond request (the network's unbonding period)", status::group(unbonding)));
+        self.ui.sub("rule      run this key on ONE host: signing an epoch twice is the one slashable fault");
+        match self.ui.confirm("Stake it?", false).await {
+            Answer::Yes => {}
+            Answer::Interrupted => return Err(Halt::Interrupted),
+            Answer::No => return Err(Halt::Declined("no bond was staked".into())),
+            Answer::Unanswered => return Err(Halt::Declined("staking locks funds: re-run with --yes, or at a terminal".into())),
+        }
+        let tx =
+            key.build_funded_stake_bond_tx_multi(amount, 0, unbonding, key.reward_spk_payload(), &fundings, fee).map_err(|e| {
+                Halt::Blocked(Finding::error("E-VALIDATOR-BOND-BUILD", exit::FUNDS, "The stake bond could not be built").current(e))
+            })?;
+        let txid = self.node().client().submit_transaction((&tx).into(), false).await.map_err(|e| {
+            Halt::Blocked(
+                Finding::error("E-VALIDATOR-BOND-REFUSED", exit::FUNDS, "The node refused the stake bond").current(e.to_string()),
+            )
+        })?;
+        let op = format!("{txid}:0");
+        self.ui.sub(&format!("submitted {} — waiting for a block to carry it", short_op(&op)));
+        let deadline = Instant::now() + Duration::from_secs(900);
+        while Instant::now() < deadline {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => return Err(Halt::Interrupted),
+                _ = tokio::time::sleep(Duration::from_secs(4)) => {}
+            }
+            if let Ok(b) = self.node().client().get_stake_bond(kaspa_rpc_core::GetStakeBondRequest { bond_outpoint: op.clone() }).await
+                && b.available
+            {
+                accept(self, &op, b.amount, &b.effective_status, "staked just now");
+                return Ok(());
+            }
+        }
+        self.validator.bond = Some(op.clone());
+        Err(Halt::Waiting(format!("stake bond {} to be mined", short_op(&op)), exit::NOT_READY))
+    }
+
+    /// The command that runs this validator: the node, with the overlay's validator in-process.
+    fn validator_command(&self) -> String {
+        validator_command(
+            &self.network,
+            &ValidatorToml {
+                validator: ValidatorSection {
+                    network: Some(self.network.clone()),
+                    key: Some(self.key_path.display().to_string()),
+                    bond: self.validator.bond.clone(),
+                    amount_sompi: self.validator.amount_sompi,
+                },
+                advanced: AdvancedSection { appdir: Some(self.appdir.display().to_string()), ..self.file.advanced.clone() },
+            },
+        )
+    }
+
+    async fn step_write_validator(&mut self) -> Step {
+        let v = ValidatorToml {
+            validator: ValidatorSection {
+                network: Some(self.network.clone()),
+                key: Some(host::tilde(&self.key_path)),
+                bond: self.validator.bond.clone(),
+                amount_sompi: self.validator.amount_sompi,
+            },
+            advanced: self.file.advanced.clone(),
+        };
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let text = render_validator_toml(&v, &today);
+        let same = self.existing.as_deref().and_then(|e| toml::from_str::<ValidatorToml>(e).ok()).is_some_and(|e| e == v);
+        if same {
+            self.row(Severity::Ok, "validator.toml", format!("{} already says this", host::tilde(&self.path)));
+            return Ok(());
+        }
+        self.ui.say("");
+        match &self.existing {
+            Some(old) => {
+                self.ui.say(&paint::bold(&format!("  Update {}:", host::tilde(&self.path))));
+                for (sign, line) in changed_lines(old, &text) {
+                    let shown = format!("    {sign} {line}");
+                    self.ui.say(&if sign == '+' { paint::green(&shown) } else { paint::red(&shown) });
+                }
+                match self.ui.confirm(&format!("Replace {}?", host::tilde(&self.path)), true).await {
+                    Answer::Yes => {}
+                    Answer::Interrupted => return Err(Halt::Interrupted),
+                    _ => return Err(Halt::Declined(format!("{} was left as it was", host::tilde(&self.path)))),
+                }
+            }
+            None => {
+                self.ui.say(&paint::bold(&format!("  Write {}:", host::tilde(&self.path))));
+                for line in text.lines() {
+                    self.ui.say(&paint::dim(&format!("    {line}")));
+                }
+            }
+        }
+        if let Some(dir) = self.path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let tmp = self.path.with_extension("toml.partial");
+        std::fs::write(&tmp, &text)
+            .and_then(|_| std::fs::rename(&tmp, &self.path))
+            .map_err(|e| Halt::Blocked(Finding::error("E-CONFIG-WRITE", exit::CONFIG, format!("{}: {e}", self.path.display()))))?;
+        self.row(Severity::Ok, "validator.toml", format!("written {}", host::tilde(&self.path)));
+        Ok(())
+    }
+
     // -- artifact -------------------------------------------------------------------------------
 
     fn step_artifact(&mut self) -> Step {
@@ -1705,7 +2107,7 @@ impl<'a> Wizard<'a> {
             }
         }
         match self.purpose {
-            Purpose::Verify => {
+            Purpose::Verify | Purpose::Validate => {
                 self.row(Severity::Info, "fee outpoint", "none — this seat files receipts only; another seat carries the quorum");
                 Ok(())
             }
@@ -1824,12 +2226,20 @@ impl<'a> Wizard<'a> {
             self.ui.say(&f.render());
         }
         // Set up and already running as this purpose: the next command is not a start.
+        let validating = |a: &procs::KaspadArgs| a.enable_validator;
         let running = self.external.as_ref().filter(|(_, a)| match self.purpose {
             Purpose::Mine => a.produce,
             Purpose::Verify => a.panel,
+            Purpose::Validate => validating(a),
         });
         let noun = self.purpose.noun();
-        if let (0, Some((proc_, _))) = (code, running) {
+        if let (0, Purpose::Validate, None) = (code, self.purpose, running) {
+            // One process runs a validator: the node, with the overlay's validator in it.
+            self.ui.say("");
+            self.ui.say(&paint::green("● ready. Next: run the node as a validator —"));
+            self.ui.say(&format!("    {}", self.validator_command()));
+            self.ui.say(&paint::dim("    then: misaka validator status   (it attests every epoch once the bond is active)"));
+        } else if let (0, Some((proc_, _))) = (code, running) {
             self.ui.say("");
             self.ui.say(&paint::green(&format!("● set up, and already running (kaspad pid {}).", proc_.pid)));
             self.ui.say(&paint::dim(&format!("    misaka {noun} status · misaka doctor · misaka {noun} stop")));
@@ -1852,7 +2262,7 @@ impl<'a> Wizard<'a> {
                 "steps": self.rows,
                 "finding": detail,
                 "running": running.map(|(p, _)| p.pid),
-                "next": (code == 0 && running.is_none()).then(|| self.purpose.start().to_string()),
+                "next": (code == 0 && running.is_none()).then(|| if self.purpose == Purpose::Validate { self.validator_command() } else { self.purpose.start().to_string() }),
             });
             println!("{}", serde_json::to_string_pretty(&doc).expect("serializable"));
         }
@@ -1907,9 +2317,10 @@ fn artifact_roots(network: &str, path: &Path) -> Result<Vec<(String, String)>, S
 /// **`misaka init`** — what should this machine do? Then the setup for that purpose, or the
 /// commands that are that purpose.
 pub(crate) async fn init(ctx: &crate::node::Ctx, args: SetupArgs) -> CliResult {
-    let purposes: [(&str, &str); 4] = [
+    let purposes: [(&str, &str); 5] = [
         ("Mine", "produce blocks and earn rewards — a bond locks collateral"),
         ("Verify", "sit on panels and judge other miners' claims — not paid; it is how claims become final"),
+        ("Validate", "a DNS-finality validator — a stake bond, attesting every epoch"),
         ("Add a model", "register a class, certify it, open its market"),
         ("Hold positions", "buy or sell a model's positions"),
     ];
@@ -1921,14 +2332,15 @@ pub(crate) async fn init(ctx: &crate::node::Ctx, args: SetupArgs) -> CliResult {
     let ui = Ui { interactive, yes: false, json: false };
     if !interactive {
         println!();
-        println!("  misaka mining setup · misaka verifier setup · misaka model list · misaka position list");
+        println!("  misaka mining setup · misaka verifier setup · misaka validator --help · misaka model list · misaka position list");
         return Ok(());
     }
     match ui.choose("Choose", purposes.len(), 0).await.unwrap_or(usize::MAX) {
         usize::MAX => Err(CliError::new(exit::NOT_READY, String::new())),
         0 => run(ctx, Purpose::Mine, args).await,
         1 => run(ctx, Purpose::Verify, args).await,
-        2 => {
+        2 => run(ctx, Purpose::Validate, args).await,
+        3 => {
             println!();
             println!("  misaka model add                 this build's catalog, and which models the chain holds");
             println!("  misaka model add <model>         register it and certify its lanes — drills and files a family only when");

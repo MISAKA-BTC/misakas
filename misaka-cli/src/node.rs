@@ -133,7 +133,7 @@ pub async fn doctor(ctx: &Ctx) -> CliResult {
 
                 rows.push(Row {
                     label: "UTXO index".into(),
-                    value: if info.has_utxo_index { "enabled".into() } else { "DISABLED (the wallet needs it)".into() },
+                    value: if info.has_utxo_index { "enabled".into() } else { "DISABLED (wallet/validator need it)".into() },
                     health: if info.has_utxo_index { Health::Ok } else { Health::Warn },
                 });
                 rows.push(Row {
