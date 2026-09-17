@@ -1132,7 +1132,10 @@ mod tests {
         let seed = palw_execution_span_seed_v1(&a, 9, 40, h(700));
         assert_eq!(palw_execution_span_seed_v1(&a, 9, 40, h(700)), seed, "deterministic");
         for (moved, what) in [
-            (palw_execution_span_seed_v1(&PalwExecSeedAnchorV1 { execution_key: h(601), ..a }, 9, 40, h(700)), "the anchor's execution"),
+            (
+                palw_execution_span_seed_v1(&PalwExecSeedAnchorV1 { execution_key: h(601), ..a }, 9, 40, h(700)),
+                "the anchor's execution",
+            ),
             (palw_execution_span_seed_v1(&a, 10, 40, h(700)), "the span"),
             (palw_execution_span_seed_v1(&a, 9, 41, h(700)), "the frontier's blue score"),
             (palw_execution_span_seed_v1(&a, 9, 40, h(701)), "the frontier"),
@@ -1267,7 +1270,11 @@ mod tests {
             let mut parity_of: BTreeMap<Hash64, u8> = BTreeMap::new();
             for d in &schedule.domains {
                 for b in &d.bonds {
-                    assert_eq!(*parity_of.entry(b.operator_id).or_insert(d.parity), d.parity, "census {census}: an operator in both parities");
+                    assert_eq!(
+                        *parity_of.entry(b.operator_id).or_insert(d.parity),
+                        d.parity,
+                        "census {census}: an operator in both parities"
+                    );
                 }
             }
             for width in [1u16, 2, 5, 10] {
@@ -1277,7 +1284,11 @@ mod tests {
                     permits_seen += permits.len();
                     let operators: BTreeSet<Hash64> = permits.iter().map(|p| p.operator_id).collect();
                     let domains: BTreeSet<Hash64> = permits.iter().map(|p| p.domain).collect();
-                    assert_eq!(operators.len(), permits.len(), "census {census}, width {width}, round {round}: one permit an operator");
+                    assert_eq!(
+                        operators.len(),
+                        permits.len(),
+                        "census {census}, width {width}, round {round}: one permit an operator"
+                    );
                     assert!(
                         operators.is_disjoint(&previous_operators),
                         "census {census}, width {width}, round {round}: an operator held permits in two rounds running"
