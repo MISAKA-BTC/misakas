@@ -2,7 +2,8 @@
 
 * Status: **ACCEPTED 2026-09-17, implementation in progress** on `feat/palw-exec-lane-and-validator-retirement`.
   Decisions 2–5 ride testnet-11's DAA 7,001 flag day with ADR-0124/0125/0126/0128. Decision 1 is built
-  dormant: arming it on testnet-11 needs the capital §3 measures, and that is the operator's call.
+  dormant and computed in shadow (Decision 8); the operator decided (2026-09-17) that λ is off at 7,001 and
+  gets a height only once the shadow shows the capacity and a shorter liability lifetime exists (§3).
 * Operator's direction, in the operator's words: "BPSは当分1で固定するなら、今は高速化ではなく『BPS1でも壊れ
   ない経済性・選出・settlement』を固める段階"; "一番大きい変更を1つだけ選ぶなら、まず
   `panel_exposure = max(3×claim.reserved, λ×seat_reward)`"; "その次が BPS1でのcross-round operator連続禁止、
@@ -22,11 +23,20 @@ chosen from was fixed — with a missed round, never a relaxed rule, where nobod
 
 ## 1. What exists, and where it fails at width 1
 
-* **A seat earns about 320 times what it risks.** Past DAA 7,001 a testnet-11 claim escrows 3,200.85 MSK;
-  its panel pool is a fifth, 128.03 MSK a seat. The seat reserves `3 × claim.reserved`, and a claim reserves
-  one inference's worth at the network's slash value: 5 sompi × 2,685,360 pwu = 0.134 MSK for Qwen3.6, so
-  0.40 MSK a seat (the slash value read from the live node's registration terms). A seat that licenses
-  anything loses at most 0.40 MSK and earns 128 MSK for being counted.
+* **A seat earns one to five orders of magnitude more than it risks, and a producer more still.** Past DAA
+  7,001 a testnet-11 claim escrows 3,200.85 MSK before ADR-0124's work price; the pool is a fifth, 128.03 MSK
+  a seat at full price. A claim reserves one inference's worth at the network's slash value, 5 sompi a pwu
+  (read from the live node's registration terms), and a seat three times that. A model class is priced by
+  its pwu against the heaviest weight-bearing model class (the unit), so its reward-to-exposure ratio does
+  not depend on the class, only on the unit; the floor is not priced:
+
+  | role | model class (unit = 6,630,544 pwu, the heaviest live class) | floor (7,708 pwu, unpriced) |
+  |---|---|---|
+  | panel seat: `128.03 MSK × price ÷ (3 × pwu × 5 sompi)` | ~129× (e.g. 128.03 / 0.99 MSK) | ~110,700× (128.03 / 0.0012 MSK) |
+  | producer: `2,560.68 MSK × price ÷ (pwu × 5 sompi)` | ~7,700× | ~6,640,000× |
+
+  (With a unit of 2,685,360 pwu the seat ratio is ~318×; with 9,000,776 ~95×.) The panel side is what the
+  operator asked to fix first; the producer side is the same shape and larger (Decision 8 reports both).
 * **A bond split is a ticket bought.** Past ADR-0124 every eligible bond draws one ticket; one seat per
   operator per panel stops a quorum, not the odds: ten bonds are ten chances to be among the five.
 * **"One permit an operator a round" is vacuous at width 1.** A round has one permit, so one operator can
@@ -74,6 +84,17 @@ once its first block exists. No beacon. The fingerprint names the rule set (`pal
 **Decision 6 — the width stays 1.** The stage table keeps its ceiling of ten and every widening its own
 fenced height; none is scheduled.
 
+**Decision 8 — λ in shadow, and the economics in one table (node-local, no consensus).** Until λ has a
+height the node computes, for the live claims, what λ = 2 would require: each seat's required exposure,
+whether each operator would be eligible, whether each panel would fail to draw, each operator's capacity and
+utilization; it records each claim's lifecycle (bound, licensed, final or voided, exposure released); and it
+reports reward per reserved sompi for the producer and the seat by class. λ gets a height only when the shadow
+shows p95 operator utilization under 70 %, eligible operators beyond the seats after excluding the executor,
+would-fail draws under 0.1–1 %, receipt latency p99 well inside the new deadline, an acceptable round-miss rate,
+and several complete claim lifecycles observed. Once armed λ is a fixed consensus parameter: it is never lowered
+because operators are scarce — a panel that cannot draw leaves its claim short of `Final`, and scarcity is
+answered with operators and collateral.
+
 **Decision 7 — a receipt's verdict may resolve, not reverse (recorded, not built).** `Unavailable → Valid` and
 `Unavailable → Invalid` within the receipt window stay honest (a restarted seat can sign both); a seat that
 signs `Valid` and `Invalid` for one claim contradicts itself and should be slashable. Built after BPS 1 has run.
@@ -90,13 +111,37 @@ Read from the explorer node (`getPalwClaims`, role `seat`, each genesis bond):
 | exposure a bond reserves for them today | 88.5–115.3 MSK |
 | reservation ceiling | 500 ‰ of collateral = 5,000 MSK a bond |
 
-With λ = 2 each seat reserves at least 256.07 MSK, so ~500 concurrent seats need ~128,000 MSK reserved a bond
-— ~256,000 MSK of collateral at the 500 ‰ ceiling, twenty-five times what a genesis bond holds. Armed on today's
+With λ = 2 a full-price seat reserves at least 256.07 MSK (a Qwen3.6 seat priced at 40.5 % about 104 MSK, a
+floor seat 256.07 MSK), so ~500 concurrent seats need on the order of 100,000–128,000 MSK reserved a bond —
+some 200,000–256,000 MSK of collateral at the 500 ‰ ceiling, twenty to twenty-five times what a genesis bond
+holds. At 256 MSK a seat a 10,000 MSK bond holds ~19 seats. Armed on today's
 bonds, the draw would find too few operators with headroom, `PanelBound` could not be built, and claims would
 stop reaching `Final` — and the lane, whose schedule is made of finals, would stop with them. Arming it on
 testnet-11 therefore needs one of: collateral scaled to the concurrency (new bonds of ~300,000 MSK, or more
 operators), a shorter claim life (the receipt window drives the concurrency), or both; it is not armed at
-7,001 until the operator chooses.
+7,001 (the operator's decision).
+
+**Why the concurrency is 500: the liability lifetime, measured** (1,311 distinct claims read from four bonds,
+newest first, at DAA 5,774):
+
+| segment | p50 | p90 | p99 |
+|---|---|---|---|
+| accepted → bound | 641 | 642 | 646 — 739 of 1,292 were redrawn: the first panel did not license in 600 DAA |
+| bound → licensed (the 91 licensed) | 75 | 252 | 562 |
+| age of the 824 still `panel_bound` | 257 | 471 | 590 |
+| accepted → `Final` (48) | 2,016 | 2,121 | 2,200 — the challenge window is 1,200 DAA before 7,000 |
+| accepted → voided (320, all `receipt_timeout`) | 1,242 | 1,244 | 1,245 — two receipt windows |
+
+By class: the 2,685,360-pwu class (Qwen3.6, 488 ‰) had 500 claims sampled and none licensed; the
+6,630,544-pwu class (491 ‰) licensed at a median 82 DAA and ended 48 `Final` against 320 voided; the floor
+licensed at a median 6 DAA. **The window is not the root cause — licensing is.** A 30-DAA receipt window
+today would void nearly every model-class claim (licence p50 75–82 DAA, and never for Qwen3.6). The order is
+therefore: find why model-class panels do not reach quorum in time; then shorten the receipt window and the
+challenge window to what licensing actually takes (7,000 already cuts the challenge window to 120 DAA); then
+size bonds to the concurrency that remains (the operator's first trial: ~30 DAA with 20,000 MSK panel bonds
+→ ~39 seats of capacity against ~25 in use); then arm λ. The lane is exposed to the same cause: its schedule
+is made of finals, so past 7,001 spans in which only the floor and the 6,630,544-pwu class finalize schedule
+only their domains, and spans with no final idle.
 
 ## 4. Security amendments and residuals
 
@@ -123,7 +168,11 @@ seconds ahead (before mainnet); Decision 7's slash.
 * **Settlement under attack**, as property tests and simulations: one operator with 80 % of the compute, one
   domain with 90 %, half the producers offline, two and three of five seats malicious, a permit signed twice,
   one output spent on two branches, a claim withheld before an anchor, a bond split a hundred ways, a
-  producer DDoSed out of its rounds — each asserting that no number of execution blocks moves settlement depth.
+  producer DDoSed out of its rounds — each asserting that no number of execution blocks moves settlement depth;
+  and four the operator added: anchor grinding (withholding a last attempt block to re-roll a span's seed),
+  operator-parity gaming (moving credit between domains to choose a parity), λ-shadow exhaustion (replaying a
+  claim stream to the DAA each operator's free collateral runs out under λ = 2), and one top operator offline
+  under the consecutive-round rule (round misses and settlement progress).
 * **What BPS 1 must show over weeks**, readable over RPC: rounds total/produced/missed, permit conflicts and
   double signs, operator and domain shares (p50/p95/max), consecutive-round rejections, settlement latency and
   reorgs, panel response/correct/slash rates, panel and producer reward per reserved sompi, MSK per canonical
