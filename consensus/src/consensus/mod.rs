@@ -1688,6 +1688,17 @@ impl ConsensusApi for Consensus {
         }
     }
 
+    fn get_precommit_duty(
+        &self,
+        validator_id: kaspa_consensus_core::Hash64,
+        bond_outpoint: TransactionOutpoint,
+    ) -> Option<kaspa_consensus_core::dns_finality::PrecommitDuty> {
+        // ADR-0128 Decision 6: read from the chain at the sink — `round_active` is the BFT gate's
+        // fence there, the lock is the one the chain shows, and the due epochs are the StakeScore
+        // window's that reached round one and that this bond has not precommitted.
+        self.virtual_processor.dns_bft_precommit_duty(self.get_sink(), validator_id, bond_outpoint)
+    }
+
     fn get_sink_daa_score_timestamp(&self) -> DaaScoreTimestamp {
         let sink = self.get_sink();
         let compact = self.headers_store.get_compact_header_data(sink).unwrap();

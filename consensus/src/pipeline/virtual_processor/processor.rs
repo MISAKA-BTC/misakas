@@ -362,6 +362,9 @@ pub struct VirtualStateProcessor {
     // kaspa-pq ADR-0022: overlay snapshot as-of the pruning point (serve + below-pp window consult).
     pub(super) pruning_overlay_snapshot_store: Arc<RwLock<DbPruningPointOverlaySnapshotStore>>,
     pub(super) dns_params: Option<DnsParams>,
+    /// ADR-0128: the DNS validators' BFT vote and the stake reorg gate that follows it, where the
+    /// network runs an overlay (`Params::dns_bft_gate_fence`). `None` on every shipped preset.
+    pub(super) dns_bft_gate: Option<kaspa_consensus_core::config::params::DnsBftGateV1>,
     /// ADR-0038 Decision A: the network's PALW commitment fence. `None` on every shipped preset.
     pub(super) palw_block_commitment: Option<kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentParamsV1>,
     /// ADR-0064's fence, `None` on every shipped preset. See
@@ -893,6 +896,7 @@ impl VirtualStateProcessor {
             evm_typed_receipt_root_activation_daa_score: params.evm_typed_receipt_root_activation_daa_score,
             evm_lane_kpi: EvmLaneKpi::default(),
             dns_params: params.dns_params.clone(),
+            dns_bft_gate: params.dns_bft_gate_fence(),
             palw_block_commitment: params.palw_block_commitment,
             palw_bootstrap_activation: params.palw_bootstrap_activation,
             palw_unavailable_abstains: params.palw_unavailable_abstains,
@@ -8894,7 +8898,7 @@ impl VirtualStateProcessor {
                     .saturating_sub(self.ghostdag_store.get_blue_work(anchor_hash).unwrap_or_default())
             })
             .unwrap_or_default();
-        let new_state = advance_dns_confirmation(
+        let depth_state = advance_dns_confirmation(
             prev_dns_state.as_ref(),
             sink,
             sink_daa,
@@ -8911,6 +8915,13 @@ impl VirtualStateProcessor {
             anchor_epoch_attesters,
             dns_params.min_anchor_attesters,
         );
+        // ADR-0128 Decision 5: past the BFT fence (at the sink) the confirmed anchor is the newest
+        // DNS-final one instead of the depth rule's; every other field above is kept as computed.
+        // Below the fence, and wherever the fence is unset, the depth rule's state is written as is.
+        let new_state = match self.dns_bft_gate.filter(|gate| gate.activation.is_active(sink_daa)) {
+            Some(gate) => self.dns_bft_confirmed_state(depth_state, prev_dns_state.as_ref(), sink, &bonds, dns_params, &gate),
+            None => depth_state,
+        };
         self.dns_state_store.write().set_batch(batch, new_state).unwrap();
     }
 
@@ -9947,6 +9958,16 @@ impl VirtualStateProcessor {
     /// data is committed by the time the gate runs (the candidate's by
     /// `calculate_utxo_state_relatively`), so the per-branch walks are deterministic.
     fn dns_reorg_outcome(&self, candidate: BlockHash, prev_sink: BlockHash, candidate_bond_view: &ActiveBondView) -> DnsReorgOutcome {
+        // **ADR-0128 Decision 5: the stake reorg gate follows the BFT vote, and it is asked FIRST.**
+        //
+        // Past the fence at the incumbent sink, a candidate that abandons the DNS-final anchor is
+        // refused before the PALW comparator below is consulted — a reorg and an extension alike,
+        // which is what the early return below used to skip for a reorg. A candidate this does not
+        // refuse (it contains the anchor, the anchor is stale on this node's own chain, or nothing
+        // is confirmed) goes on exactly as it does without the fence. See `dns_bft_gate_refusal`.
+        if let Some(refusal) = self.dns_bft_gate_refusal(candidate, prev_sink) {
+            return refusal;
+        }
         // **Unit D, site 4: on a V2 network the deep-reorg gate IS the one comparator.**
         //
         // A private fork can pile blue work without limit, but its frontier died at the fork

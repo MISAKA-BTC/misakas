@@ -1,3 +1,4 @@
+mod dns_bft;
 pub mod errors;
 mod processor;
 mod utxo_inquirer;
