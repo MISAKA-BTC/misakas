@@ -170,8 +170,9 @@ describe stays a legacy row. The fold itself is unchanged: it opens rows from th
 **Amended the same evening, the second drill finding:** a possession proof names the span it was made for
 and the fold took it only in that span or the next; on the devnet's two-DAA spans the carrier that brings it
 waited longer than that in mempools and for a block (every proof refused as "names span 11 at span 21").
-A proof now lands within `PALW_READINESS_LANDING_SPANS_V1 = 8` spans of the span it names (a future span
-is still refused), and the row it writes is dated at the named span's first DAA: a late proof is exactly as
+A proof now lands within `max(8 spans, 40 DAA)` of the span it names (`palw_readiness_landing_spans_v1`:
+eight spans on testnet-11's five-DAA spans, twenty on the devnet's two — phase 2 found eight spans still short
+of a chain of receipts on a bursty devnet; a future span is still refused), and the row it writes is dated at the named span's first DAA: a late proof is exactly as
 fresh as when it was made, a replayed one renews nothing, and the thirty-span readiness age bounds the rest; on testnet-11 (five-DAA spans, ~5 DAA an
 hour) the allowance is about eight hours of carrier latency.
 

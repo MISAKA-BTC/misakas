@@ -7921,10 +7921,10 @@ impl<'a> TransitionBuilder<'a> {
         let span_now = crate::palw_execution_lane_v1::palw_execution_span_v1(ctx.daa_score, span_daa);
         // A proof for a span not yet opened is refused; one older than the landing allowance is
         // refused (the seat proves again for a current span rather than replaying an old one).
-        if span > span_now || span_now - span > registry::PALW_READINESS_LANDING_SPANS_V1 {
+        let landing = registry::palw_readiness_landing_spans_v1(span_daa);
+        if span > span_now || span_now - span > landing {
             return Err(PalwStateV2Error::ReadinessProofRefused(format!(
-                "the proof names span {span} at span {span_now} (a proof lands within {} spans)",
-                registry::PALW_READINESS_LANDING_SPANS_V1
+                "the proof names span {span} at span {span_now} (a proof lands within {landing} spans)"
             )));
         }
         let bond_bytes = borsh::to_vec(bond).expect("a bond key is borsh-serializable");

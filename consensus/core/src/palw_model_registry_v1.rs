@@ -225,6 +225,18 @@ pub fn palw_derive_profile_v1(work: &PalwModelWorkV1, g: &PalwRegistryGlobalsV1)
 /// age (thirty spans) bounds the rest.
 pub const PALW_READINESS_LANDING_SPANS_V1: u64 = 8;
 
+/// The same allowance in DAA, for a network whose spans are short: a carrier's wait is blocks and
+/// minutes, not spans, and on a devnet with two-DAA spans eight spans were sixteen minutes — a
+/// chain of eight receipts ahead of the proof took longer. The allowance is the larger of the two
+/// (`max(8 spans, 40 DAA / span)`): on testnet-11's five-DAA spans it is the eight spans, on the
+/// devnet twenty.
+pub const PALW_READINESS_LANDING_DAA_V1: u64 = 40;
+
+/// How many spans late a proof may land at `span_daa` DAA a span.
+pub fn palw_readiness_landing_spans_v1(span_daa: u64) -> u64 {
+    PALW_READINESS_LANDING_SPANS_V1.max(PALW_READINESS_LANDING_DAA_V1 / span_daa.max(1))
+}
+
 /// **The single lottery's class targets, from admission alone** (ADR-0132 S, ADR-0133 §9a Fence 2):
 /// each class's share of draws is its admitted claims a span over every class's, in permille —
 /// no share is set by anyone, and a class whose admission is zero holds no share.
@@ -1261,5 +1273,16 @@ mod tests {
             assert!(work.ops_supported && work.economic_ccu_per_claim > 0 && work.verification_ccu > 0, "{id}: {work:?}");
         }
         assert_eq!(works, palw_rc_typed_class_works_v1(), "a function of the binary alone");
+    }
+
+    /// The landing allowance is eight spans or forty DAA, whichever is more: testnet-11's five-DAA
+    /// spans keep the eight, a two-DAA devnet gets twenty, a one-DAA fixture forty.
+    #[test]
+    fn adr0135_the_landing_allowance_is_the_larger_of_eight_spans_and_forty_daa() {
+        assert_eq!(palw_readiness_landing_spans_v1(5), 8);
+        assert_eq!(palw_readiness_landing_spans_v1(10), 8);
+        assert_eq!(palw_readiness_landing_spans_v1(2), 20);
+        assert_eq!(palw_readiness_landing_spans_v1(1), 40);
+        assert_eq!(palw_readiness_landing_spans_v1(0), 40, "a zero span is read as one");
     }
 }
