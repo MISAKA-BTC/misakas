@@ -192,23 +192,15 @@ pub enum DatabaseStorePrefixes {
     EvmTraceReplay = 219,
 
     // ---- MISAKA Verified LLM Token-Weighted BFT (`vlt`) ----
-    /// Keyed by `u64` epoch: the per-epoch verified-compute credit `X_i(epoch)`
-    /// (`VltEpochCredits`), written ONLY once an epoch is buried past both the challenge window
-    /// and the reorg horizon — i.e. once no challenge and no branch can still change it, which
-    /// is what makes one epoch-keyed row valid for every branch. Turns the `C_i(E)` sum from a
-    /// full `credit_window_epochs`-deep re-walk (re-verifying every certificate's ML-DSA-87
-    /// signatures) into a walk of the unfinalized tail. Inert (never written) while
-    /// `DnsParams::vlt.vlt_activation_daa_score` is `u64::MAX`, which it is on every shipped
-    /// preset.
+    // The voting-weight half is removed: no code reads or writes 235, 236, 241, 242, 243 or 244.
+    // A testnet-10/11 database may still hold rows at 235/236 and 242/243 (the shadow fence ran
+    // the credit accumulator and the voting-snapshot freeze there); 241 and 244 were only written
+    // above a weight fence, which no public network opened. The values stay reserved so no future store
+    // reuses a prefix an old database may carry.
+    /// Reserved: the removed per-epoch verified-compute credit rows (`X_i(epoch)`).
     VltCredits = 235,
 
-    /// Singleton `u32`: the derivation rules the [`Self::VltCredits`] rows were produced under.
-    ///
-    /// Those rows are write-once and derived, which is a dangerous pair — a bug in the derivation
-    /// is not corrected by fixing the bug, because the wrong answer has already been recorded as
-    /// final. This is the escape: bump the version and every row from the old rules is dropped and
-    /// re-derived, while the chain, bonds, commitments, certificates, verdicts and challenges they
-    /// came from are untouched.
+    /// Reserved: the removed schema-version marker of [`Self::VltCredits`].
     VltCreditsSchemaVersion = 236,
 
     /// Keyed by the declaring transaction: an accepted [`ComputeCapabilityRecord`].
@@ -274,35 +266,15 @@ pub enum DatabaseStorePrefixes {
     /// from the unset default, which is the same state a first boot presents.
     ChainParticipation = 240,
 
-    /// Singleton `VltActivationRecord`: where this consensus is on the §6 VLT activation state
-    /// machine — awaiting an eligible snapshot, holding a reservation for the next epoch, or
-    /// activated (terminal). Written by the virtual processor's per-epoch DNS recompute in the
-    /// same batch as [`Self::DnsState`]; read back at the next recompute and after a restart, so
-    /// a committed reservation survives the process and an activated network can never be
-    /// re-derived back onto bootstrap weight. Lives in the consensus DB (not meta): the record is
-    /// a fact about this consensus's chain, and a staging commit that swaps the consensus out is
-    /// exactly the moment it must be re-derived from the new chain.
+    /// Reserved: the removed §6 VLT activation record singleton.
     VltActivation = 241,
 
-    /// Per-epoch frozen `VltVotingSnapshot` rows (§5), keyed by `u64` wall epoch: the complete
-    /// voting denominator — validator rows, weights, and the two roots a vote signs — frozen at
-    /// the first recompute of each epoch and write-once thereafter, which is what "the validator
-    /// set and its weights are fixed within an epoch" means on disk. Derived state: every row is
-    /// re-derivable from the chain at its pinned anchor, so a fresh IBD converges to identical
-    /// rows.
+    /// Reserved: the removed per-epoch frozen VLT voting snapshots (§5).
     VltVotingSnapshots = 242,
-    /// Singleton schema-version marker for [`Self::VltVotingSnapshots`], mirroring
-    /// [`Self::VltCreditsSchemaVersion`]: frozen rows are derived AND write-once, so a derivation
-    /// change must discard rows recorded under the old rules rather than read them as final.
+    /// Reserved: the removed schema-version marker of [`Self::VltVotingSnapshots`].
     VltVotingSnapshotsSchemaVersion = 243,
 
-    /// Per-epoch `DnsFinalityCertificate` rows (§7.2), keyed by `u64` target epoch: the
-    /// persistent proof that the epoch's anchor reached its precommit quorum — denominator
-    /// roots, weight arithmetic, and every ML-DSA-87 signature. Written once when the quorum
-    /// first counts on the selected chain; never reindexed away, because unlike the frozen
-    /// snapshots these stop being re-derivable the moment the vote window slides past the
-    /// epoch — the certificate IS the surviving evidence, and the §12 checkpoint package's
-    /// payload.
+    /// Reserved: the removed per-epoch §7.2 DNS finality certificates.
     DnsFinalityCertificates = 244,
 
     // ---- MISAKA Compute Token Program (design v0.1, Phase A) — RESERVED ----

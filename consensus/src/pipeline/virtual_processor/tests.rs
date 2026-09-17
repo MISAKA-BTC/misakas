@@ -1,7 +1,6 @@
 use crate::{
     consensus::test_consensus::TestConsensus,
     model::{services::reachability::ReachabilityService, stores::headers::HeaderStoreReader},
-    pipeline::virtual_processor::ContributionWeight,
 };
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::{
@@ -6674,14 +6673,7 @@ async fn dns_v3_canonical_attestation_credited() {
         let vp = ctx.consensus.virtual_processor();
         let bonds: Vec<_> = vp.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
         let bond_amount = bonds.iter().find(|b| b.bond_outpoint == bond_outpoint).expect("the funded bond is persisted").amount;
-        let (c, d) = vp.collect_stake_contributions_v2(
-            new_sink,
-            None,
-            &bonds,
-            genesis_hash.as_byte_slice(),
-            &dns,
-            ContributionWeight::BondedStake,
-        );
+        let (c, d) = vp.collect_stake_contributions_v2(new_sink, None, &bonds, genesis_hash.as_byte_slice(), &dns);
         (c, d, bond_amount)
     };
 
@@ -6805,7 +6797,7 @@ async fn dns_v3_noncanonical_attestation_rejected() {
     let (contributions, denom) = {
         let vp = ctx.consensus.virtual_processor();
         let bonds: Vec<_> = vp.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
-        vp.collect_stake_contributions_v2(new_sink, None, &bonds, genesis_hash.as_byte_slice(), &dns, ContributionWeight::BondedStake)
+        vp.collect_stake_contributions_v2(new_sink, None, &bonds, genesis_hash.as_byte_slice(), &dns)
     };
 
     // The non-canonical attestation also earns NO StakeScore credit (PR4)...
@@ -7342,15 +7334,14 @@ async fn duplicate_epoch_attestation_credited_once() {
     let new_sink = ctx.consensus.get_sink();
     let vp = ctx.consensus.virtual_processor();
     let bonds: Vec<_> = vp.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
-    let (contributions, denom) =
-        vp.collect_stake_contributions_v2(new_sink, None, &bonds, genesis_hash.as_byte_slice(), &dns, ContributionWeight::BondedStake);
+    let (contributions, denom) = vp.collect_stake_contributions_v2(new_sink, None, &bonds, genesis_hash.as_byte_slice(), &dns);
 
     // The (bond, epoch) pair is credited at most once even though two shards carry it.
     let credited_for_epoch = contributions.iter().filter(|c| c.bond_outpoint == bond_outpoint && c.epoch == anchor.epoch).count();
     assert!(credited_for_epoch >= 1, "the canonical attestation is credited at least once");
     // After the per-(bond,epoch) aggregation, the signed stake for this epoch equals the bond's
     // stake exactly ONCE (no double-count from the duplicate shard).
-    let totals = total_active_stake_by_epoch(&bonds, &denom, kaspa_consensus_core::dns_finality::InactivityLeakViewV1::none());
+    let totals = total_active_stake_by_epoch(&bonds, &denom);
     let per_epoch = aggregate_epoch_tallies(&contributions, &totals);
     let bond_amount = bonds.iter().find(|b| b.bond_outpoint == bond_outpoint).expect("bond persisted").amount;
     let tally = per_epoch.iter().find(|t| t.epoch == anchor.epoch).expect("the epoch is tallied");

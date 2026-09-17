@@ -37,14 +37,13 @@ use crate::{
         deps_manager::{BlockProcessingMessage, BlockResultSender, BlockTask, VirtualStateProcessingMessage},
         header_processor::HeaderProcessor,
         pruning_processor::processor::{PruningProcessingMessage, PruningProcessor},
-        virtual_processor::{ContributionWeight, VirtualStateProcessor, errors::PruningImportResult},
+        virtual_processor::{VirtualStateProcessor, errors::PruningImportResult},
     },
     processes::{
         ghostdag::ordering::SortableBlock,
         window::{WindowManager, WindowType},
     },
 };
-use kaspa_consensus_core::vlt::VltActivationState;
 use kaspa_consensus_core::{
     BlockHashSet, BlueWorkType, ChainPath, HashMapCustomHasher,
     acceptance_data::{AcceptanceData, MergesetBlockAcceptanceData},
@@ -61,9 +60,9 @@ use kaspa_consensus_core::{
     coinbase::MinerData,
     daa_score_timestamp::DaaScoreTimestamp,
     dns_finality::{
-        ActiveValidatorSet, AttestationQualityDeficit, CanonicalLaggedEpochAnchor, ComputeStatusView, DnsConfirmation,
-        PendingComputeVerdict, PrecommitDuty, StakeBondPage, StakeBondQuery, StakeBondRecord, ValidatorAttestationTarget,
-        ValidatorRecord, VltStatusView, dns_confirmation_from_state, epoch_meets_quality_floor, is_bond_active_at,
+        ActiveValidatorSet, AttestationQualityDeficit, CanonicalLaggedEpochAnchor, DnsConfirmation, StakeBondPage, StakeBondQuery,
+        StakeBondRecord, ValidatorAttestationTarget, ValidatorRecord, dns_confirmation_from_state, epoch_meets_quality_floor,
+        is_bond_active_at,
         paginate_stake_bonds, ready_epoch_from_tip_blue_score, required_stake_for_quality_floor, stake_attestation_message,
     },
     errors::{
@@ -1041,48 +1040,19 @@ impl Consensus {
             .collect()
     }
 
-    /// Every stake-bond record in the overlay store. `flatten()`-equivalent filtering drops
-    /// unreadable entries defensively: one corrupt bond must not blank out the whole set, since
-    /// callers use it as the universe the overlay's identity and activity checks resolve against.
-    fn all_stake_bond_records(&self) -> Vec<StakeBondRecord> {
-        self.storage.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect()
-    }
-
     /// kaspa-pq DNS v3: assemble the signed `ValidatorAttestationTarget` for a canonical
     /// lagged anchor — the exact `(net_id, epoch, target_hash, target_daa_score, vsc,
     /// bond)` digest the v3 verifier reconstructs (`collect_stake_contributions_v2`). The
     /// service only signs `message`. Shared by the singular + batch signers.
     ///
-    /// Below the VLT weight fence the VSC is the audit-#4 fixed zero (P-1D: ADR-0017 retired
-    /// the committee; kept for domain separation). At and above it, PR 2 gives the slot its
-    /// §5.1 meaning: the [`kaspa_consensus_core::vlt::vote_snapshot_commitment`] of the frozen
-    /// voting snapshot in force at the sink, binding this vote to the denominator it will be
-    /// weighed against.
+    /// The VSC is the audit-#4 fixed zero (P-1D: ADR-0017 retired the committee; kept for domain
+    /// separation), the only value the acceptance gate admits.
     fn build_attestation_target(
         &self,
         anchor: &CanonicalLaggedEpochAnchor,
         bond_outpoint: TransactionOutpoint,
     ) -> ValidatorAttestationTarget {
-        let vsc = self
-            .config
-            .params
-            .dns_params
-            .as_ref()
-            .and_then(|dns_params| {
-                let sink = self.get_sink();
-                let sink_daa = self.get_sink_daa_score_timestamp().daa_score;
-                // PR 4: keyed by the TARGET epoch — a late signature for an older due epoch
-                // must bind that epoch's frozen denominator, not whichever is current.
-                self.virtual_processor.vote_commitment_for_target(
-                    sink,
-                    sink_daa,
-                    anchor.epoch,
-                    &self.all_stake_bond_records(),
-                    self.config.params.genesis.hash.as_byte_slice(),
-                    dns_params,
-                )
-            })
-            .unwrap_or_default();
+        let vsc = kaspa_hashes::Hash64::default();
         // ADR-0009 Addendum A.3: network discriminator := the per-network genesis hash.
         let message = stake_attestation_message(
             self.config.params.genesis.hash.as_byte_slice(),
@@ -1569,10 +1539,6 @@ impl ConsensusApi for Consensus {
             &bonds,
             self.config.params.genesis.hash.as_byte_slice(),
             dns_params,
-            // Stake-denominated inclusion policy, not finality voting weight: these deficits are
-            // measured against `min_active_stake_sompi` / `required_stake_for_quality_floor`, so they
-            // stay on bonded stake regardless of the VLT fence.
-            ContributionWeight::BondedStake,
         );
 
         let mut seen = HashSet::new();
@@ -1668,10 +1634,6 @@ impl ConsensusApi for Consensus {
             &bonds,
             self.config.params.genesis.hash.as_byte_slice(),
             dns_params,
-            // Stake-denominated inclusion policy, not finality voting weight: these deficits are
-            // measured against `min_active_stake_sompi` / `required_stake_for_quality_floor`, so they
-            // stay on bonded stake regardless of the VLT fence.
-            ContributionWeight::BondedStake,
         );
         let mut seen = HashSet::new();
         let mut signed_by_epoch: HashMap<u64, u64> = HashMap::new();
@@ -1724,73 +1686,6 @@ impl ConsensusApi for Consensus {
         } else {
             fallback.into_iter().rev().take(limit).collect()
         }
-    }
-
-    fn get_pending_compute_verdicts(&self, validator_id: kaspa_consensus_core::Hash64, limit: usize) -> Vec<PendingComputeVerdict> {
-        let Some(dns_params) = self.config.params.dns_params.as_ref() else {
-            return Vec::new();
-        };
-        let sink = self.get_sink();
-        let sink_daa = self.get_sink_daa_score_timestamp().daa_score;
-        self.virtual_processor.pending_compute_verdicts(
-            sink,
-            &self.all_stake_bond_records(),
-            self.config.params.genesis.hash.as_byte_slice(),
-            dns_params,
-            sink_daa,
-            validator_id,
-            limit,
-        )
-    }
-
-    fn get_compute_status(
-        &self,
-        validator_id: kaspa_consensus_core::Hash64,
-        bond_outpoint: TransactionOutpoint,
-    ) -> Option<ComputeStatusView> {
-        let dns_params = self.config.params.dns_params.as_ref()?;
-        let sink = self.get_sink();
-        let sink_daa = self.get_sink_daa_score_timestamp().daa_score;
-        Some(self.virtual_processor.compute_status(
-            sink,
-            &self.all_stake_bond_records(),
-            self.config.params.genesis.hash.as_byte_slice(),
-            dns_params,
-            sink_daa,
-            validator_id,
-            bond_outpoint,
-        ))
-    }
-
-    fn get_vlt_status(&self) -> Option<VltStatusView> {
-        let dns_params = self.config.params.dns_params.as_ref()?;
-        let (gauges, sink_daa_score) = self.virtual_processor.vlt_metrics.read();
-        Some(VltStatusView {
-            state: self.virtual_processor.vlt_state.lock().unwrap().as_ref().map_or("pre_shadow", VltActivationState::label),
-            gauges,
-            shadow_fence_daa_score: dns_params.vlt.vlt_shadow_activation_daa_score,
-            weight_fence_daa_score: dns_params.vlt.vlt_activation_daa_score,
-            sink_daa_score,
-        })
-    }
-
-    fn get_precommit_duty(
-        &self,
-        validator_id: kaspa_consensus_core::Hash64,
-        bond_outpoint: TransactionOutpoint,
-    ) -> Option<PrecommitDuty> {
-        let dns_params = self.config.params.dns_params.as_ref()?;
-        let sink = self.get_sink();
-        let sink_daa = self.get_sink_daa_score_timestamp().daa_score;
-        Some(self.virtual_processor.precommit_duty_view(
-            sink,
-            &self.all_stake_bond_records(),
-            self.config.params.genesis.hash.as_byte_slice(),
-            dns_params,
-            sink_daa,
-            validator_id,
-            bond_outpoint,
-        ))
     }
 
     fn get_sink_daa_score_timestamp(&self) -> DaaScoreTimestamp {

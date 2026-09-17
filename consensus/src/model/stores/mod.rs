@@ -9,7 +9,6 @@ pub mod dns_state;
 pub mod epoch_accumulator;
 // kaspa-pq Selected-Parent EVM Lane (ADR-0020): per-block EVM header / state
 // snapshot + canonical-heads stores (prefixes 201/206/209).
-pub mod dns_finality_certificate;
 pub mod evm;
 pub mod ghostdag;
 pub mod headers;
@@ -32,8 +31,6 @@ pub mod utxo_diffs;
 pub mod utxo_multisets;
 pub mod utxo_set;
 pub mod virtual_state;
-pub mod vlt_credits;
-pub mod vlt_voting_snapshot;
 
 pub use kaspa_database;
 pub use kaspa_database::prelude::DB;

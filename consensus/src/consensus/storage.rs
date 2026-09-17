@@ -8,8 +8,7 @@ use crate::{
         compute_capabilities::DbComputeCapabilityStore,
         daa::DbDaaStore,
         depth::DbDepthStore,
-        dns_finality_certificate::DbDnsFinalityCertificateStore,
-        dns_state::{DbDnsStateStore, DbVltActivationStore},
+        dns_state::DbDnsStateStore,
         epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
         evm::{
             DbEvmBlockHashMapStore, DbEvmBlockStateRootStore, DbEvmCanonicalHeadsStore, DbEvmCodeStore, DbEvmDepositLockStore,
@@ -36,8 +35,6 @@ use crate::{
         utxo_diffs::DbUtxoDiffsStore,
         utxo_multisets::DbUtxoMultisetsStore,
         virtual_state::{LkgVirtualState, VirtualStores},
-        vlt_credits::DbVltCreditStore,
-        vlt_voting_snapshot::DbVltVotingSnapshotStore,
     },
     processes::{ghostdag::ordering::SortableBlock, reachability::inquirer as reachability, relations},
 };
@@ -67,9 +64,6 @@ pub struct ConsensusStorage {
 
     // kaspa-pq DNS finality overlay stores (ADR-0009, Phase 10)
     pub dns_state_store: Arc<RwLock<DbDnsStateStore>>,
-    /// MISAKA VLT PR 1: the persisted §6 activation record — the reservation/active state the
-    /// per-epoch recompute steps and a restart resumes from. Same batch as `dns_state_store`.
-    pub vlt_activation_store: Arc<RwLock<DbVltActivationStore>>,
     // kaspa-pq ADR-0022: singleton overlay snapshot as-of the current pruning point.
     pub pruning_overlay_snapshot_store: Arc<RwLock<DbPruningPointOverlaySnapshotStore>>,
     pub stake_bonds_store: Arc<RwLock<DbStakeBondsStore>>,
@@ -143,13 +137,6 @@ pub struct ConsensusStorage {
     // ([`EpochTally`]) and its per-block validator quality sub-pool input. Both
     // inert (never written) until `pos_v2_activation_daa_score` (`u64::MAX` today).
     pub epoch_accumulator_store: Arc<DbEpochAccumulatorStore>,
-    /// MISAKA Verified LLM Token-Weighted BFT: per-epoch finalized verified-compute credit.
-    pub vlt_credit_store: Arc<DbVltCreditStore>,
-    /// MISAKA VLT PR 2: per-epoch frozen voting snapshots (§5) — the denominator a vote's signed
-    /// commitment binds. Write-once per wall epoch, frozen at the boundary recompute.
-    pub vlt_voting_snapshot_store: Arc<DbVltVotingSnapshotStore>,
-    /// MISAKA VLT PR 4: per-epoch §7.2 finality certificates — the persistent quorum proof.
-    pub dns_finality_certificate_store: Arc<DbDnsFinalityCertificateStore>,
     pub block_quality_pool_store: Arc<DbBlockQualityPoolStore>,
     pub reserve_balance_store: Arc<DbReserveBalanceStore>,
 
@@ -309,7 +296,6 @@ impl ConsensusStorage {
         // bond set is small (bounded by the active validator count), so a
         // modest item-capped cache suffices.
         let dns_state_store = Arc::new(RwLock::new(DbDnsStateStore::new(db.clone())));
-        let vlt_activation_store = Arc::new(RwLock::new(DbVltActivationStore::new(db.clone())));
         let pruning_overlay_snapshot_store = Arc::new(RwLock::new(DbPruningPointOverlaySnapshotStore::new(db.clone())));
         let stake_bonds_store =
             Arc::new(RwLock::new(DbStakeBondsStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build())));
@@ -371,36 +357,6 @@ impl ConsensusStorage {
         // per-block rewarded-keys cache sizing.
         let epoch_accumulator_store =
             Arc::new(DbEpochAccumulatorStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build()));
-        // Sized to comfortably hold a whole `credit_window_epochs + credit_delay_epochs` span so
-        // a full `C_i(E)` sum is served from cache. Untracked (`Count`) like the accumulator —
-        // `tracked_bytes` would call `estimate_mem_bytes` and panic.
-        let vlt_credit_store = {
-            let mut store = DbVltCreditStore::new(db.clone(), PolicyBuilder::new().max_items(8192).untracked().build());
-            // Before anything can read a row. These rows are write-once, so a row derived under
-            // superseded rules is not merely stale — it is the answer forever, and every later
-            // read prefers it to the truth. Discarding them here costs a recomputation from the
-            // chain, which is exactly what the store exists to avoid doing repeatedly and exactly
-            // what it must do once after the rules change.
-            if let Err(err) = store.reindex_if_stale() {
-                kaspa_core::warn!(
-                    "[vlt-credit] could not check the accumulator schema version: {err}; leaving existing rows in place"
-                );
-            }
-            Arc::new(store)
-        };
-        // A handful of epochs is plenty: the sign path reads the current epoch, the credit walk
-        // memoizes per run. Untracked for the same estimator reason as the credit store.
-        let vlt_voting_snapshot_store = {
-            let mut store = DbVltVotingSnapshotStore::new(db.clone(), PolicyBuilder::new().max_items(64).untracked().build());
-            // Same write-once-and-derived discipline as the credit rows: frozen under superseded
-            // rules means wrong forever, so discard for re-freezing rather than read as final.
-            if let Err(err) = store.reindex_if_stale() {
-                kaspa_core::warn!("[vlt-voting-snapshot] could not check the schema version: {err}; leaving existing rows in place");
-            }
-            Arc::new(store)
-        };
-        let dns_finality_certificate_store =
-            Arc::new(DbDnsFinalityCertificateStore::new(db.clone(), PolicyBuilder::new().max_items(64).untracked().build()));
         let block_quality_pool_store = Arc::new(DbBlockQualityPoolStore::new(
             db.clone(),
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
@@ -499,7 +455,6 @@ impl ConsensusStorage {
             virtual_stores,
             selected_chain_store,
             dns_state_store,
-            vlt_activation_store,
             pruning_overlay_snapshot_store,
             stake_bonds_store,
             palw_class_carriage_store,
@@ -531,9 +486,6 @@ impl ConsensusStorage {
             utxo_diffs_store,
             rewarded_epochs_store,
             epoch_accumulator_store,
-            vlt_credit_store,
-            vlt_voting_snapshot_store,
-            dns_finality_certificate_store,
             block_quality_pool_store,
             reserve_balance_store,
             utxo_multisets_store,
