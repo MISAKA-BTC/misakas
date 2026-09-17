@@ -793,6 +793,14 @@ impl PalwPanelService {
         let backends = self.backends();
         let mut out = Vec::new();
         for class in read.classes.iter().filter(|c| !c.is_base_class) {
+            // **Node-local capacity, never consensus** (the operator's rule): a host without the
+            // memory to replay this class proves nothing for it — the standing proof expires by
+            // itself and the class counts one seat fewer. The chain judges the proof; the budget
+            // is this node's own.
+            if let Err(why) = self.replay_memory_budget_v1() {
+                self.readiness_note(class.class_id, format!("no proof — {why}"));
+                continue;
+            }
             let row = read.readiness.iter().find(|r| r.bond == bond_key && r.class_id == class.class_id).map(|r| r.row);
             let last = self.readiness_submitted.lock().unwrap().get(&class.class_id).copied();
             if !palw_readiness_duty_due_v1(row.as_ref(), current_daa, span_now, last, read.span_daa, &globals) {
@@ -888,6 +896,24 @@ impl PalwPanelService {
             });
         }
         out
+    }
+
+    /// The bytes a replay of a held class needs on this host: the largest held artifact file (its
+    /// pages, mapped and shared, still have to be resident to replay) plus one replay's scratch.
+    fn replay_memory_need_bytes_v1(&self) -> u64 {
+        let artifact = self
+            .class_holdings
+            .iter()
+            .filter_map(|holding| holding.path.as_ref())
+            .filter_map(|path| std::fs::metadata(path).ok().map(|m| m.len()))
+            .max()
+            .unwrap_or(0);
+        artifact.saturating_add(crate::palw_backends::PALW_REPLAY_SCRATCH_ESTIMATE_BYTES_V1)
+    }
+
+    /// [`crate::palw_backends::replay_memory_budget_v1`] for this node's holdings.
+    fn replay_memory_budget_v1(&self) -> Result<(), String> {
+        crate::palw_backends::replay_memory_budget_v1(self.replay_memory_need_bytes_v1())
     }
 
     fn fee_state_path(&self) -> PathBuf {
@@ -4082,6 +4108,16 @@ impl PalwPanelService {
                     continue;
                 }
                 first_seen.entry(duty.claim_id).or_insert(current_daa.max(duty.bound_daa));
+                // **Host memory, node-local and never consensus**: a replay that would push this host
+                // past its usable memory waits for a later tick instead of starting — swap is not
+                // capacity, and a host in swap finishes no replay at all. The deadline still runs;
+                // a seat that never fits answers nothing, which the quorum prices as silence.
+                if let Err(why) = self.replay_memory_budget_v1() {
+                    crate::palw_backends::note_throttled_v1("panel-replay-budget", || {
+                        format!("[{PALW_PANEL}] replay of claim {} deferred: {why}", duty.claim_id)
+                    });
+                    continue;
+                }
                 let verdict = 'verdict: {
                     // **Class capability is decided BEFORE looking at deliveries.** This resolve
                     // lived inside the per-material loop, so a seat that received NOTHING never

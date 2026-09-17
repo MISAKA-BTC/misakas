@@ -459,6 +459,9 @@ pub fn load_class_holdings_v1(
             );
         }
     }
+    if !holdings.is_empty() {
+        info!("[{role}] memory after loading {} class artifact(s): {}", holdings.len(), process_memory_line_v1());
+    }
     holdings
 }
 
@@ -557,6 +560,108 @@ fn cgroup_headroom_from_v1(proc_self_cgroup: &str, read: impl Fn(&Path) -> Optio
 }
 
 /// `MemAvailable` of this host in bytes, where the kernel says it (Linux); `None` elsewhere.
+/// **What this process holds, as the kernel accounts it** (`/proc/self/smaps_rollup`, Linux):
+/// proportional set size split into anonymous and file-backed pages, and what is swapped out.
+/// The number that tells a mapped artifact from a copied one is `pss_file` against `pss_anon`:
+/// seven seats sharing one mapped file show it once in `pss_file` each (divided by the sharers)
+/// and nothing in `pss_anon`; seven copies show 1.8 GiB of `pss_anon` each. `None` off Linux.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwProcessMemoryV1 {
+    pub rss_bytes: u64,
+    pub pss_bytes: u64,
+    pub pss_anon_bytes: u64,
+    pub pss_file_bytes: u64,
+    pub swap_bytes: u64,
+}
+
+pub fn process_memory_v1() -> Option<PalwProcessMemoryV1> {
+    #[cfg(target_os = "linux")]
+    {
+        let text = std::fs::read_to_string("/proc/self/smaps_rollup").ok()?;
+        let field = |name: &str| -> u64 {
+            text.lines()
+                .find_map(|line| {
+                    let rest = line.strip_prefix(name)?.trim();
+                    rest.strip_suffix("kB")?.trim().parse::<u64>().ok().map(|kb| kb.saturating_mul(1024))
+                })
+                .unwrap_or(0)
+        };
+        Some(PalwProcessMemoryV1 {
+            rss_bytes: field("Rss:"),
+            pss_bytes: field("Pss:"),
+            pss_anon_bytes: field("Pss_Anon:"),
+            pss_file_bytes: field("Pss_File:"),
+            swap_bytes: field("Swap:"),
+        })
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
+/// One line of [`process_memory_v1`] for a log, or the reason there is none.
+pub fn process_memory_line_v1() -> String {
+    match process_memory_v1() {
+        Some(m) => format!(
+            "PSS {:.2} GiB = {:.2} GiB anonymous + {:.2} GiB file-backed (shared with every process that maps the same \
+             files); swapped out {:.2} GiB",
+            gib(m.pss_bytes),
+            gib(m.pss_anon_bytes),
+            gib(m.pss_file_bytes),
+            gib(m.swap_bytes)
+        ),
+        None => "process memory accounting is Linux-only here".to_string(),
+    }
+}
+
+/// **The host memory a replay must leave alone**, and the fraction of the rest it may take.
+/// Node-local policy, never consensus: a seat that starts a replay its host cannot hold does not
+/// finish it, and a host driven into swap finishes nothing (measured 2026-09-17: seven seats on a
+/// 12 GiB host, 8 GiB of swap filled in minutes, the OOM killer took a node). Swap is a crash
+/// guard, not capacity, so only `MemAvailable` counts.
+pub const PALW_REPLAY_HOST_RESERVE_BYTES_V1: u64 = 1 << 30;
+pub const PALW_REPLAY_BUDGET_PERMILLE_V1: u64 = 700;
+/// What one dense replay adds on top of the artifact's own pages until it is measured: caches,
+/// retained logits rows and the trace. Half a GiB is the round number above the measured floor
+/// (0.9 GiB was the worst node-wide growth under seven concurrent claims, most of it the copied
+/// artifact this build no longer makes).
+pub const PALW_REPLAY_SCRATCH_ESTIMATE_BYTES_V1: u64 = 512 << 20;
+
+/// Whether a replay that needs `need_bytes` (the class's artifact plus its scratch) fits this
+/// host's budget now: `need ≤ 70 % × (MemAvailable − reserve)`. `Ok` where the platform cannot say
+/// (the node then behaves as before this policy); `Err` names the numbers.
+pub fn replay_memory_budget_v1(need_bytes: u64) -> Result<(), String> {
+    let Some(available) = host_available_bytes_v1() else { return Ok(()) };
+    let usable = available.saturating_sub(PALW_REPLAY_HOST_RESERVE_BYTES_V1);
+    let budget = usable.saturating_mul(PALW_REPLAY_BUDGET_PERMILLE_V1) / 1_000;
+    if need_bytes <= budget {
+        return Ok(());
+    }
+    Err(format!(
+        "the host's replay budget is {:.2} GiB (70 % of {:.2} GiB available past a {:.2} GiB reserve; swap is not capacity) \
+         and this class needs {:.2} GiB",
+        gib(budget),
+        gib(available),
+        gib(PALW_REPLAY_HOST_RESERVE_BYTES_V1),
+        gib(need_bytes)
+    ))
+}
+
+/// A line logged at most once a minute per key — a deferral that repeats every tick is one fact.
+pub fn note_throttled_v1(key: &str, line: impl FnOnce() -> String) {
+    static LAST: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>> =
+        std::sync::OnceLock::new();
+    let map = LAST.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let mut map = map.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let now = std::time::Instant::now();
+    if map.get(key).is_some_and(|at| now.duration_since(*at) < std::time::Duration::from_secs(60)) {
+        return;
+    }
+    map.insert(key.to_string(), now);
+    warn!("{}", line());
+}
+
 fn mem_available_bytes_v1() -> Option<u64> {
     #[cfg(target_os = "linux")]
     {
