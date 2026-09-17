@@ -71,7 +71,12 @@ Four nodes at rest, the same artifact, before and after D1 (`smaps_rollup`, MiB)
 | host, summed | 11,255 + 8,300 swapped (7 nodes) | — | 2,923 | 1,752 = the file, once |
 
 Seven nodes at rest after D1: anonymous 52–66 MiB per non-registering node, the file 1,752 MiB once for the
-host, `MemAvailable` 9.3 GiB of 12 (before: 0.3 GiB and the OOM killer). **D2 matters to every node, not only
+host, `MemAvailable` 9.3 GiB of 12 (before: 0.3 GiB and the OOM killer). **Under the drill's activity**
+(phase 2, eight nodes, the class in PROBATION with eight ready seats, every seat replaying the floor's claims
+and proving possession each span): 800–1,030 MiB anonymous per node — the scratch this ADR §4 names: retained
+materials, KV caches, logits rows, the per-process compile — and the file still 1,753 MiB once (`Pss_File`
+summed over eight processes), `MemAvailable` 9.4 GiB of 12. Before D1 the same eight nodes would have held
+8 × 1.8 GiB of copies before any scratch. **D2 matters to every node, not only
 the registrant**: on the D1-only binary, the moment the class registration landed, each node that resolved the
 new class derived its operand-inventory root by materializing the rows — four nodes at 2.0–2.1 GiB anonymous
 within a minute, 9.2 GiB on the host, swap in use — because the resolve runs on every producer tick and the
