@@ -266,6 +266,7 @@ pub mod palw_model_benefits_v1;
 pub mod palw_model_fit_v1;
 pub mod palw_model_lines_v1;
 pub mod palw_model_market_v1;
+pub mod palw_model_registry_v1;
 /// ADR-0077 Decision 16 (P-16): `PanelDa`, the privacy mode whose prompt stays off chain — and
 /// ADR-0077 SA-5, which says what arming it does NOT buy.
 pub mod palw_panel_da_v1;

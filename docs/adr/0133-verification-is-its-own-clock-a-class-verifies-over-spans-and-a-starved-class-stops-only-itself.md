@@ -89,7 +89,9 @@ execution spans** (5 anchors each). Neither of the first two moves for a model. 
 (`claim.pwu`), `EconomicAttempted` stays model economics (ADR-0131/0132), the window is liveness/timing, and
 artifact availability is data availability/runtime — four responsibilities, four numbers.
 
-**Decision 2 — `PalwVerificationProfileV1`, derived, never chosen.**
+**Decision 2 — `PalwVerificationProfileV1`, derived, never chosen.** *(Superseded the same day by ADR-0135
+Decision 3 in one respect: the measured p99s below are telemetry, not inputs — the registry's profile reads the
+graph's work alone, so no measuring host's hardware enters a rule.)*
 `{ verification_window_spans, artifact_prefetch_spans, max_inflight_claims, warm_p99_ms, cold_p99_ms,
 seat_count }` from `PalwClassTimingFactsV1 { draw_compute (the graph's, ADR-0131), artifact_bytes (declared at
 registration), warm_p99_ms, cold_p99_ms (measured in the shadow period, ADR-0131 Decision 6) }` and a
