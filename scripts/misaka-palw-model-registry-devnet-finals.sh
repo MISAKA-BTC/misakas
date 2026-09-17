@@ -7,7 +7,8 @@
 #   1/4  the nodes restart from their datadirs, node-3 as a producer for the class (`--palw-producer-class`)
 #   2/4  the class's first claim is accepted (op 186 `inflightNow` ≥ 1 or a Final)
 #   3/4  the class's first claim reaches `Final` (`misaka palw economics`: claims_final ≥ 1 for the class)
-#   4/4  the class leaves PROBATION (ACTIVE_LIMITED or ACTIVE) — needs `probationClaims` finals
+#   4/5  the class leaves PROBATION (ACTIVE_LIMITED or ACTIVE) — needs `probationClaims` finals
+#   5/5  a fresh node (NODES, an empty datadir) syncs from the others and holds the same registry rows
 #
 # Env as the first phase (WORK_DIR, NODES, LANE, REGISTRY_AT, CLASS_ARTIFACT, RPC_BASE, P2P_BASE,
 # STEP_WAIT, STALL_WAIT), plus PRODUCER_NODE (default 3).
@@ -101,11 +102,38 @@ log "3/4 the class's first claim reaches Final"
 wait_for 1 eco "any(c.get('class_id') == '$CLASS_ID' and c.get('claims', {}).get('final', 0) >= 1 for c in v.get('census', []))" "the class's first Final"
 log "    $(eco 1 "[(c['claims']) for c in v['census'] if c['class_id']=='$CLASS_ID'][0]") · registry $(reg 1 "[(c['state'], c['probesPassed'], c['probesFailed']) for c in v['classes'] if c['classId']=='$CLASS_ID'][0]")"
 
-log "4/4 the class leaves PROBATION"
+log "4/5 the class leaves PROBATION"
 wait_for 1 reg "any(c.get('classId') == '$CLASS_ID' and c.get('state') in ('ActiveLimited', 'Active') for c in v.get('classes', []))" "the class past probation"
 log "    $(reg 1 "[(c['state'], c['readySeatsNow'], c['inflightNow'], c['sharePermille'], c['reason']) for c in v['classes'] if c['classId']=='$CLASS_ID'][0]")"
 for n in 1 2; do cli "$n" palw registry --output json > "$WORK_DIR/out/registry-finals-node-$n.json" 2>/dev/null || true; cli "$n" palw economics --output json > "$WORK_DIR/out/economics-finals-node-$n.json" 2>/dev/null || true; done
-log "PASS — the nodes restarted from their datadirs, the class produced, its claim reached Final through the registry's panels, and the lifecycle left probation"
+log "5/5 a fresh node syncs and holds the same rows"
+f="$NODES"
+python3 - "$WORK_DIR/keys" "$f" <<'PYSEED'
+import hashlib, os, sys
+d, i = sys.argv[1], int(sys.argv[2])
+h = lambda b: hashlib.blake2b(b, digest_size=32).hexdigest()
+p = f"{d}/bond-{i}.seed"; open(p, "w").write(h(b"misaka-devnet-genesis-bond-v1/" + str(i).encode())); os.chmod(p, 0o600)
+PYSEED
+addr="$("$CLI_BIN" --network devnet key address --key-file "$WORK_DIR/keys/bond-$f.seed" | tail -1 | awk '{print $NF}')"
+echo "$addr" > "$WORK_DIR/keys/bond-$f.address"
+rm -rf "$WORK_DIR/node-$f"
+MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/node-$f" --listen="127.0.0.1:$((P2P_BASE + f))" --rpclisten-borsh="127.0.0.1:$((RPC_BASE + f))" \
+  --utxoindex --nodnsseed --disable-upnp --nogrpc \
+  --palw-execution-lane-devnet="$LANE" --palw-model-registry-devnet="$REGISTRY_AT" --palw-panel --palw-class-artifact="$CLASS_ARTIFACT" \
+  --palw-producer-key="$WORK_DIR/keys/bond-$f.seed" --palw-producer-bond="$PREMINE_TXID:$f" --palw-producer-pay-address="$addr" \
+  --connect="127.0.0.1:$P2P_BASE" >>"$WORK_DIR/node-$f.log" 2>&1 &
+pids+=("$!")
+log "    node-$f pid ${pids[-1]} syncing from an empty datadir"
+step_start
+while ! step_expired; do
+  a="$(reg 1 "sorted((c['classId'], c['state'] if c['hasRow'] else 'legacy', c['sinceSpan']) for c in v.get('classes', []))")"
+  b="$(reg "$f" "sorted((c['classId'], c['state'] if c['hasRow'] else 'legacy', c['sinceSpan']) for c in v.get('classes', []))")"
+  ta="$(reg 1 "v.get('tipDaa')")"; tb="$(reg "$f" "v.get('tipDaa')")"
+  if [ -n "$a" ] && [ "$a" = "$b" ] && [ -n "$tb" ] && [ "$tb" -ge $(( ${ta:-0} - 4 )) ]; then log "    the fresh node holds node-1's rows at DAA $tb: $a"; break; fi
+  sleep 15
+done
+[ "$a" = "$b" ] || gave_up "the fresh node to hold node-1's rows ($a vs $b)"
+log "PASS — the nodes restarted from their datadirs, the class produced, its claim reached Final through the registry's panels, the lifecycle left probation, and a fresh node synced to the same rows"
 log "the nodes are left running for the operator (kill them with: pkill -f '$WORK_DIR/node-')"
 trap - EXIT
 exit 0
