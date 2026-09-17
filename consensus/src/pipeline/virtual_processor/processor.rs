@@ -450,9 +450,6 @@ pub struct VirtualStateProcessor {
     pub(super) palw_work_priced_reward: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0125: `Params::palw_execution_lane_fence` — the execution lane's activation and shape.
     pub(super) palw_execution_lane: Option<kaspa_consensus_core::config::params::PalwExecutionLaneV1>,
-    /// ADR-0126: `Params::palw_validator_overlay_retirement_fence` — where the validator overlay stops
-    /// being consensus.
-    pub(super) palw_validator_overlay_retirement: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **ADR-0089 Decision 9's fence, `None` on every shipped preset.** Past it the EVM's
     /// window and hand exist and the block's EVM actions reach its transition. Resolved at the
     /// BLOCK's DAA.
@@ -917,7 +914,6 @@ impl VirtualStateProcessor {
             palw_panel_economy: params.palw_panel_economy_fence(),
             palw_work_priced_reward: params.palw_work_priced_reward_fence(),
             palw_execution_lane: params.palw_execution_lane_fence(),
-            palw_validator_overlay_retirement: params.palw_validator_overlay_retirement_fence(),
             palw_model_evm: params.palw_model_evm_fence(),
             palw_context_ladder: params.palw_context_ladder,
             palw_epoch_boundary_budget: params.palw_epoch_boundary_budget,
@@ -974,11 +970,6 @@ impl VirtualStateProcessor {
     /// [`dns_finality_fresh_for_bridge`] — and read the same way the deposit-claim RPC reads it,
     /// so the RPC never accepts a claim the template would then leave out, or the reverse.
     fn bridge_finality_is_fresh(&self, sink: BlockHash) -> bool {
-        // ADR-0126: past the retirement there is no overlay finality to wait for, and the bridge
-        // must not pause on a clock that has stopped.
-        if self.headers_store.get_daa_score(sink).is_ok_and(|daa| self.validator_overlay_retired_at(daa)) {
-            return true;
-        }
         let Some(dns_params) = self.dns_params.as_ref() else {
             return false;
         };
@@ -3420,7 +3411,7 @@ impl VirtualStateProcessor {
         bond_view: &ActiveBondView,
         daa_score: u64,
     ) -> Vec<BondMutation> {
-        let Some(dns_params) = self.dns_params_at(daa_score) else {
+        let Some(dns_params) = self.dns_params.as_ref() else {
             return Vec::new();
         };
         if !dns_params.vlt_shadow_active_at(daa_score) {
@@ -3519,10 +3510,6 @@ impl VirtualStateProcessor {
         min_bond: u64,
         unbonding_floor: u64,
     ) -> Vec<BondMutation> {
-        // ADR-0126: past the retirement the overlay's bond set does not move.
-        if self.validator_overlay_retired_at(accepted_daa_score) {
-            return Vec::new();
-        }
         let enforce = self.dns_params.as_ref().is_some_and(|p| accepted_daa_score >= p.unbond_authz_mergeset_activation_daa_score);
         let mut muts = bond_mutations_from_accepted_txs(txs, accepted_daa_score, min_bond, unbonding_floor, enforce);
 
@@ -7411,35 +7398,6 @@ impl VirtualStateProcessor {
         self.palw_work_priced_reward.is_some_and(|fence| fence.is_active(daa_score))
     }
 
-    /// **ADR-0126: has the validator overlay retired at `daa_score`?**
-    pub(super) fn validator_overlay_retired_at(&self, daa_score: u64) -> bool {
-        self.palw_validator_overlay_retirement.is_some_and(|fence| fence.is_active(daa_score))
-    }
-
-    /// **ADR-0126: the overlay's params where the overlay is still consensus at `daa_score`.** Past the
-    /// retirement every overlay rule reads `None` — the path a network without an overlay has always
-    /// taken — so the retirement is that path, height-indexed, rather than a second set of branches.
-    pub(super) fn dns_params_at(&self, daa_score: u64) -> Option<&DnsParams> {
-        self.dns_params.as_ref().filter(|_| !self.validator_overlay_retired_at(daa_score))
-    }
-
-    /// **The coinbase carve at `daa_score`**: the overlay's split while it is consensus, PALW's worker
-    /// carve once it has retired (on a PALW network; the whole reward on any other), and the whole
-    /// reward where no overlay ever ran.
-    pub(super) fn coinbase_carve_at(&self, daa_score: u64) -> crate::processes::coinbase::CoinbaseCarve<'_> {
-        use crate::processes::coinbase::CoinbaseCarve;
-        if self.validator_overlay_retired_at(daa_score) {
-            return match self.palw_state_params_v2.as_ref() {
-                Some(state_params) => CoinbaseCarve::Palw(state_params),
-                None => CoinbaseCarve::Full,
-            };
-        }
-        match self.dns_params.as_ref().and_then(|p| p.reward_fee_split(daa_score)) {
-            Some(split) => CoinbaseCarve::Overlay(split),
-            None => CoinbaseCarve::Full,
-        }
-    }
-
     /// ADR-0125: the execution lane's shape where it is open at `daa_score`.
     pub(super) fn palw_execution_lane_at(&self, daa_score: u64) -> Option<kaspa_consensus_core::config::params::PalwExecutionLaneV1> {
         self.palw_execution_lane.filter(|lane| lane.activation.is_active(daa_score))
@@ -8692,10 +8650,6 @@ impl VirtualStateProcessor {
         let Some(dns_params) = self.dns_params.as_ref() else {
             return;
         };
-        // ADR-0126: past the retirement the overlay's state is frozen where the overlay stopped.
-        if self.headers_store.get_daa_score(sink).is_ok_and(|daa| self.validator_overlay_retired_at(daa)) {
-            return;
-        }
         // The StakeScore recompute below walks the selected chain reading each chain block's
         // acceptance data (`collect_stake_contributions_v2` -> `accepted_txs_of_chain_block`). During
         // pruning-point UTXO import (IBD), the sink IS the imported pruning point, whose acceptance
@@ -8950,10 +8904,6 @@ impl VirtualStateProcessor {
             return;
         };
         let sink_daa = self.headers_store.get_daa_score(sink).unwrap();
-        // ADR-0126: nothing past the retirement is accumulated for a validator.
-        if self.validator_overlay_retired_at(sink_daa) {
-            return;
-        }
         // The v2 master fence: inert (no walk, no write) on devnet/simnet (`u64::MAX`);
         // the walk runs from block 1 on mainnet/testnet (`PRODUCTION_DNS_PARAMS`, fence `0`).
         if sink_daa < dns_params.pos_v2_activation_daa_score {
@@ -9997,10 +9947,7 @@ impl VirtualStateProcessor {
                 }
             };
         }
-        // ADR-0126: a candidate past the retirement faces no stake gate. The PALW authority above is
-        // not the overlay's and keeps deciding deep reorgs.
-        let candidate_daa = self.headers_store.get_daa_score(candidate).unwrap_or_default();
-        let Some(dns_params) = self.dns_params_at(candidate_daa) else {
+        let Some(dns_params) = self.dns_params.as_ref() else {
             return DnsReorgOutcome::GateInactive;
         };
         let Ok(state) = self.dns_state_store.read().get() else {
@@ -10247,9 +10194,8 @@ impl VirtualStateProcessor {
     /// differs across nodes by their resolve batching — safe for admission (a policy disagreement
     /// keeps a tx out of a mempool, never out of a block's acceptance), disqualifying for
     /// validity. The consensus call site passes `None` and says why.
-    pub(super) fn dns_coinbase_settlement(&self, daa_score: u64) -> Option<DnsCoinbaseSettlement> {
-        // ADR-0126: past the retirement no coinbase waits on an overlay confirmation.
-        let dns_params = self.dns_params_at(daa_score)?;
+    pub(super) fn dns_coinbase_settlement(&self) -> Option<DnsCoinbaseSettlement> {
+        let dns_params = self.dns_params.as_ref()?;
         let long_maturity_daa = dns_params.coinbase_settlement_long_maturity_daa;
         if long_maturity_daa == 0 {
             return None;
@@ -10269,8 +10215,7 @@ impl VirtualStateProcessor {
     /// note on the reorg gate (§5-5) does not apply: this path is entered only in the dead-anchor
     /// state, which the cheap staleness check settles first on every healthy resolve.
     fn dns_stake_preferred_tip(&self, prev_sink: BlockHash, tips: &[BlockHash], finality_point: BlockHash) -> Option<BlockHash> {
-        // ADR-0126: past the retirement no stake prefers a tip.
-        let dns_params = self.dns_params_at(self.headers_store.get_daa_score(prev_sink).unwrap_or_default())?;
+        let dns_params = self.dns_params.as_ref()?;
         let mult = dns_params.stake_preference_max_work_deficit_multiplier;
         if mult == 0 || tips.len() < 2 {
             return None;
@@ -10981,7 +10926,7 @@ impl VirtualStateProcessor {
     }
 
     fn latest_ready_epoch_for_template_snapshot(&self, virtual_state: &VirtualState) -> Option<u64> {
-        let dns_params = self.dns_params_at(virtual_state.daa_score)?;
+        let dns_params = self.dns_params.as_ref()?;
         ready_epoch_from_tip_blue_score(
             virtual_state.ghostdag_data.blue_score,
             dns_params.attestation_epoch_length_blue_score,
@@ -11663,14 +11608,13 @@ impl VirtualStateProcessor {
         // on every current network (overlay dormant).
         // ADR-0018 §F staged rollout: None (Stage 1) / bootstrap (Stage 2) / full
         // (Stage 3) selected by DAA, identically to the validation path.
-        // ADR-0126: past the retirement the carve is PALW's and there is no validator pool.
-        let carve = self.coinbase_carve_at(virtual_state.daa_score);
+        let carve = self.dns_params.as_ref().and_then(|p| p.reward_fee_split(virtual_state.daa_score));
         // **A template build is six PALW-state materializations, and `getBlockTemplate` is an
         // unauthenticated wRPC method miners poll** (mainnet audit H-1's sibling sweep). The five
         // reads below and the existence probe at the header assembly all ask about the SAME tip
         // row; through the shared materialization they cost one, and the answers cannot differ
         // from each other any more than they could before.
-        let validator_pool = carve.overlay_split().map_or(0, |fs| {
+        let validator_pool = carve.map_or(0, |fs| {
             // The template computes the SAME set the validator will, from the same state it is
             // building on — a template whose pool disagreed with validation would build a coinbase
             // its own node then refuses.
@@ -11711,7 +11655,7 @@ impl VirtualStateProcessor {
         // mined from this template reproduces the validated coinbase byte-for-byte. Reads the sink's
         // committed reserve balance (= the template's selected parent). Inert below the v2 fence.
         let mut validator_reward_outputs = validator_reward_outputs;
-        if let Some(dns_params) = self.dns_params_at(virtual_state.daa_score) {
+        if let Some(dns_params) = self.dns_params.as_ref() {
             // MISAKA VLT §6 audit fee, from the unspent remainder of the §E validator pool. Placed
             // before the drip so both paths append in one order. Inert below the VLT fence.
             let (audit_outputs, _) = self.compute_audit_fee_outputs(
@@ -11882,8 +11826,7 @@ impl VirtualStateProcessor {
         // `overlay_commitment_root` byte-for-byte (construction == validation). Inert
         // (header unchanged) when the overlay is dormant. Appended after the EVM fields;
         // `with_overlay_commitment` re-finalizes over the full preimage.
-        // ADR-0126: past the retirement the overlay root is zero, as validation requires.
-        let header = if self.dns_params_at(virtual_state.daa_score).is_some() {
+        let header = if self.dns_params.is_some() {
             let overlay_root =
                 self.compute_overlay_snapshot(virtual_state.ghostdag_data.selected_parent, &template_bond_view).commitment_root();
             header.with_overlay_commitment(overlay_root)
@@ -12559,13 +12502,6 @@ impl VirtualStateProcessor {
         // Pinned by `the_pruning_point_witness_is_the_selected_chain_child_not_a_side_block`, which
         // fails against the heaviest-child rule with the attacker's planted root demanded.
         let verified_against = self.pruning_point_witness_child(pruning_point);
-        // ADR-0126: a witness past the retirement commits no overlay (its root is zero), and nothing
-        // after it reads one — so there is nothing to verify and nothing to install.
-        if let Some(child) = verified_against
-            && self.headers_store.get_daa_score(child).is_ok_and(|daa| self.validator_overlay_retired_at(daa))
-        {
-            return Ok(());
-        }
         if let Some(child) = verified_against {
             let committed = self.headers_store.get_header(child).map(|h| h.overlay_commitment_root).unwrap_or_default();
             if committed != got {
@@ -12706,10 +12642,6 @@ impl VirtualStateProcessor {
             return;
         }
         let pp_daa = self.headers_store.get_daa_score(pruning_point).unwrap();
-        // ADR-0126: a pruning point past the retirement has no overlay to serve.
-        if self.validator_overlay_retired_at(pp_daa) {
-            return;
-        }
         let view = ActiveBondView::from_records(self.bonds_as_of(pp_daa).into_iter().map(|r| (r.bond_outpoint, r)));
         let snapshot = self.compute_overlay_snapshot(pruning_point, &view);
         let mut batch = WriteBatch::default();

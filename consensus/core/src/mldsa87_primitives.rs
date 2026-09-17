@@ -2,9 +2,9 @@
 //! script a 64-byte payload pays to, and a key's 64-byte id.
 //!
 //! They were first written for the DNS-finality overlay (`dns_finality`), and every PALW lane, the
-//! coinbase, the premine and the EVM bridge came to read them from there. The overlay is retired;
-//! PALW never depended on it, only on these four definitions, so they live here and the overlay
-//! re-exports them under its old names. Every value is byte-identical to what it was: the lengths
+//! coinbase, the premine and the EVM bridge came to read them from there. PALW never depended on
+//! the overlay, only on these four definitions, so they live here and the overlay re-exports them
+//! under its old names. Every value is byte-identical to what it was: the lengths
 //! are FIPS 204's, the script is ADR-0019 §8's, and the key id is the unkeyed BLAKE2b-512 of the
 //! key — genesis premine outputs, bond payouts and registry ids all hash through them.
 

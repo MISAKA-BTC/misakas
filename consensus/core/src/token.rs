@@ -11,8 +11,7 @@
 //!   `SUBNETWORK_ID_TOKEN_TRANSFER` / `SUBNETWORK_ID_TOKEN_BURN` to
 //!   [`validate_token_transfer_payload`] / [`validate_token_burn_payload`] on every network, so a
 //!   chain may already carry such a transaction, and refusing a shape earlier builds admitted would
-//!   split it. Past the validator overlay's retirement (ADR-0126) both ids are refused in header
-//!   context. An admitted op is applied by nothing: its signature is length-checked, never
+//!   split it. An admitted op is applied by nothing: its signature is length-checked, never
 //!   verified, and it moves no balance.
 //! * **[`TokenParams`].** [`crate::dns_finality::DnsParams`] embeds it and is hashed whole into
 //!   `consensus_params_id`, so its fields and their inert values are part of every overlay

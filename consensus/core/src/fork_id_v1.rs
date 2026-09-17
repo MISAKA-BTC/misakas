@@ -618,7 +618,6 @@ mod tests {
             "palw_share_growth_final" => params.palw_share_growth_final = Some(at),
             "palw_panel_economy" => params.palw_panel_economy = Some(at),
             "palw_work_priced_reward" => params.palw_work_priced_reward = Some(at),
-            "palw_validator_overlay_retirement" => params.palw_validator_overlay_retirement = Some(at),
             "palw_execution_lane" => {
                 params.palw_execution_lane = Some(crate::config::params::PalwExecutionLaneV1 {
                     activation: at,

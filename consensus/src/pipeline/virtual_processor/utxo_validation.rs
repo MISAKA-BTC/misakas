@@ -32,13 +32,13 @@ use kaspa_consensus_core::{
     coinbase::*,
     dns_finality::{
         ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BlockEpochContribution, BondMutation, BondStatus, DnsParams, EpochTally,
-        OverlaySnapshot, PRECOMMIT_MLDSA87_CONTEXT, RewardedEpochSet, SlashingSideEffect, StakeAttestation, UNBOND_REQUEST_CONTEXT,
-        attestations_from_accepted_txs, bond_mutations_from_accepted_txs, bond_release_daa_score, compute_challenges_with_ids,
-        decode_attestation_shard, deferred_quality_bonus_outputs_for_block, effective_bond_status, epochs_finalized_at,
-        precommit_evidence_from_accepted_txs, precommit_fault, recompute_epoch_tallies, reserve_drip_outputs_for_block,
-        resolve_slashing_side_effects, slashing_evidence_from_accepted_txs, split_validator_pool, stake_attestation_message,
-        stake_precommit_message, unbond_request_message, unbond_requests_from_accepted_txs, validator_id_from_pubkey,
-        validator_participation_reward_outputs, victim_compensation_outputs,
+        FeeSplitParams, OverlaySnapshot, PRECOMMIT_MLDSA87_CONTEXT, RewardedEpochSet, SlashingSideEffect, StakeAttestation,
+        UNBOND_REQUEST_CONTEXT, attestations_from_accepted_txs, bond_mutations_from_accepted_txs, bond_release_daa_score,
+        compute_challenges_with_ids, decode_attestation_shard, deferred_quality_bonus_outputs_for_block, effective_bond_status,
+        epochs_finalized_at, precommit_evidence_from_accepted_txs, precommit_fault, recompute_epoch_tallies,
+        reserve_drip_outputs_for_block, resolve_slashing_side_effects, slashing_evidence_from_accepted_txs, split_validator_pool,
+        stake_attestation_message, stake_precommit_message, unbond_request_message, unbond_requests_from_accepted_txs,
+        validator_id_from_pubkey, validator_participation_reward_outputs, victim_compensation_outputs,
     },
     hashing,
     header::Header,
@@ -338,7 +338,8 @@ impl VirtualStateProcessor {
         // construction == validation. `None` (inert) below the fence ⇒ the legacy own-body gate is the
         // sole protection and acceptance is byte-identical to today.
         let bond_gate_view: Option<ActiveBondView> = self
-            .dns_params_at(pov_daa_score)
+            .dns_params
+            .as_ref()
             // Active only at/above the mergeset fence AND at/above dns_activation (matching the legacy
             // gate's `dns_activation_daa_score` semantics). The dns_activation conjunct is defensive:
             // every sane config sets the mergeset fence ≥ dns_activation (and below dns_activation the
@@ -428,7 +429,7 @@ impl VirtualStateProcessor {
             //      `pov_daa_score` is path-identical, so the conjunction preserves c==v.
             // Below either fence `finality_fee` stays 0 ⇒ byte-identical splits.
             let finality_fee_active = pov_daa_score >= self.evm_activation_daa_score
-                && self.dns_params_at(pov_daa_score).is_some_and(|p| pov_daa_score >= p.finality_fee_activation_daa_score);
+                && self.dns_params.as_ref().is_some_and(|p| pov_daa_score >= p.finality_fee_activation_daa_score);
             // ADR-0075 SA-1/SA-2: what each accepted transaction paid, kept for the walk that
             // grades a certification (see `UtxoProcessingContext::palw_v2_accepted_tx_fees`).
             // Off — and the map empty — unless the rent fence is armed, so every shipped preset
@@ -551,7 +552,7 @@ impl VirtualStateProcessor {
         selected_parent_bond_view: &ActiveBondView,
         pov_daa_score: u64,
     ) {
-        let Some(dns_params) = self.dns_params_at(pov_daa_score) else {
+        let Some(dns_params) = self.dns_params.as_ref() else {
             return;
         };
         if pov_daa_score < dns_params.dns_activation_daa_score {
@@ -783,13 +784,7 @@ impl VirtualStateProcessor {
         // (construction == validation); a pruned-IBD node imports the overlay stores at
         // the pruning point and this same check on the first post-pruning block verifies
         // them against its header. Gated on the overlay being active (`dns_params`).
-        // ADR-0126: past the retirement the overlay commits nothing, and the field must say so — it is
-        // hashed and under the PoW either way, and a free field is a field someone fills.
-        if self.validator_overlay_retired_at(header.daa_score) {
-            if header.overlay_commitment_root != kaspa_hashes::ZERO_HASH64 {
-                return Err(BadOverlayCommitment(header.hash, header.overlay_commitment_root, kaspa_hashes::ZERO_HASH64));
-            }
-        } else if self.dns_params.is_some() {
+        if self.dns_params.is_some() {
             let snap = self.compute_overlay_snapshot(ctx.selected_parent(), selected_parent_bond_view);
             let expected_overlay = snap.commitment_root();
             if expected_overlay != header.overlay_commitment_root {
@@ -926,9 +921,8 @@ impl VirtualStateProcessor {
         let mergeset_non_daa = self.daa_excluded_store.get_mergeset_non_daa(header.hash).unwrap();
         // ADR-0018 §F staged rollout: None (Stage 1) / bootstrap (Stage 2) / full
         // (Stage 3) selected by DAA, identically to the construction path.
-        // ADR-0126: past the retirement the carve is PALW's and there is no validator pool.
-        let carve = self.coinbase_carve_at(header.daa_score);
-        let validator_pool = carve.overlay_split().map_or(0, |fs| {
+        let carve = self.dns_params.as_ref().and_then(|p| p.reward_fee_split(header.daa_score));
+        let validator_pool = carve.map_or(0, |fs| {
             self.coinbase_manager.coinbase_validator_pool(
                 &ctx.ghostdag_data,
                 &ctx.mergeset_rewards,
@@ -956,7 +950,7 @@ impl VirtualStateProcessor {
         // already 0, since `validator_pool` is.) Does NOT affect the coinbase, so
         // construction == validation is untouched.
         ctx.validator_quality_subpool =
-            self.dns_params_at(header.daa_score).filter(|p| header.daa_score >= p.pos_v2_activation_daa_score).map_or(0, |p| {
+            self.dns_params.as_ref().filter(|p| header.daa_score >= p.pos_v2_activation_daa_score).map_or(0, |p| {
                 split_validator_pool(validator_pool as u128, p.reward_params.validator_participation_bps).1.min(u64::MAX as u128)
                     as u64
             });
@@ -967,7 +961,7 @@ impl VirtualStateProcessor {
         // reserve_accrual − drip`. The drip reads the selected parent's COMMITTED balance (so the
         // construction (template) and validation paths agree byte-for-byte). Inert below the v2 fence.
         let mut validator_reward_outputs = validator_reward_outputs;
-        if let Some(dns_params) = self.dns_params_at(header.daa_score) {
+        if let Some(dns_params) = self.dns_params.as_ref() {
             // MISAKA VLT §6 audit fee: pay every verifier whose verdict was counted for a
             // certificate that leaves its challenge window at this block, from the unspent
             // remainder of the §E validator pool. Appended before the drip so this path and the
@@ -1071,7 +1065,7 @@ impl VirtualStateProcessor {
         // kaspa-pq Phase 13 (ADR-0018 §F): the per-source-block reward carve,
         // threaded to `expected_coinbase_transaction`. `None` on every current
         // network (matches the construction path).
-        carve: crate::processes::coinbase::CoinbaseCarve<'_>,
+        carve: Option<&FeeSplitParams>,
         // kaspa-pq Phase 13 (ADR-0018 §D): `(newly_included_stake, expected_stake)`,
         // threaded to `expected_coinbase_transaction` for the inclusion bounty.
         inclusion: (u128, u128),
@@ -1193,7 +1187,7 @@ impl VirtualStateProcessor {
         // kaspa-pq Phase 13 (ADR-0018 §D): also returns `(newly_included_stake,
         // expected_stake)` so the coinbase can pay the §D worker inclusion bounty.
     ) -> (Vec<TransactionOutput>, RewardedEpochKeys, u128, u128) {
-        let Some(dns_params) = self.dns_params_at(daa_score) else {
+        let Some(dns_params) = self.dns_params.as_ref() else {
             return (Vec::new(), Vec::new(), 0, 0);
         };
         if daa_score < dns_params.dns_activation_daa_score {
@@ -1448,7 +1442,7 @@ impl VirtualStateProcessor {
         bond_view: &ActiveBondView,
         daa_score: u64,
     ) -> AttestationShardDecision {
-        let activated = self.dns_params_at(daa_score).is_some_and(|p| daa_score >= p.dns_activation_daa_score);
+        let activated = self.dns_params.as_ref().is_some_and(|p| daa_score >= p.dns_activation_daa_score);
         classify_attestation_shard_for_template(tx, bond_view, self.genesis.hash, activated)
     }
 
@@ -1469,7 +1463,7 @@ impl VirtualStateProcessor {
         bond_view: &ActiveBondView,
         daa_score: u64,
     ) {
-        let Some(dns_params) = self.dns_params_at(daa_score) else {
+        let Some(dns_params) = self.dns_params.as_ref() else {
             return;
         };
         if daa_score < dns_params.dns_activation_daa_score {
@@ -1506,7 +1500,7 @@ impl VirtualStateProcessor {
         daa_score: u64,
     ) -> BlockProcessResult<()> {
         // Fold the gate: configured overlay AND past activation.
-        let activated = self.dns_params_at(daa_score).is_some_and(|p| daa_score >= p.dns_activation_daa_score);
+        let activated = self.dns_params.as_ref().is_some_and(|p| daa_score >= p.dns_activation_daa_score);
         // ADR-0009 Addendum A.3: the network_id discriminator is the genesis hash.
         attestation_reward_eligibility(txs, selected_parent_bond_view, self.genesis.hash, activated)
             .map_err(|(bond_tx, epoch)| IneligibleAttestationInBlock(bond_tx, epoch))
@@ -1527,7 +1521,7 @@ impl VirtualStateProcessor {
         selected_parent_bond_view: &ActiveBondView,
         daa_score: u64,
     ) -> BlockProcessResult<()> {
-        let Some(params) = self.dns_params_at(daa_score) else { return Ok(()) };
+        let Some(params) = self.dns_params.as_ref() else { return Ok(()) };
         let activated = daa_score >= params.dns_activation_daa_score;
         slashing_evidence_genuine(
             txs,
@@ -1554,7 +1548,7 @@ impl VirtualStateProcessor {
         selected_parent_bond_view: &ActiveBondView,
         daa_score: u64,
     ) -> BlockProcessResult<()> {
-        let Some(params) = self.dns_params_at(daa_score) else { return Ok(()) };
+        let Some(params) = self.dns_params.as_ref() else { return Ok(()) };
         let activated = daa_score >= params.dns_activation_daa_score;
         precommit_evidence_genuine(
             txs,
@@ -1582,7 +1576,7 @@ impl VirtualStateProcessor {
         selected_parent_bond_view: &ActiveBondView,
         daa_score: u64,
     ) -> BlockProcessResult<()> {
-        let Some(params) = self.dns_params_at(daa_score) else { return Ok(()) };
+        let Some(params) = self.dns_params.as_ref() else { return Ok(()) };
         let activated = daa_score >= params.dns_activation_daa_score;
         compute_challenge_genuine(txs, selected_parent_bond_view, self.genesis.hash, daa_score, activated)
             .map_err(UnverifiableComputeChallengeInBlock)
@@ -1701,7 +1695,7 @@ impl VirtualStateProcessor {
         selected_parent_bond_view: &ActiveBondView,
         daa_score: u64,
     ) -> BlockProcessResult<()> {
-        let activated = self.dns_params_at(daa_score).is_some_and(|p| daa_score >= p.dns_activation_daa_score);
+        let activated = self.dns_params.as_ref().is_some_and(|p| daa_score >= p.dns_activation_daa_score);
         unbond_request_authorized(txs, selected_parent_bond_view, self.genesis.hash.as_byte_slice(), daa_score, activated)
             .map_err(|(tx_id, bond_outpoint)| UnauthorizedUnbondRequestInBlock(tx_id, bond_outpoint))
     }
@@ -1890,7 +1884,7 @@ impl VirtualStateProcessor {
             // POLICY path (mempool admission → relay → template inclusion): the settlement layer
             // where node-local anchor timing is safe — a policy disagreement keeps a tx out of a
             // mempool, never out of a block's acceptance.
-            self.dns_coinbase_settlement(pov_daa_score).as_ref(),
+            self.dns_coinbase_settlement().as_ref(),
         )?;
         mutable_tx.calculated_fee = Some(calculated_fee);
         Ok(())
