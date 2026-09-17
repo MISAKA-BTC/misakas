@@ -30,13 +30,16 @@ chosen from was fixed — with a missed round, never a relaxed rule, where nobod
   its pwu against the heaviest weight-bearing model class (the unit), so its reward-to-exposure ratio does
   not depend on the class, only on the unit; the floor is not priced:
 
-  | role | model class (unit = 6,630,544 pwu, the heaviest live class) | floor (7,708 pwu, unpriced) |
+  | role | model class (unit = 9,000,776 pwu: `Qwen3.8-27B/graph-v3`, share 1 ‰) | floor (7,708 pwu, unpriced) |
   |---|---|---|
-  | panel seat: `128.03 MSK × price ÷ (3 × pwu × 5 sompi)` | ~129× (e.g. 128.03 / 0.99 MSK) | ~110,700× (128.03 / 0.0012 MSK) |
-  | producer: `2,560.68 MSK × price ÷ (pwu × 5 sompi)` | ~7,700× | ~6,640,000× |
+  | panel seat: `128.03 MSK × price ÷ (3 × pwu × 5 sompi)` | ~95× | ~110,700× (128.03 / 0.0012 MSK) |
+  | producer: `2,560.68 MSK × price ÷ (pwu × 5 sompi)` | ~5,700× | ~6,640,000× |
 
-  (With a unit of 2,685,360 pwu the seat ratio is ~318×; with 9,000,776 ~95×.) The panel side is what the
-  operator asked to fix first; the producer side is the same shape and larger (Decision 8 reports both).
+  The unit is the heaviest *weight-bearing* model class, and a class bears weight once its share is above
+  zero: testnet-11's `Qwen3.8-27B/graph-v3` (registered at DAA 1,165, 1 ‰) is therefore the unit, pricing
+  `Qwen/Qwen2.5-1.5B/graph-v5@512` (6,630,544 pwu) at 73.7 % and `Qwen3.6-35B-A3B/graph-v3` (2,685,360) at
+  29.8 %. (Were the unit 6,630,544 the seat ratio would be ~129×; at 2,685,360, ~318×.) The panel side is what
+  the operator asked to fix first; the producer side is the same shape and larger (Decision 8 reports both).
 * **A bond split is a ticket bought.** Past ADR-0124 every eligible bond draws one ticket; one seat per
   operator per panel stops a quorum, not the odds: ten bonds are ten chances to be among the five.
 * **"One permit an operator a round" is vacuous at width 1.** A round has one permit, so one operator can

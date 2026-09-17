@@ -396,6 +396,17 @@ both floors). Mainnet has not launched, so its ruleset id may move.
   (dormant everywhere, scheduled moves the fingerprint and never the identity, the card states
   both); `a_v2_panel_seat_is_never_paid` now pins the below-the-fence half and names the other.
 
+## 12. Corrections
+
+* **§4's class table is the build's fixtures, not testnet-11's registrations** (found 2026-09-17 reading the live
+  genesis objects). testnet-11 registers `Qwen/Qwen2.5-1.5B/graph-v5@512` at 6,630,544 pwu per inference (its
+  canonical job is 63 + 2 tokens at n_ctx 512) and `Qwen3.6-35B-A3B/graph-v3` at 2,685,360 (7 + 2 tokens at
+  n_ctx 8), and `Qwen/Qwen3.8-27B/graph-v3` (registered at DAA 1,165, share 1 ‰) at 9,000,776 is the heaviest
+  weight-bearing model class — so past 7,001 the unit is 9,000,776, Qwen2.5 is priced at 73.7 % and Qwen3.6 at
+  29.8 %, not QWEN36 at 100 % and QWEN25-A16 at 59.19 %. Two consequences are ADR-0131's: a leaf count prices jobs
+  of different sizes and kernels as if a leaf were one unit of compute, and the unit is set by whichever
+  weight-bearing class is heaviest — a class registered with a 1 ‰ share lowers every other class's pay.
+
 ## 11. Number hygiene
 
 0124 was the next free number on `main` at `6fdf6ba7` (README: "the next free number is 0123", and
