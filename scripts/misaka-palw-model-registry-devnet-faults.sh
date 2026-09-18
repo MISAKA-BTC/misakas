@@ -34,6 +34,10 @@ MINER_BIN="${MINER_BIN:-}"
 MINER_NODE="${MINER_NODE:-0}"
 GRPC_PORT="${GRPC_PORT:-16610}"
 MINER_INTERVAL_MS="${MINER_INTERVAL_MS:-5000}"
+# testnet-11's shape: two hash miners and one bondless heartbeat miner. HEARTBEAT_NODE runs the
+# second lane, so the drill exercises the stand-in rule (ADR-0138: a heartbeat advances the DAA only
+# in a mergeset that carries nothing `bits` priced) instead of leaving it to the unit tests.
+HEARTBEAT_NODE="${HEARTBEAT_NODE:-}"
 # FLOOR_ONLY=1 when the first phase ran on the floor-only ruleset (the class registered by node-1): the
 # restarted nodes must name the same ruleset their datadirs hold.
 FLOOR_ONLY="${FLOOR_ONLY:-0}"
@@ -81,6 +85,7 @@ start_node() {
   [ -n "$ANCHOR_CLOCK_AT" ] && args+=(--palw-anchor-clock-devnet="$ANCHOR_CLOCK_AT")
   [ "$with_artifact" = 1 ] && args+=(--palw-class-artifact="$CLASS_ARTIFACT")
   args+=(--connect="127.0.0.1:$P2P_BASE")
+  [ -n "$HEARTBEAT_NODE" ] && [ "$i" = "$HEARTBEAT_NODE" ] && args+=(--palw-heartbeat-miner-address="$addr")
   if [ -n "$MINER_BIN" ] && [ "$i" -eq "$MINER_NODE" ]; then args+=(--rpclisten="127.0.0.1:$GRPC_PORT"); else args+=(--nogrpc); fi
   MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >>"$WORK_DIR/node-$i.log" 2>&1 &
   echo $!
@@ -99,6 +104,7 @@ start_miner() {
   "$MINER_BIN" --pool "127.0.0.1:$GRPC_PORT" --wallet "$addr" --network-id devnet --threads 1 \
     --min-block-interval-ms "$MINER_INTERVAL_MS" --mine-when-not-synced >>"$WORK_DIR/miner.log" 2>&1 &
   local mp=$!
+  echo "$mp" > "$WORK_DIR/miner.pid"
   pids+=("$mp")
   log "hash miner pid $mp on node-$MINER_NODE gRPC $GRPC_PORT, one block per ${MINER_INTERVAL_MS} ms — the anchor lane the DAA clock counts"
 }
@@ -108,7 +114,7 @@ CLASS_ID="$(reg 1 "[c['classId'] for c in v.get('classes', []) if not c.get('isB
 before="$(reg 1 "[(c['state'], c['readySeatsNow'], c['requiredReadySeats']) for c in v['classes'] if c['classId']=='$CLASS_ID'][0]")"
 log "class $CLASS_ID before the faults: (state, ready, required) = $before"
 
-log "1/4 seats $STOPPED stop; their proofs age out and the class alone is HELD"
+log "1/5 seats $STOPPED stop; their proofs age out and the class alone is HELD"
 for i in $STOPPED; do
   pid="$(lsof -nP -t -iTCP:"$((RPC_BASE + i))" -sTCP:LISTEN 2>/dev/null | head -1 || true)"
   [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
@@ -122,16 +128,41 @@ log "    the chain went on: DAA $before_daa → $after_daa while the class was h
 
 set -- $STOPPED
 without="$1"; shift
-log "2/4 seat $without restarts without its artifact: no proof, fail-closed"
+log "2/5 seat $without restarts without its artifact: no proof, fail-closed"
 start_node "$without" 0 >/dev/null
 sleep 60
 grep -q "readiness for class.*no proof — this node holds no artifact" "$WORK_DIR/node-$without.log" && log "    node-$without: $(grep 'no proof — this node holds no artifact' "$WORK_DIR/node-$without.log" | tail -1 | cut -c1-160)" || log "    (node-$without has not logged its refusal yet)"
 
-log "3/4 seats $* restart with their artifacts and re-prove; the class recovers to PROBATION"
+log "3/5 seats $* restart with their artifacts and re-prove; the class recovers to PROBATION"
 for i in "$@"; do start_node "$i" 1 >/dev/null; done
 wait_reg 1 "any(c.get('classId') == '$CLASS_ID' and c.get('state') in ('Probation', 'ActiveLimited', 'Active') for c in v.get('classes', []))" "the class to recover"
 log "    $(reg 1 "[(c['state'], c['readySeatsNow'], c['requiredReadySeats'], c['reason']) for c in v['classes'] if c['classId']=='$CLASS_ID'][0]")"
 [ "$(reg 1 "any(r.get('classId') == '$CLASS_ID' and r.get('fresh') for r in v.get('readiness', []))")" = "True" ] || die "no fresh proof after the restarts"
 for n in 1; do cli "$n" palw registry --output json > "$WORK_DIR/out/registry-faults-node-$n.json" 2>/dev/null || true; done
-log "4/4 PASS — an operator outage held the class alone with the chain producing, a seat without its artifact proved nothing, and the returning seats brought the class back through probation"
+log "4/5 the hash lane stops: the heartbeat stands in and the DAA clock keeps ticking (ADR-0138)"
+if [ -n "$MINER_BIN" ] && [ -n "$HEARTBEAT_NODE" ] && [ -f "$WORK_DIR/miner.pid" ]; then
+  mp="$(cat "$WORK_DIR/miner.pid")"
+  kill "$mp" 2>/dev/null || true
+  sleep 10
+  kill -0 "$mp" 2>/dev/null && die "the hash miner (pid $mp) would not stop"
+  hb_before="$(daa_of 1)"
+  log "    the hash miner is down; DAA $hb_before — every mergeset from here carries nothing \`bits\` priced"
+  moved=0
+  for _ in $(seq 1 30); do
+    sleep 20
+    hb_after="$(daa_of 1)"
+    [ -n "$hb_after" ] && [ -n "$hb_before" ] && [ "$hb_after" != "$hb_before" ] && { moved=1; break; }
+  done
+  [ "$moved" = 1 ] || die "the DAA froze with the hash lane down ($hb_before -> ${hb_after:-?}): the heartbeat did not stand in"
+  log "    DAA $hb_before -> $hb_after on heartbeats alone — the stand-in is live, not just a unit test"
+  start_miner
+  sleep 20
+  hb_back="$(daa_of 1)"
+  [ -n "$hb_back" ] && [ "$hb_back" != "$hb_after" ] || die "the DAA stopped when the hash lane came back ($hb_after -> ${hb_back:-?})"
+  log "    the hash lane is back and priced blocks pace the clock again: DAA $hb_after -> $hb_back"
+else
+  log "    (skipped: needs MINER_BIN and HEARTBEAT_NODE)"
+fi
+
+log "5/5 PASS — an operator outage held the class alone with the chain producing, a seat without its artifact proved nothing, the returning seats brought the class back through probation, and the DAA clock survived the hash lane going down"
 exit 0
