@@ -135,16 +135,26 @@ start_miner() {
 # budget reporting that op 186 listed no class, which is true of a node that never came up and says
 # nothing about the chain. A drill that cannot tell its own fault from the chain's is worse than no
 # drill, so the lock is now waited for and named.
+# The predecessor's nodes are asked to stop, then INSISTED upon. The first version of this guard only
+# waited and died, which was already an improvement — it named the lock instead of spending the phase's
+# whole budget reporting an empty registry — but it still let one phase's shutdown latency fail the
+# next phase. A kaspad writes its databases out on SIGTERM and phase 1's cleanup does not wait for it,
+# so the hand-off is exactly where the wait belongs.
 wait_for_free_datadir() {
-  local i="$1" lock="$WORK_DIR/node-$i/misaka-devnet/datadir/meta/LOCK" waited=0
+  local i="$1" lock="$WORK_DIR/node-$i/misaka-devnet/datadir/meta/LOCK" waited=0 holders=""
   [ -e "$lock" ] || return 0
   while lsof -nP -- "$lock" >/dev/null 2>&1; do
     waited=$((waited + 2))
-    if [ "$waited" -gt 60 ]; then
-      log "    node-$i's datadir is still held by: $(lsof -nP -t -- "$lock" 2>/dev/null | tr '\n' ' ')"
-      die "node-$i's datadir lock is held after ${waited}s — a previous phase's node is still running. \
-Stop it before this phase starts, or its node panics on the lock and every later check reports the \
-absence that causes."
+    if [ "$waited" -gt 180 ]; then
+      holders="$(lsof -nP -t -- "$lock" 2>/dev/null | tr '\n' ' ')"
+      log "    node-$i's datadir is still held after ${waited}s by pid(s): ${holders:-none}; SIGKILL"
+      for pid in $holders; do kill -9 "$pid" 2>/dev/null || true; done
+      sleep 5
+      lsof -nP -- "$lock" >/dev/null 2>&1 && die "node-$i's datadir lock survives a SIGKILL of ${holders}. \
+This phase cannot restart that node, and every check below it would report the absence that causes \
+rather than anything about the chain."
+      log "    node-$i's datadir is free"
+      return 0
     fi
     sleep 2
   done
