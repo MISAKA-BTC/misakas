@@ -185,6 +185,7 @@ pub mod palw_chain_weight;
 pub mod palw_checkpoint_court_v1;
 pub mod palw_class_admission_v2;
 pub mod palw_class_daa;
+pub mod palw_clock_cursor_v1;
 pub mod palw_context_ladder;
 /// ADR-0077 SA-4: the court's turn deadline is a slashing rule, so it is DERIVED from what an
 /// honest responder needs — one interval of replay plus `2 x NETWORK_DELAY_BOUND` — and every
