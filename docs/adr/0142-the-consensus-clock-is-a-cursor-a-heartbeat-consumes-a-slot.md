@@ -191,10 +191,35 @@ pruned node hit it at its own pruning point, and the two computed different verd
 It is pinned by `a_missing_parent_cursor_answers_differently_from_a_present_one`, which asserts the
 divergence rather than the property.
 
-The fix must make the cursor either **carried and verifiable** (in the pruning proof, anchored by
-something a header commits) or **derivable from data every node has** (bounded by the DAA window
-rather than by the whole chain). Until it is one of those, the fence stays dormant on every preset,
-which is how it ships.
+**How urgent.** Latent, not live, and only because the chain is young. testnet-11 nodes do not run
+`--archival`, so they prune; the chain has simply not reached the pruning depth yet. It becomes live
+the moment it does, and immediately for any node that joins by pruning proof after that. So it must
+close before the fence is armed, and it does not block the 6,301 bundle, which carries neither this
+fence nor the anchor clock.
+
+### The two candidate fixes, and what each costs
+
+**(i) Commit the cursor.** Put it back in the rooted PALW state, where the pruning proof carries it
+and `palw_state_root` commits it — the reason rooted state was the first instinct. The obstacle is
+the one that moved it out: the DAA score is decided in header processing and the PALW state is
+folded in the virtual processor, so the exemption cannot read it. Closing that means either moving
+the exemption decision out of header processing, which is large and touches the header's own
+committed `daa_score`, or keeping a second copy where header processing can see it, which is two
+sources of one truth and exactly the drift this ADR §5 exists to prevent.
+
+**(ii) Derive it from bounded data.** What the cursor stands for is *the timestamp of the block at
+which the DAA score last advanced*, and that is visible without a store: among the blocks of this
+block's DAA window, the earliest carrying `daa_score == selected_parent.daa_score`. The invariant
+survives, because an attempt block and a refused beat both carry that same score and a later
+timestamp, so neither moves the reference — only an advance does. Bounded, available to every node
+that can process the block at all, and no new carriage.
+
+Its obstacle is sampling. The difficulty window is sampled at `difficulty_sample_rate`, so the block
+that actually set the current score may not be in it; the reference would then be later than the
+truth, which refuses slots that should open — starvation again, in a smaller form. Making it exact
+needs an unsampled bounded source, and whether one exists here is the open question.
+
+Neither is chosen. Until one is, the fence stays dormant on every preset, which is how it ships.
 
 **4. Can a producer send the clock into the future?** Only by a bounded, quantised amount. The cursor
 lands on a slot BOUNDARY, never at `beat + interval`, so a timestamp buys whole slots and nothing
