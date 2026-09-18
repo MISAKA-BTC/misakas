@@ -1,7 +1,7 @@
 # The 6,001 release: what was gated, what was measured, and the verdict
 
 **Release candidate.** The bundle audited as `05169552` plus the fixes that audit and its own
-re-audits produced. Fingerprint `727ec391e8983d1a343ea7a4076718c68be0ce07e7e25a67b860c81ef8379c93`;
+re-audits produced. Fingerprint `b16a94770653183bce23c8c184f58e1326e4d9ba5e1b32d51c4e9511a08638be`;
 schedule `1150, 1900, 2150, 2400, 3500, 4000, 6300, 6301, 6400, 6501, 6900`.
 
 This is the third report on this bundle and the only one that decides. The first
@@ -173,7 +173,7 @@ the cursor stands for is **derived, not stored**: the block at the selected pare
 lowest blue score, read from the DAA window every node already builds, so a pruned node and one that
 joined by pruning proof answer exactly as an archival one.
 
-**So the single lottery and the anchor clock left the 6,301 day.** They arm together — one setter,
+**So the single lottery and the anchor clock left the 6,701 day.** They arm together — one setter,
 so they can never be spelled at two heights — and `validate_palw_v2` now refuses the anchor clock
 without ADR-0142's cursor. The preset therefore ships with both dormant, and the build enforces it
 rather than trusting whoever arms them next. Everything else keeps the day: the work target, the
@@ -181,9 +181,9 @@ registry, the payout, the panel economy, the execution lane, the DNS gate and th
 window. The dependency runs one way — the lottery needs the work target, never the reverse.
 
 The heights moved once more for an unrelated reason: the tip reached 6,000 while the release was
-held, so the whole day moved up 300. Compatibility boundary 6,300, PALW upgrade day 6,301,
-Verification and readiness V2 at 6,400, compute-overlay retirement at 6,501; ADR-0120's 6,900 stays.
-Fingerprint `727ec391e8983d1a343ea7a4076718c68be0ce07e7e25a67b860c81ef8379c93`, read from a running
+held, so the whole day moved up 300. Compatibility boundary 6,700, PALW upgrade day 6,701,
+Verification and readiness V2 at 6,800, compute-overlay retirement at 6,901; ADR-0120's 6,900 stays.
+Fingerprint `b16a94770653183bce23c8c184f58e1326e4d9ba5e1b32d51c4e9511a08638be`, read from a running
 node.
 
 ## 8. Verdict

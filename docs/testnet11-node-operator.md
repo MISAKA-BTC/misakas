@@ -48,10 +48,10 @@ wRPC is disabled until its listener flag is supplied. Keep RPC on loopback unles
 
 ## Identity
 
-The current Testnet-11 fingerprint is (the build that schedules the DAA 6,301 flag day; the 7,000 release printed `ae1d6162…` and is refused from 6,300, the moved height it does not schedule):
+The current Testnet-11 fingerprint is (the build that schedules the DAA 6,701 flag day; the 7,000 release printed `ae1d6162…` and is refused from 6,700, the moved height it does not schedule):
 
 ```text
-727ec391e8983d1a343ea7a4076718c68be0ce07e7e25a67b860c81ef8379c93
+b16a94770653183bce23c8c184f58e1326e4d9ba5e1b32d51c4e9511a08638be
 ```
 
 The fence schedule this build prints on start:
@@ -60,12 +60,12 @@ The fence schedule this build prints on start:
 1150, 1900, 2150, 2400, 3500, 4000, 6300, 6301, 6400, 6501, 6900, 2125000
 ```
 
-**6,300** is the compatibility boundary (no PALW rule fires there; it exists so the fleet is on one
-binary first), **6,301** is the one PALW upgrade day, **6,400** carries ADR-0133's Verification V2
-and the whole-artifact possession proof, **6,501** retires the compute overlay, **6,900** is the
+**6,700** is the compatibility boundary (no PALW rule fires there; it exists so the fleet is on one
+binary first), **6,701** is the one PALW upgrade day, **6,800** carries ADR-0133's Verification V2
+and the whole-artifact possession proof, **6,901** retires the compute overlay, **6,900** is the
 market's least seed. The first four moved up 300 on 2026-09-18, when holding the release to fix the
 DAA clock took the tip past the boundary they had been pinned to. What each one changes:
-[docs/testnet11-6301-upgrade-announcement.md](testnet11-6301-upgrade-announcement.md).
+[docs/testnet11-6701-upgrade-announcement.md](testnet11-6701-upgrade-announcement.md).
 
 A different fingerprint or fork-id schedule is a ruleset mismatch, not an ordinary connectivity problem. Testnet-11 Relaunch 5f uses a different genesis from prior relaunches; old datadirs cannot be continued.
 

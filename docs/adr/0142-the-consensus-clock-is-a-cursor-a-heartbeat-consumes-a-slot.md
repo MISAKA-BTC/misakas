@@ -3,7 +3,7 @@
 **Status:** PROPOSED 2026-09-18 on `feat/palw-exec-lane-and-validator-retirement`. **Consensus
 change, built and drilled, NOT ARMED on any preset.** The four checks of §6a all pass; arming is the
 operator's call and wants a reorg drill and a target-cadence drill first (§8).
-It replaces the heartbeat lane's admissibility rule. It held the 6,301 rollout.
+It replaces the heartbeat lane's admissibility rule. It held the 6,701 rollout.
 
 **Builds on:** ADR-0060 (the liveness doctrine), ADR-0064 (silence is not checkable), ADR-0066
 Decision 2 (the one-block-deep slot rule, which this supersedes), ADR-0105 (the miner's yield),
@@ -236,5 +236,5 @@ cadence. ADR-0140's release gate applies to it as to anything else — the fence
 drill whose lane composition and cadence are the target network's.
 
 Until it lands, `palw_single_lottery` and `palw_anchor_clock` stay dormant, which is how they ship in
-the 6,301 bundle. They arm together (`Params::set_palw_single_lottery`), and arming either without
+the 6,701 bundle. They arm together (`Params::set_palw_single_lottery`), and arming either without
 this rule is the liveness failure in §1.

@@ -1,18 +1,18 @@
 # ADR-0143 — An artifact root has one owner on the chain, and competing weights stay permissionless
 
-**Status:** IMPLEMENTED 2026-09-18, **armed on testnet-11 at DAA 6,302** by the operator's decision
-of 2026-09-19 to ship it with the 6,300 flag day. Behind its own fence,
+**Status:** IMPLEMENTED 2026-09-18, **armed on testnet-11 at DAA 6,702** by the operator's decision
+of 2026-09-19 to ship it with the 6,700 flag day. Behind its own fence,
 `palw_artifact_root_ownership`, dormant on every other preset.
 
-**6,302 and not 6,300**, because the fork id digests the fired heights deduplicated: a fence at a
+**6,702 and not 6,700**, because the fork id digests the fired heights deduplicated: a fence at a
 height the schedule already names is invisible to the handshake, and two builds that disagree about
-who owns an artifact from 6,300 would peer as if they agreed. Two DAA of separation is what makes it
+who owns an artifact from 6,700 would peer as if they agreed. Two DAA of separation is what makes it
 a named refusal instead of a silent fork.
 
-**What is drilled and what is not, stated plainly.** The release drill crosses the 6,300/6,301 fences
+**What is drilled and what is not, stated plainly.** The release drill crosses the 6,700/6,701 fences
 and its clock gate passed; it does **not** cross this one. The launch runbook's §5c gate asks for a
 drill that crosses each armed fence, and this fence is shipping without its own crossing — an
-operator decision taken against a deadline (the tip was ~170 DAA from 6,300 at 42 DAA/h). What
+operator decision taken against a deadline (the tip was ~170 DAA from 6,700 at 42 DAA/h). What
 carries the risk instead: the crossing block's whole effect is ownership rows and nothing else,
 asserted; the migration is deterministic and reverts exactly, asserted; and below the fence every
 answer is byte-identical to the chain that has been running. §6 states the one quantity that is
@@ -142,7 +142,7 @@ owner fee for a root they do not own.
 12,816 MSK already attributed included. The fence changes attribution from the fence, and no earlier
 state root moves.
 
-**D9. Its own fence.** `palw_artifact_root_ownership`, independent of the 6,301 bundle, so a failure
+**D9. Its own fence.** `palw_artifact_root_ownership`, independent of the 6,701 bundle, so a failure
 in either is one failure domain. It is dormant on every preset here.
 
 ## 4. Why the index and not a rule against duplicates alone

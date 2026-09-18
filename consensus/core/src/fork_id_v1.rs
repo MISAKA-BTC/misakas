@@ -544,9 +544,8 @@ mod tests {
                 crate::config::params::PALW_RC_ARTIFACT_ROOT_OWNERSHIP_FENCE_DAA,
                 crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
                 // ADR-0134's retirement of the compute overlay: its own height, after the flag day.
-                crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
-                // ADR-0120's 6,900, where the deployed release put it — now after the moved heights.
                 crate::config::params::PALW_RC_MODEL_SEED_V2_FENCE_DAA,
+                crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
             ],
             "testnet-11's gate set is its flag days (ADR-0083, ADR-0062, ADR-0084 U-08, ADR-0095, ADR-0114, the audit's shallow fence, the held regime with the audit's deep fence, 6,001, ADR-0133's 6,100, and ADR-0134's 6,201), and deriving the list must not widen it"
         );
@@ -817,8 +816,8 @@ mod tests {
                         crate::config::params::PALW_RC_PALW_UPGRADE_FENCE_DAA,
                         crate::config::params::PALW_RC_ARTIFACT_ROOT_OWNERSHIP_FENCE_DAA,
                         crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
-                        crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
                         crate::config::params::PALW_RC_MODEL_SEED_V2_FENCE_DAA,
+                        crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
                         2_125_000
                     ]
                 ),
@@ -882,8 +881,8 @@ mod tests {
                         PALW_UPGRADE_DAY,
                         crate::config::params::PALW_RC_ARTIFACT_ROOT_OWNERSHIP_FENCE_DAA,
                         crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
-                        RETIRED_6201,
-                        ADR_0120
+                        ADR_0120,
+                        RETIRED_6201
                     ],
                     "{name}: armed by ADR-0083's fence, ADR-0062's, ADR-0084 U-08's, ADR-0095's, ADR-0114's, the audit's shallow one, ADR-0120's, the held regime's with the audit's deep one, 6,001's, ADR-0143's own day two past it, ADR-0133's 6,100, and ADR-0134's 6,201, and nothing else"
                 );
@@ -915,8 +914,8 @@ mod tests {
                 PALW_UPGRADE_DAY,
                 crate::config::params::PALW_RC_ARTIFACT_ROOT_OWNERSHIP_FENCE_DAA,
                 crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
-                RETIRED_6201,
                 ADR_0120,
+                RETIRED_6201,
                 CRESCENDO_T11
             ]
         );
@@ -1410,8 +1409,8 @@ mod tests {
                 PALW_UPGRADE_DAY,
                 crate::config::params::PALW_RC_ARTIFACT_ROOT_OWNERSHIP_FENCE_DAA,
                 crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
-                RETIRED_6201,
                 crate::config::params::PALW_RC_MODEL_SEED_V2_FENCE_DAA,
+                RETIRED_6201,
                 CRESCENDO_T11
             ],
             "the held regime and the deep audit at 6,000, the flag day one past, ADR-0133's V2 a hundred past, ADR-0134 two hundred past, ADR-0120 where it was"
