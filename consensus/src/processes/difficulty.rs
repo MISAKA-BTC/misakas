@@ -399,7 +399,7 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> DifficultyManagerExtension fo
         // DAA window again; counting it never would let a chain whose hash lane stops keep producing
         // with a frozen clock. So: where the mergeset carries something `bits` priced, the beat adds
         // nothing; where it carries none, exactly one beat ticks in the anchor's place.
-        exempt.saturating_sub(kaspa_consensus_core::palw_heartbeat_v1::heartbeat_clock_contribution_v1(priced, heartbeats))
+        if priced == 0 && heartbeats > 0 { exempt.saturating_sub(1) } else { exempt }
     }
 
     fn headers_store(&self) -> &dyn HeaderStoreReader {
