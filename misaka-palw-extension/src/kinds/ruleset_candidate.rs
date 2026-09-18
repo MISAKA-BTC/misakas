@@ -93,6 +93,12 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         "palw_signature_contexts_v2" => params.palw_signature_contexts_v2 = Some(at),
         "palw_heartbeat_transparent" => params.palw_heartbeat_transparent = Some(at),
         "palw_share_growth_final" => params.palw_share_growth_final = Some(at),
+        "palw_model_registry" => params.palw_model_registry = Some(at),
+        "palw_economic_payout" => {
+            companion(&mut params.palw_economic_payout, name, "rate_sompi_per_giga", at, |f, at| f.activation = at)?
+        }
+        "palw_work_target" => params.palw_work_target = Some(at),
+        "palw_single_lottery" => params.palw_single_lottery = Some(at),
         "palw_panel_economy" => params.palw_panel_economy = Some(at),
         "palw_work_priced_reward" => params.palw_work_priced_reward = Some(at),
         "palw_overlay_carve" => {
