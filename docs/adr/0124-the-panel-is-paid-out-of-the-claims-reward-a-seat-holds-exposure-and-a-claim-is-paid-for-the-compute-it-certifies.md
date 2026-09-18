@@ -324,7 +324,7 @@ free-prompt lane (escrow 0, nothing to split or price); every network below the 
 ## 8. Arming it on testnet-11
 
 **Armed 2026-09-17** on `feat/palw-exec-lane-and-validator-retirement` (`d6c46f25`): both fences at
-`PALW_RC_FLAG_DAY_6001_FENCE_DAA` = 6,001 — 7,001 when armed that morning at DAA ≈5,773, one past the
+`PALW_RC_PALW_UPGRADE_FENCE_DAA` = 6,001 — 7,001 when armed that morning at DAA ≈5,773, one past the
 7,000 release's height, which a fence of its own must not share; moved to 6,001 the same evening at DAA
 5,798 when the operator moved the held regime's and the deep audit's height from 7,000 to 6,000 ("時間が
 かかりすぎる"), keeping this flag day one past it — beside ADR-0125's lane, ADR-0126's carve, ADR-0128's

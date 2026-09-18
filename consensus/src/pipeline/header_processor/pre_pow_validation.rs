@@ -57,9 +57,25 @@ impl HeaderProcessor {
                 .headers_store
                 .get_header(ghostdag_data.selected_parent)
                 .map_err(|_| RuleError::MissingParents(vec![ghostdag_data.selected_parent]))?;
-            if let Err(early) =
-                kaspa_consensus_core::palw_heartbeat_v1::check_heartbeat_slot(parent.timestamp, parent.pow_algo_id, header.timestamp)
-            {
+            // ADR-0138 §3c: the interval follows the CLOCK, not the bond. Past `palw_anchor_clock`
+            // a bonded attempt parent produces without advancing the DAA, so backing off an hour
+            // for it leaves a PALW-only chain with no clock at all. Both arguments are pure
+            // functions of stored headers and the preset's fences — no store read, no local fact.
+            let anchor_clock_active = self.palw_anchor_clock.is_some_and(|fence| fence.is_active(header.daa_score));
+            let parent_advances_daa = crate::processes::difficulty::palw_lane_advances_daa_v1(
+                parent.pow_algo_id,
+                parent.daa_score,
+                self.palw_anchor_clock,
+                self.palw_single_lottery,
+                self.palw_receipt_rows_unpriced,
+            );
+            if let Err(early) = kaspa_consensus_core::palw_heartbeat_v1::check_heartbeat_slot_v2(
+                parent.timestamp,
+                parent.pow_algo_id,
+                anchor_clock_active,
+                parent_advances_daa,
+                header.timestamp,
+            ) {
                 return Err(RuleError::HeartbeatTooEarly(
                     header.hash,
                     header.timestamp,

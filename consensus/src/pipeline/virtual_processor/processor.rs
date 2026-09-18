@@ -531,6 +531,10 @@ pub struct VirtualStateProcessor {
     pub(super) palw_validator_payout_bounds: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0066: the heartbeat lane's fence, mode folded in.
     pub(super) palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0138: `Params::palw_anchor_clock` and ADR-0083's receipt fence — the heartbeat miner's
+    /// hint reads them for the same reason the slot rule does (`heartbeat_yield_hint_v2`).
+    pub(super) palw_anchor_clock: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_receipt_rows_unpriced: kaspa_consensus_core::config::params::ForkActivation,
     /// ADR-0072 SA-3/SA-4: the attempt lane's activation fence. `None` on every shipped preset, so
     /// the lane resolves to `Unfenced` and the template keeps declaring algo-6.
     pub(super) palw_attempt_activation: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -795,6 +799,10 @@ impl VirtualStateProcessor {
             pow_palw_ollama_activation: params.pow_palw_ollama_activation,
             palw_required_algo_id: params.palw_consensus_mode.required_algo_id(),
             palw_heartbeat_lane: params.palw_heartbeat_lane_fence(),
+            palw_anchor_clock: params.palw_anchor_clock,
+            palw_receipt_rows_unpriced: params
+                .palw_receipt_rows_unpriced
+                .unwrap_or_else(kaspa_consensus_core::config::params::ForkActivation::never),
             palw_attempt_activation: params.palw_attempt_activation,
             palw_maturity_warn_last_daa: std::sync::atomic::AtomicU64::new(
                 kaspa_consensus_core::palw_panel_v2::PALW_SHORTFALL_NEVER_REPORTED,
@@ -11087,7 +11095,31 @@ impl VirtualStateProcessor {
             .unordered_mergeset_without_selected_parent()
             .filter_map(|hash| self.headers_store.get_header(hash).ok().map(|header| (header.pow_algo_id, header.timestamp)))
             .collect();
-        hb::heartbeat_yield_hint_v1(selected_parent.pow_algo_id, merged)
+        // ADR-0138 §3c: the same question the slot rule asks — is someone else pacing the clock?
+        // A miner that kept the old hint would answer "bonded parent, sleep an hour" to every
+        // attempt-lane parent past the fence, on a chain where nothing else advances the DAA.
+        let anchor_clock_active = self.palw_anchor_clock.is_some_and(|fence| fence.is_active(virtual_state.daa_score));
+        let parent_advances_daa = crate::processes::difficulty::palw_lane_advances_daa_v1(
+            selected_parent.pow_algo_id,
+            selected_parent.daa_score,
+            self.palw_anchor_clock,
+            self.palw_single_lottery,
+            self.palw_receipt_rows_unpriced,
+        );
+        let attempt_advances_daa = crate::processes::difficulty::palw_lane_advances_daa_v1(
+            kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2,
+            virtual_state.daa_score,
+            self.palw_anchor_clock,
+            self.palw_single_lottery,
+            self.palw_receipt_rows_unpriced,
+        );
+        hb::heartbeat_yield_hint_v2(
+            selected_parent.pow_algo_id,
+            anchor_clock_active,
+            parent_advances_daa,
+            attempt_advances_daa,
+            merged,
+        )
     }
 
     fn build_block_template_with_selector_provider<F>(

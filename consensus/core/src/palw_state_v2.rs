@@ -18291,10 +18291,12 @@ pub(crate) mod tests {
             let armed = bundle.state.clone();
             let long = armed.window_challenge();
             assert_ne!(long, PALW_SHORT_CHALLENGE_WINDOW_DAA_V1, "the premise: the shipped window is not the short one");
-            assert_eq!(armed.short_challenge_window_from_daa(), Some(6_001), "testnet-11 mirrors its 6,001 fence into the bundle");
-            assert_eq!(armed.window_challenge_at(5_999), long);
-            assert_eq!(armed.window_challenge_at(6_000), long, "6,000 is the compatibility boundary, not a rule change");
-            assert_eq!(armed.window_challenge_at(6_001), PALW_SHORT_CHALLENGE_WINDOW_DAA_V1, "the flag day shortens it");
+            let day = crate::config::params::PALW_RC_PALW_UPGRADE_FENCE_DAA;
+            let boundary = crate::config::params::PALW_RC_AUDIT_DEEP_FENCE_DAA;
+            assert_eq!(armed.short_challenge_window_from_daa(), Some(day), "testnet-11 mirrors its flag day into the bundle");
+            assert_eq!(armed.window_challenge_at(boundary - 1), long);
+            assert_eq!(armed.window_challenge_at(boundary), long, "the boundary is a compatibility one, not a rule change");
+            assert_eq!(armed.window_challenge_at(day), PALW_SHORT_CHALLENGE_WINDOW_DAA_V1, "the flag day shortens it");
             assert_eq!(armed.window_challenge_at(u64::MAX), PALW_SHORT_CHALLENGE_WINDOW_DAA_V1);
             let dormant = armed.clone().with_short_challenge_window_from_daa(None);
             for daa in [0, 5_999, 6_000, 6_001, 7_000, u64::MAX] {

@@ -132,6 +132,57 @@ pub fn heartbeat_interval_ms(selected_parent_algo_id: u8) -> u64 {
     }
 }
 
+/// **ADR-0138 §3c: past the anchor clock the interval follows the CLOCK, not the bond.**
+///
+/// `heartbeat_interval_ms` backs off for an hour whenever the selected parent is a bonded PALW-v2
+/// block, on the reading that "a bonded block one block ago" means the chain is producing and the
+/// lane should stay out of the way. Past `palw_anchor_clock` that reading is wrong, because an
+/// attempt block produces without advancing the DAA at all. On a network with no `bits`-priced
+/// producer — which is every ConsensusV2 network, since `PalwRulesetV2::validate` forces the
+/// template to declare the attempt id — the old rule leaves the chain beating once an hour and the
+/// DAA score moving once an hour with it, or not at all across a stretch that carries no beat.
+/// testnet-11 measured exactly that: 60 of its last 60 selected-chain blocks are algo 6.
+///
+/// So the question becomes the one that was always meant: **is someone else pacing the clock?**
+/// If the parent advances the DAA, the lane stays out of the way for the nominal hour. If it does
+/// not, the lane runs at the recovery cadence and IS the clock — which, with the per-mergeset
+/// stand-in in `daa_exempt_count`, makes the DAA advance at the target block time on a chain that
+/// has no priced lane, and changes nothing on a chain that has one.
+///
+/// Below the fence the caller passes `anchor_clock_active = false` and the answer is byte-identical
+/// to `heartbeat_interval_ms`, so no history moves.
+pub fn heartbeat_interval_ms_v2(selected_parent_algo_id: u8, anchor_clock_active: bool, parent_advances_daa: bool) -> u64 {
+    if heartbeat_parent_paces_the_clock_v1(selected_parent_algo_id, anchor_clock_active, parent_advances_daa) {
+        HEARTBEAT_NOMINAL_INTERVAL_MS
+    } else {
+        HEARTBEAT_RECOVERY_INTERVAL_MS
+    }
+}
+
+/// Is the selected parent pacing the chain's clock? Below `palw_anchor_clock` a bonded PALW-v2
+/// parent is (every lane advanced the DAA then); past it, only a parent that advances the DAA is.
+/// One block deep, a pure function of its arguments, and the single place the two regimes differ.
+#[inline]
+pub fn heartbeat_parent_paces_the_clock_v1(selected_parent_algo_id: u8, anchor_clock_active: bool, parent_advances_daa: bool) -> bool {
+    if anchor_clock_active { parent_advances_daa } else { is_palw_v2_algo_id(selected_parent_algo_id) }
+}
+
+/// [`check_heartbeat_slot`] under the ADR-0138 rule. The caller answers the two fence questions
+/// because the lane predicate lives with the DAA arithmetic, in `kaspa-consensus`.
+pub fn check_heartbeat_slot_v2(
+    selected_parent_timestamp: u64,
+    selected_parent_algo_id: u8,
+    anchor_clock_active: bool,
+    parent_advances_daa: bool,
+    header_timestamp: u64,
+) -> Result<(), HeartbeatTooEarly> {
+    let interval_ms = heartbeat_interval_ms_v2(selected_parent_algo_id, anchor_clock_active, parent_advances_daa);
+    match selected_parent_timestamp.checked_add(interval_ms) {
+        Some(earliest) if header_timestamp >= earliest => Ok(()),
+        _ => Err(HeartbeatTooEarly { last_heartbeat_timestamp: selected_parent_timestamp, interval_ms }),
+    }
+}
+
 /// Why a heartbeat header was refused by the slot rule.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HeartbeatTooEarly {
@@ -196,15 +247,37 @@ pub enum HeartbeatYieldHintV1 {
 /// count as something to yield to — those are the blocks that carry weight and that pay the class
 /// lottery to exist. A receipt-lane block carries no weight a heartbeat could bury.
 pub fn heartbeat_yield_hint_v1(selected_parent_algo_id: u8, merged: impl IntoIterator<Item = (u8, u64)>) -> HeartbeatYieldHintV1 {
-    if is_palw_v2_algo_id(selected_parent_algo_id) {
+    heartbeat_yield_hint_v2(selected_parent_algo_id, false, true, true, merged)
+}
+
+/// The hint under the ADR-0138 rule. A miner that kept the v1 hint past the fence would answer
+/// `BondedSelectedParent` to every attempt-lane parent and sleep the nominal hour — on a chain
+/// where nothing else advances the clock, so it would sleep through the very regime the lane
+/// exists for. And the wait `YieldUntil` names must be the interval the SLOT RULE would grant,
+/// or the miner waits an hour for a slot it could have taken in two minutes.
+pub fn heartbeat_yield_hint_v2(
+    selected_parent_algo_id: u8,
+    anchor_clock_active: bool,
+    parent_advances_daa: bool,
+    attempt_advances_daa: bool,
+    merged: impl IntoIterator<Item = (u8, u64)>,
+) -> HeartbeatYieldHintV1 {
+    if heartbeat_parent_paces_the_clock_v1(selected_parent_algo_id, anchor_clock_active, parent_advances_daa) {
         return HeartbeatYieldHintV1::BondedSelectedParent;
     }
     merged
         .into_iter()
         .filter(|&(algo_id, _)| is_palw_attempt_algo_id(algo_id))
+        // The wait is the interval the slot rule would have granted THAT block had it been
+        // selected — so it is computed from that block's lane, not the parent's, and past the
+        // anchor clock an attempt block that advances no DAA earns the recovery interval rather
+        // than the nominal hour. Yielding the hour there would stall the clock the lane now keeps.
+        //
         // Saturating is the right direction HERE and not in the slot rule: this is a wait a miner
         // chooses, bounded by its own per-episode budget, not a refusal consensus relies on.
-        .map(|(_, timestamp)| timestamp.saturating_add(HEARTBEAT_NOMINAL_INTERVAL_MS))
+        .map(|(algo_id, timestamp)| {
+            timestamp.saturating_add(heartbeat_interval_ms_v2(algo_id, anchor_clock_active, attempt_advances_daa))
+        })
         .max()
         .map_or(HeartbeatYieldHintV1::NothingToYieldTo, HeartbeatYieldHintV1::YieldUntil)
 }
@@ -221,6 +294,69 @@ mod tests {
     /// 4: an archival node never hit `Err(get_header)`, a pruned node hit it at its own pruning
     /// point, and the two computed different verdicts for one header). One block deep admits two
     /// states because that is how many a single parent can distinguish.
+    /// **ADR-0138 §3c.** Below the fence the v2 rule is the v1 rule, byte for byte, so no history
+    /// moves. Past it the question changes from "is the parent bonded" to "does the parent advance
+    /// the clock", which is the only thing the hour of back-off was ever for.
+    #[test]
+    fn past_the_anchor_clock_the_interval_follows_the_clock_and_not_the_bond() {
+        let attempt = POW_ALGO_ID_PALW_COMMITTED_V2;
+        let receipt = POW_ALGO_ID_PALW_RECEIPT_V3;
+        let beat = PALW_HEARTBEAT_ALGO_ID;
+        let anchor = crate::pow_layer0::POW_ALGO_ID_BLAKE2B_SHA3;
+
+        // Below the fence: identical to v1 for every lane, whatever the second argument says.
+        for &lane in &[attempt, receipt, beat, anchor] {
+            for &advances in &[true, false] {
+                assert_eq!(
+                    heartbeat_interval_ms_v2(lane, false, advances),
+                    heartbeat_interval_ms(lane),
+                    "below the fence the rule may not move (lane {lane}, advances {advances})"
+                );
+            }
+        }
+
+        // Past the fence, a parent that advances the DAA is pacing the clock: stay out of the way.
+        assert_eq!(heartbeat_interval_ms_v2(anchor, true, true), HEARTBEAT_NOMINAL_INTERVAL_MS);
+        // ...and one that does not is NOT, however bonded it is. This is the testnet-11 case: the
+        // whole selected chain is attempt blocks, every one of them exempt from the DAA score.
+        assert_eq!(heartbeat_interval_ms_v2(attempt, true, false), HEARTBEAT_RECOVERY_INTERVAL_MS);
+        assert_eq!(heartbeat_interval_ms_v2(receipt, true, false), HEARTBEAT_RECOVERY_INTERVAL_MS);
+        assert_eq!(heartbeat_interval_ms_v2(beat, true, false), HEARTBEAT_RECOVERY_INTERVAL_MS);
+
+        // The slot rule carries the same two answers, and refuses one millisecond early.
+        let t = 1_700_000_000_000u64;
+        assert!(check_heartbeat_slot_v2(t, attempt, true, false, t + HEARTBEAT_RECOVERY_INTERVAL_MS).is_ok());
+        assert!(check_heartbeat_slot_v2(t, attempt, true, false, t + HEARTBEAT_RECOVERY_INTERVAL_MS - 1).is_err());
+        assert!(check_heartbeat_slot_v2(t, attempt, false, false, t + HEARTBEAT_RECOVERY_INTERVAL_MS).is_err());
+        assert!(check_heartbeat_slot_v2(t, attempt, false, false, t + HEARTBEAT_NOMINAL_INTERVAL_MS).is_ok());
+        // Overflow still fails CLOSED under the new rule.
+        assert!(check_heartbeat_slot_v2(u64::MAX, attempt, true, false, u64::MAX).is_err());
+    }
+
+    /// The miner has to agree with the rule, or it sleeps through the regime the lane exists for.
+    #[test]
+    fn the_miners_hint_yields_for_exactly_as_long_as_the_slot_rule_would() {
+        let attempt = POW_ALGO_ID_PALW_COMMITTED_V2;
+        let anchor = crate::pow_layer0::POW_ALGO_ID_BLAKE2B_SHA3;
+        let t = 1_700_000_000_000u64;
+
+        // Below the fence: unchanged, and `heartbeat_yield_hint_v1` is the same call.
+        assert_eq!(heartbeat_yield_hint_v1(attempt, [(attempt, t)]), HeartbeatYieldHintV1::BondedSelectedParent);
+        assert_eq!(heartbeat_yield_hint_v2(attempt, false, false, true, [(attempt, t)]), HeartbeatYieldHintV1::BondedSelectedParent);
+
+        // Past the fence with a parent that paces the clock: still out of the way.
+        assert_eq!(heartbeat_yield_hint_v2(anchor, true, true, false, [(attempt, t)]), HeartbeatYieldHintV1::BondedSelectedParent);
+
+        // Past the fence on a chain with no priced lane: the attempt parent is no longer a reason
+        // to sleep, and the wait a waiting attempt block buys is the RECOVERY interval the slot
+        // rule would grant — not the nominal hour, which would stall the clock it now carries.
+        assert_eq!(
+            heartbeat_yield_hint_v2(attempt, true, false, false, [(attempt, t)]),
+            HeartbeatYieldHintV1::YieldUntil(t + HEARTBEAT_RECOVERY_INTERVAL_MS)
+        );
+        assert_eq!(heartbeat_yield_hint_v2(attempt, true, false, false, []), HeartbeatYieldHintV1::NothingToYieldTo);
+    }
+
     #[test]
     fn the_interval_is_a_function_of_the_parents_lane_and_nothing_else() {
         // A bonded parent means the chain was producing one block ago: stay out of the way.

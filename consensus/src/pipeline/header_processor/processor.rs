@@ -130,6 +130,12 @@ pub struct HeaderProcessor {
     pub(super) palw_block_commitment: Option<kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentParamsV1>,
     /// ADR-0066: the heartbeat lane's fence, mode folded in (`Params::palw_heartbeat_lane_fence`).
     pub(super) palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0138: `Params::palw_anchor_clock`. The heartbeat's slot rule reads it, because past the
+    /// fence the interval follows whether the parent advances the DAA rather than whether it is
+    /// bonded (`heartbeat_interval_ms_v2`).
+    pub(super) palw_anchor_clock: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0083 Decision 1's fence, the third argument of `palw_lane_advances_daa_v1`.
+    pub(super) palw_receipt_rows_unpriced: kaspa_consensus_core::config::params::ForkActivation,
     /// ADR-0125: the execution lane, mode folded in (`Params::palw_execution_lane_fence`) — its
     /// activation admits round blocks; its shape bounds every mergeset that holds them.
     pub(super) palw_execution_lane: Option<kaspa_consensus_core::config::params::PalwExecutionLaneV1>,
@@ -247,6 +253,10 @@ impl HeaderProcessor {
             palw_consensus_mode: params.palw_consensus_mode.clone(),
             palw_block_commitment: params.palw_block_commitment,
             palw_heartbeat_lane: params.palw_heartbeat_lane_fence(),
+            palw_anchor_clock: params.palw_anchor_clock,
+            palw_receipt_rows_unpriced: params
+                .palw_receipt_rows_unpriced
+                .unwrap_or_else(kaspa_consensus_core::config::params::ForkActivation::never),
             palw_execution_lane: params.palw_execution_lane_fence(),
             palw_attempt_activation: params.palw_attempt_activation,
             palw_single_lottery: params.palw_single_lottery,

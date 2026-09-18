@@ -539,7 +539,7 @@ mod tests {
                 // One entry for 6,000: the held regime and the deep-audit fence share it (ADR-0118; 7,000 until 2026-09-17).
                 crate::config::params::PALW_RC_AUDIT_DEEP_FENCE_DAA,
                 // One for 6,001: ADR-0124, 0125, 0126, 0128 and 0130 share it.
-                crate::config::params::PALW_RC_FLAG_DAY_6001_FENCE_DAA,
+                crate::config::params::PALW_RC_PALW_UPGRADE_FENCE_DAA,
                 crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
                 // ADR-0134's retirement of the compute overlay: its own height, after the flag day.
                 crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
@@ -797,7 +797,23 @@ mod tests {
                 // **And 6900, ADR-0120's one-million-MSK least seed** (scheduled 2026-09-12 to ship with
                 // the 7,000 release at a height of its own, so the gate can see a build without it; it
                 // stays where the deployed release put it, so it now follows the moved heights).
-                ("testnet-11", vec![1150, 1900, 2150, 2400, 3500, 4000, 6000, 6001, 6100, 6201, 6900, 2_125_000]),
+                (
+                    "testnet-11",
+                    vec![
+                        1150,
+                        1900,
+                        2150,
+                        2400,
+                        3500,
+                        4000,
+                        crate::config::params::PALW_RC_AUDIT_DEEP_FENCE_DAA,
+                        crate::config::params::PALW_RC_PALW_UPGRADE_FENCE_DAA,
+                        crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
+                        crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
+                        crate::config::params::PALW_RC_MODEL_SEED_V2_FENCE_DAA,
+                        2_125_000
+                    ]
+                ),
                 ("devnet", vec![]),
                 ("simnet", vec![]),
             ],
@@ -834,14 +850,14 @@ mod tests {
         /// ADR-0118's height — the held regime, the one-move court and the retention pins — and the
         /// audit's DEEP findings' flag day (B-1/C-01/B-4/court cluster): one height, one release
         /// (7,000 until the operator moved it on 2026-09-17).
-        const HELD_AND_AUDIT_DEEP: u64 = 6000;
+        const HELD_AND_AUDIT_DEEP: u64 = crate::config::params::PALW_RC_AUDIT_DEEP_FENCE_DAA;
         /// The operator's flag day of 2026-09-17: ADR-0124, 0125, 0126, 0128 and 0130.
-        const FLAG_DAY_6001: u64 = 6001;
+        const PALW_UPGRADE_DAY: u64 = crate::config::params::PALW_RC_PALW_UPGRADE_FENCE_DAA;
         /// ADR-0134's retirement of the compute overlay, its own height after the flag day.
-        const RETIRED_6201: u64 = 6201;
+        const RETIRED_6201: u64 = crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA;
         /// ADR-0120's own height — the least seed becomes 1,000,000 MSK; scheduled by the deployed
         /// release and left there, so it now follows the moved heights.
-        const ADR_0120: u64 = 6900;
+        const ADR_0120: u64 = crate::config::params::PALW_RC_MODEL_SEED_V2_FENCE_DAA;
         const CRESCENDO_T11: u64 = 2_125_000;
         for (name, params) in shipped() {
             if name == "testnet-11" {
@@ -855,8 +871,8 @@ mod tests {
                         ADR_0114,
                         AUDIT_FENCE,
                         HELD_AND_AUDIT_DEEP,
-                        FLAG_DAY_6001,
-                        6100,
+                        PALW_UPGRADE_DAY,
+                        crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
                         RETIRED_6201,
                         ADR_0120
                     ],
@@ -887,8 +903,8 @@ mod tests {
                 ADR_0114,
                 AUDIT_FENCE,
                 HELD_AND_AUDIT_DEEP,
-                FLAG_DAY_6001,
-                6100,
+                PALW_UPGRADE_DAY,
+                crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
                 RETIRED_6201,
                 ADR_0120,
                 CRESCENDO_T11
@@ -1363,8 +1379,8 @@ mod tests {
     /// and be invisible beside a build carrying the regime without the set.
     #[test]
     fn the_moved_heights_refuse_the_deployed_7000_release_from_6000_and_keep_it_below() {
-        const HELD_AND_DEEP: u64 = 6_000;
-        const FLAG_DAY_6001: u64 = crate::config::params::PALW_RC_FLAG_DAY_6001_FENCE_DAA;
+        const HELD_AND_DEEP: u64 = crate::config::params::PALW_RC_AUDIT_DEEP_FENCE_DAA;
+        const PALW_UPGRADE_DAY: u64 = crate::config::params::PALW_RC_PALW_UPGRADE_FENCE_DAA;
         const RETIRED_6201: u64 = crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA;
         const CRESCENDO_T11: u64 = 2_125_000;
         let upgraded = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
@@ -1373,7 +1389,20 @@ mod tests {
         assert_eq!(release_7000.fence_schedule_v1(), vec![1150, 1900, 2150, 2400, 3500, 4000, 6900, 7000, CRESCENDO_T11]);
         assert_eq!(
             upgraded.fence_schedule_v1(),
-            vec![1150, 1900, 2150, 2400, 3500, 4000, HELD_AND_DEEP, FLAG_DAY_6001, 6100, RETIRED_6201, 6900, CRESCENDO_T11],
+            vec![
+                1150,
+                1900,
+                2150,
+                2400,
+                3500,
+                4000,
+                HELD_AND_DEEP,
+                PALW_UPGRADE_DAY,
+                crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
+                RETIRED_6201,
+                crate::config::params::PALW_RC_MODEL_SEED_V2_FENCE_DAA,
+                CRESCENDO_T11
+            ],
             "the held regime and the deep audit at 6,000, the flag day one past, ADR-0133's V2 a hundred past, ADR-0134 two hundred past, ADR-0120 where it was"
         );
 
@@ -1393,7 +1422,7 @@ mod tests {
                 "this build keeps the 7,000 release at {local_daa}"
             );
         }
-        for local_daa in [HELD_AND_DEEP, FLAG_DAY_6001, FLAG_DAY_6001 + 1, RETIRED_6201, 6_900, 7_000, 7_001] {
+        for local_daa in [HELD_AND_DEEP, PALW_UPGRADE_DAY, PALW_UPGRADE_DAY + 1, RETIRED_6201, 6_900, 7_000, 7_001] {
             let (new_at, old_at) = (fork_id_v1(&upgraded, local_daa), fork_id_v1(&release_7000, local_daa));
             assert!(
                 evaluate_fork_id_v1(&release_7000, local_daa, new_at.fired.as_bytes().as_slice(), new_at.next).refuses(),
@@ -1441,7 +1470,7 @@ mod tests {
             without_the_set.fence_schedule_v1(),
             "at 6,000 the set would advertise the schedule of a build without it"
         );
-        for local_daa in [HELD_AND_DEEP, FLAG_DAY_6001, 8_000] {
+        for local_daa in [HELD_AND_DEEP, PALW_UPGRADE_DAY, 8_000] {
             let (hidden, bare) = (fork_id_v1(&at_6000, local_daa), fork_id_v1(&without_the_set, local_daa));
             assert_eq!(
                 (hidden.fired, hidden.next),

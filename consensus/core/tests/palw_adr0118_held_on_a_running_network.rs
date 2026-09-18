@@ -27,7 +27,10 @@ use kaspa_hashes::Hash64;
 
 /// The held regime.s height on testnet-11 — shared with the deep-audit fence (7,000 until the operator moved it
 /// on 2026-09-17, unreached).
-const HELD_AT: u64 = 6_000;
+/// The operator's height, read from the constant rather than spelled out: it has moved three times
+/// (7,000 → 6,000 on 2026-09-17, 6,000 → 6,300 on 2026-09-18 when the tip reached it while the
+/// release was held) and a literal here would have to be edited on each move.
+const HELD_AT: u64 = kaspa_consensus_core::config::params::PALW_RC_AUDIT_DEEP_FENCE_DAA;
 
 fn bundle(params: &Params) -> &PalwConsensusParamsV2 {
     match &params.palw_consensus_mode {
@@ -122,7 +125,7 @@ fn gate_at(params: &Params, profile: &PalwShapeProfileV3, daa: u64) -> Result<()
 /// gate refuses a stale node at, and the identity moves from the build before it. From genesis on
 /// the same bundle it is still refused: a mint that takes the regime states V4 and Merkle itself.
 #[test]
-fn testnet_11_takes_the_held_regime_at_its_7000_flag_day() {
+fn testnet_11_takes_the_held_regime_at_its_operator_chosen_flag_day() {
     assert_eq!(PALW_RC_HELD_FENCE_DAA, Some(HELD_AT), "the operator's height (2026-09-12), shared with the deep-audit fence");
     let shipped = palw_rc_shipped_params();
     assert_eq!(shipped.palw_audit_2026_09_11_deep, Some(ForkActivation::new(HELD_AT)), "the deep fence is the height's other");

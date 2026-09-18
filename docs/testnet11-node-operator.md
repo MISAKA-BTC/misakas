@@ -51,13 +51,13 @@ wRPC is disabled until its listener flag is supplied. Keep RPC on loopback unles
 The current Testnet-11 fingerprint is (the build that schedules the DAA 6,001 flag day; the 7,000 release printed `ae1d6162…` and is refused from 6,000, the moved height it does not schedule):
 
 ```text
-3d150afd18d2367a1ed0de65d0b1c12cfe06cd8a61478354ecab27e6283855e1
+7920f7b233695172959046ce2d7c18cc58729753a3cbc90d0b4ba27c8ec3c30f
 ```
 
 The fence schedule this build prints on start:
 
 ```text
-1150, 1900, 2150, 2400, 3500, 4000, 6000, 6001, 6100, 6201, 6900, 2125000
+1150, 1900, 2150, 2400, 3500, 4000, 6300, 6301, 6400, 6501, 6900, 2125000
 ```
 
 **6,000** is the compatibility boundary (no PALW rule fires there; it exists so the fleet is on one

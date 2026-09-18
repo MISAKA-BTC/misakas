@@ -9,7 +9,7 @@
 > [the clock audit §2](palw-daa-clock-audit-2026-09-18.md) and
 > [the release report](palw-release-6001-verdict-2026-09-18.md).
 
-**Fingerprint of the release: `3d150afd18d2367a1ed0de65d0b1c12cfe06cd8a61478354ecab27e6283855e1`.**
+**Fingerprint of the release: `7920f7b233695172959046ce2d7c18cc58729753a3cbc90d0b4ba27c8ec3c30f`.**
 Every node on testnet-11 must run this build **before DAA 6,000**. The build currently deployed prints
 `ae1d6162…` and is refused from 6,000 — it schedules the held regime and the audit's deep fixes at 7,000,
 the height the operator moved to 6,000 on 2026-09-17.
@@ -77,7 +77,7 @@ This bundle was audited twice against the code, not the design, and both reports
 ## What an operator has to do
 
 1. Build this release and check the fingerprint and the schedule on start:
-   `1150, 1900, 2150, 2400, 3500, 4000, 6000, 6001, 6100, 6201, 6900, …`.
+   `1150, 1900, 2150, 2400, 3500, 4000, 6300, 6301, 6400, 6501, 6900, …`.
 2. Restart every node — producers, panel seats, pool slots — before DAA 6,000. No datadir move, no resync.
 3. After 6,001, read the registry and the economics:
    ```bash

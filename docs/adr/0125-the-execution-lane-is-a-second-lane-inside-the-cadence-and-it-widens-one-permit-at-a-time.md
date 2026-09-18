@@ -269,7 +269,7 @@ every DAG parameter, depth and PALW window; every network until its fence is arm
 3. **Built** — relay de-duplication and the equivocation slash (SA-2).
 4. **Built** — `getPalwRoundLane`, `misaka palw round-lane` and `misaka mining status`'s lane line.
    An explorer reads op 181; misakascan lives in its own repository.
-5. **Scheduled** — testnet-11 at `PALW_RC_FLAG_DAY_6001_FENCE_DAA` = 6,001 (the operator's height,
+5. **Scheduled** — testnet-11 at `PALW_RC_PALW_UPGRADE_FENCE_DAA` = 6,001 (the operator's height,
    2026-09-17, at DAA ≈5,773): `{ width 1, no widening, max_per_mergeset 600, schedule_span_daa 5 }` (30 when first pinned as
    `4787b92a…`; ADR-0130 shortened the span and named the scheduler rule set the same day, re-pinning to
    `ab4e7b9c…`), one execution block a second, with ADR-0124, ADR-0126, ADR-0128 and ADR-0130 at the same

@@ -1,8 +1,8 @@
 # The 6,001 release: what was gated, what was measured, and the verdict
 
 **Release candidate.** The bundle audited as `05169552` plus the fixes that audit and its own
-re-audits produced. Fingerprint `3d150afd18d2367a1ed0de65d0b1c12cfe06cd8a61478354ecab27e6283855e1`;
-schedule `1150, 1900, 2150, 2400, 3500, 4000, 6000, 6001, 6100, 6201, 6900`.
+re-audits produced. Fingerprint `7920f7b233695172959046ce2d7c18cc58729753a3cbc90d0b4ba27c8ec3c30f`;
+schedule `1150, 1900, 2150, 2400, 3500, 4000, 6300, 6301, 6400, 6501, 6900`.
 
 This is the third report on this bundle and the only one that decides. The first
 ([the pre-arming audit](palw-audit-2026-09-18-6001.md)) found two Critical and six High and said
