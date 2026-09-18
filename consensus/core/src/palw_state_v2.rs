@@ -3401,7 +3401,12 @@ pub enum PalwConsensusObjectV2 {
     /// not the graph. Refused while the registry is dormant, for a class without a row, from any
     /// bond but the registrant's, and for zero bytes; a genesis class has no registrant and keeps
     /// the catalog's estimate. Tag 48; appended last.
-    ClassManifestV2 { class_id: Hash64, artifact_bytes: u64, registrant_bond: PalwBondKeyV2, signature: Vec<u8> },
+    ClassManifestV2 {
+        class_id: Hash64,
+        artifact_bytes: u64,
+        registrant_bond: PalwBondKeyV2,
+        signature: Vec<u8>,
+    },
 }
 
 /// The block's own work slot, as the V3 transition consumes it (ADR-0044): a chain-challenge

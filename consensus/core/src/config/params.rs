@@ -20030,7 +20030,10 @@ mod palw_model_registry_fence_tests {
         same.palw_single_lottery = Some(ForkActivation::new(height));
         same.validate_palw_v2().expect("the work target's own height is at or below");
 
+        // testnet-11 arms the work target on the 6,001 flag day (`wip/arm-6001-registry-payout`),
+        // so the base that lacks it is built here rather than read from the preset.
         let mut alone = rc.clone();
+        alone.palw_work_target = None;
         alone.palw_single_lottery = Some(ForkActivation::new(height));
         let refusal = alone.validate_palw_v2().expect_err("the single lottery cannot precede the work target");
         assert!(format!("{refusal:?}").contains("palw_single_lottery"), "{refusal:?}");
