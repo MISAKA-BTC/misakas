@@ -618,6 +618,8 @@ So, before any build that arms a fence is rolled out:
    the arming height are read before a height is picked — a few hundred crosses in one ordinary
    block, and a number far past that needs the question asked again. This is the same discipline as
    item 2: the drill is held to what the target actually is, not to what it is assumed to be.
+   Measured on testnet-11 at DAA 6,263 (2026-09-19): five classes, six lines, **six** distinct
+   roots — six delta entries in the crossing block.
 
 ```bash
 # the target network's lane profile, from the chain

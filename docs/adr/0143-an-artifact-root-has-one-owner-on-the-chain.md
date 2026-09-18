@@ -189,6 +189,11 @@ is read from the chain, it belongs beside the launch runbook's §5c drill gate, 
 nothing else — a chain with a few hundred roots crosses in one ordinary block, and a chain with
 hundreds of thousands needs the question asked again before a height is picked.
 
+**Measured on testnet-11, 2026-09-19 at DAA 6,263: five classes, six lines, and SIX distinct
+artifact roots.** The block that crosses 6,702 writes six delta entries. The ceiling was worth
+computing; the answer is that this chain is nowhere near it, and the number is in this document so
+the next reader takes the measurement rather than the ceiling.
+
 ## 7. What this does not decide
 
 Whether the fence is armed, and at what height. That is the operator's, after a drill crosses it.
