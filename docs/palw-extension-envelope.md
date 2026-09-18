@@ -310,7 +310,7 @@ needs a node (`--rpc`); without one it exits `4` with the connection error.
 
 | kind | what is filed |
 |---|---|
-| `model-class`, `context-profile` | a `ClassRegistered` built by the SDK and signed with your key, which must be the **bond's** — pass `--bond <txid:index>`. Built twice (once to learn the object, once with the signature over it), exactly as `kaspad --palw-register-class` does, and written beside the manifest as `<name>.class-registered.borsh` |
+| `model-class`, `context-profile` | a `ClassRegistered` built by the SDK and signed with your key, which must be the **bond's** — pass `--bond <txid:index>`. Built twice (once to learn the object, once with the signature over it), exactly as `kaspad --palw-register-class` does, and written beside the manifest as `<name>.class-registered.borsh`. When the manifest names `artifact.bytes` or a readable `artifact.path`, a signed `ClassManifestV2` (ADR-0135 manifest V2: the file's byte count, which the registry's row then reads instead of the graph's estimate) is written beside it as `<name>.class-manifest.borsh` and carried with the registration once the model registry's fence is active |
 | `family-certification`, `lane-certification` | the object file itself; over one carrier's 100,000 bytes it is cut into `ObjectChunk`s beside it and submitted in index order (ADR-0075 Decision 14) |
 | `derived-transformer` | nothing — refused, naming `admission.object: none` |
 | `ruleset-candidate` | nothing — refused, naming the tier (exit `22`) |
