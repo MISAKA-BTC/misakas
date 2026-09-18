@@ -327,6 +327,12 @@ pub struct PalwLifecycleObservationV1 {
     /// where the economic payout is dormant: nothing prices it). A class over it is not stepped to
     /// `Active` and an `Active` one falls back to a tenth — "not activatable", as a rule.
     pub cap_ok: bool,
+    /// **ADR-0133 §11.3 (fail-closed):** the class's derived verification window
+    /// (`verification_window_spans × span_daa`) fits inside the network's receipt deadline
+    /// (`window_receipt`). A class that needs longer to replay than a claim is given to be replayed
+    /// in would void every claim it accepted; it is HELD, never ACTIVE, until a class-specific
+    /// receipt deadline (its own fence, not built) or a wider global window admits it.
+    pub window_fits_receipt: bool,
     /// Whether this span ran at or under the target utilization with no held claim.
     pub span_stable: bool,
 }
@@ -349,7 +355,9 @@ pub fn palw_lifecycle_step_v1(
     use PalwModelLifecycleV1::*;
     let panel_drawable = obs.ready_seats >= g.seat_count as u32;
     let ready_enough = obs.ready_seats >= profile.required_ready_seats && obs.collateral_ok;
-    let overloaded = obs.utilization_permille >= 1_000;
+    // ADR-0133 §11.3: a class whose replay does not fit the receipt deadline is treated as
+    // overloaded for ever — it admits nothing, and it re-enters Probation only once it fits.
+    let overloaded = obs.utilization_permille >= 1_000 || !obs.window_fits_receipt;
     match state {
         Registered => {
             if obs.manifest == PalwManifestVerdictV1Flag::Valid {
@@ -1230,6 +1238,42 @@ mod tests {
     /// prefetch for 300 GiB, seven ready seats, a bond of 2,000 MSK, and an admission of 8.3 claims
     /// a span under a budget of ten dense-tier claims' attempted compute.
     #[test]
+    fn adr0133_a_class_whose_replay_does_not_fit_the_receipt_deadline_is_held_never_active() {
+        // **§11.3, fail-closed.** The observation says the derived window is wider than the
+        // network's receipt deadline: from every admitting state the class goes to Held, and Held
+        // stays Held however ready its seats are, until the window fits again.
+        use PalwModelLifecycleV1::*;
+        let work = PalwModelWorkV1 {
+            verification_ccu: 2_000_000_000_000,
+            economic_ccu_per_claim: 1_000_000_000_000,
+            ops_supported: true,
+            ..Default::default()
+        };
+        let k = palw_lifecycle_profile_v1(&work, 1 << 32, &G);
+        let obs = |fits: bool, state_ok: bool| PalwLifecycleObservationV1 {
+            manifest: PalwManifestVerdictV1Flag::Valid,
+            ready_seats: 7,
+            probes_passed_this_span: 1,
+            probes_failed_this_span: 0,
+            utilization_permille: 300,
+            collateral_ok: state_ok,
+            cap_ok: true,
+            window_fits_receipt: fits,
+            span_stable: true,
+        };
+        for from in [Probation { probes_passed: 9 }, ActiveLimited { stable_epochs: 9 }, Active] {
+            assert_eq!(palw_lifecycle_step_v1(from, &obs(false, true), &k, &G), Held, "{from:?}: does not fit → Held");
+        }
+        assert_eq!(palw_lifecycle_step_v1(Held, &obs(false, true), &k, &G), Held, "Held stays Held while it does not fit");
+        assert_eq!(
+            palw_lifecycle_step_v1(Held, &obs(true, true), &k, &G),
+            Probation { probes_passed: 0 },
+            "…and re-enters Probation once it fits"
+        );
+        assert_eq!(palw_lifecycle_step_v1(Active, &obs(true, true), &k, &G), Active, "a fitting window changes nothing");
+    }
+
+    #[test]
     fn adr0135_the_profile_is_derived_from_work_alone() {
         let a = palw_derive_profile_v1(&dense(), &G);
         let b = palw_derive_profile_v1(&dense(), &G);
@@ -1320,6 +1364,7 @@ mod tests {
             utilization_permille: 300,
             collateral_ok: true,
             cap_ok: true,
+            window_fits_receipt: true,
             span_stable: true,
         };
         let mut s = Registered;
@@ -1452,6 +1497,7 @@ mod tests {
             utilization_permille: 300,
             collateral_ok: true,
             cap_ok,
+            window_fits_receipt: true,
             span_stable: true,
         };
         assert_eq!(

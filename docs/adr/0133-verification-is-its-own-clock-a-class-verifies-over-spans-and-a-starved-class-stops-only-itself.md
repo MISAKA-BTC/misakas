@@ -398,6 +398,30 @@ flag-day table (params). The node's submitter builds V2 past the fence
 **What is still V1 by design:** everything at 6,001. A fleet crossing the flag day proves possession
 the old way and has its own day at 6,100 to cross to the new one.
 
+### 11.3 Fail-closed: a class whose derived window does not fit the receipt deadline is HELD (2026-09-18)
+
+The claim's receipt deadline is one global number — `bound_daa + window_receipt` (600 DAA on
+testnet-11) — while a class's verification window is derived from its graph
+(`verification_window_spans × span_daa`; 2 spans = 10 DAA for the dense A16 class). The derived
+window governs capacity (the panel room, the inflight cap, the required seats); nothing made it a
+deadline. So a class heavy enough that its own window exceeded the global deadline could be stepped
+ACTIVE and then void every claim it accepted — the seats could not replay in time.
+
+**Built:** `PalwLifecycleObservationV1::window_fits_receipt` (the registry step computes
+`verification_window_spans × span_daa ≤ window_receipt`; the base class always fits), and
+`palw_lifecycle_step_v1` treats a window that does not fit as a permanent overload: Probation,
+ActiveLimited and Active go to Held, Held stays Held, and nothing re-enters Probation until it fits.
+Pinned by `adr0133_a_class_whose_replay_does_not_fit_the_receipt_deadline_is_held_never_active`
+(registry) and the heavy half of `adr0135_the_inflight_cap_refuses_the_claim_after_the_cap` (state:
+the heavy graph is HELD and admits nothing; the cap itself is shown on a class that fits).
+
+**Not built, its own fence when it comes:** a class-specific receipt deadline — `window_receipt`
+replaced by the class's `verification_window_spans × span_daa` at bind time, so a heavy class gets
+the window its graph needs instead of being held out. It changes a claim's deadline arithmetic and
+must be fenced on its own (`palw_class_receipt_window`, reserved here, not in `Params`); until then
+the network's receipt window is the ceiling and a class that needs more is refused rather than
+admitted and voided.
+
 ## 12. Number hygiene
 
 0133 was free when written; the next free number is 0134.

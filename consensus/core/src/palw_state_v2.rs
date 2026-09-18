@@ -8606,6 +8606,9 @@ impl<'a> TransitionBuilder<'a> {
                     utilization_permille: utilization,
                     collateral_ok: ready >= profile.required_ready_seats,
                     cap_ok,
+                    // ADR-0133 §11.3: the derived window against the global receipt deadline, in DAA.
+                    window_fits_receipt: (profile.verification_window_spans as u64).saturating_mul(fold.span_daa.max(1))
+                        <= self.params.window_receipt(),
                     span_stable: utilization < 1_000 && row.probes_failed_this_span == 0 && ready >= profile.required_ready_seats,
                 };
                 (palw_lifecycle_step_v1(row.state, &obs, &profile, &fold.globals), utilization)
@@ -18263,6 +18266,15 @@ pub(crate) mod tests {
 
     mod adr0135 {
         use super::*;
+
+        /// The registry's fixture params: the shared `params()` with a receipt window of four spans
+        /// (40 DAA) instead of ten DAA — the derived verification window of any class is at least
+        /// two spans (`receipt_allowance_spans` on top of one span of work), and ADR-0133 §11.3
+        /// holds a class whose window does not fit the receipt deadline. The shared fixture's ten
+        /// DAA were never a claim's real replay allowance; testnet-11 gives 600 DAA against 10.
+        fn params() -> PalwStateParamsV2 {
+            PalwStateParamsV2::new(100, 10, 40, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 0).unwrap().with_fp_quanta(8, 64).unwrap()
+        }
         /// Measured: the number of `PalwConsensusObjectV2` variants before this one.
         const PALW_SEAT_READINESS_PROVED_DISCRIMINANT: u8 = 47;
         const PALW_CLASS_MANIFEST_V2_DISCRIMINANT: u8 = 48;
@@ -18902,13 +18914,35 @@ pub(crate) mod tests {
             let (s7, _) = step(&s6, &p, &ctx(7, 130, 7), &[], None, Some(f.clone())).unwrap();
             let kimi = s7.model_lifecycle(&kimi_id()).unwrap();
             assert_eq!(kimi.profile.max_inflight_claims, 1, "the heavy graph's cap");
-            assert_eq!(kimi.state, PalwModelLifecycleV1::Active, "seven ready seats keep it active at the boundary");
+            // **ADR-0133 §11.3 (fail-closed).** A graph this heavy derives a verification window
+            // no receipt deadline holds — the profile says so — and such a class is HELD at the
+            // boundary however many seats are ready: it would void every claim it accepted. The
+            // inflight cap of one is still the profile's fact; it never gets to bind.
+            let window_daa = (kimi.profile.verification_window_spans as u64).saturating_mul(SPAN);
+            assert!(window_daa > p.window_receipt(), "the premise: the window ({window_daa} DAA) does not fit {}", p.window_receipt());
+            assert_eq!(kimi.state, PalwModelLifecycleV1::Held, "a class that cannot be verified in time admits nothing");
             let first = kimi_attempt(2, root);
-            let (s8, _) = step(&s7, &p, &ctx(8, 131, 8), &[], Some(&first), Some(f.clone())).unwrap();
-            let second = kimi_attempt(3, root);
-            let capped = step(&s8, &p, &ctx(9, 132, 9), &[], Some(&second), Some(f.clone()));
+            let refused = step(&s7, &p, &ctx(8, 131, 8), &[], Some(&first), Some(f.clone()));
+            assert!(matches!(&refused, Err(PalwStateV2Error::ClassNotAdmitting { class, .. }) if *class == kimi_id()), "{refused:?}");
+            // The cap itself, on a class that fits: Kimi's own graph (two spans of twenty DAA
+            // against a forty-DAA receipt window) with a fold whose reference work makes its cap one.
+            let mut tight = fold(kimi_work());
+            tight.globals.reference_work_per_span = 2_000_000; // Kimi's 1 M of verification is half a span
+            tight.globals.utilization_permille = 1_000;
+            let (t6, _) = step(&s5, &p, &ctx(6, 125, 6), &proofs, None, Some(tight.clone())).unwrap();
+            let (t7, _) = step(&t6, &p, &ctx(7, 130, 7), &[], None, Some(tight.clone())).unwrap();
+            let row = t7.model_lifecycle(&kimi_id()).unwrap();
+            assert_eq!(row.state, PalwModelLifecycleV1::Active, "a fitting class with seven ready seats is active");
+            let cap = row.profile.max_inflight_claims;
+            let mut s = t7;
+            for i in 0..cap {
+                let env = kimi_attempt(2 + i as u64, root);
+                s = step(&s, &p, &ctx(8 + i as u64, 131 + i as u64, 8 + i as u64), &[], Some(&env), Some(tight.clone())).unwrap().0;
+            }
+            let over = kimi_attempt(2 + cap as u64, root);
+            let capped = step(&s, &p, &ctx(8 + cap as u64, 131 + cap as u64, 8 + cap as u64), &[], Some(&over), Some(tight.clone()));
             assert!(
-                matches!(capped, Err(PalwStateV2Error::ClassInflightCapped { class, inflight: 1, cap: 1 }) if class == kimi_id()),
+                matches!(capped, Err(PalwStateV2Error::ClassInflightCapped { class, inflight, cap: c }) if class == kimi_id() && inflight == cap && c == cap),
                 "{capped:?}"
             );
         }
