@@ -31,7 +31,7 @@ use crate::palw_model_registry_v1::PalwModelWorkV1;
 pub const PALW_ECONOMIC_PAYOUT_VERSION_V1: u16 = 1;
 
 /// **The devnet's numbers** — what `--palw-economic-payout-devnet` and the fork-id arm-by-name
-/// schedule: 0.01 MSK per 10⁹ MAC-eq, `α = 1`, the panel share between a tenth and three tenths,
+/// schedule: 9 MSK per 10⁹ MAC-eq (testnet-11's rate — see the field), `α = 1`, the panel share between a tenth and three tenths,
 /// the cap ceiling at 80 %. The activation is the caller's. A testnet or mainnet card states its
 /// own calibrated rate (ADR-0132 §4.3: so the heaviest live class sits under the ceiling).
 pub const PALW_ECONOMIC_PAYOUT_DEVNET_V1: crate::config::params::PalwEconomicPayoutV1 = crate::config::params::PalwEconomicPayoutV1 {
