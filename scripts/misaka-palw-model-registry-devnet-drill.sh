@@ -35,6 +35,9 @@ SINGLE_LOTTERY_AT="${SINGLE_LOTTERY_AT:-}"
 VERIFICATION_V2_AT="${VERIFICATION_V2_AT:-}"
 READINESS_V2_AT="${READINESS_V2_AT:-}"
 ANCHOR_CLOCK_AT="${ANCHOR_CLOCK_AT:-}"
+# ADR-0143: the drill crosses this fence too, so the build that arms it on testnet-11 has been
+# through a crossing rather than only through its unit tests (the launch runbook's §5c gate).
+ARTIFACT_ROOT_OWNERSHIP_AT="${ARTIFACT_ROOT_OWNERSHIP_AT:-}"
 CLASS_ARTIFACT="${CLASS_ARTIFACT:-}"
 MODEL_ID="${MODEL_ID:-}"
 # With an artifact the shipped devnet class set is used (the artifact's class is a genesis class the
@@ -95,6 +98,7 @@ node_args() {
   [ -n "$VERIFICATION_V2_AT" ] && args+=(--palw-verification-v2-devnet="$VERIFICATION_V2_AT")
   [ -n "$READINESS_V2_AT" ] && args+=(--palw-readiness-v2-devnet="$READINESS_V2_AT")
   [ -n "$ANCHOR_CLOCK_AT" ] && args+=(--palw-anchor-clock-devnet="$ANCHOR_CLOCK_AT")
+  [ -n "$ARTIFACT_ROOT_OWNERSHIP_AT" ] && args+=(--palw-artifact-root-ownership-devnet="$ARTIFACT_ROOT_OWNERSHIP_AT")
   if [ -n "$CLASS_ARTIFACT" ]; then
     args+=(--palw-class-artifact="$CLASS_ARTIFACT")
     if [ "$i" -eq 1 ] && [ "$REGISTER_CLASS" = 1 ]; then
@@ -251,6 +255,34 @@ for i in $(seq 0 $((NODES - 1))); do
   beats_total=$((beats_total + ${beats:-0}))
 done
 log "    DAA $gate_began -> $gate_now past the fence in $((SECONDS - gate_t0))s, with $beats_total heartbeat(s) minted across the fleet"
+
+# **ADR-0143, step 1c: the chain crossed the ownership fence and the index answers.**
+#
+# Crossing a fence without failing is not evidence that it did anything. Past the fence the roots a
+# line may be served for are the index's answer, and a class's own registered root belongs to its
+# founding line — so the base class's line must name at least one root it owns. Below the fence the
+# same read answers from the walk, which is why this is asked only past it.
+if [ -n "$ARTIFACT_ROOT_OWNERSHIP_AT" ]; then
+  log "1c/6 the artifact-root ownership fence is crossed and the index answers (ADR-0143)"
+  own_t0=$SECONDS
+  own_daa=""
+  while [ $((SECONDS - own_t0)) -lt "${OWNERSHIP_WAIT:-600}" ]; do
+    own_daa="$(daa_of 1)"
+    [ -n "$own_daa" ] && [ "$own_daa" -gt "$ARTIFACT_ROOT_OWNERSHIP_AT" ] 2>/dev/null && break
+    alive; sleep 10
+  done
+  [ -n "$own_daa" ] && [ "$own_daa" -gt "$ARTIFACT_ROOT_OWNERSHIP_AT" ] 2>/dev/null \
+    || die "THE CHAIN DID NOT CROSS THE OWNERSHIP FENCE: daa ${own_daa:-?} is not past $ARTIFACT_ROOT_OWNERSHIP_AT \
+after ${OWNERSHIP_WAIT:-600}s. A fence that stops the chain is what this step exists to catch."
+  base_line="$(reg 1 "[c['classId'] for c in v.get('classes', []) if c.get('isBaseClass')][0]")"
+  [ -n "$base_line" ] || die "op 186 names no base class, so there is no founding line to ask about ownership"
+  owned="$(cli 1 palw line-show --line "$base_line" --output json 2>/dev/null \
+    | python3 -c "import json,sys; print(len(json.load(sys.stdin).get('service_facts', {}).get('roots', [])))" 2>/dev/null || true)"
+  [ "${owned:-0}" -ge 1 ] 2>/dev/null \
+    || die "PAST THE OWNERSHIP FENCE THE INDEX IS EMPTY: the base class's founding line owns ${owned:-0} root(s) at daa $own_daa. \
+The migration runs in the crossing block; an empty index means it did not, or the index is not what the reader reads."
+  log "    daa $own_daa past $ARTIFACT_ROOT_OWNERSHIP_AT; the base class's founding line owns $owned root(s) by the index"
+fi
 
 if [ -n "$CLASS_ARTIFACT" ]; then
   if [ "$REGISTER_CLASS" = 1 ]; then log "2/6 node-1 registers the artifact's class"; else log "2/6 the artifact's class is on the chain (a genesis class of the devnet's set)"; fi

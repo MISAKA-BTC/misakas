@@ -22,6 +22,9 @@ SINGLE_LOTTERY_AT="${SINGLE_LOTTERY_AT:-}"
 VERIFICATION_V2_AT="${VERIFICATION_V2_AT:-}"
 READINESS_V2_AT="${READINESS_V2_AT:-}"
 ANCHOR_CLOCK_AT="${ANCHOR_CLOCK_AT:-}"
+# ADR-0143: the drill crosses this fence too, so the build that arms it on testnet-11 has been
+# through a crossing rather than only through its unit tests (the launch runbook's §5c gate).
+ARTIFACT_ROOT_OWNERSHIP_AT="${ARTIFACT_ROOT_OWNERSHIP_AT:-}"
 CLASS_ARTIFACT="${CLASS_ARTIFACT:-}"
 STEP_WAIT="${STEP_WAIT:-14400}"
 STALL_WAIT="${STALL_WAIT:-1800}"
@@ -83,6 +86,7 @@ start_node() {
   [ -n "$VERIFICATION_V2_AT" ] && args+=(--palw-verification-v2-devnet="$VERIFICATION_V2_AT")
   [ -n "$READINESS_V2_AT" ] && args+=(--palw-readiness-v2-devnet="$READINESS_V2_AT")
   [ -n "$ANCHOR_CLOCK_AT" ] && args+=(--palw-anchor-clock-devnet="$ANCHOR_CLOCK_AT")
+  [ -n "$ARTIFACT_ROOT_OWNERSHIP_AT" ] && args+=(--palw-artifact-root-ownership-devnet="$ARTIFACT_ROOT_OWNERSHIP_AT")
   [ "$with_artifact" = 1 ] && args+=(--palw-class-artifact="$CLASS_ARTIFACT")
   args+=(--connect="127.0.0.1:$P2P_BASE")
   [ -n "$HEARTBEAT_NODE" ] && [ "$i" = "$HEARTBEAT_NODE" ] && args+=(--palw-heartbeat-miner-address="$addr")

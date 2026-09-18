@@ -342,6 +342,8 @@ pub struct Args {
     pub palw_verification_v2_devnet_daa: Option<u64>,
     pub palw_readiness_v2_devnet_daa: Option<u64>,
     pub palw_anchor_clock_devnet_daa: Option<u64>,
+    /// ADR-0143 on a private devnet: the DAA from which an artifact root has one owner.
+    pub palw_artifact_root_ownership_devnet_daa: Option<u64>,
     /// PALW on a PRIVATE devnet: run the floor-only ruleset (the base class alone, seeded by
     /// ADR-0076 with the whole share, `MAX/278`) instead of the shipped devnet's testnet-11 class
     /// set, whose floor holds a sliver of the share and prices a fixture block at minutes per
@@ -473,6 +475,7 @@ impl Default for Args {
             palw_verification_v2_devnet_daa: None,
             palw_readiness_v2_devnet_daa: None,
             palw_anchor_clock_devnet_daa: None,
+            palw_artifact_root_ownership_devnet_daa: None,
             palw_devnet_floor_only: false,
             testnet: false,
             testnet_suffix: 10,
@@ -834,6 +837,20 @@ impl Args {
             config.params.palw_clock_cursor = Some(kaspa_consensus_core::config::params::ForkActivation::new(daa));
             if let Err(e) = config.params.validate_palw_v2() {
                 panic!("--palw-anchor-clock-devnet={daa} produced a ruleset the node refuses: {e:?}");
+            }
+        }
+
+        if let Some(daa) = self.palw_artifact_root_ownership_devnet_daa {
+            let net = self.network().network_type();
+            if !matches!(net, NetworkType::Devnet | NetworkType::Simnet) {
+                panic!(
+                    "--palw-artifact-root-ownership-devnet is devnet/simnet only (got {net:?}). Who owns an artifact root \
+                     is a consensus rule and ships in a release, not a command line."
+                );
+            }
+            config.params.palw_artifact_root_ownership = Some(kaspa_consensus_core::config::params::ForkActivation::new(daa));
+            if let Err(e) = config.params.validate_palw_v2() {
+                panic!("--palw-artifact-root-ownership-devnet={daa} produced a ruleset the node refuses: {e:?}");
             }
         }
 
@@ -1514,6 +1531,19 @@ pub fn cli() -> Command {
                 .env("KASPAD_PALW_ANCHOR_CLOCK_DEVNET"),
         )
         .arg(
+            Arg::new("palw-artifact-root-ownership-devnet")
+                .long("palw-artifact-root-ownership-devnet")
+                .value_name("daa-score")
+                .value_parser(clap::value_parser!(u64))
+                .require_equals(false)
+                .help(
+                    "ADR-0143 on a PRIVATE devnet: from this DAA score an artifact root has ONE owner — the crossing block \
+                     builds the index from the rows already on the chain, and every entrance refuses a root another line \
+                     owns. DEVNET/SIMNET ONLY.",
+                )
+                .env("KASPAD_PALW_ARTIFACT_ROOT_OWNERSHIP_DEVNET"),
+        )
+        .arg(
             Arg::new("palw-work-target-devnet")
                 .long("palw-work-target-devnet")
                 .value_name("daa-score")
@@ -1943,6 +1973,10 @@ impl Args {
                 .get_one::<u64>("palw-anchor-clock-devnet")
                 .copied()
                 .or(defaults.palw_anchor_clock_devnet_daa),
+            palw_artifact_root_ownership_devnet_daa: m
+                .get_one::<u64>("palw-artifact-root-ownership-devnet")
+                .copied()
+                .or(defaults.palw_artifact_root_ownership_devnet_daa),
             palw_devnet_floor_only: arg_match_unwrap_or::<bool>(&m, "palw-devnet-floor-only", defaults.palw_devnet_floor_only),
             utxoindex: arg_match_unwrap_or::<bool>(&m, "utxoindex", defaults.utxoindex),
             testnet: arg_match_unwrap_or::<bool>(&m, "testnet", defaults.testnet),
