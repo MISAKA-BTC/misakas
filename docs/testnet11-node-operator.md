@@ -54,6 +54,18 @@ The current Testnet-11 fingerprint is (the build that schedules the DAA 6,001 fl
 3d150afd18d2367a1ed0de65d0b1c12cfe06cd8a61478354ecab27e6283855e1
 ```
 
+The fence schedule this build prints on start:
+
+```text
+1150, 1900, 2150, 2400, 3500, 4000, 6000, 6001, 6100, 6201, 6900, 2125000
+```
+
+**6,000** is the compatibility boundary (no PALW rule fires there; it exists so the fleet is on one
+binary first), **6,001** is the one PALW upgrade day, **6,100** carries ADR-0133's Verification V2
+and the whole-artifact possession proof, **6,201** retires the compute overlay, **6,900** is the
+market's least seed. What each one changes:
+[docs/testnet11-6001-upgrade-announcement.md](testnet11-6001-upgrade-announcement.md).
+
 A different fingerprint or fork-id schedule is a ruleset mismatch, not an ordinary connectivity problem. Testnet-11 Relaunch 5f uses a different genesis from prior relaunches; old datadirs cannot be continued.
 
 ## Health

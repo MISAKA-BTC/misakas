@@ -32,14 +32,43 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 >   waits for them, and `misaka wallet utxo list` shows each output's depth.
 > * **Validators receive 20 % of a block's subsidy instead of 30 %** (ADR-0126); the tenth is escrowed
 >   for the block's PALW claim and paid at `Final`.
+> * **A block buys one unit of work from any model** (ADR-0137): a block draws against one
+>   network-wide work target `W` — `CCU/W`, the class's counted compute against the block's own
+>   floor — and a class's *share* becomes a result the readers report, not an input to the draw. No
+>   class share, class target, epoch budget or seat price is read past this height.
+> * **The class ticket is the whole lottery** (ADR-0132 S): an attempt block's Layer-0 digest is no
+>   longer compared to `bits`, so a model producer that wins its class ticket is not asked to win a
+>   hash draw it can only lose. The work target holds the cadence in its place.
+> * **The DAA score becomes the anchor's clock** (ADR-0138): a block advances it only if `bits`
+>   priced it, or it is a heartbeat. The attempt and receipt lanes still merge, still earn and still
+>   fold — they simply stop pacing the windows that are counted in DAA (the challenge window, the
+>   validator leak, a bond's withdrawal), which were sized against the 120-second cadence.
+> * **The execution lane's gas scales with the lane** (ADR-0139): each distinct permitted round a
+>   chain block merges adds 3,000,000 gas to what that block may accept, under a 390,000,000
+>   ceiling — so "one block a second" is one second of transactions, not one second of scheduling
+>   against a 120-second gas budget.
+> * **The permissionless model registry opens** (ADR-0135): anyone may register a model class, its
+>   profile is derived from its graph, seats prove they hold its artifact, and a class walks a
+>   lifecycle that holds it back when its panel cannot verify it. A claim is challengeable for 120
+>   DAA instead of 1,200 (ADR-0132 §7.6).
 > * **Validators vote BFT by bonded stake** (ADR-0128): an anchor is DNS-final when more than two thirds
 >   of the counted stake has attested and precommitted to it, and the DNS stake reorg gate refuses
 >   chains that abandon it. Validators restart on this build and precommit without new flags
 >   ([docs/validator-runbook.md](docs/validator-runbook.md)). PALW production and settlement do not
 >   depend on validators; the gate is a veto layered on top.
 >
+> **From DAA 6,100**, two more, both of ADR-0133: a receipt may attest the segments of a job rather
+> than the whole of it (Verification V2, S1), and a seat's possession proof becomes a multiproof over
+> sixteen leaves drawn from the whole artifact instead of one leaf of a contiguous window.
+>
 > These are consensus rules: a node on the 7,000 release keeps peering below 6,000 and is refused
 > from 6,000; its own 6,900 and 7,000 are never reached by it.
+>
+> **Before it was armed**, this bundle was audited twice against the code rather than the design:
+> a pre-arming security audit ([docs/palw-audit-2026-09-18-6001.md](docs/palw-audit-2026-09-18-6001.md),
+> two Critical and six High findings, all fixed) and a DAA-clock audit
+> ([docs/palw-daa-clock-audit-2026-09-18.md](docs/palw-daa-clock-audit-2026-09-18.md), which is why
+> ADR-0138 exists and what it deliberately does not close).
 
 <details>
 <summary>Historical Relaunch 5f rollout log and crossed fences</summary>
@@ -182,7 +211,7 @@ wrong ruleset:
 
 ```
 Consensus params fingerprint: 3d150afd18d2367a1ed0de65d0b1c12cfe06cd8a61478354ecab27e6283855e1 (network testnet-11)
-Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 4000, 6000, 6001, 6201, 6900, 2125000 (schedule id …)
+Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 4000, 6000, 6001, 6100, 6201, 6900, 2125000 (schedule id …)
 ```
 
 A build from `891a1a14` up to `a5f1bdf7` prints `060e3597cd2950bc…` on the first line and the same

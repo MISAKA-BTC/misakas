@@ -30,7 +30,7 @@ of it fires without the rest:
 | one work target `W` — a block draws against `CCU / W`; no class share, class DAA, epoch budget or seat price is read | 0137 |
 | the single lottery — an attempt block's Layer-0 digest is no longer compared to `bits`, the class ticket is the whole lottery | 0132 S |
 | the short challenge window: a claim licensed past 6,001 is challengeable for 120 DAA, not 1,200 | 0132 §7.6 |
-| the anchor clock: a block advances the DAA score iff `bits` priced it — the attempt, receipt and heartbeat lanes stop ticking the windows | 0138 |
+| the anchor clock: a block advances the DAA score iff `bits` priced it, or it is a heartbeat — the attempt and receipt lanes stop pacing the DAA-counted windows | 0138 |
 | the execution lane's gas: one 3 M budget per permitted round a chain block merges, under a 390 M ceiling (O13 decided) | 0139 |
 
 **DAA 6,100 — Verification V2 (S1, segmented replay) and readiness V2.** A receipt may name the segments of a job it
@@ -46,6 +46,21 @@ the artifact needs no change beyond running this build; a seat that was answerin
 will stop counting. ADR-0133 §11.2.
 
 **DAA 6,201 — the compute overlay retires** (ADR-0134). **DAA 6,900 — the market's least seed** (ADR-0120).
+
+## What the two audits found before this was armed
+
+This bundle was audited twice against the code, not the design, and both reports ship with it:
+
+* [The pre-arming security audit](palw-audit-2026-09-18-6001.md) — two Critical and six High
+  findings, every one fixed before arming. The two Criticals: a rooted consensus decision that read
+  a node's own storage (two honest nodes could have folded different state roots), and a `pwu` rule
+  that still priced off a value the flag day retires (which both blocked every honest model block
+  and let a registrant buy fork-choice weight cheaply).
+* [The DAA-clock audit](palw-daa-clock-audit-2026-09-18.md) — why ADR-0138 exists, what it closes,
+  and what it does not: finality, merge depth, pruning and the DNS attestation epoch are counted in
+  blue score, which the model lane still paces, so their wall-clock length is about half what the
+  120-second cadence alone would give. None of them is a chain-split risk and finality moves in the
+  safe direction; the numbers are in §9 of that report.
 
 ## What an operator has to do
 
