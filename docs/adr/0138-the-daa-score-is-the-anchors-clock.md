@@ -129,5 +129,5 @@ liveness and availability, with finality moving in the safe direction.
 
 ## 4. Fingerprint
 
-`c472a17b…` → `7920f7b2…` on testnet-11 (the fence is hashed Some-only). The schedule is unchanged:
+`c472a17b…` → `48d1e31f…` on testnet-11 (the fence is hashed Some-only). The schedule is unchanged:
 6,001 was already a scheduled height.

@@ -8,11 +8,12 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 > **Current status (2026-09-17).** The live public network is **`testnet-11`**, Relaunch 5f.
 > Build current `main`, select it explicitly with `--testnet --netsuffix=11` or
 > `misaka --network testnet-11`, and verify fingerprint
-> **`7920f7b233695172959046ce2d7c18cc58729753a3cbc90d0b4ba27c8ec3c30f`** (the build that moves the held
+> **`48d1e31feefce318ae2596bfa0083a83ec9c232437f96d77c0d0c1ce42776de4`** (the build that moves the held
 > regime and the audit's deep fixes to DAA 6,300 — from the 7,000 the deployed release scheduled; the
 > operator, 2026-09-17: the wait was too long — and schedules the DAA 6,301 flag day with ADR-0130's
-> operator lottery and 5-DAA spans, the model registry, the economic payout, the work target, the
-> single lottery and the short challenge window (one PALW upgrade day, 2026-09-18), ADR-0133's
+> operator lottery and 5-DAA spans, the model registry, the economic payout, the work target and
+> the short challenge window (one PALW upgrade day, 2026-09-18 — ADR-0132 S's single lottery and
+> ADR-0138's anchor clock left it and wait for ADR-0142), ADR-0133's
 > Verification V2 (S1) at 6,400, and ADR-0134's compute-overlay retirement at 6,501; the 7,000
 > release prints `ae1d6162…`; the earlier builds `4787b92a…`, `ab4e7b9c…` and `dd805c9f…`, which
 > scheduled 7,001, were never deployed).
@@ -36,15 +37,18 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 >   network-wide work target `W` — `CCU/W`, the class's counted compute against the block's own
 >   floor — and a class's *share* becomes a result the readers report, not an input to the draw. No
 >   class share, class target, epoch budget or seat price is read past this height.
-> * **The class ticket is the whole lottery** (ADR-0132 S): an attempt block's Layer-0 digest is no
->   longer compared to `bits`, so a model producer that wins its class ticket is not asked to win a
->   hash draw it can only lose. The work target holds the cadence in its place.
-> * **The DAA score becomes the anchor's clock** (ADR-0138): a block advances it only if `bits`
->   priced it. A heartbeat stands in where a mergeset carries no priced block at all, so a chain
->   whose hash lane stops keeps its clock without a beating chain running it fast. The attempt and
->   receipt lanes still merge, still earn and still fold — they simply stop pacing the windows that
->   are counted in DAA (the challenge window, the validator leak, a bond's withdrawal), which were
->   sized against the 120-second cadence.
+>
+> **Two rules are NOT on this day**, and the reason is a measurement rather than a schedule.
+> ADR-0132 S's single lottery and ADR-0138's anchor clock arm together, and arming them would have
+> stopped the chain's clock: testnet-11 has no `bits`-priced producer — 60 of its last 60
+> selected-chain blocks are the model lane — so past the anchor clock only a heartbeat can advance
+> the DAA score, and the rule that admitted heartbeats measured them against a parent every new
+> block replaces. A chain producing faster than the interval suppressed the lane entirely, and the
+> registry drill reproduced it: the clock frozen at its own flag day, the miner running, nothing
+> minted. [ADR-0142](docs/adr/0142-the-consensus-clock-is-a-cursor-a-heartbeat-consumes-a-slot.md)
+> is the rule that fixes it — built and drilled, armed nowhere — and these two follow it on a later
+> day. Nothing else in the upgrade depends on them.
+>
 > * **The execution lane's gas scales with the lane** (ADR-0139): each distinct permitted round a
 >   chain block merges adds 3,000,000 gas to what that block may accept, under a 390,000,000
 >   ceiling — so "one block a second" is one second of transactions, not one second of scheduling
@@ -215,7 +219,7 @@ The log must show this fingerprint and, on the next line, this fence schedule, o
 wrong ruleset:
 
 ```
-Consensus params fingerprint: 7920f7b233695172959046ce2d7c18cc58729753a3cbc90d0b4ba27c8ec3c30f (network testnet-11)
+Consensus params fingerprint: 48d1e31feefce318ae2596bfa0083a83ec9c232437f96d77c0d0c1ce42776de4 (network testnet-11)
 Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 4000, 6300, 6301, 6400, 6501, 6900, 2125000 (schedule id …)
 ```
 

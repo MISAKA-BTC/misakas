@@ -1,7 +1,7 @@
 # The 6,001 release: what was gated, what was measured, and the verdict
 
 **Release candidate.** The bundle audited as `05169552` plus the fixes that audit and its own
-re-audits produced. Fingerprint `7920f7b233695172959046ce2d7c18cc58729753a3cbc90d0b4ba27c8ec3c30f`;
+re-audits produced. Fingerprint `48d1e31feefce318ae2596bfa0083a83ec9c232437f96d77c0d0c1ce42776de4`;
 schedule `1150, 1900, 2150, 2400, 3500, 4000, 6300, 6301, 6400, 6501, 6900`.
 
 This is the third report on this bundle and the only one that decides. The first
@@ -180,7 +180,7 @@ costs `T / interval` blocks at the lane's constant target, so a shorter interval
 The heights moved with it, because the tip reached 6,000 while the release was held: held and deep
 audit to 6,300, the PALW upgrade day to 6,301, Verification and readiness V2 to 6,400, the
 compute-overlay retirement to 6,501. ADR-0120's 6,900 stays where the deployed release put it.
-Fingerprint `7920f7b233695172959046ce2d7c18cc58729753a3cbc90d0b4ba27c8ec3c30f`.
+Fingerprint `48d1e31feefce318ae2596bfa0083a83ec9c232437f96d77c0d0c1ce42776de4`.
 
 The tests that pinned those heights now read the constants rather than spelling the numbers out. The
 flag day has moved three times, and the edit a literal forces is the one most likely to be made

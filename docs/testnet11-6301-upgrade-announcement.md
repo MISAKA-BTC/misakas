@@ -9,7 +9,7 @@
 > [The clock audit §2](palw-daa-clock-audit-2026-09-18.md) has the measurement and
 > [the release report](palw-release-6001-verdict-2026-09-18.md) §7 has the fix.
 
-**Fingerprint of the release: `7920f7b233695172959046ce2d7c18cc58729753a3cbc90d0b4ba27c8ec3c30f`.**
+**Fingerprint of the release: `48d1e31feefce318ae2596bfa0083a83ec9c232437f96d77c0d0c1ce42776de4`.**
 Every node on testnet-11 must run this build **before DAA 6,300**. The build currently deployed prints
 `ae1d6162…` and is refused from 6,300.
 
@@ -36,10 +36,23 @@ of it fires without the rest:
 | the permissionless model registry (rows, readiness proofs, the capacity gate) | 0135 Upgrade A |
 | the economic payout: `min(escrow, attempted × rate)` at 9 MSK a G MAC-eq, the panel's share | 0132 Upgrade C |
 | one work target `W` — a block draws against `CCU / W`; no class share, class DAA, epoch budget or seat price is read | 0137 |
-| the single lottery — an attempt block's Layer-0 digest is no longer compared to `bits`, the class ticket is the whole lottery | 0132 S |
 | the short challenge window: a claim licensed past 6,301 is challengeable for 120 DAA, not 1,200 | 0132 §7.6 |
-| the anchor clock: a block advances the DAA score only if `bits` priced it; a heartbeat stands in where a mergeset carries no priced block at all, and the lane runs at the target block time whenever its parent is not pacing the clock. The attempt and receipt lanes stop pacing the DAA-counted windows | 0138 |
 | the execution lane's gas: one 3 M budget per permitted round a chain block merges, under a 390 M ceiling (O13 decided) | 0139 |
+
+**Two rules left this day, and why.** ADR-0132 S's single lottery and ADR-0138's anchor clock are
+**not** in the list above. They arm together — one setter, so they can never be spelled at two
+heights — and a pre-rollout measurement of the live chain found that arming them would have stopped
+the chain's clock. testnet-11 has no `bits`-priced producer: of the last 60 selected-chain blocks,
+60 are the model lane and none is a hash anchor. Past the anchor clock only a heartbeat can advance
+the DAA score, and the rule the heartbeat was admitted under measured it against a parent every new
+block replaces — so a chain producing faster than the interval suppressed the lane entirely. The
+registry drill reproduced it: the clock frozen at its own flag day with the miner running and
+nothing minted.
+
+The rule that fixes it is [ADR-0142](adr/0142-the-consensus-clock-is-a-cursor-a-heartbeat-consumes-a-slot.md),
+which is built and drilled but not armed anywhere. These two follow it on a later day, with their own
+fence. Nothing else in the upgrade depends on them: the work target arrives on schedule, because the
+dependency runs one way — the lottery needs the work target, never the reverse.
 
 **DAA 6,400 — Verification V2 (S1, segmented replay) and readiness V2.** A receipt may name the segments of a job it
 attests; a claim licenses when the panel's quorum holds **and** every segment of the anchor's cut is
