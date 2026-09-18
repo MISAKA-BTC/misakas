@@ -276,11 +276,29 @@ if [ -n "$ARTIFACT_ROOT_OWNERSHIP_AT" ]; then
 after ${OWNERSHIP_WAIT:-600}s. A fence that stops the chain is what this step exists to catch."
   base_line="$(reg 1 "[c['classId'] for c in v.get('classes', []) if c.get('isBaseClass')][0]")"
   [ -n "$base_line" ] || die "op 186 names no base class, so there is no founding line to ask about ownership"
-  owned="$(cli 1 palw line-show --line "$base_line" --output json 2>/dev/null \
-    | python3 -c "import json,sys; print(len(json.load(sys.stdin).get('service_facts', {}).get('roots', [])))" 2>/dev/null || true)"
-  [ "${owned:-0}" -ge 1 ] 2>/dev/null \
-    || die "PAST THE OWNERSHIP FENCE THE INDEX IS EMPTY: the base class's founding line owns ${owned:-0} root(s) at daa $own_daa. \
-The migration runs in the crossing block; an empty index means it did not, or the index is not what the reader reads."
+  # `line-show` takes the line id POSITIONALLY. It was called with `--line` on the first run, the CLI
+  # refused the argument, the empty output parsed as zero, and the step reported an empty index on a
+  # chain whose index was never asked. A read that failed and a read that answered nothing are
+  # different findings and must not share a message — the same lesson the datadir lock taught phase 2.
+  line_json="$(cli 1 palw line-show "$base_line" --output json 2>&1 || true)"
+  owned="$(printf '%s' "$line_json" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print('ERR'); raise SystemExit(0)
+if not d.get('exists', False):
+    print('ERR'); raise SystemExit(0)
+print(len(d.get('service_facts', {}).get('roots', [])))
+" 2>/dev/null || echo ERR)"
+  case "$owned" in
+    ERR|"")
+      die "THE OWNERSHIP READ FAILED, so this step learned nothing about the chain: \
+\`misaka palw line-show $base_line\` did not answer with a line. Its reply was: $(printf '%s' "$line_json" | head -c 300)" ;;
+    0)
+      die "PAST THE OWNERSHIP FENCE THE INDEX IS EMPTY: the base class's founding line owns 0 root(s) at daa $own_daa. \
+The migration runs in the crossing block; an empty index means it did not, or the index is not what the reader reads." ;;
+  esac
   log "    daa $own_daa past $ARTIFACT_ROOT_OWNERSHIP_AT; the base class's founding line owns $owned root(s) by the index"
 fi
 
