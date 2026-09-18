@@ -245,22 +245,28 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
         }
     }
 
-    /// **ADR-0138: does a block of this lane, minted at `daa_score`, advance the DAA score?** Yes
-    /// below `palw_anchor_clock`. Past it, exactly when `bits` prices the lane at that height — the
-    /// same three-generation predicate the difficulty window reads (`algo_id_is_priced_by_bits`,
-    /// `_v2` past `palw_receipt_rows_unpriced`, `_v3` past the single lottery), so the DAA clock and
-    /// the retarget count the same blocks. One spelling: a lane that leaves the window leaves the clock.
+    /// [`palw_lane_advances_daa_v1`] with this manager's own fences.
+    /// **ADR-0138: does a block of this lane, minted at `daa_score`, advance the DAA score?**
+    ///
+    /// Yes below `palw_anchor_clock`. Past it, a lane ticks the clock when **the chain sets its
+    /// rate** — and that is two things, not one:
+    ///
+    /// * the lanes `bits` prices (the anchor), on the difficulty window's own three-generation
+    ///   predicate (`algo_id_is_priced_by_bits`, `_v2` past `palw_receipt_rows_unpriced`, `_v3` past
+    ///   the single lottery), so the clock and the retarget count the same blocks; and
+    /// * **the heartbeat lane.** ADR-0066 took the heartbeat out of `bits` so a stock of certified
+    ///   quanta could not tighten the attempt lane's target, but the heartbeat IS the chain's
+    ///   liveness tick: one an hour (`HEARTBEAT_NOMINAL_INTERVAL_MS`), at most
+    ///   `PALW_HEARTBEAT_MAX_PER_MERGESET` a mergeset, on a constant target no producer moves. A
+    ///   chain whose hash lane stops still beats, and if the beat did not tick the clock the DAA
+    ///   score would FREEZE — every fence, deadline, retention and leak window with it — while
+    ///   blocks kept coming. Its contribution where the hash lane runs is one tick an hour against
+    ///   thirty, so it distorts the 120-second meaning by nothing that matters.
+    ///
+    /// The attempt lane (rate `CCU/W`, set by compute) and the receipt lane (rate set by licensed
+    /// receipts) are what this rule takes out of the clock, and the round lane was never in it.
     pub fn lane_advances_daa_at(&self, pow_algo_id: u8, daa_score: u64) -> bool {
-        if !self.anchor_clock.is_some_and(|fence| fence.is_active(daa_score)) {
-            return true;
-        }
-        if self.single_lottery.is_some_and(|fence| fence.is_active(daa_score)) {
-            kaspa_consensus_core::pow_layer0::algo_id_is_priced_by_bits_v3(pow_algo_id)
-        } else if self.receipt_rows_activation.is_active(daa_score) {
-            kaspa_consensus_core::pow_layer0::algo_id_is_priced_by_bits_v2(pow_algo_id)
-        } else {
-            algo_id_is_priced_by_bits(pow_algo_id)
-        }
+        palw_lane_advances_daa_v1(pow_algo_id, daa_score, self.anchor_clock, self.single_lottery, self.receipt_rows_activation)
     }
 
     /// **ADR-0125: is `hash` a round block?** Its lane's id where the lane is open at its own DAA
@@ -536,6 +542,30 @@ impl Ord for DifficultyBlock {
     }
 }
 
+/// **ADR-0138's rule, as a function of the fences alone** — so it can be read and tested without a
+/// store. See [`SampledDifficultyManager::lane_advances_daa_at`] for what it means.
+pub fn palw_lane_advances_daa_v1(
+    pow_algo_id: u8,
+    daa_score: u64,
+    anchor_clock: Option<ForkActivation>,
+    single_lottery: Option<ForkActivation>,
+    receipt_rows_activation: ForkActivation,
+) -> bool {
+    if !anchor_clock.is_some_and(|fence| fence.is_active(daa_score)) {
+        return true;
+    }
+    if pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1 {
+        return true;
+    }
+    if single_lottery.is_some_and(|fence| fence.is_active(daa_score)) {
+        kaspa_consensus_core::pow_layer0::algo_id_is_priced_by_bits_v3(pow_algo_id)
+    } else if receipt_rows_activation.is_active(daa_score) {
+        kaspa_consensus_core::pow_layer0::algo_id_is_priced_by_bits_v2(pow_algo_id)
+    } else {
+        algo_id_is_priced_by_bits(pow_algo_id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use kaspa_consensus_core::{BlockLevel, BlueWorkType, MAX_WORK_LEVEL};
@@ -737,5 +767,76 @@ mod tests {
             MAX_DIFFICULTY_TARGET.compact_target_bits(),
             "a window of receipt rows alone holds no priced row"
         );
+    }
+}
+
+#[cfg(test)]
+mod adr0138_clock_tests {
+    use super::palw_lane_advances_daa_v1 as ticks;
+    use kaspa_consensus_core::config::params::ForkActivation;
+    use kaspa_consensus_core::pow_layer0::{
+        POW_ALGO_ID_BLAKE2B_SHA3, POW_ALGO_ID_HEARTBEAT_V1, POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_EXEC_V3,
+        POW_ALGO_ID_PALW_RECEIPT_V3, POW_ALGO_ID_PALW_ROUND_V1,
+    };
+
+    const ANCHOR: u8 = POW_ALGO_ID_BLAKE2B_SHA3;
+    const LANES: [(&str, u8); 6] = [
+        ("anchor", ANCHOR),
+        ("attempt-committed", POW_ALGO_ID_PALW_COMMITTED_V2),
+        ("attempt-exec", POW_ALGO_ID_PALW_EXEC_V3),
+        ("receipt", POW_ALGO_ID_PALW_RECEIPT_V3),
+        ("heartbeat", POW_ALGO_ID_HEARTBEAT_V1),
+        ("round", POW_ALGO_ID_PALW_ROUND_V1),
+    ];
+
+    /// **The whole classification, one table, at every fence combination.** The round lane is absent
+    /// from the answers because it never reaches this rule — `is_round_block` puts it in
+    /// `mergeset_non_daa`, out of the window and out of the count, before the exemption is asked.
+    #[test]
+    fn the_clock_is_the_anchor_and_the_heartbeat_and_nothing_else_past_the_fence() {
+        let never = ForkActivation::never();
+        let always = ForkActivation::always();
+        // Below the fence: every lane ticks, exactly as it did before ADR-0138.
+        for (name, algo) in LANES {
+            assert!(ticks(algo, 100, None, None, never), "{name}: no clock fence, no exemption");
+            assert!(ticks(algo, 100, Some(ForkActivation::new(101)), Some(always), always), "{name}: the fence is one past");
+        }
+        // Past the fence, with the single lottery in force (the 6,001 shape).
+        let armed = Some(always);
+        assert!(ticks(ANCHOR, 100, armed, armed, always), "the anchor ticks: `bits` prices it");
+        assert!(ticks(POW_ALGO_ID_HEARTBEAT_V1, 100, armed, armed, always), "the heartbeat ticks: the chain sets its rate");
+        for (name, algo) in [("attempt-committed", POW_ALGO_ID_PALW_COMMITTED_V2), ("attempt-exec", POW_ALGO_ID_PALW_EXEC_V3)] {
+            assert!(!ticks(algo, 100, armed, armed, always), "{name}: unpriced past the single lottery, out of the clock");
+        }
+        assert!(!ticks(POW_ALGO_ID_PALW_RECEIPT_V3, 100, armed, armed, always), "the receipt lane: unpriced since ADR-0083");
+        assert!(!ticks(POW_ALGO_ID_PALW_ROUND_V1, 100, armed, armed, always), "the round lane: never in the clock");
+        // Past the clock fence but BELOW the single lottery: the attempt lane is still priced, so it
+        // still ticks — the clock and the difficulty window agree at every height, which is the rule.
+        let lottery_later = Some(ForkActivation::new(200));
+        for (name, algo) in [("attempt-committed", POW_ALGO_ID_PALW_COMMITTED_V2), ("attempt-exec", POW_ALGO_ID_PALW_EXEC_V3)] {
+            assert!(ticks(algo, 100, armed, lottery_later, always), "{name}: priced below the lottery, so it ticks");
+            assert!(!ticks(algo, 200, armed, lottery_later, always), "{name}: and stops at the lottery's own height");
+        }
+        // The receipt lane before ADR-0083's fence: priced, so it ticks.
+        assert!(ticks(POW_ALGO_ID_PALW_RECEIPT_V3, 100, armed, None, ForkActivation::new(500)), "receipt: priced below its fence");
+        assert!(!ticks(POW_ALGO_ID_PALW_RECEIPT_V3, 500, armed, None, ForkActivation::new(500)), "…and unpriced at it");
+    }
+
+    /// **Determinism: the answer is a function of (lane, height, fences) and nothing else.** Called
+    /// a thousand times over every lane and a spread of heights, it never differs — no clock, no
+    /// store, no host state enters it, so two nodes folding one block classify it alike.
+    #[test]
+    fn the_classification_is_a_pure_function_every_node_computes_alike() {
+        let armed = Some(ForkActivation::new(6_001));
+        let lottery = Some(ForkActivation::new(6_001));
+        let receipts = ForkActivation::new(2_400);
+        for (_, algo) in LANES {
+            for daa in [0u64, 1, 2_399, 2_400, 6_000, 6_001, 6_002, 1 << 40] {
+                let first = ticks(algo, daa, armed, lottery, receipts);
+                for _ in 0..1_000 {
+                    assert_eq!(ticks(algo, daa, armed, lottery, receipts), first, "algo {algo} at daa {daa} is one answer");
+                }
+            }
+        }
     }
 }

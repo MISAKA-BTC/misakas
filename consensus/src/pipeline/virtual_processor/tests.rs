@@ -548,11 +548,12 @@ async fn palw_heartbeat_blocks_tick_the_clock_and_weigh_epsilon() {
 /// sides of the fence are asserted as blue-work DIFFERENCES through the real pipeline, so the
 /// number a peer actually adds is the number under test.
 #[tokio::test]
-async fn adr0138_past_the_anchor_clock_a_heartbeat_block_ticks_no_daa() {
-    // **ADR-0138: the DAA score is the anchor's clock.** A heartbeat carries the global `bits` but
-    // is not priced by them (ADR-0066), so past `palw_anchor_clock` merging one moves no window:
-    // the chain block that merges the heartbeat has the DAA score of one anchor, not two. Below
-    // the fence the heartbeat ticks as it always did (`palw_heartbeat_blocks_tick_the_clock…`).
+async fn adr0138_past_the_anchor_clock_the_heartbeat_still_ticks_the_clock() {
+    // **ADR-0138: the clock is the lanes whose rate the chain sets — the anchor AND the heartbeat.**
+    // The heartbeat is not priced by `bits` (ADR-0066) but it is the chain's liveness tick, one an
+    // hour on a constant target: if it did not tick, a chain whose hash lane stopped would keep
+    // producing while its DAA score froze. So merging a heartbeat moves the clock, exactly as it
+    // did below the fence, and what the fence takes out is the attempt and receipt lanes.
     use crate::model::stores::daa::DaaStoreReader;
     use crate::model::stores::ghostdag::GhostdagStoreReader;
     use kaspa_consensus_core::palw_heartbeat_v1 as hb;
@@ -598,7 +599,11 @@ async fn adr0138_past_the_anchor_clock_a_heartbeat_block_ticks_no_daa() {
     // Two blocks were added on top of `sink_before` — the heartbeat and the anchor that merged it —
     // and the clock moved by exactly one: the anchor's.
     assert_eq!(daa_hb, daa_before + 1, "the heartbeat's own score counts the anchor it built on");
-    assert_eq!(daa_next, daa_before + 1, "…and the block that merges the heartbeat adds nothing for it: one anchor, one tick");
+    assert_eq!(
+        daa_next,
+        daa_hb + 1,
+        "…and the anchor that merges the heartbeat counts it: the beat is a tick, so a chain whose hash lane stops still has a clock"
+    );
     let ghostdag = vp.ghostdag_store.get_data(next_hash).unwrap();
     assert!(
         ghostdag.mergeset_blues.contains(&hb_hash) || ghostdag.selected_parent == hb_hash,

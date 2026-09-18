@@ -121,3 +121,144 @@ One rule, one place, fenced at 6,001 with the rest of the bundle:
 * **Class-derived verification window vs the global receipt deadline.** `verification_window_spans`
   is read only by capacity (`panel_room_v1`, the profile); the receipt deadline is
   `bound_daa + window_receipt` for every class. The fail-closed guard is in ADR-0133 §11.3.
+
+---
+
+# Part II — the re-audit of the fix (2026-09-18, RC `05169552` frozen)
+
+Four gates, run against the frozen candidate. Two things the fix itself created, both closed here;
+one residual on the blue axis, reported as a release blocker below.
+
+## 7. ADR-0138 re-audited: the clock's own holes
+
+**Every DAA increment site.** One: `SampledDifficultyManager::internal_calc_daa_score`
+(`consensus/src/processes/difficulty.rs`). Both callers — the template's
+`calc_daa_score_and_mergeset_non_daa_blocks` and validation's `block_daa_window` → `calc_daa_score`
+(`window.rs:351,357`) — end in it, and `check_difficulty_and_daa_score`
+(`pre_pow_validation.rs:31`) refuses a header that claims another number. No second arithmetic
+exists anywhere in the tree.
+
+**The rule is a pure function.** `palw_lane_advances_daa_v1(algo, daa, anchor_clock, single_lottery,
+receipt_rows)` — no store, no clock, no host state. Pinned by
+`the_clock_is_the_anchor_and_the_heartbeat_and_nothing_else_past_the_fence` (every lane at every
+fence combination, including the heights where the attempt and receipt lanes are still priced and
+therefore still tick) and `the_classification_is_a_pure_function_every_node_computes_alike`.
+
+**The freeze the first version created, and its fix.** ADR-0066 took the heartbeat out of `bits`, so
+the first cut of ADR-0138 exempted it too — and a chain whose hash lane stops still beats, which
+means its DAA score would have **frozen** while blocks kept coming: every fence, deadline, retention
+and leak window stopped with it. The heartbeat is now inside the clock: one an hour on a constant
+target, at most four a mergeset, so it cannot pace the clock where the hash lane runs (one tick an
+hour against thirty) and it cannot let the clock stop where it does not. Pinned by
+`adr0138_past_the_anchor_clock_the_heartbeat_still_ticks_the_clock` (the merging anchor counts the
+beat) and by the table above.
+
+**Exempt is not excluded.** The exemption is arithmetic on the score only. A merged attempt block
+stays blue, stays out of `mergeset_non_daa` — the set the coinbase skips (`coinbase.rs:233`) and the
+PALW fold ignores (`palw_v2_merged_works(.., &merged_non_daa, ..)`) — so it keeps its subsidy and its
+claim still folds. The heartbeat test asserts exactly this for a real merged block: blue, not in
+`mergeset_non_daa`, and the state root moves for it.
+
+**Reorg and replay.** The score is `stored_parent_score + (mergeset − non_daa − exempt)`, every term
+a function of stored headers and the block's own ghostdag data, so a replay of the same block
+computes the same number by construction; the rooted PALW state's delta revert is pinned per feature
+(`revert_delta_v2` equality in each of the 6,001 tests). No wall clock, no local storage, no
+iteration order enters either.
+
+## 8. RELEASE BLOCKER (blue axis) — the DNS leak's evidence window is walked in blue score while the leak is decided in DAA
+
+ADR-0138 made the DAA score slower than the blue score, and one rule reads both.
+
+* The leak fires when `anchor_daa − last_attested_daa ≥ t_leak_daa` (5,040 on testnet-11):
+  `dns_bft_v1.rs:368`, decided in **DAA**.
+* `last_attested_daa` comes from the walk. Where the walk finds no attestation it falls back to
+  `window_lower_edge_daa` — the lowest DAA the walk reached (`dns_bft_v1.rs:249-257`).
+* The walk's bound is **blue score**: it stops at `evidence_floor_blue_score = anchor_blue −
+  (t_leak_daa + reentry_final_depth_daa + epoch_length_blue + lag_blue)` = 5,244 blue on
+  testnet-11 (`dns_bft_v1.rs:55-60,110`; the runtime loop at
+  `virtual_processor/dns_bft.rs:186-203` breaks on `compact.blue_score < floor`).
+
+Before ADR-0138 blue and DAA advanced together, so walking 5,244 of blue reached back ≥ 5,040 of DAA
+and ADR-0128's own sentence held: *"Absence inside a window at least `t_leak_daa` long is silence of
+at least `t_leak_daa`, so the lower-edge fallback is exact rather than a guess."* Now the attempt
+lane adds blue without adding DAA: at the work target's steady state (`fp_attempt_share_permille =
+900`, so ~0.9 attempt blocks an anchor) 5,244 blue reaches back **~2,760 DAA**, and
+`anchor_daa − lower_edge ≈ 2,760 < 5,040` for **every** bond.
+
+**Impact: the inactivity leak can never fire past 6,001.** The direction is safe for the bond (no
+honest validator is leaked — the fallback under-states silence, never over-states it) and wrong for
+the overlay: a validator that stops attesting is never removed from the counted set, so a two-stage
+BFT quorum can be held below threshold by bonds that never speak, the DNS-final anchor stops
+advancing, and the stake reorg gate freezes at its last confirmation. ADR-0128's stated purpose —
+"inactivity leak は再実装して … 正しく有効化できるようにして" — is defeated on the flag day, silently.
+
+**Minimal fix (not applied — it changes a walk bound and its pruning-depth derivation, the
+operator's call):** walk until BOTH spans are covered — the blue terms (`stake_score_window`,
+`epoch_length`, `lag`) in blue score as today, AND the DAA terms (`t_leak_daa +
+reentry_final_depth_daa`) in DAA score — stopping only when each is satisfied. Deterministic, and it
+restores the ADR's sentence exactly. Cost: the walk reads ~1.9× the blocks in steady state, and
+`validate_palw_v2`'s "pruning depth ≥ the walk" check must be re-derived against the longer blue
+span (testnet-11's derived 12,002 covers the ~9,600 blue the fixed walk needs at the steady ratio,
+but not an arbitrary burst — bounding the model lane per epoch, the audit's A-05, is what makes the
+ratio a bound rather than an average).
+
+## 9. The other blue-score windows, measured
+
+Counted in blue score, and the blue clock is now paced by the anchor **plus** the attempt lane
+(~1.9× the anchor at the steady state above; unbounded within one epoch until A-05's per-epoch cap
+exists):
+
+| window | blue blocks | at 120 s anchors only | at the steady 1.9× |
+|---|---|---|---|
+| merge depth (`MERGE_DEPTH_DURATION` 1 h) | 30 | 1.0 h | 32 min |
+| finality (`FINALITY_DURATION` 12 h) | 360 | 12 h | 6.3 h |
+| pruning (`PRUNING_DURATION` 30 h) | ~900 | 30 h | 15.8 h |
+| DNS attestation epoch | 100 | 3.3 h | 1.75 h |
+
+None of these is a split risk: blue score is a deterministic function of the DAG, identical on every
+node. The effects are liveness and availability — a slow producer's block falls outside the merge
+window sooner, a node offline longer than the (shortened) pruning window needs a fresh pruned sync,
+and DNS validators must attest more often per unit time. Reaching finality depth sooner makes the
+chain harder to reorg, which is the safe direction. **Recommendation:** accept and document these
+four, and close §8 before arming — it is the one that turns a security mechanism off.
+
+## 10. ADR-0139 re-audited
+
+`evm_distinct_permitted_rounds_v1` is the whole rule and it is now one function in consensus-core,
+read by validation and by the template alike. `one_round_buys_one_budget_however_many_blocks_or_permits_it_carries`
+pins: two permits of one round buy one budget; one round across two spans buys one; 200 uses over 5
+rounds buy 5; a gap in the round indices buys nothing extra; order and repetition do not matter.
+Upstream of the count, a round block is in `uses` only if the parent state granted its permit
+(`round_permit_used` refuses a permit twice, `round_equivocated` refuses an equivocation), so
+filling one round with blocks cannot even reach the count. The cap saturates at
+`EVM_CHAIN_BLOCK_GAS_CEILING_V1` (390 M) and is committed as the EVM header's `gas_limit`, so a
+reorg that changes the round set changes the commitment and the block does not reconstruct.
+
+## 11. ADR-0133 §11.3 re-audited — the units
+
+`verification_window_spans` (spans) × `fold.span_daa` (DAA a span) vs `window_receipt()` (DAA): one
+unit on both sides. The safety the operator asked about is inside the derivation, not the
+comparison — `palw_verification_window_spans_v1` multiplies by `safety_permille` (≥ 1.0) and adds
+`receipt_allowance_spans` (1 span) before the guard ever sees the number. Pinned at the three points
+by `adr0133_the_window_fits_the_deadline_in_daa_at_deadline_minus_one_deadline_and_plus_one`
+(deadline − one span fits, the deadline exactly fits, deadline + one span is HELD), and the
+multiplier itself is pinned by changing only `span_daa` and watching the verdict flip. Calibration
+note: `reference_work_per_span` is derived from `PALW_SPAN_MS_V1` (600 s = 5 anchors × 120 s), which
+matches testnet-11's `schedule_span_daa = 5`; the drill's devnet runs `span_daa = 2` on 10-second
+blocks, so its derived windows are optimistic by construction — a fixture property, not a
+testnet-11 one.
+
+## 12. The registry fence re-audited — consensus side, not just the node
+
+Holding the node's own submitter was not enough: anyone can put a `ClassRegistered` object on the
+chain below the fence (its acceptance is gated by ADR-0049's admission, not by the registry's
+height), and the C-1 fix means no node can ever derive that class's work from the chain. **The first
+boundary past the fence now gives such a class an inert row** — `Registered`, zero work, admission
+zero — instead of leaving it row-less: it admits no claim (`ClassNotAdmitting{Registered}`), it
+prices nothing, and its permille returns to the room at that same boundary instead of standing for
+ever as `legacy_sum` that no rowed class can use. Every node writes the same row, because "the build
+cannot describe this class" is a fact about the build. A class that wants in registers again past
+the fence, where the object carries the graph and the row opens in the same block. Pinned by
+`a_class_registered_before_the_fence_gets_an_inert_row_and_gives_its_share_back`. Rejecting the
+object below the fence was the alternative and was rejected: it would change consensus below DAA
+6,000, which is exactly what the compatibility boundary exists to prevent.

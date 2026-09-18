@@ -8524,7 +8524,46 @@ impl<'a> TransitionBuilder<'a> {
             if self.state.model_lifecycles.contains_key(class_id) {
                 continue;
             }
-            let Some(work) = fold.genesis_works.get(class_id).copied() else { continue };
+            // **A class the chain holds but the build cannot describe gets an INERT row** (the
+            // 2026-09-18 audit's C-1 with the operator's point 4): a registration accepted before
+            // the registry's fence carries its graph in block data, not in state, so no node can
+            // derive its work from the chain — and leaving it row-less left a permanent "legacy"
+            // share that no rowed class could use (`legacy_sum` below) and a class the work target
+            // refuses with "no row" for ever. The row is `Registered` with zero work: it admits no
+            // claim (`admits_claims` is false), it prices nothing, its admission is zero — so its
+            // permille returns to the room at this very boundary — and it is the same row on every
+            // node, because "the build cannot describe it" is a fact about the build, not the host.
+            // A class that wants in registers again past the fence, where the object carries the
+            // graph and `open_model_lifecycle` writes the real row in the same block.
+            let work = match fold.genesis_works.get(class_id).copied() {
+                Some(work) => work,
+                None => {
+                    self.write_model_lifecycle(
+                        *class_id,
+                        Some(PalwModelLifecycleRowV1 {
+                            state: PalwModelLifecycleV1::Registered,
+                            work: crate::palw_model_registry_v1::PalwModelWorkV1::default(),
+                            profile: palw_lifecycle_profile_v1(
+                                &crate::palw_model_registry_v1::PalwModelWorkV1::default(),
+                                0,
+                                &fold.globals,
+                            ),
+                            since_span: span_now,
+                            probes_passed: 0,
+                            probes_failed: 0,
+                            probes_passed_this_span: 0,
+                            probes_failed_this_span: 0,
+                            ready_seats: 0,
+                            inflight_claims: 0,
+                            utilization_permille: 0,
+                            admission_milli: 0,
+                            cap_utilization_permille: 0,
+                            priced_share_permille: 0,
+                        }),
+                    );
+                    continue;
+                }
+            };
             let has_final =
                 self.state.claims.values().any(|c| c.class_id == *class_id && matches!(c.phase, PalwClaimPhaseV2::Final { .. }));
             let state = if *class_id == base || has_final {
@@ -18630,6 +18669,127 @@ pub(crate) mod tests {
             // A re-measured file is a new commitment from the same registrant, not a duplicate.
             let (s4, _) = step(&s3, &p, &ctx(4, 112, 4), &[manifest(bond_key(2), FILE + 1)], None, Some(f.clone())).unwrap();
             assert_eq!(s4.model_lifecycle(&kimi_id()).unwrap().work.artifact_bytes, FILE + 1);
+        }
+
+        #[test]
+        fn a_class_registered_before_the_fence_gets_an_inert_row_and_gives_its_share_back() {
+            // **The operator's point 4 (2026-09-18), consensus side.** A registration accepted
+            // before the registry's fence — by a node's own submitter or by anyone who puts the
+            // object on the chain — leaves a class whose graph is in block data, not in state. The
+            // first boundary past the fence gives it an INERT row rather than leaving it row-less:
+            // it admits no claim, it is not "legacy" share any more, and every node writes the same
+            // row because the build's inability to describe it is a fact about the build.
+            let p = params();
+            let (_, root) = inventory();
+            let f = fold(kimi_work());
+            // The chain: the base and Kimi at genesis, then a stranger registered with NO carriage
+            // and NO entry in the fold's works — the shape of a pre-fence registration.
+            let stranger = h64(0x5747);
+            let objects = {
+                let mut v = network(root);
+                v.push(PalwConsensusObjectV2::ClassRegistered {
+                    class_id: stranger,
+                    artifact_root: h64(0x57),
+                    slash_value_per_pwu: 5,
+                    pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+                    initial_target: u128::MAX / 2,
+                    share_permille: 1,
+                    activation_daa: 0,
+                    admission: None,
+                });
+                v
+            };
+            // Below the fence: accepted, share granted, NO row (the fold is absent).
+            let (s1, _) = step(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None, None).unwrap();
+            assert!(s1.class(&stranger).is_some(), "the class is on the chain");
+            assert_eq!(s1.class_shares_iter().find(|(id, _)| **id == stranger).map(|(_, s)| *s), Some(1), "…holding a permille");
+            assert!(s1.model_lifecycle(&stranger).is_none(), "…and no row: nothing could describe it");
+            // Past the fence, at the first boundary the registry governs: the inert row.
+            let (s2, d2) = step(&s1, &p, &ctx(2, 110, 2), &[], None, Some(f.clone())).unwrap();
+            let row = s2.model_lifecycle(&stranger).expect("the boundary rowed it");
+            assert_eq!(row.state, PalwModelLifecycleV1::Registered, "inert: Registered never admits a claim");
+            assert!(!row.state.admits_claims());
+            assert_eq!(row.state.admission_permille(), 0, "…so its admission is zero");
+            assert_eq!(row.work, PalwModelWorkV1::default(), "zero work: the build cannot describe it");
+            assert_eq!(
+                s2.class_shares_iter().find(|(id, _)| **id == stranger).map(|(_, s)| *s),
+                Some(0),
+                "and its permille came back to the room"
+            );
+            assert_ne!(s2.state_root(), s1.state_root(), "the row is rooted");
+            assert_eq!(revert_delta_v2(&s2, &d2, &p).expect("reverts").state_root(), s1.state_root(), "…and it reverts");
+            // The class still cannot produce, and the refusal names the state rather than "no row".
+            let env = attempt_for_class(8, 7_777, stranger, bond_key(1), vec![7; 4], op_id(21), h64(0x57));
+            let refused = step(&s2, &p, &ctx(3, 111, 3), &[], Some(&env), Some(f.clone()));
+            assert!(
+                matches!(&refused, Err(PalwStateV2Error::ClassNotAdmitting { class, state }) if *class == stranger && state.contains("Registered")),
+                "{refused:?}"
+            );
+        }
+
+        #[test]
+        fn adr0133_the_window_fits_the_deadline_in_daa_at_deadline_minus_one_deadline_and_plus_one() {
+            // **§11.3's units.** `verification_window_spans` is SPANS and `window_receipt()` is DAA,
+            // so the guard multiplies by the fold's `span_daa` before comparing. Three points around
+            // the deadline, and then the same class with the span alone changed — if the multiplier
+            // were dropped, the last assertion would pass with the wrong verdict.
+            use crate::palw_model_registry_v1::{PALW_REGISTRY_GLOBALS_V1, palw_verification_window_spans_v1};
+            let p = params();
+            let (operands, root) = inventory();
+            let deadline = p.window_receipt();
+            assert_eq!((deadline, SPAN), (40, 10), "the fixture: a forty-DAA receipt window, ten-DAA spans");
+            let ref_span = PALW_REGISTRY_GLOBALS_V1.reference_work_per_span;
+            // window(ccu) = ceil(ccu / reference_work_per_span) + receipt_allowance_spans(1).
+            let work_of = |ccu: u128| PalwModelWorkV1 {
+                verification_ccu: ccu,
+                economic_ccu_per_claim: 800_000,
+                ops_supported: true,
+                ..Default::default()
+            };
+            let spans_of = |ccu: u128| palw_verification_window_spans_v1(&work_of(ccu), &PALW_REGISTRY_GLOBALS_V1) as u64;
+            // The window the deadline admits, in spans, and the CCU that lands on each of the three
+            // points — derived from the shipped globals (safety and the receipt allowance included),
+            // never assumed.
+            let fits_spans = deadline / SPAN; // 4
+            let ccu_for = |spans: u64| -> u128 {
+                let mut lo = 0u128;
+                let mut hi = ref_span.saturating_mul(spans as u128 + 4).max(1);
+                while lo < hi {
+                    let mid = (lo + hi) / 2;
+                    if spans_of(mid) >= spans { hi = mid } else { lo = mid + 1 }
+                }
+                lo
+            };
+            let (under, exact, over) = (ccu_for(fits_spans - 1), ccu_for(fits_spans), ccu_for(fits_spans + 1));
+            assert_eq!(
+                (spans_of(under), spans_of(exact), spans_of(over)),
+                (fits_spans - 1, fits_spans, fits_spans + 1),
+                "the three windows around the deadline, in spans"
+            );
+            assert_eq!(
+                (spans_of(under) * SPAN, spans_of(exact) * SPAN, spans_of(over) * SPAN),
+                (deadline - SPAN, deadline, deadline + SPAN),
+                "…which is deadline − one span, the deadline exactly, and deadline + one span in DAA"
+            );
+
+            let verdict = |ccu: u128, span_daa: u64| {
+                let mut f = fold(work_of(ccu));
+                f.span_daa = span_daa;
+                f.genesis_works.insert(kimi_id(), work_of(ccu));
+                let s5 = kimi_with_a_final(&p, root);
+                // The proof names the span the fold's own `span_daa` puts DAA 125 in.
+                let span_now = 125 / span_daa.max(1);
+                let proofs: Vec<PalwConsensusObjectV2> = (2..=8).map(|n| proof(&operands, bond_key(n), span_now)).collect();
+                let (s6, _) = step(&s5, &p, &ctx(6, 125, 6), &proofs, None, Some(f.clone())).unwrap();
+                let (s7, _) = step(&s6, &p, &ctx(7, 130, 7), &[], None, Some(f.clone())).unwrap();
+                s7.model_lifecycle(&kimi_id()).expect("the row exists").state
+            };
+            assert_ne!(verdict(under, SPAN), PalwModelLifecycleV1::Held, "deadline − 10: it fits");
+            assert_ne!(verdict(exact, SPAN), PalwModelLifecycleV1::Held, "the deadline exactly: `<=` fits");
+            assert_eq!(verdict(over, SPAN), PalwModelLifecycleV1::Held, "deadline + 10: fail-closed");
+            // The multiplier itself: the class that fits at ten-DAA spans does not fit at fourteen.
+            assert_eq!(verdict(exact, 14), PalwModelLifecycleV1::Held, "4 spans × 14 DAA = 56 > 40: the span_daa is read");
+            assert_ne!(verdict(exact, 2), PalwModelLifecycleV1::Held, "4 spans × 2 DAA = 8 ≤ 40: and a short span fits");
         }
 
         #[test]

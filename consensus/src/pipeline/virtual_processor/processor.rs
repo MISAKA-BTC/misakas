@@ -2149,7 +2149,7 @@ impl VirtualStateProcessor {
                     kaspa_consensus_core::evm::evm_user_gas_cap_v1(self.palw_execution_lane_at(header.daa_score).map(|_| {
                         ctx.palw_round_verdicts
                             .as_ref()
-                            .map(|v| v.uses.iter().map(|u| u.round).collect::<std::collections::BTreeSet<_>>().len() as u64)
+                            .map(|v| kaspa_consensus_core::evm::evm_distinct_permitted_rounds_v1(&v.uses))
                             .unwrap_or(0)
                     }));
                 let map_err = |e| match e {
@@ -2637,7 +2637,7 @@ impl VirtualStateProcessor {
             template_palw_state
                 .as_ref()
                 .and_then(|state| self.palw_round_verdicts_v1(state, &virtual_state.ghostdag_data, header.daa_score))
-                .map(|v| v.uses.iter().map(|u| u.round).collect::<std::collections::BTreeSet<_>>().len() as u64)
+                .map(|v| kaspa_consensus_core::evm::evm_distinct_permitted_rounds_v1(&v.uses))
                 .unwrap_or(0)
         }));
 

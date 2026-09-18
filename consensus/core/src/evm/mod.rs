@@ -185,6 +185,15 @@ pub const EVM_ROUND_GAS_BUDGET_V1: u64 = 3_000_000;
 /// propagate at the anchor cadence and ~10 s of execution on a slow host at 35 M gas/s.
 pub const EVM_CHAIN_BLOCK_GAS_CEILING_V1: u64 = MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK + 120 * EVM_ROUND_GAS_BUDGET_V1;
 
+/// **How many round budgets a chain block bought** (ADR-0139): the number of DISTINCT rounds among
+/// the permits its round blocks used. Distinct is the whole rule — two blocks of the SAME round buy
+/// one budget, whatever their permit indices, so a producer cannot inflate a chain block's gas by
+/// filling one round with blocks. The permits come from the merging block's own verdicts, which
+/// already refuse a permit twice (`round_permit_used`) and an equivocation.
+pub fn evm_distinct_permitted_rounds_v1(uses: &[crate::palw_execution_lane_v1::PalwExecPermitUseV1]) -> u64 {
+    uses.iter().map(|u| u.round).collect::<std::collections::BTreeSet<u64>>().len() as u64
+}
+
 /// **The accepted-user-gas cap of one chain block** (ADR-0139). `None` where the execution lane is
 /// not in force at the block's DAA — the cap a chain block always had. `Some(rounds)` — the number
 /// of DISTINCT permitted rounds among the round blocks it merges — buys one round budget each,
@@ -1500,6 +1509,36 @@ impl MemSizeEstimator for CanonicalEvmHeads {
 #[cfg(test)]
 mod adr0139_gas_cap_tests {
     use super::*;
+
+    fn use_at(span: u64, round: u64, permit_index: u16) -> crate::palw_execution_lane_v1::PalwExecPermitUseV1 {
+        crate::palw_execution_lane_v1::PalwExecPermitUseV1 { span, round, permit_index }
+    }
+
+    #[test]
+    fn one_round_buys_one_budget_however_many_blocks_or_permits_it_carries() {
+        // **The inflation question.** A producer that fills one round with blocks, or takes several
+        // permit indices of one round, buys ONE budget: the count is over distinct rounds.
+        assert_eq!(evm_distinct_permitted_rounds_v1(&[]), 0, "nothing merged, nothing bought");
+        assert_eq!(evm_distinct_permitted_rounds_v1(&[use_at(1, 7, 0)]), 1);
+        assert_eq!(evm_distinct_permitted_rounds_v1(&[use_at(1, 7, 0), use_at(1, 7, 1)]), 1, "two permits of one round: one");
+        assert_eq!(
+            evm_distinct_permitted_rounds_v1(&[use_at(1, 7, 0), use_at(1, 7, 1), use_at(1, 7, 2), use_at(2, 7, 0)]),
+            1,
+            "…and one round across two spans is still one round"
+        );
+        assert_eq!(evm_distinct_permitted_rounds_v1(&[use_at(1, 7, 0), use_at(1, 8, 0)]), 2, "two rounds: two");
+        // A gap in the rounds buys nothing extra: 7 and 9 are two rounds, not three.
+        assert_eq!(evm_distinct_permitted_rounds_v1(&[use_at(1, 7, 0), use_at(1, 9, 0)]), 2, "a missing round is not a budget");
+        // Order does not matter, and a repeated entry counts once.
+        let mut many: Vec<_> = (0..200u64).map(|i| use_at(1, i % 5, (i % 3) as u16)).collect();
+        many.reverse();
+        assert_eq!(evm_distinct_permitted_rounds_v1(&many), 5, "200 uses over 5 rounds buy 5 budgets");
+        assert_eq!(
+            evm_user_gas_cap_v1(Some(evm_distinct_permitted_rounds_v1(&many))),
+            MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK + 5 * EVM_ROUND_GAS_BUDGET_V1,
+            "and the cap follows the distinct count, not the block count"
+        );
+    }
 
     #[test]
     fn the_cap_is_the_base_below_the_lane_and_one_budget_a_permitted_round_under_the_ceiling() {
