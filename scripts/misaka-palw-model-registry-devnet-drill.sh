@@ -164,6 +164,19 @@ start_miner() {
   pids+=("$mp")
   log "hash miner pid $mp on node-$MINER_NODE gRPC $GRPC_PORT, one block per ${MINER_INTERVAL_MS} ms — the anchor lane the DAA clock counts"
 }
+# **The lane profile this run rehearses, named before anything starts.**
+#
+# The bug the clock gate above exists for was masked once by a drill that had a hash miner the
+# TARGET network does not have: a devnet with an anchor lane never reaches the state a PALW-only
+# chain reaches at the same fence. So the composition is printed, and `LANE_PROFILE` makes it a
+# refusal rather than a thing to notice in a log afterwards. Compare it against the target network
+# with `scripts/misaka-t11-lane-walk.py`, which counts the lanes the live chain actually carries.
+lane_profile="palw$([ -n "$MINER_BIN" ] && echo "+hash")$([ -n "$HEARTBEAT_NODE" ] && echo "+heartbeat")"
+log "lane profile: $lane_profile (attempt/receipt from $NODES producers$([ -n "$MINER_BIN" ] && echo ", a Layer-0 hash miner on node-$MINER_NODE")$([ -n "$HEARTBEAT_NODE" ] && echo ", a bondless heartbeat miner on node-$HEARTBEAT_NODE"))"
+if [ -n "${LANE_PROFILE:-}" ] && [ "$LANE_PROFILE" != "$lane_profile" ]; then
+  die "this run rehearses '$lane_profile' but LANE_PROFILE demands '$LANE_PROFILE' — a drill whose lanes differ from the target network's does not rehearse the target network"
+fi
+
 if [ "$ATTACH" = 1 ]; then attach_nodes; else start_nodes; fi
 start_miner
 
@@ -193,6 +206,46 @@ log "    $(reg 1 "'span %s DAA · grace until DAA %s · seats %s+%s' % (v.get('s
 log "1/6 the fence crossed: the base class's row opens ACTIVE at the first boundary past it"
 wait_reg 1 "v.get('active') == True and any(c.get('isBaseClass') and c.get('hasRow') and c.get('state') == 'Active' for c in v.get('classes', []))" "the base class's row"
 log "    $(reg 1 "'tip DAA %s · rows %s' % (v.get('tipDaa'), [(c['classId'][:12], c['state'] if c['hasRow'] else 'legacy') for c in v.get('classes', [])])")"
+
+# **THE CLOCK SURVIVES ITS OWN FLAG DAY.** A release gate, not a progress message.
+#
+# A fence that retires whatever was pacing the chain can leave nothing pacing it, and every unit
+# test in the tree stays green while it happens: the rule is right per block and the chain still
+# produces, so only a running network with the TARGET NETWORK'S LANES shows the clock stop. This
+# check has now caught two distinct causes at the same height — a heartbeat exempted from the score
+# (ADR-0138's first draft, DAA frozen at 20 with 183 blocks accepted) and a heartbeat miner that
+# yielded to blocks which no longer paced the clock (ADR-0105's hint past the anchor clock, DAA
+# frozen at 20 with the miner running and minting nothing).
+#
+# So: from the first tip past the fence, the DAA must advance `CLOCK_GATE_DAA` within
+# `CLOCK_GATE_WAIT` seconds, and the run must be able to NAME the lane that advanced it.
+CLOCK_GATE_DAA="${CLOCK_GATE_DAA:-3}"
+CLOCK_GATE_WAIT="${CLOCK_GATE_WAIT:-900}"
+gate_began="$(daa_of 1)"
+gate_t0=$SECONDS
+log "1b/6 the clock survives the flag day: DAA must reach $((gate_began + CLOCK_GATE_DAA)) from $gate_began within ${CLOCK_GATE_WAIT}s"
+gate_now="$gate_began"
+while [ $((SECONDS - gate_t0)) -lt "$CLOCK_GATE_WAIT" ]; do
+  sleep 15
+  gate_now="$(daa_of 1)"
+  [ -n "$gate_now" ] && [ "$gate_now" -ge $((gate_began + CLOCK_GATE_DAA)) ] && break
+done
+if [ -z "$gate_now" ] || [ "$gate_now" -lt $((gate_began + CLOCK_GATE_DAA)) ]; then
+  log "    lanes seen since the fence:"
+  for i in $(seq 0 $((NODES - 1))); do
+    b="$(grep -c 'the clock ticked' "$WORK_DIR/node-$i.log" 2>/dev/null || echo 0)"
+    a="$(grep -c 'produced block #' "$WORK_DIR/node-$i.log" 2>/dev/null || echo 0)"
+    r="$(grep -c 'produced RECEIPT block' "$WORK_DIR/node-$i.log" 2>/dev/null || echo 0)"
+    log "      node-$i heartbeats=$b attempts=$a receipts=$r"
+  done
+  die "THE CLOCK STOPPED AT ITS OWN FLAG DAY: DAA $gate_began -> ${gate_now:-?} in ${CLOCK_GATE_WAIT}s. \
+The chain is producing and the score is not moving — the fence retired whatever was pacing it and nothing took over."
+fi
+beats_total=0
+for i in $(seq 0 $((NODES - 1))); do
+  beats_total=$((beats_total + $(grep -c 'the clock ticked' "$WORK_DIR/node-$i.log" 2>/dev/null || echo 0)))
+done
+log "    DAA $gate_began -> $gate_now past the fence in $((SECONDS - gate_t0))s, with $beats_total heartbeat(s) minted across the fleet"
 
 if [ -n "$CLASS_ARTIFACT" ]; then
   if [ "$REGISTER_CLASS" = 1 ]; then log "2/6 node-1 registers the artifact's class"; else log "2/6 the artifact's class is on the chain (a genesis class of the devnet's set)"; fi
