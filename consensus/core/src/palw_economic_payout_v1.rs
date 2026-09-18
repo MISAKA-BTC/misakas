@@ -36,7 +36,13 @@ pub const PALW_ECONOMIC_PAYOUT_VERSION_V1: u16 = 1;
 /// own calibrated rate (ADR-0132 §4.3: so the heaviest live class sits under the ceiling).
 pub const PALW_ECONOMIC_PAYOUT_DEVNET_V1: crate::config::params::PalwEconomicPayoutV1 = crate::config::params::PalwEconomicPayoutV1 {
     activation: crate::config::params::ForkActivation::never(),
-    rate_sompi_per_giga: 1_000_000,
+    // testnet-11's rate (9 MSK a G MAC-eq), not a devnet-sized one: ADR-0137's work floor is
+    // `W₀ = escrow × 10⁹ / rate`, and a devnet block's escrow is a testnet block's (~3,200 MSK of a
+    // 4,445.62 MSK subsidy), so at 0.01 MSK a G the floor was 320 T MAC-eq and the dense A16 class
+    // (84 G a draw) drew at p ≈ 2.6 × 10⁻⁴ — one block a day — which the 2026-09-18 drill found at
+    // its second phase. At 9 MSK a G the floor is ~356 G and the class draws at p ≈ 0.24, as it
+    // will on the testnet.
+    rate_sompi_per_giga: 900_000_000,
     panel_share_alpha_permille: 1_000,
     panel_share_min_permille: 100,
     panel_share_max_permille: 300,
