@@ -428,12 +428,107 @@ pub fn palw_model_evaluation_message_v1(
     finish(s)
 }
 
+// --- ADR-0143: an artifact root has one owner. ---
+
+/// **Who owns an artifact root**, as the chain records it. One row per root, so attribution never
+/// depends on which `line_id` happens to sort first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwArtifactOwnerV1 {
+    pub class_id: Hash64,
+    pub line_id: Hash64,
+    pub version: u32,
+}
+
+/// One candidate for a root, as the activation migration reads the existing rows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwArtifactClaimantV1 {
+    pub class_id: Hash64,
+    pub line_id: Hash64,
+    pub version: u32,
+    /// The DAA at which the version was accepted. `published_daa` on the row.
+    pub published_daa: u64,
+    /// Is this the founding line of the class whose registered artifact root this is?
+    pub is_founding_root: bool,
+}
+
+/// **ADR-0143 Decision 6: the total order that canonicalizes what is already on the chain.**
+///
+/// 1. a root equal to its class's registered founding root → the FOUNDING line, always. This is
+///    the clause that returns a squatted root to the class that registered it, and it is first
+///    because registration is what created the root's meaning.
+/// 2. otherwise the EARLIEST accepted version, because attribution was a fact of the accepting
+///    block and the earliest block is the one that made it.
+/// 3. a tie → `(line_id, version)` order, so two versions accepted in the same block still resolve
+///    the same way on every node.
+///
+/// Total and deterministic: no iteration order of the caller can change the answer, which is the
+/// whole defect this ADR exists to close.
+pub fn palw_canonical_artifact_owner_v1(
+    claimants: impl IntoIterator<Item = PalwArtifactClaimantV1>,
+) -> Option<PalwArtifactOwnerV1> {
+    claimants
+        .into_iter()
+        .min_by_key(|c| (!c.is_founding_root, c.published_daa, c.line_id, c.version))
+        .map(|c| PalwArtifactOwnerV1 { class_id: c.class_id, line_id: c.line_id, version: c.version })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn bond(i: u64) -> PalwBondKeyV2 {
         PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_u64_word(i), 0))
+    }
+
+    fn claimant(line: u64, version: u32, daa: u64, founding: bool) -> PalwArtifactClaimantV1 {
+        PalwArtifactClaimantV1 {
+            class_id: Hash64::from_u64_word(7),
+            line_id: Hash64::from_u64_word(line),
+            version,
+            published_daa: daa,
+            is_founding_root: founding,
+        }
+    }
+
+    /// **ADR-0143 Decision 6.** The order that canonicalizes what is already on the chain, and the
+    /// reason the defect existed: the old answer was whichever `line_id` sorted first in a
+    /// `BTreeMap`, which made a hash's byte order a consensus-visible outcome.
+    #[test]
+    fn a_founding_root_beats_an_earlier_squatter_and_the_order_never_depends_on_id() {
+        // A squatter got there first, by DAA and by id. The founding line still wins, because
+        // registration is what created the root's meaning.
+        let squatter = claimant(1, 3, 100, false);
+        let founding = claimant(9, 1, 500, true);
+        let owner = palw_canonical_artifact_owner_v1([squatter, founding]).expect("an owner");
+        assert_eq!(owner.line_id, founding.line_id, "the founding line wins however late and however high its id");
+        assert_eq!(palw_canonical_artifact_owner_v1([founding, squatter]).expect("an owner"), owner, "and the input order is irrelevant");
+
+        // With no founding claimant, the earliest ACCEPTED version wins — attribution was a fact of
+        // the accepting block.
+        let early = claimant(9, 2, 100, false);
+        let late = claimant(1, 1, 101, false);
+        let owner = palw_canonical_artifact_owner_v1([late, early]).expect("an owner");
+        assert_eq!(owner.line_id, early.line_id, "earliest accepted, not lowest id");
+        assert_eq!(palw_canonical_artifact_owner_v1([early, late]).expect("an owner"), owner);
+
+        // A tie in the same block resolves by (line, version), so every node lands identically.
+        let a = claimant(1, 2, 100, false);
+        let b = claimant(1, 1, 100, false);
+        let c = claimant(2, 1, 100, false);
+        let owner = palw_canonical_artifact_owner_v1([c, a, b]).expect("an owner");
+        assert_eq!((owner.line_id, owner.version), (b.line_id, b.version), "lowest line, then lowest version");
+        for order in [[a, b, c], [b, c, a], [c, b, a], [a, c, b]] {
+            assert_eq!(palw_canonical_artifact_owner_v1(order).expect("an owner"), owner, "{order:?} disagreed");
+        }
+
+        // Two founding claimants cannot exist for one root — a root belongs to one class's
+        // registration — but if the state were ever that broken the answer is still total.
+        let f1 = claimant(3, 1, 200, true);
+        let f2 = claimant(4, 1, 100, true);
+        assert_eq!(palw_canonical_artifact_owner_v1([f1, f2]).expect("an owner").line_id, f2.line_id, "earliest of the two");
+
+        assert_eq!(palw_canonical_artifact_owner_v1([]), None, "no claimant, no owner");
     }
 
     #[test]

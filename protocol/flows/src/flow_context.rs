@@ -291,19 +291,14 @@ mod tests {
         use kaspa_consensus_core::fork_id_v1::{ForkIdMismatch, ForkIdV1, fork_id_v1};
         use kaspa_consensus_core::network::{NetworkId, NetworkType};
         const ADR_0095: u64 = 2400;
-        const CRESCENDO_T11: u64 = 2_125_000;
-        // The 2400 day's builds: ADR-0114's 3500, the audit's 4000 (the shallow fence, with ADR-0117's
-        // draw fence) and the 7000 flag day (the held regime, ADR-0118, with the audit's deep fence)
-        // were scheduled later and are not theirs.
-        let mut upgraded = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11));
-        upgraded.palw_model_leg_v2 = None;
-        upgraded.palw_audit_2026_09_11 = None;
-        upgraded.palw_prefill_draw = None;
-        upgraded.palw_model_seed_v2 = None;
-        upgraded.palw_audit_2026_09_11_deep = None;
-        upgraded.palw_held_context = None;
-        upgraded.palw_shard_court = None;
-        upgraded.palw_fp_da_pins = None;
+        // The two builds differ in ONE fence — ADR-0095's, at 2400 — and in nothing else. An earlier
+        // version of this test spelled out the fences scheduled above 2400 and cleared them by hand
+        // so it could also spell out what the un-upgraded peer announces next; every later flag day
+        // made that list wrong, and the failure named a height rather than the property. Both the
+        // peer's next fence and this build's are now read from the schedule, so the test pins the
+        // BEHAVIOUR — kept below the disputed fence, dropped at it — and nothing about when the
+        // fences after it happen to fall.
+        let upgraded = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11));
         let mut un_upgraded = upgraded.clone();
         un_upgraded.palw_model_benefits = None;
 
@@ -311,8 +306,16 @@ mod tests {
             fork_id_fields_v1(params, local_daa, peer.fired.as_bytes().as_slice(), peer.next)
         };
 
+        // The premise, asserted rather than assumed: below 2400 the two builds agree about every
+        // fence, and 2400 is the next one this build expects — so a fence scheduled between the
+        // handshake height and 2400 fails HERE, naming itself, instead of turning the refusal into
+        // an agreement further down.
+        let peer_fork = fork_id_v1(&un_upgraded, 2270);
+        assert_eq!(fork_id_v1(&upgraded, 2270).next, ADR_0095, "the disputed fence is the next one this build expects");
+        assert_ne!(peer_fork.next, ADR_0095, "the un-upgraded build does not carry the disputed fence");
+
         // The explorer node's case: met at this node's DAA 0.
-        let old_peer = stored(&upgraded, 0, fork_id_v1(&un_upgraded, 2270));
+        let old_peer = stored(&upgraded, 0, peer_fork);
         assert_eq!(old_peer.fork_id_refusal_height, Some(ADR_0095));
         for daa in [0, 1150, 2270, ADR_0095 - 1] {
             assert_eq!(fork_id_rejudge_v1(&upgraded, daa, &old_peer), None, "kept at {daa}");
@@ -320,7 +323,7 @@ mod tests {
         for daa in [ADR_0095, 3_158] {
             assert_eq!(
                 fork_id_rejudge_v1(&upgraded, daa, &old_peer),
-                Some((ForkIdMismatch::NextFenceDiffers { expected: ADR_0095, got: CRESCENDO_T11 }, ADR_0095)),
+                Some((ForkIdMismatch::NextFenceDiffers { expected: ADR_0095, got: peer_fork.next }, ADR_0095)),
                 "dropped at {daa}"
             );
         }
