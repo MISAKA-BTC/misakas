@@ -1,6 +1,6 @@
 # ADR-0143 — An artifact root has one owner on the chain, and competing weights stay permissionless
 
-**Status:** PROPOSED 2026-09-18 on `feat/palw-exec-lane-and-validator-retirement`. **Consensus
+**Status:** IMPLEMENTED 2026-09-18 on `feat/palw-exec-lane-and-validator-retirement`. **Consensus
 change behind its own fence, `palw_artifact_root_ownership`, dormant on every preset.** Not part of
 the 6,301 bundle and not released with it: a fence ships only after a drill has crossed it
 (the launch runbook's §5c gate).
@@ -65,22 +65,51 @@ are addressed.
 artifact_owners: BTreeMap<Hash64, PalwArtifactOwnerV1 { class_id, line_id, version }>
 ```
 
+Uniqueness is **global, not per class**. A root is a file of weights; two classes carrying the same
+one are the same duplicate the rule exists to refuse, and a per-class index would let the collision
+move one level up and keep its ambiguity. The index nevertheless records the class, and every reader
+passes the class it is asking about, so a root owned by another class's line answers "not yours"
+rather than paying the wrong pair.
+
 **D2. The positional lookups retire.** `model_version_of_root` and `model_line_of_root` stop walking
 lines and read the index. Past the fence there is no "first match" to be decided by id order.
+
+The line comes from the index; the **version** is then resolved *inside that one line* — the lowest
+version of the owning line carrying the root and in force, and the index's own recorded version when
+the line has no rows at all, which is how a class's synthesised founding line answers. A scan inside
+a single line is not a walk across lines: no id order can reorder it. **Whether a root is in force is
+not moved by this ADR** — `class_roots_in_force` still decides admission, and it decides it exactly
+where it did.
 
 **D3. One source for every attribution.** Usage attribution, ADR-0091's buyback, the owner fee and
 version lookup all read the index and nothing else. A second way to answer the question is how the
 two answers come to differ.
+
+There were **three** call sites, not the two §1 shows. `uncount_claim_usage` — the subtraction a
+voided claim makes — carried its own copy of the first-match walk, and one that never filtered by
+force while the counting side always did, so on a line that withdrew and republished a root the two
+could already land on different rows. Past the fence it asks the counting side's own question with
+the claim's own accept height, so the subtraction lands where the addition did.
 
 **D4. A founding root is reserved at registration, atomically.** `ClassRegistered` writes the class
 row and the ownership of its founding root in one transition. The fallback that depended on "no line
 row exists yet" is deleted with the window it opened: there is no moment when a class's root is
 registered and unowned.
 
-**D5. Every entrance refuses a duplicate.** `ModelLineFounded` and `ModelVersionPublished` both
-reject an owned root with `DuplicateArtifactRoot`, through one helper. Fixing a single call site
-leaves the other open, so the rule is written once and every path where a root enters state is
-audited against it.
+**A registration on a root another line already owns is refused**, with the same
+`DuplicateArtifactRoot`. The alternative — admitting the class and leaving it unable to own its own
+root — would create a class whose own attribution is paid to a stranger, which is the defect itself
+rather than a milder form of it. A registrant who meets this has a remedy the chain need not
+provide: a different artifact is a different root.
+
+**D5. Every entrance refuses a duplicate.** `ClassRegistered`, `ModelLineFounded` and
+`ModelVersionPublished` all reject an owned root with `DuplicateArtifactRoot`, through one helper.
+Fixing a single call site leaves the others open, so the rule is written once and every path where a
+root enters state is audited against it.
+
+A line republishing a root **it already owns** is not a duplicate and keeps the row it has. The
+question the index answers is *which line*, and moving the version on a republication would rewrite
+where the claims that already counted point.
 
 **D6. Activation canonicalizes what is already there, deterministically.** At the fence the index is
 built from existing state by a total order:
